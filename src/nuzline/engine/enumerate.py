@@ -194,6 +194,7 @@ from nuzline.engine.ids import (
     MINIMIZE_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    SNORE_PARAM,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -209,12 +210,14 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import (
+    CALL_ASSIST,
     CALL_COPYCAT,
     CALL_METRONOME,
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    assist_candidates,
     call_kind,
     called_move,
     copycat_call,
@@ -261,12 +264,14 @@ WIDTH_CAP = 131072
 DURATION_DEFAULT = 0  # Random 3, 2: 2-5 (sleep, confusion and every other move)
 DURATION_TRAP = 1  # Random 3, 3: 3-6 (Bind, Uproar; Disable: RandNext() % 4 + 3, the same law)
 DURATION_TAUNT = 2  # Random 2, 3: 3-5
+DURATION_ENCORE = 3  # BtlCmd_TryEncore's RandNext() % 5 + 3: 3-7 (B10-9)
 
 # Effects whose hits read ``outcome.secondary`` through ``proc`` (effects.py:468).
 _PROC_EFFECTS = (
     _E.SECONDARY_STAT_SELF,
     _E.SECONDARY_STAT_FOE,
     _E.SECONDARY_STATUS,
+    _E.RECOIL_STATUS,  # its status roll (effects._secondary_status, B10-1)
     _E.FLINCH,
     _E.FAKE_OUT,
     _E.RAISE_ALL_STATS_HIT,
@@ -303,6 +308,7 @@ class Reads(NamedTuple):
     infatuated_own: jnp.ndarray  # it moves in love at the start (its source stays)
     infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
     future_roll: jnp.ndarray  # its Future Sight can be set: TryFutureSight's roll[s, 0]
+    crash: jnp.ndarray  # its move crashes on a miss (EffectId.CRASH): crit / roll[s, 0] then too
 
 
 class OutcomeLaws(NamedTuple):
@@ -355,7 +361,10 @@ def _inflicts(tables: Tables, state: BattleState, moves, status) -> jnp.ndarray:
     ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack), Secret Power by its
     terrain's effect (``order.move_effects``)."""
     effect, params = move_effects(tables, state, moves)
-    status_effect = _any_of(effect, (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH))
+    status_effect = _any_of(
+        effect,
+        (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH),
+    )
     tri = (effect == _E.TRI_ATTACK) & (status in TRI_ATTACK_STATUSES)
     return (status_effect & (params[..., 0] == status)) | tri
 
@@ -549,7 +558,8 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
     # that cannot take it changes nothing (status eligibility), judged on the turn-start
     # state, which is the state of the hit when the user moves first with one hit.
     status_effect = _any_of(
-        b["effect"], (_E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK)
+        b["effect"],
+        (_E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
     )
     blocked = first_self & (
         (status_effect & b["status_blocked"])
@@ -656,6 +666,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    _E.ASSIST,  # B10-11: an invoker like them
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -677,9 +688,26 @@ INPUT_NEUTRAL_EFFECTS = (
     # The user's Attack and HP only (the foe's later hit reads the user's Defense and HP: the HP
     # clause covers HP).
     _E.BELLY_DRUM,
+    # B10-2: a hit, and on a miss its crash hurts the foe (the HP clause).
+    _E.CRASH,
+    # B10-4: the user's HP (the HP clause) and its substitute, which no table-damage input reads
+    # (SmellingSalt's x2 is DOUBLE_POWER's, never compressed: NON_TABLE_DAMAGE_EFFECTS).
+    _E.SUBSTITUTE,
+    # B10-5: both battlers' HP only (the HP clause).
+    _E.ENDEAVOR,
+    _E.PAIN_SPLIT,
+    # B10-7: a side condition that stops statuses (a burn's Attack is the status clause's).
+    _E.SAFEGUARD,
+    # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
+    _E.FOCUS_PUNCH,
+    # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
+    _E.ENCORE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
+    # B10-6: it takes the foe's held item, which its later hit may read (a power item, Life Orb,
+    # a Choice item): the clause below, any item held.
+    _E.KNOCK_OFF,
     # The user's Attack and Speed (Dragon Dance) or Defense (Bulk Up): the stat clause.
     _E.DRAGON_DANCE,
     _E.SECONDARY_STAT_SELF,
@@ -689,6 +717,9 @@ INPUT_CLAUSE_EFFECTS = (
     _E.CURSE,  # the foe's Defense
     _E.STATUS_FOE,  # the attacker's burn, or any status under Guts
     _E.SECONDARY_STATUS,
+    # B10-1: its status like SECONDARY_STATUS's (the status clause); its recoil hurts the foe
+    # (the HP clause).
+    _E.RECOIL_STATUS,
     _E.REFLECT,  # the defender's side's screens
     _E.LIGHT_SCREEN,
     _E.MUD_SPORT,  # any side's sport (damage.py :6811, :6815)
@@ -889,6 +920,9 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.WEATHER_ROCK,
     # The crit odds (outcome.crit_odds): a crit is the hit's own draw.
     ItemId.CRIT_ITEM,
+    # B10-12: it skips its holder's charge and is used up; no damage input reads it (the
+    # charge's own clauses are the move's: MoveFlag.CHARGE above).
+    ItemId.POWER_HERB,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -957,8 +991,17 @@ TABLE_DAMAGE_EFFECTS = (
     _E.FALSE_SWIPE,
     # A plain hit (effect_script_0159.s: CalcCrit, CalcDamage); the uproar comes after it.
     _E.UPROAR,
+    # B10-1, B10-2: plain hits (CalcCrit, CalcDamage; Reckless is the attacker's fixed ability);
+    # the recoil and status come after the damage, and a crash reads the same table entry.
+    _E.RECOIL_STATUS,
+    _E.CRASH,
+    # B10-6: CalcCrit, CalcDamage (effect_script_0188.s:6-7); the item goes after the damage.
+    _E.KNOCK_OFF,
+    # B10-8: CalcCrit, CalcDamage (effect_script_0170.s:8-9) unless the focus is lost first.
+    _E.FOCUS_PUNCH,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
+    _E.ENCORE,  # a status move: no damage (B10-9)
     _E.STAT_SELF,
     _E.STAT_FOE,
     _E.STATUS_FOE,
@@ -1007,6 +1050,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.SLEEP_TALK,
     _E.METRONOME,
     _E.COPYCAT,
+    _E.ASSIST,  # B10-11: an invoker like them
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -1019,6 +1063,10 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.FOLLOW_ME,  # status moves: no damage
     _E.HELPING_HAND,
     _E.BELLY_DRUM,
+    _E.SUBSTITUTE,  # a status move: no damage (B10-4)
+    _E.ENDEAVOR,  # no roll (damage.fixed_damage), B10-5
+    _E.PAIN_SPLIT,  # a status move: no damage
+    _E.SAFEGUARD,  # a status move: no damage (B10-7)
 )
 
 
@@ -1046,7 +1094,8 @@ def damage_inputs_can_change(
       sport for this move type, or the foe's own types (Camouflage: the type chart and the
       Rock Sp. Def boost read them); or the side's active Pokemon itself (the foe's Roar
       drags it out; no hit of a dragged battler follows in Gen 4, its action ends, so this
-      roar clause is conservative);
+      roar clause is conservative); a charge move (its user's semi-invulnerable bit, which a
+      ``MoveFlag.DOUBLE_SEMI`` hit's power reads; Skull Bash's Defense +1), B10-12;
     * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
       read the user's HP: any earlier foe move or earlier hit of the same move;
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
@@ -1107,10 +1156,18 @@ def damage_inputs_can_change(
     pinch_stat = tables.item_param[held, 1]
     pinch = item == ItemId.PINCH_BERRY
     foe_effect, foe_param0 = effect[::-1], param0[::-1]
+    own_flags = tables.move_flags[moves].astype(_I32)
+    foe_flags = own_flags[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
     status_hit = _any_of(
         foe_effect,
-        (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
+        (
+            _E.STATUS_FOE,
+            _E.SECONDARY_STATUS,
+            _E.RECOIL_STATUS,
+            _E.FANG_PARALYZE_FLINCH,
+            _E.TRI_ATTACK,
+        ),
     )
     foe_burns = _inflicts(tables, state, moves[::-1], Status.BURN)
     foe_move = uses_move[::-1] & (
@@ -1139,6 +1196,12 @@ def damage_inputs_can_change(
         | (foe_effect == _E.ROAR)
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
+        | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
+        # B10-12: a charge move sets or (its second turn, or an unlock on its disruption) clears
+        # its user's semi-invulnerable bit, which a DOUBLE_SEMI hit's power reads; Skull Bash's
+        # charge raises the foe's Defense.
+        | (((foe_flags & MoveFlag.CHARGE) != 0) & ((own_flags & MoveFlag.DOUBLE_SEMI) != 0))
+        | (((foe_flags & MoveFlag.CHARGE_DEF_UP) != 0) & physical)
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)
@@ -1655,11 +1718,17 @@ def outcome_laws(
         & (kinds == Type.WATER)
     ) | ((ignorable == AbilityId.VOLT_ABSORB) & (kinds == Type.ELECTRIC))
     flinch_sure = (
-        ((effect == _E.FLINCH) | fake_out_ok | fang)
+        # Snore (FLINCH with SNORE_PARAM) fails unless its user is asleep when it acts
+        # (effect_script_0092.s:5; step's ``failed``), which a wake-up this turn can undo: its
+        # flinch is never sure (B10, found by test_matches_sampled_frequencies_random).
+        (((effect == _E.FLINCH) & (params[:, 2] != SNORE_PARAM)) | fake_out_ok | fang)
         & reach
         & deals
         & (ignorable != AbilityId.INNER_FOCUS)
         & (ignorable != AbilityId.SHIELD_DUST)  # effects._shield_dust
+        # subscript_flinch_mon.s:6: a foe behind a substitute is never flinched (its bit, or the
+        # flag this single hit sets), B10-4.
+        & (state.substitute_hp[::-1] == 0)
         & ~absorbs
         & foe_moves
         & (chance != 0)
@@ -1667,6 +1736,7 @@ def outcome_laws(
     )
     proc_effects = (
         _E.SECONDARY_STATUS,
+        _E.RECOIL_STATUS,
         _E.SECONDARY_CONFUSE,
         _E.TRAP,
         _E.FANG_PARALYZE_FLINCH,
@@ -1693,12 +1763,18 @@ def outcome_laws(
         infatuated_own=base["infatuated_own"],
         infatuated_by_foe=jnp.stack([m["infatuated_by_foe"] for m in branches]),
         future_roll=future_roll,
+        # B10-2: a miss or a Protect still reads hit 0's crit and roll (step._use_move's crash).
+        crash=off if loose else uses_move & (effect == _E.CRASH),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
         DURATION_TAUNT,
         jnp.where(
-            _any_of(effect, (_E.TRAP, _E.DISABLE, _E.UPROAR)), DURATION_TRAP, DURATION_DEFAULT
+            effect == _E.ENCORE,
+            DURATION_ENCORE,
+            jnp.where(
+                _any_of(effect, (_E.TRAP, _E.DISABLE, _E.UPROAR)), DURATION_TRAP, DURATION_DEFAULT
+            ),
         ),
     )
     # Damage classes (rules §10.3 item 5): a hit whose damage the turn-start table gives
@@ -1828,6 +1904,8 @@ def _duration(laws: OutcomeLaws, side: int) -> _Law:
     kind = int(laws.duration_kind[side])
     if kind == DURATION_TAUNT:
         return [3, 4, 5], [1, 1, 1], 3
+    if kind == DURATION_ENCORE:
+        return [3, 4, 5, 6, 7], [1] * 5, 5
     low = 3 if kind == DURATION_TRAP else 2
     return list(range(low, low + 4)), [1] * 4, 4
 
@@ -2128,6 +2206,11 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.
             if i > 0 or bool(rel.crit[s, 0]) or bool(reads.future_roll[s]):
                 plan.path(("roll", (s, i)), "move", *hits)
+        # A crash move (B10-2) reads hit 0's crit and roll whether or not it hits (its crash on
+        # a miss or a Protect): a path of its own, unconditional (the flinch gate still applies).
+        if bool(reads.crash[s]):
+            plan.path(("crit", (s, 0)), "crash")
+            plan.path(("roll", (s, 0)), "crash")
         for name in (
             "n_hits",
             "magnitude",
@@ -2590,7 +2673,7 @@ def _disabled_state(state: BattleState, sides) -> BattleState:
 def _sealed_state(state: BattleState, sides) -> BattleState:
     """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
     (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
-    6724), which then seals its moves for the Sleep Talk user (battle_script.c:4929; battle
+    6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
     b on side b in singles)."""
     foe_of = jnp.asarray(sides)[::-1]
     value = jnp.where(foe_of, 1, state.imprison)
@@ -2717,6 +2800,17 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )
         metro_w = jnp.where(values < n, metro_all[by_rank], 0)
         copy_w = ((values == 0) | ((values == 1) & uses_move[foe])).astype(_I32)
+        # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
+        # the turn; position v calls the v-th valid entry.
+        listed, valid = assist_candidates(tables, state, side)
+        n_listed = jnp.sum(valid.astype(_I32))
+        assist_w = (values < n_listed).astype(_I32)
+        listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
+        assist_called = (
+            jnp.zeros((CALL_VALUES,), _I32)
+            .at[jnp.where(valid, listed_rank, CALL_VALUES)]
+            .set(listed, mode="drop")
+        )
         copy_called = jnp.where(
             values == 0,
             copycat_call(tables, state.move_prev),
@@ -2730,7 +2824,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
                 jnp.where(
                     kind == CALL_METRONOME,
                     metro_w,
-                    jnp.where(kind == CALL_COPYCAT, copy_w, (values == 0).astype(_I32)),
+                    jnp.where(
+                        kind == CALL_COPYCAT,
+                        copy_w,
+                        jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
+                    ),
                 ),
             )
         )
@@ -2741,7 +2839,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
                 jnp.where(
                     kind == CALL_METRONOME,
                     by_rank,
-                    jnp.where(kind == CALL_COPYCAT, copy_called, 0),
+                    jnp.where(
+                        kind == CALL_COPYCAT,
+                        copy_called,
+                        jnp.where(kind == CALL_ASSIST, assist_called, 0),
+                    ),
                 ),
             )
         )
@@ -2776,7 +2878,7 @@ def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
-        if kind in (CALL_SLEEP_TALK, CALL_METRONOME):
+        if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
             groups: dict[tuple[int, int, int], list[int]] = {}
             for v in np.flatnonzero(weight):
                 key = (int(called[v]), int(alt[v]), int(sealed[v]))

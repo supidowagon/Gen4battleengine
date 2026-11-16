@@ -78,9 +78,10 @@ order of residual messages, so states it separates stay in one set (coarser than
 game, never finer). Likewise a crit into a substitute: the game prints "A critical hit!"
 whenever a landed hit's ``criticalMul != 1`` (bcp.c:4547-4554, whatever took the
 damage), but ``crit`` is gated on the target's HP dropping (``step._hit_events``), so
-such a crit is not recorded. No implemented move sets ``substitute_hp`` (it is only
-reset, ``_VOLATILE`` step.py:94; notes/stage-b/observe.md section 1), so the case cannot
-arise yet; were it to, its states would stay in one set (coarser, never finer).
+such a crit is not recorded: states that differ only there stay in one set (coarser, never
+finer). Substitute (E2 batch 10, B10-4) shows only whether one is up ("{0} made a
+substitute!", "The substitute took damage for {0}!", "{0}'s substitute faded!",
+subscript_try_substitute.s, subscript_hit_substitute.s:12, :23); its HP is hidden.
 
 The visible projection of ``after``: both actives and their current types (Camouflage's
 "X transformed into the TYPE type!", effect_script_0213.s), every slot's species, status and
@@ -191,10 +192,13 @@ _NONZERO_SIDE = (
     "lock_on",
     # "{0} made {1} drowsy!" (subscript_yawn.s:24) until it falls asleep.
     "yawn",
-    # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:14).
+    # "{0} cut its own HP and laid a curse on {1}!" (subscript_curse_ghost.s:17).
     "curse",
     # E2 batch 9: Minimize's own message (it used the move).
     "minimized",
+    # E2 batch 10: "{0} got an encore!" (subscript_encore_start.s) until "{0}'s encore ended!";
+    # the count is hidden (B10-9).
+    "encore_move",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 
@@ -228,6 +232,8 @@ _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("stages", (SIDES, 8)),
     ("disabled_move", _SIDE),
     ("locked_move", _SIDE),
+    # B10-12: the vanished battler ("flew up high!", subscript_vanish_on_charge_turn.s), its kind.
+    ("semi_invulnerable", _SIDE),
     *((name, _SIDE) for name in _NONZERO_SIDE),
     ("spikes", _SIDE),
     ("toxic_spikes", _SIDE),
@@ -310,6 +316,7 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "stages": after.stages,
         "disabled_move": after.disabled_move,
         "locked_move": after.locked_move,
+        "semi_invulnerable": after.semi_invulnerable,
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_SIDE},
         "spikes": after.spikes,
         "toxic_spikes": after.toxic_spikes,

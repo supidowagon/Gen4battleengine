@@ -50,10 +50,10 @@ def test_lock_on_ends_with_its_lockers_switch_or_replacement(tables, names):
     fainted = assert_matches_reference(tables, s.replace_hp(0, 0, 1), (0, 0), O)
     assert int(fainted.hp[0, 0]) == 0
     assert int(fainted.lock_on[1]) == 1 and int(fainted.lock_on_target[1]) == 1
+    from nuzline.data.tables import to_numpy
     from nuzline.engine.step import replace
     from nuzline.reference.convert import from_ref, to_ref
     from nuzline.reference.engine import ref_replace
-    from nuzline.data.tables import to_numpy
 
     sent = replace(tables, fainted, 0, 1)
     assert int(sent.lock_on[1]) == 0 and int(sent.lock_on_target[1]) == 0
@@ -107,9 +107,9 @@ def test_yawn_meets_insomnia(tables, names):
 
 def test_ghost_curse_halves_the_user_and_hurts_the_foe_each_turn(tables, names):
     """B8-5: a Ghost user's Curse (effect_script_0109.s:5-6, :9-17) curses the foe and costs
-    Divide(maxHP, 2) (subscript_curse_ghost.s:6-12); MON_COND_CHECK_STATE_CURSE takes
+    Divide(maxHP, 2) (subscript_curse_ghost.s:9-15); MON_COND_CHECK_STATE_CURSE takes
     Divide(maxHP, 4) at each turn end (bcp.c:1451-1459, subscript_curse_damage.s). A cursed foe
-    makes the next Curse fail (:4)."""
+    makes the next Curse fail (:7)."""
     n = names
     s = make_state(tables, [_mon(n, "Gastly", ["Curse"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
     out = assert_matches_reference(tables, s, (0, 0), O)
@@ -146,7 +146,9 @@ def test_future_sight_law_reads_the_lock_after_the_countdown(tables, names):
         lock_on=s.lock_on.at[1].set(1),
         lock_on_target=s.lock_on_target.at[1].set(1),
     )
-    at_hit = s._replace(lock_on=s.lock_on.at[1].set(0), lock_on_target=s.lock_on_target.at[1].set(0))
+    at_hit = s._replace(
+        lock_on=s.lock_on.at[1].set(0), lock_on_target=s.lock_on_target.at[1].set(0)
+    )
     live = int(future_threshold(tables, at_hit, 1))
     assert live < 100
     laws = outcome_laws(tables, s, jnp.asarray([0, 0]))

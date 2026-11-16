@@ -49,12 +49,13 @@ from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ITEM_GRISEOUS_ORB,
+    MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
+    SEMI_HIT_FLAGS,
     SPECIES_CLAMPERL,
-    STOMP_PARAM,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
     SPECIES_DITTO,
@@ -64,12 +65,14 @@ from nuzline.engine.ids import (
     SPECIES_MAROWAK,
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
+    STOMP_PARAM,
     UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Status,
     Type,
@@ -305,8 +308,9 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 
 # effect_script_0048.s, _0269.s (RECOIL: Take Down, Double-Edge, ...): a Reckless attacker
 # (CheckAbility, Battler_Ability) sets BTLVAR_POWER_MULTI to 12 before CalcCrit / CalcDamage;
-# the other Reckless scripts (0045, 0198, 0253, 0262) are unsupported effects.
+# effect_script_0045.s (CRASH), _0253.s and _0262.s (RECOIL_STATUS) check it the same way.
 RECKLESS_POWER_MUL = 12
+RECKLESS_EFFECTS = (EffectId.RECOIL, EffectId.RECOIL_STATUS, EffectId.CRASH)
 
 
 # BTLVAR_POWER_MULTI 20 (effect_script_0169.s, _0171.s, _0221.s).
@@ -318,12 +322,14 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     battler: SmellingSalt against a paralyzed defender (effect_script_0171.s:6), Facade for a
     user with ``MON_CONDITION_FACADE_BOOST`` (effect_script_0169.s:5), Brine against
     ``curHP <= maxHP / 2`` (effect_script_0221.s:5-8; ``OPCODE_DIV`` is a plain ``/``,
-    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` meets no substitute:
-    Substitute is an unsupported move."""
+    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` (effect_script_0171.s:5) jumps
+    past the x2 for a defender behind a substitute (its bit: no hit of the action came first)."""
     move = _i32(move)
     cond = _i32(tables.move_param[move, 0])
     user, target = state.active[atk_side], state.active[def_side]
-    paralyzed = state.status[def_side, target] == Status.PARALYSIS
+    paralyzed = (state.status[def_side, target] == Status.PARALYSIS) & (
+        state.substitute_hp[def_side] == 0
+    )
     statused = jnp.isin(state.status[atk_side, user], jnp.asarray(FACADE_STATUSES, jnp.int8))
     half = _i32(state.hp[def_side, target]) <= _i32(state.max_hp[def_side, target]) // 2
     holds = jnp.where(
@@ -334,6 +340,17 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
         ),
     )
     return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
+
+
+# MoveFlag.HIT_* by ids.SemiKind (index 0, no bit, hits nothing).
+_SEMI_HIT_BITS = (0, *(int(SEMI_HIT_FLAGS[k]) for k in sorted(SEMI_HIT_FLAGS)))
+
+
+def hits_semi(tables: Tables, move, kind) -> jnp.ndarray:
+    """``bool``: ``move``'s script sets the SYSCTL_HIT_DURING_* of the semi-invulnerable
+    ``kind`` (an ``ids.SemiKind``; CheckMoveHitOverrides, bcp.c:3034-3040), B10-12."""
+    bits = jnp.asarray(_SEMI_HIT_BITS, _I32)[_i32(kind)]
+    return (_i32(tables.move_flags[_i32(move)]) & bits) != 0
 
 
 def script_power_mul(
@@ -347,13 +364,19 @@ def script_power_mul(
     move script."""
     atk_side = _i32(atk_side)
     reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
-    recoil = tables.move_effect[_i32(move)] == EffectId.RECOIL
+    # effect_script_0045.s, _0253.s, _0262.s set it too (E2 batch 10, B10-1, B10-2).
+    recoil = jnp.isin(tables.move_effect[_i32(move)], jnp.asarray(RECKLESS_EFFECTS, jnp.int32))
     doubled = double_power(tables, state, atk_side, def_side, move)
     # Stomp (effect_script_0150.s:6-8): powerMul 10, or 20 against MOVE_EFFECT_MINIMIZE (B9-10).
     stomp = (tables.move_effect[_i32(move)] == EffectId.FLINCH) & (
         _i32(tables.move_param[_i32(move), 2]) == STOMP_PARAM
     )
     doubled = doubled | (stomp & (state.minimized[def_side] != 0))
+    # Gust / Twister, Earthquake / Magnitude, Surf / Whirlpool (effect_script_0146.s, _0149.s,
+    # _0126.s, _0147.s, _0257.s, _0261.s: line 7-8): powerMul 20 against a defender with the
+    # MOVE_EFFECT_* bit the move hits (MoveFlag.DOUBLE_SEMI), B10-12.
+    semi_double = (_i32(tables.move_flags[_i32(move)]) & MoveFlag.DOUBLE_SEMI) != 0
+    doubled = doubled | (semi_double & hits_semi(tables, move, state.semi_invulnerable[def_side]))
     out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
     return jnp.where(doubled, DOUBLE_POWER_MUL, out)
 
@@ -465,10 +488,15 @@ def fixed_damage(
     flat = _i32(tables.move_param[_i32(move), 0])
     level = jnp.where(is_level & (flat > 0), flat, level)
     amount = jnp.where(is_ohko, ohko, jnp.where(is_halve, halved, level))
+    # Endeavor (effect_script_0189.s:5-9): the defender's curHP minus the attacker's under
+    # SYSCTL_IGNORE_TYPE_CHECKS; a difference <= 0 fails the move (step._use_move), B10-5.
+    is_endeavor = effect == EffectId.ENDEAVOR
+    gap = _i32(state.hp[def_side, target]) - _i32(state.hp[atk_side, state.active[atk_side]])
+    amount = jnp.where(is_endeavor, jnp.maximum(gap, 0), amount)
     # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
     # the stored hit is step._future_sight's.
     is_future = effect == EffectId.FUTURE_SIGHT
-    fixed = is_level | is_bide | is_halve | is_ohko | is_future
+    fixed = is_level | is_bide | is_halve | is_ohko | is_future | is_endeavor
     amount = jnp.where(is_future, 0, amount)
     return fixed, jnp.where(is_bide, stored, jnp.where(immune, 0, amount))
 
@@ -940,6 +968,15 @@ def _pre_random(
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
+    # :7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (rain, sandstorm, hail,
+    # fog: condition.h:136-139) is halved, between rain and sun (B10-13).
+    solar_down = (
+        (weather == Weather.RAIN)
+        | (weather == Weather.SANDSTORM)
+        | (weather == Weather.HAIL)
+        | (weather == Weather.FOG)
+    )
+    damage = jnp.where(solar_down & (move == MOVE_SOLAR_BEAM) & (not self_hit), damage // 2, damage)
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 

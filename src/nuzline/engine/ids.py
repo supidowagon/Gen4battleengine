@@ -263,6 +263,49 @@ class EffectId(IntEnum):
     # Belly Drum (subscript_belly_drum.s, B9-10): fails at Attack +6 or curHP <= Divide(maxHP, 2)
     # (:3-6, MOVE_STATUS_FAILED); else Attack +6 and Divide(maxHP, 2) lost through UPDATE_HP.
     BELLY_DRUM = 79
+    # E2 batch 10, B10-1. Volt Tackle's family (262, BATTLE_EFFECT_RECOIL_PARALYZE_HIT) and Flare
+    # Blitz's (253, _RECOIL_BURN_HIT): ``(Status, divisor, thaws_user)``. The script's indirect
+    # MOVE_SIDE_EFFECT_PROBABILISTIC subscript (subscript_recoil_1_3_chance_to_{paralyze,burn}.s)
+    # runs on every hit that hit: recoil Divide(hitDamage, divisor) (Rock Head, Magic Guard skip
+    # it), then the status as a secondary one when the roll passed and the defender had HP
+    # (battle_lib.c:1551-1567). Flare Blitz's family thaws its frozen user (bcp.c:2481, :2730).
+    RECOIL_STATUS = 80
+    # Jump Kick / Hi Jump Kick (45, BATTLE_EFFECT_CRASH_ON_MISS): zeros. A plain hit whose
+    # SYSCTL_CRASH_DAMAGE makes subscript_missed.s run subscript_crash_on_miss.s: the user loses
+    # min(Divide(damage, 2), Divide(defender maxHP, 2)) of the damage the script computed
+    # (crit and roll included, then the type chart), Magic Guard excepted (B10-2).
+    CRASH = 81
+    # Substitute (79, BATTLE_EFFECT_SET_SUBSTITUTE): zeros. subscript_try_substitute.s: fails
+    # behind one or at curHP <= Divide(maxHP, 4); else ``substitute_hp`` = Divide(maxHP, 4), the
+    # user's bind cleared and the HP lost (``effects._substitute``, B10-4).
+    SUBSTITUTE = 82
+    # Endeavor (189, BATTLE_EFFECT_SET_HP_EQUAL_TO_USER): zeros. effect_script_0189.s: fails
+    # (MOVE_STATUS_FAILED, :7, :13-14) unless the defender's curHP exceeds the attacker's; else
+    # battleCtx->damage = their difference under SYSCTL_IGNORE_TYPE_CHECKS (no CalcCrit /
+    # CalcDamage; an immunity still flags), B10-5.
+    ENDEAVOR = 83
+    # Pain Split (91, BATTLE_EFFECT_AVERAGE_HP): zeros. A direct ON_HIT subscript_pain_split.s:
+    # fails behind a substitute (:5, :50-52); else both battlers' HP become (a + d) / 2 through
+    # UPDATE_HP (:7-19), B10-5.
+    PAIN_SPLIT = 84
+    # Knock Off (188, BATTLE_EFFECT_REMOVE_HELD_ITEM): zeros. A table hit with an indirect ON_HIT
+    # subscript_knock_off.s (``effects._knock_off``), B10-6.
+    KNOCK_OFF = 85
+    # Safeguard (124, BATTLE_EFFECT_PREVENT_STATUS): zeros. subscript_safeguard_start.s ->
+    # BtlCmd_TrySafeguard (battle_script.c:5754-5772): fails with the user's side's Safeguard up,
+    # else 5 turns on it (``effects._safeguard``), B10-7.
+    SAFEGUARD = 86
+    # Focus Punch (170, BATTLE_EFFECT_HIT_LAST_WHIFF_IF_HIT): zeros. effect_script_0170.s: a
+    # user with its turnFlags physical / specialDamageAttackerMask set (a hit on its HP this turn,
+    # bcp.c:3416-3424) gets MOVE_STATUS_LOST_FOCUS (:5-6, :12-16; a DID_NOT_HIT status:
+    # subscript_missed.s:8-10, "lost its focus"); else a plain table hit (B10-8).
+    FOCUS_PUNCH = 87
+    # Encore (90, BATTLE_EFFECT_ENCORE): zeros. A direct ON_HIT subscript_encore_start.s ->
+    # BtlCmd_TryEncore (battle_script.c:4725-4748), ``effects._encore``, B10-9.
+    ENCORE = 88
+    # Assist (180, BATTLE_EFFECT_USE_RANDOM_ALLY_MOVE): zeros. effect_script_0180.s: BtlCmd_TryAssist
+    # (battle_script.c:6405-6444) then GoToMoveScript: an invoker (``order.CALL_ASSIST``), B10-11.
+    ASSIST = 89
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -303,6 +346,7 @@ UNROLLED_EFFECTS = (
     EffectId.OHKO,
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
+    EffectId.ENDEAVOR,  # effect_script_0189.s: the HP difference (B10-5)
 )
 # BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
 FUTURE_SIGHT_TURNS = 3
@@ -660,6 +704,10 @@ class ItemId(IntEnum):
     # item needs (0: any holder). ``BattleSystem_CalcCriticalMulti`` adds 1 stage for the first,
     # 2 for a species item on its species (battle_lib.c:7123-7128; ``outcome.crit_odds``).
     CRIT_ITEM = 50
+    # Power Herb (HOLD_EFFECT_CHARGE_SKIP, generated/item_hold_effects.txt:100): a charge move's
+    # first use hits at once and the herb is used up (subscript_item_skip_charge_turn.s,
+    # effect_script_0039.s:7 and the other charge scripts, B10-12).
+    POWER_HERB = 51
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -754,6 +802,65 @@ class MoveFlag(IntFlag):
     # (cleared in hail, :3029-3031), all inside NO_CLOUD_NINE.
     THUNDER = 128
     BLIZZARD = 256
+    # E2 batch 10 family 7, the charge turn (B10-12..). CHARGE: Move_IsMultiTurn's charge-up
+    # effects (battle_lib.c:2975-2992 without Bide: 39, 75, 145, 151, 155, 255, 256, 263, 272),
+    # whose scripts charge on a first use (SYSCTL_FIRST_OF_MULTI_TURN and the direct
+    # subscript_vanish_on_charge_turn.s, which locks the user) and hit while
+    # VOLATILE_CONDITION_MOVE_LOCKED is set (effect_script_0039.s:5 and the others' line 5).
+    CHARGE = 512
+    # BATTLE_EFFECT_SKIP_CHARGE_TURN_IN_SUN (151, SolarBeam): effect_script_0151.s:5-6 hits at
+    # once in sun unless CheckIgnoreWeather (Cloud Nine, Air Lock: battle_script.c:9195-9206).
+    SUN_SKIP = 1024
+    # BATTLE_EFFECT_CHARGE_TURN_DEF_UP (145, Skull Bash): effect_script_0145.s:8 the charge turn's
+    # indirect TO_ATTACKER Defense +1 (with a Power Herb: subscript_power_herb_skull_bash.s:14-17).
+    CHARGE_DEF_UP = 2048
+    # The semi-invulnerable bit the charge sets on the user (moves.h:14-15, :26, :37):
+    # MOVE_EFFECT_AIRBORNE (Fly 155, Bounce 263), _UNDERGROUND (Dig 256), _UNDERWATER (Dive 255),
+    # _SHADOW_FORCE (272); effect_script_0155.s:7 and the others' line 7-8.
+    SEMI_AIR = 4096
+    SEMI_DIG = 8192
+    SEMI_DIVE = 16384
+    SEMI_SHADOW = 32768
+    # SYSCTL_HIT_DURING_FLY / _DIG / _DIVE / _SHADOW_FORCE (system_control.h:6-8, :27) its script
+    # sets: CheckMoveHitOverrides then lets the move hit a defender with that bit
+    # (battle_controller_player.c:3034-3040). FLY: 146, 149, 152, 207; DIG: 126, 147; DIVE: 257,
+    # 261; all four: 148, 168, 176.
+    HIT_AIR = 65536
+    HIT_DIG = 131072
+    HIT_DIVE = 262144
+    HIT_SHADOW = 524288
+    # BTLVAR_POWER_MULTI 20 against a defender with the bit the move hits (effect_script_0146.s,
+    # _0149.s: AIRBORNE; _0126.s, _0147.s: UNDERGROUND; _0257.s, _0261.s: UNDERWATER; line 8-9).
+    DOUBLE_SEMI = 1048576
+    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16).
+    CRIT_UP = 2097152
+
+
+class SemiKind(IntEnum):
+    """``BattleState.semi_invulnerable``: which MOVE_EFFECT_SEMI_INVULNERABLE bit
+    (moves.h:14-15, :26, :37, :44) the battler's ``moveEffectsMask`` holds, 0 for none; a
+    charge sets one at a time (B10-12)."""
+
+    NONE = 0
+    AIRBORNE = 1  # Fly, Bounce
+    UNDERGROUND = 2  # Dig
+    UNDERWATER = 3  # Dive
+    SHADOW_FORCE = 4
+
+
+# The ``MoveFlag`` a charge move sets on its user, and the one a move hits through, per kind.
+SEMI_SET_FLAGS = {
+    SemiKind.AIRBORNE: MoveFlag.SEMI_AIR,
+    SemiKind.UNDERGROUND: MoveFlag.SEMI_DIG,
+    SemiKind.UNDERWATER: MoveFlag.SEMI_DIVE,
+    SemiKind.SHADOW_FORCE: MoveFlag.SEMI_SHADOW,
+}
+SEMI_HIT_FLAGS = {
+    SemiKind.AIRBORNE: MoveFlag.HIT_AIR,
+    SemiKind.UNDERGROUND: MoveFlag.HIT_DIG,
+    SemiKind.UNDERWATER: MoveFlag.HIT_DIVE,
+    SemiKind.SHADOW_FORCE: MoveFlag.HIT_SHADOW,
+}
 
 
 class MoveTarget(IntEnum):
@@ -847,6 +954,16 @@ SLEEP_TALK_VALUES = 12
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).
 MOVE_FAKE_OUT = 252
+# MOVE_KNOCK_OFF (generated/moves.txt): the on-hit Sticky Barb transfer skips it
+# (battle_lib.c:5391), B10-6.
+MOVE_KNOCK_OFF = 282
+# sCannotEncoreMoves (battle_lib.c:7212-7219): Move_CanBeEncored compares their battle effects
+# (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
+# Encore, Struggle (generated/moves.txt), B10-9.
+CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
+# Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
+# Mirror Move, Metronome (generated/moves.txt), B10-11.
+INVOKER_MOVES = (0, 214, 383, 274, 382, 119, 118)
 # Protect, Detect, Endure (``generated/moves.txt`` lines 183, 198, 204): ``BtlCmd_TryProtection``
 # (battle_script.c:5154-5158) keeps the chain only when ``moveProtect`` is one of them, and
 # ``AICmd_LoadProtectChain`` (trainer_ai.c:2546-2552) reads it the same way. The engine folds
@@ -858,6 +975,9 @@ MOVE_ENDURE = 203
 # Choice lock for them (bcp.c:3927-3928, by ``moveTemp``).
 MOVE_BATON_PASS = 226
 MOVE_U_TURN = 369
+# SolarBeam (generated/moves.txt line 77): BattleSystem_CalcMoveDamage halves it by move id under
+# FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
+MOVE_SOLAR_BEAM = 76
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``
@@ -909,6 +1029,8 @@ ITEM_ABILITY_IDS = {
     "Immunity": 17,
     "Water Veil": 41,
     "Leaf Guard": 102,
+    # subscript_knock_off.s / BtlCmd_TryKnockOff (battle_script.c:6614), B10-6.
+    "Sticky Hold": 60,
 }
 
 # ``sTerrainCamouflageType`` (include/data/terrain/to_type.h), indexed like ``TERRAIN_MOVES``.

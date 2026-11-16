@@ -434,6 +434,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.SLEEP_TALK,
     EffectId.METRONOME,
     EffectId.COPYCAT,
+    EffectId.ASSIST,  # an invoker (B10-11)
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -456,6 +457,19 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.FOLLOW_ME,
     EffectId.HELPING_HAND,
     EffectId.BELLY_DRUM,
+    # E2 batch 10: hits whose recoil, status or crash write no stage (B10-1, B10-2); Substitute
+    # writes the user's HP and substitute only (B10-4).
+    EffectId.RECOIL_STATUS,
+    EffectId.CRASH,
+    EffectId.SUBSTITUTE,
+    # Endeavor and Pain Split write HP only (B10-5).
+    EffectId.ENDEAVOR,
+    EffectId.PAIN_SPLIT,
+    # Knock Off takes an item only (B10-6).
+    EffectId.KNOCK_OFF,
+    EffectId.SAFEGUARD,  # a side condition (B10-7)
+    EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
+    EffectId.ENCORE,  # sets the encore only (B10-9)
 }
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {

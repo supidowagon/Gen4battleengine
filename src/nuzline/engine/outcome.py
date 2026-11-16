@@ -56,10 +56,12 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import (
+    CALL_ASSIST,
     CALL_METRONOME,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
+    assist_candidates,
     call_kind,
     is_item,
     is_switch,
@@ -711,6 +713,9 @@ def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.nd
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
+    # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
+    # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
+    stage = stage + ((tables.move_flags[moves].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
     super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
     stage = stage + super_luck.astype(_I32)
@@ -936,8 +941,21 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         ranks.append(jnp.sum(cands & (jnp.arange(weights.shape[0]) < pick)))
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     kinds = call_kind(tables, chosen)
+    # Assist (B10-11): RandNext() % numMoves over its list (order.assist_candidates), fixed for
+    # the turn (the party's moves; the user is its active battler throughout).
+    assist = []
+    for side in (0, 1):
+        count = jnp.sum(assist_candidates(tables, state, side)[1].astype(_I32))
+        draw_ = jax.random.randint(jax.random.fold_in(key, 30 + side), (), 0, jnp.maximum(count, 1))
+        assist.append(draw_.astype(_I32))
     call = jnp.where(
-        kinds == CALL_SLEEP_TALK, talk, jnp.where(kinds == CALL_METRONOME, jnp.stack(ranks), 0)
+        kinds == CALL_SLEEP_TALK,
+        talk,
+        jnp.where(
+            kinds == CALL_METRONOME,
+            jnp.stack(ranks),
+            jnp.where(kinds == CALL_ASSIST, jnp.stack(assist), 0),
+        ),
     )
     # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
     # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
@@ -969,10 +987,15 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     # same 3-6 as Bind.
     effect = tables.move_effect[moves]
     three = (effect == EffectId.TRAP) | (effect == EffectId.DISABLE) | (effect == EffectId.UPROAR)
+    # BtlCmd_TryEncore (battle_script.c:4742): RandNext() % 5 + 3, 3-7 (B10-9).
     duration = jnp.where(
         effect == EffectId.TAUNT,
         draw(13, per_side, 3) + 3,
-        draw(10, per_side, 4) + jnp.where(three, 3, 2),
+        jnp.where(
+            effect == EffectId.ENCORE,
+            draw(10, per_side, 5) + 3,
+            draw(10, per_side, 4) + jnp.where(three, 3, 2),
+        ),
     )
     outcome = Outcome(
         speed_tie=speed_tie,

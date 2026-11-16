@@ -1,5 +1,6 @@
-"""The opponent-legality invariant (test side only, no engine cost; ledger "Opponent-action
-legality"): every action the AI policy picks, or gives a positive probability, is one
+"""The opponent-legality invariant, HOST-SIDE PICKS ONLY (test side only, no engine cost;
+ledger "Opponent-action legality"; jitted playouts' picks are not checked, see below): every
+action the AI policy picks, or gives a positive probability, is one
 ``legal_opponent_actions`` allows in that state; every replacement it picks is a
 ``legal_replacements`` slot. ``step`` trusts the AI for this (it checks no opponent action), so
 the tests check it on the concrete outputs of every host-side call, never inside a traced
@@ -28,7 +29,8 @@ EXCEPTED: tuple[str, ...] = ()
 
 
 class IllegalAiAction(AssertionError):
-    """The AI chose (or weighted) an action the opponent may not take."""
+    """The AI chose (or weighted) an action the opponent may not take, in a host-side call (a
+    traced pick inside a jitted program is never checked)."""
 
 
 def _concrete(*xs) -> bool:

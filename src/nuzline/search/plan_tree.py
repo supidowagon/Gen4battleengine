@@ -269,6 +269,7 @@ _COND_TEXT = {
     "lock_on": "locked onto",
     "yawn": "drowsy",
     "minimized": "minimized",
+    "semi_invulnerable": "semi-invulnerable",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

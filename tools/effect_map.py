@@ -64,6 +64,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Status,
     TrainerItemId,
@@ -144,11 +145,12 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Pay Day: effect_script_0034.s, a hit plus subscript_pay_day.s (prize money only).
     34: ("BATTLE_EFFECT_INCREASE_PRIZE_MONEY", _E.PLAIN, (0, 0, 0)),
     42: ("BATTLE_EFFECT_BIND_HIT", _E.TRAP, (0, 0, 0)),
-    # Gust: effect_script_0149.s doubles the power against MOVE_EFFECT_AIRBORNE (Fly,
-    # Bounce), which no supported move sets (test_gust_note_holds).
+    # Gust: effect_script_0149.s hits a Fly / Bounce user (SYSCTL_HIT_DURING_FLY) and doubles the
+    # power against MOVE_EFFECT_AIRBORNE (MoveFlag.HIT_AIR, DOUBLE_SEMI: SEMI_HIT_EFFECTS, B10-12).
     149: ("BATTLE_EFFECT_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.PLAIN, (0, 0, 0)),
     # Sand Tomb (Kaizo), Whirlpool: effect_script_0261.s is Bind's script (the same
-    # BIND_TARGET indirect effect) plus a x2 against MOVE_EFFECT_UNDERWATER (Dive, unsupported).
+    # BIND_TARGET indirect effect) plus SYSCTL_HIT_DURING_DIVE and a x2 against
+    # MOVE_EFFECT_UNDERWATER (SEMI_HIT_EFFECTS, B10-12).
     261: ("BATTLE_EFFECT_WHIRLPOOL", _E.TRAP, (0, 0, 0)),
     43: ("BATTLE_EFFECT_HIGH_CRITICAL", _E.HIGH_CRIT, (0, 0, 0)),
     # subscript_recoil_1_4.s: DivideVarByValue(hitDamage, 4) (E2 batch 9: RECOIL's param 0 is
@@ -177,8 +179,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     103: ("BATTLE_EFFECT_PRIORITY_1", _E.PLAIN, (0, 0, 0)),
     # Flame Wheel, Sacred Fire: effect_script_0125.s is BURN_HIT's script; the effect id
     # itself lets a frozen user move and thaw (battle_controller_player.c:2481, :2728),
-    # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 254) also has a
-    # third recoil and stays unsupported.
+    # flagged by move_param[m, 2] = 1. RECOIL_BURN_HIT (Flare Blitz, 253) adds a third
+    # recoil: RECOIL_STATUS (E2 batch 10, below).
     # Foresight, Odor Sleuth: effect_script_0113.s, an on-hit indirect effect
     # (subscript_foresight.s sets VOLATILE_CONDITION_FORESIGHT on the defender).
     # Confusion, Psybeam, Dizzy Punch, ...: effect_script_0076.s, a probabilistic indirect
@@ -235,6 +237,15 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Double-Edge, Wood Hammer: effect_script_0198.s (Reckless x1.2, ON_HIT
     # subscript_recoil_1_3.s: DivideVarByValue(hitDamage, 3)) (B9-4).
     198: ("BATTLE_EFFECT_RECOIL_THIRD", _E.RECOIL, (3, 0, 0)),
+    # E2 batch 10, B10-1: effect_script_0262.s / _0253.s (Reckless x1.2, then an indirect
+    # PROBABILISTIC TO_DEFENDER subscript_recoil_1_3_chance_to_{paralyze,burn}.s): recoil 1/3,
+    # then the status at the move's chance; 253 lets a frozen user move and thaws it
+    # (battle_controller_player.c:2481, :2730).
+    262: ("BATTLE_EFFECT_RECOIL_PARALYZE_HIT", _E.RECOIL_STATUS, (Status.PARALYSIS, 3, 0)),
+    253: ("BATTLE_EFFECT_RECOIL_BURN_HIT", _E.RECOIL_STATUS, (Status.BURN, 3, 1)),
+    # Jump Kick, Hi Jump Kick (B10-2): effect_script_0045.s (Reckless x1.2, SYSCTL_CRASH_DAMAGE,
+    # CalcCrit, CalcDamage); subscript_crash_on_miss.s from subscript_missed.s:98.
+    45: ("BATTLE_EFFECT_CRASH_ON_MISS", _E.CRASH, (0, 0, 0)),
     271: ("BATTLE_EFFECT_LOWER_SP_DEF_2_HIT", _E.SECONDARY_STAT_FOE, (_SPD, -2, 0)),
     # effect_script_0275.s -> subscript_paralyze_or_flinch.s: a paralysis roll, then a flinch
     # roll (engine/effects.py ``_fang``).
@@ -248,8 +259,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Thunder (effect_script_0152.s) and Blizzard (_0260.s): a probabilistic TO_DEFENDER
     # paralysis / freeze, as effects 6 / 5; their weather accuracy is by effect id in
     # CheckMoveHitAccuracy / CheckMoveHitOverrides (bcp.c:2915-2917, :3024-3031), carried as
-    # MoveFlag.THUNDER / BLIZZARD (tools/build_tables.py); Thunder's SYSCTL_HIT_DURING_FLY only
-    # matters against Fly / Bounce, unsupported moves (B9-1).
+    # MoveFlag.THUNDER / BLIZZARD (tools/build_tables.py); Thunder's SYSCTL_HIT_DURING_FLY is
+    # MoveFlag.HIT_AIR (SEMI_HIT_EFFECTS, B10-12).
     152: ("BATTLE_EFFECT_THUNDER", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
     260: ("BATTLE_EFFECT_BLIZZARD", _E.SECONDARY_STATUS, (Status.FREEZE, 0, 0)),
     # effect_script_0122.s: BtlCmd_Present (battle_script.c:5789-5806) draws the power or the
@@ -316,9 +327,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     40: ("BATTLE_EFFECT_HALVE_HP", _E.HALVE_HP, (0, 0, 0)),
     38: ("BATTLE_EFFECT_ONE_HIT_KO", _E.OHKO, (0, 0, 0)),
     101: ("BATTLE_EFFECT_LEAVE_WITH_1_HP", _E.FALSE_SWIPE, (0, 0, 0)),
-    # Earthquake: effect_script_0147.s doubles the power against MOVE_EFFECT_UNDERGROUND (Dig),
-    # which no supported move sets, like Gust (149); SYSCTL_HIT_DURING_DIG only matters against
-    # a digging target.
+    # Earthquake: effect_script_0147.s hits a Dig user (SYSCTL_HIT_DURING_DIG) and doubles the
+    # power against MOVE_EFFECT_UNDERGROUND (SEMI_HIT_EFFECTS, B10-12).
     147: ("BATTLE_EFFECT_DOUBLE_DAMAGE_DIG", _E.PLAIN, (0, 0, 0)),
     # Poison Fang: effect_script_0202.s, an indirect TO_DEFENDER badly-poison at the move's
     # chance (subscript_badly_poison.s).
@@ -345,6 +355,21 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     208: ("BATTLE_EFFECT_ATK_DEF_UP", _E.DRAGON_DANCE, (_DEF, 0, 0)),
     # Belly Drum: effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s (B9-10).
     142: ("BATTLE_EFFECT_MAX_ATK_LOSE_HALF_MAX_HP", _E.BELLY_DRUM, (0, 0, 0)),
+    # Substitute (B10-4): effect_script_0079.s, a direct ON_HIT subscript_try_substitute.s.
+    79: ("BATTLE_EFFECT_SET_SUBSTITUTE", _E.SUBSTITUTE, (0, 0, 0)),
+    # Endeavor, Pain Split (B10-5): effect_script_0189.s, effect_script_0091.s.
+    189: ("BATTLE_EFFECT_SET_HP_EQUAL_TO_USER", _E.ENDEAVOR, (0, 0, 0)),
+    91: ("BATTLE_EFFECT_AVERAGE_HP", _E.PAIN_SPLIT, (0, 0, 0)),
+    # Knock Off (B10-6): effect_script_0188.s, an indirect ON_HIT subscript_knock_off.s.
+    188: ("BATTLE_EFFECT_REMOVE_HELD_ITEM", _E.KNOCK_OFF, (0, 0, 0)),
+    # Safeguard (B10-7): effect_script_0124.s, a direct ON_HIT subscript_safeguard_start.s.
+    124: ("BATTLE_EFFECT_PREVENT_STATUS", _E.SAFEGUARD, (0, 0, 0)),
+    # Focus Punch (B10-8): effect_script_0170.s, CalcCrit / CalcDamage unless it lost its focus.
+    170: ("BATTLE_EFFECT_HIT_LAST_WHIFF_IF_HIT", _E.FOCUS_PUNCH, (0, 0, 0)),
+    # Encore (B10-9): effect_script_0090.s, a direct ON_HIT subscript_encore_start.s.
+    90: ("BATTLE_EFFECT_ENCORE", _E.ENCORE, (0, 0, 0)),
+    # Assist (B10-11): effect_script_0180.s, TryAssist then GoToMoveScript (an invoker).
+    180: ("BATTLE_EFFECT_USE_RANDOM_ALLY_MOVE", _E.ASSIST, (0, 0, 0)),
     # Minimize: effect_script_0108.s, a direct TO_ATTACKER subscript_minimize.s: the user's
     # MOVE_EFFECT_MINIMIZE, then Evasion +1 (STAT_SELF with move_param[m, 2] = MINIMIZE_PARAM).
     108: ("BATTLE_EFFECT_EVA_UP_2_MINIMIZE", _E.STAT_SELF, (_EVA, 1, MINIMIZE_PARAM)),
@@ -373,14 +398,41 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     114: ("BATTLE_EFFECT_ALL_FAINT_3_TURNS", _E.PERISH_SONG, (0, 0, 0)),
     # Yawn: effect_script_0187.s (a direct subscript_yawn.s).
     187: ("BATTLE_EFFECT_STATUS_SLEEP_NEXT_TURN", _E.YAWN, (0, 0, 0)),
-    # E2 batch 9 (B9-5). Surf: effect_script_0257.s doubles the power against
-    # MOVE_EFFECT_UNDERWATER (Dive), which no supported move sets, like Gust (149) and Earthquake
-    # (147); SYSCTL_HIT_DURING_DIVE only matters against a diving target.
+    # E2 batch 9 (B9-5). Surf: effect_script_0257.s hits a Dive user (SYSCTL_HIT_DURING_DIVE) and
+    # doubles the power against MOVE_EFFECT_UNDERWATER (SEMI_HIT_EFFECTS, B10-12).
     257: ("BATTLE_EFFECT_DOUBLE_DAMAGE_DIVE", _E.PLAIN, (0, 0, 0)),
     # Follow Me: effect_script_0172.s (BtlCmd_FollowMe, battle_script.c:6261-6270, then an ON_HIT
     # message). Helping Hand: effect_script_0176.s (BtlCmd_TryHelpingHand, :6291-6314).
     172: ("BATTLE_EFFECT_MAKE_GLOBAL_TARGET", _E.FOLLOW_ME, (0, 0, 0)),
     176: ("BATTLE_EFFECT_BOOST_ALLY_POWER_BY_50_PERCENT", _E.HELPING_HAND, (0, 0, 0)),
+    # E2 batch 10 family 7, the charge turn (B10-12..): each charge move is its attack turn's
+    # effect; MoveFlag.CHARGE and its kin (CHARGE_FLAG_EFFECTS) carry the charge (step._use_move).
+    # Razor Wind: effect_script_0039.s, CRITICAL_BOOSTS + 1, CalcCrit, CalcDamage (:17-19).
+    39: ("BATTLE_EFFECT_CHARGE_TURN_HIGH_CRIT", _E.PLAIN, (0, 0, 0)),
+    # Sky Attack: effect_script_0075.s, CRITICAL_BOOSTS + 1, CalcCrit, CalcDamage, then the
+    # indirect TO_DEFENDER flinch at the move's chance (:16-19), as Headbutt's (31).
+    75: ("BATTLE_EFFECT_CHARGE_TURN_HIGH_CRIT_FLINCH", _E.FLINCH, (0, 0, 0)),
+    # Skull Bash: effect_script_0145.s, CalcCrit, CalcDamage (:17-18); its Defense +1 is the
+    # charge's (MoveFlag.CHARGE_DEF_UP).
+    145: ("BATTLE_EFFECT_CHARGE_TURN_DEF_UP", _E.PLAIN, (0, 0, 0)),
+    # SolarBeam: effect_script_0151.s, CalcCrit, CalcDamage (:22-23); no charge in sun.
+    151: ("BATTLE_EFFECT_SKIP_CHARGE_TURN_IN_SUN", _E.PLAIN, (0, 0, 0)),
+    # Fly, Dive, Dig: effect_script_0155.s / _0255.s / _0256.s, CalcCrit, CalcDamage (:20-21).
+    155: ("BATTLE_EFFECT_FLY", _E.PLAIN, (0, 0, 0)),
+    255: ("BATTLE_EFFECT_DIVE", _E.PLAIN, (0, 0, 0)),
+    256: ("BATTLE_EFFECT_DIG", _E.PLAIN, (0, 0, 0)),
+    # Bounce: effect_script_0263.s, the indirect TO_DEFENDER paralysis at the move's chance, then
+    # CalcCrit, CalcDamage (:20-22), as Thunderbolt's (6).
+    263: ("BATTLE_EFFECT_BOUNCE", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
+    # Shadow Force: effect_script_0272.s, an ON_HIT subscript_feint.s (:21) and CalcCrit,
+    # CalcDamage: the feint only clears the defender's turnFlags.protecting (subscript_feint.s:20),
+    # which in singles nothing reads after the defender's own action (it acted, as it protected).
+    272: ("BATTLE_EFFECT_SHADOW_FORCE", _E.PLAIN, (0, 0, 0)),
+    # Twister: effect_script_0146.s, Headbutt's flinch (:5) with SYSCTL_HIT_DURING_FLY and a x2
+    # against MOVE_EFFECT_AIRBORNE (SEMI_HIT_EFFECTS).
+    146: ("BATTLE_EFFECT_FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.FLINCH, (0, 0, 0)),
+    # Sky Uppercut: effect_script_0207.s, SYSCTL_HIT_DURING_FLY then CalcCrit, CalcDamage.
+    207: ("BATTLE_EFFECT_HIT_FLY", _E.PLAIN, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -439,6 +491,37 @@ BLIZZARD_EFFECT = 260  # BATTLE_EFFECT_BLIZZARD
 # CHARGE_TURN_HIGH_CRIT_FLINCH, CHARGE_TURN_DEF_UP, SKIP_CHARGE_TURN_IN_SUN, FLY, DIVE, DIG,
 # BOUNCE, SHADOW_FORCE (generated/move_battle_effects.txt).
 MULTI_TURN_EFFECTS: tuple[int, ...] = (26, 39, 75, 145, 151, 155, 255, 256, 263, 272)
+# E2 batch 10 family 7 (B10-12..): decomp effect id -> the MoveFlag bits of its charge
+# (tools/build_tables.py ``_move_flags``; ids.MoveFlag cites each script).
+CHARGE_FLAG_EFFECTS: dict[int, int] = {
+    39: MoveFlag.CHARGE | MoveFlag.CRIT_UP,
+    75: MoveFlag.CHARGE | MoveFlag.CRIT_UP,
+    145: MoveFlag.CHARGE | MoveFlag.CHARGE_DEF_UP,
+    151: MoveFlag.CHARGE | MoveFlag.SUN_SKIP,
+    155: MoveFlag.CHARGE | MoveFlag.SEMI_AIR,
+    263: MoveFlag.CHARGE | MoveFlag.SEMI_AIR,
+    256: MoveFlag.CHARGE | MoveFlag.SEMI_DIG,
+    255: MoveFlag.CHARGE | MoveFlag.SEMI_DIVE,
+    272: MoveFlag.CHARGE | MoveFlag.SEMI_SHADOW,
+}
+# The scripts that set SYSCTL_HIT_DURING_* (and BTLVAR_POWER_MULTI 20 against that bit): decomp
+# effect id -> MoveFlag bits. effect_script_0146.s:6-9, _0149.s:5-8 (Fly); _0152.s:6, _0207.s:5
+# (Fly, no x2); _0126.s:5-8, _0147.s:5-8 (Dig); _0257.s:5-8, _0261.s:5-8 (Dive); _0148.s:7,
+# _0168.s:11, _0176.s:9 (all four).
+_ALL_HIT = MoveFlag.HIT_AIR | MoveFlag.HIT_DIG | MoveFlag.HIT_DIVE | MoveFlag.HIT_SHADOW
+SEMI_HIT_EFFECTS: dict[int, int] = {
+    146: MoveFlag.HIT_AIR | MoveFlag.DOUBLE_SEMI,
+    149: MoveFlag.HIT_AIR | MoveFlag.DOUBLE_SEMI,
+    152: MoveFlag.HIT_AIR,
+    207: MoveFlag.HIT_AIR,
+    126: MoveFlag.HIT_DIG | MoveFlag.DOUBLE_SEMI,
+    147: MoveFlag.HIT_DIG | MoveFlag.DOUBLE_SEMI,
+    257: MoveFlag.HIT_DIVE | MoveFlag.DOUBLE_SEMI,
+    261: MoveFlag.HIT_DIVE | MoveFlag.DOUBLE_SEMI,
+    148: _ALL_HIT,
+    168: _ALL_HIT,
+    176: _ALL_HIT,
+}
 # sCannotMetronomeMoves up to FORBIDDEN_BY_METRONOME_DELIM (battle_lib.c:7152-7178):
 # Metronome, Struggle, Sketch, Mimic, Chatter, Sleep Talk, Assist, Mirror Move, Counter, Mirror
 # Coat, Protect, Detect, Endure, Destiny Bond, Thief, Follow Me, Snatch, Helping Hand, Covet,
@@ -688,6 +771,9 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
     104: ("HOLD_EFFECT_ACCURACY_UP_SLOWER", ItemId.ZOOM_LENS),
     109: ("HOLD_EFFECT_HP_RESTORE_PSN_TYPE", ItemId.BLACK_SLUDGE),
     116: ("HOLD_EFFECT_DMG_USER_CONTACT_XFR", ItemId.STICKY_BARB),
+    # Power Herb: a charge move hits on its first use (effect_script_0039.s:7, the other charge
+    # scripts' CheckItemHoldEffect HOLD_EFFECT_CHARGE_SKIP), B10-12.
+    99: ("HOLD_EFFECT_CHARGE_SKIP", ItemId.POWER_HERB),
 }
 
 # The weather rocks (effect_script_0115.s, _0136.s, _0137.s, _0164.s: the attacker's

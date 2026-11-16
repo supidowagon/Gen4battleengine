@@ -218,8 +218,11 @@ many are real). Decomp sources:
   (``STICKY_BARB``): ``sticky_barb_transfer``, run by ``step`` after every hit's item checks
   (and after Pursuit's hit); its end-of-turn damage is in ``step``.
 
-Unreachable branches are not modelled: Substitute, Mist, Safeguard and Uproar
-come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of every effect
+(``_Hit.sub_hit``, ``_Hit.shielded``), ``_substitute`` the move.
+Safeguard (E2 batch 10, B10-7): ``_safeguard`` and its gates on status and confusion.
+Unreachable branches are not modelled: Mist comes from an unsupported move; Clear Body, Hyper
+Cutter, Immunity, Leaf Guard, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
@@ -253,8 +256,12 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
-    MOVE_FAKE_OUT,
+    CANNOT_ENCORE_MOVES,
+    ITEM_ABILITY_IDS,
+    ITEM_GRISEOUS_ORB,
     MINIMIZE_PARAM,
+    MOVE_FAKE_OUT,
+    MOVE_KNOCK_OFF,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_MOVED,
     RESIST_ANY_NORMAL,
@@ -283,6 +290,7 @@ from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 _I32 = jnp.int32
 _E = EffectId
 BIDE_TURNS = 2  # VOLATILE_CONDITION_BIDE_1 (condition.h:41): the 2-bit counter's value 2
+SAFEGUARD_TURNS = 5  # BtlCmd_TrySafeguard (battle_script.c:5765)
 ROLLOUT_USES = 5  # BtlCmd_CalcRolloutPower starts rolloutCount at 5
 
 
@@ -308,6 +316,12 @@ class _Hit(NamedTuple):
     # physical / specialDamageTaken (bcp.c:3411-3424), which King's Rock reads (MoveHit.damaged).
     update_hp: jnp.ndarray
     hit_index: jnp.ndarray  # the hit's index (per-hit outcome fields)
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT after this hit (bcp.c:3371): a hit of this
+    # action landed on its substitute. ``Battler_SubstituteWasHit`` (battle_lib.c:6259-6268).
+    sub_hit: jnp.ndarray
+    # ``BtlCmd_CheckSubstitute`` on the defender after this hit (battle_script.c:9173-9186):
+    # its substitute is up or ``sub_hit``.
+    shielded: jnp.ndarray
 
 
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
@@ -340,6 +354,10 @@ def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
     keen_eye = (seen == AbilityId.KEEN_EYE) & (stat == Stat.ACC)
     hyper_cutter = (seen == AbilityId.HYPER_CUTTER) & (stat == Stat.ATK)
     blocked = (delta < 0) & ((seen == AbilityId.CLEAR_BODY) | keen_eye | hyper_cutter)
+    # Then the stage already at -6, then (indirect) Shield Dust, then the substitute's bit
+    # (VOLATILE_CONDITION_SUBSTITUTE only, :2921-2923): a direct drop fails, an indirect one is
+    # skipped silently (:2937-2945). Each blocks the drop; raises are never tested.
+    blocked = blocked | ((delta < 0) & (state.substitute_hp[h.target_side] != 0))
     return change_stage(state, h.target_side, stat, delta, cond & ~blocked)
 
 
@@ -377,7 +395,8 @@ def _shield_dust(h: _Hit) -> jnp.ndarray:
 def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     recipient_ok = h.certain | _alive(state, h.target_side, h.target)
     cond = (h.effect == _E.SECONDARY_STAT_FOE) & h.effective & h.proc & recipient_ok
-    cond = cond & ~_shield_dust(h)
+    # A rolled secondary on the defender needs ~SubstituteWasHit (battle_lib.c:1580-1582).
+    cond = cond & ~_shield_dust(h) & ~(h.sub_hit & ~h.certain)
     return _foe_stage(state, h, cond)
 
 
@@ -425,6 +444,15 @@ def _inflict(
     # Shield Dust, after Insomnia / Limber (Leaf Guard, Water Veil and the like in between are
     # unsupported), for an indirect effect only.
     blocked = blocked | limber | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    # Then CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36,
+    # freeze :19, poison :29, badly_poison :46, fall_asleep :40, before its uproar test at
+    # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
+    # ABILITY side effect skips the test (paralyze :20 and the like; not through here).
+    blocked = blocked | (cond & h.shielded)
+    # Then the target's side's Safeguard (paralyze :28, burn :45, freeze :25, poison :41,
+    # badly_poison :55, fall_asleep :51, after its uproar test at :45), B10-7: silent for an
+    # indirect effect.
+    blocked = blocked | (cond & (state.safeguard[h.target_side] != 0))
     # subscript_fall_asleep.s:43-45 (:14-16 for a move effect): a target not asleep yet stays
     # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
     # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
@@ -452,7 +480,11 @@ def _status_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _secondary_status(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    cond = (h.effect == _E.SECONDARY_STATUS) & h.effective & h.proc
+    # RECOIL_STATUS: after its recoil (``_recoil``), the subscript's BATTLE_SUBSCRIPT_PARALYZE /
+    # _BURN under SYSCTL_APPLY_SECONDARY_EFFECT: the roll passed and the defender had HP
+    # (battle_lib.c:1560-1565), an indirect effect (B10-1).
+    status_effect = (h.effect == _E.SECONDARY_STATUS) | (h.effect == _E.RECOIL_STATUS)
+    cond = status_effect & h.effective & h.proc
     return _inflict(tables, state, h, outcome, cond, False)
 
 
@@ -498,6 +530,8 @@ def _flinch(tables, state, h: _Hit) -> BattleState:
     # :18-23: Inner Focus's message (TAG_NICKNAME_ABILITY) is shown for Fake Out only.
     from nuzline.engine.hooks import FLINCH_BLOCKED, reveal_ability  # hooks imports this module
 
+    # :6: CheckSubstitute comes first (a substitute ends it silently), before Inner Focus (:7).
+    reached = reached & ~h.shielded
     shown = reached & inner_focus & (h.move == MOVE_FAKE_OUT)
     state = reveal_ability(state, h.target_side, h.target, FLINCH_BLOCKED, shown)
     # :8-9: both flinch effects are indirect, so Shield Dust stops them after Inner Focus.
@@ -523,6 +557,7 @@ def _fang(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~h.target_moved
         & (h.target_ignorable != AbilityId.INNER_FOCUS)
         & ~_shield_dust(h)
+        & ~h.shielded  # subscript_flinch_mon.s:6
     )
     old = state.flinched[h.target_side]
     return state._replace(
@@ -592,7 +627,7 @@ def _curse(tables, state, h: _Hit) -> BattleState:
         state = change_stage(state, h.side, stat, delta, cond)
     # The Ghost branch (:9-17): a direct ON_HIT subscript_curse_ghost.s on the foe, unless it
     # fails (``curse_fails``): the foe's VOLATILE_CONDITION_CURSE, then the user loses
-    # Divide(maxHP, 2) through UPDATE_HP (:6-12; it can faint).
+    # Divide(maxHP, 2) through UPDATE_HP (:9-15; it can faint).
     hexed = (h.effect == _E.CURSE) & h.landed & ghost & ~curse_fails(state, h.target_side)
     state = _set(state, "curse", h.target_side, 1, hexed)
     hp = state.hp[h.side, h.user].astype(_I32)
@@ -601,8 +636,8 @@ def _curse(tables, state, h: _Hit) -> BattleState:
 
 
 def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
-    """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :18-20) on a defender behind
-    a substitute (:3) or already cursed (:4); its semi-invulnerable test (:2) cannot hold."""
+    """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :22-24) on a defender behind
+    a substitute (:6) or already cursed (:7); its semi-invulnerable test (:5) cannot hold."""
     return (state.substitute_hp[target_side] != 0) | (state.curse[target_side] != 0)
 
 
@@ -635,9 +670,14 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
     rock_head = state.ability[h.side, h.user] == AbilityId.ROCK_HEAD
     magic_guard = state.ability[h.side, h.user] == AbilityId.MAGIC_GUARD
     # subscript_recoil_1_{2,3,4}.s: DivideVarByValue(hitDamage, 2 / 3 / 4), at least 1 (B9-4).
-    third = jnp.maximum(h.dealt // jnp.maximum(h.param[0], 1), 1)
+    # RECOIL_STATUS keeps its divisor in param 1 (subscript_recoil_1_3_chance_to_*.s:5 calls
+    # BATTLE_SUBSCRIPT_RECOIL_1_3 first, on every hit that hit, B10-1).
+    status_recoil = h.effect == _E.RECOIL_STATUS
+    divisor = jnp.where(status_recoil, h.param[1], h.param[0])
+    third = jnp.maximum(h.dealt // jnp.maximum(divisor, 1), 1)
+    recoils = (h.effect == _E.RECOIL) | status_recoil
     cost = jnp.where(
-        (h.effect == _E.RECOIL) & h.effective & ~rock_head & ~magic_guard & (h.dealt > 0),
+        recoils & h.effective & ~rock_head & ~magic_guard & (h.dealt > 0),
         third,
         0,
     )
@@ -730,7 +770,8 @@ def unlock_move(state: BattleState, side, cond) -> BattleState:
     ``VOLATILE_CONDITION_UPROAR``: an uproaring battler stays locked into its move
     (``Battler_CanPickCommand``, battle_lib.c:6224-6235), so ``locked_move`` stays while
     ``uproar`` is up (ruling B5-5)."""
-    for field in ("bide_turns", "bide_damage", "rollout_count"):
+    # :1838 also clears MOVE_EFFECT_SEMI_INVULNERABLE (B10-12).
+    for field in ("bide_turns", "bide_damage", "rollout_count", "semi_invulnerable"):
         state = _set(state, field, side, 0, cond)
     return _set(state, "locked_move", side, 0, cond & (state.uproar[side] == 0))
 
@@ -769,6 +810,10 @@ def _cure_paralysis(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & h.effective
         & _alive(state, h.target_side, h.target)
         & (state.status[h.target_side, h.target] == Status.PARALYSIS)
+        # effect_script_0171.s:5: CheckSubstitute before the damage jumps to a plain hit (no x2,
+        # no cure). The flag cannot be set before the move's own (only) hit, so this is the bit
+        # at the script's start: up then exactly when this hit took the substitute.
+        & ~h.sub_hit
     )
     return _set_status(state, h.target_side, h.target, Status.NONE, cond)
 
@@ -778,21 +823,25 @@ SWAGGER_STAGES = 2
 
 
 def swagger_fails(state: BattleState, target_side) -> jnp.ndarray:
-    """``bool``: subscript_swagger.s:7-8 fails Swagger (``MOVE_STATUS_FAILED``) on a defender
-    at +6 Attack that is already confused."""
-    return (state.stages[target_side, Stat.ATK] >= STAGE_MAX) & (state.confusion[target_side] > 0)
+    """``bool``: subscript_swagger.s fails Swagger (``MOVE_STATUS_FAILED``) on a defender behind
+    a substitute (:5) or at +6 Attack and already confused (:7-8)."""
+    maxed = (state.stages[target_side, Stat.ATK] >= STAGE_MAX) & (state.confusion[target_side] > 0)
+    return (state.substitute_hp[target_side] != 0) | maxed
 
 
 def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Swagger (effect_script_0118.s, a direct ON_HIT effect; subscript_swagger.s): Attack +2
     below +6 (``UPDATE_STAT_STAGE``), then subscript_confuse.s unless the defender is confused
-    (:13, no message): ``Random 3, 2`` turns (``outcome.duration``). Substitute (:5), Own Tempo
-    and Safeguard (subscript_confuse.s:12, :26) come from unsupported moves and abilities; the
-    failure (``swagger_fails``) skips AfterMoveEffects (``step``)."""
+    (:13, no message): ``Random 3, 2`` turns (``outcome.duration``). Own Tempo and Safeguard
+    (subscript_confuse.s:12, :26) come from unsupported abilities and moves; the failure
+    (``swagger_fails``, a substitute included) skips AfterMoveEffects (``step``)."""
     cond = (h.effect == _E.SWAGGER) & h.landed & _alive(state, h.target_side, h.target)
+    cond = cond & ~swagger_fails(state, h.target_side)
     below = state.stages[h.target_side, Stat.ATK] < STAGE_MAX
     state = change_stage(state, h.target_side, Stat.ATK, SWAGGER_STAGES, cond & below)
-    confuse = cond & (state.confusion[h.target_side] == 0)
+    # subscript_confuse.s (a direct side effect): the substitute is swagger_fails'; then Safeguard
+    # (:26, B10-7), after the Attack raise.
+    confuse = cond & (state.confusion[h.target_side] == 0) & (state.safeguard[h.target_side] == 0)
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
 
 
@@ -813,6 +862,90 @@ def belly_drum_fails(state: BattleState, side) -> jnp.ndarray:
     mon = state.active[side]
     half = jnp.maximum(state.max_hp[side, mon].astype(_I32) // 2, 1)
     return (state.stages[side, Stat.ATK] >= STAGE_MAX) | (state.hp[side, mon].astype(_I32) <= half)
+
+
+def substitute_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: Substitute ends in ``MOVE_STATUS_NO_MORE_WORK``: subscript_try_substitute.s:7,
+    the user is behind one already (CheckSubstitute: its bit; its flag is clear in its own
+    action); :8, ``BtlCmd_TrySubstitute`` (battle_script.c:5215-5218) at ``curHP <=
+    Divide(maxHP, 4)``."""
+    mon = state.active[side]
+    quarter = divide(state.max_hp[side, mon].astype(_I32), 4)
+    return (state.substitute_hp[side] != 0) | (state.hp[side, mon].astype(_I32) <= quarter)
+
+
+def _substitute(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Substitute (effect_script_0079.s, a direct ON_HIT subscript_try_substitute.s on the user, a
+    RANGE_USER defender): ``BtlCmd_TrySubstitute`` (battle_script.c:5211-5226) sets
+    ``substituteHP`` to Divide(maxHP, 4) and clears the user's ``VOLATILE_CONDITION_BIND``
+    (:5222), then :12-13 the user loses it through UPDATE_HP (B10-4). A failing one never gets
+    here (``primary_effect_fails``)."""
+    cond = (h.effect == _E.SUBSTITUTE) & h.landed & ~substitute_fails(state, h.side)
+    quarter = divide(state.max_hp[h.side, h.user].astype(_I32), 4)
+    state = _set(state, "substitute_hp", h.side, quarter, cond)
+    state = _set(state, "trapped", h.side, 0, cond)
+    state = _set(state, "trap_move", h.side, 0, cond)
+    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - quarter, 0)
+    return _set(state, "hp", (h.side, h.user), hp, cond)
+
+
+def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Pain Split (effect_script_0091.s, a direct ON_HIT subscript_pain_split.s): avg = (the
+    attacker's curHP + the defender's) / 2 (:7-10, OPCODE_DIV), then each battler's HP changes
+    by avg - its curHP through UPDATE_HP (:12-22, capped at its max HP; SKIP_SPRITE_BLINK, a
+    status move: no resist berry), B10-5. A substitute fails it first (:5, ``h.shielded``;
+    ``primary_effect_fails``)."""
+    cond = (h.effect == _E.PAIN_SPLIT) & h.landed & ~h.shielded
+    mine = state.hp[h.side, h.user].astype(_I32)
+    theirs = state.hp[h.target_side, h.target].astype(_I32)
+    avg = (mine + theirs) // 2
+    mine_new = jnp.minimum(avg, state.max_hp[h.side, h.user].astype(_I32))
+    theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
+    state = _set(state, "hp", (h.side, h.user), mine_new, cond)
+    return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
+
+
+def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
+    """``(fails, slot)``: BtlCmd_TryEncore (battle_script.c:4725-4748) on ``target_side``'s
+    battler: the slot of its movePrevByBattler (``last_move``; Battler_SlotForMove), and the
+    failure (MOVE_STATUS_FAILED): it is encored already, its last move is none, not in its slots,
+    one Move_CanBeEncored refuses (the battle effect of a ``CANNOT_ENCORE_MOVES`` move,
+    battle_lib.c:7221-7231) or out of PP."""
+    mon = state.active[target_side]
+    last = state.last_move[target_side].astype(_I32)
+    moves = state.moves[target_side, mon].astype(_I32)
+    held = (moves == last) & (last != 0)
+    slot = jnp.argmax(held).astype(_I32)
+    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
+    refused = jnp.any(tables.move_ai_effect[last] == banned)
+    fails = (
+        (state.encore_move[target_side] != 0)
+        | (last == 0)
+        | ~jnp.any(held)
+        | refused
+        | (state.pp[target_side, mon, slot] == 0)
+    )
+    return fails, slot
+
+
+def _encore(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Encore (effect_script_0090.s, a direct ON_HIT subscript_encore_start.s): unless
+    ``encore_slot_of`` fails it, encoredMove = the target's last move, encoredMoveSlot its slot,
+    encoredTurns = RandNext() % 5 + 3 (battle_script.c:4740-4742; ``outcome.duration`` of the
+    user's side, ``DURATION_ENCORE``), B10-9."""
+    fails, slot = encore_slot_of(tables, state, h.target_side)
+    cond = (h.effect == _E.ENCORE) & h.landed & _alive(state, h.target_side, h.target) & ~fails
+    state = _set(state, "encore_move", h.target_side, state.last_move[h.target_side], cond)
+    state = _set(state, "encore_slot", h.target_side, slot, cond)
+    return _set(state, "encore_turns", h.target_side, outcome.duration[h.side], cond)
+
+
+def _safeguard(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Safeguard (BtlCmd_TrySafeguard, battle_script.c:5754-5772): safeguardTurns = 5 on the
+    user's side (the field-condition pass counts it down, ``step.FIELD_SIDE_TIMERS``); with it up
+    already the move fails (``primary_effect_fails``), B10-7."""
+    cond = (h.effect == _E.SAFEGUARD) & h.landed & (state.safeguard[h.side] == 0)
+    return _set(state, "safeguard", h.side, SAFEGUARD_TURNS, cond)
 
 
 def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -908,6 +1041,14 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
             & dragon_dance_fails(state, side, tables.move_param[jnp.asarray(move, _I32), 0])
         )
         | ((effect == _E.BELLY_DRUM) & belly_drum_fails(state, side))
+        # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
+        | ((effect == _E.SUBSTITUTE) & substitute_fails(state, side))
+        # subscript_pain_split.s:5, :50-52 (MOVE_STATUS_FAILED), B10-5.
+        | ((effect == _E.PAIN_SPLIT) & (state.substitute_hp[target_side] != 0))
+        # BtlCmd_TrySafeguard (battle_script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
+        | ((effect == _E.SAFEGUARD) & (state.safeguard[side] != 0))
+        # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
+        | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side] != 0))
@@ -919,7 +1060,7 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.LOCK_ON) & lock_on_fails(state, target_side))
         # BtlCmd_TryPerishSong (battle_script.c:5482-5484): no battler eligible.
         | ((effect == _E.PERISH_SONG) & ~jnp.any(perish_song_eligible(state)))
-        # subscript_curse_ghost.s:18-20 (a Ghost user's Curse).
+        # subscript_curse_ghost.s:22-24 (a Ghost user's Curse).
         | ((effect == _E.CURSE) & ghost_user(state, side) & curse_fails(state, target_side))
         # subscript_yawn.s's failures (``yawn_blocks``).
         | ((effect == _E.YAWN) & yawn_blocks(tables, state, side, target_side)[0])
@@ -932,13 +1073,15 @@ def _stealth_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _trap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    # MOVE_SIDE_EFFECT_CHECK_HP_AND_SUBSTITUTE: the target survived the hit.
+    # MOVE_SIDE_EFFECT_CHECK_HP_AND_SUBSTITUTE (battle_lib.c:1537-1544): the target survived the
+    # hit and its substitute was not hit; subscript_bind_start.s:5 then CheckSubstitute.
     cond = (
         (h.effect == _E.TRAP)
         & h.effective
         & h.proc
         & _alive(state, h.target_side, h.target)
         & (state.trapped[h.target_side] == 0)
+        & ~h.shielded
     )
     state = _set(state, "trapped", h.target_side, outcome.duration[h.side], cond)
     return _set(state, "trap_move", h.target_side, h.move, cond)
@@ -976,6 +1119,8 @@ def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & h.effective
         & _alive(state, h.target_side, h.target)
         & (state.confusion[h.target_side] == 0)
+        & ~h.shielded  # subscript_confuse.s:23
+        & (state.safeguard[h.target_side] == 0)  # :26 (B10-7)
     )
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
@@ -988,6 +1133,8 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.target_side, h.target)
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
+        & ~h.shielded  # the rolled-secondary gate (battle_lib.c:1580-1582); confuse :23
+        & (state.safeguard[h.target_side] == 0)  # :26 (B10-7)
     )
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
 
@@ -1077,6 +1224,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "water_sport",
     "aqua_ring",
     "minimized",
+    "semi_invulnerable",  # B10-12
 )
 
 
@@ -1085,9 +1233,9 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Fly, Dig, Dive, Shadow Force,
-    Minimize, Charge, Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet
-    Rise); each joins the tuple with its move."""
+    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Gastro Acid,
+    Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise); each joins the tuple with its
+    move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
@@ -1185,7 +1333,8 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
 def _yawn(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Yawn (effect_script_0187.s: a direct ``CHECK_HP | TO_DEFENDER`` subscript_yawn.s for a
     living defender on a move that connected): unless ``yawn_blocks``, the defender's
-    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged."""
+    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged. On a
+    semi-invulnerable miss the subscript still runs and tags it (``step._use_move``, B10-13)."""
     run = (h.effect == _E.YAWN) & h.landed & _alive(state, h.target_side, h.target)
     fails, by_ability = yawn_blocks(tables, state, h.side, h.target_side)
     state = know_ability(state, h.target_side, h.target, run & by_ability)
@@ -1303,8 +1452,40 @@ def _eat_berry(
     # Local import: hooks imports this module.
     from nuzline.engine.hooks import pluck_berry
 
-    cond = (h.effect == _E.EAT_BERRY) & h.effective
+    # BattleSystem_PluckBerry returns early when the defender's substitute was hit
+    # (battle_lib.c:5546).
+    cond = (h.effect == _E.EAT_BERRY) & h.effective & ~h.sub_hit
     return pluck_berry(tables, state, h.side, h.target_side, cond, foe_custap)
+
+
+def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
+    """Knock Off (effect_script_0188.s: an indirect ON_HIT subscript_knock_off.s on a hit that
+    was not MOVE_STATUS_NO_EFFECTS, battle_lib.c:1524-1529), B10-6. The subscript ends with
+    nothing done for a defender behind a substitute (:5, ``h.shielded``), with Multitype
+    (:6, its BATTLEMON_ABILITY), holding the Griseous Orb (:7) or with its quickClaw (:8,
+    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set; then BtlCmd_TryKnockOff
+    (battle_script.c:6608-6632): no item does nothing; an ignorable Sticky Hold keeps it (its
+    C-built "made ineffective" message tags nothing for the AI); else heldItem = ITEM_NONE and
+    the slot's knockedOffItemsMask bit (:6626-6627). Neither RemoveItem nor CopyToParty runs: the
+    AI's record of the item (``ai_item_known``) stays until the battler's next CopyToParty
+    (ruling B10-6), and canUnburden stays as it was (an armed Unburden holder speeds up)."""
+    item = state.item[h.target_side, h.target]
+    raw = decomp_abilities(tables, state)[h.target_side, h.target]
+    mold_breaker = state.ability[h.side, h.user] == AbilityId.MOLD_BREAKER
+    sticky = (raw == ITEM_ABILITY_IDS["Sticky Hold"]) & ~mold_breaker
+    cond = (
+        (h.effect == _E.KNOCK_OFF)
+        & h.effective
+        & ~h.shielded
+        & (raw != ABILITY_MULTITYPE)
+        & (item != ITEM_GRISEOUS_ORB)
+        & ~jnp.asarray(foe_claw, bool)
+        & ~jnp.asarray(foe_custap, bool)
+        & (item != 0)
+        & ~sticky
+    )
+    state = _set(state, "item", (h.target_side, h.target), 0, cond)
+    return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
 
 
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1313,6 +1494,7 @@ def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         (h.effect == _E.LEECH_SEED)
         & h.effective
         & _alive(state, h.target_side, h.target)
+        & ~h.shielded  # subscript_leech_seed_start.s:5, before the Grass test
         & ~grass
         & (state.leech_seed[h.target_side] == 0)
     )
@@ -1380,6 +1562,9 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     contact = (tables.move_flags[h.move] & MoveFlag.CONTACT) != 0
     hit = contact & h.effective & (h.dealt > 0) & _alive(state, h.side, h.user)
+    # BattleSystem_TriggerAbilityOnHit returns early when the defender's substitute was hit
+    # (battle_lib.c:4209).
+    hit = hit & ~h.sub_hit
     # subscript_paralyze.s:5: the attacker's own Limber (the side-effect battler is the
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
@@ -1446,9 +1631,10 @@ def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``MOVE_FLAG_TRIGGERS_KINGS_ROCK`` and the defender has HP left. ``subscript_flinch_mon.s``
     then flinches a target that has not moved (:5), unless its Inner Focus (as the attacker
     sees it, :7; a silent block: not Fake Out, not a direct effect) or its Shield Dust (:9,
-    ``_shield_dust``). Substitute (:6) is an unsupported move. A U-turn that
+    ``_shield_dust``), after CheckSubstitute (:6: ``h.shielded``). A U-turn that
     switches makes its check with the newcomer's item (``kings_rock_flinch``, from ``step._use_move``)."""
     cond = h.landed & h.update_hp & (outcome.flinch_item[h.side, h.hit_index] != 0)
+    cond = cond & ~h.shielded
     return kings_rock_flinch(tables, state, h.side, h.target_side, h.move, cond & ~h.target_moved)
 
 
@@ -1501,8 +1687,8 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
     ``AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT``, battle_controller_player.c:3698-3706, and
     ``subscript_pursuit.s:44``, :90) needs a defender holding a
     ``HOLD_EFFECT_DMG_USER_CONTACT_XFR`` item (alive or not), a living attacker whose
-    ``heldItem`` is ``ITEM_NONE`` and a move with ``MOVE_FLAG_MAKES_CONTACT``; Knock Off,
-    U-turn and the knocked-off mask come from unsupported moves.
+    ``heldItem`` is ``ITEM_NONE``, not knocked off, a move with ``MOVE_FLAG_MAKES_CONTACT`` that
+    is not Knock Off (:5390-5391, B10-6); U-turn's guard is ``step``'s.
     ``subscript_transfer_sticky_barb.s`` moves the item: the attacker holds it, the defender
     nothing (no ``RemoveItem``: ``item_consumed`` is untouched). ``foe``: the defender's side."""
     user, target = state.active[side], state.active[foe]
@@ -1514,6 +1700,9 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
         & _alive(state, side, user)
         & (state.item[side, user] == 0)
         & contact
+        # :5390-5391: not a knocked-off attacker, not Knock Off itself (B10-6).
+        & (state.knocked_off[side, user] == 0)
+        & (move != MOVE_KNOCK_OFF)
     )
     state = _set(state, "item", (side, user), barb, on)
     state = forget_item(state, foe, target, on)
@@ -1530,6 +1719,8 @@ def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jn
         & _alive(state, side, user)
         & (state.item[side, user] == 0)
         & contact
+        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not a knocked-off attacker (B10-6).
+        & (state.knocked_off[side, user] == 0)
     )
 
 
@@ -1626,6 +1817,11 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         & (layers > 0)
         & ~poison_type
         & ~blocks
+        # subscript_poison.s:29 / subscript_badly_poison.s:46: CheckSubstitute after the ability
+        # tests, silent: a Baton Pass newcomer keeps the passer's substitute (B10-4).
+        & (state.substitute_hp[side] == 0)
+        # subscript_poison.s:41 / _badly_poison.s:55: the side's Safeguard (B10-7).
+        & (state.safeguard[side] == 0)
         & can_have_status(tables, state, side, mon, status)
     )
     state = _set_status(state, side, mon, status, poisoned)
@@ -1670,6 +1866,9 @@ class MoveHit(NamedTuple):
     # The hit reached its effects: landed and not MOVE_STATUS_DID_NOT_HIT (the move passed the type
     # chart, ``_Hit.effective``): a U-turn's ON_HIT switch needs it (bcp.c:3486-3487).
     effective: jnp.ndarray
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), set by this hit or an earlier one
+    # of the action; it lasts until BattleContext_Init at the action's end (battle_lib.c:2014).
+    sub_hit: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -1691,7 +1890,14 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 # Sight (effect_script_0148.s:7, no damage at its use).
 # subscript_type_resist_berry.s:5 skips the berry for such a hit. tests/tools/
 # test_effect_map.py checks the list against every mapped effect script.
-IGNORES_TYPE_CHECKS = (_E.LEVEL_DAMAGE, _E.FORESIGHT, _E.HALVE_HP, _E.COUNTER, _E.FUTURE_SIGHT)
+IGNORES_TYPE_CHECKS = (
+    _E.LEVEL_DAMAGE,
+    _E.FORESIGHT,
+    _E.HALVE_HP,
+    _E.COUNTER,
+    _E.FUTURE_SIGHT,
+    _E.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
+)
 # subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
 RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
 
@@ -1838,6 +2044,9 @@ def play_hit(
     foe_custap=False,
     extra_flinch=True,
     counter_damage=0,
+    sub_hit=False,
+    pursuit_switch=False,
+    foe_claw=False,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -1866,6 +2075,16 @@ def play_hit(
     takes 0); a holder below full HP at the first hit is never protected. Bide stores the
     capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
     OHKO moves (``MOVE_STATUS_ONE_HIT_KO``, bcp.c:3342), none of which is supported.
+
+    Substitute (bcp.c:3359-3378, B10-4): a defender behind one takes the damage on it instead:
+    min(damage, its HP) (``hitDamage``: drain and recoil read it, and shellBellDamageDealt), the
+    substitute breaking at 0, and ``SELF_TURN_FLAG_SUBSTITUTE_HIT``. UpdateHP then returns
+    before False Swipe's cap, the Focus Sash, Bide's store, the damage-taken fields, the resist
+    berry and ``SYSCTL_MOVE_HIT``. ``sub_hit``: an earlier hit of this action set the flag.
+    ``pursuit_switch`` (static): Pursuit's pre-switch hit, whose subscript_pursuit.s:20, :56-73
+    takes the substitute down only when it breaks (``substituteHP <= damage``) and otherwise
+    leaves its HP as it was (no ``UpdateMonData`` on that path), sets no flag and skips the
+    on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158).
     """
     side = jnp.asarray(side, _I32)
     target_side = 1 - side
@@ -1929,10 +2148,16 @@ def play_hit(
         | is_counter
     )
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
+    # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
+    # UpdateHP returns early; `real`: the rest of UpdateHP runs on the defender's HP.
+    sub_hp = state.substitute_hp[target_side].astype(_I32)
+    sub_take = update_hp & (sub_hp != 0)
+    to_sub = jnp.where(sub_take, jnp.minimum(raw, sub_hp), 0)
+    real = update_hp & ~sub_take
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
-    armed = jnp.asarray(focus_armed) | (update_hp & sash & full)
-    capped, endured = focus_sash_damage(state, target_side, damage, armed & update_hp)
+    armed = jnp.asarray(focus_armed) | (real & sash & full)
+    capped, endured = focus_sash_damage(state, target_side, damage, armed & real)
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
     taken = jnp.where(endured, target_hp - 1, damage)
     # Secret Power's secondary effect is the terrain's (order.move_effects).
@@ -1958,21 +2183,26 @@ def play_hit(
         )
     )
     resisted = (
-        update_hp
+        real
         & ~jnp.isin(effect, jnp.asarray(RESIST_BERRY_SKIPS, effect.dtype))
         & resist_berry(tables, state, target_side, move_type, super_effective)
     )
-    dealt = jnp.where(landed & hits_foe, capped, 0)
+    dealt = jnp.where(landed & hits_foe & ~sub_take, capped, 0)
     dealt = resist_berry_damage(state, target_side, taken, resisted, dealt)
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
+    if pursuit_switch:
+        state = _set(state, "substitute_hp", target_side, 0, sub_take & (to_sub == sub_hp))
+    else:
+        state = _set(state, "substitute_hp", target_side, sub_hp - to_sub, sub_take)
+        sub_hit = jnp.asarray(sub_hit) | sub_take
     state = consume_item(state, target_side, (endured & sash) | resisted)
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
     # before the berry halves the HP change: what it lost, or the unhalved amount after a
     # resist berry (a target that faints is cleared at the faint check, so the HP cap of
     # `dealt` changes nothing there).
-    biding = state.bide_turns[target_side] > 0
+    biding = (state.bide_turns[target_side] > 0) & ~sub_take
     stored = jnp.where(resisted, taken, dealt)
     state = _set(state, "bide_damage", target_side, state.bide_damage[target_side] + stored, biding)
 
@@ -2000,13 +2230,17 @@ def play_hit(
         landed=landed,
         effective=landed & passes,
         proc=(chance == 0) | (outcome.secondary[side, hit_index] != 0),
-        dealt=dealt,
+        # hitDamage: what the substitute took on its path (bcp.c:3363, :3367).
+        dealt=jnp.where(sub_take, to_sub, dealt),
         target_moved=jnp.asarray(target_moved, jnp.bool_),
         move=move,
         target_ignorable=ignorable(state, side, target_side),
         contact_proc=outcome.contact_proc[target_side, hit_index] != 0,
-        update_hp=update_hp & (taken != 0),
+        update_hp=real & (taken != 0),
         hit_index=jnp.asarray(hit_index, _I32),
+        # Pursuit's switch path sets no flag but skips the on-hit ability all the same (:108).
+        sub_hit=sub_hit | (sub_take & pursuit_switch),
+        shielded=sub_hit | sub_take | (state.substitute_hp[target_side] != 0),
     )
     for fn in (
         _stat_self,
@@ -2055,6 +2289,10 @@ def play_hit(
         _swagger,
         _dragon_dance,
         _belly_drum,
+        _substitute,
+        _pain_split,
+        _safeguard,
+        _encore,
         _roost,
         _side_layers,
         _destiny_bond,
@@ -2062,21 +2300,24 @@ def play_hit(
     ):
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
+    state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
-    # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431) and subscript_pursuit.s's (:21-29).
-    shell = jnp.where(update_hp, jnp.minimum(taken, target_hp), 0)
-    pursuit_shell = jnp.where(update_hp, jnp.minimum(damage, target_hp), 0)
+    # UpdateHP's shellBellDamageDealt (bcp.c:3427-3431; the substitute's share, :3361, :3366)
+    # and subscript_pursuit.s's (:21-29).
+    shell = jnp.where(real, jnp.minimum(taken, target_hp), to_sub)
+    pursuit_shell = jnp.where(real, jnp.minimum(damage, target_hp), 0)
     return state, MoveHit(
         focus_armed=armed,
         pluck_flag=pluck_flag,
-        update_hp=update_hp,
+        update_hp=real,
         dealt=dealt,
-        damaged=update_hp & (taken != 0),
+        damaged=real & (taken != 0),
         shell_bell=shell,
         pursuit_shell_bell=pursuit_shell,
-        taken=jnp.where(update_hp, taken, 0),
+        taken=jnp.where(real, taken, 0),
         effective=h.effective,
+        sub_hit=sub_hit,
     )

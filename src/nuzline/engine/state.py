@@ -102,13 +102,22 @@ Encodings:
   (``Battler_Ability``) holding an item (battle_lib.c:4433-4437), at every move end for the
   attacker and the defender (bcp.c:3965-3967) and in the switch-in checks for every battler
   (battle_lib.c:4135-4145); ``BattleSystem_InitBattleMon`` sets it for any holder of an item
-  (:160-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
-  whole MoveEffectsData after it, :2097-2101, Baton Pass included), where the switch-in check
-  sets it for the Unburden holders it can concern. Nothing clears it but a switch (a volatile).
+  (:161-166), which matters only at the battle start (a switch's UpdateAfterSwitch zeroes the
+  whole MoveEffectsData after it, :2100-2104, Baton Pass included): ``hooks.battle_start`` sets
+  it for every lead holding an item, whatever its ability (a lead that gains Unburden later
+  keeps it). Nothing clears it but a switch (a volatile).
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
 * ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
   Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
   does not keep (moves.h:46-48).
+* ``semi_invulnerable`` is the active battler's MOVE_EFFECT_SEMI_INVULNERABLE bit as an
+  ``ids.SemiKind`` (moves.h:14-15, :26, :37, :44; E2 batch 10, B10-12): the charge turn of Fly /
+  Bounce (AIRBORNE), Dig, Dive and Shadow Force sets it (effect_script_0155.s:7 and the others),
+  their attack turn clears it before the hit (:24), and so does every Battler_UnlockMoveChoice
+  (battle_lib.c:1838: a disrupted or missed move, a sleeper at the next turn's setup). A
+  volatile Baton Pass does not keep (moves.h:46-48). A foe's move aimed at it misses unless its
+  script hits that kind (bcp.c:3034-3040; ``MoveFlag.HIT_*``); the charge's lock is
+  ``locked_move``.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -190,6 +199,8 @@ class BattleState(NamedTuple):
     ability_slot: jnp.ndarray  # int8, species ability slot 0/1
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
+    # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
+    knocked_off: jnp.ndarray
     moves: jnp.ndarray  # int16[2,6,4]
     pp: jnp.ndarray  # int8[2,6,4]
     status: jnp.ndarray  # int8, ids.Status
@@ -220,6 +231,10 @@ class BattleState(NamedTuple):
     foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
     disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
     disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
+    # E2 batch 10 (B10-9): MoveEffectsData.encoredMove / encoredMoveSlot / encoredTurns.
+    encore_move: jnp.ndarray  # int16, 0 = not encored
+    encore_slot: jnp.ndarray  # int8
+    encore_turns: jnp.ndarray  # int8 (hidden)
     locked_move: jnp.ndarray  # int16, moveLockedInto while VOLATILE_CONDITION_MOVE_LOCKED
     bide_turns: jnp.ndarray  # int8, VOLATILE_CONDITION_BIDE turns, 0-2
     bide_damage: jnp.ndarray  # int16, storedDamage while Biding (hidden), else 0
@@ -243,6 +258,7 @@ class BattleState(NamedTuple):
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
+    semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -306,6 +322,7 @@ class BattleState(NamedTuple):
     ts_locked: jnp.ndarray  # int8[2], locked at selection (no PP)
     ts_item: jnp.ndarray  # int16[2], the bag item picked
     ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
+    ts_claw: jnp.ndarray  # int8[2], moveEffectsData.quickClaw from the turn order (B10-6)
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
     ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
     ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
@@ -395,6 +412,9 @@ VOLATILE_FIELDS = (
     "foresight",
     "disabled_move",
     "disable_turns",
+    "encore_move",
+    "encore_slot",
+    "encore_turns",
     "locked_move",
     "bide_turns",
     "bide_damage",
@@ -417,10 +437,12 @@ VOLATILE_FIELDS = (
     "curse",
     "can_unburden",
     "minimized",
+    "semi_invulnerable",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
-# confusion, Mean Look; Focus Energy, Curse and Substitute's bit come from unsupported moves),
+# confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``); Focus Energy comes
+# from an unsupported move),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
 # and Water Sport, Aqua Ring, Ingrain; the rest from unsupported moves), the substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
@@ -457,6 +479,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ability_slot": (_SLOT, np.int8),
     "item": (_SLOT, np.int16),
     "item_consumed": (_SLOT, np.int16),
+    "knocked_off": (_SLOT, np.int8),
     "moves": ((*_SLOT, MOVES), np.int16),
     "pp": ((*_SLOT, MOVES), np.int8),
     "status": (_SLOT, np.int8),
@@ -486,6 +509,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "foresight": (_SIDE, np.int8),
     "disabled_move": (_SIDE, np.int16),
     "disable_turns": (_SIDE, np.int8),
+    "encore_move": (_SIDE, np.int16),
+    "encore_slot": (_SIDE, np.int8),
+    "encore_turns": (_SIDE, np.int8),
     "locked_move": (_SIDE, np.int16),
     "bide_turns": (_SIDE, np.int8),
     "bide_damage": (_SIDE, np.int16),
@@ -509,6 +535,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "roosting": (_SIDE, np.int8),
     "can_unburden": (_SIDE, np.int8),
     "minimized": (_SIDE, np.int8),
+    "semi_invulnerable": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -566,6 +593,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_locked": (_SIDE, np.int8),
     "ts_item": (_SIDE, np.int16),
     "ts_custap": (_SIDE, np.int8),
+    "ts_claw": (_SIDE, np.int8),
     "ts_pursued": (_FIELD, np.int8),
     "ts_protect_ok": (_SIDE, np.int8),
     "ts_taken": ((SIDES, 6), np.int16),

@@ -327,16 +327,31 @@ class BattleEffect(IntEnum):
     GROUND_TRAP_USER_CONTINUOUS_HEAL = 181  # Ingrain
     PASS_STATS_AND_STATUS = 127  # Baton Pass
     BOOST_ALLY_POWER_BY_50_PERCENT = 176  # Helping Hand
-    SKIP_CHARGE_TURN_IN_SUN = 151  # SolarBeam
     DOUBLE_POWER_IF_HIT = 185  # Avalanche, Revenge (Expert_MetalBurst, script.s:5049)
     PRIORITY_NEG_1_BYPASS_ACCURACY = 78  # Vital Throw (Expert_MetalBurst, script.s:5051)
     SET_SUBSTITUTE = 79  # Substitute
     STATUS_POISON = 66  # Poison Powder (Expert_Substitute's last-move table, script.s:3019)
 
     TOXIC_SPIKES = 249
+    RECOIL_BURN_HIT = 253  # Flare Blitz
     RECOIL_PARALYZE_HIT = 262
     STEALTH_ROCK = 266
     RECOIL_HALF = 269  # Head Smash
+    # E2 batch 10: the charge-turn moves (Expert_ChargeTurnNoInvuln, script.s:3933-3973;
+    # Expert_ChargeTurnWithInvuln / Expert_ShadowForce, :3992-4072) and the two hits on a
+    # flying target, which no script names.
+    CHARGE_TURN_HIGH_CRIT = 39  # Razor Wind
+    CHARGE_TURN_HIGH_CRIT_FLINCH = 75  # Sky Attack
+    NEXT_ATTACK_ALWAYS_HITS = 94  # Lock-On, Mind Reader (Expert_ChargeTurnWithInvuln, :4053)
+    CHARGE_TURN_DEF_UP = 145  # Skull Bash
+    FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE = 146  # Twister
+    SKIP_CHARGE_TURN_IN_SUN = 151  # SolarBeam
+    FLY = 155
+    HIT_FLY = 207  # Sky Uppercut
+    DIVE = 255
+    DIG = 256
+    BOUNCE = 263
+    SHADOW_FORCE = 272
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -902,6 +917,11 @@ MIRROR_COAT_SPECIAL_TYPES = tuple(
     TYPE_IDS[n] for n in ("Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark")
 )
 ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
+# ITEM_POWER_HERB: line 272 of generated/items.txt (id = line - 1), the item
+# Expert_ChargeTurnNoInvuln / _WithInvuln / Expert_ShadowForce test (script.s:3956, :4009, :4020).
+ITEM_POWER_HERB = 271
+# Expert_ChargeTurnWithInvuln_SandImmuneTypes (script.s:4068-4072).
+CHARGE_TURN_SAND_IMMUNE_TYPES = tuple(TYPE_IDS[n] for n in ("Ground", "Rock", "Steel"))
 _TRAPPING = jnp.array([ABILITY_IDS[n] for n in ("Shadow Tag", "Magnet Pull", "Arena Trap")], _I32)
 
 
@@ -1457,7 +1477,6 @@ def load_effect_of_loaded_move(ctx: AiContext) -> AiContext:
 
 
 ITEM_SHINY_STONE = 107  # Basic_CheckMetalBurst (script.s:1169, :1176; generated/items.txt)
-ITEM_POWER_HERB = 271  # Expert_ChargeTurnNoInvuln_CheckForPowerHerb (script.s:3956)
 
 
 def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:

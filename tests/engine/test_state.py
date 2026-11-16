@@ -188,7 +188,6 @@ AUDIT_LATER_ROWS = (
     "BattleMon.weatherAbilityAnnounced",
     "BattleMon.traceAnnounced",
     "BattleMon.downloadAnnounced",
-    "MoveEffectsData.quickClaw",
     "BattleContext.monSpeedValues",
     "BattleContext.moveSketched",
 )
@@ -220,7 +219,9 @@ def test_speed_rand_maps_to_qc_roll():
     # docs/kaizo/k3b2-rules.md §12: speedRand is read only through Quick Claw's test.
     rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
     assert rows["BattleContext.speedRand"] == ("qc_roll", "mapped")
-    assert rows["MoveEffectsData.quickClaw"][1] == "later (M6)"
+    # E2 B10-6: Knock Off reads moveEffectsData.quickClaw (subscript_knock_off.s:8): the turn
+    # scratch ts_claw (order.claw_flags).
+    assert rows["MoveEffectsData.quickClaw"] == ("ts_claw", "mapped")
 
 
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):

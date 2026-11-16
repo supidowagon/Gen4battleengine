@@ -273,6 +273,11 @@ VISIBLE_CLASSES = (
     "switch target",
     "replacement",
     "turn order",
+    # E2 batch 7 (B7-n): their cases were in visible_cases, not in this list.
+    "ingrain",
+    "mean look",
+    "imprison",
+    "roosting",
 )
 
 

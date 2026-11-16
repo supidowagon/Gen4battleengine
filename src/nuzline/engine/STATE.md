@@ -67,7 +67,9 @@ three structs has a row.
   battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
   Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
-  `effects.MOVE_EFFECT_MASK_FIELDS`). The rest (semi-invulnerable turns, Minimize, Charge,
+  `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
+  UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
+  The rest (Minimize, Charge,
   Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise) are later
   (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
@@ -99,8 +101,9 @@ three structs has a row.
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
   (`order.copycat_call`). A field condition, not a battler's: it does not leave with a battler.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
-  battler is locked into for its next turn (Bide, Rollout, Uproar; charge-up moves are
-  later, M6), and `charge_turn` is an `int8` flag that cannot hold a move id.
+  battler is locked into for its next turn (Bide, Rollout, Uproar, and since E2 batch 10 the
+  charge-up moves: subscript_vanish_on_charge_turn.s:10 locks into moveCur, B10-12), and
+  `charge_turn` is an `int8` flag that cannot hold a move id.
   `locked_move` is an `int16`, 0 = not locked: it is set while `Battler_CanPickCommand` is
   FALSE (battle_lib.c:6224-6235) through `VOLATILE_CONDITION_MOVE_LOCKED` or an uproar (E2
   batch 5: `Battler_UnlockMoveChoice` clears only the first, battle_lib.c:1834-1841, so an
@@ -301,7 +304,8 @@ three structs has a row.
   subscript_baton_pass.s:17, else 0) and the turn scratch `ts_*` (per field: the
   `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
-  `moveEffectsData.custapBerry` (`ts_custap`), the per-battler `turnFlags` later actors read
+  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
+  `turnFlags` later actors read
   (`ts_protect_ok`, `ts_taken`; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
@@ -373,7 +377,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -382,7 +386,7 @@ three structs has a row.
 | Struct.field | pytree field | status |
 |---|---|---|
 | `MoveEffectsData.disabledTurns` | `disable_turns` | mapped |
-| `MoveEffectsData.encoredTurns` | — | later (M6) |
+| `MoveEffectsData.encoredTurns` | `encore_turns` | mapped |
 | `MoveEffectsData.chargedTurns` | — | later (M6) |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
 | `MoveEffectsData.protectSuccessTurns` | `protect_count` | mapped |
@@ -406,7 +410,7 @@ three structs has a row.
 | `MoveEffectsData.metronomeTurns` | — | later (M6) |
 | `MoveEffectsData.micleBerry` | — | later (M6) |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
-| `MoveEffectsData.quickClaw` | — | later (M6) |
+| `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
 | `MoveEffectsData.meFirst` | — | later (M6) |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
@@ -417,8 +421,8 @@ three structs has a row.
 | `MoveEffectsData.transformedPID` | — | later (M6) |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
-| `MoveEffectsData.encoredMove` | — | later (M6) |
-| `MoveEffectsData.encoredMoveSlot` | — | later (M6) |
+| `MoveEffectsData.encoredMove` | `encore_move` | mapped |
+| `MoveEffectsData.encoredMoveSlot` | `encore_slot` | mapped |
 | `MoveEffectsData.lastResortMoves` | — | later (M6) |
 | `MoveEffectsData.choiceLockedMove` | `choice_lock` | mapped |
 | `MoveEffectsData.transformedGender` | — | later (M6) |
@@ -438,7 +442,7 @@ three structs has a row.
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
 | `SideConditions.followMe` | — | not needed because Follow Me only redirects moves in doubles |
 | `SideConditions.followMeUser` | — | not needed because Follow Me only redirects moves in doubles |
-| `SideConditions.knockedOffItemsMask` | — | later (M6) |
+| `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |
 | `SideConditions.toxicSpikesLayers` | `toxic_spikes` | mapped |

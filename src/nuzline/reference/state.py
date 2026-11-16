@@ -33,6 +33,7 @@ class RefPokemon:
     ability_slot: int
     item: int
     item_consumed: int
+    knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)
     moves: list[int]
     pp: list[int]
     status: int
@@ -69,6 +70,9 @@ class RefSide:
     foresight: int
     disabled_move: int
     disable_turns: int
+    encore_move: int  # B10-9
+    encore_slot: int
+    encore_turns: int
     locked_move: int
     bide_turns: int
     bide_damage: int
@@ -92,6 +96,7 @@ class RefSide:
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     can_unburden: int  # MoveEffectsData.canUnburden
     minimized: int  # MOVE_EFFECT_MINIMIZE
+    semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -154,6 +159,7 @@ class RefState:
     ts_locked: list[int]
     ts_item: list[int]
     ts_custap: list[int]
+    ts_claw: list[int]
     ts_pursued: int
     ts_protect_ok: list[int]
     ts_taken: list[list[int]]

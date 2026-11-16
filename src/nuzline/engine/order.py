@@ -49,6 +49,7 @@ from nuzline.engine.actions import (
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
 from nuzline.engine.ids import (
+    INVOKER_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
     MOVE_STRUGGLE,
@@ -131,6 +132,7 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
 
 # The invokers (ids.EffectId.SLEEP_TALK, METRONOME, COPYCAT): ``call_kind``.
 CALL_NONE, CALL_SLEEP_TALK, CALL_METRONOME, CALL_COPYCAT = 0, 1, 2, 3
+CALL_ASSIST = 4  # E2 batch 10, B10-11
 
 
 def call_kind(tables: Tables, move) -> jnp.ndarray:
@@ -142,9 +144,30 @@ def call_kind(tables: Tables, move) -> jnp.ndarray:
         jnp.where(
             effect == EffectId.METRONOME,
             CALL_METRONOME,
-            jnp.where(effect == EffectId.COPYCAT, CALL_COPYCAT, CALL_NONE),
+            jnp.where(
+                effect == EffectId.COPYCAT,
+                CALL_COPYCAT,
+                jnp.where(effect == EffectId.ASSIST, CALL_ASSIST, CALL_NONE),
+            ),
         ),
     ).astype(_I32)
+
+
+def assist_candidates(tables: Tables, state: BattleState, side) -> tuple:
+    """``(moves int32[SLOTS * 4], valid bool[...])``: BtlCmd_TryAssist's list (battle_script.c:
+    6418-6436) for ``side``'s active battler: in party order, every move of every other party
+    slot holding a Pokemon (fainted ones too: only SPECIES_NONE and eggs are skipped) that is
+    not an invoker (Move_IsInvoker, ``ids.INVOKER_MOVES``) and that Move_CanBeMetronomed allows
+    (``MoveFlag.NO_METRONOME``; its Gravity and Heal Block tests are owed with those moves). A
+    move two mates know is listed twice. The call is ``RandNext() % numMoves`` (:6439):
+    ``Outcome.call``'s uniform value, ``invoked_move`` taking the ``call % count``-th entry."""
+    moves = state.moves[side].astype(_I32)  # [SLOTS, 4]
+    slots = jnp.arange(moves.shape[0])[:, None]
+    mate = (slots != state.active[side]) & (state.species[side][:, None] != 0)
+    invoker = jnp.isin(moves, jnp.asarray(INVOKER_MOVES, _I32))
+    allowed = (tables.move_flags[moves] & MoveFlag.NO_METRONOME) == 0
+    valid = mate & ~invoker & allowed
+    return moves.reshape(-1), valid.reshape(-1)
 
 
 def _nth(mask, k) -> jnp.ndarray:
@@ -158,18 +181,21 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``side``'s active battler, as the battler is now: not ``MoveFlag.NO_SLEEP_TALK``
     (Move_IsInvoker, which holds an empty slot's MOVE_NONE, Focus Punch, Uproar, Chatter,
     Move_IsMultiTurn: :4918-4925), and not flagged by ``BattleSystem_CheckInvalidMoves`` with every
-    check but NO_PP (:4929; battle_lib.c:2255-2316): the disabled move, a power-0 move while
+    check but NO_PP (:4927; battle_lib.c:2255-2316): the disabled move, a power-0 move while
     taunted, a Choice holder's moves other than its lock (``actions.choice_locked``: a lock
     it does not know is cleared there and restricts nothing) and a move a foe's Imprison seals
     (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling
-    B7-13). Torment, Heal Block and Encore come from unsupported moves; Gravity
-    (``Move_FailsInHighGravity``) is owed with Gravity (ledger)."""
+    B7-13) and, under Encore, every move but the encored one (battle_lib.c:2302-2304, B10-9).
+    Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``) is
+    owed with Gravity (ledger)."""
     mon = state.active[side]
     moves = state.moves[side, mon].astype(_I32)
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
     ok = ok & (moves != state.disabled_move[side])
     ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
     ok = ok & ~move_imprisoned(state, side, moves)
+    encore = state.encore_move[side].astype(_I32)
+    ok = ok & ((encore == 0) | (moves == encore))
     lock = state.choice_lock[side].astype(_I32)
     return ok & (~choice_locked(tables, state, side) | (moves == lock))
 
@@ -225,11 +251,16 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     metronome = jnp.where(n_cands > 0, _nth(cands, call % jnp.maximum(n_cands, 1)), 0)
     prev = state.move_prev if move_prev is None else move_prev
     copycat = copycat_call(tables, prev)
+    listed, valid = assist_candidates(tables, state, side)
+    n_listed = jnp.sum(valid.astype(_I32))
+    assist = jnp.where(n_listed > 0, listed[_nth(valid, call % jnp.maximum(n_listed, 1))], 0)
     return jnp.where(
         kind == CALL_SLEEP_TALK,
         talk,
         jnp.where(
-            kind == CALL_METRONOME, metronome, jnp.where(kind == CALL_COPYCAT, copycat, move)
+            kind == CALL_METRONOME,
+            metronome,
+            jnp.where(kind == CALL_COPYCAT, copycat, jnp.where(kind == CALL_ASSIST, assist, move)),
         ),
     ).astype(_I32)
 
@@ -375,6 +406,18 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
     return custap_active(tables, state) & fight[0] & fight[1]
+
+
+def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+    """``bool[2]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
+    FIGHT-against-FIGHT compare (``ignoreQuickClaw = FALSE``, bcp.c:772-786) sets it for each
+    activated Quick Claw (battle_lib.c:1283, :1349; ``quick_claw_active`` on the turn's
+    ``qc_roll``). The holder's own BEFORE_MOVE_STATE_QUICK_CLAW clears it
+    (subscript_check_quick_claw.s:22-23), so it stands until the holder's move starts; only
+    Knock Off reads it (subscript_knock_off.s:8), B10-6."""
+    actions = jnp.asarray(actions, _I32)
+    fight = ~is_switch(actions) & ~is_item(actions)
+    return quick_claw_active(tables, state, state.qc_roll) & fight[0] & fight[1]
 
 
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:

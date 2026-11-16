@@ -75,12 +75,16 @@ def test_only_thunder_wave_is_a_type_checked_status_move(tables, names):
 
 def test_thawing_moves_carry_the_thaw_flag(tables, names):
     """BATTLE_EFFECT_THAW_AND_BURN_HIT is a burn hit whose frozen user moves and thaws
-    (move_param[2] = 1); a plain burn hit has no flag."""
+    (move_param[2] = 1); a plain burn hit has no flag; Flare Blitz's recoil family carries it."""
     t, n = tables, names
     for move in ("Flame Wheel", "Sacred Fire"):
         assert _effect(t, n, move) == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 1))
     assert _effect(t, n, "Ember") == (EffectId.SECONDARY_STATUS, (Status.BURN, 0, 0))
-    assert _effect(t, n, "Flare Blitz")[0] == EffectId.UNSUPPORTED
+    # Flare Blitz (BATTLE_EFFECT_RECOIL_BURN_HIT) thaws its user too (battle_controller_player.c
+    # :2481-2482, :2730), modelled since B10-1 as RECOIL_STATUS (status, recoil divisor, thaw);
+    # Volt Tackle, the same family without the thaw, carries no flag.
+    assert _effect(t, n, "Flare Blitz") == (EffectId.RECOIL_STATUS, (Status.BURN, 3, 1))
+    assert _effect(t, n, "Volt Tackle") == (EffectId.RECOIL_STATUS, (Status.PARALYSIS, 3, 0))
 
 
 def test_move_target_ids_match_the_manifest(tables, names):

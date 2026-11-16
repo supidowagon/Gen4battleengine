@@ -1,63 +1,54 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15: batch 9 and its follow-ups done; batch 10 family 1 set aside)
+## RESUME (updated 2026-11-15 night: batch 10 closed, tip with the manager; batch 11 next)
 
-- **Tip and merges.** Tip: this RESUME commit on 253afaf ("fix(e2): batch 9 review follow-ups",
-  B9-13..B9-15). It holds batches 3-9 with their review follow-ups (batch 9's at 253afaf, batch
-  8's at 0936d40) and main bdb51d8 (merged at d6c3bab, backlog regenerated at 697a626). It is the
-  merge-check tip: no batch 10 code is committed.
-- **Batch 10.** The plan is committed at e2f0d73 ("Batch 10" below: ten families). Family 1
-  (recoil and crash) is written but uncommitted, saved as
-  `G:/Farry/Claude Workspace/_scratch/e2/b10/wip_family1.patch` with `test_batch10.py` beside it
-  (re-apply with `git apply --3way` on the patch, then copy the test to `tests/engine/`). It
-  covers: `EffectId.RECOIL_STATUS` (80) for Volt Tackle's family 262 (paralysis) and Flare
-  Blitz's 253 (burn, thaws its frozen user; bcp.c:2481, :2730): recoil Divide(hitDamage, 3), then
-  the PROBABILISTIC status (battle_lib.c:1551-1567); `EffectId.CRASH` (81) for Jump Kick / Hi
-  Jump Kick 45: on a miss or a Protect the user loses min(Divide(damage, 2), Divide(defender
-  maxHP, 2)) of hit 0's crit and roll damage (subscript_crash_on_miss.s), Magic Guard excepted;
-  Reckless for 45 / 253 / 262 (`damage.RECKLESS_EFFECTS`); both engines, the laws
-  (`Reads.crash`: crit / roll[s, 0] read on a miss; the status lists, TABLE_DAMAGE_EFFECTS, the
-  input classification), build_tables (chance 0 refused for RECOIL_STATUS), the generator
-  (`strategies._draw_batch10`) and three hand tests. State reached: hand tests 3 passed,
-  test_damage_classes 46 passed, differential 150 (seed 1) clean; a second seed was stopped
-  unfinished. Not done: rulings B10-1 / B10-2 in the ledger, the commit, the backlog
-  regeneration, notes for E1 (new EffectIds RECOIL_STATUS, CRASH: the AI's #253 / #262 / #45
-  scripts are E1's). The patch also carries an older copy of the B9-13 hunk in enumerate.py,
-  now committed at 253afaf: expect that hunk to conflict and keep the committed version.
-  The tables (`data/*/tables.npz`, untracked) were rebuilt for the clean tip; rebuild both after
-  re-applying (`uv run python -m tools.build_tables`; `uv run --group rom python -m
-  tools.build_tables --game kaizo`).
-- **Batch 9 follow-ups.** test_stage_b's six failing nodes are fixed (the exhaustive solver's
-  unpack, B9-15) and confirmed: 6 passed (test_terminal_win_after_a_death_scores_zero_at_k0,
-  test_win_after_a_new_death_scores_zero_at_k0, test_result_dict_round_trip,
-  test_root_chance_node_for_the_battle_start_quick_claw, test_matches_exhaustive_on_endgames,
-  test_no_peeking). Engine guards, test_stage_b_learn, test_batch9: 159 passed; tests/data +
-  tests/tools 596 passed before the build_tables gate fix, then test_build_tables_game 14
-  passed. tests/prep/test_exhaustive.py was stopped unfinished (slow). The four cross-area
-  guards on 253afaf were stopped unfinished at the session clear (2026-11-15 ~08:50); the
-  manager reruns them in the merge check.
-- **Next.** Batch 10 families 1-10 in the plan order (re-apply family 1 first), then the next
-  splits (Fantina onward, backlog order).
-- **Open rulings and items.** Compile re-time pending on a quiet machine (batch 9's 76.5 s was
-  load-skewed). `tests/search/test_leaves.py` and `tests/search/test_player_learn.py` owe a
-  restructuring (each past 8 GB). The slow search run peaked at 17 GB. A one-process focused
-  run over tests/prep and the engine guards grew past 16 GB here and was stopped: run such sets
-  per file. Sampling note: `outcome.sample_outcome` uses `fold_in(key, 26)` for both Metronome's
-  side-0 rank and `yawn_sleep` (correlated draws; marginals exact).
-- **Test worktree.** `G:\Farry\Claude Workspace\_scratch\e2\testwt` (detached; tables rebuilt per
-  tip; JAX cache under its `.cache/jax-tests`); `compile_time.py` at `_scratch\e2\`; batch 10
-  scratch at `_scratch\e2\b10\` (`diff.py N SEED`: the reduced differential).
-- **Process rules (user-approved).**
-  - Per batch: the batch's focused tests plus the four cross-area guards
-    (`tests/prep/test_variants.py`, `tests/data/test_game_constants.py`,
-    `tests/tools/test_backlog.py`, `tests/test_cli.py`) and one review. No fast tier per batch.
-  - The fast tier runs once per merge into main, on the merge-check tip, under the lock.
-  - Never start a third batch while two are unmerged: send a merge-check tip instead.
-  - The session is cleared at every batch boundary: keep this RESUME current at each one.
-- **Lock rules.** The fast-tier lock (`_scratch/fast_tier.lock`) names the launched pytest's pid,
-  written only after that process is confirmed alive; a lock whose pid is dead may be deleted.
-  At most 8 GB per test file. Every background launch gets a liveness check within two minutes.
-  No 90 minutes without a commit (else tell the coordinator in two lines what it waits on).
+- **Main.** Batches 3-9 are in local main (d420167; main 0bed7e9 merged into this branch at
+  ac351e1, CLAUDE.md only). Never push.
+- **Batch 10 on this branch (unmerged), closed and sent to the manager for its merge check.**
+  597ad95 recoil/crash (B10-1/2); ff4490b merge-check follow-ups (B10-3); 939bd45 Substitute
+  (B10-4); a9806c2 Endeavor / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard
+  (B10-7); 5efc1e9 Focus Punch (B10-8); 5e9b960 Encore engine side (B10-9, B10-10); 8df2d38
+  Assist (B10-11), Encore refused by coverage for both sides; 6d37c38 the charge turn incl.
+  semi-invulnerable and Power Herb (B10-12/13; backlog 234 -> 230); 4d174a8 test_pivot_search
+  under 8 GB true peak (conftest prints each test's sampled 50 ms peak; peaks 15.5 -> 4.9 GB);
+  ac351e1 merge of main; e3e0d0b review follow-ups (B10-14 Future Sight vs semi-invulnerable incl.
+  the Spikes-last range quirk, B10-15 OHKO + Sturdy semi target, B10-16 comment, B10-17 ts_claw /
+  ts_custap per battler).
+- **Batch 10 checks.** test_damage_classes 46; test_expand + four guards passed
+  (at ac351e1); after e3e0d0b: test_batch10 34, test_accuracy_classes 30, test_invokers 16,
+  differential seeds 21-24 clean, the four guards 172 passed 1 skipped. Review: approve-with-changes, all fixed.
+- **Found, not ours:** the new peak sampler shows tests/test_cli.py over 8 GB:
+  test_cli_rank_deaths_and_protect 11.96 GB, test_cli_rank_default_budget_keeps_the_header 8.67,
+  test_rank_lead_and_opponent_active 8.16 (likely the same expand CHUNK padding). Reported.
+- **Owed from batch 10:** Gravity grounding a Fly user (Gravity refused by coverage), Transform
+  vs a vanished target, Kaizo Hurricane (effect 141, no fight reaches it).
+- **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
+  as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
+  replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
+  a second sampled outcome returned where the event fired, Outcome shape unchanged), including
+  the Sleep Talk + Disable / Imprison sampler fix with a frequency test that fails today, Encore
+  into Metronome / Assist / Sleep Talk / Copycat; then lift both Encore refusals and add Encore's
+  AI (Basic_CheckCannotEncore, Expert_Encore) under the ALLIN convention.
+- **ALLIN AI convention (from E1's merge):** gate a flag only through policy._flags /
+  _run_flags; every random read through commands._slot_read with its bound in
+  read_bounds.READ_BOUNDS; concrete code uses layout.fight_flags / fight_effects.
+- **Process rules.** Per batch: focused tests + the four guards (tests/prep/test_variants.py,
+  tests/data/test_game_constants.py, tests/tools/test_backlog.py, tests/test_cli.py) + one
+  review; the fast tier once per merge, on the merge-check tip, under
+  G:/Farry/Claude Workspace/_scratch/fast_tier.lock (launcher _scratch/e2/run_fast_tier.ps1;
+  E1's merge takes the lock first). No third batch while two are unmerged. Report in a few lines
+  to the manager (SendMessage local_a4231f03-556b-4b7f-bc82-38b27d410c76); a two-line note after
+  90 minutes without a commit. E2 owns move-effect families end to end (mechanic, AI scoring,
+  tests); E1 owns abilities, held items, battle conditions, AI flags. Keep commits small (E1
+  builds on this branch: claude/e1-gardenia-on-e2). Context: do not read whole large files or
+  full test logs (grep / tail), delegate file-heavy work to subagents. Runs narrow (one process,
+  under 6 GB) while another fast tier holds the lock.
+- **Scratch.** _scratch/e2/b10: diff.py N SEED (reduced differential, dumps fail_SEED.pkl),
+  replay.py / replay3.py (replay a dump in both engines), edit.py (scripted edits), the decomp
+  Substitute inventory. Test worktree _scratch/e2/testwt (now at d420167). Rebuild tables after
+  an effect-map change (uv run python -m tools.build_tables; uv run --group rom python -m
+  tools.build_tables --game kaizo); regenerate the backlog per family (uv run --group rom python
+  -m tools.kaizo.backlog docs/kaizo/mechanics_backlog.md).
 
 ## History
 
@@ -232,6 +223,113 @@ family committed on its own, rulings B10-n.
 
 Out of scope: AI entries (E1), double / multi formats, gauntlets, the terrain entries (data).
 
+### Family 3 design: Substitute (in progress; decomp inventory at
+`G:/Farry/Claude Workspace/_scratch/e2/b10/substitute_inventory.md`)
+
+- The move: `EffectId.SUBSTITUTE` (decomp 79). subscript_try_substitute.s:7 fails with a
+  substitute up; BtlCmd_TrySubstitute (battle_script.c:5211-5226): q = Divide(maxHP, 4), fails
+  when curHP <= q, else the user loses q through UPDATE_HP, `substitute_hp` = q, and its
+  VOLATILE_CONDITION_BIND clears (:5222). The AI's scripts are E1's, already transcribed.
+- State: `substitute_hp != 0` stands for VOLATILE_CONDITION_SUBSTITUTE (every break zeroes both
+  but Pursuit's, whose stale HP nothing reads without the bit). SELF_TURN_FLAG_SUBSTITUTE_HIT
+  lasts one action (BattleContext_Init, battle_lib.c:2014, after every action, bcp.c:3998): a
+  carry of the hit loop (`MoveHit.sub_hit`, like `focus_armed`), not a state field.
+- The hit (bcp.c:3359-3378): with a substitute and damage, the substitute takes min(damage, its
+  HP) (hitDamage: drain and recoil read it; shellBellDamageDealt too), the flag sets, and
+  UpdateHP returns early: no False Swipe cap, Focus Sash / Band, Bide store, damage-taken fields
+  (Counter, Mirror Coat, Metal Burst), lastDamageTaken, SYSCTL_MOVE_HIT (Life Orb, Shell Bell),
+  resist berry. Later hits of a multi-hit go on, on real HP once it broke, the flag still set.
+- Gates: CheckSubstitute (battle_script.c:9173-9186) = the bit or the flag; SubstituteWasHit
+  (battle_lib.c:6259) = the flag. Default-chance secondaries on the defender (lib.c:1570-1587),
+  CHECK_HP_AND_SUBSTITUTE (Bind), the status / flinch / confuse / leech seed / lock-on / mean
+  look / yawn / curse / swagger subscripts, ChangeStatStage's drop on a foe (bit only: direct
+  fails, indirect silent), Dream Eater (no damage), SmellingSalt (no x2, no cure), the contact
+  ability (lib.c:4209), the on-hit items (:5378), Pluck (:5546), Intimidate (subscript :13),
+  Toxic Spikes on a Baton-Passed substitute. Not gated: self-recipient secondaries, ON_HIT,
+  Taunt, Disable, Attract, Foresight, Roar, Perish Song, U-turn, sound moves.
+- Special paths: Future Sight (subscript_future_sight_damage.s:13-24, no flag); Pursuit on a
+  switcher (subscript_pursuit.s:20, :56-73: only a break changes it); confusion self-hit and Leech
+  Seed's drain bypass it; Struggle's recoil is maxHP/4 anyway.
+
+### Family 6 design: Knock Off (next; the AI is E1's, branch claude/e1-prep-on-e2)
+
+- effect_script_0188.s: an indirect ON_HIT subscript_knock_off.s after CalcCrit / CalcDamage (a
+  table hit). The subscript ends with nothing done when the defender is behind a substitute (:5,
+  CheckSubstitute), has Multitype (:6, BATTLEMON_ABILITY), holds the Griseous Orb (:7), or has its
+  moveEffectsData.quickClaw (:8) or custapBerry (:9) set; then BtlCmd_TryKnockOff
+  (battle_script.c:6608-6632): no item, nothing; an ignorable Sticky Hold with an item, "{0}'s {1}
+  made {2} ineffective!" (TAG_NICKNAME_ABILITY_MOVE); else heldItem = ITEM_NONE and the side's
+  knockedOffItemsMask |= the slot's bit (:6626-6627).
+- New state: `knocked_off` int8[SIDES, SLOTS] (the mask; it survives switches): InitBattleMon
+  clears a knocked-off slot's item and canUnburden on entry (battle_lib.c:161-163), the Sticky Barb
+  transfer skips a knocked-off attacker (:5390, :7380), Thief / Covet / Trick / Fling read it
+  (script.c:5105, :6348). `quick_claw_flag` int8[SIDES] (moveEffectsData.quickClaw): set by
+  CalcTurnOrder when the Quick Claw activates and the sort does not ignore it (battle_lib.c:1283,
+  :1349), cleared by the holder's BEFORE_MOVE subscript_check_quick_claw.s:22-23 and with
+  MoveEffectsData on a switch; it outlives a turn whose holder did not FIGHT. Check how the engine
+  keeps the Custap flag (step `custap`, `ts_custap`) and whether it needs the same persistence.
+- Knock Off leaves canUnburden as it was: an armed Unburden holder doubles its speed after it.
+
+### Design: a chosen move replaced mid-turn (Encore's takeover; manager decision (a), 2026-11-15)
+
+Problem. FightCommand (bcp.c:1866-1873) runs an encored battler's encored move whatever it chose, so
+a faster Encore this turn replaces the move the turn-start laws and sampler assumed. The same
+gap already exists, unflagged, for Sleep Talk's split variants (B5-13 Disable, B7-13 Imprison):
+`call_laws` / `call_variants` / `call_consistent` enumerate the alternative called move exactly,
+but `sample_outcome` draws every move-dependent field from the turn-start prediction
+(`used_moves`), so a split variant whose called move differs in crit stage, effect chance or
+duration law is sampled at the wrong rates. One mechanism covers both.
+
+Revised after review (approve-with-changes, 2026-11-15): the first draft listed `hit` as
+rate-free (it is the roll's class over the move's thresholds, outcome.py:967-968), missed `call`
+(Encore can lock a battler into Metronome / Assist / Sleep Talk / Copycat: Encore is not
+NO_METRONOME, and sCannotEncoreMoves leaves them), `fang_flinch` and `future_hit`, chose the copy by
+a test that can disagree with the laws, and encoded the variant in `call` (which Metronome's and
+Assist's `call % count` would corrupt). The plan now:
+
+1. One event, shared by laws, engine and sampler: `encore_taken[battler]` = its encore_move was 0
+   at the turn start and is set and held (moves[encore_slot] == encore_move) when its action
+   starts, not struggling (bcp.c:1866-1873); a new `step_events` flag. With the existing
+   `disabled_at_move` / `sealed_at_move` (`_split_events`) it decides every replaced-move variant.
+2. Laws (no new Outcome fields): a TAKEN variant per battler whose foe can make it happen (a foe
+   using Encore, or an invoker that can call it: over-approximate; `call_consistent` drops the
+   rows that did not happen), computed wholly from a hypothetical state with the encore set (as
+   `_disabled_state` does for Disable): moves, effects, crit odds, damage classes, thresholds and
+   the battler's own call law when the encored move is an invoker. The variant tag is a field
+   beside `call` (not an offset of it). Possible only when the target is not encored at the turn
+   start, its last move is encorable, held, has PP and differs from the chosen one.
+3. Sampler only: draw Outcome A as today; draw B = A with the move-dependent fields of each
+   possibly-replaced battler (`hit`, `crit`, `secondary`, `fang_flinch`, `duration`, `call`,
+   `future_hit`) redrawn for its alternative move; run the turn's events on A and return B for a
+   battler whose event fired. Exact: the event is fixed before that battler's action starts, and
+   the redrawn fields are read only after it. The same pass closes the Sleep Talk Disable /
+   Imprison split's sampler gap (today drawn from the turn-start prediction).
+4. Engine: unchanged (it already runs the replaced move; it only emits the event).
+5. Doubles: a short list of alternatives per battler, each keyed by its event (two foes can Disable
+   and Encore one battler in a turn); singles needs one per kind.
+6. Tests: the hand case (1 child vs 33) as a law test and a frequency test; a Sleep Talk + faster
+   Disable frequency test with calls of different accuracy (fails today); Encore into Metronome or
+   Assist; each shown failing without its part.
+7. Size: about two days (the reviewer's estimate for the first draft was 2-3; this route is
+   smaller). Playout cost: a second event pass on turns where a replacement is possible.
+
+### Family 10 rest: Encore and Assist (next; decomp sites, not yet modelled)
+
+- Encore (effect 90, effect_script_0090.s: a direct ON_HIT subscript_encore_start.s ->
+  BtlCmd_TryEncore, battle_script.c:4725-4748): fails (MOVE_STATUS_FAILED) when the defender is
+  encored already, its last move (movePrevByBattler) is none, is not in its slots, cannot be
+  encored (Move_CanBeEncored) or has no PP; else encoredMove / encoredMoveSlot and encoredTurns =
+  RandNext() % 5 + 3 (3-7: a new duration law). Readers: command selection (bcp.c:435-450, the
+  move forced), BattleSystem_CheckInvalidMoves (battle_lib.c:2302-2304: other moves invalid, so
+  the legal actions and the AI's choices change), the action (bcp.c:1869-1883: the encored move
+  used, or the encore dropped when the slot no longer holds it), the end-of-turn count
+  (bcp.c:1592-1610: ends at 0 or when the move's PP is 0), Pursuit (script.c:6905), Sucker Punch
+  (:7292), Me First (:7391). New state: the encored move, slot and turns per battler (volatile,
+  Baton Pass?: check condition / moves.h); the AI's Encore scripts are E2's to transcribe.
+- Assist (effect 180): the invoker family (Sleep Talk / Metronome / Copycat, B5-1): a random
+  move of the user's party mates' known moves minus the exclusion list; find its command and the
+  call law shape before starting.
+
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
 # Mid-turn switch decision (U-turn, Baton Pass): design, rev. 2
@@ -367,17 +465,15 @@ Rules left out because another mechanic is missing; each closes with the mechani
   before the second mover's check (its own recoil, Life Orb) is not followed (pre-existing for
   Sand Veil; Thunder makes it a 70 vs 100 difference).
 
-- King's Rock's flinch vs Substitute (effects.py `_kings_rock`; subscript_flinch_mon.s:6):
-  Substitute. (Its Shield Dust test, :9, is modelled by E2 batch 3, B3-9.)
-- The Sticky Barb transfer vs Knock Off, the knocked-off mask and the substitute test
-  (effects.py `sticky_barb_transfer`; battle_lib.c:5378, :5390-5393): those moves (U-turn's
-  guard is modelled since B6-4). Magic Guard's readers are reached since B4-11.
+- The Sticky Barb transfer vs Knock Off and the knocked-off mask (effects.py
+  `sticky_barb_transfer`; battle_lib.c:5390-5393): Knock Off (U-turn's guard is modelled since
+  B6-4; the substitute test, :5378, since B10-4). Magic Guard's readers are reached since B4-11.
 - Fire Fang (`BATTLE_EFFECT_FLINCH_BURN_HIT`) always bypasses Wonder Guard (the decomp's bug note,
   battle_lib.c:7600): Fire Fang / Wonder Guard.
 - Gravity makes the moves that fail in high gravity (Jump Kick, Hi Jump Kick, ...) invalid:
   `Move_FailsInHighGravity` under `CHECK_INVALID_GRAVITY` in `BattleSystem_CheckInvalidMoves`
   (battle_lib.c:2292, :2348), which the AI also reads (trainer_ai.c:234); `actions.usable_moves`
-  ignores Gravity, and so do Sleep Talk's slots (`order.sleep_talk_slots`, battle_script.c:4929)
+  ignores Gravity, and so do Sleep Talk's slots (`order.sleep_talk_slots`, battle_script.c:4927)
   and `Move_CanBeMetronomed` (battle_lib.c:7204-7207: `order.metronome_candidates`,
   `order.copycat_call`, `coverage.metronome_calls`); its Heal Block test is an unsupported move's:
   Gravity.
@@ -810,7 +906,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   slots not `MoveFlag.NO_SLEEP_TALK` (Move_IsInvoker, Focus Punch, Uproar, Chatter, and
   Move_IsMultiTurn by the move's decomp effect, :4918-4925; battle_lib.c:2975-2992, :3032-3045)
   and not flagged by CheckInvalidMoves without NO_PP (disabled, power 0 while taunted, a Choice
-  holder's other moves; :4929); none fails the move. `Outcome.call` holds u in 0..11 and the
+  holder's other moves; :4927); none fails the move. `Outcome.call` holds u in 0..11 and the
   call is allowed slot `u % count` of the set the move sees when it runs (12 is a multiple of
   every count 1-4). Copycat (BtlCmd_TryCopycat :7328-7341) reads `BattleState.move_prev`
   (battle-wide `movePrev`) at its turn and fails on MOVE_NONE or a move of sCannotMetronomeMoves
@@ -1121,7 +1217,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   with that battler's volatiles; the script fails a user already imprisoning or sharing no move
   with a battler of the other side, whatever its HP (:6692-6722). A sealed move
   (`Move_Imprisoned`, battle_lib.c:3316-3338) is invalid at selection (CHECK_INVALID_IMPRISONED,
-  :2287-2290; Sleep Talk's slots too, battle_script.c:4929) and, chosen before a faster foe's
+  :2287-2290; Sleep Talk's slots too, battle_script.c:4927) and, chosen before a faster foe's
   Imprison, fails at `CHECK_STATUS_STATE_IMPRISON` after Taunt (bcp.c:2572-2583): unlock, no
   PP, `moveFailFlags.imprisoned` (the Uproar check, battle_lib.c:2812), event `ACT_IMPRISONED`.
 - B7-8 `roosting` (turnFlags.roosting, battle_context.h:64) replaces `ts_roosted`: a Roost that
@@ -1149,7 +1245,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   bag item runs no move script, so only a move or a resumed action can stop. The reference was
   right. Test: tests/engine/test_batch7_review.py (fails at f22b818).
 - B7-13 (batch 7 review) Sleep Talk's slots drop a move a foe's Imprison seals:
-  `BtlCmd_TrySleepTalk` runs CheckInvalidMoves with `~CHECK_INVALID_NO_PP` (battle_script.c:4929),
+  `BtlCmd_TrySleepTalk` runs CheckInvalidMoves with `~CHECK_INVALID_NO_PP` (battle_script.c:4927),
   which includes CHECK_INVALID_IMPRISONED (battle_lib.c:2287-2290); JAX's `order.sleep_talk_slots`
   missed it (the reference had it). A faster foe's Imprison this turn is the set's second change
   within a turn: a third call variant `CALL_SEALED` beside B5-13's KEEP / DISABLED
@@ -1235,8 +1331,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B8-5 Curse by a Ghost user (effect 109's Ghost branch, effect_script_0109.s:9-17): its
   defender is the foe (`effects.ghost_user` through `targets_user` / `self_defender` /
   `defender_always`, both engines); subscript_curse_ghost.s fails behind a substitute or on a
-  cursed foe (:3-4, :18-20), else curses the foe and costs the user Divide(maxHP, 2) through
-  UPDATE_HP (:6-12; it can faint). Curse has no MOVE_FLAG_CAN_PROTECT (res/moves/curse/
+  cursed foe (:6-7, :22-24), else curses the foe and costs the user Divide(maxHP, 2) through
+  UPDATE_HP (:9-15; it can faint). Curse has no MOVE_FLAG_CAN_PROTECT (res/moves/curse/
   data.json): Protect never stops it. `MON_COND_CHECK_STATE_CURSE` (bcp.c:1451-1459, after Burn):
   Divide(maxHP, 4) unless Magic Guard (subscript_curse_damage.s). Volatile, kept by Baton Pass
   (condition.h:72-76). The coverage / prep refusal (`coverage.ghost_curse`) is removed.
@@ -1367,3 +1463,252 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Dish, Aftermath, Hyper Cutter vs Intimidate, SonicBoom, the Kaizo recoil divisors, and the
   trapping abilities (`actions.trapped`: Shadow Tag vs Shadow Tag, Arena Trap vs Flying /
   Levitate / Gravity, Magnet Pull on Steel only, a fainted trapper).
+- B10-1 (batch 10, family 1) Volt Tackle's #262 and Flare Blitz's #253 are one effect,
+  `EffectId.RECOIL_STATUS` (80): params (status, recoil divisor 3, thaws_user). The scripts
+  (effect_script_0262.s, _0253.s) set the status under SYSCTL_APPLY_SECONDARY_EFFECT through the
+  PROBABILISTIC branch (battle_lib.c:1551-1567), then subscript_recoil_1_3.s takes
+  Divide(hitDamage, 3) from the user unless Rock Head or Magic Guard. Flare Blitz also thaws its
+  frozen user (bcp.c:2481 lets it act, :2730 thaws), as THAW_AND_BURN_HIT does. Chance 0 is
+  refused by build_tables. Reckless powers both (powerMul 12, as RECOIL). AI: both go to
+  Expert_RecoilMove (script.s:1796, :1802 -> :6289-6305); #253 added to the Kaizo transcribed
+  sets and the dispatch (#262 was E1's batch 7).
+- B10-2 (batch 10, family 1) Jump Kick / Hi Jump Kick #45 are `EffectId.CRASH` (81): a plain hit;
+  effect_script_0045.s sets SYSCTL_CRASH_DAMAGE before CalcCrit / CalcDamage, so a use that ran
+  its script and did not connect (missed or protected) ends in subscript_missed.s, whose
+  subscript_crash_on_miss.s (:11-19) takes min(Divide(damage, 2), Divide(defender maxHP, 2))
+  from the user, Magic Guard excepted. The damage is hit 0's crit and roll through the type
+  chart run hit or miss (bcp.c:3271-3277): an immune target gives 0. The laws read crit and
+  roll[s, 0] on a miss (`Reads.crash`). Reckless powers it. AI: #45 has no Expert_Main entry
+  (E1 batch 3 transcribed it generically).
+- B10-3 (batches 3-9 merge check, follow-ups) `BattleSystem_InitBattleMon` (bcp.c:227 at the
+  battle start) arms canUnburden for every lead holding an item, whatever its ability
+  (battle_lib.c:161-166): `hooks.battle_start` now does so before the switch-in states, so a lead
+  that gains Unburden later (Trace) keeps it (test_any_item_holder_lead_arms_unburden). What Baton
+  Pass keeps (Mean Look, Lock-On, Perish Song, Curse; battle_lib.c:2073-2115) gets a fast hand test
+  (test_baton_pass_keeps_mean_look_lock_on_perish_song_and_curse), which fails under a JAX-only
+  mutation dropping the four from `_BATON_PASSED` (checked 2026-11-15) and passes without it.
+  Citations fixed: Sleep Talk's CheckInvalidMoves is battle_script.c:4927; subscript_curse_ghost.s
+  is :5-7 (tests), :9-15 (curse and HP), :17 (message), :22-24 (failure); InitBattleMon's arm is
+  :161-166 and UpdateAfterSwitch's clear :2100-2104. tests/ai_legality.py says in its first line
+  that it checks host-side picks only.
+- B10-4 (batch 10, family 3) Substitute (`EffectId.SUBSTITUTE`, 82, decomp 79), both engines, as
+  designed under "Family 3 design" (decomp inventory: `_scratch/e2/b10/substitute_inventory.md`).
+  The move (`effects._substitute`, `substitute_fails`: subscript_try_substitute.s:7-8,
+  battle_script.c:5211-5226, MOVE_STATUS_NO_MORE_WORK). The hit (`play_hit`; bcp.c:3359-3378):
+  the substitute takes min(damage, its HP), hitDamage for drain and recoil, shellBellDamageDealt,
+  the flag (`MoveHit.sub_hit`, a hit-loop carry; the reference's `_Turn.sub_hit`), and none of
+  False Swipe's cap, the Focus Sash, Bide's store, the damage-taken records, the resist berry,
+  SYSCTL_MOVE_HIT. Gates: `_Hit.shielded` (CheckSubstitute: the bit or the flag) for the status
+  subscripts, flinch (King's Rock too), confuse, Bind, Leech Seed, Swagger (whole move fails);
+  `_Hit.sub_hit` (SubstituteWasHit) for rolled foe secondaries, Pluck (lib.c:5546), the contact
+  ability (:4209), the Sticky Barb transfer (:5378); the bit only for a foe stat drop
+  (script.c:2921-2923), Dream Eater (effect_script_0008.s:5), SmellingSalt's x2 and cure
+  (effect_script_0171.s:5), Intimidate (subscript_intimidate.s:13), Toxic Spikes on a Baton Pass
+  newcomer (subscript_poison.s:29, _badly_poison.s:46). Special paths: Future Sight's hit
+  (subscript_future_sight_damage.s:13-24), Pursuit's pre-switch hit (subscript_pursuit.s:20,
+  :56-73: only a break changes the substitute; `play_hit(pursuit_switch=True)`). Laws: SUBSTITUTE
+  is input-neutral and non-table (SmellingSalt is DOUBLE_POWER, never compressed). Observation:
+  the substitute's presence was already public, its HP hidden. The AI's scripts (Basic :633-636,
+  Expert_Substitute :2976-3042) were E1's. Hand tests in tests/engine/test_batch10.py (the move,
+  the hit and the break, status / drop / drain, multi-hit with Static, King's Rock, Pursuit, Ghost
+  Curse); the generator `strategies._draw_substitute`. Differential seed 3, 150: clean.
+  Backlog regenerated: missing groups 241 -> 240, runnable battles 53 -> 57. Found on the way:
+  family 1 left RECOIL_STATUS / CRASH unclassified in test_accuracy_classes and Flare Blitz's thaw
+  unflagged in test_effect_map's thaw test; batch 7 (4a06792) left its four observation cases out
+  of test_observe.VISIBLE_CLASSES (a slow test): all three fixed with this commit.
+- B10-5 (batch 10, family 5) Endeavor (`EffectId.ENDEAVOR`, 83, decomp 189) and Pain Split
+  (`EffectId.PAIN_SPLIT`, 84, decomp 91), both engines. Endeavor (effect_script_0189.s): fails
+  (MOVE_STATUS_FAILED, :7, :13-14; `step._use_move`'s `failed`, the reference's `_script_fails`)
+  unless the defender's curHP exceeds the attacker's; else battleCtx->damage is the difference
+  under SYSCTL_IGNORE_TYPE_CHECKS (:10: no multiplier, an immunity still gives 0; no CalcCrit /
+  CalcDamage: `UNROLLED_EFFECTS`, `damage.fixed_damage`; the resist berry skips it,
+  `IGNORES_TYPE_CHECKS`); a substitute takes it like any hit (B10-4). Pain Split
+  (subscript_pain_split.s): fails behind a substitute (:5, :50-52: `primary_effect_fails`); else
+  avg = (a + d) / 2 (OPCODE_DIV) and each battler's HP goes to it through UPDATE_HP, capped at its
+  max HP (`effects._pain_split`). Both input-neutral and non-table (HP only). The AI's
+  Expert_Endeavor / Expert_PainSplit were E1's. Hand tests in test_batch10.py; the generator draws
+  both in `_draw_batch10` with a low user.
+  Differential seed 4, 150: clean. Backlog: missing groups 240 -> 238, runnable battles 57 -> 58.
+- B10-6 (batch 10, family 6) Knock Off (`EffectId.KNOCK_OFF`, 85, decomp 188), both engines, as
+  designed under "Family 6 design". `effects._knock_off` (the reference's KNOCK_OFF branch): a
+  table hit, then subscript_knock_off.s's tests (substitute, Multitype, Griseous Orb, quickClaw,
+  custapBerry) and BtlCmd_TryKnockOff (Sticky Hold, decomp ability 60, ignorable; else the item
+  goes and the slot's bit). New state: `knocked_off` (per party slot) and the turn scratch
+  `ts_claw` (`order.claw_flags`: the quickClaw flag from the FIGHT-vs-FIGHT order, cleared at its
+  holder's move start; no persistence is needed, as only two FIGHT commands set it and the holder
+  then reaches its move start or faints). The Sticky Barb transfer skips a knocked-off attacker
+  and Knock Off itself (battle_lib.c:5390-5391; pivot :7380). Laws: a table-damage effect and an
+  input clause (the foe's later hit when it holds an item). The AI's Knock Off is E1's (branch
+  claude/e1-prep-on-e2). The AI's record (E2's under the end-to-end rule, manager 2026-11-15):
+  TryKnockOff runs no CopyToParty, so `ai_item_known` keeps the knocked item until the
+  battler's next CopyToParty (battle_lib.c:1819-1823): its next HP-bar update
+  (battle_script.c:1720) or move attempt (bcp.c:2748). Modelled per segment (an action, the end
+  of the turn) in both engines (`step._stale_known_item`, the reference's twin): exact, as a
+  knocked-off slot never holds an item again and the AI reads the record only at its next
+  choice; test_knock_off_leaves_the_ai_record_until_the_next_copy_to_party. Thief, Covet, Trick
+  and Fling, which also
+  read the mask, are unsupported.
+  STATE.md maps quickClaw (`ts_claw`) and knockedOffItemsMask (`knocked_off`); test_state's
+  audit list no longer pins quickClaw as later. Differential seed 5, 150: clean.
+- B10-7 (batch 10, family 8) Safeguard (`EffectId.SAFEGUARD`, 86, decomp 124), both engines.
+  BtlCmd_TrySafeguard (battle_script.c:5754-5772): fails with the user's side's Safeguard up
+  (MOVE_STATUS_FAILED, `primary_effect_fails`), else safeguardTurns = 5 (the existing
+  field-condition count-down, bcp.c:1016-1030). Its tests: every status subscript after the
+  substitute and status tests (paralyze :28, burn :45, freeze :25, poison :41, badly_poison :55,
+  fall_asleep :51, after its uproar test), subscript_confuse.s:26 (Swagger's confusion too, after
+  its Attack raise), the held-item path (Flame Orb subscript_burn.s:16, Toxic Orb
+  subscript_badly_poison.s:27) and Toxic Spikes on a newcomer (poison :41, badly_poison :55);
+  Yawn's test was already modelled (B8-3); the drowsy sleep (MOVE_EFFECT type) has none. The AI's
+  Basic_CheckAlreadyUnderSafeguard was E1's. Found on the way (B10-4 follow-up): Uproar's
+  "kept awake" NO_MORE_WORK for a direct sleep move now excludes a substituted target, whose
+  CheckSubstitute (subscript_fall_asleep.s:40) fails it first (both engines).
+  And a law fix (B10-4): `Reads.flinch_sure` let the first mover's flinch roll drop the foe's
+  hit reads even when the foe was behind a substitute, where the flinch never applies
+  (subscript_flinch_mon.s:6): test_damage_classes' generated case (a 1-HP substitute, Trick
+  Room, an uproar) found it; it now needs the foe's `substitute_hp == 0`, and
+  test_laws_no_sure_flinch_through_a_substitute fails without that clause.
+- B10-8 (batch 10, family 10) Focus Punch (`EffectId.FOCUS_PUNCH`, 87, decomp 170), both engines.
+  effect_script_0170.s:5-6: a user whose turnFlags physical / specialDamageAttackerMask is set
+  (a hit on its HP this turn, bcp.c:3416-3424; the engine's `phys_from` / `spec_from` records,
+  `foe_taken[3:5]`) gets MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status: subscript_missed.s:8-10
+  prints "lost its focus" and the move ends like a failed script (`step`'s `failed`, the
+  reference's lost_focus beside `_script_fails`); else a plain table hit (priority -3 is the
+  move's data). A hit on its substitute sets no mask (B10-4). The turn-start "tightening its
+  focus" message (bcp.c:811-834, PRE_MOVE_ACTION_STATE_TIGHTEN_FOCUS) changes no state; the
+  observation shows the move and the miss (coarser: "lost its focus" and a miss share a set).
+  The AI's Expert_FocusPunch was E1's. Encore and Assist (the rest of family 10) are not done.
+- B10-9 (batch 10, family 10) Encore (`EffectId.ENCORE`, 88, decomp 90), both engines; its AI
+  (Basic_CheckCannotEncore script.s:655-657, Expert_Encore :3177-3240) is still to transcribe
+  (the AI refuses the move until then). New volatile state `encore_move`, `encore_slot`,
+  `encore_turns` (MoveEffectsData, cleared on a switch, not Baton-passed). BtlCmd_TryEncore
+  (battle_script.c:4725-4748; `effects.encore_slot_of`, `_encore`): fails (MOVE_STATUS_FAILED) for
+  an encored target, no last move, a last move not in its slots, one of sCannotEncoreMoves'
+  battle effects (battle_lib.c:7212-7231, `ids.CANNOT_ENCORE_MOVES` through `move_ai_effect`) or
+  no PP; else the move, its slot and RandNext() % 5 + 3 turns (`DURATION_ENCORE`, 3-7). The
+  selection (`actions.usable_moves`): CheckInvalidMoves leaves only the encored move
+  (battle_lib.c:2302-2304), and with it valid the encored slot is the one FIGHT action
+  (bcp.c:443-446), else Struggle. The action (FightCommand, bcp.c:1866-1883): after Struggle, the
+  encored move runs whatever was chosen (a faster Encore this turn takes over), from its slot's PP
+  (no PP: MOVE_STATUS_NO_PP, now modelled in the JAX engine too); a slot that no longer holds it
+  ends the encore. The turn end (`step._encore_check`, bcp.c:1591-1612, between Disable and
+  Lock-On): unknown or 0-PP move zeroes the count; the count drops, at 0 the encore ends. The
+  observation shows that an encore is on (the count is hidden).
+  Owed (this batch, after E1's ALLIN merge lands in main): Encore's AI. Basic_CheckCannotEncore
+  and Expert_Encore need AICmd_IfBattlerUnderEffect (CHECK_ENCORE, CHECK_DISABLE), not on this
+  base, and Expert_Encore's IfRandomLessThan 30 (script.s:3192) goes through ALLIN's
+  commands._slot_read with a read_bounds.READ_BOUNDS entry. Until then coverage refuses Encore
+  for the trainer AI. Found by the differential (seeds 9, 10): the reference's volatile reset list
+  lacked the three encore fields; its usable-move check (`_usable`) ignored Encore (Struggle and
+  the forced slot); both fixed. Sleep Talk's callable slots drop every move but the encored one
+  (CheckInvalidMoves at battle_script.c:4927; `order.sleep_talk_slots`, both engines).
+  Manager ruling 2026-11-15: batch 10 ships Encore refused by coverage for both sides
+  (`coverage.IMPLEMENTED_EFFECTS[ENCORE] = NONE`, reason `ENCORE_REFUSAL` naming the takeover
+  task; Metronome is refused with it, as it can call Encore), the engine code kept; batch 11 builds
+  the takeover (design below) and then lifts the refusal and adds Encore's AI.
+  Owed (decision asked of the manager 2026-11-15): the same-turn takeover (FightCommand,
+  bcp.c:1869-1873) is exact in both engines but not in `outcome_laws` (reads are planned from the
+  chosen move: a hand case gives 1 child against 33 sampled outcomes) nor in `sample_outcome`
+  (crit and secondary drawn with the chosen move's rates). Proposed: the encored move as a second
+  candidate move for that side, reads unioned and crit / secondary drawn per candidate.
+- B10-10 (law) `Reads.flinch_sure` counted Snore (FLINCH with SNORE_PARAM), whose flinch fails
+  with its move unless the user is asleep when it acts (effect_script_0092.s:5): an awake Snore
+  user moving first let the laws drop the foe's reads (test_matches_sampled_frequencies_random's
+  derandomized case, Snore vs Future Sight; on main d420167 too, reached now by the batch 10
+  generator draws). Snore is left out of `flinch_sure` (its foe's reads stay planned).
+- B10-11 (batch 10, family 10) Assist (`EffectId.ASSIST`, 89, decomp 180), an invoker
+  (`order.CALL_ASSIST`), both engines. BtlCmd_TryAssist (battle_script.c:6405-6444;
+  `order.assist_candidates`): in party order, every move of every other party slot holding a
+  Pokemon (a fainted mate's too), not Move_IsInvoker (`ids.INVOKER_MOVES`, battle_lib.c:
+  3032-3045) and Metronome-able (NO_METRONOME; Gravity and Heal Block owed with those moves);
+  duplicates count; the call is RandNext() % numMoves (`sample_outcome`: a uniform draw over the
+  list, fold_in 30 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
+  `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
+  invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
+  user). Its AI entry was transcribed generically by E1 (batch 3).
+- B10-12 (batch 10, family 7) The charge turn. Each charge move keeps its attack turn's
+  EffectId (Razor Wind / Skull Bash / SolarBeam / Fly / Dig / Dive / Shadow Force PLAIN, Sky
+  Attack FLINCH, Bounce SECONDARY_STATUS paralysis); `MoveFlag.CHARGE` and kin (built from the
+  decomp effect: `effect_map.CHARGE_FLAG_EFFECTS`, `move_flags` now int32) carry the charge.
+  The scripts (effect_script_0039/0075/0145/0151/0155/0255/0256/0263/0272.s) attack when the
+  user is VOLATILE_CONDITION_MOVE_LOCKED (line 5: the second turn, `locked_move`; PP spent once,
+  on the first: bcp.c:335), SolarBeam in sun without Cloud Nine / Air Lock (_0151.s:5-6,
+  CheckIgnoreWeather battle_script.c:9195-9206) or with a Power Herb (HOLD_EFFECT_CHARGE_SKIP,
+  `ItemId.POWER_HERB`, removed by subscript_item_skip_charge_turn.s:20; Skull Bash's Def +1
+  first, subscript_power_herb_skull_bash.s:14-17). Else they charge: SYSCTL_FIRST_OF_MULTI_TURN
+  (no accuracy roll bcp.c:2905-2908, no Protect / Lock-On / semi test :3003-3005, no type chart
+  :2354, no immunity abilities battle_lib.c:3509-3540), the direct subscript_vanish_on_charge_
+  turn.s locks the user into moveCur (:10, Battler_LockMoveChoice lib.c:1828-1832; a called
+  move's lock is the called move), the semi-invulnerable bit (new state `semi_invulnerable`,
+  `ids.SemiKind`: AIRBORNE Fly/Bounce, UNDERGROUND Dig, UNDERWATER Dive, SHADOW_FORCE), Skull
+  Bash's Def +1 (_0145.s:8, chance 100). A charge with no living foe keeps the user as defender
+  and charges (HasNoTarget bcp.c:2327-2334); a called charge move with none goes to
+  subscript_no_target from GoToMoveScript (battle_script.c:2124-2126); a herb / sun attack with
+  none ends in TryMove's HasNoTarget (LAST_OF_MULTI_TURN, common.h:57-60) after the herb went.
+  The second turn's script clears the bit and the lock before TryMove (line 24 / cleanup :6).
+  Interruptions: every disruption, miss, Protect and the sleeper unlock at turn setup run
+  Battler_UnlockMoveChoice, which also clears the bit (lib.c:1838): the move is lost and the
+  next use charges again (flinch, full paralysis, confusion self-hit, Truant, sleep); a switch
+  or faint resets it (volatile). Choice lock: FIRST_OF_MULTI_TURN updates the locks as the
+  attack message does (bcp.c:3921-3922, :4490-4491). The charge turn shows no attack message
+  (moveHit, movePrev, moveProtect MOVE_NONE) except Skull Bash, whose indirect Def +1 runs
+  subscript_update_stat_stage.s's PrintAttackMessage (:6-7; battle_script.c:1431-1432).
+  Razor Wind / Sky Attack crit +1 (CRITICAL_BOOSTS, `MoveFlag.CRIT_UP`, `outcome.crit_odds`).
+  Shadow Force's ON_HIT subscript_feint.s only clears the defender's turnFlags.protecting
+  (:20), unread afterwards in singles. Kaizo: be_seq 39-272 are unchanged (rom_diff.toml);
+  Kaizo gives the charge effects to Razor Wind, SolarBeam, Fly and Shadow Force only (its Dive
+  and Bounce are plain / paralysis hits); Kaizo Sky Uppercut is effect 149 and Twister 261.
+- B10-13 The semi-invulnerable target (CheckMoveHitOverrides, bcp.c:3016-3040): after Protect
+  and the Lock-On / No Guard return (either battler's No Guard; OHKO's BYPASSED_ACCURACY,
+  battle_script.c:4343-4374, the same battlers), a move whose defender is the foe (a special
+  Counter's and Bide's unleash included), not RANGE_OPPONENT_SIDE, misses
+  (MOVE_STATUS_SEMI_INVULNERABLE, accuracy 0 too) unless its script sets the kind's
+  SYSCTL_HIT_DURING_* (`MoveFlag.HIT_*`, `effect_map.SEMI_HIT_EFFECTS`: Fly 146/149/152/207,
+  Dig 126/147, Dive 257/261, all 148/168/176). A miss crashes (Jump Kick) and shows before
+  Sturdy (subscript_missed.s:13). Exception, Yawn: a direct MOVE_SIDE_EFFECT_CHECK_HP effect
+  (effect_script_0187.s:5), whose subscript BattleSystem_TriggerPrimaryEffect still runs on
+  MOVE_STATUS_GENERAL_MISS for a living defender (battle_lib.c:1500-1503; moves.h:88);
+  subscript_yawn.s:5-9 test Insomnia / Vital Spirit / Leaf Guard in sun (ignorable) before its
+  own miss test (:21), so against a semi-invulnerable holder the ability is printed with
+  TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806) and
+  `ai_ability_known` set; no drowsiness either way. A protected target is not semi-missed
+  (Protect returns first, bcp.c:3007-3013), so no reveal. x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
+  `damage.script_power_mul`) for Gust / Twister vs AIRBORNE, Earthquake / Magnitude vs
+  UNDERGROUND, Surf / Whirlpool vs UNDERWATER (line 7-8 of each). MOVE_EFFECT_NO_WEATHER_DAMAGE
+  (UNDERGROUND, UNDERWATER: moves.h:50) skips the sandstorm, sun and hail branches of the turn
+  end (battle_script.c:5580, :5587, :5600), not rain. SolarBeam (by move id) is halved under
+  FIELD_CONDITION_SOLAR_DOWN (rain, sand, hail, fog; lib.c:7058-7060). Twister (146) and Sky
+  Uppercut (207) are now supported. Damage classes: a foe's charge move changes a DOUBLE_SEMI
+  hit's power, Skull Bash's charge the Defense. AI: Basic :158/:219, Expert_ChargeTurnNoInvuln
+  (:3933-3973), _WithInvuln (:3992-4012), Expert_ShadowForce (:4014-4066, 80 roll at :4058);
+  SolarBeam's Expert_Thunder entry (:1719) is dead (the first jump wins). Not modelled (no
+  supported mover): Gravity's grounding (subscript_gravity_start.s:16; Gravity refused by
+  coverage), Transform's semi test, Hurricane (Kaizo 141, not reached).
+- B10-14 (batch 10 review) Future Sight / Doom Desire's delayed hit and a semi-invulnerable
+  defender. subscript_future_sight_damage.s:8 CheckMoveHit (battle_script.c:6115-6131) runs
+  CheckMoveHitOverrides (bcp.c:216-220): after Protect (:3005-3013) and the Lock-On / No Guard
+  return (:3016-3021), :3034-3040 sets MOVE_STATUS_SEMI_INVULNERABLE on a defender with a semi
+  bit. Every SYSCTL_HIT_DURING_* bit is cleared by BattleContext_Init at the last MoveEnd
+  (battle_lib.c:2009, system_control.h:31-40; bcp.c:3998) and BYPASSED_ACCURACY with
+  moveStatusFlags (:1983), so any semi kind is missed ("But it failed!"); the bit itself lasts
+  to the holder's next action. The range test reads CURRENT_MOVE_DATA (common.h:24), i.e.
+  moveCur, which nothing resets: FightCommand's moveTemp (bcp.c:1898) or GoToMoveScript's called
+  move (battle_script.c:2118). After a turn whose last such move is Spikes, Toxic Spikes or Stealth
+  Rock (the RANGE_OPPONENT_SIDE moves) the test is skipped and the hit lands. A turn with no FIGHT
+  keeps an older moveCur, but then no battler is semi-invulnerable at the turn's end (its holder
+  is locked into a FIGHT), so engines read only this turn's (`step._turn_move_cur`, event
+  `move_cur`; reference `_Turn.move_cur`). The flag lasts the pass like the others: a second hit
+  after a semi miss fails even under No Guard (which clears only MISSED).
+- B10-15 (batch 10 review; corrects B10-13's OHKO clause) An OHKO move and a semi-invulnerable
+  target. BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (battle_script.c:4338), so
+  the Lock-On / No Guard return of CheckMoveHitOverrides is skipped (bcp.c:3016); the semi test is
+  skipped only by MOVE_STATUS_BYPASSED_ACCURACY (:3035), which TryOHKOMove sets on the
+  non-Sturdy branch when the defender has MOVE_EFFECT_LOCK_ON (any target) or either battler has
+  No Guard (:4342-4372). Against an ignorable Sturdy (:4340-4341) No Guard / Lock-On do not help:
+  the semi target is missed, and subscript_missed.s:11-12 shows that miss before the Sturdy
+  message (:67-69), so the AI does not learn Sturdy (ai_ability_known).
+- B10-16 (batch 10 review) effects.py's module note: Safeguard is supported (B10-7); only Mist's
+  branches stay unmodelled (no supported mover).
+- B10-17 (batch 10 review) The pause scratch's `ts_claw` / `ts_custap` keep the flag of each
+  battler whose action is still after the paused one in the order (`to_come`), a fact about the
+  named battler (doubles design section 5 rule 5) instead of "the second actor at position 0";
+  the same values in singles.

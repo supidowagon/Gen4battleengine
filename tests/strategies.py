@@ -37,6 +37,7 @@ from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
     MOVE_STRUGGLE,
+    SEMI_SET_FLAGS,
     AbilityId,
     EffectId,
     ItemId,
@@ -309,7 +310,7 @@ BATCH4_MOVES = (
 BATCH4_ABILITIES = (AbilityId.FILTER, AbilityId.MAGIC_GUARD, AbilityId.SNIPER)
 # E2 batch 5: the invokers, and moves for them to call or copy (a sleep move, Protect, a
 # multi-hit move, Disable, a Choice item's lock).
-INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome")
+INVOKERS = ("Sleep Talk", "Sleep Talk", "Copycat", "Metronome", "Assist")  # Assist: B10-11
 CALLED_MOVES = ("Tackle", "Spore", "Protect", "Fury Swipes", "Disable", "Counter", "Ember", "Bide")
 CRIT_ITEMS = ("Scope Lens", "Razor Claw", "Lucky Punch", "Stick")
 SWITCH_IN_ABILITIES = (
@@ -880,10 +881,174 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             a["item"][side, active] = 0
             a["can_unburden"][side] = 1
         else:
-            a["item"][side, active] = names.item(rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry")))
+            a["item"][side, active] = names.item(
+                rnd.choice(("Oran Berry", "Sitrus Berry", "Lum Berry"))
+            )
             # A holder with an item has canUnburden set: its switch-in check armed it
             # (battle_lib.c:4433-4437) and nothing clears it while it stays in (B9-13).
             a["can_unburden"][side] = 1
+
+
+def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
+    Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
+    Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
+    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
+    (B10-6; an item on the foe, a knocked-off user with no item for the barb)."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(move_name: str, who: int = side, mon: int = active) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    move = rnd.choice(
+        (
+            "Volt Tackle",
+            "Flare Blitz",
+            "Jump Kick",
+            "Hi Jump Kick",
+            "Endeavor",
+            "Pain Split",
+            "Knock Off",
+            "Safeguard",
+            "Focus Punch",
+            "Encore",
+            # B10-12: the charge turn and the moves that hit a vanished foe.
+            "SolarBeam",
+            "Razor Wind",
+            "Skull Bash",
+            "Sky Attack",
+            "Fly",
+            "Dig",
+            "Dive",
+            "Bounce",
+            "Shadow Force",
+            "Twister",
+            "Sky Uppercut",
+        )
+    )
+    give(move)
+    charge = int(tables.move_flags[names.move(move)]) & int(MoveFlag.CHARGE)
+    if charge and rnd.random() < 0.3:  # B10-12: a Power Herb
+        a["item"][side, active] = names.item("Power Herb")
+    if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
+        foe_moves = [int(m) for m in a["moves"][foe, foe_mon] if m]
+        a["last_move"][foe] = rnd.choice(foe_moves + [0]) if foe_moves else 0
+    if rnd.random() < 0.15:  # B10-9: an encore already on either side, on a move it knows
+        who = rnd.choice((side, foe))
+        mon = active if who == side else foe_mon
+        slots = [k for k in range(4) if a["moves"][who, mon, k]]
+        if slots:
+            k = rnd.choice(slots)
+            a["encore_move"][who] = a["moves"][who, mon, k]
+            a["encore_slot"][who] = k
+            a["encore_turns"][who] = rnd.randint(0, 7)
+            if rnd.random() < 0.2:
+                a["pp"][who, mon, k] = 0
+    if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
+        a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
+        give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)
+    if move == "Knock Off":  # B10-6: an item to take, a Quick Claw, a barb; a knocked-off user
+        a["item"][foe, foe_mon] = names.item(
+            rnd.choice(("Leftovers", "Quick Claw", "Sticky Barb", "Oran Berry", "Life Orb"))
+        )
+        if rnd.random() < 0.3:
+            a["knocked_off"][side, active] = 1
+            a["item"][side, active] = 0
+    if move in ("Endeavor", "Pain Split") and rnd.random() < 0.6:  # a low user: Endeavor works
+        a["hp"][side, active] = rnd.randint(1, max(1, int(a["max_hp"][side, active]) // 3))
+    if rnd.random() < 0.3:
+        a["ability"][side, active] = rnd.choice(
+            (AbilityId.RECKLESS, AbilityId.ROCK_HEAD, AbilityId.MAGIC_GUARD)
+        )
+    if move == "Flare Blitz" and rnd.random() < 0.4:
+        a["status"][side, active] = Status.FREEZE
+        a["status_counter"][side, active] = 0
+    if move in ("Jump Kick", "Hi Jump Kick"):
+        roll = rnd.random()
+        if roll < 0.3:
+            give(rnd.choice(("Protect", "Detect")), foe, foe_mon)
+        elif roll < 0.5:
+            a["types"][foe, foe_mon] = (Type.GHOST, Type.GHOST)
+        if rnd.random() < 0.3:  # a small foe: the crash's cap
+            a["max_hp"][foe, foe_mon] = rnd.randint(10, 40)
+            a["hp"][foe, foe_mon] = min(int(a["hp"][foe, foe_mon]), int(a["max_hp"][foe, foe_mon]))
+    if rnd.random() < 0.3:  # a low user: the recoil or crash can faint it
+        a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
+    if charge and rnd.random() < 0.4 and a["status"][side, active] != Status.SLEEP:
+        a["encore_move"][side] = a["encore_slot"][side] = a["encore_turns"][side] = 0
+        # B10-12: mid-charge (the second turn next): locked into it, with its vanished kind.
+        flags = int(tables.move_flags[names.move(move)])
+        a["locked_move"][side] = names.move(move)
+        a["uproar"][side] = 0
+        a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
+        a["semi_invulnerable"][side] = next(
+            (int(k) for k, bit in SEMI_SET_FLAGS.items() if flags & int(bit)), 0
+        )
+
+
+# Moves whose decomp path tests a substitute or meets one (B10-4).
+SUBSTITUTE_FOE_MOVES = (
+    "Tackle",
+    "Double Kick",
+    "Thunder Wave",
+    "Growl",
+    "Toxic",
+    "Supersonic",
+    "Swagger",
+    "Leech Seed",
+    "Mega Drain",
+    "Dream Eater",
+    "SmellingSalt",
+    "Wrap",
+    "Fire Fang",
+    "Headbutt",
+    "Fake Out",
+    "Thunderbolt",
+    "Pursuit",
+    "Future Sight",
+    "Pluck",
+    "False Swipe",
+    "Super Fang",
+    "Take Down",
+)
+
+
+def _draw_substitute(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon Substitute, or a substitute already up (a small one
+    breaks, a big one holds), and its foe a move that meets it (``SUBSTITUTE_FOE_MOVES``); a
+    sleeping or paralyzed holder for Dream Eater / SmellingSalt, Static for the contact gate."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def give(move_name: str, who: int, mon: int) -> None:
+        move = names.move(move_name)
+        k = rnd.randint(0, 3)
+        a["moves"][who, mon, k] = move
+        a["pp"][who, mon, k] = int(tables.move_pp[move])
+
+    if rnd.random() < 0.5:
+        give("Substitute", side, active)
+        if rnd.random() < 0.3:  # at or near the quarter: the failure
+            quarter = max(int(a["max_hp"][side, active]) // 4, 1)
+            a["hp"][side, active] = rnd.randint(1, quarter + 1)
+    if rnd.random() < 0.7:
+        a["substitute_hp"][side] = rnd.choice((1, rnd.randint(1, 60), 200))
+    give(rnd.choice(SUBSTITUTE_FOE_MOVES), foe, foe_mon)
+    if rnd.random() < 0.3:
+        a["status"][side, active] = rnd.choice((Status.SLEEP, Status.PARALYSIS))
+        a["status_counter"][side, active] = 2 if a["status"][side, active] == Status.SLEEP else 0
+    if rnd.random() < 0.2:
+        a["ability"][side, active] = rnd.choice((AbilityId.STATIC, AbilityId.INTIMIDATE))
 
 
 def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1260,6 +1425,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_pivot(draw, tables, a, side, active, names)
         _draw_batch7(draw, tables, a, side, active, names)
         _draw_batch9(draw, tables, a, side, active, names)
+        _draw_batch10(draw, tables, a, side, active, names)
+        _draw_substitute(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
@@ -1601,7 +1768,8 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     move_pp = np.asarray(tables.move_pp)
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
-        effect[a["moves"]], (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT)
+        effect[a["moves"]],
+        (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
     )
     a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
     for side in (0, 1):

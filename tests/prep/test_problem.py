@@ -404,31 +404,41 @@ def test_opponent_explosion_leaves_a_low_defense_candidate_out(tmp_path, tables,
 
 # --- K3d-exp T7: moves learnable by levelling up in the fight ---------------------------
 
-STARLY_L17 = 3120  # exp_table[3][17]; Roark's Geodude L12 bounds a payout at 188
+SHINX_L9 = 419  # exp_table[3][9]; any L8 Shinx (314-418) reaches 9 off Roark's Geodude L12
 
 
-def _starly_near_17(names, **changes):
-    """Starly L16 that Roark's Geodude can level to 17, where it learns Endeavor (an
-    unsupported effect) into its empty last slot; ``coverage.learnable_moves``."""
-    gap = (names.move("Tackle"), names.move("Growl"), names.move("Quick Attack"), 0)
+def _shinx_near_9(names, **changes):
+    """Shinx L8 that Roark's Geodude can level to 9, where it learns Charge (an unsupported
+    effect) into its empty last slot; ``coverage.learnable_moves``. (Starly's Endeavor at 17
+    served here until E2 batch 10 modelled it, B10-5.)"""
+    gap = (names.move("Tackle"), names.move("Leer"), names.move("Quick Attack"), 0)
     spec = replace(
-        sample_party(names)[3], level=16, **{"exp": STARLY_L17 - 188, "moves": gap, **changes}
+        sample_party(names)[3],
+        species=names.species("Shinx"),
+        **{"level": 8, "exp": SHINX_L9 - 105, "moves": gap, **changes},
     )
     return candidate(names, spec, 3)
 
 
+def _shinx_past_9(names):
+    """The same Shinx at L9 with Charge's prompt behind it: nothing unsupported is left to
+    learn off one Geodude (Spark at 13)."""
+    return _shinx_near_9(names, level=9, exp=SHINX_L9)
+
+
 def test_a_learnable_unsupported_move_leaves_the_candidate_out(tables, names):
+    assert int(tables.move_effect[names.move("Charge")]) == 0  # EffectId.UNSUPPORTED
     geodude = roark_party(names)[:1]
-    near = _starly_near_17(names)
+    near = _shinx_near_9(names)
     pool, lines = usable_pool(tables, names, [near], geodude)
     assert pool == []
     assert lines == [
-        "party slot 3 STARLY: left out: Endeavor (level-up in battle, move effect not implemented)"
+        "party slot 3 SHINX: left out: Charge (level-up in battle, move effect not implemented)"
     ]
-    far = _starly_near_17(names, exp=STARLY_L17 - 189)
-    assert usable_pool(tables, names, [far], geodude) == ([far], [])
-    # Four moves: Endeavor is only a prompt, masked in the learn options (ruling D10).
-    full = _starly_near_17(names, moves=sample_party(names)[3].moves)
+    past = _shinx_past_9(names)
+    assert usable_pool(tables, names, [past], geodude) == ([past], [])
+    # Four moves: Charge is only a prompt, masked in the learn options (ruling D10).
+    full = _shinx_near_9(names, moves=(*near.spec.moves[:3], names.move("Bite")))
     assert usable_pool(tables, names, [full], geodude) == ([full], [])
 
 
@@ -437,14 +447,14 @@ def test_check_pool_grades_learnable_moves(tables, names):
     from nuzline.prep.pool import check_pool
 
     geodude = roark_party(names)[:1]
-    report = check_pool(tables, names, [_starly_near_17(names)], geodude)
+    report = check_pool(tables, names, [_shinx_near_9(names)], geodude)
     assert report.level == Support.NONE
     assert report.missing == [
-        "party slot 3 STARLY: Endeavor (level-up in battle, move effect UNSUPPORTED)"
+        "party slot 3 SHINX: Charge (level-up in battle, move effect UNSUPPORTED)"
     ]
-    far = _starly_near_17(names, exp=STARLY_L17 - 189)
-    assert check_pool(tables, names, [far], geodude).missing == []
-    full = _starly_near_17(names, moves=sample_party(names)[3].moves)
+    assert check_pool(tables, names, [_shinx_past_9(names)], geodude).missing == []
+    near = _shinx_near_9(names)
+    full = _shinx_near_9(names, moves=(*near.spec.moves[:3], names.move("Bite")))
     assert check_pool(tables, names, [full], geodude).level == Support.EXACT
 
 

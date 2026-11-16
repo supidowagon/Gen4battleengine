@@ -107,6 +107,7 @@ from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget
 from tools.effect_map import (
     BLIZZARD_EFFECT,
     CERTAIN_SECONDARY_EFFECTS,
+    CHARGE_FLAG_EFFECTS,
     CRIT_HOLD_EFFECTS,
     DECOMP_ABILITY_TO_ID,
     DECOMP_EFFECT_TO_ID,
@@ -119,10 +120,11 @@ from tools.effect_map import (
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
+    SEMI_HIT_EFFECTS,
     SLEEP_TALK_EXCLUDED_MOVES,
+    THUNDER_EFFECT,
     TYPE_BOOST_HOLD_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
-    THUNDER_EFFECT,
     UNSUPPORTED_MOVES,
     WEATHER_ROCK_HOLD_EFFECTS,
     held_item_ids,
@@ -202,6 +204,9 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.THUNDER
     if move.get("effect") == BLIZZARD_EFFECT:
         bits |= MoveFlag.BLIZZARD
+    # The charge-turn bits and the SYSCTL_HIT_DURING_* bits, by decomp effect (B10-12).
+    bits |= CHARGE_FLAG_EFFECTS.get(move.get("effect"), 0)
+    bits |= SEMI_HIT_EFFECTS.get(move.get("effect"), 0)
     return int(bits)
 
 
@@ -247,6 +252,12 @@ def _move_effect(
         # subscript_paralyze_or_flinch.s rolls through BtlCmd_CheckEffectActivation, which
         # asserts effectChance != 0 (battle_script.c:8375).
         raise BuildError(f"move {move['name']!r}: fang effect {move['effect']} with chance 0")
+    if eid == EffectId.RECOIL_STATUS and move["effect_chance"] == 0:
+        # The PROBABILISTIC branch asserts effectChance != 0 (battle_lib.c:1557), while the
+        # engine would read chance 0 as a certain status (B10-1).
+        raise BuildError(
+            f"move {move['name']!r}: recoil-status effect {move['effect']} with chance 0"
+        )
     if eid == EffectId.FAKE_OUT and move["effect_chance"] == 0:
         # effect_script_0158.s rolls RandNext() % 100 < chance: chance 0 never flinches, but
         # the engine reads chance 0 as an ON_HIT effect, and PLAIN would drop the failure.
@@ -633,7 +644,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr(
-            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int16, "move flags"
+            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int32, "move flags"
         ),
         "move_is_hm": _arr([int(i in hm_moves) for i in range(len(moves))], np.int8, "move is hm"),
         "type_chart": _arr(chart, np.int8, "type chart"),
