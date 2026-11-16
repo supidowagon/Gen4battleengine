@@ -58,9 +58,8 @@ def test_effect_mapping(tables, names):
     assert int(t.move_effect[n.move("Leer")]) == EffectId.STAT_FOE
     assert tuple(int(x) for x in t.move_param[n.move("Leer")]) == (2, -1, 0)
     # E2 batch 5: Metronome has an engine effect; coverage refuses it while a move it can call
-    # is unmodelled (ruling B5-2). Sketch stays unsupported.
+    # is unmodelled (ruling B5-2).
     assert int(t.move_effect[n.move("Metronome")]) == EffectId.METRONOME
-    assert int(t.move_effect[n.move("Sketch")]) == EffectId.UNSUPPORTED
 
 
 def test_only_thunder_wave_is_a_type_checked_status_move(tables, names):

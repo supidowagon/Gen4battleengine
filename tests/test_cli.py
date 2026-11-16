@@ -50,7 +50,7 @@ def test_coverage_ok(capsys):
     assert "missing: none" in capsys.readouterr().out.lower()
 
 
-def test_coverage_failure_exit_code(capsys):
+def test_coverage_failure_exit_code(capsys, metronome_refused):
     assert main(["coverage", "--party", UNSUPPORTED, "--trainer", "roark"]) == 2
     assert "Metronome" in capsys.readouterr().out
 
@@ -179,7 +179,7 @@ def test_rank_rejects_a_fainted_or_missing_lead(capsys):
     assert "side 1: lead slot 3" in capsys.readouterr().err
 
 
-def test_rank_refuses_unsupported_fight(capsys):
+def test_rank_refuses_unsupported_fight(capsys, metronome_refused):
     assert main(["rank", "--party", UNSUPPORTED, "--trainer", "roark", "--n", "20"]) == 2
     assert "Metronome" in capsys.readouterr().out
 
@@ -292,7 +292,7 @@ def test_cli_solve_small(tmp_path, monkeypatch, capsys):
     assert run["result"]["leaf_budget"] == 2000
 
 
-def test_cli_solve_refused(capsys, tmp_path, monkeypatch):
+def test_cli_solve_refused(capsys, tmp_path, monkeypatch, metronome_refused):
     from nuzline import cli
 
     monkeypatch.setattr(cli, "RUNS", tmp_path / "runs")
@@ -576,7 +576,9 @@ def test_coverage_save_reports_pool(tmp_path, tables, names, capsys):
     assert out.count("Support: EXACT") == 2
 
 
-def test_coverage_pool_does_not_change_exit_code(tmp_path, tables, names, capsys):
+def test_coverage_pool_does_not_change_exit_code(
+    tmp_path, tables, names, capsys, metronome_refused
+):
     path = _pool_save(tmp_path, tables, names, box_moves=("Metronome",))
     assert main(["coverage", "--save", str(path), "--trainer", "roark"]) == 0
     out = capsys.readouterr().out

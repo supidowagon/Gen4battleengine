@@ -65,6 +65,16 @@ def find_move(tables: Tables, power: int, type_id: int, category: int) -> int:
     return int(ids[0])
 
 
+def unmodelled(tables: Tables, *moves: int) -> Tables:
+    """``tables`` with each of ``moves`` given ``EffectId.UNSUPPORTED``: a refusal test's
+    unsupported move, made so here rather than read from today's partial coverage (which
+    breaks the test as soon as the move is modelled)."""
+    effect = jnp.asarray(tables.move_effect)
+    for move in moves:
+        effect = effect.at[move].set(EffectId.UNSUPPORTED)
+    return tables._replace(move_effect=effect)
+
+
 def _spec(level: int, move: int) -> PokemonSpec:
     return PokemonSpec(
         species=1,

@@ -18,20 +18,23 @@ from nuzline.data.tables import Names
 from nuzline.engine.coverage import (
     EXP_ITEM_HOLD_EFFECTS,
     FRIENDSHIP_POWER_EFFECTS,
-    IMPLEMENTED_EFFECTS,
     ITEM_MOVING_EFFECTS,
     RELOAD_STATE_EFFECTS,
-    Support,
     check_coverage,
     forced_learn_moves,
     learnable_moves,
     reachable_learn_moves,
     reachable_level,
 )
-from nuzline.engine.ids import EffectId
 from nuzline.engine.levelup import pay_exp
 from nuzline.engine.state import make_state
-from tests.engine.helpers import kaizo_names_with, roark_party, roark_trainer, sample_party
+from tests.engine.helpers import (
+    kaizo_names_with,
+    roark_party,
+    roark_trainer,
+    sample_party,
+    unmodelled,
+)
 
 STARLY_SLOT = 3  # tests/fixtures/sample_party.toml
 L17 = 3120  # exp_table[3][17]
@@ -121,8 +124,8 @@ BUDEW_SLOT = 5  # tests/fixtures/sample_party.toml
 
 def _budew(tables, names, below=0, moves=None):
     """The sample party with its Budew at level 15, ``GEODUDE_BOUND + below`` exp short of
-    level 16, where its vanilla learnset has Worry Seed, a move effect the engine does not
-    model (``EffectId.UNSUPPORTED``); ``moves`` replaces its moveset."""
+    level 16, where its vanilla learnset has Worry Seed (unsupported in ``_worry_off``);
+    ``moves`` replaces its moveset."""
     party = list(sample_party(names))
     budew = party[BUDEW_SLOT]
     rate = int(np.asarray(tables.species_exp_rate)[budew.species])
@@ -139,15 +142,16 @@ def _budew_gap(names):
     return (names.move("Absorb"), names.move("Growth"), names.move("Stun Spore"), 0)
 
 
-def test_worry_seed_is_unsupported(tables, names):
-    """The refusal tests below rest on Worry Seed's effect being one the engine does not model."""
-    effect = EffectId(int(np.asarray(tables.move_effect)[names.move("Worry Seed")]))
-    assert IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE
+def _worry_off(tables, names):
+    """``tables`` with Worry Seed's effect UNSUPPORTED (``unmodelled``): the refused learnable
+    move of the tests below, whatever the engine models."""
+    return unmodelled(tables, names.move("Worry Seed"))
 
 
 def test_a_learnable_unsupported_move_is_refused(tables, names):
     """Worry Seed (unsupported) is reached only through the level-up in battle, and with an
     empty slot it is learned without a prompt (pokemon.c:3852-3873, ruling D10)."""
+    tables = _worry_off(tables, names)
     geodude = _geodude(names)
     worry = names.move("Worry Seed")
     assert worry not in sample_party(names)[BUDEW_SLOT].moves
@@ -164,6 +168,7 @@ def test_a_prompt_only_unsupported_learnable_is_masked_not_refused(tables, names
     with every slot full Worry Seed is only a prompt (battle_script.c:10016-10018), which the
     learn options mask (``levelup.learn_options``, by the table's effect:
     ``coverage.learn_masked``) and the player can give up, so the fight stays covered."""
+    tables = _worry_off(tables, names)
     geodude = _geodude(names)
     full = _budew(tables, names)
     budew = full[BUDEW_SLOT]
@@ -348,6 +353,7 @@ def test_out_of_scope_formats_are_refused(tables, names):
 def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names):
     """The scan runs on the tables, whatever the game's names (no game gate)."""
     kaizo = Names({**vanilla_manifest, "game": KAIZO, "unclassified_rom_changes": 0})
+    tables = _worry_off(tables, names)
     near = _budew(tables, names, moves=_budew_gap(names))
     missing = _missing(tables, kaizo, near, _geodude(names))
     assert any("Worry Seed (level-up in battle move effect UNSUPPORTED)" in m for m in missing)

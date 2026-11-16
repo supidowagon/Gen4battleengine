@@ -35,6 +35,7 @@ from nuzline.engine.levelup import (
 from nuzline.engine.state import make_state
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_learn_options
+from tests.engine.helpers import unmodelled
 from tests.engine.test_levelup import _base, _ko, _mon, _same, _with
 
 _adv = jax.jit(advance_learns)
@@ -91,18 +92,18 @@ def _prompted_move(tables, names, s, slot: int) -> str:
 
 
 def test_an_unsupported_offered_move_is_masked(tables, names):
-    """Ruling D10: Shinx (four moves) prompted for Charge at 9, an UNSUPPORTED effect:
-    every replacement is masked, giving up stays (coverage's ``learnable_moves`` relies on
-    it). Prompted for Spark at 13 (supported), the replacements are open. (Starly's Endeavor
-    served here until E2 batch 10 modelled it, B10-5.)"""
+    """Ruling D10: Shinx (four moves) prompted for Charge at 9, its effect made UNSUPPORTED
+    (``unmodelled``, so the test does not wait on Charge staying unmodelled): every
+    replacement is masked, giving up stays (coverage's ``learnable_moves`` relies on it).
+    Prompted for Spark at 13 (supported), the replacements are open."""
+    t = unmodelled(tables, names.move("Charge"))
     shinx = _mon(names, "Shinx", 9, moves=("Tackle", "Leer", "Quick Attack", "Bite"))
-    assert int(tables.move_effect[names.move("Charge")]) == EffectId.UNSUPPORTED
-    s = _advance(tables, _mark(_state(tables, names, shinx), 0, 9))
-    assert bool(needs_learn(s)) and _prompted_move(tables, names, s, 0) == "Charge"
-    assert _options(tables, s) == [False, False, False, False, True]
-    s = _advance(tables, _mark(_state(tables, names, shinx), 0, 13))
-    assert _prompted_move(tables, names, s, 0) == "Spark"
-    assert _options(tables, s) == [True, True, True, True, True]
+    s = _advance(t, _mark(_state(t, names, shinx), 0, 9))
+    assert bool(needs_learn(s)) and _prompted_move(t, names, s, 0) == "Charge"
+    assert _options(t, s) == [False, False, False, False, True]
+    s = _advance(t, _mark(_state(t, names, shinx), 0, 13))
+    assert _prompted_move(t, names, s, 0) == "Spark"
+    assert _options(t, s) == [True, True, True, True, True]
 
 
 def test_auto_learn_takes_the_first_empty_slot_in_slot_order(tables, names):

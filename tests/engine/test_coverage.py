@@ -49,7 +49,7 @@ def test_roark_vs_sample_party_is_fully_covered(tables, names):
     assert r.missing == [] and r.level == Support.EXACT
 
 
-def test_all_missing_reported_at_once(tables, names):
+def test_all_missing_reported_at_once(tables, names, metronome_refused):
     party = sample_party(
         names,
         override_moves={0: ["Metronome", "Scratch", "Leer", "Ember"]},
@@ -467,7 +467,7 @@ def test_ability_override_without_set_data_refused(tables, names):  # review I1
     assert not any("no PKCalc set" in m for m in report.missing)
 
 
-def test_report_names_a_labelled_trainer_by_its_label(tables, names):
+def test_report_names_a_labelled_trainer_by_its_label(tables, names, metronome_refused):
     # Task 18 fix round 1: a Kaizo label is what a report shows; the ROM name stays data.
     t = replace(roark_trainer(), label="Leader Roark", format="double")
     opp = roark_party(names)
