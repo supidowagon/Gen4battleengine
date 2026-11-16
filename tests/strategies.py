@@ -39,6 +39,7 @@ from nuzline.engine.ids import (
     CONFUSION_PENDING,
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
+    SEMI_SET_FLAGS,
     AbilityId,
     EffectId,
     ItemId,
@@ -1172,9 +1173,24 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             "Safeguard",
             "Focus Punch",
             "Encore",
+            # B10-12: the charge turn and the moves that hit a vanished foe.
+            "SolarBeam",
+            "Razor Wind",
+            "Skull Bash",
+            "Sky Attack",
+            "Fly",
+            "Dig",
+            "Dive",
+            "Bounce",
+            "Shadow Force",
+            "Twister",
+            "Sky Uppercut",
         )
     )
     give(move)
+    charge = int(tables.move_flags[names.move(move)]) & int(MoveFlag.CHARGE)
+    if charge and rnd.random() < 0.3:  # B10-12: a Power Herb
+        a["item"][side, active] = names.item("Power Herb")
     if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
         foe_moves = [int(m) for m in a["moves"][foe, foe_mon] if m]
         a["last_move"][foe] = rnd.choice(foe_moves + [0]) if foe_moves else 0
@@ -1219,6 +1235,16 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             a["hp"][foe, foe_mon] = min(int(a["hp"][foe, foe_mon]), int(a["max_hp"][foe, foe_mon]))
     if rnd.random() < 0.3:  # a low user: the recoil or crash can faint it
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
+    if charge and rnd.random() < 0.4 and a["status"][side, active] != Status.SLEEP:
+        a["encore_move"][side] = a["encore_slot"][side] = a["encore_turns"][side] = 0
+        # B10-12: mid-charge (the second turn next): locked into it, with its vanished kind.
+        flags = int(tables.move_flags[names.move(move)])
+        a["locked_move"][side] = names.move(move)
+        a["uproar"][side] = 0
+        a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
+        a["semi_invulnerable"][side] = next(
+            (int(k) for k, bit in SEMI_SET_FLAGS.items() if flags & int(bit)), 0
+        )
 
 
 # Moves whose decomp path tests a substitute or meets one (B10-4).

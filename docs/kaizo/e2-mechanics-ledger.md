@@ -14,10 +14,15 @@
   test_enumerate 39, test_accuracy_classes 30, test_effect_map 23, coverage 91. NOT rerun after
   the last generator change: test_damage_classes (its earlier failure was Assist leaking into
   invoker-free law states, fixed in tests/strategies.py). Rerun it first.
-- **Left in batch 10 (manager, 2026-11-15):** family 7 the charge turn (SolarBeam #151, Razor
-  Wind, Fly / Dig / Dive / Bounce / Shadow Force, Skull Bash, Sky Attack, Power Herb; mechanic +
-  AI + tests); tests/search/test_pivot_search.py under 8 GB per test with per-test memory shown
-  (after E1's fast tier and its search-test rework are in main); then merge main, focused tests
+- **Charge turn (B10-12, B10-13) done:** tests at the commit: test_batch10 + test_effect_map +
+  test_accuracy_classes 84 passed; test_damage_classes + test_enumerate + test_coverage(_exp) +
+  test_invokers 191 passed (then the POWER_HERB item classification fix, rechecked); differential
+  seeds 21-22 (300 each) clean; guards 237 passed after game_constants entries (also the
+  pre-existing CANNOT_ENCORE_MOVES / INVOKER_MOVES / Sticky Hold gaps); backlog 234 -> 230.
+- **test_pivot_search under 8 GB done:** conftest now prints each test's sampled peak (50 ms);
+  the file runs expand at CHUNK 1024 (module fixture): peaks 14.95/15.48/15.49 -> 4.86/3.75/3.75 GB.
+- **Left in batch 10 (manager, 2026-11-15):** after E1's fast tier and its search-test rework
+  are in main: merge main, focused tests
   + the four guards + one review, and send the tip to the manager. No Encore AI in batch 10.
 - **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
@@ -1623,3 +1628,54 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
   invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
   user). Its AI entry was transcribed generically by E1 (batch 3).
+- B10-12 (batch 10, family 7) The charge turn. Each charge move keeps its attack turn's
+  EffectId (Razor Wind / Skull Bash / SolarBeam / Fly / Dig / Dive / Shadow Force PLAIN, Sky
+  Attack FLINCH, Bounce SECONDARY_STATUS paralysis); `MoveFlag.CHARGE` and kin (built from the
+  decomp effect: `effect_map.CHARGE_FLAG_EFFECTS`, `move_flags` now int32) carry the charge.
+  The scripts (effect_script_0039/0075/0145/0151/0155/0255/0256/0263/0272.s) attack when the
+  user is VOLATILE_CONDITION_MOVE_LOCKED (line 5: the second turn, `locked_move`; PP spent once,
+  on the first: bcp.c:335), SolarBeam in sun without Cloud Nine / Air Lock (_0151.s:5-6,
+  CheckIgnoreWeather battle_script.c:9195-9206) or with a Power Herb (HOLD_EFFECT_CHARGE_SKIP,
+  `ItemId.POWER_HERB`, removed by subscript_item_skip_charge_turn.s:20; Skull Bash's Def +1
+  first, subscript_power_herb_skull_bash.s:14-17). Else they charge: SYSCTL_FIRST_OF_MULTI_TURN
+  (no accuracy roll bcp.c:2905-2908, no Protect / Lock-On / semi test :3003-3005, no type chart
+  :2354, no immunity abilities battle_lib.c:3509-3540), the direct subscript_vanish_on_charge_
+  turn.s locks the user into moveCur (:10, Battler_LockMoveChoice lib.c:1828-1832; a called
+  move's lock is the called move), the semi-invulnerable bit (new state `semi_invulnerable`,
+  `ids.SemiKind`: AIRBORNE Fly/Bounce, UNDERGROUND Dig, UNDERWATER Dive, SHADOW_FORCE), Skull
+  Bash's Def +1 (_0145.s:8, chance 100). A charge with no living foe keeps the user as defender
+  and charges (HasNoTarget bcp.c:2327-2334); a called charge move with none goes to
+  subscript_no_target from GoToMoveScript (battle_script.c:2124-2126); a herb / sun attack with
+  none ends in TryMove's HasNoTarget (LAST_OF_MULTI_TURN, common.h:57-60) after the herb went.
+  The second turn's script clears the bit and the lock before TryMove (line 24 / cleanup :6).
+  Interruptions: every disruption, miss, Protect and the sleeper unlock at turn setup run
+  Battler_UnlockMoveChoice, which also clears the bit (lib.c:1838): the move is lost and the
+  next use charges again (flinch, full paralysis, confusion self-hit, Truant, sleep); a switch
+  or faint resets it (volatile). Choice lock: FIRST_OF_MULTI_TURN updates the locks as the
+  attack message does (bcp.c:3921-3922, :4490-4491). The charge turn shows no attack message
+  (moveHit, movePrev, moveProtect MOVE_NONE) except Skull Bash, whose indirect Def +1 runs
+  subscript_update_stat_stage.s's PrintAttackMessage (:6-7; battle_script.c:1431-1432).
+  Razor Wind / Sky Attack crit +1 (CRITICAL_BOOSTS, `MoveFlag.CRIT_UP`, `outcome.crit_odds`).
+  Shadow Force's ON_HIT subscript_feint.s only clears the defender's turnFlags.protecting
+  (:20), unread afterwards in singles. Kaizo: be_seq 39-272 are unchanged (rom_diff.toml);
+  Kaizo gives the charge effects to Razor Wind, SolarBeam, Fly and Shadow Force only (its Dive
+  and Bounce are plain / paralysis hits); Kaizo Sky Uppercut is effect 149 and Twister 261.
+- B10-13 The semi-invulnerable target (CheckMoveHitOverrides, bcp.c:3016-3040): after Protect
+  and the Lock-On / No Guard return (either battler's No Guard; OHKO's BYPASSED_ACCURACY,
+  battle_script.c:4343-4374, the same battlers), a move whose defender is the foe (a special
+  Counter's and Bide's unleash included), not RANGE_OPPONENT_SIDE, misses
+  (MOVE_STATUS_SEMI_INVULNERABLE, accuracy 0 too) unless its script sets the kind's
+  SYSCTL_HIT_DURING_* (`MoveFlag.HIT_*`, `effect_map.SEMI_HIT_EFFECTS`: Fly 146/149/152/207,
+  Dig 126/147, Dive 257/261, all 148/168/176). A miss crashes (Jump Kick) and shows before
+  Sturdy (subscript_missed.s:13). x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
+  `damage.script_power_mul`) for Gust / Twister vs AIRBORNE, Earthquake / Magnitude vs
+  UNDERGROUND, Surf / Whirlpool vs UNDERWATER (line 7-8 of each). MOVE_EFFECT_NO_WEATHER_DAMAGE
+  (UNDERGROUND, UNDERWATER: moves.h:50) skips the sandstorm, sun and hail branches of the turn
+  end (battle_script.c:5580, :5587, :5600), not rain. SolarBeam (by move id) is halved under
+  FIELD_CONDITION_SOLAR_DOWN (rain, sand, hail, fog; lib.c:7058-7060). Twister (146) and Sky
+  Uppercut (207) are now supported. Damage classes: a foe's charge move changes a DOUBLE_SEMI
+  hit's power, Skull Bash's charge the Defense. AI: Basic :158/:219, Expert_ChargeTurnNoInvuln
+  (:3933-3973), _WithInvuln (:3992-4012), Expert_ShadowForce (:4014-4066, 80 roll at :4058);
+  SolarBeam's Expert_Thunder entry (:1719) is dead (the first jump wins). Not modelled (no
+  supported mover): Gravity's grounding (subscript_gravity_start.s:16; Gravity refused by
+  coverage), Transform's semi test, Hurricane (Kaizo 141, not reached).

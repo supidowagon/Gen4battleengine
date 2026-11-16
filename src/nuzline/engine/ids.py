@@ -734,9 +734,13 @@ class ItemId(IntEnum):
     # item needs (0: any holder). ``BattleSystem_CalcCriticalMulti`` adds 1 stage for the first,
     # 2 for a species item on its species (battle_lib.c:7123-7128; ``outcome.crit_odds``).
     CRIT_ITEM = 50
+    # Power Herb (HOLD_EFFECT_CHARGE_SKIP, generated/item_hold_effects.txt:100): a charge move's
+    # first use hits at once and the herb is used up (subscript_item_skip_charge_turn.s,
+    # effect_script_0039.s:7 and the other charge scripts, B10-12).
+    POWER_HERB = 51
     # E1 Gardenia batch (G-1 .. G-6).
-    FOCUS_BAND = 51
-    FLAVOR_BERRY = 52
+    FOCUS_BAND = 52
+    FLAVOR_BERRY = 53
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -889,6 +893,65 @@ class MoveFlag(IntFlag):
     # (cleared in hail, :3029-3031), all inside NO_CLOUD_NINE.
     THUNDER = 128
     BLIZZARD = 256
+    # E2 batch 10 family 7, the charge turn (B10-12..). CHARGE: Move_IsMultiTurn's charge-up
+    # effects (battle_lib.c:2975-2992 without Bide: 39, 75, 145, 151, 155, 255, 256, 263, 272),
+    # whose scripts charge on a first use (SYSCTL_FIRST_OF_MULTI_TURN and the direct
+    # subscript_vanish_on_charge_turn.s, which locks the user) and hit while
+    # VOLATILE_CONDITION_MOVE_LOCKED is set (effect_script_0039.s:5 and the others' line 5).
+    CHARGE = 512
+    # BATTLE_EFFECT_SKIP_CHARGE_TURN_IN_SUN (151, SolarBeam): effect_script_0151.s:5-6 hits at
+    # once in sun unless CheckIgnoreWeather (Cloud Nine, Air Lock: battle_script.c:9195-9206).
+    SUN_SKIP = 1024
+    # BATTLE_EFFECT_CHARGE_TURN_DEF_UP (145, Skull Bash): effect_script_0145.s:8 the charge turn's
+    # indirect TO_ATTACKER Defense +1 (with a Power Herb: subscript_power_herb_skull_bash.s:14-17).
+    CHARGE_DEF_UP = 2048
+    # The semi-invulnerable bit the charge sets on the user (moves.h:14-15, :26, :37):
+    # MOVE_EFFECT_AIRBORNE (Fly 155, Bounce 263), _UNDERGROUND (Dig 256), _UNDERWATER (Dive 255),
+    # _SHADOW_FORCE (272); effect_script_0155.s:7 and the others' line 7-8.
+    SEMI_AIR = 4096
+    SEMI_DIG = 8192
+    SEMI_DIVE = 16384
+    SEMI_SHADOW = 32768
+    # SYSCTL_HIT_DURING_FLY / _DIG / _DIVE / _SHADOW_FORCE (system_control.h:6-8, :27) its script
+    # sets: CheckMoveHitOverrides then lets the move hit a defender with that bit
+    # (battle_controller_player.c:3034-3040). FLY: 146, 149, 152, 207; DIG: 126, 147; DIVE: 257,
+    # 261; all four: 148, 168, 176.
+    HIT_AIR = 65536
+    HIT_DIG = 131072
+    HIT_DIVE = 262144
+    HIT_SHADOW = 524288
+    # BTLVAR_POWER_MULTI 20 against a defender with the bit the move hits (effect_script_0146.s,
+    # _0149.s: AIRBORNE; _0126.s, _0147.s: UNDERGROUND; _0257.s, _0261.s: UNDERWATER; line 8-9).
+    DOUBLE_SEMI = 1048576
+    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16).
+    CRIT_UP = 2097152
+
+
+class SemiKind(IntEnum):
+    """``BattleState.semi_invulnerable``: which MOVE_EFFECT_SEMI_INVULNERABLE bit
+    (moves.h:14-15, :26, :37, :44) the battler's ``moveEffectsMask`` holds, 0 for none; a
+    charge sets one at a time (B10-12)."""
+
+    NONE = 0
+    AIRBORNE = 1  # Fly, Bounce
+    UNDERGROUND = 2  # Dig
+    UNDERWATER = 3  # Dive
+    SHADOW_FORCE = 4
+
+
+# The ``MoveFlag`` a charge move sets on its user, and the one a move hits through, per kind.
+SEMI_SET_FLAGS = {
+    SemiKind.AIRBORNE: MoveFlag.SEMI_AIR,
+    SemiKind.UNDERGROUND: MoveFlag.SEMI_DIG,
+    SemiKind.UNDERWATER: MoveFlag.SEMI_DIVE,
+    SemiKind.SHADOW_FORCE: MoveFlag.SEMI_SHADOW,
+}
+SEMI_HIT_FLAGS = {
+    SemiKind.AIRBORNE: MoveFlag.HIT_AIR,
+    SemiKind.UNDERGROUND: MoveFlag.HIT_DIG,
+    SemiKind.UNDERWATER: MoveFlag.HIT_DIVE,
+    SemiKind.SHADOW_FORCE: MoveFlag.HIT_SHADOW,
+}
 
 
 class MoveTarget(IntEnum):
@@ -1006,6 +1069,9 @@ MOVE_U_TURN = 369
 # Imprison (``generated/moves.txt`` line 287): BattleControllerPlayer_DecrementPP counts the
 # other side's living Pressure holders for it by ``moveTemp``, whatever its range (bcp.c:2239-2240).
 MOVE_IMPRISON = 286
+# SolarBeam (generated/moves.txt line 77): BattleSystem_CalcMoveDamage halves it by move id under
+# FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
+MOVE_SOLAR_BEAM = 76
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``

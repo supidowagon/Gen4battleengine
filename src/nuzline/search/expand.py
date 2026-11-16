@@ -141,9 +141,9 @@ def bucket_rows(n: int) -> int:
     return min(CHUNK, max(AI_MIN_ROWS, 1 << max(n - 1, 0).bit_length()))
 
 
-def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=None, per_call=CHUNK):
+def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=None, per_call=None):
     """``fn(tables, *rows)`` (a ``vmap`` over the rows' leading axis) over ``n`` rows,
-    in ``per_call``-row calls (default ``CHUNK``) padded and sharded as the module
+    in ``per_call``-row calls (default ``CHUNK``, read at the call) padded and sharded as the module
     docstring says; numpy out. ``static`` names what else ``fn`` closes over
     (``cached_export``). Padding rows are copies of the call's row 0 and are dropped. A
     row's result does not depend on ``per_call`` when ``fn``'s per-row program does not
@@ -155,6 +155,7 @@ def _run(fn: Callable, name: str, tables: Tables, rows: tuple, n: int, static=No
         specs = jax.tree.map(lambda a: jax.ShapeDtypeStruct((lead, *a.shape[1:]), a.dtype), rows)
         shape = jax.eval_shape(fn, tables, *specs)
         return jax.tree.map(lambda s: np.zeros((0, *s.shape[1:]), s.dtype), shape)
+    per_call = CHUNK if per_call is None else per_call
     devices = jax.device_count()
     size = -(-per_call // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))

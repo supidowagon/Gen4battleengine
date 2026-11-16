@@ -338,6 +338,8 @@ SITE_N: dict[int, int] = {
     3680: 80,  # Expert_BatonPass_HighStatStage_TryScorePlus2
     6577: 80,  # BatonPass_Main: the attacker without a Baton Pass effect
     6591: 20,  # BatonPass_EvalMove: +3
+    # E2 batch 10: the charge-turn moves.
+    4058: 80,  # Expert_ChargeTurnWithInvuln_TryScorePlus1 (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -451,6 +453,21 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove (:1802), no roll
         # E2 batch 10 (B10-1).
         253,  # RECOIL_BURN_HIT (Flare Blitz): Expert_RecoilMove (:1796), no roll
+        # E2 batch 10: the charge-turn moves. Basic_CheckNonStandardDamageOrChargeTurn (:158,
+        # :219) for the first and third; Expert_ChargeTurnNoInvuln (:3933-3973, no roll),
+        # Expert_ChargeTurnWithInvuln (:3992) and Expert_ShadowForce (:4014), :4058.
+        39,  # CHARGE_TURN_HIGH_CRIT (Razor Wind): :158; Expert_ChargeTurnNoInvuln (:1657)
+        75,  # CHARGE_TURN_HIGH_CRIT_FLINCH (Sky Attack): Expert_ChargeTurnNoInvuln (:1682)
+        145,  # CHARGE_TURN_DEF_UP (Skull Bash): :219; Expert_ChargeTurnNoInvuln (:1715)
+        151,  # SKIP_CHARGE_TURN_IN_SUN (SolarBeam): Expert_ChargeTurnNoInvuln (:1716)
+        155,  # FLY: Expert_ChargeTurnWithInvuln (:1721), :4058
+        255,  # DIVE: Expert_ChargeTurnWithInvuln (:1797), :4058
+        256,  # DIG: Expert_ChargeTurnWithInvuln (:1798), :4058
+        263,  # BOUNCE: Expert_ChargeTurnWithInvuln (:1803), :4058
+        272,  # SHADOW_FORCE: Expert_ShadowForce (:1808), :4058
+        # E2 batch 10: no script names them (no Basic_Main, Expert_Main or other entry).
+        146,  # FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE (Twister)
+        207,  # HIT_FLY (Sky Uppercut)
         # E1 batch 9 (docs/ai/kaizo_roark.md 5.13).
         98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond (:1694), :3346, :3351, :3356
         112,  # SET_SPIKES: Basic_CheckSpikes (:197); Expert_Spikes (:1702), :3595, :3602
@@ -527,7 +544,6 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         127,  # PASS_STATS_AND_STATUS: Basic_CheckBatonPass (:208); Expert_BatonPass (:1705)
         # E1 prep batch P4 (Gardenia)
         176,  # BOOST_ALLY_POWER_BY_50_PERCENT: Basic_CheckHelpingHand (:234); no Expert entry
-        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln (:1716), no roll
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -575,6 +591,16 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     221: ("Expert_Brine", 1765),
     262: ("Expert_RecoilMove", 1802),
     253: ("Expert_RecoilMove", 1796),  # E2 batch 10: RECOIL_BURN_HIT (Flare Blitz)
+    # E2 batch 10: the charge-turn moves.
+    39: ("Expert_ChargeTurnNoInvuln", 1657),
+    75: ("Expert_ChargeTurnNoInvuln", 1682),
+    145: ("Expert_ChargeTurnNoInvuln", 1715),
+    151: ("Expert_ChargeTurnNoInvuln", 1716),
+    155: ("Expert_ChargeTurnWithInvuln", 1721),
+    255: ("Expert_ChargeTurnWithInvuln", 1797),
+    256: ("Expert_ChargeTurnWithInvuln", 1798),
+    263: ("Expert_ChargeTurnWithInvuln", 1803),
+    272: ("Expert_ShadowForce", 1808),
     # E1 batch 9.
     98: ("Expert_DestinyBond", 1694),
     112: ("Expert_Spikes", 1702),
@@ -627,7 +653,6 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     242: ("Expert_Copycat", 1785),
     181: ("Expert_Ingrain", 1734),
     127: ("Expert_BatonPass", 1705),
-    151: ("Expert_ChargeTurnNoInvuln", 1716),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -667,6 +692,15 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         221,  # DOUBLE_POWER_WHEN_BELOW_HALF: Expert_Brine
         262,  # RECOIL_PARALYZE_HIT: Expert_RecoilMove
         253,  # RECOIL_BURN_HIT: Expert_RecoilMove (E2 batch 10)
+        39,  # CHARGE_TURN_HIGH_CRIT: Expert_ChargeTurnNoInvuln (E2 batch 10)
+        75,  # CHARGE_TURN_HIGH_CRIT_FLINCH: Expert_ChargeTurnNoInvuln
+        145,  # CHARGE_TURN_DEF_UP: Expert_ChargeTurnNoInvuln
+        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln
+        155,  # FLY: Expert_ChargeTurnWithInvuln
+        255,  # DIVE: Expert_ChargeTurnWithInvuln
+        256,  # DIG: Expert_ChargeTurnWithInvuln
+        263,  # BOUNCE: Expert_ChargeTurnWithInvuln
+        272,  # SHADOW_FORCE: Expert_ShadowForce
         98,  # KO_MON_THAT_DEFEATED_USER: Expert_DestinyBond
         112,  # SET_SPIKES: Expert_Spikes
         208,  # ATK_DEF_UP: Expert_StatusDefenseUp
@@ -715,7 +749,6 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         242,  # USE_LAST_USED_MOVE: Expert_Copycat
         181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Expert_Ingrain (no score change)
         127,  # PASS_STATS_AND_STATUS: Expert_BatonPass
-        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

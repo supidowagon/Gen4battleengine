@@ -961,6 +961,9 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.WEATHER_ROCK,
     # The crit odds (outcome.crit_odds): a crit is the hit's own draw.
     ItemId.CRIT_ITEM,
+    # B10-12: it skips its holder's charge and is used up; no damage input reads it (the
+    # charge's own clauses are the move's: MoveFlag.CHARGE above).
+    ItemId.POWER_HERB,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -1134,7 +1137,8 @@ def damage_inputs_can_change(
       sport for this move type, or the foe's own types (Camouflage: the type chart and the
       Rock Sp. Def boost read them); or the side's active Pokemon itself (the foe's Roar
       drags it out; no hit of a dragged battler follows in Gen 4, its action ends, so this
-      roar clause is conservative);
+      roar clause is conservative); a charge move (its user's semi-invulnerable bit, which a
+      ``MoveFlag.DOUBLE_SEMI`` hit's power reads; Skull Bash's Defense +1), B10-12;
     * **HP**: Flail's power band and Overgrow / Blaze / Torrent (damage.py :6819-6837)
       read the user's HP: any earlier foe move or earlier hit of the same move;
     * **contact**: on a later hit, the foe's Flame Body burn or Static / Poison Point
@@ -1195,6 +1199,8 @@ def damage_inputs_can_change(
     pinch_stat = tables.item_param[held, 1]
     pinch = item == ItemId.PINCH_BERRY
     foe_effect, foe_param0 = effect[::-1], param0[::-1]
+    own_flags = tables.move_flags[moves].astype(_I32)
+    foe_flags = own_flags[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
     status_hit = _any_of(
         foe_effect,
@@ -1234,6 +1240,11 @@ def damage_inputs_can_change(
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
         | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
+        # B10-12: a charge move sets or (its second turn, or an unlock on its disruption) clears
+        # its user's semi-invulnerable bit, which a DOUBLE_SEMI hit's power reads; Skull Bash's
+        # charge raises the foe's Defense.
+        | (((foe_flags & MoveFlag.CHARGE) != 0) & ((own_flags & MoveFlag.DOUBLE_SEMI) != 0))
+        | (((foe_flags & MoveFlag.CHARGE_DEF_UP) != 0) & physical)
         | hp_sensitive
     )
     foe_action = live & (is_switch(actions)[::-1] | is_item(actions)[::-1] | foe_move)

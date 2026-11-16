@@ -748,6 +748,9 @@ def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.nd
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
     stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
+    # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
+    # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
+    stage = stage + ((tables.move_flags[moves].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
     super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
     stage = stage + super_luck.astype(_I32)

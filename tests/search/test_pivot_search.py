@@ -10,15 +10,29 @@ from collections import Counter
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.actions import MOVE_ACTIONS, decision_actions
 from nuzline.engine.outcome import sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step
+from nuzline.search import expand as expand_mod
 from nuzline.search.expand import expand
 from nuzline.search.stage_b import SolveSettings, solve
 from tests.search.test_stage_b import ZERO, batch
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _small_chunk():
+    """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384). Every request
+    here enumerates a few hundred outcomes at most, yet each ``calls_rows``, ``laws_rows``
+    and ``step_rows`` call pads to ``CHUNK`` rows: 12-15 GB sampled peak per test. A row's
+    result depends on neither the call size nor the device count (expand's module
+    docstring), so the pivot properties are unchanged; peaks fall under 5 GB."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand_mod, "CHUNK", 1024)
+        yield
 
 
 def _mon(names, species: str, moves, level=30) -> PokemonSpec:

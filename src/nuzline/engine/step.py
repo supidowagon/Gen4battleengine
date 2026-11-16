@@ -97,6 +97,7 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    hits_semi,
     identified,
     ignorable,
     levitated,
@@ -183,6 +184,7 @@ from nuzline.engine.ids import (
     POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
+    SEMI_SET_FLAGS,
     SNORE_PARAM,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
@@ -191,6 +193,7 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     MoveTarget,
+    SemiKind,
     Stat,
     Status,
     TrainerItemId,
@@ -947,6 +950,41 @@ def _use_move(
         called_move(tables, state, invoked),
         called_move(tables, state, move),
     )
+    # E2 batch 10 family 7, the charge turn (B10-12..). A charge move's script (MoveFlag.CHARGE:
+    # effect_script_0039.s, _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s)
+    # attacks when its user is VOLATILE_CONDITION_MOVE_LOCKED (line 5: the second turn,
+    # ``locked_move``, PP spent on the first: bcp.c:335), when SolarBeam meets sun without Cloud
+    # Nine / Air Lock (effect_script_0151.s:5-6) or with a Power Herb (HOLD_EFFECT_CHARGE_SKIP,
+    # line 6-7: subscript_item_skip_charge_turn.s removes it, :20). Otherwise it charges: the
+    # direct TO_ATTACKER subscript_vanish_on_charge_turn.s locks the user into moveCur (:10,
+    # Battler_LockMoveChoice, battle_lib.c:1828-1832), the script sets its semi-invulnerable bit
+    # and SYSCTL_FIRST_OF_MULTI_TURN: no accuracy roll (bcp.c:2905-2908), no Protect, Lock-On or
+    # semi-invulnerable test (:3003-3005), no type chart (:2354) and no damage. A charge with no
+    # living foe keeps the user as its defender (HasNoTarget, bcp.c:2327-2334), so it charges.
+    used_flags = tables.move_flags[used].astype(_I32)
+    charge_move = (used_flags & MoveFlag.CHARGE) != 0
+    second_turn = charge_move & (state.locked_move[side] != 0)
+    sun_now = (
+        ((used_flags & MoveFlag.SUN_SKIP) != 0)
+        & (state.weather == Weather.SUN)
+        & ~weather_suppressed(tables, state)
+    )
+    # The script runs with a defender: the foe, or for the user's own first turn the user
+    # (HasNoTarget, bcp.c:2327-2334); a called move without a foe goes to subscript_no_target.s
+    # from GoToMoveScript (battle_script.c:2124-2126) before its script.
+    script_runs = (state.hp[target_side, target] > 0) | (~invoker & ~nature_power)
+    herb = (
+        can_act
+        & charge_move
+        & ~second_turn
+        & ~sun_now
+        & script_runs
+        & holds(tables, state, side, ItemId.POWER_HERB)
+    )
+    charging = can_act & charge_move & ~second_turn & ~sun_now & ~herb & script_runs
+    # Skull Bash charges with the indirect TO_ATTACKER Defense +1 (effect_script_0145.s:8, chance
+    # 100); with a Power Herb subscript_power_herb_skull_bash.s:14-17 raises it before the hit.
+    def_up = (used_flags & MoveFlag.CHARGE_DEF_UP) != 0
     # Accuracy 0 never misses (CheckMoveHitAccuracy returns before rolling, :2901). A
     # multi-hit move checks accuracy on its first hit only (effects.py).
     # The no-target check (:3190) fails a move whose defender has fainted; a move whose
@@ -982,7 +1020,7 @@ def _use_move(
         & (state.hp[attacker, state.active[attacker]] > 0)
     )
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
-    has_target = has_target | special_counter | (invoker & call_failed)
+    has_target = has_target | special_counter | (invoker & call_failed) | charging
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
     # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
     # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
@@ -1002,7 +1040,10 @@ def _use_move(
     # when struggling; Nature Power, moveTemp, for Nature Power, even when its call finds no
     # target) to movePrevByBattler, else MOVE_NONE. Every path of a battler that acts
     # reaches it, the confusion self-hit too (LOOP_FAINTED, :2639).
-    succeeded = can_act & (has_target | nature_power | invoker)
+    # A charge move's own first use passes BeforeMove's no-target check whatever the foe's HP
+    # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
+    first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
+    succeeded = can_act & (has_target | nature_power | invoker | first_charge)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
@@ -1082,6 +1123,17 @@ def _use_move(
     state = _set_side(state, "future_move", target_side, used, sets)
     state = _set_side(state, "future_attacker", target_side, side + 1, sets)
     state = _set_side(state, "future_damage", target_side, stored, sets)
+    # The Power Herb (line 6-7 of the charge scripts): subscript_item_skip_charge_turn.s:20 /
+    # subscript_power_herb_skull_bash.s:24 RemoveItem, then the hit (a defender of BATTLER_NONE
+    # skips it and TryMove's HasNoTarget, with SYSCTL_LAST_OF_MULTI_TURN set by
+    # subscript_charge_move_cleanup.s:7, ends in subscript_no_target.s).
+    state = consume_item(state, side, herb)
+    state = change_stage(state, side, Stat.DEF, 1, herb & def_up)
+    # The second turn's script clears the semi-invulnerable bit (effect_script_0155.s:24 and the
+    # others) and subscript_charge_move_cleanup.s:6 VOLATILE_CONDITION_MOVE_LOCKED before TryMove.
+    cleanup = can_act & has_target & second_turn
+    state = _set_side(state, "semi_invulnerable", side, 0, cleanup)
+    state = _set_side(state, "locked_move", side, 0, cleanup)
     # Selfdestruct / Explosion (effect_script_0007.s): the script sets the user's HP to 0
     # before TryMove, so the user faints on a miss or into a Ghost too, and its own Cloud
     # Nine no longer counts for the hit (COUNT_ALIVE_BATTLERS). The faint itself is
@@ -1095,11 +1147,36 @@ def _use_move(
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
-    hit = never_misses | ((roll > 0) & (roll <= threshold))
+    hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
+    # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
+    # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender: for an OHKO move
+    # BtlCmd_TryOHKOMove's MOVE_STATUS_BYPASSED_ACCURACY, battle_script.c:4343-4374, the same
+    # battlers), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
+    # (MOVE_STATUS_SEMI_INVULNERABLE) a foe with a semi-invulnerable bit its script does not hit
+    # (MoveFlag.HIT_*: SYSCTL_HIT_DURING_*), B10-12. A special-range Counter's command and Bide's
+    # unleash have made the foe the defender by then.
+    foe_semi = state.semi_invulnerable[target_side]
+    aims_foe = ~self_defender(tables, used, ghost_user(state, side)) | special_counter | bide_ends
+    bypass = (
+        (state.ability[side, user] == AbilityId.NO_GUARD)
+        | (state.ability[target_side, target] == AbilityId.NO_GUARD)
+        | locked_onto(state, side, target_side)
+    )
+    semi_miss = (
+        can_act
+        & has_target
+        & ~charging
+        & aims_foe
+        & (foe_semi != 0)
+        & ~hits_semi(tables, used, foe_semi)
+        & (tables.move_target[used] != MoveTarget.RANGE_OPPONENT_SIDE)
+        & ~bypass
+    )
+    hit = hit & ~semi_miss
     # CheckMoveHitOverrides (bcp.c:3001-3014) runs after the accuracy roll, hit or miss: a
     # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
     # Battler_UnlockMoveChoice (the unlock below). Selfdestruct's user already fainted.
-    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, used, bide_ends)
+    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, used, bide_ends) & ~charging
     # An OHKO move against an ignorable Sturdy (BtlCmd_TryOHKOMove, battle_script.c:4340-4341:
     # MOVE_STATUS_STURDY, no roll): subscript_missed.s:67-69 tags the defender's ability
     # ("{0} was protected by {1}!", BattleAI_SetAbility, battle_script.c:11798-11806), unless a
@@ -1121,9 +1198,11 @@ def _use_move(
             != 0
         )
         & ~levitated(state, side, target_side, ohko_type)
+        # subscript_missed.s:13 shows the miss of MOVE_STATUS_SEMI_INVULNERABLE first.
+        & ~semi_miss
     )
     state = reveal_ability(state, target_side, target, OHKO_BLOCKED, sturdy_shown)
-    connected = can_act & has_target & hit & ~failed & ~blocked
+    connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
     # chain reset of :5154-5158 is folded into protect_count (below), so its value here is
@@ -1196,7 +1275,18 @@ def _use_move(
     )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
-    state = _unlock(state, side, can_act & ~connected)
+    state = _unlock(state, side, can_act & ~connected & ~charging)
+    # The charge (B10-12): the lock into moveCur (subscript_vanish_on_charge_turn.s:10), the
+    # semi-invulnerable bit (effect_script_0155.s:7, _0255.s:7, _0256.s:7, _0263.s:7, _0272.s:8)
+    # and Skull Bash's Defense +1 (effect_script_0145.s:8).
+    state = _set_side(state, "locked_move", side, used, charging)
+    semi_kind = jnp.select(
+        [(used_flags & int(SEMI_SET_FLAGS[k])) != 0 for k in sorted(SEMI_SET_FLAGS)],
+        [jnp.int32(int(k)) for k in sorted(SEMI_SET_FLAGS)],
+        jnp.int32(0),
+    )
+    state = _set_side(state, "semi_invulnerable", side, semi_kind, charging)
+    state = change_stage(state, side, Stat.DEF, 1, charging & def_up)
     n_hits = hit_count(tables, used, outcome, side)
     # Present's heal path (effects._present): subscript_recover_hp.s prints "regained health"
     # (1), or "HP is full!" (2) for a target at full HP; the target's HP is unchanged
@@ -1249,15 +1339,19 @@ def _use_move(
         & ~(invoker & call_failed)
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
-        & wonder_guarded(tables, state, side, used, move_type)
+        # A charge turn skips the chart (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356); a charge
+        # move's strike runs it under SYSCTL_LAST_OF_MULTI_TURN (damage.charge_strike), G-27.
+        & ~charging
+        & wonder_guarded(tables, state, side, used, move_type, None, charge_move)
     )
     guarded = connected & guard_tested
     # subscript_missed.s:107-110 "{0} avoided damage by using {1}!" (TAG_NICKNAME_ABILITY,
     # BTLSCR_DEFENDER: BattleAI_SetAbility, battle_script.c:11798-11806) unless a flag it tests
     # first holds: lost focus (:5), protected (:18) or failed (:97) (``failed`` carries the
-    # first and the script failures); a miss reaches it (ruling G-20).
+    # first and the script failures); a miss reaches it (ruling G-20), a semi-invulnerable miss
+    # does not (:11 -> :157, the miss message), ruling G-28.
     state = reveal_ability(
-        state, target_side, target, DAMAGE_AVOIDED, guard_tested & ~blocked & ~failed
+        state, target_side, target, DAMAGE_AVOIDED, guard_tested & ~blocked & ~failed & ~semi_miss
     )
     # Water Absorb (:3507-3512) is Dry Skin's test; Volt Absorb (:3500-3505) takes an Electric
     # move whatever its power (Thunder Wave too), attacker != defender (B9-6).
@@ -1333,6 +1427,7 @@ def _use_move(
         & (tables.move_power[used] != 0)
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & ~charging  # SYSCTL_FIRST_OF_MULTI_TURN (bcp.c:2356), B10-12
         & (chart == 0)
     )
     move_failed = (
@@ -1722,7 +1817,13 @@ def _use_move(
     # The tail modes: the paused move showed its attack message and its defender is the foe
     # unless it is a self-defender (Baton Pass).
     record = jnp.where(head_on, record, ~self_defender(tables, used_t, ghost_user(state, side)))
-    shown_t = jnp.where(head_on, can_act, True)
+    # The charge turn shows no attack message (SYSCTL_SKIP_ATTACK_MESSAGE, and
+    # subscript_use_move.s:5 skips subscript_attack_message_and_animation.s after a direct side
+    # effect), so SYSCTL_ATTACK_MESSAGE_SHOWN stays clear: moveHit, movePrev and moveProtect get
+    # MOVE_NONE (bcp.c:3936-3942, :4499-4508). Skull Bash's indirect Defense +1 runs
+    # subscript_update_stat_stage.s, whose PrintAttackMessage (:6-7, shown or not) sets it
+    # (battle_script.c:1431-1432), B10-12.
+    shown_t = jnp.where(head_on, can_act & ~(charging & ~def_up), True)
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
     hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])
     state = state._replace(
@@ -1746,8 +1847,17 @@ def _use_move(
     exempt = ((move == MOVE_U_TURN) & resumed) | (
         (move == MOVE_BATON_PASS) & jnp.where(head_on, succeeded, True)
     )
+    # SYSCTL_FIRST_OF_MULTI_TURN updates the Choice locks as the attack message does
+    # (bcp.c:3921-3922, :4490-4491), B10-12.
     state = _choice_lock(
-        tables, state, side, target_side, move, ready_t & shown_t & tail, record, exempt
+        tables,
+        state,
+        side,
+        target_side,
+        move,
+        ready_t & (shown_t | (charging & head_on)) & tail,
+        record,
+        exempt,
     )
     # UpdateMoveBuffers writes movePrevByBattler / moveProtect onto the battler in the slot
     # (bcp.c:3934-3944): the newcomer, whose switch-in cleared them (battle_lib.c:2119, :2123).
@@ -2836,8 +2946,9 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     Sand Veil, Snow Cloak, Dry Skin and Solar Power are ``AbilityId`` members
     (``state.ability``); Ice Body and Magic Guard, which no table maps, are read from
     ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
-    ``MOVE_EFFECT_NO_WEATHER_DAMAGE`` (Dig / Dive) cannot be set: no charge move is
-    supported."""
+    The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
+    (moves.h:50: Dig's UNDERGROUND, Dive's UNDERWATER; :5580, :5587, :5600), rain does not
+    (B10-12)."""
     mon = state.active[side]
     hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
     types = state.types[side, mon]
@@ -2855,12 +2966,18 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         & ~has(Type.GROUND)
         & (own != AbilityId.SAND_VEIL)
     )
-    hail = state.weather == Weather.HAIL
+    hidden = (state.semi_invulnerable[side] == SemiKind.UNDERGROUND) | (
+        state.semi_invulnerable[side] == SemiKind.UNDERWATER
+    )
+    sand = sand & ~hidden
+    hail = (state.weather == Weather.HAIL) & ~hidden
     ice_body = hail & (ab == WEATHER_ABILITY_IDS["Ice Body"])
     hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
     eighth = jnp.maximum(max_hp // 8, 1)
-    sun = (state.weather == Weather.SUN) & (
-        (own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER)
+    sun = (
+        (state.weather == Weather.SUN)
+        & ~hidden
+        & ((own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER))
     )
     rain = (state.weather == Weather.RAIN) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
     # battle_script.c:5614-5618 Rain Dish: Divide(maxHP, 16) below full HP in rain (B9-6).

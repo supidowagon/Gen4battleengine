@@ -110,6 +110,14 @@ Encodings:
 * ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
   Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
   does not keep (moves.h:46-48).
+* ``semi_invulnerable`` is the active battler's MOVE_EFFECT_SEMI_INVULNERABLE bit as an
+  ``ids.SemiKind`` (moves.h:14-15, :26, :37, :44; E2 batch 10, B10-12): the charge turn of Fly /
+  Bounce (AIRBORNE), Dig, Dive and Shadow Force sets it (effect_script_0155.s:7 and the others),
+  their attack turn clears it before the hit (:24), and so does every Battler_UnlockMoveChoice
+  (battle_lib.c:1838: a disrupted or missed move, a sleeper at the next turn's setup). A
+  volatile Baton Pass does not keep (moves.h:46-48). A foe's move aimed at it misses unless its
+  script hits that kind (bcp.c:3034-3040; ``MoveFlag.HIT_*``); the charge's lock is
+  ``locked_move``.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -261,6 +269,7 @@ class BattleState(NamedTuple):
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
+    semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -440,6 +449,7 @@ VOLATILE_FIELDS = (
     "curse",
     "can_unburden",
     "minimized",
+    "semi_invulnerable",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -537,6 +547,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "roosting": (_SIDE, np.int8),
     "can_unburden": (_SIDE, np.int8),
     "minimized": (_SIDE, np.int8),
+    "semi_invulnerable": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

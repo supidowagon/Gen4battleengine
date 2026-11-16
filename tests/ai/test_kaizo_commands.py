@@ -691,3 +691,21 @@ def test_script_commands_table_matches_the_module():
     count = re.search(r"gives (\d+): (\d+) command rows", text)
     assert count is not None
     assert int(count.group(1)) == len(rows) and int(count.group(2)) == len(body)
+
+
+# --- IfHeldItemEqualTo (trainer_ai.c:1915-1934) --------------------------------------------
+
+
+def test_if_held_item_equal_to(tables, names):
+    # The AI's own battler: its true held item (:1925-1926), 0 once consumed; the player's:
+    # AI_CONTEXT.battlerHeldItems, only what a message named (:1927-1928).
+    s = versus(tables, names, GEODUDE)
+    herb = c.ITEM_POWER_HERB
+    held = s._replace(item=s.item.at[1, int(s.active[1])].set(herb))
+    assert _jump(c.if_held_item_equal_to(_ctx(tables, held), _A, herb))
+    gone = held._replace(item=held.item.at[1, int(s.active[1])].set(0))
+    assert not _jump(c.if_held_item_equal_to(_ctx(tables, gone), _A, herb))
+    hidden = s._replace(item=s.item.at[0, int(s.active[0])].set(herb))
+    assert not _jump(c.if_held_item_equal_to(_ctx(tables, hidden), _D, herb))
+    named = hidden._replace(ai_item_known=hidden.ai_item_known.at[int(s.active[0])].set(herb))
+    assert _jump(c.if_held_item_equal_to(_ctx(tables, named), _D, herb))

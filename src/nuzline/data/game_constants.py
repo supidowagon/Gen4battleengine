@@ -486,6 +486,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Immunity": 17,
             "Water Veil": 41,
             "Leaf Guard": 102,
+            # BtlCmd_TryKnockOff's Sticky Hold (battle_script.c:6614), B10-6.
             "Sticky Hold": 60,
             "Own Tempo": 20,
         },
@@ -530,8 +531,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
-    Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E),
     Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
+    # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
+    Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
     # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
     # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
     Constant("nuzline.engine.ids.POTION_HP_RESTORED", "item", 17, "Potion", _E, hp_restored=20),
@@ -658,6 +660,7 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.Status": _ENGINE_ENCODING,
     "nuzline.engine.ids.Stat": "engine index order of every stat vector; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.MoveFlag": _ENGINE_ENCODING,
+    "nuzline.engine.ids.SemiKind": _ENGINE_ENCODING,
     "nuzline.engine.ids.Weather": _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemId": _ENGINE_ENCODING,
     "nuzline.engine.ids.TrainerItemId": _ENGINE_ENCODING,
@@ -740,11 +743,17 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.DECOMP_EFFECT_NAMES": _KEYED_BY_EFFECT,
     "tools.effect_map.CERTAIN_SECONDARY_EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.MULTI_TURN_EFFECTS": _KEYED_BY_EFFECT,
+    "tools.effect_map.CHARGE_FLAG_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
+    "tools.effect_map.SEMI_HIT_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
     # E2 batch 5: move ids the battle code compares against (BtlCmd_TrySleepTalk,
     # Move_IsInvoker, sCannotMetronomeMoves), turned into MoveFlag bits at table build.
     "tools.effect_map.INVOKER_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.SLEEP_TALK_EXCLUDED_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.METRONOME_EXCLUDED_MOVES": _CODE_MOVE_IDS,
+    # Move_CanBeEncored's sCannotEncoreMoves and Move_IsInvoker as the engine reads them (B10-9,
+    # B10-11).
+    "nuzline.engine.ids.CANNOT_ENCORE_MOVES": _CODE_MOVE_IDS,
+    "nuzline.engine.ids.INVOKER_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

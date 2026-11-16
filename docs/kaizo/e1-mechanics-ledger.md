@@ -368,3 +368,40 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   runs the next player newcomer's and the opponent's newcomer's switch-in states together after
   the next pass, while the engine has run the opponent's at its entry (its weather, and its
   Intimidate against the fainted battler), so that pair is not ordered.
+
+## The merge with E2's charge turn (B10-12, B10-13)
+
+- G-27 Wonder Guard and the charge moves (amends G-18's "no supported move sets it"). The
+  charge turn sets SYSCTL_FIRST_OF_MULTI_TURN (effect_script_0039.s:9 and the other charge
+  scripts), so `CheckTypeChart` does not run (bcp.c:2356): no Wonder Guard flag and no reveal on
+  that turn. Every path of a charge script that does not charge (the locked second turn, the
+  Power Herb's skip, SolarBeam in sun) ends in subscript_charge_move_cleanup.s, which sets
+  SYSCTL_LAST_OF_MULTI_TURN (:7), and the move script runs before TryMove (bcp.c:3214-3216,
+  :3272), so `MoveIsOnDamagingTurn` (battle_lib.c:7588-7604) holds at the strike: a strike that
+  is not super effective is guarded (no damage, subscript_missed.s, the reveal). Bide's
+  subscript_bide_end.s:12 sets the flag too, but Bide is RANGE_USER (no chart); Fire Fang is never
+  on it. The trainer AI reads after `BattleContext_Init` (battle_lib.c:2009, bcp.c:1855, :3998),
+  so in every AI read the charge moves stay off their damaging turn (G-23 unchanged). Engine:
+  `damage.charge_strike` (MoveFlag.CHARGE), `wonder_guarded(..., last_of_multi_turn)`, passed by
+  `_finish` for a battle hit (not for the AI's `variance_last` estimate) and by
+  `step._use_move`'s `guard_tested` (with `~charging`); the reference's `_wonder_guarded` (a
+  charge move's chart only runs at its strike: `_use_move` returns before it on the charge turn).
+- G-28 A semi-invulnerable miss on a Wonder Guard holder: the chart still runs after
+  `CheckMoveHitOverrides` (bcp.c:3263-3277), but subscript_missed.s:11 sends
+  MOVE_STATUS_SEMI_INVULNERABLE straight to the miss message (:157), past the Wonder Guard
+  message (:107): no reveal (`step._use_move`'s `reveal_ability(..., ~semi_miss)`, the
+  reference's `guarded` reveal). The miss still crashes a Jump Kick (subscript_missed.s:189-191:
+  `CRASH_ON_MISS` on every path), as E2's B10-12 has it; the merged reference keeps one
+  `blocked` (miss, semi-invulnerable miss, Protect) for the crash and the return.
+- G-29 Pressure and the charge moves: the charge turn's (or the Power Herb turn's)
+  `BattleControllerPlayer_DecrementPP` takes 1 plus the Pressure foe's (bcp.c:2235-2280); the
+  locked second turn cannot pick a command (`Battler_CanPickCommand`, battle_lib.c:6224-6235:
+  VOLATILE_CONDITION_MOVE_LOCKED), so `ppDecremented` is set (bcp.c:334-335) and it spends
+  nothing (the engines' `locked`). No code change; a hand test pins it. Focus Band, Synchronize,
+  Leaf Guard and Download need nothing: the charge turn and a semi-invulnerable miss deal no
+  damage and inflict no status (no UpdateHP roll, nothing to pass or block), and Download's sums
+  (battle_lib.c:3814-3851) read HP and the substitute only, not MOVE_EFFECT_SEMI_INVULNERABLE.
+- Merge note: `ItemId.POWER_HERB` (E2) took 51; `FOCUS_BAND` / `FLAVOR_BERRY` are now 52 / 53
+  (the tables map by name; rebuilt). E1 prep P4's `Expert_ChargeTurnNoInvuln` (SolarBeam only),
+  its second `IfHeldItemEqualTo` and the duplicate `SKIP_CHARGE_TURN_IN_SUN` /
+  `ITEM_POWER_HERB` / outcome-table entries gave way to E2's transcription of every entry.

@@ -49,10 +49,12 @@ from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ITEM_GRISEOUS_ORB,
+    MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
+    SEMI_HIT_FLAGS,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -70,6 +72,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     ItemId,
+    MoveFlag,
     Stat,
     Status,
     Type,
@@ -193,11 +196,26 @@ def on_damaging_turn(tables: Tables, move, last_of_multi_turn=False) -> jnp.ndar
     set that flag, and ``BattleContext_Init`` clears it (``SYSCTL_INIT_P1``, battle_lib.c:2011,
     after every action and at the turn's end), so Fire Fang (``BATTLE_EFFECT_FLINCH_BURN_HIT``)
     is never on its damaging turn: in battle and in every trainer-AI read it bypasses Wonder
-    Guard (ruling G-18). The charge-turn moves are unsupported, and Bide never reaches the chart
-    in battle (``RANGE_USER``, bcp.c:2352), so every engine caller passes ``False``."""
+    Guard (ruling G-18). Bide never reaches the chart in battle (``RANGE_USER``, bcp.c:2352). A
+    charge move's strike runs subscript_charge_move_cleanup.s before TryMove's chart, so in
+    battle it is on its damaging turn (``charge_strike``); its charge turn skips the chart
+    (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356), and every AI read comes after BattleContext_Init,
+    where it is not (ruling G-27)."""
     effect = _i32(tables.move_ai_effect[_i32(move)])
     listed = jnp.isin(effect, jnp.asarray(MULTI_TURN_BATTLE_EFFECTS, _I32))
     return ~listed | jnp.asarray(last_of_multi_turn, jnp.bool_)
+
+
+def charge_strike(tables: Tables, move) -> jnp.ndarray:
+    """``bool``: in battle, ``SYSCTL_LAST_OF_MULTI_TURN`` holds when ``move``'s type chart runs.
+    Every charge move's script (``MoveFlag.CHARGE``: effect_script_0039.s, _0075.s, _0145.s,
+    _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s) ends each path that does not charge in
+    ``Call BATTLE_SUBSCRIPT_CHARGE_MOVE_CLEANUP`` (the locked second turn, the Power Herb's
+    skip, SolarBeam in sun), which sets the flag (subscript_charge_move_cleanup.s:7), and the
+    script runs before TryMove (bcp.c:3214-3216); the charging path sets
+    SYSCTL_FIRST_OF_MULTI_TURN instead, which skips the chart (bcp.c:2356). No other battle path
+    sets it with a chart to run (Bide's subscript_bide_end.s:12: RANGE_USER), ruling G-27."""
+    return (_i32(tables.move_flags[_i32(move)]) & MoveFlag.CHARGE) != 0
 
 
 def super_effective_flag(first, second, update=True) -> jnp.ndarray:
@@ -236,14 +254,20 @@ def chart_walk(tables: Tables, state: BattleState, atk_side, def_side, move_type
 
 
 def wonder_guarded(
-    tables: Tables, state: BattleState, atk_side, move, move_type, def_side=None
+    tables: Tables,
+    state: BattleState,
+    atk_side,
+    move,
+    move_type,
+    def_side=None,
+    last_of_multi_turn=False,
 ) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_WONDER_GUARD`` (battle_lib.c:
     2649-2654, ruling G-18) for ``move`` (of type ``move_type``) by ``atk_side``'s active battler
     against ``def_side``'s (default the other side): the defender has Wonder Guard as the
     attacker sees it (``Battler_IgnorableAbility``: an attacker's Mold Breaker hides it,
-    ``ignorable``), the move is on its damaging turn (``on_damaging_turn``: Fire Fang never
-    is), the walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``super_effective_flag``; an
+    ``ignorable``), the move is on its damaging turn (``on_damaging_turn`` under
+    ``last_of_multi_turn``: Fire Fang never is, a battle caller passes ``charge_strike``), the walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``super_effective_flag``; an
     immune or neutral hit, a resisted one) and the move has table power (a status move never
     is guarded; the fixed-damage moves have power 1 and are). Struggle returns before
     (:2573). The flag is part of ``MOVE_STATUS_DID_NOT_HIT`` / ``_IMMUNE``: the move does no
@@ -256,7 +280,7 @@ def wonder_guarded(
     power = tables.move_power[move] != 0
     return (
         (ignorable(state, atk_side, def_side) == AbilityId.WONDER_GUARD)
-        & on_damaging_turn(tables, move)
+        & on_damaging_turn(tables, move, last_of_multi_turn)
         & ~super_effective_flag(first, second, power)
         & power
         & (move != MOVE_STRUGGLE)
@@ -428,6 +452,17 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
 
 
+# MoveFlag.HIT_* by ids.SemiKind (index 0, no bit, hits nothing).
+_SEMI_HIT_BITS = (0, *(int(SEMI_HIT_FLAGS[k]) for k in sorted(SEMI_HIT_FLAGS)))
+
+
+def hits_semi(tables: Tables, move, kind) -> jnp.ndarray:
+    """``bool``: ``move``'s script sets the SYSCTL_HIT_DURING_* of the semi-invulnerable
+    ``kind`` (an ``ids.SemiKind``; CheckMoveHitOverrides, bcp.c:3034-3040), B10-12."""
+    bits = jnp.asarray(_SEMI_HIT_BITS, _I32)[_i32(kind)]
+    return (_i32(tables.move_flags[_i32(move)]) & bits) != 0
+
+
 def script_power_mul(
     tables: Tables, state: BattleState, atk_side, def_side, move, power_mul
 ) -> jnp.ndarray:
@@ -447,6 +482,11 @@ def script_power_mul(
         _i32(tables.move_param[_i32(move), 2]) == STOMP_PARAM
     )
     doubled = doubled | (stomp & (state.minimized[def_side] != 0))
+    # Gust / Twister, Earthquake / Magnitude, Surf / Whirlpool (effect_script_0146.s, _0149.s,
+    # _0126.s, _0147.s, _0257.s, _0261.s: line 7-8): powerMul 20 against a defender with the
+    # MOVE_EFFECT_* bit the move hits (MoveFlag.DOUBLE_SEMI), B10-12.
+    semi_double = (_i32(tables.move_flags[_i32(move)]) & MoveFlag.DOUBLE_SEMI) != 0
+    doubled = doubled | (semi_double & hits_semi(tables, move, state.semi_invulnerable[def_side]))
     out = jnp.where(reckless & recoil, RECKLESS_POWER_MUL, _i32(power_mul))
     return jnp.where(doubled, DOUBLE_POWER_MUL, out)
 
@@ -1045,6 +1085,15 @@ def _pre_random(
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
+    # :7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (rain, sandstorm, hail,
+    # fog: condition.h:136-139) is halved, between rain and sun (B10-13).
+    solar_down = (
+        (weather == Weather.RAIN)
+        | (weather == Weather.SANDSTORM)
+        | (weather == Weather.HAIL)
+        | (weather == Weather.FOG)
+    )
+    damage = jnp.where(solar_down & (move == MOVE_SOLAR_BEAM) & (not self_hit), damage // 2, damage)
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 
@@ -1144,7 +1193,10 @@ def _finish(
     # estimate zeroes an immune hit, trainer_ai.c:3106).
     damage = jnp.where(levitated(s, atk_side, def_side, move_type), 0, damage)
     # :2649-2654 Wonder Guard: MOVE_STATUS_WONDER_GUARD, part of MOVE_STATUS_IMMUNE (ruling G-18).
-    guarded = wonder_guarded(tables, s, atk_side, move, move_type, def_side)
+    # A battle hit of a charge move is its strike (``charge_strike``); the AI's estimate
+    # (``variance_last``) runs after BattleContext_Init, where it is not (G-27).
+    strike = False if variance_last else charge_strike(tables, move)
+    guarded = wonder_guarded(tables, s, atk_side, move, move_type, def_side, strike)
     damage = jnp.where(jnp.asarray(wonder_guard) & guarded, 0, damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:

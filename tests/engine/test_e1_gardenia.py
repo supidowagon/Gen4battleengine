@@ -20,7 +20,7 @@ import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import legal_actions
-from nuzline.engine.damage import damage_table
+from nuzline.engine.damage import ai_damage_for_roll, damage_table
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
@@ -28,6 +28,7 @@ from nuzline.engine.ids import (
     AbilityId,
     Flavor,
     ItemId,
+    SemiKind,
     Stat,
     Status,
     Weather,
@@ -1201,3 +1202,70 @@ def test_weather_war_at_a_double_ko(tables, names):
     assert [k.prob for k in kids] == [0.5, 0.5]
     weathers = {int(take(store, np.asarray([k.state_row])).weather[0]) for k in kids}
     assert weathers == {Weather.SUN, Weather.RAIN}
+
+
+# --- The merge with E2's charge turn (G-27, G-28) -------------------------------------------
+
+
+def test_wonder_guard_tests_a_charge_moves_strike_not_its_charge(tables, names):
+    """G-27: the charge turn sets SYSCTL_FIRST_OF_MULTI_TURN, so CheckTypeChart never runs
+    (bcp.c:2356): no Wonder Guard flag, no reveal. The strike runs
+    subscript_charge_move_cleanup.s (SYSCTL_LAST_OF_MULTI_TURN, :7) before TryMove's chart
+    (bcp.c:3214-3216), so MoveIsOnDamagingTurn holds (battle_lib.c:7588-7604): a neutral Dig is
+    guarded, deals nothing and tags the holder. A Power Herb's skip strikes the same turn
+    (effect_script_0256.s:12-26). The AI's own estimate runs after BattleContext_Init, where
+    the flag is clear: it sees the hit."""
+    n = names
+    s = _guard_duel(tables, names, ["Dig", "Growl"])
+    acts = A("Growl", "Dig", s, n)
+    one = assert_matches_reference(tables, s, acts, O)
+    assert int(one.locked_move[1]) == n.move("Dig")
+    assert int(one.semi_invulnerable[1]) == SemiKind.UNDERGROUND
+    assert int(one.ai_ability_known[0]) == 0 and int(one.hp[0, 0]) == int(s.hp[0, 0])
+    two = assert_matches_reference(tables, one, acts, O)
+    assert int(two.locked_move[1]) == 0 and int(two.semi_invulnerable[1]) == 0
+    assert int(two.hp[0, 0]) == int(s.hp[0, 0]) and int(two.ai_ability_known[0]) == 1
+    dig = n.move("Dig")
+    assert int(damage_table(tables, s, 1, dig, False)[15]) == 0
+    assert int(damage_table(tables, s, 1, dig, False, wonder_guard=False)[15]) > 0
+    assert int(ai_damage_for_roll(tables, s, 1, dig, 15)) > 0
+    herb = _item(s, 1, 0, "Power Herb", n)
+    out = assert_matches_reference(tables, herb, acts, O)
+    assert int(out.item[1, 0]) == 0 and int(out.locked_move[1]) == 0
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    # Without Wonder Guard the same strike lands.
+    plain = _ability(one, 0, AbilityId.NONE)
+    out = assert_matches_reference(tables, plain, acts, O)
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])
+
+
+def test_wonder_guard_holder_underground_is_missed_not_revealed(tables, names):
+    """G-28: a move that misses a semi-invulnerable Wonder Guard holder still runs the chart
+    (bcp.c:3263-3277), but subscript_missed.s:11 sends MOVE_STATUS_SEMI_INVULNERABLE to the
+    miss message (:157) before the Wonder Guard one (:107): the AI learns nothing."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Squirtle", ["Dig", "Growl"], 50)],
+        [_spec(n, "Rattata", ["Tackle", "Growl"], 10)],
+    )
+    s = _ability(s, 0, AbilityId.WONDER_GUARD)
+    out = assert_matches_reference(tables, s, A("Dig", "Tackle", s, n), O)
+    assert int(out.semi_invulnerable[0]) == SemiKind.UNDERGROUND
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
+
+
+def test_pressure_charges_a_charge_move_once(tables, names):
+    """G-29: the charge turn's BattleControllerPlayer_DecrementPP takes 1 plus the Pressure
+    foe's 1 (bcp.c:2235-2280); the locked second turn cannot pick a command
+    (Battler_CanPickCommand, battle_lib.c:6224-6235: VOLATILE_CONDITION_MOVE_LOCKED), so
+    ppDecremented is set (bcp.c:334-335) and it spends nothing, Pressure or not."""
+    s = _pressure(roark_state(tables, names, player_moves=["Dig"]), 1)
+    before = _pp(s, 0, "Dig", names)
+    acts = A("Dig", "Leer", s, names)
+    one = assert_matches_reference(tables, s, acts, O)
+    assert before - _pp(one, 0, "Dig", names) == 2
+    assert int(one.locked_move[0]) == names.move("Dig")
+    two = assert_matches_reference(tables, one, acts, O)
+    assert _pp(two, 0, "Dig", names) == _pp(one, 0, "Dig", names)
+    assert int(two.locked_move[0]) == 0
