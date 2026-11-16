@@ -413,15 +413,59 @@ def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices)
 
 
 @jax.jit
-def _replay(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
-    """``_apply_turn`` for each candidate from ``state`` with that candidate's start
-    ``qc_roll`` (``qcs``), all with the learn answers ``choices``."""
-
+def _replay_chunk(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
     def one(q, a, o):
         s = state._replace(qc_roll=q)
         return _apply_turn(tables, s, a, o, player_slot, opp_slot, choices)
 
     return jax.vmap(one)(qcs, actions, outcomes)
+
+
+def _replay(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
+    """``_apply_turn`` for each candidate from ``state`` with that candidate's start
+    ``qc_roll`` (``qcs``), all with the learn answers ``choices``. The candidates go in
+    ``_CHUNK``-row calls of one program (fewer rows padded with copies of the first, dropped:
+    a row's result does not depend on the others), so a one-candidate replay (a learn fit,
+    a Quick Claw redraw, ``replay_turn``) does not compile a whole-``step`` program of its
+    own; such a program keeps over 2 GB resident."""
+    n = len(qcs)
+    rows = (qcs, actions, outcomes)
+    if n % _CHUNK:
+        pad = np.concatenate([np.arange(n), np.zeros(_CHUNK - n % _CHUNK, np.int64)])
+        rows = jax.tree.map(lambda x: jnp.asarray(x)[pad], rows)
+    if len(rows[0]) == _CHUNK:
+        out = _replay_chunk(tables, state, *rows, player_slot, opp_slot, choices)
+        return out if n == _CHUNK else jax.tree.map(lambda x: x[:n], out)
+    parts = [
+        _replay_chunk(
+            tables,
+            state,
+            *jax.tree.map(lambda x, i=i: x[i : i + _CHUNK], rows),
+            player_slot,
+            opp_slot,
+            choices,
+        )
+        for i in range(0, len(rows[0]), _CHUNK)
+    ]
+    return jax.tree.map(lambda *xs: jnp.concatenate(xs)[:n], *parts)
+
+
+def replay_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_choices=()):
+    """``apply_turn`` through the converter's candidate program (``_replay``, one row): the
+    same state, and a test replaying traces with it compiles no second ``step`` program."""
+    if not isinstance(learn_choices, jnp.ndarray):
+        learn_choices = learn_array(learn_choices)
+    out = _replay(
+        tables,
+        state,
+        jnp.asarray(state.qc_roll, _I8)[None],
+        jnp.asarray(actions, _I32)[None],
+        jax.tree.map(lambda x: jnp.asarray(x, _I8)[None], outcome),
+        jnp.asarray(player_slot, _I32),
+        jnp.asarray(opp_slot, _I32),
+        learn_choices,
+    )
+    return jax.tree.map(lambda x: x[0], out[0])
 
 
 def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -> bool:
