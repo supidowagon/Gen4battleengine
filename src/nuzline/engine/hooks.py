@@ -360,7 +360,10 @@ def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
     first): where ``war`` (``weather_war``), the order the sort gave (``swaps``,
     ``order_swaps``) settles it now when the draws still to come cannot change it (``qc``: the
     ``speedRand`` bits when they are known, ``int[2]``; else every value counts), else it waits
-    in ``war_swaps`` for ``step.resolve_war``'s draw. Ruling G-26."""
+    in ``war_swaps`` for ``step.resolve_war``'s draw. Where not ``war``, ``war_swaps`` is kept:
+    a tie an earlier ShowBattleMon left open (a double KO's hazard pass, ``search.playout.
+    replacement_pass``) still waits for its ``RandNext() & 1`` (battle_lib.c:1445, in the sort
+    at TrainerMessage, battle_controller_player.c:251). Ruling G-26."""
     swaps = jnp.asarray(swaps, _I32)
     if qc is None:
         always, never = swaps == ALL_SWAPS, swaps == 0
@@ -371,7 +374,7 @@ def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
         always, never = (tie0 == 1) & (tie1 == 1), (tie0 == 0) & (tie1 == 0)
     war = jnp.asarray(war, bool)
     state = swap_war(state, war & always)
-    held = jnp.where(war & ~always & ~never, swaps, 0)
+    held = jnp.where(war, jnp.where(~always & ~never, swaps, 0), state.war_swaps)
     return state._replace(war_swaps=held.astype(state.war_swaps.dtype))
 
 

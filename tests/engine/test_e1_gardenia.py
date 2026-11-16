@@ -1454,6 +1454,16 @@ def test_double_ko_newcomer_felled_by_hazards_leaves_the_foes_states_waiting(tab
         assert not bool(refused) and int(second.active[0]) == 2
         assert int(second.weather) == weather and int(second.weather_timer) == 0
         assert np.asarray(second.entry_pending).tolist() == [0, 0]
+    # A tie (Groudon and Kyogre, both Speed 102 at level 50): the sort at TrainerMessage
+    # (battle_controller_player.c:251) swaps on RandNext() & 1 (battle_lib.c:1445), so the war
+    # stays open in war_swaps for the next draw, as at an ordinary double KO.
+    from nuzline.engine.step import resolve_war
+
+    first, _ = replacement_pass(tables, _hazard_double_ko(tables, names, (50, 50)), 1)
+    second, refused = replacement_pass(tables, first, 2)
+    assert not bool(refused) and int(second.war_swaps) == 0b10101010
+    assert int(resolve_war(second, 1).weather) == Weather.SUN
+    assert int(resolve_war(second, 0).weather) == Weather.RAIN
 
 
 def test_double_ko_waiting_intimidate_meets_the_next_newcomer(tables, names):
