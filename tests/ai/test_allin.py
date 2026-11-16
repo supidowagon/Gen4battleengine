@@ -182,7 +182,8 @@ def _runs(picked: dict) -> dict:
             trainer,
             party,
             own,
-            (acts[start : start + n], {k: v[start : start + n] for k, v in ctx.items()}),
+            # a field may be a pytree (``damage`` is a ``CalcEstimate``): slice its arrays.
+            (acts[start : start + n], jax.tree.map(lambda a, i=slice(start, start + n): a[i], ctx)),
         )
         start += n
     del program
@@ -268,7 +269,9 @@ def test_a_masked_flag_script_consumes_no_read(kaizo_tables, cover_runs):
     masked_reads = 0
     for flags, (trainer, party, (_, want), (_, got)) in cover_runs.items():
         for name in CONTEXT_FIELDS:
-            assert np.array_equal(want[name], got[name]), (trainer.name, f"{flags:#x}", name)
+            # ``damage`` is a ``CalcEstimate`` (value, prob, kind): compare it leaf by leaf.
+            pairs = zip(jax.tree.leaves(want[name]), jax.tree.leaves(got[name]), strict=True)
+            assert all(np.array_equal(w, g) for w, g in pairs), (trainer.name, f"{flags:#x}", name)
         rows = move_read_rows(kaizo_tables, [m for spec in party for m in spec.moves])
         off = [col for col, bit in enumerate(READ_BOUND_BITS) if not flags >> bit & 1]
         masked_reads += int(rows[:, off].sum())

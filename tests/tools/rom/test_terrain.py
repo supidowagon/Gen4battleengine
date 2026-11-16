@@ -22,7 +22,7 @@ BUILDING = TERRAIN_NAMES.index("TERRAIN_BUILDING")
 # Mixed trainers (several terrains over the tiles their battles can start on) per game,
 # after the per-trainer narrowing of rules §9.3 step 2 (415 and 371 over whole headers; a
 # rematch row's base unspun, ruling B4-19).
-MIXED = {"CPUE": 212, "JAK7": 235}
+MIXED = {"CPUE": 212, "JAK7": 219}
 
 
 def _t(name: str) -> int:
