@@ -9,15 +9,34 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
-from nuzline.engine.enumerate import call_laws, call_variants, enumerate_turn
+from nuzline.engine.actions import MOVE_ACTIONS, legal_actions
+from nuzline.engine.enumerate import (
+    _split_events,
+    call_laws,
+    call_variants,
+    enumerate_turn,
+    taken_events,
+)
 from nuzline.engine.ids import Stat, Status
-from nuzline.engine.order import CALL_ASSIST, CALL_COPYCAT, CALL_METRONOME, metronome_weights
-from nuzline.engine.outcome import empty_outcome, sample_outcome
+from nuzline.engine.order import (
+    CALL_ASSIST,
+    CALL_COPYCAT,
+    CALL_METRONOME,
+    CALL_SLEEP_TALK,
+    call_kind,
+    metronome_weights,
+    selected_move,
+    takeover_possible,
+)
+from nuzline.engine.outcome import empty_outcome, pivot_view, replacement_possible, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, turn_events
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
+from tests.strategies import _teach, any_outcome, legal_action_pair, supported_state
 
 CHUNK = 256  # one compiled program per kind for every batch in this file (small: under 8 GB)
 _steps = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
@@ -246,3 +265,116 @@ def test_encore_into_copycat_copies_the_encore_and_fails(tables, names):
     assert np.all(out.encore_move[:, 0] == 0)
     o = empty_outcome()._replace(call=jnp.asarray([0, 1], jnp.int16))
     assert_matches_reference(tables, s, acts, o)
+
+
+def _cover(tables, state, actions, outcome):
+    """``(fired, uncovered)`` ``bool[2]`` each: a replacement event that changes the side's move
+    fired (taken over, or a Sleep Talk side's set changed by a faster Disable or Imprison), and
+    one fired that the predicates did not allow (``order.takeover_possible`` for a takeover,
+    ``outcome.replacement_possible`` for any), each read on the ``pivot_view`` as the laws and
+    the sampler read them."""
+    events = turn_events(tables, state, actions, outcome)
+    disabled, sealed = _split_events(state, events)
+    taken = taken_events(state, events)
+    view, view_actions = pivot_view(tables, state, actions)
+    fired, uncovered = [], []
+    for side in (0, 1):
+        foe = 1 - side
+        chosen = selected_move(tables, view, side, view_actions[side])[0]
+        talk = call_kind(tables, chosen) == CALL_SLEEP_TALK
+        event = taken[side] | (talk & (disabled[side] | sealed[side]))
+        can_take = takeover_possible(tables, view, view_actions, side, foe)
+        can_replace = replacement_possible(tables, view, view_actions, side, foe)
+        fired.append(event)
+        uncovered.append((taken[side] & ~can_take) | (event & ~can_replace))
+    return jnp.stack(fired), jnp.stack(uncovered)
+
+
+_covers = jax.jit(_cover)
+_FIRED = [0]  # replacement events met (a coverage aid for runs)
+
+
+def _steer(data, tables, names, s):
+    """Three draws in four, ``s`` and the actions steered at a replacement (the generator alone
+    met none in 300 draws): a fast foe (Speed 999) that knows Encore, Disable or Imprison (full
+    PP) and uses it; the target's last move one it knows, nobody encored, disabled or
+    imprisoning, no Trick Room, no lock, the foe untaunted; for Disable and Imprison the target
+    asleep using Sleep Talk, and for Imprison the foe knowing the target's last move. Else
+    ``None``."""
+    side = data.draw(st.integers(0, 1))
+    foe = 1 - side
+    mon, foe_mon = int(s.active[side]), int(s.active[foe])
+    live = int(s.hp[side, mon]) > 0 and int(s.hp[foe, foe_mon]) > 0
+    if data.draw(st.integers(0, 3)) == 0 or not live or int(s.pivot_battler) or int(s.over):
+        return None
+    a = {name: np.asarray(getattr(s, name)).copy() for name in type(s)._fields}
+    kind = data.draw(st.sampled_from(["Encore", "Disable", "Imprison"]))
+    k = _teach(tables, a, foe, foe_mon, names.move(kind), data.draw(st.integers(0, 3)))
+    talk = names.move("Sleep Talk")
+    if kind != "Encore":
+        talk = _teach(tables, a, side, mon, talk, data.draw(st.integers(0, 3)))
+        a["status"][side, mon] = Status.SLEEP
+        a["status_counter"][side, mon] = data.draw(st.integers(2, 4))
+    known = [
+        int(m) for j, m in enumerate(a["moves"][side, mon]) if m and (kind == "Encore" or j != talk)
+    ]
+    if not known:
+        return None
+    last = data.draw(st.sampled_from(known))
+    if kind == "Imprison":
+        _teach(
+            tables,
+            a,
+            foe,
+            foe_mon,
+            last,
+            data.draw(st.sampled_from([j for j in range(4) if j != k])),
+        )
+    a["last_move"][side] = last
+    a["stats"][foe, foe_mon, Stat.SPE - Stat.ATK] = 999
+    a["encore_move"][:] = a["encore_slot"][:] = a["encore_turns"][:] = 0
+    a["disabled_move"][side] = a["disable_turns"][side] = 0
+    a["imprison"][:] = 0
+    a["taunt"][foe] = 0
+    a["locked_move"][:] = a["choice_lock"][:] = 0
+    a["trick_room"][...] = 0
+    s = type(s)(**{name: jnp.asarray(a[name]) for name in type(s)._fields})
+    foe_slot = int(np.flatnonzero(np.asarray(s.moves[foe, foe_mon]) == names.move(kind))[0])
+    legal = [np.asarray(legal_actions(tables, s, sd))[:MOVE_ACTIONS] for sd in (0, 1)]
+    if kind != "Encore":
+        mine = [talk] if legal[side][talk] else []
+    else:
+        mine = np.flatnonzero(legal[side]).tolist()
+    if not legal[foe][foe_slot] or not mine:
+        return None
+    acts = [0, 0]
+    acts[side], acts[foe] = data.draw(st.sampled_from(mine)), foe_slot
+    return s, jnp.asarray(acts, jnp.int32)
+
+
+@settings(
+    max_examples=300,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(data=st.data())
+def test_the_replacement_predicates_cover_every_event(tables, names, data):
+    """B11-10: the sampler redraws a side's move fields only where ``replacement_possible`` holds,
+    and the laws split a takeover only where ``takeover_possible`` holds (``call_consistent``):
+    both must hold wherever the event fires (``step_events``' ``encored_at_move``, and
+    ``disabled_at_move`` / ``sealed_at_move`` for a Sleep Talk side), for any outcome, on
+    generated states, three in four steered at a replacement (``_steer``). Also: no generated
+    Pokemon knows a move twice (B11-5)."""
+    s = data.draw(supported_state(tables, names))
+    moves = np.asarray(s.moves)
+    for row in moves.reshape(-1, moves.shape[-1]):
+        known = row[row != 0]
+        assert len(set(known.tolist())) == len(known), row
+    steered = _steer(data, tables, names, s)
+    if steered is None:
+        acts = jnp.asarray(data.draw(legal_action_pair(tables, s)), jnp.int32)
+    else:
+        s, acts = steered
+    fired, uncovered = _covers(tables, s, acts, data.draw(any_outcome()))
+    _FIRED[0] += int(np.sum(np.asarray(fired)))
+    assert not np.any(np.asarray(uncovered)), (np.asarray(acts), np.asarray(fired))

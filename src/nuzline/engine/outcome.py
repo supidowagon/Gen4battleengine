@@ -1010,15 +1010,16 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     }
 
 
-def replacement_possible(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool``: a side's move can be replaced within the turn (ruling B11-1): a Sleep Talk user
-    whose foe uses a move (a faster Disable or Imprison can change its set: rulings B5-13, B7-13)
-    or an ``order.takeover_possible`` side. Over-approximate."""
+def replacement_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
+    """``bool``: ``side``'s move can be replaced within the turn by ``foe``'s action (ruling
+    B11-1): a Sleep Talk user whose foe uses a move (a faster Disable or Imprison can change its
+    set: rulings B5-13, B7-13) or an ``order.takeover_possible`` side. ``foe`` is named by the
+    caller (doubles rule 1; B11-11). Over-approximate."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    talk = uses_move & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[::-1]
-    return jnp.any(talk | takeover_possible(tables, state, actions))
+    chosen = selected_move(tables, state, side, actions[side])[0]
+    talk = uses_move[side] & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[foe]
+    return talk | takeover_possible(tables, state, actions, side, foe)
 
 
 def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
@@ -1146,7 +1147,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         return jnp.stack([disabled, sealed, taken_events(state_in, events)])
 
     which = jax.lax.cond(
-        replacement_possible(tables, state, actions),
+        jnp.any(
+            jnp.stack([replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)])
+        ),
         fired,
         lambda _: jnp.zeros((3, 2), bool),
         None,

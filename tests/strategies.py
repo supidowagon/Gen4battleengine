@@ -478,6 +478,18 @@ def possible_genders(ratio: int) -> tuple[int, ...]:
     return (0, 1)
 
 
+def _teach(tables: Tables, a: dict, who: int, mon: int, move: int, k: int) -> int:
+    """Put ``move`` (full PP) in slot ``k`` of the Pokemon, or in the slot that already holds it:
+    a Pokemon never knows a move twice (the engines split on a duplicate's ``last_move``, B11-5,
+    B11-10). Returns the slot written."""
+    known = np.flatnonzero(a["moves"][who, mon] == move)
+    if known.size:
+        k = int(known[0])
+    a["moves"][who, mon, k] = move
+    a["pp"][who, mon, k] = int(tables.move_pp[move])
+    return k
+
+
 def _held_item() -> st.SearchStrategy[str]:
     """Half the time an ``M1_ITEMS`` name, else one of an ``ITEM_GROUPS`` group."""
     groups = st.sampled_from(ITEM_GROUPS).flatmap(st.sampled_from)
@@ -600,9 +612,7 @@ def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, na
     a["stats"][side, active] = stats[Stat.ATK :]
     a["hp"][side, active] = min(int(a["hp"][side, active]), int(stats[Stat.HP]))
     if moves:
-        move = names.move(draw(st.sampled_from(moves)))
-        a["moves"][side, active, 0] = move
-        a["pp"][side, active, 0] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, names.move(draw(st.sampled_from(moves))), 0)
 
 
 def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -611,9 +621,7 @@ def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: 
     if draw(st.integers(0, 5)) != 0:
         return
     pursuit = names.move("Pursuit")
-    k = draw(st.integers(0, 3))
-    a["moves"][side, active, k] = pursuit
-    a["pp"][side, active, k] = int(tables.move_pp[pursuit])
+    _teach(tables, a, side, active, pursuit, draw(st.integers(0, 3)))
 
 
 def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -629,9 +637,7 @@ def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Na
     free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
     if not free:
         return
-    k = draw(st.sampled_from(free))
-    a["moves"][side, active, k] = move
-    a["pp"][side, active, k] = int(tables.move_pp[move])
+    _teach(tables, a, side, active, move, draw(st.sampled_from(free)))
     # Some of the time make the pivot reachable: a living bench (a fainted slot revived to full
     # HP, unless it is a recorded death) and a user that can act (no sleep, freeze, confusion
     # or love).
@@ -690,10 +696,7 @@ def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, nam
         a["types"][side, active, 1] = Type.POISON
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if name == "Light Clay":
         give(side, active, rnd.choice(("Reflect", "Light Screen")))
@@ -720,10 +723,7 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if draw(st.booleans()):
         ability = rnd.choice(BATCH3_ABILITIES)
@@ -804,10 +804,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     rnd = draw(st.randoms(use_true_random=False))
 
     def give(move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][side, active, k] = move
-        a["pp"][side, active, k] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, names.move(move_name), rnd.randint(0, 3))
 
     if draw(st.integers(0, 2)) == 0:  # B9-1, B9-2: a weather-accuracy move or a fang
         give(
@@ -853,10 +850,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give_foe(move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][foe, foe_mon, k] = move
-        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, foe, foe_mon, names.move(move_name), rnd.randint(0, 3))
 
     if ability == AbilityId.VOLT_ABSORB:
         give_foe(rnd.choice(("ThunderShock", "Thunder Wave", "Thunder Fang")))
@@ -904,10 +898,7 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     foe_mon = int(a["active"][foe])
 
     def give(move_name: str, who: int = side, mon: int = active) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     move = rnd.choice(
         (
@@ -1007,7 +998,6 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             # B10-13: the foe's Yawn at the vanished user, whose subscript still runs on the
             # semi miss (subscript_yawn.s:5-9 before :21).
             give("Yawn", foe, foe_mon)
-            give("Yawn", foe, foe_mon)
             a["taunt"][foe] = 0  # a status move a taunt would block
 
 
@@ -1049,10 +1039,7 @@ def _draw_substitute(draw, tables: Tables, a: dict, side: int, active: int, name
     foe_mon = int(a["active"][foe])
 
     def give(move_name: str, who: int, mon: int) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if rnd.random() < 0.5:
         give("Substitute", side, active)
@@ -1082,10 +1069,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     foe_alive = a["hp"][foe, foe_mon] > 0
     if draw(st.booleans()):
@@ -1167,10 +1151,10 @@ def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: N
     rnd = draw(st.randoms(use_true_random=False))
     if draw(st.integers(0, 2)) == 0:
         name = rnd.choice(INVOKERS)
-        for slot, move_name in zip(rnd.sample(range(4), 2), (name, rnd.choice(CALLED_MOVES))):
-            move = names.move(move_name)
-            a["moves"][side, active, slot] = move
-            a["pp"][side, active, slot] = int(tables.move_pp[move])
+        first, second = rnd.sample(range(4), 2)
+        called = names.move(rnd.choice(CALLED_MOVES))
+        k = _teach(tables, a, side, active, names.move(name), first)
+        _teach(tables, a, side, active, called, first if second == k else second)
         if rnd.random() < 0.7:  # untaunted: an invoker is a status move (batch 11 review)
             a["taunt"][side] = 0
         if name == "Sleep Talk" and a["hp"][side, active] > 0 and rnd.random() < 0.8:
@@ -1193,15 +1177,14 @@ def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: N
     if draw(st.integers(0, 2)) != 0:
         return
     uproar = names.move("Uproar")
-    k = rnd.randint(0, 3)
-    a["moves"][side, active, k] = uproar
-    a["pp"][side, active, k] = int(tables.move_pp[uproar])
+    k = _teach(tables, a, side, active, uproar, rnd.randint(0, 3))
     foe = 1 - side
     foe_mon = int(a["active"][foe])
     under_way = draw(st.booleans())
     if under_way:
-        if rnd.random() < 0.25:
-            a["moves"][side, active, k] = names.move("Copycat")
+        copycat = names.move("Copycat")
+        if rnd.random() < 0.25 and copycat not in a["moves"][side, active]:
+            a["moves"][side, active, k] = copycat
         a["uproar"][side] = rnd.randint(1, 5)
         a["locked_move"][side] = uproar
         a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
@@ -1228,9 +1211,7 @@ def _draw_future_sight(draw, tables: Tables, a: dict, side: int, active: int, na
     moves = (names.move("Future Sight"), names.move("Doom Desire"))
     if draw(st.integers(0, 2)) == 0:
         move = rnd.choice(moves)
-        k = rnd.randint(0, 3)
-        a["moves"][side, active, k] = move
-        a["pp"][side, active, k] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, move, rnd.randint(0, 3))
     if draw(st.integers(0, 2)) == 0:
         timer = rnd.choice((1, 1, 2))
         a["future_timer"][side] = timer
@@ -1283,19 +1264,14 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
         name = rnd.choice(BATCH7_MOVES)
         free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
         if free:
-            k = rnd.choice(free)
-            move = names.move(name)
-            a["moves"][side, active, k] = move
-            a["pp"][side, active, k] = int(tables.move_pp[move])
+            k = _teach(tables, a, side, active, names.move(name), rnd.choice(free))
             foe_moves = [int(m) for m in a["moves"][foe, a["active"][foe]] if m]
             others = [j for j in free if j != k]
             if name == "Curse" and rnd.random() < 0.5:  # a Ghost user (B8-5)
                 a["types"][side, active] = [Type.GHOST, Type.GHOST]
             if name == "Imprison" and foe_moves and others and rnd.random() < 0.8:
                 shared = rnd.choice(foe_moves)
-                j = rnd.choice(others)
-                a["moves"][side, active, j] = shared
-                a["pp"][side, active, j] = int(tables.move_pp[shared])
+                _teach(tables, a, side, active, shared, rnd.choice(others))
     a["ingrain"][side] = int(draw(st.integers(0, 3)) == 0)
     if draw(st.integers(0, 3)) == 0:
         a["mean_look"][side] = 1
@@ -1813,20 +1789,24 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     # invokers' variants have their own tests (tests/engine/test_invokers.py).
     s = draw(supported_state(tables, names, invokers=False))
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
-    move_pp = np.asarray(tables.move_pp)
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
         effect[a["moves"]],
         (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
     )
-    a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
+    tackle = names.move("Tackle")
+    for side, mon, k in zip(*np.nonzero(invoker)):  # a learnset's own invoker too
+        # Tackle, or an empty slot when it knows Tackle already (no move twice, B11-10).
+        known = tackle in a["moves"][side, mon]
+        a["moves"][side, mon, k] = 0 if known else tackle
+        if known:
+            a["pp"][side, mon, k] = 0
     for side in (0, 1):
         mon = int(a["active"][side])
         a["lucky_chant"][side] = draw(st.sampled_from([0, 0, 1, 5]))
         if draw(st.booleans()):
             move = names.move(draw(st.sampled_from(LAW_MOVES)))
-            a["moves"][side, mon, 0] = move
-            a["pp"][side, mon, 0] = move_pp[move]
+            _teach(tables, a, side, mon, move, 0)
             if int(tables.move_effect[move]) == EffectId.PROTECT:
                 a["protect_count"][side] = draw(st.integers(0, 3))
 

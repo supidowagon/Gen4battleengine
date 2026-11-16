@@ -350,26 +350,31 @@ def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarr
     )
 
 
-def takeover_possible(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool[2]``: a foe's Encore can replace the side's chosen move this turn (ruling B11-1).
+def takeover_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
+    """``bool``: ``foe``'s Encore can replace ``side``'s chosen move this turn (ruling B11-1).
     BattleControllerPlayer_FightCommand (bcp.c:1866-1873) runs an encored battler's encored move,
     after Struggle, whatever it chose; an Encore landing before its action this turn (a faster
     foe's: BtlCmd_TryEncore, battle_script.c:4725-4748) therefore replaces it. Possible when the
     side uses a move without Struggling, is not encored at the turn start, ``encore_slot_of``
     would not fail it (its last move held, encorable, with PP), that move differs from the chosen
-    one, and its foe uses Encore or an invoker that can call it (``can_call_encore``). Sound, not
-    tight: the call laws drop the rows where it did not happen (``enumerate.call_consistent``)."""
+    one, and ``foe`` uses Encore or an invoker that can call it (``can_call_encore``). ``foe`` is
+    the battler whose Encore targets ``side`` (doubles rule 1: the caller names it; B11-11).
+    Sound, not tight: the call laws drop the rows where it did not happen
+    (``enumerate.call_consistent``)."""
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
-    picked = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
-    chosen = jnp.stack([p[0] for p in picked])
-    struggling = jnp.stack([p[1] for p in picked])
-    fails = jnp.stack([encore_slot_of(tables, state, side)[0] for side in (0, 1)])
-    foe_can = uses_move[::-1] & jnp.stack(
-        [can_call_encore(tables, state, 1 - side, chosen[1 - side]) for side in (0, 1)]
+    chosen, struggling = selected_move(tables, state, side, actions[side])
+    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    fails = encore_slot_of(tables, state, side)[0]
+    foe_can = uses_move[foe] & can_call_encore(tables, state, foe, foe_chosen)
+    return (
+        uses_move[side]
+        & ~struggling
+        & ~fails
+        & (state.last_move[side].astype(_I32) != chosen)
+        & foe_can
     )
-    return uses_move & ~struggling & ~fails & (state.last_move.astype(_I32) != chosen) & foe_can
 
 
 def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray, jnp.ndarray]:

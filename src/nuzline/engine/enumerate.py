@@ -2725,7 +2725,9 @@ def call_consistent(
         call >= CALL_SEALED, CALL_SEALED, jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP)
     )
     view, view_actions = pivot_view(tables, state, actions)
-    can_take = takeover_possible(tables, view, view_actions)
+    can_take = jnp.stack(
+        [takeover_possible(tables, view, view_actions, side, 1 - side) for side in (0, 1)]
+    )
     took = taken_events(state, events)
     return jnp.all(~split | (seen == want)) & jnp.all(~can_take | (took == taken))
 
@@ -2869,7 +2871,9 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         & ~jnp.stack([imprisoning_foe(state, side) for side in (0, 1)])
         & uses_move[::-1]
     )
-    can_take = takeover_possible(tables, state, actions)
+    can_take = jnp.stack(
+        [takeover_possible(tables, state, actions, side, 1 - side) for side in (0, 1)]
+    )
     encored = state.last_move.astype(_I32)
     taken_kinds = jnp.where(can_take, call_kind(tables, encored), CALL_NONE)
     taken_kinds = jnp.where(

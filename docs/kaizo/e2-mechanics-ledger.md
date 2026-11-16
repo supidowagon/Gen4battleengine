@@ -46,6 +46,14 @@
   (300). **Owed heavy runs** (when the fast tier frees the machine):
   tests/engine/test_invokers.py, the sampled-frequency tests (test_batch11 `-k sampled`),
   tests/search incl. test_playout.py, tests/test_cli.py, differential seed 32 on the merge.
+- **Batch 11 second review follow-ups (2026-11-16, on 31b3a95).** B11-10 (the generator never
+  gives a move twice, `_teach`; the replacement-coverage property test), B11-11 (the takeover /
+  replacement predicates take `side` and `foe`), B11-12 (Kaizo Expert_Encore and its table are
+  vanilla, ROM-checked). Light checks: test_batch11 `-k "not sampled"` 6 passed (the new
+  property test included; test_encore_into_assist reached 6.1 GB resident), test_batch10 41,
+  kaizo_policy `-k encore` 12 passed; differential seeds 28, 29 clean (300 each). **Owed heavy runs** (unchanged, plus the
+  new generator's draws): tests/engine/test_invokers.py, test_batch11 `-k sampled`, tests/search
+  incl. test_playout.py, tests/test_cli.py, differential seed 32 on the merge.
 - **Batch 11 (as briefed):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
   replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
@@ -1823,3 +1831,35 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (`OutcomeLaws.relevant.duration` lacked `EffectId.ENCORE`, though `duration_kind` had
   DURATION_ENCORE since B10-9): every enumerated Encore set the empty outcome's count. Fixed;
   unseen before because coverage refused Encore.
+- B11-10 (batch 11, second review) No generated Pokemon knows a move twice, at the root: every
+  move the generator writes goes through `strategies._teach` (the given slot, or the slot that
+  already holds the move), used by every give-style helper and the other slot writes (species
+  item, Pursuit, pivot, invoker pair, Uproar, Future Sight, batch 7 and Imprison's shared move,
+  the law moves); Uproar's Copycat swap is skipped when Copycat is known, and the outcome-laws
+  strategy's invoker-to-Tackle swap leaves an empty slot when Tackle is known. 31b3a95's double
+  `give("Yawn", ...)` is one call. The new property test asserts the no-duplicate rule on every
+  generated state. tests/engine/test_batch11.py::test_the_replacement_predicates_cover_every_event
+  (300 states, any outcome): a side's replacement event (`taken_events`, or a Sleep Talk side's
+  `_split_events`) never fires where `order.takeover_possible` (taken) or
+  `outcome.replacement_possible` (any) is false, read on the `pivot_view` as the laws and the
+  sampler read them. The generator alone met no event in 300 draws, so the test steers three
+  draws in four (`_steer`: a Speed 999 foe using Encore, Disable or Imprison, no Trick Room).
+  300 draws (seed 0): 28 takeovers, 22 Disables, 8 Imprisons, 58 events, none uncovered; with
+  `takeover_possible` forced false 28 uncovered, with `replacement_possible` reduced to the
+  takeover 30 uncovered. Note: `_split_events` also fires for a side that is not using Sleep
+  Talk (a faster Disable on any move); the sampler then redraws that side's fields for the same
+  move (`disabled_state` does not change a plain move), the same law, so harmless.
+- B11-11 (batch 11, second review; doubles rule 1) `order.takeover_possible` and
+  `outcome.replacement_possible` take `side` and `foe` (the battler whose Encore, Disable or
+  Imprison can land first) and return one `bool`, as `can_call_encore` takes `side`; neither
+  computes `1 - side` or `uses_move[::-1]` any more. The callers (`enumerate.call_consistent`,
+  `enumerate.call_laws`, `outcome.sample_outcome`) name the foe, stacking over the two sides.
+- B11-12 (batch 11, second review; Kaizo check) The Kaizo ROM's Expert_Encore and its encourage
+  table are vanilla. Read with tools/rom (`RomFiles.overlay(14)` of the vanilla ROM and the
+  cached Kaizo ROM, `SymbolMap` of the decomp map): gTrainerAITable starts at overlay14
+  0x022248A4 (sized 0 in the map; compared up to the next sized symbol, 0x0222EE60, 10607
+  words). One word differs, 0x022249CC (0x1A -> 0x57: rom_diff.md's Levitate -> Dry Skin compare,
+  script.s:78); Expert_Encore (script.s:3177-3200, incl. IfRandomLessThan 30 at :3192) is
+  byte-equal. Expert_Encore_EncouragedMoveEffects (script.s:3202-3285) is found once in each ROM,
+  at 0x022292D8, as `commands.ENCORE_ENCOURAGED_EFFECTS` (82 entries) then TABLE_END. Script
+  (not kept): _scratch encore_rom.py, `uv run --group rom`.
