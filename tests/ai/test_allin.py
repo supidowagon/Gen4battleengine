@@ -147,16 +147,19 @@ def _distinct(actions) -> int:
 TRIES = 5
 
 
-def _pick(kaizo_tables, candidates, flags: int, seed: int):
+def _pick(kaizo_tables, candidates, flags: int, seed: int, *, fallback: bool = False):
     """``(trainer, party, t, states, keys, own)``: the first of ``flags``' first ``TRIES``
     candidate fights whose own layout accepts decisions with more than one distinct action
-    on its batch (``_own``), so comparing ALLIN's actions to it tests a choice; ``None``
-    when none does."""
+    on its batch (``_own``), so comparing ALLIN's actions to it tests a choice. When none
+    does: ``None``, or with ``fallback`` the first candidate's run (its refusals and its one
+    action are still ALLIN's to repeat)."""
+    first = None
     for trainer, party in candidates[flags][:TRIES]:
-        run = _own(kaizo_tables, trainer, party, seed)
-        if _distinct(run[3][0]) > 1:
-            return (trainer, party, *run)
-    return None
+        run = (trainer, party, *_own(kaizo_tables, trainer, party, seed))
+        if _distinct(run[5][0]) > 1:
+            return run
+        first = first or run
+    return first if fallback else None
 
 
 def _runs(picked: dict) -> dict:
@@ -211,14 +214,16 @@ def cover_runs(cover_picks):
     return _runs(cover_picks)
 
 
-def _same_actions(runs) -> None:
+def _same_actions(runs, choices=None) -> None:
+    """ALLIN's actions are the fight's own layout's for every key, refusals included; on the
+    ``choices`` flag sets (default: every one) the accepted decisions take more than one
+    action, so the match is a choice ALLIN repeats, not one fixed action or a refusal."""
     for flags, (trainer, _, (want, _), (got, _)) in runs.items():
         want, got = np.asarray(want), np.asarray(got)
         bad = np.flatnonzero(got != want)
         assert not bad.size, (trainer.name, f"{flags:#x}", bad[:5], want[bad[:5]], got[bad[:5]])
-        # Per fight: its accepted decisions take more than one action, so the match is a
-        # choice ALLIN repeats, not one fixed action or a refusal.
-        assert _distinct(want) > 1, (trainer.name, f"{flags:#x}", np.unique(want))
+        if choices is None or flags in choices:
+            assert _distinct(want) > 1, (trainer.name, f"{flags:#x}", np.unique(want))
 
 
 def test_the_cover_holds_every_bit_on_and_off(kaizo_tables, cover_picks):
@@ -241,12 +246,15 @@ def test_allin_picks_the_fights_own_action(cover_runs):
 
 @pytest.mark.slow
 def test_allin_picks_the_fights_own_action_for_every_flag_set(kaizo_tables, candidates):
-    # Every flag set with a picked fight (_pick); a set whose first TRIES fights are all
-    # refused or take one action has no choice to compare.
-    picked = {f: _pick(kaizo_tables, candidates, f, 100 + f) for f in sorted(candidates)}
-    picked = {f: p for f, p in picked.items() if p is not None}
-    assert ROARK_FLAGS in picked
-    _same_actions(_runs(picked))
+    # Every flag set: its picked fight (_pick), else its first candidate, whose refusals and
+    # single action ALLIN must repeat too (it refuses exactly where the fight's own layout
+    # refuses). The more-than-one-action check holds where _pick found a fight.
+    picked = {
+        f: _pick(kaizo_tables, candidates, f, 100 + f, fallback=True) for f in sorted(candidates)
+    }
+    choices = {f for f, p in picked.items() if _distinct(p[5][0]) > 1}
+    assert ROARK_FLAGS in choices
+    _same_actions(_runs(picked), choices)
 
 
 def test_a_masked_flag_script_consumes_no_read(kaizo_tables, cover_runs):
