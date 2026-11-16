@@ -1013,8 +1013,8 @@ def read_radix(kind: int) -> int:
 # stays well under this (tests/ai/test_kaizo_outcome.py test_slot_reads_fit_*). More raises (policy._loose_reads). Tests only, but each column
 # costs compile memory in every loose program, so the headroom is kept modest. E1 ruling G-39
 # adds a column per move each damage command estimates: four per FlagMoveDamageScore, one per
-# IfCurrentMoveKills, five per IfBattlerDealsMoreDamage, CALC_DRAWS per
-# IfPartyMemberDealsMoreDamage.
+# IfCurrentMoveKills, five per IfBattlerDealsMoreDamage, MOVES * (1 + SLOTS) = 28 per
+# IfPartyMemberDealsMoreDamage (the active's four moves, then each party slot's four).
 LOOSE_READS = 160
 
 

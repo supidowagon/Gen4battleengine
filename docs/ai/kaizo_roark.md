@@ -1260,7 +1260,8 @@ The user chose one transcription in two program shapes (`ai.layout` module docst
 - **Bounds.** `tools/ai_read_bounds.py` counts these reads (`read_bounds.DRAWN_READ_BOUNDS` for
   a fight with a drawing move, keyed also by whether the scored move draws; Copycat's
   `IfBattlerDealsMoreDamage` always, the player's move being unknown to the layout). Seventeen
-  Kaizo fights' bounds grow by 1 or 2; the widest, Barry #6 (479-481), reads 11 (8253 scorings),
+  Kaizo fights' bounds grow by 1 or 2; the widest drawing fight, Barry #6 (479-481), reads 11 (8253 scorings; the widest overall,
+  Jason 82 and Danny 725, read 14),
   all within `WIDTH_CAP`.
 - **The loose oracle** draws every `RandNext` of every estimate as its own digit
   (`ReadKind.CALC_PSYWAVE`, `CALC_MAGNITUDE`), including the dead ones, and computes each command
