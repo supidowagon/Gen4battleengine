@@ -305,6 +305,41 @@ SITE_N: dict[int, int] = {
     6281: 64,  # Expert_StealthRock_TryScorePlus1: with Roar or Whirlwind (since batch 17)
     # E2 batch 10: the charge-turn moves.
     4058: 80,  # Expert_ChargeTurnWithInvuln_TryScorePlus1 (+1 when it does NOT jump)
+    # E1 prep batch P1 (on E2's state)
+    6405: 170,  # EvalAttack_TryScorePlus4: Future Sight's kill bonus
+    5053: 10,  # Expert_MetalBurst, 30 % HP or less
+    5058: 100,
+    5062: 192,
+    5070: 100,
+    5075: 100,
+    2453: 100,  # Expert_StatusAccuracyDown
+    2458: 80,
+    2463: 70,
+    2468: 70,
+    2473: 128,
+    2479: 128,
+    2484: 70,
+    2492: 70,
+    2204: 100,  # Expert_StatusEvasionUp
+    2209: 128,
+    2215: 80,
+    2218: 50,
+    2223: 70,
+    2228: 128,
+    2234: 128,
+    2240: 70,
+    2248: 70,
+    2821: 128,  # Expert_BindingMove
+    4577: 180,  # Expert_KnockOff
+    4638: 100,  # Expert_Imprison
+    # E1 prep batch P2 (on E2's state)
+    5563: 128,  # Expert_Copycat: an encouraged last move
+    5568: 32,  # Expert_Copycat_TryScorePlus2
+    5576: 80,  # Expert_Copycat_CheckMoveEncouraged
+    # E1 prep batch P3: Baton Pass
+    3680: 80,  # Expert_BatonPass_HighStatStage_TryScorePlus2
+    6577: 80,  # BatonPass_Main: the attacker without a Baton Pass effect
+    6591: 20,  # BatonPass_EvalMove: +3
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -496,6 +531,22 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Roost: Recover's labels. turnFlags.roosting is cleared before command selection
         # (BattleSystem_SetupNextTurn, battle_lib.c:2229-2231), so scoring never sees it set.
         214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Basic_CheckCanRecoverHP (:253); Expert_Recovery
+        # E1 prep batch P1, on E2's state (ingrain, mean_look, imprison/ed, ai_item_known,
+        # future_sight; docs/ai/kaizo_roark.md 5.21)
+        23,  # ACC_DOWN: Basic_CheckLowStatStage_Accuracy (:149); Expert_StatusAccuracyDown
+        106,  # PREVENT_ESCAPE: Basic_CheckMeanLook (:193); Expert_BindingMove (:1698)
+        108,  # EVA_UP_2_MINIMIZE: Basic_CheckHighStatStage_Evasion (:195); Expert_StatusEvasionUp
+        148,  # HIT_IN_3_TURNS: Basic_CheckFutureSight (:220); EvalAttack :6396 kill bonus
+        188,  # REMOVE_HELD_ITEM: Basic_CheckCanRemoveItem (:240); Expert_KnockOff (:1740)
+        192,  # MAKE_SHARED_MOVES_UNUSEABLE: Basic_CheckCanImprison (:242); Expert_Imprison
+        227,  # METAL_BURST: Basic_CheckMetalBurst (:261); Expert_MetalBurst (:1770)
+        # E1 prep batch P2, on E2's state (last_move, Copycat's call)
+        242,  # USE_LAST_USED_MOVE: Basic_CheckCopycat (:271); Expert_Copycat (:1785)
+        181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Basic_CheckAlreadyIngrained (:236); Expert_Ingrain
+        127,  # PASS_STATS_AND_STATUS: Basic_CheckBatonPass (:208); Expert_BatonPass (:1705)
+        # E1 prep batch P4 (Gardenia)
+        176,  # BOOST_ALLY_POWER_BY_50_PERCENT: Basic_CheckHelpingHand (:234); no Expert entry
+        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln (:1716), no roll
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -597,6 +648,15 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     28: ("Expert_ForceSwitch", 1650),
     79: ("Expert_Substitute", 1684),
     214: ("Expert_Recovery", 1758),
+    23: ("Expert_StatusAccuracyDown", 1646),
+    106: ("Expert_BindingMove", 1698),
+    108: ("Expert_StatusEvasionUp", 1699),
+    188: ("Expert_KnockOff", 1740),
+    192: ("Expert_Imprison", 1744),
+    227: ("Expert_MetalBurst", 1770),
+    242: ("Expert_Copycat", 1785),
+    181: ("Expert_Ingrain", 1734),
+    127: ("Expert_BatonPass", 1705),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -685,6 +745,16 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         28,  # FORCE_SWITCH: Expert_ForceSwitch
         79,  # SET_SUBSTITUTE: Expert_Substitute
         214,  # HEAL_HALF_REMOVE_FLYING_TYPE: Expert_Recovery
+        23,  # ACC_DOWN: Expert_StatusAccuracyDown
+        106,  # PREVENT_ESCAPE: Expert_BindingMove
+        108,  # EVA_UP_2_MINIMIZE: Expert_StatusEvasionUp
+        188,  # REMOVE_HELD_ITEM: Expert_KnockOff
+        192,  # MAKE_SHARED_MOVES_UNUSEABLE: Expert_Imprison
+        227,  # METAL_BURST: Expert_MetalBurst
+        242,  # USE_LAST_USED_MOVE: Expert_Copycat
+        181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Expert_Ingrain (no score change)
+        127,  # PASS_STATS_AND_STATUS: Expert_BatonPass
+        151,  # SKIP_CHARGE_TURN_IN_SUN: Expert_ChargeTurnNoInvuln
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
@@ -833,13 +903,17 @@ def sample_ai_outcome(
     over ``switch_sites(tables, state, layout.switch_sites)``). ``layout``: a per-slot layout
     draws ``script_rolls`` as ``uint8[MOVES, layout.slot_reads]``, each entry a uniform
     ``RandNext() % 256`` (each read compares its own draw: module docstring), and leaves
-    ``ability_guess`` 0; the default, and any flat layout, is the vanilla layout."""
+    ``ability_guess`` 0; the default, and any flat layout, is the vanilla layout. Read column
+    i is drawn from its own key (``fold_in(key, i)``), so a key gives the same reads whatever
+    the layout's bound: the fight's own layout and ``layout.ALLIN`` see the same draws."""
     sites = SWITCH_SITES if layout is None else layout.switch_sites
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
     if layout is not None and layout.per_slot_sites:
-        rolls = jax.random.randint(k[1], (MOVES, layout.slot_reads), 0, 256, dtype=_I32)
+        rolls = jax.vmap(
+            lambda i: jax.random.randint(jax.random.fold_in(k[1], i), (MOVES,), 0, 256, dtype=_I32)
+        )(jnp.arange(layout.slot_reads)).T
         script_rolls, guess = rolls.astype(jnp.uint8), jnp.zeros((), _I8)
     else:
         rolls = jax.random.randint(k[1], (MAX_SCRIPT_ROLLS,), 0, 256, dtype=_I32)

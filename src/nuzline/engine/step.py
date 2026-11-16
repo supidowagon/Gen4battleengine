@@ -127,6 +127,7 @@ from nuzline.engine.effects import (
     imprison_fails,
     ingrain_anchors,
     kings_rock_flinch,
+    know_ability,
     life_orb_recoil,
     locked_onto,
     pivot_item,
@@ -146,6 +147,7 @@ from nuzline.engine.effects import (
     unlock_move,
     uproar_on,
     weather_fails,
+    yawn_blocks,
     yawn_sleep,
 )
 from nuzline.engine.hooks import (
@@ -1157,6 +1159,19 @@ def _use_move(
         & ~semi_miss
     )
     state = reveal_ability(state, target_side, target, OHKO_BLOCKED, sturdy_shown)
+    # Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript still runs on
+    # MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503) for a living defender: subscript_yawn.s:
+    # 5-9 test the blocking abilities before its miss test (:21) and print "made it ineffective"
+    # with TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806).
+    # Protect returns before the semi test (bcp.c:3007-3013). The hit path is effects._yawn.
+    yawn_shown = (
+        semi_miss
+        & ~blocked
+        & (tables.move_effect[used] == EffectId.YAWN)
+        & (state.hp[target_side, target] > 0)
+        & yawn_blocks(tables, state, side, target_side)[1]
+    )
+    state = know_ability(state, target_side, target, yawn_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The

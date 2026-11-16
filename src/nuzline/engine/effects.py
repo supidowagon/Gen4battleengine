@@ -1316,7 +1316,8 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
 def _yawn(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Yawn (effect_script_0187.s: a direct ``CHECK_HP | TO_DEFENDER`` subscript_yawn.s for a
     living defender on a move that connected): unless ``yawn_blocks``, the defender's
-    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged."""
+    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged. On a
+    semi-invulnerable miss the subscript still runs and tags it (``step._use_move``, B10-13)."""
     run = (h.effect == _E.YAWN) & h.landed & _alive(state, h.target_side, h.target)
     fails, by_ability = yawn_blocks(tables, state, h.side, h.target_side)
     state = know_ability(state, h.target_side, h.target, run & by_ability)

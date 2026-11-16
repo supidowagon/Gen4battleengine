@@ -102,8 +102,9 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power (_SWITCH_REFUSED): moves whose
-# decomp handling the switch check does not model.
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost and Ingrain
+# (_SWITCH_REFUSED): moves whose decomp handling the switch check does not model. Roost and
+# Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags).
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -115,7 +116,9 @@ _SWITCH_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
 }
-_SWITCH_REFUSED = {k: v for k, v in _SWITCH_MOVES.items() if k != "Hidden Power"}
+_SWITCH_REFUSED = {
+    k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
+}
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
@@ -143,6 +146,14 @@ _AI_MOVE_IDS = {
     "Feint": 364,
     "Shadow Force": 467,
     "Focus Punch": 264,
+    # BatonPass_Main (script.s:6581-6588, :6615-6618), E1 prep batch P3.
+    "Swords Dance": 14,
+    "Dragon Dance": 349,
+    "Calm Mind": 347,
+    "Nasty Plot": 417,
+    "Baton Pass": 226,
+    "Protect": 182,
+    "Detect": 197,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
@@ -159,6 +170,20 @@ _CALC_DAMAGE_MOVES = {
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
 # Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
 _MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Weather Ball": 311}
+# ai/commands.py COPYCAT_ENCOURAGED_MOVES: Expert_Copycat_EncouragedMoves (script.s:5582-5630).
+_COPYCAT_ENCOURAGED_MOVES = {
+    "Sleep Powder": 79, "Lovely Kiss": 142, "Spore": 147, "Hypnosis": 95, "Sing": 47,
+    "GrassWhistle": 320, "Shadow Punch": 325, "Sand-Attack": 28, "SmokeScreen": 108,
+    "Toxic": 92, "Guillotine": 12, "Horn Drill": 32, "Fissure": 90, "Sheer Cold": 329,
+    "Cross Chop": 238, "Aeroblast": 177, "Confuse Ray": 109, "Sweet Kiss": 186,
+    "Screech": 103, "Cotton Spore": 178, "Scary Face": 184, "Fake Tears": 313,
+    "Metal Sound": 319, "Thunder Wave": 86, "Glare": 137, "PoisonPowder": 77,
+    "Shadow Ball": 247, "DynamicPunch": 223, "Hyper Beam": 63, "ExtremeSpeed": 245,
+    "Thief": 168, "Covet": 343, "Attract": 213, "Swagger": 207, "Torment": 259,
+    "Flatter": 260, "Trick": 271, "Superpower": 276, "Skill Swap": 285,
+    "Psycho Shift": 375, "Power Swap": 384, "Guard Swap": 385, "Sucker Punch": 389,
+    "Heart Swap": 391, "Switcheroo": 415, "Captivate": 445, "Dark Void": 464,
+}  # fmt: skip
 
 
 def _policy_tables(scope: str) -> tuple[Constant, ...]:
@@ -180,7 +205,7 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
             "nuzline.ai.policy._STATE_MOVE_IDS",
             "move",
             scope,
-            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Roost", "Magnet Rise", "Ingrain")},
+            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Magnet Rise")},
         ),
     )
 
@@ -237,6 +262,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Flower Gift": 122,
             "Solar Power": 94,
             "Suction Cups": 21,
+            "Stall": 100,
+            "Sticky Hold": 60,
+            "Keen Eye": 51,
         },
     ),
     *_table(
@@ -490,6 +518,8 @@ CONSTANTS: tuple[Constant, ...] = (
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
     # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
+    # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
+    Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
     Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
@@ -561,6 +591,7 @@ CONSTANTS: tuple[Constant, ...] = (
     # name-checked against vanilla only.
     *_table("nuzline.ai.commands.CALC_DAMAGE_MOVES", "move", _P, _CALC_DAMAGE_MOVES),
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
+    *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
     # decomp tests Levitate a second time, which never matches (quirk).
     Constant("nuzline.ai.layout.VANILLA", "ability", 26, "Levitate", _P),

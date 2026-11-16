@@ -229,6 +229,7 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
         3: Support.EXACT,
         4: Support.EXACT,
         5: Support.EXACT,
+        6: Support.EXACT,  # AI_FLAG_BATON_PASS, E1 prep batch P3
         8: Support.EXACT,
         9: Support.EXACT,
     },
