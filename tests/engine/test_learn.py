@@ -91,15 +91,17 @@ def _prompted_move(tables, names, s, slot: int) -> str:
 
 
 def test_an_unsupported_offered_move_is_masked(tables, names):
-    """Ruling D10: Starly (four moves) prompted for Endeavor at 17, an UNSUPPORTED effect:
+    """Ruling D10: Shinx (four moves) prompted for Charge at 9, an UNSUPPORTED effect:
     every replacement is masked, giving up stays (coverage's ``learnable_moves`` relies on
-    it). Prompted for Double Team at 13 (supported), the replacements are open."""
-    starly = _mon(names, "Starly", 17, moves=("Tackle", "Growl", "Quick Attack", "Wing Attack"))
-    s = _advance(tables, _mark(_state(tables, names, starly), 0, 17))
-    assert bool(needs_learn(s)) and _prompted_move(tables, names, s, 0) == "Endeavor"
+    it). Prompted for Spark at 13 (supported), the replacements are open. (Starly's Endeavor
+    served here until E2 batch 10 modelled it, B10-5.)"""
+    shinx = _mon(names, "Shinx", 9, moves=("Tackle", "Leer", "Quick Attack", "Bite"))
+    assert int(tables.move_effect[names.move("Charge")]) == EffectId.UNSUPPORTED
+    s = _advance(tables, _mark(_state(tables, names, shinx), 0, 9))
+    assert bool(needs_learn(s)) and _prompted_move(tables, names, s, 0) == "Charge"
     assert _options(tables, s) == [False, False, False, False, True]
-    s = _advance(tables, _mark(_state(tables, names, starly), 0, 13))
-    assert _prompted_move(tables, names, s, 0) == "Double Team"
+    s = _advance(tables, _mark(_state(tables, names, shinx), 0, 13))
+    assert _prompted_move(tables, names, s, 0) == "Spark"
     assert _options(tables, s) == [True, True, True, True, True]
 
 
@@ -259,14 +261,14 @@ def test_a_seen_slot_and_the_pinned_slot_are_masked(tables, names):
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
 @pytest.mark.parametrize(
-    "move, effect", [("Sleep Talk", EffectId.SLEEP_TALK), ("Assist", EffectId.UNSUPPORTED)]
+    "move, effect", [("Sleep Talk", EffectId.SLEEP_TALK), ("Assist", EffectId.ASSIST)]
 )
 def test_moves_that_read_the_whole_move_list(request, game, move, effect):
     # Sleep Talk (BtlCmd_TrySleepTalk, battle_script.c:4907) and Assist (BtlCmd_TryAssist,
     # :6405) read the move list when they run, which a deferred learn could change (design
     # §3.3 (a)). Sleep Talk is modelled since E2 batch 5 (B5-n): order.invoked_move reads the
-    # user's ``moves`` at the use, the list the decomp reads then; Assist (the party's lists)
-    # stays UNSUPPORTED, so coverage refuses it, also as a learnable move.
+    # user's ``moves`` at the use, the list the decomp reads then; Assist likewise since E2
+    # batch 10 (B10-11): it reads the party's ``moves`` at the use.
     tables = request.getfixturevalue(game)
     names = request.getfixturevalue("names" if game == "tables" else "kaizo_names")
     assert int(tables.move_effect[names.move(move)]) == effect
