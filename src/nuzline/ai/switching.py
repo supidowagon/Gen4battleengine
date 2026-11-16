@@ -46,10 +46,13 @@ the defender: a Wonder Guard bench Pokemon is ``INEFFECTIVE`` against the player
 on its damaging turn (``damage.on_damaging_turn``: ``BattleContext_Init`` cleared
 ``SYSCTL_LAST_OF_MULTI_TURN``, so Fire Fang never is), which makes it a pass-1 candidate.
 
-The gates in steps 1, 2 and 9 are implemented from the state: trapped (``trapped >
-0``), Shadow Tag or Arena Trap on ``D``, Magnet Pull on ``D`` with ``A`` Steel type, no
-other living party member, and positive stages summing to 4 or more (which ends the
-check after the keep draws).
+The gates in steps 1, 2 and 9 are implemented from the state (``_layout``): ``A`` trapped,
+``statusVolatile & VOLATILE_CONDITION_TRAPPED`` (trainer_ai.c:3906), which is Bind's
+``VOLATILE_CONDITION_BIND`` (``trapped > 0``) or ``VOLATILE_CONDITION_MEAN_LOOK``
+(``mean_look``) (condition.h:77-78); ``A`` ingrained, ``moveEffectsMask &
+MOVE_EFFECT_INGRAIN`` (``ingrain``, :3907); Shadow Tag or Arena Trap on ``D`` (:3908-3909);
+Magnet Pull on ``D`` with ``A`` Steel type (:3910-3911); no other living party member; and
+positive stages summing to 4 or more (which ends the check after the keep draws).
 
 Effectiveness is the decomp's status mask, built in chart-row order
 (``tables.type_chart_order``): ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) for

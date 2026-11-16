@@ -1498,14 +1498,15 @@ def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiCont
 
 
 def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
-    """``LoadHeldItem`` (trainer_ai.c): ``battleMons[battler].heldItem``, the true item of
+    """``LoadHeldItem`` (trainer_ai.c:1891-1899): ``battleMons[battler].heldItem``, the true item of
     either side (unlike ``IfHeldItemEqualTo``)."""
     state, side = ctx.state, _side(battler)
     return ctx._replace(calc_temp=state.item[side, state.active[side]].astype(_I32))
 
 
 def if_not_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
-    """``IfNotMoveEffect`` (trainer_ai.c): the negation of ``IfMoveEffect``."""
+    """``IfNotMoveEffect`` (trainer_ai.c:718-730): the negation of ``IfMoveEffect``,
+    ``(moveEffectsMask & mask) == FALSE`` (:727)."""
     ctx = if_move_effect(ctx, battler, mask)
     return ctx._replace(jump=~ctx.jump)
 
@@ -1521,7 +1522,7 @@ def if_loaded_mask(ctx: AiContext, mask: int) -> AiContext:
 
 
 def if_loaded_not_mask(ctx: AiContext, mask: int) -> AiContext:
-    """``IfLoadedNotMask`` (trainer_ai.c): ``(calcTemp & mask) == 0``."""
+    """``IfLoadedNotMask`` (trainer_ai.c:822-832): ``(calcTemp & mask) == 0``."""
     return _jump(ctx, (ctx.calc_temp & mask) == 0)
 
 
