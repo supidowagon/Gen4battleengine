@@ -110,8 +110,8 @@ many are real). Decomp sources:
   ``subscript_type_resist_berry.s`` on every move hit taken during an action (``play_hit``,
   Pursuit's hit through it, and the confusion self-hit in ``step``): ``resist_berry``,
   ``resist_berry_damage``.
-* ``HIGH_CRIT`` only raises the crit stage ``sample_outcome`` uses; here the
-  engine reads ``outcome.crit``.
+* ``HIGH_CRIT`` only raises the crit stage; the engine reads ``outcome.crit`` with the odds
+  at the hit (``outcome.crit_lands``).
 * Stealth Rock: ``effect_script_0266.s`` sets the flag on the defender's side
   (fails if already set); the switch-in damage is ``stealth_rock_damage``.
 * Bind (``TRAP``): ``effect_script_0042.s`` -> ``subscript_bind_start.s``, an
@@ -290,7 +290,7 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
-from nuzline.engine.outcome import Outcome
+from nuzline.engine.outcome import Outcome, crit_lands
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
@@ -740,6 +740,16 @@ def self_defender(tables: Tables, move, ghost=False) -> jnp.ndarray:
     return in_range | targets_user(tables, move, ghost)
 
 
+def defender_side(tables: Tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
+    """``int32``: the side of ``BattleSystem_Defender``'s defender (battle_lib.c:1599-1727) for
+    ``side``'s ``move`` aimed at ``target_side``: the user's own for a ``self_defender`` move (in
+    singles RANGE_ALLY and RANGE_USER_OR_ALLY give the attacker, :1670-1684; in doubles they give
+    the chosen partner, which the doubles resolver replaces), else ``target_side``. Counter's
+    later defender (the last hitter) is the caller's."""
+    own = self_defender(tables, move, ghost_user(state, side))
+    return jnp.where(own, jnp.asarray(side, _I32), jnp.asarray(target_side, _I32))
+
+
 def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
     """``BattleControllerPlayer_CheckMoveHitOverrides`` (battle_controller_player.c:
     3001-3014): a protecting defender stops ``move`` when it has ``MOVE_FLAG_CAN_PROTECT``
@@ -1063,10 +1073,11 @@ def acupressure_valid(state: BattleState, side) -> jnp.ndarray:
     return state.stages[side][idx] < STAGE_MAX
 
 
-def acupressure_fails(state: BattleState, side) -> jnp.ndarray:
-    """``bool``: effect_script_0226.s fails (MOVE_STATUS_FAILED, :8-9): the defender (the user in
-    singles) is behind a substitute (:5, CheckSubstitute) or has no stage below +6 (:6)."""
-    return (state.substitute_hp[side] != 0) | ~jnp.any(acupressure_valid(state, side))
+def acupressure_fails(state: BattleState, defender) -> jnp.ndarray:
+    """``bool``: effect_script_0226.s fails (MOVE_STATUS_FAILED, :8-9): its ``defender``'s side
+    (``defender_side``: the user in singles) is behind a substitute (:5, CheckSubstitute on
+    BTLSCR_DEFENDER) or has no stage below +6 (:6, BoostRandomStatBy2 on the defender)."""
+    return (state.substitute_hp[defender] != 0) | ~jnp.any(acupressure_valid(state, defender))
 
 
 def acupressure_stat(state: BattleState, side, draw) -> jnp.ndarray:
@@ -1082,13 +1093,16 @@ def acupressure_stat(state: BattleState, side, draw) -> jnp.ndarray:
 
 
 def _acupressure(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """Acupressure (effect_script_0226.s; its defender is the user, RANGE_USER_OR_ALLY in singles):
-    unless ``acupressure_fails``, a direct TO_DEFENDER +2 (MOVE_SUBSCRIPT_PTR_ATTACK_UP_2_STAGES +
-    the stat) on ``acupressure_stat``; the stat is below +6, so it rises (B12-9)."""
-    cond = (h.effect == _E.ACUPRESSURE) & h.landed & _alive(state, h.side, h.user)
-    cond = cond & ~acupressure_fails(state, h.side)
-    stat = acupressure_stat(state, h.side, outcome.acupressure[h.side])
-    return change_stage(state, h.side, stat, 2, cond)
+    """Acupressure (effect_script_0226.s): on its defender (RANGE_USER_OR_ALLY, ``defender_side``:
+    the user in singles), unless ``acupressure_fails``, a direct TO_DEFENDER +2
+    (MOVE_SUBSCRIPT_PTR_ATTACK_UP_2_STAGES + the stat) on ``acupressure_stat``; the stat is below
+    +6, so it rises (B12-9). The draw is the acting battler's (``Outcome.acupressure[h.side]``)."""
+    defender = defender_side(tables, state, h.side, h.target_side, h.move)
+    cond = (h.effect == _E.ACUPRESSURE) & h.landed
+    cond = cond & _alive(state, defender, state.active[defender])
+    cond = cond & ~acupressure_fails(state, defender)
+    stat = acupressure_stat(state, defender, outcome.acupressure[h.side])
+    return change_stage(state, defender, stat, 2, cond)
 
 
 def _power_trick(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1347,9 +1361,12 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.FOCUS_ENERGY) & (state.focus_energy[side] != 0))
         # effect_script_0265.s:5-9 (MOVE_STATUS_NO_MORE_WORK).
         | ((effect == _E.CAPTIVATE) & captivate_fails(tables, state, side, target_side)[0])
-        # effect_script_0226.s:5, BtlCmd_BoostRandomStatBy2's jump (MOVE_STATUS_FAILED); its
-        # defender is the user (RANGE_USER_OR_ALLY in singles).
-        | ((effect == _E.ACUPRESSURE) & acupressure_fails(state, side))
+        # effect_script_0226.s:5, BtlCmd_BoostRandomStatBy2's jump (MOVE_STATUS_FAILED), on its
+        # defender (RANGE_USER_OR_ALLY: defender_side, the user in singles).
+        | (
+            (effect == _E.ACUPRESSURE)
+            & acupressure_fails(state, defender_side(tables, state, side, target_side, move))
+        )
         # subscript_rest.s:73 (NO_MORE_WORK), BtlCmd_TryWish (FAILED), subscript_recover_psn_prz_
         # brn.s:15-16 and BtlCmd_CheckCanShareStatus (FAILED).
         | ((effect == _E.REST) & rest_fails(tables, state, side)[0])
@@ -2404,7 +2421,9 @@ def play_hit(
         state,
         side,
         move,
-        (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side),
+        # The crit draw read with the odds at this hit (battle_lib.c:7105-7132).
+        crit_lands(tables, state, side, move, outcome.crit[side, hit_index])
+        & ~armored(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),

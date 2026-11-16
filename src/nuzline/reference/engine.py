@@ -360,6 +360,27 @@ def _armored(s: RefState, attacker: int, defender: int) -> bool:
     return _ignorable(s, attacker, defender) in (AbilityId.SHELL_ARMOR, AbilityId.BATTLE_ARMOR)
 
 
+# sCriticalStageRates (lib.c:7097-7103): 1 in N at stage 0..4.
+_CRIT_RATES = (16, 8, 4, 3, 2)
+
+
+def _crits(tables, s: RefState, side: int, move: int, value: int) -> bool:
+    """``BattleSystem_CalcCriticalMulti`` (lib.c:7105-7132) at the hit: the stage from the
+    attacker's Focus Energy (+2), held item (+1 crit item, +2 on its species), the move's
+    criticalStage (HIGH_CRIT, CRIT_UP: +1 each) and Super Luck (+1), capped at 4, read now; the
+    Outcome draw ``value`` crits when ``(value - 1) % rate == 0`` (0 never). Armor and Lucky
+    Chant are the caller's."""
+    mon = _active(s, side)
+    stage = int(_t(tables, "move_effect", move) == EffectId.HIGH_CRIT)
+    stage += int(bool(_t(tables, "move_flags", move) & MoveFlag.CRIT_UP))
+    stage += int(mon.ability == AbilityId.SUPER_LUCK)
+    stage += 2 * int(bool(s.sides[side].focus_energy))
+    if _t(tables, "item_effect", mon.item) == ItemId.CRIT_ITEM:
+        needs = _t(tables, "item_param", mon.item, 1)
+        stage += 1 if needs == 0 else 2 if needs == mon.species else 0
+    return value > 0 and (value - 1) % _CRIT_RATES[min(stage, 4)] == 0
+
+
 def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int) -> bool:
     """``ApplyTypeChart``'s ``MOVE_STATUS_LEVITATED`` (lib.c:2600-2603): a Ground move against
     Levitate as the attacker sees it; part of ``MOVE_STATUS_IMMUNE``."""
@@ -2899,7 +2920,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             s,
             side,
             move,
-            o.crit[side][hit] != 0 and not _armored(s, side, target),
+            _crits(tables, s, side, move, o.crit[side][hit]) and not _armored(s, side, target),
             o.roll[side][hit],
             # Payback: movePower x2 once the target acted (script.c:7198-7209, B9-12).
             power_mul=20
@@ -3607,7 +3628,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
             # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
             would = _move_damage(
-                tables, s, side, move, o.crit[side][0] != 0 and not _armored(s, side, 1 - side),
+                tables, s, side, move,
+                _crits(tables, s, side, move, o.crit[side][0]) and not _armored(s, side, 1 - side),
                 o.roll[side][0],
             )  # fmt: skip
             cap = _divide(_active(s, 1 - side).max_hp, 2)
@@ -3898,7 +3920,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if _holds_choice(tables, s, pursuer):
         s.sides[pursuer].choice_lock = move
     o = turn.outcome
-    crit = o.crit[pursuer][0] != 0 and not _armored(s, pursuer, side)
+    crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _armored(s, pursuer, side)
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
     target_sd = s.sides[side]

@@ -4,6 +4,7 @@ engine (``assert_matches_reference``)."""
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -150,6 +151,45 @@ def test_haze_resets_every_stage_and_focus_energy(tables, names):
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert not np.asarray(out.stages)[:, 1:].any()
     assert not np.asarray(out.focus_energy).any()
+
+
+def test_a_faster_haze_leaves_the_slower_focus_energy_user_the_base_crit_rate(tables, names):
+    """BattleSystem_CalcCriticalMulti reads statusVolatile at the CalcCrit (battle_lib.c:7119-7123,
+    :7132): a faster Haze (battle_script.c:3544) clears Focus Energy first, so the slower user's
+    Tackle crits 1 in 16; with a faster Tackle instead, 1 in 4. Draw 5 (r = 4) crits at 1 in 4
+    only."""
+    from nuzline.engine.step import step
+
+    s = _state(tables, names, ("Slowpoke", "Tackle"), ("Zubat", "Haze"))
+    s = s._replace(focus_energy=s.focus_energy.at[0].set(1))
+    tackle = _state(tables, names, ("Slowpoke", "Tackle"), ("Zubat", "Tackle"))
+    tackle = tackle._replace(focus_energy=tackle.focus_energy.at[0].set(1))
+    acts = jnp.asarray([0, 0], jnp.int32)
+    run = jax.jit(step)  # the step assert_matches_reference compiles (one program)
+    for state, rate in ((s, 16), (tackle, 4)):
+        outcomes, probs = enumerate_turn(tables, state, acts)
+        # One row per (accuracy class, crit value) of the Tackle, at roll 15: the crit reads only
+        # them. A crit shows as more damage to Zubat than the same row with crit 0.
+        keys = np.stack([np.asarray(outcomes.hit)[:, 0, 0], np.asarray(outcomes.crit)[:, 0, 0]])
+        _, first, inverse = np.unique(keys.T, axis=0, return_index=True, return_inverse=True)
+        weight = np.bincount(inverse.ravel(), weights=np.asarray(probs, float))
+        full = int(state.max_hp[1, 0])
+        landed, crit = [], []
+        for row in first:
+            o = jax.tree.map(lambda f, i=row: f[i], outcomes)
+            o = o._replace(roll=O.roll)
+            hp = int(run(tables, state, acts, o).hp[1, 0])
+            base = int(run(tables, state, acts, o._replace(crit=O.crit)).hp[1, 0])
+            landed.append(base < full)
+            crit.append(hp < base)
+        p_crit = float(np.sum(weight[np.asarray(crit)])) / float(np.sum(weight[np.asarray(landed)]))
+        assert abs(p_crit - 1 / rate) < 1e-9, (rate, p_crit)
+    five = O._replace(crit=O.crit.at[0, 0].set(5))
+    hazed = assert_matches_reference(tables, s, acts, five)
+    hit = assert_matches_reference(tables, tackle, acts, five)
+    plain = assert_matches_reference(tables, s, acts, O)
+    assert int(hazed.hp[1, 0]) == int(plain.hp[1, 0])  # no crit after the Haze
+    assert int(hit.hp[1, 0]) < int(plain.hp[1, 0])  # a crit at Focus Energy's 1 in 4
 
 
 def test_psych_up_copies_the_stages_and_ors_focus_energy(tables, names):

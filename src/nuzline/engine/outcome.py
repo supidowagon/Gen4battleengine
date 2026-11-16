@@ -17,7 +17,7 @@ defending side (its contact ability: Static, Poison Point, Flame Body, Cute Char
 (``sample_outcome``).
 
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The
-crit odds are read from the state at the start of the turn. Rolls whose effect
+crit draw is read with the odds at the hit (``crit_lands``). Rolls whose effect
 depends on state that can change mid-turn (status, the defender's ability) are drawn
 unconditionally and gated by ``step``, which keeps their probabilities exact.
 
@@ -96,7 +96,7 @@ _CRIT_ODDS = jnp.array([16, 8, 4, 3, 2], _I32)
 class Outcome(NamedTuple):
     speed_tie: jnp.ndarray  # int8[], 0 = player first on equal speed
     hit: jnp.ndarray  # int8[2,5], index 0: the accuracy roll's class (module docstring)
-    crit: jnp.ndarray  # int8[2,5]
+    crit: jnp.ndarray  # int8[2,5], the crit draw's class (CRIT_DRAWS): 0 never, 1 always crits
     roll: jnp.ndarray  # int8[2,5], 0-15 (85-100 %)
     secondary: jnp.ndarray  # int8[2,5], the attacker's own secondary effect
     contact_proc: jnp.ndarray  # int8[2,5], the defender's contact ability
@@ -711,36 +711,112 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
     return jnp.where(misses_all, 0, low)
 
 
-def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
-    """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
-    battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
-    the stage, and so do the crit items (``ItemId.CRIT_ITEM``) and Focus Energy (+2; read at the
-    turn start like the rest, B12-4). Lucky
-    Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
-    are applied by ``sample_outcome``. Nature Power's are its called move's
-    (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
-    actions = jnp.asarray(actions, _I32)
-    if moves is None:
-        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
-    stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
+def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+    """``int32``: ``side``'s ``move`` crits 1 in N with ``state`` as it is when the move runs
+    (``BattleSystem_CalcCriticalMulti``, battle_lib.c:7105-7133, reads the attacker's held item,
+    species, statusVolatile and ability at its ``CalcCrit``): ``HIGH_CRIT`` (+1, the script's
+    criticalStage), Focus Energy (+2, :7123), the crit items (``ItemId.CRIT_ITEM``: +1, or +2 on
+    their species, :7124-7128), Super Luck (+1, :7126), capped at 4 (:7130)."""
+    stage = (tables.move_effect[move] == EffectId.HIGH_CRIT).astype(_I32)
     # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
     # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
-    stage = stage + ((tables.move_flags[moves].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
+    stage = stage + ((tables.move_flags[move].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
+    mon = state.active[side]
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
-    super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
-    stage = stage + super_luck.astype(_I32)
+    stage = stage + (state.ability[side, mon] == AbilityId.SUPER_LUCK).astype(_I32)
     # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
-    stage = stage + 2 * (state.focus_energy != 0).astype(_I32)
-    # :7123-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
+    stage = stage + 2 * (state.focus_energy[side] != 0).astype(_I32)
+    # :7124-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
     # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
-    item = state.item[jnp.arange(2), state.active]
-    species = state.species[jnp.arange(2), state.active].astype(_I32)
+    item = state.item[side, mon]
+    species = state.species[side, mon].astype(_I32)
     needs = tables.item_param[item, 1].astype(_I32)
     held = tables.item_effect[item] == ItemId.CRIT_ITEM
     stage = (
         stage + jnp.where(held & (needs == 0), 1, 0) + jnp.where(held & (needs == species), 2, 0)
     )
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
+
+
+def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
+    """``int32[2]``: each side's move crits 1 in N with ``state`` (``side_crit_odds``), the
+    turn-start odds. Lucky Chant on the defending side and the target's Battle Armor / Shell
+    Armor (``armored``) are applied by ``sample_outcome``. Nature Power's are its called move's
+    (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
+    actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    return jnp.stack([side_crit_odds(tables, state, side, moves[side]) for side in (0, 1)])
+
+
+# The crit draw ``RandNext() % sCriticalStageRates[stage]`` (battle_lib.c:7132) is taken when the
+# move runs, with the odds of that moment (B12-4 review). ``Outcome.crit`` holds one draw r in
+# [0, CRIT_DRAWS) = lcm(16, 8, 4, 3, 2), which serves every rate (uniform by the % n convention),
+# as r + 1 reduced to its class over the odds the hit can meet (``crit_class``); 0 never crits.
+# The hit crits when ``(value - 1) % odds == 0`` with the odds at the hit (``crit_lands``): a
+# hand-built 1 always crits.
+CRIT_DRAWS = 48
+# The odds variants of ``crit_variants``: turn start, Focus Energy cleared, held item removed,
+# both.
+CRIT_VARIANTS = 4
+# The moves that can change another battler's crit odds before its CalcCrit (``crit_variants``):
+# Haze clears every battler's Focus Energy (BtlCmd_ResetAllStatChanges, battle_script.c:3544),
+# Knock Off removes its target's held item (effects._knock_off). A new effect that sets or clears
+# another battler's Focus Energy, or changes its held item, species or ability, joins them with
+# its variant.
+CRIT_ODDS_EFFECTS = (EffectId.HAZE, EffectId.KNOCK_OFF)
+
+
+def crit_variants(
+    tables: Tables, state: BattleState, actions, moves=None
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[2, CRIT_VARIANTS], bool[2, CRIT_VARIANTS])``: the crit odds each side's move can
+    have at its CalcCrit this turn, and which can occur. Variant 0 is the turn start; 1 has the
+    side's Focus Energy cleared (another battler's Haze, while the side holds it); 2 its held
+    item removed (another battler's Knock Off, while it holds a crit item); 3 both
+    (``CRIT_ODDS_EFFECTS``). Over-approximate: the other battler may move later, or fail."""
+    actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    sides = jnp.arange(2)
+    mons = state.active
+    no_focus = state._replace(focus_energy=jnp.zeros_like(state.focus_energy))
+    no_item = state._replace(item=state.item.at[sides, mons].set(0))
+    both = no_item._replace(focus_energy=no_focus.focus_energy)
+    odds = jnp.stack(
+        [crit_odds(tables, s, actions, moves) for s in (state, no_focus, no_item, both)], axis=1
+    )
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    # The other battler's move, per side ([::-1]: the other side's battler in singles).
+    haze = (uses_move & (effect == EffectId.HAZE))[::-1] & (state.focus_energy != 0)
+    crit_item = tables.item_effect[state.item[sides, mons]] == ItemId.CRIT_ITEM
+    knock = (uses_move & (effect == EffectId.KNOCK_OFF))[::-1] & crit_item
+    possible = jnp.stack([jnp.ones_like(haze), haze, knock, haze & knock], axis=1)
+    return odds, possible
+
+
+def crit_class(value, odds, possible) -> jnp.ndarray:
+    """The ``Outcome.crit`` value of draw ``value`` (r in [0, CRIT_DRAWS)) among the ``possible``
+    entries of ``odds`` (last axis; ``value`` broadcasts against the others): the smallest
+    r' + 1 that crits or not alike at each of them, or 0 when r crits at none of them."""
+    r = jnp.asarray(value, _I32)[..., None]
+    odds = jnp.maximum(jnp.asarray(odds, _I32), 1)
+    possible = jnp.asarray(possible, bool)
+    key = (r % odds == 0) & possible  # [..., V]
+    rs = jnp.arange(CRIT_DRAWS, dtype=_I32)
+    keys = ((rs[:, None] % odds[..., None, :]) == 0) & possible[..., None, :]  # [..., R, V]
+    same = jnp.all(keys == key[..., None, :], axis=-1)
+    return jnp.where(jnp.any(key, axis=-1), jnp.argmax(same, axis=-1) + 1, 0).astype(_I32)
+
+
+def crit_lands(tables: Tables, state: BattleState, side, move, value) -> jnp.ndarray:
+    """``bool``: ``Outcome.crit`` value ``value`` crits ``side``'s ``move`` at its CalcCrit with
+    ``state`` (``side_crit_odds`` of that moment, battle_lib.c:7132): ``(value - 1) % odds == 0``;
+    0 never. Lucky Chant and Battle Armor / Shell Armor are the caller's."""
+    value = jnp.asarray(value, _I32)
+    odds = side_crit_odds(tables, state, side, move)
+    return (value > 0) & ((value - 1) % odds == 0)
 
 
 def armored(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -978,7 +1054,16 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
     no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
-    crit = (draw(1, per_hit, crit_odds(tables, state, actions, moves)[:, None]) == 0) & ~no_crit
+    # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
+    # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
+    # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can
+    # meet (crit_class), from a fold_in key (every other field keeps its samples).
+    odds, odds_ok = crit_variants(tables, state, actions, moves)
+    moving = jnp.any(odds_ok & (odds != odds[:, :1]), axis=1)[:, None]
+    fixed = (draw(1, per_hit, odds[:, :1]) == 0).astype(_I32)
+    r = jax.random.randint(jax.random.fold_in(key, 41), per_hit, 0, CRIT_DRAWS, dtype=_I32)
+    crit = jnp.where(moving, crit_class(r, odds[:, None, :], odds_ok[:, None, :]), fixed)
+    crit = jnp.where(no_crit, 0, crit)
     # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
     chance = secondary_chance(tables, state, moves)[:, None]

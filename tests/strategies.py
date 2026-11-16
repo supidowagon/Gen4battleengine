@@ -1755,7 +1755,8 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         speed_tie=_flag(()),
         # 0-1 as a hit / miss flag, or any class value (outcome.hit_class: a roll 1-100).
         hit=st.one_of(_flag(hits), _ints(0, 100, hits)),
-        crit=_flag(hits),
+        # 0-1 as a never / always flag, or any draw class (outcome.crit_class: r + 1, r < 48).
+        crit=st.one_of(_flag(hits), _ints(0, 48, hits)),
         roll=_ints(0, 15, hits),
         secondary=_flag(hits),
         contact_proc=_flag(hits),

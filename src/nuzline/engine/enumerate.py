@@ -164,6 +164,7 @@ force never compresses.
 
 from __future__ import annotations
 
+import collections
 import itertools
 import math
 from collections.abc import Callable
@@ -190,6 +191,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import (
     acupressure_valid,
+    defender_side,
     psycho_shift_status,
     can_have_status,
     ingrain_anchors,
@@ -243,6 +245,7 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.outcome import (
     ACUPRESSURE_DRAWS,
+    CRIT_DRAWS,
     MAX_HITS,
     PRESENT_CUTS,
     PRESENT_HEAL,
@@ -250,7 +253,9 @@ from nuzline.engine.outcome import (
     ROAR_LEVEL_VALUES,
     Outcome,
     armored,
+    crit_class,
     crit_odds,
+    crit_variants,
     empty_outcome,
     future_thresholds,
     hit_thresholds,
@@ -328,7 +333,10 @@ class OutcomeLaws(NamedTuple):
 
     hit_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS], outcome.hit_thresholds
     hit_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS], which of them can occur
-    crit_odds: jnp.ndarray  # int32[2], outcome.crit_odds (1 in N)
+    crit_odds: jnp.ndarray  # int32[2], outcome.crit_odds (1 in N) at the turn start
+    # B12-4 review: the odds each side's hit can meet at its CalcCrit (outcome.crit_variants).
+    crit_variants: jnp.ndarray  # int32[2, outcome.CRIT_VARIANTS]
+    crit_possible: jnp.ndarray  # bool[2, outcome.CRIT_VARIANTS]
     no_crit: jnp.ndarray  # bool[2], Lucky Chant on the defending side (outcome.py:157)
     secondary_chance: jnp.ndarray  # int32[2], tables.move_effect_chance of the move
     duration_kind: jnp.ndarray  # int32[2], DURATION_*
@@ -725,7 +733,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.FOCUS_PUNCH,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
     _E.ENCORE,
-    # B12-4: the crit stages, whose odds are read at the turn start (outcome.crit_odds).
+    # B12-4: its user's own crit stages (another battler's crit odds are crit_variants').
     _E.FOCUS_ENERGY,
     # B12-12..16: the user's own HP (the HP clause), status and party; Wish's heal comes at the
     # turn's field pass, after every hit.
@@ -963,7 +971,8 @@ INPUT_NEUTRAL_ITEMS = (
     ItemId.LIGHT_CLAY,
     # Only the weather's duration (effects._weather); the weather is its move's clause.
     ItemId.WEATHER_ROCK,
-    # The crit odds (outcome.crit_odds): a crit is the hit's own draw.
+    # The crit odds (outcome.crit_variants: a Knock Off of it turns the hit's damage classes
+    # off): a crit is the hit's own draw.
     ItemId.CRIT_ITEM,
     # B10-12: it skips its holder's charge and is used up; no damage input reads it (the
     # charge's own clauses are the move's: MoveFlag.CHARGE above).
@@ -1743,12 +1752,20 @@ def outcome_laws(
     # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
     quick_claw = live & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
-    # Acupressure (B12-9): BtlCmd_BoostRandomStatBy2 reads the count of its user's stats below +6
-    # at the move (battle_script.c:8943-8950). Its user's stages can change before then only by
-    # the foe's action (a move, or a newcomer's Intimidate; over-approximate): the count is
-    # then loose. A count of 1 with no change possible draws nothing that matters.
+    # Acupressure (B12-9): BtlCmd_BoostRandomStatBy2 reads the count of its defender's stats
+    # below +6 at the move (battle_script.c:8943-8950; effects.defender_side, the user in
+    # singles). Those stages can change before then only by the foe's action (a move, or a
+    # newcomer's Intimidate; over-approximate): the count is then loose. A count of 1 with no
+    # change possible draws nothing that matters.
     acu_count = jnp.stack(
-        [jnp.sum(acupressure_valid(state, side).astype(_I32)) for side in (0, 1)]
+        [
+            jnp.sum(
+                acupressure_valid(
+                    state, defender_side(tables, state, side, target, moves[side])
+                ).astype(_I32)
+            )
+            for side, target in ((0, 1), (1, 0))
+        ]
     )
     acu_loose = (live & (uses_move | switch))[::-1]
     acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
@@ -1906,10 +1923,17 @@ def outcome_laws(
     # its damage (TABLE_DAMAGE_EFFECTS, an allowlist), and whose roll is not also a
     # confusion self-hit's.
     tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS)
+    # The crit odds at the hit (outcome.crit_variants): a hit whose odds can change before its
+    # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
+    odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
+    if loose:
+        odds_possible = jnp.ones_like(odds_possible)
+    crit_moves = jnp.any(odds_possible & (odds_variants != odds_variants[:, :1]), axis=1)
     compress = jnp.stack(
         [
             crit
             & tabled[:, None]
+            & ~crit_moves[:, None]
             & ~damage_inputs_can_change(tables, state, actions, firsts[t] == 1 - sides, moves)
             & ~(m["confusion_hit"][:, None] & (hit_index == 0))
             for t, m in enumerate(branches)
@@ -1932,6 +1956,8 @@ def outcome_laws(
         hit_thresholds=thresholds,
         hit_possible=possible,
         crit_odds=crit_odds(tables, state, actions, moves),
+        crit_variants=odds_variants,
+        crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
         no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions),
         secondary_chance=secondary_chance(tables, state, moves),
@@ -1996,10 +2022,22 @@ def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
 
 
 def _crit(laws: OutcomeLaws, side: int) -> _Law:
+    """The crit draw ``RandNext() % odds`` (battle_lib.c:7132) with the odds at the hit: with one
+    possible odds N, 1 (crits) at 1/N and 0 at (N - 1)/N; with several (``crit_variants``), the
+    draw r in [0, CRIT_DRAWS) reduced to its class (``outcome.crit_class``), each weighing its
+    width. Values in increasing order."""
     if bool(laws.no_crit[side]):
         return [0], [1], 1
-    odds = int(laws.crit_odds[side])  # rand % odds == 0
-    return [0, 1], [odds - 1, 1], odds
+    possible = np.asarray(laws.crit_possible[side], bool)
+    odds = np.asarray(laws.crit_variants[side])[possible]
+    if len(set(odds.tolist())) == 1:
+        n = int(odds[0])  # rand % n == 0
+        return [0, 1], [n - 1, 1], n
+    values = np.asarray(
+        crit_class(np.arange(CRIT_DRAWS), np.asarray(laws.crit_variants[side]), possible)
+    ).tolist()
+    law = sorted(collections.Counter(values).items())
+    return [v for v, _ in law], [w for _, w in law], CRIT_DRAWS
 
 
 def _roll(laws: OutcomeLaws, side: int) -> _Law:
@@ -2573,6 +2611,8 @@ def damage_class_law(
     representative, its lowest roll. Values are class indices in crit-then-roll order."""
     table = np.asarray(laws.damage[side])
     crit_values, crit_weights, crit_den = _crit(laws, side)
+    # A hit whose crit odds can change is never compressed (outcome_laws' crit_moves).
+    assert set(crit_values) <= {0, 1}, crit_values
     classes: dict[tuple[int, int], int] = {}
     weights: list[int] = []
     crits: list[int] = []

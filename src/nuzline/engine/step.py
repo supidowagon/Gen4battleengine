@@ -216,6 +216,7 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
+    crit_lands,
     future_threshold,
     live_hit_threshold,
     roar_bench,
@@ -1339,7 +1340,9 @@ def _use_move(
     # damage and crashes for 0 too.
     crash = can_act & has_target & ~connected & (tables.move_effect[used] == EffectId.CRASH)
     crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
-    crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
+    crash_crit = crit_lands(tables, state, side, used, outcome.crit[side, 0]) & ~armored(
+        state, side, target_side
+    )
     would = damage_for_roll(tables, state, side, used, crash_crit, outcome.roll[side, 0])
     cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
     crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
@@ -1528,7 +1531,9 @@ def _use_move(
         stop_now = lists | chases
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
-        crit = (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side) & ~unrolled
+        # The crit draw read with the odds at this hit (outcome.crit_lands, battle_lib.c:7105-7132).
+        crit = crit_lands(tables, state, side, used, outcome.crit[side, hit_index])
+        crit = crit & ~armored(state, side, target_side) & ~unrolled
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
@@ -2172,7 +2177,8 @@ def _execute_actions(
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, acts, choices, outcome)
-        crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
+        crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
+        crit = crit & ~armored(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {
             "act_kind": ACT_MOVE,

@@ -7,7 +7,14 @@ import numpy as np
 import pytest
 
 from nuzline.engine.ids import AbilityId, Weather
-from nuzline.engine.outcome import Outcome, crit_odds, empty_outcome, hit_threshold, sample_outcome
+from nuzline.engine.outcome import (
+    INT16_FIELDS,
+    Outcome,
+    crit_odds,
+    empty_outcome,
+    hit_threshold,
+    sample_outcome,
+)
 from nuzline.engine.step import replace
 from tests.engine.helpers import roark_real_state, roark_state
 
@@ -23,8 +30,8 @@ def test_empty_outcome_is_all_hits_no_crits_max_roll():
     assert o.hit.tolist() == [[1] * 5] * 2 and o.crit.tolist() == [[0] * 5] * 2
     assert o.roll.tolist() == [[15] * 5] * 2
     assert o.secondary.tolist() == [[0] * 5] * 2 and o.contact_proc.tolist() == [[0] * 5] * 2
-    # Every field int8 but the invokers' call (int16: Metronome's rank, E2 batch 5).
-    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields if f != "call")
+    # Every field int8 but INT16_FIELDS (the invokers' call, E2 batch 5; Acupressure's draw, B12-9).
+    assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields if f not in INT16_FIELDS)
     assert o.call.dtype == jnp.int16 and o.call.tolist() == [0, 0]
 
 
@@ -77,7 +84,7 @@ def freq(x, value=1):
 
 def test_sample_shapes_and_dtypes(samples):
     for f in Outcome._fields:
-        assert getattr(samples, f).dtype == (jnp.int16 if f == "call" else jnp.int8), f
+        assert getattr(samples, f).dtype == (jnp.int16 if f in INT16_FIELDS else jnp.int8), f
     assert samples.hit.shape == (N, 2, 5) and samples.n_hits.shape == (N, 2)
 
 
@@ -157,9 +164,9 @@ def test_quick_claw_draw_has_its_own_key(tables, names):
     # the fifth (fang_flinch 16, present 17, protect 18, infatuation 19).
     # Recorded at K3b2 Task 8 (fold_in(key, 20)), like EXISTING_DRAWS: keys 0-3.
     s = roark_real_state(tables, names)
+    sample = jax.jit(sample_outcome)  # one program for the four keys (eager runs grow memory)
     got = [
-        sample_outcome(jax.random.key(k), tables, s, acts(EMBER, 1)).quick_claw.tolist()
-        for k in range(4)
+        sample(jax.random.key(k), tables, s, acts(EMBER, 1)).quick_claw.tolist() for k in range(4)
     ]
     assert got == [[0, 1], [0, 0], [0, 0], [0, 1]]
 
