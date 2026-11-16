@@ -1,9 +1,10 @@
 """The voluntary-switch draw layout of ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3894).
 
-``docs/ai/roark.md`` 11.1 lists the checks. Only two kinds of draw change the result
-for the trainers M1 covers: the keep draw of each super-effective damaging move of the
-AI's active Pokemon ``A`` against the player's active ``D`` (step 8), and the
-first-success draws of the two party passes (steps 10 and 11). ``switch_sites`` lists
+``docs/ai/roark.md`` 11.1 lists the checks. Three kinds of draw change the result: the
+first-success draws of ``AI_CannotDamageWonderGuard`` (step 4, trainer_ai.c:3286-3348; ruling
+G-23), the keep draw of each super-effective damaging move of the AI's active Pokemon ``A``
+against the player's active ``D`` (step 8), and the first-success draws of the two party
+passes (steps 10 and 11). ``switch_sites`` lists
 them in the decomp's order as ``SwitchSite`` kinds, one per site, so that
 ``AiOutcome.switch_stop`` (the first site that stops the check) is one exact
 categorical (``nuzline.ai.outcome``). ``switch_action`` maps a stop to the action it
@@ -12,22 +13,46 @@ means. Both come from the same layout, so the sampler, the enumerator and Task 3
 
 How many sites the outcome encodes is the AI layout's ``switch_sites`` (``ai.layout``),
 passed to the functions here as ``sites`` (static): ``SWITCH_SITES`` (9) for vanilla
-Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (44) for a party of six. The candidate draws
-are the same for both: the keep draw of each of the active's four move slots
-(``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, the draw at :3588), then for each
-pass one draw per (bench Pokemon, move slot) (``AI_HasPartyMemberWithSuperEffectiveMove``,
-:3756-3804, the draw at :3796). The bench excludes the active slot
+Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (60) for a party of six. The candidate draws
+are the same for both: one Wonder Guard draw per (bench Pokemon, move slot)
+(``AI_CannotDamageWonderGuard``, :3315-3344, the draw at :3338), the keep draw of each of the
+active's four move slots (``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, the draw at
+:3588), then for each pass one draw per (bench Pokemon, move slot)
+(``AI_HasPartyMemberWithSuperEffectiveMove``, :3756-3804, the draw at :3796). The bench excludes the active slot
 (``selectedPartySlot``) and ``aiSwitchedPartySlot`` (:3762-3765), which is 6 at every
 ``TrainerAI_ShouldSwitch`` call: ``BattleContext_Init`` sets it (battle_lib.c:2015) after
 every action (battle_controller_player.c:3998) and at the turn's end
 (battle_controller_player.c:1855), and inside the check only a branch that returns TRUE
-writes it (:3797). With five bench Pokemon that is ``4 + 2 * 5 * 4 = 44`` candidates, so a
-party of six never has more sites than ``KAIZO_SWITCH_SITES``.
+writes it (:3797). A bench Pokemon can be in both passes: ``UpateMoveStatusForTypeMul``
+(battle_lib.c:2762-2781) sets ``NOT_VERY_EFFECTIVE`` on a resisted chart row after an immune
+row cleared it (Ground on Flying/Bug), and Wonder Guard's ``INEFFECTIVE`` (:2734-2739) never
+clears ``NOT_VERY_EFFECTIVE``; so the passes hold up to ``2 * 5 * 4 = 40`` draws. The Wonder
+Guard draws (step 4) exist only when no move of ``A`` is super effective (:3300-3311), so never
+beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates (ruling G-33), and a party
+of six never has more sites than ``KAIZO_SWITCH_SITES``
+(``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``).
 
-The gates in steps 1, 2 and 9 are implemented from the state: trapped (``trapped >
-0``), Shadow Tag or Arena Trap on ``D``, Magnet Pull on ``D`` with ``A`` Steel type, no
-other living party member, and positive stages summing to 4 or more (which ends the
-check after the keep draws).
+Wonder Guard (ruling G-23). ``AI_CannotDamageWonderGuard`` (step 4) runs when ``D``'s
+``battleMons[].ability`` is Wonder Guard (no Mold Breaker test, no knowledge: the true
+ability) and no move of ``A`` sets ``MOVE_STATUS_SUPER_EFFECTIVE`` through ``ApplyTypeChart``
+(:3300-3311, the keep draws' flags); then each bench Pokemon's moves in party order through
+``CalcEffectiveness`` against ``D`` (:3328-3336), and each super-effective one draws
+``RandNext() % 3 < 2`` (:3338): the first success switches to that Pokemon. Wonder Guard's
+own bit in those calls (``MOVE_STATUS_WONDER_GUARD`` / ``INEFFECTIVE``, battle_lib.c:
+2649-2654, :2734-2739) never clears the super-effective bit, so the keep draws and the passes'
+second calls are unchanged. The passes' first call (:3769-3777) has the AI's bench Pokemon as
+the defender: a Wonder Guard bench Pokemon is ``INEFFECTIVE`` against the player's last move
+(``moveHit``) unless the player's active has Mold Breaker, the move is super effective or not
+on its damaging turn (``damage.on_damaging_turn``: ``BattleContext_Init`` cleared
+``SYSCTL_LAST_OF_MULTI_TURN``, so Fire Fang never is), which makes it a pass-1 candidate.
+
+The gates in steps 1, 2 and 9 are implemented from the state (``_layout``): ``A`` trapped,
+``statusVolatile & VOLATILE_CONDITION_TRAPPED`` (trainer_ai.c:3906), which is Bind's
+``VOLATILE_CONDITION_BIND`` (``trapped > 0``) or ``VOLATILE_CONDITION_MEAN_LOOK``
+(``mean_look``) (condition.h:77-78); ``A`` ingrained, ``moveEffectsMask &
+MOVE_EFFECT_INGRAIN`` (``ingrain``, :3907); Shadow Tag or Arena Trap on ``D`` (:3908-3909);
+Magnet Pull on ``D`` with ``A`` Steel type (:3910-3911); no other living party member; and
+positive stages summing to 4 or more (which ends the check after the keep draws).
 
 Effectiveness is the decomp's status mask, built in chart-row order
 (``tables.type_chart_order``): ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) for
@@ -36,13 +61,13 @@ the keep draws, where only moves with power update the super/not-very-effective 
 the party passes, which updates them for every move (``UpateMoveStatusForTypeMul``,
 :2781). Struggle sets no bit (:2573, :2687). Gravity lifts the Ground-on-Flying
 immunity in both (``BasicTypeMulApplies`` :2529, ``NoImmunityOverrides`` :2759). Mold
-Breaker only matters against Levitate or Wonder Guard, which are refused, so it needs
-nothing here.
+Breaker only matters against Levitate, which is refused, and the AI bench's Wonder Guard
+(above).
 
 Refused, never approximated (``switching_refusals`` names each one):
 
-* abilities on either side that change these masks: Levitate, Wonder Guard, Scrappy,
-  Normalize; and on the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
+* abilities on either side that change these masks: Levitate, Scrappy, Normalize; and on
+  the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
   Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
 * Iron Ball (``HOLD_EFFECT_SPEED_DOWN_GROUNDED``) on either side;
@@ -52,7 +77,8 @@ Refused, never approximated (``switching_refusals`` names each one):
   modelled on both sides: ``damage.ai_move_type``, and a bench member's own,
   ``Move_CalcVariableType``, battle_lib.c:8162-8175);
 * a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
-* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``).
+* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``, which is the
+  six-party maximum).
 
 Called on concrete arrays, ``switch_sites`` and ``switch_action`` raise
 ``UnsupportedSwitching`` for these. Traced (jit, vmap) they cannot raise, so every
@@ -73,14 +99,21 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.damage import ai_move_type, decomp_abilities, divide, hidden_power
+from nuzline.engine.damage import (
+    ai_move_type,
+    decomp_abilities,
+    divide,
+    hidden_power,
+    on_damaging_turn,
+)
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
 SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check (vanilla layout)
-# Every candidate draw of a party of six: 4 keep draws, and 5 bench Pokemon x 4 moves in each
-# of the two passes (module docstring). A layout's switch_stop is ``sites`` when none stops.
-KAIZO_SWITCH_SITES = MOVES + 2 * (SLOTS - 1) * MOVES
+# Every candidate draw of a party of six (module docstring, ruling G-33): the Wonder Guard draws
+# (5 bench Pokemon x 4 moves) or the 4 keep draws, never both, then 5 x 4 in each of the two
+# passes: 20 + 40 = 60. A layout's switch_stop is ``sites`` when none stops.
+KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
 SWITCH_REFUSED = -1  # switch_stop of a refused layout (traced only)
 NO_SWITCH = -1  # switch_action: the AI does not switch
 REFUSED_ACTION = -2  # switch_action of a refused layout (traced only)
@@ -101,6 +134,9 @@ class SwitchSite(IntEnum):
     PASS_NOT_VERY_EFFECTIVE = 3
     # The layout is refused (module docstring); only produced under tracing.
     REFUSED = 4
+    # AI_CannotDamageWonderGuard (:3286): RandNext() % 3 < 2 switches (:3338), 43691 of 65536
+    # (ruling G-23).
+    WONDER_GUARD = 5
 
 
 # MOVE_STATUS_* bits (include/constants/battle/moves.h:58-60).
@@ -122,6 +158,7 @@ ABILITY_IDS = {
     "Water Absorb": 11,
     "Volt Absorb": 10,
     "Natural Cure": 30,
+    "Mold Breaker": 104,
 }
 MOVE_IDS = {
     "Magnet Rise": 393,
@@ -137,7 +174,6 @@ MOVE_IDS = {
 # Refused abilities: name -> what the decomp does with it that is not implemented.
 _ANY_SIDE_ABILITIES = {
     "Levitate": "LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness",
-    "Wonder Guard": "WONDER_GUARD / INEFFECTIVE, and AI_CannotDamageWonderGuard",
     "Scrappy": "skips the Ghost immunities",
     "Normalize": "makes every move Normal",
 }
@@ -170,16 +206,18 @@ _MOVE_REFUSED_IDS = jnp.array([MOVE_IDS[n] for n in _MOVES], _I32)
 _ABILITY_NAMES = {i: n for n, i in ABILITY_IDS.items()}
 _MOVE_NAMES = {i: n for n, i in MOVE_IDS.items()}
 
-_CANDIDATES = MOVES + 2 * SLOTS * MOVES  # keep draws, then pass 1, then pass 2
+# Wonder Guard draws, then keep draws, then pass 1, then pass 2.
+_CANDIDATES = MOVES + 3 * SLOTS * MOVES
 _CANDIDATE_KINDS = jnp.array(
-    [SwitchSite.KEEP] * MOVES
+    [SwitchSite.WONDER_GUARD] * (SLOTS * MOVES)
+    + [SwitchSite.KEEP] * MOVES
     + [SwitchSite.PASS_INEFFECTIVE] * (SLOTS * MOVES)
     + [SwitchSite.PASS_NOT_VERY_EFFECTIVE] * (SLOTS * MOVES),
     _I8,
 )
-_CANDIDATE_TARGETS = jnp.array(
-    [-1] * MOVES + [j for j in range(SLOTS) for _ in range(MOVES)] * 2, _I8
-)
+_BENCH_TARGETS = [j for j in range(SLOTS) for _ in range(MOVES)]
+_CANDIDATE_TARGETS = jnp.array(_BENCH_TARGETS + [-1] * MOVES + _BENCH_TARGETS * 2, _I8)
+_WONDER_GUARD, _MOLD_BREAKER = ABILITY_IDS["Wonder Guard"], ABILITY_IDS["Mold Breaker"]
 
 
 class UnsupportedSwitching(ValueError):
@@ -261,9 +299,10 @@ def apply_type_chart(
     (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
     ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
     unchanged (:2573). The defender's Foresight, Ingrain and roosting flags are read
-    (``chart_multipliers``); the other type-chart modifiers (Adaptability, Normalize,
-    Scrappy, Levitate, Wonder Guard, Iron Ball, Miracle Eye, Magnet Rise) are not
-    implemented: ``policy.ai_refusals`` refuses them.
+    (``chart_multipliers``); Wonder Guard sets a flag only (``wonder_guard_bit``), the value
+    is unchanged; the other type-chart modifiers (Adaptability, Normalize, Scrappy, Levitate,
+    Iron Ball, Miracle Eye, Magnet Rise) are not implemented: ``policy.ai_refusals`` refuses
+    them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
@@ -327,6 +366,33 @@ def type_chart_flags(
     power = tables.move_power[jnp.asarray(move, _I32)]
     return _chart_flags(
         tables, move, def_types, gravity, power > 0, identified, move_type, grounded, roosting
+    )
+
+
+def wonder_guard_bit(
+    tables: Tables, state: BattleState, atk_side, def_side, move, flags
+) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_WONDER_GUARD`` (battle_lib.c:
+    2649-2654) for ``move`` by ``atk_side``'s active battler against ``def_side``'s, given the
+    walk's ``flags`` (``type_chart_flags``): the defender's Wonder Guard (``Battler_Ability``:
+    ``damage.decomp_abilities``, the true ability) unless the attacker has Mold Breaker
+    (``Battler_IgnorableAbility``), a move on its damaging turn (``damage.on_damaging_turn``:
+    the AI reads at command selection, after ``BattleContext_Init`` cleared
+    ``SYSCTL_LAST_OF_MULTI_TURN``), with table power, not Struggle (:2573), and
+    ``MOVE_STATUS_SUPER_EFFECTIVE`` clear. Part of ``MOVE_STATUS_IMMUNE`` (ruling G-23)."""
+    atk_side = jnp.asarray(atk_side, _I32)
+    def_side = jnp.asarray(def_side, _I32)
+    move = jnp.asarray(move, _I32)
+    ability = decomp_abilities(tables, state)
+    attacker = ability[atk_side, state.active[atk_side]]
+    defender = ability[def_side, state.active[def_side]]
+    return (
+        (attacker != _MOLD_BREAKER)
+        & (defender == _WONDER_GUARD)
+        & on_damaging_turn(tables, move)
+        & ((jnp.asarray(flags, _I32) & SUPER_EFFECTIVE) == 0)
+        & (tables.move_power[move] != 0)
+        & (move != MOVE_STRUGGLE)
     )
 
 
@@ -409,6 +475,17 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     hit_flags = jax.vmap(lambda t: calc_effectiveness_flags(tables, hit, t, gravity, hit_type))(
         state.types[1]
     )
+    # CalcEffectiveness's Wonder Guard (battle_lib.c:2734-2739) with the bench Pokemon as the
+    # defender (MON_DATA_ABILITY) and Battler_Ability(moveHitBattler), the player's active, as
+    # the attacker: INEFFECTIVE unless Mold Breaker, a super-effective moveHit or one not on its
+    # damaging turn (ruling G-23).
+    bench_guard = (
+        (ability[1] == _WONDER_GUARD)
+        & (d_ability != _MOLD_BREAKER)
+        & on_damaging_turn(tables, hit)
+        & ((hit_flags & SUPER_EFFECTIVE) == 0)
+    )
+    hit_flags = jnp.where(bench_guard, hit_flags | INEFFECTIVE, hit_flags)
     bench_moves = state.moves[1].astype(_I32).reshape(-1)  # [SLOTS * MOVES], slot-major
     # Move_CalcVariableType (:3780): each bench member's own Hidden Power type.
     bench_types = party_move_types(tables, state).reshape(-1)
@@ -421,7 +498,13 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         ((bench & hit_ok & ~boosted & ((hit_flags & mask) != 0))[:, None] & bench_se).reshape(-1)
         for mask in (INEFFECTIVE, NOT_VERY_EFFECTIVE)
     ]
-    exists = jnp.concatenate([keep, *passes]) & ~gate  # [_CANDIDATES]
+    # Step 4, AI_CannotDamageWonderGuard (:3286-3348): D's battleMons[].ability (:3298) is
+    # Wonder Guard and no move of A is super effective by ApplyTypeChart (:3300-3311, ``keep``'s
+    # flags); then each bench Pokemon's super-effective moves by CalcEffectiveness, in party
+    # order (``bench_se``), draw (:3338). Doubles return FALSE (:3294), so singles only.
+    guard = (d_ability == _WONDER_GUARD) & ~jnp.any(keep)
+    guard_draws = (guard & bench[:, None] & bench_se).reshape(-1)
+    exists = jnp.concatenate([guard_draws, keep, *passes]) & ~gate  # [_CANDIDATES]
 
     position = jnp.cumsum(exists.astype(_I32)) - 1
     target = jnp.where(exists, position, sites)  # out of range: dropped
@@ -501,7 +584,8 @@ def _checked_layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
 def switch_sites(tables: Tables, state: BattleState, sites: int = SWITCH_SITES) -> jnp.ndarray:
     """``int8[sites]``: the ``SwitchSite`` kind of each result-changing draw of
-    ``TrainerAI_ShouldSwitch`` for the opponent's active Pokemon, in the decomp's order
+    ``TrainerAI_ShouldSwitch`` for the opponent's active Pokemon (the Wonder Guard draws, the
+    keep draws, then the two passes), in the decomp's order
     (``SwitchSite.NONE`` for unused entries), under a layout of ``sites`` sites (the AI
     layout's ``switch_sites``; the default is the vanilla 9). Raises
     ``UnsupportedSwitching`` on a refused layout when not traced (module docstring)."""
@@ -513,7 +597,8 @@ def switch_action(
 ) -> jnp.ndarray:
     """``int32``: what ``AiOutcome.switch_stop = stop`` means for this state under a
     layout of ``sites`` sites: the switch action ``4 + j`` when a party-pass site for slot
-    j stops, ``NO_SWITCH`` for a keep draw or for ``stop = sites`` (none stops),
+    j stops (a Wonder Guard draw too: ``aiSwitchedPartySlot = i``, :3339), ``NO_SWITCH`` for a
+    keep draw or for ``stop = sites`` (none stops),
     ``REFUSED_ACTION`` for a refused layout."""
     lay = _checked_layout(tables, state, sites)
     stop = jnp.asarray(stop, _I32)
@@ -521,7 +606,9 @@ def switch_action(
     index = jnp.clip(stop, 0, sites - 1)
     kind = lay.kinds[index]
     is_pass = in_range & (
-        (kind == SwitchSite.PASS_INEFFECTIVE) | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)
+        (kind == SwitchSite.PASS_INEFFECTIVE)
+        | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)
+        | (kind == SwitchSite.WONDER_GUARD)
     )
     action = jnp.where(is_pass, MOVE_ACTIONS + lay.targets[index].astype(_I32), NO_SWITCH)
     return jnp.where(lay.refused | (stop == SWITCH_REFUSED), REFUSED_ACTION, action).astype(_I32)

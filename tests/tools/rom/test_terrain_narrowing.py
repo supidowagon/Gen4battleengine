@@ -181,8 +181,35 @@ def test_a_coord_event_battle_narrows_to_its_rectangle(decomp, world):
     warp = [("SCRCMD_WARP", (1, 2, 3, 4)), *battle[3:]]
     assert _narrow(world, coords=[coord], script=_Script(warp)) == {}
     assert _narrow(world, coords=[coord], script=_Script(battle), other=[1]) == {}
-    # A battle not started by the header's coord events is not narrowed.
-    assert _narrow(world, coords=[CoordEvent(2, 3, 3, 1, 2)], script=_Script(battle)) == {}
+    # A battle of an entry the header never runs (no event, init script or C-started id of
+    # it; E1 ruling G-38) starts nothing there: the header gives the trainer no terrain.
+    got = _narrow(world, coords=[CoordEvent(2, 3, 3, 1, 2)], script=_Script(battle))
+    assert got == {(9, 0): frozenset()}
+
+
+def test_a_tag_battles_variable_partner_operand_names_only_partners(decomp, world):
+    # ScrCmd_StartTagBattle (scrcmd_trainer.c:146-161) reads the partner first. Entry 4 is
+    # C-started (the start menu's retire, start_menu.c:1457) and its partner operand is a
+    # variable no constant reaches: it names a partner, never trainer 9, so 9's coord battle
+    # (entry 1) still narrows (E1 ruling G-38); before, the operand matched every trainer.
+    coord = CoordEvent(1, 3, 3, 1, 2)
+    battle = [("SCRCMD_STARTTRAINERBATTLE", (9, 0)), ("SCRCMD_END", ())]
+    tag = [("SCRCMD_STARTTAGBATTLE", (0x8004, 414, 415)), ("SCRCMD_END", ())]
+    stop = [("SCRCMD_END", ())]
+    script = _Script(battle, stop, stop, tag)
+    assert _narrow(world, coords=[coord], script=script) == {(9, 0): frozenset({GRASS})}
+    # A trainer some script makes a partner (here through the partner variable) is matched.
+    partner = [("SCRCMD_SETVARFROMVALUE", (PARTNER_VAR, 9)), ("SCRCMD_END", ())]
+    script = _Script(battle, partner, stop, tag)
+    assert _narrow(world, coords=[coord], script=script) == {}
+    # A partner operand variable resolves to the constants its paths assign (as the
+    # trainer -> map join resolves operands, maps.script_battles): 9 is that partner.
+    tag9 = [
+        ("SCRCMD_SETVARFROMVALUE", (0x8004, 9)),
+        ("SCRCMD_STARTTAGBATTLE", (0x8004, 414, 415)),
+        ("SCRCMD_END", ()),
+    ]
+    assert _narrow(world, coords=[coord], script=_Script(battle, stop, stop, tag9)) == {}
 
 
 def test_the_constants_follow_the_rom_reader():
@@ -258,7 +285,26 @@ def test_vanilla_rom_narrows_as_the_decomp(vanilla_files, decomp, symbols, decom
     assert _rom_rows(vanilla_files, decomp, symbols)[1] == decomp_rows[1]
 
 
-def test_kaizo_route_203_fights(kaizo_files, decomp, symbols):
+@pytest.fixture(scope="module")
+def kaizo_rows(kaizo_files, decomp, symbols):
+    return _rom_rows(kaizo_files, decomp, symbols)
+
+
+def test_kaizo_clowns_fight_in_jubilife(kaizo_rows):
+    # Clowns Ronald (252) and Moe (254) (E1 ruling G-38, closing G-36): the join places them
+    # on Jubilife City (header 3, its objects run their entries 15 and 14) and on Route 202
+    # (header 343), whose file (scr_seq 428, that header's alone) carries their battles as
+    # entries 14 and 15, which no Route 202 event, init script or C-started id runs. Its
+    # C-started entry 4 is a tag battle whose partner operand VAR_0x8004 names a partner
+    # (scrcmd_trainer.c:146-161), not them. So Route 202 gives them no terrain, and Jubilife's
+    # whole header gives TERRAIN_BUILDING.
+    where, rows = kaizo_rows
+    for tid in (252, 254):
+        assert sorted(where[tid]) == [3, 343]
+        assert rows[tid] == (_t("BUILDING"), [_t("BUILDING")])
+
+
+def test_kaizo_route_203_fights(kaizo_files, decomp, symbols, kaizo_rows):
     from tools.rom.readers.maps import (
         LAND_DATA_NARC,
         MATRIX_NARC,
@@ -268,7 +314,7 @@ def test_kaizo_route_203_fights(kaizo_files, decomp, symbols):
     )
     from tools.terrain import parse_matrix, rom_narrowing_inputs
 
-    where, rows = _rom_rows(kaizo_files, decomp, symbols)
+    where, rows = kaizo_rows
     # Route 203 (header 344, BACKGROUND_PLAIN) mixes PLAIN, GRASS and WATER tiles. Barry #2
     # (247-249) starts from the coord event at (196, 757), 1x4, of script 6, whose commands
     # before the battle leave the player in place: four PLAIN tiles.

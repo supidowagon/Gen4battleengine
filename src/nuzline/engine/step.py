@@ -103,6 +103,7 @@ from nuzline.engine.damage import (
     levitated,
     move_type_of,
     weather_suppressed,
+    wonder_guarded,
 )
 from nuzline.engine.damage import (
     SPECIAL as SPECIAL_CATEGORY,
@@ -112,6 +113,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import (
     LOCK_ON_TURNS,
+    NO_DEFENDER,
     armored,
     big_root,
     can_have_status,
@@ -132,6 +134,8 @@ from nuzline.engine.effects import (
     locked_onto,
     pivot_item,
     play_hit,
+    pressure_holder,
+    pressure_pp_cost,
     primary_effect_fails,
     protect_blocks,
     recovers_at_full_hp,
@@ -141,6 +145,8 @@ from nuzline.engine.effects import (
     self_defender,
     shell_bell_heal,
     sticky_barb_transfer,
+    sync_landed,
+    synchronize,
     targets_foe_side,
     targets_user,
     thaw_target,
@@ -152,6 +158,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.hooks import (
     ABSORB,
+    DAMAGE_AVOIDED,
     OHKO_BLOCKED,
     STATUS_CURE,
     STATUS_HP,
@@ -159,13 +166,14 @@ from nuzline.engine.hooks import (
     WEATHER_HP,
     after_damage_items,
     held_item_check,
-    on_switch_in,
     recover_status_by_ability,
     reveal_ability,
+    swap_war,
     switch_in_effects,
 )
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
+    CONFUSION_PENDING,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
@@ -658,6 +666,9 @@ def _use_move(
     mode=MODE_FULL,
     pursuit=None,
     claw=(False, False),
+    entry_poisoned=False,
+    entry_status=None,
+    pursuit_sync=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -688,7 +699,14 @@ def _use_move(
     the list (:17). ``mode`` ``MODE_PURSUIT`` (after the Pursuit) and ``MODE_RESUME`` (on the
     newcomer, after the list's switch-in, hazards and faint check) run only the action's tail:
     the head's state is dropped and its values come from ``BattleState.ts_used`` /
-    ``ts_damaged`` / ``ts_dealt`` (written where the action stops).
+    ``ts_damaged`` / ``ts_dealt`` (written where the action stops). ``entry_poisoned``
+    (``MODE_RESUME``): the list's Toxic Spikes poisoned the newcomer (``_act``), which set
+    ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` after U-turn cleared it (rulings G-12, G-13), and
+    ``entry_status`` the newcomer's status before the list's faint check (its
+    ``BattleMon.status``, which the Synchronize step reads; ruling G-24). ``pursuit_sync``
+    (``MODE_PURSUIT``): ``(flag, sideEffectMon, held)`` after the Pursuit, the head's
+    Synchronize flag and side-effect battler as the Pursuit's contact ability left them and each
+    battler's ``BattleMon.status`` before the Pursuit's faint check (``_execute_actions``).
 
     Returns ``(state, own, foe, ctl)``: the state after the move, the user's events (each
     status check's result, effect-gated: set only when the check was reached and had an
@@ -809,22 +827,34 @@ def _use_move(
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
-    # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP
-    # leaves 1 HP, and the followup message removes it (the user is the defender, :2629).
+    # runs CheckHoldOnWith1HP on the user (script.c:9098-9124): a Focus Sash at full HP, or a
+    # Focus Band whose roll passes, leaves 1 HP, and the followup message removes a sash (the
+    # user is the defender, :2629).
     # Its BATTLE_SUBSCRIPT_UPDATE_HP then runs the resist-berry check on the user
     # (effects.resist_berry): BattleContext_Init left moveType Normal and moveStatusFlags 0
     # (battle_lib.c:1981-1982), so calcTemp is the table type of the move the battler
     # chose (moveCur, bcp.c:1898; Hidden Power's too) and nothing is super-effective: a
     # Chilan Berry halves the self-hit when that move is Normal-type, a Rindo Berry never.
-    confused = go & (state.confusion[side] > 0)
-    confusion = state.confusion[side] - confused.astype(state.confusion.dtype)
+    # A flavor berry's pending counter (ids.CONFUSION_PENDING, hooks.berry_confuse) is drawn
+    # at this first read: its Random 3, 2 (subscript_confuse.s:34), Outcome.berry_confusion
+    # (ruling G-5).
+    counter = jnp.where(
+        state.confusion[side] == CONFUSION_PENDING,
+        outcome.berry_confusion[side],
+        state.confusion[side],
+    ).astype(state.confusion.dtype)
+    confused = go & (counter > 0)
+    confusion = jnp.where(go, counter - confused.astype(counter.dtype), state.confusion[side])
     still_confused = confused & (confusion > 0)
     self_hit = still_confused & (outcome.confusion_hit[side] != 0)
     user_hp = state.hp[side, user].astype(_I32)
     sash = holds(tables, state, side, ItemId.FOCUS_SASH)
     full = user_hp == state.max_hp[side, user].astype(_I32)
+    # A Focus Band's roll (script.c:9109-9112, ruling G-1): Outcome.focus_band[side, 0], the
+    # user's own (its move does not run after a self-hit).
+    band = holds(tables, state, side, ItemId.FOCUS_BAND) & (outcome.focus_band[side, 0] != 0)
     raw = confusion_damage(tables, state, side, outcome.roll[side, 0])
-    hurt, endured = focus_sash_damage(state, side, raw, sash & full)
+    hurt, endured = focus_sash_damage(state, side, raw, (sash & full) | band)
     resisted = self_hit & resist_berry(tables, state, side, tables.move_type[move], False)
     taken = jnp.where(endured, user_hp - 1, raw)
     hurt = resist_berry_damage(state, side, taken, resisted, hurt)
@@ -833,7 +863,9 @@ def _use_move(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
-    state = consume_item(state, side, (self_hit & endured) | resisted)
+    # subscript_move_followup_message.s:16 names the endured item (the user is the defender).
+    state = reveal_item(state, side, user, self_hit & endured)
+    state = consume_item(state, side, (self_hit & endured & sash) | resisted)
     state = _unlock(state, side, self_hit)  # subscript_hurt_self_in_confusion.s
     go = go & ~self_hit
     # CHECK_STATUS_STATE_PARALYSIS (:2652-2654): RandNext() % 4 == 0 (outcome.full_para) fully
@@ -877,14 +909,25 @@ def _use_move(
     state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
 
     # BattleControllerPlayer_DecrementPP (battle_controller_player.c:3182) runs before the
-    # no-target check (:3190); Struggle has no PP to spend.
+    # no-target check (:3190); Struggle has no PP to spend. It takes 1 plus the Pressure cost of
+    # moveTemp (``move``, an invoker's own range) against the fight command's defender
+    # (effects.pressure_pp_cost), at most the PP left (:2276-2280), ruling G-8.
     spend = can_act & ~struggling & ~locked
     # No PP left in the slot (bcp.c:2275-2285): MOVE_STATUS_NO_PP, the move fails after its attack
     # message. Only an encored move taken over this turn can reach it (B10-9; the selection
     # offers no 0-PP slot).
     no_pp = spend & (state.pp[side, user, slot] == 0)
     spend = spend & ~no_pp
-    pp = state.pp.at[side, user, slot].add(jnp.where(spend, -1, 0).astype(state.pp.dtype))
+    defender = jnp.where(
+        foe_defender,
+        target_side,
+        jnp.where(self_defender(tables, move, ghost_user(state, side)), side, NO_DEFENDER),
+    )
+    cost = pressure_pp_cost(tables, state, side, defender, move)
+    left = jnp.maximum(state.pp[side, user, slot].astype(_I32) - cost, 0)
+    pp = state.pp.at[side, user, slot].set(
+        jnp.where(spend, left, state.pp[side, user, slot]).astype(state.pp.dtype)
+    )
     state = state._replace(pp=pp)
 
     # Nature Power (effect_script_0173.s): its script turns it into the terrain's move
@@ -983,6 +1026,19 @@ def _use_move(
     )
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     has_target = has_target | special_counter | (invoker & call_failed) | charging
+    # A Counter-family command that passes (its script's first command, effect_script_0089.s,
+    # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
+    # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
+    # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
+    # has PP left and the defender has Pressure, ruling G-9.
+    counter_pressure = (
+        can_act & has_target & counter & counter_ok & pressure_holder(state, attacker)
+    ) & (state.pp[side, user, slot] > 0)
+    state = state._replace(
+        pp=state.pp.at[side, user, slot].add(
+            jnp.where(counter_pressure, -1, 0).astype(state.pp.dtype)
+        )
+    )
     # SYSCTL_MOVE_SUCCEEDED (battle_controller_player.c:3212) once the move got past the
     # status checks, the PP decrement and the no-target check, before the accuracy check
     # (a miss counts): UpdateMoveBuffers (:3945-3949) writes the move (Struggle's own id
@@ -1232,7 +1288,17 @@ def _use_move(
     dragged = roar & jnp.any(eligible) & level_ok
     roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
+    pre_drag = state
     state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
+    # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
+    # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
+    # sideEffectMon (BtlCmd_CheckToxicSpikes, battle_script.c:7640-7641; ruling G-13).
+    newcomer_status = state.status[target_side, drag_slot]
+    roar_poisoned = (
+        dragged
+        & (pre_drag.status[target_side, drag_slot] == Status.NONE)
+        & ((newcomer_status == Status.POISON) | (newcomer_status == Status.TOXIC))
+    )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
     state = _unlock(state, side, can_act & ~connected & ~charging)
@@ -1248,6 +1314,12 @@ def _use_move(
     state = _set_side(state, "semi_invulnerable", side, semi_kind, charging)
     state = change_stage(state, side, Stat.DEF, 1, charging & def_up)
     n_hits = hit_count(tables, used, outcome, side)
+    # effect_script_0122.s _004: Present's heal path sets SYSCTL_IGNORE_IMMUNITIES (:13) in the
+    # move script (bcp.c:3214), before TryMove's chart (:3272), hit or miss: CheckTypeChart skips
+    # the chart (bcp.c:2350-2356), so no Wonder Guard flag and no noEffect (ruling G-30).
+    heal_path = (tables.move_effect[used] == EffectId.PRESENT) & (
+        outcome.present[side] == PRESENT_HEAL
+    )
     # Present's heal path (effects._present): subscript_recover_hp.s prints "regained health"
     # (1), or "HP is full!" (2) for a target at full HP; the target's HP is unchanged
     # between here and the hit.
@@ -1286,6 +1358,34 @@ def _use_move(
     chart = effectiveness(
         tables, move_type, state.types[target_side, target], identified(state, side, target_side)
     )
+    # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
+    # move passed the no-target check, for a move with power that is not RANGE_USER /
+    # RANGE_USER_SIDE and not under SYSCTL_IGNORE_IMMUNITIES): Wonder Guard's
+    # MOVE_STATUS_WONDER_GUARD (damage.wonder_guarded, ruling G-18). ``guard_tested``: the chart
+    # ran; ``guarded``: on a move that connected, the hits deal nothing (damage_for_roll) and the
+    # move ends in subscript_missed.s (bcp.c:3324-3327): no AfterMoveEffects (``items_full``),
+    # Jump Kick crashes (below). It is not MOVE_STATUS_INEFFECTIVE: no noEffect (below).
+    guard_tested = (
+        can_act
+        & has_target
+        & ~(invoker & call_failed)
+        & ~targets_user(tables, used, ghost_user(state, side))
+        & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
+        # A charge turn skips the chart (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356); a charge
+        # move's strike runs it under SYSCTL_LAST_OF_MULTI_TURN (damage.charge_strike), G-27.
+        & ~charging
+        & wonder_guarded(tables, state, side, used, move_type, target_side, charge_move)
+    )
+    guarded = connected & guard_tested
+    # subscript_missed.s:107-110 "{0} avoided damage by using {1}!" (TAG_NICKNAME_ABILITY,
+    # BTLSCR_DEFENDER: BattleAI_SetAbility, battle_script.c:11798-11806) unless a flag it tests
+    # first holds: lost focus (:5), protected (:18) or failed (:97) (``failed`` carries the
+    # first and the script failures); a miss reaches it (ruling G-20), a semi-invulnerable miss
+    # does not (:11 -> :157, the miss message), ruling G-28.
+    state = reveal_ability(
+        state, target_side, target, DAMAGE_AVOIDED, guard_tested & ~blocked & ~failed & ~semi_miss
+    )
     # Water Absorb (:3507-3512) is Dry Skin's test; Volt Absorb (:3500-3505) takes an Electric
     # move whatever its power (Thunder Wave too), attacker != defender (B9-6).
     seen = ignorable(state, side, target_side)
@@ -1317,10 +1417,15 @@ def _use_move(
     # the type chart of TRY_MOVE_STATE_CHECK_TYPE_CHART (run hit or miss, bcp.c:3271-3277: an
     # immune target gives 0, which loses nothing). An immune target that connected deals 0
     # damage and crashes for 0 too.
-    crash = can_act & has_target & ~connected & (tables.move_effect[used] == EffectId.CRASH)
+    # A Wonder Guard block ends there too (MOVE_STATUS_WONDER_GUARD), with battleCtx->damage as
+    # ApplyTypeChart leaves it: the chart applied, not zeroed (ruling G-19).
+    crash = can_act & has_target & (~connected | guarded)
+    crash = crash & (tables.move_effect[used] == EffectId.CRASH)
     crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
     crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
-    would = damage_for_roll(tables, state, side, used, crash_crit, outcome.roll[side, 0])
+    would = damage_for_roll(
+        tables, state, side, used, crash_crit, outcome.roll[side, 0], wonder_guard=False
+    )
     cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
     crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
     user_hp_now = state.hp[side, user].astype(_I32)
@@ -1355,6 +1460,7 @@ def _use_move(
         & (tables.move_power[used] != 0)
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
         & ~charging  # SYSCTL_FIRST_OF_MULTI_TURN (bcp.c:2356), B10-12
         & (chart == 0)
     )
@@ -1392,6 +1498,68 @@ def _use_move(
     # effects, at the site Roar's drag shares.
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
+    items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
+    items_full = items_full & ~baton_failed & ~guarded
+    # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
+    # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
+    # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
+    # subscript_attack_then_switch_out.s:69), its sideEffectMon the newcomer; on the resumed
+    # tail CheckExtraFlinch's King's Rock then makes the defender the sideEffectMon
+    # (bcp.c:4643, before subscript_flinch_mon.s's own tests). The defender is the user for a
+    # self-defender move (Baton Pass: the pass then aims at the newcomer itself, already
+    # poisoned). Rulings G-12, G-13.
+    sync_defender = jnp.where(
+        self_defender(tables, used_t, ghost_user(state, side)), side, target_side
+    )
+    resumed_rock = (
+        rock
+        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
+        & (state.hp[target_side, state.active[target_side]] > 0)
+    )
+    # MODE_PURSUIT with the user fainted (ruling G-24): the U-turn script ended at :55 before
+    # its flag clear (:69), so AfterMoveEffects' Synchronize step reads the head's flag as the
+    # Pursuit's contact ability toggled it, after CheckExtraFlinch made the defender the
+    # sideEffectMon (bcp.c:3524, :4636-4643: the fainted user's King's Rock, its roll, the
+    # flag, a damaged defender with HP). A fainted passer passes its BattleMon.status (``held``).
+    if pursuit_sync is None:
+        pursuit_sync = (False, target_side, None)
+    p_flag, p_sem, p_held = pursuit_sync
+    tail_fainted = after_pursuit & ~pursuit_pause
+    pursuit_rock = (
+        tail_fainted
+        & (state_in.ts_damaged != 0)
+        & (outcome.flinch_item[side, 0] != 0)
+        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
+        & (state.hp[target_side, state.active[target_side]] > 0)
+    )
+    p_sem = jnp.where(pursuit_rock, target_side, jnp.asarray(p_sem, _I32))
+    sync_sem = jnp.where(
+        resumed,
+        jnp.where(resumed_rock, target_side, side),
+        jnp.where(after_pursuit, p_sem, target_side),
+    ).astype(_I32)
+    sync_flag = jnp.where(
+        resumed,
+        jnp.asarray(entry_poisoned, bool),
+        jnp.where(after_pursuit, jnp.asarray(p_flag, bool), roar_poisoned),
+    )
+    held = state.status[jnp.arange(2), state.active].astype(_I32)
+    if entry_status is not None:
+        held = jnp.where(resumed, held.at[side].set(jnp.asarray(entry_status, _I32)), held)
+    if p_held is not None:
+        held = jnp.where(after_pursuit, jnp.asarray(p_held, _I32), held)
+    state, _, _ = synchronize(
+        tables,
+        state,
+        side,
+        sync_defender,
+        sync_flag,
+        sync_sem,
+        (dragged & head_on & items_full) | resumed | tail_fainted,
+        held,
+    )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
     state = _where(entering, switch_in_effects(tables, state, fx_side), state)
@@ -1403,8 +1571,6 @@ def _use_move(
     # The tail modes' items (AfterMoveEffects): on the newcomer, or a U-turn user that died to the
     # Pursuit (its continuation without a switch).
     tail_items = resumed | (after_pursuit & ~pursuit_pause)
-    items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
-    items_full = items_full & ~baton_failed
 
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
@@ -1413,7 +1579,10 @@ def _use_move(
         state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
         # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
         # action (MoveHit.sub_hit).
-        paused, pursue, damaged0, dealt0, sub_hit = carry[11:]
+        paused, pursue, damaged0, dealt0, sub_hit = carry[11:16]
+        # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
+        # BattleContext_Init at the action's end, battle_lib.c:2009).
+        sync_flag, sync_sem = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -1519,6 +1688,41 @@ def _use_move(
         # this action (struck), and the thaw of a frozen defender a Fire hit damaged
         # (effects.thaw_target; an Aspear / Lum Berry it holds has cured the freeze first).
         items = jnp.where(head_on, items_full & ~stopped & ~stop_now, tail_items & ~stops)
+        # The hit's status subscripts toggled SYSCTL_TRY_SYNCHRONIZE_STATUS: the secondary
+        # effect's on the defender (AfterMoveMessage's TRIGGER_SECONDARY, bcp.c:3484), then the
+        # contact ability's on the attacker (TRIGGER_ABILITY, :3514; BattleSystem_
+        # TriggerAbilityOnHit sets sideEffectMon to the attacker, battle_lib.c:4225), each the
+        # new sideEffectMon; CheckExtraFlinch (:3524) makes the defender the sideEffectMon once
+        # its own tests pass (bcp.c:4636-4643: the attacker's King's Rock, the roll, the move's
+        # flag, a damaged defender with HP), before subscript_flinch_mon.s's. Then
+        # AfterMoveEffects' Synchronize step (``effects.synchronize``), before the item checks
+        # (rulings G-12, G-13). A Roar's and the tails' run above.
+        def_landed = sync_landed(state, hit_state, target_side)
+        att_landed = sync_landed(state, hit_state, side)
+        sync_flag = sync_flag ^ def_landed ^ att_landed
+        sync_sem = jnp.where(att_landed, side, jnp.where(def_landed, target_side, sync_sem))
+        attacker_rock = (
+            tables.item_effect[hit_state.item[side, hit_state.active[side]]] == ItemId.KINGS_ROCK
+        )
+        rock_test = (
+            attacker_rock
+            & (outcome.flinch_item[side, hit_index] != 0)
+            & ((tables.move_flags[used] & MoveFlag.KINGS_ROCK) != 0)
+            & (hit_state.hp[target_side, target] > 0)
+        )
+        rock_sem = (landed & info.damaged & ~is_uturn) | (
+            going & first & is_uturn & ~goes & landed & info.damaged
+        )
+        sync_sem = jnp.where(rock_sem & rock_test, target_side, sync_sem).astype(_I32)
+        hit_state, sync_flag, sync_sem = synchronize(
+            tables,
+            hit_state,
+            side,
+            sync_defender,
+            sync_flag,
+            sync_sem,
+            items & landed & head_on & ~dragged,
+        )
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
         state = after_damage_items(tables, state, 1 - side, items)
         struck = struck | info.update_hp
@@ -1565,6 +1769,8 @@ def _use_move(
             jnp.where(first, info.damaged, damaged0),
             jnp.where(first, info.dealt, dealt0),
             info.sub_hit,
+            sync_flag,
+            sync_sem,
         )
 
     init = (
@@ -1584,6 +1790,8 @@ def _use_move(
         jnp.bool_(False),
         _I32(0),
         jnp.bool_(False),
+        jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
+        jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]
@@ -1769,7 +1977,9 @@ def _use_move(
     }
     # turnFlags.roosting (subscript_roost.s:11-12): set unless "HP is full!" (NO_MORE_WORK).
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
-    ctl = {"pause": paused, "pursue": pursue}
+    # The head's Synchronize flag and sideEffectMon where it stopped for U-turn's Pursuit: the
+    # MODE_PURSUIT tail's Synchronize step reads them (``pursuit_sync``, ruling G-24).
+    ctl = {"pause": paused, "pursue": pursue, "sync_flag": looped[16], "sync_sem": looped[17]}
     return state, own, foe, ctl
 
 
@@ -1828,6 +2038,7 @@ def _act(
     base=None,
     foe=None,
     claw=(False, False),
+    pursuit_sync=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -1838,7 +2049,7 @@ def _act(
     the hazards, then a faint check against ``base``, the party bitmask of the faints already
     handled, ``BattleState.ts_alive``), and that state feeds the move branch, which runs the
     action's tail on the newcomer. ``ctl["fbase"]``: the bitmask the action's own faint check
-    starts from (after the list's)."""
+    starts from (after the list's). ``pursuit_sync``: ``_use_move``'s, for ``MODE_PURSUIT``."""
     action = actions[side]
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
@@ -1848,6 +2059,15 @@ def _act(
     )
     base = _alive_mask(state) if base is None else base
     listed = _faint_check(tables, _with_alive(state, base), switched)
+    # The list's Toxic Spikes poisoned the newcomer (subscript_show_party_list.s:22, before its
+    # faint check): the resumed tail's Synchronize flag (rulings G-12, G-13).
+    newcomer = jnp.clip(action - MOVE_ACTIONS, 0, 5)
+    landed = switched.status[side, newcomer]
+    entry_poisoned = (
+        resumed
+        & (state.status[side, newcomer] == Status.NONE)
+        & ((landed == Status.POISON) | (landed == Status.TOXIC))
+    )
     used = _use_trainer_item(tables, state, side, items[side])
     choice = (choices[0][side], choices[1][side], choices[2][side])
     # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
@@ -1867,6 +2087,9 @@ def _act(
         mode,
         pursuit,
         claw,
+        entry_poisoned,
+        landed,  # the newcomer's BattleMon.status before the list's faint check (G-24)
+        pursuit_sync,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -1936,7 +2159,7 @@ def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.nd
 
 
 def _pursuit_hit(
-    tables: Tables, state: BattleState, pursuer, actions, choices, outcome: Outcome
+    tables: Tables, state: BattleState, pursuer, switcher, actions, choices, outcome: Outcome
 ) -> BattleState:
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
@@ -1949,15 +2172,29 @@ def _pursuit_hit(
     ``effects.sticky_barb_transfer``, the defender's physicalDamageTaken being the script's
     damage, :33): Shell Bell's heal of the script's ``shellBellDamageDealt`` (:21-29,
     ``effects.shell_bell_heal``) or Life Orb's recoil (``effects.life_orb_recoil``; one
-    holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set."""
+    holder holds one of them). The switching side chose no FIGHT, so no Custap flag is set.
+    ``switcher``: the switching battler (``switchedMon``)."""
     action = actions[pursuer]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
     mon = state.active[pursuer]
     state = state._replace(pp=state.pp.at[pursuer, mon, slot].add(jnp.int8(-1)))
+    # battle_script.c:6919-6922: one more while PP is left when the switching battler has
+    # Pressure (Battler_Ability, its own: the switch has not happened yet), ruling G-9.
+    extra = pressure_holder(state, switcher) & (state.pp[pursuer, mon, slot] > 0)
+    state = state._replace(
+        pp=state.pp.at[pursuer, mon, slot].add(jnp.where(extra, -1, 0).astype(state.pp.dtype))
+    )
     move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
-    before_hp = state.hp[1 - pursuer, state.active[1 - pursuer]]
+    before_hp = state.hp[switcher, state.active[switcher]]
+    # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
+    # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
+    # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
+    guarded = wonder_guarded(
+        tables, state, pursuer, move, move_type_of(tables, state, pursuer, move), switcher
+    )
+    state = reveal_ability(state, switcher, state.active[switcher], DAMAGE_AVOIDED, guarded)
     state, info = play_hit(
         tables,
         state,
@@ -1973,7 +2210,6 @@ def _pursuit_hit(
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
-    switcher = 1 - pursuer
     fell = (before_hp > 0) & (state.hp[switcher, state.active[switcher]] == 0)
     bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[pursuer, mon] > 0)
     state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
@@ -2126,7 +2362,7 @@ def _execute_actions(
         return (position < 2) & (state.pivot_battler == 0)
 
     def body(carry):
-        state, read, shown, position, phase, pursued, base, pick_mul, fired = carry
+        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
@@ -2139,7 +2375,7 @@ def _execute_actions(
         pursuer = 1 - side
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
-        hit = _pursuit_hit(tables, pre, pursuer, acts, choices, outcome)
+        hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {
@@ -2150,7 +2386,20 @@ def _execute_actions(
         }
         read, shown = put((read, shown), pursuer, pursuer_events, fire)
         read, shown = put((read, shown), side, {"contact_ability": seen["contact"]}, fire)
-        state = _faint_check(tables, pre, _where(fire, hit, pre))
+        struck = _where(fire, hit, pre)
+        state = _faint_check(tables, pre, struck)
+        # U-turn's head stopped with its Synchronize flag and sideEffectMon (``sync``); the
+        # Pursuit's contact ability (subscript_pursuit.s:40, :86, TriggerAbilityOnHit: the
+        # pursuer becomes the sideEffectMon) toggles the flag, and its faint check zeroes only
+        # the party copy of a fainted battler's status (battle_controller.c:1481-1486): the
+        # MODE_PURSUIT tail's Synchronize step reads both battlers' BattleMon.status (G-24).
+        chased = ap & sync_landed(pre, struck, pursuer)
+        sides = jnp.arange(2)
+        pursuit_sync = (
+            sync[0] ^ chased,
+            jnp.where(chased, pursuer, sync[1]),
+            struck.status[sides, struck.active].astype(_I32),
+        )
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
@@ -2182,6 +2431,7 @@ def _execute_actions(
             base,
             pursuer,
             claw=claw,
+            pursuit_sync=pursuit_sync,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
@@ -2220,7 +2470,11 @@ def _execute_actions(
         state = _where(stop, acted, done)
         position = jnp.where(stop, position, position + 1)
         phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
-        return state, read, shown, position, phase, pursued, base, pick_mul, fired
+        sync = (
+            jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
+            jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
+        )
+        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync
 
     start = (
         state,
@@ -2232,9 +2486,10 @@ def _execute_actions(
         jnp.where(paused, state.ts_alive, _alive_mask(state)),
         jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
+        (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     # Each battler whose action is still to come (after the paused one in ``order``): doubles
@@ -2915,8 +3170,9 @@ def _future_sight(
     ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else a defender behind a substitute
     (its bit, :13) has the damage taken off the substitute's HP, 0 when ``substituteHP <=
     damage`` (:15-21, B10-4; no flag, no HP change), then goes to :92; otherwise (Rage, :30-37,
-    is unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP
-    leaves 1 HP, ``MOVE_STATUS_ENDURED_ITEM``) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
+    is unsupported) ``CheckHoldOnWith1HP`` (:28; battle_script.c:9098-9124: a Focus Sash at full HP,
+    or a Focus Band whose roll ``Outcome.future_band[battler]`` passes, leaves 1 HP,
+    ``MOVE_STATUS_ENDURED_ITEM``; ruling G-1) and ``UPDATE_HP`` (:29; ``waitingBattlers`` is 0
     after the actions, bcp.c:881-886, so no resist berry, subscript_update_hp.s:9-10); then, under
     ``MOVE_STATUS_ENDURED_ITEM``, a ``HOLD_EFFECT_ENDURE`` item is removed (:40-48).
 
@@ -2967,10 +3223,15 @@ def _future_sight(
         sub_hp = state.substitute_hp[d].astype(_I32)
         behind = sub_hp != 0
         state = _set_side(state, "substitute_hp", d, jnp.maximum(sub_hp - damage, 0), hit & behind)
-        endured_now = hit & ~behind & sash & full & (damage >= hp)
+        # A Focus Band's roll (Outcome.future_band[d], ruling G-1) or a full-HP Focus Sash.
+        band = holds(tables, state, d, ItemId.FOCUS_BAND) & (outcome.future_band[d] != 0)
+        endured_now = hit & ~behind & ((sash & full) | band) & (damage >= hp)
         dealt = jnp.where(endured_now, hp - 1, jnp.minimum(damage, hp))
         state = _set_mon(state, "hp", d, mon, hp - dealt, hit & ~behind)
         endure_flag = endured | endured_now
+        # :39-44: under MOVE_STATUS_ENDURED_ITEM the message tags msgBattlerTemp's item (bcp.c:
+        # 1776; BattleMessage_ItemTag, battle_script.c:11741-11744), then removes a sash.
+        state = reveal_item(state, d, mon, hit & endure_flag)
         state = consume_item(state, d, hit & endure_flag & sash)
         missed = jnp.where(fires, miss_flag, missed)
         shielded = jnp.where(fires, shield_flag, shielded)
@@ -3151,16 +3412,23 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     battle-start ``speedRand`` (``BattleContext_InitCounters``, battle_lib.c:2019-2025), or at
     a later root the previous turn's draw, which the player never sees. ``RandNext() % 5 ==
     0`` (``QUICK_CLAW_MODULUS``), treated as uniform (1/5, the project's ``% n`` convention;
-    exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere."""
+    exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere. Then a weather war the
+    battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
+    and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
-    return _keep_quick_claw(tables, state, draw)
+    state = _keep_quick_claw(tables, state, draw)
+    return sample_war(jax.random.fold_in(key, 1), state)
 
 
 def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, float]]:
     """Stage B's root chance node (host): ``(state, probability)`` for every value of the
     hidden ``qc_roll`` under ``sample_root``'s law, one state per combination over the
     ``qc_kept`` sides (1 at 1/5, 0 at 4/5), the other sides 0. They differ only in hidden
-    state, so they are one information set. Without a kept side: ``[(state, 1.0)]``."""
+    state, so they are one information set. Without a kept side: ``[(state, 1.0)]``. A weather
+    war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
+    two tie values (1/2 each) where the tie decides it: those states differ in the weather,
+    which the player sees before acting, so Stage B makes the root a chance node over the
+    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34)."""
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []
@@ -3169,8 +3437,40 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
         for k, b in zip(kept, bits, strict=True):
             if k:
                 prob *= 1 / n if b else (n - 1) / n
-        out.append((state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype)), prob))
+        drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
+        if bool(war_split(drawn)):
+            out.extend((resolve_war(drawn, tie), prob / 2) for tie in (0, 1))
+        else:
+            out.append((resolve_war(drawn, 0), prob))
     return out
+
+
+def war_split(state: BattleState) -> jnp.ndarray:
+    """``bool``: ``state`` holds an open weather war (``BattleState.war_swaps``) whose order
+    the tie bit decides at its ``speedRand`` (``qc_roll``)."""
+    swaps = state.war_swaps.astype(_I32)
+    qc = state.qc_roll.astype(_I32)
+    at = 2 * qc[0] + 4 * qc[1]
+    return (swaps != 0) & (((swaps >> at) & 1) != ((swaps >> (at + 1)) & 1))
+
+
+def resolve_war(state: BattleState, tie) -> BattleState:
+    """``state`` with its open weather war settled (ruling G-26): ``monSpeedOrder`` is the
+    sort's at the state's ``speedRand`` (``qc_roll``) and the tie's ``RandNext() & 1``
+    ``tie`` (bit ``tie + 2 * qc[0] + 4 * qc[1]`` of ``war_swaps``, ``hooks.order_swaps``);
+    where it put the player second, the player's weather stays (``hooks.swap_war``).
+    ``war_swaps`` is then 0. Without an open war: ``state`` (``war_swaps`` is 0)."""
+    swaps = state.war_swaps.astype(_I32)
+    qc = state.qc_roll.astype(_I32)
+    bit = (swaps >> (jnp.asarray(tie, _I32) + 2 * qc[0] + 4 * qc[1])) & 1
+    state = swap_war(state, (swaps != 0) & (bit == 1))
+    return state._replace(war_swaps=jnp.zeros_like(state.war_swaps))
+
+
+def sample_war(key, state: BattleState) -> BattleState:
+    """``resolve_war`` with the tie drawn from ``key`` (``RandNext() & 1``, uniform): the
+    draw a playout makes before the next decision (``search.playout``)."""
+    return resolve_war(state, jax.random.randint(key, (), 0, 2))
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:
@@ -3183,7 +3483,7 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
     return (active_down & jnp.any(bench, axis=1) & (state.over == 0)).astype(jnp.int8)
 
 
-def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
+def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> BattleState:
     """Send in party ``slot`` for ``side``'s fainted active Pokemon, through the same
     switch-in path as a switch action (``_switch_in``, then ``hooks.on_switch_in``) and a
     faint check.
@@ -3200,9 +3500,21 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
 
     ``ReplaceFainted`` runs before ``totalTurns++`` (:1852), while ``step`` has already
     added 1 to ``turn``: the decomp's ``totalTurns + 1`` is ``turn`` here, for the
-    newcomer's ``fake_out_turn`` and for a faint on entry."""
+    newcomer's ``fake_out_turn`` and for a faint on entry.
+
+    Where ``effects`` (``bool``, traceable) is false only the list runs (the hazards and the
+    faint check): the newcomer's switch-in states wait for ``ShowBattleMon`` while the other
+    side sends in again first, ``entry_pending[side]`` is set for a newcomer with HP left
+    (``hooks.show_battle_mon`` runs them; ``search.playout.replacement_pass``, ruling G-32)."""
     entered = _switch_in(tables, state, side, slot, state.turn)
-    out = _faint_check(tables, entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    effects = jnp.asarray(effects, bool)
+    hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
+    arrived = _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
+    waits = ~effects & (out.hp[side, out.active[side]] > 0) & (out.over == 0)
+    out = out._replace(
+        entry_pending=out.entry_pending.at[side].set(waits.astype(out.entry_pending.dtype))
+    )
     # TurnEnd's AnyExpPayout (bcp.c:1846) pays for a newcomer the hazards fainted. Learn work
     # it leaves inside the opponent's replacement loop would be read by the next replacement
     # pick before the learn resolve: refused as window (c) (design §3.3(c)).

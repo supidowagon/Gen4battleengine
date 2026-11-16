@@ -11,7 +11,7 @@ import pytest
 
 from nuzline.ai.layout import KAIZO, fight_slot_reads, move_read_rows
 from nuzline.ai.outcome import KAIZO_TRANSCRIBED
-from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
+from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUNDS
 
 DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 
@@ -21,14 +21,35 @@ def test_read_bounds_are_the_decomps(kaizo_tables):
     transcribed effect in all four kinds (damaging or not, quadruple or not)."""
     import sys
 
-    from tools.ai_read_bounds import Script, read_bounds
+    from tools.ai_read_bounds import Script, drawn_read_bounds, read_bounds
 
     if not (DECOMP / "src/battle/trainer_ai/script.s").exists():
         pytest.skip("decomp not present")
     sys.setrecursionlimit(max(sys.getrecursionlimit(), 100000))
     script = Script(DECOMP, np.asarray(kaizo_tables.move_ai_effect))
     assert read_bounds(script, KAIZO_TRANSCRIBED) == READ_BOUNDS
+    assert drawn_read_bounds(script, KAIZO_TRANSCRIBED, READ_BOUNDS) == DRAWN_READ_BOUNDS
     assert {e for e, _, _ in READ_BOUNDS} == set(KAIZO_TRANSCRIBED)
+
+
+def test_damage_commands_read_by_the_moveset():
+    """E1 ruling G-39, hand-checked rows. A damaging hit (effect 0) in a fight with a drawing
+    move reads EvalAttack's FlagMoveDamageScore (:6361-6362, compared with NOT_HIGHEST) and,
+    when it draws itself, IfCurrentMoveKills (:6358): EVAL_ATTACK 0 -> 1 -> 2; Basic_Main's
+    two compares with AI_NO_COMPARISON_MADE (:63, :113) read nothing (BASIC stays 2). U-turn
+    (SWITCH_HIT, 228) reads IfPartyMemberDealsMoreDamage (:5118) once more in EXPERT. Copycat
+    (242) reads IfBattlerDealsMoreDamage at :5560 and :5573 on one path even in a fight with no
+    drawing move (the player's last move may draw): EXPERT 3."""
+    bits = READ_BOUND_BITS
+    base = dict(zip(bits, READ_BOUNDS[(0, True, False)], strict=True))
+    fight = dict(zip(bits, DRAWN_READ_BOUNDS[(0, True, False, False)], strict=True))
+    own = dict(zip(bits, DRAWN_READ_BOUNDS[(0, True, False, True)], strict=True))
+    assert (base[1], fight[1], own[1]) == (0, 1, 2)
+    assert base[0] == fight[0] == own[0] == 2
+    u_turn = dict(zip(bits, READ_BOUNDS[(228, True, False)], strict=True))
+    u_turn_drawn = dict(zip(bits, DRAWN_READ_BOUNDS[(228, True, False, False)], strict=True))
+    assert u_turn_drawn[2] == u_turn[2] + 1
+    assert dict(zip(bits, READ_BOUNDS[(242, False, False)], strict=True))[2] == 3
 
 
 def test_read_bounds_decide_by_the_move(kaizo_tables):

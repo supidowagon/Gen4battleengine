@@ -33,7 +33,7 @@ from nuzline.engine.coverage import (
     terrain_refusal,
     unknown_start,
 )
-from nuzline.engine.ids import Weather
+from nuzline.engine.ids import AbilityId, Weather
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
@@ -244,18 +244,11 @@ def test_in_battle_form_changes_are_refused(tables, names, species, form, item, 
 
 def test_coverage_reads_the_form_row_ability(tables, names):
     origin = replace(sample_party(names)[0], species=487, form=1, item=names.item("Griseous Orb"))
-    r = check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
-    # Origin Forme's row has Levitate (supported since E2 batch 3), Altered Forme's Pressure.
-    assert (
-        any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
-        is False
-    )
-    assert not any(
-        "Levitate (ability UNSUPPORTED)" in m for m in r.missing
-    )  # the AI's refusals stay
+    # Origin Forme's row has Levitate, Altered Forme's Pressure: coverage reads the form's row.
+    assert coverage_module._party_abilities(tables, [origin]) == {AbilityId.LEVITATE}
     altered = replace(origin, form=0)
-    r = check_coverage(tables, names, [altered], roark_trainer(), roark_party(names), 0)
-    assert any(m.endswith("GIRATINA (slot 0): Pressure (ability UNSUPPORTED)") for m in r.missing)
+    assert coverage_module._party_abilities(tables, [altered]) == {AbilityId.PRESSURE}
+    check_coverage(tables, names, [origin], roark_trainer(), roark_party(names), 0)
     with pytest.raises(ValueError, match="species 479 has no form 6"):
         check_coverage(
             tables,
@@ -639,31 +632,3 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
-
-
-def test_weather_war_and_trace_standoff_are_refused(tables, names):
-    """Rulings B3-14, B3-15 (coverage docstring): two different weather abilities on the two
-    sides, and Trace on both sides, are refused; one side alone is not."""
-    from nuzline.data.spec import PokemonSpec
-    from nuzline.engine.coverage import trace_standoff_line, weather_war_line
-
-    def mon(species: str) -> PokemonSpec:
-        sid = names.species(species)
-        return PokemonSpec(
-            species=sid,
-            level=10,
-            nature=0,
-            ivs=(0,) * 6,
-            evs=(0,) * 6,
-            moves=(names.move("Tackle"), 0, 0, 0),
-            item=0,
-            ability_slot=0,
-            gender=0,
-            friendship=0,
-        )
-
-    assert weather_war_line(tables, [mon("Groudon")], [mon("Kyogre")]) is not None
-    assert weather_war_line(tables, [mon("Groudon")], [mon("Groudon"), mon("Geodude")]) is None
-    assert weather_war_line(tables, [mon("Kyogre"), mon("Groudon")], [mon("Geodude")]) is None
-    assert trace_standoff_line(tables, [mon("Porygon")], [mon("Porygon")]) is not None
-    assert trace_standoff_line(tables, [mon("Porygon")], [mon("Geodude")]) is None

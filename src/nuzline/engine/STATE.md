@@ -44,6 +44,10 @@ three structs has a row.
 - **Status.** The decomp packs sleep turns and the toxic counter into `status`
   bits (`include/constants/battle/condition.h`); `BattleState` splits them into
   `status` (`ids.Status`) and `status_counter`.
+- **Pending confusion.** `confusion == ids.CONFUSION_PENDING` (6): a disliked flavor berry
+  confused the battler (subscript_confuse.s:34's `Random 3, 2` not drawn yet); its next
+  confusion check draws the counter (`Outcome.berry_confusion`), ruling G-5 in
+  docs/kaizo/e1-mechanics-ledger.md. Every other read takes it as confused.
 - **statusVolatile** bits mapped: confusion turns -> `confusion`, flinch ->
   `flinched`, bind turns -> `trapped`, recharging -> `recharge`, Foresight ->
   `foresight`, Bide turns -> `bide_turns`, Defense Curl -> `curled`,
@@ -137,7 +141,12 @@ three structs has a row.
   mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
   Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the
   weather ability of the newcomer and of a battler that just traced; Skill Swap and Role
-  Play, which would need the flags, are unsupported. `MoveEffectsData.truant` is
+  Play, which would need the flags, are unsupported. `downloadAnnounced` (E1 Gardenia batch,
+  ruling G-21) likewise stays without a field: `hooks.download` runs for the newcomer and for
+  a battler that just traced Download, the only times the flag is clear, and the one
+  newcomer that meets no living foe (the player's at a double KO) has it fired by
+  `search.playout.replacement_pass` once the opposing newcomer is in (G-22); the row stays
+  `later (M6)` for Skill Swap and Role Play. `MoveEffectsData.truant` is
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
   :2195-2197; 0 for a lead), so it is `fake_out_turn`'s parity (`order.truant_loafs`).
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
@@ -182,6 +191,23 @@ three structs has a row.
   whose UpdateAfterSwitch (`battle_script.c:2522`) clears it (B8-2, B8-7). Their turn-end checks:
   Curse (bcp.c:1451, with Burn), Lock-On (:1618, with Uproar / Disable), Yawn (:1684, with
   Taunt), Perish Song in the side-condition pass (:1791).
+- **monSpeedOrder -> `war_swaps`** (E1 Gardenia batch, ruling G-26): inside a turn `step`
+  resolves the order itself; between turns the switch-in states run over the order
+  `BattleSystem_SortMonSpeedOrder` gave at `TrainerMessage` (battle_lib.c:3364-3382,
+  battle_controller_player.c:251), and only the weather state's result depends on it (two
+  different switch-in weather abilities entering together: the slower one's stays). Where
+  that order hangs on a draw still to come (the battle-start `speedRand`, a speed tie's
+  `RandNext() & 1`), `war_swaps` holds the swap bit of each draw (`hooks.order_swaps`) until
+  `step.resolve_war` makes it; else 0.
+- **The announced flags while a list newcomer waits -> `entry_pending`** (E1 Gardenia review,
+  ruling G-32): `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and
+  `downloadAnnounced` stay `later (M6)` rows (Skill Swap, Role Play), but one span needs their
+  "all still clear" state: a newcomer a replacement's party list sent in
+  (subscript_show_party_list.s:22-24) while the player's newcomer of the same list fainted on
+  its hazards, so `TurnEnd` re-enters `ReplaceFainted` (battle_controller_player.c:1846-1858)
+  before `ShowBattleMon` (:256) runs its switch-in states. `entry_pending[battler]` is 1 then
+  (`step.replace(..., effects=False)`), until `search.playout.replacement_pass` runs both
+  newcomers' states (`hooks.show_battle_mon`); else 0.
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
@@ -355,7 +381,7 @@ three structs has a row.
 | `BattleMon.slowStartFinished` | — | later (M6) |
 | `BattleMon.friskAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.moldBreakerAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
-| `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
+| `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
 | `BattleMon.ppCur` | `pp` | mapped |
 | `BattleMon.ppUps` | — | later (M3) |
@@ -572,7 +598,7 @@ three structs has a row.
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
-| `BattleContext.monSpeedOrder` | — | not needed because it is reset every turn and `step` resolves a whole turn |
+| `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

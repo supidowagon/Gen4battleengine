@@ -120,7 +120,7 @@ _SWITCH_REFUSED = {
     k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
-_ANY_SIDE_ABILITIES = {"Levitate": 26, "Wonder Guard": 25, "Scrappy": 113, "Normalize": 96}
+_ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
 # ai/commands.py MOVE_IDS: Basic_Main's OHKO checks (script.s:57-58), Expert_Pursuit's
 # U-turn (:3730), Expert_StealthRock's Roar and Whirlwind (:6276-6277), Expert_Curse's Gyro
 # Ball and Trick Room (:3472-3473, read from K3c Task 6), and the Basic_CheckSoundproof list
@@ -159,13 +159,12 @@ _AI_MOVE_IDS = {
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
-# Shade are modelled since E1 batch 13, Hidden Power since batch 14 (engine.damage).
+# Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
+# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES).
 _CALC_DAMAGE_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
     "Gyro Ball": 360,
-    "Psywave": 149,
-    "Magnitude": 222,
 }
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
 # Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
@@ -273,6 +272,8 @@ CONSTANTS: tuple[Constant, ...] = (
         _E,
         {
             **_ANY_SIDE_ABILITIES,
+            "Wonder Guard": 25,
+            "Mold Breaker": 104,
             "Shadow Tag": 23,
             "Arena Trap": 71,
             "Magnet Pull": 42,
@@ -326,6 +327,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
     Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
     Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # MOVE_IMPRISON (generated/moves.txt line 287): DecrementPP's Pressure count for it
+    # (battle_controller_player.c:2239-2240), ruling G-8.
+    Constant("nuzline.engine.ids.MOVE_IMPRISON", "move", 286, "Imprison", _E),
     # ABILITY_MULTITYPE (generated/abilities.txt line 122): BtlCmd_TryCamouflage
     # (battle_script.c:8001-8004).
     Constant("nuzline.engine.ids.ABILITY_MULTITYPE", "ability", 121, "Multitype", _E),
@@ -432,6 +436,11 @@ CONSTANTS: tuple[Constant, ...] = (
             "Arena Trap": 71,
             "Shadow Tag": 23,
             "Magnet Pull": 42,
+            "Pressure": 46,
+            "Leaf Guard": 102,
+            "Synchronize": 28,
+            "Wonder Guard": 25,
+            "Download": 88,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -478,6 +487,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Leaf Guard": 102,
             # BtlCmd_TryKnockOff's Sticky Hold (battle_script.c:6614), B10-6.
             "Sticky Hold": 60,
+            "Own Tempo": 20,
         },
     ),
     Constant("nuzline.ai.switching.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
@@ -531,6 +541,12 @@ CONSTANTS: tuple[Constant, ...] = (
     # (battle_lib.c:1278-1286) as one bit, exact only for this param.
     Constant(
         "nuzline.engine.ids.QUICK_CLAW_PARAM", "item", 217, "Quick Claw", _E, 52, hold_param=20
+    ),
+    # Focus Band's effectParam (res/items/data/focus_band.json) with HOLD_EFFECT_MAYBE_ENDURE
+    # (65): the engine stores RandNext() % 100 < param (bcp.c:3387, battle_script.c:9110) as
+    # one bit (Outcome.focus_band / future_band), exact only for this param (ruling G-1).
+    Constant(
+        "nuzline.engine.ids.FOCUS_BAND_PARAM", "item", 230, "Focus Band", _E, 65, hold_param=10
     ),
     # saves/check.py: Sketch's user and the special routes outside the learnset tables
     # (Rotom's form moves, Route 228's ultimate moves, Wilma's Draco Meteor for Dragon
@@ -689,6 +705,12 @@ EXEMPT: dict[str, str] = {
         "Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves "
         "carry their own effect"
     ),
+    "nuzline.ai.commands.HARRASSMENT_EFFECTS": (
+        "decomp battle effect ids of script.s's Harrassment_Effects (:8036-8071), compared with "
+        "MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script Kaizo did not "
+        "change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves carry their "
+        "own effect"
+    ),
     "nuzline.ai.commands.CHECK_HP_TABLES": (
         "decomp battle effect ids of script.s's six CheckHP_*Discourage* tables (:7748-7977), "
         "compared with MoveTable.effect (IfLoadedInTable, trainer_ai.c:858-874) by a script "
@@ -752,6 +774,16 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
         "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "tools.effect_map.FLAVOR_HOLD_EFFECTS": (
+        "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's flavor berries "
+        "(battle_lib.c:4698-4771, ruling G-4): each game's items carry their own hold effect "
+        "(build_tables looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "nuzline.engine.ids.Flavor": "enum Flavor (include/constants/flavor.h); " + _ENGINE_ENCODING,
+    "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
+        "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
+        "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
     ),
     "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "

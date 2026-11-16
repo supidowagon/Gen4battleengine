@@ -64,6 +64,7 @@ from nuzline.search.playout import (
     replacement_policy,
     root_state,
     send_replacements,
+    settle_war,
 )
 
 __all__ = ["GREEDY", "Player", "PlayerResult", "player_playout", "refusal_reason"]
@@ -157,6 +158,7 @@ def _player_run(
     def body(carry):
         s, key, turns, fallback, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
+        s = settle_war(s, k_turn)  # an open weather war, before the decisions (G-26)
         action, act_refused, by_fallback = player.act(tables, s, params, k_policy, layout)
         played, refused, ai_switched, power_mul = _play(
             tables, s, jnp.asarray(action, _I32), k_turn, layout
@@ -267,6 +269,7 @@ def _replay(
         if int(state.over) != 0:
             return None, state, turns
         key, k_policy, k_turn = jax.random.split(key, 3)
+        state = settle_war(state, k_turn)
         action, act_refused, _ = _act_jit(tables, state, player, params, k_policy, layout)
         played, ai_refused, ai_switched, power_mul = _play_jit(
             tables, state, jnp.asarray(action, _I32), k_turn, layout

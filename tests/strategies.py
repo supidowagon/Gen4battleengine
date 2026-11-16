@@ -36,7 +36,9 @@ from nuzline.engine.actions import (
 from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
+    CONFUSION_PENDING,
     MOVE_STRUGGLE,
+    NATURE_DISLIKED_FLAVOR,
     SEMI_SET_FLAGS,
     AbilityId,
     EffectId,
@@ -249,6 +251,10 @@ BATCH2_ITEMS = (
 )
 # E2 batch 3: the weather rocks (their holder's weather move lasts longer).
 WEATHER_ROCKS = ("Damp Rock", "Heat Rock", "Smooth Rock", "Icy Rock")
+# E1 Gardenia batch (G-1, G-4): Focus Band and the flavor berries; ``_draw_gardenia_item`` also
+# gives one to an active Pokemon on purpose, with what makes it act.
+FLAVOR_BERRIES = ("Figy Berry", "Wiki Berry", "Mago Berry", "Aguav Berry", "Iapapa Berry")
+GARDENIA_ITEMS = ("Focus Band", *FLAVOR_BERRIES)
 ITEM_GROUPS = (
     TYPE_BOOST_ITEMS,
     DAMAGE_ITEMS,
@@ -256,6 +262,7 @@ ITEM_GROUPS = (
     NO_EFFECT_ITEMS,
     BATCH2_ITEMS,
     WEATHER_ROCKS,
+    GARDENIA_ITEMS,
 )
 # E2 batch 3: abilities ``_draw_batch3`` puts on an active Pokemon (the battler's ability; a
 # switch-out restores its own) and the switch-in ones it puts on a bench Pokemon.
@@ -319,6 +326,25 @@ SWITCH_IN_ABILITIES = (
     AbilityId.DRIZZLE,
     AbilityId.SAND_STREAM,
     AbilityId.SNOW_WARNING,
+    AbilityId.PRESSURE,  # its switch-in announcement (G-8)
+)
+# E1 Gardenia batch (G-8): moves of each Pressure range class ``_draw_pressure`` gives the foe of
+# a Pressure holder (single target, field, opponent side, adjacent opponents, all adjacent, the
+# user, Imprison by id, the Counter family and Pursuit's extra PP; a Sleep Talk / Copycat call).
+PRESSURE_MOVES = (
+    "Tackle",
+    "Sunny Day",
+    "Spikes",
+    "Toxic Spikes",
+    "Growl",
+    "Earthquake",
+    "Swords Dance",
+    "Imprison",
+    "Counter",
+    "Mirror Coat",
+    "Metal Burst",
+    "Pursuit",
+    "Sleep Talk",
 )
 # The species items' holders (BattleSystem_CalcMoveDamage, battle_lib.c:6730-6774), none of
 # them an M1 species: ``_draw_species_item`` makes an active Pokemon one of them, holding the
@@ -710,6 +736,40 @@ def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, nam
         give(1 - side, foe, "Tackle")
 
 
+def _draw_gardenia_item(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 3) give the active Pokemon a ``GARDENIA_ITEMS`` item, picked uniformly, with
+    what makes it act most of the time: a flavor berry at or near half HP and (half the time) a
+    nature that dislikes it (``ids.NATURE_DISLIKED_FLAVOR``), the foe sometimes with Bug Bite to
+    eat it; a Focus Band holder at low HP or confused (its self-hit roll). Sometimes the active
+    Pokemon's confusion is a flavor berry's pending counter (``CONFUSION_PENDING``, G-5)."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    if rnd.random() < 0.15:
+        a["confusion"][side] = CONFUSION_PENDING
+    name = rnd.choice(GARDENIA_ITEMS)
+    a["item"][side, active] = names.item(name)
+    max_hp = int(a["max_hp"][side, active])
+    if rnd.random() < 0.6:
+        a["hp"][side, active] = rnd.randint(1, max(max_hp * 3 // 4, 1))
+    if name in FLAVOR_BERRIES:
+        flavor = FLAVOR_BERRIES.index(name)
+        if rnd.random() < 0.5:
+            disliking = [k for k, f in enumerate(NATURE_DISLIKED_FLAVOR) if f == flavor]
+            a["nature"][side, active] = rnd.choice(disliking)
+        if rnd.random() < 0.3:
+            foe = 1 - side
+            foe_mon = int(a["active"][foe])
+            move = names.move(rnd.choice(("Bug Bite", "Pluck")))
+            k = rnd.randint(0, 3)
+            a["moves"][foe, foe_mon, k] = move
+            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+    elif rnd.random() < 0.3:
+        a["confusion"][side] = rnd.randint(2, _CONFUSION_MAX)
+
+
 def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 2) put a ``BATCH3_ABILITIES`` ability on the active Pokemon, picked uniformly,
     with what makes it act most of the time: a recoil move for Reckless, a low-power hit for
@@ -772,6 +832,200 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
     ]
     if bench and draw(st.integers(0, 2)) == 0:
         a["ability"][side, rnd.choice(bench)] = rnd.choice(SWITCH_IN_ABILITIES)
+
+
+def _draw_pressure(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 4) give the active Pokemon Pressure (G-8), its foe a ``PRESSURE_MOVES`` move
+    (kept only when supported) and, half the time, 1-2 PP left in each of the foe's moves, so a
+    Pressure cost can run a move out."""
+    if draw(st.integers(0, 3)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    a["ability"][side, active] = AbilityId.PRESSURE
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    move = names.move(rnd.choice(PRESSURE_MOVES))
+    if tables.move_effect[move] != EffectId.UNSUPPORTED:
+        k = rnd.randint(0, 3)
+        a["moves"][foe, foe_mon, k] = move
+        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+    if rnd.random() < 0.5:
+        for k in range(4):
+            if a["moves"][foe, foe_mon, k]:
+                a["pp"][foe, foe_mon, k] = rnd.randint(1, 2)
+
+
+# E1 Gardenia batch (G-12 .. G-14): moves ``_draw_status_guard`` gives the foe of a Synchronize or
+# Leaf Guard holder: status moves of each status, damaging moves with a status secondary (contact
+# or not), and a plain contact move; Roar and U-turn for the Toxic Spikes paths.
+STATUS_GUARD_MOVES = (
+    "Thunder Wave",
+    "Glare",
+    "Will-O-Wisp",
+    "Toxic",
+    "PoisonPowder",
+    "Spore",
+    "Ember",
+    "Body Slam",
+    "Poison Sting",
+    "Fire Punch",
+    "Tackle",
+    "Roar",
+    "U-turn",
+)
+CONTACT_STATUS_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
+
+
+def _draw_status_guard(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 4) give the active Pokemon Synchronize or Leaf Guard (G-12 .. G-14), its foe a
+    ``STATUS_GUARD_MOVES`` move and its own side a contact move (kept only when supported), each
+    active Pokemon no status half the time, the foe a Static-like ability a third of the time, sun
+    half the time (Leaf Guard), and a bench Pokemon Synchronize with Toxic Spikes on its side a
+    third of the time (the Roar and U-turn newcomer paths)."""
+    if draw(st.integers(0, 3)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    guard = rnd.choice((AbilityId.SYNCHRONIZE, AbilityId.LEAF_GUARD))
+    a["ability"][side, active] = guard
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    for owner, mon, name in (
+        (foe, foe_mon, rnd.choice(STATUS_GUARD_MOVES)),
+        (side, active, rnd.choice(("Tackle", "Fire Punch", "Body Slam", "Thunder Wave", "U-turn"))),
+    ):
+        move = names.move(name)
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            k = rnd.randint(0, 3)
+            a["moves"][owner, mon, k] = move
+            a["pp"][owner, mon, k] = int(tables.move_pp[move])
+    for owner, mon in ((side, active), (foe, foe_mon)):
+        if rnd.random() < 0.5:
+            a["status"][owner, mon] = Status.NONE
+            a["status_counter"][owner, mon] = 0
+    if rnd.random() < 1 / 3:
+        a["ability"][foe, foe_mon] = rnd.choice(CONTACT_STATUS_ABILITIES)
+    if guard == AbilityId.LEAF_GUARD and rnd.random() < 0.5:
+        a["weather"][...] = Weather.SUN
+    bench = [
+        i
+        for i in range(SLOTS)
+        if i != active and a["species"][side, i] and a["hp"][side, i] > 0
+    ]
+    if bench and rnd.random() < 1 / 3:
+        slot = rnd.choice(bench)
+        a["ability"][side, slot] = AbilityId.SYNCHRONIZE
+        a["status"][side, slot] = Status.NONE
+        a["status_counter"][side, slot] = 0
+        a["toxic_spikes"][side] = rnd.randint(1, 2)
+
+
+# E1 Gardenia batch (G-18 .. G-22): moves ``_draw_guard_download`` gives the foe of a Wonder Guard
+# holder: neutral, resisted and super-effective hits, Fire Fang's bypass and Ice Fang's block, the
+# fixed-damage and Counter families (power 1), Jump Kick's crash, a status move, and Pursuit.
+WONDER_GUARD_MOVES = (
+    "Tackle",
+    "Water Gun",
+    "ThunderShock",
+    "Ember",
+    "Fire Fang",
+    "Ice Fang",
+    "Thunder Fang",
+    "Night Shade",
+    "Seismic Toss",
+    "Mirror Coat",
+    "Jump Kick",
+    "Double Kick",
+    "Thunder Wave",
+    "Pursuit",
+    "Brick Break",
+)
+
+
+def _draw_guard_download(
+    draw, tables: Tables, a: dict, side: int, active: int, names: Names
+) -> None:
+    """Maybe (1 in 4) give the active Pokemon Wonder Guard (G-18), its foe a
+    ``WONDER_GUARD_MOVES`` move (kept only when supported) and a third of the time Mold Breaker;
+    and maybe (1 in 3) a bench Pokemon of either side Download (G-21), with the active foe at a
+    random Defense / Sp. Def stage, so a switch-in, a U-turn, Baton Pass or Roar newcomer and a
+    replacement reach it."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    if draw(st.integers(0, 3)) == 0:
+        a["ability"][side, active] = AbilityId.WONDER_GUARD
+        move = names.move(rnd.choice(WONDER_GUARD_MOVES))
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            k = rnd.randint(0, 3)
+            a["moves"][foe, foe_mon, k] = move
+            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        if rnd.random() < 1 / 3:
+            a["ability"][foe, foe_mon] = AbilityId.MOLD_BREAKER
+    if draw(st.integers(0, 2)) == 0:
+        owner = rnd.choice((side, foe))
+        mon = int(a["active"][owner])
+        bench = [
+            i for i in range(SLOTS) if i != mon and a["species"][owner, i] and a["hp"][owner, i] > 0
+        ]
+        if bench:
+            a["ability"][owner, rnd.choice(bench)] = AbilityId.DOWNLOAD
+            other = 1 - owner
+            a["stages"][other, Stat.DEF] = rnd.randint(-6, 6)
+            a["stages"][other, Stat.SPD] = rnd.randint(-6, 6)
+
+
+# E1 Gardenia batch (G-25): abilities a bench Pokemon facing an armed Trace holder carries, so
+# the holder's mid-turn copy reaches the chance laws (crit, accuracy, secondary, the armors,
+# contact procs, speed), the switch-in states (Intimidate, Download, a weather) and the turn end.
+STANDOFF_COPIES = (
+    AbilityId.SUPER_LUCK,
+    AbilityId.SERENE_GRACE,
+    AbilityId.COMPOUNDEYES,
+    AbilityId.NO_GUARD,
+    AbilityId.SHELL_ARMOR,
+    AbilityId.STATIC,
+    AbilityId.SWIFT_SWIM,
+    AbilityId.SHED_SKIN,
+    AbilityId.INTIMIDATE,
+    AbilityId.DOWNLOAD,
+    AbilityId.DRIZZLE,
+    AbilityId.SYNCHRONIZE,
+)
+# G-26: the switch-in weather abilities a weather war pairs.
+WEATHER_SETTERS = (
+    AbilityId.DRIZZLE,
+    AbilityId.DROUGHT,
+    AbilityId.SAND_STREAM,
+    AbilityId.SNOW_WARNING,
+)
+
+
+def _draw_standoff(draw, a: dict, side: int) -> None:
+    """Maybe (1 in 5) give both active Pokemon Trace, which neither can copy, so both stay armed
+    (G-25), and a living bench Pokemon of the other side a ``STANDOFF_COPIES`` ability: its
+    entry (a switch, a U-turn or Baton Pass pick, a Roar drag, a replacement) is copied mid-turn.
+    And maybe (1 in 5) a living bench Pokemon of each side a different ``WEATHER_SETTERS``
+    ability (G-26: the replacements' weather war, an active setter facing a newcomer's)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+
+    def bench(owner: int) -> list[int]:
+        mon = int(a["active"][owner])
+        return [
+            i for i in range(SLOTS) if i != mon and a["species"][owner, i] and a["hp"][owner, i]
+        ]
+
+    if draw(st.integers(0, 4)) == 0:
+        for owner in (side, foe):
+            a["ability"][owner, int(a["active"][owner])] = AbilityId.TRACE
+        if bench(foe):
+            a["ability"][foe, rnd.choice(bench(foe))] = rnd.choice(STANDOFF_COPIES)
+    if draw(st.integers(0, 4)) == 0 and bench(side) and bench(foe):
+        mine, theirs = rnd.sample(WEATHER_SETTERS, 2)
+        a["ability"][side, rnd.choice(bench(side))] = mine
+        a["ability"][foe, rnd.choice(bench(foe))] = theirs
 
 
 # E2 batch 9: abilities ``_draw_batch9`` puts on the active Pokemon.
@@ -1412,6 +1666,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_battle_item(draw, tables, a, side, active, names)
         _draw_species_item(draw, tables, a, side, active, names)
         _draw_batch2_item(draw, tables, a, side, active, names)
+        _draw_gardenia_item(draw, tables, a, side, active, names)
         _draw_batch3(draw, tables, a, side, active, names)
         _draw_batch4(draw, tables, a, side, active, names)
         if invokers:
@@ -1423,6 +1678,10 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_substitute(draw, tables, a, side, active, names)
+        _draw_pressure(draw, tables, a, side, active, names)
+        _draw_status_guard(draw, tables, a, side, active, names)
+        _draw_guard_download(draw, tables, a, side, active, names)
+        _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
     # already up) can shrink the Sleep Talk set.
@@ -1677,6 +1936,9 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
         future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
         yawn_sleep=_ints(2, 5, sides),
+        focus_band=_flag(hits),
+        future_band=_flag(sides),
+        berry_confusion=_ints(2, 5, sides),
     )
 
 
@@ -1812,5 +2074,6 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
 
         if draw(st.integers(0, 3)) == 0:
             a["ability"][side, mon] = draw(st.sampled_from(LAW_ABILITIES))
+    _draw_standoff(draw, a, draw(st.integers(0, 1)))  # G-25: an armed Trace holder's copy
     _draw_terrain(draw, tables, a)  # a LAW_MOVES terrain move needs one too
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})

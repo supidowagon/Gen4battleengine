@@ -23,7 +23,7 @@ The fields:
 * ``name``: the policy, ``game_constants.POLICY``'s value for the game.
 * ``flags``: the trainer AI flags the policy runs (``policy._flags``), in bit order
   (``generated/ai_flags.txt``: bit 0 BASIC, 1 EVAL_ATTACK, 2 EXPERT, 3 SETUP_FIRST_TURN,
-  4 RISKY, 5 PRIORITIZE_EXTREMES, 8 CHECK_HP, 9 WEATHER).
+  4 RISKY, 5 PRIORITIZE_EXTREMES, 6 BATON_PASS, 8 CHECK_HP, 9 WEATHER, 10 HARRASSMENT).
 * ``per_slot_sites``: the random reads are keyed by move slot (K3c Task 3) and by their
   order on the slot's path (E1 Ruling R4; ``outcome`` docstring).
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
@@ -34,7 +34,7 @@ The fields:
   (``AiContext.missing_read``). 0 for the flat layout.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
-  ``switching.KAIZO_SWITCH_SITES`` (44, every candidate draw of a party of six) for Kaizo.
+  ``switching.KAIZO_SWITCH_SITES`` (60, every candidate draw of a party of six) for Kaizo.
 * ``water2_ability``: the ability ``Basic_CheckForImmunity``'s last compare tests
   (script.s:78): Levitate (26) in vanilla, a second Levitate test that never matches (the
   decomp's bug, since :77 already takes Levitate), and Dry Skin (87) in Kaizo (overlay14
@@ -84,7 +84,7 @@ from nuzline.ai.outcome import (
     KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
 )
-from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
+from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUNDS
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import (
@@ -95,6 +95,7 @@ from nuzline.data.tables import (
     BATTLE_TYPES,
     Tables,
 )
+from nuzline.engine.damage import AI_DRAWN_MOVES
 from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
@@ -117,6 +118,7 @@ __all__ = [
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
 BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY = 0, 1, 2, 3, 4
 PRIORITIZE_EXTREMES, BATON_PASS, TAG_STRATEGY, CHECK_HP, WEATHER = 5, 6, 7, 8, 9
+HARRASSMENT = 10
 # The flag bits whose scripts the Kaizo policy transcribes (policy._flags):
 # engine/coverage.py IMPLEMENTED_AI_FLAGS["kaizo"] lists the same bits.
 KAIZO_FLAG_BITS = frozenset(
@@ -130,6 +132,7 @@ KAIZO_FLAG_BITS = frozenset(
         BATON_PASS,
         CHECK_HP,
         WEATHER,
+        HARRASSMENT,
     }
 )
 assert set(READ_BOUND_BITS) == KAIZO_FLAG_BITS
@@ -225,9 +228,10 @@ def thinking_mask(tables: Tables, battler: int = 1):
 
 
 # The most random reads one move's scoring path makes with every transcribed flag on: the
-# largest row sum of read_bounds.READ_BOUNDS (E1 Ruling R6), so no fight's path, under any of
-# its flags, passes it (each fight's own bound, fight_slot_reads, is a row sum over a subset).
-ALLIN_READS = max(sum(row) for row in READ_BOUNDS.values())
+# largest row sum of read_bounds.READ_BOUNDS and DRAWN_READ_BOUNDS (E1 Ruling R6, ruling G-39),
+# so no fight's path, under any of its flags, passes it (each fight's own bound,
+# fight_slot_reads, is a row sum over a subset).
+ALLIN_READS = max(sum(row) for row in (*READ_BOUNDS.values(), *DRAWN_READ_BOUNDS.values()))
 
 # The sampled AI of every Kaizo fight in one program (module docstring): all transcribed flag
 # bits and effects, the read bound ALLIN_READS, the trainer's flags read at run time. Built
@@ -276,7 +280,10 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
     """``int8[n, 8]``: per move of ``moves`` (move ids, 0 or less for none), the most
     random reads each transcribed flag script makes on its path (``read_bounds.READ_BOUNDS``,
     by its battle effect, whether it is damaging, and whether its type can be quadruple
-    effective; E1 Ruling R6). A move whose effect is not transcribed is refused
+    effective; E1 Ruling R6). When some move of ``moves`` draws in ``TrainerAI_CalcDamage``
+    (Psywave's or Magnitude's id case, a damaging move: trainer_ai.c:2827-2835, :3014-3048;
+    E1 ruling G-39) the damage commands read too: ``read_bounds.DRAWN_READ_BOUNDS``, keyed
+    also by whether the move itself draws. A move whose effect is not transcribed is refused
     (``policy._refused``), and its row is 0."""
     effect = np.asarray(tables.move_ai_effect)
     power = np.asarray(tables.move_power)
@@ -286,19 +293,25 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
 
     moves = [int(m) for m in np.asarray(moves).ravel() if int(m) > 0]
     rows = np.zeros((max(len(moves), 1), len(READ_BOUND_BITS)), np.int8)
-    for i, move in enumerate(moves):
-        e = int(effect[move])
+
+    def is_damaging(move: int) -> bool:
         # FlagMoveDamageScore's test (trainer_ai.c:1035-1036), as commands.is_damaging:
         # an alt-power effect whatever its power, else power above 1 and a calc effect.
-        damaging = e in ALT_POWER_EFFECTS or (
-            bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
-        )
+        e = int(effect[move])
+        return e in ALT_POWER_EFFECTS or (bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS)
+
+    drawing = {m for m in moves if m in AI_DRAWN_MOVES and is_damaging(m)}
+    for i, move in enumerate(moves):
+        e = int(effect[move])
+        damaging = is_damaging(move)
         # QUADRUPLE needs two distinct
         # defender types each taking the move super effectively (battle_lib.c:2611-2646), while
         # an AI Adaptability Pokemon stays refused (its STAB of 2, :2592-2594, makes one
         # super-effective type QUADRUPLE: then this must allow one).
         can_quad = int((chart[int(move_type[move])] == 20).sum()) >= 2
         reads = READ_BOUNDS.get((e, damaging, can_quad))
+        if reads is not None and drawing:
+            reads = DRAWN_READ_BOUNDS.get((e, damaging, can_quad, move in drawing), reads)
         if reads is not None:
             rows[i] = reads
     return rows

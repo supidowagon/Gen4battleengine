@@ -7,8 +7,8 @@
   from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973; at the
   start of the battle from ``ShowBattleMon``, :256). Of its states the engine reaches
   ``SWITCH_IN_CHECK_STATE_TRACE`` (:3718, ``trace``), ``_WEATHER_ABILITIES`` (:3740,
-  ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_FORBIDDEN_STATUS`` (:4135) and
-  ``_HELD_ITEM_STATUS`` (:4151).
+  ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_DOWNLOAD`` (:3814, ``download``),
+  ``_FORBIDDEN_STATUS`` (:4135) and ``_HELD_ITEM_STATUS`` (:4151).
 * ``held_item_check`` / ``after_damage_items``: ``BattleSystem_TriggerHeldItem``
   (battle_lib.c:4576) and ``BattleSystem_TriggerHeldItemOnStatus`` (:4967), which
   are the same for every implemented item (HP berries, Berry Juice, the status berries,
@@ -72,10 +72,24 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import ability_weather, trace_copy
+from nuzline.engine.damage import (
+    ability_weather,
+    apply_stage,
+    decomp_abilities,
+    divide,
+    trace_copy,
+)
 from nuzline.engine.effects import change_stage, entry_hazards, forget_item
-from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
-from nuzline.engine.order import pinch_divisor
+from nuzline.engine.ids import (
+    CONFUSION_PENDING,
+    ITEM_ABILITY_IDS,
+    AbilityId,
+    ItemId,
+    Stat,
+    Status,
+    Weather,
+)
+from nuzline.engine.order import dislikes_berry, pinch_divisor, player_second
 from nuzline.engine.state import STAGE_MAX, BattleState
 
 _I32 = jnp.int32
@@ -88,11 +102,17 @@ CONTACT_DAMAGE, PARALYSIS_BLOCKED = "contact_damage", "paralysis_blocked"
 WEATHER_SET, ABSORB, WEATHER_HP = "weather_set", "absorb", "weather_hp"
 OHKO_BLOCKED = "ohko_blocked"
 STATUS_HP, TORMENT = "status_hp", "torment"
+STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
+DAMAGE_AVOIDED = "damage_avoided"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
 #   battler that has not announced it: subscript_mold_breaker.s prints
 #   ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP, BTLSCR_MSG_BATTLER_TEMP``.
+# * Pressure: SWITCH_IN_CHECK_STATE_PRESSURE (battle_lib.c:4096-4110), likewise for a living
+#   battler whose ``pressureAnnounced`` is clear (cleared on entry, :113): subscript_pressure.s
+#   prints "{0} is exerting its {1}!" with ``TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP,
+#   BTLSCR_MSG_BATTLER_TEMP`` (ruling G-10).
 # * Static / Poison Point / Flame Body: when the contact ability inflicts its status
 #   (``effects._contact_ability``): subscript_paralyze.s:44 / subscript_poison.s:57 /
 #   subscript_burn.s:_177 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder. A target that
@@ -112,6 +132,19 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 #   because of its {1}" with ``TAG_NICKNAME_ABILITY``), and the cure of a sleep status
 #   (``RecoverStatusByAbility``, subscript_ability_forbids_status.s:6 tags
 #   ``BTLSCR_MSG_TEMP``).
+# * Leaf Guard: a direct status (a status move) it blocks in sun (``effects._inflict``; ruling
+#   G-14): subscript_poison.s:_201, _badly_poison.s:_266, _burn.s:_264, _paralyze.s:_170 and
+#   _fall_asleep.s:_221 print their "prevents" / "stayed awake" message with
+#   ``TAG_NICKNAME_ABILITY``; an indirect or ability side effect ends silently. (Toxic Spikes and
+#   Yawn reveal it through their own code, by decomp id.)
+# * Synchronize: a status it passes on (``effects.synchronize``; ruling G-13): subscript_poison.s
+#   :57 / _burn.s:68 / _paralyze.s:44 tag ``BTLSCR_MSG_BATTLER_TEMP``, the holder; a pass the
+#   receiver blocks is silent.
+# * Wonder Guard: a move it guards (MOVE_STATUS_WONDER_GUARD, ``damage.wonder_guarded``; ruling
+#   G-20): subscript_missed.s:107-110 prints "{0} avoided damage by using {1}!" with
+#   ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER, unless an earlier flag of subscript_missed.s prints
+#   first: lost focus (:5), protected (:18), failed (:97) (``step._use_move``). A miss still
+#   reaches it (the plain-miss message is :157, after it).
 # * Shed Skin: subscript_ability_restore_status.s:8 tags the holder
 #   (``TAG_NICKNAME_ABILITY_STATUS``).
 # * Inner Focus: a Fake Out flinch it blocks (``effects._flinch``): subscript_flinch_mon.s:18-23
@@ -130,7 +163,8 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 #   battle_script.c:4340-4341; subscript_missed.s:67-69 prints "{0} was protected by {1}!"
 #   with ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER) unless an earlier flag of subscript_missed.s
 #   prints first: protected (:18), Levitate (:34), ineffective (:59) (``step._use_move``).
-# The others never reveal: Intimidate's "cuts" message and Keen Eye's "prevents"
+# The others never reveal: Intimidate's "cuts" message, Download's "raised its" message
+# (``SetupNicknameAbilityStatMsg``, :2854) and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
 # Shield Dust blocks silently (an indirect side effect); Truant's "loafing around"
 # (subscript_loafing_around.s) tags only the nickname; the damage, accuracy, crit, speed and
@@ -141,6 +175,7 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 # nothing).
 REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.MOLD_BREAKER: frozenset({SWITCH_IN}),
+    AbilityId.PRESSURE: frozenset({SWITCH_IN}),
     AbilityId.STATIC: frozenset({CONTACT_STATUS}),
     AbilityId.POISON_POINT: frozenset({CONTACT_STATUS}),
     AbilityId.FLAME_BODY: frozenset({CONTACT_STATUS}),
@@ -166,7 +201,45 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.POISON_HEAL: frozenset({STATUS_HP}),
     AbilityId.BAD_DREAMS: frozenset({TORMENT}),
     AbilityId.STURDY: frozenset({OHKO_BLOCKED}),
+    AbilityId.LEAF_GUARD: frozenset({STATUS_BLOCKED}),
+    AbilityId.SYNCHRONIZE: frozenset({SYNCHRONIZED}),
+    AbilityId.WONDER_GUARD: frozenset({DAMAGE_AVOIDED}),
 }
+
+
+def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_DOWNLOAD`` (battle_lib.c:3814-3851) for ``side``'s active battler
+    where ``cond`` (its ``downloadAnnounced`` is clear: it entered, or it just traced Download),
+    ruling G-21: with HP left and Download (``Battler_Ability``), it sums over the opposing
+    battlers ``foes`` (sides; the singles foe) that have HP and are not behind a substitute
+    (``VOLATILE_CONDITION_SUBSTITUTE``: its bit) their Defense and their Sp. Def, each through
+    its stage (``stats * sStatStageBoosts[stage]``, ``damage.apply_stage``; the raw stage, no
+    Simple). ``downloadAnnounced`` is set whatever the sums (:3836); when they are not both 0
+    the larger-or-equal Defense raises Sp. Attack, a larger Sp. Def raises Attack, by 1 through
+    ``subscript_update_stat_stage.s`` as an ability side effect (``BtlCmd_ChangeStatStage``,
+    battle_script.c:2841-2873: at +6 it ends silently). Its "raised its" message is built in C
+    (``SetupNicknameAbilityStatMsg``, :2854): the AI learns nothing. ``staged=False`` reads every
+    foe's stages as 0 (``search.playout.replacement_pass``, a fresh newcomer)."""
+    side = jnp.asarray(side, _I32)
+    mon = state.active[side]
+    sum_def, sum_spd = jnp.int32(0), jnp.int32(0)
+    for foe in foes:  # the opposing battlers (doubles: both)
+        target = state.active[foe]
+        counts = (state.hp[foe, target] > 0) & (state.substitute_hp[foe] == 0)
+        stats = state.stats[foe, target].astype(_I32)
+        stages = state.stages[foe].astype(_I32) * int(bool(staged))
+        defense = apply_stage(stats[Stat.DEF - 1], stages[Stat.DEF])
+        sp_def = apply_stage(stats[Stat.SPD - 1], stages[Stat.SPD])
+        sum_def = sum_def + jnp.where(counts, defense, 0)
+        sum_spd = sum_spd + jnp.where(counts, sp_def, 0)
+    on = (
+        jnp.asarray(cond)
+        & (state.ability[side, mon] == AbilityId.DOWNLOAD)
+        & (state.hp[side, mon] > 0)
+        & (sum_def + sum_spd != 0)
+    )
+    state = change_stage(state, side, Stat.SPA, 1, on & (sum_def >= sum_spd))
+    return change_stage(state, side, Stat.ATK, 1, on & (sum_def < sum_spd))
 
 
 def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> BattleState:
@@ -225,6 +298,84 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
         weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
         weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
     )
+
+
+# Every bit of ``order_swaps``: the three draws a sort of two battlers reads (a tie, two speedRand).
+ORDER_DRAWS = 8
+ALL_SWAPS = (1 << ORDER_DRAWS) - 1
+
+
+def order_swaps(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364-3382) of the two battlers
+    on ``state`` (the state the sort reads) for every value of the draws it reads: bit
+    ``tie + 2 * qc[0] + 4 * qc[1]`` is set where it puts the player's battler second
+    (``CompareBattlerSpeed(0, 1, TRUE)`` swaps: ``order.player_second``; ``ignoreQuickClaw``
+    leaves both priorities 0, but each Quick Claw's ``speedRand`` bit ``qc`` still activates it,
+    :1278-1286, and an exact tie swaps on ``RandNext() & 1``, :1445). A fainted battler goes
+    after a living one (:1205-1211). Ruling G-26."""
+    down = [state.hp[side, state.active[side]] == 0 for side in (0, 1)]
+    bits = jnp.int32(0)
+    for draw in range(ORDER_DRAWS):
+        qc = jnp.asarray([(draw >> 1) & 1, (draw >> 2) & 1], _I32)
+        second = player_second(tables, state, draw & 1, qc)
+        second = jnp.where(down[0] != down[1], down[0], second)
+        bits = bits | (second.astype(_I32) << draw)
+    return bits
+
+
+def weather_war(state: BattleState) -> jnp.ndarray:
+    """``bool``: both active Pokemon have HP and switch-in weather abilities
+    (``Battler_Ability``: Drizzle, Sand Stream, Drought, Snow Warning) that set different
+    weathers. Run in one weather state (battle_lib.c:3740-3790), each sets its own (the other's
+    permanent weather is not its own), so the second in ``monSpeedOrder`` leaves its weather."""
+    weathers = [ability_weather(state.ability[side, state.active[side]]) for side in (0, 1)]
+    alive = [state.hp[side, state.active[side]] > 0 for side in (0, 1)]
+    return (
+        alive[0]
+        & alive[1]
+        & (weathers[0] != Weather.NONE)
+        & (weathers[1] != Weather.NONE)
+        & (weathers[0] != weathers[1])
+    )
+
+
+def swap_war(state: BattleState, swapped) -> BattleState:
+    """The weather state run in the order ``[opponent, player]`` where ``swapped``, on a state
+    where it ran in the order ``[player, opponent]`` (the engine's): the player's weather
+    ability runs last, so its weather stays, permanent, and its script runs (the opponent's
+    permanent weather is up, not the player's: subscript_drizzle.s etc. reveal it to the AI,
+    ``WEATHER_SET``). Ruling G-26."""
+    on = jnp.asarray(swapped, bool)
+    mon = state.active[0]
+    weather = ability_weather(state.ability[0, mon])
+    state = reveal_ability(state, 0, mon, WEATHER_SET, on)
+    return state._replace(
+        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
+        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
+    )
+
+
+def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
+    """After a weather state the two battlers ran together in the engine's order (player
+    first): where ``war`` (``weather_war``), the order the sort gave (``swaps``,
+    ``order_swaps``) settles it now when the draws still to come cannot change it (``qc``: the
+    ``speedRand`` bits when they are known, ``int[2]``; else every value counts), else it waits
+    in ``war_swaps`` for ``step.resolve_war``'s draw. Where not ``war``, ``war_swaps`` is kept:
+    a tie an earlier ShowBattleMon left open (a double KO's hazard pass, ``search.playout.
+    replacement_pass``) still waits for its ``RandNext() & 1`` (battle_lib.c:1445, in the sort
+    at TrainerMessage, battle_controller_player.c:251). Ruling G-26."""
+    swaps = jnp.asarray(swaps, _I32)
+    if qc is None:
+        always, never = swaps == ALL_SWAPS, swaps == 0
+    else:
+        qc = jnp.asarray(qc, _I32)
+        at = 2 * qc[0] + 4 * qc[1]
+        tie0, tie1 = (swaps >> at) & 1, (swaps >> (at + 1)) & 1
+        always, never = (tie0 == 1) & (tie1 == 1), (tie0 == 0) & (tie1 == 0)
+    war = jnp.asarray(war, bool)
+    state = swap_war(state, war & always)
+    held = jnp.where(war, jnp.where(~always & ~never, swaps, 0), state.war_swaps)
+    return state._replace(war_swaps=held.astype(state.war_swaps.dtype))
 
 
 def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
@@ -347,10 +498,32 @@ def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
 def _hp_restore(effect, power, max_hp) -> jnp.ndarray:
     """HP an HP berry restores: Oran Berry and Berry Juice (``HOLD_EFFECT_HP_RESTORE``) its
     param, Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP *
-    param, 100)``; else 0."""
+    param, 100)``, a flavor berry (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``)
+    ``BattleSystem_Divide(maxHP, param)`` (battle_lib.c:4700 etc., :5680 etc.; build_tables
+    keeps its param >= 1, ruling G-4); else 0."""
     flat = (effect == ItemId.ORAN_BERRY) | (effect == ItemId.BERRY_JUICE)
     pct = jnp.maximum(max_hp * power // 100, 1)
-    return jnp.where(flat, power, jnp.where(effect == ItemId.SITRUS_BERRY, pct, 0))
+    flavor = divide(max_hp, jnp.maximum(power, 1))
+    heal = jnp.where(effect == ItemId.FLAVOR_BERRY, flavor, 0)
+    return jnp.where(flat, power, jnp.where(effect == ItemId.SITRUS_BERRY, pct, heal))
+
+
+def berry_confuse(tables: Tables, state: BattleState, side, mon, cond) -> BattleState:
+    """A flavor berry's dislike (subscript_held_item_dislike_flavor.s:10-13): after the heal,
+    ``side``'s Pokemon in party slot ``mon`` (its active battler) goes through
+    subscript_confuse.s with ``SIDE_EFFECT_TYPE_HELD_ITEM`` where ``cond``: its own Own Tempo
+    (``CheckAbility``, :6), a confusion already (:7) or Safeguard on its side (:8) end the
+    script before any draw; else ``Random 3, 2`` (:34) sets the counter. The counter is
+    ``CONFUSION_PENDING`` until the battler's confusion check reads it, which draws it
+    (``Outcome.berry_confusion``, ``step._use_move``): nothing reads more than the confusion
+    bit before that, so the late draw has the decomp's law, in and out of ``step`` (the battle
+    start, a faint replacement), ruling G-5."""
+    own_tempo = decomp_abilities(tables, state)[side, mon] == ITEM_ABILITY_IDS["Own Tempo"]
+    on = (
+        jnp.asarray(cond) & ~own_tempo & (state.confusion[side] == 0) & (state.safeguard[side] == 0)
+    )
+    new = jnp.where(on, CONFUSION_PENDING, state.confusion[side]).astype(state.confusion.dtype)
+    return state._replace(confusion=state.confusion.at[side].set(new))
 
 
 def held_item_check(
@@ -362,7 +535,11 @@ def held_item_check(
     (``_hp_restore``) at ``curHP <= maxHP / 2`` (``hp * 2 <= max_hp``) heals, capped
     (``subscript_held_item_hp_restore.s``); a status berry or White Herb cures
     (``_restore``); a stat pinch berry at ``curHP <= maxHP / pinch_divisor`` raises its stat
-    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``). Every one of those subscripts ends in
+    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``); a flavor berry heals
+    like the HP berries and then confuses a holder that dislikes its flavor (``berry_confuse``,
+    after the item is removed: the heal subscript's ``PLUCK_CHECK`` runs first,
+    subscript_held_item_hp_restore.s:13; Gluttony does not touch it, battle_lib.c:4698-4771).
+    Every one of those subscripts ends in
     ``BATTLE_SUBSCRIPT_PLUCK_CHECK``, which removes the item (``BtlCmd_RemoveItem``,
     battle_script.c:8972, which keeps it in ``item_consumed``) unless the attacker's
     ``SELF_TURN_FLAG_PLUCK_BERRY`` is set (``keep``, ``effects.MoveHit.pluck_flag``), and
@@ -391,7 +568,8 @@ def held_item_check(
             jnp.where(spent, item, state.item_consumed[side, mon]).astype(state.item_consumed.dtype)
         ),
     )
-    return state, on
+    disliked = healed & dislikes_berry(tables, state, side, mon, item)
+    return berry_confuse(tables, state, side, mon, disliked), on
 
 
 def after_damage_items(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
@@ -418,6 +596,7 @@ PLUCKABLE = (
     ItemId.PERSIM_BERRY,
     ItemId.LUM_BERRY,
     ItemId.PINCH_BERRY,
+    ItemId.FLAVOR_BERRY,  # PLUCK_EFFECT_HP_RESTORE_SPICY .. _SOUR (:5678-5751), G-4
     # The resist berries, Custap Berry and the berries with no hold effect (Razz, Nanab,
     # ...): PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
     ItemId.RESIST_BERRY,
@@ -438,7 +617,10 @@ def pluck_berry(
     foe holds an item (battle_script.c:8125-8127). A ``PLUCKABLE`` berry is removed
     (``RemoveItem BTLSCR_DEFENDER``, kept in ``item_consumed``) even if the foe fainted,
     and its pluck effect acts on the eater: Oran heals its param, Sitrus
-    ``Divide(maxHP * param, 100)``, each only below full HP (capped); Cheri, Chesto, Pecha,
+    ``Divide(maxHP * param, 100)``, a flavor berry ``Divide(maxHP, param)`` (and confuses an
+    eater whose nature dislikes it, ``berry_confuse``: subscript_pluck.s sets
+    ``msgBattlerTemp`` to the attacker, battle_lib.c:5678-5751), each only below full HP
+    (capped); Cheri, Chesto, Pecha,
     Rawst, Aspear, Persim and Lum cure as the held berry would (``_restore``: the same restore
     subscripts); a stat pinch berry raises the eater's stat by 1 below +6 whatever its HP
     (``_raise_stat``, :5753-5796: ``subscript_pluck.s`` sets ``msgBattlerTemp`` to the
@@ -474,6 +656,8 @@ def pluck_berry(
             jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
         ),
     )
+    disliked = healed & dislikes_berry(tables, state, side, user, item)
+    state = berry_confuse(tables, state, side, user, disliked)
     return state, on & ~healed & ~cured & ~raised
 
 
@@ -510,14 +694,17 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     in their state order (``BattleSystem_TriggerEffectOnSwitch``): Trace (``trace``) for the
     newcomer and for the other battler, whose Trace stayed armed while its foe was down (a
     double KO's replacements: the player's newcomer enters first, ``playout``); the weather
-    abilities (``weather_ability``) and Intimidate of the newcomer and of a battler that just
-    traced one; a living newcomer's switch-in announcement (``reveal_ability``,
-    ``SWITCH_IN``) and a traced Mold Breaker's; the forbidden-status check
+    abilities (``weather_ability``), Intimidate and Download (``download``) of the newcomer and
+    of a battler that just traced one; a living newcomer's switch-in announcement (``reveal_ability``,
+    ``SWITCH_IN``: Mold Breaker, Pressure) and a traced one's; the forbidden-status check
     (``recover_status_by_ability``, battle_lib.c:4135); then the held-item check of both
     active Pokemon (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS`` loops over every battler). Each
     state loops over ``monSpeedOrder``; in singles the order changes nothing here: two Trace
-    holders cannot copy each other, a traced ability is the other battler's own, and coverage
-    refuses two different weather abilities on the two sides (``coverage.weather_war``)."""
+    holders cannot copy each other (a holder facing Trace stays armed and copies the foe's next
+    newcomer here, ruling G-25), a traced ability is the other battler's own, and a newcomer
+    meets an active battler that announced its weather ability at its own entry. Two newcomers'
+    weather abilities meet only at a double KO's replacements (``playout.replacement_pass``)
+    and at the battle start (``battle_start``), ruling G-26."""
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
@@ -535,6 +722,8 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     state = weather_ability(state, foe, traced)
     state = intimidate(state, side, foe=foe)
     state = intimidate(state, foe, traced, foe=side)
+    state = download(state, side, (foe,))
+    state = download(state, foe, (side,), traced)
     mon, other = state.active[side], state.active[foe]
     state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
@@ -553,11 +742,16 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
     machine whose every state loops over all battlers (``monSpeedOrder``) before the next
     state runs (battle_lib.c:3649-4168): Trace (:3718-3737) for each lead, then the weather
     abilities (:3740-3790), then Intimidate (:3795-3808, once per battler: its
-    ``intimidateAnnounced``), then the switch-in announcements, the forbidden-status check
+    ``intimidateAnnounced``), then Download (:3814-3851, its ``downloadAnnounced``; it reads the
+    foe's Defense and Sp. Def, which no earlier state changes), then the switch-in announcements, the forbidden-status check
     (:4135) and the held-item check (:4151). So a lead that traced Intimidate fires it once,
     in the Intimidate state, like any Intimidate lead (ruling B3-18). No entry hazard is up at
     the start. A loop over battlers per state (the doubles conventions); in singles the order
-    within a state changes nothing (``on_switch_in``'s docstring)."""
+    within a state changes nothing (``on_switch_in``'s docstring) but in the weather state: two
+    leads whose weather abilities set different weathers leave the second one's in
+    ``monSpeedOrder``, which ``TrainerMessage`` sorted before (battle_controller_player.c:251)
+    on the leads as sent out, with the battle-start ``speedRand`` and a tie draw still to come
+    (``order_swaps``, ``hold_war``: settled at the root, ``step.resolve_war``; ruling G-26)."""
     sides = (0, 1)
     # Before ShowBattleMon, BattleSystem_InitBattleMon (bcp.c:227) arms canUnburden for every
     # lead holding an item, whatever its ability (battle_lib.c:161-166; no item is knocked off
@@ -566,12 +760,38 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
         held = state.item[side, state.active[side]] != 0
         value = jnp.where(held, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
         state = state._replace(can_unburden=state.can_unburden.at[side].set(value))
+    # TrainerMessage sorts monSpeedOrder before ShowBattleMon (battle_controller_player.c:251):
+    # on the leads as sent out, no weather yet (SWITCH_IN_CHECK_STATE_FIELD_WEATHER sets the
+    # start condition inside TriggerEffectOnSwitch), with the battle-start speedRand
+    # (BattleContext_InitCounters, battle_lib.c:2024), a root draw (ruling G-26).
+    swaps = order_swaps(
+        tables,
+        state._replace(
+            weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
+        ),
+    )
+    return show_battle_mon(tables, state, swaps)
+
+
+def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> BattleState:
+    """``ShowBattleMon``'s ``BattleSystem_TriggerEffectOnSwitch`` (battle_controller_player.c:
+    256; battle_lib.c:3649-4168) for two battlers whose states all wait: each state loops over
+    both (``monSpeedOrder``) before the next runs: Trace, the weather abilities (the order the
+    sort gave, ``swaps`` / ``qc``: ``hold_war``), Intimidate, Download, the switch-in
+    announcements, the forbidden-status check and the held-item check. The leads at the battle
+    start (``battle_start``) and, at a double KO whose player newcomer fainted on its hazards,
+    the waiting opposing newcomer with the player's next one (``search.playout.
+    replacement_pass``, ruling G-32)."""
+    sides = (0, 1)
     for side in sides:
         state, _ = trace(tables, state, side, 1 - side)
-    for side in sides:
+    for side in sides:  # the engine's order, player first; hold_war reorders a weather war
         state = weather_ability(state, side)
+    state = hold_war(state, weather_war(state), swaps, qc)
     for side in sides:
         state = intimidate(state, side, foe=1 - side)
+    for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate
+        state = download(state, side, (1 - side,))
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)

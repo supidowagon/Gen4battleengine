@@ -55,7 +55,8 @@ tile of one of ``h``'s warp events, and its terrain is ``CalcTerrain`` of that t
 terrain is the union over its map headers (``tools.rom.readers.maps.trainer_maps``) of the
 terrains of the tiles its battle can start on there: the sight-line and talk tiles of its
 object, or the rectangle of the coord event whose script starts it, when the decomp fixes
-them (``narrowed_terrains``, rules §9.3 step 2), else the header's whole set. One value is
+them (``narrowed_terrains``, rules §9.3 step 2; nothing from a header that runs none of the
+trainer's battles), else the header's whole set. One value is
 the terrain, several are "mixed" and no header (no map places the trainer) is "unknown";
 both of the last two store ``TERRAIN_UNKNOWN``.
 """
@@ -557,8 +558,9 @@ def trainer_terrains(
 ) -> list[tuple[int, list[int]]]:
     """Per trainer id: ``(terrain, possible terrains)``. The possible terrains are the union
     over the trainer's map headers ``where[id]`` of ``narrowed[(id, header)]`` when given
-    (``narrowed_terrains``: the tiles its battle can start on there), else ``by_header``;
-    one value is the terrain, none or several give ``TERRAIN_UNKNOWN``. ``TERRAIN_UNKNOWN``
+    (``narrowed_terrains``: the tiles its battle can start on there, empty for a header that
+    runs none of its battles), else ``by_header``; one value is the terrain, none or several
+    give ``TERRAIN_UNKNOWN``. ``TERRAIN_UNKNOWN``
     in the list means a header whose cells cannot be read."""
     narrowed = narrowed or {}
     out = []
@@ -772,6 +774,12 @@ VARS_START = 0x4000  # operands at or above it are variables (src/script_manager
 COMMON_SCRIPTS = (2000, 2500)
 SCRIPT_STACK_SIZE = 20  # ScriptContext.stack (include/field_script_context.h:20)
 UNKNOWN_TRAINER = -1  # a battle operand or partner value no constant gives
+# A tag battle's partner operand that is a variable no constant reaches on some path: it names
+# the partner (ScrCmd_StartTagBattle, src/scrcmd_trainer.c:146-161: the first operand is
+# partnerTrainer, then enemyTrainer1 and enemyTrainer2), never an opponent, so it matches only
+# a trainer some script makes a partner (narrowed_terrains' ``partners``).
+UNKNOWN_PARTNER = -2
+TAG_BATTLE = "SCRCMD_STARTTAGBATTLE"
 LOCALID_H = Path("include") / "constants" / "scrcmd.h"
 
 
@@ -853,12 +861,35 @@ def _is_var(v) -> bool:
     return v is None or v >= VARS_START
 
 
-def explore(script, starts, step) -> None:
+def _successors(cmd: Cmd, node, stack: tuple):
+    """The ``(node, stack)`` pairs control flow goes to after ``cmd`` at ``node`` (``explore``)."""
+    c = cmd.const
+    if c == "SCRCMD_END":
+        return []
+    if c == "SCRCMD_RETURN":
+        return [(stack[-1], stack[:-1])] if stack else []
+    out = []
+    if c in ("SCRCMD_CALL", "SCRCMD_CALLIF"):
+        if len(stack) + 1 >= SCRIPT_STACK_SIZE:
+            raise TerrainError(f"script call stack overflow at {node!r}")
+        out.append((cmd.target, (*stack, cmd.next)))
+        if c == "SCRCMD_CALL":
+            return out
+    elif c == "SCRCMD_GOTO":
+        return [(cmd.target, stack)]
+    elif cmd.target is not None:
+        out.append((cmd.target, stack))
+    out.append((cmd.next, stack))
+    return out
+
+
+def explore(script, starts, step, nodes: bool = False) -> None:
     """Walk ``script`` (``.cmd(node) -> Cmd``) from ``starts`` ((node, state)) by control
     flow, as ``tools.rom.readers.maps._walk`` does: ``Call``/``CallIf`` push the command
     after them, ``Return`` pops (an empty stack ends the path), ``End`` ends and ``GoTo``
-    jumps, any other branch command may jump or fall through. ``step(cmd, state)`` gives the
-    state after a command, or None to end the path there."""
+    jumps, any other branch command may jump or fall through. ``step(cmd, state)`` (with
+    ``nodes``, ``step(node, cmd, state)``) gives the state after a command, or None to end the
+    path there."""
     seen = set()
     work = [(node, (), state) for node, state in starts]
     while work:
@@ -867,28 +898,48 @@ def explore(script, starts, step) -> None:
             continue
         seen.add((node, stack, state))
         cmd = script.cmd(node)
-        state = step(cmd, state)
+        state = step(node, cmd, state) if nodes else step(cmd, state)
         if state is None:
             continue
-        c = cmd.const
-        if c == "SCRCMD_END":
+        for nxt, nstack in _successors(cmd, node, stack):
+            work.append((nxt, nstack, state))
+
+
+def partner_operands(script) -> dict:
+    """``node -> values`` for each ``StartTagBattle`` reached from ``script``'s entries whose
+    partner operand (its first, ``ScrCmd_StartTagBattle``, src/scrcmd_trainer.c:146-161) is a
+    variable: the constants assigned to that variable on the paths that reach the command,
+    with None for a path that assigns none. The variable resolves as the trainer -> map join
+    resolves a battle operand (``tools.rom.readers.maps.script_battles``: each path carries var
+    -> values, ``SetVarFromValue`` replaces them, paths meeting at a command with the same call
+    stack are merged; a variable written by another command adds nothing)."""
+    seen: dict = {}
+    out: dict = {}
+    work = [(e, (), {}) for e in script.entries]
+    while work:
+        node, stack, env = work.pop()
+        if node is None:
             continue
-        if c == "SCRCMD_RETURN":
-            if stack:
-                work.append((stack[-1], stack[:-1], state))
-            continue
-        if c in ("SCRCMD_CALL", "SCRCMD_CALLIF"):
-            if len(stack) + 1 >= SCRIPT_STACK_SIZE:
-                raise TerrainError(f"script call stack overflow at {node!r}")
-            work.append((cmd.target, (*stack, cmd.next), state))
-            if c == "SCRCMD_CALL":
+        old = seen.get((node, stack))
+        if old is not None:
+            merged = {
+                v: old.get(v, frozenset({None})) | env.get(v, frozenset({None}))
+                for v in old.keys() | env
+            }
+            if merged == old:
                 continue
-        elif c == "SCRCMD_GOTO":
-            work.append((cmd.target, stack, state))
-            continue
-        elif cmd.target is not None:
-            work.append((cmd.target, stack, state))
-        work.append((cmd.next, stack, state))
+            env = merged
+        seen[(node, stack)] = env
+        cmd = script.cmd(node)
+        if cmd.const == TAG_BATTLE and cmd.args and _is_var(cmd.args[0]):
+            var = cmd.args[0]
+            got = env.get(var, frozenset({None})) if var is not None else frozenset({None})
+            out[node] = out.get(node, frozenset()) | got
+        elif cmd.const == SET_VAR and cmd.args and cmd.args[0] is not None:
+            env = {**env, cmd.args[0]: frozenset({cmd.args[1]})}
+        for nxt, nstack in _successors(cmd, node, stack):
+            work.append((nxt, nstack, env))
+    return out
 
 
 class ScriptFacts:
@@ -897,8 +948,13 @@ class ScriptFacts:
     (``common``, the same shape): per local id, the trainers its battles and partner variable
     can name (``placed``) and the trainers it starts with the player still where the script
     began (``started``); over the whole file, the constants it reaches (``consts``), the
-    local ids it moves objects by (``moved``) and whether it can start any of its own entries
-    by id (``any_entry``)."""
+    local ids it moves objects by (``moved``), whether it can start any of its own entries
+    by id (``any_entry``) and the trainers it makes a partner (``partners``: constants given to
+    the partner variable, and a tag battle's partner operand, ``battle_operands``).
+
+    A tag battle's partner operand names the partner (src/scrcmd_trainer.c:146-161), so a
+    variable one resolves through ``partner_operands`` to the partners its paths assign, and
+    one no constant reaches on some path is ``UNKNOWN_PARTNER``, never ``UNKNOWN_TRAINER``."""
 
     def __init__(self, script, common, fr: FieldRules):
         self.script, self.common, self.fr = script, common, fr
@@ -912,6 +968,7 @@ class ScriptFacts:
             return state
 
         explore(script, [(e, 0) for e in script.entries], keep)
+        self._partner_values = partner_operands(script)
         self.consts = frozenset(c.const for c in reached)
         self.moved = frozenset(
             UNKNOWN_TRAINER if _is_var(c.args[0] if c.args else None) else c.args[0]
@@ -928,6 +985,41 @@ class ScriptFacts:
             for c in reached
         )
 
+    @property
+    def partners(self) -> frozenset[int]:
+        """The trainers this file's scripts make a partner: constants given to the partner
+        variable (``SystemVars_GetPartnerTrainerID``, src/scrcmd_trainer.c:131-133) and the
+        resolved partner operands of its tag battles."""
+        if not hasattr(self, "_partners"):
+            out: set[int] = set()
+
+            def step(node, cmd, state):
+                if cmd.const == TAG_BATTLE:
+                    partner, _ = self.battle_operands(node, cmd)
+                    out.update(partner)
+                elif cmd.const == SET_VAR and cmd.args[0] == self.script.partner_var:
+                    out.add(UNKNOWN_TRAINER if cmd.args[1] is None else cmd.args[1])
+                return state
+
+            explore(self.script, [(e, 0) for e in self.script.entries], step, nodes=True)
+            self._partners = frozenset(out - {0, UNKNOWN_PARTNER})
+        return self._partners
+
+    def battle_operands(self, node, cmd: Cmd) -> tuple[frozenset, tuple]:
+        """``(partners, opponents)`` of battle command ``cmd`` at ``node``: a tag battle's
+        first operand is the partner (src/scrcmd_trainer.c:146-161), as constants (a variable
+        one resolved by ``partner_operands``, ``UNKNOWN_PARTNER`` for a path with no constant);
+        every other operand, and every operand of ``StartTrainerBattle`` (:123-144) and
+        ``StartFirstBattle`` (src/scrcmd.c:4038-4048), is an opponent."""
+        if cmd.const != TAG_BATTLE or not cmd.args:
+            return frozenset(), cmd.args
+        first = cmd.args[0]
+        if not _is_var(first):
+            return frozenset({first}), cmd.args[1:]
+        values = self._partner_values.get(node, frozenset({None}))
+        partner = {UNKNOWN_PARTNER if v is None else v for v in values}
+        return frozenset(partner), cmd.args[1:]
+
     def _entry(self, local: int) -> list:
         if not 1 <= local <= len(self.script.entries):
             return []
@@ -940,16 +1032,18 @@ class ScriptFacts:
         if local not in self._placed:
             out: set[int] = set()
 
-            def step(cmd, state):
+            def step(node, cmd, state):
                 if cmd.const in BATTLE_COMMANDS:
-                    out.update(UNKNOWN_TRAINER if _is_var(a) else a for a in cmd.args)
+                    partner, enemies = self.battle_operands(node, cmd)
+                    out.update(partner)
+                    out.update(UNKNOWN_TRAINER if _is_var(a) else a for a in enemies)
                 elif cmd.const == SET_VAR and cmd.args[0] in (self.script.partner_var, None):
                     out.add(UNKNOWN_TRAINER if cmd.args[1] is None else cmd.args[1])
                 elif cmd.const.startswith("?"):
                     out.add(UNKNOWN_TRAINER)
                 return state
 
-            explore(self.script, self._entry(local), step)
+            explore(self.script, self._entry(local), step, nodes=True)
             out.discard(0)
             self._placed[local] = frozenset(out)
         return self._placed[local]
@@ -961,10 +1055,13 @@ class ScriptFacts:
             safe: set[int] = set()
             other: set[int] = set()
 
-            def step(cmd, moved):
+            def step(node, cmd, moved):
                 if cmd.const in BATTLE_COMMANDS:
-                    for a in cmd.args:
-                        if _is_var(a):
+                    partner, enemies = self.battle_operands(node, cmd)
+                    for a in (*sorted(partner), *enemies):
+                        if a == UNKNOWN_PARTNER:
+                            other.add(UNKNOWN_PARTNER)
+                        elif _is_var(a):
                             other.add(UNKNOWN_TRAINER)
                         elif a:
                             (other if moved else safe).add(a)
@@ -973,7 +1070,7 @@ class ScriptFacts:
                     other.add(UNKNOWN_TRAINER if cmd.args[1] is None else cmd.args[1])
                 return moved or not self.safe(cmd)
 
-            explore(self.script, self._entry(local), step)
+            explore(self.script, self._entry(local), step, nodes=True)
             self._started[local] = (frozenset(safe), frozenset(other))
         return self._started[local]
 
@@ -1125,7 +1222,21 @@ def narrowed_terrains(
     whose battle the notes above narrow to known tiles; the other pairs are left out, so
     ``trainer_terrains`` keeps the whole-header set for them. ``sites[h]``: header ``h``'s
     events; ``scripts[file]``: its script file's facts; ``rematch_rows``: ``(base,
-    rematches)`` of ``gVsSeekerRematchData`` (a rematch is fought at its base's objects)."""
+    rematches)`` of ``gVsSeekerRematchData`` (a rematch is fought at its base's objects).
+
+    Two rules read which battles of the file can start under ``h`` (E1 ruling G-38):
+
+    * A script entry ``h`` cannot run starts no battle there: ``h`` runs the local ids of its
+      bg, object and coord events and init scripts (``ScriptManager_Start`` from the field's
+      event checks; ``HeaderSites``), the ids game code starts directly (``C_STARTED_SCRIPTS``,
+      cited at ``tools.rom.readers.maps.C_STARTED_SCRIPTS``), and any entry when the file can
+      start one by id (``ScriptFacts.any_entry``). The trainer -> map join walks a file only one
+      header uses whole (``maps.join_trainer_maps``), so it can place a trainer on a header that
+      never runs its entry; when every entry naming the trainer is such an entry and no object
+      of ``h`` is the trainer, ``h`` gives it no terrain (an empty set).
+    * A tag battle's partner operand names the partner (``ScriptFacts.battle_operands``): a
+      variable one that no constant reaches (``UNKNOWN_PARTNER``) matches only the trainers some
+      script of the game makes a partner (``ScriptFacts.partners``), not every trainer."""
     bases: dict[int, set[int]] = {}
     spins: set[int] = set()
     firsts: set[int] = set()
@@ -1159,9 +1270,11 @@ def narrowed_terrains(
             )
         return features[h]
 
+    partners = frozenset().union(*(facts.partners for facts in scripts.values()))
     out: dict[tuple[int, int], frozenset[int]] = {}
     for t in sorted(where):
         ids = {t} | bases.get(t, set())
+        names = ids | {UNKNOWN_TRAINER} | ({UNKNOWN_PARTNER} if ids & partners else set())
         for h in sorted(set(where[t])):
             if h not in sites:
                 continue
@@ -1191,23 +1304,28 @@ def narrowed_terrains(
                     facings = frozenset()
                 sight |= _sight_tiles(tiles, o, facings)
                 stand |= _talk_tiles(tiles, o)
-            entries = [
-                e
-                for e in range(1, len(facts.script.entries) + 1)
-                if facts.placed(e) & (ids | {UNKNOWN_TRAINER})
-            ]
             coord_scripts = {c.script for c in site.coords}
-            for e in entries if ok else ():
-                safe, other = facts.started(e)
-                c_started = e in C_STARTED_SCRIPTS and (
+
+            def c_started(e: int, facts=facts) -> bool:
+                return e in C_STARTED_SCRIPTS and (
                     e not in OVERLAY9_ONLY_SCRIPTS or DISTORTION_FEATURES in facts.consts
                 )
+
+            named = [e for e in range(1, len(facts.script.entries) + 1) if facts.placed(e) & names]
+            # The entries h can run (first rule of the docstring); the others start nothing here.
+            entries = [
+                e
+                for e in named
+                if facts.any_entry or e in coord_scripts or e in site.other_scripts or c_started(e)
+            ]
+            for e in entries if ok else ():
+                safe, other = facts.started(e)
                 if (
                     facts.any_entry
                     or e not in coord_scripts
                     or e in site.other_scripts
-                    or c_started
-                    or other & (ids | {UNKNOWN_TRAINER})
+                    or c_started(e)
+                    or other & names
                     or not safe & ids
                 ):
                     ok = False
@@ -1217,6 +1335,9 @@ def narrowed_terrains(
                         stand |= {
                             (c.x + i, c.z + j) for i in range(c.width) for j in range(c.length)
                         }
+            if ok and named and not (objects or entries):
+                out[(t, h)] = frozenset()  # h runs none of the trainer's battles
+                continue
             if not ok or not (objects or entries):
                 continue
             terrains = _tile_terrains(tiles, sight, False)

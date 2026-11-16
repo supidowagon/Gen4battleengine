@@ -32,6 +32,7 @@ from nuzline.ai.outcome import (
     SIM_ROLL_MAX,
     SWITCH_NONE,
     AiOutcome,
+    no_calc_draws,
 )
 from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
@@ -157,6 +158,7 @@ def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO, tie: int = 0) -> AiOu
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(0, jnp.int8),
         switch_stop=jnp.asarray(SWITCH_NONE, jnp.int8),
+        calc_draws=no_calc_draws((), rolls.shape[1]),
     )
 
 
@@ -200,7 +202,7 @@ def _effectiveness(t, s, move) -> int:
 def _damage(t, s) -> list[int]:
     """The AI's damage estimate of each slot (``TrainerAI_CalcAllDamage``, 0 for a no-calc
     or power-0 move)."""
-    return [int(x) for x in c._slot_damage(t, s, jnp.full((MOVES,), SIM_ROLL_MAX))]
+    return [int(x) for x in c._slot_damage(t, s, jnp.full((MOVES,), SIM_ROLL_MAX)).value[:, 0]]
 
 
 def _with_abilities(t, species: int, abilities):
@@ -3355,146 +3357,6 @@ def test_roost_scores_as_recover(kaizo_tables, kaizo_names, kaizo_roark_party, o
     assert scored("Roost") == scored("Recover")
 
 
-# --- E2 batch 10: the charge-turn moves (script.s:3933-4072) -----------------------------
-
-POWER_HERB = c.ITEM_POWER_HERB
-
-
-def _charge_state(t, n, party, move: str, player: str = "Gible", herb: bool = False):
-    """Bonsly (Rock) with ``move`` and Accelerock, holding nothing or (``herb``) a Power Herb,
-    slower than the player and at full HP, against ``player``."""
-    s = _state(t, party, BONSLY, _ids(n, move, "Accelerock", "", ""))
-    if player != "Gible":
-        s = _with_player(t, s, n.species(player), 0, known=True)
-    s = s._replace(item=s.item.at[1, 0].set(POWER_HERB if herb else 0))
-    return _speeds(s, player=500, opp=1)
-
-
-def _seen_protect(t, n, s):
-    """``s`` with the player's active knowing Protect, seen by the AI."""
-    protect = n.move_names.index("Protect")
-    assert int(t.move_ai_effect[protect]) == BattleEffect.PROTECT
-    return s._replace(
-        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1)
-    )
-
-
-def test_charge_turn_kaizo_moves(kaizo_tables, kaizo_names):
-    """The Kaizo moves the tests below use carry the decomp effects (Tables.move_ai_effect),
-    and Power Herb is item 271 (generated/items.txt:272)."""
-    t, n = kaizo_tables, kaizo_names
-    for move, effect in (
-        ("Razor Wind", BattleEffect.CHARGE_TURN_HIGH_CRIT),
-        ("SolarBeam", BattleEffect.SKIP_CHARGE_TURN_IN_SUN),
-        ("Fly", BattleEffect.FLY),
-        ("Shadow Force", BattleEffect.SHADOW_FORCE),
-        ("Lock-On", BattleEffect.NEXT_ATTACK_ALWAYS_HITS),
-    ):
-        assert int(t.move_ai_effect[n.move_names.index(move)]) == effect, move
-    path = DECOMP / "generated/items.txt"
-    if path.exists():
-        assert path.read_text(encoding="utf-8").split()[POWER_HERB] == "ITEM_POWER_HERB"
-
-
-@pytest.mark.parametrize(
-    ("move", "player", "herb", "protect", "hp", "weather", "expected"),
-    [
-        # Expert_ChargeTurnNoInvuln (script.s:3933-3973), Razor Wind (:1657):
-        ("Razor Wind", "Gible", False, False, 100, Weather.NONE, 0),
-        ("Razor Wind", "Gible", True, False, 100, Weather.NONE, 2),  # Power Herb (:3956)
-        ("Razor Wind", "Gible", False, True, 100, Weather.NONE, -2),  # Protect seen (:3964)
-        ("Razor Wind", "Gible", False, False, 38, Weather.NONE, -1),  # 38 % HP or less
-        ("Razor Wind", "Gible", False, False, 39, Weather.NONE, 0),  # above 38 %: nothing
-        ("Razor Wind", "Gible", True, True, 30, Weather.NONE, 2),  # the herb ends it
-        ("Razor Wind", "Geodude", True, False, 100, Weather.NONE, -2),  # resisted first
-        ("Razor Wind", "Gible", False, False, 100, Weather.SUN, 0),  # sun: SolarBeam only
-        # SolarBeam (:1716; the :1719 Expert_Thunder entry is never reached):
-        ("SolarBeam", "Gible", False, False, 100, Weather.SUN, 2),  # :3949-3952
-        ("SolarBeam", "Gible", False, True, 30, Weather.SUN, 2),  # sun ends it
-        ("SolarBeam", "Gible", True, False, 100, Weather.NONE, 2),  # no sun: the herb
-        ("SolarBeam", "Gible", False, True, 100, Weather.RAIN, -2),
-        ("SolarBeam", "Charmander", False, False, 100, Weather.SUN, -2),  # resisted (Grass)
-    ],
-)
-def test_charge_turn_no_invuln(
-    kaizo_tables,
-    kaizo_names,
-    kaizo_roark_party,
-    move,
-    player,
-    herb,
-    protect,
-    hp,
-    weather,
-    expected,
-):
-    """E2 batch 10: Expert_ChargeTurnNoInvuln, no random read."""
-    t, n = kaizo_tables, kaizo_names
-    s = _charge_state(t, n, kaizo_roark_party, move, player, herb)
-    if protect:
-        s = _seen_protect(t, n, s)
-    s = _hp(s, 1, hp)._replace(weather=jnp.asarray(weather, s.weather.dtype))
-    if player != "Gible":
-        resisted = (TypeMulti.HALF, TypeMulti.QUARTER)
-        assert _effectiveness(t, s, n.move_names.index(move)) in resisted
-    assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
-
-
-def test_charge_turn_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """Razor Wind's Basic_Main entry (script.s:158) is Basic_CheckNonStandardDamageOrChargeTurn
-    (:572-585): a neutral hit against no Wonder Guard, nothing."""
-    t, n = kaizo_tables, kaizo_names
-    s = _charge_state(t, n, kaizo_roark_party, "Razor Wind")
-    assert _delta(t, s, 0x2, 0x3)[0] == 0
-
-
-@pytest.mark.parametrize(
-    ("case", "jumps", "expected"),
-    [
-        # Expert_ChargeTurnWithInvuln (script.s:3992-4012), Fly (:1721):
-        ("plain", (), 0),  # slower, nothing on the player: the end
-        ("herb", (), 2),  # Expert_ChargeTurnNoInvuln_ScorePlus2 (:4009 -> :3959)
-        ("protect", (), -1),  # :4010-4012
-        ("herb protect", (), 2),
-        ("resisted", (), 1),  # Expert_ShadowForce's +1 on a resisted move (:4017-4019, :4064)
-        ("toxic", (), 1),  # :4028 -> TryScorePlus1, +1 unless :4058 jumps
-        ("toxic", ((0, 4058),), 0),
-        ("curse", (), 1),  # :4029
-        ("seeded", (), 1),  # :4030
-        ("sand", (), 1),  # a Rock attacker in sand (:4036-4040, the table :4068-4072)
-        ("sand", ((0, 4058),), 0),
-        ("hail", (), 0),  # no Ice type (:4043-4048): the speed compare, slower
-        ("faster", (), 1),  # :4050-4055: not slower, last move not NEXT_ATTACK_ALWAYS_HITS
-        ("faster", ((0, 4058),), 0),
-        ("faster lock-on", (), 0),  # the player's last move Lock-On
-    ],
-)
-def test_charge_turn_with_invuln(
-    kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected
-):
-    """E2 batch 10: Expert_ChargeTurnWithInvuln, falling into Expert_ShadowForce."""
-    t, n = kaizo_tables, kaizo_names
-    player = "Geodude" if case == "resisted" else "Gible"
-    s = _charge_state(t, n, kaizo_roark_party, "Fly", player, herb="herb" in case)
-    if "protect" in case:
-        s = _seen_protect(t, n, s)
-    if case == "toxic":
-        s = s._replace(status=s.status.at[0, 0].set(Status.TOXIC))
-    if case == "curse":
-        s = s._replace(curse=s.curse.at[0].set(1))
-    if case == "seeded":
-        s = s._replace(leech_seed=s.leech_seed.at[0].set(1))
-    weather = {"sand": Weather.SANDSTORM, "hail": Weather.HAIL}.get(case, Weather.NONE)
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
-    if case.startswith("faster"):
-        s = _speeds(s, player=1, opp=500)
-    if case == "faster lock-on":
-        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index("Lock-On")))
-    if case == "resisted":
-        assert _effectiveness(t, s, n.move_names.index("Fly")) == TypeMulti.HALF
-    assert _delta(t, s, 0x3, 0x7, jumps)[:2] == [expected, 0]
-
-
 # --- E1 prep batch P1 (on E2's state): Metal Burst, Future Sight, ACC_DOWN, Minimize, -------
 # --- Mean Look, Knock Off, Imprison --------------------------------------------------------
 
@@ -3769,23 +3631,6 @@ def test_a_status_move_takes_no_type_chart_bonus(kaizo_tables, kaizo_names, kaiz
         assert int(got) == 1, ability
 
 
-def test_copycat_refuses_a_player_calc_damage_case(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """A player Pokemon that knows a refused TrainerAI_CalcDamage id case (Gyro Ball, 360) is
-    refused in a fight whose AI knows Copycat (its IfBattlerDealsMoreDamage calculates the
-    player's last move), and not otherwise."""
-    t, n = kaizo_tables, kaizo_names
-    for moves, refused in (
-        (("Copycat", "Accelerock", "", ""), True),
-        (("Accelerock", "", "", ""), False),
-    ):
-        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
-        s = s._replace(moves=s.moves.at[0, 1, 3].set(360))
-        found = [
-            r for r in policy.ai_refusals(t, s, n, layout_for(t, 0x7, s)) if "player slot 1" in r
-        ]
-        assert bool(found) == refused, found
-
-
 @pytest.mark.parametrize(("ingrained", "basic"), [(False, 0), (True, -10)])
 def test_ingrain(kaizo_tables, kaizo_names, kaizo_roark_party, ingrained, basic):
     """Basic_CheckAlreadyIngrained (script.s:906-909) -10 when ingrained; Expert_Ingrain
@@ -3925,6 +3770,182 @@ def test_basic_helping_hand(kaizo_tables, kaizo_names, kaizo_roark_party):
 @pytest.mark.parametrize(
     ("case", "expected"),
     [
+        # Expert_ChargeTurnNoInvuln (script.s:3933-3972), SolarBeam (Grass) against Gible
+        ("plain", 0),
+        ("sun", 2),
+        ("power herb", 2),
+        ("low hp", -1),  # 38 % HP or less
+        ("resisted", -2),  # against a Grass player: half damage
+    ],
+)
+def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Accelerock", "", ""))
+    if case == "sun":
+        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+    elif case == "power herb":
+        s = s._replace(item=s.item.at[1, 0].set(c.ITEM_POWER_HERB))
+    elif case == "low hp":
+        s = _hp(s, 1, 30)
+    elif case == "resisted":
+        s = _with_player(t, s, n.species_names.index("Turtwig"), 0, known=True)
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
+    for own, weather in ((100, Weather.SUN), (30, Weather.NONE)):
+        s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        layout = layout_for(t, flags, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E2 batch 10: the charge-turn moves (script.s:3933-4072) -----------------------------
+
+POWER_HERB = c.ITEM_POWER_HERB
+
+
+def _charge_state(t, n, party, move: str, player: str = "Gible", herb: bool = False):
+    """Bonsly (Rock) with ``move`` and Accelerock, holding nothing or (``herb``) a Power Herb,
+    slower than the player and at full HP, against ``player``."""
+    s = _state(t, party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if player != "Gible":
+        s = _with_player(t, s, n.species(player), 0, known=True)
+    s = s._replace(item=s.item.at[1, 0].set(POWER_HERB if herb else 0))
+    return _speeds(s, player=500, opp=1)
+
+
+def _seen_protect(t, n, s):
+    """``s`` with the player's active knowing Protect, seen by the AI."""
+    protect = n.move_names.index("Protect")
+    assert int(t.move_ai_effect[protect]) == BattleEffect.PROTECT
+    return s._replace(
+        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1)
+    )
+
+
+def test_charge_turn_kaizo_moves(kaizo_tables, kaizo_names):
+    """The Kaizo moves the tests below use carry the decomp effects (Tables.move_ai_effect),
+    and Power Herb is item 271 (generated/items.txt:272)."""
+    t, n = kaizo_tables, kaizo_names
+    for move, effect in (
+        ("Razor Wind", BattleEffect.CHARGE_TURN_HIGH_CRIT),
+        ("SolarBeam", BattleEffect.SKIP_CHARGE_TURN_IN_SUN),
+        ("Fly", BattleEffect.FLY),
+        ("Shadow Force", BattleEffect.SHADOW_FORCE),
+        ("Lock-On", BattleEffect.NEXT_ATTACK_ALWAYS_HITS),
+    ):
+        assert int(t.move_ai_effect[n.move_names.index(move)]) == effect, move
+    path = DECOMP / "generated/items.txt"
+    if path.exists():
+        assert path.read_text(encoding="utf-8").split()[POWER_HERB] == "ITEM_POWER_HERB"
+
+
+@pytest.mark.parametrize(
+    ("move", "player", "herb", "protect", "hp", "weather", "expected"),
+    [
+        # Expert_ChargeTurnNoInvuln (script.s:3933-3973), Razor Wind (:1657):
+        ("Razor Wind", "Gible", False, False, 100, Weather.NONE, 0),
+        ("Razor Wind", "Gible", True, False, 100, Weather.NONE, 2),  # Power Herb (:3956)
+        ("Razor Wind", "Gible", False, True, 100, Weather.NONE, -2),  # Protect seen (:3964)
+        ("Razor Wind", "Gible", False, False, 38, Weather.NONE, -1),  # 38 % HP or less
+        ("Razor Wind", "Gible", False, False, 39, Weather.NONE, 0),  # above 38 %: nothing
+        ("Razor Wind", "Gible", True, True, 30, Weather.NONE, 2),  # the herb ends it
+        ("Razor Wind", "Geodude", True, False, 100, Weather.NONE, -2),  # resisted first
+        ("Razor Wind", "Gible", False, False, 100, Weather.SUN, 0),  # sun: SolarBeam only
+        # SolarBeam (:1716; the :1719 Expert_Thunder entry is never reached):
+        ("SolarBeam", "Gible", False, False, 100, Weather.SUN, 2),  # :3949-3952
+        ("SolarBeam", "Gible", False, True, 30, Weather.SUN, 2),  # sun ends it
+        ("SolarBeam", "Gible", True, False, 100, Weather.NONE, 2),  # no sun: the herb
+        ("SolarBeam", "Gible", False, True, 100, Weather.RAIN, -2),
+        ("SolarBeam", "Charmander", False, False, 100, Weather.SUN, -2),  # resisted (Grass)
+    ],
+)
+def test_charge_turn_no_invuln(
+    kaizo_tables,
+    kaizo_names,
+    kaizo_roark_party,
+    move,
+    player,
+    herb,
+    protect,
+    hp,
+    weather,
+    expected,
+):
+    """E2 batch 10: Expert_ChargeTurnNoInvuln, no random read."""
+    t, n = kaizo_tables, kaizo_names
+    s = _charge_state(t, n, kaizo_roark_party, move, player, herb)
+    if protect:
+        s = _seen_protect(t, n, s)
+    s = _hp(s, 1, hp)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    if player != "Gible":
+        resisted = (TypeMulti.HALF, TypeMulti.QUARTER)
+        assert _effectiveness(t, s, n.move_names.index(move)) in resisted
+    assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
+
+
+def test_charge_turn_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Razor Wind's Basic_Main entry (script.s:158) is Basic_CheckNonStandardDamageOrChargeTurn
+    (:572-585): a neutral hit against no Wonder Guard, nothing."""
+    t, n = kaizo_tables, kaizo_names
+    s = _charge_state(t, n, kaizo_roark_party, "Razor Wind")
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_ChargeTurnWithInvuln (script.s:3992-4012), Fly (:1721):
+        ("plain", (), 0),  # slower, nothing on the player: the end
+        ("herb", (), 2),  # Expert_ChargeTurnNoInvuln_ScorePlus2 (:4009 -> :3959)
+        ("protect", (), -1),  # :4010-4012
+        ("herb protect", (), 2),
+        ("resisted", (), 1),  # Expert_ShadowForce's +1 on a resisted move (:4017-4019, :4064)
+        ("toxic", (), 1),  # :4028 -> TryScorePlus1, +1 unless :4058 jumps
+        ("toxic", ((0, 4058),), 0),
+        ("curse", (), 1),  # :4029
+        ("seeded", (), 1),  # :4030
+        ("sand", (), 1),  # a Rock attacker in sand (:4036-4040, the table :4068-4072)
+        ("sand", ((0, 4058),), 0),
+        ("hail", (), 0),  # no Ice type (:4043-4048): the speed compare, slower
+        ("faster", (), 1),  # :4050-4055: not slower, last move not NEXT_ATTACK_ALWAYS_HITS
+        ("faster", ((0, 4058),), 0),
+        ("faster lock-on", (), 0),  # the player's last move Lock-On
+    ],
+)
+def test_charge_turn_with_invuln(
+    kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected
+):
+    """E2 batch 10: Expert_ChargeTurnWithInvuln, falling into Expert_ShadowForce."""
+    t, n = kaizo_tables, kaizo_names
+    player = "Geodude" if case == "resisted" else "Gible"
+    s = _charge_state(t, n, kaizo_roark_party, "Fly", player, herb="herb" in case)
+    if "protect" in case:
+        s = _seen_protect(t, n, s)
+    if case == "toxic":
+        s = s._replace(status=s.status.at[0, 0].set(Status.TOXIC))
+    if case == "curse":
+        s = s._replace(curse=s.curse.at[0].set(1))
+    if case == "seeded":
+        s = s._replace(leech_seed=s.leech_seed.at[0].set(1))
+    weather = {"sand": Weather.SANDSTORM, "hail": Weather.HAIL}.get(case, Weather.NONE)
+    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    if case.startswith("faster"):
+        s = _speeds(s, player=1, opp=500)
+    if case == "faster lock-on":
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index("Lock-On")))
+    if case == "resisted":
+        assert _effectiveness(t, s, n.move_names.index("Fly")) == TypeMulti.HALF
+    assert _delta(t, s, 0x3, 0x7, jumps)[:2] == [expected, 0]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
         # Expert_ShadowForce (script.s:4014-4066), Shadow Force (:1808):
         ("plain", 0),
         ("herb", 1),  # Expert_ChargeTurnWithInvuln_ScorePlus1AndEnd (:4020 -> :4023)
@@ -4027,42 +4048,6 @@ def test_batch11_encore_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roar
     for disabled, faster in ((0, True), (2, False), (0, False)):
         s2 = s._replace(disable_turns=s.disable_turns.at[0].set(disabled))
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
-        layout = layout_for(t, flags, s2)
-        assert policy.ai_refusals(t, s2, n, layout) == []
-        _assert_exact_equals_loose(t, s2, layout)
-
-
-@pytest.mark.parametrize(
-    ("case", "expected"),
-    [
-        # Expert_ChargeTurnNoInvuln (script.s:3933-3972), SolarBeam (Grass) against Gible
-        ("plain", 0),
-        ("sun", 2),
-        ("power herb", 2),
-        ("low hp", -1),  # 38 % HP or less
-        ("resisted", -2),  # against a Grass player: half damage
-    ],
-)
-def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
-    t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Accelerock", "", ""))
-    if case == "sun":
-        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
-    elif case == "power herb":
-        s = s._replace(item=s.item.at[1, 0].set(c.ITEM_POWER_HERB))
-    elif case == "low hp":
-        s = _hp(s, 1, 30)
-    elif case == "resisted":
-        s = _with_player(t, s, n.species_names.index("Turtwig"), 0, known=True)
-    assert _delta(t, s, 0x3, 0x7)[0] == expected
-
-
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
-    t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
-    for own, weather in ((100, Weather.SUN), (30, Weather.NONE)):
-        s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
