@@ -202,7 +202,7 @@ def _effectiveness(t, s, move) -> int:
 def _damage(t, s) -> list[int]:
     """The AI's damage estimate of each slot (``TrainerAI_CalcAllDamage``, 0 for a no-calc
     or power-0 move)."""
-    return [int(x) for x in c._slot_damage(t, s, jnp.full((MOVES,), SIM_ROLL_MAX))]
+    return [int(x) for x in c._slot_damage(t, s, jnp.full((MOVES,), SIM_ROLL_MAX)).value[:, 0]]
 
 
 def _with_abilities(t, species: int, abilities):
