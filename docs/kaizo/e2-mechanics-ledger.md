@@ -1674,7 +1674,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Pokemon (a fainted mate's too), not Move_IsInvoker (`ids.INVOKER_MOVES`, battle_lib.c:
   3032-3045) and Metronome-able (NO_METRONOME; Gravity and Heal Block owed with those moves);
   duplicates count; the call is RandNext() % numMoves (`sample_outcome`: a uniform draw over the
-  list, fold_in 30 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
+  list, fold_in 34 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
   `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
   invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
   user). Its AI entry was transcribed generically by E1 (batch 3).

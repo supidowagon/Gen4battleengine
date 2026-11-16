@@ -1005,13 +1005,13 @@ def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
         weights = metronome_weights(tables, state, side)
         cands = weights > 0
         pick = jax.random.choice(
-            jax.random.fold_in(key, 26 + side),
+            jax.random.fold_in(key, 32 + side),
             weights.shape[0],
             p=weights / jnp.maximum(jnp.sum(weights), 1),
         )
         ranks.append(jnp.sum(cands & (jnp.arange(weights.shape[0]) < pick)))
         count = jnp.sum(assist_candidates(tables, state, side)[1].astype(_I32))
-        draw_ = jax.random.randint(jax.random.fold_in(key, 30 + side), (), 0, jnp.maximum(count, 1))
+        draw_ = jax.random.randint(jax.random.fold_in(key, 34 + side), (), 0, jnp.maximum(count, 1))
         assist.append(draw_.astype(_I32))
     kinds = call_kind(tables, chosen)
     return jnp.where(
