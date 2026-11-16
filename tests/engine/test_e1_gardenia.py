@@ -1488,68 +1488,68 @@ def test_replace_without_effects_matches_the_reference(tables, names):
 def test_weather_war_tie_is_a_root_chance_node_the_player_sees(tables, names, monkeypatch):
     """G-34: the battle-start weather war's tie (battle_lib.c:1445, sorted at TrainerMessage,
     battle_controller_player.c:251) is drawn before command selection, and the weather shows:
-    Stage B's root is a chance node over what the player sees, each outcome its own belief node
-    (``_solve_belief``, stubbed here: Tackle wins in sun, Growl in rain). The root's value is
-    the weighted best, 1 (one belief node over both gave 1/2). A Quick Claw read stays hidden
-    within an outcome; here it decides the weather (1/5 rain)."""
+    Stage B's root is a chance node over what the player sees, each outcome its own belief node.
+    A real Stage B solve with a leaf that pays Tackle in sun and Growl in rain: each outcome's
+    best is worth 1, so the root's value is the weighted best, 1, where one belief node over
+    both weathers gives 1/2. A Quick Claw read stays hidden within an outcome; here it decides
+    the weather (1/5 rain). ``expand`` runs at 1024-row calls instead of ``CHUNK`` (16384): a
+    row's result depends on neither the call size nor the device count (expand's module
+    docstring), and the default call size took this solve to a 16.5 GB sampled peak."""
     import json
 
     import jax
 
+    from nuzline.engine.step import root_belief
+    from nuzline.search import expand as expand_mod
     from nuzline.search import stage_b
+    from nuzline.search.leaves import LeafValue
     from nuzline.search.plan_tree import render, to_json
-    from nuzline.search.stage_b import (
-        ROOT_CHANCE,
-        ActionValue,
-        PlanNode,
-        SolveResult,
-        SolveSettings,
-        result_from_dict,
-        result_to_dict,
-    )
+    from nuzline.search.stage_b import ROOT_CHANCE, SolveSettings, result_from_dict, result_to_dict
 
+    monkeypatch.setattr(expand_mod, "CHUNK", 1024)
     n = names
     s = make_state(
         tables,
         [_spec(n, "Groudon", ["Tackle", "Growl"], 50)],
         [_spec(n, "Kyogre", ["Tackle"], 50)],
     )
+    assert int(s.war_swaps) != 0
     tackle, growl = n.move_slot(s, 0, "Tackle"), n.move_slot(s, 0, "Growl")
-    seen = []
+    full = int(s.pp[0, 0, tackle])
 
-    def one(action, value):
-        return ActionValue(action, f"a{action}", value, value, value, value, 0.0, 0.0, 0.0, False)
+    def leaf(states, weights, pairs=None):
+        sun = np.asarray(states.weather) == Weather.SUN
+        tackled = np.asarray(states.pp)[:, 0, 0, tackle] < full
+        return [LeafValue(10 * int(w), 10, 10 * int(w), 10, False) for w in sun == tackled]
 
-    def fake(tables_, names_, state, belief, key, settings, leaf_fn, start):
-        weathers = {int(b.weather) for b, _ in belief}
-        assert len(weathers) == 1 and abs(sum(w for _, w in belief) - 1) < 1e-12
-        weather = weathers.pop()
-        seen.append(weather)
-        best = tackle if weather == Weather.SUN else growl
-        rows = [one(best, 1.0), one(tackle + growl - best, 0.0)]
-        plan = PlanNode(None, 1.0, best, {best: 1.0}, {}, "decision")
-        return SolveResult(rows, {}, 1, plan, 10, 0.0, settings, 10)
-
-    monkeypatch.setattr(stage_b, "_solve_belief", fake)
-    settings = SolveSettings(max_depth=1)
-    result = stage_b.solve(tables, n, s, jax.random.PRNGKey(0), settings)
-    assert sorted(seen) == sorted([int(Weather.SUN), int(Weather.RAIN)])
+    settings = SolveSettings(max_depth=1, budget_playouts=20, n_depth0=10, epsilon=0.0)
+    key = jax.random.PRNGKey(0)
+    result = stage_b.solve(tables, n, s, key, settings, leaf_fn=leaf)
     got = sorted((o.label, o.prob) for o in result.outcomes)
     assert got == [("weather rain", 0.5), ("weather sun", 0.5)]
+    best = {o.label: o.result.ranking[0] for o in result.outcomes}
+    assert {k: r.action for k, r in best.items()} == {"weather sun": tackle, "weather rain": growl}
+    assert all(r.estimate == pytest.approx(1.0) for r in best.values())
     [row] = result.ranking
     assert row.action == ROOT_CHANCE and row.estimate == pytest.approx(1.0)
     assert result.plan.kind == "chance" and len(result.plan.children[ROOT_CHANCE]) == 2
+    plans = {o.label: p for o, p in zip(result.outcomes, result.plan.children[ROOT_CHANCE])}
+    assert {k: p.action for k, p in plans.items()} == {"weather sun": tackle, "weather rain": growl}
+    assert all(p.obs == o.obs for o, p in zip(result.outcomes, result.plan.children[ROOT_CHANCE]))
+    # One belief node over both weathers (the lower bound the chance root replaces): 1/2.
+    one = stage_b._solve_belief(tables, n, s, root_belief(tables, s), key, settings, leaf, 0.0)
+    assert one.outcomes == () and one.ranking[0].estimate == pytest.approx(0.5)
     assert result_from_dict(result_to_dict(result)) == result
     assert any("weather sun" in line for line in render(result, n, 1, root=s))
     json.dumps(to_json(result, n, root=s))
     # The slower player's Quick Claw (G-26): activated (1/5) it sorts first and the rain stays.
     claw = _war(tables, n, (40, 50), ("Quick Claw", ""))
-    result = stage_b.solve(tables, n, claw, jax.random.PRNGKey(0), settings)
+    result = stage_b.solve(tables, n, claw, key, settings, leaf_fn=leaf)
     got = {o.label: o.prob for o in result.outcomes}
     assert got == pytest.approx({"weather rain": 0.2, "weather sun": 0.8})
     # No war: one belief node, the solve's own result.
     plain = _war(tables, n, (50, 40))
-    assert stage_b.solve(tables, n, plain, jax.random.PRNGKey(0), settings).outcomes == ()
+    assert stage_b.solve(tables, n, plain, key, settings, leaf_fn=leaf).outcomes == ()
 
 
 @pytest.mark.parametrize(
