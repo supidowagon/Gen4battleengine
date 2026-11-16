@@ -3843,8 +3843,11 @@ def ai_path_refusals(
     """The refusals of a concrete per-slot state found only on a scoring path, after
     ``ai_refusals`` is empty: each slot whose path makes more random reads than
     ``layout.slot_reads`` (``AiContext.missing_read``; kaizo_roark.md 8.3), naming the slot
-    and the move. Empty for the flat layout, which has no such refusal."""
-    layout = _layout(tables, layout)
+    and the move. Empty for the flat layout, which has no such refusal. It replays every read
+    pattern (``2**slot_reads`` scorings) as the exact distribution does, so like the exact
+    entry points it is per fight: ``ValueError`` for a ``runtime_flags`` layout
+    (``layout.ALLIN``, ``_exact_layout``; the fight's own layout is ``layout_of``)."""
+    layout = _exact_layout(_layout(tables, layout))
     if not layout.per_slot_sites:
         return []
     names = _names_for(tables, names)
@@ -3859,8 +3862,8 @@ def ai_path_refusals(
 
 
 def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) -> None:
-    # ai_path_refusals replays every read pattern (2**slot_reads), per fight only; ALLIN's
-    # bound is no fight's path's (ALLIN_READS), so it names none.
+    # ai_path_refusals replays every read pattern (2**slot_reads), per fight only, and refuses
+    # ALLIN (ValueError): ALLIN's bound is no fight's path's (ALLIN_READS), so it names none.
     found = [] if layout.runtime_flags else ai_path_refusals(tables, state, layout=layout)
     raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
 

@@ -240,6 +240,9 @@ def test_the_exact_distribution_refuses_allin(kaizo_tables, fights):
     ):
         with pytest.raises(ValueError, match="per fight"):
             exact(t, s, ALLIN)
+    # The path refusals replay the exact distribution's 2**slot_reads scorings: per fight too.
+    with pytest.raises(ValueError, match="per fight"):
+        policy.ai_path_refusals(t, s, layout=ALLIN)
 
 
 @pytest.mark.parametrize("flags, doubles", [(-1, False), (0x400 | 0x7, False), (0x7, True)])
