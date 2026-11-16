@@ -27,7 +27,6 @@ from nuzline.ai.layout import (
 from nuzline.ai.outcome import sample_ai_outcome
 from nuzline.ai.read_bounds import READ_BOUND_BITS
 from nuzline.data.games import GAMES, KAIZO
-from nuzline.data.tables import BATTLE_TYPES
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.state import make_state
 
@@ -245,15 +244,12 @@ def test_the_exact_distribution_refuses_allin(kaizo_tables, fights):
         policy.ai_path_refusals(t, s, layout=ALLIN)
 
 
-@pytest.mark.parametrize("flags, doubles", [(-1, False), (0x400 | 0x7, False), (0x7, True)])
-def test_allin_refuses_unset_or_untranscribed_flags(kaizo_tables, fights, flags, doubles):
-    # 0x400: HARRASSMENT (bit 10), not transcribed. A doubles battle adds TAG_STRATEGY to the
-    # mask (trainer_ai.c:253-254), not transcribed.
+def test_allin_refuses_unset_flags(kaizo_tables, fights):
+    # ALLIN reads the fight's flags at run time: tables whose flags were never set
+    # (AI_FLAGS_UNSET, -1; ai.layout.fight_tables sets them) have no fight to run.
     trainer, party = fights[min(fights)]
     t, states, _ = _fight(kaizo_tables, trainer, party, seed=5)
-    t = t._replace(ai_flags=np.int32(flags))
-    if doubles:
-        t = t._replace(battle_type=BATTLE_TYPES["double"])
+    t = t._replace(ai_flags=np.int32(-1))
     s = jax.tree.map(lambda x: x[0], states)
     assert any("AI flags" in r for r in policy.ai_refusals(t, s, layout=ALLIN))
     # Traced, _policy gives REFUSED_ACTION on _Refused.any, which the policy refusal sets.

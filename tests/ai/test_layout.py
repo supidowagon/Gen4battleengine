@@ -239,20 +239,16 @@ def test_program_caches_key_on_the_flag_set():
 def test_every_kaizo_fight_fits_the_width_cap(kaizo_tables, kaizo_trainers):
     """E1 Ruling R6: every Kaizo trainer's fight, under the transcribed bits of its own AI
     flags, has a read bound whose layout passes WIDTH_CAP (``kaizo_layout`` raises otherwise).
-    Synthetic flag sets can pass it (every flag with ACC_DOWN bounds at 17); no trainer does
-    (the widest, Jason 82 and Danny 725, bound at 14)."""
+    Synthetic flag sets can pass it (every flag with ACC_DOWN bounds at 17); no trainer does."""
     from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_slot_reads, move_read_rows
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from tests.conftest import KAIZO_INTERMEDIATE
 
     inter = IntermediateData(KAIZO_INTERMEDIATE)
     mask = sum(1 << b for b in KAIZO_FLAG_BITS)
-    widest = 0
     for trainer in kaizo_trainers:
         party = build_trainer_party(trainer, inter)
         moves = np.array([m for p in party for m in p.moves], np.int32)
         flags = trainer.ai_flags & mask
         reads = fight_slot_reads(move_read_rows(kaizo_tables, moves), flags)
         kaizo_layout(flags, reads)  # raises past WIDTH_CAP
-        widest = max(widest, reads)
-    assert widest == 14

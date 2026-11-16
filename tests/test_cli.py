@@ -1290,8 +1290,8 @@ def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, 
     out = done.stdout
     assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
     assert "Support: NONE" in out and "Missing (" in out
-    # K3c Task 2 gave Kaizo an AI policy; Barry's CHECK_HP flag (ai_flags 279) is refused.
-    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
+    # Barry's CHECK_HP flag (ai_flags 279) is transcribed (layout.KAIZO_FLAG_BITS).
+    assert "AI_FLAG_CHECK_HP" not in out
 
 
 @pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])

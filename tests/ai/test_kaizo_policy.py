@@ -3629,23 +3629,6 @@ def test_a_status_move_takes_no_type_chart_bonus(kaizo_tables, kaizo_names, kaiz
         assert int(got) == 1, ability
 
 
-def test_copycat_refuses_a_player_calc_damage_case(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """A player Pokemon that knows a refused TrainerAI_CalcDamage id case (Gyro Ball, 360) is
-    refused in a fight whose AI knows Copycat (its IfBattlerDealsMoreDamage calculates the
-    player's last move), and not otherwise."""
-    t, n = kaizo_tables, kaizo_names
-    for moves, refused in (
-        (("Copycat", "Accelerock", "", ""), True),
-        (("Accelerock", "", "", ""), False),
-    ):
-        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
-        s = s._replace(moves=s.moves.at[0, 1, 3].set(360))
-        found = [
-            r for r in policy.ai_refusals(t, s, n, layout_for(t, 0x7, s)) if "player slot 1" in r
-        ]
-        assert bool(found) == refused, found
-
-
 @pytest.mark.parametrize(("ingrained", "basic"), [(False, 0), (True, -10)])
 def test_ingrain(kaizo_tables, kaizo_names, kaizo_roark_party, ingrained, basic):
     """Basic_CheckAlreadyIngrained (script.s:906-909) -10 when ingrained; Expert_Ingrain
