@@ -763,11 +763,22 @@ MOVES_OBJECT = frozenset(
 FEATURES_PREFIX = "SCRCMD_INITPERSISTEDMAPFEATURESFOR"
 DISTORTION_FEATURES = "SCRCMD_INITPERSISTEDMAPFEATURESFORDISTORTIONWORLD"
 # Local script ids game code starts (tools.rom.readers.maps.C_STARTED_SCRIPTS cites each
-# site). 2, 6, 7 and 8 come only from overlay 9 (src/overlay009/ov9_02249960.c), loaded only
-# while the Distortion World's map features are on (src/overlay005/fieldmap.c:170-182,
+# site). Overlay 9 (src/overlay009/ov9_02249960.c) starts 2, 3, 4, 6, 7 and 8; it is loaded
+# only while the Distortion World's map features are on (src/overlay005/fieldmap.c:170-182,
 # :369-380), which only InitPersistedMapFeaturesForDistortionWorld sets (src/scrcmd.c:4780-4785).
+# 3 and 4 otherwise come only while FLAG_IN_PAL_PARK is set (E1 ruling G-42): the Pal Park
+# encounter task's last ball (FieldTask_PalParkEncounter, src/encounter.c:591-645, :636-637,
+# created only by Encounter_NewVsPalParkTransfer, :647-650) and the start menu's Retire, which
+# runs 4 outside the Safari Game (StartMenu_SelectRetire, src/start_menu.c:1452-1457) and is
+# shown only in the Safari and Pal Park option sets (src/start_menu.c:279-287, :333-347; the
+# normal, Battle Tower, Union Room and Colosseum sets hide it, :385, :402, :407, :412). Only
+# ScrCmd_SetClearInCatchingShowFlag sets or clears that flag (src/scrcmd_catching_show.c:24-38,
+# src/system_flags.c:418-431), so a header runs 3 and 4 that way only when its own script file
+# reaches that command (CATCHING_SHOW; Pal Park's file in both ROMs, whose exits clear it).
 C_STARTED_SCRIPTS = (2, 3, 4, 5, 6, 7, 8)
-OVERLAY9_ONLY_SCRIPTS = (2, 6, 7, 8)
+OVERLAY9_SCRIPTS = (2, 3, 4, 6, 7, 8)
+PAL_PARK_SCRIPTS = (3, 4)
+CATCHING_SHOW = "SCRCMD_SETCLEARINCATCHINGSHOWFLAG"
 VARS_START = 0x4000  # operands at or above it are variables (src/script_manager.c:428-452)
 # SCRIPT_ID_OFFSET_COMMON_SCRIPTS up to SCRIPT_ID_OFFSET_BG_EVENTS (include/script_manager.h:
 # 90-91) run scripts_common (src/script_manager.c:62, :228-254).
@@ -809,13 +820,19 @@ class CoordEvent(NamedTuple):
 
 class HeaderSites(NamedTuple):
     """One map header's events as the narrowing reads them: ``other_scripts`` are the local
-    script ids its bg and object events and its init scripts run; ``file`` keys its script
-    file in ``narrowed_terrains``' ``scripts``."""
+    script ids its bg and object events and its init scripts run, a clone object's being the
+    script of the object it keeps (``clone_scripts``); ``file`` keys its script file in
+    ``narrowed_terrains``' ``scripts``. A local id of those past the file's entry table
+    (``past_table_starts``, E1 ruling G-40) runs the script at ``extra_starts`` (nodes of the
+    file, explored like an entry) or, when the table read leaves the file, ``runs_any``: the
+    header may run any entry of its file."""
 
     objects: tuple[ObjectEvent, ...]
     coords: tuple[CoordEvent, ...]
     other_scripts: frozenset[int]
     file: object
+    extra_starts: tuple = ()
+    runs_any: bool = False
 
 
 class Cmd(NamedTuple):
@@ -958,7 +975,7 @@ class ScriptFacts:
 
     def __init__(self, script, common, fr: FieldRules):
         self.script, self.common, self.fr = script, common, fr
-        self._placed: dict[int, frozenset[int]] = {}
+        self._placed: dict[object, frozenset[int]] = {}
         self._started: dict[int, tuple[frozenset[int], frozenset[int]]] = {}
         self._common_safe: dict[int, bool] = {}
         reached: list[Cmd] = []
@@ -1029,6 +1046,15 @@ class ScriptFacts:
         """Every trainer a battle command reached from entry ``local`` names and every
         constant it gives the partner variable (``maps.script_battles``); ``UNKNOWN_TRAINER``
         for a variable operand or a command the reader cannot expand."""
+        return self._placed_from(local, self._entry(local))
+
+    def placed_at(self, node) -> frozenset[int]:
+        """``placed`` for a script started at ``node`` of the file rather than at an entry
+        (``HeaderSites.extra_starts``)."""
+        return self._placed_from(("node", node), [(node, False)])
+
+    def _placed_from(self, key, starts) -> frozenset[int]:
+        local = key
         if local not in self._placed:
             out: set[int] = set()
 
@@ -1043,7 +1069,7 @@ class ScriptFacts:
                     out.add(UNKNOWN_TRAINER)
                 return state
 
-            explore(self.script, self._entry(local), step, nodes=True)
+            explore(self.script, starts, step, nodes=True)
             out.discard(0)
             self._placed[local] = frozenset(out)
         return self._placed[local]
@@ -1229,8 +1255,13 @@ def narrowed_terrains(
     * A script entry ``h`` cannot run starts no battle there: ``h`` runs the local ids of its
       bg, object and coord events and init scripts (``ScriptManager_Start`` from the field's
       event checks; ``HeaderSites``), the ids game code starts directly (``C_STARTED_SCRIPTS``,
-      cited at ``tools.rom.readers.maps.C_STARTED_SCRIPTS``), and any entry when the file can
-      start one by id (``ScriptFacts.any_entry``). The trainer -> map join walks a file only one
+      cited at ``tools.rom.readers.maps.C_STARTED_SCRIPTS``; 3 and 4 only where the Pal Park
+      flag can be on or overlay 9 runs, E1 ruling G-42), and any entry when the file can start
+      one by id (``ScriptFacts.any_entry``) or a past-table id of ``h`` reads its table word
+      past the file (``HeaderSites.runs_any``). A clone object runs the script of the object it
+      keeps (``clone_scripts``), and an id past the file's table runs the script at
+      ``HeaderSites.extra_starts``, whose battles count for ``h`` like a non-coord entry's (E1
+      ruling G-40). The trainer -> map join walks a file only one
       header uses whole (``maps.join_trainer_maps``), so it can place a trainer on a header that
       never runs its entry; when every entry naming the trainer is such an entry and no object
       of ``h`` is the trainer, ``h`` gives it no terrain (an empty set).
@@ -1307,21 +1338,32 @@ def narrowed_terrains(
             coord_scripts = {c.script for c in site.coords}
 
             def c_started(e: int, facts=facts) -> bool:
-                return e in C_STARTED_SCRIPTS and (
-                    e not in OVERLAY9_ONLY_SCRIPTS or DISTORTION_FEATURES in facts.consts
-                )
+                """Whether game code can start local id ``e`` on ``h`` (``C_STARTED_SCRIPTS``):
+                overlay 9's ids need the Distortion World's features, 3 and 4 also the
+                Pal Park flag (``CATCHING_SHOW``); 5 runs anywhere."""
+                if e not in C_STARTED_SCRIPTS:
+                    return False
+                gates = [DISTORTION_FEATURES] if e in OVERLAY9_SCRIPTS else []
+                gates += [CATCHING_SHOW] if e in PAL_PARK_SCRIPTS else []
+                return not gates or any(g in facts.consts for g in gates)
 
+            any_entry = facts.any_entry or site.runs_any
             named = [e for e in range(1, len(facts.script.entries) + 1) if facts.placed(e) & names]
+            # A past-table id's script (G-40) is run by h like a bg/object/init entry: it counts
+            # as naming the trainer and keeps the whole header.
+            extra = any(facts.placed_at(n) & names for n in site.extra_starts)
+            if extra:
+                ok = False
             # The entries h can run (first rule of the docstring); the others start nothing here.
             entries = [
                 e
                 for e in named
-                if facts.any_entry or e in coord_scripts or e in site.other_scripts or c_started(e)
+                if any_entry or e in coord_scripts or e in site.other_scripts or c_started(e)
             ]
             for e in entries if ok else ():
                 safe, other = facts.started(e)
                 if (
-                    facts.any_entry
+                    any_entry
                     or e not in coord_scripts
                     or e in site.other_scripts
                     or c_started(e)
@@ -1335,7 +1377,7 @@ def narrowed_terrains(
                         stand |= {
                             (c.x + i, c.z + j) for i in range(c.width) for j in range(c.length)
                         }
-            if ok and named and not (objects or entries):
+            if ok and named and not (objects or entries or extra):
                 out[(t, h)] = frozenset()  # h runs none of the trainer's battles
                 continue
             if not ok or not (objects or entries):
@@ -1754,10 +1796,23 @@ def decomp_narrowing_inputs(decomp: Path, trainers: Sequence[str]):
             script = int(script, 0) if re.fullmatch(r"\d+", script) else 0
         return _battle_script_trainer(script)
 
+    events_of = {
+        name: json.loads(_read(decomp, EVENTS / f"{fields[name]['eventsArchiveID']}.json"))
+        for name in names
+    }
+    clones = clone_scripts(
+        {
+            name: [
+                (o.get("clone_id", i), o["hidden_flag"], o["script"])
+                for i, o in enumerate(ev["object_events"])
+            ]
+            for name, ev in events_of.items()
+        }
+    )
     sites = {}
     for h, name in enumerate(names):
         f = fields[name]
-        events = json.loads(_read(decomp, EVENTS / f"{f['eventsArchiveID']}.json"))
+        events = events_of[name]
         objects = tuple(
             ObjectEvent(
                 o.get("clone_id", i),
@@ -1780,9 +1835,15 @@ def decomp_narrowing_inputs(decomp: Path, trainers: Sequence[str]):
         other = {int(b["script"]) for b in events["bg_events"]}
         other |= {o["script"] for o in events["object_events"] if isinstance(o["script"], int)}
         other |= set(_decomp_init_ids(decomp, f["initScriptsArchiveID"]))
+        # A clone's kept object's script (clone_scripts): only a number names a local id.
+        other |= {s for s in clones.get(name, ()) if isinstance(s, int)}
         file = f["scriptsArchiveID"]
         if file not in files:
             files[file] = DecompScript(decomp, file, macros, symbols, partner)
+        # A past-table id (past_table_starts) runs no entry here: DecompScript nodes are
+        # commands, not bytes, so the decomp cannot read the word the game jumps by (G-40).
+        # The vanilla ROM reader computes it, and test_terrain_narrowing's ROM-equals-decomp
+        # test pins that vanilla's ten such headers give the same rows either way.
         sites[h] = HeaderSites(objects, coords, frozenset(other), file)
     scripts = {k: ScriptFacts(v, common, fr) for k, v in files.items()}
     rows = [(trainer_id[b], [trainer_id[t] for t in ts]) for b, ts in _rematches(decomp).items()]
@@ -1794,6 +1855,67 @@ def decomp_narrowing_inputs(decomp: Path, trainers: Sequence[str]):
         for t in re.findall(r"^\s*NoUniqueRematches\((TRAINER_\w+)\),", vs_seeker, re.MULTILINE)
     ]
     return sites, scripts, rows, fr
+
+
+def clone_scripts(objects: Mapping[object, Sequence[tuple[int, object, object]]]) -> dict:
+    """``header -> script ids`` its clone objects run (E1 ruling G-40). ``objects[h]``:
+    header ``h``'s object events as ``(local id, hidden flag, script)``. An object whose script
+    is ``NO_SCRIPT`` is a clone: across a header change ``sub_0206244C``
+    (src/map_object.c:772-801) keeps the old header's map object with the same local id when
+    the clone's hidden flag names that header, so the object the player talks to in ``h`` is
+    that one, with its own script id, which ``ScriptManager_Start`` resolves against the
+    current map's file (``ScriptContext_LoadFromCurrentMap``, src/script_manager.c:243-246).
+    The clone's flag names the old header; its objects with the clone's local id that are not
+    clones themselves are the ones kept (``ObjectEvent_HasNoScript``, :2322-2333).
+
+    A clone whose flag header has no such object keeps nothing: ``sub_0206184C`` deleted every
+    old object the new header's events do not keep (:171-198), so
+    ``MapObjectMan_AddMapObjectFromHeader``'s search (``sub_020624CC``, :803-815, from
+    :236-241) finds none and it builds a fresh object from the clone event itself (:244-255),
+    whose script ``NO_SCRIPT`` is no local id (65535 starts a fixed file,
+    ``ScriptContext_LoadAndOffsetID``, src/script_manager.c:32-33, :228-254). It adds no id."""
+    out: dict = {}
+    for h, objs in objects.items():
+        for local, flag, script in objs:
+            if script != NO_SCRIPT:
+                continue
+            kept = [s for lo, _, s in objects.get(flag, ()) if lo == local and s != NO_SCRIPT]
+            out.setdefault(h, set()).update(kept)
+    return out
+
+
+def past_table_target(script: bytes, local: int) -> int | None:
+    """The offset ``ScriptContext_JumpToOffsetID`` (src/script_manager.c:412-416) runs for
+    local id ``local`` of a script file: ``4 * (local - 1)``, plus 4, plus the signed word
+    read there (the entry table read without a bound, so past it the word is script bytes).
+    None when that word lies past the file's end (the game reads heap memory)."""
+    k = local - 1
+    if 4 * k + 4 > len(script):
+        return None
+    return 4 * k + 4 + struct.unpack_from("<i", script, 4 * k)[0]
+
+
+def past_table_starts(
+    script: bytes, entries: Sequence[int], ids: Iterable[int]
+) -> tuple[tuple[int, ...], bool]:
+    """E1 ruling G-40: ``(extra_starts, runs_any)`` of a header whose events or init scripts
+    name ``ids`` in a file with ``entries``. A local id past the entry table (and below the
+    common scripts) runs ``past_table_target``: an offset inside the file is a start node
+    explored like an entry; one outside it runs memory past the loaded file, no entry of it
+    (Kaizo has five such ids, vanilla Oreburgh City's 45). A table word past the file's end is
+    read from heap memory that the decomp does not fix, so the header may run any entry of its
+    file (``runs_any``, the conservative ruling)."""
+    n = len(entries)
+    extra: set[int] = set()
+    runs_any = False
+    for local in ids:
+        if n < local < COMMON_SCRIPTS[0]:
+            target = past_table_target(script, local)
+            if target is None:
+                runs_any = True
+            elif 0 <= target < len(script):
+                extra.add(target)
+    return tuple(sorted(extra)), runs_any
 
 
 def _battle_script_trainer(script: int) -> int:
@@ -1863,7 +1985,8 @@ def rom_narrowing_inputs(rom, symbols, decomp: Path, n_trainers: int):
     common = RomScript(narc[common_id], table, f"{SCRIPTS_NARC} member {common_id}")
     files: dict[int, ScriptFacts] = {}
     sites = {}
-    for h, (script_id, events_id, _) in enumerate(rows):
+    records_of = {}
+    for h, (_, events_id, _) in enumerate(rows):
         member = events[events_id]
         pos, records = 0, []
         for size in EVENT_RECORD_SIZES:
@@ -1872,7 +1995,16 @@ def rom_narrowing_inputs(rom, symbols, decomp: Path, n_trainers: int):
                 [member[pos + 4 + i * size : pos + 4 + (i + 1) * size] for i in range(n)]
             )
             pos += 4 + n * size
-        bg, objs, _, coord = records
+        records_of[h] = records
+    clones = clone_scripts(
+        {
+            # (local id +0, hidden flag +8, script +10) of each object event
+            h: [tuple(struct.unpack_from("<H", r, at)[0] for at in (0, 8, 10)) for r in rec[1]]
+            for h, rec in records_of.items()
+        }
+    )
+    for h, (script_id, _, _) in enumerate(rows):
+        bg, objs, _, coord = records_of[h]
         objects = []
         other = {struct.unpack_from("<H", r, 0)[0] for r in bg}
         for r in objs:
@@ -1887,8 +2019,11 @@ def rom_narrowing_inputs(rom, symbols, decomp: Path, n_trainers: int):
             other.add(script)
         coords = tuple(CoordEvent(*struct.unpack_from("<5H", r, 0)) for r in coord)
         other |= set(init_script_ids(narc[inits[h]], inits[h]))
+        other |= clones.get(h, set())
         if script_id not in files:
             script = RomScript(narc[script_id], table, f"{SCRIPTS_NARC} member {script_id}")
             files[script_id] = ScriptFacts(script, common, fr)
-        sites[h] = HeaderSites(tuple(objects), coords, frozenset(other), script_id)
+        ids = other | {c.script for c in coords}
+        extra, runs_any = past_table_starts(narc[script_id], files[script_id].script.entries, ids)
+        sites[h] = HeaderSites(tuple(objects), coords, frozenset(other), script_id, extra, runs_any)
     return sites, files, _rematches(rom, symbols, n_trainers), fr

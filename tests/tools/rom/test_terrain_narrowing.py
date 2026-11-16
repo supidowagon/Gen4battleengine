@@ -11,8 +11,10 @@ from tools.terrain import (
     Matrix,
     ObjectEvent,
     ScriptFacts,
+    clone_scripts,
     field_rules,
     narrowed_terrains,
+    past_table_starts,
     terrain_rules,
     tile_behaviours,
 )
@@ -93,11 +95,15 @@ def _trainer_type(decomp, name):
     return _constants(decomp, "trainer_types", "TRAINER_TYPE_").index(name)
 
 
-def _narrow(world, objects=(), coords=(), script=None, other=(), rows=(), where=None):
+def _narrow(
+    world, objects=(), coords=(), script=None, other=(), rows=(), where=None, extra=(), any_=False
+):
     rules, fr, headers, matrices, lands = world
     script = script or _Script()
     facts = ScriptFacts(script, _Script([("SCRCMD_STOPMUSIC", ()), ("SCRCMD_END", ())]), fr)
-    sites = {0: HeaderSites(tuple(objects), tuple(coords), frozenset(other), "f")}
+    sites = {
+        0: HeaderSites(tuple(objects), tuple(coords), frozenset(other), "f", tuple(extra), any_)
+    }
     where = where or {7: [0], 9: [0]}
     return narrowed_terrains(
         rules, fr, headers, matrices, lands, where, {}, sites, {"f": facts}, rows
@@ -189,13 +195,14 @@ def test_a_coord_event_battle_narrows_to_its_rectangle(decomp, world):
 
 def test_a_tag_battles_variable_partner_operand_names_only_partners(decomp, world):
     # ScrCmd_StartTagBattle (scrcmd_trainer.c:146-161) reads the partner first. Entry 4 is
-    # C-started (the start menu's retire, start_menu.c:1457) and its partner operand is a
+    # C-started (the start menu's retire, start_menu.c:1457; the file sets the Pal Park flag,
+    # E1 ruling G-42) and its partner operand is a
     # variable no constant reaches: it names a partner, never trainer 9, so 9's coord battle
     # (entry 1) still narrows (E1 ruling G-38); before, the operand matched every trainer.
     coord = CoordEvent(1, 3, 3, 1, 2)
     battle = [("SCRCMD_STARTTRAINERBATTLE", (9, 0)), ("SCRCMD_END", ())]
     tag = [("SCRCMD_STARTTAGBATTLE", (0x8004, 414, 415)), ("SCRCMD_END", ())]
-    stop = [("SCRCMD_END", ())]
+    stop = [("SCRCMD_SETCLEARINCATCHINGSHOWFLAG", (0,)), ("SCRCMD_END", ())]
     script = _Script(battle, stop, stop, tag)
     assert _narrow(world, coords=[coord], script=script) == {(9, 0): frozenset({GRASS})}
     # A trainer some script makes a partner (here through the partner variable) is matched.
@@ -210,6 +217,50 @@ def test_a_tag_battles_variable_partner_operand_names_only_partners(decomp, worl
         ("SCRCMD_END", ()),
     ]
     assert _narrow(world, coords=[coord], script=_Script(battle, stop, stop, tag9)) == {}
+
+
+def test_retire_and_last_ball_run_only_where_the_pal_park_flag_is_set(decomp, world):
+    # E1 ruling G-42: local ids 3 and 4 are started by game code only in the catching show
+    # (encounter.c:636-637; the Retire option, start_menu.c:279-287, :385, :1452-1457) or by
+    # overlay 9. A header whose file never runs SetClearInCatchingShowFlag
+    # (scrcmd_catching_show.c:24-38) or the Distortion World's features runs neither, so
+    # trainer 9, named only by entry 4, gets no terrain there; else the whole header.
+    battle = [("SCRCMD_STARTTRAINERBATTLE", (9, 0)), ("SCRCMD_END", ())]
+    stop = [("SCRCMD_END", ())]
+    assert _narrow(world, script=_Script(stop, stop, stop, battle)) == {(9, 0): frozenset()}
+    for gate in (
+        "SCRCMD_SETCLEARINCATCHINGSHOWFLAG",
+        "SCRCMD_INITPERSISTEDMAPFEATURESFORDISTORTIONWORLD",
+    ):
+        opened = [(gate, (0,)), ("SCRCMD_END", ())]
+        assert _narrow(world, script=_Script(opened, stop, stop, battle)) == {}
+
+
+def test_clone_objects_run_the_script_of_the_object_they_keep():
+    # E1 ruling G-40: a clone (script NO_SCRIPT) of header 20's local 3 keeps that object
+    # across the header change (map_object.c:772-801) and runs its script 7; a clone whose
+    # flag header has no such object is built fresh from the clone event (map_object.c:
+    # 236-255) and runs no local id.
+    clone = (3, 20, 65535)
+    assert clone_scripts({10: [clone], 20: [(3, 0, 7)]}) == {10: {7}}
+    assert clone_scripts({10: [clone], 20: [(4, 0, 7)]}) == {10: set()}
+
+
+def test_a_past_table_id_runs_its_table_words_target(decomp, world):
+    # E1 ruling G-40: ScriptContext_JumpToOffsetID (script_manager.c:412-416) reads the word
+    # at 4 * (id - 1) without a bound. A 1-entry, 16-byte file: id 2 reads 0 at 4 and runs
+    # offset 8 (an extra start), id 3 jumps past the file (no entry of it), id 5's word lies
+    # past the file's end (heap memory: any entry may run).
+    script = bytes(4) + (0).to_bytes(4, "little") + (256).to_bytes(4, "little") + bytes(4)
+    assert past_table_starts(script, [4], [1, 2, 3, 2000]) == ((8,), False)
+    assert past_table_starts(script, [4], [3, 5]) == ((), True)
+    # An extra start naming trainer 9 keeps the whole header; none, and 9 gets no terrain.
+    battle = [("SCRCMD_STARTTRAINERBATTLE", (9, 0)), ("SCRCMD_END", ())]
+    stop = [("SCRCMD_END", ())]
+    script = _Script(stop, battle)
+    assert _narrow(world, script=script) == {(9, 0): frozenset()}
+    assert _narrow(world, script=script, extra=[script.entries[1]]) == {}
+    assert _narrow(world, script=script, any_=True) == {}
 
 
 def test_the_constants_follow_the_rom_reader():
@@ -288,6 +339,17 @@ def test_vanilla_rom_narrows_as_the_decomp(vanilla_files, decomp, symbols, decom
 @pytest.fixture(scope="module")
 def kaizo_rows(kaizo_files, decomp, symbols):
     return _rom_rows(kaizo_files, decomp, symbols)
+
+
+def test_kaizo_venus_and_luna_fight_in_jubilife(kaizo_rows):
+    # E1 ruling G-42: Venus (414) and Luna (415)'s tag battle is entry 4 of Jubilife's file
+    # (a coord event) and of Route 202's copy (scr_seq 428), where only the start menu's
+    # Retire could run it, which needs the Pal Park flag Route 202 never sets: Route 202 gives
+    # them no terrain, Jubilife's whole header TERRAIN_BUILDING.
+    where, rows = kaizo_rows
+    for tid in (414, 415):
+        assert 343 in where[tid]
+        assert rows[tid] == (_t("BUILDING"), [_t("BUILDING")])
 
 
 def test_kaizo_clowns_fight_in_jubilife(kaizo_rows):

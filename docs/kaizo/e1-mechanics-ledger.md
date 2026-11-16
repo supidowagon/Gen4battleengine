@@ -593,3 +593,37 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   base row; Giratina-Origin (Cyrus 780) now has Pressure and Shaymin-Sky (Cynthia 870) Natural
   Cure, both still refused by Ruling 8 (`_check_form`). Tests: `tests/engine/test_e1_batch_a.py`
   (family 1), `tests/data/test_trainer.py`, `tests/engine/test_coverage.py`.
+- G-42 Local script ids 3 and 4 run on a header only where game code can start them
+  (`tools/terrain.py` `C_STARTED_SCRIPTS`, `c_started` in `narrowed_terrains`): the Pal Park
+  encounter task's last ball (`FieldTask_PalParkEncounter`, encounter.c:591-645, :636-637,
+  created only by `Encounter_NewVsPalParkTransfer`, :647-650) and the start menu's Retire,
+  which runs 4 outside the Safari Game (start_menu.c:1452-1457) and is shown only in the Safari
+  and Pal Park option sets (:279-287, :333-347; the normal, Battle Tower, Union Room and
+  Colosseum sets hide it, :385, :402, :407, :412). `FLAG_IN_PAL_PARK` is set and cleared only
+  by `ScrCmd_SetClearInCatchingShowFlag` (scrcmd_catching_show.c:24-38; system_flags.c:
+  418-431), so 3 and 4 run that way only on a header whose own file reaches
+  `SCRCMD_SETCLEARINCATCHINGSHOWFLAG` (Pal Park in both ROMs). Overlay 9 also starts 2, 3, 4,
+  6, 7 and 8 (ov9_02249960.c:99, :106, :8765, :11050-12709), kept behind the Distortion World's
+  map features as before. 5 (Union Room) is unchanged. Kaizo: 11 rows lose Route 202's or a
+  sibling header's tiles (Venus 414, Luna 415, Lucas/Dawn partner rows 613-618 -> BUILDING; Io
+  442 -> MOUNTAIN; Scarlet 892, Celeste 893 -> PLAIN); vanilla: none. Tests:
+  `tests/tools/rom/test_terrain_narrowing.py`, `tests/tools/rom/test_terrain.py` (Kaizo mixed
+  219 -> 208).
+- G-40 Clone objects and past-table local ids in the terrain narrowing (`tools/terrain.py`
+  `clone_scripts`, `past_table_starts`, `HeaderSites.extra_starts` / `runs_any`). A clone
+  object (script `NO_SCRIPT`) keeps the old header's map object with its local id when the
+  clone's flag names that header (`sub_0206184C` / `sub_0206244C`, map_object.c:171-198,
+  :772-801), so the header runs that object's script id; a clone whose flag header has no such
+  object keeps nothing and is built fresh from the clone event (`MapObjectMan_AddMapObjectFrom
+  Header` -> `sub_020624CC`'s search, :236-241, :803-815, then :244-255), whose script 65535
+  starts a fixed file, no local id (script_manager.c:32-33, :228-254): it adds no id (Kaizo
+  headers 336 and 371). A local id past its file's entry table runs
+  `ScriptContext_JumpToOffsetID` (script_manager.c:412-416) at `4 * id` plus the word read
+  there: inside the file it is an extra start node explored like a bg/object entry (vanilla
+  Route 207's clone id 15 -> offset 70: SetVarFromValue, End, no battle); outside the file it
+  runs no entry of it (Kaizo's five, vanilla Oreburgh City's 45); a table word past the file's
+  end is read from heap memory the decomp does not fix, so that header may run any entry of its
+  file (the conservative ruling; vanilla Route 223, header 468, `scripts_empty`). The decomp
+  narrowing (vanilla intermediates) has no byte offsets, so a past-table id runs no entry there;
+  `test_vanilla_rom_narrows_as_the_decomp` pins that the ROM reader's exact answer gives the same
+  rows. Moves no row in either game. Tests: `tests/tools/rom/test_terrain_narrowing.py`.
