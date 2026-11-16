@@ -820,6 +820,15 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   effect, CHARGE_TURN_DEF_UP (`:1715`), is not transcribed.
 - Encore waits on an encore state (`IfBattlerUnderEffect CHECK_ENCORE`, `:657`).
 
+### 5.24 AI_FLAG_HARRASSMENT (E1 Roark close batch, G-37)
+
+- `Harrassment_Main` (`:8021-8034`), FlagTable bit 10 (`:29`): `IfTargetIsPartner` (never in
+  singles), `LoadCurrentMoveEffect`, `IfLoadedNotInTable Harrassment_Effects` (`:8036-8071`,
+  34 effects, `commands.HARRASSMENT_EFFECTS`), then `IfRandomLessThan 128` (`:8030`): +2 when it
+  does not jump. One read per path for a table effect, none for any other (`read_bounds`
+  column 10). `policy._harrassment`; `layout.KAIZO_FLAG_BITS` and coverage's
+  `IMPLEMENTED_AI_FLAGS["kaizo"]` carry bit 10.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

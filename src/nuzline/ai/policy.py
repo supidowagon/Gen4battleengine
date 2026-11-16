@@ -66,6 +66,7 @@ from nuzline.ai.layout import (
     CHECK_HP,
     EVAL_ATTACK,
     EXPERT,
+    HARRASSMENT,
     PRIORITIZE_EXTREMES,
     RISKY,
     SETUP_FIRST_TURN,
@@ -2889,6 +2890,18 @@ def _weather(ctx: AiContext) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, 5))
 
 
+def _harrassment(ctx: AiContext) -> AiContext:
+    """``Harrassment_Main`` (script.s:8021-8034; G-37): ``IfTargetIsPartner`` never jumps in
+    singles (trainer_ai.c:2630); a move whose effect (``LoadCurrentMoveEffect``, :1164) is in
+    ``Harrassment_Effects`` (``commands.HARRASSMENT_EFFECTS``, :8036-8071) gets +2 unless the
+    128 roll (:8030) jumps; any other effect ends with no roll."""
+    ctx = _terminate(ctx)
+    ctx = c.load_current_move_effect(ctx)
+    ctx, _ = _split(c.if_loaded_not_in_table(ctx, c.HARRASSMENT_EFFECTS))  # -> _Terminate
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 8030))  # -> Harrassment_Terminate
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
 def _prioritize_extremes(ctx: AiContext) -> AiContext:
     """``PrioritizeExtremes_Main`` (script.s:6499-6519): a move ``FlagMoveDamageScore
     USE_MAX_DAMAGE`` makes no comparison for (``AI_NO_COMPARISON_MADE``, :6511-6512; a status
@@ -2990,7 +3003,7 @@ def _flags(layout: AiLayout) -> tuple:
     (``TrainerAI_MainSingles`` runs a flag's script only when its bit is set, low bit first,
     trainer_ai.c:297-308; ``FlagTable``, script.s:18-30): BASIC (bit 0), EVAL_ATTACK (1),
     EXPERT (2), SETUP_FIRST_TURN (3), RISKY (4), PRIORITIZE_EXTREMES (5), BATON_PASS (6),
-    CHECK_HP (8), WEATHER (9). Vanilla runs 7 (roark.md 1);
+    CHECK_HP (8), WEATHER (9), HARRASSMENT (10). Vanilla runs 7 (roark.md 1);
     Kaizo the trainer's set (E1 Ruling
     R2), Roark's 23. A bit without a transcribed script raises (``layout.kaizo_layout``
     builds no such layout; coverage refuses the trainer). A ``runtime_flags`` layout
@@ -3011,6 +3024,7 @@ def _flag_scripts(layout: AiLayout) -> tuple:
         BATON_PASS: _baton_pass,
         CHECK_HP: _check_hp,
         WEATHER: _weather,
+        HARRASSMENT: _harrassment,
     }
     out = []
     for bit in range(layout.flags.bit_length()):

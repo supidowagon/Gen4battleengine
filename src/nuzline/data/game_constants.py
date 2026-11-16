@@ -700,6 +700,12 @@ EXEMPT: dict[str, str] = {
         "Kaizo did not change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves "
         "carry their own effect"
     ),
+    "nuzline.ai.commands.HARRASSMENT_EFFECTS": (
+        "decomp battle effect ids of script.s's Harrassment_Effects (:8036-8071), compared with "
+        "MoveTable.effect (IfLoadedNotInTable, trainer_ai.c:876-891) by a script Kaizo did not "
+        "change apart from one word (docs/ai/kaizo_roark.md 2); each game's moves carry their "
+        "own effect"
+    ),
     "nuzline.ai.commands.CHECK_HP_TABLES": (
         "decomp battle effect ids of script.s's six CheckHP_*Discourage* tables (:7748-7977), "
         "compared with MoveTable.effect (IfLoadedInTable, trainer_ai.c:858-874) by a script "

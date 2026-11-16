@@ -511,6 +511,45 @@ SETUP_FIRST_TURN_EFFECTS = (
     258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN
     261,  # WHIRLPOOL (:6496)
 )
+# Harrassment_Effects (script.s:8036-8071): the effects Harrassment_Main scores
+# (IfLoadedNotInTable, :8027; trainer_ai.c:876-891). BATTLE_EFFECT_* ids, line - 1 of
+# generated/move_battle_effects.txt, in the table's order (34 entries).
+HARRASSMENT_EFFECTS = (
+    1,  # STATUS_SLEEP
+    18,  # ATK_DOWN
+    19,  # DEF_DOWN
+    23,  # ACC_DOWN
+    24,  # EVA_DOWN
+    49,  # STATUS_CONFUSE
+    58,  # ATK_DOWN_2
+    59,  # DEF_DOWN_2
+    60,  # SPEED_DOWN_2
+    62,  # SP_DEF_DOWN_2
+    66,  # STATUS_POISON
+    67,  # STATUS_PARALYZE
+    84,  # STATUS_LEECH_SEED
+    90,  # ENCORE
+    100,  # DECREASE_LAST_MOVE_PP
+    112,  # SET_SPIKES
+    118,  # ATK_UP_2_STATUS_CONFUSION
+    120,  # INFATUATE
+    165,  # TORMENT
+    166,  # SP_ATK_UP_CAUSE_CONFUSION
+    167,  # STATUS_BURN
+    173,  # NATURE_POWER
+    187,  # STATUS_SLEEP_NEXT_TURN
+    188,  # REMOVE_HELD_ITEM
+    192,  # MAKE_SHARED_MOVES_UNUSEABLE
+    197,  # SECRET_POWER
+    199,  # CONFUSE_ALL
+    205,  # ATK_DEF_DOWN
+    213,  # CAMOUFLAGE
+    232,  # PREVENT_ITEM_USE
+    234,  # TRANSFER_STATUS
+    249,  # TOXIC_SPIKES
+    258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN
+    265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER
+)
 # CheckHP_Main's six tables (script.s:7748-7977), by label: the effects it discourages at the
 # attacker's (CheckHP_Discourage*) and the target's (CheckHP_Target_Discourage*) high (> 70 %),
 # medium (31-70 %) and low HP (IfLoadedInTable, :7703-7737; trainer_ai.c:858-874).

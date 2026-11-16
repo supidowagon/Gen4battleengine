@@ -45,7 +45,7 @@ DECOMP = ROOT / "external/pokeplatinum"
 OUT = ROOT / "src/nuzline/ai/read_bounds.py"
 
 # FlagTable bits whose scripts are bounded (the Kaizo policy's transcribed flags,
-# layout.KAIZO_FLAG_BITS), with their entry labels (script.s:19-28).
+# layout.KAIZO_FLAG_BITS), with their entry labels (script.s:19-29).
 FLAG_LABELS = {
     0: "Basic_Main",
     1: "EvalAttack_Main",
@@ -56,6 +56,7 @@ FLAG_LABELS = {
     6: "BatonPass_Main",
     8: "CheckHP_Main",
     9: "Weather_Main",
+    10: "Harrassment_Main",
 }
 _ENDS = {"PopOrEnd", "Escape"}
 # Commands that leave calcTemp as it is: jumps on the state, scoring and flow.

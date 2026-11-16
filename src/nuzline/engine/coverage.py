@@ -230,6 +230,7 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
         6: Support.EXACT,  # AI_FLAG_BATON_PASS, E1 prep batch P3
         8: Support.EXACT,
         9: Support.EXACT,
+        10: Support.EXACT,  # AI_FLAG_HARRASSMENT, E1 Roark close batch (G-37)
     },
 }
 # The vanilla policy runs these scripts together, so a vanilla trainer must have them all. The

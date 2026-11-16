@@ -108,6 +108,7 @@ LISTED = [
     "nuzline.ai.commands.ALT_POWER_EFFECTS",
     "nuzline.ai.commands.RISKY_EFFECTS",
     "nuzline.ai.commands.SETUP_FIRST_TURN_EFFECTS",
+    "nuzline.ai.commands.HARRASSMENT_EFFECTS",
     "nuzline.ai.commands.CHECK_HP_TABLES",
     "nuzline.ai.outcome.KAIZO_TRANSCRIBED",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",

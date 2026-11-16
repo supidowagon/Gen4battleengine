@@ -340,6 +340,8 @@ SITE_N: dict[int, int] = {
     6591: 20,  # BatonPass_EvalMove: +3
     # E2 batch 10: the charge-turn moves.
     4058: 80,  # Expert_ChargeTurnWithInvuln_TryScorePlus1 (+1 when it does NOT jump)
+    # E1 Roark close batch: AI_FLAG_HARRASSMENT (G-37).
+    8030: 128,  # Harrassment_Main (+2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is

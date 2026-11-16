@@ -23,7 +23,7 @@ The fields:
 * ``name``: the policy, ``game_constants.POLICY``'s value for the game.
 * ``flags``: the trainer AI flags the policy runs (``policy._flags``), in bit order
   (``generated/ai_flags.txt``: bit 0 BASIC, 1 EVAL_ATTACK, 2 EXPERT, 3 SETUP_FIRST_TURN,
-  4 RISKY, 5 PRIORITIZE_EXTREMES, 8 CHECK_HP, 9 WEATHER).
+  4 RISKY, 5 PRIORITIZE_EXTREMES, 6 BATON_PASS, 8 CHECK_HP, 9 WEATHER, 10 HARRASSMENT).
 * ``per_slot_sites``: the random reads are keyed by move slot (K3c Task 3) and by their
   order on the slot's path (E1 Ruling R4; ``outcome`` docstring).
 * ``max_script_rolls``: the flat ``AiOutcome.script_rolls`` width (vanilla).
@@ -117,6 +117,7 @@ __all__ = [
 # AI flag bits (generated/ai_flags.txt, line n + 2 is bit n; FlagTable, script.s:18-30).
 BASIC, EVAL_ATTACK, EXPERT, SETUP_FIRST_TURN, RISKY = 0, 1, 2, 3, 4
 PRIORITIZE_EXTREMES, BATON_PASS, TAG_STRATEGY, CHECK_HP, WEATHER = 5, 6, 7, 8, 9
+HARRASSMENT = 10
 # The flag bits whose scripts the Kaizo policy transcribes (policy._flags):
 # engine/coverage.py IMPLEMENTED_AI_FLAGS["kaizo"] lists the same bits.
 KAIZO_FLAG_BITS = frozenset(
@@ -130,6 +131,7 @@ KAIZO_FLAG_BITS = frozenset(
         BATON_PASS,
         CHECK_HP,
         WEATHER,
+        HARRASSMENT,
     }
 )
 assert set(READ_BOUND_BITS) == KAIZO_FLAG_BITS

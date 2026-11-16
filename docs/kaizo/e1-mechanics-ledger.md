@@ -493,3 +493,16 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   Calc repo: no location or terrain field. Sheet: both under "Jubilife City" (Roark Split:37).
   Not guessed; resolving it needs the narrowing to read a battle command's partner operand as
   the partner and to drop entries a header cannot run.
+- G-37 AI_FLAG_HARRASSMENT (bit 10, FlagTable script.s:29): `Harrassment_Main` (:8021-8034)
+  is `IfTargetIsPartner` (never in singles, trainer_ai.c:2630), `LoadCurrentMoveEffect`
+  (:1164), `IfLoadedNotInTable Harrassment_Effects` (:8036-8071, 34 effects, trainer_ai.c:
+  876-891), `IfRandomLessThan 128` (:8030, trainer_ai.c:528-538), +2 when it does not jump.
+  `policy._harrassment` runs it through `policy._flags` / `_run_flags` (ALLIN: masked by the
+  fight's `tables.ai_flags`); the roll is the slot's next `commands._slot_read` (outcome
+  `SITE_N[8030] = 128`); `tools/ai_read_bounds.py` bounds it (column 10 of
+  `read_bounds.READ_BOUNDS`: one read for a table effect); `layout.KAIZO_FLAG_BITS` and
+  coverage's `IMPLEMENTED_AI_FLAGS["kaizo"]` carry bit 10; `commands.HARRASSMENT_EFFECTS`
+  (game_constants: decomp effect ids). The eight Gardenia-split fights with the flag are all
+  multi battles (201-203, 395, 435-436, 461-462; Cheryl 608 is a partner row), so they stay
+  refused by format, and 201, 395 and 608 also by TAG_STRATEGY. Tests:
+  `tests/engine/test_e1_roark_close.py`; docs/ai/kaizo_roark.md 5.24.
