@@ -763,9 +763,7 @@ def _draw_gardenia_item(
             foe = 1 - side
             foe_mon = int(a["active"][foe])
             move = names.move(rnd.choice(("Bug Bite", "Pluck")))
-            k = rnd.randint(0, 3)
-            a["moves"][foe, foe_mon, k] = move
-            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
     elif rnd.random() < 0.3:
         a["confusion"][side] = rnd.randint(2, _CONFUSION_MAX)
 
@@ -846,9 +844,7 @@ def _draw_pressure(draw, tables: Tables, a: dict, side: int, active: int, names:
     foe_mon = int(a["active"][foe])
     move = names.move(rnd.choice(PRESSURE_MOVES))
     if tables.move_effect[move] != EffectId.UNSUPPORTED:
-        k = rnd.randint(0, 3)
-        a["moves"][foe, foe_mon, k] = move
-        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
     if rnd.random() < 0.5:
         for k in range(4):
             if a["moves"][foe, foe_mon, k]:
@@ -897,9 +893,7 @@ def _draw_status_guard(
     ):
         move = names.move(name)
         if tables.move_effect[move] != EffectId.UNSUPPORTED:
-            k = rnd.randint(0, 3)
-            a["moves"][owner, mon, k] = move
-            a["pp"][owner, mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, owner, mon, move, rnd.randint(0, 3))
     for owner, mon in ((side, active), (foe, foe_mon)):
         if rnd.random() < 0.5:
             a["status"][owner, mon] = Status.NONE
@@ -958,9 +952,7 @@ def _draw_guard_download(
         a["ability"][side, active] = AbilityId.WONDER_GUARD
         move = names.move(rnd.choice(WONDER_GUARD_MOVES))
         if tables.move_effect[move] != EffectId.UNSUPPORTED:
-            k = rnd.randint(0, 3)
-            a["moves"][foe, foe_mon, k] = move
-            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
         if rnd.random() < 1 / 3:
             a["ability"][foe, foe_mon] = AbilityId.MOLD_BREAKER
     if draw(st.integers(0, 2)) == 0:
