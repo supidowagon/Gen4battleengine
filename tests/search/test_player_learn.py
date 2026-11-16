@@ -4,10 +4,12 @@ settles a pending learn at its root, as ``playout`` does, and both loops'
 ``refusal_reason`` name a refused learn (window (c)). The states are
 ``tests/search/test_learn.py``'s.
 
-Compile cost shapes this module (each loop program is the whole engine): the free-policy
-runs share one turn count and the fixed-action runs another (a root refused at its settle
-plays no turn, so its count is free), the playouts the players are compared with run once
-per module, and no test traces more than two loop programs of its own."""
+Compile cost shapes this module (each loop or turn program is the whole engine, several GB
+resident once compiled): the free-policy runs share one turn count and the fixed-action runs
+another, a root refused at its settle runs the no-turn programs (max_turns 0: the settle
+alone), the playouts the players are compared with run once per module, every test starts
+with no program resident (``_own_programs``) and a test that needs two whole-engine programs
+drops the first before the second (``drop_programs``)."""
 
 from __future__ import annotations
 
@@ -24,9 +26,17 @@ from nuzline.search import playout as playout_module
 from nuzline.search.line import LINE, empty_line
 from nuzline.search.player import GREEDY, Player, _player_run, player_playout
 from nuzline.search.playout import playout, playout_from_action, replacement_policy, root_state
-from tests.engine.helpers import roark_real_state
+from tests.engine.helpers import drop_programs, roark_real_state
 from tests.engine.test_levelup import _base, _mon, _with
 from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
+
+
+@pytest.fixture(autouse=True)
+def _own_programs():
+    """No earlier test's programs resident when a test starts (after the module's ``roots``,
+    which is set up first): a test's whole-engine compiles on another's executables passed
+    12 GB in the fast tier."""
+    drop_programs()
 
 
 def _fixed_act(tables, state, params, key, layout):
@@ -116,12 +126,13 @@ def test_greedy_equals_playout_through_learns(tables, roots):
 
 
 def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):
-    # Refused at the root's settle, before any turn: both loops on the programs of the test
-    # above (the turn count is free there: no turn is played).
+    # Refused at the root's settle, before any turn: both loops refuse with no turn to play
+    # (max_turns 0, the no-turn programs: the root's settle alone, about 1.5 GB each where a
+    # turn program passes 4 GB), so the refusal can only come from the settle.
     s = _window_c_root(tables, names)
     key = jax.random.PRNGKey(7)
-    assert int(_run(tables, s, GREEDY, (), key, TURNS)[0].refused) == 1
-    assert int(playout(tables, s, key, TURNS).refused) == 1
+    assert int(_run(tables, s, GREEDY, (), key, 0)[0].refused) == 1
+    assert int(playout(tables, s, key, 0).refused) == 1
     # Both refusal_reason replays name it with no turn to replay (max_turns 0), so the name
     # can only come from the root's settle (player._replay's and playout.refusal_reason's
     # settle_reason, as _resolve_pending's settle_learns); with turns, the first replayed
@@ -159,26 +170,30 @@ def test_a_turn_resolves_its_learns(tables, names):
 
 def test_a_turn_window_c_refuses_the_fixed_player_and_is_named(tables, names):
     # The playout's window (c) turn (the test below) in the player loop, on the FIXED
-    # program of the test above (its refusal_reason shares playout's _play_jit).
+    # program of the test above; its refusal_reason replays the turn in playout's _play_jit,
+    # compiled after the loop program is dropped.
     s = _window_c(tables, names)
     action = names.move_slot(s, 0, "Bubble")
     key = jax.random.PRNGKey(3)
     assert int(_run(tables, s, FIXED, action, key, FIXED_TURNS)[0].refused) == 1
+    drop_programs()
     reason = player_module.refusal_reason(tables, s, FIXED, action, key, FIXED_TURNS)
     assert "window (c)" in reason
 
 
 def test_a_turn_window_c_refuses_the_playout_and_is_named(tables, names):
     # Refused in the first turn's payout (test_learn.py::_window_c). Formerly
-    # test_learn.py::test_window_c_refuses_the_playout_and_names_it.
+    # test_learn.py::test_window_c_refuses_the_playout_and_names_it. The replay's _play_jit
+    # and finish_turn programs, then the loop program after they are dropped.
     s = _window_c(tables, names)
     action = names.move_slot(s, 0, "Bubble")
     key = jax.random.PRNGKey(3)
-    assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 1
     assert "window (c)" in playout_module.refusal_reason(tables, s, action, key, FIXED_TURNS)
+    drop_programs()
+    assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 1
 
 
-# Slow: a no-turn GREEDY program of its own (about 2.3 GB). The fast tier keeps the property
+# Slow: a no-turn GREEDY program (the window (c) root test's, about 1.4 GB). The fast tier keeps the property
 # through test_greedy_equals_playout_through_learns' two pending roots (it fails with the
 # root's settle_learns removed from _player_run, and with its carried powerMul replaced by
 # the normal one).
