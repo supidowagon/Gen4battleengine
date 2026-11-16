@@ -7,7 +7,7 @@ Keep this file short. Design and roadmap live in `docs/design.md`.
 - **Doubles-ready code:** new engine and AI code follows section 5 of `docs/doubles-state-design.md`.
 - **Pushing:** only the managing session pushes, and only `main`, after each merge that passed a fresh review agent (standing yes from the user, 2026-11-15). Work streams never push. Merges into local `main` go through a fresh review agent.
 - **Safety over speed:** a line's win chance outranks saving allowed resources.
-- **Never write to any `backup` folder.** The user's save files and ROMs are never copied or committed.
+- **Never write to any `backup` folder.** The user's save files and ROMs are never committed, and never copied anywhere except the project's git-ignored `.cache` folder.
 - **Build for the complete engine:** no tests, guards or special cases that only matter while coverage is partial. Model the missing mechanic instead.
 - **Lean process:** mechanics in batches by family, one review per batch, focused tests plus the cross-area guards (`tests/prep/test_variants.py`, `tests/data/test_game_constants.py`, `tests/tools/test_backlog.py`, `tests/test_cli.py`) per batch, fast tier (`-m "not slow"`) once per merge into `main`, full suite only when a split closes. No stream starts a third batch while two of its batches are unmerged.
 - **After merging `main` into a branch:** rebuild the vanilla and Kaizo tables before any test, scan for names, enum members and table rows defined twice (both sides adding the same thing merges without a conflict), and run the tests that assert something is unsupported.
