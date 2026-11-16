@@ -71,25 +71,6 @@ def test_batched_playout_shapes(tables, names):
     assert r.won.shape == (B,) and r.turns.dtype == jnp.int16
 
 
-def _replay(tables, state, key, max_turns=100):
-    """The states of ``playout(tables, state, key)`` turn by turn (its key splits) and
-    the opponent's action each turn: ``[(state before, opponent action, state after)]``."""
-    out = []
-    for _ in range(max_turns):
-        if int(state.over) != 0:
-            break
-        key, k_policy, k_turn = jax.random.split(key, 3)
-        action = playout_module._policy_jit(tables, state, k_policy)[0]
-        played, refused = playout_module._turn_jit(tables, state, action, k_turn)
-        assert not bool(refused)
-        opp = int(
-            ai_policy(tables, state, sample_ai_outcome(jax.random.split(k_turn)[0], tables, state))
-        )
-        out.append((state, opp, played))
-        state = played
-    return out
-
-
 def _short_party_trace_f(tables, names):
     """roark.md 13, trace F (Cranidos 40/43 in party slot 2, moveHit = Wing Attack, turn
     2; its AI switches with p = 1 - (43690/65536)^4) against a two-Pokemon player party

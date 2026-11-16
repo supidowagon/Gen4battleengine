@@ -817,7 +817,8 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   or immune -2; in sun +2; else Power Herb (its true item) +2; else the player known to have
   a Protect effect -2, or the attacker at 38 % HP or less -1. Expert_Main's second entry for
   this effect (`:1719`, Expert_Thunder, the decomp's Thunder bug) is never reached. Its other
-  effect, CHARGE_TURN_DEF_UP (`:1715`), is not transcribed.
+  effect, CHARGE_TURN_DEF_UP (`:1715`, Skull Bash), is transcribed since E2 batch 10 to the
+  same label (`policy.py`, `_expert_charge_turn_no_invuln`).
 - Encore waits on an encore state (`IfBattlerUnderEffect CHECK_ENCORE`, `:657`).
 
 ## 6. Where the AI reads the true battle state

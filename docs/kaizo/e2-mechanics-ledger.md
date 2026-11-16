@@ -1,6 +1,6 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-16: batch 11 in progress on this branch)
+## RESUME (updated 2026-11-16: batch 11 merged with the batch 10 merge tip, follow-ups done; heavy runs owed)
 
 - **Main.** Batches 3-9 are in local main (d420167; main 0bed7e9 merged into this branch at
   ac351e1, CLAUDE.md only). Never push.
@@ -35,6 +35,17 @@
   passed. Owed once the fast tier frees the machine (runs under 4 GB until then, no tests/search,
   no test_cli): test_invokers and test_batch11's hand tests after the sampler rewrite (peaks
   5-8 GB), tests/test_cli.py, the review. Sampler cost: see B11-1.
+- **Batch 11 follow-ups after the merge (2026-11-16, on ef4fe39).** outcome.py's two duplicate
+  `151` entries dropped; kaizo_roark.md 5.23 says CHARGE_TURN_DEF_UP is transcribed; the Yawn
+  semi-miss test parametrized (Vital Spirit, Leaf Guard in and out of sun, Mold Breaker users;
+  subscript_yawn.s:5-9, battle_lib.c:3108-3123); test_playout's duplicate `_replay` removed (the
+  later body kept); the generator draws the foe's Yawn at a vanished battler (B10-13; 800 draws,
+  seeds 1-2: the foe knows it 25, uses it 12). Light checks: test_batch10 41, test_batch11 hand
+  tests 5 (`-k "not sampled"`), read_bounds 3, kaizo_policy `-k "encore or solar or charge or
+  shadow"` 55, game_constants 16, tables 34, test_state 24 passed; differential seed 27 clean
+  (300). **Owed heavy runs** (when the fast tier frees the machine):
+  tests/engine/test_invokers.py, the sampled-frequency tests (test_batch11 `-k sampled`),
+  tests/search incl. test_playout.py, tests/test_cli.py, differential seed 32 on the merge.
 - **Batch 11 (as briefed):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
   replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,

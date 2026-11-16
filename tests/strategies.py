@@ -1003,6 +1003,12 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["semi_invulnerable"][side] = next(
             (int(k) for k, bit in SEMI_SET_FLAGS.items() if flags & int(bit)), 0
         )
+        if a["semi_invulnerable"][side] and rnd.random() < 0.7:
+            # B10-13: the foe's Yawn at the vanished user, whose subscript still runs on the
+            # semi miss (subscript_yawn.s:5-9 before :21).
+            give("Yawn", foe, foe_mon)
+            give("Yawn", foe, foe_mon)
+            a["taunt"][foe] = 0  # a status move a taunt would block
 
 
 # Moves whose decomp path tests a substitute or meets one (B10-4).
@@ -1609,6 +1615,12 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         rare = np.isin(effect, RARE_EFFECTS) | ((flags & int(MoveFlag.CHARGE)) != 0)
         for side in (0, 1):
             slots = [k for k in range(4) if rare[side, k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
+        # B10-13: Yawn at a vanished foe one draw in two (its subscript runs on the semi miss).
+        yawn = (effect == EffectId.YAWN) & (np.asarray(state.semi_invulnerable)[::-1] != 0)[:, None]
+        for side in (0, 1):
+            slots = [k for k in range(4) if yawn[side, k] and masks[side][k]]
             if slots and draw(st.booleans()):
                 acts[side] = draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
