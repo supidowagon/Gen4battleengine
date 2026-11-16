@@ -4,9 +4,10 @@ plainly over ``step`` and ``enumerate_outcomes``. The reference ``stage_b.solve`
 match on the endgames.
 
 Independent of ``search/expand.py`` (nothing imported from it, no shared merge code):
-each (state, action pair) has its enumerated outcome rows padded to ``P`` and played by
-one module-level ``jax.jit(jax.vmap(_turn))`` (the playout's turn recipe,
-``playout._play``/``_turn``: ``step``, the opponent's forced replacement
+each (state, action pair) has its enumerated outcome rows played in calls of ``P`` rows
+(the last one padded with copies of its first row, dropped; a row's result does not
+depend on ``P``) by one module-level ``jax.jit(jax.vmap(_turn))`` (the playout's turn
+recipe, ``playout._play``/``_turn``: ``step``, the opponent's forced replacement
 ``send_replacements`` with ``ai_switched = is_switch(opponent action)`` and the
 replacement's ``power_mul``, then ``observe``), merged on the host by (state bytes,
 observation bytes, refused) and grouped by observation into belief nodes. A refused
@@ -34,11 +35,18 @@ from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
 from nuzline.engine.observe import OBS_SIZE, observe, replacement_observation
 from nuzline.engine.order import is_switch
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import WINNER_PLAYER, needs_replacement, replacement_power_mul, step
+from nuzline.engine.step import (
+    WINNER_PLAYER,
+    needs_replacement,
+    replacement_power_mul,
+    resolve_war,
+    step,
+    war_split,
+)
 from nuzline.search import deaths
 from nuzline.search.playout import replacement_pass, send_replacements
 
-P = 8192  # outcome rows per program call (padded)
+P = 8192  # outcome rows per program call (padded), read at the call
 _OBS_BYTES = OBS_SIZE * 4  # int32 observation
 
 
@@ -54,9 +62,11 @@ _laws = jax.jit(outcome_laws)
 _legal = jax.jit(decision_actions)
 
 
-def _replace(tables, state, action):
+def _replace(tables, state, action, tie):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    return after, refused, replacement_observation(after)
+    split = war_split(after)
+    after = resolve_war(after, tie)
+    return after, refused, replacement_observation(after), split
 
 
 _replaced = jax.jit(_replace)
@@ -86,10 +96,15 @@ def children(
     actions = jnp.asarray([a, o], jnp.int32)
     outcomes, probs = enumerate_outcomes(jax.device_get(_laws(tables, state, actions)))
     k = len(probs)
-    assert k <= P, k
-    pad = np.concatenate([np.arange(k), np.zeros(P - k, np.int64)])
-    padded = jax.tree.map(lambda f: np.asarray(f)[pad], outcomes)
-    after, refused, obs = jax.device_get(_turns(tables, state, actions, padded))
+    parts = []
+    for start in range(0, k, P):  # P read at the call (a test may run smaller calls)
+        idx = np.arange(start, min(start + P, k))
+        pad = np.concatenate([idx, np.full(P - len(idx), start, np.int64)])
+        padded = jax.tree.map(lambda f, p=pad: np.asarray(f)[p], outcomes)
+        out = jax.device_get(_turns(tables, state, actions, padded))
+        n = len(idx)
+        parts.append(jax.tree.map(lambda f, n=n: np.asarray(f)[:n], out))
+    after, refused, obs = jax.tree.map(lambda *fs: np.concatenate(fs), *parts)
     # Each row's state bytes at once: the fields' bytes side by side, in ``state_bytes``'
     # order, so row i of ``rows`` is ``state_bytes(_row(after, i))``.
     rows = np.concatenate(
@@ -116,18 +131,26 @@ def replacement_children(
     tables, state: BattleState, a: int
 ) -> list[tuple[BattleState, bool, bytes, float]]:
     """``children`` of the replacement ``a`` (``MOVE_ACTIONS + slot``) at a pending
-    ``state``: one child, probability 1."""
+    ``state``: one child, probability 1, or one per tie bit (1/2) of an open weather war
+    (``step.resolve_war``, ruling G-26)."""
     key = (id(tables), state_bytes(state), a)
     if key not in _REPLACED:
-        after, refused, obs = jax.device_get(_replaced(tables, state, jnp.int32(a)))
-        _REPLACED[key] = [
-            (
-                jax.tree.map(np.asarray, after),
-                bool(refused),
-                np.asarray(obs, np.int32).tobytes(),
-                1.0,
+        kids = []
+        for tie in (0, 1):
+            after, refused, obs, split = jax.device_get(
+                _replaced(tables, state, jnp.int32(a), jnp.int32(tie))
             )
-        ]
+            kids.append(
+                (
+                    jax.tree.map(np.asarray, after),
+                    bool(refused),
+                    np.asarray(obs, np.int32).tobytes(),
+                    0.5 if bool(split) else 1.0,
+                )
+            )
+            if not bool(split):
+                break
+        _REPLACED[key] = kids
     return _REPLACED[key]
 
 

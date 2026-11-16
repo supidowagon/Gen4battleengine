@@ -12,7 +12,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from nuzline.ai.commands import SIM_ROLL_MAX, ai_damage, is_damaging
+from nuzline.ai.commands import SIM_ROLL_MAX, estimate, is_damaging
 from nuzline.ai.layout import fight_effects, layout_of
 from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import AI_POLICIES
@@ -298,13 +298,16 @@ def ai_kill_damage(
 ) -> tuple[int, ...]:
     """The AI's kill-check damages against ``spec`` (ruling 5 b): for each opponent slot ``j``
     and each damaging move of it, ``ai_damage`` at ``SIM_ROLL_MAX`` on the turn-0 matchup
-    with that opponent leading; distinct, ascending, zeros dropped."""
+    with that opponent leading, every class of a Psywave or Magnitude draw (``estimate``;
+    trainer_ai.c:1560-1567, E1 ruling G-39); distinct, ascending, zeros dropped."""
     out: set[int] = set()
     for j, mon in enumerate(opp):
         state = make_state(tables, [spec], list(opp), start_condition, opp_items, leads=(0, j))
         for move in mon.moves:
             if move and bool(is_damaging(tables, move)):
-                out.add(int(ai_damage(tables, state, move, SIM_ROLL_MAX)))
+                est = estimate(tables, state, move, SIM_ROLL_MAX)
+                value, prob = np.asarray(est.value), np.asarray(est.prob)
+                out.update(int(v) for v in value[prob > 0])
     return tuple(sorted(d for d in out if d > 0))
 
 

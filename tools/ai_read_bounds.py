@@ -29,6 +29,18 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
 Every other branch is taken both ways, so the table is an upper bound: a path never makes more
 reads than its row says (a layout bound that is never exceeded is never a refusal).
 
+The damage commands make one read each where ``TrainerAI_CalcDamage`` draws (E1 ruling G-39:
+Psywave's and Magnitude's id cases, trainer_ai.c:3014-3048; ``ai.outcome`` docstring), so the
+bound also follows the moveset (``drawn``): ``IfBattlerDealsMoreDamage`` (:2187-2240) always
+(the player's last move may be one; the layout does not know the player's moves);
+``IfPartyMemberDealsMoreDamage`` (:2106-2174) when the fight's moves include a drawing one;
+``IfCurrentMoveKills`` (:1525-1567) when the scored move is one (and damaging);
+``FlagMoveDamageScore`` (:1012-1063) when the fight has one, the move is damaging and a later
+compare reads the result as other than ``AI_NO_COMPARISON_MADE`` (counted at that compare;
+script.s:62, :112, :6511 and :6572 compare only with it and are no read). ``READ_BOUNDS`` holds
+the fights without a drawing move, ``DRAWN_READ_BOUNDS`` (keyed by ``current``, the scored move
+draws, too) the rows that differ in a fight with one.
+
 Run from the repository root with the decomp and the built Kaizo tables present:
     uv run python -m tools.ai_read_bounds
 ``tests/ai/test_read_bounds.py`` regenerates the table and compares.
@@ -45,7 +57,7 @@ DECOMP = ROOT / "external/pokeplatinum"
 OUT = ROOT / "src/nuzline/ai/read_bounds.py"
 
 # FlagTable bits whose scripts are bounded (the Kaizo policy's transcribed flags,
-# layout.KAIZO_FLAG_BITS), with their entry labels (script.s:19-28).
+# layout.KAIZO_FLAG_BITS), with their entry labels (script.s:19-29).
 FLAG_LABELS = {
     0: "Basic_Main",
     1: "EvalAttack_Main",
@@ -56,6 +68,7 @@ FLAG_LABELS = {
     6: "BatonPass_Main",
     8: "CheckHP_Main",
     9: "Weather_Main",
+    10: "Harrassment_Main",
 }
 _ENDS = {"PopOrEnd", "Escape"}
 # Commands that leave calcTemp as it is: jumps on the state, scoring and flow.
@@ -102,8 +115,12 @@ class Script:
         return self.effects.index(name) if name in self.effects else None
 
 
-def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: bool) -> int:
-    """The most reads flag ``bit``'s script makes on one path for a move of ``effect``."""
+def flag_reads(
+    script: Script, bit: int, effect: int, damaging: bool, can_quad: bool, drawn: int = 0
+) -> int:
+    """The most reads flag ``bit``'s script makes on one path for a move of ``effect``;
+    ``drawn``: 0 no move of the fight draws in ``TrainerAI_CalcDamage``, 1 some does, 2 the
+    scored move does (module docstring)."""
     lines = script.lines
 
     @cache
@@ -127,11 +144,20 @@ def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: 
                 reads = int(args[0] == "AI_BATTLER_DEFENDER")
             elif cmd == "IfSpeedCompareEqualTo":
                 reads = int(args[0] != "COMPARE_SPEED_SLOWER")  # the tie (E1 Ruling R8)
+            elif cmd == "IfBattlerDealsMoreDamage":
+                reads = 1
+            elif cmd == "IfPartyMemberDealsMoreDamage":
+                reads = int(drawn >= 1)
+            elif cmd in ("IfCurrentMoveKills", "IfCurrentMoveDoesNotKill"):
+                reads = int(drawn == 2 and damaging)
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
                 return reads + most(script.labels[target], calc)
             taken = _decided(script, cmd, args, calc, effect, damaging, can_quad)
-            nxt = _next_calc(cmd, calc, effect, damaging)
+            nxt = _next_calc(cmd, calc, effect, damaging, drawn)
+            if calc[0] == "compared" and calc[2] and cmd.startswith("IfLoaded") and taken is None:
+                reads += 1  # FlagMoveDamageScore's pending read: its result is read here
+                nxt = (calc[0], calc[1], False)
             if target is None or not cmd.startswith("If"):
                 if reads:
                     return reads + most(i + 1, nxt)
@@ -151,11 +177,11 @@ def flag_reads(script: Script, bit: int, effect: int, damaging: bool, can_quad: 
     return most(script.labels[FLAG_LABELS[bit]] + 1, ("unknown",))
 
 
-def _next_calc(cmd: str, calc: tuple, effect: int, damaging: bool) -> tuple:
+def _next_calc(cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0) -> tuple:
     if cmd == "LoadCurrentMoveEffect":
         return ("effect", effect)
     if cmd == "FlagMoveDamageScore":
-        return ("compared", damaging)
+        return ("compared", damaging, drawn >= 1 and damaging)
     if cmd.startswith("If") or cmd in _KEEPS_CALC:
         return calc
     return ("unknown",)
@@ -204,8 +230,28 @@ def read_bounds(script: Script, effects) -> dict[tuple[int, bool, bool], tuple[i
     }
 
 
-def render(bounds) -> str:
+def drawn_read_bounds(
+    script: Script, effects, base
+) -> dict[tuple[int, bool, bool, bool], tuple[int, ...]]:
+    """The rows of a fight with a drawing move (``flag_reads``' ``drawn`` 1, or 2 for
+    ``current``) that differ from ``base`` (``read_bounds``)."""
+    out = {}
+    for e in sorted(effects):
+        for damaging in (False, True):
+            for can_quad in (False, True):
+                for current in (False, True):
+                    row = tuple(
+                        flag_reads(script, bit, e, damaging, can_quad, 2 if current else 1)
+                        for bit in FLAG_LABELS
+                    )
+                    if row != base[(e, damaging, can_quad)]:
+                        out[(e, damaging, can_quad, current)] = row
+    return out
+
+
+def render(bounds, drawn=None) -> str:
     rows = "\n".join(f"    {key!r}: {value!r}," for key, value in bounds.items())
+    drawn_rows = "\n".join(f"    {key!r}: {value!r}," for key, value in (drawn or {}).items())
     return f'''"""Generated by tools/ai_read_bounds.py (E1 Ruling R6); do not edit by hand.
 
 The most random reads (``IfRandomLessThan`` and defender-ability guesses) each transcribed
@@ -213,12 +259,22 @@ trainer-AI flag script makes on one move slot's path, per kind of move:
 ``READ_BOUNDS[(battle effect, damaging, can be quadruple effective)]`` holds one count per
 bit of ``READ_BOUND_BITS``, in that order. ``layout.fight_slot_reads`` sums the counts of a
 fight's flag set and takes the most over its opponents' moves.
+
+A damage command whose estimate draws (Psywave's and Magnitude's id cases, E1 ruling G-39) is
+one read too: ``READ_BOUNDS`` is for a fight none of whose moves draws (its
+``IfBattlerDealsMoreDamage`` still counts one: the player's move may draw), and in a fight with
+such a move ``DRAWN_READ_BOUNDS[(battle effect, damaging, can be quadruple effective, the move
+itself draws)]`` replaces the rows that differ.
 """
 
 READ_BOUND_BITS = {tuple(FLAG_LABELS)!r}
 
 READ_BOUNDS: dict[tuple[int, bool, bool], tuple[int, ...]] = {{
 {rows}
+}}
+
+DRAWN_READ_BOUNDS: dict[tuple[int, bool, bool, bool], tuple[int, ...]] = {{
+{drawn_rows}
 }}
 '''
 
@@ -232,7 +288,9 @@ def main() -> int:
 
     tables = load_tables(ROOT / "data/gen4_platinum_kaizo")
     script = Script(DECOMP, np.asarray(tables.move_ai_effect))
-    OUT.write_text(render(read_bounds(script, KAIZO_TRANSCRIBED)), "utf-8", newline="\n")
+    base = read_bounds(script, KAIZO_TRANSCRIBED)
+    drawn = drawn_read_bounds(script, KAIZO_TRANSCRIBED, base)
+    OUT.write_text(render(base, drawn), "utf-8", newline="\n")
     print(f"wrote {OUT.relative_to(ROOT)}")
     return 0
 

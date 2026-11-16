@@ -133,9 +133,11 @@ uses the table's power for 0 and the table's type for TYPE_NORMAL, `battle_lib.c
   bench member's from its own IVs (`Move_CalcVariableType`, `battle_lib.c:8162-8175`;
   `ai.switching.party_move_types`: the switch's bench check and both stages of the
   post-KO replacement, `:7998`, `:8051`);
-- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball (`monSpeedValues`, left by the last speed compare,
-  `battle_lib.c:1372`), Psywave and Magnitude (a `RandNext` in the estimate, `:3015`,
-  `:3030`). Kaizo Triple Axel sits on MOVE_PSYWAVE's id (`:3014`);
+- Psywave and Magnitude (E1 Roark close batch, G-39): a `RandNext` in the estimate
+  (`:3014-3016`, `:3028-3048`), each damage command a read of its own (8.7). Kaizo Triple Axel
+  sits on MOVE_PSYWAVE's id and Bulldoze on MOVE_MAGNITUDE's;
+- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball
+  (`monSpeedValues`, left by the last speed compare, `battle_lib.c:1372`);
 - a move id that `TrainerAI_MoveType` takes by case (`trainer_ai.c:3132-3222`;
   `commands.MOVE_TYPE_MOVES`): Natural Gift, Judgment, Weather Ball.
 
@@ -694,7 +696,7 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
   POWER_BASED_ON_FRIENDSHIP (121), RANDOM_POWER_MAYBE_HEAL (122), POWER_BASED_ON_LOW_FRIENDSHIP
   (123), 20_DAMAGE_FLAT (130), RANDOM_POWER_BASED_ON_IVS (135), INCREASE_POWER_WITH_WEIGHT
   (196): `Basic_CheckNonStandardDamageOrChargeTurn` only (`:160`-`:244`, 5.16), no Expert_Main
-  entry; their AI damage is 2.4's. Psywave's id (Kaizo Triple Axel) stays refused by id.
+  entry; their AI damage is 2.4's. Psywave's id (Kaizo Triple Axel) draws in its estimate (8.7).
 - ONE_HIT_KO (38): `Basic_CheckOHKOWouldFail` (`:554-564`; dispatch `:157`): immune -10,
   against Sturdy (a guessing read) -10 unless Mold Breaker, the attacker's level below the
   player's -10 (the new command `IfLevel`, `trainer_ai.c:2579-2608`). `Expert_OHKOMove`
@@ -787,8 +789,8 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   computes it on the AI path; `ai_damage_for_roll` takes `def_side` and `ivs`). The AI's
   estimate never sees Stomp's x2 (`effect_script_0150.s`'s `BTLVAR_POWER_MULTI`; `powerMul`
   is reset at the turn's end, battle_controller_player.c:1855). A player move with a refused
-  `TrainerAI_CalcDamage` id case (Gyro Ball, Psywave / Triple Axel, Magnitude / Bulldoze,
-  Natural Gift, Judgment) is refused in a fight whose AI knows Copycat.
+  `TrainerAI_CalcDamage` id case (Gyro Ball, Natural Gift, Judgment) is refused in a fight
+  whose AI knows Copycat; Psywave / Triple Axel and Magnitude / Bulldoze draw (8.7).
 - GROUND_TRAP_USER_CONTINUOUS_HEAL (181): `Basic_CheckAlreadyIngrained` (`:906-909`);
   `Expert_Ingrain` (`:4463-4465`, no change).
 - The AI's `ApplyTypeChart` (`switching.chart_multipliers`, `defender_chart_flags`) reads the
@@ -819,6 +821,15 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   this effect (`:1719`, Expert_Thunder, the decomp's Thunder bug) is never reached. Its other
   effect, CHARGE_TURN_DEF_UP (`:1715`), is not transcribed.
 - Encore waits on an encore state (`IfBattlerUnderEffect CHECK_ENCORE`, `:657`).
+
+### 5.24 AI_FLAG_HARRASSMENT (E1 Roark close batch, G-37)
+
+- `Harrassment_Main` (`:8021-8034`), FlagTable bit 10 (`:29`): `IfTargetIsPartner` (never in
+  singles), `LoadCurrentMoveEffect`, `IfLoadedNotInTable Harrassment_Effects` (`:8036-8071`,
+  34 effects, `commands.HARRASSMENT_EFFECTS`), then `IfRandomLessThan 128` (`:8030`): +2 when it
+  does not jump. One read per path for a table effect, none for any other (`read_bounds`
+  column 10). `policy._harrassment`; `layout.KAIZO_FLAG_BITS` and coverage's
+  `IMPLEMENTED_AI_FLAGS["kaizo"]` carry bit 10.
 
 ## 6. Where the AI reads the true battle state
 
@@ -953,8 +964,8 @@ out (`nuzline.ai.outcome`; `AiLayout.per_slot_sites`).
 - `ability_guess`: 0 and unread (the flat layout's scalar guess; every per-slot guess is a
   read of `script_rolls`).
 - `tiebreak`: `RandNext % 12`, as roark.md 8.4.
-- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 44 sites, every switch draw
-  of a party of six (section 11); 44 means no site stops.
+- `switch_stop`: as roark.md 8.5, over `KAIZO.switch_sites` = 60 sites, every switch draw
+  of a party of six (section 11; 44 until E1 ruling G-33); 60 means no site stops.
 
 **8.2 Reads keyed by order on the path (E1 Ruling R4; replaces K3c's per-effect site table and
 batch 1's guess columns).** Every random read of a slot's scoring is one
@@ -1109,7 +1120,8 @@ its switch part from the exact path's own `switch_sites`, `switch_stop_probs` an
 and the move pick; the switch categorical is compared with itself. The switch has its own
 independent oracle and tests instead (11.1, "The loose check"): `_loose_switch`, which walks
 `trainer_ai.c:3906-3987` with every read its own draw on states with at most 12 reads, and
-`test_six_bench_layout_fits`, which reaches all 44 sites against a closed form.
+`test_six_bench_layout_fits`, which reaches the 44 keep and pass sites against a closed form
+(`test_kaizo_switch_sites_reach_sixty` reaches all 60 with Wonder Guard, ruling G-33).
 
 **8.7 RNG read order (for K3d's trace replay).** Every read is one `BattleSystem_RandNext`
 (`battle_system.c:1308`), made in this order in one decision. The reads marked *merged* have
@@ -1220,6 +1232,42 @@ The user chose one transcription in two program shapes (`ai.layout` module docst
   - The same read counts, path weights and scores.
   - The masked scripts would have read.
 
+### 8.7 The damage estimate's draws (E1 Roark close batch, G-39)
+
+- **The draws.** `TrainerAI_CalcDamage` switches on the move id (`trainer_ai.c:2885`):
+  MOVE_PSYWAVE (149, Kaizo Triple Axel) deals `level * (RandNext() % 11 + 5) / 10` as fixed
+  damage (`:3014-3016`; a 0 at level 1 falls to `CalcMoveDamage` at the table power, `:3073`),
+  MOVE_MAGNITUDE (222, Kaizo Bulldoze) takes the power of `RandNext() % 100` bucketed below 5,
+  15, 35, 65, 85, 95 into 10-150 (`:3028-3048`). Their laws over a u16 are
+  `outcome.CALC_DRAW_P` (11 classes of 5958 or 5957 values; 7 buckets of 3280, 6560, 13120,
+  19651, 13100, 6550, 3275).
+- **Who draws.** Every estimate of such a move draws afresh: `FlagMoveDamageScore` (`:1041`, the
+  attacker's four moves), `IfCurrentMoveKills` (`:1560`), `IfPartyMemberDealsMoreDamage`
+  (`:2130`, `:2156`), `IfBattlerDealsMoreDamage` (`:2210`, `:2228`, the battler's last move with
+  no damaging test, at its own level) and `CheckIfHighestDamageWithPartner` (`:2402`, TAG_STRATEGY
+  only, not transcribed).
+- **One read per command.** Each command's result is one yes/no and its draws reach nothing
+  else, so the per-slot layout makes one read per command whose estimate draws
+  (`commands._calc_read`), with the exact probability of yes over the draws' joint law: kill
+  `sum_c P(c) [hp <= d_c]`; highest `sum_c P(D_slot = d_c) prod_{i != slot} P(D_i <= d_c)`; a
+  party member out-damaging `1 - sum_v P(A = v) prod_j P(M_j <= v)`; the battler out-damaging
+  `sum_c P(B = b_c) P(A < b_c)`. In the enumeration the read's bit is the result
+  (`READ_DRAWS[1]` yes); a sampled outcome carries the raw draws, `AiOutcome.calc_draws`
+  (`uint16[MOVES, slot_reads, CALC_DRAWS]`), and the command computes its result from them.
+  Basic_Main's and PrioritizeExtremes' and BatonPass_Main's `FlagMoveDamageScore`
+  (script.s:62, :112, :6511, :6572) are compared only with `AI_NO_COMPARISON_MADE`: their draws
+  are no read (`compared=False`).
+- **Bounds.** `tools/ai_read_bounds.py` counts these reads (`read_bounds.DRAWN_READ_BOUNDS` for
+  a fight with a drawing move, keyed also by whether the scored move draws; Copycat's
+  `IfBattlerDealsMoreDamage` always, the player's move being unknown to the layout). Seventeen
+  Kaizo fights' bounds grow by 1 or 2; the widest drawing fight, Barry #6 (479-481), reads 11 (8253 scorings; the widest overall,
+  Jason 82 and Danny 725, read 14),
+  all within `WIDTH_CAP`.
+- **The loose oracle** draws every `RandNext` of every estimate as its own digit
+  (`ReadKind.CALC_PSYWAVE`, `CALC_MAGNITUDE`), including the dead ones, and computes each command
+  as the decomp does; its patterns are mixed-radix (`policy._loose_patterns`).
+- **Tests:** `tests/engine/test_e1_roark_close.py` (family 3).
+
 ## 9. What the AI knows about the player
 
 The records are roark.md 9's, kept the same way by the engine (`BattleState.ai_seen_moves`,
@@ -1260,7 +1308,7 @@ and their helpers as relocated calls: `TrainerAI_ShouldSwitch` (:356), `AI_OnlyI
 `BattleSystem_CalcEffectiveness` (:601). The rules are roark.md 11.1 and 11.2. What changes is the
 party: Kaizo Roark has six Pokemon, so five can be on the bench.
 
-### 11.1 The switch sites (`KAIZO.switch_sites` = 44)
+### 11.1 The switch sites (`KAIZO.switch_sites` = 60)
 
 The draws that can change the result are those of roark.md 11.1:
 
@@ -1276,7 +1324,11 @@ The draws that can change the result are those of roark.md 11.1:
   (`:3796`); a zero residue stops the check with "switch to this Pokemon" (`:3797`). At most
   5 bench Pokemon x 4 moves per pass.
 
-So `KAIZO.switch_sites = 4 + 2 x 5 x 4 = 44` (`switching.KAIZO_SWITCH_SITES`), and vanilla
+So the keep and pass draws number at most `4 + 2 x 5 x 4 = 44`. Against a player's Wonder Guard,
+`AI_CannotDamageWonderGuard` (`:3286-3348`, E1 ruling G-23) adds one draw per (bench Pokemon,
+super-effective move), at most 5 x 4, but only when the active has no super-effective move, so
+never beside a keep draw (E1 ruling G-33): `KAIZO.switch_sites = max(4, 5 x 4) + 2 x 5 x 4 = 60`
+(`switching.KAIZO_SWITCH_SITES`; 44 before G-33), and vanilla
 keeps `SWITCH_SITES` = 9 (roark.md 11.1). One Pokemon can be in both passes: the two bits
 are not exclusive. `UpateMoveStatusForTypeMul` (`battle_lib.c:2781`) sets INEFFECTIVE on an
 immune chart row and then NOT_VERY_EFFECTIVE on a later resisted row, so Ground against
@@ -1302,9 +1354,9 @@ change. The only vanilla limit was the 9 sites `AiOutcome.switch_stop` encodes.
 `switch_action(..., sites)` and `switching_refusals(..., sites)` take it (default 9, the
 vanilla count, so vanilla is unchanged). `sample_ai_outcome`, `enumerate_ai_outcomes`
 (per-slot), `policy.maybe_switch`, `_policy`, `_distribution`, `ai_refusals` and the loose
-oracle pass `layout.switch_sites`. `switch_stop = 44` means no site stops under Kaizo
+oracle pass `layout.switch_sites`. `switch_stop = 60` means no site stops under Kaizo
 (`SWITCH_NONE`, 9, stays the vanilla value). The "more draws than sites" refusal cannot fire
-under Kaizo, since 44 is every candidate a party of six has.
+under Kaizo, since 60 is every candidate a party of six has.
 
 **Merged draws.** `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`) is read whenever
 the active has a super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` reads nothing,

@@ -733,12 +733,12 @@ Rules left out because another mechanic is missing; each closes with the mechani
   only the battler's (no form change: no party write), so it ends when it leaves; the AI learns the
   tracer's and the target's abilities (battle_script.c:3403, :11806). A Trace facing Trace stays
   armed and copies the next newcomer mid-turn, which the turn-start chance laws do not follow:
-  Trace in both parties is refused (`coverage.trace_standoff_line`). A player Trace newcomer that
+  Trace in both parties was refused (`coverage.trace_standoff_line`; modelled since E1 G-25). A player Trace newcomer that
   entered against a fainted foe traces when the foe's replacement enters (`hooks.on_switch_in`
   runs Trace for the other battler too; `playout.replacement_pass` defers only the newcomer's own
   Intimidate).
-- B3-15 Two weather abilities that set different weathers, one in each party, are refused
-  (`coverage.weather_war_line`): entering together (battle start, a double KO's replacements) the
+- B3-15 Two weather abilities that set different weathers, one in each party, were refused
+  (`coverage.weather_war_line`; modelled since E1 G-26): entering together (battle start, a double KO's replacements) the
   `monSpeedOrder` loop (battle_lib.c:3740-3790, sorted by `CompareBattlerSpeed` at
   bcp.c:251, :263) leaves the slower one's weather, with an exact tie a `RandNext() & 1` the engine
   does not draw there.
@@ -759,8 +759,9 @@ Rules left out because another mechanic is missing; each closes with the mechani
   contact attacker rolls Static, and one that copies Battle Armor / Shell Armor is never crit
   (`outcome._rate`, `outcome.armored`, `enumerate._holds`, Cute Charm's `charm_later`).
 - B3-20 Prep applies the party-pair refusals per candidate against the trainer's party
-  (`weather_war_line`, `trace_standoff_line`): `prep.problem.usable_pool` leaves the candidate
-  out and `prep.pool.check_pool` refuses it.
+  (`weather_war_line`, `trace_standoff_line`, both deleted by E1 G-25 / G-26;
+  `trace_copy_line` remains): `prep.problem.usable_pool` leaves the candidate out and
+  `prep.pool.check_pool` refuses it.
 - B3-21 (revised at the main merge, 2026-11-15) The AI reads a battler's current ability
   (`damage.decomp_abilities`, E1's fix: ai/commands.py `attacker_ability` / `_defender_abilities`,
   ai/policy.py and ai/switching.py refusals), so it sees the copy `subscript_trace.s` writes with

@@ -73,19 +73,19 @@ def _candidate(spec: PokemonSpec, slot: int = 0) -> Candidate:
     return Candidate(("party", 0, slot), f"party slot {slot}", spec, 0, (), ())
 
 
-def test_prep_refuses_a_weather_war_and_a_trace_copy_the_ai_refuses(tables, names):
-    """B3-20, B3-21: a Drought candidate against a Drizzle opponent is left out and refused per
-    candidate; a Trace candidate is kept unless a copy it can make is one the AI refuses on the
-    player's side (Filter, policy ``player_ability_refusal``), in the usable pool and the pool
-    check alike."""
+def test_prep_keeps_a_weather_war_and_refuses_a_trace_copy_the_ai_refuses(tables, names):
+    """B3-20, B3-21, G-26: a Drought candidate against a Drizzle opponent is kept (the weather
+    war is modelled); a Trace candidate is kept unless a copy it can make is one the AI refuses
+    on the player's side (Filter, policy ``player_ability_refusal``), in the usable pool and the
+    pool check alike."""
     opp = [_mon(names, "Kyogre")]
     trainer = roark_trainer()
     groudon, porygon = _candidate(_mon(names, "Groudon")), _candidate(_mon(names, "Porygon"), 1)
     kept, lines = usable_pool(tables, names, [groudon, porygon], opp, trainer)
-    assert kept == [porygon]
-    assert any("party slot 0" in line and "weather" in line for line in lines)
+    assert groudon in kept and porygon in kept
+    assert not any("weather" in line for line in lines)
     report = check_pool(tables, names, [groudon, porygon], opp, trainer)
-    assert any("party slot 0" in m and "weather" in m for m in report.missing)
+    assert not any("weather" in m for m in report.missing)
     assert not any("Trace" in m for m in report.missing)
     filter_opp = [_mon(names, "Mr. Mime", slot=1)]
     kept, lines = usable_pool(tables, names, [porygon], filter_opp, trainer)

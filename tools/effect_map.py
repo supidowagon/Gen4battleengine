@@ -37,9 +37,10 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-are Insomnia and Limber (implemented in ``engine/effects.py``), Shield Dust against a
-damaging move's secondary status (``effects._inflict``), and Vital Spirit, Immunity, Water
-Veil, Magma Armor and Leaf Guard (``AbilityId.UNSUPPORTED``), and
+are Insomnia, Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard
+since the E1 Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
+(``effects._inflict``), and Vital Spirit, Immunity, Water Veil and Magma Armor
+(``AbilityId.UNSUPPORTED``), and
 Safeguard and Substitute are unsupported moves, so none of those branches can be
 reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
 (E2 batch 5, ``effects._inflict``).
@@ -63,6 +64,7 @@ from nuzline.engine.ids import (
     STOMP_PARAM,
     AbilityId,
     EffectId,
+    Flavor,
     ItemId,
     MoveFlag,
     Stat,
@@ -615,6 +617,11 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Arena Trap": AbilityId.ARENA_TRAP,
     "Shadow Tag": AbilityId.SHADOW_TAG,
     "Magnet Pull": AbilityId.MAGNET_PULL,
+    "Pressure": AbilityId.PRESSURE,
+    "Leaf Guard": AbilityId.LEAF_GUARD,
+    "Synchronize": AbilityId.SYNCHRONIZE,
+    "Wonder Guard": AbilityId.WONDER_GUARD,
+    "Download": AbilityId.DOWNLOAD,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -689,6 +696,8 @@ DIVISOR_PARAM_MIN: dict[ItemId, int] = {
     **{item: 2 for item in PINCH_DIVISOR_ITEMS},
     ItemId.STICKY_BARB: 1,
     ItemId.SHELL_BELL: 1,
+    # BattleSystem_Divide(maxHP, itemPower) (battle_lib.c:4700 etc., :5680 etc.), ruling G-4.
+    ItemId.FLAVOR_BERRY: 1,
 }
 
 # sTypeBoostingItems (src/battle/battle_lib.c:6514-6549), applied at :6716-6722: decomp hold
@@ -799,6 +808,25 @@ CRIT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
 }
 HOLD_EFFECT_TO_ID.update(
     {h: (name, ItemId.CRIT_ITEM) for h, (name, _) in CRIT_HOLD_EFFECTS.items()}
+)
+
+# E1 Gardenia batch. Focus Band (BattleControllerPlayer_UpdateHP, bcp.c:3386-3389;
+# BtlCmd_CheckHoldOnWith1HP, battle_script.c:9109-9112), ruling G-1.
+HOLD_EFFECT_TO_ID[65] = ("HOLD_EFFECT_MAYBE_ENDURE", ItemId.FOCUS_BAND)
+
+# The flavor berries (BattleSystem_TriggerHeldItem, battle_lib.c:4698-4771, and ..._OnStatus,
+# :5121-5194; BattleSystem_PluckBerry's PLUCK_EFFECT_HP_RESTORE_*, :5678-5751): decomp hold
+# effect -> (name, the Flavor its msgTemp names). build_tables fills a FLAVOR_BERRY item's
+# item_param[i, 1] from here (ruling G-4).
+FLAVOR_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
+    14: ("HOLD_EFFECT_HP_RESTORE_SPICY", Flavor.SPICY),
+    15: ("HOLD_EFFECT_HP_RESTORE_DRY", Flavor.DRY),
+    16: ("HOLD_EFFECT_HP_RESTORE_SWEET", Flavor.SWEET),
+    17: ("HOLD_EFFECT_HP_RESTORE_BITTER", Flavor.BITTER),
+    18: ("HOLD_EFFECT_HP_RESTORE_SOUR", Flavor.SOUR),
+}
+HOLD_EFFECT_TO_ID.update(
+    {h: (name, ItemId.FLAVOR_BERRY) for h, (name, _) in FLAVOR_HOLD_EFFECTS.items()}
 )
 
 # HOLD_EFFECT_NONE. An item without a hold effect is NONE (no implemented path reads it by
