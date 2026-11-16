@@ -1024,6 +1024,11 @@ def read_radix(kind: int) -> int:
 LOOSE_READS = 160
 
 
+# ``LooseDraws.line`` of a damage draw the loose oracle makes but the exact layout does not:
+# FlagMoveDamageScore compared only with AI_NO_COMPARISON_MADE (``flag_move_damage_score``).
+UNREAD_DRAW = -1
+
+
 class LooseDraws(NamedTuple):
     """The loose oracle's draws (module docstring). Read i of slot m, counted in the order
     the straight-line scripts make the reads (``count``), takes ``bits[m, i]``."""
@@ -1034,7 +1039,9 @@ class LooseDraws(NamedTuple):
     p: jnp.ndarray  # float32[MOVES, LOOSE_READS]: P(bit = 1) of each read
     kind: jnp.ndarray  # int8[MOVES, LOOSE_READS]: the ReadKind of each read
     live: jnp.ndarray  # bool[MOVES, LOOSE_READS]: the read is on the slot's path
-    line: jnp.ndarray  # int32[MOVES, LOOSE_READS]: an IfRandomLessThan's script.s line, else 0
+    # int32[MOVES, LOOSE_READS]: an IfRandomLessThan's script.s line; UNREAD_DRAW for a damage
+    # draw whose result the script never reads (``_calc_read``'s ``read`` False); else 0
+    line: jnp.ndarray
 
 
 def loose_draws(bits) -> LooseDraws:
@@ -1230,7 +1237,8 @@ def _calc_read(ctx, est: CalcEstimate, gate, p_yes, decide, read: bool = True, a
                 int(ReadKind.CALC_PSYWAVE),
                 jnp.where(est.kind[i] == CALC_MAGNITUDE, int(ReadKind.CALC_MAGNITUDE), 0),
             )
-            ctx, digit = _loose_read(ctx, 0.0, kind, live=ctx.live & drawn_each[i])
+            line = 0 if read else UNREAD_DRAW  # a result never read: no read of the exact layout
+            ctx, digit = _loose_read(ctx, 0.0, kind, live=ctx.live & drawn_each[i], line=line)
             digits.append(jnp.where(drawn_each[i], digit.astype(_I32), 0))
         return ctx, decide(_realized(est, jnp.stack(digits)))
     if not per_slot(ctx):

@@ -168,7 +168,7 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
 - G-14 Leaf Guard (`AbilityId.LEAF_GUARD`, decomp 102). Every status subscript but
   subscript_freeze.s tests `CheckIgnoreWeather` (a living Cloud Nine / Air Lock holder skips the
   test, battle_script.c:9195-9206), then `FIELD_CONDITION_SUNNY`, then the side-effect battler's
-  Leaf Guard, right after the status's own ability test: subscript_fall_asleep.s:23-25,
+  Leaf Guard, right after the status's own ability test: subscript_fall_asleep.s:25-27,
   subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
   subscript_paralyze.s:6-8 (`CheckIgnorableAbility`: an attacker's Mold Breaker pierces it). A
   direct effect (a status move) prints "prevents ..." / "stayed awake because of its {1}"
@@ -230,7 +230,7 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `_wonder_guarded`, `_move_damage`, `_fixed_damage`, the counter branch.
 - G-19 What the guarded move still does: subscript_missed.s unlocks the attacker
   (`Battler_UnlockMoveChoice`; a Rollout / Uproar lock ends as on an immunity, through
-  `_Hit.effective`) and runs subscript_crash_on_miss.s (:98): a guarded Jump Kick crashes for
+  `_Hit.effective`, subscript_missed.s:97) and runs subscript_crash_on_miss.s (:98): a guarded Jump Kick crashes for
   min(Divide(battleCtx->damage, 2), Divide(defender maxHP, 2)), where `battleCtx->damage` is
   CalcDamage's through the chart walk, which Wonder Guard does not zero (only an immune entry
   does): `step._use_move` (`guarded`, `damage_for_roll(..., wonder_guard=False)`), the
@@ -241,13 +241,13 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   (`enumerate.outcome_laws`, `hit_damage_table(..., wonder_guard=False)` for `EffectId.CRASH`).
   Wonder Guard is input-neutral (a fixed factor through the chart, whose inputs have clauses);
   Download is a switch-in clause ability.
-- G-20 The AI learns the holder's ability: subscript_missed.s:107-110 prints "{0} avoided
+- G-20 The AI learns the holder's ability: subscript_missed.s:53-57 prints "{0} avoided
   damage by using {1}!" (`TAG_NICKNAME_ABILITY`, BTLSCR_DEFENDER: `BattleMessage_AbilityTag`,
   battle_script.c:11798-11806, `BattleAI_SetAbility`) unless an earlier flag prints first:
-  lost focus (:5), protected (:18), failed (:97). A plain miss reaches it (the miss message is
-  :157, after it), and an immune Tackle on Shedinja too (WONDER_GUARD is tested before
-  INEFFECTIVE, :119). `hooks.DAMAGE_AVOIDED` (`step._use_move`, `step._pursuit_hit`: Pursuit's
-  hit on a switching holder goes to subscript_missed.s through subscript_pursuit.s:17, :154);
+  lost focus (:8-10), protected (:16-32), failed (:47-51). A plain miss reaches it (the miss
+  message is :78-84, after it), and an immune Tackle on Shedinja too (WONDER_GUARD is tested at :54,
+  before INEFFECTIVE at :60). `hooks.DAMAGE_AVOIDED` (`step._use_move`, `step._pursuit_hit`: Pursuit's
+  hit on a switching holder goes to subscript_missed.s through subscript_pursuit.s:17, :75-77);
   the reference's `guarded` reveal.
 - G-21 Download (`AbilityId.DOWNLOAD`, decomp 88: Porygon, Porygon2, Porygon-Z).
   `SWITCH_IN_CHECK_STATE_DOWNLOAD` (battle_lib.c:3814-3851), after the Intimidate state: a
@@ -387,10 +387,10 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `step._use_move`'s `guard_tested` (with `~charging`); the reference's `_wonder_guarded` (a
   charge move's chart only runs at its strike: `_use_move` returns before it on the charge turn).
 - G-28 A semi-invulnerable miss on a Wonder Guard holder: the chart still runs after
-  `CheckMoveHitOverrides` (bcp.c:3263-3277), but subscript_missed.s:11 sends
-  MOVE_STATUS_SEMI_INVULNERABLE straight to the miss message (:157), past the Wonder Guard
-  message (:107): no reveal (`step._use_move`'s `reveal_ability(..., ~semi_miss)`, the
-  reference's `guarded` reveal). The miss still crashes a Jump Kick (subscript_missed.s:189-191:
+  `CheckMoveHitOverrides` (bcp.c:3263-3277), but subscript_missed.s:12-14 sends
+  MOVE_STATUS_SEMI_INVULNERABLE straight to the miss message (:78-84), past the Wonder Guard
+  message (:53-57): no reveal (`step._use_move`'s `reveal_ability(..., ~semi_miss)`, the
+  reference's `guarded` reveal). The miss still crashes a Jump Kick (subscript_missed.s:96-98:
   `CRASH_ON_MISS` on every path), as E2's B10-12 has it; the merged reference keeps one
   `blocked` (miss, semi-invulnerable miss, Protect) for the crash and the return.
 - G-29 Pressure and the charge moves: the charge turn's (or the Power Herb turn's)

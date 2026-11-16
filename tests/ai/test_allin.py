@@ -142,8 +142,10 @@ def _distinct(actions) -> int:
     return np.unique(actions[actions >= 0]).size
 
 
-# Candidate fights tried per flag set: many Kaizo fights are still refused on every lead
-# (REFUSED_ACTION), and some opponents pick one action whatever the state.
+# Candidate fights tried per flag set: a decision whose path reaches an AI move effect not yet
+# transcribed is still refused (REFUSED_ACTION; the backlog's "AI move effects" rows), so a
+# fight may accept few decisions on its batch, and some opponents pick one action whatever
+# the state.
 TRIES = 5
 
 
