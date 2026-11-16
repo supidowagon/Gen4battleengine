@@ -84,7 +84,7 @@ from nuzline.ai.outcome import (
     KAIZO_TRANSCRIBED,
     MAX_SCRIPT_ROLLS,
 )
-from nuzline.ai.read_bounds import READ_BOUND_BITS, READ_BOUNDS
+from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUNDS
 from nuzline.ai.switching import KAIZO_SWITCH_SITES, SWITCH_SITES
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import (
@@ -95,6 +95,7 @@ from nuzline.data.tables import (
     BATTLE_TYPES,
     Tables,
 )
+from nuzline.engine.damage import AI_DRAWN_MOVES
 from nuzline.engine.enumerate import WIDTH_CAP
 
 __all__ = [
@@ -227,9 +228,10 @@ def thinking_mask(tables: Tables, battler: int = 1):
 
 
 # The most random reads one move's scoring path makes with every transcribed flag on: the
-# largest row sum of read_bounds.READ_BOUNDS (E1 Ruling R6), so no fight's path, under any of
-# its flags, passes it (each fight's own bound, fight_slot_reads, is a row sum over a subset).
-ALLIN_READS = max(sum(row) for row in READ_BOUNDS.values())
+# largest row sum of read_bounds.READ_BOUNDS and DRAWN_READ_BOUNDS (E1 Ruling R6, ruling G-39),
+# so no fight's path, under any of its flags, passes it (each fight's own bound,
+# fight_slot_reads, is a row sum over a subset).
+ALLIN_READS = max(sum(row) for row in (*READ_BOUNDS.values(), *DRAWN_READ_BOUNDS.values()))
 
 # The sampled AI of every Kaizo fight in one program (module docstring): all transcribed flag
 # bits and effects, the read bound ALLIN_READS, the trainer's flags read at run time. Built
@@ -278,7 +280,10 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
     """``int8[n, 8]``: per move of ``moves`` (move ids, 0 or less for none), the most
     random reads each transcribed flag script makes on its path (``read_bounds.READ_BOUNDS``,
     by its battle effect, whether it is damaging, and whether its type can be quadruple
-    effective; E1 Ruling R6). A move whose effect is not transcribed is refused
+    effective; E1 Ruling R6). When some move of ``moves`` draws in ``TrainerAI_CalcDamage``
+    (Psywave's or Magnitude's id case, a damaging move: trainer_ai.c:2827-2835, :3014-3048;
+    E1 ruling G-39) the damage commands read too: ``read_bounds.DRAWN_READ_BOUNDS``, keyed
+    also by whether the move itself draws. A move whose effect is not transcribed is refused
     (``policy._refused``), and its row is 0."""
     effect = np.asarray(tables.move_ai_effect)
     power = np.asarray(tables.move_power)
@@ -288,19 +293,25 @@ def move_read_rows(tables: Tables, moves) -> np.ndarray:
 
     moves = [int(m) for m in np.asarray(moves).ravel() if int(m) > 0]
     rows = np.zeros((max(len(moves), 1), len(READ_BOUND_BITS)), np.int8)
-    for i, move in enumerate(moves):
-        e = int(effect[move])
+
+    def is_damaging(move: int) -> bool:
         # FlagMoveDamageScore's test (trainer_ai.c:1035-1036), as commands.is_damaging:
         # an alt-power effect whatever its power, else power above 1 and a calc effect.
-        damaging = e in ALT_POWER_EFFECTS or (
-            bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS
-        )
+        e = int(effect[move])
+        return e in ALT_POWER_EFFECTS or (bool(power[move] > 1) and e not in NO_DAMAGE_CALC_EFFECTS)
+
+    drawing = {m for m in moves if m in AI_DRAWN_MOVES and is_damaging(m)}
+    for i, move in enumerate(moves):
+        e = int(effect[move])
+        damaging = is_damaging(move)
         # QUADRUPLE needs two distinct
         # defender types each taking the move super effectively (battle_lib.c:2611-2646), while
         # an AI Adaptability Pokemon stays refused (its STAB of 2, :2592-2594, makes one
         # super-effective type QUADRUPLE: then this must allow one).
         can_quad = int((chart[int(move_type[move])] == 20).sum()) >= 2
         reads = READ_BOUNDS.get((e, damaging, can_quad))
+        if reads is not None and drawing:
+            reads = DRAWN_READ_BOUNDS.get((e, damaging, can_quad, move in drawing), reads)
         if reads is not None:
             rows[i] = reads
     return rows

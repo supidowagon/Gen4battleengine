@@ -81,6 +81,36 @@ Sites are named by their ``script.s`` line (``SITE_N``): every ``IfRandomLessTha
 transcription reads passes its N and its line to ``commands.if_random_less_than``. The flat
 layout finds the draw's index in ``AiContext.sites`` (one column per ``SITE_LINES`` entry,
 ``line_sites``); the per-slot layout takes the slot's next read.
+
+**The damage estimate's draws** (E1 ruling G-39). ``TrainerAI_CalcDamage`` draws for two move
+ids (trainer_ai.c:2868-3110): MOVE_PSYWAVE's damage ``level * (RandNext() % 11 + 5) / 10``
+(:3014-3016) and MOVE_MAGNITUDE's power ``RandNext() % 100`` in seven buckets (:3028-3048);
+Kaizo's Triple Axel (149) and Bulldoze (222) sit on those ids. Every damage command draws
+afresh for each such move it estimates: ``FlagMoveDamageScore`` (:1041, ``CalcAllDamage`` over
+the attacker's four moves), ``IfCurrentMoveKills`` (:1560), ``IfPartyMemberDealsMoreDamage``
+(:2130, :2156, the attacker's moves then every living party member's), ``IfBattlerDealsMoreDamage``
+(:2210, :2228) and ``CheckIfHighestDamageWithPartner`` (:2402, doubles only). Each draw's law
+(``CALC_DRAW_P``, by ``calc_draw_kind``): the class ``calc_draw_class`` of a uniform u16, Psywave's
+``% 11`` (65536 = 11 * 5957 + 9: classes 0-8 have 5958 values, 9-10 5957) and Magnitude's
+bucket of ``% 100`` (65536 = 100 * 655 + 36: residues 0-35 have 656 values, 36-99 655).
+
+Each command's result is one yes/no (the jump, or ``calcTemp``'s HIGHEST / NOT_HIGHEST), and its
+draws reach nothing else (local arrays, trainer_ai.c:1016-1063, :1525-1567, :2106-2174,
+:2187-2240). So in the per-slot layout a command whose estimate draws is **one read** of the
+slot's path, whose result has the exact probability of the draws' joint law
+(``commands._calc_read``): a multi-valued draw, or several, collapse to one binary read, so the
+width grows by 2 per such command, not by 11 or 7 per draw. ``script_rolls`` keeps its meaning
+for the enumeration (the read's bit is its result: ``READ_DRAWS[1]`` yes). A sampled outcome
+also carries the raw draws, ``calc_draws``: ``uint16[MOVES, slot_reads, CALC_DRAWS]``, entry
+``[m, k, j]`` the j-th ``RandNext()`` of slot m's k-th read when that read is a damage command
+(j counting the moves it estimates with a drawing case, in the decomp's order), and the
+command's result is computed from them as the decomp does. ``calc_draws`` is None in the
+enumeration's patterns (``policy._pattern_outcomes``), which take the result from the bit.
+Where the result is never read (``FlagMoveDamageScore`` compared only with
+``AI_NO_COMPARISON_MADE``, which does not depend on the draws: script.s:62-63, :112-113,
+:6511-6512, :6572-6573, then overwritten by ``LoadBattlerAbility`` :67/:117 or ended), the
+draws change nothing and are no read, as the SLOWER compare's tie (plan K3c Ruling 3); the
+loose oracle still draws every one of them, digit by digit, and checks that.
 """
 
 from __future__ import annotations
@@ -100,7 +130,8 @@ from nuzline.ai.switching import (
     switch_sites,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.state import MOVES, BattleState
+from nuzline.engine.damage import AI_DRAW_CLASSES, AI_MAGNITUDE, AI_PSYWAVE
+from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 if TYPE_CHECKING:
     from nuzline.ai.layout import AiLayout
@@ -108,6 +139,9 @@ if TYPE_CHECKING:
 __all__ = [
     "ABILITY_GUESSES",
     "AI_SITE_MOVES",
+    "CALC_DRAWS",
+    "CALC_DRAW_CLASSES",
+    "CALC_DRAW_P",
     "ENUMERATION_WIDTH",
     "KAIZO_EXPERT_LABELS",
     "KAIZO_EXPERT_TRANSCRIBED",
@@ -126,6 +160,9 @@ __all__ = [
     "TIEBREAK_P",
     "AiOutcome",
     "SwitchSite",
+    "calc_draw_class",
+    "calc_draw_kind",
+    "calc_kind_class",
     "enumerate_ai_outcomes",
     "line_sites",
     "sample_ai_outcome",
@@ -507,7 +544,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # their AI damage: engine.damage.ai_case_power / ai_case_fixed or the default.
         41,  # 40_DAMAGE_FLAT (:160)
         87,  # LEVEL_DAMAGE_FLAT (:185)
-        88,  # RANDOM_DAMAGE_1_TO_150_LEVEL (:186; Psywave's id itself stays refused)
+        88,  # RANDOM_DAMAGE_1_TO_150_LEVEL (:186; Psywave's id case draws, ruling G-39)
         121,  # POWER_BASED_ON_FRIENDSHIP (:203)
         122,  # RANDOM_POWER_MAYBE_HEAL (:204)
         123,  # POWER_BASED_ON_LOW_FRIENDSHIP (:205)
@@ -781,6 +818,58 @@ TIEBREAK_P = np.array([5462] * 4 + [5461] * 8, np.float64) / 65536
 READ_DRAWS = (254, 1)
 assert all(READ_DRAWS[1] < n <= READ_DRAWS[0] for n in SITE_N.values())
 
+# TrainerAI_CalcDamage's draws (module docstring, E1 ruling G-39). calc_draw_kind: 0 no draw,
+# CALC_PSYWAVE (MOVE_PSYWAVE's case, trainer_ai.c:3014-3016), CALC_MAGNITUDE (:3028-3048).
+CALC_NONE, CALC_PSYWAVE, CALC_MAGNITUDE = 0, 1, 2
+CALC_DRAW_CLASSES = AI_DRAW_CLASSES  # 11, Psywave's % 11; Magnitude uses classes 0-6
+# Magnitude's buckets: RandNext() % 100 below 5, 15, 35, 65, 85, 95 -> powers 10, 30, 50, 70,
+# 90, 110, else 150 (engine.damage.AI_MAGNITUDE_POWER).
+MAGNITUDE_BUCKETS = (5, 15, 35, 65, 85, 95)
+_U16 = np.arange(65536)
+# CALC_DRAW_P[kind, class]: the exact law of a draw's class over a uniform u16, counted.
+CALC_DRAW_P = np.stack(
+    [
+        np.eye(CALC_DRAW_CLASSES)[0],
+        np.bincount(_U16 % 11, minlength=CALC_DRAW_CLASSES) / 65536,
+        np.bincount(
+            np.searchsorted(MAGNITUDE_BUCKETS, _U16 % 100, side="right"),
+            minlength=CALC_DRAW_CLASSES,
+        )
+        / 65536,
+    ]
+)
+assert np.allclose(CALC_DRAW_P.sum(axis=1), 1)
+# The most draws one command makes: IfPartyMemberDealsMoreDamage estimates the attacker's four
+# moves and four of each other party member (trainer_ai.c:2130-2171), a party of SLOTS.
+CALC_DRAWS = MOVES * SLOTS
+
+
+def calc_draw_kind(move) -> jnp.ndarray:
+    """``int32``: the draw ``TrainerAI_CalcDamage`` makes for ``move`` (decomp id): it switches
+    on the id (trainer_ai.c:2885), so ``CALC_PSYWAVE`` for 149, ``CALC_MAGNITUDE`` for 222,
+    else ``CALC_NONE``."""
+    move = jnp.asarray(move, _I32)
+    return jnp.where(
+        move == AI_PSYWAVE, CALC_PSYWAVE, jnp.where(move == AI_MAGNITUDE, CALC_MAGNITUDE, CALC_NONE)
+    ).astype(_I32)
+
+
+def calc_kind_class(kind, draw) -> jnp.ndarray:
+    """``int32``: the class of the raw ``RandNext()`` ``draw`` (a u16) in a case of ``kind``
+    (``calc_draw_kind``): ``draw % 11`` for Psywave (trainer_ai.c:3015), the bucket of
+    ``draw % 100`` for Magnitude (:3030-3046), 0 for ``CALC_NONE``."""
+    draw = jnp.asarray(draw, _I32)
+    kind = jnp.asarray(kind, _I32)
+    bucket = jnp.searchsorted(jnp.asarray(MAGNITUDE_BUCKETS, _I32), draw % 100, side="right")
+    return jnp.where(
+        kind == CALC_PSYWAVE, draw % 11, jnp.where(kind == CALC_MAGNITUDE, bucket, 0)
+    ).astype(_I32)
+
+
+def calc_draw_class(move, draw) -> jnp.ndarray:
+    """``int32``: ``calc_kind_class`` of ``move``'s case (decomp id)."""
+    return calc_kind_class(calc_draw_kind(move), draw)
+
 
 class AiOutcome(NamedTuple):
     sim_roll: jnp.ndarray  # int8[4], roll index 0-15 per opponent move slot
@@ -794,6 +883,10 @@ class AiOutcome(NamedTuple):
     # int8[]: the first stopping switch draw, 0..sites - 1; sites (layout.switch_sites: 9
     # vanilla, 60 Kaizo) = none; -1 refused
     switch_stop: jnp.ndarray
+    # uint16[MOVES, slot_reads, CALC_DRAWS] (a sampled per-slot outcome): the raw RandNext()
+    # draws of the damage commands among the reads (module docstring); None in the
+    # enumeration's patterns and in the flat layout, where a damage read takes its bit
+    calc_draws: jnp.ndarray | None = None
 
 
 def _site_table(moves) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -906,11 +999,21 @@ def sample_ai_outcome(
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
+    calc = None
     if layout is not None and layout.per_slot_sites:
         rolls = jax.vmap(
             lambda i: jax.random.randint(jax.random.fold_in(k[1], i), (MOVES,), 0, 256, dtype=_I32)
         )(jnp.arange(layout.slot_reads)).T
         script_rolls, guess = rolls.astype(jnp.uint8), jnp.zeros((), _I8)
+        # The damage commands' raw draws, read column i from its own key as above (a key of
+        # its own beside the four streams, so they are unchanged).
+        k_calc = jax.random.fold_in(key, 0x43414C43)
+        calc = jax.vmap(
+            lambda i: jax.random.randint(
+                jax.random.fold_in(k_calc, i), (MOVES, CALC_DRAWS), 0, 65536, dtype=_I32
+            )
+        )(jnp.arange(layout.slot_reads))
+        calc = jnp.transpose(calc, (1, 0, 2)).astype(jnp.uint16)
     else:
         rolls = jax.random.randint(k[1], (MAX_SCRIPT_ROLLS,), 0, 256, dtype=_I32)
         script_rolls = (rolls < script_roll_thresholds(state)).astype(_I8)
@@ -921,6 +1024,7 @@ def sample_ai_outcome(
         script_rolls=script_rolls,
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
         switch_stop=_first_stop(draws, layout_sites).astype(_I8),
+        calc_draws=calc,
     )
 
 

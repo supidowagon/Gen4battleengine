@@ -159,13 +159,12 @@ _AI_MOVE_IDS = {
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
-# Shade are modelled since E1 batch 13, Hidden Power since batch 14 (engine.damage).
+# Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
+# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES).
 _CALC_DAMAGE_MOVES = {
     "Natural Gift": 363,
     "Judgment": 449,
     "Gyro Ball": 360,
-    "Psywave": 149,
-    "Magnitude": 222,
 }
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
 # Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).

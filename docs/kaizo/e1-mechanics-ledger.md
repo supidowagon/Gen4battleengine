@@ -531,3 +531,42 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   494-503, 921-927) are now placed nowhere (`[]`). No row's set grew. Vanilla: unchanged
   (tests/tools/rom/test_terrain_narrowing.py). Tests: that file and
   `tests/engine/test_e1_roark_close.py`.
+- G-39 TrainerAI_CalcDamage's draws (trainer_ai.c:2868-3110). MOVE_PSYWAVE (149, Kaizo Triple
+  Axel): `level * (RandNext() % 11 + 5) / 10` as fixed damage (:3014-3016; a 0, level 1 with a
+  draw below 5, falls to CalcMoveDamage at the table power, :3073); MOVE_MAGNITUDE (222, Kaizo
+  Bulldoze): the power of `RandNext() % 100` bucketed below 5/15/35/65/85/95 into
+  10/30/50/70/90/110/150 (:3028-3048). `engine.damage.ai_case_fixed` / `ai_case_power` take the
+  draw's class (`ai_damage_for_roll(draw=)`); `ai.outcome.CALC_DRAW_P` holds the laws, counted
+  over a u16 (Psywave 9 x 5958 + 2 x 5957; Magnitude 3280, 6560, 13120, 19651, 13100, 6550,
+  3275), `calc_draw_class` the class of a raw draw. Every estimate draws afresh:
+  FlagMoveDamageScore (:1041), IfCurrentMoveKills (:1560), IfPartyMemberDealsMoreDamage
+  (:2130, :2156), IfBattlerDealsMoreDamage (:2210, :2228; the battler's move with no damaging
+  test, at its own level), CheckIfHighestDamageWithPartner (:2402, TAG_STRATEGY, not
+  transcribed). Each command's result is one yes/no whose draws reach nothing else, so the
+  per-slot layout makes one read per command that draws (`commands._calc_read`), with the
+  exact probability of yes over the draws' joint law (kill: `sum_c P(c) [hp <= d_c]`;
+  highest: `sum_c P(D_slot = d_c) prod_{i != slot} P(D_i <= d_c)`; a member out-damaging:
+  `1 - sum_v P(A = v) prod_j P(M_j <= v)`; the battler: `sum_c P(B = b_c) P(A < b_c)`): the
+  enumeration's pattern bit is the result (`READ_DRAWS[1]` yes), a sampled outcome carries
+  the raw draws (`AiOutcome.calc_draws`, uint16[MOVES, slot_reads, 24]) and the command
+  computes its result from them as the decomp does. So an 11- or 7-way draw costs one binary
+  read, not 11 or 7 patterns per draw. FlagMoveDamageScore at script.s:62, :112, :6511 and
+  :6572 is compared only with AI_NO_COMPARISON_MADE (decided by the move, :1035-1036) and
+  calcTemp is reloaded (:67, :117) or the script ends: its draws are no read
+  (`compared=False`), as the SLOWER tie (K3c Ruling 3). The loose oracle draws every
+  `RandNext` of every estimate as a digit of its own (`ReadKind.CALC_PSYWAVE` /
+  `CALC_MAGNITUDE`, the dead ones included) and computes each command from them; its patterns
+  are mixed-radix and run in chunks (`policy._loose_patterns`, `LOOSE_CHUNK`). Read bounds:
+  `tools/ai_read_bounds.py` counts IfBattlerDealsMoreDamage always (the layout does not know
+  the player's moves; Copycat's EXPERT column 1 -> 3), and in a fight with a drawing damaging
+  move (`read_bounds.DRAWN_READ_BOUNDS`, keyed also by whether the scored move draws)
+  IfPartyMemberDealsMoreDamage, IfCurrentMoveKills on a drawing move, and FlagMoveDamageScore
+  where a later compare reads its result. 17 Kaizo fights' bounds grow (by 1 or 2): Cyclists
+  James (26) and Nicole (30), Jogger Scott (130), Ninja Boy Matthew (146), Pokefan Sheen (177),
+  Collector Tobias (227), Worker Hugh (239), Galactic Terra #1 (297), Leader Gardenia (315,
+  5 -> 6), Galactic Laomedeia #1 (392), Cyrus #3 (404), Barry #6 (479-481, 9-10 -> 11, 8253
+  scorings), Neptune #3 (581), Barry @ Spear Pillar (607, 620); none passes WIDTH_CAP (131072).
+  `commands.CALC_DAMAGE_MOVES` keeps Natural Gift, Judgment and Gyro Ball only;
+  `prep.variants.ai_kill_damage` lists every class's damage. Tests:
+  `tests/engine/test_e1_roark_close.py` (family 3), `tests/ai/test_read_bounds.py`;
+  docs/ai/kaizo_roark.md 8.7.

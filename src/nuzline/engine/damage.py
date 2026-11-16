@@ -633,10 +633,19 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
 # decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
-# Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
+# Ball) are refused (ai.commands.CALC_DAMAGE_MOVES).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
+# The two cases that draw: MOVE_PSYWAVE's damage ``level * (RandNext() % 11 + 5) / 10``
+# (trainer_ai.c:3014-3016) and MOVE_MAGNITUDE's power, ``RandNext() % 100`` bucketed
+# (:3028-3048). Kaizo keeps the ids (Triple Axel on 149, Bulldoze on 222), so its moves there
+# take these cases. ``draw`` below is the draw's class: Psywave's ``RandNext() % 11`` (0-10),
+# Magnitude's bucket (0-6, ``AI_MAGNITUDE_POWER``); ai.outcome.CALC_DRAW_P holds their laws.
+AI_PSYWAVE, AI_MAGNITUDE = 149, 222
+AI_DRAWN_MOVES = (AI_PSYWAVE, AI_MAGNITUDE)
+AI_DRAW_CLASSES = 11  # the most classes one draw has (Psywave's % 11)
+AI_MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
 # sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
 # (hectograms) is at least the defender's gives the power, else 120 (trainer_ai.c:3055-3071).
 _WEIGHT_LIMITS = jnp.array([100, 250, 500, 1000, 2000], jnp.int32)
@@ -644,15 +653,17 @@ _WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
 
 
 def ai_case_power(
-    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None
+    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0
 ) -> jnp.ndarray:
     """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
     ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
     ``friendship * 10 / 25`` and Frustration ``(255 - friendship) * 10 / 25``
     (trainer_ai.c:3018-3026; ``battleMons[attacker].friendship``), Low Kick and Grass Knot by
     the defender's weight (:3055-3071; ``battleMons[defender].weight``, its species' Pokedex
-    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``). A
-    computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
+    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``),
+    Magnitude the power of its draw's bucket (:3028-3048; ``draw`` 0-6, ``AI_MAGNITUDE_POWER``:
+    ``RandNext() % 100`` below 5, 15, 35, 65, 85, 95 gives 10, 30, 50, 70, 90, 110, else 150).
+    A computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
     (default the other side) and ``ivs`` the ``ivs`` argument (default the attacker's own):
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240) passes the player as attacker,
     the player again as defender and the AI attacker's IVs."""
@@ -664,14 +675,16 @@ def ai_case_power(
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
     ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
     hidden = hidden_power(ivs)[1]
+    magnitude = AI_MAGNITUDE_POWER[jnp.clip(_i32(draw), 0, 6)]
     return jnp.select(
         [
             move == AI_RETURN,
             move == AI_FRUSTRATION,
             (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
             move == AI_HIDDEN_POWER,
+            move == AI_MAGNITUDE,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude],
         0,
     )
 
@@ -692,21 +705,26 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
 
 
-def ai_case_fixed(s: BattleState, atk_side, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+def ai_case_fixed(s: BattleState, atk_side, move, draw=0) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(is_fixed, damage)``: ``TrainerAI_CalcDamage``'s fixed damage (trainer_ai.c:
-    3005-3012, :3051-3053): Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the
-    attacker's level. It skips ``CalcMoveDamage`` and goes through the type chart with
-    ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or multiplier, an immunity still 0."""
+    3005-3016, :3051-3053): Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the
+    attacker's level, Psywave ``level * (draw + 5) / 10`` (``draw`` its ``RandNext() % 11``,
+    0-10; ``battleMons[attacker].level``). A nonzero amount skips ``CalcMoveDamage`` and goes
+    through the type chart with ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or
+    multiplier, an immunity still 0. A 0 (Psywave at level 1 with a draw below 5) is not
+    fixed: ``damage == 0`` sends it to ``CalcMoveDamage`` with power 0, the table's (:3073)."""
     atk_side = _i32(atk_side)
     move = _i32(move)
     level = _i32(s.level[atk_side, s.active[atk_side]])
+    psywave = level * (jnp.clip(_i32(draw), 0, AI_DRAW_CLASSES - 1) + 5) // 10
     damage = jnp.select(
         [
             move == AI_DRAGON_RAGE,
             move == AI_SONIC_BOOM,
             (move == AI_SEISMIC_TOSS) | (move == AI_NIGHT_SHADE),
+            move == AI_PSYWAVE,
         ],
-        [40, 20, level],
+        [40, 20, level, psywave],
         0,
     )
     return damage > 0, damage
@@ -868,6 +886,7 @@ def _pre_random(
     ai: bool = False,
     def_side=None,
     ai_ivs=None,
+    ai_draw=0,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -880,7 +899,8 @@ def _pre_random(
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
     Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
     is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``)."""
+    passes, default the attacker's own (``ai_case_power``), and ``ai_draw`` the class of
+    its ``RandNext`` draw (Magnitude's case)."""
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
@@ -922,7 +942,7 @@ def _pre_random(
         | (effect == EffectId.FLAIL)
     )
     if ai:
-        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs)
+        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw)
         power = jnp.where(case > 0, case, base_power)
     else:
         power = jnp.where(has_variable, variable, base_power)
@@ -1300,7 +1320,7 @@ def calc_move_damage(
 
 
 def ai_damage_for_roll(
-    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None
+    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None, draw=0
 ) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
@@ -1309,9 +1329,11 @@ def ai_damage_for_roll(
     power-0 move gives the ``+ 2`` through the chart (``_finish``). ``def_side`` is
     ``AI_CONTEXT.defender``'s side (default the other side) and ``ivs`` the IVs passed
     (default the attacker's own): ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2229-2237) has
-    the player attack itself with the AI attacker's IVs."""
+    the player attack itself with the AI attacker's IVs. ``draw`` is the class of the
+    ``RandNext`` draw of Psywave's or Magnitude's case (``ai_case_fixed``, ``ai_case_power``;
+    ignored for any other move)."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs
+        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs, ai_draw=draw
     )
     computed = _finish(
         tables,
@@ -1327,7 +1349,7 @@ def ai_damage_for_roll(
         def_side=def_side,
     )
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
-    fixed, amount = ai_case_fixed(state, atk_side, move)
+    fixed, amount = ai_case_fixed(state, atk_side, move, draw)
     def_side = 1 - _i32(atk_side) if def_side is None else _i32(def_side)
     d_types = state.types[def_side, state.active[def_side]]
     identified = state.foresight[def_side] != 0

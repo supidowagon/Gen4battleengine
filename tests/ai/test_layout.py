@@ -99,7 +99,7 @@ def test_is_damaging_excludes_no_calc_effects(kaizo_tables, kaizo_names, kaizo_r
     s = make_state(t, [gible], [cranidos])
     moves = jnp.array([SELFDESTRUCT, HEAD_SMASH, CRUNCH, 0], s.moves.dtype)
     s = s._replace(moves=s.moves.at[1, 0].set(moves))
-    damage = commands._slot_damage(t, s, jnp.full((4,), commands.SIM_ROLL_MAX))
+    damage = commands._slot_damage(t, s, jnp.full((4,), commands.SIM_ROLL_MAX)).value[:, 0]
     assert int(damage[0]) == 0 and int(damage[1]) == 0 and int(damage[2]) > 0
     assert int(commands.ai_damage(t, s, HEAD_SMASH, commands.SIM_ROLL_MAX)) == 0
 

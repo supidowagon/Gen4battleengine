@@ -29,7 +29,13 @@ the read's own N/256, or 1/2. Its index counts every read of the straight-line s
 the path or not; the exact per-slot layout counts only the reads on the path (E1 Ruling R4).
 It reads neither ``AiContext.sites`` nor ``AiOutcome``'s draws, and it compares the speed
 compare's three-valued result, so it shares no gate with the exact layout: no read order, no
-read bound, no dropped tie.
+read bound, no dropped tie. Each ``RandNext`` of ``TrainerAI_CalcDamage`` (Psywave's and
+Magnitude's cases, trainer_ai.c:3014-3048; ``outcome`` docstring) is a loose read of its own
+too, a digit (``ReadKind.CALC_PSYWAVE``: the draw's ``% 11``, ``CALC_MAGNITUDE``: its bucket)
+with its class law (``outcome.CALC_DRAW_P``), one per move each damage command estimates, on
+the path when that move draws; the command then computes its result from the digits as the
+decomp does. The exact layout instead makes one read per command, with the result's
+probability (``_calc_read``), and drops the draws whose result is never read.
 """
 
 from __future__ import annotations
@@ -40,7 +46,21 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from nuzline.ai.outcome import SITE_LINES, SITE_N, AiOutcome, line_sites
+from nuzline.ai.outcome import (
+    CALC_DRAW_CLASSES,
+    CALC_DRAW_P,
+    CALC_DRAWS,
+    CALC_MAGNITUDE,
+    CALC_NONE,
+    CALC_PSYWAVE,
+    READ_DRAWS,
+    SITE_LINES,
+    SITE_N,
+    AiOutcome,
+    calc_draw_kind,
+    calc_kind_class,
+    line_sites,
+)
 from nuzline.ai.switching import (
     INEFFECTIVE,
     SUPER_EFFECTIVE,
@@ -787,11 +807,11 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
 # refused: Natural Gift and Judgment (item data), Gyro Ball (monSpeedValues, the last speed
-# compare's, battle_lib.c:1372), Psywave and Magnitude (a RandNext draw in the damage, :3015,
-# :3030). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
-# are modelled
-# (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13). Decomp move ids.
-CALC_DAMAGE_MOVES = (363, 449, 360, 149, 222)
+# compare's, battle_lib.c:1372). Return, Frustration, Low Kick, Grass Knot, Hidden Power and
+# the fixed-damage cases are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch
+# 13), and Psywave and Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39,
+# ``_calc_read``). Decomp move ids.
+CALC_DAMAGE_MOVES = (363, 449, 360)
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
 # these moves is not their table type. Decomp move ids.
 MOVE_TYPE_MOVES = (363, 449, 311)  # Hidden Power's is modelled (damage.ai_move_type)
@@ -973,21 +993,37 @@ class ReadKind(IntEnum):
     ABILITY = 2  # LoadBattlerAbility DEFENDER's coin flip: P(1) = 1/2
     SPEED_TIE = 3  # a SLOWER compare's tie, RandNext() & 1: P(1) = 1/2; no exact read (R3)
     SPEED_TIE_DRAWN = 4  # a FASTER or TIE compare's tie: a read of the exact layout (E1 R8)
+    # TrainerAI_CalcDamage's draw (E1 ruling G-39): a digit, the class of the draw, with law
+    # outcome.CALC_DRAW_P[CALC_PSYWAVE] (11 classes) or [CALC_MAGNITUDE] (7)
+    CALC_PSYWAVE = 5
+    CALC_MAGNITUDE = 6
+
+
+def read_radix(kind: int) -> int:
+    """The number of values a loose read of ``ReadKind`` ``kind`` takes (the loose oracle's
+    radix): a damage draw's classes (11 for Psywave's ``% 11``, 7 Magnitude buckets), else 2."""
+    if kind == ReadKind.CALC_PSYWAVE:
+        return CALC_DRAW_CLASSES
+    return 7 if kind == ReadKind.CALC_MAGNITUDE else 2
 
 
 # LooseDraws columns: at least the reads one slot's scripts make. Every read counts, on the
 # slot's path or not (the scripts are straight-line): 35 after K3c Task 6, 74 after E1 batch 7
 # under every transcribed flag; only fight-sized layouts (E1 Ruling R7) are run loose, and each
 # stays well under this (tests/ai/test_kaizo_outcome.py test_slot_reads_fit_*). More raises (policy._loose_reads). Tests only, but each column
-# costs compile memory in every loose program, so the headroom is kept modest.
-LOOSE_READS = 96
+# costs compile memory in every loose program, so the headroom is kept modest. E1 ruling G-39
+# adds a column per move each damage command estimates: four per FlagMoveDamageScore, one per
+# IfCurrentMoveKills, five per IfBattlerDealsMoreDamage, CALC_DRAWS per
+# IfPartyMemberDealsMoreDamage.
+LOOSE_READS = 160
 
 
 class LooseDraws(NamedTuple):
     """The loose oracle's draws (module docstring). Read i of slot m, counted in the order
     the straight-line scripts make the reads (``count``), takes ``bits[m, i]``."""
 
-    bits: jnp.ndarray  # int8[MOVES, LOOSE_READS]: 1 = the jump / ability slot 1
+    # int8[MOVES, LOOSE_READS]: 1 = the jump / ability slot 1; a CALC read's digit, its class
+    bits: jnp.ndarray
     count: jnp.ndarray  # int32[MOVES]: reads made so far in each slot
     p: jnp.ndarray  # float32[MOVES, LOOSE_READS]: P(bit = 1) of each read
     kind: jnp.ndarray  # int8[MOVES, LOOSE_READS]: the ReadKind of each read
@@ -1008,6 +1044,18 @@ def loose_draws(bits) -> LooseDraws:
     )
 
 
+class CalcEstimate(NamedTuple):
+    """``TrainerAI_CalcDamage`` of moves (leading axes), one value per class of the move's
+    ``RandNext`` draw (``outcome`` docstring; E1 ruling G-39): ``value[..., c]`` the damage when
+    the draw's class is c, ``prob[..., c]`` the class's probability (``outcome.CALC_DRAW_P``; a
+    move that does not draw has class 0 only), ``kind`` its ``outcome.calc_draw_kind``
+    (``CALC_NONE`` when the call draws nothing)."""
+
+    value: jnp.ndarray  # int32[..., CALC_DRAW_CLASSES]
+    prob: jnp.ndarray  # float32[..., CALC_DRAW_CLASSES]
+    kind: jnp.ndarray  # int32[...]
+
+
 class AiContext(NamedTuple):
     """The decomp's ``AIContext`` for one decision, plus the masks of the straight-line
     scripts."""
@@ -1023,7 +1071,6 @@ class AiContext(NamedTuple):
     calc_temp: jnp.ndarray  # int32, calcTemp
     seen_moves: jnp.ndarray  # int32[4]: the player's active's moves the AI has seen, else 0
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
-    damage: jnp.ndarray  # int32[4]: ai_damage of the AI's move slots, USE_MAX_DAMAGE
     # int32[4, len(SITE_LINES)]: the flat layout's script_rolls index of each line; an
     # unused int32[] in a per-slot layout, whose reads go by order (per_slot)
     sites: jnp.ndarray
@@ -1031,6 +1078,9 @@ class AiContext(NamedTuple):
     # bool: its reads draw a coin this decision (ability_guessed). Per-slot layout.
     guess_abilities: jnp.ndarray
     guessing: jnp.ndarray
+    # CalcEstimate [MOVES, C]: TrainerAI_CalcAllDamage of the AI's active's moves at
+    # USE_MAX_DAMAGE, every class of each move's draw (``estimate``)
+    damage: CalcEstimate
     # Per-slot layout (E1 Ruling R4), per slot: the random reads made so far on its path (the
     # next one takes script_rolls[slot, reads[slot]]) and the product of their probabilities
     reads: jnp.ndarray  # int32[MOVES]
@@ -1041,15 +1091,147 @@ class AiContext(NamedTuple):
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
 
 
-def ai_damage(tables: Tables, state: BattleState, move, roll) -> jnp.ndarray:
+def ai_damage(tables: Tables, state: BattleState, move, roll, draw=0) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868) of ``move`` by the AI's
     active Pokemon against the player's, with variance ``85 + roll`` percent applied
     after STAB and the type chart (:3109; the battle applies it before them): the
     engine's ``ai_damage_for_roll`` (roark.md 7.1), 0 for a move that is not damaging
-    (``is_damaging``) and for an immunity."""
+    (``is_damaging``) and for an immunity. ``draw``: the class of Psywave's or Magnitude's
+    ``RandNext`` draw (``estimate`` has every class)."""
     move = jnp.asarray(move, _I32)
-    damage = ai_damage_for_roll(tables, state, 1, move, roll)
+    damage = ai_damage_for_roll(tables, state, 1, move, roll, draw=draw)
     return jnp.where(is_damaging(tables, move), damage, 0)
+
+
+_CALC_P = jnp.asarray(CALC_DRAW_P, jnp.float32)  # [kind, class]
+_CLASSES = jnp.arange(CALC_DRAW_CLASSES, dtype=_I32)
+
+
+def drawn_cases(
+    tables: Tables, state: BattleState, roll, *, atk_side=1, def_side=None, ivs=None
+) -> jnp.ndarray:
+    """``int32[3, C]``: per ``calc_draw_kind`` (row 0 unused), ``ai_damage_for_roll`` of the
+    drawing move id (MOVE_PSYWAVE, MOVE_MAGNITUDE) for each class of its draw: the same for any
+    move with that id, so ``estimate`` computes it once per attacker and defender instead of
+    once per move (its IVs reach Hidden Power's case only, trainer_ai.c:2973-2993)."""
+    from nuzline.engine.damage import AI_MAGNITUDE, AI_PSYWAVE
+
+    def table(move):
+        return jax.vmap(
+            lambda c: ai_damage_for_roll(
+                tables, state, atk_side, move, roll, def_side=def_side, ivs=ivs, draw=c
+            )
+        )(_CLASSES)
+
+    zero = jnp.zeros(CALC_DRAW_CLASSES, _I32)
+    return jnp.stack([zero, table(AI_PSYWAVE), table(AI_MAGNITUDE)]).astype(_I32)
+
+
+def estimate(
+    tables: Tables,
+    state: BattleState,
+    move,
+    roll,
+    *,
+    atk_side=1,
+    def_side=None,
+    ivs=None,
+    damaging_test: bool = True,
+    cases=None,
+) -> CalcEstimate:
+    """``TrainerAI_CalcDamage`` of ``move`` by ``atk_side``'s active Pokemon at variance
+    ``85 + roll``, for every class of the move's draw (``CalcEstimate``; trainer_ai.c:
+    3014-3016, :3028-3048). ``damaging_test``: as ``TrainerAI_CalcAllDamage`` (:2810-2838) and
+    the kill checks (:1539-1557), a move that is not damaging (``is_damaging``) is not
+    estimated, 0 and no draw; ``IfBattlerDealsMoreDamage`` estimates the battler's move without
+    it (:2228-2237). ``def_side`` / ``ivs``: ``ai_damage_for_roll``'s. ``cases``: the
+    ``drawn_cases`` of the same attacker, defender and roll (computed here when not given)."""
+    move = jnp.asarray(move, _I32)
+    if cases is None:
+        cases = drawn_cases(tables, state, roll, atk_side=atk_side, def_side=def_side, ivs=ivs)
+    kind = calc_draw_kind(move)
+    once = ai_damage_for_roll(tables, state, atk_side, move, roll, def_side=def_side, ivs=ivs)
+    value = jnp.where(kind == CALC_NONE, jnp.broadcast_to(once, (CALC_DRAW_CLASSES,)), cases[kind])
+    if damaging_test:
+        damaging = is_damaging(tables, move)
+        value = jnp.where(damaging, value, 0)
+        kind = jnp.where(damaging, kind, CALC_NONE)
+    return CalcEstimate(value.astype(_I32), _CALC_P[kind], kind.astype(_I32))
+
+
+def _at_most(est: CalcEstimate, x, strict: bool = False) -> jnp.ndarray:
+    """``P(D <= x)`` (``strict``: ``P(D < x)``) of each estimate's damage D, ``x`` broadcast
+    over the estimates' leading axes."""
+    x = jnp.asarray(x)[..., None]
+    hit = est.value < x if strict else est.value <= x
+    return jnp.sum(jnp.where(hit, est.prob, 0.0), axis=-1)
+
+
+def _max_at_most(est: CalcEstimate, x, strict: bool = False) -> jnp.ndarray:
+    """``P(max_i D_i <= x)`` (``strict``: ``<``) over the independent estimates ``est`` (one
+    leading axis i), for each ``x`` (any shape)."""
+    x = jnp.asarray(x)
+    return jnp.prod(_at_most(est, x[..., None], strict), axis=-1)
+
+
+def _realized(est: CalcEstimate, classes) -> jnp.ndarray:
+    """``int32[n]``: each estimate's damage when its draw has class ``classes[i]``."""
+    classes = jnp.clip(jnp.asarray(classes, _I32), 0, CALC_DRAW_CLASSES - 1)
+    return jnp.take_along_axis(est.value, classes[:, None], axis=1)[:, 0]
+
+
+def _drawn_classes(est: CalcEstimate, draws) -> jnp.ndarray:
+    """``int32[n]``: the class of each estimate's draw from the raw ``RandNext()`` values
+    ``draws`` (``uint16[CALC_DRAWS]``), the estimates that draw taking ``draws[0], draws[1],
+    ...`` in their order (the decomp's), the others class 0."""
+    drawn = est.kind != CALC_NONE
+    index = jnp.clip(jnp.cumsum(drawn.astype(_I32)) - 1, 0, CALC_DRAWS - 1)
+    raw = jnp.take(jnp.asarray(draws, _I32), index)
+    return jnp.where(drawn, calc_kind_class(est.kind, raw), 0)
+
+
+def _calc_read(ctx, est: CalcEstimate, gate, p_yes, decide, read: bool = True):
+    """One damage command's draws (E1 ruling G-39; ``outcome`` docstring): ``(ctx, yes)``, the
+    command's yes/no from ``est`` (its estimates, one leading axis in the decomp's draw order)
+    through ``decide(damages int32[n]) -> bool``. ``gate``: the command estimates at all on
+    this path (its damaging test passed); ``p_yes``: the exact probability of yes over the
+    draws' joint law.
+
+    - loose: each move that draws is its own read, a digit with its class law, live on the
+      path when ``gate`` holds and the move draws, and ``decide`` reads the digits' damages;
+    - per-slot exact (``read``): when some move draws, the slot's next read (``_slot_read``)
+      with probability ``p_yes``: its bit in the enumeration's patterns (``READ_DRAWS[1]``:
+      yes), else ``decide`` of the raw draws ``AiOutcome.calc_draws[slot, k]``;
+    - no draw, the flat layout, or ``read`` False (a result the script never reads): the
+      result at class 0, exact when nothing draws (and no other result is read)."""
+    drawn_each = gate & (est.kind != CALC_NONE)
+    det = decide(est.value[:, 0])
+    if ctx.loose is not None:
+        digits = []
+        for i in range(est.kind.shape[0]):
+            kind = jnp.where(
+                est.kind[i] == CALC_PSYWAVE,
+                int(ReadKind.CALC_PSYWAVE),
+                jnp.where(est.kind[i] == CALC_MAGNITUDE, int(ReadKind.CALC_MAGNITUDE), 0),
+            )
+            ctx, digit = _loose_read(ctx, 0.0, kind, live=ctx.live & drawn_each[i])
+            digits.append(jnp.where(drawn_each[i], digit.astype(_I32), 0))
+        return ctx, decide(_realized(est, jnp.stack(digits)))
+    if not read or not per_slot(ctx):
+        return ctx, det
+    drawn = jnp.any(drawn_each)
+    if ctx.outcome.calc_draws is None:
+        ctx, r = _slot_read(ctx, lambda r: (jnp.where(r == READ_DRAWS[1], p_yes, 1 - p_yes), drawn))
+        return ctx, jnp.where(drawn, r == READ_DRAWS[1], det)
+    k = jnp.clip(ctx.reads[ctx.slot], 0, ctx.outcome.calc_draws.shape[1] - 1)
+    raw = ctx.outcome.calc_draws[ctx.slot, k]
+    yes = decide(
+        _realized(
+            est, _drawn_classes(est._replace(kind=jnp.where(drawn_each, est.kind, CALC_NONE)), raw)
+        )
+    )
+    ctx, _ = _slot_read(ctx, lambda r: (jnp.where(yes, p_yes, 1 - p_yes), drawn))
+    return ctx, jnp.where(drawn, yes, det)
 
 
 def is_damaging(tables: Tables, move) -> jnp.ndarray:
@@ -1065,11 +1247,16 @@ def is_damaging(tables: Tables, move) -> jnp.ndarray:
     return alt | ((move != 0) & (tables.move_power[move] > 1) & ~no_calc)
 
 
-def _slot_damage(tables: Tables, state: BattleState, rolls) -> jnp.ndarray:
-    """``int32[4]``: ``TrainerAI_CalcAllDamage`` (trainer_ai.c:2799) over the AI's true
-    moveset, whatever the PP, with ``rolls[i]`` for slot i."""
+def _slot_damage(tables: Tables, state: BattleState, rolls) -> CalcEstimate:
+    """``CalcEstimate [4, C]``: ``TrainerAI_CalcAllDamage`` (trainer_ai.c:2799) over the AI's
+    true moveset, whatever the PP, with ``rolls[i]`` for slot i (or one roll for all), every
+    class of each draw."""
     moves = state.moves[1, state.active[1]].astype(_I32)
-    return jax.vmap(lambda m, r: ai_damage(tables, state, m, r))(moves, jnp.asarray(rolls, _I32))
+    rolls = jnp.asarray(rolls, _I32)
+    if rolls.ndim == 0:  # one roll for every slot (USE_MAX_DAMAGE): the drawing cases once
+        cases = drawn_cases(tables, state, rolls)
+        return jax.vmap(lambda m: estimate(tables, state, m, rolls, cases=cases))(moves)
+    return jax.vmap(lambda m, r: estimate(tables, state, m, r))(moves, rolls)
 
 
 def if_has_super_effective_move(ctx: AiContext) -> AiContext:
@@ -1106,23 +1293,57 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     (``AI_CONTEXT.attacker``: its stats, level, types, ability and item in
     ``CalcMoveDamage``), with only the member's IVs passed (Hidden Power's case; the item
     and ability parameters only reach Natural Gift and Judgment, refused). Only
-    ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted)."""
+    ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted).
+
+    Psywave's and Magnitude's cases draw for every such move estimated (:2130 the active's,
+    :2156 each living member's; Psywave at the active's level, ``battleMons[attacker]``): one
+    read (``_calc_read``) whose jump has probability ``1 - E[prod_j P(M_j <= A)]``, A the
+    active's best and M_j member j's, all independent (the loop's ``break``, :2167, only stops
+    draws that change nothing)."""
     assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
     tables, state = ctx.tables, ctx.state
     a = _side(Battler.ATTACKER)
     active = state.active[a]
 
-    def best(moves, ivs):
+    cases = drawn_cases(tables, state, SIM_ROLL_MAX)  # IVs reach Hidden Power's case only
+
+    def estimates(moves, ivs):
         as_active = state._replace(ivs=state.ivs.at[a, active].set(ivs))
-        return jnp.max(
-            jax.vmap(lambda m: ai_damage(tables, as_active, m, SIM_ROLL_MAX))(moves.astype(_I32))
+        return jax.vmap(lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases))(
+            moves.astype(_I32)
         )
 
-    mine = best(state.moves[a, active], state.ivs[a, active])
-    theirs = jax.vmap(best)(state.moves[a], state.ivs[a])  # [SLOTS]
+    mine = estimates(state.moves[a, active], state.ivs[a, active])  # [4, C]
+    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a])  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
     alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
-    return _jump(ctx, jnp.any(alive & (theirs > mine)))
+    # A member that is not estimated draws nothing (:2145-2148).
+    theirs = theirs._replace(kind=jnp.where(alive[:, None], theirs.kind, CALC_NONE))
+    n = theirs.kind.shape[0]
+    # P(no jump) = sum over A's support of P(A = v) prod_j P(M_j <= v) (each value counted at
+    # its first occurrence among the support's).
+    support = mine.value.reshape(-1)  # [4C]
+    valid = mine.prob.reshape(-1) > 0
+    first = valid & ~jnp.any(
+        jnp.tril(support[:, None] == support[None, :], -1) & valid[None, :], axis=1
+    )
+    p_a = _max_at_most(mine, support) - _max_at_most(mine, support, strict=True)  # [4C]
+    members = jax.vmap(lambda e: _max_at_most(e, support))(theirs)  # [SLOTS, 4C]
+    beaten = jnp.prod(jnp.where(alive[:, None], members, 1.0), axis=0)
+    p_jump = 1.0 - jnp.sum(jnp.where(first, p_a * beaten, 0.0))
+    flat = CalcEstimate(
+        jnp.concatenate([mine.value, theirs.value.reshape(-1, CALC_DRAW_CLASSES)]),
+        jnp.concatenate([mine.prob, theirs.prob.reshape(-1, CALC_DRAW_CLASSES)]),
+        jnp.concatenate([mine.kind, theirs.kind.reshape(-1)]),
+    )
+
+    def decide(d):
+        best = jnp.max(d[:MOVES])
+        member_best = jnp.max(d[MOVES:].reshape(n, MOVES), axis=1)
+        return jnp.any(alive & (member_best > best))
+
+    ctx, jump = _calc_read(ctx, flat, ctx.live, p_jump, decide)
+    return _jump(ctx, jump)
 
 
 def if_battler_deals_more_damage(
@@ -1143,17 +1364,23 @@ def if_battler_deals_more_damage(
     assert battler == Battler.DEFENDER, battler
     tables, state = ctx.tables, ctx.state
     a, d = _side(Battler.ATTACKER), _side(battler)
-    ai_best = jnp.max(ctx.damage)  # _slot_damage at USE_MAX_DAMAGE (new_context)
-    theirs = ai_damage_for_roll(
+    mine = ctx.damage  # _slot_damage at USE_MAX_DAMAGE (new_context)
+    theirs = estimate(
         tables,
         state,
-        d,
         state.last_move[d].astype(_I32),
         SIM_ROLL_MAX,
+        atk_side=d,
         def_side=_side(Battler.DEFENDER),
         ivs=state.ivs[a, state.active[a]],
+        damaging_test=False,
     )
-    return _jump(ctx, theirs > ai_best)
+    # Psywave's and Magnitude's draws (:2210 the AI's moves, :2228 the battler's; Psywave at
+    # the battler's level): one read, P(B > A) = sum_c P(B = b_c) P(A < b_c).
+    p_jump = jnp.sum(theirs.prob * _max_at_most(mine, theirs.value, strict=True))
+    both = jax.tree.map(lambda x, y: jnp.concatenate([x, y[None]]), mine, theirs)
+    ctx, jump = _calc_read(ctx, both, ctx.live, p_jump, lambda dm: dm[MOVES] > jnp.max(dm[:MOVES]))
+    return _jump(ctx, jump)
 
 
 def move_effect(tables: Tables, move) -> jnp.ndarray:
@@ -1309,7 +1536,7 @@ def new_context(
             if slotted
             else defender_ability(tables, state, outcome.ability_guess)
         ),
-        damage=_slot_damage(tables, state, jnp.full((MOVES,), SIM_ROLL_MAX, _I32)),
+        damage=_slot_damage(tables, state, SIM_ROLL_MAX),
         sites=jnp.asarray(sites, _I32),
         guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
         guessing=ability_guessed(tables, state),
@@ -1340,7 +1567,7 @@ def _jump(ctx: AiContext, cond) -> AiContext:
 
 
 def _loose_read(
-    ctx: AiContext, p: float, kind: ReadKind, live=None, line: int = 0
+    ctx: AiContext, p: float, kind, live=None, line: int = 0
 ) -> tuple[AiContext, jnp.ndarray]:
     """The loose oracle's next draw of the current slot (module docstring): ``(ctx, bit)``,
     with the read's probability ``p`` of a 1, its kind and whether it is on the path
@@ -1353,7 +1580,7 @@ def _loose_read(
     lo = lo._replace(
         count=lo.count.at[slot].add(1),
         p=lo.p.at[slot, i].set(p, mode="drop"),
-        kind=lo.kind.at[slot, i].set(int(kind), mode="drop"),
+        kind=lo.kind.at[slot, i].set(jnp.asarray(kind).astype(jnp.int8), mode="drop"),
         live=lo.live.at[slot, i].set(live, mode="drop"),
         line=lo.line.at[slot, i].set(line, mode="drop"),
     )
@@ -1411,17 +1638,35 @@ def if_move_equal_to(ctx: AiContext, move: int) -> AiContext:
     return _jump(ctx, ctx.move == move)
 
 
-def flag_move_damage_score(ctx: AiContext, use_damage_roll: int) -> AiContext:
+def flag_move_damage_score(
+    ctx: AiContext, use_damage_roll: int, compared: bool = True
+) -> AiContext:
     """``FlagMoveDamageScore`` (trainer_ai.c:1012): ``AI_NO_COMPARISON_MADE`` for a move
     that is not damaging; else ``AI_MOVE_IS_HIGHEST_DAMAGE`` when no slot of the true
-    moveset estimates strictly more damage, ``AI_NOT_HIGHEST_DAMAGE`` otherwise."""
+    moveset estimates strictly more damage, ``AI_NOT_HIGHEST_DAMAGE`` otherwise.
+
+    ``TrainerAI_CalcAllDamage`` (:1041) draws for each Psywave or Magnitude move of the moveset
+    (``estimate``): one read (``_calc_read``), highest with probability ``sum_c P(D_slot = d_c)
+    prod_{i != slot} P(D_i <= d_c)``. ``compared`` False: the script compares the result only
+    with ``AI_NO_COMPARISON_MADE``, which does not depend on the draws, and loads ``calcTemp``
+    anew before reading it again (script.s:62-67, :112-117, :6511-6512, :6572-6573), so the
+    draws are no read (the loose oracle still draws them)."""
     if use_damage_roll == ROLL_FOR_DAMAGE:
         damage = _slot_damage(ctx.tables, ctx.state, ctx.outcome.sim_roll)
     else:
         damage = ctx.damage
-    highest = ~jnp.any(damage > damage[ctx.slot])
+    mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
+    others = jnp.arange(MOVES) != ctx.slot
+    le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c)
+    p_high = jnp.sum(mine.prob * jnp.prod(jnp.where(others[None, :], le, 1.0), axis=1))
+    damaging = is_damaging(ctx.tables, ctx.move)
+
+    def decide(d):
+        return ~jnp.any(d > jnp.take(d, ctx.slot))
+
+    ctx, highest = _calc_read(ctx, damage, damaging, p_high, decide, read=compared)
     flag = jnp.where(highest, AI_MOVE_IS_HIGHEST_DAMAGE, AI_NOT_HIGHEST_DAMAGE)
-    value = jnp.where(is_damaging(ctx.tables, ctx.move), flag, AI_NO_COMPARISON_MADE)
+    value = jnp.where(damaging, flag, AI_NO_COMPARISON_MADE)
     return ctx._replace(calc_temp=value.astype(_I32))
 
 
@@ -1675,15 +1920,20 @@ def pop_or_end(ctx: AiContext) -> AiContext:
 
 def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
     """``IfCurrentMoveKills`` (trainer_ai.c:1525): the move is damaging and the
-    defender's true HP is at most its estimated damage."""
+    defender's true HP is at most its estimated damage. Psywave's and Magnitude's cases draw
+    (:1560): one read (``_calc_read``) that kills with probability ``sum_c P(c) [hp <= d_c]``."""
     if use_damage_roll == ROLL_FOR_DAMAGE:
         roll = ctx.outcome.sim_roll[ctx.slot]
     else:
         roll = SIM_ROLL_MAX
-    damage = ai_damage(ctx.tables, ctx.state, ctx.move, roll)
+    est = estimate(ctx.tables, ctx.state, ctx.move, roll)
     state = ctx.state
     hp = state.hp[0, state.active[0]].astype(_I32)
-    return _jump(ctx, is_damaging(ctx.tables, ctx.move) & (hp <= damage))
+    p_kill = jnp.sum(jnp.where(hp <= est.value, est.prob, 0.0))
+    damaging = is_damaging(ctx.tables, ctx.move)
+    one = jax.tree.map(lambda x: x[None], est)
+    ctx, kills = _calc_read(ctx, one, damaging, p_kill, lambda d: hp <= d[0])
+    return _jump(ctx, damaging & kills)
 
 
 def if_random_less_than(ctx: AiContext, n: int, line: int) -> AiContext:

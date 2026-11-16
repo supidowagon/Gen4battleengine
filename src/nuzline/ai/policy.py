@@ -78,6 +78,10 @@ from nuzline.ai.layout import (
 )
 from nuzline.ai.outcome import (
     ABILITY_GUESSES,
+    CALC_DRAW_P,
+    CALC_DRAWS,
+    CALC_MAGNITUDE,
+    CALC_PSYWAVE,
     ENUMERATION_WIDTH,
     KAIZO_EXPERT_LABELS,
     KAIZO_TRANSCRIBED,
@@ -176,7 +180,9 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
     ctx, ohko = _split(c.if_move_equal_to(ctx, _MOVE["Fissure"]))
     ctx, t = _split(c.if_move_equal_to(ctx, _MOVE["Horn Drill"]))
     ohko = ohko | t
-    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    # Compared with AI_NO_COMPARISON_MADE only, then calcTemp reloaded (:62-67): the
+    # estimate's draws are no read (commands.flag_move_damage_score, E1 ruling G-39).
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)
     ctx, soundproof = _split(c.if_loaded_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
 
     # Basic_CheckForImmunity (:65)
@@ -225,7 +231,8 @@ def _basic(ctx: AiContext, layout: AiLayout) -> AiContext:
 
     # Basic_NoImmunityAbility (:111)
     ctx = _at(ctx, no_immunity)
-    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    # Compared with AI_NO_COMPARISON_MADE only, then calcTemp reloaded (:112-117).
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)
     ctx, t = _split(c.if_loaded_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
     soundproof = soundproof | t | ctx.live
 
@@ -2908,7 +2915,7 @@ def _prioritize_extremes(ctx: AiContext) -> AiContext:
     move or a no-calc effect, trainer_ai.c:1012-1063; an alt-power effect always compares,
     ``c.is_damaging``) gets +2 unless the 100 roll (:6515) jumps."""
     ctx = _terminate(ctx)
-    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)
     ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))
     ctx, _ = _split(c.if_random_less_than(ctx, 100, 6515))
     return c.pop_or_end(c.add_to_move_score(ctx, 2))
@@ -2925,7 +2932,7 @@ def _baton_pass(ctx: AiContext) -> AiContext:
     ctx = _terminate(ctx)
     ctx = c.count_alive_party_battlers(ctx, _A)
     ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # -> BatonPass_Terminate
-    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+    ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE, compared=False)
     ctx, _ = _split(c.if_loaded_not_equal_to(ctx, c.AI_NO_COMPARISON_MADE))  # -> _Terminate
     ctx, known = _split(c.if_move_effect_known(ctx, _A, BattleEffect.PASS_STATS_AND_STATUS))
     ctx, _ = _split(c.if_random_less_than(ctx, 80, 6577))  # -> Risky_Terminate
@@ -3478,12 +3485,16 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
 
 
 def _check_outcome(ai_outcome: AiOutcome, layout: AiLayout) -> None:
-    """Check that ``ai_outcome.script_rolls`` and ``ability_guess`` have ``layout``'s shapes
-    (static, so also when traced)."""
+    """Check that ``ai_outcome.script_rolls``, ``ability_guess`` and, when given,
+    ``calc_draws`` have ``layout``'s shapes (static, so also when traced)."""
     if layout.per_slot_sites:
         shapes = {"script_rolls": (MOVES, layout.slot_reads), "ability_guess": ()}
+        if ai_outcome.calc_draws is not None:
+            shapes["calc_draws"] = (MOVES, layout.slot_reads, CALC_DRAWS)
     else:
         shapes = {"script_rolls": (MAX_SCRIPT_ROLLS,), "ability_guess": ()}
+        if ai_outcome.calc_draws is not None:
+            raise ValueError("AiOutcome.calc_draws is a per-slot layout's")
     for field, shape in shapes.items():
         got = tuple(jnp.shape(getattr(ai_outcome, field)))
         if got != shape:
@@ -4035,15 +4046,26 @@ def _loose_run(tables: Tables, state: BattleState, bits, layout: AiLayout):
     return ctx.scores, ctx.loose
 
 
+LOOSE_CHUNK = 2048  # patterns per loose program run (bounds its memory)
+
+
 def _loose_batch(tables: Tables, states: BattleState, bits, layout: AiLayout):
     """``_loose_run`` for every state (leading axis N) and bit pattern (``bits``,
     ``int8[P, MOVES, LOOSE_READS]``): scores ``[N, P, MOVES]`` and ``LooseDraws [N, P, ...]``.
     The loose oracle reads no read bound (it has no ``AiOutcome`` draws), so its program is
     compiled once per flag set and effect set, not once per fight's bound (E1 Ruling R6), and
     the patterns are padded to a power of two (zero rows, sliced off again), so a growing
-    enumeration reuses a few compiled shapes instead of compiling one per count."""
+    enumeration reuses a few compiled shapes instead of compiling one per count. More than
+    ``LOOSE_CHUNK`` patterns (the damage draws' digits multiply them) run in chunks of that
+    many."""
     bits = jnp.asarray(bits)
     n = int(bits.shape[0])
+    if n > LOOSE_CHUNK:
+        parts = [
+            _loose_batch(tables, states, bits[i : i + LOOSE_CHUNK], layout)
+            for i in range(0, n, LOOSE_CHUNK)
+        ]
+        return jax.tree.map(lambda *xs: jnp.concatenate(xs, axis=1), *parts)
     padded = 1 << max(n - 1, 0).bit_length()
     if padded != n:
         bits = jnp.concatenate([bits, jnp.zeros((padded - n, *bits.shape[1:]), bits.dtype)])
@@ -4057,16 +4079,62 @@ def _loose_batch_program(tables: Tables, states: BattleState, bits, layout: AiLa
     return jax.vmap(lambda s: per_state(s, bits))(states)
 
 
-def _loose_patterns(reads: list[list[int]]) -> np.ndarray:
-    """``int8[P, MOVES, LOOSE_READS]``: pattern p sets, in each slot m, read ``reads[m][k]``
-    to bit k of p, for every p below ``2**max(len)`` (padded to a power of two)."""
+def _radix(kind) -> np.ndarray:
+    """The values a loose read of each ``ReadKind`` in ``kind`` takes: a damage draw's
+    classes (``commands.read_radix``), else 2."""
+    kind = np.asarray(kind)
+    out = np.full(kind.shape, 2, np.int64)
+    for k in (c.ReadKind.CALC_PSYWAVE, c.ReadKind.CALC_MAGNITUDE):
+        out[kind == int(k)] = c.read_radix(k)
+    return out
+
+
+def _position_radix(reads: list[list[int]], kind=None) -> list[int]:
+    """Per position k of the slots' read lists, the most values a read there takes."""
+    radix = None if kind is None else _radix(kind)
     width = max(len(r) for r in reads)
-    patterns = np.arange(2**width)
+    return [
+        max([2] + [int(radix[m, r[k]]) for m, r in enumerate(reads) if k < len(r)])
+        if radix is not None
+        else 2
+        for k in range(width)
+    ]
+
+
+def _digits(patterns: np.ndarray, radices: list[int]) -> np.ndarray:
+    """``int[P, len(radices)]``: the mixed-radix digits of ``patterns`` (digit 0 fastest)."""
+    out = np.zeros((len(patterns), len(radices)), np.int64)
+    rest = np.asarray(patterns, np.int64)
+    for k, r in enumerate(radices):
+        out[:, k], rest = rest % r, rest // r
+    return out
+
+
+def _loose_patterns(reads: list[list[int]], kind=None) -> np.ndarray:
+    """``int8[P, MOVES, LOOSE_READS]``: pattern p sets, in each slot m, read ``reads[m][k]``
+    to digit k of p, for every p below the product of the positions' radices
+    (``_position_radix``: 2, or a damage draw's classes when ``kind``, the reads' ``ReadKind``
+    ``[MOVES, LOOSE_READS]``, is given; ``2**max(len)`` without it)."""
+    radices = _position_radix(reads, kind)
+    patterns = np.arange(int(np.prod(radices, dtype=np.int64)))
+    digits = _digits(patterns, radices)
     bits = np.zeros((len(patterns), MOVES, c.LOOSE_READS), np.int8)
     for m, slot_reads in enumerate(reads):
         for k, read in enumerate(slot_reads):
-            bits[:, m, read] = patterns >> k & 1
+            bits[:, m, read] = digits[:, k]
     return bits
+
+
+def _read_law(p: float, kind: int) -> np.ndarray:
+    """``float64[11]``: the law of a loose read's digit: a damage draw's class law
+    (``outcome.CALC_DRAW_P``), else ``[1 - p, p]``."""
+    law = np.zeros(CALC_DRAW_P.shape[1])
+    if kind == c.ReadKind.CALC_PSYWAVE:
+        return CALC_DRAW_P[CALC_PSYWAVE].copy()
+    if kind == c.ReadKind.CALC_MAGNITUDE:
+        return CALC_DRAW_P[CALC_MAGNITUDE].copy()
+    law[0], law[1] = 1 - p, p
+    return law
 
 
 def _loose_reads(tables: Tables, states: BattleState, layout: AiLayout):
@@ -4076,18 +4144,22 @@ def _loose_reads(tables: Tables, states: BattleState, layout: AiLayout):
     one of them); and each read index's probability and ``ReadKind`` (``[MOVES,
     LOOSE_READS]``, the same for every state: the reads' order is static)."""
     reads: list[list[int]] = [[] for _ in range(MOVES)]
+    kind = None
     while True:
-        _, lo = _loose_batch(tables, states, jnp.asarray(_loose_patterns(reads)), layout)
+        _, lo = _loose_batch(tables, states, jnp.asarray(_loose_patterns(reads, kind)), layout)
         count = np.asarray(lo.count)
         if count.max() > c.LOOSE_READS:
             raise RuntimeError(f"{count.max()} reads in one slot > LOOSE_READS {c.LOOSE_READS}")
         live = np.asarray(lo.live).any(axis=(0, 1))  # [MOVES, LOOSE_READS]
+        # A damage draw's kind follows the move (commands._calc_read), not the pattern: its
+        # largest over the states and patterns.
+        kind = np.asarray(lo.kind).max(axis=(0, 1))
         found = [
             sorted(set(r) | set(np.flatnonzero(live[m]).tolist())) for m, r in enumerate(reads)
         ]
         if found == reads:
             p = np.asarray(lo.p, np.float64)[0, 0]
-            return reads, p, np.asarray(lo.kind)[0, 0]
+            return reads, p, kind
         reads = found
 
 
@@ -4122,31 +4194,34 @@ def _loose_move_distribution(
     enumerated jointly; otherwise each slot's score distribution over its own reads, and
     the pick over the product of those (exact in loose: no two slots share a draw)."""
     batch = jax.tree.map(lambda a: jnp.asarray(a)[None], state)
-    reads, p, _ = _loose_reads(tables, batch, layout)
+    reads, p, kind = _loose_reads(tables, batch, layout)
     has = np.array(state.moves[1, state.active[1]] != 0)
     has[0] = True
     if not np.any(np.asarray(usable_moves(tables, state, 1))):
         return np.eye(MOVES)[0]  # Struggle (battle_controller_player.c:433)
 
-    def weight(bits: np.ndarray, slot_reads: list[tuple[int, int]]) -> np.ndarray:
-        w = np.ones(len(bits))
-        for k, (m, r) in enumerate(slot_reads):
-            on = bits >> k & 1
-            w *= np.where(on == 1, p[m, r], 1 - p[m, r])
+    every = [(m, r) for m in range(MOVES) for r in reads[m]]
+    radices = [int(_radix(kind)[m, r]) for m, r in every]
+    laws = [_read_law(float(p[m, r]), int(kind[m, r])) for m, r in every]
+
+    def weight(digits: np.ndarray) -> np.ndarray:
+        w = np.ones(len(digits))
+        for k, law in enumerate(laws):
+            w *= law[digits[:, k]]
         return w
 
-    every = [(m, r) for m in range(MOVES) for r in reads[m]]
-    if len(every) <= joint_bits:
-        patterns = np.arange(2 ** len(every))
+    total = int(np.prod(radices, dtype=np.int64))
+    if total <= 2**joint_bits:
+        patterns = np.arange(total)
         rows, weights = [], []
         for start in range(0, len(patterns), 4096):
-            chunk = patterns[start : start + 4096]
-            bits = np.zeros((len(chunk), MOVES, c.LOOSE_READS), np.int8)
+            digits = _digits(patterns[start : start + 4096], radices)
+            bits = np.zeros((len(digits), MOVES, c.LOOSE_READS), np.int8)
             for k, (m, r) in enumerate(every):
-                bits[:, m, r] = chunk >> k & 1
+                bits[:, m, r] = digits[:, k]
             scores, _ = _loose_batch(tables, batch, jnp.asarray(bits), layout)
             rows.append(np.asarray(scores)[0])
-            weights.append(weight(chunk, every))
+            weights.append(weight(digits))
         return _loose_pick(has, np.concatenate(rows), np.concatenate(weights))
     support = [list(h.items()) for h in _loose_slot_scores(tables, state, layout)]
     combos = list(itertools.product(*support))
@@ -4161,17 +4236,23 @@ def _loose_slot_scores(
     """Per move slot, the loose distribution of its score (``{score: probability}``) over
     the slot's own reads, each its own draw (refusals not applied)."""
     batch = jax.tree.map(lambda a: jnp.asarray(a)[None], state)
-    reads, p, _ = _loose_reads(tables, batch, layout)
-    scores, _ = _loose_batch(tables, batch, jnp.asarray(_loose_patterns(reads)), layout)
+    reads, p, kind = _loose_reads(tables, batch, layout)
+    scores, _ = _loose_batch(tables, batch, jnp.asarray(_loose_patterns(reads, kind)), layout)
     scores = np.asarray(scores)[0]  # [P, MOVES]
+    radices = _position_radix(reads, kind)
+    digits = _digits(np.arange(scores.shape[0]), radices)
     out = []
     for m in range(MOVES):
+        # A pattern is slot m's own once: its digits past m's reads are 0, and each read's
+        # law gives its own digits (a digit past a read's values has probability 0).
+        w = np.all(digits[:, len(reads[m]) :] == 0, axis=1).astype(np.float64)
+        for k, r in enumerate(reads[m]):
+            law = _read_law(float(p[m, r]), int(kind[m, r]))
+            law = np.concatenate([law, np.zeros(max(radices) + 1)])
+            w = w * law[digits[:, k]]
         values: dict[int, float] = {}
-        for q in range(2 ** len(reads[m])):
-            w = 1.0
-            for k, r in enumerate(reads[m]):
-                w *= p[m, r] if q >> k & 1 else 1 - p[m, r]
-            values[int(scores[q, m])] = values.get(int(scores[q, m]), 0.0) + w
+        for q in np.flatnonzero(w):
+            values[int(scores[q, m])] = values.get(int(scores[q, m]), 0.0) + float(w[q])
         out.append(values)
     return out
 

@@ -133,9 +133,11 @@ uses the table's power for 0 and the table's type for TYPE_NORMAL, `battle_lib.c
   bench member's from its own IVs (`Move_CalcVariableType`, `battle_lib.c:8162-8175`;
   `ai.switching.party_move_types`: the switch's bench check and both stages of the
   post-KO replacement, `:7998`, `:8051`);
-- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball (`monSpeedValues`, left by the last speed compare,
-  `battle_lib.c:1372`), Psywave and Magnitude (a `RandNext` in the estimate, `:3015`,
-  `:3030`). Kaizo Triple Axel sits on MOVE_PSYWAVE's id (`:3014`);
+- Psywave and Magnitude (E1 Roark close batch, G-39): a `RandNext` in the estimate
+  (`:3014-3016`, `:3028-3048`), each damage command a read of its own (8.7). Kaizo Triple Axel
+  sits on MOVE_PSYWAVE's id and Bulldoze on MOVE_MAGNITUDE's;
+- refused (`commands.CALC_DAMAGE_MOVES`): Natural Gift and Judgment (item data), Gyro Ball
+  (`monSpeedValues`, left by the last speed compare, `battle_lib.c:1372`);
 - a move id that `TrainerAI_MoveType` takes by case (`trainer_ai.c:3132-3222`;
   `commands.MOVE_TYPE_MOVES`): Natural Gift, Judgment, Weather Ball.
 
@@ -694,7 +696,7 @@ MIRROR_COAT (144), LOWER_OWN_ATK_AND_DEF (182), WEATHER_RAIN (136), WEATHER_HAIL
   POWER_BASED_ON_FRIENDSHIP (121), RANDOM_POWER_MAYBE_HEAL (122), POWER_BASED_ON_LOW_FRIENDSHIP
   (123), 20_DAMAGE_FLAT (130), RANDOM_POWER_BASED_ON_IVS (135), INCREASE_POWER_WITH_WEIGHT
   (196): `Basic_CheckNonStandardDamageOrChargeTurn` only (`:160`-`:244`, 5.16), no Expert_Main
-  entry; their AI damage is 2.4's. Psywave's id (Kaizo Triple Axel) stays refused by id.
+  entry; their AI damage is 2.4's. Psywave's id (Kaizo Triple Axel) draws in its estimate (8.7).
 - ONE_HIT_KO (38): `Basic_CheckOHKOWouldFail` (`:554-564`; dispatch `:157`): immune -10,
   against Sturdy (a guessing read) -10 unless Mold Breaker, the attacker's level below the
   player's -10 (the new command `IfLevel`, `trainer_ai.c:2579-2608`). `Expert_OHKOMove`
@@ -787,8 +789,8 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   computes it on the AI path; `ai_damage_for_roll` takes `def_side` and `ivs`). The AI's
   estimate never sees Stomp's x2 (`effect_script_0150.s`'s `BTLVAR_POWER_MULTI`; `powerMul`
   is reset at the turn's end, battle_controller_player.c:1855). A player move with a refused
-  `TrainerAI_CalcDamage` id case (Gyro Ball, Psywave / Triple Axel, Magnitude / Bulldoze,
-  Natural Gift, Judgment) is refused in a fight whose AI knows Copycat.
+  `TrainerAI_CalcDamage` id case (Gyro Ball, Natural Gift, Judgment) is refused in a fight
+  whose AI knows Copycat; Psywave / Triple Axel and Magnitude / Bulldoze draw (8.7).
 - GROUND_TRAP_USER_CONTINUOUS_HEAL (181): `Basic_CheckAlreadyIngrained` (`:906-909`);
   `Expert_Ingrain` (`:4463-4465`, no change).
 - The AI's `ApplyTypeChart` (`switching.chart_multipliers`, `defender_chart_flags`) reads the
@@ -1229,6 +1231,41 @@ The user chose one transcription in two program shapes (`ai.layout` module docst
   - The same action as the fight's own layout for every key, over a cover of the real flag sets in the fast tier and over all of them in the slow tier.
   - The same read counts, path weights and scores.
   - The masked scripts would have read.
+
+### 8.7 The damage estimate's draws (E1 Roark close batch, G-39)
+
+- **The draws.** `TrainerAI_CalcDamage` switches on the move id (`trainer_ai.c:2885`):
+  MOVE_PSYWAVE (149, Kaizo Triple Axel) deals `level * (RandNext() % 11 + 5) / 10` as fixed
+  damage (`:3014-3016`; a 0 at level 1 falls to `CalcMoveDamage` at the table power, `:3073`),
+  MOVE_MAGNITUDE (222, Kaizo Bulldoze) takes the power of `RandNext() % 100` bucketed below 5,
+  15, 35, 65, 85, 95 into 10-150 (`:3028-3048`). Their laws over a u16 are
+  `outcome.CALC_DRAW_P` (11 classes of 5958 or 5957 values; 7 buckets of 3280, 6560, 13120,
+  19651, 13100, 6550, 3275).
+- **Who draws.** Every estimate of such a move draws afresh: `FlagMoveDamageScore` (`:1041`, the
+  attacker's four moves), `IfCurrentMoveKills` (`:1560`), `IfPartyMemberDealsMoreDamage`
+  (`:2130`, `:2156`), `IfBattlerDealsMoreDamage` (`:2210`, `:2228`, the battler's last move with
+  no damaging test, at its own level) and `CheckIfHighestDamageWithPartner` (`:2402`, TAG_STRATEGY
+  only, not transcribed).
+- **One read per command.** Each command's result is one yes/no and its draws reach nothing
+  else, so the per-slot layout makes one read per command whose estimate draws
+  (`commands._calc_read`), with the exact probability of yes over the draws' joint law: kill
+  `sum_c P(c) [hp <= d_c]`; highest `sum_c P(D_slot = d_c) prod_{i != slot} P(D_i <= d_c)`; a
+  party member out-damaging `1 - sum_v P(A = v) prod_j P(M_j <= v)`; the battler out-damaging
+  `sum_c P(B = b_c) P(A < b_c)`. In the enumeration the read's bit is the result
+  (`READ_DRAWS[1]` yes); a sampled outcome carries the raw draws, `AiOutcome.calc_draws`
+  (`uint16[MOVES, slot_reads, CALC_DRAWS]`), and the command computes its result from them.
+  Basic_Main's and PrioritizeExtremes' and BatonPass_Main's `FlagMoveDamageScore`
+  (script.s:62, :112, :6511, :6572) are compared only with `AI_NO_COMPARISON_MADE`: their draws
+  are no read (`compared=False`).
+- **Bounds.** `tools/ai_read_bounds.py` counts these reads (`read_bounds.DRAWN_READ_BOUNDS` for
+  a fight with a drawing move, keyed also by whether the scored move draws; Copycat's
+  `IfBattlerDealsMoreDamage` always, the player's move being unknown to the layout). Seventeen
+  Kaizo fights' bounds grow by 1 or 2; the widest, Barry #6 (479-481), reads 11 (8253 scorings),
+  all within `WIDTH_CAP`.
+- **The loose oracle** draws every `RandNext` of every estimate as its own digit
+  (`ReadKind.CALC_PSYWAVE`, `CALC_MAGNITUDE`), including the dead ones, and computes each command
+  as the decomp does; its patterns are mixed-radix (`policy._loose_patterns`).
+- **Tests:** `tests/engine/test_e1_roark_close.py` (family 3).
 
 ## 9. What the AI knows about the player
 
