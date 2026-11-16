@@ -591,6 +591,7 @@ def _empty_events() -> dict:
             "magnitude",
             "present_heal",
             "called",
+            "move_cur",
             "dragged",
             "roosted",
             "phys_taken",
@@ -1092,19 +1093,27 @@ def _use_move(
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
-    # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender: for an OHKO move
-    # BtlCmd_TryOHKOMove's MOVE_STATUS_BYPASSED_ACCURACY, battle_script.c:4343-4374, the same
-    # battlers), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
+    # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
+    # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
     # (MOVE_STATUS_SEMI_INVULNERABLE) a foe with a semi-invulnerable bit its script does not hit
     # (MoveFlag.HIT_*: SYSCTL_HIT_DURING_*), B10-12. A special-range Counter's command and Bide's
     # unleash have made the foe the defender by then.
     foe_semi = state.semi_invulnerable[target_side]
     aims_foe = ~self_defender(tables, used, ghost_user(state, side)) | special_counter | bide_ends
-    bypass = (
-        (state.ability[side, user] == AbilityId.NO_GUARD)
-        | (state.ability[target_side, target] == AbilityId.NO_GUARD)
-        | locked_onto(state, side, target_side)
+    no_guard = (state.ability[side, user] == AbilityId.NO_GUARD) | (
+        state.ability[target_side, target] == AbilityId.NO_GUARD
     )
+    # An OHKO move: BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (battle_script.c:
+    # 4338), which skips the Lock-On / No Guard return (bcp.c:3016); only its
+    # MOVE_STATUS_BYPASSED_ACCURACY skips the semi test (:3035), set on the non-Sturdy branch
+    # when the defender has MOVE_EFFECT_LOCK_ON or either battler has No Guard (script.c:
+    # 4342-4372). Against an ignorable Sturdy (:4340-4341) the semi-invulnerable foe is missed,
+    # and subscript_missed.s:11-12 shows that miss before the Sturdy message (B10-15).
+    ohko = tables.move_effect[used] == EffectId.OHKO
+    ohko_bypass = (ignorable(state, side, target_side) != AbilityId.STURDY) & (
+        (state.lock_on[target_side] != 0) | no_guard
+    )
+    bypass = jnp.where(ohko, ohko_bypass, no_guard | locked_onto(state, side, target_side))
     semi_miss = (
         can_act
         & has_target
@@ -1702,6 +1711,13 @@ def _use_move(
         # runs: the called move's id, else 0.
         # The invokers' called move likewise (the attack message of the called move).
         "called": jnp.where(can_act & (nature_power | (invoker & ~call_failed)), used, 0),
+        # The action's last moveCur: FightCommand's moveTemp (bcp.c:1898), then the called move
+        # once GoToMoveScript runs (battle_script.c:2118). The Future Sight hit of the turn's end
+        # reads its range (``_future_sight``, B10-14). A tail mode's is the paused action's
+        # (``ts_used``).
+        "move_cur": jnp.where(
+            head_on, jnp.where(can_act & (nature_power | (invoker & ~call_failed)), used, move), used_t
+        ),
         "crit": crits,
         "full_para": full_para,
         "flinched": flinched,
@@ -2161,6 +2177,8 @@ def _execute_actions(
         # The events of an action are its start's (a U-turn's head) or its resume's; the pass
         # after the Pursuit adds none of its own.
         keep = ~skip & ~ap
+        # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
+        own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
         read, shown = put((read, shown), side, own, keep)
         foe = 1 - side
         merged = [
@@ -2198,6 +2216,9 @@ def _execute_actions(
     state, read, shown, position, _, pursued, base, pick_mul, fired = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
+    # Each battler whose action is still to come (after the paused one in ``order``): doubles
+    # section 5 rule 5, a fact about the named battler, not "the second actor" (B10-17).
+    to_come = jnp.stack([jnp.any((order == b) & (jnp.arange(2) > position)) for b in (0, 1)])
     scratch = {
         "ts_cursor": position,
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
@@ -2211,9 +2232,9 @@ def _execute_actions(
         "ts_item": items,
         # Only an actor still to come keeps its flag: an earlier one ate its Custap Berry when
         # its move started (_use_move).
-        "ts_custap": custap & (jnp.arange(2) == order[1]) & (position == 0),
+        "ts_custap": custap & to_come,
         # Likewise: an earlier actor's own move start cleared its quickClaw.
-        "ts_claw": claw & (jnp.arange(2) == order[1]) & (position == 0),
+        "ts_claw": claw & to_come,
         "ts_pursued": pursued,
         "ts_protect_ok": read["protect_ok"],
         "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),
@@ -2837,8 +2858,18 @@ def end_of_turn(
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
+def _turn_move_cur(read: dict, order) -> jnp.ndarray:
+    """``battleCtx->moveCur`` at the turn's end: the last action in ``order`` whose FIGHT ran
+    (``read["move_cur"]``, 0 for none). Nothing else sets it after the actions, and
+    ``BattleContext_Init`` keeps it (battle_lib.c:1974-2017). A turn with no FIGHT leaves an older
+    moveCur, but then no battler is semi-invulnerable at the turn's end (the bit is set by a
+    charge turn and its holder is locked into a FIGHT the next turn), so its range is never read."""
+    first, last = (read["move_cur"][order[k]] for k in (0, 1))
+    return jnp.where(last != 0, last, first).astype(_I32)
+
+
 def _future_sight(
-    tables: Tables, state: BattleState, sides, outcome: Outcome, protecting
+    tables: Tables, state: BattleState, sides, outcome: Outcome, protecting, move_cur=0
 ) -> BattleState:
     """``SIDE_COND_CHECK_STATE_FUTURE_SIGHT`` of ``BattleControllerPlayer_CheckSideConditions``
     (battle_controller_player.c:1758-1783), after ``CheckMonConditions`` (:1733): for each battler
@@ -2848,7 +2879,13 @@ def _future_sight(
     (:8; ``outcome.future_threshold`` with ``Outcome.future_hit[battler]``, then
     ``CheckMoveHitOverrides``: a protecting defender (``protecting``: this turn's turnFlags) stops a
     ``MOVE_FLAG_CAN_PROTECT`` move and unlocks the battler in the attacker's slot, bcp.c:3005-3011;
-    either battler's No Guard clears ``MOVE_STATUS_MISSED``, :3016-3021); on
+    either battler's No Guard (or the attacker's battler locked onto by the defender) clears
+    ``MOVE_STATUS_MISSED`` and returns, :3016-3021; else a semi-invulnerable defender sets
+    ``MOVE_STATUS_SEMI_INVULNERABLE``, :3034-3040, B10-14: ``BattleContext_Init`` cleared every
+    ``SYSCTL_HIT_DURING_*`` bit at the last MoveEnd, battle_lib.c:2009, system_control.h:31-38,
+    and ``BYPASSED_ACCURACY`` with ``moveStatusFlags``, :1983; the range test reads
+    ``CURRENT_MOVE_DATA`` (common.h:24), the turn's last ``moveCur`` (``move_cur``), so a last
+    Spikes, Toxic Spikes or Stealth Rock, ``RANGE_OPPONENT_SIDE``, skips it); on
     ``MOVE_STATUS_DID_NOT_HIT`` "But it failed!" (:53-59). Else a defender behind a substitute
     (its bit, :13) has the damage taken off the substitute's HP, 0 when ``substituteHP <=
     damage`` (:15-21, B10-4; no flag, no HP change), then goes to :92; otherwise (Rage, :30-37,
@@ -2866,7 +2903,9 @@ def _future_sight(
     live = state.over == 0
     start = state
     missed, shielded, endured = jnp.bool_(False), jnp.bool_(False), jnp.bool_(False)
+    semi = jnp.bool_(False)
     protecting = jnp.asarray(protecting)
+    semi_tested = tables.move_target[jnp.asarray(move_cur, _I32)] != MoveTarget.RANGE_OPPONENT_SIDE
     mid = state
     for position in (0, 1):
         d = sides[position]
@@ -2889,8 +2928,12 @@ def _future_sight(
         blocked = (protecting[d] != 0) & protect_blocks(tables, move, False)
         miss_flag = jnp.where(~blocked & no_guard, False, missed | missed_now)
         shield_flag = shielded | blocked
+        # MOVE_STATUS_SEMI_INVULNERABLE (bcp.c:3034-3040) past both returns; No Guard does not
+        # clear one the first hit of the pass set.
+        semi_now = ~blocked & ~no_guard & semi_tested & (state.semi_invulnerable[d] != 0)
+        semi_flag = semi | semi_now
         state = _unlock(state, attacker, fires & blocked)
-        hit = fires & ~miss_flag & ~shield_flag
+        hit = fires & ~miss_flag & ~shield_flag & ~semi_flag
         hp = state.hp[d, mon].astype(_I32)
         sash = holds(tables, state, d, ItemId.FOCUS_SASH)
         damage = state.future_damage[d].astype(_I32)
@@ -2905,6 +2948,7 @@ def _future_sight(
         state = consume_item(state, d, hit & endure_flag & sash)
         missed = jnp.where(fires, miss_flag, missed)
         shielded = jnp.where(fires, shield_flag, shielded)
+        semi = jnp.where(fires, semi_flag, semi)
         endured = endured | (fires & endured_now)
         state = _faint_check(tables, mid, state, decide=False)
         mid = state
@@ -3014,7 +3058,7 @@ def step_events(
     sides = end_of_turn_order(tables, s, outcome)
     e = field_conditions(tables, s, sides)
     e = end_of_turn(tables, e, actions, outcome, order, sides, read["move_failed"])
-    e = _future_sight(tables, e, sides, outcome, read["protect_ok"])
+    e = _future_sight(tables, e, sides, outcome, read["protect_ok"], _turn_move_cur(read, order))
     e = _stale_known_item(s, e, False)  # B10-6: the end of the turn's HP updates
     e = _unlock_sleepers(e)
     e = e._replace(turn=(e.turn + 1).astype(e.turn.dtype))

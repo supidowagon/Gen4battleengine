@@ -220,7 +220,9 @@ many are real). Decomp sources:
 
 Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of every effect
 (``_Hit.sub_hit``, ``_Hit.shielded``), ``_substitute`` the move.
-Unreachable branches are not modelled: Mist and Safeguard come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Safeguard (E2 batch 10, B10-7): ``_safeguard`` and its gates on status and confusion.
+Unreachable branches are not modelled: Mist comes from an unsupported move; Clear Body, Hyper
+Cutter, Immunity, Leaf Guard, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance

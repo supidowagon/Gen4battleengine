@@ -620,3 +620,80 @@ def test_shadow_force_vanishes_and_surf_doubles_on_a_diver(tables, names):
     )
     out = assert_matches_reference(tables, under, (0, 0), O)
     assert int(out.hp[1, 0]) < int(d.hp[1, 0])
+
+
+def _future_on_player(s, move):
+    """The opponent's Future Sight / Doom Desire due on the player this turn's end (5 HP)."""
+    return s._replace(
+        future_timer=s.future_timer.at[0].set(1),
+        future_damage=s.future_damage.at[0].set(5),
+        future_move=s.future_move.at[0].set(move),
+        future_attacker=s.future_attacker.at[0].set(2),
+        future_sight=s.future_sight.at[0].set(1),
+    )
+
+
+def test_future_sight_misses_a_semi_invulnerable_target_unless_spikes_was_last(tables, names):
+    """B10-14: subscript_future_sight_damage.s:8 CheckMoveHit -> CheckMoveHitOverrides
+    (bcp.c:3034-3040): BattleContext_Init cleared every SYSCTL_HIT_DURING_* bit (battle_lib.c:2009),
+    so the charging flyer is missed; No Guard returns first (:3016-3021); the range test reads
+    CURRENT_MOVE_DATA, the turn's last moveCur, so a last Spikes (RANGE_OPPONENT_SIDE) skips it."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Pidgeotto", ["Fly"], 40)],
+        [_mon(n, "Bronzor", ["Growl", "Spikes"], 20)],
+    )
+    s = _future_on_player(s, n.move("Doom Desire"))
+    growl = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(growl.semi_invulnerable[0]) == SemiKind.AIRBORNE
+    assert int(growl.hp[0, 0]) == int(s.hp[0, 0]) and int(growl.future_sight[0]) == 0
+    spikes = assert_matches_reference(tables, s, (0, 1), O)
+    assert int(spikes.hp[0, 0]) == int(s.hp[0, 0]) - 5
+    guard = s._replace(ability=s.ability.at[1, 0].set(AbilityId.NO_GUARD))
+    out = assert_matches_reference(tables, guard, (0, 0), O)
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) - 5
+
+
+def test_ohko_with_no_guard_misses_a_semi_invulnerable_sturdy_target_unrevealed(tables, names):
+    """B10-15: BtlCmd_TryOHKOMove (battle_script.c:4338-4374) sets NONSTANDARD_ACC_CHECK, so the
+    No Guard return (bcp.c:3016) is skipped, and MOVE_STATUS_BYPASSED_ACCURACY only off the Sturdy
+    branch: a digging Sturdy target is missed (subscript_missed.s:11-12, before the Sturdy
+    message), its ability not revealed; without Sturdy No Guard's bypass hits it."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Geodude", ["Dig"], 30)], [_mon(n, "Machop", ["Horn Drill"], 40)]
+    )
+    s = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.UNDERGROUND),
+        locked_move=s.locked_move.at[0].set(n.move("Dig")),
+        ability=s.ability.at[1, 0].set(AbilityId.NO_GUARD),
+    )
+    sturdy = s._replace(ability=s.ability.at[0, 0].set(AbilityId.STURDY))
+    out = assert_matches_reference(tables, sturdy, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 0
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.hp[1, 0]) < int(s.hp[1, 0])
+    plain = s._replace(ability=s.ability.at[0, 0].set(AbilityId.ROCK_HEAD))
+    out = assert_matches_reference(tables, plain, (0, 0), O)
+    assert int(out.hp[0, 0]) == 0
+
+
+def test_a_u_turn_pause_keeps_only_the_quick_claw_still_to_come(tables, names):
+    """B10-17: the pause's scratch keeps moveEffectsData.quickClaw only for a battler whose
+    action is still to come (cleared at its own move start, subscript_check_quick_claw.s:22-23):
+    the foe moving last with an activated Quick Claw keeps it across the party list."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Snorlax", ["Whirlwind"], 40, "Quick Claw")],
+    )
+    s = s._replace(qc_roll=s.qc_roll.at[1].set(1))
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    assert [int(x) for x in paused.ts_claw] == [0, 1]
+    _resume(tables, paused, 1)

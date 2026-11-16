@@ -1678,3 +1678,32 @@ Rules left out because another mechanic is missing; each closes with the mechani
   SolarBeam's Expert_Thunder entry (:1719) is dead (the first jump wins). Not modelled (no
   supported mover): Gravity's grounding (subscript_gravity_start.s:16; Gravity refused by
   coverage), Transform's semi test, Hurricane (Kaizo 141, not reached).
+- B10-14 (batch 10 review) Future Sight / Doom Desire's delayed hit and a semi-invulnerable
+  defender. subscript_future_sight_damage.s:8 CheckMoveHit (battle_script.c:6115-6131) runs
+  CheckMoveHitOverrides (bcp.c:216-220): after Protect (:3005-3013) and the Lock-On / No Guard
+  return (:3016-3021), :3034-3040 sets MOVE_STATUS_SEMI_INVULNERABLE on a defender with a semi
+  bit. Every SYSCTL_HIT_DURING_* bit is cleared by BattleContext_Init at the last MoveEnd
+  (battle_lib.c:2009, system_control.h:31-40; bcp.c:3998) and BYPASSED_ACCURACY with
+  moveStatusFlags (:1983), so any semi kind is missed ("But it failed!"); the bit itself lasts
+  to the holder's next action. The range test reads CURRENT_MOVE_DATA (common.h:24), i.e.
+  moveCur, which nothing resets: FightCommand's moveTemp (bcp.c:1898) or GoToMoveScript's called
+  move (battle_script.c:2118). After a turn whose last such move is Spikes, Toxic Spikes or Stealth
+  Rock (the RANGE_OPPONENT_SIDE moves) the test is skipped and the hit lands. A turn with no FIGHT
+  keeps an older moveCur, but then no battler is semi-invulnerable at the turn's end (its holder
+  is locked into a FIGHT), so engines read only this turn's (`step._turn_move_cur`, event
+  `move_cur`; reference `_Turn.move_cur`). The flag lasts the pass like the others: a second hit
+  after a semi miss fails even under No Guard (which clears only MISSED).
+- B10-15 (batch 10 review; corrects B10-13's OHKO clause) An OHKO move and a semi-invulnerable
+  target. BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (battle_script.c:4338), so
+  the Lock-On / No Guard return of CheckMoveHitOverrides is skipped (bcp.c:3016); the semi test is
+  skipped only by MOVE_STATUS_BYPASSED_ACCURACY (:3035), which TryOHKOMove sets on the
+  non-Sturdy branch when the defender has MOVE_EFFECT_LOCK_ON (any target) or either battler has
+  No Guard (:4342-4372). Against an ignorable Sturdy (:4340-4341) No Guard / Lock-On do not help:
+  the semi target is missed, and subscript_missed.s:11-12 shows that miss before the Sturdy
+  message (:67-69), so the AI does not learn Sturdy (ai_ability_known).
+- B10-16 (batch 10 review) effects.py's module note: Safeguard is supported (B10-7); only Mist's
+  branches stay unmodelled (no supported mover).
+- B10-17 (batch 10 review) The pause scratch's `ts_claw` / `ts_custap` keep the flag of each
+  battler whose action is still after the paused one in the order (`to_come`), a fact about the
+  named battler (doubles design section 5 rule 5) instead of "the second actor at position 0";
+  the same values in singles.

@@ -3363,9 +3363,19 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         or unleash
     )
     foe_kind = s.sides[1 - side].semi_invulnerable
-    bypass = AbilityId.NO_GUARD in (mon.ability, _active(s, 1 - side).ability) or _locked_onto(
-        s, side, 1 - side
-    )
+    no_guard = AbilityId.NO_GUARD in (mon.ability, _active(s, 1 - side).ability)
+    if effect == EffectId.OHKO:
+        # BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (script.c:4338), which skips
+        # the Lock-On / No Guard return (bcp.c:3016); only MOVE_STATUS_BYPASSED_ACCURACY skips the
+        # semi test (:3035), set on the non-Sturdy branch when the defender has
+        # MOVE_EFFECT_LOCK_ON or either battler has No Guard (script.c:4342-4372). Against an
+        # ignorable Sturdy (:4340-4341) the semi foe is missed (and subscript_missed.s:11-12
+        # shows that miss before the Sturdy message), B10-15.
+        bypass = _ignorable(s, side, 1 - side) != AbilityId.STURDY and (
+            bool(s.sides[1 - side].lock_on) or no_guard
+        )
+    else:
+        bypass = no_guard or _locked_onto(s, side, 1 - side)
     semi_miss = (
         aims_foe
         and bool(foe_kind)
@@ -3920,7 +3930,17 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             s, attacker, d
         ):
             flags.discard("missed")
-        if flags & {"missed", "protected"}:
+        elif sd.semi_invulnerable and (
+            _move_target(tables, turn.move_cur) != MoveTarget.RANGE_OPPONENT_SIDE
+        ):
+            # :3034-3040 (B10-14): BattleContext_Init cleared every SYSCTL_HIT_DURING_* bit at the
+            # last MoveEnd (lib.c:2009, system_control.h:31-40) and BYPASSED_ACCURACY with
+            # moveStatusFlags (:1983), so a semi-invulnerable defender is missed; the range test
+            # reads CURRENT_MOVE_DATA (common.h:24), the turn's last moveCur: after a last
+            # Spikes, Toxic Spikes or Stealth Rock (RANGE_OPPONENT_SIDE) it is skipped. No Guard
+            # never clears the flag a first hit of the pass set.
+            flags.add("semi")
+        if flags & {"missed", "protected", "semi"}:
             continue
         damage = sd.future_damage
         sash = _item_effect(tables, mon) == ItemId.FOCUS_SASH
