@@ -1,9 +1,23 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-16: batch 11 merged with the batch 10 merge tip, follow-ups done; heavy runs owed)
+## RESUME (updated 2026-11-16 morning: batch 10 in main; batch 11 closing; batch 12 planned)
 
-- **Main.** Batches 3-9 are in local main (d420167; main 0bed7e9 merged into this branch at
-  ac351e1, CLAUDE.md only). Never push.
+- **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
+  / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
+  e022644). Main merged into this branch at 453e283. Never push.
+- **Batch 11 (this branch, unmerged): code and review done** (e760d9e, 926874a, 71eccee,
+  d78ba49, 8f1e469, 31b3a95 follow-ups, bb35cdc review follow-ups B11-10..12). OWED before
+  sending the tip: test_invokers + test_batch11 incl. sampled tests (5-8 GB), tests/search
+  test_expand / test_playout / test_pivot_search / test_stage_b, tests/test_cli.py, seed 32
+  (log _scratch/e2/logs/b11_diff32.log). E1's merge fast tier holds the machine (~4-5 h from
+  2026-11-16 morning): until it ends one side process under ~4 GB, heavy runs queued.
+- **test_cli under 8 GB (mine):** 9.09 GB peak for test_cli_rank_default_budget_keeps_the_header
+  in the fast tier; the earlier agent's work was stopped twice; restart after E1's tier.
+- **Batch 12 plan (sent to the manager for a check against E1):** Metronome's 65 unmodelled
+  Kaizo callable moves (list: _scratch/e2/metro_list.py), in families stat/HP, healing, power
+  formulas, secondary hits, field/side, move-restricting; ability- and item-changing moves
+  (Role Play, Skill Swap, Gastro Acid, Worry Seed, Fling, Natural Gift, Recycle) pending E1.
+- **History of batch 10's close:** below.
 - **Batch 10 on this branch (unmerged), closed and sent to the manager for its merge check.**
   597ad95 recoil/crash (B10-1/2); ff4490b merge-check follow-ups (B10-3); 939bd45 Substitute
   (B10-4); a9806c2 Endeavor / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard
