@@ -104,8 +104,11 @@ for the enumeration (the read's bit is its result: ``READ_DRAWS[1]`` yes). A sam
 also carries the raw draws, ``calc_draws``: ``uint16[MOVES, slot_reads, CALC_DRAWS]``, entry
 ``[m, k, j]`` the j-th ``RandNext()`` of slot m's k-th read when that read is a damage command
 (j counting the moves it estimates with a drawing case, in the decomp's order), and the
-command's result is computed from them as the decomp does. ``calc_draws`` is None in the
-enumeration's patterns (``policy._pattern_outcomes``), which take the result from the bit.
+command's result is computed from them as the decomp does. The enumeration's patterns
+(``policy._pattern_outcomes``) take the result from the bit instead: their ``calc_draws`` is
+the marker of no raw draws, a last axis of 0 (``no_calc_draws``), and so does every flat
+outcome (``uint16[MOVES, 0, 0]``: the flat layout's damage commands never draw,
+``commands._calc_read``). Every outcome carries one or the other (``policy._check_outcome``).
 Where the result is never read (``FlagMoveDamageScore`` compared only with
 ``AI_NO_COMPARISON_MADE``, which does not depend on the draws: script.s:62-63, :112-113,
 :6511-6512, :6572-6573, then overwritten by ``LoadBattlerAbility`` :67/:117 or ended), the
@@ -884,9 +887,18 @@ class AiOutcome(NamedTuple):
     # vanilla, 60 Kaizo) = none; -1 refused
     switch_stop: jnp.ndarray
     # uint16[MOVES, slot_reads, CALC_DRAWS] (a sampled per-slot outcome): the raw RandNext()
-    # draws of the damage commands among the reads (module docstring); None in the
-    # enumeration's patterns and in the flat layout, where a damage read takes its bit
-    calc_draws: jnp.ndarray | None = None
+    # draws of the damage commands among the reads (module docstring); uint16[MOVES,
+    # slot_reads, 0] in the enumeration's patterns, where a damage read takes its bit, and
+    # uint16[MOVES, 0, 0] in a flat outcome (no_calc_draws: no raw draws)
+    calc_draws: jnp.ndarray
+
+
+def no_calc_draws(lead: tuple[int, ...] = (), slot_reads: int = 0) -> jnp.ndarray:
+    """``uint16[*lead, MOVES, slot_reads, 0]``: the ``calc_draws`` that carries no raw draws
+    (module docstring): a per-slot layout's enumeration patterns (``slot_reads`` its bound),
+    each damage read taking its result from its ``script_rolls`` bit, and a flat outcome
+    (``slot_reads`` 0), whose damage commands never draw (``commands._calc_read``)."""
+    return jnp.zeros((*lead, MOVES, slot_reads, 0), jnp.uint16)
 
 
 def _site_table(moves) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -999,7 +1011,7 @@ def sample_ai_outcome(
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
-    calc = None
+    calc = no_calc_draws()
     if layout is not None and layout.per_slot_sites:
         rolls = jax.vmap(
             lambda i: jax.random.randint(jax.random.fold_in(k[1], i), (MOVES,), 0, 256, dtype=_I32)
@@ -1064,5 +1076,6 @@ def _enumerate_flat(tables: Tables, state: BattleState) -> tuple[AiOutcome, jnp.
         script_rolls=jnp.asarray(rolls, _I8),
         tiebreak=jnp.asarray(tiebreak, _I8),
         switch_stop=jnp.asarray(switch, _I8),
+        calc_draws=no_calc_draws((ENUMERATION_WIDTH,)),
     )
     return outs, p_rolls * p_switch * p_rest

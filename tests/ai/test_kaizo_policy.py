@@ -32,6 +32,7 @@ from nuzline.ai.outcome import (
     SIM_ROLL_MAX,
     SWITCH_NONE,
     AiOutcome,
+    no_calc_draws,
 )
 from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
@@ -157,6 +158,7 @@ def _outcome(t, s, guess: int = 0, jumps=(), layout=KAIZO, tie: int = 0) -> AiOu
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(0, jnp.int8),
         switch_stop=jnp.asarray(SWITCH_NONE, jnp.int8),
+        calc_draws=no_calc_draws((), rolls.shape[1]),
     )
 
 

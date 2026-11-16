@@ -321,6 +321,85 @@ def test_battler_estimate_draws(kaizo_tables, kaizo_roark_party, speed):
     _assert_exact_equals_loose(t, s, layout_for(t, 0x7, s))
 
 
+@pytest.mark.parametrize(
+    ("command", "moves", "hp"),
+    [
+        ("kills", (BULLDOZE, "accelerock", "headbutt", 0), 40),
+        ("kills", (TRIPLE_AXEL, "accelerock", "headbutt", 0), 14),
+        ("highest", (TRIPLE_AXEL, BULLDOZE, "accelerock", "headbutt"), 400),
+    ],
+)
+def test_raw_draw_classes_score_the_exact_p_yes(
+    kaizo_tables, kaizo_roark_party, command, moves, hp
+):
+    """A sampled per-slot outcome scores a damage command from its raw ``RandNext()`` draws
+    (``AiOutcome.calc_draws``; G-39): for each class of each drawing estimate (one raw draw of
+    that class, in the decomp's draw order), the command's yes/no, and the read's weight is the
+    exact ``p_yes`` or ``1 - p_yes``. Summed over the classes' joint law, the yeses give that
+    ``p_yes``. IfCurrentMoveKills (trainer_ai.c:1560) draws once; FlagMoveDamageScore over
+    Triple Axel and Bulldoze (:1041) twice, Psywave's (slot 0) first."""
+    import itertools
+
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+
+    from nuzline.ai import commands as c
+    from nuzline.ai.outcome import (
+        CALC_DRAW_P,
+        CALC_DRAWS,
+        calc_draw_class,
+        calc_draw_kind,
+        sample_ai_outcome,
+    )
+    from nuzline.engine.state import MOVES
+    from tests.ai.test_kaizo_outcome import ACCELEROCK, HEADBUTT, layout_for
+    from tests.ai.test_kaizo_policy import BONSLY, _state
+
+    names = {"accelerock": ACCELEROCK, "headbutt": HEADBUTT}
+    moves = tuple(names.get(m, m) for m in moves)
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, moves, hp=hp)
+    layout = layout_for(t, 0x7, s)
+    base = sample_ai_outcome(jax.random.PRNGKey(0), t, s, layout)
+
+    @jax.jit
+    def run(raw):
+        calc = jnp.zeros((MOVES, layout.slot_reads, CALC_DRAWS), jnp.uint16)
+        outcome = base._replace(calc_draws=calc.at[0, 0, : raw.shape[0]].set(raw))
+        ctx = c.at_slot(c.new_context(t, s, outcome), 0)
+        if command == "kills":
+            ctx = c.if_current_move_kills(ctx, c.USE_MAX_DAMAGE)
+            yes = ctx.jump
+        else:
+            ctx = c.flag_move_damage_score(ctx, c.USE_MAX_DAMAGE)
+            yes = ctx.calc_temp == c.AI_MOVE_IS_HIGHEST_DAMAGE
+        return yes, ctx.weight[0], ctx.reads[0]
+
+    drawing = [m for m in (moves[:1] if command == "kills" else moves) if m]
+    drawing = [m for m in drawing if int(calc_draw_kind(m))]
+    every = np.arange(65536)
+    raws, laws = [], []
+    for m in drawing:
+        cls = np.asarray(calc_draw_class(m, jnp.asarray(every)))
+        law = CALC_DRAW_P[int(calc_draw_kind(m))]
+        support = np.flatnonzero(law > 0)
+        raws.append([int(np.flatnonzero(cls == k)[0]) for k in support])
+        laws.append(law[support])
+    total, p_yes = 0.0, []
+    for combo in itertools.product(*(range(len(r)) for r in raws)):
+        raw = jnp.asarray([raws[i][j] for i, j in enumerate(combo)], jnp.uint16)
+        yes, weight, reads = run(raw)
+        assert int(reads) == 1  # one read for the command, whatever its draws
+        p = float(weight) if bool(yes) else 1.0 - float(weight)
+        p_yes.append(p)
+        total += float(np.prod([laws[i][j] for i, j in enumerate(combo)])) * bool(yes)
+    assert max(p_yes) - min(p_yes) < 1e-6, p_yes
+    p = p_yes[0]
+    assert 0 < p < 1  # the draws decide
+    assert total == pytest.approx(p, abs=1e-6)
+
+
 def test_drawing_moves_are_not_refused_and_widen_the_bound(kaizo_tables, kaizo_trainers):
     """Triple Axel and Bulldoze are no longer refused (``CALC_DAMAGE_MOVES``), and a fight with
     one reads the damage commands (read_bounds.DRAWN_READ_BOUNDS): Leader Gardenia (315, flags

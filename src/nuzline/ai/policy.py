@@ -93,6 +93,7 @@ from nuzline.ai.outcome import (
     TIEBREAK_P,
     AiOutcome,
     enumerate_ai_outcomes,
+    no_calc_draws,
     script_roll_count,
     script_roll_probs,
     switch_stop_probs,
@@ -3488,16 +3489,22 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
 
 
 def _check_outcome(ai_outcome: AiOutcome, layout: AiLayout) -> None:
-    """Check that ``ai_outcome.script_rolls``, ``ability_guess`` and, when given,
-    ``calc_draws`` have ``layout``'s shapes (static, so also when traced)."""
+    """Check that ``ai_outcome.script_rolls``, ``ability_guess`` and ``calc_draws`` have
+    ``layout``'s shapes (static, so also when traced): a per-slot outcome's ``calc_draws`` is
+    the raw draws (``CALC_DRAWS`` last) or the enumeration patterns' marker of none (0 last,
+    ``outcome.no_calc_draws``); a flat outcome's is that marker with no reads."""
     if layout.per_slot_sites:
         shapes = {"script_rolls": (MOVES, layout.slot_reads), "ability_guess": ()}
-        if ai_outcome.calc_draws is not None:
-            shapes["calc_draws"] = (MOVES, layout.slot_reads, CALC_DRAWS)
+        if ai_outcome.calc_draws is None:
+            raise ValueError(
+                "a per-slot AiOutcome carries calc_draws: the raw draws, or "
+                "outcome.no_calc_draws in an enumeration pattern"
+            )
+        last = jnp.shape(ai_outcome.calc_draws)[-1]
+        shapes["calc_draws"] = (MOVES, layout.slot_reads, 0 if last == 0 else CALC_DRAWS)
     else:
         shapes = {"script_rolls": (MAX_SCRIPT_ROLLS,), "ability_guess": ()}
-        if ai_outcome.calc_draws is not None:
-            raise ValueError("AiOutcome.calc_draws is a per-slot layout's")
+        shapes["calc_draws"] = (MOVES, 0, 0)  # outcome.no_calc_draws(): no raw draws
     for field, shape in shapes.items():
         got = tuple(jnp.shape(getattr(ai_outcome, field)))
         if got != shape:
@@ -3700,6 +3707,7 @@ def ai_action_distribution_enumerated(
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.asarray(tiebreak, jnp.int8),
         switch_stop=jnp.asarray(switch, jnp.int8),
+        calc_draws=no_calc_draws((len(patterns),), layout.slot_reads),
     )
     probs = jnp.asarray(p_switch[switch] * TIEBREAK_P[tiebreak], jnp.float32)
     return _enumerated(tables, state, outcomes, probs, layout)
@@ -3753,6 +3761,7 @@ def _move_distribution(tables: Tables, state: BattleState, layout: AiLayout) -> 
         script_rolls=jnp.tile(jnp.asarray(rolls), (ABILITY_GUESSES, 1)),
         tiebreak=jnp.zeros(n, jnp.int8),  # _scores does not read it
         switch_stop=jnp.full(n, SWITCH_NONE, jnp.int8),  # nor this
+        calc_draws=no_calc_draws((n,)),
     )
     scores = jax.vmap(lambda o: _scores(tables, state, o, layout))(outcomes)  # [32, MOVES]
     tiebreaks = jnp.arange(TIEBREAK_MOD, dtype=jnp.int8)
@@ -3839,6 +3848,7 @@ def _pattern_outcomes(layout: AiLayout) -> tuple[np.ndarray, AiOutcome]:
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.zeros(patterns, jnp.int8),  # _scores does not read it
         switch_stop=jnp.full(patterns, SWITCH_NONE, jnp.int8),  # nor this
+        calc_draws=no_calc_draws((patterns,), width),  # damage reads take their bit
     )
     return bits, outcomes
 
@@ -4042,6 +4052,7 @@ def _loose_run(tables: Tables, state: BattleState, bits, layout: AiLayout):
         script_rolls=jnp.zeros((MAX_SCRIPT_ROLLS,), jnp.int8),  # not read
         tiebreak=jnp.int8(0),
         switch_stop=jnp.int8(SWITCH_NONE),
+        calc_draws=no_calc_draws(),  # not read: the loose oracle draws each digit
     )
     no_sites = jnp.zeros((MOVES, len(c.SITE_LINES)), _I32)  # not read
     ctx = c.new_context(tables, state, outcome, no_sites, c.loose_draws(bits))

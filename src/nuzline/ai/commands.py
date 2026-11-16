@@ -72,7 +72,13 @@ from nuzline.ai.switching import (
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import ai_damage_for_roll, ai_move_type, decomp_abilities
+from nuzline.engine.damage import (
+    AI_MAGNITUDE,
+    AI_PSYWAVE,
+    ai_damage_for_roll,
+    ai_move_type,
+    decomp_abilities,
+)
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -1114,7 +1120,6 @@ def drawn_cases(
     drawing move id (MOVE_PSYWAVE, MOVE_MAGNITUDE) for each class of its draw: the same for any
     move with that id, so ``estimate`` computes it once per attacker and defender instead of
     once per move (its IVs reach Hidden Power's case only, trainer_ai.c:2973-2993)."""
-    from nuzline.engine.damage import AI_MAGNITUDE, AI_PSYWAVE
 
     def table(move):
         return jax.vmap(
@@ -1190,20 +1195,31 @@ def _drawn_classes(est: CalcEstimate, draws) -> jnp.ndarray:
     return jnp.where(drawn, calc_kind_class(est.kind, raw), 0)
 
 
-def _calc_read(ctx, est: CalcEstimate, gate, p_yes, decide, read: bool = True):
+def _calc_read(ctx, est: CalcEstimate, gate, p_yes, decide, read: bool = True, ai_own=True):
     """One damage command's draws (E1 ruling G-39; ``outcome`` docstring): ``(ctx, yes)``, the
     command's yes/no from ``est`` (its estimates, one leading axis in the decomp's draw order)
     through ``decide(damages int32[n]) -> bool``. ``gate``: the command estimates at all on
     this path (its damaging test passed); ``p_yes``: the exact probability of yes over the
-    draws' joint law.
+    draws' joint law. ``ai_own``: every estimate is of a move of the AI's active Pokemon
+    (False: ``IfBattlerDealsMoreDamage``'s battler's move, ``IfPartyMemberDealsMoreDamage``'s
+    party members').
 
     - loose: each move that draws is its own read, a digit with its class law, live on the
       path when ``gate`` holds and the move draws, and ``decide`` reads the digits' damages;
     - per-slot exact (``read``): when some move draws, the slot's next read (``_slot_read``)
-      with probability ``p_yes``: its bit in the enumeration's patterns (``READ_DRAWS[1]``:
-      yes), else ``decide`` of the raw draws ``AiOutcome.calc_draws[slot, k]``;
-    - no draw, the flat layout, or ``read`` False (a result the script never reads): the
-      result at class 0, exact when nothing draws (and no other result is read)."""
+      with probability ``p_yes``: in the enumeration's patterns (``calc_draws`` with a last
+      axis of 0, ``outcome.no_calc_draws``) its bit (``READ_DRAWS[1]``: yes), else
+      ``decide`` of the raw draws ``AiOutcome.calc_draws[slot, k]``;
+    - ``read`` False (a result the script never reads), or no draw: the result at class 0;
+    - the flat layout: the result at class 0, exact by a static invariant (raised otherwise).
+      The flat layout is vanilla's (``layout.VANILLA``), whose policy refuses every state with
+      an AI party move outside ``MOVE_EFFECTS`` (``policy._refused``, by move id), and whose
+      Expert dispatch, restricted to those moves' effects, traces neither Copycat's
+      ``IfBattlerDealsMoreDamage`` nor U-turn's ``IfPartyMemberDealsMoreDamage``. So in every
+      accepted state its estimates are of ``MOVE_EFFECTS`` moves, and none of those is
+      MOVE_PSYWAVE or MOVE_MAGNITUDE, the only ids that draw (trainer_ai.c:3014-3016,
+      :3028-3048; ``outcome.calc_draw_kind``): nothing draws. A call that breaks either half
+      (``ai_own`` False, or a drawing id in ``MOVE_EFFECTS``) raises."""
     drawn_each = gate & (est.kind != CALC_NONE)
     det = decide(est.value[:, 0])
     if ctx.loose is not None:
@@ -1217,14 +1233,21 @@ def _calc_read(ctx, est: CalcEstimate, gate, p_yes, decide, read: bool = True):
             ctx, digit = _loose_read(ctx, 0.0, kind, live=ctx.live & drawn_each[i])
             digits.append(jnp.where(drawn_each[i], digit.astype(_I32), 0))
         return ctx, decide(_realized(est, jnp.stack(digits)))
-    if not read or not per_slot(ctx):
+    if not per_slot(ctx):
+        if not ai_own or set(MOVE_EFFECTS) & {AI_PSYWAVE, AI_MAGNITUDE}:
+            raise ValueError("the flat layout estimates only MOVE_EFFECTS moves, which never draw")
+        return ctx, det
+    if not read:
         return ctx, det
     drawn = jnp.any(drawn_each)
-    if ctx.outcome.calc_draws is None:
+    calc = ctx.outcome.calc_draws
+    if calc is None:
+        raise ValueError("an AiOutcome carries calc_draws (outcome.no_calc_draws)")
+    if calc.shape[-1] == 0:  # an enumeration pattern: the read's bit is its result
         ctx, r = _slot_read(ctx, lambda r: (jnp.where(r == READ_DRAWS[1], p_yes, 1 - p_yes), drawn))
         return ctx, jnp.where(drawn, r == READ_DRAWS[1], det)
-    k = jnp.clip(ctx.reads[ctx.slot], 0, ctx.outcome.calc_draws.shape[1] - 1)
-    raw = ctx.outcome.calc_draws[ctx.slot, k]
+    k = jnp.clip(ctx.reads[ctx.slot], 0, calc.shape[1] - 1)
+    raw = calc[ctx.slot, k]
     yes = decide(
         _realized(
             est, _drawn_classes(est._replace(kind=jnp.where(drawn_each, est.kind, CALC_NONE)), raw)
@@ -1342,7 +1365,7 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
         member_best = jnp.max(d[MOVES:].reshape(n, MOVES), axis=1)
         return jnp.any(alive & (member_best > best))
 
-    ctx, jump = _calc_read(ctx, flat, ctx.live, p_jump, decide)
+    ctx, jump = _calc_read(ctx, flat, ctx.live, p_jump, decide, ai_own=False)
     return _jump(ctx, jump)
 
 
@@ -1379,7 +1402,9 @@ def if_battler_deals_more_damage(
     # the battler's level): one read, P(B > A) = sum_c P(B = b_c) P(A < b_c).
     p_jump = jnp.sum(theirs.prob * _max_at_most(mine, theirs.value, strict=True))
     both = jax.tree.map(lambda x, y: jnp.concatenate([x, y[None]]), mine, theirs)
-    ctx, jump = _calc_read(ctx, both, ctx.live, p_jump, lambda dm: dm[MOVES] > jnp.max(dm[:MOVES]))
+    ctx, jump = _calc_read(
+        ctx, both, ctx.live, p_jump, lambda dm: dm[MOVES] > jnp.max(dm[:MOVES]), ai_own=False
+    )
     return _jump(ctx, jump)
 
 

@@ -60,7 +60,8 @@ def test_sample_within_ranges(tables, names):
     assert int(o.ability_guess) in (0, 1)
     assert o.sim_roll.tolist() == [15] * 4  # roll index 15 = 100 %, roark.md 8.1
     assert set(o.script_rolls.tolist()) <= {0, 1} and 0 <= int(o.tiebreak) <= 11
-    assert all(getattr(o, f).dtype == jnp.int8 for f in AiOutcome._fields)
+    assert all(getattr(o, f).dtype == jnp.int8 for f in AiOutcome._fields if f != "calc_draws")
+    assert o.calc_draws.shape == (4, 0, 0)  # a flat outcome draws no raw damage draws
 
 
 def test_enumeration_probabilities_sum_to_one(tables, names):
@@ -118,8 +119,10 @@ def test_sampled_frequencies_match_enumeration(tables, names):
     outs, probs = enumerate_ai_outcomes(tables, s)
     probs = np.asarray(probs, np.float64)
     for field in AiOutcome._fields:
-        sampled = np.asarray(getattr(samples, field)).reshape(N, -1)
-        listed = np.asarray(getattr(outs, field)).reshape(probs.shape[0], -1)
+        sampled = np.asarray(getattr(samples, field))
+        sampled = sampled.reshape(N, sampled[0].size)  # calc_draws: empty
+        listed = np.asarray(getattr(outs, field))
+        listed = listed.reshape(probs.shape[0], listed[0].size)
         for i in range(sampled.shape[1]):
             for v in np.union1d(sampled[:, i], listed[:, i]):
                 freq = float((sampled[:, i] == v).mean())

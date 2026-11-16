@@ -59,6 +59,7 @@ from nuzline.ai.outcome import (
     TIEBREAK_P,
     AiOutcome,
     enumerate_ai_outcomes,
+    no_calc_draws,
     sample_ai_outcome,
 )
 from nuzline.engine.actions import NUM_OPP_ACTIONS
@@ -216,6 +217,7 @@ def _joint_moves(t, s, layout) -> np.ndarray:
         script_rolls=jnp.asarray(rolls),
         tiebreak=jnp.zeros(k, jnp.int8),
         switch_stop=jnp.full(k, SWITCH_NONE, jnp.int8),
+        calc_draws=no_calc_draws((k,), layout.slot_reads),
     )
     scores = _scores_batch(t, s, outs, layout)
     if np.any(np.asarray(scores) < 0):
@@ -302,6 +304,7 @@ def test_vanilla_layout_frozen(tables, names):
         "script_rolls": (4,),
         "tiebreak": (),
         "switch_stop": (),
+        "calc_draws": (4, 0, 0),  # no raw damage draws (outcome.no_calc_draws)
     }
     outs, _ = enumerate_ai_outcomes(tables, s)
     assert outs.script_rolls.shape == (ENUMERATION_WIDTH, MAX_SCRIPT_ROLLS)

@@ -12,6 +12,7 @@ import pytest
 
 from nuzline.ai import commands, policy
 from nuzline.ai.layout import KAIZO, VANILLA, AiLayout, kaizo_layout, layout_of
+from nuzline.ai.outcome import no_calc_draws
 from nuzline.ai.policy import ai_policy, ai_refusals
 from nuzline.ai.switching import REFUSED_ACTION
 from nuzline.engine.state import make_state
@@ -214,7 +215,9 @@ def test_traced_tables_without_a_layout_refuse_another_policy(tables, names):
     )
     # Concrete tables resolve their own layout: the Kaizo policy's outcome is per slot.
     reads = layout_of(kaizo_like).slot_reads
-    per_slot = outcome()._replace(script_rolls=jnp.full((4, reads), 254, jnp.uint8))
+    per_slot = outcome()._replace(
+        script_rolls=jnp.full((4, reads), 254, jnp.uint8), calc_draws=no_calc_draws((), reads)
+    )
     assert int(jax.jit(lambda st: ai_policy(kaizo_like, st, per_slot))(s)) == 0
     traced = jax.jit(lambda t: ai_policy(t, s, outcome()))
     assert int(traced(tables)) == 0
