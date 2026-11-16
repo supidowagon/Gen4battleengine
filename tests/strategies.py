@@ -895,7 +895,7 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
     Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
     (B10-6; an item on the foe, a knocked-off user with no item for the barb). One draw in two,
-    the move in two slots, and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
+    and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
     under uniform draws the differential met these moves too rarely (batch 11 review)."""
     if draw(st.integers(0, 1)) != 0:
         return
@@ -936,7 +936,6 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         )
     )
     give(move)
-    give(move)  # two slots (a random slot each: maybe the same one)
     if int(tables.move_power[names.move(move)]) == 0 and rnd.random() < 0.7:
         a["taunt"][side] = 0  # a status move a taunt would block (batch 11 review)
     charge = int(tables.move_flags[names.move(move)]) & int(MoveFlag.CHARGE)
