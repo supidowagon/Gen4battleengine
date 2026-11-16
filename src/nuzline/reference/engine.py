@@ -3660,9 +3660,19 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         or unleash
     )
     foe_kind = s.sides[1 - side].semi_invulnerable
-    bypass = AbilityId.NO_GUARD in (mon.ability, _active(s, 1 - side).ability) or _locked_onto(
-        s, side, 1 - side
-    )
+    no_guard = AbilityId.NO_GUARD in (mon.ability, _active(s, 1 - side).ability)
+    if effect == EffectId.OHKO:
+        # BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (script.c:4338), which skips
+        # the Lock-On / No Guard return (bcp.c:3016); only MOVE_STATUS_BYPASSED_ACCURACY skips the
+        # semi test (:3035), set on the non-Sturdy branch when the defender has
+        # MOVE_EFFECT_LOCK_ON or either battler has No Guard (script.c:4342-4372). Against an
+        # ignorable Sturdy (:4340-4341) the semi foe is missed (and subscript_missed.s:11-12
+        # shows that miss before the Sturdy message), B10-15.
+        bypass = _ignorable(s, side, 1 - side) != AbilityId.STURDY and (
+            bool(s.sides[1 - side].lock_on) or no_guard
+        )
+    else:
+        bypass = no_guard or _locked_onto(s, side, 1 - side)
     semi_miss = (
         aims_foe
         and bool(foe_kind)
@@ -3707,7 +3717,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # A Wonder Guard block ends in subscript_missed.s too (bcp.c:3324-3327), its hits dealing
     # nothing; ``battleCtx->damage`` keeps the chart's value for the crash (G-19). A
     # semi-invulnerable miss ends there as well (B10-12), and crashes (subscript_missed.s:189-191).
-    blocked = missed or semi_miss or _protected(turn, s, side, move, unleash)
+    protected = _protected(turn, s, side, move, unleash)
+    blocked = missed or semi_miss or protected
     crash = effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD
     if (blocked or guarded) and crash:
         # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
@@ -3720,6 +3731,20 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         cap = _divide(_active(s, 1 - side).max_hp, 2)
         _lose_hp(turn, s, side, min(_divide(would, 2), cap))
     if blocked:
+        # Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript still runs
+        # on MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test the
+        # blocking abilities before its miss test (:21) and print "made it ineffective" with
+        # TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806).
+        # Protect returns before the semi test (bcp.c:3007-3013).
+        if (
+            effect == EffectId.YAWN
+            and semi_miss
+            and not protected
+            and 1 - side == 0
+            and _active(s, 0).hp
+            and _yawn_blocks(tables, s, side, 0)[1]
+        ):
+            s.ai_ability_known[s.sides[0].active] = 1
         _unlock(s.sides[side])  # subscript_missed.s
         # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
         return move if unleash else record
@@ -4256,7 +4281,17 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             s, attacker, d
         ):
             flags.discard("missed")
-        if flags & {"missed", "protected"}:
+        elif sd.semi_invulnerable and (
+            _move_target(tables, turn.move_cur) != MoveTarget.RANGE_OPPONENT_SIDE
+        ):
+            # :3034-3040 (B10-14): BattleContext_Init cleared every SYSCTL_HIT_DURING_* bit at the
+            # last MoveEnd (lib.c:2009, system_control.h:31-40) and BYPASSED_ACCURACY with
+            # moveStatusFlags (:1983), so a semi-invulnerable defender is missed; the range test
+            # reads CURRENT_MOVE_DATA (common.h:24), the turn's last moveCur: after a last
+            # Spikes, Toxic Spikes or Stealth Rock (RANGE_OPPONENT_SIDE) it is skipped. No Guard
+            # never clears the flag a first hit of the pass set.
+            flags.add("semi")
+        if flags & {"missed", "protected", "semi"}:
             continue
         damage = sd.future_damage
         sash = _item_effect(tables, mon) == ItemId.FOCUS_SASH

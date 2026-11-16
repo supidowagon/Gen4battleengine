@@ -504,15 +504,16 @@ def test_fly_charges_vanishes_then_hits_and_dodges_tackle(tables, names):
 
 
 def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
-    """B10-12: effect_script_0149.s: Gust hits an airborne foe at powerMul 20; Earthquake
-    (effect_script_0147.s: SYSCTL_HIT_DURING_DIG only) misses it."""
+    """B10-12: a faster Gust (effect_script_0149.s: SYSCTL_HIT_DURING_FLY) hits a foe in the air
+    mid-Fly at powerMul 20; a faster Earthquake (effect_script_0147.s: SYSCTL_HIT_DURING_DIG
+    only) misses a non-Flying foe mid-Bounce (bcp.c:3034-3040)."""
     from nuzline.engine.ids import SemiKind
 
     n = names
     s = make_state(
         tables,
-        [_mon(n, "Pidgey", ["Gust", "Earthquake"], 40)],
-        [_mon(n, "Pidgeotto", ["Fly"], 40)],
+        [_mon(n, "Pidgeotto", ["Gust", "Earthquake"], 45)],
+        [_mon(n, "Pidgey", ["Fly"], 40)],
     )
     up = s._replace(
         semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
@@ -521,11 +522,50 @@ def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
     gust = int(damage_for_roll(tables, s, 0, n.move("Gust"), False, 15))
     doubled = int(damage_for_roll(tables, up, 0, n.move("Gust"), False, 15))
     assert doubled > gust
-    quake = assert_matches_reference(tables, up, (1, 0), O)
-    # The Earthquake missed; Fly then landed on the player.
-    assert int(quake.hp[0, 0]) < int(up.hp[0, 0])
-    assert int(quake.semi_invulnerable[1]) == 0
-    assert_matches_reference(tables, up, (0, 0), O)
+    out = assert_matches_reference(tables, up, (0, 0), O)
+    assert int(up.hp[1, 0]) - int(out.hp[1, 0]) == doubled  # hit in the air, doubled
+    assert int(out.semi_invulnerable[1]) == 0  # then Fly landed
+    b = make_state(
+        tables,
+        [_mon(n, "Pidgeotto", ["Gust", "Earthquake"], 50)],
+        [_mon(n, "Buneary", ["Bounce"], 30)],
+    )
+    bounce = b._replace(
+        semi_invulnerable=b.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+        locked_move=b.locked_move.at[1].set(n.move("Bounce")),
+    )
+    assert int(damage_for_roll(tables, b, 0, n.move("Earthquake"), False, 15)) > 0
+    quake = assert_matches_reference(tables, bounce, (1, 0), O)
+    assert int(quake.hp[1, 0]) == int(b.hp[1, 0])  # missed in the air
+    assert int(quake.hp[0, 0]) < int(b.hp[0, 0])  # Bounce then landed
+
+
+def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(tables, names):
+    """B10-13: Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript runs on
+    MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test Insomnia
+    before its miss test (:21) and tag it (:31-37, BattleAI_SetAbility, battle_script.c:
+    11798-11806). Another ability is not revealed; neither gets drowsy."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(tables, [_mon(n, "Hoothoot", ["Fly"], 10)], [_mon(n, "Slakoth", ["Yawn"], 40)])
+    s = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.AIRBORNE),
+        locked_move=s.locked_move.at[0].set(n.move("Fly")),
+    )
+
+    # Hoothoot's ability slots (the decomp ability is read from the slot): Insomnia, Keen Eye.
+    def with_slot(k, ability):
+        return s._replace(
+            ability_slot=s.ability_slot.at[0, 0].set(k), ability=s.ability.at[0, 0].set(ability)
+        )
+
+    insomnia = with_slot(0, AbilityId.INSOMNIA)
+    out = assert_matches_reference(tables, insomnia, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 1 and int(out.yawn[0]) == 0
+    keen = with_slot(1, AbilityId.KEEN_EYE)
+    out = assert_matches_reference(tables, keen, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 0 and int(out.yawn[0]) == 0
 
 
 def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):
@@ -620,3 +660,80 @@ def test_shadow_force_vanishes_and_surf_doubles_on_a_diver(tables, names):
     )
     out = assert_matches_reference(tables, under, (0, 0), O)
     assert int(out.hp[1, 0]) < int(d.hp[1, 0])
+
+
+def _future_on_player(s, move):
+    """The opponent's Future Sight / Doom Desire due on the player this turn's end (5 HP)."""
+    return s._replace(
+        future_timer=s.future_timer.at[0].set(1),
+        future_damage=s.future_damage.at[0].set(5),
+        future_move=s.future_move.at[0].set(move),
+        future_attacker=s.future_attacker.at[0].set(2),
+        future_sight=s.future_sight.at[0].set(1),
+    )
+
+
+def test_future_sight_misses_a_semi_invulnerable_target_unless_spikes_was_last(tables, names):
+    """B10-14: subscript_future_sight_damage.s:8 CheckMoveHit -> CheckMoveHitOverrides
+    (bcp.c:3034-3040): BattleContext_Init cleared every SYSCTL_HIT_DURING_* bit (battle_lib.c:2009),
+    so the charging flyer is missed; No Guard returns first (:3016-3021); the range test reads
+    CURRENT_MOVE_DATA, the turn's last moveCur, so a last Spikes (RANGE_OPPONENT_SIDE) skips it."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Pidgeotto", ["Fly"], 40)],
+        [_mon(n, "Bronzor", ["Growl", "Spikes"], 20)],
+    )
+    s = _future_on_player(s, n.move("Doom Desire"))
+    growl = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(growl.semi_invulnerable[0]) == SemiKind.AIRBORNE
+    assert int(growl.hp[0, 0]) == int(s.hp[0, 0]) and int(growl.future_sight[0]) == 0
+    spikes = assert_matches_reference(tables, s, (0, 1), O)
+    assert int(spikes.hp[0, 0]) == int(s.hp[0, 0]) - 5
+    guard = s._replace(ability=s.ability.at[1, 0].set(AbilityId.NO_GUARD))
+    out = assert_matches_reference(tables, guard, (0, 0), O)
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) - 5
+
+
+def test_ohko_with_no_guard_misses_a_semi_invulnerable_sturdy_target_unrevealed(tables, names):
+    """B10-15: BtlCmd_TryOHKOMove (battle_script.c:4338-4374) sets NONSTANDARD_ACC_CHECK, so the
+    No Guard return (bcp.c:3016) is skipped, and MOVE_STATUS_BYPASSED_ACCURACY only off the Sturdy
+    branch: a digging Sturdy target is missed (subscript_missed.s:11-12, before the Sturdy
+    message), its ability not revealed; without Sturdy No Guard's bypass hits it."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(
+        tables, [_mon(n, "Geodude", ["Dig"], 30)], [_mon(n, "Machop", ["Horn Drill"], 40)]
+    )
+    s = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.UNDERGROUND),
+        locked_move=s.locked_move.at[0].set(n.move("Dig")),
+        ability=s.ability.at[1, 0].set(AbilityId.NO_GUARD),
+    )
+    sturdy = s._replace(ability=s.ability.at[0, 0].set(AbilityId.STURDY))
+    out = assert_matches_reference(tables, sturdy, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 0
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.hp[1, 0]) < int(s.hp[1, 0])
+    plain = s._replace(ability=s.ability.at[0, 0].set(AbilityId.ROCK_HEAD))
+    out = assert_matches_reference(tables, plain, (0, 0), O)
+    assert int(out.hp[0, 0]) == 0
+
+
+def test_a_u_turn_pause_keeps_only_the_quick_claw_still_to_come(tables, names):
+    """B10-17: the pause's scratch keeps moveEffectsData.quickClaw only for a battler whose
+    action is still to come (cleared at its own move start, subscript_check_quick_claw.s:22-23):
+    the foe moving last with an activated Quick Claw keeps it across the party list."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Snorlax", ["Whirlwind"], 40, "Quick Claw")],
+    )
+    s = s._replace(qc_roll=s.qc_roll.at[1].set(1))
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    assert [int(x) for x in paused.ts_claw] == [0, 1]
+    _resume(tables, paused, 1)

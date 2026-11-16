@@ -1771,7 +1771,10 @@ def _expert_charge_turn_no_invuln(ctx: AiContext, mask) -> AiContext:
     or the attacker at 38 % HP or less -1. No random read."""
     # Expert_ChargeTurnNoInvuln (:3933)
     ctx = _at(ctx, mask)
-    ctx, minus2 = _not_resisted(ctx)  # :3942-3944
+    minus2 = jnp.zeros_like(ctx.live)
+    for multi in (TypeMulti.IMMUNE, TypeMulti.QUARTER, TypeMulti.HALF):  # :3942-3944
+        ctx, t = _split(c.if_move_effectiveness_equals(ctx, multi))
+        minus2 = minus2 | t
     in_sun = BattleEffect.SKIP_CHARGE_TURN_IN_SUN
     ctx, sun = _split(c.if_current_move_effect_equal_to(ctx, in_sun))  # :3945
     ctx, herb = _split(c.go_to(ctx))  # :3946

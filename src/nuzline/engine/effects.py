@@ -220,10 +220,12 @@ many are real). Decomp sources:
 
 Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of every effect
 (``_Hit.sub_hit``, ``_Hit.shielded``), ``_substitute`` the move.
+Safeguard (E2 batch 10, B10-7): ``_safeguard`` and its gates on status and confusion.
 Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard in sun in
 ``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
-Unreachable branches are not modelled: Mist and Safeguard come from unsupported moves; Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
+Unreachable branches are not modelled: Mist comes from an unsupported move; Clear Body, Hyper
+Cutter, Immunity, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
@@ -1422,7 +1424,8 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
 def _yawn(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Yawn (effect_script_0187.s: a direct ``CHECK_HP | TO_DEFENDER`` subscript_yawn.s for a
     living defender on a move that connected): unless ``yawn_blocks``, the defender's
-    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged."""
+    MOVE_EFFECT_YAWN counter becomes ``YAWN_TURNS``; an ability that blocks it is tagged. On a
+    semi-invulnerable miss the subscript still runs and tags it (``step._use_move``, B10-13)."""
     run = (h.effect == _E.YAWN) & h.landed & _alive(state, h.target_side, h.target)
     fails, by_ability = yawn_blocks(tables, state, h.side, h.target_side)
     state = know_ability(state, h.target_side, h.target, run & by_ability)

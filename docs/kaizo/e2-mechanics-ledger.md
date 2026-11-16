@@ -1,29 +1,27 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15 evening: batch 10 open; session cleared at the Assist commit)
+## RESUME (updated 2026-11-15 night: batch 10 closed, tip with the manager; batch 11 next)
 
-- **Main.** Batches 3-9 are in local main d420167 (merge 4fb3548 of c961e18 + c6c4df0). Never push.
-- **Batch 10 on this branch (unmerged), all committed; tip = this RESUME commit on 8df2d38.**
-  597ad95 recoil/crash (B10-1/2, Flare Blitz AI); ff4490b merge-check follow-ups (B10-3: Baton
-  Pass keeps-test, Unburden lead arming, citations); 939bd45 Substitute (B10-4); a9806c2 Endeavor
-  / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard + two Substitute fixes
-  (B10-7); 5efc1e9 Focus Punch (B10-8); 5e9b960 Encore engine side (B10-9), the stale AI known
-  item after Knock Off modelled (B10-6), Snore law fix (B10-10); 8df2d38 Assist (B10-11) and
-  Encore refused by coverage for both sides (Metronome with it). Backlog at 234 missing groups.
-- **Assist status.** Differential seeds 12-14 clean, test_invokers 16 passed, test_batch10 25,
-  test_enumerate 39, test_accuracy_classes 30, test_effect_map 23, coverage 91. NOT rerun after
-  the last generator change: test_damage_classes (its earlier failure was Assist leaking into
-  invoker-free law states, fixed in tests/strategies.py). Rerun it first.
-- **Charge turn (B10-12, B10-13) done:** tests at the commit: test_batch10 + test_effect_map +
-  test_accuracy_classes 84 passed; test_damage_classes + test_enumerate + test_coverage(_exp) +
-  test_invokers 191 passed (then the POWER_HERB item classification fix, rechecked); differential
-  seeds 21-22 (300 each) clean; guards 237 passed after game_constants entries (also the
-  pre-existing CANNOT_ENCORE_MOVES / INVOKER_MOVES / Sticky Hold gaps); backlog 234 -> 230.
-- **test_pivot_search under 8 GB done:** conftest now prints each test's sampled peak (50 ms);
-  the file runs expand at CHUNK 1024 (module fixture): peaks 14.95/15.48/15.49 -> 4.86/3.75/3.75 GB.
-- **Left in batch 10 (manager, 2026-11-15):** after E1's fast tier and its search-test rework
-  are in main: merge main, focused tests
-  + the four guards + one review, and send the tip to the manager. No Encore AI in batch 10.
+- **Main.** Batches 3-9 are in local main (d420167; main 0bed7e9 merged into this branch at
+  ac351e1, CLAUDE.md only). Never push.
+- **Batch 10 on this branch (unmerged), closed and sent to the manager for its merge check.**
+  597ad95 recoil/crash (B10-1/2); ff4490b merge-check follow-ups (B10-3); 939bd45 Substitute
+  (B10-4); a9806c2 Endeavor / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard
+  (B10-7); 5efc1e9 Focus Punch (B10-8); 5e9b960 Encore engine side (B10-9, B10-10); 8df2d38
+  Assist (B10-11), Encore refused by coverage for both sides; 6d37c38 the charge turn incl.
+  semi-invulnerable and Power Herb (B10-12/13; backlog 234 -> 230); 4d174a8 test_pivot_search
+  under 8 GB true peak (conftest prints each test's sampled 50 ms peak; peaks 15.5 -> 4.9 GB);
+  ac351e1 merge of main; e3e0d0b review follow-ups (B10-14 Future Sight vs semi-invulnerable incl.
+  the Spikes-last range quirk, B10-15 OHKO + Sturdy semi target, B10-16 comment, B10-17 ts_claw /
+  ts_custap per battler).
+- **Batch 10 checks.** test_damage_classes 46; test_expand + four guards passed
+  (at ac351e1); after e3e0d0b: test_batch10 34, test_accuracy_classes 30, test_invokers 16,
+  differential seeds 21-24 clean, the four guards 172 passed 1 skipped. Review: approve-with-changes, all fixed.
+- **Found, not ours:** the new peak sampler shows tests/test_cli.py over 8 GB:
+  test_cli_rank_deaths_and_protect 11.96 GB, test_cli_rank_default_budget_keeps_the_header 8.67,
+  test_rank_lead_and_opponent_active 8.16 (likely the same expand CHUNK padding). Reported.
+- **Owed from batch 10:** Gravity grounding a Fly user (Gravity refused by coverage), Transform
+  vs a vanished target, Kaizo Hurricane (effect 141, no fight reaches it).
 - **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
   replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
@@ -1667,7 +1665,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (MOVE_STATUS_SEMI_INVULNERABLE, accuracy 0 too) unless its script sets the kind's
   SYSCTL_HIT_DURING_* (`MoveFlag.HIT_*`, `effect_map.SEMI_HIT_EFFECTS`: Fly 146/149/152/207,
   Dig 126/147, Dive 257/261, all 148/168/176). A miss crashes (Jump Kick) and shows before
-  Sturdy (subscript_missed.s:13). x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
+  Sturdy (subscript_missed.s:13). Exception, Yawn: a direct MOVE_SIDE_EFFECT_CHECK_HP effect
+  (effect_script_0187.s:5), whose subscript BattleSystem_TriggerPrimaryEffect still runs on
+  MOVE_STATUS_GENERAL_MISS for a living defender (battle_lib.c:1500-1503; moves.h:88);
+  subscript_yawn.s:5-9 test Insomnia / Vital Spirit / Leaf Guard in sun (ignorable) before its
+  own miss test (:21), so against a semi-invulnerable holder the ability is printed with
+  TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806) and
+  `ai_ability_known` set; no drowsiness either way. A protected target is not semi-missed
+  (Protect returns first, bcp.c:3007-3013), so no reveal. x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
   `damage.script_power_mul`) for Gust / Twister vs AIRBORNE, Earthquake / Magnitude vs
   UNDERGROUND, Surf / Whirlpool vs UNDERWATER (line 7-8 of each). MOVE_EFFECT_NO_WEATHER_DAMAGE
   (UNDERGROUND, UNDERWATER: moves.h:50) skips the sandstorm, sun and hail branches of the turn
@@ -1679,3 +1684,32 @@ Rules left out because another mechanic is missing; each closes with the mechani
   SolarBeam's Expert_Thunder entry (:1719) is dead (the first jump wins). Not modelled (no
   supported mover): Gravity's grounding (subscript_gravity_start.s:16; Gravity refused by
   coverage), Transform's semi test, Hurricane (Kaizo 141, not reached).
+- B10-14 (batch 10 review) Future Sight / Doom Desire's delayed hit and a semi-invulnerable
+  defender. subscript_future_sight_damage.s:8 CheckMoveHit (battle_script.c:6115-6131) runs
+  CheckMoveHitOverrides (bcp.c:216-220): after Protect (:3005-3013) and the Lock-On / No Guard
+  return (:3016-3021), :3034-3040 sets MOVE_STATUS_SEMI_INVULNERABLE on a defender with a semi
+  bit. Every SYSCTL_HIT_DURING_* bit is cleared by BattleContext_Init at the last MoveEnd
+  (battle_lib.c:2009, system_control.h:31-40; bcp.c:3998) and BYPASSED_ACCURACY with
+  moveStatusFlags (:1983), so any semi kind is missed ("But it failed!"); the bit itself lasts
+  to the holder's next action. The range test reads CURRENT_MOVE_DATA (common.h:24), i.e.
+  moveCur, which nothing resets: FightCommand's moveTemp (bcp.c:1898) or GoToMoveScript's called
+  move (battle_script.c:2118). After a turn whose last such move is Spikes, Toxic Spikes or Stealth
+  Rock (the RANGE_OPPONENT_SIDE moves) the test is skipped and the hit lands. A turn with no FIGHT
+  keeps an older moveCur, but then no battler is semi-invulnerable at the turn's end (its holder
+  is locked into a FIGHT), so engines read only this turn's (`step._turn_move_cur`, event
+  `move_cur`; reference `_Turn.move_cur`). The flag lasts the pass like the others: a second hit
+  after a semi miss fails even under No Guard (which clears only MISSED).
+- B10-15 (batch 10 review; corrects B10-13's OHKO clause) An OHKO move and a semi-invulnerable
+  target. BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (battle_script.c:4338), so
+  the Lock-On / No Guard return of CheckMoveHitOverrides is skipped (bcp.c:3016); the semi test is
+  skipped only by MOVE_STATUS_BYPASSED_ACCURACY (:3035), which TryOHKOMove sets on the
+  non-Sturdy branch when the defender has MOVE_EFFECT_LOCK_ON (any target) or either battler has
+  No Guard (:4342-4372). Against an ignorable Sturdy (:4340-4341) No Guard / Lock-On do not help:
+  the semi target is missed, and subscript_missed.s:11-12 shows that miss before the Sturdy
+  message (:67-69), so the AI does not learn Sturdy (ai_ability_known).
+- B10-16 (batch 10 review) effects.py's module note: Safeguard is supported (B10-7); only Mist's
+  branches stay unmodelled (no supported mover).
+- B10-17 (batch 10 review) The pause scratch's `ts_claw` / `ts_custap` keep the flag of each
+  battler whose action is still after the paused one in the order (`to_come`), a fact about the
+  named battler (doubles design section 5 rule 5) instead of "the second actor at position 0";
+  the same values in singles.
