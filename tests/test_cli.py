@@ -95,9 +95,50 @@ def test_rank_output_is_plain_ascii(capsys):
     assert out.isascii() and "Switch -> " in out
 
 
-def test_rank_lead_and_opponent_active(capsys):
+def _labels_only_ranking(monkeypatch):
+    """``stage_a.rank_actions`` replaced by one that ranks the state's legal actions by
+    their labels (``stage_a.action_label``) without playouts: the CLI's own state building,
+    validation and printing run as in a real ``rank``; the playouts are the slow tests'."""
+    import numpy as np
+
+    from nuzline.engine.actions import decision_actions, usable_moves
+    from nuzline.search import stage_a
+
+    def labels_only(tables, names, state, n, key, max_turns=100):
+        legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))
+        struggle = not bool(np.any(np.asarray(usable_moves(tables, state, 0))))
+        rows = [
+            stage_a.ActionResult(
+                int(a),
+                stage_a.action_label(names, state, int(a), struggle),
+                0.5,
+                0.4,
+                0.6,
+                0.5,
+                0.5,
+                n,
+            )
+            for a in legal
+        ]
+        return stage_a.Ranking.of(rows)
+
+    monkeypatch.setattr(stage_a, "rank_actions", labels_only)
+
+
+def test_rank_lead_and_opponent_active(capsys, monkeypatch):
     # --lead 2 sends out Grotle (slot 2): its moves are ranked and Monferno (slot 0)
-    # becomes a switch target; --opp-active 1 puts Onix out.
+    # becomes a switch target; --opp-active 1 puts Onix out. The fast tier ranks without
+    # playouts (_labels_only_ranking); the real ranking is test_rank_lead_and_opponent_active_played.
+    _labels_only_ranking(monkeypatch)
+    args = ["rank", "--party", PARTY, "--trainer", "roark", "--n", "20"]
+    assert main([*args, "--lead", "2", "--opp-active", "1"]) == 0
+    out = capsys.readouterr().out.lower()
+    assert "razor leaf" in out and "switch -> monferno" in out and "grotle vs onix" in out
+
+
+@pytest.mark.slow
+def test_rank_lead_and_opponent_active_played(capsys):
+    # As test_rank_lead_and_opponent_active, with the real playouts.
     args = ["rank", "--party", PARTY, "--trainer", "roark", "--n", "20"]
     assert main([*args, "--lead", "2", "--opp-active", "1"]) == 0
     out = capsys.readouterr().out.lower()
@@ -407,7 +448,17 @@ def test_save_export_round_trips(save_path, tmp_path, tables, names, capsys):
     assert e.value.code == 2
 
 
-def test_rank_with_save(save_path, capsys):
+def test_rank_with_save(save_path, capsys, monkeypatch):
+    # The fight from a save, ranked without playouts (_labels_only_ranking); the real
+    # ranking is test_rank_with_save_played.
+    _labels_only_ranking(monkeypatch)
+    args = ["rank", "--save", str(save_path), "--trainer", "roark", "--n", "20", "--devices", "1"]
+    assert main(args) == 0
+    assert "Switch" in capsys.readouterr().out
+
+
+@pytest.mark.slow
+def test_rank_with_save_played(save_path, capsys):
     args = ["rank", "--save", str(save_path), "--trainer", "roark", "--n", "20", "--devices", "1"]
     assert main(args) == 0
     assert "Switch" in capsys.readouterr().out
@@ -1238,8 +1289,10 @@ def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, 
     out = done.stdout
     assert out.isascii() and "Pok\\xe9mon Trainer Barry #3 [Empoleon] (" in out
     assert "Support: NONE" in out and "Missing (" in out
-    # K3c Task 2 gave Kaizo an AI policy; Barry's CHECK_HP flag (ai_flags 279) is refused.
-    assert "Pok\\xe9mon Trainer Barry #3 [Empoleon]: AI_FLAG_CHECK_HP (AI flag UNSUPPORTED)" in out
+    # Barry's CHECK_HP flag (ai_flags 279) is transcribed (layout.KAIZO_FLAG_BITS); what still
+    # refuses him is the AI's reads of mechanics not built yet (Expert Belt, ...).
+    assert "AI_FLAG_CHECK_HP" not in out
+    assert "(trainer AI UNSUPPORTED)" in out
 
 
 @pytest.mark.parametrize("which", ["kaizo_save_pre_roark_path", "kaizo_save_path"])

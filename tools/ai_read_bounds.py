@@ -53,6 +53,7 @@ FLAG_LABELS = {
     3: "SetupFirstTurn_Main",
     4: "Risky_Main",
     5: "PrioritizeExtremes_Main",
+    6: "BatonPass_Main",
     8: "CheckHP_Main",
     9: "Weather_Main",
 }

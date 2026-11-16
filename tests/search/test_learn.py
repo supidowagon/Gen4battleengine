@@ -20,7 +20,7 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import EXP_REFUSED_WINDOW_C, step
 from nuzline.search import playout as playout_module
 from nuzline.search.learn import learn_reason, resolve_learns
-from nuzline.search.playout import finish_turn, playout_from_action, refusal_reason
+from nuzline.search.playout import finish_turn, refusal_reason
 from nuzline.search.stage_a import rank_actions
 from tests.engine.helpers import A, roark_real_state
 from tests.engine.test_levelup import _base, _mask, _mon, _prinplup_state, _with
@@ -113,6 +113,9 @@ def test_learn_work_of_a_battle_ending_entry_ko_stays(tables, names):
 def _window_c(tables, names):
     # Prinplup KOs Geodude (L17); the AI sends Bonsly L40 (1 HP) into Stealth Rock: its
     # payout levels Prinplup to 18 and the battle goes on (a third Pokemon): window (c).
+    # The whole-loop window (c) tests (playout_from_action and refusal_reason, here and at
+    # a pending learn root) are in test_player_learn.py, next to the player loop's, so the
+    # loop programs are traced once.
     opp = [
         _mon(names, "Geodude", 12),
         _mon(names, "Bonsly", 40, current_hp=1),
@@ -129,15 +132,6 @@ def test_window_c_refuses_finish_turn(tables, names):
     assert bool(refused) and int(out.exp_refused) == EXP_REFUSED_WINDOW_C
     assert "window (c)" in learn_reason(out)
     assert learn_reason(played) is None
-
-
-def test_window_c_refuses_the_playout_and_names_it(tables, names):
-    s = _window_c(tables, names)
-    action = names.move_slot(s, 0, "Bubble")
-    key = jax.random.PRNGKey(3)
-    r = playout_from_action(tables, s, action, key, 5)
-    assert int(r.refused) == 1
-    assert "window (c)" in refusal_reason(tables, s, action, key, 5)
 
 
 def test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul(tables, names):
@@ -160,23 +154,6 @@ def test_a_stage_a_root_carries_no_learn_work(tables, names):
     s = _with(_prinplup_state(tables, names), learn_level={0: 17})
     with pytest.raises(ValueError, match="no learn work"):
         rank_actions(tables, names, s, 2, jax.random.PRNGKey(0), max_turns=1)
-
-
-def test_refusal_reason_settles_a_pending_learn_root(tables, names):
-    # A root at a learn prompt with the opponent's replacement pending (a Stage B learn
-    # node): the playout gives the moves up, then sends Onix or Cranidos (1 HP) into Stealth
-    # Rock; its payout levels Machop again with a foe left: window (c). refusal_reason must
-    # settle the root as _resolve_pending does (settle_learns) to name it.
-    s = roark_real_state(tables, names, player_species="Machop").replace_hp(1, GEODUDE, 0)
-    s = s.replace_hp(1, ONIX, 1).replace_hp(1, CRANIDOS, 1)
-    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
-    level = int(s.level[0, 0])
-    s = _with(s, exp={0: _base(tables, names, "Machop", level + 1) - 1})
-    s, _ = _with_prompt(tables, names, s)
-    # No turn (max_turns 0): the refusal comes from the root's settle alone.
-    key = jax.random.PRNGKey(7)
-    assert int(playout_from_action(tables, s, 0, key, 0).refused) == 1
-    assert "window (c)" in refusal_reason(tables, s, 0, key, 0)
 
 
 def test_refusal_reason_asks_the_replacement_on_the_resolved_turn(tables, names, monkeypatch):

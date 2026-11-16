@@ -154,11 +154,15 @@ def _dry_skin_state(tables, names):
 def test_dry_skin_compare_per_policy(tables, names):
     """Basic_CheckForImmunity's last compare (script.s:78) branches to
     Basic_CheckWaterAbsorption2 (:106-109): a Water move scores -12 against Dry Skin in
-    Kaizo. Vanilla compares Levitate again there, which never matches."""
+    Kaizo. Vanilla compares Levitate again there, which never matches. The Kaizo layout holds
+    the fight's own effects (E1 Ruling R7): another effect's label may make a FASTER compare's
+    per-slot read (E1 Ruling R8), which this flat outcome has no place for."""
     s = _dry_skin_state(tables, names)
     ctx = commands.at_slot(commands.new_context(tables, s, outcome()), 0)
+    own = {int(tables.move_ai_effect[m]) for m in np.asarray(s.moves[1, 0]) if m}
+    kaizo = kaizo_layout(KAIZO.flags, KAIZO.slot_reads, own)
     scores = {
-        layout.name: int(policy._basic(ctx, layout).scores[0]) - 100 for layout in (VANILLA, KAIZO)
+        layout.name: int(policy._basic(ctx, layout).scores[0]) - 100 for layout in (VANILLA, kaizo)
     }
     assert scores == {"vanilla": 0, "kaizo": -12}
 
@@ -230,3 +234,25 @@ def test_program_caches_key_on_the_flag_set():
         if '"layout": layout.name' in line
     ]
     assert not bad, bad
+
+
+def test_every_kaizo_fight_fits_the_width_cap(kaizo_tables, kaizo_trainers):
+    """E1 Ruling R6: every Kaizo trainer's fight, under the transcribed bits of its own AI
+    flags, has a read bound whose layout passes WIDTH_CAP (``kaizo_layout`` raises otherwise).
+    Synthetic flag sets can pass it (every flag with ACC_DOWN bounds at 17); no trainer does
+    (the widest, Jason 82 and Danny 725, bound at 14)."""
+    from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_slot_reads, move_read_rows
+    from nuzline.data.trainer import IntermediateData, build_trainer_party
+    from tests.conftest import KAIZO_INTERMEDIATE
+
+    inter = IntermediateData(KAIZO_INTERMEDIATE)
+    mask = sum(1 << b for b in KAIZO_FLAG_BITS)
+    widest = 0
+    for trainer in kaizo_trainers:
+        party = build_trainer_party(trainer, inter)
+        moves = np.array([m for p in party for m in p.moves], np.int32)
+        flags = trainer.ai_flags & mask
+        reads = fight_slot_reads(move_read_rows(kaizo_tables, moves), flags)
+        kaizo_layout(flags, reads)  # raises past WIDTH_CAP
+        widest = max(widest, reads)
+    assert widest == 14
