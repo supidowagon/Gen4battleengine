@@ -504,15 +504,16 @@ def test_fly_charges_vanishes_then_hits_and_dodges_tackle(tables, names):
 
 
 def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
-    """B10-12: effect_script_0149.s: Gust hits an airborne foe at powerMul 20; Earthquake
-    (effect_script_0147.s: SYSCTL_HIT_DURING_DIG only) misses it."""
+    """B10-12: a faster Gust (effect_script_0149.s: SYSCTL_HIT_DURING_FLY) hits a foe in the air
+    mid-Fly at powerMul 20; a faster Earthquake (effect_script_0147.s: SYSCTL_HIT_DURING_DIG
+    only) misses a non-Flying foe mid-Bounce (bcp.c:3034-3040)."""
     from nuzline.engine.ids import SemiKind
 
     n = names
     s = make_state(
         tables,
-        [_mon(n, "Pidgey", ["Gust", "Earthquake"], 40)],
-        [_mon(n, "Pidgeotto", ["Fly"], 40)],
+        [_mon(n, "Pidgeotto", ["Gust", "Earthquake"], 45)],
+        [_mon(n, "Pidgey", ["Fly"], 40)],
     )
     up = s._replace(
         semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
@@ -521,11 +522,50 @@ def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
     gust = int(damage_for_roll(tables, s, 0, n.move("Gust"), False, 15))
     doubled = int(damage_for_roll(tables, up, 0, n.move("Gust"), False, 15))
     assert doubled > gust
-    quake = assert_matches_reference(tables, up, (1, 0), O)
-    # The Earthquake missed; Fly then landed on the player.
-    assert int(quake.hp[0, 0]) < int(up.hp[0, 0])
-    assert int(quake.semi_invulnerable[1]) == 0
-    assert_matches_reference(tables, up, (0, 0), O)
+    out = assert_matches_reference(tables, up, (0, 0), O)
+    assert int(up.hp[1, 0]) - int(out.hp[1, 0]) == doubled  # hit in the air, doubled
+    assert int(out.semi_invulnerable[1]) == 0  # then Fly landed
+    b = make_state(
+        tables,
+        [_mon(n, "Pidgeotto", ["Gust", "Earthquake"], 50)],
+        [_mon(n, "Buneary", ["Bounce"], 30)],
+    )
+    bounce = b._replace(
+        semi_invulnerable=b.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+        locked_move=b.locked_move.at[1].set(n.move("Bounce")),
+    )
+    assert int(damage_for_roll(tables, b, 0, n.move("Earthquake"), False, 15)) > 0
+    quake = assert_matches_reference(tables, bounce, (1, 0), O)
+    assert int(quake.hp[1, 0]) == int(b.hp[1, 0])  # missed in the air
+    assert int(quake.hp[0, 0]) < int(b.hp[0, 0])  # Bounce then landed
+
+
+def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(tables, names):
+    """B10-13: Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript runs on
+    MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test Insomnia
+    before its miss test (:21) and tag it (:31-37, BattleAI_SetAbility, battle_script.c:
+    11798-11806). Another ability is not revealed; neither gets drowsy."""
+    from nuzline.engine.ids import AbilityId, SemiKind
+
+    n = names
+    s = make_state(tables, [_mon(n, "Hoothoot", ["Fly"], 10)], [_mon(n, "Slakoth", ["Yawn"], 40)])
+    s = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.AIRBORNE),
+        locked_move=s.locked_move.at[0].set(n.move("Fly")),
+    )
+
+    # Hoothoot's ability slots (the decomp ability is read from the slot): Insomnia, Keen Eye.
+    def with_slot(k, ability):
+        return s._replace(
+            ability_slot=s.ability_slot.at[0, 0].set(k), ability=s.ability.at[0, 0].set(ability)
+        )
+
+    insomnia = with_slot(0, AbilityId.INSOMNIA)
+    out = assert_matches_reference(tables, insomnia, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 1 and int(out.yawn[0]) == 0
+    keen = with_slot(1, AbilityId.KEEN_EYE)
+    out = assert_matches_reference(tables, keen, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == 0 and int(out.yawn[0]) == 0
 
 
 def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):

@@ -3404,7 +3404,22 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
-    if missed or semi_miss or _protected(turn, s, side, move, unleash):
+    protected = _protected(turn, s, side, move, unleash)
+    if missed or semi_miss or protected:
+        # Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript still runs
+        # on MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test the
+        # blocking abilities before its miss test (:21) and print "made it ineffective" with
+        # TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806).
+        # Protect returns before the semi test (bcp.c:3007-3013).
+        if (
+            effect == EffectId.YAWN
+            and semi_miss
+            and not protected
+            and 1 - side == 0
+            and _active(s, 0).hp
+            and _yawn_blocks(tables, s, side, 0)[1]
+        ):
+            s.ai_ability_known[s.sides[0].active] = 1
         _unlock(s.sides[side])  # subscript_missed.s
         if effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD:
             # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from

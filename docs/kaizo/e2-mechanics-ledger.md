@@ -1664,7 +1664,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (MOVE_STATUS_SEMI_INVULNERABLE, accuracy 0 too) unless its script sets the kind's
   SYSCTL_HIT_DURING_* (`MoveFlag.HIT_*`, `effect_map.SEMI_HIT_EFFECTS`: Fly 146/149/152/207,
   Dig 126/147, Dive 257/261, all 148/168/176). A miss crashes (Jump Kick) and shows before
-  Sturdy (subscript_missed.s:13). x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
+  Sturdy (subscript_missed.s:13). Exception, Yawn: a direct MOVE_SIDE_EFFECT_CHECK_HP effect
+  (effect_script_0187.s:5), whose subscript BattleSystem_TriggerPrimaryEffect still runs on
+  MOVE_STATUS_GENERAL_MISS for a living defender (battle_lib.c:1500-1503; moves.h:88);
+  subscript_yawn.s:5-9 test Insomnia / Vital Spirit / Leaf Guard in sun (ignorable) before its
+  own miss test (:21), so against a semi-invulnerable holder the ability is printed with
+  TAG_NICKNAME_ABILITY (:31-37 -> BattleAI_SetAbility, battle_script.c:11798-11806) and
+  `ai_ability_known` set; no drowsiness either way. A protected target is not semi-missed
+  (Protect returns first, bcp.c:3007-3013), so no reveal. x2 (powerMul 20, `MoveFlag.DOUBLE_SEMI`,
   `damage.script_power_mul`) for Gust / Twister vs AIRBORNE, Earthquake / Magnitude vs
   UNDERGROUND, Surf / Whirlpool vs UNDERWATER (line 7-8 of each). MOVE_EFFECT_NO_WEATHER_DAMAGE
   (UNDERGROUND, UNDERWATER: moves.h:50) skips the sandstorm, sun and hail branches of the turn
