@@ -195,15 +195,18 @@ def test_sheet_cites():
 
 def test_metronome_unmodelled_counts_the_refused_calls(tables, names):
     """Ruling B5-2: of the moves Metronome can call (ids 1-467 but itself and the
-    NO_METRONOME moves), the count whose own line coverage refuses."""
+    NO_METRONOME moves), the count whose own line coverage refuses. One call is made
+    unmodelled (``unmodelled``) so the count is not 0 whatever the engine models."""
     import numpy as np
 
     from nuzline.engine.coverage import Support, move_effect_line
     from nuzline.engine.ids import MoveFlag
+    from tests.engine.helpers import unmodelled
 
     metronome = names.move_names.index("Metronome")
     flags = np.asarray(tables.move_flags)
     calls = [m for m in range(1, 468) if m != metronome and not flags[m] & MoveFlag.NO_METRONOME]
+    tables = unmodelled(tables, calls[0])
     refused = [m for m in calls if move_effect_line(tables, names, m, 1)[0] == Support.NONE]
     n, m = metronome_unmodelled(tables, names, 1)
     assert (n, m) == (len(refused), len(calls))
