@@ -570,3 +570,26 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `prep.variants.ai_kill_damage` lists every class's damage. Tests:
   `tests/engine/test_e1_roark_close.py` (family 3), `tests/ai/test_read_bounds.py`;
   docs/ai/kaizo_roark.md 8.7.
+
+## Batch A
+
+- G-41 Trainer Pokemon in a data form (Wormadam, Deoxys, Rotom, Giratina-Origin, Shaymin-Sky
+  personal rows 496-507, `Pokemon_GetFormNarcIndex`, pokemon.c:4929-4960) are built as the
+  game builds them, and the coverage refusal "trainer Pokemon in a data form" is gone.
+  `TrainerData_BuildParty` (src/trainer_data.c:216-218, :246-248, :272-274, :303-305) sets
+  `MON_DATA_FORM` after `Pokemon_InitWith` has read the base species' friendship
+  (pokemon.c:435-436), ability (:473-485, ability 1 when ability 2 is `ABILITY_NONE`), gender
+  ratio (`Pokemon_GetGenderOf`, :2707-2715) and level-up learnset (`BoxPokemon_SetDefaultMoves`
+  reads `MON_DATA_FORM`, still 0, :3819-3829); setting the form only stores it (:1608-1609),
+  and the types follow the form (`MON_DATA_TYPE_1/2`, :1219-1225; `BattleSystem_InitBattleMon`
+  copies them, battle/battle_lib.c:114-115). Vanilla keeps the base row's stats (no recalc);
+  Kaizo's patched builder calls `Pokemon_CalcStats` after the form (rom_diff.md
+  "TrainerData_BuildParty, decoded", step 11), which loads the form's row (pokemon.c:595) and
+  keeps a full-HP Pokemon at full HP (:633-641). Engine: `PokemonSpec.ability_form` /
+  `stats_form` (None = `form`); `build_trainer_party` sets `ability_form=0` and, for the vanilla
+  PID routine, `stats_form=0`; the new state field `ability_form` (int8[2,6], STATE.md) is the
+  row `ability_slot` indexes in `_fill_slot`, `step._restore_ability`,
+  `damage.decomp_abilities`, the reference engine and coverage. Rotom's form rows equal its
+  base row; Giratina-Origin (Cyrus 780) now has Pressure and Shaymin-Sky (Cynthia 870) Natural
+  Cure, both still refused by Ruling 8 (`_check_form`). Tests: `tests/engine/test_e1_batch_a.py`
+  (family 1), `tests/data/test_trainer.py`, `tests/engine/test_coverage.py`.

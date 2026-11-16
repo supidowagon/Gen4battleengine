@@ -68,6 +68,7 @@ def _setup(tables, names, case):
         "faint": (0, 2 * X, 3 * X, 0),  # the player's Tackle faints Psyduck: 2X vs 2X
     }[case]
     a["species"][1, lock], a["form"][1, lock] = psyduck, 0
+    a["ability_form"][1, lock] = 0
     a["ability_slot"][1, lock], a["ability_slot"][1, 1 - lock] = slot, 0
     a["stats"][1, lock, Stat.SPE - 1] = lock_spe
     a["stats"][1, 1 - lock, Stat.SPE - 1] = other_spe

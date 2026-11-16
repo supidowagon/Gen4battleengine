@@ -142,10 +142,11 @@ _ABILITY_DECOMP = jnp.array([ABILITY_DECOMP_IDS.get(a, -1) for a in AbilityId], 
 
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
-    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot; for
+    ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
+    ability slot; for
     a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
     copied ability's (``ids.ABILITY_DECOMP_IDS``)."""
-    row = _i32(tables.species_form_row[_i32(state.species), _i32(state.form)])
+    row = _i32(tables.species_form_row[_i32(state.species), _i32(state.ability_form)])
     slot = _i32(state.ability_slot)
     own = _i32(tables.species_abilities_decomp[row, slot])
     trace = ABILITY_DECOMP_IDS[AbilityId.TRACE]

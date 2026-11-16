@@ -494,14 +494,15 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
 
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
-    its personal row's (``tables.species_abilities`` at its ability slot). Only Trace
+    its party Pokemon's (``tables.species_abilities`` at its ``ability_form``'s row and
+    ability slot, as ``make_state`` builds it). Only Trace
     (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
     ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
     (battle_lib.c:124). Run when the battler is switched or dragged out, and when a
     replacement takes a fainted one's place (``_switch_in``): a fainted battler keeps the
     copied ability until then, as its ``BattleMon`` does, and no Pokemon comes back from 0 HP."""
     mon = state.active[side]
-    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    row = tables.species_form_row[state.species[side, mon], state.ability_form[side, mon]]
     party = tables.species_abilities[row, state.ability_slot[side, mon]]
     value = jnp.where(cond, party, state.ability[side, mon]).astype(state.ability.dtype)
     return state._replace(ability=state.ability.at[side, mon].set(value))

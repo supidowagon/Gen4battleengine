@@ -31,6 +31,16 @@ class PokemonSpec:
     to a level-up's friendship (pokemon.c:2668-2670); ``pp_ups`` are the PP Ups per move
     slot (``MON_DATA_MOVE1_PP_UPS``), which a move learned into that slot inherits
     (``BoxPokemon_SetMoveSlot``, pokemon.c:3925-3933). A hand-typed party has 0 for both.
+
+    Data forms (E1 Batch A, G-41): ``ability_form`` is the form whose personal row
+    ``ability_slot`` indexes and ``stats_form`` the form whose base stats ``calc_stats``
+    reads; ``None`` means ``form``. A trainer Pokemon gets its ability from the base species
+    (``BoxPokemon_InitWith`` reads ``SpeciesData_GetSpeciesValue(species, ...)`` before the
+    form is set, pokemon.c:473-485; setting ``MON_DATA_FORM`` only stores it,
+    pokemon.c:1608-1609), so ``build_trainer_party`` sets ``ability_form=0``; vanilla's
+    builder never recomputes the stats after the form (src/trainer_data.c:216-218), so there
+    ``stats_form=0`` too. Types always follow ``form`` (``MON_DATA_TYPE_1/2`` read the form
+    row, pokemon.c:1219-1225).
     """
 
     species: int
@@ -55,3 +65,15 @@ class PokemonSpec:
     friend_bonus: int = 0
     egg_location: int = 0
     pp_ups: tuple[int, int, int, int] = (0, 0, 0, 0)
+    ability_form: int | None = None
+    stats_form: int | None = None
+
+    @property
+    def ability_from(self) -> int:
+        """The form whose personal row the ability slot indexes."""
+        return self.form if self.ability_form is None else self.ability_form
+
+    @property
+    def stats_from(self) -> int:
+        """The form whose personal row's base stats the stats are computed from."""
+        return self.form if self.stats_form is None else self.stats_form

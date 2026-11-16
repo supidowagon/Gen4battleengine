@@ -370,7 +370,7 @@ def _restore_ability(tables, s: RefState, side: int) -> None:
     battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the
     party (lib.c:124)."""
     mon = _active(s, side)
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)
 
 
@@ -4105,9 +4105,9 @@ def _speed_order(tables, s: RefState, o) -> list[int]:
 
 
 def _decomp_ability(tables, mon: RefPokemon) -> int:
-    """``Battler_Ability``: the decomp ability id at the Pokemon's personal row and
-    ability slot."""
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    """``Battler_Ability``: the decomp ability id at the Pokemon's ability row
+    (``ability_form``) and ability slot."""
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     traced = _t(tables, "species_abilities", row, mon.ability_slot) == AbilityId.TRACE
     if traced and mon.ability != AbilityId.TRACE:
         return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]  # a traced ability

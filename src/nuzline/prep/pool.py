@@ -162,8 +162,9 @@ def check_pool(
         spec = cand.spec
         slot = spec.ability_slot
         row = personal_row(tables, spec.species, spec.form)
-        ability = AbilityId(int(abilities[row, slot]))
-        ability_name = names.ability_names[names.species_abilities(spec.species, spec.form)[slot]]
+        ability_row = personal_row(tables, spec.species, spec.ability_from)
+        ability = AbilityId(int(abilities[ability_row, slot]))
+        ability_name = names.ability_names[names.species_abilities(spec.species, spec.ability_from)[slot]]
         support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
         c.add(support, f"{cand.label}: {ability_name}", "ability")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:
@@ -172,7 +173,7 @@ def check_pool(
         if (line := trace_copy_line(tables, names, trainer, spec, opp)) is not None:
             c.add(Support.NONE, f"{cand.label}: {line}", "trainer AI")
         if support != Support.NONE and (
-            reason := player_ability_refusal(int(decomp_abilities[row][slot]))
+            reason := player_ability_refusal(int(decomp_abilities[ability_row][slot]))
         ):
             refuse(f"{cand.label}: {ability_name} (ability, {reason})")
         item = ItemId(int(item_effect[spec.item]))

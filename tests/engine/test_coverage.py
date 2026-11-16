@@ -260,42 +260,14 @@ def test_coverage_reads_the_form_row_ability(tables, names):
         )
 
 
-DATA_FORM_LINE = (
-    "trainer Pokemon in a data form keeps its base form's stats, ability and moves "
-    "(form UNSUPPORTED)"
-)
-
-
-def test_trainer_pokemon_in_a_data_form_is_refused(tables, names):
-    # Controller ruling (K2a Task 6): TrainerData_BuildParty sets the form after building
-    # from the base form (src/trainer_data.c:216-218). Devon (491) has Wormadam-Sandy and
-    # -Trash in slots 1 and 2; his Plant Cloak Wormadam in slot 0 passes.
+def test_trainer_pokemon_in_a_data_form_is_not_refused(tables, names):
+    # G-41: Devon (491) has Wormadam-Sandy and -Trash in slots 1 and 2, built from the base
+    # species (data.trainer.build_trainer_party); coverage has no form line for them.
     devon = next(t for t in load_trainers(INTERMEDIATE) if t.id == 491)
     opp = build_trainer_party(devon, _inter())
     assert [m.form for m in opp] == [0, 1, 2]
     r = check_opponent(tables, names, devon, opp, 0)
-    hits = [m for m in r.missing if m.endswith(DATA_FORM_LINE)]
-    assert hits == [f"{devon.name} WORMADAM (slot {s}): {DATA_FORM_LINE}" for s in (1, 2)]
-    assert r.level == Support.NONE
-
-
-def test_data_form_reason_is_true_for_the_game(tables, names, vanilla_manifest):
-    # Final review M11: Kaizo's patched TrainerData_BuildParty computes stats after the
-    # form, so the vanilla "keeps its base form's stats" would be false there.
-    devon = next(t for t in load_trainers(INTERMEDIATE) if t.id == 491)
-    opp = build_trainer_party(devon, _inter())
-    kaizo = Names({**vanilla_manifest, "game": KAIZO})
-    r = check_opponent(tables, kaizo, devon, opp, 0)
-    hits = [m for m in r.missing if "data form" in m]
-    assert len(hits) == 2 and not any("keeps its base form" in m for m in hits)
-    assert all("applies the form before computing its stats" in m for m in hits)
-
-
-@pytest.mark.parametrize(("species", "form"), [("Shellos", 1), ("Unown", 5), ("Arceus", 3)])
-def test_trainer_pokemon_in_a_form_without_data_passes(tables, names, species, form):
-    mon = replace(roark_party(names)[0], species=names.species(species), form=form)
-    r = check_opponent(tables, names, roark_trainer(), [mon], 0)
-    assert not any("data form" in m for m in r.missing)
+    assert not any("form" in m for m in r.missing)
 
 
 def test_player_rotom_wash_is_not_refused_for_its_form(tables, names):

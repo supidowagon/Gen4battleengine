@@ -165,20 +165,24 @@ def test_partner_variants_load():
 
 
 @needs_inter
-def test_trainer_form_uses_row(names):
+def test_trainer_form_takes_the_base_species_ability(names):
+    # G-41: BoxPokemon_InitWith picks the ability and friendship from the base species before
+    # the form is set (pokemon.c:435-436, :473-485). Origin's row has Levitate, Altered's
+    # Pressure; vanilla's builder keeps the base stats (stats_form 0).
     from dataclasses import replace
 
     inter = IntermediateData(INTER)
     roark = _roark()
     t = replace(roark, party=(replace(roark.party[0], species=487, form=1),))
     (mon,) = build_trainer_party(t, inter)
-    assert mon.form == 1
-    assert names.species_abilities(487, 1)[mon.ability_slot] == names.ability("Levitate")
-    assert mon.friendship == names.species_base_friendship(487, 1)
+    assert (mon.form, mon.ability_from, mon.stats_from) == (1, 0, 0)
+    assert names.species_abilities(487, 0)[mon.ability_slot] == names.ability("Pressure")
+    assert mon.friendship == names.species_base_friendship(487, 0)
 
 
 @needs_inter
-def test_trainer_form_default_moves_use_the_row_learnset():
+def test_trainer_form_default_moves_use_the_base_learnset():
+    # G-41: BoxPokemon_SetDefaultMoves reads MON_DATA_FORM, still 0 (pokemon.c:3819-3829).
     # Wormadam-Sandy's level-up learnset (row 499) parts from Plant Cloak's at level 26.
     from dataclasses import replace
 
@@ -186,8 +190,8 @@ def test_trainer_form_default_moves_use_the_row_learnset():
     roark = _roark()
     raw = replace(roark.party[0], species=413, form=1, level=30, moves=None)
     (mon,) = build_trainer_party(replace(roark, party=(raw,)), inter)
-    assert mon.moves == default_moves(inter.learnsets[499], 30)
-    assert mon.moves != default_moves(inter.learnsets[413], 30)
+    assert mon.moves == default_moves(inter.learnsets[413], 30)
+    assert mon.moves != default_moves(inter.learnsets[499], 30)
     with pytest.raises(ValueError, match="species 413 has no form 3"):
         build_trainer_party(replace(roark, party=(replace(raw, form=3),)), inter)
 
