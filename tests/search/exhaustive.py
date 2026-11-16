@@ -4,9 +4,10 @@ plainly over ``step`` and ``enumerate_outcomes``. The reference ``stage_b.solve`
 match on the endgames.
 
 Independent of ``search/expand.py`` (nothing imported from it, no shared merge code):
-each (state, action pair) has its enumerated outcome rows padded to ``P`` and played by
-one module-level ``jax.jit(jax.vmap(_turn))`` (the playout's turn recipe,
-``playout._play``/``_turn``: ``step``, the opponent's forced replacement
+each (state, action pair) has its enumerated outcome rows played in calls of ``P`` rows
+(the last one padded with copies of its first row, dropped; a row's result does not
+depend on ``P``) by one module-level ``jax.jit(jax.vmap(_turn))`` (the playout's turn
+recipe, ``playout._play``/``_turn``: ``step``, the opponent's forced replacement
 ``send_replacements`` with ``ai_switched = is_switch(opponent action)`` and the
 replacement's ``power_mul``, then ``observe``), merged on the host by (state bytes,
 observation bytes, refused) and grouped by observation into belief nodes. A refused
@@ -45,7 +46,7 @@ from nuzline.engine.step import (
 from nuzline.search import deaths
 from nuzline.search.playout import replacement_pass, send_replacements
 
-P = 8192  # outcome rows per program call (padded)
+P = 8192  # outcome rows per program call (padded), read at the call
 _OBS_BYTES = OBS_SIZE * 4  # int32 observation
 
 
@@ -95,10 +96,15 @@ def children(
     actions = jnp.asarray([a, o], jnp.int32)
     outcomes, probs = enumerate_outcomes(jax.device_get(_laws(tables, state, actions)))
     k = len(probs)
-    assert k <= P, k
-    pad = np.concatenate([np.arange(k), np.zeros(P - k, np.int64)])
-    padded = jax.tree.map(lambda f: np.asarray(f)[pad], outcomes)
-    after, refused, obs = jax.device_get(_turns(tables, state, actions, padded))
+    parts = []
+    for start in range(0, k, P):  # P read at the call (a test may run smaller calls)
+        idx = np.arange(start, min(start + P, k))
+        pad = np.concatenate([idx, np.full(P - len(idx), start, np.int64)])
+        padded = jax.tree.map(lambda f, p=pad: np.asarray(f)[p], outcomes)
+        out = jax.device_get(_turns(tables, state, actions, padded))
+        n = len(idx)
+        parts.append(jax.tree.map(lambda f, n=n: np.asarray(f)[:n], out))
+    after, refused, obs = jax.tree.map(lambda *fs: np.concatenate(fs), *parts)
     # Each row's state bytes at once: the fields' bytes side by side, in ``state_bytes``'
     # order, so row i of ``rows`` is ``state_bytes(_row(after, i))``.
     rows = np.concatenate(
