@@ -67,7 +67,9 @@ three structs has a row.
   battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
   Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
-  `effects.MOVE_EFFECT_MASK_FIELDS`). The rest (semi-invulnerable turns, Minimize, Charge,
+  `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
+  UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
+  The rest (Minimize, Charge,
   Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise) are later
   (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
@@ -375,7 +377,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable` (the AIRBORNE / UNDERGROUND / UNDERWATER / SHADOW_FORCE bit as an `ids.SemiKind`, B10-12) | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
