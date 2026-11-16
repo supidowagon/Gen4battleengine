@@ -894,8 +894,10 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
     Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
-    (B10-6; an item on the foe, a knocked-off user with no item for the barb)."""
-    if draw(st.integers(0, 2)) != 0:
+    (B10-6; an item on the foe, a knocked-off user with no item for the barb). One draw in two,
+    the move in two slots, and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
+    under uniform draws the differential met these moves too rarely (batch 11 review)."""
+    if draw(st.integers(0, 1)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
     foe = 1 - side
@@ -934,7 +936,14 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         )
     )
     give(move)
+    give(move)  # two slots (a random slot each: maybe the same one)
+    if int(tables.move_power[names.move(move)]) == 0 and rnd.random() < 0.7:
+        a["taunt"][side] = 0  # a status move a taunt would block (batch 11 review)
     charge = int(tables.move_flags[names.move(move)]) & int(MoveFlag.CHARGE)
+    if charge and a["status"][side, active] in (Status.SLEEP, Status.FREEZE) and rnd.random() < 0.7:
+        # A user that can act on its first turn: the charge itself (B10-12).
+        a["status"][side, active] = Status.NONE
+        a["status_counter"][side, active] = 0
     if charge and rnd.random() < 0.3:  # B10-12: a Power Herb
         a["item"][side, active] = names.item("Power Herb")
     if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
@@ -951,6 +960,10 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             a["encore_turns"][who] = rnd.randint(0, 7)
             if rnd.random() < 0.2:
                 a["pp"][who, mon, k] = 0
+    own = int(a["encore_move"][side])
+    if own and own != names.move(move) and rnd.random() < 0.7:
+        # Free to use the drawn move: no encore on another one (batch 11 review).
+        a["encore_move"][side] = a["encore_slot"][side] = a["encore_turns"][side] = 0
     if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
         a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
         give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)
@@ -1153,6 +1166,8 @@ def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: N
             move = names.move(move_name)
             a["moves"][side, active, slot] = move
             a["pp"][side, active, slot] = int(tables.move_pp[move])
+        if rnd.random() < 0.7:  # untaunted: an invoker is a status move (batch 11 review)
+            a["taunt"][side] = 0
         if name == "Sleep Talk" and a["hp"][side, active] > 0 and rnd.random() < 0.8:
             a["status"][side, active] = Status.SLEEP
             a["status_counter"][side, active] = rnd.randint(1, 4)
@@ -1589,7 +1604,29 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
             slots = [k for k in range(4) if pivots[side, k] and masks[side][k]]
             if slots and draw(st.integers(0, 3)) != 0:
                 acts[side] = draw(st.sampled_from(slots))
+        # Batch 10-11: a rare move the side knows (``RARE_EFFECTS``, a charge move) is used one
+        # draw in two, so the differential meets each.
+        flags = np.asarray(tables.move_flags)[moves]
+        rare = np.isin(effect, RARE_EFFECTS) | ((flags & int(MoveFlag.CHARGE)) != 0)
+        for side in (0, 1):
+            slots = [k for k in range(4) if rare[side, k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
+
+
+# The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
+RARE_EFFECTS = (
+    EffectId.ENCORE,
+    EffectId.ASSIST,
+    EffectId.PAIN_SPLIT,
+    EffectId.SAFEGUARD,
+    EffectId.ENDEAVOR,
+    EffectId.KNOCK_OFF,
+    EffectId.FOCUS_PUNCH,
+    EffectId.METRONOME,
+    EffectId.COPYCAT,
+)
 
 
 @st.composite
