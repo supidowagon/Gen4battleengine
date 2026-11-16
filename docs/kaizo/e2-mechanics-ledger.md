@@ -31,9 +31,10 @@
   Checks: test_batch11 + test_invokers 24 passed; batch10 / accuracy / damage classes /
   enumerate / effect_map / coverage / coverage_exp / observe / pivot_search / read_bounds 222
   passed (before the sampler's single-alternative rewrite; its sampled tests rerun after: pass);
-  AI + coverage_exp + game_constants 74 passed. Owed while the fast tier holds the machine (keep
-  runs under 4 GB, no tests/search, no test_cli): test_invokers and test_batch11's hand tests
-  after the rewrite, the four guards, the review. Sampler cost: see B11-1.
+  AI + coverage_exp + game_constants 74 passed; test_variants + game_constants + test_backlog 69
+  passed. Owed once the fast tier frees the machine (runs under 4 GB until then, no tests/search,
+  no test_cli): test_invokers and test_batch11's hand tests after the sampler rewrite (peaks
+  5-8 GB), tests/test_cli.py, the review. Sampler cost: see B11-1.
 - **Batch 11 (as briefed):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
   replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
