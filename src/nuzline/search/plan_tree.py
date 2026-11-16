@@ -270,6 +270,8 @@ _COND_TEXT = {
     "yawn": "drowsy",
     "minimized": "minimized",
     "semi_invulnerable": "semi-invulnerable",
+    "focus_energy": "getting pumped",
+    "power_trick": "Power Trick",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

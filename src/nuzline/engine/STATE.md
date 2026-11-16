@@ -58,8 +58,11 @@ three structs has a row.
   cleared but with the trapped battler's volatiles, so a stale value stays (B7-15); `mean_look`
   ends when the trapper leaves by a switch that is not a Baton Pass, battle_lib.c:2055-2061, or
   faints, :2170-2172; Baton Pass keeps both, :2078, :2111), Curse ->
-  `curse` (below). The other bits (Thrash, Focus Energy, Transform, Rage, Substitute flag,
-  Nightmare, Torment) are later (M6); the Substitute flag is implied by `substitute_hp > 0`.
+  `curse` (below), Focus Energy -> `focus_energy` (E2 batch 12, B12-4: per battler, set by
+  subscript_focus_energy.s:6, ORed in by Psych Up, battle_script.c:6050, cleared by Haze, :3544,
+  and with the volatiles; Baton Pass keeps it, condition.h:72). The other bits (Thrash,
+  Transform, Rage, Substitute flag, Nightmare, Torment) are later (M6); the Substitute flag is
+  implied by `substitute_hp > 0`.
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
@@ -69,9 +72,11 @@ three structs has a row.
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
   `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
   UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
-  The rest (Minimize, Charge,
-  Grudge, Gastro Acid, Miracle Eye, Power Trick, Heal Block, Embargo, Magnet Rise) are later
-  (M6).
+  Power Trick -> `power_trick` (E2 batch 12, B12-10: per battler, toggled by
+  subscript_user_swap_atk_and_def.s:5; the BattleMon Attack and Defense it swaps are read
+  through `damage.battle_stats`; Baton Pass keeps it, moves.h:47, and swaps the newcomer's,
+  battle_lib.c:2137-2141). The rest (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block,
+  Embargo, Magnet Rise) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -368,7 +373,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -377,7 +382,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 

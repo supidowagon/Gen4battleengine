@@ -66,8 +66,7 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented: Wish's heal in the field pass (no supported move sets ``wish_timer``) and
-the Trick Room countdown of the turn end's side-condition pass
+Not implemented: the Trick Room countdown of the turn end's side-condition pass
 (battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
 """
 
@@ -133,6 +132,7 @@ from nuzline.engine.effects import (
     pivot_item,
     play_hit,
     primary_effect_fails,
+    psycho_shift_fails,
     protect_blocks,
     recovers_at_full_hp,
     resist_berry,
@@ -1329,10 +1329,22 @@ def _use_move(
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
     # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no
     # AfterMoveEffects (effects._inflict blocks the sleep).
+    # Psycho Shift's sleep (subscript_give_target_own_status.s:5-6 calls the same subscript as a
+    # direct effect; CheckCanShareStatus passed: the defender has no status nor substitute), B12-17.
+    shift_sleep = (
+        (tables.move_effect[used] == EffectId.PSYCHO_SHIFT)
+        & (state.status[side, user] == Status.SLEEP)
+        & ~psycho_shift_fails(state, side, target_side)
+    )
     kept_awake = (
         connected
-        & (tables.move_effect[used] == EffectId.STATUS_FOE)
-        & (tables.move_param[used, 0] == Status.SLEEP)
+        & (
+            (
+                (tables.move_effect[used] == EffectId.STATUS_FOE)
+                & (tables.move_param[used, 0] == Status.SLEEP)
+            )
+            | shift_sleep
+        )
         & (state.hp[target_side, target] > 0)
         & (ignorable(state, side, target_side) != AbilityId.INSOMNIA)
         & (state.status[target_side, target] != Status.SLEEP)
@@ -2792,6 +2804,24 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
+def _wish(state: BattleState, side) -> BattleState:
+    """FIELD_COND_CHECK_STATE_WISH (bcp.c:1085-1111) for ``side``'s battler: ``wishTurns`` drops
+    when nonzero; at 0 the battler, if it has HP, regains ``Divide(maxHP, 2)``, its own max HP,
+    unless at full HP (subscript_wish_heal.s:9-11), B12-14."""
+    timer = state.wish_timer[side].astype(_I32)
+    on = timer != 0
+    left = jnp.where(on, timer - 1, timer)
+    state = state._replace(
+        wish_timer=state.wish_timer.at[side].set(left.astype(state.wish_timer.dtype))
+    )
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    heals = on & (left == 0) & (hp > 0) & (hp != max_hp)
+    healed = jnp.minimum(hp + divide(max_hp, 2), max_hp)
+    return _set_mon(state, "hp", side, mon, healed, heals)
+
+
 def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     """``BattleControllerPlayer_CheckFieldConditions`` (battle_controller_player.c:
     932-1254), between the actions and ``end_of_turn``; nothing runs once the battle is
@@ -2799,7 +2829,10 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
     1. ``FIELD_SIDE_TIMERS``, side 0 then side 1: a nonzero count drops by 1 and the
        condition ends at 0 (``--reflectTurns == 0``, :947-1083).
-    2. Wish (:1085-1111) is not implemented: no supported move sets ``wish_timer``.
+    2. Wish (:1085-1111, E2 batch 12, B12-14): each battler in ``sides`` (``monSpeedOrder``) with
+       a nonzero ``wish_timer`` counts it down, and at 0 a battler with HP regains
+       ``Divide(maxHP, 2)`` of its own (subscript_wish_heal.s: "HP is full!" at full HP, else
+       UPDATE_HP, capped; Heal Block is unsupported) (``_wish``).
     3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
        with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
        one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
@@ -2826,6 +2859,8 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
     state = _where(live, counted, state)
+    for position in (0, 1):
+        state = _where(live, _wish(state, sides[position]), state)
 
     before = state
     ability = decomp_abilities(tables, state)

@@ -4066,3 +4066,251 @@ def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, fla
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E2 batch 12 (B12-11): the stat family's AI ---------------------------------------------
+
+
+def _stage(s, side: int, stat, value: int):
+    """``s`` with ``side``'s ``stat`` stage at engine ``value`` (decomp ``value + 6``)."""
+    return s._replace(stages=s.stages.at[side, stat].set(value))
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "expected"),
+    [
+        # Basic_CheckStatStageImbalance (script.s:475-497): -10 with nothing to undo or copy.
+        ("Haze", "neutral", -10),
+        ("Haze", "own drop", 0),
+        ("Psych Up", "player boost", 0),
+        ("Psych Up", "neutral", -10),
+        # Basic_CheckAlreadyPumpedUp (:592-595).
+        ("Focus Energy", "pumped", -10),
+        ("Focus Energy", "neutral", 0),
+        # Basic_CheckTickle (:933-947): Attack at -6 -10, Defense at -6 -8.
+        ("Tickle", "player atk -6", -10),
+        ("Tickle", "player def -6", -8),
+        # Basic_CheckCosmicPower (:949-963): Defense +6 -10, Sp. Def +6 -8.
+        ("Cosmic Power", "own def +6", -10),
+        ("Cosmic Power", "own spd +6", -8),
+        # Basic_CheckAcupressure (:1135-1147): any stage at +6 -10.
+        ("Acupressure", "own eva +6", -10),
+        ("Acupressure", "neutral", 0),
+        # Basic_CheckPowerTrick (:1358-1361).
+        ("Power Trick", "tricked", -10),
+        ("Power Trick", "neutral", 0),
+        # Basic_CheckPowerSwap (:1392-1404): -10 unless the player is ahead on Attack or Sp. Atk.
+        ("Power Swap", "neutral", -10),
+        ("Power Swap", "player boost", 0),
+        ("Guard Swap", "player def ahead", 0),
+        ("Guard Swap", "neutral", -10),
+        # Basic_CheckCaptivate (:1508-1538): same gender -10.
+        ("Captivate", "same gender", -10),
+        ("Captivate", "opposite", 0),
+    ],
+)
+def test_batch12_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if case == "own drop":
+        s = _stage(s, 1, Stat.SPE, -1)
+    elif case == "player boost":
+        s = _stage(s, 0, Stat.ATK, 2)
+    elif case == "pumped":
+        s = s._replace(focus_energy=s.focus_energy.at[1].set(1))
+    elif case == "player atk -6":
+        s = _stage(s, 0, Stat.ATK, -6)
+    elif case == "player def -6":
+        s = _stage(s, 0, Stat.DEF, -6)
+    elif case == "own def +6":
+        s = _stage(s, 1, Stat.DEF, 6)
+    elif case == "own spd +6":
+        s = _stage(s, 1, Stat.SPD, 6)
+    elif case == "own eva +6":
+        s = _stage(s, 1, Stat.EVA, 6)
+    elif case == "tricked":
+        s = s._replace(power_trick=s.power_trick.at[1].set(1))
+    elif case == "player def ahead":
+        s = _stage(s, 0, Stat.DEF, 1)
+    elif case in ("same gender", "opposite"):
+        mine = 0 if case == "same gender" else 1
+        s = s._replace(gender=s.gender.at[0, 0].set(0).at[1, 0].set(mine))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "jumps", "expected"),
+    [
+        # Expert_Haze (script.s:2520-2564)
+        ("Haze", "neutral", (), -1),  # neither list: -1 unless :2555 jumps
+        ("Haze", "neutral", (2555,), 0),
+        ("Haze", "own +3", (), -3 - 1),  # :2541 does not jump: -3; then -1
+        ("Haze", "player +3", (), 3),  # :2560: +3 unless it jumps
+        ("Haze", "player +3", (2560,), 0),
+        # Expert_PsychUp (:3814-3850)
+        ("Psych Up", "neutral", (), -2),
+        ("Psych Up", "player +3", (), 1),  # the AI's Attack below 7 (neutral)
+        # Expert_Flatter (:2854-2859), then Expert_StatusConfuse with the player above 70 %.
+        ("Flatter", "neutral", (), 1),
+        ("Flatter", "neutral", (2858,), 0),
+        # Expert_Acupressure (:5008-5027): full HP: +1 unless :5019 jumps.
+        ("Acupressure", "neutral", (), 1),
+        ("Acupressure", "neutral", (5019,), 0),
+        ("Acupressure", "low hp", (), -1),
+        # Expert_PowerTrick (:5442-5469)
+        ("Power Trick", "neutral", (), 1),
+        ("Power Trick", "neutral", (5454,), 0),
+        ("Power Trick", "low hp", (), -2),
+        # Expert_PowerSwap (:5632-5764): Attack diff 4 (HighDiff), Sp. Atk diff 0: TryScorePlus3.
+        ("Power Swap", "player atk +4", (), 3),
+        ("Power Swap", "player atk +4", (5749,), 2),
+        ("Power Swap", "player atk +4", (5749, 5754, 5759), 0),
+        ("Power Swap", "neutral", (), 0),  # diff 0 / 0: NoDiff, no entry: nothing
+        # Expert_GuardSwap (:5766-5898): Defense diff 1 (LowDiff), Sp. Def diff 0: Plus1.
+        ("Guard Swap", "player def +1", (), 1),
+        ("Guard Swap", "player def +1", (5893,), 0),
+        # Expert_Captivate (:6236-6266): the player's Sp. Atk at neutral and its HP full; its
+        # last move none, whose class is physical (LoadDefenderLastUsedMoveClass): -1 unless
+        # :6262 jumps.
+        ("Captivate", "neutral", (), -1),
+        ("Captivate", "neutral", (6262,), 0),
+        # Sp. Atk at -4 (decomp 2): -1 (the AI's HP full skips the second), -2 unless :6252
+        # jumps, then the last move's -1.
+        ("Captivate", "player spa -4", (), -1 - 2 - 1),
+        ("Captivate", "player spa -4", (6252, 6262), -1),
+    ],
+)
+def test_batch12_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = s._replace(gender=s.gender.at[0, 0].set(0).at[1, 0].set(1))
+    if case == "own +3":
+        s = _stage(s, 1, Stat.SPA, 3)
+    elif case == "player +3":
+        s = _stage(s, 0, Stat.ATK, 3)
+    elif case == "low hp":
+        s = _hp(s, 1, 30)
+    elif case == "player atk +4":
+        s = _stage(s, 0, Stat.ATK, 4)
+    elif case == "player def +1":
+        s = _stage(s, 0, Stat.DEF, 1)
+    elif case == "player spa -4":
+        s = _stage(s, 0, Stat.SPA, -4)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_batch12_stat_family_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    for moves in (
+        ("Haze", "Psych Up", "Flatter", "Tickle"),
+        ("Acupressure", "Power Trick", "Power Swap", "Guard Swap"),
+        ("Captivate", "Focus Energy", "Cosmic Power", "Calm Mind"),
+    ):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+        for own, stage in ((100, 3), (40, -2)):
+            s2 = _stage(_stage(_hp(s, 1, own), 0, Stat.ATK, stage), 1, Stat.DEF, -stage)
+            layout = layout_for(t, flags, s2)
+            assert policy.ai_refusals(t, s2, n, layout) == []
+            _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E2 batch 12 (B12-18): the healing family's AI ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "expected"),
+    [
+        # Basic_CheckCanRefreshStatus (script.s:923-926)
+        ("Refresh", "neutral", -10),
+        ("Refresh", "burned", 0),
+        ("Refresh", "asleep", -10),
+        # Basic_CheckCanPsychoShift (:1301-1345)
+        ("Psycho Shift", "neutral", -10),
+        ("Psycho Shift", "burned", 0),
+        ("Psycho Shift", "burned, player statused", -10),
+        ("Psycho Shift", "poisoned", -10),  # poison onto a Steel player (:1320-1321)
+        # Basic_CheckCanRecoverHP (:210 -> :538)
+        ("Morning Sun", "neutral", -8),
+        ("Morning Sun", "hurt", 0),
+    ],
+)
+def test_batch12_healing_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if "burned" in case:
+        s = s._replace(status=s.status.at[1, 0].set(Status.BURN))
+    if case == "asleep":
+        s = s._replace(status=s.status.at[1, 0].set(Status.SLEEP))
+    if "player statused" in case:
+        s = s._replace(status=s.status.at[0, 0].set(Status.PARALYSIS))
+    if case == "poisoned":
+        s = s._replace(status=s.status.at[1, 0].set(Status.POISON))
+        s = _with_player(t, s, n.species_names.index("Magnemite"), 0, known=True)  # Steel
+    if case == "hurt":
+        s = _hp(s, 1, 40)
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "jumps", "expected"),
+    [
+        # Expert_Rest (script.s:2745-2790): faster at full HP -8.
+        ("Rest", "faster full", (), -8),
+        # Faster at 30 %: CheckForSnatch: the player shows no Snatch: +3 unless :2786 jumps.
+        ("Rest", "faster low", (), 3),
+        ("Rest", "faster low", (2786,), 0),
+        # Faster at 60 % (above 50): -3.
+        ("Rest", "faster 60", (), -3),
+        # Faster at 45 %: -3 unless :2766 jumps (then +3).
+        ("Rest", "faster 45", (), -3),
+        ("Rest", "faster 45", (2766,), 3),
+        # Slower at 65 % (between 60 and 70): the :2775 roll.
+        ("Rest", "slower 65", (), -3),
+        ("Rest", "slower 65", (2775,), 3),
+        # Expert_HealBell (:3398-3406): no status anywhere -5; a statused party member: 0.
+        ("Heal Bell", "neutral", (), -5),
+        ("Heal Bell", "bench statused", (), 0),
+        # Expert_Synthesis (:2628-2638): rain -2, then Expert_Recovery (full HP: -3).
+        ("Synthesis", "rain", (), -2 - 3),
+        ("Synthesis", "neutral", (), -3),
+        # Expert_Refresh (:4644-4653): the player below 50 % -1.
+        ("Refresh", "player low", (), -1),
+        ("Refresh", "neutral", (), 0),
+        # Expert_PsychoShift (:5296-5306): statused AI: +1 unless :5301 jumps.
+        ("Psycho Shift", "burned", (), 1),
+        ("Psycho Shift", "burned", (5301,), 0),
+        ("Psycho Shift", "neutral", (), -10),
+    ],
+)
+def test_batch12_healing_expert(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, case, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if "slower" in case else _speeds(s, player=1, opp=500)
+    hp = {"faster low": 30, "faster 60": 60, "faster 45": 45, "slower 65": 65}.get(case)
+    if hp is not None:
+        s = _hp(s, 1, hp)
+    if case == "bench statused":
+        s = s._replace(status=s.status.at[1, 1].set(Status.BURN))
+    if case == "rain":
+        s = s._replace(weather=jnp.asarray(Weather.RAIN, s.weather.dtype))
+    if case == "player low":
+        s = _hp(s, 0, 40)
+    if case == "burned":
+        s = s._replace(status=s.status.at[1, 0].set(Status.BURN))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_batch12_healing_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    for moves in (("Rest", "Heal Bell", "Synthesis", "Wish"), ("Refresh", "Psycho Shift", "", "")):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+        for own, status, faster in ((100, Status.NONE, True), (45, Status.BURN, False)):
+            s2 = _hp(s, 1, own)._replace(status=s.status.at[1, 0].set(status))
+            s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
+            layout = layout_for(t, flags, s2)
+            assert policy.ai_refusals(t, s2, n, layout) == []
+            _assert_exact_equals_loose(t, s2, layout)

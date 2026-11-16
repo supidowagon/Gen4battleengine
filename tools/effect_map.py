@@ -333,7 +333,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Poison Fang: effect_script_0202.s, an indirect TO_DEFENDER badly-poison at the move's
     # chance (subscript_badly_poison.s).
     202: ("BATTLE_EFFECT_BADLY_POISON_HIT", _E.SECONDARY_STATUS, (Status.TOXIC, 0, 0)),
-    118: ("BATTLE_EFFECT_ATK_UP_2_STATUS_CONFUSION", _E.SWAGGER, (0, 0, 0)),
+    # Swagger: subscript_swagger.s:6, :11 (Attack +2 below +6); Flatter (E2 batch 12, B12-2):
+    # subscript_flatter.s:6, :11, the same script with Sp. Atk +1.
+    118: ("BATTLE_EFFECT_ATK_UP_2_STATUS_CONFUSION", _E.SWAGGER, (_ATK, 2, 0)),
+    166: ("BATTLE_EFFECT_SP_ATK_UP_CAUSE_CONFUSION", _E.SWAGGER, (_SPA, 1, 0)),
     # Snore: effect_script_0092.s, an indirect TO_DEFENDER flinch at the move's chance, failing
     # unless the user is asleep (move_param[m, 2] = SNORE_PARAM).
     92: ("BATTLE_EFFECT_DAMAGE_WHILE_ASLEEP", _E.FLINCH, (0, 0, SNORE_PARAM)),
@@ -349,10 +352,45 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     89: ("BATTLE_EFFECT_COUNTER", _E.COUNTER, (COUNTER_PHYSICAL, 20, 0)),
     144: ("BATTLE_EFFECT_MIRROR_COAT", _E.COUNTER, (COUNTER_SPECIAL, 20, 0)),
     227: ("BATTLE_EFFECT_METAL_BURST", _E.COUNTER, (COUNTER_ANY, 15, 0)),
-    # Dragon Dance / Bulk Up (E2 batch 9, B9-10): subscript_user_atk_and_speed_up_1_stage.s and
-    # subscript_user_atk_and_def_up_1_stage.s differ only in the second stat (:4, :12).
-    212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (_SPE, 0, 0)),
-    208: ("BATTLE_EFFECT_ATK_DEF_UP", _E.DRAGON_DANCE, (_DEF, 0, 0)),
+    # Dragon Dance / Bulk Up (E2 batch 9, B9-10), Calm Mind / Cosmic Power and Defend Order
+    # (batch 12, B12-1): subscript_user_{atk_and_speed,atk_and_def,spatk_and_spdef,def_and_spdef}_
+    # up_1_stage.s differ only in their two stats (:5-6, :13-16), the first then the second.
+    212: ("BATTLE_EFFECT_ATK_SPD_UP", _E.DRAGON_DANCE, (_ATK, _SPE, 0)),
+    208: ("BATTLE_EFFECT_ATK_DEF_UP", _E.DRAGON_DANCE, (_ATK, _DEF, 0)),
+    211: ("BATTLE_EFFECT_SP_ATK_SP_DEF_UP", _E.DRAGON_DANCE, (_SPA, _SPD, 0)),
+    206: ("BATTLE_EFFECT_DEF_SPD_UP", _E.DRAGON_DANCE, (_DEF, _SPD, 0)),
+    # E2 batch 12, the stat family (B12-n). Tickle: effect_script_0205.s, a direct CHECK_HP |
+    # TO_DEFENDER subscript_target_atk_and_def_down_1_stage.s (Attack, then Defense, -1).
+    205: ("BATTLE_EFFECT_ATK_DEF_DOWN", _E.TICKLE, (_ATK, _DEF, 0)),
+    # Focus Energy: effect_script_0047.s (subscript_focus_energy.s).
+    47: ("BATTLE_EFFECT_CRIT_UP_2", _E.FOCUS_ENERGY, (0, 0, 0)),
+    # Haze: effect_script_0025.s (subscript_reset_all_stat_stages.s).
+    25: ("BATTLE_EFFECT_RESET_STAT_CHANGES", _E.HAZE, (0, 0, 0)),
+    # Psych Up: effect_script_0143.s (BtlCmd_CopyStatStages).
+    143: ("BATTLE_EFFECT_COPY_STAT_CHANGES", _E.PSYCH_UP, (0, 0, 0)),
+    # Power Swap / Guard Swap: effect_script_0243.s / _0244.s (subscript_exchange_atk_and_spatk_
+    # stages.s / _def_and_spdef_stages.s).
+    243: ("BATTLE_EFFECT_SWAP_ATK_SP_ATK_STAT_CHANGES", _E.STAGE_SWAP, (_ATK, _SPA, 0)),
+    244: ("BATTLE_EFFECT_SWAP_DEF_SP_DEF_STAT_CHANGES", _E.STAGE_SWAP, (_DEF, _SPD, 0)),
+    # Captivate: effect_script_0265.s, then a direct TO_DEFENDER Sp. Atk -2 (:10).
+    265: ("BATTLE_EFFECT_SP_ATK_DOWN_2_OPPOSITE_GENDER", _E.CAPTIVATE, (_SPA, -2, 0)),
+    # Acupressure: effect_script_0226.s (BtlCmd_BoostRandomStatBy2).
+    226: ("BATTLE_EFFECT_RANDOM_STAT_UP_2", _E.ACUPRESSURE, (0, 0, 0)),
+    # Power Trick: effect_script_0238.s (subscript_user_swap_atk_and_def.s).
+    238: ("BATTLE_EFFECT_SWAP_ATK_DEF", _E.POWER_TRICK, (0, 0, 0)),
+    # E2 batch 12, the healing family (B12-12..). Rest: effect_script_0037.s (subscript_rest.s).
+    37: ("BATTLE_EFFECT_REST", _E.REST, (0, 0, 0)),
+    # Morning Sun, Synthesis, Moonlight: effect_script_0132.s (WeatherHPRecovery,
+    # subscript_present_heal.s).
+    132: ("BATTLE_EFFECT_HEAL_HALF_MORE_IN_SUN", _E.WEATHER_HEAL, (0, 0, 0)),
+    # Wish: effect_script_0179.s (TryWish).
+    179: ("BATTLE_EFFECT_HEAL_IN_3_TURNS", _E.WISH, (0, 0, 0)),
+    # Heal Bell, Aromatherapy: effect_script_0102.s (subscript_heal_bell.s).
+    102: ("BATTLE_EFFECT_CURE_PARTY_STATUS", _E.HEAL_BELL, (0, 0, 0)),
+    # Refresh: effect_script_0193.s (subscript_recover_psn_prz_brn.s).
+    193: ("BATTLE_EFFECT_HEAL_STATUS", _E.REFRESH, (0, 0, 0)),
+    # Psycho Shift: effect_script_0234.s (CheckCanShareStatus, subscript_give_target_own_status.s).
+    234: ("BATTLE_EFFECT_TRANSFER_STATUS", _E.PSYCHO_SHIFT, (0, 0, 0)),
     # Belly Drum: effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s (B9-10).
     142: ("BATTLE_EFFECT_MAX_ATK_LOSE_HALF_MAX_HP", _E.BELLY_DRUM, (0, 0, 0)),
     # Substitute (B10-4): effect_script_0079.s, a direct ON_HIT subscript_try_substitute.s.

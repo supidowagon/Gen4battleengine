@@ -1001,6 +1001,95 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             a["taunt"][foe] = 0  # a status move a taunt would block
 
 
+# E2 batch 12: the stat family's moves (B12-n).
+BATCH12_MOVES = (
+    "Calm Mind",
+    "Cosmic Power",
+    "Defend Order",
+    "Tickle",
+    "Flatter",
+    "Captivate",
+    "Focus Energy",
+    "Haze",
+    "Psych Up",
+    "Power Swap",
+    "Guard Swap",
+    "Acupressure",
+    "Power Trick",
+    # The healing family (B12-12..17).
+    "Rest",
+    "Morning Sun",
+    "Synthesis",
+    "Moonlight",
+    "Wish",
+    "Heal Bell",
+    "Aromatherapy",
+    "Refresh",
+    "Psycho Shift",
+)
+
+
+def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 2) give the active Pokemon a ``BATCH12_MOVES`` move with what makes it act:
+    the battlers' Focus Energy and Power Trick bits, stages at +6 / -6 (the two-stat moves' and
+    Acupressure's failures, Acupressure's count), the genders Captivate reads, a substitute on
+    the Acupressure user; ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+    a["focus_energy"][side] = int(rnd.random() < 0.3)
+    a["power_trick"][side] = int(rnd.random() < 0.2)
+    if draw(st.integers(0, 1)) != 0:
+        return
+    move = rnd.choice(BATCH12_MOVES)
+    _teach(tables, a, side, active, names.move(move), rnd.randint(0, 3))
+    if rnd.random() < 0.7:
+        a["taunt"][side] = 0  # status moves all: a taunt would block them
+    stages = a["stages"]
+    if move in ("Calm Mind", "Cosmic Power", "Defend Order", "Acupressure") and rnd.random() < 0.4:
+        # Near or at +6: the both-maxed failure, Acupressure's small counts.
+        for stat in rnd.sample(range(Stat.ATK, Stat.EVA + 1), rnd.randint(2, 7)):
+            stages[side, stat] = rnd.choice((5, 6, 6))
+    if move == "Tickle" and rnd.random() < 0.4:
+        stages[foe, Stat.ATK] = rnd.choice((-6, -6, -5))
+        stages[foe, Stat.DEF] = rnd.choice((-6, -6, -5))
+    if move == "Flatter" and rnd.random() < 0.4:
+        stages[foe, Stat.SPA] = rnd.choice((5, 6))
+    if move == "Captivate" and rnd.random() < 0.6:
+        a["gender"][side, active] = rnd.choice((0, 1))
+        a["gender"][foe, foe_mon] = rnd.choice((0, 1, 1 - int(a["gender"][side, active])))
+    if move == "Acupressure" and rnd.random() < 0.2:
+        a["substitute_hp"][side] = rnd.randint(1, 30)
+    if move in ("Haze", "Psych Up") and rnd.random() < 0.4:
+        a["focus_energy"][foe] = 1
+    # The healing family: a hurt user, a status to cure or pass on, statused party members for
+    # Heal Bell (one with Soundproof's decomp ability via its party data is out of reach: the
+    # generator keeps the species' abilities), a Wish already counting on either side.
+    if move in ("Rest", "Morning Sun", "Synthesis", "Moonlight", "Wish") and rnd.random() < 0.7:
+        a["hp"][side, active] = rnd.randint(1, max(1, int(a["max_hp"][side, active]) - 1))
+    if move in ("Rest", "Refresh", "Psycho Shift", "Heal Bell", "Aromatherapy"):
+        if rnd.random() < 0.7:
+            status = rnd.choice(
+                (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS, Status.SLEEP)
+            )
+            a["status"][side, active] = status
+            a["status_counter"][side, active] = rnd.randint(1, 4) if status == Status.SLEEP else 0
+        if move == "Psycho Shift" and rnd.random() < 0.6:
+            a["status"][foe, foe_mon] = Status.NONE
+            a["status_counter"][foe, foe_mon] = 0
+            a["substitute_hp"][foe] = 0
+    if move in ("Heal Bell", "Aromatherapy"):
+        for slot in range(a["species"].shape[1]):
+            living = a["species"][side, slot] and a["hp"][side, slot] > 0
+            if living and slot != active and rnd.random() < 0.5:
+                a["status"][side, slot] = rnd.choice((Status.BURN, Status.PARALYSIS, Status.TOXIC))
+                a["status_counter"][side, slot] = 0
+    if move in ("Morning Sun", "Synthesis", "Moonlight") and rnd.random() < 0.6:
+        a["weather"][...] = rnd.choice(list(Weather))
+    if rnd.random() < 0.15:
+        a["wish_timer"][rnd.choice((side, foe))] = rnd.randint(1, 2)
+
+
 # Moves whose decomp path tests a substitute or meets one (B10-4).
 SUBSTITUTE_FOE_MOVES = (
     "Tackle",
@@ -1422,6 +1511,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch7(draw, tables, a, side, active, names)
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
+        _draw_batch12(draw, tables, a, side, active, names)
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
@@ -1613,6 +1703,21 @@ RARE_EFFECTS = (
     EffectId.FOCUS_PUNCH,
     EffectId.METRONOME,
     EffectId.COPYCAT,
+    # E2 batch 12 (B12-n).
+    EffectId.TICKLE,
+    EffectId.FOCUS_ENERGY,
+    EffectId.HAZE,
+    EffectId.PSYCH_UP,
+    EffectId.STAGE_SWAP,
+    EffectId.CAPTIVATE,
+    EffectId.ACUPRESSURE,
+    EffectId.POWER_TRICK,
+    EffectId.REST,
+    EffectId.WEATHER_HEAL,
+    EffectId.WISH,
+    EffectId.HEAL_BELL,
+    EffectId.REFRESH,
+    EffectId.PSYCHO_SHIFT,
 )
 
 
@@ -1677,6 +1782,10 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         # The Future Sight hit's roll: a flag or any class value (1-100), like ``hit``.
         future_hit=st.one_of(_flag(sides), _ints(0, 100, sides)),
         yawn_sleep=_ints(2, 5, sides),
+        # Acupressure's RandNext() value in [0, 420), read modulo the live count (B12-9).
+        acupressure=st.lists(st.integers(0, 419), min_size=2, max_size=2).map(
+            lambda v: jnp.asarray(np.asarray(v, np.int16))
+        ),
     )
 
 

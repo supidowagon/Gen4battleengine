@@ -128,6 +128,10 @@ class Outcome(NamedTuple):
     # int8[2], by the battler a Yawn puts to sleep at this turn's end: subscript_fall_asleep.s's
     # ``Random 3, 2`` (2-5 turns), a draw of its own (bcp.c:1684-1697).
     yawn_sleep: jnp.ndarray
+    # int16[2], Acupressure's RandNext() (BtlCmd_BoostRandomStatBy2, battle_script.c:8950) as a
+    # value in [0, ACUPRESSURE_DRAWS): the stat is rank ``value % validStats`` among the stats
+    # below +6 at the move (``effects.acupressure_stat``), B12-9.
+    acupressure: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -160,6 +164,7 @@ def empty_outcome() -> Outcome:
         call=jnp.zeros((2,), jnp.int16),
         future_hit=sides + 1,
         yawn_sleep=sides + 2,
+        acupressure=jnp.zeros((2,), jnp.int16),
     )
 
 
@@ -709,7 +714,8 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
 def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
     battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
-    the stage, and so do the crit items (``ItemId.CRIT_ITEM``); Focus Energy is not implemented. Lucky
+    the stage, and so do the crit items (``ItemId.CRIT_ITEM``) and Focus Energy (+2; read at the
+    turn start like the rest, B12-4). Lucky
     Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
     are applied by ``sample_outcome``. Nature Power's are its called move's
     (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
@@ -723,6 +729,8 @@ def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.nd
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
     super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
     stage = stage + super_luck.astype(_I32)
+    # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
+    stage = stage + 2 * (state.focus_energy != 0).astype(_I32)
     # :7123-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
     # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
     item = state.item[jnp.arange(2), state.active]
@@ -1134,6 +1142,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # Yawn's sleep at the turn end: subscript_fall_asleep.s ``Random 3, 2`` (BtlCmd_Random,
         # battle_script.c:3200-3210: rand % 4 + 2). From a fold_in key.
         yawn_sleep=jax.random.randint(jax.random.fold_in(key, 26), per_side, 0, 4, dtype=_I32) + 2,
+        # BtlCmd_BoostRandomStatBy2 (battle_script.c:8950): RandNext() % validStats, the count
+        # read at the move (1-7): one draw in [0, 420) (lcm(1..7)) serves every count, uniform
+        # by the % n convention (B12-9).
+        acupressure=jax.random.randint(
+            jax.random.fold_in(key, 29), per_side, 0, ACUPRESSURE_DRAWS, dtype=_I32
+        ),
     )
     outcome = _cast(outcome)
 
@@ -1186,11 +1200,18 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     return outcome
 
 
+# The Outcome fields stored as int16 (the rest are int8).
+INT16_FIELDS = ("call", "acupressure")
+# Acupressure's draw values: lcm(1..7), every count of stats below +6 dividing it (B12-9).
+ACUPRESSURE_DRAWS = 420
+
+
 def _cast(outcome: Outcome) -> Outcome:
-    """``outcome`` with every field at its stored dtype (``call`` int16, the rest int8)."""
+    """``outcome`` with every field at its stored dtype (``INT16_FIELDS`` int16, the rest
+    int8)."""
     return Outcome(
         *(
-            jnp.asarray(f).astype(jnp.int16 if name == "call" else _I8)
+            jnp.asarray(f).astype(jnp.int16 if name in INT16_FIELDS else _I8)
             for name, f in zip(Outcome._fields, outcome, strict=True)
         )
     )

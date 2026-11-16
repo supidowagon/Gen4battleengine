@@ -326,6 +326,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
     Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
     Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # MOVE_HEAL_BELL (generated/moves.txt line 216): BtlCmd_TryPartyStatusRefresh's compare
+    # (battle_script.c:5035), E2 batch 12.
+    Constant("nuzline.engine.ids.MOVE_HEAL_BELL", "move", 215, "Heal Bell", _E),
     # ABILITY_MULTITYPE (generated/abilities.txt line 122): BtlCmd_TryCamouflage
     # (battle_script.c:8001-8004).
     Constant("nuzline.engine.ids.ABILITY_MULTITYPE", "ability", 121, "Multitype", _E),
@@ -465,6 +468,20 @@ CONSTANTS: tuple[Constant, ...] = (
             "Soundproof": 43,
             "Vital Spirit": 72,
             "Leaf Guard": 102,
+        },
+    ),
+    # E2 batch 12's decomp abilities: Captivate's Oblivious (effect_script_0265.s:5), Rest's
+    # Insomnia, Vital Spirit, Soundproof (subscript_rest.s:7-10), Heal Bell's Soundproof
+    # (battle_script.c:5038).
+    *_table(
+        "nuzline.engine.ids.STAT_MOVE_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Oblivious": 12,
+            "Insomnia": 15,
+            "Soundproof": 43,
+            "Vital Spirit": 72,
         },
     ),
     # The status orbs' decomp abilities (subscript_badly_poison.s:14, subscript_burn.s:6, :9).

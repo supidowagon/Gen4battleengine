@@ -188,7 +188,13 @@ from nuzline.engine.damage import (
     pinch_ability,
     weather_suppressed,
 )
-from nuzline.engine.effects import can_have_status, ingrain_anchors, protect_blocks
+from nuzline.engine.effects import (
+    acupressure_valid,
+    psycho_shift_status,
+    can_have_status,
+    ingrain_anchors,
+    protect_blocks,
+)
 from nuzline.engine.ids import (
     METRONOME_DRAW,
     MINIMIZE_PARAM,
@@ -236,6 +242,7 @@ from nuzline.engine.order import (
     used_moves,
 )
 from nuzline.engine.outcome import (
+    ACUPRESSURE_DRAWS,
     MAX_HITS,
     PRESENT_CUTS,
     PRESENT_HEAL,
@@ -342,6 +349,11 @@ class OutcomeLaws(NamedTuple):
     future_thresholds: jnp.ndarray  # int32[2, K]
     future_possible: jnp.ndarray  # bool[2, K]
     future_loose: jnp.ndarray  # bool[2]: every roll its own class
+    # E2 batch 12 (B12-9): Acupressure's draw, per side: the count of its user's stats below +6
+    # at the turn start, and whether that count can change before the move (every residue class
+    # of the 420 draws its own value then).
+    acupressure_count: jnp.ndarray  # int32[2]
+    acupressure_loose: jnp.ndarray  # bool[2]
 
 
 class SamplingOnly(Exception):
@@ -359,18 +371,25 @@ def _any_of(x, values) -> jnp.ndarray:
     return out
 
 
-def _inflicts(tables: Tables, state: BattleState, moves, status) -> jnp.ndarray:
+def _inflicts(tables: Tables, state: BattleState, moves, status, users=None) -> jnp.ndarray:
     """The move can inflict ``status`` on the foe (``STATUS_FOE`` / ``SECONDARY_STATUS`` /
     ``FANG_PARALYZE_FLINCH`` with ``move_param[m, 0]``, effects._inflict, effects._fang; and
     ``TRI_ATTACK`` any of ``TRI_ATTACK_STATUSES``, effects._tri_attack), Secret Power by its
-    terrain's effect (``order.move_effects``)."""
+    terrain's effect (``order.move_effects``). Psycho Shift (B12-17) gives its user's status
+    (``effects.psycho_shift_status``): ``users`` (``int[2]``) names each move's user side; without
+    it any status counts (over-approximate)."""
     effect, params = move_effects(tables, state, moves)
     status_effect = _any_of(
         effect,
         (_E.STATUS_FOE, _E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH),
     )
     tri = (effect == _E.TRI_ATTACK) & (status in TRI_ATTACK_STATUSES)
-    return (status_effect & (params[..., 0] == status)) | tri
+    shift = effect == _E.PSYCHO_SHIFT
+    if users is not None:
+        users = jnp.asarray(users, _I32)
+        own = state.status[users, state.active[users]]
+        shift = shift & (psycho_shift_status(own) == status)
+    return (status_effect & (params[..., 0] == status)) | tri | shift
 
 
 def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -706,6 +725,15 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.FOCUS_PUNCH,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
     _E.ENCORE,
+    # B12-4: the crit stages, whose odds are read at the turn start (outcome.crit_odds).
+    _E.FOCUS_ENERGY,
+    # B12-12..16: the user's own HP (the HP clause), status and party; Wish's heal comes at the
+    # turn's field pass, after every hit.
+    _E.REST,
+    _E.WEATHER_HEAL,
+    _E.WISH,
+    _E.HEAL_BELL,
+    _E.REFRESH,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -763,6 +791,19 @@ INPUT_CLAUSE_EFFECTS = (
     # the stages): the pivot clause.
     _E.U_TURN,
     _E.BATON_PASS,
+    # E2 batch 12, the stat clause: Tickle lowers the side's Attack (and Defense); Captivate its
+    # Sp. Atk; Haze, Psych Up, Acupressure and Power / Guard Swap change stages the side's hit
+    # reads (its attacking one or the foe's defending one); Power Trick swaps the foe's Attack
+    # and Defense (damage.battle_stats).
+    _E.TICKLE,
+    _E.CAPTIVATE,
+    _E.HAZE,
+    _E.PSYCH_UP,
+    _E.STAGE_SWAP,
+    _E.ACUPRESSURE,
+    _E.POWER_TRICK,
+    # B12-17: the user's status onto the side: the status clause (``status_hit``).
+    _E.PSYCHO_SHIFT,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1071,6 +1112,21 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENDEAVOR,  # no roll (damage.fixed_damage), B10-5
     _E.PAIN_SPLIT,  # a status move: no damage
     _E.SAFEGUARD,  # a status move: no damage (B10-7)
+    # E2 batch 12: status moves, no damage.
+    _E.TICKLE,
+    _E.FOCUS_ENERGY,
+    _E.HAZE,
+    _E.PSYCH_UP,
+    _E.STAGE_SWAP,
+    _E.CAPTIVATE,
+    _E.ACUPRESSURE,
+    _E.POWER_TRICK,
+    _E.REST,
+    _E.WEATHER_HEAL,
+    _E.WISH,
+    _E.HEAL_BELL,
+    _E.REFRESH,
+    _E.PSYCHO_SHIFT,
 )
 
 
@@ -1139,7 +1195,7 @@ def damage_inputs_can_change(
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in (0, 1)])
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
-    param0 = params[:, 0]
+    param0, param1 = params[:, 0], params[:, 1]
     category = tables.move_category[moves]
     move_type = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in (0, 1)])
     ability = state.ability[sides, mons]
@@ -1159,7 +1215,7 @@ def damage_inputs_can_change(
     held = state.item[sides, mons]
     pinch_stat = tables.item_param[held, 1]
     pinch = item == ItemId.PINCH_BERRY
-    foe_effect, foe_param0 = effect[::-1], param0[::-1]
+    foe_effect, foe_param0, foe_param1 = effect[::-1], param0[::-1], param1[::-1]
     own_flags = tables.move_flags[moves].astype(_I32)
     foe_flags = own_flags[::-1]
     unclassified = ~_any_of(foe_effect, INPUT_NEUTRAL_EFFECTS + INPUT_CLAUSE_EFFECTS)
@@ -1171,9 +1227,10 @@ def damage_inputs_can_change(
             _E.RECOIL_STATUS,
             _E.FANG_PARALYZE_FLINCH,
             _E.TRI_ATTACK,
+            _E.PSYCHO_SHIFT,  # B12-17: the user's status onto the side (foe_burns reads which)
         ),
     )
-    foe_burns = _inflicts(tables, state, moves[::-1], Status.BURN)
+    foe_burns = _inflicts(tables, state, moves[::-1], Status.BURN, users=(1, 0))
     foe_move = uses_move[::-1] & (
         unclassified
         | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
@@ -1183,10 +1240,21 @@ def damage_inputs_can_change(
         )
         | (foe_effect == _E.RAISE_ALL_STATS_HIT)
         | ((foe_effect == _E.CURSE) & physical)
-        | ((foe_effect == _E.DRAGON_DANCE) & (foe_param0 == defense_stat))
+        | (
+            (foe_effect == _E.DRAGON_DANCE)
+            & ((foe_param0 == defense_stat) | (foe_param1 == defense_stat))
+        )
         # Minimize sets the flag Stomp's power reads (B9-10).
         | ((foe_effect == _E.STAT_SELF) & (params[::-1, 2] == MINIMIZE_PARAM) & stomp)
-        | ((foe_effect == _E.SWAGGER) & physical)
+        # Swagger / Flatter raise the side's Attack / Sp. Atk (move_param 0, B12-2).
+        | ((foe_effect == _E.SWAGGER) & (foe_param0 == attack_stat))
+        # E2 batch 12: Tickle lowers the side's Attack (its Defense only meets the foe's own
+        # hit, which came first), Captivate its Sp. Atk; Haze, Psych Up, Acupressure and the
+        # stage swaps change a stage the hit reads; Power Trick the foe's Defense.
+        | ((foe_effect == _E.TICKLE) & physical)
+        | ((foe_effect == _E.CAPTIVATE) & special)
+        | _any_of(foe_effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE, _E.STAGE_SWAP))
+        | ((foe_effect == _E.POWER_TRICK) & physical)
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
@@ -1223,13 +1291,24 @@ def damage_inputs_can_change(
     stat_move = uses_move & _any_of(
         effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)
     )
+    # B12-3, B12-7, B12-8: Tickle and the stage swaps change move_param 0 and 1, Captivate 0;
+    # Haze, Psych Up and Acupressure any stage.
+    two_stat = uses_move & _any_of(effect, (_E.TICKLE, _E.STAGE_SWAP))
+    any_stage = jnp.any(uses_move & _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE)))
+    stat_move = stat_move | two_stat | (uses_move & (effect == _E.CAPTIVATE))
     any_switch = jnp.any(live & is_switch(actions))
 
     def lowerable(stat) -> jnp.ndarray:
         """``bool[2]``: per side ``s``, a move this turn changes stage ``stat[s]`` (the
         stage ``s``'s hit reads) of some battler, or a Pokemon switches in."""
-        moved = jnp.stack([jnp.any(stat_move & (param0 == stat[s])) for s in (0, 1)])
-        return moved | any_switch
+        moved = jnp.stack(
+            [
+                jnp.any(stat_move & (param0 == stat[s]))
+                | jnp.any(two_stat & (param1 == stat[s]))
+                for s in (0, 1)
+            ]
+        )
+        return moved | any_switch | any_stage
 
     attack_stage = state.stages[sides, attack_stat] < 0
     defense_stage = state.stages[sides[::-1], defense_stat] < 0
@@ -1400,7 +1479,7 @@ def outcome_laws(
         )
         # Encore's RandNext() % 5 + 3 (battle_script.c:4742): missing until batch 11 (B11-9).
         | (effect == _E.ENCORE)
-        | _inflicts(tables, state, moves, Status.SLEEP)
+        | _inflicts(tables, state, moves, Status.SLEEP, users=(0, 1))
         # Uproar's Random 3, 3 (subscript_uproar.s:6), only for a user not in an uproar yet
         # (effect_script_0159.s:5; only its own move can start one this turn).
         | ((effect == _E.UPROAR) & (state.uproar == 0))
@@ -1475,10 +1554,10 @@ def outcome_laws(
         "confused_own": uses_move & (state.confusion >= 2),
         "future_roll": future_roll,
         "para_inflict": uses_move
-        & _inflicts(tables, state, moves, Status.PARALYSIS)
+        & _inflicts(tables, state, moves, Status.PARALYSIS, users=(0, 1))
         & ~status_blocked,
         "freeze_inflict": uses_move
-        & _inflicts(tables, state, moves, Status.FREEZE)
+        & _inflicts(tables, state, moves, Status.FREEZE, users=(0, 1))
         & ~status_blocked,
         "confuse_inflict": uses_move & confuses & ~confused_blocked,
         "infatuated_own": infatuated_own,
@@ -1516,7 +1595,11 @@ def outcome_laws(
     own_speed = (_any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)) & (param0 == Stat.SPE)) | (
         _any_of(effect, (_E.RAISE_ALL_STATS_HIT, _E.CURSE, _E.DRAGON_DANCE))
     )
+    # E2 batch 12: Haze resets, Psych Up copies and Acupressure may raise the user's Speed; Haze
+    # resets the foe's too.
+    own_speed = own_speed | _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE))
     foe_speed = _any_of(effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (param0 == Stat.SPE)
+    foe_speed = foe_speed | (effect == _E.HAZE)
     # subscript_flinched.s:10-14: a flinched Steadfast Pokemon gains +1 Speed (its foe's
     # flinch move, or its King's Rock on a flagged damaging move).
     steadfast = _holds(tables, state, actions, (AbilityId.STEADFAST,)) & foe_moves
@@ -1541,7 +1624,9 @@ def outcome_laws(
     # pluck_berry).
     lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
     para_free = (
-        (foe_moves & _inflicts(tables, state, foe_move, Status.PARALYSIS))
+        (foe_moves & _inflicts(tables, state, foe_move, Status.PARALYSIS, users=(1, 0)))
+        # B12-12..17: Rest, Refresh, Heal Bell and Psycho Shift cure their user's paralysis.
+        | (uses_move & _any_of(effect, (_E.REST, _E.REFRESH, _E.HEAL_BELL, _E.PSYCHO_SHIFT)))
         | (uses_move & damaging & contact & static[::-1])
         | lum
         | plucks
@@ -1658,6 +1743,18 @@ def outcome_laws(
     # Quick Claw (step.qc_kept, end_of_turn_order): a living holder anywhere in the party.
     claw = tables.item_effect[state.item] == ItemId.QUICK_CLAW
     quick_claw = live & jnp.any(claw & (state.species != 0) & (state.hp > 0), axis=1)
+    # Acupressure (B12-9): BtlCmd_BoostRandomStatBy2 reads the count of its user's stats below +6
+    # at the move (battle_script.c:8943-8950). Its user's stages can change before then only by
+    # the foe's action (a move, or a newcomer's Intimidate; over-approximate): the count is
+    # then loose. A count of 1 with no change possible draws nothing that matters.
+    acu_count = jnp.stack(
+        [jnp.sum(acupressure_valid(state, side).astype(_I32)) for side in (0, 1)]
+    )
+    acu_loose = (live & (uses_move | switch))[::-1]
+    acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
+    if loose:
+        acupressure = uses_move & (effect == _E.ACUPRESSURE)
+        acu_loose = jnp.ones_like(acu_loose)
     if loose:
         # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle
         # (either party, any HP), holder or not. With no Quick Claw at all nothing can read
@@ -1697,6 +1794,9 @@ def outcome_laws(
             # Yawn's sleep of this turn's end: a count of 1 now reaches 0 there (a Yawn of this
             # turn sets 2; over-approximate: the sleep may still be blocked).
             yawn_sleep=live & (state.yawn == 1),
+            # B12-9: the side uses Acupressure (its draw decides only with two or more stats
+            # below +6 at the move, or a count that can change first).
+            acupressure=acupressure,
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -1851,6 +1951,8 @@ def outcome_laws(
         future_thresholds=future_thr,
         future_possible=future_ok,
         future_loose=future_loose,
+        acupressure_count=acu_count,
+        acupressure_loose=acu_loose,
     )
 
 
@@ -1990,6 +2092,17 @@ def _roar_target(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(n)), [1] * n, n
 
 
+def _acupressure(laws: OutcomeLaws, side: int) -> _Law:
+    """BtlCmd_BoostRandomStatBy2 (battle_script.c:8950): RandNext() % validStats, uniform by the
+    % n convention, stored as a value in [0, ACUPRESSURE_DRAWS) read modulo the count at the move
+    (``effects.acupressure_stat``, B12-9). A fixed count c gives c classes; a loose one the 420
+    residues (each its own class over the counts 1-7)."""
+    if bool(laws.acupressure_loose[side]):
+        return list(range(ACUPRESSURE_DRAWS)), [1] * ACUPRESSURE_DRAWS, ACUPRESSURE_DRAWS
+    n = max(int(laws.acupressure_count[side]), 1)
+    return list(range(n)), [1] * n, n
+
+
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
     # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
     # RandNext() % 100 < param, uniform by the % n convention.
@@ -2025,6 +2138,7 @@ _LAWS = {
     "future_hit": _future_hit,
     # subscript_fall_asleep.s Random 3, 2 at Yawn's turn end: 2-5, uniform.
     "yawn_sleep": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
+    "acupressure": _acupressure,
 }
 
 
@@ -2244,6 +2358,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "tri_attack",
             "roar_level",
             "roar_target",
+            "acupressure",
         ):
             plan.path((name, (s,)), "move", *hits)
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
@@ -2305,6 +2420,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "tri_attack",
             "roar_level",
             "roar_target",
+            "acupressure",
         ):
             plan.gate((name, (q,)), cond)
 
@@ -2626,7 +2742,7 @@ def enumerate_drawn(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray, Outcome]:
         for (name, index), col in cols.items():
             read = col != SKIPPED
             target = fields[name][(rows_, *index)]
-            fields[name][(rows_, *index)] = np.where(read, col, target).astype(np.int8)
+            fields[name][(rows_, *index)] = np.where(read, col, target).astype(fields[name].dtype)
             drawn[name][(rows_, *index)] = read
         start += len(probs)
     fields["call"][:] = laws.call.astype(fields["call"].dtype)

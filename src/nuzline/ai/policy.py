@@ -509,6 +509,178 @@ _basic_check_dragon_dance = _double_stat_stage(
 )
 
 
+_basic_check_cosmic_power = _double_stat_stage(
+    "Basic_CheckCosmicPower", Stat.DEF, Stat.SPD, 949
+)  # B12-11
+
+# E2 batch 12, the stat family's Basic labels (B12-11).
+_BATTLE_STATS = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD, Stat.ACC, Stat.EVA)
+
+
+def _basic_check_stat_stage_imbalance(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckStatStageImbalance`` (script.s:475-497; Haze, Psych Up): -10 unless one of the
+    AI's stages is below neutral (:480-486) or one of the player's above (:487-493)."""
+    ctx = _at(ctx, mask)
+    for stat in _BATTLE_STATS:
+        ctx, _ = _split(c.if_stat_stage_less_than(ctx, _A, stat, 6))  # -> _Terminate
+    for stat in _BATTLE_STATS:
+        ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _D, stat, 6))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -10))  # :494 GoTo ScoreMinus10
+    return ctx
+
+
+def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_volatile_status(ctx, _A, c.VolatileCondition.FOCUS_ENERGY))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_tickle(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckTickle`` (script.s:933-947): without the AI's Mold Breaker, the player's
+    Clear Body or White Smoke -10; then the player's Attack at -6 -10, its Defense -8."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    ctx, stages = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Clear Body", "White Smoke"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    # Basic_CheckTickle_CheckStatStages (:942)
+    ctx = _at(ctx, stages | ctx.live)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.ATK, 0))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.DEF, 0))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_check_acupressure(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAcupressure`` (script.s:1135-1158): with Simple, -10 when any stage is above
+    decomp 8 (:1149-1158); without, -10 when any is at +6 (:1140-1147)."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    ctx, simple = _split(c.if_loaded_equal_to(ctx, _ABILITY["Simple"]))
+    order = (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD, Stat.EVA, Stat.ACC)
+    for stat in order:
+        ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, stat, 12))
+        ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+    # Basic_CheckAcupressure_Simple (:1149)
+    ctx = _at(ctx, simple)
+    for stat in order:
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_power_trick(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckPowerTrick`` (script.s:1358-1361): -10 under the AI's own Power Trick."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effect(ctx, _A, c.MoveEffectMask.POWER_TRICK))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _stage_swap_check(label: str, first: Stat, second: Stat, line: int):
+    """``Basic_CheckPowerSwap`` (script.s:1392-1404) / ``_GuardSwap`` (:1406-1418): -10 when
+    neither swap is a gain: the player's stage minus the AI's (``DiffStatStages``) below 1 for
+    both stats."""
+
+    def check(ctx: AiContext, mask) -> AiContext:
+        ctx = c.diff_stat_stages(_at(ctx, mask), _D, first)
+        ctx, second_check = _split(c.if_loaded_less_than(ctx, 1))
+        ctx, _ = _split(c.go_to(ctx))  # -> _Terminate
+        ctx = c.diff_stat_stages(_at(ctx, second_check), _D, second)
+        ctx, t = _split(c.if_loaded_less_than(ctx, 1))
+        return c.pop_or_end(_score(ctx, t, -10))
+
+    check.__name__ = check.__qualname__ = f"_basic_check_{label.split('_')[-1].lower()}"
+    check.__doc__ = f"``{label}`` (script.s:{line})."
+    return check
+
+
+_basic_check_powerswap = _stage_swap_check("Basic_CheckPowerSwap", Stat.ATK, Stat.SPA, 1392)
+_basic_check_guardswap = _stage_swap_check("Basic_CheckGuardSwap", Stat.DEF, Stat.SPD, 1406)
+
+
+def _basic_check_captivate(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCaptivate`` (script.s:1508-1538): without the AI's Mold Breaker, the player's
+    Oblivious, Clear Body or White Smoke -10; then -10 unless the two are male and female
+    (``LoadGender``), and -10 with the player's Sp. Atk at -6."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    ctx, gender = _split(c.if_loaded_equal_to(ctx, _ABILITY["Mold Breaker"]))
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Oblivious", "Clear Body", "White Smoke"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    # Basic_CheckCaptivate_CheckGender (:1518)
+    ctx = c.load_gender(_at(ctx, gender | ctx.live), _A)
+    ctx, male = _split(c.if_loaded_equal_to(ctx, c.Gender.MALE))
+    ctx, female = _split(c.if_loaded_equal_to(ctx, c.Gender.FEMALE))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -10))
+    stage = jnp.zeros_like(ctx.live)
+    for mine, theirs in ((male, c.Gender.FEMALE), (female, c.Gender.MALE)):
+        ctx = c.load_gender(_at(ctx, mine), _D)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, theirs))
+        stage = stage | t
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, -10))
+    # Basic_CheckCaptivate_CheckStatStage (:1535)
+    ctx, t = _split(c.if_stat_stage_less_than(_at(ctx, stage), _D, Stat.SPA, 1))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_can_refresh_status(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanRefreshStatus`` (script.s:923-926): -10 unless the AI is poisoned, badly
+    poisoned, burned or paralyzed (B12-18)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_not_status(ctx, _A, c.MonCondition.FACADE_BOOST))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_can_psycho_shift(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanPsychoShift`` (script.s:1301-1345): -10 when the AI has no status, the
+    player has one or its side has Safeguard; then by the AI's status: poison (Poison Heal on
+    the AI; a Poison or Steel player; Immunity, Poison Heal or Magic Guard), burn (a Fire
+    player; Magic Guard or Water Veil), paralysis (Limber) -10 (B12-18)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_not_status(ctx, _A, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -10)
+    ctx, poison = _split(c.if_status(ctx, _A, c.MonCondition.ANY_POISON))
+    ctx, burn = _split(c.if_status(ctx, _A, c.MonCondition.BURN))
+    ctx, para = _split(c.if_status(ctx, _A, c.MonCondition.PARALYSIS))
+    ctx = c.pop_or_end(ctx)  # GoTo Basic_PsychoShift_Terminate
+    # Basic_PsychoShift_Poison (:1316)
+    ctx = c.load_battler_ability(_at(ctx, poison), _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Poison Heal"]))
+    ctx = _score(ctx, t, -10)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        for type_name in ("Poison", "Steel"):
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+            ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Immunity", "Poison Heal", "Magic Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+    # Basic_PsychoShift_Burn (:1332)
+    ctx = _at(ctx, burn)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+        ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Magic Guard", "Water Veil"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx = c.pop_or_end(ctx)
+    # Basic_PsychoShift_Paralysis (:1342)
+    ctx = c.load_battler_ability(_at(ctx, para), _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Limber"]))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _hazard_layers(label: str, condition, full: int, line: int):
     """``Basic_CheckSpikes`` (script.s:707-713) / ``Basic_CheckToxicSpikes`` (:1445-1453): -10
     when the player's side already has ``full`` layers or the player has no other Pokemon
@@ -2611,6 +2783,268 @@ def _expert_status_defense_down(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
+# E2 batch 12, the stat family's Expert labels (B12-11).
+
+
+def _expert_haze(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Haze`` (script.s:2520-2564): one of the AI's stages above decomp 8 or the
+    player's below 4 (:2528-2537): -3 unless the 50 roll (:2541) jumps; then (_CheckToEncourage,
+    :2544) one of the player's above 8 or the AI's below 4: +3 unless the 50 roll (:2560) jumps,
+    else -1 unless the 50 roll (:2555) jumps."""
+    ctx = _at(ctx, mask)
+    minus3 = jnp.zeros_like(ctx.live)
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.EVA):
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _A, stat, 8))
+        minus3 = minus3 | t
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.ACC):
+        ctx, t = _split(c.if_stat_stage_less_than(ctx, _D, stat, 4))
+        minus3 = minus3 | t
+    ctx, encourage = _split(c.go_to(ctx))  # :2538
+    # Expert_Haze_TryScoreMinus3 (:2540)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, minus3), 50, 2541))
+    ctx = c.add_to_move_score(ctx, -3)
+    # Expert_Haze_CheckToEncourage (:2544)
+    ctx = _at(ctx, encourage | t | ctx.live)
+    plus3 = jnp.zeros_like(ctx.live)
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.EVA):
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, stat, 8))
+        plus3 = plus3 | t
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.ACC):
+        ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, stat, 4))
+        plus3 = plus3 | t
+    ctx, end = _split(c.if_random_less_than(ctx, 50, 2555))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, t = _split(c.go_to(ctx))  # :2557
+    end = end | t
+    # Expert_Haze_TryScorePlus3 (:2559)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus3), 50, 2560))
+    ctx = c.add_to_move_score(ctx, 3)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
+def _expert_psych_up(ctx: AiContext, mask) -> AiContext:
+    """``Expert_PsychUp`` (script.s:3814-3850): none of the player's Attack, Defense, Sp. Atk,
+    Sp. Def, Evasion above decomp 8: -2; else +1 when one of the AI's Attack .. Sp. Def is below
+    7, +2 when its Evasion is, otherwise -2 unless the 50 roll (:3836) jumps."""
+    ctx = _at(ctx, mask)
+    check = jnp.zeros_like(ctx.live)
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD, Stat.EVA):
+        ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, stat, 8))
+        check = check | t
+    ctx, minus2 = _split(c.go_to(ctx))  # :3828
+    # Expert_PsychUp_CheckUserStatStages (:3830)
+    ctx = _at(ctx, check)
+    plus1 = jnp.zeros_like(ctx.live)
+    for stat in (Stat.ATK, Stat.DEF, Stat.SPA, Stat.SPD):
+        ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, stat, 7))
+        plus1 = plus1 | t
+    ctx, plus2 = _split(c.if_stat_stage_less_than(ctx, _A, Stat.EVA, 7))
+    ctx, end = _split(c.if_random_less_than(ctx, 50, 3836))
+    ctx, t = _split(c.go_to(ctx))  # :3837
+    minus2 = minus2 | t
+    # Expert_PsychUp_ScorePlus2 (:3839), falling into _ScorePlus1 (:3842)
+    ctx = c.add_to_move_score(_at(ctx, plus2), 1)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus1 | ctx.live), 1))
+    # Expert_PsychUp_ScoreMinus2 (:3846), falling into _End
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
+def _expert_flatter(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Flatter`` (script.s:2854-2859): +1 unless the 128 roll (:2858) jumps, then
+    ``Expert_StatusConfuse`` (:2861)."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 2858))
+    ctx = c.add_to_move_score(ctx, 1)
+    return _status_confuse(_at(ctx, t | ctx.live))
+
+
+def _expert_acupressure(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Acupressure`` (script.s:5008-5027): at 50 % HP or less -1; above 90 % +1 unless
+    the 64 roll (:5019) jumps; else the 128 roll (:5016) ends it, then the same +1."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 51))
+    ctx, plus1 = _split(c.if_hp_percent_greater_than(ctx, _A, 90))
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 5016))
+    # Expert_Acupressure_TryScorePlus1 (:5018)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus1 | ctx.live), 64, 5019))
+    ctx = c.add_to_move_score(ctx, 1)
+    end = end | t | ctx.live  # :5021 GoTo _End
+    # Expert_Acupressure_ScoreMinus1 (:5023)
+    ctx = c.add_to_move_score(_at(ctx, minus1), -1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
+def _expert_power_trick(ctx: AiContext, mask) -> AiContext:
+    """``Expert_PowerTrick`` (script.s:5442-5469): above 90 % HP +1 unless the 96 roll (:5454)
+    jumps, above 60 % the 128 roll (:5459), above 30 % the 164 roll (:5464); else -2."""
+    ctx = _at(ctx, mask)
+    branches = []
+    for hp, n, line in ((90, 96, 5454), (60, 128, 5459), (30, 164, 5464)):
+        ctx, t = _split(c.if_hp_percent_greater_than(ctx, _A, hp))
+        branches.append((t, n, line))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))  # :5451 GoTo ScoreMinus2
+    for t, n, line in branches:
+        ctx, jumped = _split(c.if_random_less_than(_at(ctx, t), n, line))
+        ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+        ctx = c.pop_or_end(_at(ctx, jumped))
+    return ctx
+
+
+def _swap_tiers(label: str, first: Stat, second: Stat, lines: tuple[int, ...]):
+    """``Expert_PowerSwap`` (script.s:5632-5764) / ``Expert_GuardSwap`` (:5766-5898): the
+    first stat's ``DiffStatStages`` (the player's stage minus the AI's) picks a tier (above 3,
+    above 1, above 0, equal to 0; else nothing), the second stat's diff then a ``TryScorePlusN``
+    entry (above 3, above 1, equal to 0 or above 0 by tier), and each ``TryScorePlusN`` adds N
+    unless its 128 roll jumps to ``TryScorePlus(N - 1)`` (``lines``: the rolls of TryScorePlus5
+    .. 1; TryScorePlus1's jump ends it)."""
+    # (first tier) -> ((test, threshold, N), ...) in script order (:5710-5736).
+    tiers = (
+        ((">", 3), ((">", 3, 5), (">", 1, 4), ("==", 0, 3))),
+        ((">", 1), ((">", 3, 4), (">", 1, 3), ("==", 0, 2))),
+        ((">", 0), ((">", 3, 3), (">", 1, 2), ("==", 0, 1))),
+        (("==", 0), ((">", 3, 3), (">", 1, 2), (">", 0, 1))),
+    )
+
+    def test(ctx, op, value):
+        if op == ">":
+            return c.if_loaded_greater_than(ctx, value)
+        return c.if_loaded_equal_to(ctx, value)
+
+    def label_fn(ctx: AiContext, mask) -> AiContext:
+        ctx = c.diff_stat_stages(_at(ctx, mask), _D, first)
+        reached = []
+        for (op, value), entries in tiers:
+            ctx, t = _split(test(ctx, op, value))
+            reached.append((t, entries))
+        ctx, end = _split(c.go_to(ctx))  # -> _End
+        plus = {n: jnp.zeros_like(ctx.live) for n in range(1, 6)}
+        for t, entries in reached:
+            ctx = c.diff_stat_stages(_at(ctx, t), _D, second)
+            for op, value, n in entries:
+                ctx, j = _split(test(ctx, op, value))
+                plus[n] = plus[n] | j
+            ctx, j = _split(c.go_to(ctx))
+            end = end | j
+        # TryScorePlus5 .. 1: each roll jumps one tier down; else +N and the end.
+        carry = jnp.zeros_like(ctx.live)
+        for n in range(5, 0, -1):
+            ctx = _at(ctx, plus[n] | carry)
+            ctx, carry = _split(c.if_random_less_than(ctx, 128, lines[5 - n]))
+            ctx = c.add_to_move_score(ctx, n)
+            ctx, j = _split(c.go_to(ctx))
+            end = end | j
+        end = end | carry  # TryScorePlus1's jump: the end
+        return c.pop_or_end(_at(ctx, end))
+
+    label_fn.__name__ = label_fn.__qualname__ = f"_expert_{label.split('_')[-1].lower()}"
+    label_fn.__doc__ = f"``{label}`` (script.s:{lines[0]}); see ``_swap_tiers``."
+    return label_fn
+
+
+_expert_powerswap = _swap_tiers(
+    "Expert_PowerSwap", Stat.ATK, Stat.SPA, (5739, 5744, 5749, 5754, 5759)
+)
+_expert_guardswap = _swap_tiers(
+    "Expert_GuardSwap", Stat.DEF, Stat.SPD, (5873, 5878, 5883, 5888, 5893)
+)
+
+
+def _expert_captivate(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Captivate`` (script.s:6236-6266)."""
+    ctx = _at(ctx, mask)
+    ctx, check_hp = _split(c.if_stat_stage_equal_to(ctx, _D, Stat.SPA, 6))
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, low = _split(c.if_hp_percent_greater_than(ctx, _A, 90))
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_Captivate_CheckLowStatStage (:6250)
+    ctx = _at(ctx, low | ctx.live)
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.SPA, 3))
+    check_hp = check_hp | t
+    ctx, t = _split(c.if_random_less_than(ctx, 50, 6252))
+    check_hp = check_hp | t
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_Captivate_CheckOpponentHP (:6255)
+    ctx = _at(ctx, check_hp | ctx.live)
+    ctx, last = _split(c.if_hp_percent_greater_than(ctx, _D, 70))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_Captivate_CheckOpponentLastMove (:6259)
+    ctx = c.load_defender_last_used_move_class(_at(ctx, last | ctx.live))
+    ctx, end = _split(c.if_loaded_not_equal_to(ctx, c.CLASS_PHYSICAL))
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 6262))
+    ctx = c.add_to_move_score(ctx, -1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
+def _expert_rest(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Rest`` (script.s:2745-2790), B12-18."""
+    ctx = _at(ctx, mask)
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, faster = _split(c.if_hp_percent_not_equal_to(ctx, _A, 100))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -8))  # :2760-2761
+    snatch = jnp.zeros_like(ctx.live)
+    for reached, low, high, n, line in ((faster, 40, 50, 70, 2766), (slower, 60, 70, 50, 2775)):
+        # Expert_Rest_{Faster,Slower}CheckHP (:2763, :2772)
+        ctx = _at(ctx, reached)
+        ctx, t = _split(c.if_hp_percent_less_than(ctx, _A, low))
+        snatch = snatch | t
+        ctx, minus3 = _split(c.if_hp_percent_greater_than(ctx, _A, high))
+        ctx, t = _split(c.if_random_less_than(ctx, n, line))
+        snatch = snatch | t
+        # _ScoreMinus3 (:2768, :2777)
+        ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus3 | ctx.live), -3))
+    # Expert_Rest_CheckForSnatch (:2781)
+    ctx = _at(ctx, snatch)
+    ctx, plus3 = _split(c.if_move_effect_not_known(ctx, _D, BattleEffect.STEAL_STATUS_MOVE))
+    ctx, end = _split(c.if_random_less_than(ctx, 50, 2783))
+    # Expert_Rest_TryScorePlus3 (:2785)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus3 | ctx.live), 10, 2786))
+    ctx = c.add_to_move_score(ctx, 3)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
+def _expert_heal_bell(ctx: AiContext, mask) -> AiContext:
+    """``Expert_HealBell`` (script.s:3398-3406): -5 unless the AI or a party member with HP has
+    a status, B12-18."""
+    ctx = _at(ctx, mask)
+    ctx, end = _split(c.if_status(ctx, _A, c.MonCondition.ANY))
+    ctx, t = _split(c.if_party_member_status(ctx, _A, c.MonCondition.ANY))
+    ctx = c.add_to_move_score(ctx, -5)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
+def _expert_synthesis(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Synthesis`` (script.s:2628-2638): in hail, rain or a sandstorm (``LoadCurrentWeather``)
+    -2, then ``Expert_Recovery`` either way (:2635, the fall-through at :2638), B12-18."""
+    ctx = c.load_current_weather(_at(ctx, mask))
+    minus2 = jnp.zeros_like(ctx.live)
+    for weather in (c.AiWeather.HAILING, c.AiWeather.RAINING, c.AiWeather.SANDSTORM):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, int(weather)))
+        minus2 = minus2 | t
+    ctx, recovery = _split(c.go_to(ctx))
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)
+    return _expert_recovery(ctx, recovery | ctx.live)
+
+
+def _expert_refresh(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Refresh`` (script.s:4644-4653): the player below 50 % HP -1, B12-18."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _D, 50))
+    return c.pop_or_end(_score(ctx, t, -1))
+
+
+def _expert_psycho_shift(ctx: AiContext, mask) -> AiContext:
+    """``Expert_PsychoShift`` (script.s:5296-5306): -10 without a status on the AI; else +1 unless
+    the 128 roll (:5301) jumps or the player is below 30 % HP, B12-18."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_not_status(ctx, _A, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -10)
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 5301))
+    ctx, t = _split(c.if_hp_percent_less_than(ctx, _D, 30))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
 def _expert_pursuit(ctx: AiContext, mask) -> AiContext:
     """``Expert_Pursuit`` (script.s:3706-3735)."""
     # Expert_Pursuit (:3706)
@@ -2688,6 +3122,7 @@ _BASIC_LABELS = (
     (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
     (BattleEffect.ACC_DOWN, _basic_check_low_accuracy),  # :149
     (BattleEffect.EVA_DOWN, _basic_check_low_evasion),  # :150
+    (BattleEffect.RESET_STAT_CHANGES, _basic_check_stat_stage_imbalance),  # :151 (B12-11)
     (BattleEffect.FORCE_SWITCH, _basic_check_force_switch),  # :153
     (BattleEffect.RESTORE_HALF_HP, _basic_check_can_recover_hp),  # :154
     (BattleEffect.STATUS_BADLY_POISON, _basic_check_cannot_poison),  # :155
@@ -2696,6 +3131,7 @@ _BASIC_LABELS = (
     (BattleEffect.CHARGE_TURN_HIGH_CRIT, _basic_check_non_standard_damage),  # :158
     (BattleEffect.HALVE_HP, _basic_check_non_standard_damage),  # :159
     (BattleEffect.DAMAGE_FLAT_40, _basic_check_non_standard_damage),  # :160
+    (BattleEffect.CRIT_UP_2, _basic_check_already_pumped_up),  # :162 (B12-11)
     (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
     (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164
     (BattleEffect.DEF_UP_2, _basic_check_high_def),  # :165
@@ -2729,15 +3165,18 @@ _BASIC_LABELS = (
     (BattleEffect.PREVENT_STATUS, _basic_check_safeguard),  # :206
     (BattleEffect.PASS_STATS_AND_STATUS, _basic_check_baton_pass),  # :208
     (BattleEffect.DAMAGE_FLAT_20, _basic_check_non_standard_damage),  # :209
+    (BattleEffect.HEAL_HALF_MORE_IN_SUN, _basic_check_can_recover_hp),  # :210 (B12-18)
     (BattleEffect.RANDOM_POWER_BASED_ON_IVS, _basic_check_non_standard_damage),  # :213
     (BattleEffect.WEATHER_RAIN, _basic_check_rain_dance),  # :214
     (BattleEffect.WEATHER_SUN, _basic_check_sunny_day),  # :215
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _basic_check_belly_drum),  # :216
+    (BattleEffect.COPY_STAT_CHANGES, _basic_check_stat_stage_imbalance),  # :217 (B12-11)
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
     (BattleEffect.CHARGE_TURN_DEF_UP, _basic_check_non_standard_damage),  # :219
     (BattleEffect.HIT_IN_3_TURNS, _basic_check_future_sight),  # :220
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
+    (BattleEffect.SP_ATK_UP_CAUSE_CONFUSION, _basic_check_cannot_confuse),  # :230 (B12-11)
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233
     (BattleEffect.BOOST_ALLY_POWER_BY_50_PERCENT, _basic_check_helping_hand),  # :234
@@ -2746,15 +3185,24 @@ _BASIC_LABELS = (
     (BattleEffect.REMOVE_HELD_ITEM, _basic_check_remove_item),  # :240
     (BattleEffect.SET_HP_EQUAL_TO_USER, _basic_check_non_standard_damage),  # :241
     (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _basic_check_imprison),  # :242
+    (BattleEffect.HEAL_STATUS, _basic_check_can_refresh_status),  # :243 (B12-18)
     (BattleEffect.INCREASE_POWER_WITH_WEIGHT, _basic_check_non_standard_damage),  # :244
+    (BattleEffect.ATK_DEF_DOWN, _basic_check_tickle),  # :246 (B12-11)
+    (BattleEffect.DEF_SPD_UP, _basic_check_cosmic_power),  # :247 (B12-11)
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
+    (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
+    (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
+    (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
     (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
+    (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
+    (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
+    (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
 # Expert_Main's entries (script.s:1628-1808) of the transcribed effects, in line order. The
@@ -2773,10 +3221,12 @@ _EXPERT_LABELS = (
     (BattleEffect.SPEED_DOWN, _expert_status_speed_down),  # :1643
     (BattleEffect.ACC_DOWN, _expert_status_accuracy_down),  # :1646
     (BattleEffect.EVA_DOWN, _expert_status_eva_down),  # :1647
+    (BattleEffect.RESET_STAT_CHANGES, _expert_haze),  # :1648 (B12-11)
     (BattleEffect.FORCE_SWITCH, _expert_force_switch),  # :1650
     (BattleEffect.RESTORE_HALF_HP, _expert_recovery),  # :1652
     (BattleEffect.STATUS_BADLY_POISON, _expert_toxic_leech_seed),  # :1653
     (BattleEffect.SET_LIGHT_SCREEN, _expert_light_screen),  # :1654
+    (BattleEffect.REST, _expert_rest),  # :1655 (B12-18)
     (BattleEffect.ONE_HIT_KO, _expert_ohko),  # :1656
     (BattleEffect.CHARGE_TURN_HIGH_CRIT, _expert_charge_turn_no_invuln),  # :1657
     (BattleEffect.HALVE_HP, _expert_super_fang),  # :1658
@@ -2806,6 +3256,7 @@ _EXPERT_LABELS = (
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
+    (BattleEffect.CURE_PARTY_STATUS, _expert_heal_bell),  # :1696 (B12-18)
     (BattleEffect.PREVENT_ESCAPE, _expert_binding_move),  # :1698
     (BattleEffect.EVA_UP_2_MINIMIZE, _expert_status_evasion_up),  # :1699
     (BattleEffect.CURSE, _expert_curse),  # :1700
@@ -2813,9 +3264,11 @@ _EXPERT_LABELS = (
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
     (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
+    (BattleEffect.HEAL_HALF_MORE_IN_SUN, _expert_synthesis),  # :1707 (B12-18)
     (BattleEffect.WEATHER_RAIN, _expert_rain_dance),  # :1710
     (BattleEffect.WEATHER_SUN, _expert_sunny_day),  # :1711
     (BattleEffect.MAX_ATK_LOSE_HALF_MAX_HP, _expert_belly_drum),  # :1712
+    (BattleEffect.COPY_STAT_CHANGES, _expert_psych_up),  # :1713 (B12-11)
     (BattleEffect.MIRROR_COAT, _expert_mirror_coat),  # :1714
     (BattleEffect.CHARGE_TURN_DEF_UP, _expert_charge_turn_no_invuln),  # :1715
     # :1716. Its second entry, to Expert_Thunder (:1719, the decomp's BUG note), is never
@@ -2825,6 +3278,7 @@ _EXPERT_LABELS = (
     (BattleEffect.FLY, _expert_charge_turn_with_invuln),  # :1721
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _expert_fake_out),  # :1723
     (BattleEffect.WEATHER_HAIL, _expert_hail),  # :1726
+    (BattleEffect.SP_ATK_UP_CAUSE_CONFUSION, _expert_flatter),  # :1727 (B12-11)
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _expert_focus_punch),  # :1730
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
@@ -2834,7 +3288,10 @@ _EXPERT_LABELS = (
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
     (BattleEffect.SET_HP_EQUAL_TO_USER, _expert_endeavor),  # :1741
     (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _expert_imprison),  # :1744
+    (BattleEffect.HEAL_STATUS, _expert_refresh),  # :1745 (B12-18)
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
+    (BattleEffect.ATK_DEF_DOWN, _expert_status_defense_down),  # :1751 (B12-11)
+    (BattleEffect.DEF_SPD_UP, _expert_status_spd_up),  # :1752 (B12-11)
     (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
@@ -2842,10 +3299,15 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
+    (BattleEffect.RANDOM_STAT_UP_2, _expert_acupressure),  # :1769 (B12-11)
     (BattleEffect.METAL_BURST, _expert_metal_burst),  # :1770
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
+    (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
+    (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
+    (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
+    (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
@@ -2853,6 +3315,7 @@ _EXPERT_LABELS = (
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.BOUNCE, _expert_charge_turn_with_invuln),  # :1803
+    (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _expert_captivate),  # :1804 (B12-11)
     (BattleEffect.STEALTH_ROCK, _expert_stealth_rock),  # :1805
     (BattleEffect.RECOIL_HALF, _expert_recoil_move),  # :1806
     (BattleEffect.SHADOW_FORCE, _expert_shadow_force),  # :1808

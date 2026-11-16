@@ -2,6 +2,11 @@
 
 ## RESUME (updated 2026-11-16 morning: batch 10 in main; batch 11 closing; batch 12 planned)
 
+- **HELD 2026-11-16 (manager, weekly usage 94%; resume after 12:00 on the manager's word).**
+  Tip 49084d6. Batch 12 (stat/HP + healing) is UNCOMMITTED in this tree, stopped mid-way (the
+  agent was writing the healing AI): engine/AI/state/tests files plus new tests/engine/
+  test_batch12.py; untested; review with `git diff` before continuing. Seed 32 on batch 11 came
+  back clean (ok 300 32). Batch 11's other owed heavy runs and test_cli are still queued.
 - **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
   / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
   e022644). Main merged into this branch at 453e283. Never push.

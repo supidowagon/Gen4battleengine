@@ -340,6 +340,35 @@ SITE_N: dict[int, int] = {
     3680: 80,  # Expert_BatonPass_HighStatStage_TryScorePlus2
     6577: 80,  # BatonPass_Main: the attacker without a Baton Pass effect
     6591: 20,  # BatonPass_EvalMove: +3
+    # E2 batch 12, the stat family (B12-11).
+    2541: 50,  # Expert_Haze_TryScoreMinus3
+    2555: 50,  # Expert_Haze_CheckToEncourage (-1 when it does NOT jump)
+    2560: 50,  # Expert_Haze_TryScorePlus3
+    3836: 50,  # Expert_PsychUp_CheckUserStatStages (-2 when it does NOT jump)
+    2858: 128,  # Expert_Flatter (+1 when it does NOT jump)
+    5016: 128,  # Expert_Acupressure (to _TryScorePlus1 when it does NOT jump)
+    5019: 64,  # Expert_Acupressure_TryScorePlus1
+    5454: 96,  # Expert_PowerTrick_LikelyScorePlus1
+    5459: 128,  # Expert_PowerTrick_CoinFlipScorePlus1
+    5464: 164,  # Expert_PowerTrick_UnlikelyScorePlus1
+    5739: 128,  # Expert_PowerSwap_TryScorePlus5
+    5744: 128,  # Expert_PowerSwap_TryScorePlus4
+    5749: 128,  # Expert_PowerSwap_TryScorePlus3
+    5754: 128,  # Expert_PowerSwap_TryScorePlus2
+    5759: 128,  # Expert_PowerSwap_TryScorePlus1
+    5873: 128,  # Expert_GuardSwap_TryScorePlus5
+    5878: 128,  # Expert_GuardSwap_TryScorePlus4
+    5883: 128,  # Expert_GuardSwap_TryScorePlus3
+    5888: 128,  # Expert_GuardSwap_TryScorePlus2
+    5893: 128,  # Expert_GuardSwap_TryScorePlus1
+    6252: 50,  # Expert_Captivate_CheckLowStatStage
+    6262: 64,  # Expert_Captivate_CheckOpponentLastMove
+    # E2 batch 12, the healing family (B12-18).
+    2766: 70,  # Expert_Rest_FasterCheckHP
+    2775: 50,  # Expert_Rest_SlowerCheckHP
+    2783: 50,  # Expert_Rest_CheckForSnatch
+    2786: 10,  # Expert_Rest_TryScorePlus3
+    5301: 128,  # Expert_PsychoShift
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -546,6 +575,25 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         127,  # PASS_STATS_AND_STATUS: Basic_CheckBatonPass (:208); Expert_BatonPass (:1705)
         # E1 prep batch P4 (Gardenia)
         176,  # BOOST_ALLY_POWER_BY_50_PERCENT: Basic_CheckHelpingHand (:234); no Expert entry
+        # E2 batch 12, the stat family (B12-11).
+        25,  # RESET_STAT_CHANGES: Basic_CheckStatStageImbalance (:151); Expert_Haze (:1648)
+        47,  # CRIT_UP_2: Basic_CheckAlreadyPumpedUp (:162); no Expert entry
+        143,  # COPY_STAT_CHANGES: Basic_CheckStatStageImbalance (:217); Expert_PsychUp (:1713)
+        166,  # SP_ATK_UP_CAUSE_CONFUSION: Basic_CheckCannotConfuse (:230); Expert_Flatter
+        205,  # ATK_DEF_DOWN: Basic_CheckTickle (:246); Expert_StatusDefenseDown (:1751)
+        206,  # DEF_SPD_UP: Basic_CheckCosmicPower (:247); Expert_StatusSpDefenseUp (:1752)
+        226,  # RANDOM_STAT_UP_2: Basic_CheckAcupressure (:260); Expert_Acupressure (:1769)
+        238,  # SWAP_ATK_DEF: Basic_CheckPowerTrick (:268); Expert_PowerTrick (:1781)
+        243,  # SWAP_ATK_SP_ATK_STAT_CHANGES: Basic_CheckPowerSwap (:272); Expert_PowerSwap
+        244,  # SWAP_DEF_SP_DEF_STAT_CHANGES: Basic_CheckGuardSwap (:273); Expert_GuardSwap
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER: Basic_CheckCaptivate (:283); Expert_Captivate
+        # E2 batch 12, the healing family (B12-18).
+        37,  # REST: no Basic entry; Expert_Rest (:1655), :2766, :2775, :2783, :2786
+        102,  # CURE_PARTY_STATUS: no Basic entry; Expert_HealBell (:1696)
+        132,  # HEAL_HALF_MORE_IN_SUN: Basic_CheckCanRecoverHP (:210); Expert_Synthesis (:1707)
+        179,  # HEAL_IN_3_TURNS: no Basic_ScoreMoveEffect or Expert_Main entry
+        193,  # HEAL_STATUS: Basic_CheckCanRefreshStatus (:243); Expert_Refresh (:1745)
+        234,  # TRANSFER_STATUS: Basic_CheckCanPsychoShift (:264); Expert_PsychoShift, :5301
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -656,6 +704,22 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     242: ("Expert_Copycat", 1785),
     181: ("Expert_Ingrain", 1734),
     127: ("Expert_BatonPass", 1705),
+    # E2 batch 12 (B12-11).
+    25: ("Expert_Haze", 1648),
+    143: ("Expert_PsychUp", 1713),
+    166: ("Expert_Flatter", 1727),
+    205: ("Expert_StatusDefenseDown", 1751),
+    206: ("Expert_StatusSpDefenseUp", 1752),
+    226: ("Expert_Acupressure", 1769),
+    238: ("Expert_PowerTrick", 1781),
+    243: ("Expert_PowerSwap", 1786),
+    244: ("Expert_GuardSwap", 1787),
+    265: ("Expert_Captivate", 1804),
+    37: ("Expert_Rest", 1655),
+    102: ("Expert_HealBell", 1696),
+    132: ("Expert_Synthesis", 1707),
+    193: ("Expert_Refresh", 1745),
+    234: ("Expert_PsychoShift", 1777),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -753,6 +817,22 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         242,  # USE_LAST_USED_MOVE: Expert_Copycat
         181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL: Expert_Ingrain (no score change)
         127,  # PASS_STATS_AND_STATUS: Expert_BatonPass
+        # E2 batch 12 (B12-11).
+        25,  # RESET_STAT_CHANGES: Expert_Haze
+        143,  # COPY_STAT_CHANGES: Expert_PsychUp
+        166,  # SP_ATK_UP_CAUSE_CONFUSION: Expert_Flatter
+        205,  # ATK_DEF_DOWN: Expert_StatusDefenseDown
+        206,  # DEF_SPD_UP: Expert_StatusSpDefenseUp
+        226,  # RANDOM_STAT_UP_2: Expert_Acupressure
+        238,  # SWAP_ATK_DEF: Expert_PowerTrick
+        243,  # SWAP_ATK_SP_ATK_STAT_CHANGES: Expert_PowerSwap
+        244,  # SWAP_DEF_SP_DEF_STAT_CHANGES: Expert_GuardSwap
+        265,  # SP_ATK_DOWN_2_OPPOSITE_GENDER: Expert_Captivate
+        37,  # REST: Expert_Rest (B12-18)
+        102,  # CURE_PARTY_STATUS: Expert_HealBell
+        132,  # HEAL_HALF_MORE_IN_SUN: Expert_Synthesis
+        193,  # HEAL_STATUS: Expert_Refresh
+        234,  # TRANSFER_STATUS: Expert_PsychoShift
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
