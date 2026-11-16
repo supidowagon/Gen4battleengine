@@ -1,4 +1,5 @@
-"""Golden emulator traces replayed through ``apply_turn`` (docs/tracing.md).
+"""Golden emulator traces replayed through ``apply_turn`` (docs/tracing.md), run as
+``replay_turn`` (one row of the converter's candidate program).
 
 Each bundle skips until it has been recorded under ``tests/golden/``: that needs the
 user's ROM and save. A turn is ``step`` followed by the replacement of a fainted active

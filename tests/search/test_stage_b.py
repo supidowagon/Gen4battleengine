@@ -372,7 +372,8 @@ def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     real = stage_b.evaluate_forced
 
     def spy(tables, states, pairs, counts, key, max_turns):
-        drop_programs()
+        if not calls:  # once, before the first forced program compiles
+            drop_programs()
         values = real(tables, states, pairs, counts, key, max_turns)
         calls.append((np.asarray(pairs), np.asarray(counts), values))
         return values

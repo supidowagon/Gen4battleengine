@@ -7,9 +7,9 @@ settles a pending learn at its root, as ``playout`` does, and both loops'
 Compile cost shapes this module (each loop or turn program is the whole engine, several GB
 resident once compiled): the free-policy runs share one turn count and the fixed-action runs
 another, a root refused at its settle runs the no-turn programs (max_turns 0: the settle
-alone), the playouts the players are compared with run once per module, every test starts
-with no program resident (``_own_programs``) and a test that needs two whole-engine programs
-drops the first before the second (``drop_programs``)."""
+alone), the playouts the players are compared with run once per module, and a test that
+needs two whole-engine programs of its own drops the first before the second
+(``drop_programs``)."""
 
 from __future__ import annotations
 
@@ -29,14 +29,6 @@ from nuzline.search.playout import playout, playout_from_action, replacement_pol
 from tests.engine.helpers import drop_programs, roark_real_state
 from tests.engine.test_levelup import _base, _mon, _with
 from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
-
-
-@pytest.fixture(autouse=True)
-def _own_programs():
-    """No earlier test's programs resident when a test starts (after the module's ``roots``,
-    which is set up first): a test's whole-engine compiles on another's executables passed
-    12 GB in the fast tier."""
-    drop_programs()
 
 
 def _fixed_act(tables, state, params, key, layout):
@@ -102,13 +94,15 @@ _KEYS = jax.random.split(jax.random.PRNGKey(5), 4)
 @pytest.fixture(scope="module")
 def roots(tables, names):
     """``[(label, root, key, playout result)]`` over the four roots and four keys: the
-    ``playout`` every player run is compared with, computed once for the module."""
+    ``playout`` every player run is compared with, computed once for the module; its program
+    is dropped before the players' compile (``drop_programs``)."""
     out = []
     for build in _ROOTS:
         s = build(tables, names)
         for k in _KEYS:
             want = jax.device_get(playout(tables, root_state(tables, s, k), k, TURNS))
             out.append((f"{build.__name__}, key {np.asarray(k).tolist()}", s, k, want))
+    drop_programs()
     return out
 
 
@@ -121,6 +115,10 @@ def test_greedy_equals_playout_through_learns(tables, roots):
     for root, s, k, want in roots:
         got, out = _run(tables, s, GREEDY, (), k, TURNS)
         _same(got, want, root)
+        if root.startswith(_window_c_root.__name__):
+            # Refused at the settle with turns left: both loops' cond stops on a refused root
+            # (test_a_pending_learn_root_window_c_is_refused_and_named runs no turn).
+            assert int(got.refused) == 1 and int(want.refused) == 1, root
         if not int(got.refused):
             assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
 
@@ -193,10 +191,10 @@ def test_a_turn_window_c_refuses_the_playout_and_is_named(tables, names):
     assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 1
 
 
-# Slow: a no-turn GREEDY program (the window (c) root test's, about 1.4 GB). The fast tier keeps the property
-# through test_greedy_equals_playout_through_learns' two pending roots (it fails with the
-# root's settle_learns removed from _player_run, and with its carried powerMul replaced by
-# the normal one).
+# Slow: the window (c) root test's no-turn GREEDY program (about 1.4 GB). The fast tier
+# keeps the property through test_greedy_equals_playout_through_learns' two pending roots
+# (it fails with the root's settle_learns removed from _player_run, and with its carried
+# powerMul replaced by the normal one).
 @pytest.mark.slow
 @pytest.mark.parametrize("mul, newcomer", [(0, CRANIDOS), (20, ONIX)])
 def test_a_pending_learn_root_sends_with_the_carried_mul(tables, names, mul, newcomer):
