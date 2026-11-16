@@ -40,6 +40,17 @@ from tests.search.fixtures import (
 pytestmark = pytest.mark.slow
 
 SMALL = 256  # the independent re-step program's batch (test_merged_child_equals_each_member)
+EXPAND_ROWS = 1024  # expand's call size in this file's expansions (``small_chunk``)
+
+
+@pytest.fixture
+def small_chunk(monkeypatch):
+    """``expand``'s programs in ``EXPAND_ROWS``-row calls instead of ``CHUNK`` (16384):
+    each ``calls_rows``, ``laws_rows`` and ``step_rows`` call pads to ``CHUNK`` rows, and
+    this file reached ~15 GB. A row's result depends on neither the call size nor the
+    device count (expand's module docstring), so the expansions are unchanged.
+    ``test_bucket_rows`` reads the default ``CHUNK`` and does not use it."""
+    monkeypatch.setattr(expand_mod, "CHUNK", EXPAND_ROWS)
 
 
 def batch(*states):
@@ -67,9 +78,9 @@ def legal_pairs(tables, state, index: int = 0) -> list[tuple[int, int, int]]:
 def roark_expansion(tables, names):
     """``expand`` of every legal pair at the real Roark start and its variants with
     either lead or both at 30, 20, 10 or 5 HP, with the row count of each ``step_rows`` call
-    recorded (``test_expand_streams``): more than one ``CHUNK`` of rows (the K3b2
-    conditional reads and damage classes cut the four roots this used before to about
-    a third of a chunk)."""
+    recorded (``test_expand_streams``), in ``EXPAND_ROWS``-row calls: more than one
+    ``CHUNK`` of rows (the K3b2 conditional reads and damage classes cut the four roots
+    this used before to about a third of a chunk)."""
     root = roark_real_state(tables, names)
     roots = [root]
     for hp in (30, 20, 10, 5):
@@ -84,6 +95,7 @@ def roark_expansion(tables, names):
         return real(tables, states, actions, outcomes)
 
     with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand_mod, "CHUNK", EXPAND_ROWS)  # as ``small_chunk``
         mp.setattr(expand_mod, "step_rows", recording)
         store, children = expand(tables, batch(*roots), pairs)
     return roots, pairs, store, children, sizes
@@ -107,7 +119,7 @@ def test_children_sum_to_one(roark_expansion):
 def test_expand_streams(roark_expansion):
     *_, sizes = roark_expansion
     assert len(sizes) >= 2, sizes  # the request set spans several chunks
-    assert max(sizes) <= CHUNK
+    assert max(sizes) <= EXPAND_ROWS
 
 
 def _turn_row(tables, before, actions, outcome):
@@ -126,6 +138,7 @@ _restep = jax.jit(jax.vmap(_turn_row, in_axes=(None, None, None, 0)))
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("small_chunk")
 def test_merged_child_equals_each_member(tables, names):
     state = shinx_vs_cranidos(tables, names, slower_opp=True)
     # Cranidos at 1 HP: Spark KOs it with or without a crit, one state seen two ways
@@ -171,6 +184,7 @@ def _playout_turn(tables, state, a, key):
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("small_chunk")
 def test_matches_playout_turn(tables, names):
     state = roark_real_state(tables, names)
     legal = np.flatnonzero(np.asarray(legal_actions(tables, state, 0)))
@@ -192,6 +206,7 @@ def test_matches_playout_turn(tables, names):
         assert len(hits) == 1, (i, pairs, len(hits))
 
 
+@pytest.mark.usefixtures("small_chunk")
 def test_sampling_only_reported(tables, names):
     state = spike_cannon_root(tables, names)
     cannons = (names.move_slot(state, 0, "Spike Cannon"), names.move_slot(state, 1, "Spike Cannon"))
@@ -204,6 +219,7 @@ def test_sampling_only_reported(tables, names):
     assert sum(c.prob for c in children[1]) == pytest.approx(1.0, abs=1e-12)
 
 
+@pytest.mark.usefixtures("small_chunk")
 def test_replacement_refusal_flagged(tables, names):
     state = switch_refusal_root(tables, names)
     to_geodude = 4 + 0  # switch to party slot 0
@@ -222,8 +238,10 @@ import hashlib, json, jax
 from nuzline.data.tables import load_names, load_tables
 from nuzline.jaxcache import cache_root, jax_version, set_compile_cache_dir
 set_compile_cache_dir(cache_root() / "jax-tests" / jax_version())
+from nuzline.search import expand as expand_mod
 from nuzline.search.expand import expand
 from tests.search.fixtures import shinx_vs_cranidos
+expand_mod.CHUNK = 1024  # EXPAND_ROWS (small_chunk); padding still differs at 3 devices
 from tests.search.test_expand import batch, row_keys
 
 assert jax.device_count() == DEVICES, jax.device_count()
@@ -279,6 +297,7 @@ def test_device_count_invariant(tables):
     assert _expand_on_devices(3) == one
 
 
+@pytest.mark.usefixtures("small_chunk")
 def test_expand_replacements_match_replacement_pass(tables, names):
     s = at_replacement(roark_state(tables, names), opp_down=True)
     slots = np.flatnonzero(np.asarray(legal_replacements(s, 0))).tolist()
@@ -302,6 +321,7 @@ def take_row(tree, i: int):
     return jax.tree.map(lambda f: np.asarray(f)[i : i + 1], tree)
 
 
+@pytest.mark.usefixtures("small_chunk")
 def test_turn_child_stops_at_the_player_replacement(tables, names):
     s = roark_state(tables, names, opp_faster=True, player_moves=["Leer"]).replace_hp(0, 0, 1)
     pair = (0, *[int(x) for x in A("Leer", "Tackle", s, names)])
@@ -330,6 +350,7 @@ def test_turn_child_stops_at_the_player_replacement(tables, names):
         assert int(child.deaths[0, 0]) == 1
 
 
+@pytest.mark.usefixtures("small_chunk")
 def test_decision_actions_constant_on_equal_obs(tables, names):
     root = roark_real_state(tables, names)
     store, children = expand(tables, batch(root), legal_pairs(tables, root))
