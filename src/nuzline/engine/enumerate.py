@@ -330,6 +330,10 @@ class Reads(NamedTuple):
     band_self: jnp.ndarray  # it holds a Focus Band: a confusion self-hit rolls focus_band[s, 0]
     berry_by_foe: jnp.ndarray  # bool[2, 2]: a foe move first can feed it a disliked flavor berry
     pending_own: jnp.ndarray  # it moves with a CONFUSION_PENDING counter at the start
+    # G-30: it uses Present against a side with a Wonder Guard Pokemon: the draw picks the heal
+    # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
+    # Wonder Guard message, subscript_missed.s:107, or the plain miss).
+    present_guard: jnp.ndarray
 
 
 class OutcomeLaws(NamedTuple):
@@ -1885,6 +1889,11 @@ def outcome_laws(
         band_self=base["own_band"],
         berry_by_foe=jnp.stack([m["berry_by_foe"] for m in branches]),
         pending_own=base["pending"],
+        present_guard=off
+        if loose
+        else uses_move
+        & (effect == _E.PRESENT)
+        & jnp.any(state.ability[::-1] == AbilityId.WONDER_GUARD, axis=1),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -2353,7 +2362,9 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "roar_level",
             "roar_target",
         ):
-            plan.path((name, (s,)), "move", *hits)
+            # G-30: Present's draw against a Wonder Guard side is read on a miss as well.
+            guard = name == "present" and bool(reads.present_guard[s])
+            plan.path((name, (s,)), "move", *([] if guard else hits))
         proc = [procs(s)] if bool(reads.proc_gated[s]) else []
         plan.path(("duration", (s,)), "move", *hits, *proc)
         for name, own, by_foe, path in (

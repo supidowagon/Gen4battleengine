@@ -1269,3 +1269,311 @@ def test_pressure_charges_a_charge_move_once(tables, names):
     two = assert_matches_reference(tables, one, acts, O)
     assert _pp(two, 0, "Dig", names) == _pp(one, 0, "Dig", names)
     assert int(two.locked_move[0]) == 0
+
+
+# --- review fixes (G-30 ..) -------------------------------------------------------------------
+
+
+def _present(o, side, kind):
+    return o._replace(present=o.present.at[side].set(kind))
+
+
+def test_present_heal_skips_wonder_guard(tables, names):
+    """G-30: Present's heal path sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0122.s:13) before
+    TryMove's chart, which then does not run (bcp.c:2350-2356): no MOVE_STATUS_WONDER_GUARD, no
+    subscript_missed.s, no reveal; the heal lands and AfterMoveEffects run. Its damage path is a
+    Normal hit, never super effective: guarded and revealed, as is a miss on that path (G-20); a
+    missed heal shows only the miss."""
+    from nuzline.engine.outcome import PRESENT_HEAL
+
+    s = _guard_duel(tables, names, ["Present", "Growl"])
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2)
+    acts = A("Growl", "Present", s, names)
+    out = assert_matches_reference(tables, s, acts, _present(O, 1, PRESENT_HEAL))
+    assert int(out.hp[0, 0]) > int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, acts, _present(O, 1, 2))
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    missed = O._replace(hit=O.hit.at[1, 0].set(0))
+    out = assert_matches_reference(tables, s, acts, _present(missed, 1, PRESENT_HEAL))
+    assert int(out.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, acts, _present(missed, 1, 0))
+    assert int(out.ai_ability_known[0]) == 1
+
+
+def test_present_heal_runs_the_after_move_items(tables, names):
+    """G-30: the heal path's AfterMoveEffects run on a Wonder Guard holder (no
+    subscript_missed.s): the healer's Sitrus Berry check happens."""
+    from nuzline.engine.outcome import PRESENT_HEAL
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Squirtle", ["Tackle", "Growl"], 30)],
+        [_spec(n, "Rattata", ["Present", "Growl"], 30, "Sitrus Berry")],
+    )
+    s = _ability(s, 0, AbilityId.WONDER_GUARD)
+    s = s.replace_hp(1, 0, int(s.max_hp[1, 0]) // 2 - 1)
+    acts = A("Growl", "Present", s, n)
+    out = assert_matches_reference(tables, s, acts, _present(O, 1, PRESENT_HEAL))
+    assert int(out.item[1, 0]) == 0 and int(out.hp[1, 0]) > int(s.hp[1, 0])
+
+
+def test_present_vs_wonder_guard_enumerates_its_draw_on_a_miss(tables, names):
+    """G-30: against a player's Wonder Guard the Present draw decides the reveal on a miss too
+    (the script runs before the accuracy check, bcp.c:3214), so the exact enumeration reads it
+    there (``Reads.present_guard``) and equals the brute force."""
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    s = _guard_duel(tables, names, ["Present", "Growl"])
+    assert_equals_bruteforce(tables, s, A("Growl", "Present", s, names))
+
+
+def test_synchronize_pass_to_a_fainted_statused_receiver_fails(tables, names):
+    """G-31: the receiver's status test reads BattleMon.status (subscript_paralyze.s:41-42), which
+    a faint keeps (battle_controller.c:1481-1486): the AI's burned Static U-turn user that the
+    player's Synchronize Pursuit KOs (Static paralyzes the pursuer, subscript_pursuit.s:86) is the
+    receiver of the MODE_PURSUIT tail's pass, still burned: the pass fails silently (no reveal;
+    Umbreon, slower, Synchronize).
+    Unburned, the pass lands on the fainted battler: the message tags Synchronize."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Umbreon", ["Pursuit"], 35)],
+        [_spec(n, "Rattata", ["U-turn"], 50), _spec(n, "Rattata", ["Growl"], 30)],
+    )
+    assert int(s.ability[0, 0]) == AbilityId.SYNCHRONIZE
+    s = _ability(s, 1, AbilityId.STATIC)._replace(hp=s.hp.at[1, 0].set(1))
+    burned = _status(s, 1, 0, Status.BURN)
+    acts = A("Pursuit", "U-turn", s, n)
+    o = _proc(O, "contact_proc", 1)
+    out = assert_matches_reference(tables, burned, acts, o)
+    assert int(out.hp[1, 0]) == 0 and int(out.status[0, 0]) == Status.PARALYSIS
+    assert int(out.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.hp[1, 0]) == 0 and int(out.status[0, 0]) == Status.PARALYSIS
+    assert int(out.ai_ability_known[0]) == 1
+
+
+def test_synchronize_flag_toggles_twice_in_one_hit(tables, names):
+    """G-12 (test gap): one hit whose secondary paralyzes the defender (subscript_paralyze.s:50-55:
+    the flag toggles on) and whose contact meets the defender's Static (toggles it off again,
+    TriggerAbilityOnHit, sideEffectMon the attacker): the step finds the flag clear. The
+    Synchronize attacker's pass could only reach the paralyzed defender anyway, so both engines
+    agree and nothing more lands."""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Abra", ["ThunderPunch", "Growl"], 30)],
+        [_spec(n, "Rattata", ["Growl"], 30)],
+    )
+    s = _ability(s, 1, AbilityId.STATIC)
+    o = _proc(_proc(O, "secondary", 0), "contact_proc", 1)
+    out = assert_matches_reference(tables, s, A("ThunderPunch", "Growl", s, n), o)
+    assert int(out.status[1, 0]) == Status.PARALYSIS
+    assert int(out.status[0, 0]) == Status.PARALYSIS
+
+
+def test_synchronize_runs_after_every_hit_of_a_multi_hit_move(tables, names):
+    """G-12 (test gap): AfterMoveEffects' Synchronize step runs after each hit (bcp.c:3665-3670,
+    inside the multi-hit loop): Double Kick's second hit meets the foe's Static
+    (TriggerAbilityOnHit, sideEffectMon the Synchronize attacker), and the step after that hit
+    passes the paralysis back. (Twineedle, the one multi-hit move with a status secondary, is
+    not a supported effect in these tables.)"""
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Abra", ["Double Kick", "Growl"], 30)],
+        [_spec(n, "Rattata", ["Growl"], 30)],
+    )
+    s = _ability(s, 1, AbilityId.STATIC)
+    for hit in (0, 1):
+        o = _proc(O, "contact_proc", 1, hit)
+        out = assert_matches_reference(tables, s, A("Double Kick", "Growl", s, n), o)
+        assert int(out.status[0, 0]) == Status.PARALYSIS, hit
+        assert int(out.status[1, 0]) == Status.PARALYSIS, hit
+        assert int(out.ai_ability_known[0]) == 1
+
+
+def test_pressure_with_a_fainted_foe(tables, names):
+    """G-8 (test gap): the foe's Selfdestruct faints it before the player moves. Tackle then
+    has no defender (FightCommand: BATTLER_NONE for a fainted single target), so
+    DecrementPP's Pressure test (bcp.c:2238) is skipped: 1 PP. Spikes (RANGE_OPPONENT_SIDE)
+    keeps its defender, but COUNT_ALIVE_BATTLERS_THEIR_SIDE counts no fainted holder: 1 PP."""
+    n = names
+    for move in ("Tackle", "Spikes"):
+        s = make_state(
+            tables,
+            [_spec(n, "Snorlax", [move], 50)],
+            [_spec(n, "Electrode", ["Selfdestruct"], 20), _spec(n, "Geodude", ["Tackle"], 20)],
+        )
+        s = _pressure(s, 1)
+        before = _pp(s, 0, move, names)
+        out = assert_matches_reference(tables, s, A(move, "Selfdestruct", s, names), O)
+        assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) > 0
+        assert before - _pp(out, 0, move, names) == 1, move
+
+
+def _hazard_double_ko(tables, names, levels, opp="Kyogre"):
+    """A double KO (both Geodude leads down) whose player newcomer, Charmander at 1 HP, falls to
+    Stealth Rock: the player's next newcomer is Groudon (Drought, level ``levels[0]``), the
+    opponent's only bench Pokemon ``opp`` (level ``levels[1]``)."""
+    from tests.search.fixtures import at_replacement
+
+    n = names
+    s = make_state(
+        tables,
+        [
+            _spec(n, "Geodude", ["Tackle"], 30),
+            _spec(n, "Charmander", ["Tackle"], 30),
+            _spec(n, "Groudon", ["Tackle"], levels[0]),
+        ],
+        [_spec(n, "Geodude", ["Tackle"], 30), _spec(n, opp, ["Tackle"], levels[1])],
+    )
+    s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1), hp=s.hp.at[0, 1].set(1))
+    return at_replacement(s, opp_down=True)
+
+
+def test_double_ko_newcomer_felled_by_hazards_leaves_the_foes_states_waiting(tables, names):
+    """G-32: the list sends both newcomers in with the hazards only (subscript_show_party_list.s:
+    22-24); the player's falls to Stealth Rock, so TurnEnd re-enters ReplaceFainted for the
+    player (battle_controller_player.c:1846-1858) before any ShowBattleMon: the opponent's
+    Kyogre has not set its rain. With the player's next newcomer both run ShowBattleMon's states
+    together (:251-263): the slower one's weather stays (G-26), not the later entry's."""
+    from nuzline.engine.step import needs_replacement
+    from nuzline.search.playout import replacement_pass
+
+    for levels, weather in (((50, 40), Weather.RAIN), ((40, 50), Weather.SUN)):
+        s = _hazard_double_ko(tables, names, levels)
+        first, refused = replacement_pass(tables, s, 1)
+        assert not bool(refused)
+        assert int(first.hp[0, 1]) == 0 and int(first.active[1]) == 1
+        assert int(first.weather) == Weather.NONE
+        assert np.asarray(first.entry_pending).tolist() == [0, 1]
+        assert int(needs_replacement(first)[0]) == 1
+        second, refused = replacement_pass(tables, first, 2)
+        assert not bool(refused) and int(second.active[0]) == 2
+        assert int(second.weather) == weather and int(second.weather_timer) == 0
+        assert np.asarray(second.entry_pending).tolist() == [0, 0]
+
+
+def test_double_ko_waiting_intimidate_meets_the_next_newcomer(tables, names):
+    """G-32: the waiting opposing newcomer's Intimidate fires at ShowBattleMon against the
+    player's next newcomer (battle_lib.c:3795-3808); before, the engine had fired it at its
+    entry against the fainted Charmander (nothing). Its held-item check waits too."""
+    from nuzline.search.playout import replacement_pass
+
+    s = _hazard_double_ko(tables, names, (50, 40), opp="Rattata")
+    s = _ability(s, 1, AbilityId.INTIMIDATE, slot=1)
+    first, _ = replacement_pass(tables, s, 1)
+    assert int(first.entry_pending[1]) == 1 and int(first.stages[0, Stat.ATK]) == 0
+    second, _ = replacement_pass(tables, first, 2)
+    assert int(second.stages[0, Stat.ATK]) == -1
+    assert int(second.entry_pending[1]) == 0
+
+
+def test_replace_without_effects_matches_the_reference(tables, names):
+    """G-32: ``replace(..., effects=False)`` runs the list alone (the hazards, the faint check)
+    and marks a living newcomer's switch-in states as waiting, in both engines."""
+    s = _hazard_double_ko(tables, names, (50, 40))
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+    out = replace(tables, s, 1, 1, False)
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(s), 1, 1, False))
+    for name in out._fields:
+        mine, theirs = np.asarray(getattr(out, name)), np.asarray(getattr(ref, name))
+        np.testing.assert_array_equal(mine, theirs, name)
+    assert int(out.entry_pending[1]) == 1 and int(out.weather) == Weather.NONE
+    assert int(out.hp[1, 1]) < int(s.hp[1, 1])  # Stealth Rock hit it
+
+
+def test_weather_war_tie_is_a_root_chance_node_the_player_sees(tables, names, monkeypatch):
+    """G-34: the battle-start weather war's tie (battle_lib.c:1445, sorted at TrainerMessage,
+    battle_controller_player.c:251) is drawn before command selection, and the weather shows:
+    Stage B's root is a chance node over what the player sees, each outcome its own belief node
+    (``_solve_belief``, stubbed here: Tackle wins in sun, Growl in rain). The root's value is
+    the weighted best, 1 (one belief node over both gave 1/2). A Quick Claw read stays hidden
+    within an outcome; here it decides the weather (1/5 rain)."""
+    import json
+
+    import jax
+
+    from nuzline.search import stage_b
+    from nuzline.search.plan_tree import render, to_json
+    from nuzline.search.stage_b import (
+        ROOT_CHANCE,
+        ActionValue,
+        PlanNode,
+        SolveResult,
+        SolveSettings,
+        result_from_dict,
+        result_to_dict,
+    )
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Groudon", ["Tackle", "Growl"], 50)],
+        [_spec(n, "Kyogre", ["Tackle"], 50)],
+    )
+    tackle, growl = n.move_slot(s, 0, "Tackle"), n.move_slot(s, 0, "Growl")
+    seen = []
+
+    def one(action, value):
+        return ActionValue(action, f"a{action}", value, value, value, value, 0.0, 0.0, 0.0, False)
+
+    def fake(tables_, names_, state, belief, key, settings, leaf_fn, start):
+        weathers = {int(b.weather) for b, _ in belief}
+        assert len(weathers) == 1 and abs(sum(w for _, w in belief) - 1) < 1e-12
+        weather = weathers.pop()
+        seen.append(weather)
+        best = tackle if weather == Weather.SUN else growl
+        rows = [one(best, 1.0), one(tackle + growl - best, 0.0)]
+        plan = PlanNode(None, 1.0, best, {best: 1.0}, {}, "decision")
+        return SolveResult(rows, {}, 1, plan, 10, 0.0, settings, 10)
+
+    monkeypatch.setattr(stage_b, "_solve_belief", fake)
+    settings = SolveSettings(max_depth=1)
+    result = stage_b.solve(tables, n, s, jax.random.PRNGKey(0), settings)
+    assert sorted(seen) == sorted([int(Weather.SUN), int(Weather.RAIN)])
+    got = sorted((o.label, o.prob) for o in result.outcomes)
+    assert got == [("weather rain", 0.5), ("weather sun", 0.5)]
+    [row] = result.ranking
+    assert row.action == ROOT_CHANCE and row.estimate == pytest.approx(1.0)
+    assert result.plan.kind == "chance" and len(result.plan.children[ROOT_CHANCE]) == 2
+    assert result_from_dict(result_to_dict(result)) == result
+    assert any("weather sun" in line for line in render(result, n, 1, root=s))
+    json.dumps(to_json(result, n, root=s))
+    # The slower player's Quick Claw (G-26): activated (1/5) it sorts first and the rain stays.
+    claw = _war(tables, n, (40, 50), ("Quick Claw", ""))
+    result = stage_b.solve(tables, n, claw, jax.random.PRNGKey(0), settings)
+    got = {o.label: o.prob for o in result.outcomes}
+    assert got == pytest.approx({"weather rain": 0.2, "weather sun": 0.8})
+    # No war: one belief node, the solve's own result.
+    plain = _war(tables, n, (50, 40))
+    assert stage_b.solve(tables, n, plain, jax.random.PRNGKey(0), settings).outcomes == ()
+
+
+@pytest.mark.parametrize(
+    ("player_item", "foe_ability", "mine", "theirs"),
+    [
+        ("", AbilityId.STATIC, "Tackle", "Spark"),  # Synchronize: contact and secondary passes
+        ("", AbilityId.POISON_POINT, "Growl", "Thunder Wave"),  # a status move's pass
+        ("Focus Band", AbilityId.INNER_FOCUS, "Growl", "Tackle"),  # the holder's band roll per hit
+    ],
+)
+def test_synchronize_and_focus_band_reads_equal_bruteforce(
+    tables, names, player_item, foe_ability, mine, theirs
+):
+    """Review check (G-1, G-12): the exact enumeration's conditional reads of the Synchronize
+    passes and the Focus Band rolls give the brute-force product's merged children."""
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Abra", ["Growl", "Tackle"], 30, player_item)],
+        [_spec(n, "Rattata", ["Spark", "Thunder Wave", "Tackle"], 30)],
+    )
+    s = _ability(s, 1, foe_ability)
+    if player_item:
+        s = s.replace_hp(0, 0, 3)
+    assert_equals_bruteforce(tables, s, A(mine, theirs, s, n))

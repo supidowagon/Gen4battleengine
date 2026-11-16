@@ -23,7 +23,7 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
   ``TrainerAI_ShouldSwitch`` (``trainer_ai.c:3894``; roark.md 8.5 and 11.1) that
   stops the check, 0..``sites - 1``, or ``sites`` when none does, where ``sites`` is the
   layout's ``switch_sites``: ``SWITCH_SITES`` (9, ``SWITCH_NONE`` = 9 none) for the flat
-  layout, 44 for Kaizo's party of six (docs/ai/kaizo_roark.md 11). A
+  layout, 60 for Kaizo's party of six (docs/ai/kaizo_roark.md 11). A
   keep draw that stops means "no switch", a party-pass draw that stops means "switch
   to that party member". Site i stops with ``prod_{h<i} (1 - p_h) * p_i``, where p
   depends on the site's ``SwitchSite`` kind, so one categorical is exact.
@@ -790,7 +790,7 @@ class AiOutcome(NamedTuple):
     script_rolls: jnp.ndarray
     tiebreak: jnp.ndarray  # int8[], RandNext % 12
     # int8[]: the first stopping switch draw, 0..sites - 1; sites (layout.switch_sites: 9
-    # vanilla, 44 Kaizo) = none; -1 refused
+    # vanilla, 60 Kaizo) = none; -1 refused
     switch_stop: jnp.ndarray
 
 

@@ -163,7 +163,6 @@ from nuzline.engine.hooks import (
     WEATHER_HP,
     after_damage_items,
     held_item_check,
-    on_switch_in,
     recover_status_by_ability,
     reveal_ability,
     swap_war,
@@ -1288,6 +1287,12 @@ def _use_move(
     state = _set_side(state, "semi_invulnerable", side, semi_kind, charging)
     state = change_stage(state, side, Stat.DEF, 1, charging & def_up)
     n_hits = hit_count(tables, used, outcome, side)
+    # effect_script_0122.s _004: Present's heal path sets SYSCTL_IGNORE_IMMUNITIES (:13) in the
+    # move script (bcp.c:3214), before TryMove's chart (:3272), hit or miss: CheckTypeChart skips
+    # the chart (bcp.c:2350-2356), so no Wonder Guard flag and no noEffect (ruling G-30).
+    heal_path = (tables.move_effect[used] == EffectId.PRESENT) & (
+        outcome.present[side] == PRESENT_HEAL
+    )
     # Present's heal path (effects._present): subscript_recover_hp.s prints "regained health"
     # (1), or "HP is full!" (2) for a target at full HP; the target's HP is unchanged
     # between here and the hit.
@@ -1339,10 +1344,11 @@ def _use_move(
         & ~(invoker & call_failed)
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
         # A charge turn skips the chart (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356); a charge
         # move's strike runs it under SYSCTL_LAST_OF_MULTI_TURN (damage.charge_strike), G-27.
         & ~charging
-        & wonder_guarded(tables, state, side, used, move_type, None, charge_move)
+        & wonder_guarded(tables, state, side, used, move_type, target_side, charge_move)
     )
     guarded = connected & guard_tested
     # subscript_missed.s:107-110 "{0} avoided damage by using {1}!" (TAG_NICKNAME_ABILITY,
@@ -1427,6 +1433,7 @@ def _use_move(
         & (tables.move_power[used] != 0)
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
+        & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
         & ~charging  # SYSCTL_FIRST_OF_MULTI_TURN (bcp.c:2356), B10-12
         & (chart == 0)
     )
@@ -2143,12 +2150,12 @@ def _pursuit_hit(
     move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
-    before_hp = state.hp[1 - pursuer, state.active[1 - pursuer]]
+    before_hp = state.hp[switcher, state.active[switcher]]
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
     # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
     # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
     guarded = wonder_guarded(
-        tables, state, pursuer, move, move_type_of(tables, state, pursuer, move)
+        tables, state, pursuer, move, move_type_of(tables, state, pursuer, move), switcher
     )
     state = reveal_ability(state, switcher, state.active[switcher], DAMAGE_AVOIDED, guarded)
     state, info = play_hit(
@@ -3350,8 +3357,8 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     state, so they are one information set. Without a kept side: ``[(state, 1.0)]``. A weather
     war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
     two tie values (1/2 each) where the tie decides it: those states differ in the weather,
-    which the player sees, but the root stays one belief node, so the root action is chosen
-    over them (a lower bound on the battle's value)."""
+    which the player sees before acting, so Stage B makes the root a chance node over the
+    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34)."""
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []
@@ -3406,7 +3413,7 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
     return (active_down & jnp.any(bench, axis=1) & (state.over == 0)).astype(jnp.int8)
 
 
-def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
+def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> BattleState:
     """Send in party ``slot`` for ``side``'s fainted active Pokemon, through the same
     switch-in path as a switch action (``_switch_in``, then ``hooks.on_switch_in``) and a
     faint check.
@@ -3423,9 +3430,21 @@ def replace(tables: Tables, state: BattleState, side, slot) -> BattleState:
 
     ``ReplaceFainted`` runs before ``totalTurns++`` (:1852), while ``step`` has already
     added 1 to ``turn``: the decomp's ``totalTurns + 1`` is ``turn`` here, for the
-    newcomer's ``fake_out_turn`` and for a faint on entry."""
+    newcomer's ``fake_out_turn`` and for a faint on entry.
+
+    Where ``effects`` (``bool``, traceable) is false only the list runs (the hazards and the
+    faint check): the newcomer's switch-in states wait for ``ShowBattleMon`` while the other
+    side sends in again first, ``entry_pending[side]`` is set for a newcomer with HP left
+    (``hooks.show_battle_mon`` runs them; ``search.playout.replacement_pass``, ruling G-32)."""
     entered = _switch_in(tables, state, side, slot, state.turn)
-    out = _faint_check(tables, entered, on_switch_in(tables, entered, side), entry_turn=state.turn)
+    effects = jnp.asarray(effects, bool)
+    hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
+    arrived = _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
+    waits = ~effects & (out.hp[side, out.active[side]] > 0) & (out.over == 0)
+    out = out._replace(
+        entry_pending=out.entry_pending.at[side].set(waits.astype(out.entry_pending.dtype))
+    )
     # TurnEnd's AnyExpPayout (bcp.c:1846) pays for a newcomer the hazards fainted. Learn work
     # it leaves inside the opponent's replacement loop would be read by the next replacement
     # pick before the learn resolve: refused as window (c) (design §3.3(c)).

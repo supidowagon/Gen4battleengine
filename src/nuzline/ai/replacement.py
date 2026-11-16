@@ -90,7 +90,7 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     flags = type_chart_flags(
         tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
     )
-    return jnp.where(wonder_guard_bit(tables, state, 1, move, flags), 0, score)
+    return jnp.where(wonder_guard_bit(tables, state, 1, 0, move, flags), 0, score)
 
 
 def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray, jnp.ndarray]:

@@ -146,6 +146,13 @@ Encodings:
   sort puts the player second, so its weather stays (``hooks.order_swaps``). The draw that
   settles it (``step.resolve_war``: the root chance node, a playout's next turn, the tree's
   replacement children) then clears it; 0 otherwise, so states merge.
+* ``entry_pending`` (E1 Gardenia review, ruling G-32): per battler, 1 while a battler that a
+  replacement's party list sent in (subscript_show_party_list.s:22-24: the hazards and a faint
+  check only) still waits for ``ShowBattleMon``'s switch-in states (battle_controller_player.c:
+  256, ``BattleSystem_TriggerEffectOnSwitch``: its BattleMon ``traceAnnounced``,
+  ``weatherAbilityAnnounced``, ``intimidateAnnounced``, ``downloadAnnounced`` all clear) while
+  the player sends in another Pokemon first: at a double KO whose player newcomer fainted on the
+  entry hazards (``search.playout.replacement_pass``). Else 0, so states merge.
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
@@ -296,6 +303,7 @@ class BattleState(NamedTuple):
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
+    entry_pending: jnp.ndarray  # int8[2], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
     terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
@@ -572,6 +580,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
     "war_swaps": (_FIELD, np.int16),
+    "entry_pending": (_SIDE, np.int8),
     "move_prev": (_FIELD, np.int16),
     "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),

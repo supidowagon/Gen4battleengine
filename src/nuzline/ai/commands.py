@@ -1159,7 +1159,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         grounded,
         roosting,
     )
-    immune = ((flags & INEFFECTIVE) != 0) | wonder_guard_bit(tables, state, 1, move, flags)
+    immune = ((flags & INEFFECTIVE) != 0) | wonder_guard_bit(tables, state, 1, 0, move, flags)
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 

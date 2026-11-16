@@ -6,7 +6,10 @@ point) and chance layers. The root is a chance node over the given state's hidde
 (``step.root_belief``: the Quick Claw ``speedRand`` bit ``qc_roll`` of each side with a holder
 that can act next turn, 1/5 vs 4/5): its states differ only in hidden state, so they form the
 root belief node, weighted by their probabilities; without such a side it holds the one given
-state. Then: for a player action ``a``,
+state. A root draw the player sees before acting (the tie of a weather war the battle-start
+sort left open, ruling G-34) makes the root a chance node over what the player sees instead:
+each outcome is that belief node solved on its own (``SolveResult.outcomes``). Then: for a
+player action ``a``,
 each state ``s`` of the node (absolute reach ``w``) meets every opponent action ``o``
 with the AI's exact probability ``q_s(o)`` (``expand.ai_rows``), and every merged battle
 outcome of ``(a, o)`` (``expand.expand``: stepped, replaced and observed, merged on
@@ -127,7 +130,9 @@ from nuzline.ai.policy import UnsupportedAi, ai_path_refusals, ai_refusals
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
+from nuzline.engine.ids import Weather
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn_options, needs_learn
+from nuzline.engine.observe import replacement_observation
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import WINNER_PLAYER, needs_replacement, root_belief
 from nuzline.search import deaths
@@ -137,10 +142,12 @@ from nuzline.search.rows import concat, row_bytes, take
 from nuzline.search.stage_a import action_label, rank_actions, tie_ordered
 
 __all__ = [
+    "ROOT_CHANCE",
     "ActionValue",
     "Backup",
     "HiddenLegality",
     "PlanNode",
+    "RootOutcome",
     "SolveResult",
     "SolveSettings",
     "learn_label",
@@ -214,7 +221,8 @@ class PlanNode:
     half-B value given the node is reached. ``children``: per player action, the child
     nodes (at the root every ranked action; at an inner decision node only the chosen
     one; other kinds none). ``kind``: ``decision``, ``leaf``, ``terminal``, ``failed``,
-    ``pruned``, ``refused`` or ``sampled`` (module docstring); ``decision``: what a decision
+    ``pruned``, ``refused``, ``sampled`` (module docstring) or ``chance`` (a chance root,
+    ruling G-34: its children under ``ROOT_CHANCE`` are the outcomes' root plans); ``decision``: what a decision
     node decides: ``turn`` (an action), ``replacement`` (the slot to send in: the player's
     active Pokemon fainted; ``replacement`` is then true) or ``learn`` (the answer to a
     learn-move prompt, ``levelup.learn_options``' indexing; ``learn_move`` is the move it
@@ -251,7 +259,10 @@ class SolveResult:
     half-width (``None`` without a precision target, or with no root action);
     ``precision_met``, whether that is at most the target (``None`` likewise).
     ``deaths_allowed`` and ``protected``: the root state's ``faint_budget`` and protected
-    slots."""
+    slots. ``outcomes``: empty, or at a chance root (ruling G-34) each visible outcome's solve;
+    ``ranking`` then holds one row, ``ROOT_CHANCE``, the best answer to each outcome weighted
+    by its probability (the battle's value), and ``plan`` is a ``chance`` node over the
+    outcomes' plans."""
 
     ranking: list[ActionValue]
     dropped: dict[int, str]
@@ -266,6 +277,25 @@ class SolveResult:
     precision_met: bool | None = None
     deaths_allowed: int = 0
     protected: tuple[int, ...] = ()
+    outcomes: tuple[RootOutcome, ...] = ()
+
+
+ROOT_CHANCE = -1  # the action id of a chance root's one ranking row (``RootOutcome``)
+
+
+@dataclass(frozen=True)
+class RootOutcome:
+    """One visible outcome of a chance root (ruling G-34): the root's hidden draws include one
+    the player sees before acting (the battle-start weather war's tie, ``step.root_belief``),
+    so the root is a chance node over what the player sees, each outcome a belief node solved
+    on its own. ``prob``: its probability; ``obs``: the observation that tells it apart
+    (``observe.replacement_observation``); ``label``: what the player sees (the weather);
+    ``result``: that outcome's solve."""
+
+    prob: float
+    obs: bytes
+    label: str
+    result: SolveResult
 
 
 class HiddenLegality(Exception):
@@ -1246,7 +1276,105 @@ def solve(
         raise ValueError("solve: the battle is already over")
     if np.any(np.asarray(state.learn_level)):
         state = _advance_jit(tables, state)
-    belief = root_belief(tables, state)
+    groups = _visible_groups(root_belief(tables, state))
+    if len(groups) > 1:
+        return _chance_root(tables, names, state, groups, key, settings, leaf_fn, start)
+    return _solve_belief(tables, names, state, groups[0][2], key, settings, leaf_fn, start)
+
+
+def _visible_groups(belief) -> list[tuple[bytes, float, list]]:
+    """``(observation, probability, [(state, weight)])`` per visible outcome of the root's
+    draws, in first-seen order: the states of one outcome differ only in hidden state (the
+    Quick Claw ``qc_roll``); an open weather war's tie changes the weather the player sees
+    (ruling G-34). Weights are conditional on the outcome."""
+    groups: dict[bytes, list] = {}
+    for st, w in belief:
+        obs = np.asarray(replacement_observation(st), np.int32).tobytes()
+        groups.setdefault(obs, []).append((st, w))
+    out = []
+    for obs, members in groups.items():
+        p = math.fsum(w for _, w in members)
+        out.append((obs, p, [(st, w / p) for st, w in members]))
+    return out
+
+
+def _chance_root(tables, names, state, groups, key, settings, leaf_fn, start) -> SolveResult:
+    """Ruling G-34: the root is a chance node over what the player sees before acting (the
+    battle-start weather war's tie): each outcome is solved as its own belief node
+    (``_solve_belief`` on ``fold_in(key, 1 + i)``), and the root's value is their
+    probability-weighted best (the player answers each outcome on its own; one belief node
+    over them gave a lower bound). The one ranking row ``ROOT_CHANCE`` carries the weighted
+    numbers; its interval adds the outcomes' half-widths in quadrature."""
+    outcomes = []
+    for i, (obs, p, members) in enumerate(groups):
+        k = jax.random.fold_in(key, 1 + i)
+        sub = _solve_belief(tables, names, state, members, k, settings, leaf_fn, start)
+        weather = Weather(int(np.asarray(members[0][0].weather))).name.lower()
+        outcomes.append(RootOutcome(p, obs, f"weather {weather}", sub))
+    dropped = {}
+    for o in outcomes:
+        dropped.update({a: f"{o.label}: {why}" for a, why in o.result.dropped.items()})
+    ranking = []
+    if all(o.result.ranking for o in outcomes):
+        tops = [(o.prob, o.result.ranking[0]) for o in outcomes]
+
+        def total(name: str) -> float:
+            return math.fsum(p * getattr(r, name) for p, r in tops)
+
+        estimate = min(1.0, max(0.0, total("estimate")))
+        half = math.sqrt(math.fsum((p * (r.ci_high - r.ci_low) / 2) ** 2 for p, r in tops))
+        dist = None
+        if all(r.distribution is not None for _, r in tops):
+            probs = np.sum([p * np.asarray(r.distribution.probs) for p, r in tops], axis=0)
+            dist = deaths.DeathDistribution(tuple(float(x) for x in probs))
+        ranking = [
+            ActionValue(
+                action=ROOT_CHANCE,
+                label="the best answer to each outcome",
+                estimate=estimate,
+                ci_low=max(0.0, estimate - half),
+                ci_high=min(1.0, estimate + half),
+                lower_bound=min(1.0, max(0.0, total("lower_bound"))),
+                unexplored=total("unexplored"),
+                sampled=total("sampled"),
+                refused=total("refused"),
+                tied_with_best=False,
+                sampled_nodes=sum(r.sampled_nodes for _, r in tops),
+                e_deaths=total("e_deaths"),
+                failed=total("failed"),
+                distribution=dist,
+            )
+        ]
+    plan = PlanNode(
+        None,
+        1.0,
+        ROOT_CHANCE if ranking else None,
+        {ROOT_CHANCE: ranking[0].estimate} if ranking else {},
+        {ROOT_CHANCE: [replace(o.result.plan, obs=o.obs, prob=o.prob) for o in outcomes]},
+        "chance",
+    )
+    met = [o.result.precision_met for o in outcomes]
+    return SolveResult(
+        ranking,
+        dropped,
+        min(o.result.depth for o in outcomes),
+        plan,
+        sum(o.result.playouts for o in outcomes),
+        time.perf_counter() - start,
+        settings,
+        outcomes[0].result.leaf_budget,
+        max(o.result.rounds for o in outcomes),
+        None,
+        None if any(m is None for m in met) else all(met),
+        int(state.faint_budget),
+        _protected(state),
+        tuple(outcomes),
+    )
+
+
+def _solve_belief(tables, names, state, belief, key, settings, leaf_fn, start) -> SolveResult:
+    """The solve of one root belief node: ``belief`` its ``(state, weight)`` pairs, the
+    weights summing to 1 (module docstring)."""
     root = jax.tree.map(lambda *f: np.stack([np.asarray(x) for x in f]), *(b[0] for b in belief))
     weights = [b[1] for b in belief]
     solver = _Solver(tables, names, root, settings, leaf_fn, start, weights)
@@ -1352,6 +1480,15 @@ def result_to_dict(result: SolveResult) -> dict:
         "precision_met": result.precision_met,
         "deaths_allowed": int(result.deaths_allowed),
         "protected": [int(p) for p in result.protected],
+        "outcomes": [
+            {
+                "prob": float(o.prob),
+                "obs": o.obs.hex(),
+                "label": o.label,
+                "result": result_to_dict(o.result),
+            }
+            for o in result.outcomes
+        ],
     }
 
 
@@ -1371,4 +1508,10 @@ def result_from_dict(d: dict) -> SolveResult:
         precision_met=d["precision_met"],
         deaths_allowed=d["deaths_allowed"],
         protected=tuple(d["protected"]),
+        outcomes=tuple(
+            RootOutcome(
+                o["prob"], bytes.fromhex(o["obs"]), o["label"], result_from_dict(o["result"])
+            )
+            for o in d.get("outcomes", [])
+        ),
     )

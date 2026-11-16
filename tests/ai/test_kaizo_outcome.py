@@ -379,7 +379,7 @@ def test_kaizo_width_under_cap(kaizo_tables, kaizo_roark_party):
     Rough Skin) and one whose ability it knows. Its largest value for any state is within
     ``WIDTH_CAP``; the flat product is reported, not used."""
     t, party = kaizo_tables, kaizo_roark_party
-    stops = KAIZO.switch_sites + 1  # 45: the six-party switch stops (K3c Task 7)
+    stops = KAIZO.switch_sites + 1  # 61: the six-party switch stops (K3c Task 7, G-33)
     for j in range(len(party)):
         s = make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
         known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))

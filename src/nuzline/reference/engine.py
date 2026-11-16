@@ -421,6 +421,13 @@ def _wonder_guarded(
     return "super" not in flags
 
 
+def _present_heals(tables, move: int, o, side: int) -> bool:
+    """Present's heal path: effect_script_0122.s _004 sets SYSCTL_IGNORE_IMMUNITIES (:13) in the
+    move script (bcp.c:3214), hit or miss, so TryMove's CheckTypeChart (bcp.c:2350-2356) skips
+    the chart: no Wonder Guard flag, no noEffect (ruling G-30)."""
+    return _t(tables, "move_effect", move) == EffectId.PRESENT and o.present[side] == PRESENT_HEAL
+
+
 def _identified(s: RefState, attacker: int, defender: int) -> int:
     """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
     (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
@@ -2124,12 +2131,14 @@ def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) ->
     )
 
 
-def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
-    """No status yet and no immunity: ``subscript_burn.s`` (Fire), ``subscript_poison.s``
-    (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun without a weather lock: the
-    ``CheckIgnoreWeather`` at :6 skips the sun check at :7, battle_script.c:9195-9206)."""
+def _can_have_status(tables, s: RefState, side: int, status: int, current=None) -> bool:
+    """No status yet (``current``, default the active's: a fainted receiver's kept
+    BattleMon.status, ``_synchronize``) and no immunity: ``subscript_burn.s`` (Fire),
+    ``subscript_poison.s`` (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun without a
+    weather lock: the ``CheckIgnoreWeather`` at :6 skips the sun check at :7,
+    battle_script.c:9195-9206)."""
     mon = _active(s, side)
-    if mon.status != Status.NONE:
+    if (mon.status if current is None else current) != Status.NONE:
         return False
     if status == Status.BURN and Type.FIRE in mon.types:
         return False
@@ -2199,7 +2208,11 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
         return
     if mon.ability == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
         return
-    if not _can_have_status(turn.tables, s, receiver, status):
+    # The receiver's BattleMon.status, which a faint keeps, too (G-31).
+    current = mon.status
+    if mon.hp == 0:
+        current = turn.battle_status.get((receiver, s.sides[receiver].active), current)
+    if not _can_have_status(turn.tables, s, receiver, status, current):
         return
     if mon.hp:
         mon.status, mon.status_counter = status, 0
@@ -3548,8 +3561,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if (
         _t(tables, "move_power", move) != 0
         and not _targets_user(tables, move, _ghost(s, side))
-        # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7).
+        # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7), and so
+        # does Present's heal path (effect_script_0122.s:13), ruling G-30.
         and _t(tables, "move_effect", move) != EffectId.FUTURE_SIGHT
+        and not _present_heals(tables, move, o, side)
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
@@ -3674,6 +3689,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     guarded = (
         not _targets_user(tables, move, _ghost(s, side))
         and effect != EffectId.FUTURE_SIGHT  # SYSCTL_IGNORE_IMMUNITIES
+        and not _present_heals(tables, move, o, side)  # likewise (G-30)
         and _wonder_guarded(tables, s, side, 1 - side, move, _move_type(tables, s, side, move))
     )
     # subscript_missed.s:11 sends a semi-invulnerable miss (B10-12) to the miss message (:157)
@@ -5066,11 +5082,12 @@ def _keep_qc(tables, s: RefState, qc: list[int]) -> None:
         sd.qc_roll = int(bool(value)) if kept else 0
 
 
-def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
+def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True) -> RefState:
     """A faint replacement (``engine.step.replace``'s contract): ``TurnEnd`` ->
     ``ReplaceFainted`` (bcp.c:1848) -> ``subscript_show_party_list.s`` sends the
     Pokemon in and runs the hazards and a faint check (:22-24); the battle-over check
-    (bcp.c:1847), then ``ShowBattleMon`` (bcp.c:256) runs the switch-in effects."""
+    (bcp.c:1847), then ``ShowBattleMon`` (bcp.c:256) runs the switch-in effects. Without
+    ``effects`` they wait (``entry_pending``, ruling G-32) for a newcomer with HP left."""
     s = copy.deepcopy(state)
     # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
     # turn: the decomp's totalTurns + 1 is s.turn here.
@@ -5085,8 +5102,9 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).
     if _pay_exp(turn, s) and side == 1 and not s.over:
         s.exp_refused = 2
-    if not s.over:
+    if not s.over and effects:
         _switch_in_effects(turn, s, side)
+    s.entry_pending[side] = int(not effects and not s.over and _active(s, side).hp > 0)
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(

@@ -85,7 +85,14 @@ from nuzline.engine.actions import (
     legal_replacements,
 )
 from nuzline.engine.damage import damage_table
-from nuzline.engine.hooks import download, hold_war, intimidate, order_swaps, weather_war
+from nuzline.engine.hooks import (
+    download,
+    hold_war,
+    intimidate,
+    order_swaps,
+    show_battle_mon,
+    weather_war,
+)
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import action_order, is_switch, used_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
@@ -343,12 +350,34 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     Defense and Sp. Def at stage 0 (a fresh battler; only its own held-item check, a later
     state, can have raised them since). Each opposing newcomer's Download, run at its entry,
     reads the player newcomer's two stats at stage 0 too: their stages are set aside for the
-    opponent's entries (nothing an opposing switch-in does touches them) and put back after."""
+    opponent's entries (nothing an opposing switch-in does touches them) and put back after.
+
+    Ruling G-32: when the player's newcomer faints on its hazards at a double KO, the decomp's
+    ``TurnEnd`` re-enters ``ReplaceFainted`` for the player (bcp.c:1846-1858) before any
+    ``ShowBattleMon``, so the opposing newcomer, sent in by the same list, runs none of its
+    switch-in states yet (``replace(..., effects=False)``: ``entry_pending``). The player's next
+    pass sends its newcomer in with the list alone; with HP left, the two then run
+    ``ShowBattleMon``'s states together (``hooks.show_battle_mon``: state by state over
+    ``monSpeedOrder``, the weather war ordered as at a double KO, G-26); a newcomer that falls
+    too leaves the opposing one waiting for the next pass."""
     mul = _carried_mul(state)
     opp_needs = needs_replacement(state)[1] == 1
     opp_slot = post_ko_switch_in(tables, state, mul)
     bad = opp_needs & (opp_slot < 0)
-    entered = replace(tables, state, 0, slot)
+    # Ruling G-32: an opposing newcomer an earlier pass sent in while the player's newcomer
+    # fainted on its hazards still waits for ShowBattleMon (``entry_pending``): the player's
+    # newcomer enters with the list alone, and with HP left both run ShowBattleMon's switch-in
+    # states together (``hooks.show_battle_mon``, over the order TrainerMessage sorted).
+    pending = state.entry_pending[1] != 0
+    entered = replace(tables, state, 0, slot, ~pending)
+    meet = pending & (entered.hp[0, entered.active[0]] > 0) & (entered.over == 0)
+    met = show_battle_mon(
+        tables,
+        entered._replace(entry_pending=jnp.zeros_like(entered.entry_pending)),
+        order_swaps(tables, _sort_view(state, entered)),
+        entered.qc_roll,
+    )
+    entered = _select(meet, met, entered)
     opp_down = state.hp[1, state.active[1]] == 0
     own = entered.ability[0, entered.active[0]]
     unannounced = opp_down & (own == AbilityId.INTIMIDATE)
@@ -356,7 +385,10 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     kept = entered.stages[0]
     fresh = entered.stages.at[0, Stat.DEF].set(0).at[0, Stat.SPD].set(0)
     entered = entered._replace(stages=jnp.where(opp_down, fresh, entered.stages))
-    both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
+    # A player newcomer down after its hazards at a double KO: the opposing newcomer's
+    # switch-in states wait for the player's next newcomer (G-32).
+    fell = entered.hp[0, entered.active[0]] == 0
+    both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0), ~fell)
     entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
     entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))
     settled, refused = send_replacements(tables, entered, False, mul)
@@ -374,6 +406,9 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     war = opp_down & weather_war(settled) & (settled.over == 0)
     swaps = order_swaps(tables, _sort_view(state, settled))
     settled = hold_war(settled, war, swaps, settled.qc_roll)
+    # A battle that ended leaves nothing waiting (states merge).
+    waiting = jnp.where(settled.over != 0, 0, settled.entry_pending)
+    settled = settled._replace(entry_pending=waiting.astype(settled.entry_pending.dtype))
     return settled, refused | bad
 
 

@@ -259,12 +259,12 @@ def wonder_guarded(
     atk_side,
     move,
     move_type,
-    def_side=None,
+    def_side,
     last_of_multi_turn=False,
 ) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_WONDER_GUARD`` (battle_lib.c:
     2649-2654, ruling G-18) for ``move`` (of type ``move_type``) by ``atk_side``'s active battler
-    against ``def_side``'s (default the other side): the defender has Wonder Guard as the
+    against ``def_side``'s (the defender battler, passed in by the caller): the defender has Wonder Guard as the
     attacker sees it (``Battler_IgnorableAbility``: an attacker's Mold Breaker hides it,
     ``ignorable``), the move is on its damaging turn (``on_damaging_turn`` under
     ``last_of_multi_turn``: Fire Fang never is, a battle caller passes ``charge_strike``), the walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``super_effective_flag``; an
@@ -274,7 +274,7 @@ def wonder_guarded(
     damage and runs subscript_missed.s (bcp.c:3324-3327), but ``ApplyTypeChart`` does not zero
     ``battleCtx->damage`` (the crash of Jump Kick reads it, ``step._use_move``)."""
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side if def_side is None else _i32(def_side)
+    def_side = _i32(def_side)
     move = _i32(move)
     first, second = chart_walk(tables, state, atk_side, def_side, move_type)
     power = tables.move_power[move] != 0
@@ -584,7 +584,7 @@ def fixed_damage(
     immune = effectiveness(tables, kind, d_types, seen) == 0
     immune = immune | levitated(state, atk_side, def_side, kind)
     immune = immune | (
-        jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind)
+        jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind, def_side)
     )
     unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
     stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)

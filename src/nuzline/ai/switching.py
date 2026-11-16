@@ -13,7 +13,7 @@ means. Both come from the same layout, so the sampler, the enumerator and Task 3
 
 How many sites the outcome encodes is the AI layout's ``switch_sites`` (``ai.layout``),
 passed to the functions here as ``sites`` (static): ``SWITCH_SITES`` (9) for vanilla
-Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (44) for a party of six. The candidate draws
+Roark's three Pokemon, ``KAIZO_SWITCH_SITES`` (60) for a party of six. The candidate draws
 are the same for both: one Wonder Guard draw per (bench Pokemon, move slot)
 (``AI_CannotDamageWonderGuard``, :3315-3344, the draw at :3338), the keep draw of each of the
 active's four move slots (``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, the draw at
@@ -23,12 +23,14 @@ active's four move slots (``AI_HasSuperEffectiveMove``, trainer_ai.c:3576-3592, 
 ``TrainerAI_ShouldSwitch`` call: ``BattleContext_Init`` sets it (battle_lib.c:2015) after
 every action (battle_controller_player.c:3998) and at the turn's end
 (battle_controller_player.c:1855), and inside the check only a branch that returns TRUE
-writes it (:3797). With five bench Pokemon that is ``4 + 2 * 5 * 4 = 44`` candidates, so a
-party of six never has more sites than ``KAIZO_SWITCH_SITES``. The Wonder Guard draws add none
-to that bound: they exist only when no move of ``A`` is super effective (so no keep draw),
-one per super-effective (bench Pokemon, move) pair, and each bench Pokemon is in at most one
-pass (an immunity clears ``NOT_VERY_EFFECTIVE``), whose draws are those same pairs: at most
-``2 * 5 * 4 = 40``.
+writes it (:3797). A bench Pokemon can be in both passes: ``UpateMoveStatusForTypeMul``
+(battle_lib.c:2762-2781) sets ``NOT_VERY_EFFECTIVE`` on a resisted chart row after an immune
+row cleared it (Ground on Flying/Bug), and Wonder Guard's ``INEFFECTIVE`` (:2734-2739) never
+clears ``NOT_VERY_EFFECTIVE``; so the passes hold up to ``2 * 5 * 4 = 40`` draws. The Wonder
+Guard draws (step 4) exist only when no move of ``A`` is super effective (:3300-3311), so never
+beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates (ruling G-33), and a party
+of six never has more sites than ``KAIZO_SWITCH_SITES``
+(``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``).
 
 Wonder Guard (ruling G-23). ``AI_CannotDamageWonderGuard`` (step 4) runs when ``D``'s
 ``battleMons[].ability`` is Wonder Guard (no Mold Breaker test, no knowledge: the true
@@ -72,7 +74,8 @@ Refused, never approximated (``switching_refusals`` names each one):
   modelled on both sides: ``damage.ai_move_type``, and a bench member's own,
   ``Move_CalcVariableType``, battle_lib.c:8162-8175);
 * a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
-* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``).
+* a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``, which is the
+  six-party maximum).
 
 Called on concrete arrays, ``switch_sites`` and ``switch_action`` raise
 ``UnsupportedSwitching`` for these. Traced (jit, vmap) they cannot raise, so every
@@ -104,9 +107,10 @@ from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
 SWITCH_NONE = SWITCH_SITES  # switch_stop when no draw stops the check (vanilla layout)
-# Every candidate draw of a party of six: 4 keep draws, and 5 bench Pokemon x 4 moves in each
-# of the two passes (module docstring). A layout's switch_stop is ``sites`` when none stops.
-KAIZO_SWITCH_SITES = MOVES + 2 * (SLOTS - 1) * MOVES
+# Every candidate draw of a party of six (module docstring, ruling G-33): the Wonder Guard draws
+# (5 bench Pokemon x 4 moves) or the 4 keep draws, never both, then 5 x 4 in each of the two
+# passes: 20 + 40 = 60. A layout's switch_stop is ``sites`` when none stops.
+KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
 SWITCH_REFUSED = -1  # switch_stop of a refused layout (traced only)
 NO_SWITCH = -1  # switch_action: the AI does not switch
 REFUSED_ACTION = -2  # switch_action of a refused layout (traced only)
@@ -362,9 +366,11 @@ def type_chart_flags(
     )
 
 
-def wonder_guard_bit(tables: Tables, state: BattleState, atk_side, move, flags) -> jnp.ndarray:
+def wonder_guard_bit(
+    tables: Tables, state: BattleState, atk_side, def_side, move, flags
+) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_WONDER_GUARD`` (battle_lib.c:
-    2649-2654) for ``move`` by ``atk_side``'s active battler against the other side's, given the
+    2649-2654) for ``move`` by ``atk_side``'s active battler against ``def_side``'s, given the
     walk's ``flags`` (``type_chart_flags``): the defender's Wonder Guard (``Battler_Ability``:
     ``damage.decomp_abilities``, the true ability) unless the attacker has Mold Breaker
     (``Battler_IgnorableAbility``), a move on its damaging turn (``damage.on_damaging_turn``:
@@ -372,10 +378,11 @@ def wonder_guard_bit(tables: Tables, state: BattleState, atk_side, move, flags) 
     ``SYSCTL_LAST_OF_MULTI_TURN``), with table power, not Struggle (:2573), and
     ``MOVE_STATUS_SUPER_EFFECTIVE`` clear. Part of ``MOVE_STATUS_IMMUNE`` (ruling G-23)."""
     atk_side = jnp.asarray(atk_side, _I32)
+    def_side = jnp.asarray(def_side, _I32)
     move = jnp.asarray(move, _I32)
     ability = decomp_abilities(tables, state)
     attacker = ability[atk_side, state.active[atk_side]]
-    defender = ability[1 - atk_side, state.active[1 - atk_side]]
+    defender = ability[def_side, state.active[def_side]]
     return (
         (attacker != _MOLD_BREAKER)
         & (defender == _WONDER_GUARD)

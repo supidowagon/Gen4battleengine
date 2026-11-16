@@ -767,11 +767,24 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
             weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
         ),
     )
+    return show_battle_mon(tables, state, swaps)
+
+
+def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> BattleState:
+    """``ShowBattleMon``'s ``BattleSystem_TriggerEffectOnSwitch`` (battle_controller_player.c:
+    256; battle_lib.c:3649-4168) for two battlers whose states all wait: each state loops over
+    both (``monSpeedOrder``) before the next runs: Trace, the weather abilities (the order the
+    sort gave, ``swaps`` / ``qc``: ``hold_war``), Intimidate, Download, the switch-in
+    announcements, the forbidden-status check and the held-item check. The leads at the battle
+    start (``battle_start``) and, at a double KO whose player newcomer fainted on its hazards,
+    the waiting opposing newcomer with the player's next one (``search.playout.
+    replacement_pass``, ruling G-32)."""
+    sides = (0, 1)
     for side in sides:
         state, _ = trace(tables, state, side, 1 - side)
     for side in sides:  # the engine's order, player first; hold_war reorders a weather war
         state = weather_ability(state, side)
-    state = hold_war(state, weather_war(state), swaps)
+    state = hold_war(state, weather_war(state), swaps, qc)
     for side in sides:
         state = intimidate(state, side, foe=1 - side)
     for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate

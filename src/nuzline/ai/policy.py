@@ -3902,7 +3902,7 @@ def _distribution(tables: Tables, state: BattleState, layout: AiLayout = VANILLA
     scorings). NaN exactly where the
     enumeration gives NaN: a refused state, or a refused switch layout (``switch_action``
     gives ``REFUSED_ACTION`` for any stop). The switch stops are the layout's
-    ``switch_sites + 1`` (10 vanilla, 45 Kaizo)."""
+    ``switch_sites + 1`` (10 vanilla, 61 Kaizo)."""
     sites = _exact_layout(layout).switch_sites
     stops = jnp.arange(sites + 1, dtype=jnp.int8)
     p_stop = switch_stop_probs(switch_sites(tables, state, sites))  # [sites + 1]

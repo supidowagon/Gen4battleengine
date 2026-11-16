@@ -34,7 +34,7 @@ The fields:
   (``AiContext.missing_read``). 0 for the flat layout.
 * ``switch_sites``: the voluntary-switch draw sites ``AiOutcome.switch_stop`` encodes:
   ``switching.SWITCH_SITES`` (9) for vanilla Roark's three Pokemon,
-  ``switching.KAIZO_SWITCH_SITES`` (44, every candidate draw of a party of six) for Kaizo.
+  ``switching.KAIZO_SWITCH_SITES`` (60, every candidate draw of a party of six) for Kaizo.
 * ``water2_ability``: the ability ``Basic_CheckForImmunity``'s last compare tests
   (script.s:78): Levitate (26) in vanilla, a second Levitate test that never matches (the
   decomp's bug, since :77 already takes Levitate), and Dry Skin (87) in Kaizo (overlay14

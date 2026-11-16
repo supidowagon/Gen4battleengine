@@ -403,8 +403,12 @@ def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     return _foe_stage(state, h, cond)
 
 
-def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> jnp.ndarray:
-    """No status yet and no type (or weather) immunity to ``status``. Sun stops a freeze
+def can_have_status(
+    tables: Tables, state: BattleState, side, slot, status, current=None
+) -> jnp.ndarray:
+    """No status yet (``current``, default ``state.status[side, slot]``: a fainted battler's
+    ``BattleMon.status``, which its faint keeps, ``effects.synchronize``) and no type (or
+    weather) immunity to ``status``. Sun stops a freeze
     only without a weather lock: ``subscript_freeze.s:6`` runs ``CheckIgnoreWeather`` before
     the sun check at :7, and ``BtlCmd_CheckIgnoreWeather`` (battle_script.c:9195-9206) jumps
     past it while a battler on the field with HP left has Cloud Nine or Air Lock
@@ -420,7 +424,8 @@ def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> j
         )
         | ((status == Status.FREEZE) & (has(Type.ICE) | sun))
     )
-    return (state.status[side, slot] == Status.NONE) & ~immune
+    current = state.status[side, slot] if current is None else current
+    return (current == Status.NONE) & ~immune
 
 
 def _inflict(
@@ -1753,7 +1758,8 @@ def synchronize(
     Pokemon's ``state.status``) gives it for a passer that fainted since (ruling G-24). The message (poison
     :57, burn :68, paralyze :44: ``BTLSCR_MSG_BATTLER_TEMP``'s ability, the passer) tags
     Synchronize: the AI learns a player's (``hooks.REVEALS_ON``). A status that lands toggles
-    the flag off again (rulings G-12, G-13)."""
+    the flag off again (rulings G-12, G-13). ``held`` gives the receiver's status test its
+    ``BattleMon.status`` likewise: a receiver that fainted with a status takes nothing (G-31)."""
     from nuzline.engine.hooks import SYNCHRONIZED, reveal_ability  # hooks imports this module
 
     attacker = jnp.asarray(attacker, _I32)
@@ -1770,6 +1776,10 @@ def synchronize(
     passer = jnp.where(first, defender, attacker)
     receiver = jnp.where(first, attacker, defender)
     p_mon, r_mon = state.active[passer], state.active[receiver]
+    # The receiver's status test reads its BattleMon.status too (subscript_paralyze.s:41-42,
+    # subscript_poison.s, subscript_burn.s), kept by a faint: a fainted receiver that was
+    # statused takes nothing (ruling G-31).
+    r_held = state.status[receiver, r_mon] if held is None else jnp.asarray(held)[receiver]
     held = state.status[passer, p_mon] if held is None else jnp.asarray(held)[passer]
     kind = jnp.where(
         (held == Status.POISON) | (held == Status.TOXIC),
@@ -1797,7 +1807,7 @@ def synchronize(
         & (kind != Status.NONE)
         & ~shield
         & ~leaf
-        & can_have_status(tables, state, receiver, r_mon, kind)
+        & can_have_status(tables, state, receiver, r_mon, kind, r_held)
     )
     state = _set_status(state, receiver, r_mon, kind, lands & _alive(state, receiver, r_mon))
     state = reveal_ability(state, passer, p_mon, SYNCHRONIZED, lands)
@@ -2322,7 +2332,7 @@ def play_hit(
         == 0
     ) | levitated(state, side, target_side, counter_type)
     # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
-    immune = immune | wonder_guarded(tables, state, side, move, counter_type)
+    immune = immune | wonder_guarded(tables, state, side, move, counter_type, target_side)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
     target_hp = state.hp[target_side, target].astype(_I32)
     # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would

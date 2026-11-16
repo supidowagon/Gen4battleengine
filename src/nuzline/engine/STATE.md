@@ -197,6 +197,15 @@ three structs has a row.
   that order hangs on a draw still to come (the battle-start `speedRand`, a speed tie's
   `RandNext() & 1`), `war_swaps` holds the swap bit of each draw (`hooks.order_swaps`) until
   `step.resolve_war` makes it; else 0.
+- **The announced flags while a list newcomer waits -> `entry_pending`** (E1 Gardenia review,
+  ruling G-32): `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and
+  `downloadAnnounced` stay `later (M6)` rows (Skill Swap, Role Play), but one span needs their
+  "all still clear" state: a newcomer a replacement's party list sent in
+  (subscript_show_party_list.s:22-24) while the player's newcomer of the same list fainted on
+  its hazards, so `TurnEnd` re-enters `ReplaceFainted` (battle_controller_player.c:1846-1858)
+  before `ShowBattleMon` (:256) runs its switch-in states. `entry_pending[battler]` is 1 then
+  (`step.replace(..., effects=False)`), until `search.playout.replacement_pass` runs both
+  newcomers' states (`hooks.show_battle_mon`); else 0.
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's

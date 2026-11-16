@@ -405,3 +405,61 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   (the tables map by name; rebuilt). E1 prep P4's `Expert_ChargeTurnNoInvuln` (SolarBeam only),
   its second `IfHeldItemEqualTo` and the duplicate `SKIP_CHARGE_TURN_IN_SUN` /
   `ITEM_POWER_HERB` / outcome-table entries gave way to E2's transcription of every entry.
+
+## The Gardenia review fixes (2026-11-15)
+
+- G-30 Present's heal path and Wonder Guard. effect_script_0122.s `_004` sets
+  SYSCTL_IGNORE_IMMUNITIES (:13) in the move script (bcp.c:3214), before TryMove's
+  `CheckTypeChart` (:3272), which then skips the chart (bcp.c:2350-2356): no
+  MOVE_STATUS_WONDER_GUARD, no subscript_missed.s, no reveal, and AfterMoveEffects run (Synchronize,
+  the item checks); likewise no `moveFailFlags.noEffect` (a heal of a Ghost). The damage path is a
+  Normal hit, never super effective: guarded as before (G-18). The script runs hit or miss, so a
+  miss on a Wonder Guard holder reveals it only on the damage path. Engine: `step._use_move`'s
+  `heal_path` (out of `guard_tested` and `no_effect`), the reference's `_present_heals`; the exact
+  enumeration reads the Present draw on a miss too against a side with a Wonder Guard Pokemon
+  (`enumerate.Reads.present_guard`).
+- G-31 Synchronize to a fainted receiver. The receiver's status test is the status subscript's
+  `CompareMonDataToValue ... BATTLEMON_STATUS` (subscript_paralyze.s:41-42; poison, burn alike) on
+  `BattleMon.status`, which a faint keeps (only the party copy is zeroed, battle_controller.c:
+  1481-1486). So a statused receiver that fainted (the AI's burned Static U-turn user KOed by the
+  player's Synchronize Pursuit user, subscript_pursuit.s:86) takes nothing and nothing is
+  revealed; an unstatused fainted receiver still "takes" it (the message tags Synchronize, the
+  status is not kept on the fainted Pokemon, as before). `effects.synchronize`'s `held` serves the
+  receiver too (`can_have_status(..., current)`); the reference's `_synchronize` reads
+  `_Turn.battle_status` for a fainted receiver.
+- G-32 A double KO whose player newcomer faints on its hazards (closes G-26's "not modelled"
+  note). The list runs only the hazards and a faint check (subscript_show_party_list.s:22-24);
+  `TurnEnd` re-enters `ReplaceFainted` for the player (bcp.c:1846-1858) before `TrainerMessage`
+  and `ShowBattleMon` (:251-263), so the opposing newcomer's switch-in states (weather,
+  Intimidate, Download, Trace, the announcements, its held-item check) all wait and run with the
+  player's next newcomer's, state by state over `monSpeedOrder` (battle_lib.c:3649-4168).
+  Engine: `step.replace(..., effects)` (the list alone, new `BattleState.entry_pending[battler]`,
+  STATE.md note; the reference's `ref_replace(..., effects)` mirrors it); `hooks.show_battle_mon`
+  (the state machine `battle_start` now shares, with the weather war's order from the sort at
+  TrainerMessage, `hold_war` on the turn's `qc_roll`); `search.playout.replacement_pass` enters
+  the opposing newcomer without its states when the player's newcomer fell, and at the next
+  pass enters the player's newcomer with the list alone and runs both through
+  `show_battle_mon`; a newcomer that falls again leaves it waiting. The Intimidate and weather of
+  the waiting newcomer now meet the player's second newcomer.
+- G-33 The Kaizo switch-site bound. `AI_CannotDamageWonderGuard`'s draws (trainer_ai.c:3338,
+  one per bench (Pokemon, super-effective move): 20) exist only when the active has no
+  super-effective move (:3300-3311), so never beside a keep draw (4); a bench Pokemon can be in
+  both passes (an immune row then a resisted row, battle_lib.c:2762-2781, or Wonder Guard's
+  INEFFECTIVE, :2734-2739, which never clears NOT_VERY_EFFECTIVE): 40. So
+  `KAIZO_SWITCH_SITES = max(4, 20) + 40 = 60` (was 44, which a player's Wonder Guard against
+  Flying/Bug bench Pokemon exceeded: a "count > sites" refusal). The switching docstring's "each
+  bench Pokemon is in at most one pass" was wrong and is corrected;
+  `test_kaizo_switch_sites_reach_sixty` builds the 60. No new refusal; 61 switch stops stay far
+  inside `WIDTH_CAP`.
+- G-34 The battle-start weather war's tie is a chance node the player sees (amends G-26's root
+  note). The tie is drawn at TrainerMessage's sort (battle_controller_player.c:251,
+  battle_lib.c:1445) and the weather shows before command selection, so Stage B's root groups
+  `step.root_belief`'s states by what the player sees (`observe.replacement_observation`): one
+  group is the belief node as before (the Quick Claw draw stays hidden); several make the root a
+  chance node, each group solved as its own belief node (`stage_b._chance_root`,
+  `SolveResult.outcomes`, one ranking row `ROOT_CHANCE` with the weighted best and a `chance`
+  plan node; `plan_tree.render` / `to_json` show each outcome). Stage A (depth 0) still samples
+  the root per playout and ranks actions over it, its usual heuristic.
+- Doubles-ready cleanup (review item 5): `damage.wonder_guarded` and `switching.wonder_guard_bit`
+  take the defender from their callers (`step._use_move` passes `target_side`, `_pursuit_hit`
+  the switcher, whose HP `before_hp` now reads too).
