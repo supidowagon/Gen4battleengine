@@ -1162,7 +1162,10 @@ def _rematches(rom: RomFiles, symbols: SymbolMap, n_trainers: int) -> list[tuple
 # 4, overlay009/ov9_02249960.c:99,106; 5-7, :7732-7756; the event-command rows' 2, 3, 4, 7
 # and 8, :8765 and :11050-12709). Its elevator platform assigns script 6 to an object
 # (MapObject_SetScript, :5411), which the player then talks to. A shared file's header is
-# taken to run each of them that its file has.
+# taken to run each of them that its file has. Outside the Distortion World, 3 and 4 run only
+# while FLAG_IN_PAL_PARK is set (the last ball is the Pal Park encounter task's, the Retire
+# option is shown only in the Safari and Pal Park start menus); the terrain narrowing gates
+# them on that (tools.terrain.C_STARTED_SCRIPTS, E1 ruling G-42), this join does not.
 C_STARTED_SCRIPTS = (2, 3, 4, 5, 6, 7, 8)
 # Commands that start a script by an id read from the script itself, with no range check:
 # ScrCmd_Unused_013 (src/scrcmd.c:960-971), any id, and ScrCmd_CallCommonScript (:973-985)

@@ -8,7 +8,7 @@ active slot's own switch is always illegal, so at most 9 actions are legal.
 The opponent has four more, ``10-13`` (``0..NUM_OPP_ACTIONS-1``): use the item in bag
 slot ``trainer_items[1, action - 10]`` on its active Pokemon (the decomp's
 ``PLAYER_INPUT_ITEM`` from ``TrainerAI_PickCommand``, trainer_ai.c:4034). A slot is
-legal when it holds an item with a supported ``ids.TrainerItemId`` and the active
+legal when it holds an item (any: ``engine.bag`` acts by its party params) and the active
 Pokemon has HP left. The player's mask stays ``NUM_ACTIONS`` wide: the player's bag
 is not modelled.
 
@@ -44,7 +44,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, TrainerItemId, Type
+from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, Type
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
@@ -170,12 +170,11 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 
 
 def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``bool[BAG_SLOTS]``: ``side``'s bag slots holding a supported item, while its
-    active Pokemon has HP left and is not locked into a move."""
-    effect = tables.trainer_item_effect[state.trainer_items[side]]
-    supported = (effect != TrainerItemId.UNSUPPORTED) & (effect != TrainerItemId.NONE)
+    """``bool[BAG_SLOTS]``: ``side``'s bag slots holding an item, while its active Pokemon
+    has HP left and is not locked into a move."""
+    held = state.trainer_items[side] != 0
     free = (state.hp[side, state.active[side]] > 0) & (locked_slot(state, side) < 0)
-    return supported & free
+    return held & free
 
 
 def legal_opponent_actions(tables: Tables, state: BattleState) -> jnp.ndarray:

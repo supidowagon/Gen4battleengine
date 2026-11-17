@@ -636,7 +636,12 @@ def _run(
         return s, key, turns + jnp.where(refused | resumed, 0, 1), refused
 
     init = (state, key, jnp.int32(0), refused0)
-    s, _, turns, refused = jax.lax.while_loop(cond, body, init)
+    # At ``max_turns`` 0 ``cond`` is false at the start, so the loop returns ``init``: the
+    # program leaves the turn out (a no-turn run is the root's settle alone, a small program).
+    if max_turns > 0:
+        s, _, turns, refused = jax.lax.while_loop(cond, body, init)
+    else:
+        s, _, turns, refused = init
     won = (s.over != 0) & (s.winner == WINNER_PLAYER)
     hp_left, pp_left = _resources_left(tables, s)
     return PlayoutResult(
@@ -747,8 +752,18 @@ def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_m
 
 
 _play_jit = jax.jit(_play, static_argnames="layout")
-_turn_jit = jax.jit(_turn, static_argnames="layout")
 _policy_jit = jax.jit(_policy, static_argnames="layout")
+
+
+def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
+    """``_turn`` (no ``pick``) outside the loop as ``_play_jit`` then ``finish_turn``: the same
+    results, and a replay compiles the turn once (``refusal_reason`` replays ``_play_jit`` at
+    a refused turn, as ``player._replay`` does at every turn), not again in a ``_turn``
+    program."""
+    played, refused, ai_switched, power_mul = _play_jit(tables, state, player_action, key, layout)
+    played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
+    refused = refused | replace_refused
+    return _select(refused, state, played), refused
 
 
 def refusal_reason(

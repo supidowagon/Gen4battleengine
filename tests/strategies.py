@@ -374,7 +374,22 @@ BATTLE_ITEMS = (
     "Muscle Band",
     "Wise Glasses",
 )
-M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
+# The opponent's bag (engine.bag, E1 ruling G-43): HP (amounts and the all code), status,
+# confusion, stage, PP and friendship params and Full Restore's by-id branch. A Poke Ball's
+# dummy params set Mist and Focus Energy, which are not built, so none is drawn.
+M1_BAG_ITEMS = (
+    "",
+    "Potion",
+    "Max Potion",
+    "Full Restore",
+    "Full Heal",
+    "Awakening",
+    "Persim Berry",
+    "X Attack",
+    "X Accuracy",
+    "Ether",
+    "Elixir",
+)
 # Items that act on their holder's own damaging move (``legal_action_pair`` favours one).
 HITTER_ITEMS = (ItemId.KINGS_ROCK, ItemId.SHELL_BELL, ItemId.ZOOM_LENS, ItemId.WIDE_LENS)
 
@@ -872,9 +887,7 @@ STATUS_GUARD_MOVES = (
 CONTACT_STATUS_ABILITIES = (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
 
 
-def _draw_status_guard(
-    draw, tables: Tables, a: dict, side: int, active: int, names: Names
-) -> None:
+def _draw_status_guard(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 4) give the active Pokemon Synchronize or Leaf Guard (G-12 .. G-14), its foe a
     ``STATUS_GUARD_MOVES`` move and its own side a contact move (kept only when supported), each
     active Pokemon no status half the time, the foe a Static-like ability a third of the time, sun
@@ -903,9 +916,7 @@ def _draw_status_guard(
     if guard == AbilityId.LEAF_GUARD and rnd.random() < 0.5:
         a["weather"][...] = Weather.SUN
     bench = [
-        i
-        for i in range(SLOTS)
-        if i != active and a["species"][side, i] and a["hp"][side, i] > 0
+        i for i in range(SLOTS) if i != active and a["species"][side, i] and a["hp"][side, i] > 0
     ]
     if bench and rnd.random() < 1 / 3:
         slot = rnd.choice(bench)

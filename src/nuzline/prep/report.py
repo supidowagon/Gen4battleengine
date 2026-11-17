@@ -83,11 +83,11 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) 
             return f"at most {percent} % keeps the trainer AI's above-{percent} % HP check off"
         if hp == percent_cut(kind, percent, top) and kind == "less":
             return f"below {percent} % turns the trainer AI's below-{percent} % HP check on"
-    row = personal_row(tables, spec.species, spec.form)
+    row = personal_row(tables, spec.species, spec.ability_from)
     ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if hp == top // 3 and ability in _PINCH_ABILITIES:
         name = names.ability_names[
-            names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+            names.species_abilities(spec.species, spec.ability_from)[spec.ability_slot]
         ]
         return f"at most 1/3: {name} active"
     kill = ai_kill_damage(tables, spec, problem.opp, problem.start_condition, problem.trainer.items)
@@ -209,7 +209,7 @@ def setup_card(problem: PrepProblem, names: Names, setup: Setup, tables: Tables)
         top = max_hp_of(tables, spec)
         species = names.species_names[spec.species]
         ability = names.ability_names[
-            names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+            names.species_abilities(spec.species, spec.ability_from)[spec.ability_slot]
         ]
         item = names.item_names[spec.item] if spec.item else "no item"
         hp = top if spec.current_hp is None else spec.current_hp

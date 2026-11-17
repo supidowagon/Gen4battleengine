@@ -16,12 +16,15 @@ import pytest
 from nuzline.engine.damage import damage_table
 from nuzline.engine.step import WINNER_PLAYER
 from nuzline.search import deaths, stage_b
+from nuzline.search import expand as expand_mod
+from nuzline.search import leaves as leaves_mod
 from nuzline.search.expand import ai_rows, expand
 from nuzline.search.leaves import LeafValue, allocate
 from nuzline.search.plan_tree import render
 from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import HiddenLegality, PlanNode, SolveSettings, solve
-from tests.engine.helpers import roark_real_state, roark_state
+from tests.engine.helpers import drop_programs, roark_real_state, roark_state
+from tests.search import exhaustive as exhaustive_mod
 from tests.search.exhaustive import children, exhaustive
 from tests.search.fixtures import (
     all_terminal_root,
@@ -42,6 +45,21 @@ SMALL = SolveSettings(max_depth=1, budget_playouts=2000, n_depth0=200)
 CAP = 2  # the endgames' turn cap
 TURNS = 3  # playout length where real playouts run (short: a test-runtime budget)
 ENDGAMES = {"pixel": pixel_endgame, "spore": spore_endgame, "low_hp": low_hp_endgame}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _small_chunk():
+    """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384), the exhaustive
+    solver's in 1024-row calls instead of ``exhaustive.P`` (8192) and the leaf evaluators'
+    playouts in 512-row calls instead of ``leaves.LEAF_CHUNK`` (4096): every call pads to
+    its full size, and this file reached ~15 GB. A row's result depends on neither the call
+    size nor the device count (each row plays its own key: the three modules' docstrings),
+    so the solves are unchanged."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand_mod, "CHUNK", 1024)
+        mp.setattr(exhaustive_mod, "P", 1024)
+        mp.setattr(leaves_mod, "LEAF_CHUNK", 512)
+        yield
 
 
 def constant_leaf(wins: int, n: int, wins_a: int | None = None):
@@ -346,13 +364,16 @@ def test_default_forced_evaluations_get_the_floor(tables, names, monkeypatch):
     """The default evaluator's forced path inside ``solve``: every pruned opponent action
     is evaluated with exactly ``2 * leaf_floor`` playouts (ruling 8), and the default leaf
     budget is ``n_depth0`` per legal root action. The real ``evaluate_forced`` runs with a
-    one-turn cap, the program test_leaves.py's chunk test compiles (test-runtime rule);
+    one-turn cap (test-runtime rule), its program compiled after ``expand``'s are dropped
+    (``drop_programs``: the solve's whole-engine programs stacked passed 11 GB);
     ``evaluate_leaves``, which test_reproducible runs inside ``solve``, is a stub that
     honours ``counts``."""
     calls = []
     real = stage_b.evaluate_forced
 
     def spy(tables, states, pairs, counts, key, max_turns):
+        if not calls:  # once, before the first forced program compiles
+            drop_programs()
         values = real(tables, states, pairs, counts, key, max_turns)
         calls.append((np.asarray(pairs), np.asarray(counts), values))
         return values

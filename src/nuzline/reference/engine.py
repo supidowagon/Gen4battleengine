@@ -42,8 +42,12 @@ from nuzline.engine.ids import (
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     FUTURE_SIGHT_TURNS,
+    HP_RESTORED_ALL,
+    HP_RESTORED_HALF,
+    HP_RESTORED_QUARTER,
     INVOKER_MOVES,
     ITEM_ABILITY_IDS,
+    ITEM_FULL_RESTORE,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
@@ -57,7 +61,6 @@ from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     MOVE_U_TURN,
     NATURE_DISLIKED_FLAVOR,
-    POTION_HP_RESTORED,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
@@ -94,13 +97,14 @@ from nuzline.engine.ids import (
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
+    ItemAiCategory,
     ItemId,
+    ItemParam,
     MoveFlag,
     MoveTarget,
     SemiKind,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -370,7 +374,7 @@ def _restore_ability(tables, s: RefState, side: int) -> None:
     battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the
     party (lib.c:124)."""
     mon = _active(s, side)
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)
 
 
@@ -2177,9 +2181,7 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
     if not turn.sync_flag:
         return
     passer = receiver = None
-    if (
-        _active(s, defender).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == defender
-    ):
+    if _active(s, defender).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == defender:
         passer, receiver = defender, attacker
     elif _active(s, attacker).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == attacker:
         passer, receiver = attacker, defender
@@ -4081,17 +4083,135 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _switch_in_effects(turn, s, side)
 
 
-def _use_item(tables, s: RefState, side: int, item: int) -> None:
-    """``BattleControllerPlayer_ItemCommand`` (bcp.c:1905) -> ``subscript_use_potion.s``:
-    ``BattleSystem_UseBagItem`` (battle_system.c:435) restores the Potion's 20 HP to a
-    living active Pokemon that is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps
-    it at max HP."""
+def _item_branch(tables, s: RefState, side: int, item: int) -> tuple[int, int, bool]:
+    """``TrainerAI_ShouldUseItem``'s else-if chain for bag item ``item`` (trainer_ai.c:
+    4099-4189): ``(ItemAiCategory, usedItemCondition, used)`` of the first branch whose param
+    test holds (``NONE``, 0, False when none does): Full Restore by id, an HP item, each
+    status cure, confusion, then a stat stage param or Guard Spec, which are used only from
+    the battler's first turn on (Guard Spec also without Mist on side 1)."""
+    p = [_t(tables, "item_party_param", item, k) for k in range(len(ItemParam))]
+    sd = s.sides[side]
     mon = _active(s, side)
-    if _t(tables, "trainer_item_effect", item) != TrainerItemId.POTION:
+    hp, max_hp = mon.hp, mon.max_hp
+    if item == ITEM_FULL_RESTORE:
+        return ItemAiCategory.FULL_RESTORE, 0, 0 < hp < max_hp // 4
+    if p[ItemParam.HP_RESTORE]:
+        restored = p[ItemParam.HP_RESTORED] & 0xFF
+        heals = bool(restored and hp and (hp < max_hp // 4 or max_hp - hp > restored))
+        return ItemAiCategory.RECOVER_HP, 0, heals
+    for param, statuses, bit in (
+        (ItemParam.HEAL_SLEEP, (Status.SLEEP,), 5),
+        (ItemParam.HEAL_POISON, (Status.POISON, Status.TOXIC), 4),
+        (ItemParam.HEAL_BURN, (Status.BURN,), 3),
+        (ItemParam.HEAL_FREEZE, (Status.FREEZE,), 2),
+        (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,), 1),
+    ):
+        if p[param]:
+            return ItemAiCategory.RECOVER_STATUS, bit, mon.status in statuses
+    if p[ItemParam.HEAL_CONFUSION]:
+        return ItemAiCategory.RECOVER_STATUS, 0, bool(sd.confusion)
+    settled = sd.fake_out_turn - s.turn >= 0
+    for param, stat in (
+        (ItemParam.ATK_STAGES, Stat.ATK),
+        (ItemParam.DEF_STAGES, Stat.DEF),
+        (ItemParam.SPATK_STAGES, Stat.SPA),
+        (ItemParam.SPDEF_STAGES, Stat.SPD),
+        (ItemParam.SPEED_STAGES, Stat.SPE),
+        (ItemParam.ACC_STAGES, Stat.ACC),
+    ):
+        if p[param]:
+            return ItemAiCategory.STAT_BOOSTER, int(stat), settled
+    if p[ItemParam.GUARD_SPEC]:
+        return ItemAiCategory.GUARD_SPEC, 0, settled and not s.sides[1].mist
+    return ItemAiCategory.NONE, 0, False
+
+
+def _use_item(tables, s: RefState, side: int, item: int) -> None:
+    """``BattleControllerPlayer_ItemCommand`` (bcp.c:1905-1944): the subscript of the item's
+    AI category around ``BattleSystem_UseBagItem`` (battle_system.c:435-758; JAX:
+    ``engine.bag.use_bag_item``, E1 ruling G-43). Full Restore's subscript first cures the
+    status and confusion; the potion subscript then adds ``ITEM_HP_RECOVERY`` (capped); the
+    status subscript then clears confusion (condition bit 0) or the status. Mist and Focus
+    Energy are refused by coverage, so not applied."""
+    if not item:
         return
-    if mon.hp == 0 or mon.hp == mon.max_hp:
-        return
-    _gain_hp(s, side, POTION_HP_RESTORED)
+    p = [_t(tables, "item_party_param", item, k) for k in range(len(ItemParam))]
+    # The branch picks the subscript; a fight's item action is one the AI used there.
+    category, cond, _ = _item_branch(tables, s, side, item)
+    sd = s.sides[side]
+    mon = _active(s, side)
+
+    def clear_status():
+        mon.status, mon.status_counter = Status.NONE, 0
+
+    if category == ItemAiCategory.FULL_RESTORE:
+        clear_status()
+        sd.confusion = 0
+    applied = False
+    for param, statuses in (
+        (ItemParam.HEAL_SLEEP, (Status.SLEEP,)),
+        (ItemParam.HEAL_POISON, (Status.POISON, Status.TOXIC)),
+        (ItemParam.HEAL_BURN, (Status.BURN,)),
+        (ItemParam.HEAL_FREEZE, (Status.FREEZE,)),
+        (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,)),
+    ):
+        if p[param] and mon.status in statuses:
+            clear_status()
+            applied = True
+    if p[ItemParam.HEAL_CONFUSION] and sd.confusion:
+        sd.confusion, applied = 0, True
+    if p[ItemParam.HEAL_ATTRACT] and sd.infatuated:
+        sd.infatuated, applied = 0, True
+    for param, stat in (
+        (ItemParam.ATK_STAGES, Stat.ATK),
+        (ItemParam.DEF_STAGES, Stat.DEF),
+        (ItemParam.SPATK_STAGES, Stat.SPA),
+        (ItemParam.SPDEF_STAGES, Stat.SPD),
+        (ItemParam.SPEED_STAGES, Stat.SPE),
+        (ItemParam.ACC_STAGES, Stat.ACC),
+    ):
+        if p[param] and sd.stages[stat] < STAGE_MAX:
+            sd.stages[stat] += 1
+            applied = True
+    slots = ([0] if p[ItemParam.PP_RESTORE] else []) + (
+        list(range(len(mon.moves))) if p[ItemParam.PP_RESTORE_ALL] else []
+    )
+    for k in slots:  # move slot 0 (NULL), then every slot (:628-661)
+        top = _t(tables, "move_pp", mon.moves[k])  # a trainer Pokemon has no PP Ups
+        if mon.pp[k] != top:
+            mon.pp[k] = min(mon.pp[k] + p[ItemParam.PP_RESTORED], top)
+            applied = True
+    recovery = 0
+    if p[ItemParam.HP_RESTORE]:
+        revive = p[ItemParam.REVIVE]
+        if (mon.hp == 0 if revive else mon.hp != 0) and mon.hp != mon.max_hp:
+            code = p[ItemParam.HP_RESTORED] & 0xFF
+            amount = {
+                HP_RESTORED_ALL: mon.max_hp,
+                HP_RESTORED_HALF: max(mon.max_hp // 2, 1),
+                HP_RESTORED_QUARTER: max(mon.max_hp * 25 // 100, 1),
+            }.get(code, code)
+            recovery = 0 if revive else amount
+            applied = True
+    if applied:
+        gain = 0
+        for give, amount, low, top in (
+            (ItemParam.GIVE_FRIENDSHIP_LOW, ItemParam.FRIENDSHIP_LOW, 0, 100),
+            (ItemParam.GIVE_FRIENDSHIP_MED, ItemParam.FRIENDSHIP_MED, 100, 200),
+            (ItemParam.GIVE_FRIENDSHIP_HIGH, ItemParam.FRIENDSHIP_HIGH, 200, 256),
+        ):
+            if p[give] and low <= mon.friendship < top:
+                gain = p[amount]
+        if gain > 0 and p[ItemParam.HOLD_FRIENDSHIP_UP]:
+            gain = gain * 150 // 100
+        mon.friendship = min(max(mon.friendship + gain, 0), 255)
+    if category in (ItemAiCategory.FULL_RESTORE, ItemAiCategory.RECOVER_HP) and recovery:
+        _gain_hp(s, side, recovery)
+    if category == ItemAiCategory.RECOVER_STATUS:
+        if cond == 0:
+            sd.confusion = 0
+        else:
+            clear_status()
 
 
 # --------------------------------------------------------------------------- end of turn
@@ -4105,9 +4225,9 @@ def _speed_order(tables, s: RefState, o) -> list[int]:
 
 
 def _decomp_ability(tables, mon: RefPokemon) -> int:
-    """``Battler_Ability``: the decomp ability id at the Pokemon's personal row and
-    ability slot."""
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    """``Battler_Ability``: the decomp ability id at the Pokemon's ability row
+    (``ability_form``) and ability slot."""
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     traced = _t(tables, "species_abilities", row, mon.ability_slot) == AbilityId.TRACE
     if traced and mon.ability != AbilityId.TRACE:
         return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]  # a traced ability

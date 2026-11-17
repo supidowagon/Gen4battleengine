@@ -21,7 +21,7 @@ from nuzline.engine.actions import (
     legal_actions,
     legal_opponent_actions,
 )
-from nuzline.engine.ids import POTION_HP_RESTORED, TrainerItemId
+from nuzline.engine.ids import ItemParam
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.step import step
@@ -44,18 +44,15 @@ def _ref(tables, s, acts, o):
     return from_ref(ref_step(to_numpy(tables), to_ref(s), tuple(acts), outcome_to_py(o)))
 
 
-def test_potion_restores_20_hp_in_the_decomp():
+def test_potion_params_are_the_decomps(tables, names):
+    # E1 ruling G-43: res/items/data/potion.json's itemUseParams, packed by itemproc.c.
     potion = DECOMP / "res" / "items" / "data" / "potion.json"
     if not potion.exists():
         pytest.skip("decomp not cloned (run tools/clone_decomp.sh)")
     data = json.loads(potion.read_text(encoding="utf-8"))
-    assert data["itemUseParams"]["hpRestored"] == POTION_HP_RESTORED == 20
-
-
-def test_trainer_item_effects_come_from_the_tables(tables, names):
-    assert int(tables.trainer_item_effect[names.item("Potion")]) == TrainerItemId.POTION
-    assert int(tables.trainer_item_effect[names.item("")]) == TrainerItemId.NONE
-    assert int(tables.trainer_item_effect[names.item("Super Potion")]) == TrainerItemId.UNSUPPORTED
+    p = tables.item_party_param[names.item("Potion")].tolist()
+    assert data["itemUseParams"]["hpRestored"] == p[ItemParam.HP_RESTORED] == 20
+    assert p[ItemParam.HP_RESTORE] == 1 and sum(p) == 21
 
 
 def test_make_state_loads_roarks_bag(tables, names):
@@ -114,11 +111,11 @@ def test_item_in_a_pursuit_slot_does_not_pursue(tables, names):
     assert out.pp[1, 0].tolist() == s.pp[1, 0].tolist()
 
 
-def test_item_slot_illegal_when_empty_or_unsupported(tables, names):
+def test_item_slot_illegal_when_empty(tables, names):
     s = roark_state(tables, names)
     bag = [POTION, 0, names.item("Super Potion"), POTION]
     s = s._replace(trainer_items=s.trainer_items.at[1].set(jnp.asarray(bag, jnp.int16)))
-    assert legal_opponent_actions(tables, s).tolist()[NUM_ACTIONS:] == [True, False, False, True]
+    assert legal_opponent_actions(tables, s).tolist()[NUM_ACTIONS:] == [True, False, True, True]
     fainted = s.replace_hp(1, 0, 0)
     assert legal_opponent_actions(tables, fainted).tolist()[NUM_ACTIONS:] == [False] * 4
 

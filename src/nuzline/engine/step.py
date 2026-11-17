@@ -38,7 +38,7 @@ turn order activated (``order.custap_flags``) is eaten when its holder's move st
 end of the turn runs Leftovers / Black Sludge and the status orbs / Sticky Barb in their
 ``MonCondCheckState`` slots (``END_OF_TURN_ORDER``).
 
-Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
+Implemented so far: the opponent's bag items (``engine.bag``, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
@@ -85,6 +85,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
 )
+from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
     PHYSICAL as PHYSICAL_CATEGORY,
 )
@@ -183,7 +184,6 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
-    POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
@@ -197,7 +197,6 @@ from nuzline.engine.ids import (
     SemiKind,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -494,14 +493,15 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
 
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
-    its personal row's (``tables.species_abilities`` at its ability slot). Only Trace
+    its party Pokemon's (``tables.species_abilities`` at its ``ability_form``'s row and
+    ability slot, as ``make_state`` builds it). Only Trace
     (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
     ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
     (battle_lib.c:124). Run when the battler is switched or dragged out, and when a
     replacement takes a fainted one's place (``_switch_in``): a fainted battler keeps the
     copied ability until then, as its ``BattleMon`` does, and no Pokemon comes back from 0 HP."""
     mon = state.active[side]
-    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    row = tables.species_form_row[state.species[side, mon], state.ability_form[side, mon]]
     party = tables.species_abilities[row, state.ability_slot[side, mon]]
     value = jnp.where(cond, party, state.ability[side, mon]).astype(state.ability.dtype)
     return state._replace(ability=state.ability.at[side, mon].set(value))
@@ -2010,15 +2010,19 @@ def _consume_trainer_items(state: BattleState, actions) -> BattleState:
 
 
 def _use_trainer_item(tables: Tables, state: BattleState, side, item) -> BattleState:
-    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905): a
-    Potion runs ``subscript_use_potion.s``. ``BattleSystem_UseBagItem``
-    (battle_system.c:435) restores ``POTION_HP_RESTORED`` to the active Pokemon when it
-    has HP left and is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps it at max HP."""
-    mon = state.active[side]
-    hp = state.hp[side, mon].astype(_I32)
-    potion = (tables.trainer_item_effect[item] == TrainerItemId.POTION) & (hp > 0)
-    healed = jnp.minimum(hp + POTION_HP_RESTORED, state.max_hp[side, mon].astype(_I32))
-    return _set_mon(state, "hp", side, mon, healed, potion)
+    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905-1944): the
+    AI's item subscript around ``BattleSystem_UseBagItem`` (``bag.use_bag_item``, E1 ruling
+    G-43).
+
+    Rule (recomputed choice): the decomp picks the subscript from ``usedItemType``, set by
+    ``TrainerAI_ShouldUseItem`` at command selection; ``use_bag_item`` recomputes the item's
+    branch here instead. They agree because ``BattleControllerPlayer_CalcTurnOrder``
+    (battle_controller_player.c:707, :756-766) runs every item and switch command before any
+    move, so only the other battlers' switches and items run between selection and this
+    action, and none of those changes what the branch reads: the user's HP, status,
+    confusion, ``fakeOutTurnNumber``, ``totalTurns`` or its side's Mist (the subscript then
+    reads the item's params, fixed data)."""
+    return use_bag_item(tables, state, side, item, jnp.asarray(item) != 0)
 
 
 def _act(

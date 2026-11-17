@@ -25,21 +25,21 @@ New groups: needed in this split and in no earlier one.
 
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
-| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 5 | 5 |
-| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 11 | 14 | 13 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 2 | 76 | 73 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 8 | 67 | 21 |
+| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 6 | 6 |
+| Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 12 | 11 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 2 | 75 | 73 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 8 | 66 | 21 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 5 | 57 | 17 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 19 | 68 | 10 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 4 | 63 | 14 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 3 | 129 | 45 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 49 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 5 | 64 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 77 | 206 | 206 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 19 | 67 | 10 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 4 | 62 | 14 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 128 | 45 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 48 | 2 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 5 | 63 | 6 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 79 | 205 | 205 |
 
 ## Whole game
 
-206 distinct missing groups across all ten splits (387 battles,
+205 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -53,8 +53,8 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 3 | 1 | 5 |
-| Gardenia Split | 1 | 0 | 0 | 0 | 0 | 11 | 1 | 13 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
 | Fantina Split | 0 | 22 | 20 | 10 | 7 | 9 | 5 | 73 |
 | Maylene Split | 0 | 8 | 7 | 3 | 2 | 0 | 1 | 21 |
 | Wake Split | 0 | 3 | 2 | 2 | 1 | 6 | 3 | 17 |
@@ -63,7 +63,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Galactic Split | 0 | 13 | 12 | 3 | 1 | 16 | 0 | 45 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **1** | **61** | **52** | **18** | **12** | **50** | **12** | **206** |
+| **Whole game** | **1** | **61** | **52** | **18** | **12** | **48** | **13** | **205** |
 
 ### Groups needed in each split, by kind
 
@@ -71,17 +71,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 3 | 1 | 5 |
-| Gardenia Split | 1 | 0 | 1 | 0 | 0 | 11 | 1 | 14 |
-| Fantina Split | 1 | 22 | 21 | 10 | 7 | 9 | 6 | 76 |
-| Maylene Split | 1 | 21 | 21 | 9 | 5 | 3 | 7 | 67 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Gardenia Split | 1 | 0 | 1 | 0 | 0 | 10 | 0 | 12 |
+| Fantina Split | 1 | 22 | 21 | 10 | 7 | 9 | 5 | 75 |
+| Maylene Split | 1 | 21 | 21 | 9 | 5 | 3 | 6 | 66 |
 | Wake Split | 1 | 13 | 14 | 10 | 3 | 8 | 8 | 57 |
-| Byron Split | 1 | 23 | 18 | 8 | 6 | 3 | 9 | 68 |
-| Candice Split | 1 | 23 | 18 | 6 | 5 | 5 | 5 | 63 |
-| Galactic Split | 1 | 41 | 35 | 14 | 6 | 23 | 9 | 129 |
-| Volkner Split | 1 | 16 | 15 | 6 | 2 | 2 | 7 | 49 |
-| Elite Four Split | 1 | 23 | 20 | 2 | 5 | 3 | 10 | 64 |
-| **Whole game** | **1** | **61** | **52** | **18** | **12** | **50** | **12** | **206** |
+| Byron Split | 1 | 23 | 18 | 8 | 6 | 3 | 8 | 67 |
+| Candice Split | 1 | 23 | 18 | 6 | 5 | 5 | 4 | 62 |
+| Galactic Split | 1 | 41 | 35 | 14 | 6 | 23 | 8 | 128 |
+| Volkner Split | 1 | 16 | 15 | 6 | 2 | 2 | 6 | 48 |
+| Elite Four Split | 1 | 23 | 20 | 2 | 5 | 3 | 9 | 63 |
+| **Whole game** | **1** | **61** | **52** | **18** | **12** | **48** | **13** | **205** |
 
 ### Battle conditions and other groups
 
@@ -89,7 +89,6 @@ Every group the split's battles need, whether or not an earlier split needs it t
 |---|---|---|
 | battle conditions | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | Roark Split |
 | battle conditions | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | Roark Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | Roark Split |
 | battle conditions | battle format: a double battle | Gardenia Split |
 | battle conditions | battle format: a multi battle | Gardenia Split |
 | battle conditions | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | Gardenia Split |
@@ -100,7 +99,6 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Route 204 North (position 3; rules not recorded) | Gardenia Split |
 | battle conditions | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | Gardenia Split |
 | battle conditions | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | Gardenia Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | Gardenia Split |
 | battle conditions | battle format: a double_two_trainer battle | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #1 (position 1; rules not recorded) | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #1 (position 2; rules not recorded) | Fantina Split |
@@ -137,8 +135,9 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
 | battle conditions | field condition: permanent Trick Room | Galactic Split |
 | battle conditions | field condition: permanent Gravity | Elite Four Split |
-| other | trainer item: Poké Ball | Roark Split |
-| other | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | Gardenia Split |
+| other | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | Roark Split |
+| other | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | Roark Split |
+| other | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | Roark Split |
 | other | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
 | other | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
 | other | ROM change: battle/skill/sub_seq.narc#238 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
@@ -277,12 +276,13 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | Fights blocked | Group |
 |---|---|
 | 3 | move effect #83: Metronome; 65 of 442 callable moves unmodelled |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
-| 1 | trainer item: Poké Ball |
+| 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
+| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
+| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: battle format 2, battle terrain 1, move effect 1, trainer item 1
+Groups by kind: trainer item 3, battle format 2, move effect 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -294,8 +294,6 @@ Groups by kind: battle format 2, battle terrain 1, move effect 1, trainer item 1
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 5 | battle format: a double battle |
 | 4 | move effect #83: Metronome; 65 of 442 callable moves unmodelled |
-| 3 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) |
@@ -306,10 +304,11 @@ Groups by kind: battle format 2, battle terrain 1, move effect 1, trainer item 1
 | 1 | battle format: gauntlet Route 204 North (position 3; rules not recorded) |
 | 1 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it |
-| 1 | trainer item: Poké Ball |
+| 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
+| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
+| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: battle format 12, battle terrain 2, AI 1, form 1, move effect 1, trainer item 1
+Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 
 ## All ten splits (top 60)
 
@@ -334,7 +333,6 @@ Groups by kind: battle format 12, battle terrain 2, AI 1, form 1, move effect 1,
 | 25 | ROM change: overlay16 BattleControllerPlayer_CheckMoveHitOverrides is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 25 | held item effect #37: Ganlon Berry |
 | 25 | move effect #141: Hurricane |
-| 24 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
 | 23 | AI move effect #37 REST not transcribed (Expert_Rest): Rest |
 | 23 | move effect #37: Rest |
@@ -377,8 +375,9 @@ Groups by kind: battle format 12, battle terrain 2, AI 1, form 1, move effect 1,
 | 8 | held item effect #43: Enigma Berry |
 | 8 | held item effect #47: Rowap Berry |
 | 8 | move effect #116: Endure |
+| 8 | move effect #132: Moonlight, Morning Sun, Synthesis |
 
-Groups by kind: AI 62, move effect 52, battle format 36, held item effect 18, ability 12, battle terrain 11, ROM change 9, field condition 2, weather 1, form 1, trainer item 1, form change 1
+Groups by kind: AI 62, move effect 52, battle format 36, held item effect 18, ability 12, battle terrain 9, ROM change 9, trainer item 3, field condition 2, weather 1, form change 1
 
 ## Build order for the first two splits
 
@@ -386,21 +385,20 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 
 | Step | Group | Fights runnable after |
 |---|---|---|
-| 1 | battle format: a multi battle | 39 of 68 |
-| 2 | AI: AI_FLAG_TAG_STRATEGY | 45 of 68 |
-| 3 | battle format: a double battle | 49 of 68 |
-| 4 | move effect #83: Metronome; 65 of 442 callable moves unmodelled | 51 of 68 |
-| 5 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 54 of 68 |
-| 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | 56 of 68 |
-| 7 | trainer item: Poké Ball | 57 of 68 |
-| 8 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Secret Power would read it | 58 of 68 |
-| 9 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 59 of 68 |
-| 10 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 60 of 68 |
-| 11 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 61 of 68 |
-| 12 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 62 of 68 |
-| 13 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 63 of 68 |
-| 14 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 64 of 68 |
-| 15 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 65 of 68 |
-| 16 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 66 of 68 |
-| 17 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 67 of 68 |
-| 18 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 68 of 68 |
+| 1 | battle format: a multi battle | 40 of 68 |
+| 2 | AI: AI_FLAG_TAG_STRATEGY | 49 of 68 |
+| 3 | battle format: a double battle | 53 of 68 |
+| 4 | move effect #83: Metronome; 65 of 442 callable moves unmodelled | 57 of 68 |
+| 5 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 58 of 68 |
+| 6 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 59 of 68 |
+| 7 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 60 of 68 |
+| 8 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 61 of 68 |
+| 9 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 62 of 68 |
+| 10 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 63 of 68 |
+| 11 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 64 of 68 |
+| 12 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 65 of 68 |
+| 13 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 66 of 68 |
+| 14 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 67 of 68 |
+| 15 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | 67 of 68 |
+| 16 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | 67 of 68 |
+| 17 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 68 of 68 |

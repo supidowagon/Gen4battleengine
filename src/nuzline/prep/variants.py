@@ -358,7 +358,7 @@ def hp_cuts(
     for kind, percent in ai_defender_hp_checks(tables):
         cuts.append(percent_cut(kind, percent, max_hp))
     cuts.extend(d for d in kill_damage if 1 <= d < max_hp)
-    row = personal_row(tables, spec.species, spec.form)
+    row = personal_row(tables, spec.species, spec.ability_from)
     ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])
     if ability in _PINCH_ABILITIES:
         cuts.append(max_hp // 3)
@@ -396,7 +396,8 @@ def prestatus_options(
     reads them from the shipped tables."""
     row = personal_row(tables, spec.species, spec.form)
     types = {int(t) for t in np.asarray(tables.species_types)[row]}
-    ability = int(np.asarray(tables.species_abilities_decomp)[row][spec.ability_slot])
+    ability_row = personal_row(tables, spec.species, spec.ability_from)
+    ability = int(np.asarray(tables.species_abilities_decomp)[ability_row][spec.ability_slot])
     by_ability = dict(_blocking_ability_ids() if blocking is None else blocking).get(ability)
     return tuple(
         s
