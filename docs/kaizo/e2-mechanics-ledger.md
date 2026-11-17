@@ -159,6 +159,11 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 
 Rules left out because another mechanic is missing; each closes with the mechanic named.
 
+- **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
+  transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
+  Magnet Rise, Nature Power, Chatter, Gyro Ball and others; the backlog rows name them) and the
+  Kaizo scripts be_seq#141 (Hurricane), be_seq#88 and sub_seq#238.
+
 - Batch 9 left (Gardenia-split entries not done, by why): SolarBeam #151 (a charge turn: the
   two-turn lock and SYSCTL_FIRST_OF_MULTI_TURN's skips); Jump Kick / Hi Jump Kick #45
   (subscript_crash_on_miss.s reads the miss's damage: crit and roll on a miss, a law change);
