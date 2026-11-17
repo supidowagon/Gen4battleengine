@@ -186,14 +186,17 @@ def test_playout_from_action_plays_that_action_first(tables, names):
     )
     leer = names.move_slot(s, 0, "Leer")
     switch = MOVE_ACTIONS + 1
-    for seed in range(3):
-        key = jax.random.PRNGKey(seed)
+    keys = [jax.random.PRNGKey(seed) for seed in range(3)]
+    for key in keys:
         # The playout goes on past the faint with the bench: only what the first action
         # fixes is asserted, not the result.
         lost = playout_from_action(tables, s, jnp.int32(leer), key, 1)
         assert (int(lost.deaths[0]), int(lost.player_faints)) == (1, 1)
         kept = playout_from_action(tables, s, jnp.int32(switch), key, 1)
         assert (int(kept.deaths[0]), int(kept.player_faints), int(kept.refused)) == (0, 0, 0)
+    # The 100-turn program after the one-turn one is dropped (together they passed 11 GB).
+    drop_programs()
+    for key in keys:
         lost = playout_from_action(tables, s, jnp.int32(leer), key, 100)
         assert int(lost.deaths[0]) == 1  # a death is permanent
         kept = playout_from_action(tables, s, jnp.int32(switch), key, 100)
@@ -272,6 +275,7 @@ def test_refusal_reason_names_the_refused_mechanic(tables, names):
 def test_refusal_reason_is_none_for_a_playout_that_is_not_refused(tables, names):
     s = roark_state(tables, names)
     assert int(playout_from_action(tables, s, 0, jax.random.PRNGKey(11)).refused) == 0
+    drop_programs()  # the replay's programs after the loop's (together they passed 11 GB)
     assert refusal_reason(tables, s, 0, jax.random.PRNGKey(11)) is None
 
 
@@ -295,6 +299,7 @@ def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     key = jax.random.PRNGKey(12)
     r = playout_module._run(tables, s, key, 100, jnp.int32(-1))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
+    drop_programs()  # each unjitted call compiles its own loop (together they passed 12 GB)
     # A fixed first action does not depend on it: turn 1 is played, turn 2 is refused.
     r = playout_module._run(tables, s, key, 100, jnp.int32(0))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 1)

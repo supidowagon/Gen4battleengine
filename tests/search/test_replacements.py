@@ -156,9 +156,15 @@ def test_playout_from_a_pending_state(tables, names):
     chosen = int(replacement_policy(tables, s))
     resolved = replacement_pass(tables, s, chosen)[0]
     assert int(resolved.active[0]) == chosen
-    assert_same(playout(tables, s, key), playout(tables, resolved, key))
-    forced = playout_from_action(tables, s, MOVE_ACTIONS + 3, key)
-    assert_same(forced, playout(tables, replacement_pass(tables, s, 3)[0], key))
+    # The playout program's runs first, then playout_from_action's after a drop: one
+    # whole-engine program alive at a time (both together passed 15 GB).
+    third = replacement_pass(tables, s, 3)[0]
+    pending, settled, want = (
+        jax.device_get(playout(tables, x, key)) for x in (s, resolved, third)
+    )
+    assert_same(pending, settled)
+    drop_programs()
+    assert_same(playout_from_action(tables, s, MOVE_ACTIONS + 3, key), want)
 
 
 def test_pending_state_with_both_down_resolves_in_a_playout(tables, names):
@@ -207,6 +213,7 @@ def test_refusal_reason_replays_a_pending_state(tables, names):
     s = _both_down(tables, names)
     key = jax.random.PRNGKey(5)
     assert not int(playout(tables, s, key).refused)
+    drop_programs()  # the replay's programs after the loop's (together they passed 12 GB)
     assert playout_module.refusal_reason(tables, s, MOVE_ACTIONS + 1, key) is None
     assert playout_module.replacement_refusal(tables, s, True, 10) is not None
     assert playout_module.replacement_refusal(tables, s, False, 10) is None

@@ -30,6 +30,11 @@ from tests.engine.helpers import drop_programs, roark_real_state
 from tests.engine.test_levelup import _base, _mon, _with
 from tests.search.test_learn import CRANIDOS, GEODUDE, ONIX, _window_c, _with_prompt
 
+# Slow: each test compiles or loads a whole-engine loop or turn program (about 8 GB resident
+# at its compile, 10 GB at a load from the persistent cache, minutes either way), past the
+# fast tier's 60 s and 4 GB.
+pytestmark = pytest.mark.slow
+
 
 def _fixed_act(tables, state, params, key, layout):
     return jnp.asarray(params, jnp.int32), jnp.bool_(False), jnp.bool_(False)
@@ -191,11 +196,9 @@ def test_a_turn_window_c_refuses_the_playout_and_is_named(tables, names):
     assert int(playout_from_action(tables, s, action, key, FIXED_TURNS).refused) == 1
 
 
-# Slow: the window (c) root test's no-turn GREEDY program (about 1.4 GB). The fast tier
-# keeps the property through test_greedy_equals_playout_through_learns' two pending roots
-# (it fails with the root's settle_learns removed from _player_run, and with its carried
-# powerMul replaced by the normal one).
-@pytest.mark.slow
+# test_greedy_equals_playout_through_learns' two pending roots hold the property too (it
+# fails with the root's settle_learns removed from _player_run, and with its carried powerMul
+# replaced by the normal one).
 @pytest.mark.parametrize("mul, newcomer", [(0, CRANIDOS), (20, ONIX)])
 def test_a_pending_learn_root_sends_with_the_carried_mul(tables, names, mul, newcomer):
     s = _pending_learn_root(tables, names, mul)
