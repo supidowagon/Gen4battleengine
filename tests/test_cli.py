@@ -214,10 +214,11 @@ def test_trainer_id_selects_exactly():
 def test_real_roark_is_trainer_246(capsys):
     assert main(["coverage", "--party", PARTY, "--trainer", "roark"]) == 0
     assert "Roark (Leader, id 246)" in capsys.readouterr().out
-    # Roark's rematch (id 858) is a different fight: Full Restores, untranscribed moves.
+    # Roark's rematch (id 858) is a different fight: untranscribed moves (its Full Restores
+    # act by their party params, E1 ruling G-43, so they are not refused).
     assert main(["coverage", "--party", PARTY, "--trainer-id", "858"]) == 2
     out = capsys.readouterr().out
-    assert "Roark (Leader, id 858)" in out and "Full Restore" in out
+    assert "Roark (Leader, id 858)" in out and "Full Restore" not in out
 
 
 def test_trainer_and_trainer_id_are_exclusive():
