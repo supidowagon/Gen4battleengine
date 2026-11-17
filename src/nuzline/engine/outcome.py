@@ -595,15 +595,15 @@ def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return jnp.stack([(firsts[0] == side) | (firsts[1] == side) for side in (0, 1)])
 
 
-def _stage_variants(start, delta, changes, herb) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(int32[4], bool[4])``: the stage ``start``; ``start + delta`` (clamped to +-6, as
-    ``effects.change_stage``) where ``changes``; 0 where a White Herb can restore a
-    lowered stage (``hooks.held_item_check``); and ``delta`` where the herb restored a
-    lowered start before the change."""
+def _stage_variants(start, changed, from_zero, changes, herb) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[4], bool[4])``: the stage ``start``; ``changed``, the stage after the foe's
+    move (``hit_thresholds``), where ``changes``; 0 where a White Herb can restore a lowered
+    stage (``hooks.held_item_check``); and ``from_zero``, the move's stage when the herb
+    restored a lowered start before it."""
     start = start.astype(_I32)
-    changed = jnp.clip(start + delta, STAGE_MIN, STAGE_MAX)
+    changed, from_zero = changed.astype(_I32), from_zero.astype(_I32)
     lowered = (start < 0) | (changes & (changed < 0))
-    stages = jnp.stack([start, changed, jnp.zeros((), _I32), jnp.clip(delta, STAGE_MIN, STAGE_MAX)])
+    stages = jnp.stack([start, changed, jnp.zeros((), _I32), from_zero])
     return stages, jnp.stack(
         [jnp.asarray(True), changes, herb & lowered, herb & changes & (start < 0)]
     )
@@ -625,6 +625,11 @@ def hit_thresholds(
       ``Stat.ACC`` (Sand-Attack, Mud-Slap; effects.py ``_foe_stage``);
     * the target's evasion stage: a ``STAT_SELF`` / ``SECONDARY_STAT_SELF`` move on
       ``Stat.EVA`` (Double Team; ``_stat_self``);
+    * Haze (``effects._haze``, BtlCmd_ResetAllStatChanges battle_script.c:3534-3549): both
+      stages to 0; Psych Up (``effects.copy_stat_stages``, BtlCmd_CopyStatStages :6042-6053):
+      the target's evasion becomes the side's own; Acupressure (``effects._acupressure``,
+      BtlCmd_BoostRandomStatBy2 :8932-8956, evasion among the drawn stats): the target's
+      evasion +2 (B12-31);
     * a White Herb on either battler, which resets a lowered stage to 0;
     * the order: a Zoom Lens (``HOLD_EFFECT_ACCURACY_UP_SLOWER``) raises the rate against a
       target that has moved, i.e. when the side acts second (the second half of the grid,
@@ -691,10 +696,36 @@ def hit_thresholds(
         foe = 1 - side
         foe_switches = is_switch(actions[foe])
         foe_fresh = fresh_switch(state, actions, foe)
-        acc0 = state.stages[side, Stat.ACC]
-        eva0 = jnp.where(foe_fresh, 0, state.stages[foe, Stat.EVA])
-        accs, acc_ok = _stage_variants(acc0, delta[foe], on_foe_acc[foe], herb[side])
-        evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_fresh)
+        acc0 = state.stages[side, Stat.ACC].astype(_I32)
+        eva0 = jnp.where(foe_fresh, 0, state.stages[foe, Stat.EVA]).astype(_I32)
+        # The foe's move's one stage write each (B12-31): a stat move's delta, Haze's 0,
+        # Psych Up's copy of the side's own evasion (the side has not moved: its turn-start
+        # stage), Acupressure's +2 (its defender is its user in singles).
+        haze, psych = effect[foe] == EffectId.HAZE, effect[foe] == EffectId.PSYCH_UP
+        acup = effect[foe] == EffectId.ACUPRESSURE
+        acc_delta = jnp.clip(delta[foe], STAGE_MIN, STAGE_MAX).astype(_I32)
+        accs, acc_ok = _stage_variants(
+            acc0,
+            jnp.where(haze, 0, jnp.clip(acc0 + delta[foe], STAGE_MIN, STAGE_MAX)),
+            jnp.where(haze, 0, acc_delta),
+            on_foe_acc[foe] | (changes[foe] & haze),
+            herb[side],
+        )
+        eva_delta = jnp.where(acup, 2, delta[foe]).astype(_I32)
+        copied = state.stages[side, Stat.EVA].astype(_I32)
+        eva_changed = jnp.where(
+            haze, 0, jnp.where(psych, copied, jnp.clip(eva0 + eva_delta, STAGE_MIN, STAGE_MAX))
+        )
+        eva_from_zero = jnp.where(
+            haze, 0, jnp.where(psych, copied, jnp.clip(eva_delta, STAGE_MIN, STAGE_MAX))
+        )
+        evas, eva_ok = _stage_variants(
+            eva0,
+            eva_changed,
+            eva_from_zero,
+            on_own_eva[foe] | (changes[foe] & (haze | psych | acup)),
+            herb[foe] & ~foe_fresh,
+        )
         _, _, target_mon = _target_mon(state, actions, side)
         weather0 = jnp.where(
             foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather

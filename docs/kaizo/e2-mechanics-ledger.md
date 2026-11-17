@@ -4,6 +4,11 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
 
+- **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
+  Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
+  test_accuracy_classes_equal_raw_rolls (slow) killed at 8 GB alone; the rest of the file and
+  test_batch12 pass.
+
 - **User decision 2026-11-17: E2 owns the doubles / tag / multi battle format, right after batch
   13.** Batch 14 (the other 18 Metronome moves) is parked behind doubles unless doubles needs one.
   Scope: engine, reference engine, enumerate/laws and trainer AI run doubles and tag battles per
@@ -1673,3 +1678,18 @@ Rules left out because another mechanic is missing; each closes with the mechani
   at :3190 with movePrevByBattler MOVE_NONE. The reference now exempts the whole range from its
   no-target check (it exempted only Nature Power and Counter's family); JAX already agreed. Guard:
   test_invokers test_sleep_talk_with_no_living_foe_still_succeeds (awake and asleep).
+- B12-31 A faster foe's Haze, Psych Up or Acupressure changes the stages a slower move's check
+  reads (battle_controller_player.c:2873-2874), so outcome.hit_thresholds follows them: Haze
+  zeroes the side's accuracy and the foe's evasion (BtlCmd_ResetAllStatChanges,
+  battle_script.c:3534-3549), Psych Up sets the foe's evasion to the side's own
+  (BtlCmd_CopyStatStages :6042-6053; the side has not moved, so its turn-start stage), and
+  Acupressure can draw evasion (+2 on its user in singles; BtlCmd_BoostRandomStatBy2
+  :8932-8956 loops ATTACK..MAX, accuracy and evasion included). Each is the stage variant's one
+  "changed" value (a move has one effect); the White Herb variants stay. Before, a Haze over a
+  lowered accuracy made roll 76+ a "miss at every threshold" class that the live check (100)
+  would have hit. No grid size change (HIT_VARIANTS stays 128). The other batch 12 effects write
+  no accuracy or evasion stage (Tickle, Power / Guard Swap, Captivate name other stats; Focus
+  Energy, Power Trick and the healing family none; Mist only blocks later drops, B12-23).
+  Guards: test_accuracy_classes test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds
+  (_FOLLOWED), test_haze_psych_up_acupressure_are_seen_by_hit_thresholds and (slow)
+  test_haze_psych_up_acupressure_classes_match_the_live_check.

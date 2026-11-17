@@ -470,7 +470,33 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.SAFEGUARD,  # a side condition (B10-7)
     EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
     EffectId.ENCORE,  # sets the encore only (B10-9)
+    # E2 batch 12, the stat family: Tickle writes Attack and Defense (B12-4), Power / Guard Swap
+    # Attack / Sp. Atk or Defense / Sp. Def (B12-7), Captivate Sp. Atk (B12-8): their params name
+    # no accuracy or evasion (checked below). Focus Energy (B12-3) and Power Trick (B12-10) write
+    # no stage.
+    EffectId.TICKLE,
+    EffectId.STAGE_SWAP,
+    EffectId.CAPTIVATE,
+    EffectId.FOCUS_ENERGY,
+    EffectId.POWER_TRICK,
+    # The healing family writes HP, status, sleep turns, a wish or a side's Mist only (B12-12..);
+    # Mist blocks later drops (B12-23) but writes no stage.
+    EffectId.REST,
+    EffectId.WEATHER_HEAL,
+    EffectId.WISH,
+    EffectId.HEAL_BELL,
+    EffectId.REFRESH,
+    EffectId.PSYCHO_SHIFT,
+    EffectId.MIST,
 }
+# Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
+# hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,
+# battle_script.c:3534-3549), Psych Up copies the side's stages onto its user
+# (BtlCmd_CopyStatStages, :6042-6053), Acupressure can draw evasion (BtlCmd_BoostRandomStatBy2,
+# :8932-8956): test_haze_psych_up_acupressure_are_seen_by_hit_thresholds.
+_FOLLOWED = frozenset({EffectId.HAZE, EffectId.PSYCH_UP, EffectId.ACUPRESSURE})
+# Effects whose params name stats: they must name no accuracy or evasion.
+_PARAM_STATS = {EffectId.TICKLE: (0, 1), EffectId.STAGE_SWAP: (0, 1), EffectId.CAPTIVATE: (0,)}
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
 _SEEN = {
     (EffectId.STAT_FOE, Stat.ACC),
@@ -492,9 +518,10 @@ def test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds(tables):
     """``outcome.hit_thresholds`` follows the stat effects on ``Stat.ACC`` / ``Stat.EVA``
     (``move_param[m, 0]``). An effect added later that writes them (Minimize, Haze, Psych
     Up, ...) fails here until it is classified and, if it can, followed there."""
-    assert set(EffectId) == _NO_ACC_EVA_WRITE | _STAT_KINDS, (
+    assert set(EffectId) == _NO_ACC_EVA_WRITE | _STAT_KINDS | _FOLLOWED, (
         "a new EffectId: say whether it writes Stat.ACC / Stat.EVA (outcome.hit_thresholds)"
     )
+    assert not (_NO_ACC_EVA_WRITE & _FOLLOWED)
     pairs = {
         (effect, params[0])
         for effect, params in DECOMP_EFFECT_TO_ID.values()
@@ -505,6 +532,61 @@ def test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds(tables):
         e, stat = EffectId(int(effect[move])), int(param[move, 0])
         if e in _STAT_KINDS and stat in (Stat.ACC, Stat.EVA):
             pairs.add((e, stat))
+        for col in _PARAM_STATS.get(e, ()):
+            assert int(param[move, col]) not in (Stat.ACC, Stat.EVA), (move, e)
     assert pairs, "no accuracy / evasion stat effect found"
     assert pairs <= _SEEN | _IRRELEVANT, pairs - _SEEN - _IRRELEVANT
     assert (EffectId.STAT_FOE, Stat.ACC) in pairs and (EffectId.STAT_SELF, Stat.EVA) in pairs
+
+
+def _b12_31_cases(tables, names):
+    """(state, actions, law, outcome, check) per B12-31 case: a faster foe's Haze, Psych Up or
+    Acupressure before the slower Scratch, the hit roll set to the new class."""
+    rolled = empty_outcome()
+    # Haze: the player's accuracy -1 (75) goes back to 0 (100) before Scratch.
+    haze = roark_state(tables, names, opp_moves=["Haze"], opp_faster=True)
+    haze = haze._replace(stages=haze.stages.at[0, Stat.ACC].set(-1))
+    # Psych Up: Geodude copies the player's evasion +1 (75 for Scratch).
+    psych = roark_state(tables, names, opp_moves=["Psych Up"], opp_faster=True)
+    psych = psych._replace(stages=psych.stages.at[0, Stat.EVA].set(1))
+    # Acupressure: draw 6 of 7 valid stats is evasion (ACUPRESSURE_STATS): +2, 60 for Scratch.
+    acup = roark_state(tables, names, opp_moves=["Acupressure"], opp_faster=True)
+    drawn = rolled._replace(acupressure=rolled.acupressure.at[1].set(6))
+    return [
+        (
+            haze,
+            A("Scratch", "Haze", haze, names),
+            {1: 75, 76: 25},
+            rolled._replace(hit=rolled.hit.at[0, 0].set(76)),
+            lambda out, s: int(out.stages[0, Stat.ACC]) == 0 and out.hp[1, 0] < s.hp[1, 0],
+        ),
+        (
+            psych,
+            A("Scratch", "Psych Up", psych, names),
+            {1: 75, 76: 25},
+            rolled._replace(hit=rolled.hit.at[0, 0].set(76)),
+            lambda out, s: int(out.stages[1, Stat.EVA]) == 1 and out.hp[1, 0] == s.hp[1, 0],
+        ),
+        (
+            acup,
+            A("Scratch", "Acupressure", acup, names),
+            {1: 60, 61: 40},
+            drawn._replace(hit=drawn.hit.at[0, 0].set(61)),
+            lambda out, s: int(out.stages[1, Stat.EVA]) == 2 and out.hp[1, 0] == s.hp[1, 0],
+        ),
+    ]
+
+
+def test_haze_psych_up_acupressure_are_seen_by_hit_thresholds(tables, names):
+    """B12-31: a faster foe's Haze, Psych Up or Acupressure changes the stages the slower
+    Scratch's check reads (battle_controller_player.c:2873-2874); hit_thresholds holds the new
+    threshold, so the roll past the turn-start one is its own class."""
+    for s, acts, law, _, _ in _b12_31_cases(tables, names):
+        assert hit_law(tables, s, acts, 0) == law
+
+
+@pytest.mark.slow
+def test_haze_psych_up_acupressure_classes_match_the_live_check(tables, names):
+    """B12-31: that class is decided by the live check, in both engines."""
+    for s, acts, _, outcome, check in _b12_31_cases(tables, names):
+        assert check(assert_matches_reference(tables, s, acts, outcome), s)
