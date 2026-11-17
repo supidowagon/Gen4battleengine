@@ -787,6 +787,11 @@ EXEMPT: dict[str, str] = {
         "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
         "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
     ),
+    "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
+        "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "
+        "table compared with each game's own item hold effects; tests/engine/test_e1_batch_d.py "
+        "reads it back from the decomp (E1 Batch D, G-56)"
+    ),
     "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "
         "berries (battle_lib.c:4773-4836): each game's items carry their own hold effect "

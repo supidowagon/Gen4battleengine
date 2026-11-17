@@ -7,14 +7,18 @@ Claw (G-57), Leppa (G-58), Micle (G-59) and the Metronome item (G-60).
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.ai.policy import ai_refusals
 from nuzline.engine.coverage import IMPLEMENTED_ITEMS, Support
 from nuzline.engine.damage import damage_table
 from nuzline.engine.hooks import max_pp
-from nuzline.engine.ids import GRIP_CLAW_TURNS, ItemId, Stat
+from nuzline.engine.ids import GRIP_CLAW_TURNS, SPEED_HALVING_HOLD_EFFECTS, ItemId, Stat
 from nuzline.engine.order import effective_speed, pinch_limit
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from tests.engine.helpers import A, assert_matches_reference, roark_state
@@ -126,6 +130,19 @@ def test_iron_ball_halves_speed_and_grounds_a_flyer(tables, names):
     held = assert_matches_reference(tables, ball, A("Growl", "Mud-Slap", ball, names), O)
     assert int(held.hp[0, 0]) < int(s.hp[0, 0])
     assert int(damage_table(tables, ball, 1, names.move("Mud-Slap"), False)[0]) > 0
+
+
+def test_speed_halving_hold_effects_match_the_decomp():
+    """sSpeedHalvingItemEffects (battle_lib.c:1160-1169) by decomp hold effect id (line N of
+    generated/item_hold_effects.txt is id N - 1)."""
+    root = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+    if not root.exists():
+        pytest.skip("external/pokeplatinum not cloned")
+    holds = (root / "generated" / "item_hold_effects.txt").read_text().split()
+    src = (root / "src" / "battle" / "battle_lib.c").read_text(encoding="utf-8")
+    table = src[src.index("sSpeedHalvingItemEffects[] = {") :]
+    names = re.findall(r"HOLD_EFFECT_\w+", table[: table.index("};")])
+    assert [holds.index(n) for n in names] == list(SPEED_HALVING_HOLD_EFFECTS)
 
 
 def test_the_ai_no_longer_refuses_a_player_iron_ball(tables, names):
