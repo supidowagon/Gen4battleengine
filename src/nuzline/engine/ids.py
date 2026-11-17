@@ -477,6 +477,18 @@ class AbilityId(IntEnum):
     # (SWITCH_IN_CHECK_STATE_DOWNLOAD, battle_lib.c:3814-3851; hooks.download).
     WONDER_GUARD = 80
     DOWNLOAD = 81
+    # E1 Batch C, rulings G-45..G-49: Ice Body (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:
+    # 5597-5602; step._weather_effect), White Smoke (BtlCmd_ChangeStatStage's Clear Body branch,
+    # :2884-2885; effects._foe_stage, hooks.intimidate), Vital Spirit (every Insomnia site:
+    # subscript_fall_asleep.s:8, :24, subscript_yawn.s:6, subscript_rest.s:8,
+    # BattleSystem_RecoverStatusByAbility battle_lib.c:4404-4405, :4471-4472), Speed Boost
+    # (BattleSystem_TriggerTurnEndAbility, battle_lib.c:3555-3564; step._turn_end_ability) and
+    # Iron Fist (BattleSystem_CalcMoveDamage, battle_lib.c:6913-6918; damage._pre_random).
+    ICE_BODY = 82
+    WHITE_SMOKE = 83
+    VITAL_SPIRIT = 84
+    SPEED_BOOST = 85
+    IRON_FIST = 86
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -566,7 +578,24 @@ ABILITY_DECOMP_IDS = {
     AbilityId.SYNCHRONIZE: 28,
     AbilityId.WONDER_GUARD: 25,
     AbilityId.DOWNLOAD: 88,
+    AbilityId.ICE_BODY: 115,
+    AbilityId.WHITE_SMOKE: 73,
+    AbilityId.VITAL_SPIRIT: 72,
+    AbilityId.SPEED_BOOST: 3,
+    AbilityId.IRON_FIST: 89,
 }
+
+# The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
+# :23-24, subscript_yawn.s:5-6, subscript_rest.s:7-8, BattleSystem_RecoverStatusByAbility's
+# shared case (battle_lib.c:4404-4405, :4471-4472) and the disobedience nap
+# (battle_controller_player.c:2202-2203) name Insomnia and Vital Spirit side by side.
+SLEEPLESS_ABILITIES = (AbilityId.INSOMNIA, AbilityId.VITAL_SPIRIT)
+
+
+def sleepless(ability):
+    """``ability`` (an ``AbilityId``, array or int) is Insomnia or Vital Spirit."""
+    return (ability == AbilityId.INSOMNIA) | (ability == AbilityId.VITAL_SPIRIT)
+
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
 # is Forecast, Trace or Multitype (decomp ids, generated/abilities.txt).
@@ -1138,16 +1167,15 @@ TERRAIN_MOVES = (89, 89, 402, 402, 157, 157, 59, 56, 58, 161, 426, 403, 161)
 
 # Decomp ability ids the weather code names directly (``generated/abilities.txt`` line N is
 # id N-1), read through ``tables.species_abilities_decomp`` (``Battler_Ability``) rather than
-# an ``AbilityId``, for the abilities no table maps (Air Lock, Magic Guard, Ice Body) and the
+# an ``AbilityId``, for the abilities read by decomp id (Air Lock, Magic Guard) and the
 # lock they share with Cloud Nine: Cloud Nine / Air Lock suppress weather (``NO_CLOUD_NINE``,
 # include/battle/common.h:63-64); the end-of-turn chip (``BtlCmd_EndOfTurnWeatherEffect``,
-# battle_script.c:5561-5647, and ``subscript_weather_continues.s``) skips Ice Body (which
-# heals instead) and Magic Guard. Sand Veil and Snow Cloak are ``AbilityId`` members.
+# battle_script.c:5561-5647, and ``subscript_weather_continues.s``) skips Magic Guard. Sand
+# Veil, Snow Cloak and Ice Body (since E1 Batch C, G-45) are ``AbilityId`` members.
 WEATHER_ABILITY_IDS = {
     "Cloud Nine": 13,
     "Air Lock": 76,
     "Magic Guard": 98,
-    "Ice Body": 115,
 }
 
 # Decomp ability ids the held-item code names directly, read like ``WEATHER_ABILITY_IDS``

@@ -622,7 +622,7 @@ def _fight(args):
     )
     if save is None:
         player = load_party(args.party, names, tables)
-    inter = IntermediateData(game.intermediate_dir)
+    inter = IntermediateData(game.intermediate_dir, game.id)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
@@ -899,7 +899,7 @@ def _prep(args) -> int:
     trainer = resolve_trainer(
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
-    inter = IntermediateData(game.intermediate_dir)
+    inter = IntermediateData(game.intermediate_dir, game.id)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
@@ -1062,7 +1062,7 @@ def line_setup(
     trainer = resolve_trainer(trainers, trainer_id=trainer_id)
     from nuzline.ai.layout import fight_tables
 
-    inter = IntermediateData(game.intermediate_dir)
+    inter = IntermediateData(game.intermediate_dir, game.id)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     # The trainer's AI flag set and its party's moves pick the AI layout (E1 Rulings R2, R6;

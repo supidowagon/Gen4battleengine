@@ -755,15 +755,27 @@ _play_jit = jax.jit(_play, static_argnames="layout")
 _policy_jit = jax.jit(_policy, static_argnames="layout")
 
 
-def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
-    """``_turn`` (no ``pick``) outside the loop as ``_play_jit`` then ``finish_turn``: the same
-    results, and a replay compiles the turn once (``refusal_reason`` replays ``_play_jit`` at
-    a refused turn, as ``player._replay`` does at every turn), not again in a ``_turn``
-    program."""
-    played, refused, ai_switched, power_mul = _play_jit(tables, state, player_action, key, layout)
+@jax.jit
+def _finish_jit(
+    tables: Tables, state: BattleState, played: BattleState, refused, ai_switched, power_mul
+):
+    """``finish_turn`` of ``played`` and the select back to ``state`` at a refusal, one program:
+    ``(state after the turn, refused)``. With ``refused`` False the state is
+    ``finish_turn(...)[0]`` (``refusal_reason``'s refused branch reads it so)."""
     played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
     return _select(refused, state, played), refused
+
+
+def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
+    """``_turn`` (no ``pick``) outside the loop as two programs, ``_play_jit`` then
+    ``_finish_jit`` (``finish_turn`` with the select, E1 Batch C item (d)): the same results.
+    ``finish_turn`` is not folded into the ``_play_jit`` program: ``player._replay`` runs
+    ``_play_jit`` at every turn and ``refusal_reason`` again at a refused one, each needing the
+    state before ``finish_turn``, so a fused program would compile the whole turn a second
+    time in a process that runs both (the step program dominates the compile)."""
+    played, refused, ai_switched, power_mul = _play_jit(tables, state, player_action, key, layout)
+    return _finish_jit(tables, state, played, refused, ai_switched, power_mul)
 
 
 def refusal_reason(
@@ -820,8 +832,11 @@ def refusal_reason(
             played, _, ai_switched, power_mul = _play_jit(
                 tables, state, player_action, k_turn, layout
             )
-            return learn_reason(
-                finish_turn(tables, played, ai_switched, power_mul)[0]
-            ) or replacement_refusal(tables, resolve_learns(tables, played), ai_switched, power_mul)
+            finished = _finish_jit(tables, state, played, jnp.bool_(False), ai_switched, power_mul)[
+                0
+            ]
+            return learn_reason(finished) or replacement_refusal(
+                tables, resolve_learns(tables, played), ai_switched, power_mul
+            )
         state = played
     return None

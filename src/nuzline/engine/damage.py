@@ -1046,6 +1046,10 @@ def _pre_random(
     gendered = (a_ability == AbilityId.RIVALRY) & (a_gender != 2) & (d_gender != 2)
     power = jnp.where(gendered & (a_gender == d_gender), power * 125 // 100, power)
     power = jnp.where(gendered & (a_gender != d_gender), power * 75 // 100, power)
+    # :6913-6918 Iron Fist (attackerParams.ability): a move of sPunchingMoves (MoveFlag.PUNCH,
+    # the ROM's list) x12/10, after Rivalry (ruling G-49). The self-hit's move is Struggle.
+    punch = (tables.move_flags[move] & MoveFlag.PUNCH) != 0
+    power = jnp.where((a_ability == AbilityId.IRON_FIST) & punch, power * 12 // 10, power)
 
     # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
     # passes no field conditions).

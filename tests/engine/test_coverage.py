@@ -61,10 +61,11 @@ def test_all_missing_reported_at_once(tables, names, metronome_refused):
     assert e.value.report.level == Support.NONE
 
 
-def test_every_weather_but_fog_is_supported():
-    # E2 batch 3: sun, rain and hail join sandstorm (coverage docstring); deep fog stays out.
+def test_every_weather_is_supported():
+    # E2 batch 3: sun, rain and hail join sandstorm (coverage docstring); E1 Batch C: deep fog
+    # (G-44).
     for w in Weather:
-        assert IMPLEMENTED_WEATHER[w] == (Support.NONE if w == Weather.FOG else Support.EXACT)
+        assert IMPLEMENTED_WEATHER[w] == Support.EXACT
 
 
 def test_hail_route_trainer_weather_is_supported(tables, names):
@@ -74,7 +75,7 @@ def test_hail_route_trainer_weather_is_supported(tables, names):
     r = check_coverage(tables, names, sample_party(names), hail, opp, Weather.HAIL)
     assert not any("Battle start: Hail" in m for m in r.missing)
     r = check_coverage(tables, names, sample_party(names), hail, opp, Weather.FOG)
-    assert "Battle start: Fog (weather UNSUPPORTED)" in r.missing
+    assert not any("Battle start" in m for m in r.missing)  # fog is modelled (G-44)
 
 
 def test_double_battle_trainer_is_refused(tables, names):
@@ -135,10 +136,10 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
 
 
 def test_start_condition_argument_is_checked(tables, names):
-    r = check_coverage(
-        tables, names, sample_party(names), roark_trainer(), roark_party(names), Weather.FOG
-    )
-    assert any("Fog" in m for m in r.missing)
+    # Every Weather is modelled (G-44), so the refused example is an id outside the enum.
+    bad = max(Weather) + 1
+    r = check_opponent(tables, names, roark_trainer(), roark_party(names), bad)
+    assert f"Battle start: weather id {bad} (weather UNSUPPORTED)" in r.missing
 
 
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
@@ -417,12 +418,9 @@ def test_unknown_start_condition_refused_not_read_as_weather(tables, names):
     assert line in check_opponent(tables, names, area_only, roark_party(names), 0).missing
 
 
-def test_area_weather_keeps_the_fog_refusal(tables, names):
-    t = replace(roark_trainer(), start_condition="fog")
-    assert "Battle start: Fog (weather UNSUPPORTED)" in (
-        check_opponent(tables, names, t, roark_party(names), 0).missing
-    )
-    for cond in ("sandstorm", "hail", "sun", "rain"):  # E2 batch 3: modelled
+def test_area_weather_and_fog_are_modelled(tables, names):
+    # E2 batch 3: sandstorm, hail, sun, rain; E1 Batch C: fog (G-44).
+    for cond in ("sandstorm", "hail", "sun", "rain", "fog"):
         t = replace(roark_trainer(), start_condition=cond)
         assert not check_opponent(tables, names, t, roark_party(names), 0).missing
 
