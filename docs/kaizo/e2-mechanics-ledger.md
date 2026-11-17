@@ -2,7 +2,15 @@
 
 Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.md.
 
-## RESUME (updated 2026-11-16 restart: batch 11 tip 49084d6 sent for merge check; batch 12 in progress)
+## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
+
+- **User decision 2026-11-17: E2 owns the doubles / tag / multi battle format, right after batch
+  13.** Batch 14 (the other 18 Metronome moves) is parked behind doubles unless doubles needs one.
+  Scope: engine, reference engine, enumerate/laws and trainer AI run doubles and tag battles per
+  docs/doubles-state-design.md; first target Gardenia's 13 TAG_STRATEGY fights (E1's Batch B waits
+  on them; partner teams in the calc repo). When batch 13 is at its tip, send the manager ONE
+  message with the doubles plan as batches (deliverable, E1-owned files touched, rough size); no
+  doubles work before it is acknowledged.
 
 - **Main 4676fd4 merged (2026-11-17, 08064fb; only CLAUDE.md came in, no conflicts).** Tables
   (vanilla + Kaizo) and backlog rebuilt (18 steps, 0 errors, no content change; the backlog's
