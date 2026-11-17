@@ -293,6 +293,11 @@ mid-fight level-ups, merged at `e290e12`), when the engine did not level the use
 the fight. The line player now resolves level-ups and learn prompts as playouts do (learns given
 up), so these numbers are to be re-measured; they are kept as the pre-level-up record.
 
+**2026-11-16: they also predate the E1 trainer AI and the Gardenia batch.** Since then the
+transcribed Kaizo AI flags, the AI's reads and the engine mechanics have changed, so the same
+commands and seeds give different figures. They were not re-run: each search takes 40-60
+minutes (2473 s and 3608 s above). Re-measure them with the level-up re-run.
+
 13th Gen Intel(R) Core(TM) i5-13600K, 20 host devices, Windows 11, jax 0.12, measured 2026-11-12.
 
 ## Main result: the user's six-member party

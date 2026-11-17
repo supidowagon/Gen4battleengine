@@ -54,6 +54,7 @@ from nuzline.engine.ids import (
     METRONOME_DRAW,
     METRONOME_HEAVY,
     MOVE_STRUGGLE,
+    NATURE_DISLIKED_FLAVOR,
     SECRET_POWER_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -499,6 +500,16 @@ def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.nd
     power = tables.item_param[item, 0].astype(_I32)
     gluttony = state.ability[side, mon] == AbilityId.GLUTTONY
     return jnp.where(gluttony, power // 2, power)
+
+
+def dislikes_berry(tables: Tables, state: BattleState, side, mon, item) -> jnp.ndarray:
+    """``bool``: ``item`` is a flavor berry (``ItemId.FLAVOR_BERRY``) whose flavor
+    (``item_param[item, 1]``) ``side``'s party ``mon`` dislikes:
+    ``Pokemon_GetFlavorAffinityOf(personality, flavor) == -1`` (battle_lib.c:4703 etc., :5683
+    etc.; src/pokemon.c:4123-4127, ``ids.NATURE_DISLIKED_FLAVOR`` by its nature), ruling G-4."""
+    disliked = jnp.asarray(NATURE_DISLIKED_FLAVOR, _I32)[state.nature[side, mon].astype(_I32)]
+    flavor = tables.item_param[item, 1].astype(_I32)
+    return (tables.item_effect[item] == ItemId.FLAVOR_BERRY) & (disliked == flavor)
 
 
 def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:

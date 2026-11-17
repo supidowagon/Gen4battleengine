@@ -128,6 +128,8 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
+    entry_pending: list[int]  # a list newcomer's switch-in states wait (engine.state docstring)
     move_prev: int
     terrain: int
     turn: int

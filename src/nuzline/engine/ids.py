@@ -535,6 +535,22 @@ class AbilityId(IntEnum):
     ARENA_TRAP = 74
     SHADOW_TAG = 75
     MAGNET_PULL = 76
+    # E1 Gardenia batch, rulings G-8..G-11: Pressure's PP cost (BattleControllerPlayer_DecrementPP,
+    # bcp.c:2235-2270; effects.pressure_pp_cost), the Pursuit and Counter-family extra PP
+    # (battle_script.c:6919-6922, BattleSystem_DecPPForPressure battle_lib.c:7390-7397) and its
+    # switch-in announcement (SWITCH_IN_CHECK_STATE_PRESSURE, battle_lib.c:4096-4110).
+    PRESSURE = 77
+    # E1 Gardenia batch, rulings G-12..G-17: Synchronize (BattleSystem_SynchronizeStatus,
+    # battle_lib.c:4493-4534, from AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS, bcp.c:3665-3670;
+    # effects.synchronize) and Leaf Guard in sun (the status subscripts' CheckIgnoreWeather /
+    # FIELD_CONDITION_SUNNY / ABILITY_LEAF_GUARD tests; effects._inflict, _contact_ability).
+    LEAF_GUARD = 78
+    SYNCHRONIZE = 79
+    # E1 Gardenia batch, rulings G-18..G-23: Wonder Guard (BattleSystem_ApplyTypeChart's
+    # MOVE_STATUS_WONDER_GUARD, battle_lib.c:2649-2654; damage.wonder_guarded) and Download
+    # (SWITCH_IN_CHECK_STATE_DOWNLOAD, battle_lib.c:3814-3851; hooks.download).
+    WONDER_GUARD = 80
+    DOWNLOAD = 81
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -619,6 +635,11 @@ ABILITY_DECOMP_IDS = {
     AbilityId.ARENA_TRAP: 71,
     AbilityId.SHADOW_TAG: 23,
     AbilityId.MAGNET_PULL: 42,
+    AbilityId.PRESSURE: 46,
+    AbilityId.LEAF_GUARD: 102,
+    AbilityId.SYNCHRONIZE: 28,
+    AbilityId.WONDER_GUARD: 25,
+    AbilityId.DOWNLOAD: 88,
 }
 
 # ChooseTraceTarget (battle_lib.c:7750-7775) never picks a battler whose ``BattleMon.ability``
@@ -717,6 +738,15 @@ class ItemId(IntEnum):
       move (``effects.shell_bell_heal``, bcp.c:4736-4752; Pursuit's hit: battle_lib.c:7345-7355).
     * ``LIGHT_CLAY`` (``HOLD_EFFECT_EXTEND_SCREENS``): Reflect / Light Screen last
       ``5 + param`` turns (``effects._screen``, battle_script.c:4229, :4272).
+    * ``FOCUS_BAND`` (``HOLD_EFFECT_MAYBE_ENDURE``, param ``FOCUS_BAND_PARAM``): a roll
+      ``RandNext() % 100 < param`` at each damage that reaches ``UpdateHP`` or
+      ``CheckHoldOnWith1HP`` (bcp.c:3386-3389, battle_script.c:9109-9112;
+      ``Outcome.focus_band`` / ``future_band``, ruling G-1).
+    * ``FLAVOR_BERRY`` (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``: Figy, Wiki, Mago, Aguav,
+      Iapapa): ``item_param[i, 1]`` is its ``Flavor``; it heals ``Divide(maxHP, param)`` at
+      ``curHP <= maxHP / 2`` and confuses a holder whose nature dislikes the flavor
+      (battle_lib.c:4698-4771, :5121-5194; ``hooks.held_item_check``), Pluck at any HP below
+      full (:5678-5751, ``hooks.pluck_berry``); ruling G-4.
     """
 
     UNSUPPORTED = 0
@@ -782,6 +812,9 @@ class ItemId(IntEnum):
     # first use hits at once and the herb is used up (subscript_item_skip_charge_turn.s,
     # effect_script_0039.s:7 and the other charge scripts, B10-12).
     POWER_HERB = 51
+    # E1 Gardenia batch (G-1 .. G-6).
+    FOCUS_BAND = 52
+    FLAVOR_BERRY = 53
 
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
@@ -832,6 +865,64 @@ POTION_HP_RESTORED = 20
 # only while every holder has this param: ``game_constants`` asserts it for every game.
 QUICK_CLAW_PARAM = 20
 QUICK_CLAW_MODULUS = 100 // QUICK_CLAW_PARAM  # % 5
+
+# Focus Band's hold param (res/items/data/focus_band.json ``effectParam`` 10, the only
+# ``HOLD_EFFECT_MAYBE_ENDURE`` item): ``RandNext() % 100 < itemPower`` (bcp.c:3387,
+# battle_script.c:9110). The engine stores that test's result (``Outcome.focus_band``,
+# ``Outcome.future_band``), exact only while every holder has this param: ``game_constants``
+# asserts it for every game (ruling G-1).
+FOCUS_BAND_PARAM = 10
+
+
+class Flavor(IntEnum):
+    """``enum Flavor`` (include/constants/flavor.h): a flavor berry's ``msgTemp``
+    (battle_lib.c:4701 etc.) and ``item_param[i, 1]`` of a ``FLAVOR_BERRY``."""
+
+    SPICY = 0
+    DRY = 1
+    SWEET = 2
+    BITTER = 3
+    SOUR = 4
+
+
+# The flavor each nature dislikes, -1 for none: the -1 entries of ``sNatureFlavorAffinities``
+# (src/pokemon.c:61-237, read by ``Pokemon_GetFlavorAffinityOf``, :4123-4127, with the nature
+# ``personality % 25``), indexed by the decomp's nature id (``BattleState.nature``).
+# tests/engine/test_e1_gardenia.py reads the table back from the decomp.
+NATURE_DISLIKED_FLAVOR = (
+    -1,  # Hardy
+    Flavor.SOUR,  # Lonely
+    Flavor.SWEET,  # Brave
+    Flavor.DRY,  # Adamant
+    Flavor.BITTER,  # Naughty
+    Flavor.SPICY,  # Bold
+    -1,  # Docile
+    Flavor.SWEET,  # Relaxed
+    Flavor.DRY,  # Impish
+    Flavor.BITTER,  # Lax
+    Flavor.SPICY,  # Timid
+    Flavor.SOUR,  # Hasty
+    -1,  # Serious
+    Flavor.DRY,  # Jolly
+    Flavor.BITTER,  # Naive
+    Flavor.SPICY,  # Modest
+    Flavor.SOUR,  # Mild
+    Flavor.SWEET,  # Quiet
+    -1,  # Bashful
+    Flavor.BITTER,  # Rash
+    Flavor.SPICY,  # Calm
+    Flavor.SOUR,  # Gentle
+    Flavor.SWEET,  # Sassy
+    Flavor.DRY,  # Careful
+    -1,  # Quirky
+)
+
+# ``BattleState.confusion`` of a battler a flavor berry confused outside ``step`` (the
+# battle start's and a faint replacement's switch-in item check, ``hooks.battle_start``,
+# ``step.replace``): confused, its counter not drawn yet. The next ``step`` draws it first,
+# ``Outcome.berry_confusion`` (``step.draw_pending_confusion``, ruling G-5). Above every
+# drawn counter (``Random 3, 2``: 2-5), so every read of the bit sees a confused battler.
+CONFUSION_PENDING = 6
 
 
 class Status(IntEnum):
@@ -1049,6 +1140,9 @@ MOVE_ENDURE = 203
 # Choice lock for them (bcp.c:3927-3928, by ``moveTemp``).
 MOVE_BATON_PASS = 226
 MOVE_U_TURN = 369
+# Imprison (``generated/moves.txt`` line 287): BattleControllerPlayer_DecrementPP counts the
+# other side's living Pressure holders for it by ``moveTemp``, whatever its range (bcp.c:2239-2240).
+MOVE_IMPRISON = 286
 # SolarBeam (generated/moves.txt line 77): BattleSystem_CalcMoveDamage halves it by move id under
 # FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
 MOVE_SOLAR_BEAM = 76
@@ -1138,6 +1232,9 @@ ITEM_ABILITY_IDS = {
     "Leaf Guard": 102,
     # subscript_knock_off.s / BtlCmd_TryKnockOff (battle_script.c:6614), B10-6.
     "Sticky Hold": 60,
+    # subscript_confuse.s:6 (CheckAbility, the holder's own): a disliked flavor berry's
+    # confusion (ruling G-5).
+    "Own Tempo": 20,
 }
 
 # ``sTerrainCamouflageType`` (include/data/terrain/to_type.h), indexed like ``TERRAIN_MOVES``.

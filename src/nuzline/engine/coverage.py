@@ -58,23 +58,16 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
   decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
   E2 batch 9) are modelled too; the rest belong to unsupported moves (SolarBeam, Weather Ball,
-  Moonlight, Kaizo's Hurricane) or abilities (Leaf Guard, Hydration, Forecast), so they are
+  Moonlight, Kaizo's Hurricane) or abilities (Hydration, Forecast; Leaf Guard is modelled since
+  the E1 Gardenia batch, G-14), so they are
   refused with their holder. Deep fog
   stays refused (``Weather.FOG``);
-* two weather abilities that set different weathers, one in each party
-  (``weather_war_line``): ``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` runs over
-  ``monSpeedOrder`` (battle_lib.c:3740-3790), so when both enter together (the battle start,
-  a double KO's replacements) the slower one's weather stays, and the order of an exact speed
-  tie is a ``RandNext() & 1`` (battle_lib.c:1445) the engine does not draw there; refused
-  (ruling B3-15);
-* Trace in both parties (``trace_standoff_line``): a Trace holder cannot copy Trace
-  (``ChooseTraceTarget``, battle_lib.c:7750-7775), so it stays armed and copies the next
-  Pokemon the other side sends in at that switch, in the middle of a turn whose chance laws
-  (``enumerate``, ``outcome.sample_outcome``) read the holder's ability at the turn start;
-  refused (ruling B3-14). The AI reads the copy (``damage.decomp_abilities``, as
-  ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so a copy the AI refuses on the
-  holder's side is refused like the holder's own ability would be (``trace_copy_refusals``,
-  ruling B3-21);
+* a Trace copy the AI refuses on the holder's side: the AI reads the copy
+  (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
+  is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).
+  Two weather abilities at war (the slower one's weather in ``monSpeedOrder``, ruling G-26)
+  and Trace in both parties (an armed holder copies the next newcomer, ruling G-25) are
+  modelled;
 * Metronome (ruling B5-2): ``BtlCmd_Metronome`` can call any move ``metronome_calls`` lists
   (ids 1-467 but the user's own moves and sCannotMetronomeMoves, battle_lib.c:7152-7178), so a
   holder is refused while any of them is refused as a move of that Pokemon
@@ -123,7 +116,7 @@ modifiers the AI does not model, switching-rule refusals) on the fight's turn-0 
 and refuses a bag that mixes item ids (the decomp applies the last zeroed slot's item,
 docs/discrepancies.md). The AI's state-dependent refusals that can first appear later in
 the fight (more switch draws than the layout's ``switch_sites``, ``AI_OnlyIneffectiveMoves``)
-are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 44
+are not visible at turn 0; ``ai_policy`` refuses them when they occur. The Kaizo layout's 60
 switch sites are every draw a party of six can make, so only vanilla can exceed its count.
 """
 
@@ -153,7 +146,6 @@ from nuzline.engine.ids import (
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     UNTRACEABLE_ABILITIES,
-    WEATHER_ABILITIES,
     AbilityId,
     EffectId,
     ItemId,
@@ -232,6 +224,7 @@ IMPLEMENTED_AI_FLAGS: dict[str, dict[int, Support]] = {
         6: Support.EXACT,  # AI_FLAG_BATON_PASS, E1 prep batch P3
         8: Support.EXACT,
         9: Support.EXACT,
+        10: Support.EXACT,  # AI_FLAG_HARRASSMENT, E1 Roark close batch (G-37)
     },
 }
 # The vanilla policy runs these scripts together, so a vanilla trainer must have them all. The
@@ -616,39 +609,6 @@ def _party_abilities(tables: Tables, party: Sequence[PokemonSpec]) -> set[int]:
         for m in party
         if m.species
     }
-
-
-def weather_war_line(
-    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
-) -> str | None:
-    """Why the two parties' weather abilities cannot be ordered (``coverage`` docstring,
-    ruling B3-15): one side's sets a weather the other side's does not, else None. A Trace
-    holder copies its foe's ability, which is in the other party already."""
-    mine = {
-        WEATHER_ABILITIES[a] for a in _party_abilities(tables, player) if a in WEATHER_ABILITIES
-    }
-    theirs = {WEATHER_ABILITIES[a] for a in _party_abilities(tables, opp) if a in WEATHER_ABILITIES}
-    if any(a != b for a in mine for b in theirs):
-        names = sorted(w.name.title() for w in mine | theirs)
-        return (
-            f"weather abilities of both sides set different weathers ({', '.join(names)}): "
-            "entering together, the slower one's stays, by an order the engine does not draw"
-        )
-    return None
-
-
-def trace_standoff_line(
-    tables: Tables, player: Sequence[PokemonSpec], opp: Sequence[PokemonSpec]
-) -> str | None:
-    """Why Trace on both sides is refused (``coverage`` docstring, ruling B3-14), else None."""
-    if AbilityId.TRACE in _party_abilities(tables, player) and AbilityId.TRACE in (
-        _party_abilities(tables, opp)
-    ):
-        return (
-            "Trace on both sides: a Trace facing Trace copies the next Pokemon sent in, in the "
-            "middle of a turn (battle_lib.c:3718-3737)"
-        )
-    return None
 
 
 def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> list[str]:
@@ -1087,9 +1047,6 @@ def check_coverage(
 
     c = _Collector()
     _check_party(c, tables, names, "Player", player)
-    for line in (weather_war_line(tables, player, opp), trace_standoff_line(tables, player, opp)):
-        if line is not None:
-            c.add(Support.NONE, f"{display_name(trainer)}: {line}", "ability")
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)

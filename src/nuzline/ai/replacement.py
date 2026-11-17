@@ -26,7 +26,8 @@ turn (``BtlCmd_TryPursuit``, battle_script.c:6928), since only ``BattleContext_I
 Refused (``UnsupportedAi`` on concrete inputs, ``REFUSED_SLOT`` traced): stage 2 reached
 with the first candidate's slot 0 empty or of power 1. That slot is skipped but the
 comparison after it still runs (battle_lib.c:8080), on the ``score`` left over from stage
-1, which this module does not track. The type-chart modifiers (Levitate, Wonder Guard,
+1, which this module does not track. Wonder Guard's ``MOVE_STATUS_IMMUNE`` bit zeroes a stage-2
+score (``switching.wonder_guard_bit``, ruling G-23). The type-chart modifiers (Levitate,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
 Ball, Miracle Eye, Natural Gift, Judgment and Weather Ball; Hidden Power takes each
 candidate's own IV type, ``switching.party_move_types``; the player's Foresight, Ingrain and
@@ -46,7 +47,10 @@ from nuzline.ai.switching import (
     SUPER_EFFECTIVE,
     apply_type_chart,
     calc_effectiveness_flags,
+    defender_chart_flags,
     party_move_types,
+    type_chart_flags,
+    wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import calc_move_damage
@@ -75,11 +79,18 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     """battle_lib.c:8055-8074: ``CalcMoveDamage`` by the fainted battler (side 1's
     active) against ``D``, then ``ApplyTypeChart`` with the fainted battler as attacker,
     each result stored in the ``u8`` score. A chart immunity leaves 0 through
-    ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) only adds the
-    refused Levitate and Magnet Rise. ``CalcMoveDamage`` takes type 0, the table's (:8058);
+    ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) adds Wonder
+    Guard's bit (``wonder_guard_bit``, the fainted battler's Mold Breaker against ``D``'s Wonder
+    Guard; ruling G-23) and the refused Levitate and Magnet Rise. ``CalcMoveDamage`` takes type 0, the table's (:8058);
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
-    return apply_type_chart(tables, state, 1, move, score, move_type) & _U8
+    score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
+    identified, grounded, roosting = defender_chart_flags(state, 0)
+    d_types = state.types[0, state.active[0]]
+    flags = type_chart_flags(
+        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
+    )
+    return jnp.where(wonder_guard_bit(tables, state, 1, 0, move, flags), 0, score)
 
 
 def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray, jnp.ndarray]:

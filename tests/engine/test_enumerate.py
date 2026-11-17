@@ -484,8 +484,12 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
             1 for k in range(6) if k != mon and int(state.species[foe, k]) and int(state.hp[foe, k])
         )
         return {k: Fraction(1, max(bench, 1)) for k in range(max(bench, 1))}
-    if name == "yawn_sleep":  # subscript_fall_asleep.s Random 3, 2: rand % 4 + 2
+    if name in ("yawn_sleep", "berry_confusion"):
+        # subscript_fall_asleep.s / subscript_confuse.s:34 Random 3, 2: rand % 4 + 2.
         return {v: Fraction(1, 4) for v in range(2, 6)}
+    if name in ("focus_band", "future_band"):
+        # bcp.c:3387, battle_script.c:9110: RandNext() % 100 < Focus Band's param 10.
+        return coin(Fraction(10, 100))
     if name == "magnitude":  # BtlCmd_CalcMagnitude (battle_script.c:5820-5852)
         return dict(zip(range(4, 11), (Fraction(n, 100) for n in (5, 10, 20, 30, 20, 10, 5)),
                         strict=True))  # fmt: skip

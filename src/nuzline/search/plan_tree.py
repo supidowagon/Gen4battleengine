@@ -509,9 +509,15 @@ def to_json(
     """JSON-ready dict of the solve: settings, depth, leaf budget, ranking, dropped
     actions, playouts, seconds, table and code versions and the plan tree (module
     docstring; ``root`` is the solved state, optional). ``table_version``: the
-    ``jaxcache.table_version`` of the tables the solve used (``None``: not known)."""
-    walk = _Walk(result, names, root, trainer)
-    plan = _node_json(walk, result.plan, "root", walk.root_opp, walk.root_mine, 0)
+    ``jaxcache.table_version`` of the tables the solve used (``None``: not known). A chance
+    root (``SolveResult.outcomes``, ruling G-34) gives ``plan`` ``{"kind": "chance"}`` and each
+    outcome's own dict under ``outcomes``."""
+    if result.outcomes:
+        plan = {"kind": "chance"}
+    else:
+        walk = _Walk(result, names, root, trainer)
+        plan = _node_json(walk, result.plan, "root", walk.root_opp, walk.root_mine, 0)
+    labels = {r.action: r.label for r in result.ranking}
     ranking = []
     for r in result.ranking:
         row = _plain(dataclasses.asdict(r))
@@ -528,7 +534,7 @@ def to_json(
         "protected": list(result.protected),
         "ranking": ranking,
         "dropped": [
-            {"action": int(a), "label": walk.labels.get(a, f"action {a}"), "reason": why}
+            {"action": int(a), "label": labels.get(a, f"action {a}"), "reason": why}
             for a, why in result.dropped.items()
         ],
         "playouts": int(result.playouts),
@@ -536,6 +542,16 @@ def to_json(
         "table_version": table_version,
         "code_version": code_version(),
         "plan": plan,
+        "outcomes": [
+            {
+                "prob": float(o.prob),
+                "label": o.label,
+                "result": to_json(
+                    o.result, names, root=root, trainer=trainer, table_version=table_version
+                ),
+            }
+            for o in result.outcomes
+        ],
     }
 
 
@@ -600,7 +616,24 @@ def render(
     result: SolveResult, names: Names, show_depth: int, *, root=None, trainer: str = "Opponent"
 ) -> list[str]:
     """The spec §5 layout: the ranking, then the plan under the best action to
-    ``show_depth`` levels of observations, then the budget footer."""
+    ``show_depth`` levels of observations, then the budget footer. A chance root
+    (``SolveResult.outcomes``, ruling G-34): its weighted row, then each outcome's own layout,
+    indented under what the player sees."""
+    if result.outcomes:
+        r = result.ranking[0] if result.ranking else None
+        out = ["the player sees one of these before acting (a chance root), each solved alone"]
+        if r is not None:
+            out.append(
+                f"  {r.label}: {_pct(r.estimate)} [{100 * r.ci_low:4.1f}, "
+                f"{100 * r.ci_high:5.1f}], lower {_pct(r.lower_bound)}"
+            )
+            if r.distribution is not None:
+                out.append(distribution_line(r.distribution))
+        for o in result.outcomes:
+            out.append(f"{o.label} ({_pct(o.prob)}):")
+            sub = render(o.result, names, show_depth, root=root, trainer=trainer)
+            out.extend("    " + line for line in sub)
+        return out
     walk = _Walk(result, names, root, trainer)
     s = result.settings
     k = result.deaths_allowed

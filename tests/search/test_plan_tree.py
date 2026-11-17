@@ -11,6 +11,7 @@ import jax
 import numpy as np
 import pytest
 
+from nuzline.search import expand as expand_mod
 from nuzline.search import stage_b
 from nuzline.search.deaths import BUCKETS, DeathDistribution
 from nuzline.search.leaves import LeafValue
@@ -18,12 +19,27 @@ from nuzline.search.plan_tree import distribution_line, label, render, to_json
 from nuzline.search.stage_a import ActionResult, Ranking
 from nuzline.search.stage_b import PlanNode, SolveSettings, solve
 from tests.engine.helpers import roark_state
+from tests.search import exhaustive
 from tests.search.fixtures import certain_zero_leaf, sacrifice_endgame
 
 pytestmark = pytest.mark.slow
 
 KEY = jax.random.PRNGKey(0)
 SETTINGS = SolveSettings(max_depth=1, budget_playouts=100, n_depth0=10)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _small_chunk():
+    """``expand``'s programs in 1024-row calls instead of ``CHUNK`` (16384): each
+    ``calls_rows``, ``laws_rows`` and ``step_rows`` call pads to ``CHUNK`` rows, and the
+    ``roark`` fixture's solve reached a 12.9 GB sampled peak. ``sacrifice_endgame``'s
+    exhaustive check runs at 1024-row calls instead of ``exhaustive.P`` (8192) likewise
+    (8.5 GB beside the ``sacrifice`` solves). A row's result depends on neither the call
+    size nor the device count (both modules' docstrings), so the plans are unchanged."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(expand_mod, "CHUNK", 1024)
+        mp.setattr(exhaustive, "P", 1024)
+        yield
 
 
 def zero_leaf(states, weights, pairs=None):

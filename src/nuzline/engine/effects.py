@@ -223,7 +223,10 @@ Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of eve
 Safeguard (E2 batch 10, B10-7): ``_safeguard`` and its gates on status and confusion.
 Mist (E2 batch 12, B12-23): ``_mist`` the move, ``mist_blocks_drop`` its block in every drop by
 another battler (``_foe_stage``, ``hooks.intimidate``).
-Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard in sun in
+``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
+read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
+Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
@@ -254,32 +257,34 @@ from nuzline.engine.damage import (
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
+    wonder_guarded,
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
+    ACUPRESSURE_STATS,
+    GENDER_NONE,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MINIMIZE_PARAM,
     MOVE_FAKE_OUT,
+    MOVE_HEAL_BELL,
+    MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_MOVED,
+    REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
+    REST_TURNS,
     SPIKES_MAX,
+    STAT_MOVE_ABILITY_IDS,
     TAILWIND_TURNS,
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
-    YAWN_ABILITY_IDS,
-    ACUPRESSURE_STATS,
-    GENDER_NONE,
-    MOVE_HEAL_BELL,
-    REFRESH_STATUSES,
-    REST_TURNS,
-    STAT_MOVE_ABILITY_IDS,
     WISH_TURNS,
+    YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
     ItemId,
@@ -422,8 +427,12 @@ def _secondary_stat_foe(tables, state, h: _Hit) -> BattleState:
     return _foe_stage(state, h, cond)
 
 
-def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> jnp.ndarray:
-    """No status yet and no type (or weather) immunity to ``status``. Sun stops a freeze
+def can_have_status(
+    tables: Tables, state: BattleState, side, slot, status, current=None
+) -> jnp.ndarray:
+    """No status yet (``current``, default ``state.status[side, slot]``: a fainted battler's
+    ``BattleMon.status``, which its faint keeps, ``effects.synchronize``) and no type (or
+    weather) immunity to ``status``. Sun stops a freeze
     only without a weather lock: ``subscript_freeze.s:6`` runs ``CheckIgnoreWeather`` before
     the sun check at :7, and ``BtlCmd_CheckIgnoreWeather`` (battle_script.c:9195-9206) jumps
     past it while a battler on the field with HP left has Cloud Nine or Air Lock
@@ -439,7 +448,8 @@ def can_have_status(tables: Tables, state: BattleState, side, slot, status) -> j
         )
         | ((status == Status.FREEZE) & (has(Type.ICE) | sun))
     )
-    return (state.status[side, slot] == Status.NONE) & ~immune
+    current = state.status[side, slot] if current is None else current
+    return (current == Status.NONE) & ~immune
 
 
 def _inflict(
@@ -458,14 +468,39 @@ def _inflict(
     from nuzline.engine.hooks import (  # hooks imports this module
         PARALYSIS_BLOCKED,
         SLEEP_BLOCKED,
+        STATUS_BLOCKED,
         reveal_ability,
     )
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
-    # Shield Dust, after Insomnia / Limber (Leaf Guard, Water Veil and the like in between are
+    # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Limber;
+    # Immunity, Water Veil and Vital Spirit are unsupported): ``CheckIgnoreWeather`` then
+    # FIELD_CONDITION_SUNNY then an ignorable ABILITY_LEAF_GUARD (subscript_fall_asleep.s:23-25,
+    # subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
+    # subscript_paralyze.s:6-8; subscript_freeze.s has no such test). A direct effect prints the
+    # ability's message (TAG_NICKNAME_ABILITY: poison :_177/_201, badly_poison :_249/_266, burn
+    # :_264, paralyze :_170, fall_asleep :_202/_221), which the AI learns; an indirect one ends
+    # silently.
+    guarded = (
+        (status == Status.SLEEP)
+        | (status == Status.POISON)
+        | (status == Status.TOXIC)
+        | (status == Status.BURN)
+        | (status == Status.PARALYSIS)
+    )
+    leaf = (
+        cond
+        & ~blocked
+        & ~limber
+        & guarded
+        & _sunny(tables, state)
+        & (h.target_ignorable == AbilityId.LEAF_GUARD)
+    )
+    state = reveal_ability(state, h.target_side, h.target, STATUS_BLOCKED, leaf & direct)
+    # Shield Dust, after Insomnia / Limber / Leaf Guard (Water Veil and the like in between are
     # unsupported), for an indirect effect only.
-    blocked = blocked | limber | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    blocked = blocked | limber | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
     # Then CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36,
     # freeze :19, poison :29, badly_poison :46, fall_asleep :40, before its uproar test at
     # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
@@ -764,6 +799,62 @@ def defender_side(tables: Tables, state: BattleState, side, target_side, move) -
     later defender (the last hitter) is the caller's."""
     own = self_defender(tables, move, ghost_user(state, side))
     return jnp.where(own, jnp.asarray(side, _I32), jnp.asarray(target_side, _I32))
+
+
+# BattleControllerPlayer_DecrementPP's range switch (battle_controller_player.c:2241-2267):
+# these ranges count the living Pressure holders other than the user (RANGE_ALL_ADJACENT,
+# RANGE_FIELD: COUNT_ALIVE_BATTLERS_EXCEPT_ME) or of the other side (RANGE_ADJACENT_OPPONENTS,
+# RANGE_OPPONENT_SIDE: COUNT_ALIVE_BATTLERS_THEIR_SIDE, battle_lib.c:2905-2967); these add
+# nothing; every other range (the default case) reads the defender's ability alone.
+PRESSURE_COUNT_EXCEPT_ME = (MoveTarget.RANGE_ALL_ADJACENT, MoveTarget.RANGE_FIELD)
+PRESSURE_COUNT_THEIR_SIDE = (MoveTarget.RANGE_ADJACENT_OPPONENTS, MoveTarget.RANGE_OPPONENT_SIDE)
+PRESSURE_NONE = (
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_OR_ALLY,
+    MoveTarget.RANGE_ALLY,
+)
+# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE.
+NO_DEFENDER = -1
+
+
+def pressure_holder(state: BattleState, battler) -> jnp.ndarray:
+    """``Battler_Ability(battler) == ABILITY_PRESSURE`` (battle_lib.c:3088-3106: no supported
+    move suppresses an ability; ``battler`` is a side in singles, its active Pokemon)."""
+    return state.ability[battler, state.active[battler]] == AbilityId.PRESSURE
+
+
+def pressure_pp_cost(tables: Tables, state: BattleState, attacker, defender, move) -> jnp.ndarray:
+    """``int32`` PP ``BattleControllerPlayer_DecrementPP`` (battle_controller_player.c:2235-2270)
+    takes for ``moveTemp`` ``move`` of ``attacker`` with ``defender`` (the battler
+    ``BattleSystem_Defender`` picked at the fight command, ``NO_DEFENDER`` for BATTLER_NONE):
+    1, plus, when there is a defender (:2238; ``skipPressureCheck`` is set only by script
+    commands that run after this, battle_script.c:3521, :4648, :4701, :5395, :7599, and
+    BattleContext_Init clears it for the next action, battle_lib.c:2014), for Imprison (by move
+    id, :2239-2240) or a counting range (``PRESSURE_COUNT_*``) one per living Pressure holder of
+    the other side / other than the user (a fainted holder and the user's own Pressure never
+    count), for a ``PRESSURE_NONE`` range nothing, and otherwise (the default case, :2261-2266)
+    one when the defender is not the user and its ability is Pressure, whatever its HP. The
+    caller spends ``min(cost, ppCur)`` (:2276-2280). Ruling G-8."""
+    move_range = tables.move_target[move]
+    holders = jnp.zeros((), _I32)
+    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
+        mon = state.active[battler]
+        alive_holder = pressure_holder(state, battler) & (state.hp[battler, mon] > 0)
+        # In singles the only other battler is the other side's: EXCEPT_ME and THEIR_SIDE agree.
+        holders = holders + (alive_holder & (attacker != battler)).astype(_I32)
+    counted = (
+        (move == MOVE_IMPRISON)
+        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
+        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype))
+    )
+    silent = jnp.isin(move_range, jnp.asarray(PRESSURE_NONE, move_range.dtype))
+    defender = jnp.asarray(defender, _I32)
+    has_defender = defender != NO_DEFENDER
+    named = jnp.clip(defender, 0, state.active.shape[0] - 1)
+    single = (defender != attacker) & pressure_holder(state, named)
+    extra = jnp.where(counted, holders, jnp.where(silent, 0, single.astype(_I32)))
+    return 1 + jnp.where(has_defender, extra, 0)
 
 
 def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
@@ -1352,10 +1443,7 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
     param = tables.move_param[jnp.asarray(move, _I32)].astype(_I32)
     return (
         ((effect == _E.SWAGGER) & swagger_fails(state, target_side, param[0]))
-        | (
-            (effect == _E.DRAGON_DANCE)
-            & dragon_dance_fails(state, side, param[0], param[1])
-        )
+        | ((effect == _E.DRAGON_DANCE) & dragon_dance_fails(state, side, param[0], param[1]))
         | ((effect == _E.BELLY_DRUM) & belly_drum_fails(state, side))
         # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.
         | ((effect == _E.SUBSTITUTE) & substitute_fails(state, side))
@@ -1905,11 +1993,15 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
     limber = (status == Status.PARALYSIS) & (state.ability[h.side, h.user] == AbilityId.LIMBER)
+    # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
+    # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
+    leaf = _sunny(tables, state) & (state.ability[h.side, h.user] == AbilityId.LEAF_GUARD)
     cond = (
         (status != Status.NONE)
         & hit
         & h.contact_proc
         & ~limber
+        & ~leaf
         & can_have_status(tables, state, h.side, h.user, status)
     )
     # Rough Skin (battle_lib.c:4257-4271): no roll; subscript_rough_skin.s takes
@@ -1954,6 +2046,108 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # subscript_aftermath.s:6 tags BTLSCR_DEFENDER's ability (BattleMessage_AbilityTag).
     state = reveal_ability(state, h.target_side, h.target, CONTACT_DAMAGE, rough | aftermath)
     return _set_status(state, h.side, h.user, status, cond)
+
+
+SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+
+
+def sync_landed(before: BattleState, after: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``side``'s active battler (``before``'s) went from no status to poison, bad
+    poison, burn or paralysis between the two states: a status subscript reached its end
+    (subscript_poison.s:63-69, subscript_badly_poison.s:83-88, subscript_burn.s:79-84,
+    subscript_paralyze.s:50-56), which toggles ``SYSCTL_TRY_SYNCHRONIZE_STATUS`` (set when
+    clear, cleared when set). Sleep and freeze never touch it (subscript_fall_asleep.s,
+    subscript_freeze.s)."""
+    mon = before.active[side]
+    new = after.status[side, mon]
+    return (before.status[side, mon] == Status.NONE) & jnp.isin(
+        new, jnp.asarray(SYNC_STATUSES, new.dtype)
+    )
+
+
+def synchronize(
+    tables: Tables, state: BattleState, attacker, defender, flag, sem, cond, held=None
+) -> tuple[BattleState, jnp.ndarray, jnp.ndarray]:
+    """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534), the
+    ``AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS`` step of ``AfterMoveEffects`` (bcp.c:3665-3670), where
+    ``cond`` (the step runs: after every hit of a move whose AfterMoveEffects run). Returns
+    ``(state, flag, sem)``. ``flag``: ``SYSCTL_TRY_SYNCHRONIZE_STATUS``; ``sem``: the
+    ``sideEffectMon`` (a battler; the side in singles). ``attacker`` / ``defender``: the action's
+    battlers (the defender is the attacker itself for a self-defender move: Baton Pass).
+
+    With the flag set: a defender whose ``Battler_Ability`` is Synchronize and which is the
+    side-effect battler passes to the attacker (:4499-4504); else a Synchronize attacker that
+    is the side-effect battler (a Static-like ability of the defender statused it) passes to
+    the defender (:4506-4511). Either way ``sideEffectMon`` becomes the receiver. The passer's
+    status picks the script (:4514-4520): any poison runs subscript_poison.s (a bad poison
+    passes as a plain poison), a burn subscript_burn.s, a paralysis subscript_paralyze.s; a
+    sleep or a freeze passes nothing. As ``SIDE_EFFECT_TYPE_ABILITY`` (:4524) the receiver's
+    own Immunity / Water Veil / Limber (the ignorable checks read the receiver's own ability:
+    neither battler of a pass has Mold Breaker in place of the ability tested), Leaf Guard in
+    sun (poison :13-16, burn :20-23, paralyze :5-8), any status or a Poison / Steel (poison) or
+    Fire (burn) type ends it silently; it skips CheckSubstitute (poison :28, burn :35, paralyze
+    :20) and Safeguard (:39, :43, :26). Nothing tests HP: the status lands on a receiver of any
+    HP, but a fainted one's is cleared at its faint (``step._faint_check``,
+    battle_controller.c:1482-1486), so it is set only on a living one here. The passer's status
+    is its ``BattleMon.status``, which a faint does not clear (only the party copy is zeroed,
+    battle_controller.c:1481-1486): ``held`` (``int[2]``, per battler, default each side's active
+    Pokemon's ``state.status``) gives it for a passer that fainted since (ruling G-24). The message (poison
+    :57, burn :68, paralyze :44: ``BTLSCR_MSG_BATTLER_TEMP``'s ability, the passer) tags
+    Synchronize: the AI learns a player's (``hooks.REVEALS_ON``). A status that lands toggles
+    the flag off again (rulings G-12, G-13). ``held`` gives the receiver's status test its
+    ``BattleMon.status`` likewise: a receiver that fainted with a status takes nothing (G-31)."""
+    from nuzline.engine.hooks import SYNCHRONIZED, reveal_ability  # hooks imports this module
+
+    attacker = jnp.asarray(attacker, _I32)
+    defender = jnp.asarray(defender, _I32)
+    flag = jnp.asarray(flag, bool)
+    sem = jnp.asarray(sem, _I32)
+    a_mon, d_mon = state.active[attacker], state.active[defender]
+    on = jnp.asarray(cond, bool) & flag
+    first = on & (state.ability[defender, d_mon] == AbilityId.SYNCHRONIZE) & (sem == defender)
+    second = (
+        on & ~first & (state.ability[attacker, a_mon] == AbilityId.SYNCHRONIZE) & (sem == attacker)
+    )
+    run = first | second
+    passer = jnp.where(first, defender, attacker)
+    receiver = jnp.where(first, attacker, defender)
+    p_mon, r_mon = state.active[passer], state.active[receiver]
+    # The receiver's status test reads its BattleMon.status too (subscript_paralyze.s:41-42,
+    # subscript_poison.s, subscript_burn.s), kept by a faint: a fainted receiver that was
+    # statused takes nothing (ruling G-31).
+    r_held = state.status[receiver, r_mon] if held is None else jnp.asarray(held)[receiver]
+    held = state.status[passer, p_mon] if held is None else jnp.asarray(held)[passer]
+    kind = jnp.where(
+        (held == Status.POISON) | (held == Status.TOXIC),
+        Status.POISON,
+        jnp.where(
+            held == Status.BURN,
+            Status.BURN,
+            jnp.where(held == Status.PARALYSIS, Status.PARALYSIS, Status.NONE),
+        ),
+    )
+    own = decomp_abilities(tables, state)[receiver, r_mon]
+    ability = state.ability[receiver, r_mon]
+    leaf = _sunny(tables, state) & (ability == AbilityId.LEAF_GUARD)
+    shield = jnp.where(
+        kind == Status.POISON,
+        own == ITEM_ABILITY_IDS["Immunity"],
+        jnp.where(
+            kind == Status.BURN,
+            own == ITEM_ABILITY_IDS["Water Veil"],
+            ability == AbilityId.LIMBER,
+        ),
+    )
+    lands = (
+        run
+        & (kind != Status.NONE)
+        & ~shield
+        & ~leaf
+        & can_have_status(tables, state, receiver, r_mon, kind, r_held)
+    )
+    state = _set_status(state, receiver, r_mon, kind, lands & _alive(state, receiver, r_mon))
+    state = reveal_ability(state, passer, p_mon, SYNCHRONIZED, lands)
+    return state, flag & ~lands, jnp.where(run, receiver, sem)
 
 
 def _kings_rock(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2405,8 +2599,11 @@ def play_hit(
     Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
     damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
     defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
-    unsupported); while it is set, a hit that would KO leaves 1 HP (``focus_sash_damage``)
-    and the followup message removes the sash. The flag is never cleared between hits, so
+    unsupported), or a Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
+    (bcp.c:3387-3389: drawn on every such hit, lethal or not, ``Outcome.focus_band[side,
+    hit_index]``, ruling G-1); while it is set, a hit that would KO leaves 1 HP
+    (``focus_sash_damage``) and the followup message names the item (``reveal_item``) and
+    removes it only while it is a Focus Sash. The flag is never cleared between hits, so
     after a full-HP hit every later hit of the same move is capped as well (a holder at 1 HP
     takes 0); a holder below full HP at the first hit is never protected. Bide stores the
     capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
@@ -2472,6 +2669,8 @@ def play_hit(
         )
         == 0
     ) | levitated(state, side, target_side, counter_type)
+    # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
+    immune = immune | wonder_guarded(tables, state, side, move, counter_type, target_side)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
     target_hp = state.hp[target_side, target].astype(_I32)
     # False Swipe (bcp.c:3381-3384, inside UpdateHP before the endure checks): a hit that would
@@ -2494,7 +2693,11 @@ def play_hit(
     real = update_hp & ~sub_take
     sash = holds(tables, state, target_side, ItemId.FOCUS_SASH)
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
-    armed = jnp.asarray(focus_armed) | (real & sash & full)
+    # Focus Band (bcp.c:3386-3389, ruling G-1): RandNext() % 100 < param on every UpdateHP that
+    # reaches the endure checks, lethal or not (Outcome.focus_band).
+    band = holds(tables, state, target_side, ItemId.FOCUS_BAND)
+    rolled = band & (outcome.focus_band[side, hit_index] != 0)
+    armed = jnp.asarray(focus_armed) | (real & sash & full) | (real & rolled)
     capped, endured = focus_sash_damage(state, target_side, damage, armed & real)
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
     taken = jnp.where(endured, target_hp - 1, damage)
@@ -2535,6 +2738,9 @@ def play_hit(
     else:
         state = _set(state, "substitute_hp", target_side, sub_hp - to_sub, sub_take)
         sub_hit = jnp.asarray(sub_hit) | sub_take
+    # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
+    # (BattleMessage_ItemTag, battle_script.c:11736-11739): the AI learns a Focus Band that stays.
+    state = reveal_item(state, target_side, target, endured)
     state = consume_item(state, target_side, (endured & sash) | resisted)
     # BattleControllerPlayer_UpdateHP (bcp.c:3407): a Biding target stores battleCtx->damage,
     # before the berry halves the HP change: what it lost, or the unhalved amount after a

@@ -44,8 +44,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import PRESENT_HEAL, entry_ability, entry_weather, weather_suppressed
+from nuzline.engine.damage import (
+    PRESENT_HEAL,
+    entry_ability,
+    entry_weather,
+    hazards_loss,
+    trace_copy,
+    weather_suppressed,
+)
 from nuzline.engine.ids import (
+    FOCUS_BAND_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     AbilityId,
@@ -64,6 +72,7 @@ from nuzline.engine.order import (
     assist_candidates,
     call_kind,
     disabled_state,
+    dislikes_berry,
     encored_state,
     is_item,
     is_switch,
@@ -132,6 +141,20 @@ class Outcome(NamedTuple):
     # value in [0, ACUPRESSURE_DRAWS): the stat is rank ``value % validStats`` among the stats
     # below +6 at the move (``effects.acupressure_stat``), B12-9.
     acupressure: jnp.ndarray
+    # int8[2,5], 1 = a Focus Band roll passes (``RandNext() % 100 < FOCUS_BAND_PARAM``,
+    # bcp.c:3387, battle_script.c:9110): ``[s, i]`` the defender's roll at hit ``i`` of ``s``'s
+    # move (``BattleControllerPlayer_UpdateHP``; Pursuit's ``CheckHoldOnWith1HP`` at ``[pursuer,
+    # 0]``), ``[s, 0]`` also ``s``'s own roll at its confusion self-hit (its move does not run
+    # then), ruling G-1.
+    focus_band: jnp.ndarray
+    # int8[2], by the battler Future Sight hits at this turn's end: its Focus Band roll
+    # (subscript_future_sight_damage.s:28, ``CheckHoldOnWith1HP``).
+    future_band: jnp.ndarray
+    # int8[2]: the confusion counter (2-5) of subscript_confuse.s's ``Random 3, 2`` for a flavor
+    # berry the side's battler disliked (subscript_held_item_dislike_flavor.s:13), drawn when
+    # its confusion check first reads the pending counter (``ids.CONFUSION_PENDING``; one check
+    # per side per turn), ruling G-5.
+    berry_confusion: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -165,6 +188,9 @@ def empty_outcome() -> Outcome:
         future_hit=sides + 1,
         yawn_sleep=sides + 2,
         acupressure=jnp.zeros((2,), jnp.int16),
+        focus_band=hits,
+        future_band=sides,
+        berry_confusion=sides + 2,
     )
 
 
@@ -608,7 +634,9 @@ def hit_thresholds(
       turn-start threshold (``damage.entry_weather``);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
-      go first).
+      go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
+      move's after-effects, its switch-in, or a Pluck of the side's berry: ``hooks``,
+      ruling G-5; over-approximate: whenever it or the side holds such a berry).
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
@@ -618,9 +646,9 @@ def hit_thresholds(
     newcomer's switch-in checks: the weather its ability sets and the ability it traces
     (``damage.entry_weather``, ``damage.entry_ability``: a Trace newcomer facing a Sand Veil
     attacker in sand holds Sand Veil at the check). No implemented move changes Gravity, an
-    ability or Foresight's flag on the target before the target's foe moves (Trace copies
-    mid-turn only facing another Trace holder, which coverage refuses), and a faint of either
-    battler leaves no check. The
+    ability or Foresight's flag on the target before the target's foe moves (an armed Trace
+    holder copies the newcomer the foe's switch brings, before either moves: the view holds the
+    copy, ``pivot_view``), and a faint of either battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
     changes): an extra threshold splits a class, never merges two. ``moves`` (``int32[2]``): the moves the sides run (an invoker's call,
     ``order.used_moves``), default ``used_move`` without a call."""
@@ -676,8 +704,15 @@ def hit_thresholds(
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         weather_ok = jnp.stack([jnp.asarray(True), weather_move[foe]])
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
-        confuseds = jnp.stack([confused0, jnp.asarray(False)])
-        confused_ok = jnp.stack([jnp.asarray(True), confused0 & changes[foe]])
+        # The second variant is the other confusion value: snapping out (confused now), or a
+        # disliked flavor berry eaten before the check (not confused now), ruling G-5.
+        berry = dislikes_berry(
+            tables, state, foe, target_mon, state.item[foe, target_mon]
+        ) | dislikes_berry(tables, state, foe, target_mon, state.item[side, state.active[side]])
+        confuseds = jnp.stack([confused0, ~confused0])
+        confused_ok = jnp.stack(
+            [jnp.asarray(True), jnp.where(confused0, changes[foe], live & berry)]
+        )
         # Grid order: moved (2) x weather (2) x confusion (2) x accuracy (4) x evasion (4).
         acc_grid = jnp.tile(jnp.repeat(accs, _STAGE_VARIANTS), 8)
         eva_grid = jnp.tile(evas, 8 * _STAGE_VARIANTS)
@@ -953,7 +988,8 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     (``ts_acted``), else a switch to its own active Pokemon (no move). Its switch-in effects
     (weather, Trace, Intimidate) are still a switch's: ``fresh_switch`` tells the laws that its
     stages and volatiles are the view's, not a fresh battler's. The paused action's own King's
-    Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged."""
+    Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged, but for an armed
+    Trace holder whose foe enters this turn, which holds the copy (``_armed_trace``, G-25)."""
     actions = jnp.asarray(actions, _I32)
     paused = state.pivot_battler != 0
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
@@ -977,7 +1013,49 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
     )
     view = jax.tree.map(lambda a, b: jnp.where(paused, a, b), seen, state)
-    return view, jnp.where(paused, viewed, actions)
+    viewed = jnp.where(paused, viewed, actions)
+    return _armed_trace(tables, view, viewed, paused, pivot), viewed
+
+
+def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> BattleState:
+    """The laws' view of an armed Trace holder (ruling G-25). A Trace holder facing a foe whose
+    ability ``ChooseTraceTarget`` skips (Trace, battle_lib.c:7750-7775) keeps its
+    ``traceAnnounced`` clear (:3726-3733), so ``SWITCH_IN_CHECK_STATE_TRACE`` copies the next
+    battler its side faces at that newcomer's switch-in checks (``hooks.switch_in_effects``):
+    mid-turn, before the holder's own move. So where side ``d``'s foe enters this turn (its
+    switch action, or the paused pivot's pick) and ``d`` stays, ``d``'s active Pokemon holds
+    the copy here when ``damage.trace_copy`` passes on the newcomer once its entry hazards left
+    it HP (the check reads the target's ``curHP``, :3730; a switch action's newcomer has no
+    Ingrain, a Baton Pass's keeps it). The newcomer's own Trace cannot copy the holder's (Trace),
+    and no other switch-in state of the newcomer changes an ability, so this is its ability.
+    Not where ``d``'s Pursuit fires on the switch: that hit comes before the switch
+    (``step.pursuit_fires``, subscript_switch_pokemon.s:11) and ends ``d``'s action, so its
+    reads see Trace; a paused pivot's Pursuit has already run."""
+    from nuzline.engine.step import pursuit_fires  # step imports this module
+
+    sides = jnp.arange(2)
+    enters = jnp.where(paused, sides == pivot, is_switch(actions))
+    picks = [selected_move(tables, state, side, actions[side]) for side in (0, 1)]
+    choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
+    ability = state.ability
+    for side, foe in ((0, 1), (1, 0)):
+        slot = jnp.clip(actions[foe] - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
+        ingrained = jnp.where(paused, state.ingrain[foe] != 0, False)
+        loss = hazards_loss(tables, state, foe, slot, ingrained)
+        alive = state.hp[foe, slot].astype(_I32) - loss > 0
+        stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]))
+        pursued = ~paused & pursuit_fires(tables, state, foe, actions, choices)
+        copies = (
+            enters[foe]
+            & stays
+            & ~pursued
+            & alive
+            & trace_copy(tables, state, side, foe, target=slot)
+        )
+        mon = state.active[side]
+        new = jnp.where(copies, state.ability[foe, slot], ability[side, mon])
+        ability = ability.at[side, mon].set(new.astype(ability.dtype))
+    return state._replace(ability=ability)
 
 
 def fresh_switch(state: BattleState, actions, side) -> jnp.ndarray:
@@ -1011,13 +1089,13 @@ def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
         weights = metronome_weights(tables, state, side)
         cands = weights > 0
         pick = jax.random.choice(
-            jax.random.fold_in(key, 26 + side),
+            jax.random.fold_in(key, 32 + side),
             weights.shape[0],
             p=weights / jnp.maximum(jnp.sum(weights), 1),
         )
         ranks.append(jnp.sum(cands & (jnp.arange(weights.shape[0]) < pick)))
         count = jnp.sum(assist_candidates(tables, state, side)[1].astype(_I32))
-        draw_ = jax.random.randint(jax.random.fold_in(key, 30 + side), (), 0, jnp.maximum(count, 1))
+        draw_ = jax.random.randint(jax.random.fold_in(key, 34 + side), (), 0, jnp.maximum(count, 1))
         assist.append(draw_.astype(_I32))
     kinds = call_kind(tables, chosen)
     return jnp.where(
@@ -1231,8 +1309,18 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # read at the move (1-7): one draw in [0, 420) (lcm(1..7)) serves every count, uniform
         # by the % n convention (B12-9).
         acupressure=jax.random.randint(
-            jax.random.fold_in(key, 29), per_side, 0, ACUPRESSURE_DRAWS, dtype=_I32
+            jax.random.fold_in(key, 36), per_side, 0, ACUPRESSURE_DRAWS, dtype=_I32
         ),
+        # Focus Band (bcp.c:3387, battle_script.c:9110): RandNext() % 100 < param, uniform by the
+        # % n convention, per hit and for the Future Sight hit. From fold_in keys (G-1).
+        focus_band=jax.random.randint(jax.random.fold_in(key, 29), per_hit, 0, 100, dtype=_I32)
+        < FOCUS_BAND_PARAM,
+        future_band=jax.random.randint(jax.random.fold_in(key, 30), per_side, 0, 100, dtype=_I32)
+        < FOCUS_BAND_PARAM,
+        # A flavor berry's confusion: subscript_confuse.s:34 ``Random 3, 2`` (rand % 4 + 2). From a
+        # fold_in key (G-5).
+        berry_confusion=jax.random.randint(jax.random.fold_in(key, 31), per_side, 0, 4, dtype=_I32)
+        + 2,
     )
     outcome = _cast(outcome)
 

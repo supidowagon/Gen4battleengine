@@ -37,17 +37,13 @@ from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
-    ACUPRESSURE_STATS,
-    GENDER_NONE,
-    MOVE_HEAL_BELL,
-    REFRESH_STATUSES,
-    REST_TURNS,
-    STAT_MOVE_ABILITY_IDS,
-    WISH_TURNS,
     ABILITY_MULTITYPE,
+    ACUPRESSURE_STATS,
     CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
+    CONFUSION_PENDING,
     FUTURE_SIGHT_TURNS,
+    GENDER_NONE,
     INVOKER_MOVES,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
@@ -55,19 +51,24 @@ from nuzline.engine.ids import (
     MINIMIZE_PARAM,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
+    MOVE_HEAL_BELL,
+    MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    NATURE_DISLIKED_FLAVOR,
     POTION_HP_RESTORED,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     PROTECT_CHAIN_MOVES,
+    REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
+    REST_TURNS,
     SECRET_POWER_EFFECTS,
     SEMI_HIT_FLAGS,
     SEMI_SET_FLAGS,
@@ -83,6 +84,7 @@ from nuzline.engine.ids import (
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
     SPIKES_MAX,
+    STAT_MOVE_ABILITY_IDS,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TERRAIN_MOVES,
@@ -95,6 +97,7 @@ from nuzline.engine.ids import (
     WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
+    WISH_TURNS,
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
@@ -154,6 +157,21 @@ SELF_DEFENDER = TARGETS_USER | {
     MoveTarget.RANGE_ALLY,
     MoveTarget.RANGE_USER_OR_ALLY,
 }
+# BattleControllerPlayer_DecrementPP's range switch (bcp.c:2241-2267): the ranges that count the
+# living Pressure holders other than the user / of the other side (COUNT_ALIVE_BATTLERS_EXCEPT_ME,
+# _THEIR_SIDE, lib.c:2905-2967), and those that add nothing; the default case reads the defender.
+PRESSURE_COUNTED = {
+    MoveTarget.RANGE_ALL_ADJACENT,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ADJACENT_OPPONENTS,
+    MoveTarget.RANGE_OPPONENT_SIDE,
+}
+PRESSURE_NONE = {
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_OR_ALLY,
+    MoveTarget.RANGE_ALLY,
+}
 # _status_disrupted's results.
 GOES_AHEAD, DISRUPTED, HURT_ITSELF = 0, 1, 2
 # sProtectSuccessRate (script.c:5128-5133), indexed by protectSuccessTurns.
@@ -178,6 +196,10 @@ class _Turn:
     # :2195): turn + 1 during ref_step, turn in ref_replace (after the turn was counted).
     entry_turn: int
     fainted: list[tuple[int, int]] = field(default_factory=list)  # SYSCTL_MON_FAINTED
+    # BattleMon.status of a Pokemon that fainted this turn, (side, slot) -> status: the faint
+    # zeroes the party copy only (battle_controller.c:1481-1486); the Synchronize step reads the
+    # battler's (G-24).
+    battle_status: dict = field(default_factory=dict)
     done: list[bool] = field(default_factory=lambda: [False, False])  # action is MOVE_END
     # selfTurnFlags, cleared by BattleContext_Init at every action's end (bcp.c:3998,
     # lib.c:2014): the defender's focusItemActivated (bcp.c:3391) and the attacker's
@@ -236,6 +258,11 @@ class _Turn:
     power_mul: int = 10
     # The paused action's own inputs (BattleState.ts_used / ts_dealt).
     pivot_dealt: int = 0
+    # SYSCTL_TRY_SYNCHRONIZE_STATUS (toggled at the end of every poison / bad poison / burn /
+    # paralysis subscript that lands, cleared by BattleContext_Init) and sideEffectMon, the side
+    # in singles (rulings G-12, G-13).
+    sync_flag: bool = False
+    sync_mon: int = -1
 
 
 class _Pause(Exception):
@@ -387,6 +414,48 @@ def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int
     return move_type == Type.GROUND and _ignorable(s, attacker, defender) == AbilityId.LEVITATE
 
 
+# MoveIsOnDamagingTurn (lib.c:7588-7604): decomp battle effects on their damaging turn only under
+# SYSCTL_LAST_OF_MULTI_TURN. Only subscript_charge_move_cleanup.s:7 (every charge move's strike,
+# before TryMove's chart) and subscript_bide_end.s:12 (Bide: RANGE_USER, no chart) set it, so in
+# battle the charge moves are on it whenever the chart runs and Fire Fang (273) never is (rulings
+# G-18, G-27).
+_MULTI_TURN_EFFECTS = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
+
+
+def _wonder_guarded(
+    tables, s: RefState, attacker: int, defender: int, move: int, kind: int
+) -> bool:
+    """``ApplyTypeChart``'s ``MOVE_STATUS_WONDER_GUARD`` (lib.c:2649-2654, ruling G-18): the
+    defender's Wonder Guard as the attacker sees it, a move on its damaging turn
+    (``MoveIsOnDamagingTurn``: not Fire Fang), with table power, not Struggle (:2573), whose
+    chart walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``_apply_type_multiplier``'s flags)."""
+    if move == MOVE_STRUGGLE or _t(tables, "move_power", move) == 0:
+        return False
+    if _ignorable(s, attacker, defender) != AbilityId.WONDER_GUARD:
+        return False
+    # A charge move's charge turn sets SYSCTL_FIRST_OF_MULTI_TURN and skips the chart (bcp.c:
+    # 2356; ``_use_move`` returns before any caller); its strike ran
+    # subscript_charge_move_cleanup.s (SYSCTL_LAST_OF_MULTI_TURN) first (G-27).
+    strike = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE)
+    if _t(tables, "move_ai_effect", move) in _MULTI_TURN_EFFECTS and not strike:
+        return False
+    flags: set[str] = set()
+    def_types = _active(s, defender).types
+    for defending, mul in _chart_rows(tables, kind, _identified(s, attacker, defender)):
+        if defending == def_types[0]:
+            _apply_type_multiplier(0, mul, True, flags)
+        if defending == def_types[1] and def_types[0] != def_types[1]:
+            _apply_type_multiplier(0, mul, True, flags)
+    return "super" not in flags
+
+
+def _present_heals(tables, move: int, o, side: int) -> bool:
+    """Present's heal path: effect_script_0122.s _004 sets SYSCTL_IGNORE_IMMUNITIES (:13) in the
+    move script (bcp.c:3214), hit or miss, so TryMove's CheckTypeChart (bcp.c:2350-2356) skips
+    the chart: no Wonder Guard flag, no noEffect (ruling G-30)."""
+    return _t(tables, "move_effect", move) == EffectId.PRESENT and o.present[side] == PRESENT_HEAL
+
+
 def _identified(s: RefState, attacker: int, defender: int) -> int:
     """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
     (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
@@ -462,7 +531,7 @@ def _rollout_multiplier(s: RefState, attacker: int) -> int:
     return power * 2 if sd.curled else power
 
 
-def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
+def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: bool = True) -> int:
     """``effect_script_0087.s``: the attacker's level, with ``SYSCTL_IGNORE_TYPE_CHECKS``
     (lib.c:7544): no multiplier, but the chart's immunity still fails the move. Bide's
     unleash is ``2 * storedDamage`` (bcp.c:2702) and ignores the chart (``RANGE_USER``,
@@ -479,6 +548,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int) -> int:
         return 0
     if _levitated(tables, s, attacker, 1 - attacker, kind):
         return 0
+    if wonder_guard and _wonder_guarded(tables, s, attacker, 1 - attacker, move, kind):
+        return 0  # power 1: MOVE_STATUS_WONDER_GUARD stops it (G-18)
     if effect == EffectId.HALVE_HP:  # effect_script_0040.s: Divide(curHP, 2)
         return _divide(foe.hp, 2)
     if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-9 (B10-5; <= 0 fails the move)
@@ -1002,19 +1073,21 @@ def _hits_semi(tables, move: int, kind: int) -> bool:
 
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
-    magnitude: int = 4, present: int = -1,
+    magnitude: int = 4, present: int = -1, wonder_guard: bool = True,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
     status move never calculates damage; ``CheckTypeChart`` needs base power
-    (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s)."""
+    (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s).
+    Wonder Guard's flag (``_wonder_guarded``) gives 0 where ``wonder_guard``; without it the
+    damage is ``battleCtx->damage`` as the chart leaves it (Jump Kick's crash, G-19)."""
     if _t(tables, "move_category", move) == STATUS_CLASS or _t(tables, "move_power", move) == 0:
         return 0
     if _t(tables, "move_effect", move) == EffectId.PRESENT and present == PRESENT_HEAL:
         return 0
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
-        return _fixed_damage(tables, s, attacker, move)
+        return _fixed_damage(tables, s, attacker, move, wonder_guard)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
@@ -1055,6 +1128,9 @@ def _move_damage(
     if _item_effect(tables, atk) == ItemId.LIFE_ORB:
         damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     damage = _variance(damage, roll)
+    kind = _move_type(tables, s, attacker, move)
+    if wonder_guard and _wonder_guarded(tables, s, attacker, defender, move, kind):
+        return 0  # lib.c:2649-2654: MOVE_STATUS_WONDER_GUARD, no damage (G-18)
     return _apply_type_chart(tables, s, attacker, defender, move, damage)
 
 
@@ -1195,6 +1271,7 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     condition (battle_controller.c:1482-1486)."""
     for side, slot in turn.fainted:
         mon = s.sides[side].party[slot]
+        turn.battle_status[(side, slot)] = mon.status
         mon.status = Status.NONE
         mon.status_counter = 0
     if s.over:
@@ -1645,11 +1722,19 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
         return False
     effect = _item_effect(tables, mon)
     power = _t(tables, "item_param", mon.item, 0)
+    disliked = False
     if effect in (ItemId.ORAN_BERRY, ItemId.BERRY_JUICE, ItemId.SITRUS_BERRY):
         if mon.hp > mon.max_hp // 2:
             return False
         flat = effect != ItemId.SITRUS_BERRY
         _gain_hp(s, side, power if flat else _divide(mon.max_hp * power, 100))
+    elif effect == ItemId.FLAVOR_BERRY:
+        # HOLD_EFFECT_HP_RESTORE_SPICY .. _SOUR (lib.c:4698-4771): Divide(maxHP, param) at
+        # curHP <= maxHP / 2, no Gluttony (G-4).
+        if mon.hp > mon.max_hp // 2:
+            return False
+        _gain_hp(s, side, _divide(mon.max_hp, power))
+        disliked = _dislikes(tables, mon, mon.item)
     elif effect == ItemId.PINCH_BERRY:
         # HOLD_EFFECT_PINCH_*_UP (lib.c:4773-4836): curHP <= maxHP / param (Gluttony halves it).
         if mon.hp > mon.max_hp // _pinch_divisor(tables, mon):
@@ -1662,7 +1747,31 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
         mon.item_consumed = mon.item
         mon.item = 0
         _forget_item(s, side)
+    if disliked:  # subscript_held_item_dislike_flavor.s:13, after the heal's PLUCK_CHECK
+        _berry_confuse(turn, s, side)
     return True
+
+
+def _dislikes(tables, mon: RefPokemon, item: int) -> bool:
+    """``item`` is a flavor berry whose flavor (``item_param[item, 1]``) ``mon``'s nature
+    dislikes (``Pokemon_GetFlavorAffinityOf == -1``, src/pokemon.c:4123-4127), G-4."""
+    if _t(tables, "item_effect", item) != ItemId.FLAVOR_BERRY:
+        return False
+    return NATURE_DISLIKED_FLAVOR[mon.nature] == _t(tables, "item_param", item, 1)
+
+
+def _berry_confuse(turn: _Turn, s: RefState, side: int) -> None:
+    """subscript_confuse.s with ``SIDE_EFFECT_TYPE_HELD_ITEM`` on ``side``'s battler: its own
+    Own Tempo (:6), a confusion already (:7) or Safeguard (:8) end it with no draw; else
+    ``Random 3, 2`` (:34), kept as ``CONFUSION_PENDING`` until the battler's confusion check
+    draws it (``Outcome.berry_confusion[side]``, ``_status_disrupted``), G-5."""
+    sd = s.sides[side]
+    mon = _active(s, side)
+    if _decomp_ability(turn.tables, mon) == ITEM_ABILITY_IDS["Own Tempo"]:
+        return
+    if sd.confusion or sd.safeguard:
+        return
+    sd.confusion = CONFUSION_PENDING
 
 
 def _held_item_hp(turn: _Turn, s: RefState, side: int) -> None:
@@ -1689,6 +1798,21 @@ def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -
 def _sash_at_full_hp(turn: _Turn, s: RefState, side: int) -> bool:
     mon = _active(s, side)
     return _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
+
+
+def _band_rolls(turn: _Turn, s: RefState, side: int, roll: int) -> bool:
+    """A Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) on ``side``'s active Pokemon whose roll
+    ``RandNext() % 100 < param`` passed (``roll``, an ``Outcome.focus_band`` /
+    ``future_band`` element): bcp.c:3387, script.c:9109-9112, ruling G-1."""
+    return _item_effect(turn.tables, _active(s, side)) == ItemId.FOCUS_BAND and bool(roll)
+
+
+def _hung_on(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> None:
+    """subscript_move_followup_message.s:12-16 (future_sight_damage.s:39-44): an endured hit's
+    message names the item of ``side``'s battler (``_reveal_item``) before a sash goes."""
+    mon = _active(s, side)
+    if armed and damage > 0 and mon.hp - damage <= 0:
+        _reveal_item(s, side)
 
 
 def _resist_berry(
@@ -1790,6 +1914,8 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                     and _can_have_status(tables, s, side, status)
                 ):
                     mon.status, mon.status_counter = status, 0
+                    # BtlCmd_CheckToxicSpikes's sideEffectMon (script.c:7640-7641).
+                    _status_landed(turn, side, status)
         if sd.spikes and mon.hp:
             _lose_hp(turn, s, side, _divide(mon.max_hp, (5 - sd.spikes) * 2))
     _stealth_rock_damage(turn, s, side)
@@ -1872,6 +1998,23 @@ def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
             s.ai_ability_known[s.sides[0].active] = 1
 
 
+def _download(s: RefState, side: int) -> None:
+    """``SWITCH_IN_CHECK_STATE_DOWNLOAD`` (lib.c:3814-3851, G-21) for ``side``'s battler: with
+    HP and Download, the foe's Defense and Sp. Def through their stages (a foe with HP and no
+    substitute; else 0); a nonzero sum raises Sp. Atk when Defense >= Sp. Def, else Attack, by 1
+    (``BtlCmd_ChangeStatStage``: +6 stays). Its message is built in C: no AI reveal."""
+    mon = _active(s, side)
+    if not mon.hp or mon.ability != AbilityId.DOWNLOAD:
+        return
+    foe, foe_sd = _active(s, 1 - side), s.sides[1 - side]
+    sum_def = sum_spd = 0
+    if foe.hp and not foe_sd.substitute_hp:
+        sum_def = _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
+        sum_spd = _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
+    if sum_def + sum_spd:
+        _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
+
+
 def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     """``BattleSystem_TriggerEffectOnSwitch`` (lib.c:3649) after ``side``'s battler
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
@@ -1918,11 +2061,18 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         and mon.ability not in blockers
     ):
         _change_stage(s, side, Stat.ATK, -1)
+    # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3814-3851, G-21): the newcomer, then a battler that
+    # just traced Download.
+    _download(s, side)
+    if traced:
+        _download(s, other)
     # SWITCH_IN_CHECK_STATE_MOLD_BREAKER (lib.c:4075): subscript_mold_breaker.s tags the
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
-    if side == 0 and mon.hp and mon.ability == AbilityId.MOLD_BREAKER:
+    # SWITCH_IN_CHECK_STATE_PRESSURE (lib.c:4096-4110) likewise: subscript_pressure.s (G-10).
+    announced = (AbilityId.MOLD_BREAKER, AbilityId.PRESSURE)
+    if side == 0 and mon.hp and mon.ability in announced:
         s.ai_ability_known[s.sides[0].active] = 1
-    if traced and other == 0 and foe.ability == AbilityId.MOLD_BREAKER:
+    if traced and other == 0 and foe.ability in announced:
         s.ai_ability_known[s.sides[0].active] = 1
     _recover_status_by_ability(s, side)
     if traced:
@@ -2035,12 +2185,14 @@ def _protected(turn: _Turn, s: RefState, side: int, move: int, unleash: bool) ->
     )
 
 
-def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
-    """No status yet and no immunity: ``subscript_burn.s`` (Fire), ``subscript_poison.s``
-    (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun without a weather lock: the
-    ``CheckIgnoreWeather`` at :6 skips the sun check at :7, battle_script.c:9195-9206)."""
+def _can_have_status(tables, s: RefState, side: int, status: int, current=None) -> bool:
+    """No status yet (``current``, default the active's: a fainted receiver's kept
+    BattleMon.status, ``_synchronize``) and no immunity: ``subscript_burn.s`` (Fire),
+    ``subscript_poison.s`` (Poison, Steel), ``subscript_freeze.s`` (Ice, or sun without a
+    weather lock: the ``CheckIgnoreWeather`` at :6 skips the sun check at :7,
+    battle_script.c:9195-9206)."""
     mon = _active(s, side)
-    if mon.status != Status.NONE:
+    if (mon.status if current is None else current) != Status.NONE:
         return False
     if status == Status.BURN and Type.FIRE in mon.types:
         return False
@@ -2051,6 +2203,74 @@ def _can_have_status(tables, s: RefState, side: int, status: int) -> bool:
     sun = s.weather == Weather.SUN and not _weather_suppressed(tables, s)
     frozen_out = Type.ICE in mon.types or sun
     return not (status == Status.FREEZE and frozen_out)
+
+
+_SYNC_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+
+
+def _status_landed(turn: _Turn, side: int, status: int) -> None:
+    """A status subscript ended with the status on ``side``'s battler, its sideEffectMon: a
+    poison, bad poison, burn or paralysis toggles ``SYSCTL_TRY_SYNCHRONIZE_STATUS``
+    (subscript_poison.s:63-69, _badly_poison.s:83-88, _burn.s:79-84, _paralyze.s:50-56).
+    The sideEffectMon is tracked from these landings and King's Rock (ruling G-13)."""
+    if status in _SYNC_STATUSES:
+        turn.sync_flag = not turn.sync_flag
+        turn.sync_mon = side
+
+
+def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None:
+    """``BattleSystem_SynchronizeStatus`` (battle_lib.c:4493-4534) at AfterMoveEffects'
+    Synchronize step (bcp.c:3665-3670): with the flag set, a Synchronize defender that is the
+    sideEffectMon passes its status to the attacker, else a Synchronize attacker that is passes
+    it to the defender; sideEffectMon becomes the receiver. Any poison passes as poison
+    (subscript_poison.s), a burn as a burn, a paralysis as a paralysis; sleep and freeze pass
+    nothing. As an ABILITY side effect: the receiver's own Immunity / Water Veil / Limber,
+    Leaf Guard in sun, a status, a Poison / Steel or Fire type stop it silently; no substitute
+    or Safeguard test, no HP test (a fainted receiver's status is cleared at its faint). The
+    message tags the passer's Synchronize (rulings G-12, G-13)."""
+    if not turn.sync_flag:
+        return
+    passer = receiver = None
+    if _active(s, defender).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == defender:
+        passer, receiver = defender, attacker
+    elif _active(s, attacker).ability == AbilityId.SYNCHRONIZE and turn.sync_mon == attacker:
+        passer, receiver = attacker, defender
+    if passer is None:
+        return
+    turn.sync_mon = receiver
+    # The passer's BattleMon.status, which its faint did not clear (G-24).
+    held = _active(s, passer).status
+    if _active(s, passer).hp == 0:
+        held = turn.battle_status.get((passer, s.sides[passer].active), held)
+    if held in (Status.POISON, Status.TOXIC):
+        status = Status.POISON
+    elif held == Status.BURN:
+        status = Status.BURN
+    elif held == Status.PARALYSIS:
+        status = Status.PARALYSIS
+    else:
+        return
+    mon = _active(s, receiver)
+    own = _decomp_ability(turn.tables, mon)
+    if status == Status.POISON and own == ITEM_ABILITY_IDS["Immunity"]:
+        return
+    if status == Status.BURN and own == ITEM_ABILITY_IDS["Water Veil"]:
+        return
+    if status == Status.PARALYSIS and mon.ability == AbilityId.LIMBER:
+        return
+    if mon.ability == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
+        return
+    # The receiver's BattleMon.status, which a faint keeps, too (G-31).
+    current = mon.status
+    if mon.hp == 0:
+        current = turn.battle_status.get((receiver, s.sides[receiver].active), current)
+    if not _can_have_status(turn.tables, s, receiver, status, current):
+        return
+    if mon.hp:
+        mon.status, mon.status_counter = status, 0
+    turn.sync_flag = not turn.sync_flag
+    if passer == 0:
+        s.ai_ability_known[s.sides[0].active] = 1
 
 
 def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
@@ -2069,6 +2289,18 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # subscript_paralyze.s:5/_170: an ignorable Limber stops the paralysis first; its
     # "prevents paralysis" message (TAG_NICKNAME_ABILITY) is shown for a direct effect only.
     if mon.hp and status == Status.PARALYSIS and _ignorable(s, side, target) == AbilityId.LIMBER:
+        if target == 0 and direct:
+            s.ai_ability_known[s.sides[0].active] = 1
+        return
+    # Leaf Guard in sun (ignorable; subscript_fall_asleep.s:23-25, _poison.s:14-16,
+    # _badly_poison.s:32-34, _burn.s:21-23, _paralyze.s:6-8; none in subscript_freeze.s): a
+    # direct effect prints its message, tagging the ability (G-14).
+    if (
+        mon.hp
+        and status != Status.FREEZE
+        and _ignorable(s, side, target) == AbilityId.LEAF_GUARD
+        and _sunny(turn.tables, s)
+    ):
         if target == 0 and direct:
             s.ai_ability_known[s.sides[0].active] = 1
         return
@@ -2093,6 +2325,7 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     if mon.hp and _can_have_status(turn.tables, s, target, status):
         mon.status = status
         mon.status_counter = turn.outcome.duration[side] if status == Status.SLEEP else 0
+        _status_landed(turn, target, status)
         # subscript_fall_asleep.s:_176 and subscript_freeze.s:_073 unlock the new sleeper
         # or ice cube.
         if status in (Status.SLEEP, Status.FREEZE):
@@ -2164,6 +2397,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         heal = power
     elif effect == ItemId.SITRUS_BERRY:
         heal = _divide(user.max_hp * power, 100)
+    elif effect == ItemId.FLAVOR_BERRY:
+        heal = _divide(user.max_hp, power)  # PLUCK_EFFECT_HP_RESTORE_SPICY .. (lib.c:5678-5751)
     # The resist berries, Custap and the berries with no hold effect: PLUCK_EFFECT_NONE
     # berries, eaten with no effect (Item_IsBerry, :5833). The status berries cure, a stat
     # pinch berry raises the eater's stat (PLUCK_EFFECT_*_UP, lib.c:5753-5796; no HP test).
@@ -2191,6 +2426,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         did = user.hp != user.max_hp
         if did:
             _gain_hp(s, side, heal)
+            if _dislikes(tables, user, item):  # subscript_held_item_dislike_flavor.s:13
+                _berry_confuse(turn, s, side)
     elif effect == ItemId.PINCH_BERRY:
         did = _raise_pinch_stat(turn, s, side, item)
     else:
@@ -2685,8 +2922,9 @@ def _captivate_fails(tables, s: RefState, side: int, target: int) -> tuple[bool,
     """effect_script_0265.s:5-9 (B12-8): ``(fails, by_ability)``: the target's ignorable
     Oblivious, a genderless battler or the same gender (MOVE_STATUS_NO_MORE_WORK)."""
     mold = _active(s, side).ability == AbilityId.MOLD_BREAKER
-    by_ability = not mold and _decomp_ability(tables, _active(s, target)) == (
-        STAT_MOVE_ABILITY_IDS["Oblivious"]
+    by_ability = (
+        not mold
+        and _decomp_ability(tables, _active(s, target)) == (STAT_MOVE_ABILITY_IDS["Oblivious"])
     )
     mine, theirs = _active(s, side).gender, _active(s, target).gender
     fails = by_ability or GENDER_NONE in (mine, theirs) or mine == theirs
@@ -2796,9 +3034,13 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         return
     if status == Status.PARALYSIS and attacker.ability == AbilityId.LIMBER:
         return
+    # The attacker's own Leaf Guard in sun, silent for an ABILITY side effect (G-14).
+    if attacker.ability == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
+        return
     if turn.outcome.contact_proc[target][hit] and _can_have_status(turn.tables, s, side, status):
         attacker.status = status
         attacker.status_counter = 0
+        _status_landed(turn, side, status)  # TriggerAbilityOnHit: sideEffectMon = attacker
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
         # (BattleAI_SetAbility, script.c:11806).
         if target == 0:
@@ -2929,6 +3171,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         immune = _matchup_x40(
             tables, kind, target_mon.types, _identified(s, side, target)
         ) == 0 or _levitated(tables, s, side, target, kind)
+        # Wonder Guard flags them too (power 1; ruling G-18).
+        immune = immune or _wonder_guarded(tables, s, side, target, move, kind)
         damage = 0 if immune else turn.counter_damage
     else:
         damage = _move_damage(
@@ -2967,10 +3211,14 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
         if damage > 0 and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
+        # bcp.c:3387-3389 (G-1): a Focus Band's roll on every such UpdateHP, lethal or not.
+        if damage > 0 and _band_rolls(turn, s, target, o.focus_band[side][hit]):
+            turn.focus_armed = True
         # bcp.c:3381-3384, before the endure checks: False Swipe leaves 1 HP.
         swipe = _t(tables, "move_effect", move) == EffectId.FALSE_SWIPE
         if swipe and damage > 0 and damage >= target_mon.hp:
             damage = target_mon.hp - 1
+        _hung_on(turn, s, target, damage, turn.focus_armed)
         taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
         if update_hp:  # shellBellDamageDealt (bcp.c:3427-3431): capped at the target's HP
             turn.shell_dealt += min(taken, target_mon.hp)
@@ -3031,13 +3279,18 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # hit that damaged a living target, RandNext() % 100 < param (outcome.flinch_item), a
     # MOVE_FLAG_TRIGGERS_KINGS_ROCK move; subscript_flinch_mon.s: a target that has not moved,
     # no Inner Focus as the attacker sees it.
-    if (
+    rock = (
         update_hp
         and taken
         and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and _active(s, target).hp > 0
+    )
+    if rock:
+        turn.sync_mon = target  # bcp.c:4643, before subscript_flinch_mon.s's tests (G-13)
+    if (
+        rock
         and not target_moved
         and _ignorable(s, side, target) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
         and not _shielded(turn, s, target)  # subscript_flinch_mon.s:6
@@ -3096,6 +3349,9 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         before = turn.done[foe]
         _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
+            # The Synchronize flag goes on: a user that falls to it ends the script at :55,
+            # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
+            # BattleMon.status (G-24).
             turn.pursued = foe + 1
             turn.pick_mul = PURSUIT_POWER_MUL
             _faint_check(turn, s)
@@ -3107,12 +3363,17 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         turn.pivot_dealt = dealt
         raise _Pause
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
-    if (
+    rock = (
         turn.damaged
         and _item_effect(tables, user) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
+    )
+    if rock:
+        turn.sync_mon = foe  # bcp.c:4643 (G-13)
+    if (
+        rock
         and not target_moved
         and not turn.done[foe]
         and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
@@ -3192,6 +3453,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
     # above 0, RandNext() & 1 makes the battler hurt itself (CALC_SELF_HIT, a Normal
     # physical hit on itself with no side or field conditions, then the variance).
+    if sd.confusion == CONFUSION_PENDING:  # a flavor berry's counter, drawn at this read (G-5)
+        sd.confusion = o.berry_confusion[side]
     if sd.confusion:
         sd.confusion -= 1
         if sd.confusion and o.confusion_hit[side]:
@@ -3210,6 +3473,8 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             # subscript_hurt_self_in_confusion.s: CheckHoldOnWith1HP on the user
             # (script.c:9098-9124), then the followup message removes the sash.
             armed = _sash_at_full_hp(turn, s, side)
+            armed = armed or _band_rolls(turn, s, side, o.focus_band[side][0])  # G-1
+            _hung_on(turn, s, side, damage, armed)
             taken = _focus_sash(turn, s, side, damage, armed)
             # Its UPDATE_HP runs the resist-berry check on the user: moveType is Normal and
             # moveStatusFlags 0 since BattleContext_Init (lib.c:1981-1982), so calcTemp is the
@@ -3323,6 +3588,20 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
     return rate
 
 
+def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) -> int:
+    """BattleControllerPlayer_DecrementPP's ``ppCost`` (bcp.c:2236-2270) for ``moveTemp``
+    ``move`` of ``side`` with the fight command's ``defender`` (None: BATTLER_NONE).
+    ``skipPressureCheck`` is only set by script commands after it (G-8)."""
+    if defender is None:
+        return 1
+    foe = _active(s, 1 - side)
+    if move == MOVE_IMPRISON or _move_target(tables, move) in PRESSURE_COUNTED:
+        return 1 + int(foe.hp > 0 and foe.ability == AbilityId.PRESSURE)
+    if _move_target(tables, move) in PRESSURE_NONE:
+        return 1
+    return 1 + int(defender != side and _active(s, defender).ability == AbilityId.PRESSURE)
+
+
 def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggling: bool,
            locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -3331,6 +3610,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
+    # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
+    # action's end (G-13).
+    turn.sync_flag, turn.sync_mon = False, -1
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
     target_range = _move_target(tables, move)
@@ -3360,14 +3642,21 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
     record = move if foe_defender else None
     turn.attack_message = True
-    # BattleControllerPlayer_DecrementPP (bcp.c:2235): one PP from the move's slot;
+    # BattleControllerPlayer_DecrementPP (bcp.c:2235): PP from the move's slot;
     # none left fails the move (MOVE_STATUS_NO_PP). Struggle spends none, nor does a
-    # battler that was locked at command selection (ppDecremented, bcp.c:335).
+    # battler that was locked at command selection (ppDecremented, bcp.c:335). The cost is
+    # 1 plus Pressure's (bcp.c:2236-2270), capped at the PP left (:2276-2280), ruling G-8.
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
             return record
-        mon.pp[slot] -= 1
+        if foe_defender:
+            defender = 1 - side
+        elif target_range in SELF_DEFENDER or _curse_on_user(tables, move, _ghost(s, side)):
+            defender = side
+        else:
+            defender = None  # BATTLER_NONE
+        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
     # living foe for a move aimed at it. Nature Power's defender is its user
     # (RANGE_SINGLE_TARGET_SPECIAL, lib.c:1665-1669): it never fails here.
@@ -3476,8 +3765,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if (
         _t(tables, "move_power", move) != 0
         and not _targets_user(tables, move, _ghost(s, side))
-        # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7).
+        # Future Sight's script sets SYSCTL_IGNORE_IMMUNITIES (effect_script_0148.s:7), and so
+        # does Present's heal path (effect_script_0122.s:13), ruling G-30.
         and _t(tables, "move_effect", move) != EffectId.FUTURE_SIGHT
+        and not _present_heals(tables, move, o, side)
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
@@ -3536,6 +3827,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             _unlock(s.sides[side])
             return None if special_counter else record
         turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
+        # BattleSystem_DecPPForPressure on the new defender, the last attacker (script.c:4646,
+        # :4699, :7180; lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an
+        # invoker's when it called the move), while it has PP left, ruling G-9.
+        if _active(s, attacker).ability == AbilityId.PRESSURE and mon.pp[action] > 0:
+            mon.pp[action] -= 1
         if special_counter:
             record = move
     snore = effect == EffectId.FLINCH and _t(tables, "move_param", move, 2) == SNORE_PARAM
@@ -3601,6 +3897,19 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             _levitated(tables, s, side, 1 - side, kind)
         ):
             s.ai_ability_known[s.sides[0].active] = 1
+    # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, hit, miss or Protect alike): Wonder
+    # Guard's MOVE_STATUS_WONDER_GUARD (G-18). subscript_missed.s:107-110 tags the defender's
+    # ability unless it was protected first (:18); a miss reaches it (G-20).
+    guarded = (
+        not _targets_user(tables, move, _ghost(s, side))
+        and effect != EffectId.FUTURE_SIGHT  # SYSCTL_IGNORE_IMMUNITIES
+        and not _present_heals(tables, move, o, side)  # likewise (G-30)
+        and _wonder_guarded(tables, s, side, 1 - side, move, _move_type(tables, s, side, move))
+    )
+    # subscript_missed.s:11 sends a semi-invulnerable miss (B10-12) to the miss message (:157)
+    # before the Wonder Guard one (:107), ruling G-28.
+    if guarded and 1 - side == 0 and not semi_miss and not _protected(turn, s, side, move, unleash):
+        s.ai_ability_known[s.sides[0].active] = 1
     roll = o.hit[side][0]
     missed = (
         _t(tables, "move_accuracy", move) != 0
@@ -3609,8 +3918,24 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
+    # A Wonder Guard block ends in subscript_missed.s too (bcp.c:3324-3327), its hits dealing
+    # nothing; ``battleCtx->damage`` keeps the chart's value for the crash (G-19). A
+    # semi-invulnerable miss ends there as well (B10-12), and crashes (subscript_missed.s:189-191).
     protected = _protected(turn, s, side, move, unleash)
-    if missed or semi_miss or protected:
+    blocked = missed or semi_miss or protected
+    crash = effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD
+    if (blocked or guarded) and crash:
+        # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
+        # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
+        # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
+        would = _move_damage(
+            tables, s, side, move,
+            _crits(tables, s, side, move, o.crit[side][0]) and not _armored(s, side, 1 - side),
+            o.roll[side][0], wonder_guard=False,
+        )  # fmt: skip
+        cap = _divide(_active(s, 1 - side).max_hp, 2)
+        _lose_hp(turn, s, side, min(_divide(would, 2), cap))
+    if blocked:
         # Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript still runs
         # on MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test the
         # blocking abilities before its miss test (:21) and print "made it ineffective" with
@@ -3639,17 +3964,6 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         ):
             s.ai_ability_known[s.sides[0].active] = 1
         _unlock(s.sides[side])  # subscript_missed.s
-        if effect == EffectId.CRASH and mon.ability != AbilityId.MAGIC_GUARD:
-            # subscript_missed.s:98 -> subscript_crash_on_miss.s (SYSCTL_CRASH_DAMAGE from
-            # effect_script_0045.s): min(Divide(damage, 2), Divide(defender maxHP, 2)) of the
-            # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
-            would = _move_damage(
-                tables, s, side, move,
-                _crits(tables, s, side, move, o.crit[side][0]) and not _armored(s, side, 1 - side),
-                o.roll[side][0],
-            )  # fmt: skip
-            cap = _divide(_active(s, 1 - side).max_hp, 2)
-            _lose_hp(turn, s, side, min(_divide(would, 2), cap))
         # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
         return move if unleash else record
     # effect_script_0111.s (Protect, Detect) -> subscript_protect.s -> BtlCmd_TryProtection
@@ -3761,9 +4075,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (effect == EffectId.WEATHER_HEAL and user.hp == user.max_hp)
         full = full or (effect == EffectId.WISH and bool(s.sides[side].wish_timer))
         full = full or (effect == EffectId.REFRESH and user.status not in REFRESH_STATUSES)
-        full = full or (
-            effect == EffectId.PSYCHO_SHIFT and _psycho_shift_fails(s, side, 1 - side)
-        )
+        full = full or (effect == EffectId.PSYCHO_SHIFT and _psycho_shift_fails(s, side, 1 - side))
         full = full or (
             effect == EffectId.ACUPRESSURE
             and (bool(s.sides[side].substitute_hp) or all(own[x] >= 6 for x in ACUPRESSURE_STATS))
@@ -3820,7 +4132,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         )
         full = full or (
             (
-                (effect == EffectId.STATUS_FOE and _t(tables, "move_param", move, 0) == Status.SLEEP)
+                (
+                    effect == EffectId.STATUS_FOE
+                    and _t(tables, "move_param", move, 0) == Status.SLEEP
+                )
                 or shift_sleep
             )
             and foe.hp > 0
@@ -3830,8 +4145,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and _uproar_on(s)
         )
         dealt, _ = _hit(turn, s, side, move, hit, struggling, target_moved)
-        if full:
+        # A Wonder Guard block's subscript_missed.s skips AfterMoveEffects (bcp.c:3324-3327).
+        if full or guarded:
             continue
+        # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670), before the item checks; a
+        # Roar's ran at its drag (``_roar``). The defender is the user for a self-defender move.
+        if effect != EffectId.ROAR:
+            own = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(
+                tables, move, _ghost(s, side)
+            )
+            _synchronize(turn, s, side, side if own else 1 - side)
         # BattleControllerPlayer_AfterMoveEffects (bcp.c:3638), after every hit:
         # AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp.c:3684), then _DEFENDER_ITEM (:3691), then
         # _TRIGGER_ITEMS_ON_HIT (:3698, the Sticky Barb once the defender took damage this
@@ -3903,6 +4226,8 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     turn.dragged[foe] = slot + 1
     _send_out_exp(s, foe)  # PokemonSendOut BTLSCR_DEFENDER (:22)
     _entry_hazards(turn, s, foe)  # BATTLE_SUBSCRIPT_HAZARDS_CHECK (:31)
+    # AfterMoveEffects: its Synchronize step (bcp.c:3665) before the switch-in effects (:3672).
+    _synchronize(turn, s, side, foe)
     _switch_in_effects(turn, s, foe)
     turn.done[foe] = True
     return True
@@ -3931,6 +4256,10 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if mon.pp[slot] == 0:
         return
     mon.pp[slot] -= 1
+    # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
+    # (ruling G-9).
+    if _active(s, side).ability == AbilityId.PRESSURE and mon.pp[slot] > 0:
+        mon.pp[slot] -= 1
     turn.done[pursuer] = True
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
     # choiceLockedMove = Pursuit.
@@ -3938,6 +4267,11 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if _holds_choice(tables, s, pursuer):
         s.sides[pursuer].choice_lock = move
     o = turn.outcome
+    # subscript_pursuit.s:11, :17, :154: a Wonder Guard block goes to subscript_missed.s, whose
+    # :107-110 tags the switcher's ability (G-20); the hit deals nothing (_move_damage).
+    kind = _move_type(tables, s, pursuer, move)
+    if side == 0 and _wonder_guarded(tables, s, pursuer, side, move, kind):
+        s.ai_ability_known[s.sides[0].active] = 1
     crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _armored(s, pursuer, side)
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
@@ -3951,6 +4285,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         return
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
+    armed = armed or _band_rolls(turn, s, side, o.focus_band[pursuer][0])  # G-1
+    _hung_on(turn, s, side, damage, armed)
     taken = _focus_sash(turn, s, side, damage, armed)
     # Its UPDATE_HP runs the resist-berry check on the target (subscript_update_hp.s:9).
     if damage > 0 and _hit_resist_berry(turn, s, pursuer, move):
@@ -4224,10 +4560,14 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             # no flag; then :92 (an endured first hit still removes the sash).
             sd.substitute_hp = max(sd.substitute_hp - damage, 0)
         else:
-            if sash and mon.hp == mon.max_hp and mon.hp - damage <= 0:
+            # CheckHoldOnWith1HP (:28): a full-HP sash, or a Focus Band's roll (G-1).
+            band = _band_rolls(turn, s, d, o.future_band[d])
+            if ((sash and mon.hp == mon.max_hp) or band) and mon.hp - damage <= 0:
                 damage = mon.hp - 1
                 flags.add("endured")
             _lose_hp(turn, s, d, damage)
+        if "endured" in flags:
+            _reveal_item(s, d)  # :44 tags msgBattlerTemp's item (bcp.c:1776)
         if "endured" in flags and sash:
             mon.item_consumed, mon.item = mon.item, 0
             _forget_item(s, d)
@@ -4966,17 +5306,25 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
     holder = _active(s, foe)
-    if (
+    rock = (
         damaged
         and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
         and o.flinch_item[side][0]
         and _t(tables, "move_flags", used) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
+    )
+    if rock:
+        turn.sync_mon = foe  # bcp.c:4643 (G-13)
+    if (
+        rock
         and position == 0
         and _ignorable(s, side, foe) not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST)
     ):
         s.sides[foe].flinched = 1
-    # AfterMoveEffects (bcp.c:3638): the switch-in effects, the item checks, the thaw.
+    # AfterMoveEffects (bcp.c:3638): Synchronize (the flag is the list's Toxic Spikes poison:
+    # subscript_attack_then_switch_out.s:69 cleared it; a Baton Pass's defender is the user),
+    # the switch-in effects, the item checks, the thaw.
+    _synchronize(turn, s, side, side if _move_target(tables, used) in SELF_DEFENDER else foe)
     _switch_in_effects(turn, s, side)
     for battler in (side, foe):
         _held_item(turn, s, battler)
@@ -5030,11 +5378,12 @@ def _keep_qc(tables, s: RefState, qc: list[int]) -> None:
         sd.qc_roll = int(bool(value)) if kept else 0
 
 
-def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
+def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True) -> RefState:
     """A faint replacement (``engine.step.replace``'s contract): ``TurnEnd`` ->
     ``ReplaceFainted`` (bcp.c:1848) -> ``subscript_show_party_list.s`` sends the
     Pokemon in and runs the hazards and a faint check (:22-24); the battle-over check
-    (bcp.c:1847), then ``ShowBattleMon`` (bcp.c:256) runs the switch-in effects."""
+    (bcp.c:1847), then ``ShowBattleMon`` (bcp.c:256) runs the switch-in effects. Without
+    ``effects`` they wait (``entry_pending``, ruling G-32) for a newcomer with HP left."""
     s = copy.deepcopy(state)
     # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
     # turn: the decomp's totalTurns + 1 is s.turn here.
@@ -5049,8 +5398,9 @@ def ref_replace(tables, state: RefState, side: int, slot: int) -> RefState:
     # leaves inside the opponent's replacement loop is refused (window (c), design §3.3).
     if _pay_exp(turn, s) and side == 1 and not s.over:
         s.exp_refused = 2
-    if not s.over:
+    if not s.over and effects:
         _switch_in_effects(turn, s, side)
+    s.entry_pending[side] = int(not effects and not s.over and _active(s, side).hp > 0)
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(

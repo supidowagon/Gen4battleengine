@@ -42,7 +42,8 @@ lead's Quick Claw on turn 1 (``BattleState.qc_roll``, ``step.sample_root``), is 
 node. Stage A draws it per playout at its root (``stage_a.rank_actions``, and
 ``leaves.evaluate_leaves(root=True)`` for the prep screen) from ``fold_in(key, ROOT_FOLD)``,
 so the playout's own key stream is unchanged; a state below a root carries the value
-``step`` stored.
+``step`` stored. A weather war a double KO's replacements leave open (``BattleState.war_swaps``,
+ruling G-26) is settled at the next turn's start, before its decisions (``settle_war``).
 
 The trainer AI's policy (``nuzline.ai.layout``): ``tables`` are traced here, so the layout
 cannot be read from them. Every function that runs the AI takes it as the static
@@ -84,8 +85,15 @@ from nuzline.engine.actions import (
     legal_replacements,
 )
 from nuzline.engine.damage import damage_table
-from nuzline.engine.hooks import intimidate
-from nuzline.engine.ids import AbilityId
+from nuzline.engine.hooks import (
+    download,
+    hold_war,
+    intimidate,
+    order_swaps,
+    show_battle_mon,
+    weather_war,
+)
+from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import action_order, is_switch, used_move
 from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
 from nuzline.engine.state import SLOTS, BattleState
@@ -96,6 +104,7 @@ from nuzline.engine.step import (
     replace,
     replacement_power_mul,
     sample_root,
+    sample_war,
     step,
 )
 from nuzline.search.deaths import over_budget
@@ -116,11 +125,42 @@ __all__ = [
     "replacement_refusal",
     "root_state",
     "send_replacements",
+    "settle_war",
 ]
 
 _I32, _F32 = jnp.int32, jnp.float32
 REFUSED_WON = -1  # PlayoutResult.won of a refused playout
 ROOT_FOLD = 0x0C1A  # fold_in data of a playout key's root draws (root_state)
+WAR_FOLD = 0x0A27  # fold_in data of a turn key's open weather war draw (settle_war)
+
+
+def settle_war(state: BattleState, k_turn) -> BattleState:
+    """``state`` with an open weather war (``BattleState.war_swaps``, left by a double KO's
+    replacements) settled before the turn's decisions read it: ``step.sample_war`` on
+    ``fold_in(k_turn, WAR_FOLD)``, ``k_turn`` being the turn's key, so the turn's own draws are
+    unchanged. The decomp draws its tie at the sort before ``ShowBattleMon``
+    (battle_controller_player.c:251), before command selection (ruling G-26)."""
+    return sample_war(jax.random.fold_in(k_turn, WAR_FOLD), state)
+
+
+def _sort_view(before: BattleState, after: BattleState) -> BattleState:
+    """``after`` (both newcomers entered and their switch-in states run) as
+    ``BattleSystem_SortMonSpeedOrder`` reads it at ``TrainerMessage`` (battle_controller_player.c:
+    251), after the entries and their hazards (subscript_show_party_list.s:22-24) and before
+    ``ShowBattleMon``'s switch-in states: each newcomer's status and held item as it entered
+    (``before``'s: the hazards change neither in a way speed reads, a Toxic Spikes poison
+    included; the held-item and status-cure states may have since), its Speed stage 0 (a pinch
+    berry raises it later) and the weather of the turn's end (``before``'s). Its HP is the
+    hazards' (a Custap Berry's pinch test; no other item of a Custap holder heals)."""
+    sides = jnp.arange(2)
+    mons = after.active
+    return after._replace(
+        status=after.status.at[sides, mons].set(before.status[sides, mons]),
+        item=after.item.at[sides, mons].set(before.item[sides, mons]),
+        stages=after.stages.at[:, Stat.SPE].set(0),
+        weather=before.weather,
+        weather_timer=before.weather_timer,
+    )
 
 
 def root_state(tables: Tables, state: BattleState, key) -> BattleState:
@@ -302,19 +342,73 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     fires once the opponent's side is settled (the two Intimidates touch different
     battlers, so their speed order does not matter). A Trace newcomer that only copies
     Intimidate when the opponent's newcomer enters fires it there (``hooks.on_switch_in``):
-    the deferred one is the newcomer's own Intimidate at its entry."""
+    the deferred one is the newcomer's own Intimidate at its entry.
+
+    Download (``hooks.download``, ``SWITCH_IN_CHECK_STATE_DOWNLOAD``, battle_lib.c:3814-3851,
+    after the Intimidate state and before the held-item state, ruling G-22) likewise: the
+    player newcomer's fires once the opponent's side is settled, reading the opposing newcomer's
+    Defense and Sp. Def at stage 0 (a fresh battler; only its own held-item check, a later
+    state, can have raised them since). Each opposing newcomer's Download, run at its entry,
+    reads the player newcomer's two stats at stage 0 too: their stages are set aside for the
+    opponent's entries (nothing an opposing switch-in does touches them) and put back after.
+
+    Ruling G-32: when the player's newcomer faints on its hazards at a double KO, the decomp's
+    ``TurnEnd`` re-enters ``ReplaceFainted`` for the player (bcp.c:1846-1858) before any
+    ``ShowBattleMon``, so the opposing newcomer, sent in by the same list, runs none of its
+    switch-in states yet (``replace(..., effects=False)``: ``entry_pending``). The player's next
+    pass sends its newcomer in with the list alone; with HP left, the two then run
+    ``ShowBattleMon``'s states together (``hooks.show_battle_mon``: state by state over
+    ``monSpeedOrder``, the weather war ordered as at a double KO, G-26); a newcomer that falls
+    too leaves the opposing one waiting for the next pass."""
     mul = _carried_mul(state)
     opp_needs = needs_replacement(state)[1] == 1
     opp_slot = post_ko_switch_in(tables, state, mul)
     bad = opp_needs & (opp_slot < 0)
-    entered = replace(tables, state, 0, slot)
-    own = entered.ability[0, entered.active[0]] == AbilityId.INTIMIDATE
-    unannounced = (state.hp[1, state.active[1]] == 0) & own
-    both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0))
+    # Ruling G-32: an opposing newcomer an earlier pass sent in while the player's newcomer
+    # fainted on its hazards still waits for ShowBattleMon (``entry_pending``): the player's
+    # newcomer enters with the list alone, and with HP left both run ShowBattleMon's switch-in
+    # states together (``hooks.show_battle_mon``, over the order TrainerMessage sorted).
+    pending = state.entry_pending[1] != 0
+    entered = replace(tables, state, 0, slot, ~pending)
+    meet = pending & (entered.hp[0, entered.active[0]] > 0) & (entered.over == 0)
+    met = show_battle_mon(
+        tables,
+        entered._replace(entry_pending=jnp.zeros_like(entered.entry_pending)),
+        order_swaps(tables, _sort_view(state, entered)),
+        entered.qc_roll,
+    )
+    entered = _select(meet, met, entered)
+    opp_down = state.hp[1, state.active[1]] == 0
+    own = entered.ability[0, entered.active[0]]
+    unannounced = opp_down & (own == AbilityId.INTIMIDATE)
+    download_unannounced = opp_down & (own == AbilityId.DOWNLOAD)
+    kept = entered.stages[0]
+    fresh = entered.stages.at[0, Stat.DEF].set(0).at[0, Stat.SPD].set(0)
+    entered = entered._replace(stages=jnp.where(opp_down, fresh, entered.stages))
+    # A player newcomer down after its hazards at a double KO: the opposing newcomer's
+    # switch-in states wait for the player's next newcomer (G-32).
+    fell = entered.hp[0, entered.active[0]] == 0
+    both = replace(tables, entered, 1, jnp.maximum(opp_slot, 0), ~fell)
     entered = _select((needs_replacement(entered)[1] == 1) & ~bad, both, entered)
     entered = entered._replace(replace_mul=jnp.zeros_like(entered.replace_mul))
     settled, refused = send_replacements(tables, entered, False, mul)
+    put_back = (
+        settled.stages.at[0, Stat.DEF].set(kept[Stat.DEF]).at[0, Stat.SPD].set(kept[Stat.SPD])
+    )
+    settled = settled._replace(stages=jnp.where(opp_down, put_back, settled.stages))
     settled = intimidate(settled, 0, unannounced & (settled.over == 0))
+    settled = download(settled, 0, (1,), download_unannounced & (settled.over == 0), staged=False)
+    # Ruling G-26: two newcomers (the opponent's active was down) with switch-in weather
+    # abilities that set different weathers meet in one weather state, ordered by the sort at
+    # TrainerMessage on this turn's speedRand (qc_roll) and a tie bit: the player's newcomer,
+    # run first here, leaves its weather when the sort put it second (hooks.hold_war; an open
+    # tie waits in war_swaps for settle_war).
+    war = opp_down & weather_war(settled) & (settled.over == 0)
+    swaps = order_swaps(tables, _sort_view(state, settled))
+    settled = hold_war(settled, war, swaps, settled.qc_roll)
+    # A battle that ended leaves nothing waiting (states merge).
+    waiting = jnp.where(settled.over != 0, 0, settled.entry_pending)
+    settled = settled._replace(entry_pending=waiting.astype(settled.entry_pending.dtype))
     return settled, refused | bad
 
 
@@ -527,6 +621,7 @@ def _run(
     def body(carry):
         s, key, turns, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
+        s = settle_war(s, k_turn)  # an open weather war, before the decisions (G-26)
         chosen, q_refused = _policy(tables, s, k_policy, layout)
         # A refused distribution refuses the turn whenever the player's choice uses it.
         q_refused = q_refused & ~_fixed(turns, first_action)
@@ -694,6 +789,7 @@ def refusal_reason(
         if int(state.over) != 0:
             return None
         key, k_policy, k_turn = jax.random.split(key, 3)
+        state = settle_war(state, k_turn)
         chosen, q_refused = _policy_jit(tables, state, k_policy, layout)
         q_refused = bool(q_refused) and not bool(_fixed(turns, first))
         player_action = _first_action(turns, first, chosen).astype(_I32)

@@ -162,7 +162,9 @@ def battle_stats(state: BattleState, side, slot) -> jnp.ndarray:
     stats = _i32(state.stats[side, slot])
     on = (state.power_trick[side] != 0) != (state.power_trick_desync[side] != 0)
     swapped = on & (state.active[side] == slot)
-    trick = stats.at[Stat.ATK - 1].set(stats[Stat.DEF - 1]).at[Stat.DEF - 1].set(stats[Stat.ATK - 1])
+    trick = (
+        stats.at[Stat.ATK - 1].set(stats[Stat.DEF - 1]).at[Stat.DEF - 1].set(stats[Stat.ATK - 1])
+    )
     return jnp.where(swapped, trick, stats)
 
 
@@ -193,6 +195,113 @@ def levitated(state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
     return (seen == AbilityId.LEVITATE) & (_i32(move_type) == Type.GROUND)
 
 
+# MoveIsOnDamagingTurn (battle_lib.c:7588-7604): these decomp battle effects
+# (generated/move_battle_effects.txt, line - 1) are on their damaging turn only under
+# SYSCTL_LAST_OF_MULTI_TURN: BIDE, CHARGE_TURN_HIGH_CRIT, CHARGE_TURN_HIGH_CRIT_FLINCH,
+# CHARGE_TURN_DEF_UP, SKIP_CHARGE_TURN_IN_SUN, FLY, DIVE, DIG, BOUNCE and FLINCH_BURN_HIT
+# (Fire Fang, listed by the decomp's bug: :7600, docs/bugs_and_glitches.md).
+MULTI_TURN_BATTLE_EFFECTS = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
+
+
+def on_damaging_turn(tables: Tables, move, last_of_multi_turn=False) -> jnp.ndarray:
+    """``bool``: ``MoveIsOnDamagingTurn`` (battle_lib.c:7588-7604) by the move's decomp battle
+    effect (``tables.move_ai_effect``, ``MOVE_DATA(move).effect``): any effect but
+    ``MULTI_TURN_BATTLE_EFFECTS``, which pass only under ``SYSCTL_LAST_OF_MULTI_TURN``
+    (``last_of_multi_turn``). Only subscript_charge_move_cleanup.s:7 and subscript_bide_end.s:12
+    set that flag, and ``BattleContext_Init`` clears it (``SYSCTL_INIT_P1``, battle_lib.c:2011,
+    after every action and at the turn's end), so Fire Fang (``BATTLE_EFFECT_FLINCH_BURN_HIT``)
+    is never on its damaging turn: in battle and in every trainer-AI read it bypasses Wonder
+    Guard (ruling G-18). Bide never reaches the chart in battle (``RANGE_USER``, bcp.c:2352). A
+    charge move's strike runs subscript_charge_move_cleanup.s before TryMove's chart, so in
+    battle it is on its damaging turn (``charge_strike``); its charge turn skips the chart
+    (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356), and every AI read comes after BattleContext_Init,
+    where it is not (ruling G-27)."""
+    effect = _i32(tables.move_ai_effect[_i32(move)])
+    listed = jnp.isin(effect, jnp.asarray(MULTI_TURN_BATTLE_EFFECTS, _I32))
+    return ~listed | jnp.asarray(last_of_multi_turn, jnp.bool_)
+
+
+def charge_strike(tables: Tables, move) -> jnp.ndarray:
+    """``bool``: in battle, ``SYSCTL_LAST_OF_MULTI_TURN`` holds when ``move``'s type chart runs.
+    Every charge move's script (``MoveFlag.CHARGE``: effect_script_0039.s, _0075.s, _0145.s,
+    _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s) ends each path that does not charge in
+    ``Call BATTLE_SUBSCRIPT_CHARGE_MOVE_CLEANUP`` (the locked second turn, the Power Herb's
+    skip, SolarBeam in sun), which sets the flag (subscript_charge_move_cleanup.s:7), and the
+    script runs before TryMove (bcp.c:3214-3216); the charging path sets
+    SYSCTL_FIRST_OF_MULTI_TURN instead, which skips the chart (bcp.c:2356). No other battle path
+    sets it with a chart to run (Bide's subscript_bide_end.s:12: RANGE_USER), ruling G-27."""
+    return (_i32(tables.move_flags[_i32(move)]) & MoveFlag.CHARGE) != 0
+
+
+def super_effective_flag(first, second, update=True) -> jnp.ndarray:
+    """``bool``: ``MOVE_STATUS_SUPER_EFFECTIVE`` after ``ApplyTypeMultiplier`` (battle_lib.c:
+    7542-7577) meets the chart entries ``first`` then ``second`` (tenths, in chart-row order;
+    10 for no entry) from a clear mask: an immune entry clears both effectiveness bits, a x2
+    entry clears NOT_VERY_EFFECTIVE when set and else sets SUPER_EFFECTIVE, a x0.5 entry the
+    other way round; ``update`` (the move's table power, :2627) gates the x2 / x0.5 updates.
+    The two bits are never set together (each set clears the other), so
+    ``MOVE_STATUS_BASIC_EFFECTIVENESS`` (both) never holds."""
+    se, nve = jnp.bool_(False), jnp.bool_(False)
+    update = jnp.asarray(update, jnp.bool_)
+    for mul in (_i32(first), _i32(second)):
+        halve, double = update & (mul == 5), update & (mul == 20)
+        se_next = jnp.where(halve, False, jnp.where(double, ~nve, se))
+        nve_next = jnp.where(halve, ~se, jnp.where(double, False, nve))
+        se = jnp.where(mul == 0, False, se_next)
+        nve = jnp.where(mul == 0, False, nve_next)
+    return se
+
+
+def chart_walk(tables: Tables, state: BattleState, atk_side, def_side, move_type):
+    """``(first, second)``: the chart entries (tenths, 10 for none) ``ApplyTypeChart``'s walk
+    (battle_lib.c:2611-2646) meets for ``move_type`` against ``def_side``'s active battler, in
+    chart-row order (``tables.type_chart_order``); type 2 is skipped when it equals type 1
+    (:2635). The walk's flags are ``identified``'s (Foresight, the attacker's Scrappy,
+    Ingrain)."""
+    d_types = _i32(state.types[def_side, state.active[def_side]])
+    t1, t2 = d_types[0], d_types[1]
+    seen = identified(state, atk_side, def_side)
+    move_type = _i32(move_type)
+    e1 = chart_entry(tables, move_type, t1, seen)
+    e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, seen), 10)
+    t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
+    return jnp.where(t2_first, e2, e1), jnp.where(t2_first, e1, e2)
+
+
+def wonder_guarded(
+    tables: Tables,
+    state: BattleState,
+    atk_side,
+    move,
+    move_type,
+    def_side,
+    last_of_multi_turn=False,
+) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_WONDER_GUARD`` (battle_lib.c:
+    2649-2654, ruling G-18) for ``move`` (of type ``move_type``) by ``atk_side``'s active battler
+    against ``def_side``'s (the defender battler, passed in by the caller): the defender has Wonder Guard as the
+    attacker sees it (``Battler_IgnorableAbility``: an attacker's Mold Breaker hides it,
+    ``ignorable``), the move is on its damaging turn (``on_damaging_turn`` under
+    ``last_of_multi_turn``: Fire Fang never is, a battle caller passes ``charge_strike``), the walk left ``MOVE_STATUS_SUPER_EFFECTIVE`` clear (``super_effective_flag``; an
+    immune or neutral hit, a resisted one) and the move has table power (a status move never
+    is guarded; the fixed-damage moves have power 1 and are). Struggle returns before
+    (:2573). The flag is part of ``MOVE_STATUS_DID_NOT_HIT`` / ``_IMMUNE``: the move does no
+    damage and runs subscript_missed.s (bcp.c:3324-3327), but ``ApplyTypeChart`` does not zero
+    ``battleCtx->damage`` (the crash of Jump Kick reads it, ``step._use_move``)."""
+    atk_side = _i32(atk_side)
+    def_side = _i32(def_side)
+    move = _i32(move)
+    first, second = chart_walk(tables, state, atk_side, def_side, move_type)
+    power = tables.move_power[move] != 0
+    return (
+        (ignorable(state, atk_side, def_side) == AbilityId.WONDER_GUARD)
+        & on_damaging_turn(tables, move, last_of_multi_turn)
+        & ~super_effective_flag(first, second, power)
+        & power
+        & (move != MOVE_STRUGGLE)
+    )
+
+
 CHART_IDENTIFIED = 1  # ``chart_entry`` flag: skip the Ghost immunities (Foresight, Scrappy)
 CHART_GROUNDED = 2  # ``chart_entry`` flag: skip the Flying immunity (Ingrain)
 
@@ -210,7 +319,9 @@ def identified(state: BattleState, atk_side, def_side) -> jnp.ndarray:
     return seen | (state.ingrain[def_side] != 0).astype(_I32) * CHART_GROUNDED
 
 
-def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.ndarray:
+def trace_copy(
+    tables: Tables, state: BattleState, side, foe, slot=None, target=None
+) -> jnp.ndarray:
     """``bool``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3720-3735) copies ``foe``'s
     active battler's ability to ``side``'s battler (its active one, or party ``slot`` as it
     enters): that battler has HP, holds no Griseous Orb and has Trace (``Battler_Ability``;
@@ -218,9 +329,10 @@ def trace_copy(tables: Tables, state: BattleState, side, foe, slot=None) -> jnp.
     that), and ``ChooseTraceTarget`` (:7750-7775) finds the foe: alive, its
     ``BattleMon.ability`` not Forecast, Trace or Multitype (decomp ids). In singles both of
     the target's slots name the one foe. ``subscript_trace.s`` then writes the foe's ability
-    (``hooks.trace``)."""
+    (``hooks.trace``). ``target``: the foe's party slot to read (default its active one; the
+    one it switches in this turn, ``outcome.pivot_view``)."""
     slot = state.active[side] if slot is None else slot
-    target = state.active[foe]
+    target = state.active[foe] if target is None else target
     foe_decomp = decomp_abilities(tables, state)[foe, target]
     traceable = ~jnp.isin(foe_decomp, jnp.asarray(UNTRACEABLE_ABILITIES, foe_decomp.dtype))
     return (
@@ -456,7 +568,7 @@ def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
 
 
 def fixed_damage(
-    tables: Tables, state: BattleState, atk_side, move
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(is_fixed, damage)``: a ``LEVEL_DAMAGE`` move (Night Shade, Seismic Toss;
     ``effect_script_0087.s``) deals the attacker's level with ``SYSCTL_IGNORE_TYPE_CHECKS``:
@@ -470,7 +582,11 @@ def fixed_damage(
     Bide is fixed too: on its unleash turn (locked with no turns left) it deals
     ``2 * storedDamage`` (``CHECK_STATUS_STATE_BIDE``, battle_controller_player.c:2702); a
     ``RANGE_USER`` move skips the type chart (:2350-2358), so no immunity applies. Any
-    other Bide turn deals 0."""
+    other Bide turn deals 0.
+
+    Wonder Guard (``wonder_guarded``, where ``wonder_guard``) stops them like an immunity: they
+    have table power 1, so ``ApplyTypeChart`` flags any that is not super effective (ruling
+    G-18)."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side
     effect = tables.move_effect[_i32(move)]
@@ -482,6 +598,9 @@ def fixed_damage(
     seen = identified(state, atk_side, def_side)
     immune = effectiveness(tables, kind, d_types, seen) == 0
     immune = immune | levitated(state, atk_side, def_side, kind)
+    immune = immune | (
+        jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind, def_side)
+    )
     unleash = (state.bide_turns[atk_side] == 0) & (state.locked_move[atk_side] != 0)
     stored = jnp.where(unleash, 2 * _i32(state.bide_damage[atk_side]), 0)
     # Super Fang (effect_script_0040.s): Divide(curHP, 2) of the defender under
@@ -529,10 +648,19 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
 # decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
-# Ball, Psywave, Magnitude) are refused (ai.commands.CALC_DAMAGE_MOVES).
+# Ball) are refused (ai.commands.CALC_DAMAGE_MOVES).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
+# The two cases that draw: MOVE_PSYWAVE's damage ``level * (RandNext() % 11 + 5) / 10``
+# (trainer_ai.c:3014-3016) and MOVE_MAGNITUDE's power, ``RandNext() % 100`` bucketed
+# (:3028-3048). Kaizo keeps the ids (Triple Axel on 149, Bulldoze on 222), so its moves there
+# take these cases. ``draw`` below is the draw's class: Psywave's ``RandNext() % 11`` (0-10),
+# Magnitude's bucket (0-6, ``AI_MAGNITUDE_POWER``); ai.outcome.CALC_DRAW_P holds their laws.
+AI_PSYWAVE, AI_MAGNITUDE = 149, 222
+AI_DRAWN_MOVES = (AI_PSYWAVE, AI_MAGNITUDE)
+AI_DRAW_CLASSES = 11  # the most classes one draw has (Psywave's % 11)
+AI_MAGNITUDE_POWER = jnp.array([10, 30, 50, 70, 90, 110, 150], jnp.int32)
 # sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
 # (hectograms) is at least the defender's gives the power, else 120 (trainer_ai.c:3055-3071).
 _WEIGHT_LIMITS = jnp.array([100, 250, 500, 1000, 2000], jnp.int32)
@@ -540,15 +668,17 @@ _WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
 
 
 def ai_case_power(
-    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None
+    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0
 ) -> jnp.ndarray:
     """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
     ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
     ``friendship * 10 / 25`` and Frustration ``(255 - friendship) * 10 / 25``
     (trainer_ai.c:3018-3026; ``battleMons[attacker].friendship``), Low Kick and Grass Knot by
     the defender's weight (:3055-3071; ``battleMons[defender].weight``, its species' Pokedex
-    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``). A
-    computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
+    weight, battle_lib.c:150), Hidden Power its IV power (:2973-2993, ``hidden_power``),
+    Magnitude the power of its draw's bucket (:3028-3048; ``draw`` 0-6, ``AI_MAGNITUDE_POWER``:
+    ``RandNext() % 100`` below 5, 15, 35, 65, 85, 95 gives 10, 30, 50, 70, 90, 110, else 150).
+    A computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
     (default the other side) and ``ivs`` the ``ivs`` argument (default the attacker's own):
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240) passes the player as attacker,
     the player again as defender and the AI attacker's IVs."""
@@ -560,14 +690,16 @@ def ai_case_power(
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
     ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
     hidden = hidden_power(ivs)[1]
+    magnitude = AI_MAGNITUDE_POWER[jnp.clip(_i32(draw), 0, 6)]
     return jnp.select(
         [
             move == AI_RETURN,
             move == AI_FRUSTRATION,
             (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
             move == AI_HIDDEN_POWER,
+            move == AI_MAGNITUDE,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude],
         0,
     )
 
@@ -588,21 +720,26 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
 
 
-def ai_case_fixed(s: BattleState, atk_side, move) -> tuple[jnp.ndarray, jnp.ndarray]:
+def ai_case_fixed(s: BattleState, atk_side, move, draw=0) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(is_fixed, damage)``: ``TrainerAI_CalcDamage``'s fixed damage (trainer_ai.c:
-    3005-3012, :3051-3053): Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the
-    attacker's level. It skips ``CalcMoveDamage`` and goes through the type chart with
-    ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or multiplier, an immunity still 0."""
+    3005-3016, :3051-3053): Dragon Rage 40, Sonic Boom 20, Seismic Toss and Night Shade the
+    attacker's level, Psywave ``level * (draw + 5) / 10`` (``draw`` its ``RandNext() % 11``,
+    0-10; ``battleMons[attacker].level``). A nonzero amount skips ``CalcMoveDamage`` and goes
+    through the type chart with ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or
+    multiplier, an immunity still 0. A 0 (Psywave at level 1 with a draw below 5) is not
+    fixed: ``damage == 0`` sends it to ``CalcMoveDamage`` with power 0, the table's (:3073)."""
     atk_side = _i32(atk_side)
     move = _i32(move)
     level = _i32(s.level[atk_side, s.active[atk_side]])
+    psywave = level * (jnp.clip(_i32(draw), 0, AI_DRAW_CLASSES - 1) + 5) // 10
     damage = jnp.select(
         [
             move == AI_DRAGON_RAGE,
             move == AI_SONIC_BOOM,
             (move == AI_SEISMIC_TOSS) | (move == AI_NIGHT_SHADE),
+            move == AI_PSYWAVE,
         ],
-        [40, 20, level],
+        [40, 20, level, psywave],
         0,
     )
     return damage > 0, damage
@@ -764,6 +901,7 @@ def _pre_random(
     ai: bool = False,
     def_side=None,
     ai_ivs=None,
+    ai_draw=0,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -776,7 +914,8 @@ def _pre_random(
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
     Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
     is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``)."""
+    passes, default the attacker's own (``ai_case_power``), and ``ai_draw`` the class of
+    its ``RandNext`` draw (Magnitude's case)."""
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
@@ -818,7 +957,7 @@ def _pre_random(
         | (effect == EffectId.FLAIL)
     )
     if ai:
-        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs)
+        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw)
         power = jnp.where(case > 0, case, base_power)
     else:
         power = jnp.where(has_variable, variable, base_power)
@@ -1014,6 +1153,7 @@ def _finish(
     *,
     variance_last: bool = False,
     def_side=None,
+    wonder_guard=True,
 ):
     """Random roll, STAB and type chart; 0 for status moves and immunities. Struggle
     skips STAB and the chart (``ApplyTypeChart`` returns early for it, :2573).
@@ -1025,7 +1165,13 @@ def _finish(
     move too: ``CalcMoveDamage``'s ``+ 2`` (battle_lib.c:7078) goes through the chart, which
     ``IfBattlerDealsMoreDamage`` reaches with the player's last move (trainer_ai.c:2229-2237;
     the other AI callers pass only damaging moves, ``ai.commands.is_damaging``).
-    ``def_side`` is ``AI_CONTEXT.defender``'s side there (default the other side)."""
+    ``def_side`` is ``AI_CONTEXT.defender``'s side there (default the other side).
+
+    Wonder Guard (``wonder_guarded``, ruling G-18) gives 0 where ``wonder_guard``: the hit's
+    ``MOVE_STATUS_WONDER_GUARD`` ends the move in subscript_missed.s (no damage), and the AI's
+    estimate zeroes a ``MOVE_STATUS_IMMUNE`` result (trainer_ai.c:3106). ``wonder_guard=False``
+    keeps ``battleCtx->damage`` as ``ApplyTypeChart`` leaves it (it does not zero it): Jump
+    Kick's crash reads that (``step._use_move``)."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side if def_side is None else _i32(def_side)
     a_types = _i32(s.types[atk_side, s.active[atk_side]])
@@ -1082,6 +1228,12 @@ def _finish(
     # MOVE_STATUS_IMMUNE: no damage (its DID_NOT_HIT ends the move, bcp.c:3325; the AI's
     # estimate zeroes an immune hit, trainer_ai.c:3106).
     damage = jnp.where(levitated(s, atk_side, def_side, move_type), 0, damage)
+    # :2649-2654 Wonder Guard: MOVE_STATUS_WONDER_GUARD, part of MOVE_STATUS_IMMUNE (ruling G-18).
+    # A battle hit of a charge move is its strike (``charge_strike``); the AI's estimate
+    # (``variance_last``) runs after BattleContext_Init, where it is not (G-27).
+    strike = False if variance_last else charge_strike(tables, move)
+    guarded = wonder_guarded(tables, s, atk_side, move, move_type, def_side, strike)
+    damage = jnp.where(jnp.asarray(wonder_guard) & guarded, 0, damage)
     damage = jnp.where(typeless, unchanged, damage)
     if variance_last:
         # trainer_ai.c:3109; an immunity is already 0 (:3106). TrainerAI_CalcDamage has no
@@ -1092,13 +1244,15 @@ def _finish(
     return jnp.where((category == STATUS) | (power == 0), 0, damage)
 
 
-def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jnp.ndarray:
+def damage_table(
+    tables: Tables, state: BattleState, atk_side, move, crit, wonder_guard=True
+) -> jnp.ndarray:
     """``int32[16]``: damage of ``move`` by ``atk_side``'s active Pokemon against the
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
-    power (no draw: ``PRESENT_TABLE``)."""
+    power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s."""
     # The defender is the other side's active Pokemon (this table's contract).
     power_mul = script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, 10)
     damage, move_type, category, power = _pre_random(
@@ -1106,18 +1260,26 @@ def damage_table(tables: Tables, state: BattleState, atk_side, move, crit) -> jn
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolls = jnp.arange(ROLLS, dtype=_I32)
-    table = _finish(tables, state, atk_side, move, damage, move_type, category, power, rolls)
-    fixed, amount = fixed_damage(tables, state, atk_side, move)
+    table = _finish(
+        tables, state, atk_side, move, damage, move_type, category, power, rolls,
+        wonder_guard=wonder_guard,
+    )  # fmt: skip
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
     return jnp.where(fixed, amount, table)
 
 
-def hit_damage_table(tables: Tables, state: BattleState, atk_side, move) -> jnp.ndarray:
+def hit_damage_table(
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
+) -> jnp.ndarray:
     """``int32[2, ROLLS]``: one hit's damage for every ``(crit, roll)`` pair (``crit`` 0
     or 1, then ``damage_table``'s rolls), at ``state``. It equals ``damage_for_roll`` at
     the default ``power_mul`` for every move but Magnitude (``damage_table`` takes level 4)
-    and Bide (0 here); ``enumerate``'s damage classes use neither."""
-    return jnp.stack([damage_table(tables, state, atk_side, move, crit) for crit in (False, True)])
+    and Bide (0 here); ``enumerate``'s damage classes use neither. ``wonder_guard``: as
+    ``_finish``'s."""
+    return jnp.stack(
+        [damage_table(tables, state, atk_side, move, crit, wonder_guard) for crit in (False, True)]
+    )
 
 
 def damage_for_roll(
@@ -1130,12 +1292,13 @@ def damage_for_roll(
     power_mul=10,
     magnitude=MAGNITUDE_MIN,
     present=PRESENT_TABLE,
+    wonder_guard=True,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
     ``magnitude`` is Magnitude's level; ``present`` is Present's draw, and its heal path
     (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
-    ``CalcDamage``."""
+    ``CalcDamage``. ``wonder_guard``: as ``_finish``'s."""
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1148,8 +1311,11 @@ def damage_for_roll(
         present=present,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
-    rolled = _finish(tables, state, atk_side, move, damage, move_type, category, power, _i32(roll))
-    fixed, amount = fixed_damage(tables, state, atk_side, move)
+    rolled = _finish(
+        tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
+        wonder_guard=wonder_guard,
+    )  # fmt: skip
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
     # table power (it ignores a ``present`` outside 0-2), so a caller that needs the heal's
     # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
@@ -1170,7 +1336,7 @@ def calc_move_damage(
 
 
 def ai_damage_for_roll(
-    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None
+    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None, draw=0
 ) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
@@ -1179,9 +1345,11 @@ def ai_damage_for_roll(
     power-0 move gives the ``+ 2`` through the chart (``_finish``). ``def_side`` is
     ``AI_CONTEXT.defender``'s side (default the other side) and ``ivs`` the IVs passed
     (default the attacker's own): ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2229-2237) has
-    the player attack itself with the AI attacker's IVs."""
+    the player attack itself with the AI attacker's IVs. ``draw`` is the class of the
+    ``RandNext`` draw of Psywave's or Magnitude's case (``ai_case_fixed``, ``ai_case_power``;
+    ignored for any other move)."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs
+        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs, ai_draw=draw
     )
     computed = _finish(
         tables,
@@ -1197,11 +1365,13 @@ def ai_damage_for_roll(
         def_side=def_side,
     )
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
-    fixed, amount = ai_case_fixed(state, atk_side, move)
+    fixed, amount = ai_case_fixed(state, atk_side, move, draw)
     def_side = 1 - _i32(atk_side) if def_side is None else _i32(def_side)
     d_types = state.types[def_side, state.active[def_side]]
     identified = state.foresight[def_side] != 0
     immune = effectiveness(tables, move_type, d_types, identified) == 0
+    # :3106 MOVE_STATUS_IMMUNE includes MOVE_STATUS_WONDER_GUARD (ruling G-18).
+    immune = immune | wonder_guarded(tables, state, atk_side, move, move_type, def_side)
     fixed_damage_ = jnp.where(immune, 0, divide(amount * (85 + _i32(roll)), 100))
     return jnp.where(fixed, fixed_damage_, computed)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from nuzline.ai.outcome import SWITCH_NONE, AiOutcome
+from nuzline.ai.outcome import SWITCH_NONE, AiOutcome, no_calc_draws
 from nuzline.engine.state import BattleState
 from tests.engine.helpers import roark_real_state
 
@@ -32,6 +32,7 @@ def outcome(rolls=(0, 0, 0, 0), tiebreak=0, ability_guess=0, switch_stop=SWITCH_
         script_rolls=jnp.asarray(rolls, i8),
         tiebreak=jnp.asarray(tiebreak, i8),
         switch_stop=jnp.asarray(switch_stop, i8),
+        calc_draws=no_calc_draws(),
     )
 
 

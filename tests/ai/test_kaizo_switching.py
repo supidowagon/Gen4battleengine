@@ -7,8 +7,11 @@ Decomp paths are relative to ``external/pokeplatinum``: ``trainer_ai.c`` is
 Kaizo runs ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3894-3988) unchanged. Its draws that can
 change the result are the keep draws (``RandNext() % 10 != 0`` per super-effective move of
 the active, :3588) and the party passes (``RandNext() % rand == 0`` per bench Pokemon and
-super-effective move, :3796, passes :3975 and :3981). With five bench Pokemon that is at
-most ``4 + 2 * 5 * 4 = 44`` sites, ``KAIZO.switch_sites``; vanilla keeps 9.
+super-effective move, :3796, passes :3975 and :3981), and against a player's Wonder Guard
+``AI_CannotDamageWonderGuard``'s first-success draws (:3338), only when the active has no
+super-effective move (no keep draw). With five bench Pokemon that is at most
+``max(4, 5 * 4) + 2 * 5 * 4 = 60`` sites, ``KAIZO.switch_sites`` (ruling G-33); vanilla keeps
+9.
 
 The exact switch part merges each stop into one categorical (``outcome.switch_stop_probs``)
 and drops ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` (:3651), which cannot change
@@ -59,7 +62,9 @@ K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).
 ROCK_THROW, ACCELEROCK, ANCIENT_POWER, HEAD_SMASH, EARTHQUAKE = 88, 205, 246, 457, 89
 ROCK4 = (ROCK_THROW, ACCELEROCK, ANCIENT_POWER, HEAD_SMASH)
-KAIZO_SWITCH_SITES = MOVES + 2 * (SLOTS - 1) * MOVES  # 4 + 2 x 5 x 4 = 44
+# max(4 keep, 5 x 4 Wonder Guard) + 2 x 5 x 4 pass draws = 60 (ruling G-33)
+KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
+SPARE = KAIZO_SWITCH_SITES - (MOVES + 2 * (SLOTS - 1) * MOVES)  # 16 unused by the six-bench case
 TYPE_STEEL = 8  # generated/pokemon_types.txt; checked in test_type_steel_id
 
 # The u16 residue counts of each read (BattleSystem_RandNext is a u16), counted here rather
@@ -69,6 +74,10 @@ P_KEEP = np.count_nonzero(_U16 % 10 != 0) / 65536  # :3588, keep (stop: no switc
 P_PASS_1 = np.count_nonzero(_U16 % 2 == 0) / 65536  # :3796 with rand 2 (:3975)
 P_PASS_2 = np.count_nonzero(_U16 % 3 == 0) / 65536  # :3796 with rand 3 (:3981)
 P_ABSORB = np.count_nonzero(_U16 % 3 != 0) / 65536  # :3651
+P_GUARD = np.count_nonzero(_U16 % 3 < 2) / 65536  # :3338, AI_CannotDamageWonderGuard (G-23)
+# MoveIsOnDamagingTurn's listed battle effects (battle_lib.c:7588-7604); none is on its damaging
+# turn at the AI's reads (SYSCTL_LAST_OF_MULTI_TURN cleared by BattleContext_Init).
+_MULTI_TURN = (26, 39, 75, 145, 151, 155, 255, 256, 263, 273)
 
 _SETTINGS = settings(
     deadline=None,
@@ -108,9 +117,11 @@ def test_type_steel_id(kaizo_names):
 
 
 def test_kaizo_switch_sites_are_the_six_party_maximum():
-    """4 keep draws (one per move slot, :3576-3592) and, for each of the two passes, one draw
-    per (bench Pokemon, move slot) (:3756-3804): five bench Pokemon in a party of six."""
-    assert KAIZO.switch_sites == KAIZO_SWITCH_SITES == 44
+    """4 keep draws (one per move slot, :3576-3592) or 5 x 4 Wonder Guard draws (:3315-3344,
+    never both: they need no super-effective move of the active, :3300-3311) and, for each of
+    the two passes, one draw per (bench Pokemon, move slot) (:3756-3804): five bench Pokemon
+    in a party of six (ruling G-33)."""
+    assert KAIZO.switch_sites == KAIZO_SWITCH_SITES == 60
     assert VANILLA.switch_sites == SWITCH_SITES == 9
 
 
@@ -134,14 +145,21 @@ def test_six_bench_layout_fits(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert layout_of(t) == KAIZO
     assert switching_refusals(t, s, KAIZO.switch_sites) == []
     sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
-    assert sites == [K.KEEP] * 4 + [K.PASS_INEFFECTIVE] * 20 + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+    assert sites == (
+        [K.KEEP] * 4
+        + [K.PASS_INEFFECTIVE] * 20
+        + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+        + [K.NONE] * SPARE
+    )
     # Bench slots 1-5 in party order, four moves each, in each pass.
     bench = [MOVE_ACTIONS + j for j in range(1, SLOTS) for _ in range(MOVES)]
-    assert _actions(t, s, KAIZO.switch_sites) == [NO_SWITCH] * 4 + bench * 2 + [NO_SWITCH]
+    assert _actions(t, s, KAIZO.switch_sites) == (
+        [NO_SWITCH] * 4 + bench * 2 + [NO_SWITCH] * (SPARE + 1)
+    )
 
     p = np.array([P_KEEP] * 4 + [P_PASS_1] * 20 + [P_PASS_2] * 20)
     reach = np.cumprod(np.concatenate([[1.0], 1 - p]))
-    expected = np.concatenate([reach[:-1] * p, reach[-1:]])
+    expected = np.concatenate([reach[:-1] * p, np.zeros(SPARE), reach[-1:]])
     got = np.asarray(switch_stop_probs(switch_sites(t, s, KAIZO.switch_sites)), np.float64)
     np.testing.assert_allclose(got, expected, rtol=2e-5, atol=0)
     assert abs(got.sum() - 1) < 1e-6
@@ -157,9 +175,37 @@ def test_six_bench_layout_fits(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert policy.ai_width(t, s) <= MOVES * 2**KAIZO.slot_reads + KAIZO.switch_sites + 1
 
 
+def test_kaizo_switch_sites_reach_sixty(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """G-33: the worst case of ``KAIZO_SWITCH_SITES``. The player's Fire/Flying active has
+    Wonder Guard (``battleMons[].ability``, trainer_ai.c:3298: a Shedinja made Fire/Flying) and the AI's active knows no
+    super-effective move (Tackle: neutral, so ``AI_OnlyIneffectiveMoves`` does not apply), so
+    step 4 draws for each bench Pokemon's four
+    super-effective Rock moves (:3338, 20 sites, no keep draw); each Flying/Bug bench Pokemon
+    is INEFFECTIVE and NOT_VERY_EFFECTIVE against Earthquake (battle_lib.c:2762-2781), so both
+    passes draw for it too (40 sites): 60, no refusal."""
+    t, n = kaizo_tables, kaizo_names
+    from nuzline.engine.ids import AbilityId
+
+    s = _six_bench(t, n, kaizo_roark_party)
+    s = s._replace(
+        moves=s.moves.at[1, 0].set(jnp.asarray([n.move("Tackle")] * MOVES, s.moves.dtype)),
+        # Battler_Ability reads the species' ability (damage.decomp_abilities): a Shedinja,
+        # its types still made Fire/Flying.
+        species=s.species.at[0, 0].set(n.species("Shedinja")),
+        ability_slot=s.ability_slot.at[0, 0].set(0),
+        ability=s.ability.at[0, 0].set(AbilityId.WONDER_GUARD),
+    )
+    assert switching_refusals(t, s, KAIZO.switch_sites) == []
+    sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
+    assert sites == (
+        [K.WONDER_GUARD] * 20 + [K.PASS_INEFFECTIVE] * 20 + [K.PASS_NOT_VERY_EFFECTIVE] * 20
+    )
+    assert len(sites) == KAIZO_SWITCH_SITES
+
+
 def test_six_bench_sampled_stops(kaizo_tables, kaizo_names, kaizo_roark_party):
     """``sample_ai_outcome`` under the Kaizo layout draws one u16 per site, so its stops
-    range over 0..44 (``KAIZO.switch_sites`` meaning none)."""
+    range over 0..60 (``KAIZO.switch_sites`` meaning none)."""
     t = kaizo_tables
     s = _six_bench(t, kaizo_names, kaizo_roark_party)
     keys = jax.random.split(jax.random.PRNGKey(3), 4000)
@@ -171,7 +217,7 @@ def test_six_bench_sampled_stops(kaizo_tables, kaizo_names, kaizo_roark_party):
 
 def test_six_bench_policy_switches(kaizo_tables, kaizo_names, kaizo_roark_party):
     """``ai_policy`` under the Kaizo layout maps each stop as ``switch_action`` does: a pass
-    stop of bench slot j is the switch ``4 + j``, the none stop (44) the move pick."""
+    stop of bench slot j is the switch ``4 + j``, the none stop (60) the move pick."""
     t = kaizo_tables
     s = _six_bench(t, kaizo_names, kaizo_roark_party)
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, KAIZO)
@@ -249,9 +295,9 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     bench = [j for j in range(SLOTS) if j != a and species[1, j] > 0 and hp[1, j] > 0]
     if not bench:
         return reads
-    # :3941-3959. Perish Song, Wonder Guard, AI_OnlyIneffectiveMoves, the absorbing abilities
-    # on the bench and Natural Cure are refused (the caller assumes no refusal), so these
-    # return FALSE; AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
+    # :3941-3959. Perish Song, AI_OnlyIneffectiveMoves, the absorbing abilities on the bench and
+    # Natural Cure are refused (the caller assumes no refusal), so these return FALSE (Wonder
+    # Guard's check is below); AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
     # active has a super-effective move (flag TRUE: no draw inside, :3586-3587).
     a_moves = [int(m) for m in np.asarray(s.moves[1, a])]
     identified = int(s.foresight[0]) != 0
@@ -261,6 +307,15 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
             m != 0 and int(type_chart_flags(t, m, d_types, gravity, identified)) & SUPER_EFFECTIVE
         )
 
+    # :3943, AI_CannotDamageWonderGuard (:3286-3348): the player's battleMons[].ability (:3298)
+    # is Wonder Guard and no move of the active is super effective (ApplyTypeChart, :3306); then
+    # each bench Pokemon's super-effective moves (CalcEffectiveness, :3328) in party order draw
+    # RandNext() % 3 < 2 (:3338), a success switching to it.
+    if int(ability[0, d]) == ABILITY_IDS["Wonder Guard"] and not any(keep_se(m) for m in a_moves):
+        for j in bench:
+            for m in (int(x) for x in np.asarray(s.moves[1, j])):
+                if m and int(calc_effectiveness_flags(t, m, d_types, gravity)) & SUPER_EFFECTIVE:
+                    reads.append((P_GUARD, MOVE_ACTIONS + j))
     if any(keep_se(m) for m in a_moves):
         # :3651: % 3 != 0 returns FALSE (:3652); otherwise :3656-3713 return FALSE as well, with
         # no absorbing bench ability. Either way the check goes on: "stop" here is never one.
@@ -280,6 +335,15 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     for mask, p in ((INEFFECTIVE, P_PASS_1), (NOT_VERY_EFFECTIVE, P_PASS_2)):
         for j in bench:
             eff = int(calc_effectiveness_flags(t, hit, s.types[1, j], gravity, hit_type))
+            # CalcEffectiveness (battle_lib.c:2734-2739): the bench Pokemon's Wonder Guard
+            # (MON_DATA_ABILITY) against a hitter (moveHitBattler) without Mold Breaker.
+            if (
+                int(ability[1, j]) == ABILITY_IDS["Wonder Guard"]
+                and int(ability[0, d]) != ABILITY_IDS["Mold Breaker"]
+                and int(t.move_ai_effect[hit]) not in _MULTI_TURN
+                and not eff & SUPER_EFFECTIVE
+            ):
+                eff |= INEFFECTIVE
             if not eff & mask:
                 continue
             for m in (int(x) for x in np.asarray(s.moves[1, j])):
@@ -335,7 +399,17 @@ def _switch_states(draw, t, n, party):
             b1, b2 = draw(pair)
             s = s._replace(types=s.types.at[1, j].set(_types(n, b1, b2)))
     hits = ("Earthquake", "Tackle", "Ember", "Water Gun", "Wing Attack", "Karate Chop",
-            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer")  # fmt: skip
+            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer", "Fire Fang")  # fmt: skip
+    # G-23: Shedinja (Wonder Guard) as the player's active or on the AI's bench (its types stay
+    # the drawn ones: only its ability matters here).
+    shedinja = n.species("Shedinja")
+    if draw(st.integers(0, 3)) == 0:
+        s = s._replace(species=s.species.at[0, 0].set(shedinja))
+        s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    if draw(st.integers(0, 3)) == 0:
+        j = draw(st.sampled_from(bench))
+        s = s._replace(species=s.species.at[1, j].set(shedinja))
+        s = s._replace(ability_slot=s.ability_slot.at[1, j].set(0), form=s.form.at[1, j].set(0))
     return s._replace(
         hp=hp,
         move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
@@ -404,6 +478,23 @@ def test_small_six_bench_layouts_match_loose(
     t, n = kaizo_tables, kaizo_names
     s = _small_six_bench(t, n, kaizo_roark_party, alive, moves)
     assert len(_loose_reads(t, s)) == reads
+    assert policy.ai_refusals(t, s, n) == []
+    _assert_switch_equals_loose(t, s)
+
+
+@pytest.mark.parametrize("alive", [1, 2])
+def test_wonder_guard_layout_matches_loose(kaizo_tables, kaizo_names, kaizo_roark_party, alive):
+    """G-23: the player's active is Shedinja (Wonder Guard) and the AI's active knows only
+    Tackle: AI_CannotDamageWonderGuard draws once per super-effective bench move (four Rock
+    moves each), before the passes; exact against loose."""
+    t, n = kaizo_tables, kaizo_names
+    s = _small_six_bench(t, n, kaizo_roark_party, alive)
+    s = s._replace(species=s.species.at[0, 0].set(n.species("Shedinja")))
+    s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    reads = _loose_reads(t, s)
+    assert [p for p, _ in reads[: 4 * alive]] == [P_GUARD] * (4 * alive)
+    sites = switch_sites(t, s, KAIZO.switch_sites).tolist()
+    assert sites[: 4 * alive] == [K.WONDER_GUARD] * (4 * alive)
     assert policy.ai_refusals(t, s, n) == []
     _assert_switch_equals_loose(t, s)
 
