@@ -1127,14 +1127,18 @@ def test_a_bind_duration_is_refitted_from_a_later_residual(tables, names, tmp_pa
     # Monferno's Fire Spin traps Geodude for 4 turns; durations 3 and 4 replay the same
     # records until the turn where duration 3's trap has ended and no residual is taken.
     # Turn 0 first keeps 3; that turn's mismatch rewinds it to 4 (convert_bundle's refit).
+    # Geodude uses Stealth Rock (set, then failing) every turn: a real choice whose PP drop
+    # pins its action. Its slot 2 is empty: the AI never picks it (trainer_ai.c:234,
+    # CHECK_INVALID_NO_MOVE, battle_lib.c:2260-2261) and its 0 PP spends nothing
+    # (bcp.c:2275-2285), so no record could show that choice.
     party = _refit_party(tmp_path, "Fire Spin")
     trap = _outcome(p_roll=0)._replace(duration=jnp.asarray([4, 0], jnp.int8))
-    script = [((CONFUSION_MOVE, SCREECH), trap)] + [((LEER_0, SCREECH), _outcome())] * 4
+    script = [((CONFUSION_MOVE, STEALTH_ROCK), trap)] + [((LEER_0, STEALTH_ROCK), _outcome())] * 4
     records, states = _engine_trace(tables, names, script, party=party)
     three = _engine_trace(
         tables,
         names,
-        [((CONFUSION_MOVE, SCREECH), trap._replace(duration=jnp.asarray([3, 0], jnp.int8)))]
+        [((CONFUSION_MOVE, STEALTH_ROCK), trap._replace(duration=jnp.asarray([3, 0], jnp.int8)))]
         + script[1:],
         party=party,
     )[1]
