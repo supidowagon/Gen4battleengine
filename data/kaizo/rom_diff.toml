@@ -554,16 +554,14 @@ note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitAccuracy"
-status = "not_reached"
-note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the address-relative constant loads and forward jumps those 4 bytes moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141"
-when = { move_effect = [141] }
+status = "modelled"
+note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the address-relative constant loads and forward jumps those 4 bytes moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141; modelled by E2 batch 13 (B13-4): MoveFlag.THUNDER on effect 141 (tools/effect_map.py KAIZO_FLAG_EFFECTS), read by outcome._rate's sun branch"
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitOverrides"
-status = "not_reached"
-note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the address-relative constant loads and forward jumps the two 4-byte insertions moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141"
-when = { move_effect = [141] }
+status = "modelled"
+note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the address-relative constant loads and forward jumps the two 4-byte insertions moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141; modelled by E2 batch 13 (B13-4): MoveFlag.THUNDER on effect 141 (tools/effect_map.py KAIZO_FLAG_EFFECTS), read by outcome._rate's rain branch"
 
 [[code]]
 module = "overlay16"
@@ -607,9 +605,8 @@ when = { move_effect = [104] }
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 141
-status = "not_reached"
-note = "decoded: the unused plain-damage script (CalcCrit, CalcDamage) -> SIDE_EFFECT_FLAGS_INDIRECT = MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_CONFUSE (as effect 76) and BATTLE_CTX_STATUS |= SYSCTL_HIT_DURING_FLY before CalcCrit, CalcDamage: a hit that confuses the target at the move's effect chance and hits a Fly/Bounce user; with the effect-141 branches added to CheckMoveHitAccuracy (accuracy 50 in sun) and CheckMoveHitOverrides (sure hit in rain) this is Hurricane; res/battle/scripts/effects/effect_script_0141.s:5; res/battle/scripts/effects/effect_script_0076.s:5; Kaizo user: Hurricane (move 140: 120 power, 70 accuracy, 30% chance); reached only through a move with effect 141"
-when = { move_effect = [141] }
+status = "modelled"
+note = "decoded: the unused plain-damage script (CalcCrit, CalcDamage) -> SIDE_EFFECT_FLAGS_INDIRECT = MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_CONFUSE (as effect 76) and BATTLE_CTX_STATUS |= SYSCTL_HIT_DURING_FLY before CalcCrit, CalcDamage: a hit that confuses the target at the move's effect chance and hits a Fly/Bounce user; with the effect-141 branches added to CheckMoveHitAccuracy (accuracy 50 in sun) and CheckMoveHitOverrides (sure hit in rain) this is Hurricane; res/battle/scripts/effects/effect_script_0141.s:5; res/battle/scripts/effects/effect_script_0076.s:5; Kaizo user: Hurricane (move 140: 120 power, 70 accuracy, 30% chance); reached only through a move with effect 141; modelled by E2 batch 13 (B13-3): tools/effect_map.py KAIZO_EFFECTS (SECONDARY_CONFUSE) and KAIZO_FLAG_EFFECTS (MoveFlag.HIT_AIR, MoveFlag.THUNDER)"
 
 [[member]]
 narc = "battle/skill/be_seq.narc"

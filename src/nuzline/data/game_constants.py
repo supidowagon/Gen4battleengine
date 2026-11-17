@@ -773,6 +773,7 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.MULTI_TURN_EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.CHARGE_FLAG_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
     "tools.effect_map.SEMI_HIT_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
+    "tools.effect_map.SCRIPT_FLAG_EFFECTS": _KEYED_BY_EFFECT,  # B13-1, B13-2
     # E2 batch 5: move ids the battle code compares against (BtlCmd_TrySleepTalk,
     # Move_IsInvoker, sCannotMetronomeMoves), turned into MoveFlag bits at table build.
     "tools.effect_map.INVOKER_MOVES": _CODE_MOVE_IDS,
@@ -830,6 +831,10 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.KAIZO_EFFECTS": (
         "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
         "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
+    ),
+    "tools.effect_map.KAIZO_FLAG_EFFECTS": (
+        "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed: its MoveFlag "
+        "bits, used only for Kaizo and only with its KAIZO_EFFECTS entry (Ruling 13, B13-3)"
     ),
     "tools.effect_map.DIVISOR_PARAM_MIN": (
         "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "

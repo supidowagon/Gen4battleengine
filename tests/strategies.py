@@ -1345,6 +1345,7 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
 SUBSTITUTE_FOE_MOVES = (
     "Tackle",
     "Double Kick",
+    "Twineedle",  # hit 2's poison after hit 1 broke the substitute (B13-1)
     "Thunder Wave",
     "Growl",
     "Toxic",
@@ -2110,6 +2111,10 @@ LAW_MOVES = (
     "Uproar",
     "Future Sight",
     "Doom Desire",
+    # E2 batch 13: Twineedle's two hits with a poison roll each (B13-1), Blaze Kick's crit stage
+    # with its burn roll (B13-2).
+    "Twineedle",
+    "Blaze Kick",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

@@ -24,7 +24,8 @@ of the turn:
   produce, and the single value 1 when every threshold is 100 or more.
 * ``crit[s, i]``, ``roll[s, i]``: a damaging move (status moves and power 0 deal 0,
   damage.py:254), index 0, or for ``MULTI_HIT`` 0-4 (the 2-5 law) or the indices below its
-  fixed count (``move_param[m, 0]``, ``effects.hit_count``). ``roll[s, 0]``
+  fixed count (``move_param[m, 0]``, ``effects.hit_count``; 0-1 for a ``MoveFlag.HIT_TWICE``
+  move, Twineedle, B13-1). ``roll[s, 0]``
   also when a confusion self-hit is possible (``step._use_move``, step.py:503). The Pursuit
   pre-switch hit reads ``[pursuer, 0]`` (``step._pursuit_hit``, step.py:922-946), a move
   action too.
@@ -1224,9 +1225,9 @@ def damage_inputs_can_change(
       foe on its defending stat;
     * **pluck**: the foe's earlier Pluck / Bug Bite eats the side's stat pinch berry of the
       foe's defending stat (``hooks.pluck_berry`` raises the eater's stage);
-    * **own move**: a later hit of a move other than ``MULTI_HIT`` (none has several hits
-      today), a Guts user that wakes or thaws first (its status goes to none), and
-      Selfdestruct (its user's HP goes to 0 before the hit).
+    * **own move**: a later hit of a move other than ``MULTI_HIT`` (Twineedle's second hit,
+      B13-1: its first can poison a Synchronize holder), a Guts user that wakes or thaws first
+      (its status goes to none), and Selfdestruct (its user's HP goes to 0 before the hit).
 
     Extending (Tasks 4-11): a mechanic that lets anything above (or a new input) change
     mid-turn classifies its ids in the ``INPUT_*`` tuples above and adds a clause here,
@@ -1495,8 +1496,12 @@ def outcome_laws(
     # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)
     rolled = damaging & ~_any_of(effect, UNROLLED_EFFECTS)
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
-    multi = effect == _E.MULTI_HIT
-    fixed_hits = params[:, 0]
+    # effects.hit_count: MULTI_HIT's count, or two for a HIT_TWICE move (Twineedle, B13-1).
+    twice = ((tables.move_flags[moves].astype(_I32) & MoveFlag.HIT_TWICE) != 0) & (
+        effect != _E.MULTI_HIT
+    )
+    multi = (effect == _E.MULTI_HIT) | twice
+    fixed_hits = jnp.where(twice, 2, params[:, 0])
     drawn_hits = multi & (fixed_hits == 0)  # the 2-5 law
     max_hits = jnp.where(multi, jnp.where(drawn_hits, MAX_HITS, fixed_hits), 1)
     mons = state.active

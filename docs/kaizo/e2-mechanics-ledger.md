@@ -4,6 +4,22 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
 
+- **Batch 13 (branch e2-batch13 from 9e08c7e, worktree _scratch/e2/b13wt; brief
+  _scratch/e2/b13/BRIEF.md).** Secondary-effect hits done (agent A, B13-1..4): Twineedle
+  (SECONDARY_STATUS + MoveFlag.HIT_TWICE), Blaze Kick / Poison Tail / Cross Poison
+  (SECONDARY_STATUS + CRIT_UP), Kaizo Hurricane (be_seq 141 and both overlay16 compares
+  modelled: SECONDARY_CONFUSE + THUNDER | HIT_AIR); no new EffectId, state or Outcome field, no
+  new draw. Tests tests/engine/test_batch13.py (3 law tests slow: 140 s, 5.9 GB). Checks green:
+  test_batch13 16, effect_map / variants / game_constants / backlog 94, coverage +
+  damage_classes 73 (+11 slow), accuracy_classes + enumerate 40 (+6 slow property tests),
+  unsupported tests 37, test_cli not-slow 102 + 1 skipped + deaths_and_protect (7.87 GB), diff.py
+  seeds 39, 40 ok 300. FOUND, not ours (fails on base 9e08c7e too, replay
+  _scratch/e2/b13/a_fail.pkl): test_differential's draw: an asleep Groudon at 1 HP behind a
+  1-HP substitute holding a Figy Berry, Thunder Wave vs Ralts' Sky Uppercut: the reference eats
+  the berry, JAX keeps it. test_cli_rank_default_budget_keeps_the_header killed at 8.23 GB
+  (8.67-9.09 before). OWED: the AI scripts of these effects (77, 200, 209, Kaizo 141; the batch's
+  AI agent); the other families of the batch.
+
 - **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
   Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
   test_accuracy_classes_equal_raw_rolls (slow) killed at 8 GB alone; the rest of the file and
@@ -103,7 +119,7 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_cli_rank_deaths_and_protect 11.96 GB, test_cli_rank_default_budget_keeps_the_header 8.67,
   test_rank_lead_and_opponent_active 8.16 (likely the same expand CHUNK padding). Reported.
 - **Owed from batch 10:** Gravity grounding a Fly user (Gravity refused by coverage), Transform
-  vs a vanished target, Kaizo Hurricane (effect 141, no fight reaches it).
+  vs a vanished target. (Kaizo Hurricane: done in batch 13, B13-3, B13-4.)
 - **Batch 11 status (2026-11-16).** Committed: e760d9e the takeover mechanism, the Sleep Talk
   sampler fix, Encore into the invokers, B11-9, review items (c) (d) (B11-1..3, 7-9); 926874a
   Encore's AI, both Encore refusals lifted (backlog 230 -> 228), coverage tests on real data
@@ -191,7 +207,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
   Magnet Rise, Nature Power, Chatter, Gyro Ball and others; the backlog rows name them) and the
-  Kaizo scripts be_seq#141 (Hurricane), be_seq#88 and sub_seq#238.
+  Kaizo scripts be_seq#88 and sub_seq#238 (be_seq#141, Hurricane: engine done in batch 13,
+  B13-3, B13-4; its AI script with the batch's AI agent).
 
 - Batch 9 left (Gardenia-split entries not done, by why): SolarBeam #151 (a charge turn: the
   two-turn lock and SYSCTL_FIRST_OF_MULTI_TURN's skips); Jump Kick / Hi Jump Kick #45
@@ -1693,3 +1710,39 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Guards: test_accuracy_classes test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds
   (_FOLLOWED), test_haze_psych_up_acupressure_are_seen_by_hit_thresholds and (slow)
   test_haze_psych_up_acupressure_classes_match_the_live_check.
+- B13-1 Twineedle (effect 77, BATTLE_EFFECT_POISON_MULTI_HIT) is effect 2's indirect TO_DEFENDER
+  poison plus SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (effect_script_0077.s:5-6): SECONDARY_STATUS
+  poison with the new MoveFlag.HIT_TWICE (tools/effect_map.py SCRIPT_FLAG_EFFECTS;
+  effects.hit_count, enumerate's per-hit masks, the reference's hit loop). LoopMultiHit reloads
+  the script per hit (bcp.c:3789), so the flag is set again and MULTI_HIT_TRIGGER_SECONDARY rolls
+  it per hit (bcp.c:3544-3554, battle_lib.c:1570-1586): outcome.secondary[side, hit], each roll
+  Serene Grace-doubled (:1571-1575). Accuracy once (SYSCTL_MULTI_HIT_MOVE), crit and roll per
+  hit. A defender fainted by hit 1 ends the loop (faintedMon, bcp.c:3780-3782) and its roll gives
+  nothing (curHP, battle_lib.c:1580). A substitute broken by hit 1 leaves
+  SELF_TURN_FLAG_SUBSTITUTE_HIT set (bcp.c:3371; BattleSystem_SetupLoop clears no turn flags,
+  battle_lib.c:3357-3362), so hit 2 hurts the Pokemon but its poison is stopped
+  (Battler_SubstituteWasHit, battle_lib.c:1582, :6259-6268; CheckSubstitute,
+  battle_script.c:9181). Shield Dust and the Poison / Steel immunity act per hit
+  (subscript_poison.s). Vanilla 25 power 20 %, Kaizo 50 / 30 % (ROM; be_seq 77 unchanged). A
+  chance-0 Twineedle would pack PLAIN with HIT_TWICE: two plain hits (Ruling 21).
+- B13-2 Blaze Kick (200, HIGH_CRITICAL_BURN_HIT), Poison Tail and Cross Poison (209,
+  HIGH_CRITICAL_POISON_HIT): BTLVAR_CRITICAL_BOOSTS + 1 (effect_script_0200.s:5, _0209.s:5) then
+  effect 4's burn / effect 2's poison (:6): SECONDARY_STATUS with MoveFlag.CRIT_UP (as Razor
+  Wind's, B10-12), read by outcome.side_crit_odds (criticalBoosts into
+  BattleSystem_CalcCriticalMulti, battle_script.c:2158-2163; sCriticalStageRates stage 1 = 1 in 8,
+  battle_lib.c:7097-7130). The crit and the secondary are independent draws (CalcCrit's
+  RandNext, then MULTI/ONE_HIT_TRIGGER_SECONDARY's); the stage is static, so no
+  CRIT_ODDS_EFFECTS entry (nothing here writes another battler's crit inputs). Guard:
+  tests/tools/test_effect_map.py test_script_flag_effects_match_every_script (every script with
+  CRITICAL_BOOSTS or SetMultiHit 2 is classified).
+- B13-3 Kaizo be_seq 141 (Hurricane, move 140: 120 power, 70 accuracy, 30 %) is effect 76's
+  indirect TO_DEFENDER confusion plus SYSCTL_HIT_DURING_FLY (rom_diff.toml be_seq 141;
+  effect_script_0076.s:5, as Thunder's _0152.s:6 for the Fly bit): KAIZO_EFFECTS 141 =
+  SECONDARY_CONFUSE, KAIZO_FLAG_EFFECTS 141 = MoveFlag.HIT_AIR | THUNDER (no DOUBLE_SEMI: no
+  BTLVAR_POWER_MULTI). build_tables' _move_flags gives a modelled Kaizo script its
+  KAIZO_FLAG_EFFECTS bits in place of the vanilla effect-keyed ones. Member marked modelled.
+- B13-4 Kaizo's overlay16 adds effect 141 beside BATTLE_EFFECT_THUNDER in CheckMoveHitAccuracy's
+  sun branch (hitRate = 50, bcp.c:2915-2917; rom 0x0224F068) and CheckMoveHitOverrides' rain
+  branch (MOVE_STATUS_MISSED cleared, :3024-3027; rom 0x0224F386), both inside NO_CLOUD_NINE:
+  MoveFlag.THUNDER, read by outcome._rate and the reference (B9-1). Both code entries marked
+  modelled. Test: an Air Lock foe keeps 70 and the miss (Kaizo has no Cloud Nine species).

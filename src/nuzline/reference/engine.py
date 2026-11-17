@@ -4031,10 +4031,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             s.ai_ability_known[s.sides[0].active] = 1
         return record
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
-    # SetMultiHit 0 draws 2-5.
+    # SetMultiHit 0 draws 2-5; Twineedle's SetMultiHit 2 (effect_script_0077.s:6) is
+    # MoveFlag.HIT_TWICE on its SECONDARY_STATUS effect (B13-1).
     hits = 1
     if effect == EffectId.MULTI_HIT:
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
+    elif _t(tables, "move_flags", move) & MoveFlag.HIT_TWICE:
+        hits = 2
     foe_mon0 = _active(s, 1 - side)
     foe_hp0 = foe_mon0.hp
     turn.focus_armed = turn.pluck_flag = turn.damaged = turn.sub_hit = False  # BattleContext_Init

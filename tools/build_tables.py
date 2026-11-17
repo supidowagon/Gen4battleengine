@@ -118,10 +118,12 @@ from tools.effect_map import (
     FLAVOR_HOLD_EFFECTS,
     INVOKER_MOVES,
     KAIZO_EFFECTS,
+    KAIZO_FLAG_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
+    SCRIPT_FLAG_EFFECTS,
     SEMI_HIT_EFFECTS,
     SLEEP_TALK_EXCLUDED_MOVES,
     THUNDER_EFFECT,
@@ -183,10 +185,13 @@ def _decomp_commit() -> str:
     return m.group(1)
 
 
-def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
+def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]], kaizo: bool = False) -> int:
     """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
     NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
-    for Move_IsMultiTurn, the move's own decomp effect."""
+    for Move_IsMultiTurn, the move's own decomp effect. The battle code's compares by effect id
+    (Move_IsMultiTurn, THUNDER, BLIZZARD) hold whatever the script; the bits read off a script
+    (CHARGE_FLAG_EFFECTS, SEMI_HIT_EFFECTS, SCRIPT_FLAG_EFFECTS) do not: for Kaizo a modelled
+    changed script (``KAIZO_EFFECTS``) takes ``KAIZO_FLAG_EFFECTS``' bits instead (B13-3)."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -194,21 +199,26 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.SOUND
     if move_id in lists["punch"]:
         bits |= MoveFlag.PUNCH
+    effect = move.get("effect")
     if (
         move_id in INVOKER_MOVES
         or move_id in SLEEP_TALK_EXCLUDED_MOVES
-        or move.get("effect") in MULTI_TURN_EFFECTS
+        or effect in MULTI_TURN_EFFECTS
     ):
         bits |= MoveFlag.NO_SLEEP_TALK
     if move_id in METRONOME_EXCLUDED_MOVES:
         bits |= MoveFlag.NO_METRONOME
-    if move.get("effect") == THUNDER_EFFECT:
+    if effect == THUNDER_EFFECT:
         bits |= MoveFlag.THUNDER
-    if move.get("effect") == BLIZZARD_EFFECT:
+    if effect == BLIZZARD_EFFECT:
         bits |= MoveFlag.BLIZZARD
-    # The charge-turn bits and the SYSCTL_HIT_DURING_* bits, by decomp effect (B10-12).
-    bits |= CHARGE_FLAG_EFFECTS.get(move.get("effect"), 0)
-    bits |= SEMI_HIT_EFFECTS.get(move.get("effect"), 0)
+    if kaizo and effect in KAIZO_EFFECTS:  # a modelled changed script: its own bits (B13-3)
+        return int(bits | KAIZO_FLAG_EFFECTS.get(effect, 0))
+    # The charge-turn bits and the SYSCTL_HIT_DURING_* bits, by decomp effect (B10-12); the
+    # script commands added to another family's effect (B13-1, B13-2).
+    bits |= CHARGE_FLAG_EFFECTS.get(effect, 0)
+    bits |= SEMI_HIT_EFFECTS.get(effect, 0)
+    bits |= SCRIPT_FLAG_EFFECTS.get(effect, 0)
     return int(bits)
 
 
@@ -647,7 +657,9 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr(
-            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int32, "move flags"
+            [_move_flags(m, i, move_lists, kaizo) for i, m in enumerate(moves)],
+            np.int32,
+            "move flags",
         ),
         "move_is_hm": _arr([int(i in hm_moves) for i in range(len(moves))], np.int8, "move is hm"),
         "type_chart": _arr(chart, np.int8, "type chart"),

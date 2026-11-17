@@ -101,7 +101,10 @@ many are real). Decomp sources:
   accuracy check, so only ``outcome.hit[side, 0]`` matters while crit and roll
   are per hit; the loop stops once the target faints. ``SetMultiHit 0`` draws 2-5
   (``outcome.n_hits``); ``SetMultiHit 2`` (``effect_script_0044.s``) is two hits
-  (``move_param[m, 0]``). Focus Sash activates only on a hit taken at full HP
+  (``move_param[m, 0]``). Twineedle (``effect_script_0077.s``, ``MoveFlag.HIT_TWICE``) is a
+  ``SECONDARY_STATUS`` poison hit twice: the reloaded script sets its indirect effect again
+  and ``MULTI_HIT_TRIGGER_SECONDARY`` (bcp.c:3544-3554) rolls it per hit
+  (``outcome.secondary[side, hit]``), B13-1. Focus Sash activates only on a hit taken at full HP
   (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
 * Life Orb (``LIFE_ORB``): ``life_orb_recoil``, run by ``step`` once per move after its
   hits (``AFTER_MOVE_HIT_STATE_LIFE_ORB``) and after Pursuit's pre-switch hit; its damage
@@ -340,11 +343,13 @@ class _Hit(NamedTuple):
 def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
     """``int32``: hits the move makes if nothing faints: for ``MULTI_HIT`` its fixed count
     ``move_param[m, 0]`` (``SetMultiHit 2``), or ``outcome.n_hits[side]`` when that is 0
-    (``SetMultiHit 0``, the 2-5 law); else 1."""
+    (``SetMultiHit 0``, the 2-5 law); 2 for a ``MoveFlag.HIT_TWICE`` move of another family
+    (Twineedle's ``SetMultiHit 2``, effect_script_0077.s:6, B13-1); else 1."""
     multi = tables.move_effect[move] == _E.MULTI_HIT
+    twice = (tables.move_flags[move].astype(_I32) & MoveFlag.HIT_TWICE) != 0
     fixed = tables.move_param[move, 0].astype(_I32)
     drawn = outcome.n_hits[side].astype(_I32)
-    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), 1)
+    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), jnp.where(twice, 2, 1))
 
 
 def _alive(state: BattleState, side, slot) -> jnp.ndarray:

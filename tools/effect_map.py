@@ -475,6 +475,15 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     146: ("BATTLE_EFFECT_FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.FLINCH, (0, 0, 0)),
     # Sky Uppercut: effect_script_0207.s, SYSCTL_HIT_DURING_FLY then CalcCrit, CalcDamage.
     207: ("BATTLE_EFFECT_HIT_FLY", _E.PLAIN, (0, 0, 0)),
+    # E2 batch 13. Twineedle (effect_script_0077.s): effect 2's indirect TO_DEFENDER poison (:5)
+    # plus SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (:6): two hits, each its own effect-chance roll
+    # (the script reloads per hit, bcp.c:3789; MULTI_HIT_TRIGGER_SECONDARY :3544-3554);
+    # MoveFlag.HIT_TWICE (SCRIPT_FLAG_EFFECTS), B13-1.
+    77: ("BATTLE_EFFECT_POISON_MULTI_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
+    # Blaze Kick (_0200.s), Poison Tail / Cross Poison (_0209.s): BTLVAR_CRITICAL_BOOSTS + 1
+    # (:5, MoveFlag.CRIT_UP) then effect 4's burn / effect 2's poison (:6), B13-2.
+    200: ("BATTLE_EFFECT_HIGH_CRITICAL_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 0)),
+    209: ("BATTLE_EFFECT_HIGH_CRITICAL_POISON_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -486,10 +495,21 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
 #   Impact, Draco Meteor).
 # * 182: byte-identical to the vanilla effect 48 script: Reckless and 1/4 recoil (Take Down, Close
 #   Combat, Brave Bird).
+# * 141 (E2 batch 13, B13-3): the unused plain script becomes effect 76's indirect TO_DEFENDER
+#   confusion (effect_script_0076.s:5) plus SYSCTL_HIT_DURING_FLY: Hurricane. Its flags are
+#   KAIZO_FLAG_EFFECTS'.
 KAIZO_EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     48: ("Kaizo effect 48: Reckless, 1/2 recoil", _E.RECOIL, (2, 0, 0)),
     182: ("Kaizo effect 182: Reckless, 1/4 recoil", _E.RECOIL, (4, 0, 0)),
+    141: ("Kaizo effect 141: confusion hit that hits a Fly user", _E.SECONDARY_CONFUSE, (0, 0, 0)),
 }
+# The MoveFlag bits of a modelled Kaizo script (tools/build_tables.py ``_move_flags``), used for
+# that game in place of the vanilla effect-keyed bits of the same id. 141 (B13-3, B13-4):
+# SYSCTL_HIT_DURING_FLY (MoveFlag.HIT_AIR, as Thunder's effect_script_0152.s:6), and the Kaizo
+# overlay16 adds effect 141 beside BATTLE_EFFECT_THUNDER in CheckMoveHitAccuracy's sun branch
+# (hitRate 50, bcp.c:2915-2917) and CheckMoveHitOverrides' rain branch (no miss, :3024-3027):
+# MoveFlag.THUNDER (rom_diff.toml, overlay16 at 0x0224F068 and 0x0224F386).
+KAIZO_FLAG_EFFECTS: dict[int, int] = {141: MoveFlag.THUNDER | MoveFlag.HIT_AIR}
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}
 DECOMP_EFFECT_TO_ID: dict[int, tuple[EffectId, tuple[int, int, int]]] = {
@@ -563,6 +583,14 @@ SEMI_HIT_EFFECTS: dict[int, int] = {
     148: _ALL_HIT,
     168: _ALL_HIT,
     176: _ALL_HIT,
+}
+# E2 batch 13: bits of a script that adds a command to another family's effect, by decomp effect
+# id. Twineedle's SetMultiHit 2 (effect_script_0077.s:6): HIT_TWICE (B13-1); Blaze Kick's and
+# Poison Tail's BTLVAR_CRITICAL_BOOSTS + 1 (_0200.s:5, _0209.s:5): CRIT_UP (B13-2).
+SCRIPT_FLAG_EFFECTS: dict[int, int] = {
+    77: MoveFlag.HIT_TWICE,
+    200: MoveFlag.CRIT_UP,
+    209: MoveFlag.CRIT_UP,
 }
 # sCannotMetronomeMoves up to FORBIDDEN_BY_METRONOME_DELIM (battle_lib.c:7152-7178):
 # Metronome, Struggle, Sketch, Mimic, Chatter, Sleep Talk, Assist, Mirror Move, Counter, Mirror

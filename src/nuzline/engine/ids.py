@@ -40,6 +40,8 @@ class EffectId(IntEnum):
     * ``MULTI_HIT``: ``(hits, 0, 0)``: ``hits == 0`` is the 2-5 law (``Outcome.n_hits``,
       ``BATTLE_EFFECT_MULTI_HIT``), else exactly that many hits (``BATTLE_EFFECT_HIT_TWICE``:
       Double Kick, Kaizo's DoubleSlap, ``SetMultiHit 2``).
+      A move of another family with ``MoveFlag.HIT_TWICE`` also hits twice (Twineedle:
+      ``SECONDARY_STATUS`` poison, a roll per hit; E2 batch 13, B13-1).
     * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
       ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
       move's effect chance; ``CURSE`` (a non-Ghost user; coverage refuses a Ghost-type one):
@@ -997,8 +999,16 @@ class MoveFlag(IntFlag):
     # BTLVAR_POWER_MULTI 20 against a defender with the bit the move hits (effect_script_0146.s,
     # _0149.s: AIRBORNE; _0126.s, _0147.s: UNDERGROUND; _0257.s, _0261.s: UNDERWATER; line 8-9).
     DOUBLE_SEMI = 1048576
-    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16).
+    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16; E2 batch
+    # 13, B13-2: Blaze Kick _0200.s:5, Poison Tail / Cross Poison _0209.s:5, whose effect is
+    # their secondary status).
     CRIT_UP = 2097152
+    # E2 batch 13 (B13-1): ``SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE`` in a script whose effect is
+    # another family's (Twineedle, effect_script_0077.s:6: effect 2's poison hit, twice):
+    # ``effects.hit_count`` gives two hits, each running the family's effect with its own
+    # secondary roll (bcp.c:3544-3554, the script reloaded per hit :3789). ``MULTI_HIT``
+    # (Double Kick's effect_script_0044.s, a plain hit twice) keeps its count in its param.
+    HIT_TWICE = 4194304
 
 
 class SemiKind(IntEnum):

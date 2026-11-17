@@ -645,8 +645,8 @@ def hit_thresholds(
       ruling G-5; over-approximate: whenever it or the side holds such a berry).
 
     Each applies once: a move has one effect, and the only repeated hits are
-    ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
-    its repeats here).
+    ``MULTI_HIT``'s and Twineedle's (``MoveFlag.HIT_TWICE``, a poison), which change no stage
+    (a future multi-hit stat effect must add its repeats here).
 
     Switches (which go first) are in the turn-start threshold already, with the
     newcomer's switch-in checks: the weather its ability sets and the ability it traces
@@ -786,7 +786,8 @@ def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarra
     their species, :7124-7128), Super Luck (+1, :7126), capped at 4 (:7130)."""
     stage = (tables.move_effect[move] == EffectId.HIGH_CRIT).astype(_I32)
     # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
-    # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
+    # _0075.s:16; MoveFlag.CRIT_UP), B10-12; Blaze Kick, Poison Tail, Cross Poison (_0200.s:5,
+    # _0209.s:5), B13-2.
     stage = stage + ((tables.move_flags[move].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
     mon = state.active[side]
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.

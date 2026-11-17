@@ -1378,7 +1378,7 @@ def test_synchronize_runs_after_every_hit_of_a_multi_hit_move(tables, names):
     inside the multi-hit loop): Double Kick's second hit meets the foe's Static
     (TriggerAbilityOnHit, sideEffectMon the Synchronize attacker), and the step after that hit
     passes the paralysis back. (Twineedle, the one multi-hit move with a status secondary, is
-    not a supported effect in these tables.)"""
+    tests/engine/test_batch13.py's, B13-1.)"""
     n = names
     s = make_state(
         tables,
