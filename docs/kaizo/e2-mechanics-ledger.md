@@ -4,8 +4,11 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
 
-- **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
-  manager with all results; waiting for its merge. Running background work that will notify:
+- **Restart here (2026-11-17, context cleared).** Batch 12 is IN MAIN (main = 932af5a, from
+  6fc0b64). Batch 13 builder told to merge 932af5a before its review and to fix the check's notes
+  (invoker no-living-foe tests must pin the no-defender path, battle_script.c:2121-2126; White
+  Smoke cite :2883-2884). Still owed after batch 13: test_cli default_budget under 8 GB, a test for
+  leaves._run with replacement=True. Running background work that will notify:
   (1) batch 13 builder (Opus) in worktree _scratch/e2/b13wt, branch e2-batch13 from 9e08c7e; it
   builds, tests, gets one review, fixes, reports once. Batch 13 must end up ON TOP of 2c8efd6
   (merge 2c8efd6 into e2-batch13, rebuild tables, dup scan, unsupported tests, targeted set).
