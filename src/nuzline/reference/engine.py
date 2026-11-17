@@ -1827,6 +1827,12 @@ def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
     )
 
 
+def _mist_blocks_drop(s: RefState, side: int, delta: int) -> bool:
+    """BtlCmd_ChangeStatStage (script.c:2875-2882): a drop by another battler on a side with
+    mistTurns set is blocked, before any ability or stage test (no Mold Breaker), B12-23."""
+    return delta < 0 and bool(s.sides[side].mist)
+
+
 def _sub_blocks_drop(s: RefState, side: int, delta: int) -> bool:
     """BtlCmd_ChangeStatStage (script.c:2921-2923): a drop on a battler behind a substitute (its
     VOLATILE_CONDITION_SUBSTITUTE bit only) fails (direct) or is skipped (indirect), B10-4."""
@@ -1889,7 +1895,8 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
                 s.ai_ability_known[s.sides[0].active] = 1  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
-    # B10-4; White Smoke and Mist are unsupported). Its "cuts" message is built in C
+    # B10-4; White Smoke is unsupported), the holder as the attacker (:8): the foe side's Mist
+    # blocks it (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     blockers = (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER)  # script.c:2884-2902 (B9-6)
     if (
@@ -1897,6 +1904,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         and mon.ability == AbilityId.INTIMIDATE
         and foe.hp
         and not s.sides[other].substitute_hp
+        and not _mist_blocks_drop(s, other, -1)
         and foe.ability not in blockers
     ):
         _change_stage(s, other, Stat.ATK, -1)
@@ -1906,6 +1914,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         and foe.ability == AbilityId.INTIMIDATE
         and mon.hp
         and not s.sides[side].substitute_hp
+        and not _mist_blocks_drop(s, side, -1)
         and mon.ability not in blockers
     ):
         _change_stage(s, side, Stat.ATK, -1)
@@ -2221,14 +2230,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if p2 == 1 and p0 == Stat.DEF:  # Defense Curl (effect_script_0156.s)
             s.sides[side].curled = 1
     elif effect == EffectId.STAT_FOE and landed and target_alive:
-        if not _drop_blocked(seen, p0, p1) and not _sub_blocks_drop(s, target, p1):
+        blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
+        if not blocked and not _sub_blocks_drop(s, target, p1):
             _change_stage(s, target, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_SELF and effective and proc:
         if certain or _active(s, side).hp > 0:
             _change_stage(s, side, p0, p1)
     elif effect == EffectId.SECONDARY_STAT_FOE and effective and proc:
         # BtlCmd_ChangeStatStage (script.c:2918-2921): Shield Dust stops an indirect drop.
-        blocked = _drop_blocked(seen, p0, p1) or seen == AbilityId.SHIELD_DUST
+        blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
+        blocked = blocked or seen == AbilityId.SHIELD_DUST
         blocked = blocked or _sub_blocks_drop(s, target, p1)
         # A rolled secondary on the defender needs ~SubstituteWasHit (lib.c:1580-1582).
         blocked = blocked or (turn.sub_hit and not certain)
@@ -2531,7 +2542,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         theirs = s.sides[target].stages
         if not (theirs[p0] <= -6 and theirs[p1] <= -6):
             for stat in (p0, p1):
-                if not _drop_blocked(seen, stat, -1) and not _sub_blocks_drop(s, target, -1):
+                blocked = _mist_blocks_drop(s, target, -1) or _drop_blocked(seen, stat, -1)
+                if not blocked and not _sub_blocks_drop(s, target, -1):
                     _change_stage(s, target, stat, -1)
     elif effect == EffectId.FOCUS_ENERGY and landed and _active(s, side).hp > 0:
         # effect_script_0047.s:5 fails when set; subscript_focus_energy.s:6 (B12-4).
@@ -2555,7 +2567,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         fails, by_ability = _captivate_fails(tables, s, side, target)
         if by_ability and target == 0:
             s.ai_ability_known[s.sides[0].active] = 1
-        if not fails and not _drop_blocked(seen, p0, p1) and not _sub_blocks_drop(s, target, p1):
+        blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
+        if not fails and not blocked and not _sub_blocks_drop(s, target, p1):
             _change_stage(s, target, p0, p1)
     elif effect == EffectId.ACUPRESSURE and landed and _active(s, side).hp > 0:
         # effect_script_0226.s / BtlCmd_BoostRandomStatBy2 (script.c:8932-8956), the defender
@@ -2641,6 +2654,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.SAFEGUARD and landed and not s.sides[side].safeguard:
         # BtlCmd_TrySafeguard (script.c:5754-5772): 5 turns on the user's side (B10-7).
         s.sides[side].safeguard = 5
+    elif effect == EffectId.MIST and landed and not s.sides[side].mist:
+        # BtlCmd_TryMist (script.c:4300-4317): NUM_SCREEN_TURNS (5) on the user's side (B12-23).
+        s.sides[side].mist = 5
     elif effect == EffectId.PAIN_SPLIT and landed and not _shielded(turn, s, target):
         # subscript_pain_split.s (B10-5): avg = (a + d) / 2 (:7-10), each battler's HP to it through
         # UPDATE_HP, capped at its max HP (:12-22). A substitute fails it (:5).
@@ -3756,6 +3772,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (effect == EffectId.ENCORE and _encore_fails(tables, s, 1 - side)[0])
         # BtlCmd_TrySafeguard (script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
         full = full or (effect == EffectId.SAFEGUARD and bool(s.sides[side].safeguard))
+        # BtlCmd_TryMist (script.c:4307-4309, MOVE_STATUS_FAILED), B12-23.
+        full = full or (effect == EffectId.MIST and bool(s.sides[side].mist))
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
         full = full or (effect == EffectId.PAIN_SPLIT and bool(s.sides[1 - side].substitute_hp))
         # subscript_try_substitute.s:7-8 (MOVE_STATUS_NO_MORE_WORK), B10-4.

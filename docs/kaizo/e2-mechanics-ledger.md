@@ -30,8 +30,11 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_observe, test_small_moves, test_power_moves, parts of test_enumerate (~70 tests).
   Owed code: Trick / Thief / Skill Swap / Worry Seed join outcome.CRIT_ODDS_EFFECTS when they
   land; the effect-based check ignores a Metronome-called Haze / Knock Off.
-- **Mist joins batch 12** (manager 2026-11-16: E1's bag-item model needs it): the move + the
-  stat-drop block with its decomp readers. Focus Energy (E1 also needs it) is B12-4.
+- **Mist done** (B12-23..27): move, 5-turn side timer, the drop block in ChangeStatStage incl.
+  Intimidate, Basic AI. For E1: Focus Energy = BattleState.focus_energy[side] (Dire Hit sets the
+  same bit, battle_system.c:617-622); Guard Spec writes BattleState.mist[side] = 5 when 0
+  (battle_system.c:563-571). Checks: test_batch12 33, AI Mist 31 + exact==loose, Intimidate 4,
+  guards 92, diff seed 36 ok. Batch 12 needs one more review (Mist, crit-at-hit) before merging.
 - **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
   / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
   e022644). Main merged into this branch at 453e283. Never push.
@@ -1580,3 +1583,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B12-22 Psycho Shift onto a Synchronize target: the user is cured at
   subscript_give_target_own_status.s:28-30, then Synchronize (AfterMoveEffects, bcp.c:3665-3669;
   battle_lib.c:4498-4522) passes the poison / burn / paralysis back. Owed with Synchronize (E1).
+- B12-23 Mist: TryMist fails with SIDE_CONDITION_MIST up, else 5 turns on the user's side
+  (battle_script.c:4300-4317; battle.h:142); counted down in the field pass (bcp.c:993-1004).
+- B12-24 Mist blocks any drop on the battler by another battler while mistTurns is set, first,
+  before ability / -6 / Shield Dust / substitute tests; Mold Breaker does not pierce it; direct
+  drops message, indirect skip silently (battle_script.c:2874-2882, :2937-2945).
+- B12-25 Exempt: the user's own drop (battle_script.c:2876); CANNOT_PREVENT is never set (only
+  :2875 reads it). Intimidate is blocked (subscript_intimidate.s:8).
+- B12-26 Haze, Brick Break, Baton Pass leave Mist (battle_script.c:3534, :6556-6561); Defog's
+  evasion drop meets Mist before Defog clears it (subscript_defog.s:19-36).
+- B12-27 AI: Basic_CheckAlreadyUnderMist -8 (script.s:161, :587-590), no Expert entry; effect 46
+  is in the four CheckHP tables (:7782, :7830, :7884, :7938).

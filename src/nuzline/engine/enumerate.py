@@ -729,6 +729,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PAIN_SPLIT,
     # B10-7: a side condition that stops statuses (a burn's Attack is the status clause's).
     _E.SAFEGUARD,
+    # B12-23: a side condition that stops stat drops (a dropped stage is the stat clause's).
+    _E.MIST,
     # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
     _E.FOCUS_PUNCH,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
@@ -1136,6 +1138,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.HEAL_BELL,
     _E.REFRESH,
     _E.PSYCHO_SHIFT,
+    _E.MIST,
 )
 
 

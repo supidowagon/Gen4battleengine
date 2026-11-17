@@ -22,8 +22,9 @@
 
 Intimidate (``subscript_intimidate.s``): every living foe that is not behind a
 Substitute gets ``ATTACK_DOWN_1_STAGE`` as an ability side effect, through
-``BtlCmd_ChangeStatStage``; in M1 nothing blocks it (Clear Body, Hyper Cutter,
-White Smoke and Mist are unsupported), and Simple is applied where the stage is
+``BtlCmd_ChangeStatStage`` with the holder as the attacker (subscript_intimidate.s:8): the
+foe side's Mist blocks it (battle_script.c:2876-2882, B12-23), then Clear Body or Hyper
+Cutter (B9-6; White Smoke is unsupported), and Simple is applied where the stage is
 used (``damage.simple_stage``). The decomp runs the switch-in checks over
 ``monSpeedOrder``; in singles each Intimidate only lowers the other side's Attack,
 so the order does not change the result and ``make_state`` runs the player's lead
@@ -73,7 +74,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import ability_weather, trace_copy
-from nuzline.engine.effects import change_stage, entry_hazards, forget_item
+from nuzline.engine.effects import change_stage, entry_hazards, forget_item, mist_blocks_drop
 from nuzline.engine.ids import AbilityId, ItemId, Stat, Status, Weather
 from nuzline.engine.order import pinch_divisor
 from nuzline.engine.state import STAGE_MAX, BattleState
@@ -485,12 +486,14 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
     foe = 1 - side if foe is None else foe
     mon, target = state.active[side], state.active[foe]
-    # BtlCmd_ChangeStatStage (battle_script.c:2884-2902): the foe's Clear Body or Hyper Cutter
-    # (Battler_IgnorableAbility with the Intimidate holder as attacker, never Mold Breaker)
-    # blocks the drop; its "suppressed" message is built in C (no AI reveal), B9-6.
+    # BtlCmd_ChangeStatStage (battle_script.c:2874-2902): the foe side's Mist (:2876-2882; the
+    # holder is the attacker, subscript_intimidate.s:8), B12-23, then the foe's Clear Body or
+    # Hyper Cutter (Battler_IgnorableAbility with the Intimidate holder as attacker, never Mold
+    # Breaker) blocks the drop; its "suppressed" message is built in C (no AI reveal), B9-6.
     blocks = (state.ability[foe, target] == AbilityId.CLEAR_BODY) | (
         state.ability[foe, target] == AbilityId.HYPER_CUTTER
     )
+    blocks = blocks | mist_blocks_drop(state, foe, -1)
     on = (
         jnp.asarray(cond)
         & (state.ability[side, mon] == AbilityId.INTIMIDATE)

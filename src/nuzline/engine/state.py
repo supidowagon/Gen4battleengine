@@ -283,7 +283,7 @@ class BattleState(NamedTuple):
     reflect: jnp.ndarray  # int8, turns left
     light_screen: jnp.ndarray  # int8
     safeguard: jnp.ndarray  # int8
-    mist: jnp.ndarray  # int8
+    mist: jnp.ndarray  # int8, mistTurns left (per side, SideConditions; B12-23)
     lucky_chant: jnp.ndarray  # int8
     tailwind: jnp.ndarray  # int8
     wish_timer: jnp.ndarray  # int8

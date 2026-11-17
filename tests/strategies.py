@@ -1026,6 +1026,7 @@ BATCH12_MOVES = (
     "Aromatherapy",
     "Refresh",
     "Psycho Shift",
+    "Mist",  # B12-23
 )
 
 
@@ -1090,6 +1091,12 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["weather"][...] = rnd.choice(list(Weather))
     if rnd.random() < 0.15:
         a["wish_timer"][rnd.choice((side, foe))] = rnd.randint(1, 2)
+    # B12-23: Mist up on either side (its failure, its block), and a foe drop to meet it: a
+    # direct one, a secondary one, Tickle's pair, the foe's own Hammer Arm drop (exempt).
+    if move == "Mist" or rnd.random() < 0.15:
+        a["mist"][rnd.choice((side, foe))] = rnd.randint(1, 5)
+        dropper = rnd.choice(("Growl", "Screech", "Tickle", "Bubble", "Mud-Slap", "Hammer Arm"))
+        _teach(tables, a, foe, foe_mon, names.move(dropper), rnd.randint(0, 3))
 
 
 # Moves whose decomp path tests a substitute or meets one (B10-4).
@@ -1720,6 +1727,7 @@ RARE_EFFECTS = (
     EffectId.HEAL_BELL,
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
+    EffectId.MIST,  # B12-23
 )
 
 

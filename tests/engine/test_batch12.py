@@ -477,3 +477,75 @@ def test_psycho_shift_gives_sleep_with_the_drawn_count(tables, names):
     out = assert_matches_reference(tables, s, (0, 0), o)
     assert int(out.status[1, 0]) == Status.SLEEP
     assert int(out.status[0, 0]) == Status.NONE
+
+
+# --- B12-23: Mist ----------------------------------------------------------------------------
+
+
+def _misted(s, side: int, turns: int = 3):
+    return s._replace(mist=s.mist.at[side].set(turns))
+
+
+def test_mist_sets_five_turns_and_blocks_the_slower_foes_drop(tables, names):
+    """BtlCmd_TryMist (battle_script.c:4310-4313): mistTurns = NUM_SCREEN_TURNS (5) on the
+    user's side; Growl later that turn meets it (:2875-2882); the field pass takes one turn off
+    (bcp.c:993-1004)."""
+    s = _state(tables, names, ("Lapras", "Mist"), ("Bidoof", "Growl"))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert (int(out.mist[0]), int(out.mist[1]), _st(out, 0, "ATK")) == (4, 0, 0)
+
+
+def test_mist_fails_while_up_and_ends_at_zero(tables, names):
+    """BtlCmd_TryMist (:4307-4309): with SIDE_CONDITION_MIST up the move fails, the count is
+    kept; at 1 the field pass ends it (bcp.c:997-999) and the next drop lands."""
+    s = _state(tables, names, ("Lapras", "Mist", "Tackle"), ("Bidoof", "Growl"))
+    out = assert_matches_reference(tables, _misted(s, 0, 3), (0, 0), O)
+    assert (int(out.mist[0]), _st(out, 0, "ATK")) == (2, 0)
+    out = assert_matches_reference(tables, _misted(s, 0, 1), (1, 0), O)
+    assert int(out.mist[0]) == 0 and _st(out, 0, "ATK") == 0  # Growl came before the pass
+    out = assert_matches_reference(tables, out, (1, 0), O)
+    assert _st(out, 0, "ATK") == -1
+
+
+def test_mist_blocks_direct_and_secondary_drops_on_its_side_only(tables, names):
+    """battle_script.c:2875-2882: a drop by another battler on the misted side is blocked, a
+    direct one (Screech, Tickle's two, Captivate) and a secondary one (Bubble, :2938-2941); the
+    other side's drops are not."""
+    secondary = O._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    for move, stats in (("Screech", ("DEF",)), ("Tickle", ("ATK", "DEF")), ("Bubble", ("SPE",))):
+        s = _state(tables, names, ("Bidoof", "Tackle"), ("Pikachu", move))
+        out = assert_matches_reference(tables, _misted(s, 0), (0, 0), secondary)
+        assert all(_st(out, 0, stat) == 0 for stat in stats), move
+        out = assert_matches_reference(tables, _misted(s, 1), (0, 0), secondary)
+        assert all(_st(out, 0, stat) < 0 for stat in stats), move
+    s = _gendered(_state(tables, names, ("Bidoof", "Tackle"), ("Pikachu", "Captivate")), 0, 1)
+    out = assert_matches_reference(tables, _misted(s, 0), (0, 0), O)
+    assert _st(out, 0, "SPA") == 0
+
+
+def test_mist_spares_the_users_own_drop_and_meets_mold_breaker(tables, names):
+    """:2876 (attacker != sideEffectMon): Hammer Arm's Speed drop on its own user goes through
+    Mist; the test reads no ability, so the attacker's Mold Breaker does not pierce it."""
+    s = _state(tables, names, ("Machamp", "Hammer Arm"), ("Golbat", "Tackle"))
+    out = assert_matches_reference(tables, _misted(s, 0), (0, 0), O)
+    assert _st(out, 0, "SPE") == -1
+    s = _state(tables, names, ("Bidoof", "Tackle"), ("Rampardos", "Leer"))
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.MOLD_BREAKER))
+    out = assert_matches_reference(tables, _misted(s, 0), (0, 0), O)
+    assert _st(out, 0, "DEF") == 0
+
+
+def test_mist_blocks_intimidate(tables, names):
+    """subscript_intimidate.s:8 makes the holder the attacker, so the foe side's Mist blocks
+    its ATTACK_DOWN_1_STAGE (battle_script.c:2876-2882)."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bidoof", ("Tackle",), 40)],
+        [_mon(n, "Bidoof", ("Tackle",), 40), _mon(n, "Shinx", ("Tackle",), 40)],
+    )
+    s = s._replace(ability=s.ability.at[1, 1].set(AbilityId.INTIMIDATE))
+    out = assert_matches_reference(tables, _misted(s, 0), (0, 4 + 1), O)
+    assert _st(out, 0, "ATK") == 0
+    out = assert_matches_reference(tables, s, (0, 4 + 1), O)
+    assert _st(out, 0, "ATK") == -1

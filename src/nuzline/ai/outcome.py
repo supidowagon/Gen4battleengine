@@ -578,6 +578,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # E2 batch 12, the stat family (B12-11).
         25,  # RESET_STAT_CHANGES: Basic_CheckStatStageImbalance (:151); Expert_Haze (:1648)
         47,  # CRIT_UP_2: Basic_CheckAlreadyPumpedUp (:162); no Expert entry
+        46,  # PREVENT_STAT_REDUCTION: Basic_CheckAlreadyUnderMist (:161); no Expert (B12-23)
         143,  # COPY_STAT_CHANGES: Basic_CheckStatStageImbalance (:217); Expert_PsychUp (:1713)
         166,  # SP_ATK_UP_CAUSE_CONFUSION: Basic_CheckCannotConfuse (:230); Expert_Flatter
         205,  # ATK_DEF_DOWN: Basic_CheckTickle (:246); Expert_StatusDefenseDown (:1751)

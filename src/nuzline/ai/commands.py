@@ -101,6 +101,7 @@ class SideCondition(IntEnum):
     LIGHT_SCREEN = 1 << 1  # BattleState.light_screen
     SPIKES = 1 << 2  # :90; BattleState.spikes (layers, LoadSpikesLayers)
     SAFEGUARD = 1 << 3  # BattleState.safeguard
+    MIST = 1 << 6  # :94; BattleState.mist (turns left), B12-23
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
     TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
@@ -111,6 +112,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.REFLECT: "reflect",
     SideCondition.LIGHT_SCREEN: "light_screen",
     SideCondition.SAFEGUARD: "safeguard",
+    SideCondition.MIST: "mist",
     SideCondition.STEALTH_ROCK: "stealth_rock",
     SideCondition.TAILWIND: "tailwind",
     SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
@@ -338,6 +340,7 @@ class BattleEffect(IntEnum):
     # E2 batch 12, the stat family (B12-11).
     RESET_STAT_CHANGES = 25  # Haze
     CRIT_UP_2 = 47  # Focus Energy
+    PREVENT_STAT_REDUCTION = 46  # Mist (B12-23)
     COPY_STAT_CHANGES = 143  # Psych Up
     SP_ATK_UP_CAUSE_CONFUSION = 166  # Flatter
     ATK_DEF_DOWN = 205  # Tickle

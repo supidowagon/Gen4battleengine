@@ -529,6 +529,13 @@ def _basic_check_stat_stage_imbalance(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
+def _basic_check_mist(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAlreadyUnderMist`` (script.s:587-590): the AI's side under Mist
+    (SIDE_CONDITION_MIST, IfSideCondition trainer_ai.c:732), -8; B12-23."""
+    ctx, t = _split(c.if_side_condition(_at(ctx, mask), _A, c.SideCondition.MIST))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -3131,6 +3138,7 @@ _BASIC_LABELS = (
     (BattleEffect.CHARGE_TURN_HIGH_CRIT, _basic_check_non_standard_damage),  # :158
     (BattleEffect.HALVE_HP, _basic_check_non_standard_damage),  # :159
     (BattleEffect.DAMAGE_FLAT_40, _basic_check_non_standard_damage),  # :160
+    (BattleEffect.PREVENT_STAT_REDUCTION, _basic_check_mist),  # :161 (B12-23)
     (BattleEffect.CRIT_UP_2, _basic_check_already_pumped_up),  # :162 (B12-11)
     (BattleEffect.STATUS_CONFUSE, _basic_check_cannot_confuse),  # :163
     (BattleEffect.ATK_UP_2, _basic_check_high_atk),  # :164

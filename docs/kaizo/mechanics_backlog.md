@@ -174,25 +174,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 108 | 37 | 37 |
-| Gardenia Split | 28 | 410 (65) | 108 | 37 | 0 |
-| Fantina Split | 38 | 463 (69) | 108 | 37 | 0 |
-| Maylene Split | 47 | 480 (73) | 109 | 37 | 0 |
-| Wake Split | 54 | 482 (71) | 110 | 37 | 0 |
-| Byron Split | 65 | 486 (72) | 110 | 37 | 0 |
-| Candice Split | 74 | 486 (72) | 110 | 37 | 0 |
-| Galactic Split | 100 | 493 (73) | 113 | 39 | 2 |
-| Volkner Split | 84 | 487 (73) | 111 | 37 | 0 |
-| Elite Four Split | 100 | 493 (73) | 113 | 39 | 0 |
-| **Whole game** | | | 113 | 39 | 39 |
+| Roark Split | 16 | 358 (64) | 107 | 36 | 36 |
+| Gardenia Split | 28 | 410 (65) | 107 | 36 | 0 |
+| Fantina Split | 38 | 463 (69) | 107 | 36 | 0 |
+| Maylene Split | 47 | 480 (73) | 108 | 36 | 0 |
+| Wake Split | 54 | 482 (71) | 109 | 36 | 0 |
+| Byron Split | 65 | 486 (72) | 109 | 36 | 0 |
+| Candice Split | 74 | 486 (72) | 109 | 36 | 0 |
+| Galactic Split | 100 | 493 (73) | 112 | 38 | 2 |
+| Volkner Split | 84 | 487 (73) | 110 | 36 | 0 |
+| Elite Four Split | 100 | 493 (73) | 112 | 38 | 0 |
+| **Whole game** | | | 112 | 38 | 38 |
 
-Of your 113 groups, 74 are also needed by opposing trainers and 39 are player-only.
+Of your 112 groups, 74 are also needed by opposing trainers and 38 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 10 | 10 | 11 | 6 | 0 | 0 | 37 |
+| Roark Split | 0 | 10 | 9 | 11 | 6 | 0 | 0 | 36 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -202,7 +202,7 @@ Of your 113 groups, 74 are also needed by opposing trainers and 39 are player-on
 | Galactic Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **11** | **11** | **11** | **6** | **0** | **0** | **39** |
+| **Whole game** | **0** | **11** | **10** | **11** | **6** | **0** | **0** | **38** |
 
 ### Player-only groups
 
@@ -227,7 +227,6 @@ Of your 113 groups, 74 are also needed by opposing trainers and 39 are player-on
 | move effects | move effect #245: Punishment | Roark Split |
 | move effects | move effect #246: Last Resort | Roark Split |
 | move effects | move effect #258: Defog | Roark Split |
-| move effects | move effect #46: Mist | Roark Split |
 | move effects | move effect #95: Sketch | Roark Split |
 | move effects | move effect #268: Judgment | Galactic Split |
 | held items | held item effect #102: Quick Powder | Roark Split |
@@ -276,14 +275,14 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 3 | move effect #83: Metronome; 42 of 442 callable moves unmodelled |
+| 3 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
 | 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it |
 | 1 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball |
 
-Groups by kind: battle format 2, AI 1, move effect 1, battle terrain 1, trainer item 1
+Groups by kind: battle format 2, AI 1, battle terrain 1, move effect 1, trainer item 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -295,7 +294,7 @@ Groups by kind: battle format 2, AI 1, move effect 1, battle terrain 1, trainer 
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 8 | AI: AI_FLAG_HARRASSMENT |
 | 5 | battle format: a double battle |
-| 4 | move effect #83: Metronome; 42 of 442 callable moves unmodelled |
+| 4 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
 | 3 | AI move-id case of TrainerAI_CalcDamage: Bulldoze, Triple Axel |
 | 3 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model |
 | 3 | held item effect #65: Focus Band |
@@ -363,7 +362,7 @@ Groups by kind: battle format 12, ability 5, AI 3, held item effect 2, battle te
 | 15 | AI move effect #215 GRAVITY not transcribed (Basic_CheckGravityActive / Expert_Gravity): Gravity |
 | 15 | ability: Synchronize |
 | 15 | move effect #215: Gravity |
-| 15 | move effect #83: Metronome; 42 of 442 callable moves unmodelled |
+| 15 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
 | 13 | AI move effect #114 ALL_FAINT_3_TURNS not transcribed (Basic_CheckPerishSong): Perish Song |
 | 13 | AI move effect #71 LOWER_SP_ATK_HIT not transcribed (no Basic or Expert label): Mist Ball, Mystical Fire |
 | 12 | held item effect #106: Iron Ball |
@@ -400,7 +399,7 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 2 | AI: AI_FLAG_TAG_STRATEGY | 35 of 68 |
 | 3 | AI: AI_FLAG_HARRASSMENT | 41 of 68 |
 | 4 | battle format: a double battle | 43 of 68 |
-| 5 | move effect #83: Metronome; 42 of 442 callable moves unmodelled | 45 of 68 |
+| 5 | move effect #83: Metronome; 41 of 442 callable moves unmodelled | 45 of 68 |
 | 6 | form: trainer Pokemon in a data form: this game's party builder applies the form before computing its stats, which the engine's trainer party build does not model | 47 of 68 |
 | 7 | held item effect #65: Focus Band | 48 of 68 |
 | 8 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_BUILDING), and Nature Power, Secret Power, Camouflage would read it | 50 of 68 |

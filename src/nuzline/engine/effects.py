@@ -221,8 +221,9 @@ many are real). Decomp sources:
 Substitute (E2 batch 10, B10-4): ``play_hit``'s hit into it and the gates of every effect
 (``_Hit.sub_hit``, ``_Hit.shielded``), ``_substitute`` the move.
 Safeguard (E2 batch 10, B10-7): ``_safeguard`` and its gates on status and confusion.
-Unreachable branches are not modelled: Mist comes from an unsupported move; Clear Body, Hyper
-Cutter, Immunity, Leaf Guard, Liquid Ooze,
+Mist (E2 batch 12, B12-23): ``_mist`` the move, ``mist_blocks_drop`` its block in every drop by
+another battler (``_foe_stage``, ``hooks.intimidate``).
+Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Leaf Guard, Liquid Ooze,
 Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
 Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
@@ -297,6 +298,7 @@ _I32 = jnp.int32
 _E = EffectId
 BIDE_TURNS = 2  # VOLATILE_CONDITION_BIDE_1 (condition.h:41): the 2-bit counter's value 2
 SAFEGUARD_TURNS = 5  # BtlCmd_TrySafeguard (battle_script.c:5765)
+MIST_TURNS = 5  # BtlCmd_TryMist: NUM_SCREEN_TURNS (battle_script.c:4312; battle.h:142)
 ROLLOUT_USES = 5  # BtlCmd_CalcRolloutPower starts rolloutCount at 5
 
 
@@ -352,14 +354,28 @@ def change_stage(state: BattleState, side, stat, delta, cond) -> BattleState:
     return state._replace(stages=state.stages.at[side, stat].set(new))
 
 
+def mist_blocks_drop(state: BattleState, target_side, delta) -> jnp.ndarray:
+    """``bool``: ``BtlCmd_ChangeStatStage``'s first test of a drop on another battler
+    (battle_script.c:2874-2882): the target's side has ``mistTurns`` set ("is protected by
+    Mist!"), B12-23. It comes before Clear Body, the -6 test, Shield Dust and the substitute,
+    and reads no ability, so the attacker's Mold Breaker does not pierce it. Exempt: a drop on
+    the attacker itself (:2876, ``attacker != sideEffectMon``: a user's own drop such as Hammer
+    Arm's, ``_secondary_stat_self``, never calls this) and one with
+    ``MOVE_SIDE_EFFECT_CANNOT_PREVENT`` (:2875), which no script sets. In doubles an ally's drop
+    is blocked too (the test is on the battler, not the side)."""
+    return (jnp.asarray(delta) < 0) & (state.mist[target_side] != 0)
+
+
 def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
     stat, delta = h.param[0], h.param[1]
-    # BtlCmd_ChangeStatStage (battle_script.c:2884-2902), a drop by another battler: Clear Body,
-    # then Keen Eye on accuracy and Hyper Cutter on Attack (Battler_IgnorableAbility), B9-6.
+    # BtlCmd_ChangeStatStage (battle_script.c:2874-2902), a drop by another battler: the target
+    # side's Mist (B12-23), then Clear Body, then Keen Eye on accuracy and Hyper Cutter on
+    # Attack (Battler_IgnorableAbility), B9-6.
     seen = h.target_ignorable
     keen_eye = (seen == AbilityId.KEEN_EYE) & (stat == Stat.ACC)
     hyper_cutter = (seen == AbilityId.HYPER_CUTTER) & (stat == Stat.ATK)
     blocked = (delta < 0) & ((seen == AbilityId.CLEAR_BODY) | keen_eye | hyper_cutter)
+    blocked = blocked | mist_blocks_drop(state, h.target_side, delta)
     # Then the stage already at -6, then (indirect) Shield Dust, then the substitute's bit
     # (VOLATILE_CONDITION_SUBSTITUTE only, :2921-2923): a direct drop fails, an indirect one is
     # skipped silently (:2937-2945). Each blocks the drop; raises are never tested.
@@ -950,6 +966,15 @@ def _safeguard(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "safeguard", h.side, SAFEGUARD_TURNS, cond)
 
 
+def _mist(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Mist (effect_script_0046.s, a direct ON_HIT subscript_mist.s; BtlCmd_TryMist,
+    battle_script.c:4300-4317): mistTurns = 5 on the user's side (the field-condition pass counts
+    it down, ``step.FIELD_SIDE_TIMERS``, bcp.c:993-1004); with SIDE_CONDITION_MIST up already the
+    move fails (``primary_effect_fails``), B12-23. mistUser (:4313) has no reader."""
+    cond = (h.effect == _E.MIST) & h.landed & (state.mist[h.side] == 0)
+    return _set(state, "mist", h.side, MIST_TURNS, cond)
+
+
 def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Belly Drum (effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s; the user, a
     RANGE_USER defender, has HP): Attack set to +6, then Divide(maxHP, 2) through UPDATE_HP (:8-12).
@@ -1338,6 +1363,8 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.PAIN_SPLIT) & (state.substitute_hp[target_side] != 0))
         # BtlCmd_TrySafeguard (battle_script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
         | ((effect == _E.SAFEGUARD) & (state.safeguard[side] != 0))
+        # BtlCmd_TryMist (battle_script.c:4307-4309, MOVE_STATUS_FAILED), B12-23.
+        | ((effect == _E.MIST) & (state.mist[side] != 0))
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
@@ -2617,6 +2644,7 @@ def play_hit(
         _substitute,
         _pain_split,
         _safeguard,
+        _mist,
         _encore,
         _roost,
         _side_layers,

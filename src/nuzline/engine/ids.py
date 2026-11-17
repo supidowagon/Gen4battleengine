@@ -374,6 +374,12 @@ class EffectId(IntEnum):
     # subscript_give_target_own_status.s gives the user's status through its status subscript, and
     # the user's is cleared when the defender then has one (``effects._psycho_shift``).
     PSYCHO_SHIFT = 103
+    # Mist (46, BATTLE_EFFECT_PREVENT_STAT_REDUCTION): zeros. effect_script_0046.s: a direct
+    # ON_HIT subscript_mist.s -> BtlCmd_TryMist (battle_script.c:4300-4317): fails
+    # (MOVE_STATUS_FAILED) with SIDE_CONDITION_MIST on the user's side, else mistTurns =
+    # NUM_SCREEN_TURNS (5) on it (``effects._mist``). BtlCmd_ChangeStatStage
+    # (:2875-2882) blocks every drop by another battler while mistTurns is set (B12-23).
+    MIST = 104
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

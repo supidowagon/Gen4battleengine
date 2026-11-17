@@ -378,6 +378,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     226: ("BATTLE_EFFECT_RANDOM_STAT_UP_2", _E.ACUPRESSURE, (0, 0, 0)),
     # Power Trick: effect_script_0238.s (subscript_user_swap_atk_and_def.s).
     238: ("BATTLE_EFFECT_SWAP_ATK_DEF", _E.POWER_TRICK, (0, 0, 0)),
+    # Mist (B12-23): effect_script_0046.s, a direct ON_HIT subscript_mist.s (BtlCmd_TryMist).
+    46: ("BATTLE_EFFECT_PREVENT_STAT_REDUCTION", _E.MIST, (0, 0, 0)),
     # E2 batch 12, the healing family (B12-12..). Rest: effect_script_0037.s (subscript_rest.s).
     37: ("BATTLE_EFFECT_REST", _E.REST, (0, 0, 0)),
     # Morning Sun, Synthesis, Moonlight: effect_script_0132.s (WeatherHPRecovery,

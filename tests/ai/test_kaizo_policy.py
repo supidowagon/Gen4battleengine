@@ -4087,6 +4087,10 @@ def _stage(s, side: int, stat, value: int):
         # Basic_CheckAlreadyPumpedUp (:592-595).
         ("Focus Energy", "pumped", -10),
         ("Focus Energy", "neutral", 0),
+        # Basic_CheckAlreadyUnderMist (:587-590): the AI's side under Mist -8 (B12-23).
+        ("Mist", "misted", -8),
+        ("Mist", "player misted", 0),
+        ("Mist", "neutral", 0),
         # Basic_CheckTickle (:933-947): Attack at -6 -10, Defense at -6 -8.
         ("Tickle", "player atk -6", -10),
         ("Tickle", "player def -6", -8),
@@ -4118,6 +4122,8 @@ def test_batch12_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case,
         s = _stage(s, 0, Stat.ATK, 2)
     elif case == "pumped":
         s = s._replace(focus_energy=s.focus_energy.at[1].set(1))
+    elif case in ("misted", "player misted"):
+        s = s._replace(mist=s.mist.at[1 if case == "misted" else 0].set(2))
     elif case == "player atk -6":
         s = _stage(s, 0, Stat.ATK, -6)
     elif case == "player def -6":
@@ -4213,6 +4219,32 @@ def test_batch12_stat_family_exact_equals_loose(kaizo_tables, kaizo_names, kaizo
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)
+
+
+@pytest.mark.parametrize(
+    ("attacker", "target", "expected"),
+    [(100, 100, 0), (70, 100, -2), (100, 30, -2), (70, 30, -4)],
+)
+def test_mist_check_hp(kaizo_tables, kaizo_names, kaizo_roark_party, attacker, target, expected):
+    """Mist (PREVENT_STAT_REDUCTION, the Kaizo ROM's effect for the move, ``move_ai_effect``)
+    is in CheckHP_DiscourageAtMediumHP (script.s:7782) and CheckHP_Target_DiscourageAtLowHP
+    (:7938), not the high-HP ones: -2 per band met unless :7718 / :7742 jumps (B12-23)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mist", "Accelerock", "", ""))
+    assert int(t.move_ai_effect[n.move_names.index("Mist")]) == BattleEffect.PREVENT_STAT_REDUCTION
+    s = _hp(_hp(s, 1, attacker), 0, target)
+    assert _delta(t, s, 0x7, 0x107)[0] == expected
+    assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
+
+
+def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Under Roark's flag set (0x17), misted or not: scored, not refused, exact == loose."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mist", "Accelerock", "", ""))
+    for s2 in (s, s._replace(mist=s.mist.at[1].set(2))):
+        layout = layout_for(t, 0x17, s2)
+        assert policy.ai_refusals(t, s2, n, layout) == []
+        _assert_exact_equals_loose(t, s2, layout)
 
 
 # --- E2 batch 12 (B12-18): the healing family's AI ------------------------------------------
