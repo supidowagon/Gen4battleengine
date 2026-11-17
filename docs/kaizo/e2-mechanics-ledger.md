@@ -9,8 +9,9 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   (1) batch 13 builder (Opus) in worktree _scratch/e2/b13wt, branch e2-batch13 from 9e08c7e; it
   builds, tests, gets one review, fixes, reports once. Batch 13 must end up ON TOP of 2c8efd6
   (merge 2c8efd6 into e2-batch13, rebuild tables, dup scan, unsupported tests, targeted set).
-  (2) raw_rolls phases seeds 2 and 5: ci-day blocked (this session has no Runpod exec-pod tool;
-  the phase runner is not in the commit; manager told). Run them on the PC when it is quiet
+  ci-day: streams have no pod tool; send the MANAGER one line (commit, pytest node ids or -k/-m,
+  memory guard) and it runs the job and returns result/time/peak. Only committed code runs there.
+  (2) raw_rolls phases seeds 2 and 5 (not a merge condition): a Sonnet agent runs them locally. Run them on the PC when it is quiet
   (`_scratch/e2/rawrolls_phase.py 2 6 256`, then `5 6 256`; >=12 GB free at start, side lock),
   via a Sonnet agent; send the manager one line with the result.
   When batch 13 is at its tip: send the manager ONE message with the tip + results AND the
