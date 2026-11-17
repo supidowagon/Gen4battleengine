@@ -740,20 +740,29 @@ def hit_thresholds(
         conf_grid = jnp.tile(jnp.repeat(confuseds, n_stage), 4)
         weather_grid = jnp.tile(jnp.repeat(weathers, 2 * n_stage), 2)
         moved_grid = jnp.repeat(jnp.array([False, True]), 4 * n_stage)
-        for micle in (state.micle[side] != 0, jnp.asarray(True)):
-            thresholds.append(
-                jax.vmap(
-                    lambda a, e, m, w, c, side=side, micle=micle: _hit_threshold(
-                        tables, state, actions, side, a, e, m, w, c, moves[side], micle
-                    )
-                )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
+        # The Micle axis outermost (G-59): the flag as at the start, then set.
+        n_grid = acc_grid.shape[0]
+        micle_grid = jnp.concatenate(
+            [jnp.broadcast_to(state.micle[side] != 0, (n_grid,)), jnp.ones((n_grid,), bool)]
+        )
+        thresholds.append(
+            jax.vmap(
+                lambda a, e, m, w, c, k, side=side: _hit_threshold(
+                    tables, state, actions, side, a, e, m, w, c, moves[side], k
+                )
+            )(
+                *(
+                    jnp.tile(g, 2)
+                    for g in (acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
+                ),
+                micle_grid,
             )
+        )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
         grid_ok = jnp.concatenate([grid_ok, grid_ok & zoom[side]])
         possible.append(jnp.concatenate([grid_ok, grid_ok & micle_free[side]]))
-    thresholds = [jnp.concatenate(thresholds[2 * k : 2 * k + 2]) for k in (0, 1)]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 

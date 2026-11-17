@@ -226,8 +226,8 @@ Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard i
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
 Unreachable branches are not modelled: Mist comes from an unsupported move; Clear Body, Hyper
 Cutter, Immunity, Liquid Ooze,
-Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
-Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
+Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities
+(Grip Claw is E1 Batch D's, ``_trap``). Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
 (``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
 Levitate and Scrappy on the type chart (``damage.levitated``, ``damage.identified``) and

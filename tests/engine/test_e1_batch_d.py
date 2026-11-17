@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from nuzline.ai.policy import ai_refusals
+from nuzline.ai.switching import switching_refusals
 from nuzline.engine.coverage import IMPLEMENTED_ITEMS, Support
 from nuzline.engine.damage import damage_table
 from nuzline.engine.hooks import max_pp
@@ -148,6 +149,8 @@ def test_speed_halving_hold_effects_match_the_decomp():
 def test_the_ai_no_longer_refuses_a_player_iron_ball(tables, names):
     s = _item(roark_state(tables, names), 0, 0, names.item("Iron Ball"))
     assert not [r for r in ai_refusals(tables, s, names) if "Iron Ball" in r]
+    both = _item(s, 1, 1, names.item("Iron Ball"))  # and one on the AI's bench
+    assert not [r for r in switching_refusals(tables, both) if "Iron Ball" in r]
 
 
 # --- G-57 Grip Claw -------------------------------------------------------------------------

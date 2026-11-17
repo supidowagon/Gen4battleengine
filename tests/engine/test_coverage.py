@@ -32,7 +32,7 @@ from nuzline.engine.coverage import (
     terrain_refusal,
     unknown_start,
 )
-from nuzline.engine.ids import AbilityId, Weather
+from nuzline.engine.ids import AbilityId, ItemId, Weather
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
@@ -49,15 +49,20 @@ def test_roark_vs_sample_party_is_fully_covered(tables, names):
 
 
 def test_all_missing_reported_at_once(tables, names, metronome_refused):
+    # The held item is picked from the coverage table at run time: the first one still mapped
+    # to ItemId.UNSUPPORTED.
+    effects = np.asarray(tables.item_effect)
+    refused = next(i for i in range(1, len(effects)) if effects[i] == ItemId.UNSUPPORTED)
+    item = names.item_names[refused]
     party = sample_party(
         names,
         override_moves={0: ["Metronome", "Scratch", "Leer", "Ember"]},
-        override_item={1: "Iron Ball"},
+        override_item={1: item},
     )
     with pytest.raises(UnsupportedMechanics) as e:
         require_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
     msg = str(e.value)
-    assert "Metronome" in msg and "Iron Ball" in msg
+    assert "Metronome" in msg and item in msg
     assert e.value.report.level == Support.NONE
 
 

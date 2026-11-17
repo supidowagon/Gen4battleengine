@@ -204,7 +204,6 @@ def test_too_many_sites_are_refused(tables, names):
     [
         ("player_move", "Miracle Eye"),
         ("opp_move", "Weather Ball"),
-        ("item", "Iron Ball"),
         ("ability", "Levitate"),
         ("absorb", "Water Absorb"),
     ],
@@ -215,8 +214,6 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
         s = s._replace(moves=s.moves.at[0, 3, 1].set(names.move(missing)))
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
-    elif change == "item":
-        s = s._replace(item=s.item.at[0, 2].set(names.item("Iron Ball")))
     elif change == "ability":  # Gastly's only ability is Levitate
         s = s._replace(species=s.species.at[0, 5].set(names.species("Gastly")))
     else:  # Poliwag (Water Absorb) on Roark's bench: AI_HasAbsorbAbilityInParty
