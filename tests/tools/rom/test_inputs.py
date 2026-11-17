@@ -8,10 +8,11 @@ from tools.rom.inputs import REPO_ROOT, RomInputError, load_inputs, read_checked
 
 def test_toml_and_env_precedence(tmp_path):
     cfg = tmp_path / "local.toml"
-    cfg.write_text("vanilla_rom = 'roms/v.nds'\nkaizo_patch = 'C:\\p\\k.xdelta'\n")
+    patch = tmp_path / "k.xdelta"  # absolute on every OS: an absolute TOML path is kept as given
+    cfg.write_text(f"vanilla_rom = 'roms/v.nds'\nkaizo_patch = '{patch}'\n")
     got = load_inputs(cfg, environ={"NUZLINE_KAIZO_SAVE": "s.sav"})
     assert got.vanilla_rom == REPO_ROOT / "roms" / "v.nds"
-    assert got.kaizo_patch == Path("C:\\p\\k.xdelta") and got.kaizo_save == Path("s.sav")
+    assert got.kaizo_patch == patch and got.kaizo_save == Path("s.sav")
     assert got.pkcalc_zip is None and got.kaizo_docs is None
     assert got.kaizo_save_pre_roark is None and got.kaizo_save_probe is None
     probe = {"NUZLINE_KAIZO_SAVE_PROBE": "probe.dsv"}
