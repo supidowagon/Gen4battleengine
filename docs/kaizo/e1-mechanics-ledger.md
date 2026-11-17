@@ -570,3 +570,108 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `prep.variants.ai_kill_damage` lists every class's damage. Tests:
   `tests/engine/test_e1_roark_close.py` (family 3), `tests/ai/test_read_bounds.py`;
   docs/ai/kaizo_roark.md 8.7.
+
+## Batch A
+
+- G-41 Trainer Pokemon in a data form (Wormadam, Deoxys, Rotom, Giratina-Origin, Shaymin-Sky
+  personal rows 496-507, `Pokemon_GetFormNarcIndex`, pokemon.c:4929-4960) are built as the
+  game builds them, and the coverage refusal "trainer Pokemon in a data form" is gone.
+  `TrainerData_BuildParty` (src/trainer_data.c:216-218, :246-248, :272-274, :303-305) sets
+  `MON_DATA_FORM` after `Pokemon_InitWith` has read the base species' friendship
+  (pokemon.c:435-436), ability (:473-485, ability 1 when ability 2 is `ABILITY_NONE`), gender
+  ratio (`Pokemon_GetGenderOf`, :2707-2715) and level-up learnset (`BoxPokemon_SetDefaultMoves`
+  reads `MON_DATA_FORM`, still 0, :3819-3829); setting the form only stores it (:1608-1609),
+  and the types follow the form (`MON_DATA_TYPE_1/2`, :1219-1225; `BattleSystem_InitBattleMon`
+  copies them, battle/battle_lib.c:114-115). Vanilla keeps the base row's stats (no recalc);
+  Kaizo's patched builder calls `Pokemon_CalcStats` after the form (rom_diff.md
+  "TrainerData_BuildParty, decoded", step 11), which loads the form's row (pokemon.c:595) and
+  keeps a full-HP Pokemon at full HP (:633-641). Engine: `PokemonSpec.ability_form` /
+  `stats_form` (None = `form`); `build_trainer_party` sets `ability_form=0` and, by game,
+  `stats_form=0` for vanilla's builder (`IntermediateData.patched_builder` is False: no
+  `kaizo.json`, which only Kaizo's resolve step writes); the new state field `ability_form`
+  (int8[2,6], STATE.md) is the
+  row `ability_slot` indexes in `_fill_slot`, `step._restore_ability`,
+  `damage.decomp_abilities`, the reference engine and coverage. Rotom's form rows' abilities
+  equal its base row's; Giratina-Origin (Cyrus 780) now has Pressure and Shaymin-Sky (Cynthia 870) Natural
+  Cure, both still refused by Ruling 8 (`_check_form`). Tests: `tests/engine/test_e1_batch_a.py`
+  (family 1), `tests/data/test_trainer.py`, `tests/engine/test_coverage.py`.
+- G-42 Local script ids 3 and 4 run on a header only where game code can start them
+  (`tools/terrain.py` `C_STARTED_SCRIPTS`, `c_started` in `narrowed_terrains`): the Pal Park
+  encounter task's last ball (`FieldTask_PalParkEncounter`, encounter.c:591-645, :636-637,
+  created only by `Encounter_NewVsPalParkTransfer`, :647-650) and the start menu's Retire,
+  which runs 4 outside the Safari Game (start_menu.c:1452-1457) and is shown only in the Safari
+  and Pal Park option sets (:279-287, :333-347; the normal, Battle Tower, Union Room and
+  Colosseum sets hide it, :385, :402, :407, :412). `FLAG_IN_PAL_PARK` is set and cleared only
+  by `ScrCmd_SetClearInCatchingShowFlag` (scrcmd_catching_show.c:24-38; system_flags.c:
+  418-431), so 3 and 4 run that way only on a header whose own file reaches
+  `SCRCMD_SETCLEARINCATCHINGSHOWFLAG` (Pal Park in both ROMs). Overlay 9 also starts 2, 3, 4,
+  6, 7 and 8 (ov9_02249960.c:99, :106, :8765, :11050-12709), kept behind the Distortion World's
+  map features as before. 5 (Union Room) is unchanged. Kaizo: 11 rows lose Route 202's or a
+  sibling header's tiles (Venus 414, Luna 415, Lucas/Dawn partner rows 613-618 -> BUILDING; Io
+  442 -> MOUNTAIN; Scarlet 892, Celeste 893 -> PLAIN); vanilla: none. Tests:
+  `tests/tools/rom/test_terrain_narrowing.py`, `tests/tools/rom/test_terrain.py` (Kaizo mixed
+  219 -> 208).
+- G-40 Clone objects and past-table local ids in the terrain narrowing (`tools/terrain.py`
+  `clone_scripts`, `past_table_starts`, `HeaderSites.extra_starts` / `runs_any`). A clone
+  object (script `NO_SCRIPT`) keeps the old header's map object with its local id when the
+  clone's flag names that header (`sub_0206184C` / `sub_0206244C`, map_object.c:171-198,
+  :772-801), so the header runs that object's script id (no chain: a full load's clone path
+  `sub_02062714`, :962-970, sets the kept object's script to the clone's 65535 and marks it
+  `MAP_OBJ_STATUS_25`, `sub_02062E94`/`sub_02062C18`, :1630-1634, :1861-1868, so only the flag
+  header's own non-clone objects carry a script; nine clone-of-clone pairs in each ROM, e.g.
+  Route 206/207 local 8, add nothing more); a clone whose flag header has no such
+  object keeps nothing and is built fresh from the clone event (`MapObjectMan_AddMapObjectFrom
+  Header` -> `sub_020624CC`'s search, :236-241, :803-815, then :244-255), whose script 65535
+  starts a fixed file, no local id (script_manager.c:32-33, :228-254): it adds no id (Kaizo
+  headers 336 and 371). A local id past its file's entry table runs
+  `ScriptContext_JumpToOffsetID` (script_manager.c:412-416) at `4 * id` plus the word read
+  there: inside the file it is an extra start node explored like a bg/object entry (vanilla
+  Route 207's clone id 15 -> offset 70: SetVarFromValue, End, no battle). A target outside the
+  file (Kaizo's, vanilla Oreburgh City's 45) runs heap memory past the loaded file, and a table
+  word past the file's end (vanilla Route 223, header 468, `scripts_empty`) is itself read from
+  heap memory; the decomp fixes neither, so in both cases the header may run any entry of its
+  file (the conservative ruling; review fix: an outside target first ran no entry). Headers
+  that may run any entry: vanilla 45, 344, 349, 350, 362, 365, 400, 407, 468; Kaizo 2, 45, 349,
+  353, 362, 365, 400, 407, 418, 439. The decomp narrowing (vanilla intermediates) has no byte
+  offsets, so there any past-table id may run any entry; `test_vanilla_rom_narrows_as_the_decomp`
+  pins that the ROM reader's exact answer gives the same rows. Rows that move: vanilla rival on
+  Route 203 (247-249) PLAIN -> mixed (PLAIN, GRASS, WATER), its coord battle no longer
+  narrowed because Route 203's past-table id 22 may run any entry; Kaizo Byron (250) BUILDING
+  -> mixed. Tests: `tests/tools/rom/test_terrain_narrowing.py`, `tests/tools/rom/test_terrain.py`.
+- G-43 A trainer's bag items act by their party params, generic over every item (no
+  Potion or Poke Ball case). Data: `Item_Get` (src/item.c:153-198) of each party param the AI
+  and `BattleSystem_UseBagItem` read, as the new table `item_party_param[item, ids.ItemParam]`
+  (`tools/rom/readers/items.py` `party_params` from the ROM's `pl_item_data.narc`: `partyUse`
+  byte 12, the union from byte 14, bit fields LSB first per include/item.h:8-54; the decomp
+  extractor packs the JSON as itemproc.c `ProcItem`/`ProcParams` do, :131-279, including the
+  `dummy` index of balls, rods and mail; the two agree on every vanilla item,
+  `tests/tools/rom/test_moves_items.py`). With `partyUse` FALSE every param reads `dummy`
+  (item.c:186-191): a Poke Ball reads 3 everywhere. Kaizo's X Defend, X Accuracy and X
+  Special read 0 everywhere (the AI never uses them; no effect). AI (`engine.bag.
+  bag_item_category`, `ai.policy._use_item`): `TrainerAI_ShouldUseItem`'s first true branch
+  (trainer_ai.c:4099-4189): Full Restore by id below 1/4 HP; an HP item with a nonzero u8
+  `hpRestored` below 1/4 HP or when the whole amount fits; each status cure only for that
+  status (so Full Heal, whose first param is the sleep cure, is used only on a sleeping
+  battler); confusion; then, while `fakeOutTurnNumber - totalTurns >= 0`, a stage param or
+  Guard Spec. Use (`engine.bag.use_bag_item`, `step._use_trainer_item`, reference
+  `_use_item`): the subscript of the item's branch (`bag_item_branch`; the AI chose the item
+  there, and nothing before an item action changes what that choice read), i.e. the
+  category's (battle_controller_player.c:1905-1944;
+  subscript_use_full_restore / _use_potion / _use_status_recovery / _use_stat_booster) around
+  `UseBagItem` (battle_system.c:435-758): status cures, confusion, infatuation, +1 per stage
+  param below +6, PP_RESTORE to move slot 0 and PP_RESTORE_ALL to every slot (capped at the
+  base PP, trainer Pokemon having no PP Ups), HP (0xFF/0xFE/0xFD fractions, at least 1; the
+  potion subscript adds it), the friendship band's amount (x1.5 for a FRIENDSHIP_UP item; no
+  Luxury Ball or egg bonus for a trainer Pokemon). Not built and refused by name in coverage
+  and the AI (`bag.refused_bag_params`), for an item the AI can use (a branch: Full Restore's
+  id, HP_RESTORE, a status or confusion cure, a stage param or Guard Spec,
+  `bag.AI_BRANCH_PARAMS`; Dire Hit, Ether, HP Up, Rare Candy and EV berries are never used and
+  never refused): an item whose params set Mist (Guard Spec,
+  :563-573) or Focus Energy (crit stages, :617-626), and one whose friendship amount can pass
+  255 within its band, where `Pokemon_IncreaseValue` wraps the party's u8 friendship
+  (pokemon.c:1859-1874) apart from the battler's clamped value (battle_lib.c:1032-1044). So
+  School Kid Christine (345, Poke Ball x4) stays refused, now for Mist and Focus Energy
+  (and the friendship wrap: the ball's high band adds 3 at 255). `TrainerItemId`,
+  `trainer_item_effect`, `POTION_HP_RESTORED` and `DECOMP_TRAINER_ITEM_TO_ID` are gone;
+  `ids.ITEM_FULL_RESTORE` is a checked game constant. Tests: `tests/engine/test_e1_batch_a.py`
+  (family 3), `tests/engine/test_trainer_items.py`, `tests/engine/test_coverage.py`.

@@ -87,6 +87,7 @@ def _species_with(tables, s, side: int, species: int, ability: int):
     return s._replace(
         species=s.species.at[side, a].set(species),
         form=s.form.at[side, a].set(0),
+        ability_form=s.ability_form.at[side, a].set(0),
         ability_slot=s.ability_slot.at[side, a].set(slots.index(ability)),
     )
 
