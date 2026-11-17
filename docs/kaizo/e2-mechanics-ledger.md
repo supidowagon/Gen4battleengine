@@ -22,7 +22,14 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   members modelled, step = the move's power), each later hit's own accuracy roll
   (Outcome.hit[s, 1..2], thresholds without the overrides), BEAT_UP (both games); MAX_HITS 5 -> 6
   (the sixth column of every per-hit draw from fold_in 42, hits 0-4 keep their samples);
-  OutcomeLaws.damage per hit, hit_later_thresholds / _possible. OWED: the AI scripts of these
+  OutcomeLaws.damage per hit, hit_later_thresholds / _possible. Commit 1f0f34a. Checks:
+  test_batch13 not-slow 29 green, its 5 slow law tests green (Triple Kick 124 s / 5.7 GB, Beat
+  Up 176 s / 4.5 GB), effect_map + damage_classes 54, accuracy_classes + enumerate 40, outcome
+  20, variants / game_constants / backlog / coverage 136, unsupported + kaizo_tables 42,
+  test_cli not-slow 102 + 1 skipped; diff.py seeds 41, 42 ok 300; test_differential: the known
+  Figy Berry case only. test_cli_rank_deaths_and_protect killed at 8.12 GB (7.87 before:
+  MAX_HITS 6 and the per-hit tables); test_observe not-slow goes past 8 GB at 22695c4 too.
+  OWED: the AI scripts of these
   effects (77, 200, 209, Kaizo 141, 104, 88, 154; the batch's AI agent); vanilla-only Fury Cutter
   #119 and the recharge #80 (Owed list); the other families of the batch.
 
