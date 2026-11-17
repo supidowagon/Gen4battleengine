@@ -6,7 +6,9 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 - **PAUSED by the user (2026-11-17).** Wait for the manager's "resume". Batch 13 builder told to
   commit at its next step and record its state in b13wt's ledger RESUME (branch e2-batch13); read
-  that first on resume. raw_rolls: seed 2 left to finish, seed 5 not started (still owed).
+  that first on resume. raw_rolls seeds 2 and 5 still owed: the local
+  run never started a test (`No module named 'tests'`: run rawrolls_phase.py with PYTHONPATH set to
+  the worktree root, or from inside the worktree).
 - **Restart here (2026-11-17, context cleared).** Batch 12 is IN MAIN (main = 932af5a, from
   6fc0b64). Batch 13 builder told to merge 932af5a before its review and to fix the check's notes
   (invoker no-living-foe tests must pin the no-defender path, battle_script.c:2121-2126; White
