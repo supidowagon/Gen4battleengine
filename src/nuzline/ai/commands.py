@@ -336,6 +336,7 @@ class BattleEffect(IntEnum):
     ONE_HIT_KO = 38  # Guillotine, Horn Drill, Fissure
     SWITCH_HIT = 228  # U-turn
     AVERAGE_HP = 91  # Pain Split
+    ENCORE = 90  # Encore (E2 batch 11, B11-4)
     PREVENT_STATUS = 124  # Safeguard
     MAX_ATK_LOSE_HALF_MAX_HP = 142  # Belly Drum
     HIT_LAST_WHIFF_IF_HIT = 170  # Focus Punch
@@ -469,6 +470,94 @@ RISKY_EFFECTS = (
     230,  # DOUBLE_POWER_IF_MOVING_SECOND
     241,  # USE_MOVE_FIRST
     248,  # HIT_FIRST_IF_TARGET_ATTACKING
+)
+# Expert_Encore_EncouragedMoveEffects (script.s:3202-3285): the last-move effects Expert_Encore
+# encourages (IfLoadedNotInTable, :3189; trainer_ai.c:876-891). BATTLE_EFFECT_* ids, line - 1 of
+# generated/move_battle_effects.txt, in the table's order, its repeats included (82 entries;
+# E2 batch 11, B11-4).
+ENCORE_ENCOURAGED_EFFECTS = (
+    8,  # RECOVER_DAMAGE_SLEEP
+    10,  # ATK_UP
+    11,  # DEF_UP
+    12,  # SPEED_UP
+    13,  # SP_ATK_UP
+    25,  # RESET_STAT_CHANGES
+    28,  # FORCE_SWITCH
+    30,  # CONVERSION
+    33,  # STATUS_BADLY_POISON
+    35,  # SET_LIGHT_SCREEN
+    37,  # REST
+    40,  # HALVE_HP
+    54,  # SP_DEF_UP_2
+    49,  # STATUS_CONFUSE
+    66,  # STATUS_POISON
+    67,  # STATUS_PARALYZE
+    84,  # STATUS_LEECH_SEED
+    85,  # DO_NOTHING
+    50,  # ATK_UP_2
+    90,  # ENCORE
+    93,  # CONVERSION2
+    94,  # NEXT_ATTACK_ALWAYS_HITS
+    102,  # CURE_PARTY_STATUS
+    106,  # PREVENT_ESCAPE
+    107,  # STATUS_NIGHTMARE
+    111,  # PROTECT
+    191,  # SWITCH_ABILITIES
+    113,  # FORESIGHT
+    114,  # ALL_FAINT_3_TURNS
+    115,  # WEATHER_SANDSTORM
+    116,  # SURVIVE_WITH_1_HP
+    118,  # ATK_UP_2_STATUS_CONFUSION
+    120,  # INFATUATE
+    124,  # PREVENT_STATUS
+    136,  # WEATHER_RAIN
+    137,  # WEATHER_SUN
+    142,  # MAX_ATK_LOSE_HALF_MAX_HP
+    143,  # COPY_STAT_CHANGES
+    148,  # HIT_IN_3_TURNS
+    158,  # ALWAYS_FLINCH_FIRST_TURN_ONLY
+    160,  # STOCKPILE
+    161,  # SPIT_UP
+    162,  # SWALLOW
+    164,  # WEATHER_HAIL
+    165,  # TORMENT
+    167,  # STATUS_BURN
+    172,  # MAKE_GLOBAL_TARGET
+    174,  # SP_DEF_UP_DOUBLE_ELECTRIC_POWER
+    177,  # SWITCH_HELD_ITEMS
+    178,  # COPY_ABILITY
+    181,  # GROUND_TRAP_USER_CONTINUOUS_HEAL
+    184,  # RECYCLE
+    188,  # REMOVE_HELD_ITEM
+    191,  # SWITCH_ABILITIES
+    192,  # MAKE_SHARED_MOVES_UNUSEABLE
+    193,  # HEAL_STATUS
+    194,  # REMOVE_ALL_PP_ON_DEFEAT
+    199,  # CONFUSE_ALL
+    201,  # HALVE_ELECTRIC_DAMAGE
+    210,  # HALVE_FIRE_DAMAGE
+    212,  # ATK_SPD_UP
+    213,  # CAMOUFLAGE
+    215,  # GRAVITY
+    216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE
+    220,  # FAINT_AND_FULL_HEAL_NEXT_MON
+    222,  # NATURAL_GIFT
+    223,  # REMOVE_PROTECT
+    225,  # DOUBLE_SPEED_3_TURNS
+    226,  # RANDOM_STAT_UP_2
+    233,  # FLING
+    234,  # TRANSFER_STATUS
+    236,  # PREVENT_HEALING
+    238,  # SWAP_ATK_DEF
+    239,  # SUPRESS_ABILITY
+    240,  # PREVENT_CRITS
+    243,  # SWAP_ATK_SP_ATK_STAT_CHANGES
+    244,  # SWAP_DEF_SP_DEF_STAT_CHANGES
+    247,  # SET_ABILITY_TO_INSOMNIA
+    250,  # SWAP_STAT_CHANGES
+    251,  # RESTORE_HP_EVERY_TURN
+    252,  # GIVE_GROUND_IMMUNITY
+    259,  # TRICK_ROOM
 )
 # SetupFirstTurn_SetupEffects (script.s:6435-6497): the effects SetupFirstTurn_Main scores on
 # turn 0 (IfLoadedNotInTable, :6426; trainer_ai.c:876-891). BATTLE_EFFECT_* ids, line - 1 of
@@ -2223,6 +2312,21 @@ def load_battler_previous_move(ctx: AiContext, battler: Battler) -> AiContext:
     movePrevByBattler[battler]`` (``BattleState.last_move`` of the battler's side; the
     selected move on success, else ``MOVE_NONE``, battle_controller_player.c:3944-3949)."""
     return ctx._replace(calc_temp=ctx.state.last_move[_side(battler)].astype(_I32))
+
+
+# IfBattlerUnderEffect's checks (include/constants/battle/trainer_ai.h:48-49).
+CHECK_DISABLE, CHECK_ENCORE = 0, 1
+
+
+def if_battler_under_effect(ctx: AiContext, battler: Battler, check: int) -> AiContext:
+    """``IfBattlerUnderEffect`` (trainer_ai.c:1823-1848): ``CHECK_DISABLE`` jumps when the
+    battler's ``moveEffectsData.disabledTurns`` is nonzero (``BattleState.disable_turns``),
+    ``CHECK_ENCORE`` when its ``encoredTurns`` is (``BattleState.encore_turns``); any other check
+    never jumps (E2 batch 11, B11-4)."""
+    check = int(check)
+    assert check in (CHECK_DISABLE, CHECK_ENCORE), check
+    field = "disable_turns" if check == CHECK_DISABLE else "encore_turns"
+    return _jump(ctx, getattr(ctx.state, field)[_side(battler)] != 0)
 
 
 def load_power_of_loaded_move(ctx: AiContext) -> AiContext:

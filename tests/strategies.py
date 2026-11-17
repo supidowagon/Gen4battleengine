@@ -504,6 +504,18 @@ def possible_genders(ratio: int) -> tuple[int, ...]:
     return (0, 1)
 
 
+def _teach(tables: Tables, a: dict, who: int, mon: int, move: int, k: int) -> int:
+    """Put ``move`` (full PP) in slot ``k`` of the Pokemon, or in the slot that already holds it:
+    a Pokemon never knows a move twice (the engines split on a duplicate's ``last_move``, B11-5,
+    B11-10). Returns the slot written."""
+    known = np.flatnonzero(a["moves"][who, mon] == move)
+    if known.size:
+        k = int(known[0])
+    a["moves"][who, mon, k] = move
+    a["pp"][who, mon, k] = int(tables.move_pp[move])
+    return k
+
+
 def _held_item() -> st.SearchStrategy[str]:
     """Half the time an ``M1_ITEMS`` name, else one of an ``ITEM_GROUPS`` group."""
     groups = st.sampled_from(ITEM_GROUPS).flatmap(st.sampled_from)
@@ -626,9 +638,7 @@ def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, na
     a["stats"][side, active] = stats[Stat.ATK :]
     a["hp"][side, active] = min(int(a["hp"][side, active]), int(stats[Stat.HP]))
     if moves:
-        move = names.move(draw(st.sampled_from(moves)))
-        a["moves"][side, active, 0] = move
-        a["pp"][side, active, 0] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, names.move(draw(st.sampled_from(moves))), 0)
 
 
 def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -637,9 +647,7 @@ def _draw_pursuit(draw, tables: Tables, a: dict, side: int, active: int, names: 
     if draw(st.integers(0, 5)) != 0:
         return
     pursuit = names.move("Pursuit")
-    k = draw(st.integers(0, 3))
-    a["moves"][side, active, k] = pursuit
-    a["pp"][side, active, k] = int(tables.move_pp[pursuit])
+    _teach(tables, a, side, active, pursuit, draw(st.integers(0, 3)))
 
 
 def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -655,9 +663,7 @@ def _draw_pivot(draw, tables: Tables, a: dict, side: int, active: int, names: Na
     free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
     if not free:
         return
-    k = draw(st.sampled_from(free))
-    a["moves"][side, active, k] = move
-    a["pp"][side, active, k] = int(tables.move_pp[move])
+    _teach(tables, a, side, active, move, draw(st.sampled_from(free)))
     # Some of the time make the pivot reachable: a living bench (a fainted slot revived to full
     # HP, unless it is a recorded death) and a user that can act (no sleep, freeze, confusion
     # or love).
@@ -716,10 +722,7 @@ def _draw_batch2_item(draw, tables: Tables, a: dict, side: int, active: int, nam
         a["types"][side, active, 1] = Type.POISON
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if name == "Light Clay":
         give(side, active, rnd.choice(("Reflect", "Light Screen")))
@@ -760,9 +763,7 @@ def _draw_gardenia_item(
             foe = 1 - side
             foe_mon = int(a["active"][foe])
             move = names.move(rnd.choice(("Bug Bite", "Pluck")))
-            k = rnd.randint(0, 3)
-            a["moves"][foe, foe_mon, k] = move
-            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
     elif rnd.random() < 0.3:
         a["confusion"][side] = rnd.randint(2, _CONFUSION_MAX)
 
@@ -780,10 +781,7 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if draw(st.booleans()):
         ability = rnd.choice(BATCH3_ABILITIES)
@@ -846,9 +844,7 @@ def _draw_pressure(draw, tables: Tables, a: dict, side: int, active: int, names:
     foe_mon = int(a["active"][foe])
     move = names.move(rnd.choice(PRESSURE_MOVES))
     if tables.move_effect[move] != EffectId.UNSUPPORTED:
-        k = rnd.randint(0, 3)
-        a["moves"][foe, foe_mon, k] = move
-        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
     if rnd.random() < 0.5:
         for k in range(4):
             if a["moves"][foe, foe_mon, k]:
@@ -897,9 +893,7 @@ def _draw_status_guard(
     ):
         move = names.move(name)
         if tables.move_effect[move] != EffectId.UNSUPPORTED:
-            k = rnd.randint(0, 3)
-            a["moves"][owner, mon, k] = move
-            a["pp"][owner, mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, owner, mon, move, rnd.randint(0, 3))
     for owner, mon in ((side, active), (foe, foe_mon)):
         if rnd.random() < 0.5:
             a["status"][owner, mon] = Status.NONE
@@ -958,9 +952,7 @@ def _draw_guard_download(
         a["ability"][side, active] = AbilityId.WONDER_GUARD
         move = names.move(rnd.choice(WONDER_GUARD_MOVES))
         if tables.move_effect[move] != EffectId.UNSUPPORTED:
-            k = rnd.randint(0, 3)
-            a["moves"][foe, foe_mon, k] = move
-            a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+            _teach(tables, a, foe, foe_mon, move, rnd.randint(0, 3))
         if rnd.random() < 1 / 3:
             a["ability"][foe, foe_mon] = AbilityId.MOLD_BREAKER
     if draw(st.integers(0, 2)) == 0:
@@ -1058,10 +1050,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     rnd = draw(st.randoms(use_true_random=False))
 
     def give(move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][side, active, k] = move
-        a["pp"][side, active, k] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, names.move(move_name), rnd.randint(0, 3))
 
     if draw(st.integers(0, 2)) == 0:  # B9-1, B9-2: a weather-accuracy move or a fang
         give(
@@ -1107,10 +1096,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give_foe(move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][foe, foe_mon, k] = move
-        a["pp"][foe, foe_mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, foe, foe_mon, names.move(move_name), rnd.randint(0, 3))
 
     if ability == AbilityId.VOLT_ABSORB:
         give_foe(rnd.choice(("ThunderShock", "Thunder Wave", "Thunder Fang")))
@@ -1148,18 +1134,17 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
     Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
-    (B10-6; an item on the foe, a knocked-off user with no item for the barb)."""
-    if draw(st.integers(0, 2)) != 0:
+    (B10-6; an item on the foe, a knocked-off user with no item for the barb). One draw in two,
+    and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
+    under uniform draws the differential met these moves too rarely (batch 11 review)."""
+    if draw(st.integers(0, 1)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
     foe = 1 - side
     foe_mon = int(a["active"][foe])
 
     def give(move_name: str, who: int = side, mon: int = active) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     move = rnd.choice(
         (
@@ -1188,7 +1173,13 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         )
     )
     give(move)
+    if int(tables.move_power[names.move(move)]) == 0 and rnd.random() < 0.7:
+        a["taunt"][side] = 0  # a status move a taunt would block (batch 11 review)
     charge = int(tables.move_flags[names.move(move)]) & int(MoveFlag.CHARGE)
+    if charge and a["status"][side, active] in (Status.SLEEP, Status.FREEZE) and rnd.random() < 0.7:
+        # A user that can act on its first turn: the charge itself (B10-12).
+        a["status"][side, active] = Status.NONE
+        a["status_counter"][side, active] = 0
     if charge and rnd.random() < 0.3:  # B10-12: a Power Herb
         a["item"][side, active] = names.item("Power Herb")
     if move == "Encore":  # B10-9: the foe's last move one of its own (or none)
@@ -1205,6 +1196,10 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             a["encore_turns"][who] = rnd.randint(0, 7)
             if rnd.random() < 0.2:
                 a["pp"][who, mon, k] = 0
+    own = int(a["encore_move"][side])
+    if own and own != names.move(move) and rnd.random() < 0.7:
+        # Free to use the drawn move: no encore on another one (batch 11 review).
+        a["encore_move"][side] = a["encore_slot"][side] = a["encore_turns"][side] = 0
     if rnd.random() < 0.15:  # B10-7: a Safeguard up on either side, against the status moves
         a["safeguard"][rnd.choice((side, foe))] = rnd.randint(1, 5)
         give(rnd.choice(("Thunder Wave", "Toxic", "Supersonic", "Swagger", "Ember")), foe, foe_mon)
@@ -1245,6 +1240,11 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["semi_invulnerable"][side] = next(
             (int(k) for k, bit in SEMI_SET_FLAGS.items() if flags & int(bit)), 0
         )
+        if a["semi_invulnerable"][side] and rnd.random() < 0.7:
+            # B10-13: the foe's Yawn at the vanished user, whose subscript still runs on the
+            # semi miss (subscript_yawn.s:5-9 before :21).
+            give("Yawn", foe, foe_mon)
+            a["taunt"][foe] = 0  # a status move a taunt would block
 
 
 # Moves whose decomp path tests a substitute or meets one (B10-4).
@@ -1285,10 +1285,7 @@ def _draw_substitute(draw, tables: Tables, a: dict, side: int, active: int, name
     foe_mon = int(a["active"][foe])
 
     def give(move_name: str, who: int, mon: int) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     if rnd.random() < 0.5:
         give("Substitute", side, active)
@@ -1318,10 +1315,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
     foe_mon = int(a["active"][foe])
 
     def give(who: int, mon: int, move_name: str) -> None:
-        move = names.move(move_name)
-        k = rnd.randint(0, 3)
-        a["moves"][who, mon, k] = move
-        a["pp"][who, mon, k] = int(tables.move_pp[move])
+        _teach(tables, a, who, mon, names.move(move_name), rnd.randint(0, 3))
 
     foe_alive = a["hp"][foe, foe_mon] > 0
     if draw(st.booleans()):
@@ -1403,10 +1397,12 @@ def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: N
     rnd = draw(st.randoms(use_true_random=False))
     if draw(st.integers(0, 2)) == 0:
         name = rnd.choice(INVOKERS)
-        for slot, move_name in zip(rnd.sample(range(4), 2), (name, rnd.choice(CALLED_MOVES))):
-            move = names.move(move_name)
-            a["moves"][side, active, slot] = move
-            a["pp"][side, active, slot] = int(tables.move_pp[move])
+        first, second = rnd.sample(range(4), 2)
+        called = names.move(rnd.choice(CALLED_MOVES))
+        k = _teach(tables, a, side, active, names.move(name), first)
+        _teach(tables, a, side, active, called, first if second == k else second)
+        if rnd.random() < 0.7:  # untaunted: an invoker is a status move (batch 11 review)
+            a["taunt"][side] = 0
         if name == "Sleep Talk" and a["hp"][side, active] > 0 and rnd.random() < 0.8:
             a["status"][side, active] = Status.SLEEP
             a["status_counter"][side, active] = rnd.randint(1, 4)
@@ -1427,15 +1423,14 @@ def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: N
     if draw(st.integers(0, 2)) != 0:
         return
     uproar = names.move("Uproar")
-    k = rnd.randint(0, 3)
-    a["moves"][side, active, k] = uproar
-    a["pp"][side, active, k] = int(tables.move_pp[uproar])
+    k = _teach(tables, a, side, active, uproar, rnd.randint(0, 3))
     foe = 1 - side
     foe_mon = int(a["active"][foe])
     under_way = draw(st.booleans())
     if under_way:
-        if rnd.random() < 0.25:
-            a["moves"][side, active, k] = names.move("Copycat")
+        copycat = names.move("Copycat")
+        if rnd.random() < 0.25 and copycat not in a["moves"][side, active]:
+            a["moves"][side, active, k] = copycat
         a["uproar"][side] = rnd.randint(1, 5)
         a["locked_move"][side] = uproar
         a["bide_turns"][side] = a["bide_damage"][side] = a["rollout_count"][side] = 0
@@ -1462,9 +1457,7 @@ def _draw_future_sight(draw, tables: Tables, a: dict, side: int, active: int, na
     moves = (names.move("Future Sight"), names.move("Doom Desire"))
     if draw(st.integers(0, 2)) == 0:
         move = rnd.choice(moves)
-        k = rnd.randint(0, 3)
-        a["moves"][side, active, k] = move
-        a["pp"][side, active, k] = int(tables.move_pp[move])
+        _teach(tables, a, side, active, move, rnd.randint(0, 3))
     if draw(st.integers(0, 2)) == 0:
         timer = rnd.choice((1, 1, 2))
         a["future_timer"][side] = timer
@@ -1517,19 +1510,14 @@ def _draw_batch7(draw, tables: Tables, a: dict, side: int, active: int, names: N
         name = rnd.choice(BATCH7_MOVES)
         free = [k for k in range(4) if a["moves"][side, active, k] != a["locked_move"][side]]
         if free:
-            k = rnd.choice(free)
-            move = names.move(name)
-            a["moves"][side, active, k] = move
-            a["pp"][side, active, k] = int(tables.move_pp[move])
+            k = _teach(tables, a, side, active, names.move(name), rnd.choice(free))
             foe_moves = [int(m) for m in a["moves"][foe, a["active"][foe]] if m]
             others = [j for j in free if j != k]
             if name == "Curse" and rnd.random() < 0.5:  # a Ghost user (B8-5)
                 a["types"][side, active] = [Type.GHOST, Type.GHOST]
             if name == "Imprison" and foe_moves and others and rnd.random() < 0.8:
                 shared = rnd.choice(foe_moves)
-                j = rnd.choice(others)
-                a["moves"][side, active, j] = shared
-                a["pp"][side, active, j] = int(tables.move_pp[shared])
+                _teach(tables, a, side, active, shared, rnd.choice(others))
     a["ingrain"][side] = int(draw(st.integers(0, 3)) == 0)
     if draw(st.integers(0, 3)) == 0:
         a["mean_look"][side] = 1
@@ -1848,7 +1836,35 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
             slots = [k for k in range(4) if pivots[side, k] and masks[side][k]]
             if slots and draw(st.integers(0, 3)) != 0:
                 acts[side] = draw(st.sampled_from(slots))
+        # Batch 10-11: a rare move the side knows (``RARE_EFFECTS``, a charge move) is used one
+        # draw in two, so the differential meets each.
+        flags = np.asarray(tables.move_flags)[moves]
+        rare = np.isin(effect, RARE_EFFECTS) | ((flags & int(MoveFlag.CHARGE)) != 0)
+        for side in (0, 1):
+            slots = [k for k in range(4) if rare[side, k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
+        # B10-13: Yawn at a vanished foe one draw in two (its subscript runs on the semi miss).
+        yawn = (effect == EffectId.YAWN) & (np.asarray(state.semi_invulnerable)[::-1] != 0)[:, None]
+        for side in (0, 1):
+            slots = [k for k in range(4) if yawn[side, k] and masks[side][k]]
+            if slots and draw(st.booleans()):
+                acts[side] = draw(st.sampled_from(slots))
     return jnp.asarray(acts, jnp.int32)
+
+
+# The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
+RARE_EFFECTS = (
+    EffectId.ENCORE,
+    EffectId.ASSIST,
+    EffectId.PAIN_SPLIT,
+    EffectId.SAFEGUARD,
+    EffectId.ENDEAVOR,
+    EffectId.KNOCK_OFF,
+    EffectId.FOCUS_PUNCH,
+    EffectId.METRONOME,
+    EffectId.COPYCAT,
+)
 
 
 @st.composite
@@ -2027,20 +2043,24 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     # invokers' variants have their own tests (tests/engine/test_invokers.py).
     s = draw(supported_state(tables, names, invokers=False))
     a = {name: np.asarray(getattr(s, name)).copy() for name in BattleState._fields}
-    move_pp = np.asarray(tables.move_pp)
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
         effect[a["moves"]],
         (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
     )
-    a["moves"][invoker] = names.move("Tackle")  # a learnset's own invoker too
+    tackle = names.move("Tackle")
+    for side, mon, k in zip(*np.nonzero(invoker)):  # a learnset's own invoker too
+        # Tackle, or an empty slot when it knows Tackle already (no move twice, B11-10).
+        known = tackle in a["moves"][side, mon]
+        a["moves"][side, mon, k] = 0 if known else tackle
+        if known:
+            a["pp"][side, mon, k] = 0
     for side in (0, 1):
         mon = int(a["active"][side])
         a["lucky_chant"][side] = draw(st.sampled_from([0, 0, 1, 5]))
         if draw(st.booleans()):
             move = names.move(draw(st.sampled_from(LAW_MOVES)))
-            a["moves"][side, mon, 0] = move
-            a["pp"][side, mon, 0] = move_pp[move]
+            _teach(tables, a, side, mon, move, 0)
             if int(tables.move_effect[move]) == EffectId.PROTECT:
                 a["protect_count"][side] = draw(st.integers(0, 3))
 

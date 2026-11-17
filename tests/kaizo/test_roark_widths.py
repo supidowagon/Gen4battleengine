@@ -130,8 +130,9 @@ def roark_widths(save_path, tables, names, learnsets, roark):
     cl = calls_rows(tables, take(states, index), acts)
     variants = [call_variants(take(cl, r)) for r in range(len(acts))]
     v_pair = np.asarray([r for r, vs in enumerate(variants) for _ in vs])
-    v_call = np.asarray([v[0] for vs in variants for v in vs], np.int32).reshape(-1, 2)
-    laws = laws_rows(tables, take(states, index[v_pair]), acts[v_pair], v_call)
+    v_call = np.asarray([v.call for vs in variants for v in vs], np.int32).reshape(-1, 2)
+    v_taken = np.asarray([v.taken for vs in variants for v in vs], bool).reshape(-1, 2)
+    laws = laws_rows(tables, take(states, index[v_pair]), acts[v_pair], v_call, v_taken)
     v_keys = _law_keys(laws)
     laws = jax.tree.map(np.asarray, laws)
     v_width: dict[bytes, int | None] = {}

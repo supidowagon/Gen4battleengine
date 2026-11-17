@@ -36,6 +36,7 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import step, step_events, turn_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
+from tests.engine.helpers import unmodelled
 from tests.strategies import legal_action_pair, supported_state
 
 
@@ -182,11 +183,11 @@ def test_call_laws_and_variants(tables, names):
     ).with_status(0, 0, Status.SLEEP, 3)
     variants = call_variants(call_laws(t, s, jnp.zeros(2, jnp.int32)))
     talk = Counter()
-    for call, num, den in variants:
-        talk[int(call[0])] += Fraction(num, den)
+    for v in variants:
+        talk[int(v.call[0])] += Fraction(v.num, v.den)
     # Slots Tackle, Ember, Ember: Tackle 1/3 (value 0), Ember 2/3 (value 1).
     assert talk == {0: Fraction(1, 3), 1: Fraction(2, 3)}
-    assert math.isclose(sum(num / den for _, num, den in variants), 1.0)
+    assert math.isclose(sum(v.num / v.den for v in variants), 1.0)
     assert len(variants) == 2 * len(metronome_calls(t, _mon(n, "Clefairy", ["Metronome"])))
 
 
@@ -359,18 +360,17 @@ def test_enumerate_refuses_uncalled_laws(tables, names):
 
 
 def test_coverage_refuses_unmodelled_metronome(tables, names):
-    """B5-2: Metronome while it can call an unmodelled move; Sleep Talk is supported (B5-13:
-    a faster Disable is modelled, not refused)."""
+    """B5-2: Metronome while it can call an unmodelled move (one made so, ``unmodelled``, so
+    the test holds whatever the engine models); Sleep Talk is supported (B5-13: a faster
+    Disable is modelled, not refused)."""
     n = names
     talker = _mon(n, "Snorlax", ["Sleep Talk", "Tackle"])
-    effect = np.asarray(tables.move_effect)
     spec = _mon(n, "Clefairy", ["Metronome"])
-    unmodelled = [m for m in metronome_calls(tables, spec) if effect[m] == 0]
-    assert unmodelled  # every game has unmodelled moves Metronome can call (B5-2)
+    t = unmodelled(tables, metronome_calls(tables, spec)[0])
     from nuzline.engine.coverage import _check_party, _Collector
 
     c = _Collector()
-    _check_party(c, tables, names, "Player", [spec])
+    _check_party(c, t, names, "Player", [spec])
     assert any("Metronome" in line for line in c.report.missing)
     c = _Collector()
     _check_party(c, tables, names, "Player", [talker])

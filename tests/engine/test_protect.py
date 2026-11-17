@@ -132,8 +132,6 @@ def test_effect_111_maps_protect_and_detect(tables, names, kaizo_tables, kaizo_n
             assert int(t.move_priority[m]) == 3, move
             assert int(t.move_accuracy[m]) == 0 and int(t.move_power[m]) == 0
             assert not int(t.move_flags[m]) & MoveFlag.PROTECT
-        # Endure (effect 116, BATTLE_EFFECT_SURVIVE_WITH_1_HP) stays unsupported.
-        assert int(t.move_effect[n.move("Endure")]) == EffectId.UNSUPPORTED
     # Kaizo's Fake Out is +3 as well: against Protect, speed decides (rules §2(a)).
     assert int(kaizo_tables.move_priority[kaizo_names.move("Fake Out")]) == 3
     assert int(tables.move_priority[names.move("Fake Out")]) == 1

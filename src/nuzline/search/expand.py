@@ -206,16 +206,20 @@ def ai_rows(tables: Tables, states: BattleState, per_call: int | None = None) ->
     return _run(fn, "expand_ai", tables, (states,), n, {"layout": layout.key}, per_call)
 
 
-def _laws(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
-    return jax.vmap(outcome_laws, in_axes=(None, 0, 0, 0))(tables, states, actions, calls)
+def _laws(tables: Tables, states: BattleState, actions, calls, takens) -> OutcomeLaws:
+    return jax.vmap(outcome_laws, in_axes=(None, 0, 0, 0, 0))(
+        tables, states, actions, calls, takens
+    )
 
 
-def laws_rows(tables: Tables, states: BattleState, actions, calls) -> OutcomeLaws:
-    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions, ``int32[2]`` call)
-    rows, numpy (``enumerate.call_variants`` gives the calls)."""
+def laws_rows(tables: Tables, states: BattleState, actions, calls, takens=None) -> OutcomeLaws:
+    """``outcome_laws`` of each of ``N`` (state, ``int32[2]`` actions, ``int32[2]`` call,
+    ``bool[2]`` takeover tag) rows, numpy (``enumerate.call_variants`` gives the calls and tags;
+    no tag: none taken)."""
     actions = np.asarray(actions, np.int32)
     calls = np.asarray(calls, np.int32)
-    return _run(_laws, "expand_laws", tables, (states, actions, calls), len(actions))
+    takens = np.zeros(calls.shape, bool) if takens is None else np.asarray(takens, bool)
+    return _run(_laws, "expand_laws", tables, (states, actions, calls, takens), len(actions))
 
 
 def _calls(tables: Tables, states: BattleState, actions) -> CallLaws:
@@ -237,18 +241,22 @@ def _select(cond, a, b):
     return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
 
 
-def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
+def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome, taken):
     """One outcome of a turn, as the playout plays it (module docstring): ``(after,
     refused, observation)``. The learnset scans run first (``advance_learns``: the
     ``TurnEnd`` payout's prompts come before ``ReplaceFainted``, bcp.c:1846-1848); a prompt
     in a battle that goes on stops the child at the learn decision (module docstring),
     else the opponent's replacement follows as in the playout (``finish_turn``). The fourth
-    result is ``enumerate.call_consistent``: a row of a split Sleep Talk variant whose turn did
-    not meet the variant's assumption is dropped (ruling B5-13)."""
+    result is ``enumerate.call_consistent``: a row of a split Sleep Talk variant (ruling B5-13)
+    or of a takeover variant (``taken``, B11-1) whose turn did not meet the variant's assumption
+    is dropped."""
     # E2 batch 6: a state paused at a party list resumes. Its opponent's pick at its own list is
-    # made here (``playout.pivot_pick``, refused as a replacement's); the turn's powerMul and AI
-    # switch are the turn start's, kept in the scratch (the resume's actions are switch-shaped).
-    actions, pick_refused, power_mul, ai_switched = turn_inputs(tables, before, actions)
+    # made once, host-side in ``expand`` (the laws read it): ``actions`` carry it, and only the
+    # AI's refusal of it is read here (``playout.pivot_pick``, refused as a replacement's); the
+    # turn's powerMul and AI switch are the turn start's, kept in the scratch (the resume's
+    # actions are switch-shaped). B11 review item: one pick, so dropping it is caught
+    # (tests/search/test_pivot_search.py test_the_opponents_list_is_resolved_by_its_ai).
+    _, pick_refused, power_mul, ai_switched = turn_inputs(tables, before, actions)
     stepped, events = step_events(tables, before, actions, outcome)
     # A turn that pauses stops here: the child is the decision at the list (stage_b's "pivot").
     halted = stepped.pivot_battler != 0
@@ -268,23 +276,25 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome):
     refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
     after = _select(halted, paused_child, after)
     refused = jnp.where(halted, False, refused) | pick_refused
-    keep = call_consistent(tables, before, actions, outcome, events)
+    keep = call_consistent(tables, before, actions, outcome, events, taken)
     return after, refused, observation(events, after), keep
 
 
-def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome):
-    return jax.vmap(_turn, in_axes=(None, 0, 0, 0))(tables, states, actions, outcomes)
+def _turns(tables: Tables, states: BattleState, actions, outcomes: Outcome, takens):
+    return jax.vmap(_turn, in_axes=(None, 0, 0, 0, 0))(tables, states, actions, outcomes, takens)
 
 
 def step_rows(
-    tables: Tables, states: BattleState, actions, outcomes: Outcome
+    tables: Tables, states: BattleState, actions, outcomes: Outcome, takens=None
 ) -> tuple[BattleState, np.ndarray, np.ndarray, np.ndarray]:
     """``(after, refused bool[N], observation int32[N, OBS_SIZE], keep bool[N])`` of ``N``
-    rows of (state, ``int32[2]`` actions, outcome): ``step``, the opponent's replacement, the
-    observation and ``enumerate.call_consistent``, in one cached program (module docstring)."""
+    rows of (state, ``int32[2]`` actions, outcome, ``bool[2]`` takeover tag of its call variant;
+    none: no tag): ``step``, the opponent's replacement, the observation and
+    ``enumerate.call_consistent``, in one cached program (module docstring)."""
     actions = np.asarray(actions, np.int32)
+    takens = np.zeros(actions.shape, bool) if takens is None else np.asarray(takens, bool)
     after, refused, obs, keep = _run(
-        _turns, "expand_step", tables, (states, actions, outcomes), len(actions)
+        _turns, "expand_step", tables, (states, actions, outcomes, takens), len(actions)
     )
     return after, np.asarray(refused, bool), np.asarray(obs, np.int32), np.asarray(keep, bool)
 
@@ -299,8 +309,8 @@ class _Merger:
         self.rows: dict[bytes, int] = {}  # state bytes -> store row
         self.parts: list[BattleState] = []  # new store rows, per chunk
 
-    def add(self, request, states, actions, outcomes, probs) -> None:
-        after, refused, obs, keep = step_rows(self.tables, states, actions, outcomes)
+    def add(self, request, states, actions, outcomes, probs, takens) -> None:
+        after, refused, obs, keep = step_rows(self.tables, states, actions, outcomes, takens)
         n = len(request)
         state_bytes, obs_bytes = row_bytes(after, n), row_bytes(obs, n)
         new = []
@@ -338,7 +348,8 @@ def expand(
     index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
     actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
     # E2 batch 6: at the opponent's own party list its pick is the resume's switch, which the
-    # laws read (``outcome.pivot_view``): made here as in the row program (``turn_inputs``).
+    # laws read (``outcome.pivot_view``): made here only (``turn_inputs``' pick); the row program
+    # steps these actions and reads only the pick's refusal.
     opp_list = np.asarray(states.pivot_battler)[index] == 2
     if opp_list.any():
         rows = np.flatnonzero(opp_list)
@@ -348,12 +359,13 @@ def expand(
     cl = calls_rows(tables, take(states, index), actions)
     variants = [call_variants(take(cl, r)) for r in range(len(pairs))]
     v_req = np.asarray([r for r, vs in enumerate(variants) for _ in vs], np.int64)
-    v_call = np.asarray([v[0] for vs in variants for v in vs], np.int32).reshape(-1, 2)
-    laws = laws_rows(tables, take(states, index[v_req]), actions[v_req], v_call)
+    v_call = np.asarray([v.call for vs in variants for v in vs], np.int32).reshape(-1, 2)
+    v_taken = np.asarray([v.taken for vs in variants for v in vs], bool).reshape(-1, 2)
+    laws = laws_rows(tables, take(states, index[v_req]), actions[v_req], v_call, v_taken)
     first_row = np.concatenate([[0], np.cumsum([len(vs) for vs in variants])])
     merger = _Merger(tables, len(pairs))
     out: dict[int, list[Child] | SamplingOnly] = {}
-    buffer: list[tuple] = []  # (request ids, outcomes, probs) segments of the next chunk
+    buffer: list[tuple] = []  # (request ids, outcomes, probs, tags) segments of the next chunk
     filled = 0
 
     def flush():
@@ -361,16 +373,19 @@ def expand(
         request = np.concatenate([b[0] for b in buffer])
         outcomes = concat([b[1] for b in buffer])
         probs = np.concatenate([b[2] for b in buffer])
-        merger.add(request, take(states, index[request]), actions[request], outcomes, probs)
+        tags = np.concatenate([b[3] for b in buffer])
+        merger.add(request, take(states, index[request]), actions[request], outcomes, probs, tags)
         buffer, filled = [], 0
 
     for r in range(len(pairs)):
         try:
-            parts = []
-            for i, (_, num, den) in enumerate(variants[r]):
+            parts, tags = [], []
+            for i, v in enumerate(variants[r]):
                 outcomes, probs = enumerate_outcomes(take(laws, int(first_row[r]) + i))
-                parts.append((outcomes, probs, num, den))
+                parts.append((outcomes, probs, v.num, v.den))
+                tags.append(np.broadcast_to(v.taken, (len(probs), 2)))
             outcomes, probs = combine_variants(parts)
+            takens = np.concatenate(tags)
         except SamplingOnly as e:
             out[r] = e
             continue
@@ -378,7 +393,7 @@ def expand(
         while start < k:
             stop = min(k, start + CHUNK - filled)
             seg = slice(start, stop)
-            buffer.append((np.full(stop - start, r), take(outcomes, seg), probs[seg]))
+            buffer.append((np.full(stop - start, r), take(outcomes, seg), probs[seg], takens[seg]))
             filled += stop - start
             start = stop
             if filled == CHUNK:

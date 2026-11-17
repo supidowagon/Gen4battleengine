@@ -260,7 +260,6 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
-    CANNOT_ENCORE_MOVES,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MINIMIZE_PARAM,
@@ -288,7 +287,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.order import move_effects, terrain_index, terrain_known
+from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome
 from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
 
@@ -837,14 +836,21 @@ def protect_blocks(tables: Tables, move, unleash) -> jnp.ndarray:
     return flagged & jnp.where(bide, unleash, ~self_defender(tables, move))
 
 
+def targets_foe_side(tables: Tables, move) -> jnp.ndarray:
+    """``bool``: ``move``'s range is ``RANGE_OPPONENT_SIDE`` (Spikes, Toxic Spikes, Stealth Rock):
+    it aims at the foe's side, not a battler. The one test of that range (doubles design section 5
+    rule 6): ``defender_always``, the semi-invulnerable test of CheckMoveHitOverrides (bcp.c:3035,
+    ``step``) and the Future Sight hit's (B10-14)."""
+    return tables.move_target[jnp.asarray(move)] == MoveTarget.RANGE_OPPONENT_SIDE
+
+
 def defender_always(tables: Tables, move, ghost=False) -> jnp.ndarray:
     """``BattleSystem_Defender`` (battle_lib.c:1599) finds a defender for the move
     whatever the foe's HP: the user (``targets_user``) or, for ``RANGE_OPPONENT_SIDE``
-    (Stealth Rock), the foe's battler slot (``BattleSystem_RandomOpponent``, :4194). The
-    no-target check (battle_controller_player.c:2306) never fails such a move."""
-    return targets_user(tables, move, ghost) | (
-        tables.move_target[move] == MoveTarget.RANGE_OPPONENT_SIDE
-    )
+    (Stealth Rock, ``targets_foe_side``), the foe's battler slot
+    (``BattleSystem_RandomOpponent``, :4194). The no-target check (battle_controller_player.c:2306)
+    never fails such a move."""
+    return targets_user(tables, move, ghost) | targets_foe_side(tables, move)
 
 
 def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
@@ -994,29 +1000,6 @@ def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
     state = _set(state, "hp", (h.side, h.user), mine_new, cond)
     return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
-
-
-def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
-    """``(fails, slot)``: BtlCmd_TryEncore (battle_script.c:4725-4748) on ``target_side``'s
-    battler: the slot of its movePrevByBattler (``last_move``; Battler_SlotForMove), and the
-    failure (MOVE_STATUS_FAILED): it is encored already, its last move is none, not in its slots,
-    one Move_CanBeEncored refuses (the battle effect of a ``CANNOT_ENCORE_MOVES`` move,
-    battle_lib.c:7221-7231) or out of PP."""
-    mon = state.active[target_side]
-    last = state.last_move[target_side].astype(_I32)
-    moves = state.moves[target_side, mon].astype(_I32)
-    held = (moves == last) & (last != 0)
-    slot = jnp.argmax(held).astype(_I32)
-    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
-    refused = jnp.any(tables.move_ai_effect[last] == banned)
-    fails = (
-        (state.encore_move[target_side] != 0)
-        | (last == 0)
-        | ~jnp.any(held)
-        | refused
-        | (state.pp[target_side, mon, slot] == 0)
-    )
-    return fails, slot
 
 
 def _encore(tables, state, h: _Hit, outcome: Outcome) -> BattleState:

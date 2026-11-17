@@ -183,6 +183,18 @@ def learnsets():
     return load_learnsets(TABLES_DIR)
 
 
+@pytest.fixture
+def metronome_refused(monkeypatch):
+    """Coverage refuses Metronome whatever the engine models. Ruling B5-2 refuses it only
+    while a move it can call is unmodelled, so a test that uses Metronome as its refused
+    move (the CLI fixture ``sample_party_unsupported.toml``, the prep pool) takes the
+    refusal from here, not from today's partial coverage."""
+    from nuzline.engine.coverage import IMPLEMENTED_EFFECTS, Support
+    from nuzline.engine.ids import EffectId
+
+    monkeypatch.setitem(IMPLEMENTED_EFFECTS, EffectId.METRONOME, Support.NONE)
+
+
 @pytest.fixture(scope="session")
 def vanilla_manifest():
     _require_tables()

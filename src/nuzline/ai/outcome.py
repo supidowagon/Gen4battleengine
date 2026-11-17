@@ -333,6 +333,8 @@ SITE_N: dict[int, int] = {
     6229: 50,  # Expert_Blizzard (-3 when it does NOT jump)
     4148: 200,  # Expert_FocusPunch (+1 when it does NOT jump)
     4157: 100,  # Expert_FocusPunch_TryScorePlus1 (+1 when it does NOT jump)
+    # E2 batch 11 (B11-4)
+    3192: 30,  # Expert_Encore_TryScorePlus3 (+3 when it does NOT jump)
     # E1 batch 17
     2603: 64,  # Expert_ForceSwitch_75PercentScorePlus2
     2607: 128,  # Expert_ForceSwitch_50PercentScorePlus2
@@ -564,6 +566,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         170,  # HIT_LAST_WHIFF_IF_HIT: NonStandard (:233); Expert_FocusPunch (:1730), :6366
         189,  # SET_HP_EQUAL_TO_USER: NonStandard (:241); Expert_Endeavor (:1741)
         260,  # BLIZZARD: Expert_Blizzard (:1801); no Basic entry
+        # E2 batch 11 (B11-4)
+        90,  # ENCORE: Basic_CheckCannotEncore (:188); Expert_Encore (:1689), :3192
         # E1 batch 17 (docs/ai/kaizo_roark.md 5.20)
         8,  # RECOVER_DAMAGE_SLEEP: Basic_CheckDreamEater (:136); Expert_DreamEater (:1631)
         28,  # FORCE_SWITCH: Basic_CheckCanForceSwitch (:153); Expert_ForceSwitch (:1650)
@@ -682,6 +686,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     170: ("Expert_FocusPunch", 1730),
     189: ("Expert_Endeavor", 1741),
     260: ("Expert_Blizzard", 1801),
+    90: ("Expert_Encore", 1689),
     8: ("Expert_DreamEater", 1631),
     28: ("Expert_ForceSwitch", 1650),
     79: ("Expert_Substitute", 1684),
@@ -778,6 +783,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         170,  # HIT_LAST_WHIFF_IF_HIT: Expert_FocusPunch
         189,  # SET_HP_EQUAL_TO_USER: Expert_Endeavor
         260,  # BLIZZARD: Expert_Blizzard
+        90,  # ENCORE: Expert_Encore (E2 batch 11)
         8,  # RECOVER_DAMAGE_SLEEP: Expert_DreamEater
         28,  # FORCE_SWITCH: Expert_ForceSwitch
         79,  # SET_SUBSTITUTE: Expert_Substitute
