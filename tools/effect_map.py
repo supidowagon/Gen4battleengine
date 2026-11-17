@@ -484,6 +484,13 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # (:5, MoveFlag.CRIT_UP) then effect 4's burn / effect 2's poison (:6), B13-2.
     200: ("BATTLE_EFFECT_HIGH_CRITICAL_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 0)),
     209: ("BATTLE_EFFECT_HIGH_CRITICAL_POISON_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
+    # E2 batch 13, the multi-hit power family. Triple Kick (effect_script_0104.s): SetMultiHit 3,
+    # SYSCTL_TRIPLE_KICK (:5), then per hit BTLVAR_MOVE_POWER += 10 (:7), CalcCrit, CalcDamage:
+    # hit k at power 10k, each later hit with its own accuracy roll (B13-5..B13-8).
+    104: ("BATTLE_EFFECT_HIT_THREE_TIMES", _E.TRIPLE_KICK, (10, 0, 0)),
+    # Beat Up (effect_script_0154.s): SYSCTL_IGNORE_IMMUNITIES (:5), CalcCrit, BtlCmd_BeatUp
+    # (battle_script.c:6173-6247): a hit per eligible party member (B13-9..B13-11).
+    154: ("BATTLE_EFFECT_BEAT_UP", _E.BEAT_UP, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -498,10 +505,17 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
 # * 141 (E2 batch 13, B13-3): the unused plain script becomes effect 76's indirect TO_DEFENDER
 #   confusion (effect_script_0076.s:5) plus SYSCTL_HIT_DURING_FLY: Hurricane. Its flags are
 #   KAIZO_FLAG_EFFECTS'.
+# * 104, 88 (E2 batch 13, B13-5): Triple Kick's three hits at k x the move's power.
 KAIZO_EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     48: ("Kaizo effect 48: Reckless, 1/2 recoil", _E.RECOIL, (2, 0, 0)),
     182: ("Kaizo effect 182: Reckless, 1/4 recoil", _E.RECOIL, (4, 0, 0)),
     141: ("Kaizo effect 141: confusion hit that hits a Fly user", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # E2 batch 13 (B13-5): 104 is Triple Kick with GetCurrentMoveData MOVEATTRIBUTE_POWER added
+    # per hit in place of 10 (hit k at k x the move's power: Triple Kick, Rock Wrecker); 88, the
+    # Psywave script in vanilla, is byte-identical to Kaizo's 104 (Triple Axel, Fury Cutter).
+    # Step 0 = the move's own power (ids.EffectId.TRIPLE_KICK). Neither sets a MoveFlag bit.
+    104: ("Kaizo effect 104: three hits at 1x, 2x, 3x power", _E.TRIPLE_KICK, (0, 0, 0)),
+    88: ("Kaizo effect 88: three hits at 1x, 2x, 3x power", _E.TRIPLE_KICK, (0, 0, 0)),
 }
 # The MoveFlag bits of a modelled Kaizo script (tools/build_tables.py ``_move_flags``), used for
 # that game in place of the vanilla effect-keyed bits of the same id. 141 (B13-3, B13-4):

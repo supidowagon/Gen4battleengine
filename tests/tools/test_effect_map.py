@@ -244,6 +244,24 @@ def test_script_flag_effects_match_every_script():
             assert (eid == EffectId.MULTI_HIT and params[0] == 2) or flags & MoveFlag.HIT_TWICE, e
 
 
+def test_triple_kick_and_beat_up_scripts():
+    """B13-5, B13-9: every SetMultiHit 3 script is TRIPLE_KICK with its per-hit power step
+    (effect_script_0104.s:5-7: + 10); Beat Up's script sets SYSCTL_IGNORE_IMMUNITIES and runs
+    BtlCmd_BeatUp with no CalcDamage (effect_script_0154.s:5-7). Kaizo's 104 and 88 are
+    TRIPLE_KICK with step 0 (the move's power, rom_diff.toml)."""
+    for path in sorted((DECOMP / "res/battle/scripts/effects").glob("effect_script_*.s")):
+        e, text = int(path.stem[-4:]), path.read_text(encoding="utf-8")
+        if "SetMultiHit 3," in text:
+            assert DECOMP_EFFECT_TO_ID[e] == (EffectId.TRIPLE_KICK, (10, 0, 0)), e
+            assert "SYSCTL_TRIPLE_KICK" in text and "BTLVAR_MOVE_POWER, 10" in text, e
+    text = _script(154)
+    assert "SYSCTL_IGNORE_IMMUNITIES" in text and "BeatUp" in text and "CalcDamage" not in text
+    assert DECOMP_EFFECT_TO_ID[154] == (EffectId.BEAT_UP, (0, 0, 0))
+    for e in (88, 104):
+        assert KAIZO_EFFECTS[e][1:] == (EffectId.TRIPLE_KICK, (0, 0, 0)), e
+        assert e not in KAIZO_FLAG_EFFECTS
+
+
 def test_kaizo_hurricane_flags_follow_its_notes():
     """B13-3, B13-4: Kaizo effect 141 is effect 76's script (SECONDARY_CONFUSE, as vanilla 76) plus
     SYSCTL_HIT_DURING_FLY, with the two Thunder compares (MoveFlag.THUNDER); the vanilla 141 is

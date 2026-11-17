@@ -1335,7 +1335,7 @@ def _use_move(
     )
     state = _set_side(state, "semi_invulnerable", side, semi_kind, charging)
     state = change_stage(state, side, Stat.DEF, 1, charging & def_up)
-    n_hits = hit_count(tables, used, outcome, side)
+    n_hits = hit_count(tables, used, outcome, side, state)
     # effect_script_0122.s _004: Present's heal path sets SYSCTL_IGNORE_IMMUNITIES (:13) in the
     # move script (bcp.c:3214), before TryMove's chart (:3272), hit or miss: CheckTypeChart skips
     # the chart (bcp.c:2350-2356), so no Wonder Guard flag and no noEffect (ruling G-30).
@@ -1394,6 +1394,7 @@ def _use_move(
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
         & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
+        & (tables.move_effect[used] != EffectId.BEAT_UP)  # effect_script_0154.s:5 (B13-10)
         # A charge turn skips the chart (SYSCTL_FIRST_OF_MULTI_TURN, bcp.c:2356); a charge
         # move's strike runs it under SYSCTL_LAST_OF_MULTI_TURN (damage.charge_strike), G-27.
         & ~charging
@@ -1497,6 +1498,7 @@ def _use_move(
         & ~targets_user(tables, used, ghost_user(state, side))
         & (tables.move_effect[used] != EffectId.FUTURE_SIGHT)  # SYSCTL_IGNORE_IMMUNITIES
         & ~heal_path  # SYSCTL_IGNORE_IMMUNITIES (G-30)
+        & (tables.move_effect[used] != EffectId.BEAT_UP)  # effect_script_0154.s:5 (B13-10)
         & ~charging  # SYSCTL_FIRST_OF_MULTI_TURN (bcp.c:2356), B10-12
         & (chart == 0)
     )
@@ -1617,14 +1619,38 @@ def _use_move(
         # action (MoveHit.sub_hit).
         paused, pursue, damaged0, dealt0, sub_hit = carry[11:16]
         # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
-        # BattleContext_Init at the action's end, battle_lib.c:2009).
-        sync_flag, sync_sem = carry[16:]
+        # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
+        # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
+        sync_flag, sync_sem, disrupted = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
         # at 0 HP before its only hit, so the first hit is exempt).
         going = connected & ~absorbed & ((hit_index == 0) | (state.hp[side, user] > 0))
-        going = going & head_on & ~stopped
+        going = going & head_on & ~stopped & ~disrupted
+        # Triple Kick (B13-6): SYSCTL_TRIPLE_KICK has no SYSCTL_SKIP_ACCURACY_CHECK, so every
+        # later hit's TryMove rolls CheckMoveHitAccuracy again with this moment's state
+        # (bcp.c:3255-3259, its roll outcome.hit[side, hit]) but skips CheckMoveHitOverrides
+        # (_SKIP_ACCURACY_OVERRIDES, :3264-3268: no No Guard, Lock-On or weather sure hit). A
+        # miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (CheckMoveFailure, :3320-3323): no hit, no
+        # miss message, AfterMoveMessage and AfterMoveEffects as after a hit (the items below,
+        # whose repeat finds what the previous pass found), then LoopMultiHit ends (:3782).
+        # The disrupted hit's own CalcCrit can still print "A critical hit!" (MULTI_HIT_CRITICAL,
+        # :3538-3541; subscript_critical_hit.s:5): not observed (``_hit_events``' coarsening).
+        later_roll = outcome.hit[side, hit_index].astype(_I32)
+        later_ok = (later_roll > 0) & (
+            later_roll
+            <= live_hit_threshold(tables, state, side, used, target_moved, overrides=False)
+        )
+        kick_miss = (
+            going
+            & (tables.move_effect[used] == EffectId.TRIPLE_KICK)
+            & (hit_index > 0)
+            & (hit_index < n_hits)
+            & (state.hp[target_side, target] > 0)
+            & ~later_ok
+        )
+        going = going & ~kick_miss
         landed = (
             going
             & (hit_index < n_hits)
@@ -1809,6 +1835,7 @@ def _use_move(
             info.sub_hit,
             sync_flag,
             sync_sem,
+            disrupted | kick_miss,
         )
 
     init = (
@@ -1830,6 +1857,7 @@ def _use_move(
         jnp.bool_(False),
         jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
         jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
+        jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[target_side, target]

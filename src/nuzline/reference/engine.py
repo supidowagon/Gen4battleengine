@@ -763,10 +763,12 @@ def _calc_move_damage(
     present: int = -1,
     side_conditions: bool = True,
     field_conditions: bool = True,
+    hit: int = 0,
 ) -> int:
     """``BattleSystem_CalcMoveDamage`` (lib.c:6601) times ``criticalMul``
     (``BattleScript_CalcMoveDamage``, script.c:1344). ``side_conditions`` /
-    ``field_conditions`` False is the confusion self-hit's 0 masks."""
+    ``field_conditions`` False is the confusion self-hit's 0 masks. ``hit``: the hit of the move
+    (0-based), Triple Kick's power."""
     atk, dfn = _active(s, attacker), _active(s, defender)
     attack, sp_attack = _battle_stat(s, attacker, Stat.ATK), atk.stats[Stat.SPA - 1]
     defense, sp_defense = _battle_stat(s, defender, Stat.DEF), dfn.stats[Stat.SPD - 1]
@@ -795,6 +797,11 @@ def _calc_move_damage(
         power = 1 + (120 * dfn.hp) // dfn.max_hp
     elif not in_power and effect == EffectId.WEIGHT_POWER:  # script.c:6808-6826
         power = _weight_power(tables, dfn)
+    elif not in_power and effect == EffectId.TRIPLE_KICK:
+        # BTLVAR_MOVE_POWER: zeroed per action (lib.c:1979), + step per hit before CalcDamage
+        # (effect_script_0104.s:7; Kaizo's step is the move's power), B13-5.
+        step = _t(tables, "move_param", move, 0) or _t(tables, "move_power", move)
+        power = step * (hit + 1)
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
@@ -1071,9 +1078,38 @@ def _hits_semi(tables, move: int, kind: int) -> bool:
     return bool(kind) and bool(_t(tables, "move_flags", move) & SEMI_HIT_FLAGS[SemiKind(kind)])
 
 
+def _beat_up_slots(s: RefState, side: int) -> list[int]:
+    """BtlCmd_BeatUp's members in hit order (script.c:6157-6164, :6189-6244): every party
+    slot that is the user's, or has HP, a species and no status (B13-9)."""
+    sd = s.sides[side]
+    return [
+        i
+        for i, m in enumerate(sd.party)
+        if i == sd.active or (m.hp > 0 and m.species and m.status == Status.NONE)
+    ]
+
+
+def _beat_up_damage(tables, s: RefState, attacker: int, move: int, crit: bool, roll: int,
+                    hit: int) -> int:  # fmt: skip
+    """BtlCmd_BeatUp's damage (script.c:6203-6219): the member's species base Attack x power x
+    (level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2, x criticalMul, then the
+    variance; no CalcDamage, no type chart (SYSCTL_IGNORE_IMMUNITIES), B13-10."""
+    member = s.sides[attacker].party[_beat_up_slots(s, attacker)[hit]]
+    # SpeciesData_GetFormValue: by species and form, the personal row.
+    row = _t(tables, "species_form_row", member.species, member.form)
+    dfn = _active(s, 1 - attacker)
+    d_row = _t(tables, "species_form_row", dfn.species, dfn.form)
+    damage = _t(tables, "species_base_stats", row, Stat.ATK) * _t(tables, "move_power", move)
+    damage = damage * (member.level * 2 // 5 + 2)
+    damage = damage // _t(tables, "species_base_stats", d_row, Stat.DEF) // 50 + 2
+    if crit:  # BattleSystem_CalcCriticalMulti (lib.c:7139-7144): x3 for the user's Sniper
+        damage *= 3 if _active(s, attacker).ability == AbilityId.SNIPER else 2
+    return _variance(damage, roll)
+
+
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
-    magnitude: int = 4, present: int = -1, wonder_guard: bool = True,
+    magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
@@ -1088,6 +1124,8 @@ def _move_damage(
     defender = 1 - attacker
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
         return _fixed_damage(tables, s, attacker, move, wonder_guard)
+    if _t(tables, "move_effect", move) == EffectId.BEAT_UP:
+        return _beat_up_damage(tables, s, attacker, move, crit, roll, hit)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
@@ -1122,6 +1160,7 @@ def _move_damage(
         power_mul=power_mul,
         magnitude=magnitude,
         present=present,
+        hit=hit,
     )
     # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
@@ -1855,6 +1894,7 @@ def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> boo
         EffectId.HALVE_HP,
         EffectId.OHKO,
         EffectId.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
+        EffectId.BEAT_UP,  # effect_script_0154.s:5 (B13-10)
     ):
         return False
     flags: set[str] = set()
@@ -3190,6 +3230,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             else 10,
             magnitude=o.magnitude[side],
             present=o.present[side],
+            hit=hit,
         )
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
@@ -3517,7 +3558,9 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     return GOES_AHEAD
 
 
-def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool = False) -> int:
+def _hit_rate(
+    tables, s: RefState, attacker: int, move: int, target_moved: bool = False, overrides=True
+) -> int:
     """``hitRate`` of ``BattleControllerPlayer_CheckMoveHitAccuracy`` (bcp.c:2865-2979) for
     ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now;
     ``target_moved``: the foe acted earlier this turn (Zoom Lens). Hustle and the Micle Berry
@@ -3582,8 +3625,9 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
         if diff < 0:
             return 0
         return 100 if no_guard else _t(tables, "move_accuracy", move) + diff
-    # CheckMoveHitOverrides (bcp.c:3016-3021): either battler's No Guard clears the miss.
-    if no_guard:
+    # CheckMoveHitOverrides (bcp.c:3016-3021): either battler's No Guard clears the miss. A
+    # later Triple Kick hit skips it (SYSCTL_SKIP_ACCURACY_OVERRIDES, bcp.c:3264-3268), B13-6.
+    if no_guard and overrides:
         return 100
     return rate
 
@@ -3772,6 +3816,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # does Present's heal path (effect_script_0122.s:13), ruling G-30.
         and _t(tables, "move_effect", move) != EffectId.FUTURE_SIGHT
         and not _present_heals(tables, move, o, side)
+        and _t(tables, "move_effect", move) != EffectId.BEAT_UP  # B13-10
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
@@ -3907,6 +3952,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         not _targets_user(tables, move, _ghost(s, side))
         and effect != EffectId.FUTURE_SIGHT  # SYSCTL_IGNORE_IMMUNITIES
         and not _present_heals(tables, move, o, side)  # likewise (G-30)
+        and effect != EffectId.BEAT_UP  # likewise (effect_script_0154.s:5, B13-10)
         and _wonder_guarded(tables, s, side, 1 - side, move, _move_type(tables, s, side, move))
     )
     # subscript_missed.s:11 sends a semi-invulnerable miss (B10-12) to the miss message (:157)
@@ -4038,6 +4084,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         hits = _t(tables, "move_param", move, 0) or o.n_hits[side]
     elif _t(tables, "move_flags", move) & MoveFlag.HIT_TWICE:
         hits = 2
+    elif effect == EffectId.TRIPLE_KICK:  # SetMultiHit 3 (effect_script_0104.s:5), B13-5
+        hits = 3
+    elif effect == EffectId.BEAT_UP:  # one per eligible member (script.c:6189-6244), B13-9
+        hits = len(_beat_up_slots(s, side))
     foe_mon0 = _active(s, 1 - side)
     foe_hp0 = foe_mon0.hp
     turn.focus_armed = turn.pluck_flag = turn.damaged = turn.sub_hit = False  # BattleContext_Init
@@ -4046,6 +4096,14 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         # (faintedMon): the target, or the attacker by Rough Skin.
         if hit > 0 and (_active(s, 1 - side).hp == 0 or _active(s, side).hp == 0):
             break
+        # A later Triple Kick hit rolls CheckMoveHitAccuracy again (no SYSCTL_SKIP_ACCURACY_CHECK
+        # in SYSCTL_TRIPLE_KICK, bcp.c:3255-3259) without the overrides (:3264-3268); a miss is
+        # MOVE_STATUS_MULTI_HIT_DISRUPTED (:3320-3323): the AfterMoveEffects pass still runs
+        # (it repeats the previous one's checks: nothing changed), then the loop ends (:3782).
+        if hit > 0 and effect == EffectId.TRIPLE_KICK:
+            roll = o.hit[side][hit]
+            if not 0 < roll <= _hit_rate(tables, s, side, move, target_moved, overrides=False):
+                break
         # subscript_recover_hp.s _036 ("HP is full!", for Recover's user or Present's heal
         # target) sets MOVE_STATUS_NO_MORE_WORK: CheckMoveFailure (bcp.c:3313-3315) goes to
         # LOOP_SPREAD_MOVES, past AfterMoveEffects (no item checks). Single-hit moves.

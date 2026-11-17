@@ -887,6 +887,66 @@ def pinch_ability(move_type, ability) -> jnp.ndarray:
     )
 
 
+def triple_kick_power(tables: Tables, move, hit) -> jnp.ndarray:
+    """``int32``: ``BTLVAR_MOVE_POWER`` at hit ``hit`` (0-based) of a ``TRIPLE_KICK`` move:
+    BattleContext_Init zeroes it once per action (battle_lib.c:1979), BattleSystem_SetupLoop
+    keeps it between hits (:3357-3362), and the reloaded script adds its step before CalcDamage
+    every hit (effect_script_0104.s:7: 10; Kaizo's be_seq 104 and 88: the move's own power,
+    ``GetCurrentMoveData MOVEATTRIBUTE_POWER``, step 0 here), so hit k (1-3) has k x step;
+    CalcMoveDamage uses it as ``inPower`` (battle_lib.c:6673-6677), B13-5."""
+    move = _i32(move)
+    step = _i32(tables.move_param[move, 0])
+    step = jnp.where(step != 0, step, _i32(tables.move_power[move]))
+    return step * (_i32(hit) + 1)
+
+
+def beat_up_slots(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[SLOTS], int32)``: the party slots of ``side`` Beat Up hits with, in hit order,
+    and how many. BtlCmd_BeatUp (battle_script.c:6173-6247) walks the party in slot order
+    (BattleSystem_GetPartyPokemon, the party array, not the display order) and hits with every
+    slot BeatUpEligibleMon passes (:6157-6164): the user's own (``selectedPartySlot``) whatever
+    its HP or status, or one with HP, a species, no egg and ``MON_CONDITION_NONE``. Nothing
+    changes a benched Pokemon's HP or status during the move, so the list at the move's start
+    holds for every hit (B13-9). Slots past the count are ineligible ones."""
+    side = _i32(side)
+    slots = jnp.arange(state.hp.shape[1], dtype=jnp.int32)
+    eligible = (slots == _i32(state.active[side])) | (
+        (state.hp[side] > 0) & (state.species[side] != 0) & (state.status[side] == Status.NONE)
+    )
+    order = jnp.argsort(jnp.where(eligible, slots, slots + state.hp.shape[1]))
+    return order.astype(jnp.int32), jnp.sum(eligible.astype(jnp.int32))
+
+
+def beat_up_damage(tables: Tables, state: BattleState, atk_side, move, hit, crit, roll):
+    """``int32``: the damage of Beat Up's hit ``hit`` (0-based) by ``atk_side``: BtlCmd_BeatUp
+    (battle_script.c:6203-6219) with the hit's party member (``beat_up_slots``): its species'
+    base Attack x the move's power x (its level x 2 / 5 + 2) / the defender's species base
+    Defense (DEFENDING_MON.species and formNum: the personal rows, ``species_form_row``) / 50 +
+    2, x criticalMul (2, Sniper
+    3: BattleSystem_CalcCriticalMulti, battle_lib.c:7139-7144, the user's ability), then
+    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Helping Hand (:6214) is a doubles
+    flag. No CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
+    SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
+    or effectiveness (B13-10)."""
+    atk_side = _i32(atk_side)
+    def_side = 1 - atk_side
+    order, _ = beat_up_slots(state, atk_side)
+    slot = order[jnp.clip(_i32(hit), 0, order.shape[0] - 1)]
+    # SpeciesData_GetFormValue(species, form, ...): the personal row of the species and form.
+    row = tables.species_form_row[state.species[atk_side, slot], state.form[atk_side, slot]]
+    base_atk = _i32(tables.species_base_stats[row, Stat.ATK])
+    level = _i32(state.level[atk_side, slot])
+    d_slot = state.active[def_side]
+    d_row = tables.species_form_row[state.species[def_side, d_slot], state.form[def_side, d_slot]]
+    base_def = jnp.maximum(_i32(tables.species_base_stats[d_row, Stat.DEF]), 1)
+    damage = base_atk * _i32(tables.move_power[_i32(move)]) * (level * 2 // 5 + 2)
+    damage = damage // base_def // 50 + 2
+    user_ability = _i32(state.ability[atk_side, state.active[atk_side]])
+    crit_mul = jnp.where(user_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
+    damage = jnp.where(jnp.asarray(crit, jnp.bool_), damage * crit_mul, damage)
+    return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
+
+
 def _pre_random(
     tables: Tables,
     s: BattleState,
@@ -902,6 +962,7 @@ def _pre_random(
     def_side=None,
     ai_ivs=None,
     ai_draw=0,
+    hit=0,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -915,7 +976,8 @@ def _pre_random(
     Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
     is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
     passes, default the attacker's own (``ai_case_power``), and ``ai_draw`` the class of
-    its ``RandNext`` draw (Magnitude's case)."""
+    its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
+    ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``)."""
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
@@ -968,6 +1030,9 @@ def _pre_random(
         )
         by_defender = (effect == EffectId.HP_POWER) | (effect == EffectId.WEIGHT_POWER)
         power = jnp.where(by_defender, defender_power, power)
+        # Triple Kick's BTLVAR_MOVE_POWER, added to per hit (B13-5).
+        kick = effect == EffectId.TRIPLE_KICK
+        power = jnp.where(kick, triple_kick_power(tables, move, hit), power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
     present = _i32(present)
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
@@ -1245,18 +1310,19 @@ def _finish(
 
 
 def damage_table(
-    tables: Tables, state: BattleState, atk_side, move, crit, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, crit, wonder_guard=True, hit=0
 ) -> jnp.ndarray:
     """``int32[16]``: damage of ``move`` by ``atk_side``'s active Pokemon against the
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
-    power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s."""
+    power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s. ``hit``: the hit
+    of the move (0-based): Triple Kick's power, Beat Up's party member (B13-5, B13-10)."""
     # The defender is the other side's active Pokemon (this table's contract).
     power_mul = script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, 10)
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul
+        tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolls = jnp.arange(ROLLS, dtype=_I32)
@@ -1266,19 +1332,24 @@ def damage_table(
     )  # fmt: skip
     fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
+    beat_up = beat_up_damage(tables, state, atk_side, move, hit, crit, rolls)
+    table = jnp.where(tables.move_effect[_i32(move)] == EffectId.BEAT_UP, beat_up, table)
     return jnp.where(fixed, amount, table)
 
 
 def hit_damage_table(
-    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True, hit=0
 ) -> jnp.ndarray:
     """``int32[2, ROLLS]``: one hit's damage for every ``(crit, roll)`` pair (``crit`` 0
     or 1, then ``damage_table``'s rolls), at ``state``. It equals ``damage_for_roll`` at
     the default ``power_mul`` for every move but Magnitude (``damage_table`` takes level 4)
     and Bide (0 here); ``enumerate``'s damage classes use neither. ``wonder_guard``: as
-    ``_finish``'s."""
+    ``_finish``'s; ``hit``: as ``damage_table``'s."""
     return jnp.stack(
-        [damage_table(tables, state, atk_side, move, crit, wonder_guard) for crit in (False, True)]
+        [
+            damage_table(tables, state, atk_side, move, crit, wonder_guard, hit)
+            for crit in (False, True)
+        ]
     )
 
 
@@ -1293,12 +1364,14 @@ def damage_for_roll(
     magnitude=MAGNITUDE_MIN,
     present=PRESENT_TABLE,
     wonder_guard=True,
+    hit=0,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
     ``magnitude`` is Magnitude's level; ``present`` is Present's draw, and its heal path
     (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
-    ``CalcDamage``. ``wonder_guard``: as ``_finish``'s."""
+    ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
+    power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula)."""
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1309,6 +1382,7 @@ def damage_for_roll(
         power_mul=script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, power_mul),
         magnitude=magnitude,
         present=present,
+        hit=hit,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     rolled = _finish(
@@ -1321,6 +1395,10 @@ def damage_for_roll(
     # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
     heal = (_i32(tables.move_effect[_i32(move)]) == EffectId.PRESENT) & (
         _i32(present) == PRESENT_HEAL
+    )
+    beat_up = _i32(tables.move_effect[_i32(move)]) == EffectId.BEAT_UP
+    rolled = jnp.where(
+        beat_up, beat_up_damage(tables, state, atk_side, move, hit, crit, roll), rolled
     )
     return jnp.where(heal, 0, jnp.where(fixed, amount, rolled))
 

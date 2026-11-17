@@ -34,7 +34,7 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
@@ -58,7 +58,7 @@ def _full(s, side, slot, hp):
 
 def _band(o, side, hits):
     """``o`` with ``focus_band[side, i] = 1`` for each ``i`` in ``hits``."""
-    band = np.zeros((2, 5), np.int8)
+    band = np.zeros((2, MAX_HITS), np.int8)
     for i in hits:
         band[side, i] = 1
     return o._replace(focus_band=jnp.asarray(band))

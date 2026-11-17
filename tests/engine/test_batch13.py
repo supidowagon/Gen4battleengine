@@ -11,7 +11,13 @@ import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, SemiKind, Status, Weather
-from nuzline.engine.outcome import crit_odds, empty_outcome, live_hit_threshold
+from nuzline.engine.outcome import (
+    MAX_HITS,
+    Outcome,
+    crit_odds,
+    empty_outcome,
+    live_hit_threshold,
+)
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, assert_matches_reference
 from tests.engine.test_enumerate import (
@@ -45,8 +51,8 @@ def _plain(s):
 
 
 def _secondary(*hits: int):
-    row = list(hits) + [0] * (5 - len(hits))
-    return O._replace(secondary=jnp.asarray([row, [0] * 5], jnp.int8))
+    row = list(hits) + [0] * (MAX_HITS - len(hits))
+    return O._replace(secondary=jnp.asarray([row, [0] * MAX_HITS], jnp.int8))
 
 
 # --- B13-1: Twineedle (effect_script_0077.s: effect 2's poison, SetMultiHit 2) ---------------
@@ -173,7 +179,7 @@ def test_blaze_kick_crits_at_its_stage_and_burns_on_a_proc(tables, names):
     m = names.move("Blaze Kick")
     normal = int(damage_for_roll(tables, s, 0, m, False, 15))
     crit = int(damage_for_roll(tables, s, 0, m, True, 15))
-    o = O._replace(crit=jnp.asarray([[9, 0, 0, 0, 0], [0] * 5], jnp.int8))
+    o = O._replace(crit=jnp.asarray([[9] + [0] * (MAX_HITS - 1), [0] * MAX_HITS], jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == crit > normal
     out = assert_matches_reference(tables, s, (0, 0), _secondary(1))
@@ -251,7 +257,7 @@ def test_kaizo_hurricane_weather_accuracy(kaizo_tables, kaizo_names):
     assert int(live_hit_threshold(t, _hurricane(t, n), 0, m)) == 70
     cloud = _cloud_nine(t, _hurricane(t, n, Weather.SUN), 1)
     assert int(live_hit_threshold(t, cloud, 0, m)) == 70
-    miss = O._replace(hit=jnp.full((2, 5), 100, jnp.int8))
+    miss = O._replace(hit=jnp.full((2, MAX_HITS), 100, jnp.int8))
     rain = _hurricane(t, n, Weather.RAIN)
     out = assert_matches_reference(t, rain, (0, 0), miss)
     assert int(out.hp[1, 0]) < int(rain.hp[1, 0])
@@ -294,3 +300,270 @@ def test_kaizo_hurricane_law_exact_and_sampled(kaizo_tables, kaizo_names):
         assert_equals_bruteforce(t, s, acts)
         num = 20_000
         check_frequencies(children(t, s, acts), sampled(t, s, acts, num), num)
+
+
+# --- B13-5..B13-8: the Triple Kick family (effect_script_0104.s; Kaizo be_seq 104 and 88) -----
+
+
+def _hits(*classes: int):
+    """Hit 0's class and the later hits' classes (100 misses any rate below 100)."""
+    row = list(classes) + [1] * (MAX_HITS - len(classes))
+    return O._replace(hit=jnp.asarray([row, [1] * MAX_HITS], jnp.int8))
+
+
+def test_triple_kick_tables_both_games(tables, names, kaizo_tables, kaizo_names):
+    """B13-5: vanilla effect 104 adds 10 per hit (effect_script_0104.s:7: step 10); Kaizo's be_seq
+    104 (Triple Kick, Rock Wrecker) and 88 (Triple Axel, Fury Cutter) add the move's power
+    (rom_diff.toml: step 0); powers from the ROM move data."""
+    m = names.move("Triple Kick")
+    assert int(tables.move_effect[m]) == EffectId.TRIPLE_KICK
+    assert np.asarray(tables.move_param)[m].tolist() == [10, 0, 0]
+    assert int(tables.move_power[m]) == 10
+    for move, power in (
+        ("Triple Kick", 30),
+        ("Rock Wrecker", 30),
+        ("Triple Axel", 20),
+        ("Fury Cutter", 20),
+    ):
+        k = kaizo_names.move(move)
+        assert int(kaizo_tables.move_effect[k]) == EffectId.TRIPLE_KICK, move
+        assert np.asarray(kaizo_tables.move_param)[k].tolist() == [0, 0, 0], move
+        assert int(kaizo_tables.move_power[k]) == power, move
+
+
+def test_triple_kick_power_steps_and_technician(kaizo_tables, kaizo_names):
+    """B13-5: hit k has power k x step (BTLVAR_MOVE_POWER kept between hits, battle_lib.c:1979,
+    :3357-3362), read as inPower (:6673-6677) before Technician's movePower <= 60 test
+    (:6698-6702): Kaizo's 30-power Triple Kick boosts hits 1-2 (30, 60), not hit 3 (90)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_state(t, n, ("Hitmontop", "Triple Kick"), ("Snorlax", "Growl"), (40, 60)))
+    m = n.move("Triple Kick")
+    plain = [int(damage_for_roll(t, s, 0, m, False, 15, hit=k)) for k in range(3)]
+    assert plain[0] < plain[1] < plain[2]
+    tech = _ability(s, 0, AbilityId.TECHNICIAN)
+    boosted = [int(damage_for_roll(t, tech, 0, m, False, 15, hit=k)) for k in range(3)]
+    assert boosted[0] > plain[0] and boosted[1] > plain[1] and boosted[2] == plain[2]
+    out = assert_matches_reference(t, s, (0, 0), O)
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == sum(plain)
+
+
+def test_triple_kick_vanilla_steps_by_ten(tables, names):
+    """B13-5: vanilla's script adds 10 (effect_script_0104.s:7): hits of power 10, 20, 30, as a
+    10-, 20- and 30-power hit of the same move would deal."""
+    s = _plain(_state(tables, names, ("Hitmontop", "Triple Kick"), ("Snorlax", "Growl"), (40, 60)))
+    m = names.move("Triple Kick")
+    plain = [int(damage_for_roll(tables, s, 0, m, False, 15, hit=k)) for k in range(3)]
+    for k in range(3):
+        power = tables.move_power.at[m].set(10 * (k + 1))
+        param = tables.move_param.at[m, 0].set(10 * (k + 1))
+        scaled = tables._replace(move_power=power, move_param=param)
+        assert int(damage_for_roll(scaled, s, 0, m, False, 15)) == plain[k], k
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == sum(plain)
+
+
+def test_triple_kick_later_miss_ends_the_move(kaizo_tables, kaizo_names):
+    """B13-6: SYSCTL_TRIPLE_KICK has no SYSCTL_SKIP_ACCURACY_CHECK (system_control.h:81-86): hit k
+    rolls again (bcp.c:3255-3259), and a miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (:3320-3323),
+    which ends the loop (:3782): no later hit, whatever its roll."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_state(t, n, ("Hitmontop", "Triple Kick"), ("Snorlax", "Growl"), (40, 60)))
+    m = n.move("Triple Kick")
+    per = [int(damage_for_roll(t, s, 0, m, False, 15, hit=k)) for k in range(3)]
+    for classes, landed in (((1, 1, 100), 2), ((1, 100, 1), 1), ((100, 1, 1), 0)):
+        out = assert_matches_reference(t, s, (0, 0), _hits(*classes))
+        assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == sum(per[:landed]), classes
+
+
+def test_triple_kick_later_hits_skip_the_overrides(kaizo_tables, kaizo_names):
+    """B13-6: a later hit skips CheckMoveHitOverrides (SYSCTL_SKIP_ACCURACY_OVERRIDES,
+    bcp.c:3264-3268): the first hit of a No Guard user cannot miss (:3016-3021), its later
+    hits roll against the plain rate (outcome.live_hit_threshold, overrides=False)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_state(t, n, ("Machamp", "Triple Kick"), ("Snorlax", "Growl"), (40, 60)))
+    guard = _ability(s, 0, AbilityId.NO_GUARD)
+    m = n.move("Triple Kick")
+    assert int(live_hit_threshold(t, guard, 0, m)) == 100
+    assert int(live_hit_threshold(t, guard, 0, m, overrides=False)) == 95
+    per = [int(damage_for_roll(t, guard, 0, m, False, 15, hit=k)) for k in range(3)]
+    out = assert_matches_reference(t, guard, (0, 0), _hits(100, 96, 1))
+    assert int(guard.hp[1, 0]) - int(out.hp[1, 0]) == per[0]
+    out = assert_matches_reference(t, guard, (0, 0), _hits(100, 95, 95))
+    assert int(guard.hp[1, 0]) - int(out.hp[1, 0]) == sum(per)
+
+
+def test_triple_kick_stops_when_the_target_faints(tables, names):
+    """LoopMultiHit stops on faintedMon (bcp.c:3780-3782), as for every multi-hit move."""
+    s = _plain(_state(tables, names, ("Hitmontop", "Triple Kick"), ("Bidoof", "Growl")))
+    s = s._replace(hp=s.hp.at[1, 0].set(1))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[1, 0]) == 0
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_triple_kick_law_exact_and_sampled(kaizo_tables, kaizo_names):
+    """B13-6: the later hits' own accuracy classes (hit[s, 1], hit[s, 2], read once the hit
+    before can have landed) and the per-hit damage classes (OutcomeLaws.damage[side, hit]) in
+    the enumeration equal the brute force and the sampler for a No Guard user (hit 0 sure, the
+    later ones at 95), and the sampler at -1 accuracy (95 x 75 / 100 = 71 for every hit; its
+    brute force is past the width cap). The foe's Battle Armor keeps the brute force's crit-free
+    rolls (16^3) under that cap."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_state(t, n, ("Hitmontop", "Triple Kick"), ("Snorlax", "Growl"), (50, 50)))
+    s = _ability(s, 1, AbilityId.BATTLE_ARMOR)
+    guard = _ability(s, 0, AbilityId.NO_GUARD)
+    acts = A("Triple Kick", "Growl", guard, n)
+    assert_equals_bruteforce(t, guard, acts)
+    n_ = 20_000
+    check_frequencies(children(t, guard, acts), sampled(t, guard, acts, n_), n_)
+    low = s._replace(stages=s.stages.at[0, 6].set(-1))
+    acts = A("Triple Kick", "Growl", low, n)
+    expected = children(t, low, acts)
+    assert int(s.hp[1, 0]) in {int(from_bytes_like(low, k)["hp"][1, 0]) for k in expected}
+    check_frequencies(expected, sampled(t, low, acts, n_), n_)
+
+
+@pytest.mark.parametrize("later", [1, 2])
+def test_triple_kick_later_classes_equal_raw_rolls(tables, names, later):
+    """B13-6: a later hit's class over hit_thresholds(..., overrides=False) (enumerate's
+    ``hit_later_thresholds``) steps like every raw roll 1-100 it stands for, after a faster
+    Sand-Attack (the check reads the stage of its moment, bcp.c:2873-2874); the hits before it
+    land (class 1)."""
+    from fractions import Fraction
+
+    from nuzline.engine.enumerate import hit_class_law
+    from tests.engine.test_accuracy_classes import laws_of, merged, state_keys, stepped
+
+    s = _plain(
+        _state(tables, names, ("Hitmontop", "Triple Kick"), ("Snorlax", "Sand-Attack"), (30, 70))
+    )
+    acts = A("Triple Kick", "Sand-Attack", s, names)
+    laws = laws_of(tables, s, acts)
+    assert bool(laws.relevant.hit[0, later])
+    thresholds = laws.hit_later_thresholds[0][laws.hit_later_possible[0]]
+    assert {90, 67} <= set(thresholds.tolist())
+    law = dict(zip(*hit_class_law(thresholds)[:2]))
+
+    def rows(values):
+        base = empty_outcome()
+        fields = [np.repeat(np.asarray(f)[None], len(values), axis=0).copy() for f in base]
+        out = Outcome(*fields)
+        out.hit[:, 0, later] = values
+        return out
+
+    want = merged(
+        state_keys(stepped(tables, s, acts, rows(list(law)))),
+        [Fraction(w, 100) for w in law.values()],
+    )
+    raw = list(range(1, 101))
+    got = merged(state_keys(stepped(tables, s, acts, rows(raw))), [Fraction(1, 100)] * 100)
+    assert got == want
+
+
+# --- B13-9..B13-11: Beat Up (effect_script_0154.s, BtlCmd_BeatUp) ---------------------------
+
+
+def _beat_up_party(t, n, members, foe=("Snorlax", "Growl"), level=40, item=""):
+    return make_state(
+        t,
+        [_mon(n, sp, ["Beat Up"], lv) for sp, lv in members],
+        [_mon(n, foe[0], foe[1:], level, item)],
+    )
+
+
+def _beat_up_hit(t, s, slot, crit, roll):
+    """battle_script.c:6206-6218 by hand: base Attack x power x (level x 2 / 5 + 2) / base
+    Defense / 50 + 2, x2 on a crit, then the variance (at least 1)."""
+    base = np.asarray(t.species_base_stats)
+    rows = np.asarray(t.species_form_row)
+    row = rows[int(s.species[0, slot]), int(s.form[0, slot])]
+    foe = rows[int(s.species[1, 0]), int(s.form[1, 0])]
+    power = int(t.move_power[int(s.moves[0, 0, 0])])
+    level = int(s.level[0, slot])
+    d = int(base[row, 1]) * power * (level * 2 // 5 + 2) // int(base[foe, 2]) // 50 + 2
+    d = d * (2 if crit else 1)
+    return max(d * (85 + roll) // 100, 1)
+
+
+def test_beat_up_tables_both_games(tables, names, kaizo_tables, kaizo_names):
+    """B13-9: effect 154 is BEAT_UP in both games (10 power vanilla, 30 Kaizo; ROM move data)."""
+    for t, n, power in ((tables, names, 10), (kaizo_tables, kaizo_names, 30)):
+        m = n.move("Beat Up")
+        assert int(t.move_effect[m]) == EffectId.BEAT_UP
+        assert int(t.move_power[m]) == power
+
+
+def test_beat_up_hits_once_per_eligible_member(kaizo_tables, kaizo_names):
+    """B13-9: BeatUpEligibleMon (battle_script.c:6157-6164): the user always (poisoned here), every
+    other slot with HP, a species and no status, in party order, each hit its member's own
+    damage (B13-10). A fainted and a poisoned bench member give no hit."""
+    t, n = kaizo_tables, kaizo_names
+    members = [("Sneasel", 40), ("Machop", 30), ("Absol", 35), ("Geodude", 20), ("Gengar", 45)]
+    s = _plain(_beat_up_party(t, n, members))
+    s = s._replace(
+        hp=s.hp.at[0, 1].set(0),
+        status=s.status.at[0, 3].set(Status.POISON).at[0, 0].set(Status.POISON),
+    )
+    out = assert_matches_reference(t, s, (0, 0), O)
+    want = sum(_beat_up_hit(t, s, slot, False, 15) for slot in (0, 2, 4))
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == want
+
+
+def test_beat_up_full_party_hits_six_times_with_crits_per_hit(kaizo_tables, kaizo_names):
+    """B13-9, B13-10: a healthy party of six gives six hits (MAX_HITS 6), each with its own crit
+    (CalcCrit in the reloaded script) and roll."""
+    t, n = kaizo_tables, kaizo_names
+    members = [("Sneasel", 40), ("Machop", 30), ("Absol", 35), ("Geodude", 20), ("Gengar", 45),
+               ("Bidoof", 10)]  # fmt: skip
+    s = _plain(_beat_up_party(t, n, members, level=60))
+    rolls = [[3, 7, 0, 15, 9, 12], [15] * MAX_HITS]
+    crits = [[0, 1, 0, 0, 0, 1], [0] * MAX_HITS]
+    o = O._replace(roll=jnp.asarray(rolls, jnp.int8), crit=jnp.asarray(crits, jnp.int8))
+    out = assert_matches_reference(t, s, (0, 0), o)
+    want = sum(_beat_up_hit(t, s, k, crits[0][k], rolls[0][k]) for k in range(6))
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == want
+
+
+def test_beat_up_skips_the_type_chart(kaizo_tables, kaizo_names):
+    """B13-10: SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips CheckTypeChart
+    (bcp.c:2355): no Wonder Guard block (Shedinja takes the hit) and no resist berry
+    (subscript_type_resist_berry.s:5: a Colbur Berry stays)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_beat_up_party(t, n, [("Sneasel", 40)], foe=("Shedinja", "Growl")))
+    s = _ability(s, 1, AbilityId.WONDER_GUARD)
+    out = assert_matches_reference(t, s, (0, 0), O)
+    assert int(out.hp[1, 0]) == 0
+    berry = _plain(
+        _beat_up_party(t, n, [("Sneasel", 40)], foe=("Gengar", "Growl"), item="Colbur Berry")
+    )
+    out = assert_matches_reference(t, berry, (0, 0), O)
+    assert int(out.item[1, 0]) == int(berry.item[1, 0]) != 0
+    assert int(berry.hp[1, 0]) - int(out.hp[1, 0]) == _beat_up_hit(t, berry, 0, False, 15)
+
+
+def test_beat_up_life_orb_recoil_without_the_boost(kaizo_tables, kaizo_names):
+    """B13-10: no CalcDamage, so no Life Orb boost (battle_script.c:1346 is CalcDamage's); its
+    recoil still follows a hit that set SYSCTL_MOVE_HIT (bcp.c:4758-4765): maxHP / 10."""
+    t, n = kaizo_tables, kaizo_names
+    s = make_state(
+        t,
+        [_mon(n, "Sneasel", ["Beat Up"], 40, "Life Orb"), _mon(n, "Machop", ["Beat Up"], 30)],
+        [_mon(n, "Snorlax", ["Growl"], 40)],
+    )
+    s = _plain(s)
+    out = assert_matches_reference(t, s, (0, 0), O)
+    want = sum(_beat_up_hit(t, s, slot, False, 15) for slot in (0, 1))
+    assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == want
+    assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 10
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_beat_up_law_exact_and_sampled(kaizo_tables, kaizo_names):
+    """B13-10: three members' crits and rolls as per-hit damage classes
+    (OutcomeLaws.damage[side, hit]) equal the brute force and the sampler."""
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_beat_up_party(t, n, [("Sneasel", 40), ("Machop", 30), ("Absol", 35)], level=50))
+    acts = A("Beat Up", "Growl", s, n)
+    assert_equals_bruteforce(t, s, acts)
+    n_ = 20_000
+    check_frequencies(children(t, s, acts), sampled(t, s, acts, n_), n_)

@@ -1976,6 +1976,8 @@ RARE_EFFECTS = (
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
+    EffectId.TRIPLE_KICK,  # B13-5
+    EffectId.BEAT_UP,  # B13-9
 )
 
 
@@ -2115,6 +2117,9 @@ LAW_MOVES = (
     # with its burn roll (B13-2).
     "Twineedle",
     "Blaze Kick",
+    # B13-5..B13-10: Triple Kick's later accuracy rolls and per-hit power, Beat Up's members.
+    "Triple Kick",
+    "Beat Up",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

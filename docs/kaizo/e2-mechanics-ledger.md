@@ -17,8 +17,14 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   _scratch/e2/b13/a_fail.pkl): test_differential's draw: an asleep Groudon at 1 HP behind a
   1-HP substitute holding a Figy Berry, Thunder Wave vs Ralts' Sky Uppercut: the reference eats
   the berry, JAX keeps it. test_cli_rank_default_budget_keeps_the_header killed at 8.23 GB
-  (8.67-9.09 before). OWED: the AI scripts of these effects (77, 200, 209, Kaizo 141; the batch's
-  AI agent); the other families of the batch.
+  (8.67-9.09 before). Multi-hit power family done (agent B, B13-5..B13-11): TRIPLE_KICK (vanilla
+  104 step 10; Kaizo be_seq 104 Triple Kick / Rock Wrecker and 88 Triple Axel / Fury Cutter, both
+  members modelled, step = the move's power), each later hit's own accuracy roll
+  (Outcome.hit[s, 1..2], thresholds without the overrides), BEAT_UP (both games); MAX_HITS 5 -> 6
+  (the sixth column of every per-hit draw from fold_in 42, hits 0-4 keep their samples);
+  OutcomeLaws.damage per hit, hit_later_thresholds / _possible. OWED: the AI scripts of these
+  effects (77, 200, 209, Kaizo 141, 104, 88, 154; the batch's AI agent); vanilla-only Fury Cutter
+  #119 and the recharge #80 (Owed list); the other families of the batch.
 
 - **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
   Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
@@ -207,8 +213,15 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
   Magnet Rise, Nature Power, Chatter, Gyro Ball and others; the backlog rows name them) and the
-  Kaizo scripts be_seq#88 and sub_seq#238 (be_seq#141, Hurricane: engine done in batch 13,
-  B13-3, B13-4; its AI script with the batch's AI agent).
+  Kaizo script sub_seq#238 (be_seq#141, Hurricane: engine done in batch 13, B13-3, B13-4;
+  be_seq#88 and #104, the Triple Kick family: engine done in batch 13, B13-5..B13-8; their AI
+  scripts with the batch's AI agent).
+- **Batch 13, vanilla only (no Kaizo move uses either: Kaizo's Fury Cutter is be_seq 88 and its
+  Rock Wrecker / Hyper Beam family left effect 80):** Fury Cutter #119 (CalcFuryCutterPower,
+  effect_script_0119.s:5: a per-battler furyCutterCount that doubles the power per use and
+  resets on a miss or another move: a new state field and its resets) and the recharge #80
+  (effect_script_0080.s:5, MOVE_SUBSCRIPT_PTR_RECHARGE_TURN: VOLATILE_CONDITION_RECHARGING, the
+  forced recharge turn in CheckStatusDisruption and the action choice). Both stay UNSUPPORTED.
 
 - Batch 9 left (Gardenia-split entries not done, by why): SolarBeam #151 (a charge turn: the
   two-turn lock and SYSCTL_FIRST_OF_MULTI_TURN's skips); Jump Kick / Hi Jump Kick #45
@@ -1746,3 +1759,63 @@ Rules left out because another mechanic is missing; each closes with the mechani
   branch (MOVE_STATUS_MISSED cleared, :3024-3027; rom 0x0224F386), both inside NO_CLOUD_NINE:
   MoveFlag.THUNDER, read by outcome._rate and the reference (B9-1). Both code entries marked
   modelled. Test: an Air Lock foe keeps 70 and the miss (Kaizo has no Cloud Nine species).
+- B13-5 Triple Kick (vanilla 104, BATTLE_EFFECT_HIT_THREE_TIMES) is EffectId.TRIPLE_KICK (step,
+  0, 0): ``SetMultiHit 3, SYSCTL_TRIPLE_KICK`` (effect_script_0104.s:5), three hits; the script
+  reloads per hit (bcp.c:3789) and adds its step to BTLVAR_MOVE_POWER (:7), which
+  BattleContext_Init zeroes once per action (battle_lib.c:1979) and BattleSystem_SetupLoop keeps
+  (:3357-3362): hit k has power k x step, CalcMoveDamage's inPower (:6673-6677) before
+  powerMul and Technician's <= 60 (:6688-6702). Vanilla step 10 (the script's constant); Kaizo's
+  be_seq 104 adds GetCurrentMoveData MOVEATTRIBUTE_POWER (step 0 = the move's own power) and
+  be_seq 88 is byte-identical to it (rom_diff.toml): Triple Kick 30 and Rock Wrecker 30 (hits
+  30/60/90), Triple Axel 20 and Fury Cutter 20 (20/40/60). damage.triple_kick_power,
+  effects.hit_count (3), the reference's _calc_move_damage. Members 88 and 104 marked modelled
+  (KAIZO_EFFECTS; no KAIZO_FLAG_EFFECTS bits).
+- B13-6 SYSCTL_TRIPLE_KICK lacks SYSCTL_SKIP_ACCURACY_CHECK but has _SKIP_ACCURACY_OVERRIDES
+  (system_control.h:81-86): every later hit's TryMove rolls CheckMoveHitAccuracy again with that
+  moment's state (bcp.c:3255-3259) and skips CheckMoveHitOverrides (:3264-3268: no No Guard,
+  Lock-On or Thunder / Blizzard weather sure hit; Protect and the semi-invulnerable test cannot
+  change mid-move). A later miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (CheckMoveFailure,
+  :3320-3323): no damage, no miss message, AfterMoveMessage and AfterMoveEffects run as after a
+  hit (the engine's item pass repeats, finding what the last one found), then LoopMultiHit ends
+  (:3782). Outcome.hit[s, k > 0] is hit k's roll as its class over the same threshold grid
+  without the overrides (outcome.hit_threshold_pair, one pass; _rate's ``overrides``); the grid
+  covers what a hit can change before the next check (a disliked flavor berry's confusion for
+  Tangled Feet, ruling G-5; a White Herb). step's loop carries ``disrupted``; enumerate reads
+  hit[s, k] once hit[s, k - 1] can have landed and gates hit k's own reads on it
+  (OutcomeLaws.hit_later_thresholds / _possible; Protect restricts them too). The disrupted
+  hit's own CalcCrit (run before TryMove) can still print "A critical hit!" (MULTI_HIT_CRITICAL,
+  bcp.c:3538-3541; subscript_critical_hit.s:5): not observed (step._hit_events' coarsening;
+  Anger Point, which it would trigger, is unsupported). The Micle Berry flag (cleared by the
+  first check, bcp.c:2967-2970) is an unsupported item.
+- B13-7 Damage classes per hit: OutcomeLaws.damage is [side, hit, crit, roll]; hit k of a
+  TRIPLE_KICK move has its k x step table, a BEAT_UP hit its member's (damage.beat_up_damage),
+  every other hit hit 0's. Both are TABLE_DAMAGE_EFFECTS and INPUT_NEUTRAL_EFFECTS (they write the
+  foe's HP only), and damage_inputs_can_change's own-move clause treats their later hits as
+  MULTI_HIT's (their inputs change only through the HP, contact and item clauses).
+- B13-8 Test guards: test_triple_kick_later_classes_equal_raw_rolls (each later class steps like
+  the raw rolls it stands for, after a faster Sand-Attack), test_triple_kick_law_exact_and_sampled
+  (slow: a No Guard user against the brute force and the sampler; -1 accuracy against the
+  sampler), test_effect_map test_triple_kick_and_beat_up_scripts (every SetMultiHit 3 script).
+- B13-9 Beat Up (154, both games) is EffectId.BEAT_UP: BtlCmd_BeatUp (battle_script.c:6173-6247)
+  walks the party in slot order (BattleSystem_GetPartyPokemon: the party array, not the display
+  order) and hits once per slot BeatUpEligibleMon passes (:6157-6164): the user's own slot
+  whatever its HP or status, or one with HP, a species, no egg and MON_CONDITION_NONE
+  (damage.beat_up_slots). Nothing changes a benched Pokemon's HP or status mid-move, so the
+  start's list holds (effects.hit_count). Accuracy once (multiHitAccuracyCheck =
+  SYSCTL_MULTI_HIT_MOVE, :6187); the loop ends with the list or on a faint (bcp.c:3780-3782).
+  A full party gives six hits: outcome.MAX_HITS 5 -> 6. Every per-hit draw's sixth column comes
+  from fold_in(key, 42) (outcome.SIXTH_HIT_FOLD, split per field), so hits 0-4 keep their
+  samples (test_outcome's recorded draws); the 2-5 law's reads stay at 5.
+- B13-10 Beat Up's damage (:6206-6218): the member's species base Attack x the move's power x
+  (its level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2 (both by personal row:
+  SpeciesData_GetFormValue), x criticalMul (CalcCrit per hit with the user's crit stage;
+  Sniper x3, battle_lib.c:7139-7144), Helping Hand (doubles), then the variance (:7081-7092).
+  No CalcDamage: no stage, item (no Life Orb boost, battle_script.c:1346; its recoil still
+  follows SYSCTL_MOVE_HIT, bcp.c:4758-4765), ability, status, screen or weather; and
+  SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips CheckTypeChart (bcp.c:2355): no STAB,
+  effectiveness, Wonder Guard or noEffect, and subscript_type_resist_berry.s:5 skips the resist
+  berry (effects.IGNORES_TYPE_CHECKS). The member's "{0}'s attack!" message per hit and
+  SYSCTL_MULTI_HIT_SKIP_MESSAGE (no "Hit N times!") are text only.
+- B13-11 Vanilla Fury Cutter (#119) and the recharge (#80, Hyper Beam's family and vanilla Rock
+  Wrecker) are vanilla only (no Kaizo move uses either effect: Kaizo moves.json) and each needs
+  new battler state: left UNSUPPORTED, in the Owed list.

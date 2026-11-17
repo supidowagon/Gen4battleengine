@@ -591,16 +591,14 @@ note = "decoded: the 1/4-recoil script's side effect MOVE_SUBSCRIPT_PTR_QUARTER_
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 88
-status = "not_reached"
-note = "decoded: the Psywave script (damage = level x Random(10, 5) / 10) -> byte-identical to the patched effect 104 script: SetMultiHit 3 with SYSCTL_TRIPLE_KICK, the multi-hit message, then per hit GetCurrentMoveData MOVEATTRIBUTE_POWER and MOVE_POWER += it, CalcCrit, CalcDamage (hit k has k x base power); res/battle/scripts/effects/effect_script_0088.s:5; res/battle/scripts/effects/effect_script_0104.s:5; Kaizo users: Triple Axel (move 149, 20 power) and Fury Cutter (210, 20 power); reached only through a move with effect 88"
-when = { move_effect = [88] }
+status = "modelled"
+note = "decoded: the Psywave script (damage = level x Random(10, 5) / 10) -> byte-identical to the patched effect 104 script: SetMultiHit 3 with SYSCTL_TRIPLE_KICK, the multi-hit message, then per hit GetCurrentMoveData MOVEATTRIBUTE_POWER and MOVE_POWER += it, CalcCrit, CalcDamage (hit k has k x base power); res/battle/scripts/effects/effect_script_0088.s:5; res/battle/scripts/effects/effect_script_0104.s:5; Kaizo users: Triple Axel (move 149, 20 power) and Fury Cutter (210, 20 power); reached only through a move with effect 88; modelled by E2 batch 13 (B13-5): tools/effect_map.py KAIZO_EFFECTS (EffectId.TRIPLE_KICK, step 0 = the move's power; per-hit accuracy B13-6)"
 
 [[member]]
 narc = "battle/skill/be_seq.narc"
 index = 104
-status = "not_reached"
-note = "decoded: Triple Kick's per-hit power step UpdateVar OPCODE_ADD, BTLVAR_MOVE_POWER, 10 -> GetCurrentMoveData MOVEATTRIBUTE_POWER then UpdateVarFromVar OPCODE_ADD, BTLVAR_MOVE_POWER, BTLVAR_CALC_TEMP (+10 -> + the move's base power), the rest as vanilla (SetMultiHit 3, SYSCTL_TRIPLE_KICK); res/battle/scripts/effects/effect_script_0104.s:7; hit k has k x base power: Kaizo Triple Kick (move 167) and Rock Wrecker (439), both 30 power, hit 30/60/90 (vanilla Triple Kick, 10 power, 10/20/30); reached only through a move with effect 104"
-when = { move_effect = [104] }
+status = "modelled"
+note = "decoded: Triple Kick's per-hit power step UpdateVar OPCODE_ADD, BTLVAR_MOVE_POWER, 10 -> GetCurrentMoveData MOVEATTRIBUTE_POWER then UpdateVarFromVar OPCODE_ADD, BTLVAR_MOVE_POWER, BTLVAR_CALC_TEMP (+10 -> + the move's base power), the rest as vanilla (SetMultiHit 3, SYSCTL_TRIPLE_KICK); res/battle/scripts/effects/effect_script_0104.s:7; hit k has k x base power: Kaizo Triple Kick (move 167) and Rock Wrecker (439), both 30 power, hit 30/60/90 (vanilla Triple Kick, 10 power, 10/20/30); reached only through a move with effect 104; modelled by E2 batch 13 (B13-5): tools/effect_map.py KAIZO_EFFECTS (EffectId.TRIPLE_KICK, step 0 = the move's power; per-hit accuracy B13-6)"
 
 [[member]]
 narc = "battle/skill/be_seq.narc"

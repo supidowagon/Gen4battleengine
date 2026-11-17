@@ -104,7 +104,12 @@ many are real). Decomp sources:
   (``move_param[m, 0]``). Twineedle (``effect_script_0077.s``, ``MoveFlag.HIT_TWICE``) is a
   ``SECONDARY_STATUS`` poison hit twice: the reloaded script sets its indirect effect again
   and ``MULTI_HIT_TRIGGER_SECONDARY`` (bcp.c:3544-3554) rolls it per hit
-  (``outcome.secondary[side, hit]``), B13-1. Focus Sash activates only on a hit taken at full HP
+  (``outcome.secondary[side, hit]``), B13-1. Triple Kick (``TRIPLE_KICK``, ``SetMultiHit 3,
+  SYSCTL_TRIPLE_KICK``): three hits at power k x step (``damage.triple_kick_power``), each later
+  one with its own accuracy roll without the overrides, the first miss ending the move
+  (``step._use_move``, B13-5, B13-6). Beat Up (``BEAT_UP``): a hit per eligible party member
+  (``damage.beat_up_slots``), its damage the member's (``damage.beat_up_damage``), B13-9,
+  B13-10. Focus Sash activates only on a hit taken at full HP
   (bcp.c:3386-3404) and then stays active for the rest of the move (``play_hit``).
 * Life Orb (``LIFE_ORB``): ``life_orb_recoil``, run by ``step`` once per move after its
   hits (``AFTER_MOVE_HIT_STATE_LIFE_ORB``) and after Pursuit's pre-switch hit; its damage
@@ -248,6 +253,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
     PRESENT_HEAL,
     STATUS,
+    beat_up_slots,
     damage_for_roll,
     decomp_abilities,
     divide,
@@ -340,16 +346,26 @@ class _Hit(NamedTuple):
     shielded: jnp.ndarray
 
 
-def hit_count(tables: Tables, move, outcome: Outcome, side) -> jnp.ndarray:
+# Triple Kick's ``SetMultiHit 3`` (effect_script_0104.s:5; Kaizo's be_seq 104 and 88), B13-5.
+TRIPLE_KICK_HITS = 3
+
+
+def hit_count(tables: Tables, move, outcome: Outcome, side, state=None) -> jnp.ndarray:
     """``int32``: hits the move makes if nothing faints: for ``MULTI_HIT`` its fixed count
     ``move_param[m, 0]`` (``SetMultiHit 2``), or ``outcome.n_hits[side]`` when that is 0
     (``SetMultiHit 0``, the 2-5 law); 2 for a ``MoveFlag.HIT_TWICE`` move of another family
-    (Twineedle's ``SetMultiHit 2``, effect_script_0077.s:6, B13-1); else 1."""
-    multi = tables.move_effect[move] == _E.MULTI_HIT
+    (Twineedle's ``SetMultiHit 2``, effect_script_0077.s:6, B13-1); 3 for ``TRIPLE_KICK``
+    (B13-5; a later miss ends it sooner, ``step._use_move``); for ``BEAT_UP`` the eligible party
+    members of ``state`` (``damage.beat_up_slots``, B13-9); else 1."""
+    effect = tables.move_effect[move]
+    multi = effect == _E.MULTI_HIT
     twice = (tables.move_flags[move].astype(_I32) & MoveFlag.HIT_TWICE) != 0
     fixed = tables.move_param[move, 0].astype(_I32)
     drawn = outcome.n_hits[side].astype(_I32)
-    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), jnp.where(twice, 2, 1))
+    other = jnp.where(twice, 2, jnp.where(effect == _E.TRIPLE_KICK, TRIPLE_KICK_HITS, 1))
+    if state is not None:
+        other = jnp.where(effect == _E.BEAT_UP, beat_up_slots(state, side)[1], other)
+    return jnp.where(multi, jnp.where(fixed > 0, fixed, drawn), other)
 
 
 def _alive(state: BattleState, side, slot) -> jnp.ndarray:
@@ -2432,6 +2448,7 @@ IGNORES_TYPE_CHECKS = (
     _E.COUNTER,
     _E.FUTURE_SIGHT,
     _E.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
+    _E.BEAT_UP,  # effect_script_0154.s:5 (B13-10)
 )
 # subscript_type_resist_berry.s:6 also skips a MOVE_STATUS_ONE_HIT_KO hit.
 RESIST_BERRY_SKIPS = (*IGNORES_TYPE_CHECKS, _E.OHKO)
@@ -2583,7 +2600,7 @@ def play_hit(
     pursuit_switch=False,
     foe_claw=False,
 ) -> tuple[BattleState, MoveHit]:
-    """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
+    """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
 
     ``connected``: the move is being used and passed its one accuracy check
@@ -2632,7 +2649,7 @@ def play_hit(
     # foe's active having fainted earlier this turn does not stop it.
     landed = (
         connected
-        & (hit_index < hit_count(tables, move, outcome, side))
+        & (hit_index < hit_count(tables, move, outcome, side, state))
         & (
             _alive(state, target_side, target)
             | defender_always(tables, move, ghost_user(state, side))
@@ -2657,6 +2674,8 @@ def play_hit(
         power_mul,
         outcome.magnitude[side].astype(_I32),
         outcome.present[side].astype(_I32),
+        # Triple Kick's per-hit power, Beat Up's party member (B13-5, B13-10).
+        hit=hit_index,
     )
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an

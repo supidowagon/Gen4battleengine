@@ -11,7 +11,7 @@ import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.ids import Stat, Status, Type
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon, _resume
@@ -20,7 +20,7 @@ O = empty_outcome()
 
 
 def _roll(u: int):
-    return O._replace(hit=jnp.full((2, 5), u, jnp.int8))
+    return O._replace(hit=jnp.full((2, MAX_HITS), u, jnp.int8))
 
 
 def test_volt_tackle_recoils_a_third_and_paralyzes(tables, names):
@@ -30,7 +30,7 @@ def test_volt_tackle_recoils_a_third_and_paralyzes(tables, names):
     s = make_state(
         tables, [_mon(n, "Pikachu", ["Volt Tackle"], 40)], [_mon(n, "Bidoof", ["Growl"], 40)]
     )
-    o = O._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    o = O._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
     dealt = int(s.hp[1, 0]) - int(out.hp[1, 0])
     assert dealt > 0
@@ -177,7 +177,7 @@ def test_multi_hit_breaks_the_substitute_then_hits_the_hp_without_static(tables,
         [_mon(n, "Pikachu", ["Growl"], 40)],
     )
     s = _subbed(s, 1, 1)
-    o = O._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
+    o = O._replace(contact_proc=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
     assert int(out.substitute_hp[1]) == 0
     assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # the second kick
@@ -194,7 +194,7 @@ def test_kings_rock_never_flinches_through_a_substitute_hit(tables, names):
         [_mon(n, "Machop", ["Double Kick"], 40, "Razor Fang")],
         [_mon(n, "Snorlax", ["Growl"], 40)],
     )
-    o = O._replace(flinch_item=jnp.ones((2, 5), jnp.int8))
+    o = O._replace(flinch_item=jnp.ones((2, MAX_HITS), jnp.int8))
     plain = assert_matches_reference(tables, s, (0, 0), o)
     assert int(plain.stages[0, Stat.ATK]) == 0  # flinched: no Growl
     out = assert_matches_reference(tables, _subbed(s, 1, 1), (0, 0), o)
@@ -635,7 +635,7 @@ def test_skull_bash_raises_defense_and_a_flinch_drops_the_charge(tables, names):
     )
     one = assert_matches_reference(tables, s, (0, 0), O)
     assert int(one.stages[0, Stat.DEF]) == 1 and int(one.locked_move[0]) == n.move("Skull Bash")
-    flinch = O._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    flinch = O._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     two = assert_matches_reference(tables, one, (0, 0), flinch)
     assert int(two.locked_move[0]) == 0
     para = one.with_status(0, 0, Status.PARALYSIS)

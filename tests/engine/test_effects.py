@@ -20,11 +20,11 @@ import pytest
 from nuzline.engine.damage import damage_table
 from nuzline.engine.effects import can_have_status
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import A, roark_state
 
-PROC = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+PROC = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
 
 
 def dealt(before, after, side=1):
@@ -238,7 +238,7 @@ def test_stun_spore_paralyzes_and_never_overwrites(tables, names):
 
 def test_status_move_misses_with_the_accuracy_roll(tables, names):
     s = roark_state(tables, names, player_species="Budew")
-    miss = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     assert int(step(tables, s, A("Stun Spore", "Leer", s, names), miss).status[1, 0]) == Status.NONE
 
 
@@ -389,11 +389,13 @@ def test_multi_hit_checks_accuracy_once(tables, names):
     # SYSCTL_MULTI_HIT_MOVE sets SYSCTL_SKIP_ACCURACY_CHECK for hits after the first.
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
     three = empty_outcome()._replace(n_hits=jnp.array([3, 2], jnp.int8))
-    first_only = three._replace(hit=jnp.array([[1, 0, 0, 0, 0], [1] * 5], jnp.int8))
+    first_only = three._replace(
+        hit=jnp.array([[1] + [0] * (MAX_HITS - 1), [1] * MAX_HITS], jnp.int8)
+    )
     a = step(tables, s, A("Fury Swipes", "Leer", s, names), three)
     b = step(tables, s, A("Fury Swipes", "Leer", s, names), first_only)
     assert dealt(s, a) == dealt(s, b) > 0
-    miss = three._replace(hit=jnp.array([[0, 1, 1, 1, 1], [1] * 5], jnp.int8))
+    miss = three._replace(hit=jnp.array([[0] + [1] * (MAX_HITS - 1), [1] * MAX_HITS], jnp.int8))
     assert dealt(s, step(tables, s, A("Fury Swipes", "Leer", s, names), miss)) == 0
 
 
@@ -401,8 +403,10 @@ def test_multi_hit_checks_accuracy_once(tables, names):
 def test_multi_hit_rolls_crit_per_hit(tables, names):
     s = roark_state(tables, names, player_moves=["Fury Swipes"])
     base = empty_outcome()._replace(n_hits=jnp.array([3, 2], jnp.int8))
-    crit2 = base._replace(crit=jnp.array([[0, 1, 0, 0, 0], [0] * 5], jnp.int8))
-    crit4 = base._replace(crit=jnp.array([[0, 0, 0, 1, 0], [0] * 5], jnp.int8))  # beyond the 3 hits
+    crit2 = base._replace(crit=jnp.array([[0, 1] + [0] * (MAX_HITS - 2), [0] * MAX_HITS], jnp.int8))
+    crit4 = base._replace(
+        crit=jnp.array([[0, 0, 0, 1] + [0] * (MAX_HITS - 4), [0] * MAX_HITS], jnp.int8)
+    )  # beyond the 3 hits
     plain = dealt(s, step(tables, s, A("Fury Swipes", "Leer", s, names), base))
     assert dealt(s, step(tables, s, A("Fury Swipes", "Leer", s, names), crit2)) > plain
     assert dealt(s, step(tables, s, A("Fury Swipes", "Leer", s, names), crit4)) == plain

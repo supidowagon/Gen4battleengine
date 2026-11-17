@@ -42,6 +42,11 @@ class EffectId(IntEnum):
       Double Kick, Kaizo's DoubleSlap, ``SetMultiHit 2``).
       A move of another family with ``MoveFlag.HIT_TWICE`` also hits twice (Twineedle:
       ``SECONDARY_STATUS`` poison, a roll per hit; E2 batch 13, B13-1).
+    * ``TRIPLE_KICK``: ``(step, 0, 0)``: three hits, hit k at power k x step (vanilla 10), or
+      k x the move's power for step 0 (Kaizo); each later hit rolls its own accuracy check
+      and the first miss ends the move. ``BEAT_UP``: zeros; one hit per eligible party member
+      (``effects.beat_up_slots``), damage from its species and level (``effects.beat_up_damage``).
+      E2 batch 13.
     * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
       ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
       move's effect chance; ``CURSE`` (a non-Ghost user; coverage refuses a Ghost-type one):
@@ -382,6 +387,33 @@ class EffectId(IntEnum):
     # NUM_SCREEN_TURNS (5) on it (``effects._mist``). BtlCmd_ChangeStatStage
     # (:2875-2882) blocks every drop by another battler while mistTurns is set (B12-23).
     MIST = 104
+    # E2 batch 13, the multi-hit power family.
+    # Triple Kick (vanilla 104, BATTLE_EFFECT_HIT_THREE_TIMES; Kaizo be_seq 104: Triple Kick, Rock
+    # Wrecker; Kaizo be_seq 88, byte-identical to its 104: Triple Axel, Fury Cutter):
+    # ``(step, 0, 0)``. ``SetMultiHit 3, SYSCTL_TRIPLE_KICK`` (effect_script_0104.s:5): three
+    # hits; the script reloads per hit (bcp.c:3789) and adds to BTLVAR_MOVE_POWER, which
+    # BattleContext_Init zeroes once per action (battle_lib.c:1979) and BattleSystem_SetupLoop
+    # keeps (:3357-3362), before CalcCrit and CalcDamage: hit k (1-3) has power k x step, step
+    # the vanilla script's constant 10 (``UpdateVar OPCODE_ADD, BTLVAR_MOVE_POWER, 10``, :7), or
+    # 0 for the Kaizo scripts' ``GetCurrentMoveData MOVEATTRIBUTE_POWER`` (the move's own
+    # power; rom_diff.toml be_seq 88, 104). SYSCTL_TRIPLE_KICK lacks SYSCTL_SKIP_ACCURACY_CHECK
+    # but has _SKIP_ACCURACY_OVERRIDES (include/constants/battle/system_control.h:81-86): every
+    # later hit rolls CheckMoveHitAccuracy again (bcp.c:3255-3259) without
+    # CheckMoveHitOverrides (:3264-3268: no No Guard, Lock-On, Thunder / Blizzard weather), and
+    # a later miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (bcp.c:3320-3323), which ends the loop
+    # (:3782). ``Outcome.hit[side, k]`` is hit k's roll (``outcome.hit_thresholds``,
+    # ``overrides=False``), B13-5..B13-8.
+    TRIPLE_KICK = 105
+    # Beat Up (154, BATTLE_EFFECT_BEAT_UP): zeros. effect_script_0154.s: SYSCTL_IGNORE_IMMUNITIES
+    # (:5), CalcCrit, then BtlCmd_BeatUp (battle_script.c:6173-6247) for its damage, no
+    # CalcDamage: one hit per party slot, in party order, that is the user's or has HP, a
+    # species, no egg and no status (BeatUpEligibleMon, :6157-6164); hit damage = the member's
+    # species base Attack x power x (its level x 2 / 5 + 2) / the defender's species base
+    # Defense / 50 + 2, x criticalMul, Helping Hand, then the variance (:6206-6218); no stage,
+    # item, ability, status, screen, weather, STAB or type chart (CheckTypeChart skips it under
+    # SYSCTL_IGNORE_IMMUNITIES, bcp.c:2355). Accuracy once (SYSCTL_MULTI_HIT_MOVE, :6187).
+    # ``effects.beat_up_damage``, B13-9..B13-11.
+    BEAT_UP = 106
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

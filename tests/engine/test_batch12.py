@@ -11,7 +11,7 @@ import numpy as np
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.enumerate import enumerate_turn, outcome_laws
 from nuzline.engine.ids import AbilityId, Stat
-from nuzline.engine.outcome import ACUPRESSURE_DRAWS, crit_odds, empty_outcome
+from nuzline.engine.outcome import ACUPRESSURE_DRAWS, MAX_HITS, crit_odds, empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon, _resume
@@ -607,7 +607,7 @@ def test_mist_blocks_direct_and_secondary_drops_on_its_side_only(tables, names):
     """battle_script.c:2875-2882: a drop by another battler on the misted side is blocked, a
     direct one (Screech, Tickle's two, Captivate) and a secondary one (Bubble, :2938-2941); the
     other side's drops are not."""
-    secondary = O._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    secondary = O._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     for move, stats in (("Screech", ("DEF",)), ("Tickle", ("ATK", "DEF")), ("Bubble", ("SPE",))):
         s = _state(tables, names, ("Bidoof", "Tackle"), ("Pikachu", move))
         out = assert_matches_reference(tables, _misted(s, 0), (0, 0), secondary)

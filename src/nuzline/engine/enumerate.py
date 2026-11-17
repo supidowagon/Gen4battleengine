@@ -17,15 +17,19 @@ turn-start state; an element is relevant when it can be read under some earlier 
 of the turn:
 
 * ``hit[s, 0]``: ``s`` uses a move (not a switch or item) with accuracy != 0
-  (``step._use_move``). Only hit index 0 is read (a multi-hit move checks accuracy on
-  its first hit, effects.py docstring). Its values are the interval classes of the roll
+  (``step._use_move``). A multi-hit move checks accuracy on its first hit only (effects.py
+  docstring), except Triple Kick: ``hit[s, 1]``, ``hit[s, 2]`` are its later hits' own checks
+  (B13-6), read once the hit before can have landed, their classes over
+  ``hit_thresholds(..., overrides=False)`` (``OutcomeLaws.hit_later_thresholds``). The values
+  are the interval classes of the roll
   over ``outcome.hit_thresholds`` (``hit_class_law``): two classes for one threshold
   below 100 (0 and 1, as before), one more per further threshold an earlier action can
   produce, and the single value 1 when every threshold is 100 or more.
 * ``crit[s, i]``, ``roll[s, i]``: a damaging move (status moves and power 0 deal 0,
   damage.py:254), index 0, or for ``MULTI_HIT`` 0-4 (the 2-5 law) or the indices below its
   fixed count (``move_param[m, 0]``, ``effects.hit_count``; 0-1 for a ``MoveFlag.HIT_TWICE``
-  move, Twineedle, B13-1). ``roll[s, 0]``
+  move, Twineedle, B13-1; 0-2 for ``TRIPLE_KICK``, below the eligible count for ``BEAT_UP``,
+  B13-5, B13-9). ``roll[s, 0]``
   also when a confusion self-hit is possible (``step._use_move``, step.py:503). The Pursuit
   pre-switch hit reads ``[pursuer, 0]`` (``step._pursuit_hit``, step.py:922-946), a move
   action too.
@@ -196,6 +200,8 @@ from nuzline.engine.damage import (
     ROLLS,
     SPECIAL,
     STATUS,
+    beat_up_damage,
+    beat_up_slots,
     decomp_abilities,
     entry_ability,
     hit_damage_table,
@@ -204,6 +210,7 @@ from nuzline.engine.damage import (
     weather_suppressed,
 )
 from nuzline.engine.effects import (
+    TRIPLE_KICK_HITS,
     acupressure_valid,
     can_have_status,
     defender_side,
@@ -274,7 +281,7 @@ from nuzline.engine.outcome import (
     crit_variants,
     empty_outcome,
     future_thresholds,
-    hit_thresholds,
+    hit_threshold_pair,
     pivot_view,
     roar_inputs,
     roar_levels,
@@ -358,6 +365,9 @@ class OutcomeLaws(NamedTuple):
 
     hit_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS], outcome.hit_thresholds
     hit_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS], which of them can occur
+    # B13-6: a later Triple Kick hit's thresholds (outcome.hit_thresholds, overrides=False).
+    hit_later_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS]
+    hit_later_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS]
     # B12-4 review: the odds each side's hit can meet at its CalcCrit (outcome.crit_variants).
     crit_variants: jnp.ndarray  # int32[2, outcome.CRIT_VARIANTS], variant 0 the turn start
     crit_possible: jnp.ndarray  # bool[2, outcome.CRIT_VARIANTS]
@@ -367,7 +377,9 @@ class OutcomeLaws(NamedTuple):
     relevant: Outcome  # bool, each field shaped like the ``Outcome`` field: any branch
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
     reads: Reads  # the conditional reads' inputs
-    damage: jnp.ndarray  # int32[2, 2, ROLLS]: per side, hit_damage_table at the turn start
+    # int32[2, MAX_HITS, 2, ROLLS]: per side and hit, hit_damage_table at the turn start (one
+    # table for every hit but Triple Kick's power and Beat Up's member, B13-5, B13-10)
+    damage: jnp.ndarray
     protect_count: jnp.ndarray  # int32[2]: the turn-start chain (protect's law, 0-3)
     roar_level_weight: jnp.ndarray  # int32[2]: of ROAR_LEVEL_VALUES, how many pass (roar_level)
     roar_bench: jnp.ndarray  # int32[2]: the eligible bench Pokemon Roar picks from (roar_target)
@@ -679,6 +691,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.CONFUSE_FOE,
     _E.LEECH_SEED,
     _E.MULTI_HIT,
+    # E2 batch 13: hits that write the foe's HP only (B13-5, B13-9).
+    _E.TRIPLE_KICK,
+    _E.BEAT_UP,
     _E.RECOIL,  # hurts the foe
     _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
     _E.LEVEL_DAMAGE,
@@ -1101,6 +1116,10 @@ TABLE_DAMAGE_EFFECTS = (
     _E.KNOCK_OFF,
     # B10-8: CalcCrit, CalcDamage (effect_script_0170.s:8-9) unless the focus is lost first.
     _E.FOCUS_PUNCH,
+    # B13-5, B13-10: their per-hit tables (``OutcomeLaws.damage[side, hit]``: Triple Kick's
+    # k x step power, Beat Up's member), each its damage for the hit's (crit, roll).
+    _E.TRIPLE_KICK,
+    _E.BEAT_UP,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENCORE,  # a status move: no damage (B10-9)
@@ -1225,9 +1244,12 @@ def damage_inputs_can_change(
       foe on its defending stat;
     * **pluck**: the foe's earlier Pluck / Bug Bite eats the side's stat pinch berry of the
       foe's defending stat (``hooks.pluck_berry`` raises the eater's stage);
-    * **own move**: a later hit of a move other than ``MULTI_HIT`` (Twineedle's second hit,
-      B13-1: its first can poison a Synchronize holder), a Guts user that wakes or thaws first
-      (its status goes to none), and Selfdestruct (its user's HP goes to 0 before the hit).
+    * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
+      ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
+      Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
+      and their per-hit tables are ``OutcomeLaws.damage[side, hit]``, B13-5, B13-10), a Guts
+      user that wakes or thaws first (its status goes to none), and Selfdestruct (its user's
+      HP goes to 0 before the hit).
 
     Extending (Tasks 4-11): a mechanic that lets anything above (or a new input) change
     mid-turn classifies its ids in the ``INPUT_*`` tuples above and adds a clause here,
@@ -1405,7 +1427,8 @@ def damage_inputs_can_change(
         )
     )
     foe_action = foe_action | (live & sync_contact)
-    own_hits = hp_sensitive | (effect != _E.MULTI_HIT) | contact_status | sync_back
+    repeat = _any_of(effect, (_E.MULTI_HIT, _E.TRIPLE_KICK, _E.BEAT_UP))
+    own_hits = hp_sensitive | ~repeat | contact_status | sync_back
     own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
         effect == _E.SELF_DESTRUCT
     )
@@ -1500,10 +1523,17 @@ def outcome_laws(
     twice = ((tables.move_flags[moves].astype(_I32) & MoveFlag.HIT_TWICE) != 0) & (
         effect != _E.MULTI_HIT
     )
-    multi = (effect == _E.MULTI_HIT) | twice
-    fixed_hits = jnp.where(twice, 2, params[:, 0])
-    drawn_hits = multi & (fixed_hits == 0)  # the 2-5 law
-    max_hits = jnp.where(multi, jnp.where(drawn_hits, MAX_HITS, fixed_hits), 1)
+    # Triple Kick's 3 (B13-5), Beat Up's eligible members (damage.beat_up_slots, B13-9: nothing
+    # changes a benched Pokemon's HP or status before the move, and the user is always one).
+    kick = effect == _E.TRIPLE_KICK
+    beat_up = effect == _E.BEAT_UP
+    members = jnp.stack([beat_up_slots(state, side)[1] for side in (0, 1)])
+    multi = (effect == _E.MULTI_HIT) | twice | kick | beat_up
+    fixed_hits = jnp.where(
+        twice, 2, jnp.where(kick, TRIPLE_KICK_HITS, jnp.where(beat_up, members, params[:, 0]))
+    )
+    drawn_hits = (effect == _E.MULTI_HIT) & (fixed_hits == 0)  # the 2-5 law
+    max_hits = jnp.where(multi, jnp.where(drawn_hits, 5, fixed_hits), 1)
     mons = state.active
     status = state.status[sides, mons]
 
@@ -1515,10 +1545,11 @@ def outcome_laws(
     # this side's own Future Sight sets it, and the count drops at the turn's end).
     future = effect == _E.FUTURE_SIGHT
     future_roll = uses_move & future & (state.future_timer[::-1] == 0)
+    # Triple Kick's later hits roll their own check (B13-6).
     hit = (
         uses_move[:, None]
         & ((tables.move_accuracy[moves] != 0) & ~future)[:, None]
-        & (hit_index == 0)
+        & ((hit_index == 0) | (kick[:, None] & (hit_index < max_hits[:, None])))
     )
     crit = lands & rolled[:, None]
     secondary = lands & ((chance != 0) & _any_of(effect, _PROC_EFFECTS))[:, None]
@@ -1972,6 +2003,31 @@ def outcome_laws(
         ]
     )
     deals = jnp.all(damage > 0, axis=(1, 2))
+    # The per-hit tables (B13-5, B13-10): Triple Kick's hits 2-3 at 2x and 3x the step, Beat Up's
+    # members; every other hit reads hit 0's table.
+    kicks = [
+        jnp.stack([hit_damage_table(tables, state, side, moves[side], hit=k) for side in (0, 1)])
+        for k in range(1, TRIPLE_KICK_HITS)
+    ]
+    rolls_ = jnp.arange(ROLLS, dtype=_I32)
+    per_hit = []
+    for k in range(MAX_HITS):
+        beat = jnp.stack(
+            [
+                jnp.stack(
+                    [
+                        beat_up_damage(tables, state, side, moves[side], k, crit, rolls_)
+                        for crit in (False, True)
+                    ]
+                )
+                for side in (0, 1)
+            ]
+        )
+        table = damage
+        if 1 <= k < TRIPLE_KICK_HITS:
+            table = jnp.where(kick[:, None, None], kicks[k - 1], table)
+        per_hit.append(jnp.where(beat_up[:, None, None], beat, table))
+    damage_hits = jnp.stack(per_hit, axis=1)
     fake_out_ok = (effect == _E.FAKE_OUT) & (
         state.fake_out_turn.astype(_I32) == state.turn.astype(_I32)
     )
@@ -2075,12 +2131,14 @@ def outcome_laws(
     )
     if loose:
         compress = jnp.zeros_like(compress)
-    thresholds, possible = hit_thresholds(tables, state, actions, moves)
+    thresholds, possible, later_thr = hit_threshold_pair(tables, state, actions, moves)
+    later_ok = possible
     future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     if loose:
         # The brute force: the hit law cut at every threshold variant, possible or not
         # (an extra cut only splits a class), and the Future Sight roll whole.
         possible = jnp.ones_like(possible)
+        later_ok = jnp.ones_like(later_ok)
         future_loose = jnp.ones_like(future_loose)
     # The paused action's King's Rock (E2 batch 6): its own read, in both branches.
     rock = (jnp.arange(MAX_HITS) == 0)[None, :] & (paused_rock & (kings_rock > 0))[:, None]
@@ -2089,6 +2147,8 @@ def outcome_laws(
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,
+        hit_later_thresholds=later_thr,
+        hit_later_possible=later_ok,
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
@@ -2098,7 +2158,7 @@ def outcome_laws(
         relevant=relevant,
         branch_relevant=per_branch,
         reads=Reads(*(jnp.asarray(f) for f in reads)),
-        damage=damage.astype(_I32),
+        damage=damage_hits.astype(_I32),
         compress=compress,
         protect_count=state.protect_count.astype(_I32),
         roar_level_weight=roar_weight,
@@ -2137,9 +2197,14 @@ def hit_class_law(thresholds) -> _Law:
     return [v for v, _ in law], [w for _, w in law], 100
 
 
-def _hit(laws: OutcomeLaws, side: int) -> _Law:
-    possible = np.asarray(laws.hit_possible[side], bool)
-    return hit_class_law(np.asarray(laws.hit_thresholds[side])[possible])
+def _hit(laws: OutcomeLaws, side: int, hit: int = 0) -> _Law:
+    """The accuracy roll's class law: hit 0's over ``hit_thresholds``, a later Triple Kick
+    hit's over ``hit_later_thresholds`` (B13-6)."""
+    if hit == 0:
+        possible = np.asarray(laws.hit_possible[side], bool)
+        return hit_class_law(np.asarray(laws.hit_thresholds[side])[possible])
+    possible = np.asarray(laws.hit_later_possible[side], bool)
+    return hit_class_law(np.asarray(laws.hit_later_thresholds[side])[possible])
 
 
 def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
@@ -2515,18 +2580,26 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         foe = 1 - s
         hits = move_conds(s)
         for i in range(MAX_HITS):
+            # B13-6: a later Triple Kick hit is read once the hit before can have landed, and its
+            # own reads once it can land (class 0 misses at every threshold).
+            own = []
+            if i > 0 and (h := rel_elem("hit", (s, i))) is not None:
+                before = rel_elem("hit", (s, i - 1))
+                prior = [Condition((before,), _hits_somewhere)] if before else []
+                plan.path(h, "move", *hits, *prior)
+                own = [Condition((h,), _hits_somewhere)]
             for elem in (
                 ("crit", (s, i)),
                 ("secondary", (s, i)),
                 ("contact_proc", (foe, i)),
                 ("flinch_item", (s, i)),
             ):
-                plan.path(elem, "move", *hits)
+                plan.path(elem, "move", *hits, *own)
             if bool(reads.band_move[s, i]):  # the foe's Focus Band on this hit (G-1)
-                plan.path(("focus_band", (s, i)), "move", *hits)
+                plan.path(("focus_band", (s, i)), "move", *hits, *own)
             # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.
             if i > 0 or bool(rel.crit[s, 0]) or bool(reads.future_roll[s]):
-                plan.path(("roll", (s, i)), "move", *hits)
+                plan.path(("roll", (s, i)), "move", *hits, *own)
         # A crash move (B10-2) reads hit 0's crit and roll whether or not it hits (its crash on
         # a miss or a Protect): a path of its own, unconditional (the flinch gate still applies).
         if bool(reads.crash[s]):
@@ -2678,8 +2751,10 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     elem = ("protect", (first,))
     cond = Condition((elem,), _not_protected) if elem in plan else NEVER
     # The accuracy roll is read for the move alone (step._use_move: the hit and the
-    # "missed" event), so this is its only path.
+    # "missed" event), so this is its only path; a later Triple Kick hit's too (B13-6).
     plan.path(("hit", (q, 0)), "move", cond)
+    for i in range(1, MAX_HITS):
+        plan.restrict(("hit", (q, i)), "move", cond)
     # _move_reads (registered first) declares a "move" path for each of these (restrict
     # raises otherwise), except roll[q, 0] when the move has no crit: then it is read only by
     # a confusion self-hit, which comes before the Protect matters.
@@ -2769,15 +2844,15 @@ def _roar_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
 
 
 def damage_class_law(
-    laws: OutcomeLaws, side: int
+    laws: OutcomeLaws, side: int, hit: int = 0
 ) -> tuple[list[int], list[int], int, list[int], list[int]]:
     """``(values, weights, denominator, crits, rolls)``: the joint law of one hit's
     ``(crit, roll)`` reduced to its damage classes. Two pairs share a class when they have
     the same crit flag (a landed crit is observed, ``step._hit_events``) and the same
-    damage in ``laws.damage[side]``; a class weighs the sum of its pairs' weights over
+    damage in ``laws.damage[side, hit]``; a class weighs the sum of its pairs' weights over
     ``crit odds * ROLLS``, and ``crits[v]``, ``rolls[v]`` are class ``v``'s
     representative, its lowest roll. Values are class indices in crit-then-roll order."""
-    table = np.asarray(laws.damage[side])
+    table = np.asarray(laws.damage[side, hit])
     crit_values, crit_weights, crit_den = _crit(laws, side)
     # A hit whose crit odds can change is never compressed (outcome_laws' crit_moves).
     assert set(crit_values) <= {0, 1}, crit_values
@@ -2824,7 +2899,7 @@ def _damage_classes(
             continue
         if plan._gates[crit] != plan._gates[roll] or plan._paths[crit] != plan._paths[roll]:
             continue
-        values, weights, den, crits, rolls = damage_class_law(laws, index[0])
+        values, weights, den, crits, rolls = damage_class_law(laws, index[0], index[1])
         out[crit] = _DamageClasses(
             roll, (values, weights, den), np.asarray(crits, np.int16), np.asarray(rolls, np.int16)
         )
@@ -2844,7 +2919,10 @@ def _branch_elements(relevant: Outcome) -> list[Elem]:
 
 def _law(laws: OutcomeLaws, elem: Elem) -> _Law:
     name, index = elem
-    values, weights, den = _LAWS[name](laws, index[0] if index else 0)
+    if name == "hit":  # B13-6: a later Triple Kick hit's own thresholds
+        values, weights, den = _hit(laws, index[0], index[1])
+    else:
+        values, weights, den = _LAWS[name](laws, index[0] if index else 0)
     kept = [(v, w) for v, w in zip(values, weights) if w > 0]
     return [v for v, _ in kept], [w for _, w in kept], den
 

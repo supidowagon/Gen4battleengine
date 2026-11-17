@@ -47,6 +47,7 @@ from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Type
 from nuzline.engine.observe import OBS_FIELDS, observe
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import (
+    MAX_HITS,
     Outcome,
     empty_outcome,
     hit_threshold,
@@ -251,9 +252,11 @@ def test_the_level_check(tables, names):
 def test_a_miss_and_protect_stop_it(tables, names):
     s = _state(tables, names)
     acts = A("Roar", "Tackle", s, names)
-    out = assert_matches_reference(tables, s, acts, _o(hit=[[0] * 5, [1] * 5]))
+    out = assert_matches_reference(tables, s, acts, _o(hit=[[0] * MAX_HITS, [1] * MAX_HITS]))
     assert int(out.active[1]) == 0
-    assert _events(tables, s, acts, _o(hit=[[0] * 5, [1] * 5]))["missed"].tolist() == [1, 0]
+    assert _events(tables, s, acts, _o(hit=[[0] * MAX_HITS, [1] * MAX_HITS]))[
+        "missed"
+    ].tolist() == [1, 0]
     # Accuracy 100 still rolls: Sand Veil in sand and the target's evasion count.
     sand = s._replace(
         weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
