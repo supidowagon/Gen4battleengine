@@ -902,3 +902,9 @@ of them, :2107-2115).
   (`enumerate.outcome_laws`). `damage.metronome_boost`, `effects.metronome_update` /
   `metronome_verify`, `step._use_move`; reference `_move_damage`, `_metronome_update`,
   `_metronome_verify`.
+- G-61 (a reference fix found by the Batch D differential) The invokers (Metronome, Sleep Talk,
+  Copycat, Assist) have `RANGE_SINGLE_TARGET_SPECIAL` (res/moves/*/data.json), whose
+  `BattleSystem_Defender` is the user (battle_lib.c:1665-1669), so BeforeMove's HasNoTarget never
+  fails them: `SYSCTL_MOVE_SUCCEEDED` is set and `movePrevByBattler` keeps the invoker even when the
+  foe fainted earlier in the turn (its call then finds no target, battle_script.c:2124-2126).
+  `step._use_move`'s `succeeded` had it; the reference's no-target check now passes them too.

@@ -27,19 +27,19 @@ New groups: needed in this split and in no earlier one.
 |---|---|---|---|---|---|---|---|---|---|
 | Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 6 | 6 |
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 12 | 11 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 5 | 67 | 65 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 10 | 63 | 21 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 5 | 54 | 17 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 20 | 61 | 10 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 5 | 58 | 14 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 123 | 45 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 45 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 5 | 59 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 86 | 197 | 197 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 7 | 57 | 55 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 10 | 57 | 21 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 6 | 47 | 17 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 20 | 55 | 10 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 5 | 53 | 14 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 114 | 45 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 41 | 2 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 5 | 57 | 6 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 89 | 187 | 187 |
 
 ## Whole game
 
-197 distinct missing groups across all ten splits (387 battles,
+187 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -55,7 +55,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
-| Fantina Split | 0 | 22 | 20 | 10 | 2 | 8 | 3 | 65 |
+| Fantina Split | 0 | 22 | 20 | 0 | 2 | 8 | 3 | 55 |
 | Maylene Split | 0 | 8 | 7 | 3 | 2 | 0 | 1 | 21 |
 | Wake Split | 0 | 3 | 2 | 2 | 1 | 6 | 3 | 17 |
 | Byron Split | 0 | 6 | 4 | 0 | 0 | 0 | 0 | 10 |
@@ -63,7 +63,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Galactic Split | 0 | 13 | 12 | 3 | 1 | 16 | 0 | 45 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **1** | **61** | **52** | **18** | **7** | **47** | **11** | **197** |
+| **Whole game** | **1** | **61** | **52** | **8** | **7** | **47** | **11** | **187** |
 
 ### Groups needed in each split, by kind
 
@@ -73,15 +73,15 @@ Every group the split's battles need, whether or not an earlier split needs it t
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
 | Gardenia Split | 1 | 0 | 1 | 0 | 0 | 10 | 0 | 12 |
-| Fantina Split | 1 | 22 | 21 | 10 | 2 | 8 | 3 | 67 |
-| Maylene Split | 1 | 21 | 21 | 9 | 4 | 3 | 4 | 63 |
-| Wake Split | 1 | 13 | 14 | 10 | 2 | 8 | 6 | 54 |
-| Byron Split | 1 | 23 | 18 | 8 | 3 | 2 | 6 | 61 |
-| Candice Split | 1 | 23 | 18 | 6 | 3 | 5 | 2 | 58 |
-| Galactic Split | 1 | 41 | 35 | 14 | 4 | 22 | 6 | 123 |
-| Volkner Split | 1 | 16 | 15 | 6 | 1 | 2 | 4 | 45 |
-| Elite Four Split | 1 | 23 | 20 | 2 | 3 | 3 | 7 | 59 |
-| **Whole game** | **1** | **61** | **52** | **18** | **7** | **47** | **11** | **197** |
+| Fantina Split | 1 | 22 | 21 | 0 | 2 | 8 | 3 | 57 |
+| Maylene Split | 1 | 21 | 21 | 3 | 4 | 3 | 4 | 57 |
+| Wake Split | 1 | 13 | 14 | 3 | 2 | 8 | 6 | 47 |
+| Byron Split | 1 | 23 | 18 | 2 | 3 | 2 | 6 | 55 |
+| Candice Split | 1 | 23 | 18 | 1 | 3 | 5 | 2 | 53 |
+| Galactic Split | 1 | 41 | 35 | 5 | 4 | 22 | 6 | 114 |
+| Volkner Split | 1 | 16 | 15 | 2 | 1 | 2 | 4 | 41 |
+| Elite Four Split | 1 | 23 | 20 | 0 | 3 | 3 | 7 | 57 |
+| **Whole game** | **1** | **61** | **52** | **8** | **7** | **47** | **11** | **187** |
 
 ### Battle conditions and other groups
 
@@ -170,19 +170,19 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 109 | 37 | 37 |
-| Gardenia Split | 28 | 410 (65) | 109 | 37 | 0 |
-| Fantina Split | 38 | 463 (69) | 109 | 37 | 0 |
-| Maylene Split | 47 | 480 (73) | 110 | 37 | 0 |
-| Wake Split | 54 | 482 (71) | 111 | 37 | 0 |
-| Byron Split | 65 | 486 (72) | 111 | 37 | 0 |
-| Candice Split | 74 | 486 (72) | 111 | 37 | 0 |
-| Galactic Split | 100 | 493 (73) | 114 | 39 | 2 |
-| Volkner Split | 84 | 487 (73) | 112 | 37 | 0 |
-| Elite Four Split | 100 | 493 (73) | 114 | 39 | 0 |
-| **Whole game** | | | 114 | 39 | 39 |
+| Roark Split | 16 | 358 (64) | 99 | 37 | 37 |
+| Gardenia Split | 28 | 410 (65) | 99 | 37 | 0 |
+| Fantina Split | 38 | 463 (69) | 99 | 37 | 0 |
+| Maylene Split | 47 | 480 (73) | 100 | 37 | 0 |
+| Wake Split | 54 | 482 (71) | 101 | 37 | 0 |
+| Byron Split | 65 | 486 (72) | 101 | 37 | 0 |
+| Candice Split | 74 | 486 (72) | 101 | 37 | 0 |
+| Galactic Split | 100 | 493 (73) | 104 | 39 | 2 |
+| Volkner Split | 84 | 487 (73) | 102 | 37 | 0 |
+| Elite Four Split | 100 | 493 (73) | 104 | 39 | 0 |
+| **Whole game** | | | 104 | 39 | 39 |
 
-Of your 114 groups, 75 are also needed by opposing trainers and 39 are player-only.
+Of your 104 groups, 65 are also needed by opposing trainers and 39 are player-only.
 
 ### New player-only groups per split, by kind
 
@@ -264,7 +264,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 36 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 34 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
 
 ## Roark split
 
@@ -325,7 +325,6 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 35 | move effect #211: Calm Mind |
 | 25 | AI move effect #141 UNUSED_141 not transcribed (no Basic or Expert label): Hurricane |
 | 25 | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 25 | held item effect #37: Ganlon Berry |
 | 25 | move effect #141: Hurricane |
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
 | 23 | AI move effect #37 REST not transcribed (Expert_Rest): Rest |
@@ -337,15 +336,12 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 17 | AI move effect #173 NATURE_POWER not transcribed (no Basic or Expert label): Nature Power |
 | 16 | AI move effect #219 POWER_BASED_ON_LOW_SPEED not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_GyroBall): Gyro Ball |
 | 16 | ROM change: battle/skill/sub_seq.narc#238 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 16 | held item effect #40: Apicot Berry |
-| 16 | held item effect #46: Jaboca Berry |
 | 16 | move effect #219: Gyro Ball |
 | 15 | AI move effect #215 GRAVITY not transcribed (Basic_CheckGravityActive / Expert_Gravity): Gravity |
 | 15 | move effect #215: Gravity |
 | 15 | move effect #83: Metronome; 65 of 442 callable moves unmodelled |
 | 13 | AI move effect #114 ALL_FAINT_3_TURNS not transcribed (Basic_CheckPerishSong): Perish Song |
 | 13 | AI move effect #71 LOWER_SP_ATK_HIT not transcribed (no Basic or Expert label): Mist Ball, Mystical Fire |
-| 12 | held item effect #106: Iron Ball |
 | 11 | AI move effect #209 HIGH_CRITICAL_POISON_HIT not transcribed (Expert_HighCritical): Cross Poison, Poison Tail |
 | 11 | move effect #209: Cross Poison, Poison Tail |
 | 10 | AI move effect #200 HIGH_CRITICAL_BURN_HIT not transcribed (Expert_HighCritical): Blaze Kick |
@@ -356,8 +352,6 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 9 | AI move effect #239 SUPRESS_ABILITY not transcribed (Basic_CheckGastroAcid / Expert_GastroAcid): Gastro Acid |
 | 9 | AI move effect #57 TRANSFORM not transcribed (no Basic or Expert label): Transform |
 | 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
-| 9 | held item effect #10: Leppa Berry |
-| 9 | held item effect #114: Grip Claw |
 | 9 | move effect #190: Water Spout |
 | 9 | move effect #226: Acupressure |
 | 9 | move effect #239: Gastro Acid |
@@ -365,16 +359,22 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 8 | AI move effect #116 SURVIVE_WITH_1_HP not transcribed (Expert_Endure): Endure |
 | 8 | AI move effect #132 HEAL_HALF_MORE_IN_SUN not transcribed (Basic_CheckCanRecoverHP / Expert_Synthesis): Moonlight, Morning Sun, Synthesis |
 | 8 | held item effect #36: Berserk Gene |
-| 8 | held item effect #43: Enigma Berry |
-| 8 | held item effect #47: Rowap Berry |
 | 8 | move effect #116: Endure |
 | 8 | move effect #132: Moonlight, Morning Sun, Synthesis |
 | 7 | AI move effect #109 CURSE: ghost curse: Curse |
 | 7 | AI move effect #179 HEAL_IN_3_TURNS not transcribed (no Basic or Expert label): Wish |
 | 7 | AI move effect #86 DISABLE not transcribed (Basic_CheckCannotDisable / Expert_Disable): Disable |
 | 7 | ability: Heatproof |
+| 7 | move effect #179: Wish |
+| 6 | AI move effect #233 FLING not transcribed (Basic_CheckFling / Expert_Fling): Fling |
+| 6 | AI move effect #259 TRICK_ROOM not transcribed (Basic_CheckTrickRoom / Expert_TrickRoom): Trick Room |
+| 6 | AI move effect #267 CHATTER not transcribed (no Basic or Expert label): Chatter |
+| 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it |
+| 6 | move effect #233: Fling |
+| 6 | move effect #259: Trick Room |
+| 6 | move effect #267: Chatter |
 
-Groups by kind: AI 62, move effect 52, battle format 36, held item effect 18, battle terrain 9, ability 7, ROM change 7, trainer item 3, field condition 2, form change 1
+Groups by kind: AI 62, move effect 52, battle format 36, battle terrain 9, held item effect 8, ability 7, ROM change 7, trainer item 3, field condition 2, form change 1
 
 ## Build order for the first two splits
 

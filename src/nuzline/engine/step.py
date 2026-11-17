@@ -1171,9 +1171,10 @@ def _use_move(
     state = _set_side(state, "micle", side, 0, accuracy_run)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
-    # returns TRUE), before the move's script and its damage (G-60).
+    # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
+    # script and its damage (G-60).
     repeated = (tables.move_effect[used] == EffectId.ROLLOUT) & (state.rollout_count[side] != 0)
-    state = metronome_update(tables, state, side, move, head_on & can_act & has_target)
+    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
     # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
     # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
@@ -1943,7 +1944,7 @@ def _use_move(
     # Protect, a semi-invulnerable foe, a failure, an immunity: no AfterMoveEffects) once the
     # move got past BeforeMove; a status-check disruption or no target sets none of those bits.
     worked = items_full & ~no_effect
-    no_effects = can_act & has_target & ~charging & ~worked
+    no_effects = succeeded & ~charging & ~worked
     # SYSCTL_LAST_OF_MULTI_TURN: every charge move's strike runs subscript_charge_move_cleanup.s:7
     # (the second turn, a Power Herb, SolarBeam in sun), and subscript_bide_end.s.
     last_of_multi = can_act & ((charge_move & ~charging) | bide_ends)

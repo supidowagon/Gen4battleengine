@@ -3005,6 +3005,8 @@ def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: i
         _forget_item(s, foe)  # UpdateMonData's CopyToParty (script.c:3077-3078)
 
 
+_INVOKER_EFFECTS = (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST)
+
 # Effects whose script sets SYSCTL_IGNORE_TYPE_CHECKS / _IGNORE_IMMUNITIES (effects.IGNORES_TYPE_CHECKS):
 # ApplyTypeChart's end clears MOVE_STATUS_SUPER_EFFECTIVE for them (lib.c:2649-2678).
 _IGNORES_TYPE_CHECKS = (
@@ -3654,6 +3656,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     )
     no_target0 = (
         _t(tables, "move_effect", move) != EffectId.NATURE_POWER
+        and _t(tables, "move_effect", move) not in _INVOKER_EFFECTS
         and not (
             _t(tables, "move_effect", move) == EffectId.COUNTER
             and _move_target(tables, move) in SELF_DEFENDER
@@ -3688,9 +3691,13 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     first_charge = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
         s.sides[side].locked_move
     )
+    # The invokers (Metronome, Sleep Talk, Copycat, Assist) are RANGE_SINGLE_TARGET_SPECIAL too:
+    # their own defender is the user (lib.c:1665-1669), so they pass here and their call's
+    # GoToMoveScript re-picks one below (E1 Batch D; step's ``succeeded``).
     if (
         not nature_power
         and not special_counter
+        and _t(tables, "move_effect", move) not in _INVOKER_EFFECTS
         and not first_charge
         and not _defender_always(tables, move, _ghost(s, side))
         and _active(s, 1 - side).hp == 0
