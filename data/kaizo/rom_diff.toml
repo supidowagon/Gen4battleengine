@@ -554,16 +554,14 @@ note = "decoded: the badge gate if (TrainerInfo_BadgeCount(trInfo) >= 8) return 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitAccuracy"
-status = "not_reached"
-note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the address-relative constant loads and forward jumps those 4 bytes moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141"
-when = { move_effect = [141] }
+status = "modelled"
+note = "decoded: the sun branch if (NO_CLOUD_NINE && WEATHER_IS_SUN && effect == BATTLE_EFFECT_THUNDER) hitRate = 50 also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F068); the other 8 changed ranges are the address-relative constant loads and forward jumps those 4 bytes moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:2915; rom:overlay16@0x0224F068; in sun without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane, move 140, accuracy 70) gets base accuracy 50, as Thunder; reached only through a move with effect 141; modelled by E1 Batch C (G-50): tools/effect_map.py KAIZO_THUNDER_EFFECTS gives a Kaizo effect-141 move MoveFlag.THUNDER (tools/build_tables.py _move_flags), which outcome._rate reads in sun (accuracy 50 before the stage scaling, as Thunder); Hurricane itself stays refused by its unmodelled be_seq member 141"
 
 [[code]]
 module = "overlay16"
 symbol = "BattleControllerPlayer_CheckMoveHitOverrides"
-status = "not_reached"
-note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the address-relative constant loads and forward jumps the two 4-byte insertions moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141"
-when = { move_effect = [141] }
+status = "modelled"
+note = "decoded: the rain branch if (WEATHER_IS_RAIN && effect == BATTLE_EFFECT_THUNDER) moveStatusFlags &= ~MOVE_STATUS_MISSED (inside NO_CLOUD_NINE) also takes effect 141 (the Thunder compare, effect 152, gains an alternative compare for effect 141: 4 bytes inserted at 0x0224F386, so overlay16 is +8 from there); the other 9 changed ranges are the address-relative constant loads and forward jumps the two 4-byte insertions moved (every literal and call target checked equal after the overlay16 shifts); src/battle/battle_controller_player.c:3025; rom:overlay16@0x0224F384; in rain without Cloud Nine or Air Lock a move with effect 141 (Kaizo Hurricane) cannot miss, as Thunder; reached only through a move with effect 141; modelled by E1 Batch C (G-50): the same MoveFlag.THUNDER (tools/effect_map.py KAIZO_THUNDER_EFFECTS), which outcome._rate reads in rain (a sure hit after the roll, as Thunder); Hurricane itself stays refused by its unmodelled be_seq member 141"
 
 [[code]]
 module = "overlay16"

@@ -120,6 +120,7 @@ from tools.effect_map import (
     HOLD_EFFECT_FRIENDSHIP_UP,
     INVOKER_MOVES,
     KAIZO_EFFECTS,
+    KAIZO_THUNDER_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
@@ -185,10 +186,11 @@ def _decomp_commit() -> str:
     return m.group(1)
 
 
-def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
+def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]], kaizo: bool = False) -> int:
     """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
     NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
-    for Move_IsMultiTurn, the move's own decomp effect."""
+    for Move_IsMultiTurn, the move's own decomp effect. THUNDER is the weather-accuracy effect
+    152, and in Kaizo also ``KAIZO_THUNDER_EFFECTS`` (the patched overlay16 compares, G-50)."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -204,7 +206,9 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.NO_SLEEP_TALK
     if move_id in METRONOME_EXCLUDED_MOVES:
         bits |= MoveFlag.NO_METRONOME
-    if move.get("effect") == THUNDER_EFFECT:
+    if move.get("effect") == THUNDER_EFFECT or (
+        kaizo and move.get("effect") in KAIZO_THUNDER_EFFECTS
+    ):
         bits |= MoveFlag.THUNDER
     if move.get("effect") == BLIZZARD_EFFECT:
         bits |= MoveFlag.BLIZZARD
@@ -651,7 +655,9 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr(
-            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int32, "move flags"
+            [_move_flags(m, i, move_lists, kaizo) for i, m in enumerate(moves)],
+            np.int32,
+            "move flags",
         ),
         "move_is_hm": _arr([int(i in hm_moves) for i in range(len(moves))], np.int8, "move is hm"),
         "type_chart": _arr(chart, np.int8, "type chart"),

@@ -440,6 +440,11 @@ CONSTANTS: tuple[Constant, ...] = (
             "Synchronize": 28,
             "Wonder Guard": 25,
             "Download": 88,
+            "Ice Body": 115,
+            "White Smoke": 73,
+            "Vital Spirit": 72,
+            "Speed Boost": 3,
+            "Iron Fist": 89,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -459,7 +464,6 @@ CONSTANTS: tuple[Constant, ...] = (
             "Cloud Nine": 13,
             "Air Lock": 76,
             "Magic Guard": 98,
-            "Ice Body": 115,
         },
     ),
     # Yawn's decomp abilities (subscript_yawn.s:5-9, :14; subscript_fall_asleep.s:7-14), E2
@@ -812,6 +816,11 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.KAIZO_EFFECTS": (
         "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
         "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
+    ),
+    "tools.effect_map.KAIZO_THUNDER_EFFECTS": (
+        "decomp effect ids the Kaizo ROM's patched CheckMoveHitAccuracy / CheckMoveHitOverrides "
+        "compare beside BATTLE_EFFECT_THUNDER; used only for Kaizo, from its modelled "
+        "rom_diff.toml overlay16 entries (E1 Batch C, G-50)"
     ),
     "tools.effect_map.DIVISOR_PARAM_MIN": (
         "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "

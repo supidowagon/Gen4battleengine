@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from nuzline.data.forms import form_row
+from nuzline.data.games import KAIZO, game_of_intermediate
 from nuzline.data.spec import PokemonSpec
 
 MAX_IV = 31  # MAX_IVS_SINGLE_STAT
@@ -309,13 +310,15 @@ class IntermediateData:
     """Thin loader of the extractor's species, form and learnset JSON. ``species`` is indexed
     by species id, ``personal`` and ``learnsets`` by personal row (the species, then the
     data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row.
-    ``patched_builder`` is True for Kaizo's intermediates, which only Kaizo's resolve step
-    writes ``kaizo.json`` into (``tools/kaizo/resolve.py``): their trainers are built by the
-    patched ``TrainerData_BuildParty``, which recalculates stats after the form
-    (docs/kaizo/rom_diff.md, "TrainerData_BuildParty, decoded", step 11)."""
+    ``game`` is the id of the game the intermediates belong to (by default the game whose
+    ``Game.intermediate_dir`` is ``dir``, ``games.game_of_intermediate``). ``patched_builder``
+    is True for Kaizo's: its trainers are built by the patched ``TrainerData_BuildParty``,
+    which recalculates stats after the form (docs/kaizo/rom_diff.md, "TrainerData_BuildParty,
+    decoded", step 11). It keys on the game id, not on a file in ``dir``."""
 
-    def __init__(self, dir: Path):
-        self.patched_builder = (Path(dir) / "kaizo.json").exists()
+    def __init__(self, dir: Path, game: str | None = None):
+        self.game = game_of_intermediate(dir) if game is None else game
+        self.patched_builder = self.game == KAIZO
         self.species: list[dict] = _read(dir, "species")
         self.personal: list[dict] = self.species + _read(dir, "forms")
         self.form_rows: list[list[int]] = _read(dir, "form_rows")
