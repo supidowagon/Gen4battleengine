@@ -760,11 +760,12 @@ def _finish_jit(
     tables: Tables, state: BattleState, played: BattleState, refused, ai_switched, power_mul
 ):
     """``finish_turn`` of ``played`` and the select back to ``state`` at a refusal, one program:
-    ``(state after the turn, refused)``. With ``refused`` False the state is
-    ``finish_turn(...)[0]`` (``refusal_reason``'s refused branch reads it so)."""
-    played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
+    ``(state after the turn, refused, finished)``, ``finished`` being ``finish_turn(...)[0]``
+    before the select (``refusal_reason``'s refused branch reads its learn work: a turn that
+    sets ``exp_refused`` is refused, so the selected state is the one before it)."""
+    finished, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
-    return _select(refused, state, played), refused
+    return _select(refused, state, finished), refused, finished
 
 
 def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
@@ -775,7 +776,7 @@ def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: Ai
     state before ``finish_turn``, so a fused program would compile the whole turn a second
     time in a process that runs both (the step program dominates the compile)."""
     played, refused, ai_switched, power_mul = _play_jit(tables, state, player_action, key, layout)
-    return _finish_jit(tables, state, played, refused, ai_switched, power_mul)
+    return _finish_jit(tables, state, played, refused, ai_switched, power_mul)[:2]
 
 
 def refusal_reason(
@@ -832,9 +833,7 @@ def refusal_reason(
             played, _, ai_switched, power_mul = _play_jit(
                 tables, state, player_action, k_turn, layout
             )
-            finished = _finish_jit(tables, state, played, jnp.bool_(False), ai_switched, power_mul)[
-                0
-            ]
+            finished = _finish_jit(tables, state, played, refused, ai_switched, power_mul)[2]
             return learn_reason(finished) or replacement_refusal(
                 tables, resolve_learns(tables, played), ai_switched, power_mul
             )
