@@ -162,7 +162,7 @@ class MonCondition(IntEnum):
     # MON_CONDITION_FACADE_BOOST (include/constants/battle/condition.h:29): toxic, poison,
     # burn, paralysis
     FACADE_BOOST = (1 << 7) | (1 << 3) | (1 << 4) | (1 << 6)
-    # MON_CONDITION_ANY_POISON (condition.h:22): poison, toxic and the toxic counter, which is
+    # MON_CONDITION_ANY_POISON (condition.h:24): poison, toxic and the toxic counter, which is
     # set only with the toxic bit, so the group is poison or toxic (E2 batch 12, B12-18).
     ANY_POISON = (1 << 3) | (1 << 7) | (0xF << 8)
 
@@ -2185,7 +2185,7 @@ def if_hp_percent_not_equal_to(ctx: AiContext, battler: Battler, percent: int) -
 
 
 # The engine status of each MonCondition group (one status at a time, ids.Status).
-TOXIC_COUNTER = 0xF << 8  # MON_CONDITION_TOXIC_COUNTER (condition.h:16-19)
+TOXIC_COUNTER = 0xF << 8  # MON_CONDITION_TOXIC_COUNTER (condition.h:15-18, the group :23)
 _CONDITION_GROUPS = (
     (MonCondition.SLEEP, Status.SLEEP),
     (MonCondition.POISON, Status.POISON),

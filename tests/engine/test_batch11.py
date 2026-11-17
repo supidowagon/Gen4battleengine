@@ -411,3 +411,27 @@ def test_replacement_known_holds_wherever_a_replacement_is_possible(tables, name
         s, acts = steered
     if bool(_possible(tables, s, acts)):
         assert replacement_known(tables, s), np.asarray(s.moves)
+
+
+def test_replacement_known_counts_a_move_learnt_at_a_later_level(tables, names):
+    """``outcome.replacement_known``'s level-up half: Glameow learns Assist (an invoker) at level
+    29 (its ``tables.learnset_*`` row), so a level-28 Glameow that does not know it learns it at
+    its next level in a playout (``levelup.advance_learns``): the flag is True. At level 30 that
+    entry is behind it, and neither party knows or can still learn Encore or an invoker (Bidoof's
+    learnset has none): False."""
+    n = names
+    glameow = n.species("Glameow")
+    learnt = zip(
+        np.asarray(tables.learnset_move[glameow]).tolist(),
+        np.asarray(tables.learnset_level[glameow]).tolist(),
+        strict=True,
+    )
+    assert [level for move, level in learnt if move == n.move("Assist")] == [29]
+
+    def state(level):
+        return make_state(
+            tables, [_mon(n, "Glameow", ["Scratch"], level)], [_mon(n, "Bidoof", ["Tackle"], 30)]
+        )
+
+    assert replacement_known(tables, state(28))
+    assert not replacement_known(tables, state(30))

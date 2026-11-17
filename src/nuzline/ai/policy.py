@@ -680,7 +680,7 @@ def _basic_check_can_psycho_shift(ctx: AiContext, mask) -> AiContext:
         ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
         ctx = _score(ctx, t, -10)
     ctx = c.pop_or_end(ctx)
-    # Basic_PsychoShift_Burn (:1332)
+    # Basic_PsychoShift_Burn (:1334)
     ctx = _at(ctx, burn)
     for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
@@ -691,7 +691,7 @@ def _basic_check_can_psycho_shift(ctx: AiContext, mask) -> AiContext:
         ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
         ctx = _score(ctx, t, -10)
     ctx = c.pop_or_end(ctx)
-    # Basic_PsychoShift_Paralysis (:1342)
+    # Basic_PsychoShift_Paralysis (:1345)
     ctx = c.load_battler_ability(_at(ctx, para), _D)
     ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Limber"]))
     return c.pop_or_end(_score(ctx, t, -10))
@@ -2907,13 +2907,13 @@ def _expert_power_trick(ctx: AiContext, mask) -> AiContext:
     return ctx
 
 
-def _swap_tiers(label: str, first: Stat, second: Stat, lines: tuple[int, ...]):
+def _swap_tiers(label: str, line: int, first: Stat, second: Stat, lines: tuple[int, ...]):
     """``Expert_PowerSwap`` (script.s:5632-5764) / ``Expert_GuardSwap`` (:5766-5898): the
     first stat's ``DiffStatStages`` (the player's stage minus the AI's) picks a tier (above 3,
     above 1, above 0, equal to 0; else nothing), the second stat's diff then a ``TryScorePlusN``
     entry (above 3, above 1, equal to 0 or above 0 by tier), and each ``TryScorePlusN`` adds N
-    unless its 128 roll jumps to ``TryScorePlus(N - 1)`` (``lines``: the rolls of TryScorePlus5
-    .. 1; TryScorePlus1's jump ends it)."""
+    unless its 128 roll jumps to ``TryScorePlus(N - 1)`` (``line``: the label; ``lines``: the
+    rolls of TryScorePlus5 .. 1; TryScorePlus1's jump ends it)."""
     # (first tier) -> ((test, threshold, N), ...) in script order (:5710-5736).
     tiers = (
         ((">", 3), ((">", 3, 5), (">", 1, 4), ("==", 0, 3))),
@@ -2954,15 +2954,15 @@ def _swap_tiers(label: str, first: Stat, second: Stat, lines: tuple[int, ...]):
         return c.pop_or_end(_at(ctx, end))
 
     label_fn.__name__ = label_fn.__qualname__ = f"_expert_{label.split('_')[-1].lower()}"
-    label_fn.__doc__ = f"``{label}`` (script.s:{lines[0]}); see ``_swap_tiers``."
+    label_fn.__doc__ = f"``{label}`` (script.s:{line}); see ``_swap_tiers``."
     return label_fn
 
 
 _expert_powerswap = _swap_tiers(
-    "Expert_PowerSwap", Stat.ATK, Stat.SPA, (5739, 5744, 5749, 5754, 5759)
+    "Expert_PowerSwap", 5632, Stat.ATK, Stat.SPA, (5739, 5744, 5749, 5754, 5759)
 )
 _expert_guardswap = _swap_tiers(
-    "Expert_GuardSwap", Stat.DEF, Stat.SPD, (5873, 5878, 5883, 5888, 5893)
+    "Expert_GuardSwap", 5766, Stat.DEF, Stat.SPD, (5873, 5878, 5883, 5888, 5893)
 )
 
 

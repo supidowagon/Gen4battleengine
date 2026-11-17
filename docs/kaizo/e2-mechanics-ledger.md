@@ -15,14 +15,15 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_batch12_stat_family_exact_equals_loose (242 s, 5.7 GB) and _healing_ (146 s, 5.1 GB).
   OWED (killed by the free-RAM floor while the nightly held ~8 GB): test_accuracy_classes,
   test_protect, kaizo_policy `-k "not batch12"`, test_cli default_budget / deaths_and_protect.
+  Batch 12 check on cb7c878: no decomp disagreement, guards green, no duplicates. Its follow-ups:
+  replacement_known's level-up half tested (test_batch11), the flag-True leaf path tested
+  (test_leaves), `_move_draws` docstring lists fold_in 41.
 - **Batch 11 tip merged + batch 12 second review + sampler cost (2026-11-16):** 2e7fdff merges
   d097e68 (Acupressure's draw moved to fold_in 36: 29 is Focus Band's; no other shared index),
   064636b the review follow-ups (B12-28), then the sampler flag (B12-29). OWED: B12-22's
   Psycho Shift onto Synchronize can now be checked against E1's synchronize; test_batch12 needs
-  chunking under 4 GB after the merge (4.06 GB whole); the 8 GB items above; over 4 GB alone:
-  test_batch11 encore_into_assist / _metronome / _copycat, an_encored_sleep_talk; test_invokers
-  brute_force[sleep_talk, _disable, _imprison], sampled_calls_match, random_invoker_turns.
-  DIFF seed 37 fixed (B12-30): the reference wrongly failed a RANGE_SINGLE_TARGET_SPECIAL
+  chunking under 4 GB after the merge (4.06 GB whole); the 8 GB items above. (The over-4 GB
+  test_batch11 / test_invokers items ran and passed on 08064fb.) DIFF seed 37 fixed (B12-30): the reference wrongly failed a RANGE_SINGLE_TARGET_SPECIAL
   invoker (awake Sleep Talk, the foe fainted to its confusion self-hit) at HasNoTarget; the
   decomp's defender is the user, so last_move is Sleep Talk as JAX had it.
 - **Batch 11 merge (18:19):** main a5a60ad merged into 49084d6 on branch e2-b11-merge in
@@ -60,7 +61,7 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   compile cache, HEAD too): test_fangs, test_protect, test_present, test_self_destruct,
   test_observe, test_small_moves, test_power_moves, parts of test_enumerate (~70 tests).
   Owed code: Trick / Thief / Skill Swap / Worry Seed join outcome.CRIT_ODDS_EFFECTS when they
-  land; the effect-based check ignores a Metronome-called Haze / Knock Off.
+  land.
 - **Mist done** (B12-23..27): move, 5-turn side timer, the drop block in ChangeStatStage incl.
   Intimidate, Basic AI. For E1: Focus Energy = BattleState.focus_energy[side] (Dire Hit sets the
   same bit, battle_system.c:617-622); Guard Spec writes BattleState.mist[side] = 5 when 0
@@ -243,6 +244,10 @@ Rules left out because another mechanic is missing; each closes with the mechani
   `AICmd_LoadHeldItemEffect` (trainer_ai.c:1907-1910) reads `battlerHeldItems` for any battler
   but the AI's own, so in doubles it also reads the AI partner's record (and `IfHeldItemEqualTo`,
   :1924-1928, the other side's). The doubles milestone keeps it per battler on both sides.
+- Doubles rework: `commands.if_party_member_status` (`AICmd_IfPartyMemberStatus`, trainer_ai.c:
+  1348-1379) leaves out the doubles branch (:1359-1364: the partner's selected slot is also
+  skipped, :1361) and the egg check (:1373, `MON_DATA_SPECIES_OR_EGG != SPECIES_EGG`; BattleState
+  holds no eggs).
 - AI owner (E1), batch 8: `curse`, `perish_song` / `perish_song_turns`, `yawn`, `lock_on` /
   `lock_on_target` are now set (B8-1..B8-5), with the turn-end checks and the leave rules; the AI
   scripts of the moves (Lock-On, Perish Song, Yawn, Ghost Curse) are E1's. New Outcome field

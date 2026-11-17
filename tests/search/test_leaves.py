@@ -335,6 +335,27 @@ def test_both_halves_have_buckets(tables, names):
         assert 0 < value.hp_left <= 64 and 0 < value.pp_left <= 64
 
 
+def test_replacement_flag_true_matches_false_where_none_can_fire(tables, names, monkeypatch):
+    """The search's replacement path: Monferno knows Assist (an invoker), so
+    ``outcome.replacement_known`` is True and ``leaves._run`` compiles ``sample_outcome``'s
+    B11-1 redraw. With no party mate Assist calls nothing, and neither side knows or can learn
+    Encore or Sleep Talk, so no replacement can fire (``replacement_possible`` is false at every
+    turn); the redraw is a ``lax.cond`` that leaves outcome A where it is false, so the values
+    equal the flag-False program's, playout for playout."""
+    from nuzline.engine.outcome import replacement_known
+    from nuzline.search import leaves
+
+    state = roark_state(tables, names, player_count=1, opp_count=1, player_moves=["Assist"])
+    assert replacement_known(tables, state)
+    counts = np.array([64])
+    (on,) = evaluate_leaves(tables, batch(state), counts, KEY)
+    monkeypatch.setattr(leaves, "replacement_known", lambda t, s: False)
+    (off,) = evaluate_leaves(tables, batch(state), counts, KEY)
+    assert on == off
+    assert (on.n_a, on.n_b) == (32, 32) and not on.refused
+    assert sum(on.buckets_a) == sum(on.buckets_b) == 32
+
+
 def test_merge_sums_new_fields():
     a = LeafValue(1, 2, 3, 4, False, 5, 6, (1,) * 8, (0, 2, 0, 0, 0, 0, 0, 0), 1.5, 2.5)
     b = LeafValue(2, 4, 1, 2, True, 1, 2, (), (1, 0, 0, 0, 0, 0, 0, 0), 0.25, 0.5)

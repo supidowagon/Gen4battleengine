@@ -1148,7 +1148,7 @@ MOVE_FIELDS = ("hit", "crit", "secondary", "fang_flinch", "duration", "future_hi
 def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict:
     """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
     (``moves``, ``int32[2]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
-    13 and fold_ins 16, 28)."""
+    13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw)."""
     k = jax.random.split(key, 14)
     per_hit, per_side = (2, MAX_HITS), (2,)
 
