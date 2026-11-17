@@ -2220,8 +2220,11 @@ def metronome_update(tables: Tables, state: BattleState, side, move, cond) -> Ba
     (``locked_move``; Thrash is unsupported, and ``SYSCTL_LAST_OF_MULTI_TURN`` is clear at
     BeforeMove, BattleContext_Init cleared it) counts ``moveTemp`` (``move``: the chosen or
     encored move, Struggle, an invoker itself): the same move as ``metronomeMove`` adds 1 up to
-    10, another one sets the count to 0 and becomes ``metronomeMove``. Any other battler's count
-    goes to 0. G-60."""
+    10, another one sets the count to 0 and becomes ``metronomeMove``. A battler that holds no
+    Metronome has its own count reset to 0 (:6176-6177). As the update follows the
+    ``MOVE_STATUS_NO_EFFECTS`` branch (bcp.c:3209-3221), a move DecrementPP flagged
+    ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite empties a chosen move's PP before
+    its use, an unsupported move (the encored move with no PP, B10-9, takes the same path). G-60."""
     side = jnp.asarray(side, _I32)
     move = jnp.asarray(move, _I32)
     cond = jnp.asarray(cond)
@@ -2245,7 +2248,8 @@ def metronome_verify(
     ``metronomeMove``, the count is above 0, ``repeatedMoveCount`` is 0 (``repeated``: Rollout's
     count before its script, battle_script.c:5665), not uproaring, not
     ``SYSCTL_LAST_OF_MULTI_TURN`` (``last_of_multi``: a charge move's strike, Bide's end), not
-    move-locked (``locked_move`` now). Any other battler's count goes to 0. G-60."""
+    move-locked (``locked_move`` now). A battler that holds no Metronome has its own count reset
+    to 0 (:6195-6196). G-60."""
     side = jnp.asarray(side, _I32)
     cond = jnp.asarray(cond)
     holder = holds(tables, state, side, ItemId.METRONOME_ITEM)

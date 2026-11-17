@@ -19,7 +19,13 @@ from nuzline.ai.switching import switching_refusals
 from nuzline.engine.coverage import IMPLEMENTED_ITEMS, Support
 from nuzline.engine.damage import damage_table
 from nuzline.engine.hooks import max_pp
-from nuzline.engine.ids import GRIP_CLAW_TURNS, SPEED_HALVING_HOLD_EFFECTS, ItemId, Stat
+from nuzline.engine.ids import (
+    GRIP_CLAW_TURNS,
+    SPEED_HALVING_HOLD_EFFECTS,
+    AbilityId,
+    ItemId,
+    Stat,
+)
 from nuzline.engine.order import effective_speed, pinch_limit
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from tests.engine.helpers import A, assert_matches_reference, roark_state
@@ -95,6 +101,30 @@ def test_jaboca_hurts_a_physical_attacker_and_is_used(tables, names):
     # A special move does not trigger it.
     out = assert_matches_reference(tables, s, A("Ember", "Leer", s, names), O)
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.item[1, 0]) != 0
+
+
+def test_jaboca_spares_magic_guard_and_can_faint_the_attacker(tables, names):
+    """battle_lib.c:5402-5403: a Magic Guard attacker takes nothing and the berry stays; the
+    recoil's UPDATE_HP can faint a living attacker."""
+    s = _foe_holds(tables, names, "Jaboca Berry")
+    guard = s._replace(ability=s.ability.at[0, 0].set(AbilityId.MAGIC_GUARD))
+    out = assert_matches_reference(tables, guard, A("Scratch", "Leer", guard, names), O)
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.item[1, 0]) != 0
+    low = _hp(s, 0, 0, 1)
+    out = assert_matches_reference(tables, low, A("Scratch", "Leer", low, names), O)
+    assert int(out.hp[0, 0]) == 0 and int(out.item[1, 0]) == 0
+
+
+def test_jaboca_on_u_turn_takes_the_place_of_life_orb(tables, names):
+    """TriggerHeldItemOnPivotMove (battle_lib.c:7357-7375): the defender's Jaboca case comes
+    after the attacker's Life Orb case and overwrites its subscript, so the U-turn user loses the
+    berry's share and no Life Orb recoil."""
+    s = _foe_holds(tables, names, "Jaboca Berry", player_moves=["U-turn"])
+    s = _item(s, 0, 0, names.item("Life Orb"))
+    out = assert_matches_reference(tables, s, A("U-turn", "Leer", s, names), O)
+    loss = max(int(s.max_hp[0, 0]) // int(tables.item_param[names.item("Jaboca Berry"), 0]), 1)
+    assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == loss
+    assert int(out.item[1, 0]) == 0
 
 
 def test_rowap_hurts_a_special_attacker_only(tables, names):
@@ -185,6 +215,20 @@ def test_plucked_leppa_restores_the_eaters_largest_gap(tables, names):
     out = assert_matches_reference(tables, s, A("Pluck", "Leer", s, names), O)
     assert int(out.pp[0, 0, slot]) == int(s.pp[0, 0, slot])  # the spent PP came back
     assert int(out.item[1, 0]) == 0
+
+
+def test_plucked_leppa_with_every_move_full_changes_no_pp(tables, names):
+    """The slot-60 path (G-58): every move of the eater at its max PP, the uninitialized slot is
+    60 in the ROM and AddVal's default changes nothing, but the restore subscript runs
+    (``hooks._leppa`` with ``pluck``: triggered, no PP change). A Pluck through ``step`` always
+    leaves its own slot one short, so this is checked on the hook."""
+    from nuzline.engine.hooks import _leppa
+
+    s = roark_state(tables, names)
+    full = max_pp(tables, s, 0, 0)
+    s = s._replace(pp=s.pp.at[0, 0].set(full.astype(s.pp.dtype)))
+    out, triggered = _leppa(tables, s, 0, 0, 10, True, pluck=True)
+    assert bool(triggered) and out.pp[0, 0].tolist() == s.pp[0, 0].tolist()
 
 
 # --- G-59 Micle Berry -----------------------------------------------------------------------

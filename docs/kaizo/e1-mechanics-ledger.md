@@ -809,7 +809,14 @@ of them, :2107-2115).
   Custap :1294) is a plain C `/`. In the Kaizo ROM it calls the ARM9 runtime's `_u32_div_f`
   (rom:arm9@0x020E2178; from overlay16@0x02257DA2 for Ganlon, @0x02253202 for Custap), whose first
   instructions `cmp r1, #0; bxeq lr` return the dividend for a zero divisor (the signed
-  `_s32_div_f`, @0x020E1F6C, also returns the dividend). So a param 0, or 1 under Gluttony, gives
+  `_s32_div_f`, @0x020E1F6C, also returns the dividend). Decoded with `python -m tools.rom.decode
+  at <addr> <n> --module <m>` (Kaizo ROM): arm9 `0x020e2178 cmp r1, #0` / `0x020e217c bxeq lr`
+  (r0, the dividend, is returned); arm9 `0x020e1f6c eor ip, r0, r1` ... `0x020e1f80 cmp r1, #0`,
+  `0x020e1f84 rsblt r1, r1, #0`, `0x020e1f88 beq #0x20e2164`, then `0x020e2164 ands r3, ip,
+  #0x80000000` / `0x020e2168 rsbne r0, r0, #0` ... `0x020e2174 bx lr` (|dividend| with the
+  dividend's sign: the dividend); overlay16 `0x02257d9e ldr r0, [r1, r0]` (maxHP), `0x02257da0
+  adds r1, r6, #0` (itemPower), `0x02257da2 blx #0x20e2178`, `0x02257daa cmp r1, r0` (curHP).
+  So a param 0, or 1 under Gluttony, gives
   `maxHP`: Kaizo's Ganlon and Apicot raise Defense / Sp. Def at the first held-item check whatever
   the HP. `order.pinch_limit` (the reference's `_pinch_limit`) at every pinch site; the pinch
   berries and Custap leave `effect_map.DIVISOR_PARAM_MIN` (Sticky Barb, Shell Bell and the flavor
@@ -868,7 +875,18 @@ of them, :2107-2115).
   (`ABILITY_STICKY_HOLD`), a call made whenever the defender holds an item. So `slot` is 60:
   `AddVal(BATTLEMON_CUR_PP_1 + 60)` is `BATTLEMON_TRANSFORMED_PERSONALITY`
   (generated/battle_mon_params.txt), AddVal's default, `ErrorHandling_AssertFail` (compiled in,
-  @0x02252E8A), which does nothing outside a link (error_handling.c:11-16). No PP changes, and
+  @0x02252E8A), which does nothing outside a link (error_handling.c:11-16). Decoded (overlay16,
+  Kaizo ROM): TryPluck `0x02247b28 push {r3, r4, r5, r6, r7, lr}` (24 bytes: sp_T), `0x02247b5a
+  movs r3, #0x3c`, `0x02247b5c bl #0x2255abc`, then `0x02247b8c bl #0x2258cd0`;
+  IgnorableAbility `0x02255abc push {r3, r4, r5, r6, r7, lr}` (sp_T - 24), `0x02255ac4 adds r4,
+  r3, #0` (r4 = 60), `0x02255ac8 bl #0x2255a54`; Battler_Ability `0x02255a54 push {r4, r5}`
+  (r4 stored at sp_T - 32); PluckBerry `0x02258cd0 push {r4, r5, r6, r7, lr}`, `0x02258cd2 sub sp,
+  #0x14` (sp_P = sp_T - 40, so `[sp, #8]` is sp_T - 32), its only write `0x02258e3c str r5, [sp,
+  #8]` (when `0x02258e36 cmp r1, r0` / `ble` finds a larger gap), its read `0x02258e4a ldr r1, [sp,
+  #8]`, `0x02258e52 adds r1, #0x1f` (BATTLEMON_CUR_PP_1 = 31), `0x02258e54 bl #0x2252a34`; AddVal
+  `0x02252a3a cmp r1, #0x62` and its jump table sends 91 (31 + 60) to `0x02252e8a bl #0x2022974`
+  (ErrorHandling_AssertFail), `0x02252e8e pop {r4, r5, r6, pc}`. Battler_Ability makes no call
+  (a leaf), nothing between it and PluckBerry's frame writes sp_T - 32, so the slot holds 60. No PP changes, and
   the restore subscript still runs (the pluck flag is cleared). `ppUps` is `BattleState.pp_ups`
   from the party (battle_lib.c:85); a learned move replacing a slot zeroes it
   (battle_script.c:10169-10170). `hooks._leppa`, `hooks.max_pp`; reference `_held_item`,
@@ -892,8 +910,12 @@ of them, :2107-2115).
   of BeforeMove (bcp.c:3221: past the status checks and HasNoTarget; DecrementPP never returns
   TRUE): a holder not uproaring nor move-locked (Thrash is unsupported; `SYSCTL_LAST_OF_MULTI_TURN`
   is clear at BeforeMove) counts `moveTemp` (the chosen or encored move, Struggle, an invoker):
-  the same move as `metronomeMove` +1 up to 10, another one 0 and it becomes `metronomeMove`; any
-  other battler's count goes to 0. `BattleSystem_VerifyMetronomeCount` at UpdateMoveBuffers
+  the same move as `metronomeMove` +1 up to 10, another one 0 and it becomes `metronomeMove`; an
+  attacker holding no Metronome has its own count reset to 0 (:6176-6177; Verify likewise,
+  :6195-6196). The update follows BeforeMove's `MOVE_STATUS_NO_EFFECTS` branch (bcp.c:3209-3221),
+  so a move DecrementPP flagged `MOVE_STATUS_NO_PP` (bcp.c:2285) counts too; only Spite empties a
+  chosen move's PP before its use, and Spite is unsupported (the encored move with no PP, B10-9,
+  takes the same path). `BattleSystem_VerifyMetronomeCount` at UpdateMoveBuffers
   (bcp.c:3957; :6181-6198) takes one back for `MOVE_STATUS_NO_EFFECTS` (CheckMoveFailure did not
   reach USE_MOVE, bcp.c:3312-3331: a miss, Protect, a semi-invulnerable foe, a failure, an
   immunity, no PP), `metronomeMove == moveTemp`, a count above 0, `repeatedMoveCount` 0 (Rollout's

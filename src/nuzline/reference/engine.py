@@ -1775,7 +1775,9 @@ def _max_pp(tables, mon: RefPokemon, k: int) -> int:
 def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
     """``BattleSystem_UpdateMetronomeCount`` (lib.c:6160-6178), G-60: a Metronome holder not
     uproaring nor move-locked counts ``moveTemp`` (same move +1 up to 10, else 0 and the new
-    move); any other battler's count goes to 0."""
+    move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
+    with MOVE_STATUS_NO_PP (bcp.c:2285) counts too: the update follows the NO_EFFECTS branch
+    (bcp.c:3209-3221); only the unsupported Spite (or an encored move with no PP) gets there."""
     sd = s.sides[side]
     if _item_effect(tables, _active(s, side)) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
