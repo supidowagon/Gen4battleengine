@@ -882,7 +882,7 @@ def _check_trainer(
     # mechanic the engine does not build are refused by name (bag.refused_bag_params).
     params = np.asarray(tables.item_party_param)
     bag = [item for item in trainer.items if item]
-    for item in bag:
+    for item in sorted(set(bag)):
         where = f"{display_name(trainer)}: {names.item_names[item]}"
         reasons = refused_bag_params(params[item])
         if not reasons:

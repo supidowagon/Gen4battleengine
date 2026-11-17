@@ -89,7 +89,7 @@ def refused_bag_params(params) -> list[str]:
             gain = gain * 150 // 100
         if int(params[give]) and top - 1 + gain > FRIENDSHIP_MAX:
             out.append(
-                f"can raise friendship below {top} past {FRIENDSHIP_MAX}, which wraps the "
+                f"can raise a friendship of {top - 1} past {FRIENDSHIP_MAX}, which wraps the "
                 "party's friendship (pokemon.c:1859-1874)"
             )
     return out
