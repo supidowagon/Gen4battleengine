@@ -3362,7 +3362,7 @@ def _item_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=N
     params = np.asarray(tables.item_party_param)
     return [
         f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} "
-        + "; ".join(refused_bag_params(params[int(bag[k])]))
+        + "; ".join(refused_bag_params(params[int(bag[k])], int(bag[k])))
         for k in np.flatnonzero(np.asarray(_refused(tables, state, layout).bag))
     ]
 

@@ -586,11 +586,13 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   Kaizo's patched builder calls `Pokemon_CalcStats` after the form (rom_diff.md
   "TrainerData_BuildParty, decoded", step 11), which loads the form's row (pokemon.c:595) and
   keeps a full-HP Pokemon at full HP (:633-641). Engine: `PokemonSpec.ability_form` /
-  `stats_form` (None = `form`); `build_trainer_party` sets `ability_form=0` and, for the vanilla
-  PID routine, `stats_form=0`; the new state field `ability_form` (int8[2,6], STATE.md) is the
+  `stats_form` (None = `form`); `build_trainer_party` sets `ability_form=0` and, by game,
+  `stats_form=0` for vanilla's builder (`IntermediateData.patched_builder` is False: no
+  `kaizo.json`, which only Kaizo's resolve step writes); the new state field `ability_form`
+  (int8[2,6], STATE.md) is the
   row `ability_slot` indexes in `_fill_slot`, `step._restore_ability`,
-  `damage.decomp_abilities`, the reference engine and coverage. Rotom's form rows equal its
-  base row; Giratina-Origin (Cyrus 780) now has Pressure and Shaymin-Sky (Cynthia 870) Natural
+  `damage.decomp_abilities`, the reference engine and coverage. Rotom's form rows' abilities
+  equal its base row's; Giratina-Origin (Cyrus 780) now has Pressure and Shaymin-Sky (Cynthia 870) Natural
   Cure, both still refused by Ruling 8 (`_check_form`). Tests: `tests/engine/test_e1_batch_a.py`
   (family 1), `tests/data/test_trainer.py`, `tests/engine/test_coverage.py`.
 - G-42 Local script ids 3 and 4 run on a header only where game code can start them
@@ -613,20 +615,29 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `clone_scripts`, `past_table_starts`, `HeaderSites.extra_starts` / `runs_any`). A clone
   object (script `NO_SCRIPT`) keeps the old header's map object with its local id when the
   clone's flag names that header (`sub_0206184C` / `sub_0206244C`, map_object.c:171-198,
-  :772-801), so the header runs that object's script id; a clone whose flag header has no such
+  :772-801), so the header runs that object's script id (no chain: a full load's clone path
+  `sub_02062714`, :962-970, sets the kept object's script to the clone's 65535 and marks it
+  `MAP_OBJ_STATUS_25`, `sub_02062E94`/`sub_02062C18`, :1630-1634, :1861-1868, so only the flag
+  header's own non-clone objects carry a script; nine clone-of-clone pairs in each ROM, e.g.
+  Route 206/207 local 8, add nothing more); a clone whose flag header has no such
   object keeps nothing and is built fresh from the clone event (`MapObjectMan_AddMapObjectFrom
   Header` -> `sub_020624CC`'s search, :236-241, :803-815, then :244-255), whose script 65535
   starts a fixed file, no local id (script_manager.c:32-33, :228-254): it adds no id (Kaizo
   headers 336 and 371). A local id past its file's entry table runs
   `ScriptContext_JumpToOffsetID` (script_manager.c:412-416) at `4 * id` plus the word read
   there: inside the file it is an extra start node explored like a bg/object entry (vanilla
-  Route 207's clone id 15 -> offset 70: SetVarFromValue, End, no battle); outside the file it
-  runs no entry of it (Kaizo's five, vanilla Oreburgh City's 45); a table word past the file's
-  end is read from heap memory the decomp does not fix, so that header may run any entry of its
-  file (the conservative ruling; vanilla Route 223, header 468, `scripts_empty`). The decomp
-  narrowing (vanilla intermediates) has no byte offsets, so a past-table id runs no entry there;
-  `test_vanilla_rom_narrows_as_the_decomp` pins that the ROM reader's exact answer gives the same
-  rows. Moves no row in either game. Tests: `tests/tools/rom/test_terrain_narrowing.py`.
+  Route 207's clone id 15 -> offset 70: SetVarFromValue, End, no battle). A target outside the
+  file (Kaizo's, vanilla Oreburgh City's 45) runs heap memory past the loaded file, and a table
+  word past the file's end (vanilla Route 223, header 468, `scripts_empty`) is itself read from
+  heap memory; the decomp fixes neither, so in both cases the header may run any entry of its
+  file (the conservative ruling; review fix: an outside target first ran no entry). Headers
+  that may run any entry: vanilla 45, 344, 349, 350, 362, 365, 400, 407, 468; Kaizo 2, 45, 349,
+  353, 362, 365, 400, 407, 418, 439. The decomp narrowing (vanilla intermediates) has no byte
+  offsets, so there any past-table id may run any entry; `test_vanilla_rom_narrows_as_the_decomp`
+  pins that the ROM reader's exact answer gives the same rows. Rows that move: vanilla rival on
+  Route 203 (247-249) PLAIN -> mixed (PLAIN, GRASS, WATER), its coord battle no longer
+  narrowed because Route 203's past-table id 22 may run any entry; Kaizo Byron (250) BUILDING
+  -> mixed. Tests: `tests/tools/rom/test_terrain_narrowing.py`, `tests/tools/rom/test_terrain.py`.
 - G-43 A trainer's bag items act by their party params, generic over every item (no
   Potion or Poke Ball case). Data: `Item_Get` (src/item.c:153-198) of each party param the AI
   and `BattleSystem_UseBagItem` read, as the new table `item_party_param[item, ids.ItemParam]`
@@ -652,7 +663,10 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   base PP, trainer Pokemon having no PP Ups), HP (0xFF/0xFE/0xFD fractions, at least 1; the
   potion subscript adds it), the friendship band's amount (x1.5 for a FRIENDSHIP_UP item; no
   Luxury Ball or egg bonus for a trainer Pokemon). Not built and refused by name in coverage
-  and the AI (`bag.refused_bag_params`): an item whose params set Mist (Guard Spec,
+  and the AI (`bag.refused_bag_params`), for an item the AI can use (a branch: Full Restore's
+  id, HP_RESTORE, a status or confusion cure, a stage param or Guard Spec,
+  `bag.AI_BRANCH_PARAMS`; Dire Hit, Ether, HP Up, Rare Candy and EV berries are never used and
+  never refused): an item whose params set Mist (Guard Spec,
   :563-573) or Focus Energy (crit stages, :617-626), and one whose friendship amount can pass
   255 within its band, where `Pokemon_IncreaseValue` wraps the party's u8 friendship
   (pokemon.c:1859-1874) apart from the battler's clamped value (battle_lib.c:1032-1044). So

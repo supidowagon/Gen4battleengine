@@ -884,7 +884,7 @@ def _check_trainer(
     bag = [item for item in trainer.items if item]
     for item in sorted(set(bag)):
         where = f"{display_name(trainer)}: {names.item_names[item]}"
-        reasons = refused_bag_params(params[item])
+        reasons = refused_bag_params(params[item], item)
         if not reasons:
             c.add(Support.EXACT, where, "trainer item")
         for reason in reasons:

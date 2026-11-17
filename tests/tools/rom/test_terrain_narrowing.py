@@ -249,11 +249,12 @@ def test_clone_objects_run_the_script_of_the_object_they_keep():
 def test_a_past_table_id_runs_its_table_words_target(decomp, world):
     # E1 ruling G-40: ScriptContext_JumpToOffsetID (script_manager.c:412-416) reads the word
     # at 4 * (id - 1) without a bound. A 1-entry, 16-byte file: id 2 reads 0 at 4 and runs
-    # offset 8 (an extra start), id 3 jumps past the file (no entry of it), id 5's word lies
-    # past the file's end (heap memory: any entry may run).
+    # offset 8 (an extra start); id 3 jumps past the file and id 5's word lies past the file's
+    # end, both into heap memory the decomp does not fix: any entry may run.
     script = bytes(4) + (0).to_bytes(4, "little") + (256).to_bytes(4, "little") + bytes(4)
-    assert past_table_starts(script, [4], [1, 2, 3, 2000]) == ((8,), False)
-    assert past_table_starts(script, [4], [3, 5]) == ((), True)
+    assert past_table_starts(script, [4], [1, 2, 2000]) == ((8,), False)
+    assert past_table_starts(script, [4], [3]) == ((), True)
+    assert past_table_starts(script, [4], [5]) == ((), True)
     # An extra start naming trainer 9 keeps the whole header; none, and 9 gets no terrain.
     battle = [("SCRCMD_STARTTRAINERBATTLE", (9, 0)), ("SCRCMD_END", ())]
     stop = [("SCRCMD_END", ())]
@@ -315,7 +316,9 @@ def test_vanilla_narrowing_only_resolves_mixed_sets(decomp_rows):
         (_, before), (_, after) = whole[t], narrowed[t]
         assert set(after) < set(before) and len(before) > 1, t  # only a mixed set shrinks
     resolved = [t for t in changed if narrowed[t][0] != -1]
-    assert (len(changed), len(resolved)) == (262, 203)
+    # E1 ruling G-40: Route 203's past-table id 22 may run any entry, so the rival's coord
+    # battle (247-249) keeps the whole header.
+    assert (len(changed), len(resolved)) == (259, 200)
     # Roark (246) was BUILDING already.
     assert narrowed[246] == whole[246] == (_t("BUILDING"), [_t("BUILDING")])
 

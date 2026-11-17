@@ -2006,9 +2006,16 @@ def _consume_trainer_items(state: BattleState, actions) -> BattleState:
 def _use_trainer_item(tables: Tables, state: BattleState, side, item) -> BattleState:
     """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905-1944): the
     AI's item subscript around ``BattleSystem_UseBagItem`` (``bag.use_bag_item``, E1 ruling
-    G-43). Its category is the one ``TrainerAI_ShouldUseItem`` chose at selection: nothing
-    that runs before an item action (switches, other items) changes the user's HP, status,
-    confusion, ``fakeOutTurnNumber`` or the turn, which that choice reads."""
+    G-43).
+
+    Rule (recomputed choice): the decomp picks the subscript from ``usedItemType``, set by
+    ``TrainerAI_ShouldUseItem`` at command selection; ``use_bag_item`` recomputes the item's
+    branch here instead. They agree because ``BattleControllerPlayer_CalcTurnOrder``
+    (battle_controller_player.c:707, :756-766) runs every item and switch command before any
+    move, so only the other battlers' switches and items run between selection and this
+    action, and none of those changes what the branch reads: the user's HP, status,
+    confusion, ``fakeOutTurnNumber``, ``totalTurns`` or its side's Mist (the subscript then
+    reads the item's params, fixed data)."""
     return use_bag_item(tables, state, side, item, jnp.asarray(item) != 0)
 
 

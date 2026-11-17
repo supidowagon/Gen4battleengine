@@ -74,10 +74,30 @@ STATUS_CURES = (
 )
 
 
-def refused_bag_params(params) -> list[str]:
-    """Why a bag item with party params ``params`` (one ``item_party_param`` row, any int
-    sequence) is not modelled: the mechanics ``BattleSystem_UseBagItem`` would apply that the
-    engine does not build (module docstring). Empty when it is modelled."""
+# The params TrainerAI_ShouldUseItem has a branch for, besides Full Restore's id
+# (trainer_ai.c:4105-4185): an item with none of them is never used (crit-stage-only, PP-only,
+# EV- or friendship-only items: Dire Hit, Ether, HP Up, Rare Candy, the EV berries).
+AI_BRANCH_PARAMS = (
+    ItemParam.HP_RESTORE,
+    ItemParam.HEAL_SLEEP,
+    ItemParam.HEAL_POISON,
+    ItemParam.HEAL_BURN,
+    ItemParam.HEAL_FREEZE,
+    ItemParam.HEAL_PARALYSIS,
+    ItemParam.HEAL_CONFUSION,
+    *(param for param, _ in STAGE_PARAMS),
+    ItemParam.GUARD_SPEC,
+)
+
+
+def refused_bag_params(params, item: int) -> list[str]:
+    """Why bag item ``item`` with party params ``params`` (its ``item_party_param`` row, any
+    int sequence) is not modelled: the mechanics ``BattleSystem_UseBagItem`` would apply that
+    the engine does not build (module docstring). Empty when it is modelled, and for an item
+    the AI never uses (no branch of ``AI_BRANCH_PARAMS`` nor Full Restore's id), whose
+    ``UseBagItem`` never runs."""
+    if int(item) != ITEM_FULL_RESTORE and not any(int(params[p]) for p in AI_BRANCH_PARAMS):
+        return []
     out = []
     if int(params[ItemParam.GUARD_SPEC]):
         out.append("sets Mist on its side (Guard Spec param, battle_system.c:563-573)")
@@ -172,7 +192,9 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     does not build), confusion (:543-551), infatuation (:553-561); each stage param raises
     its stage by 1 below +6 (:575-615); ``PP_RESTORE`` restores ``PP_RESTORED`` to move slot
     0 and ``PP_RESTORE_ALL`` to every slot whose PP is below its max (:628-661), capped at
-    ``MoveTable_CalcMaxPP`` (pokemon.c ``Pokemon_IncreaseValue``; battle_lib.c ``Battler_AddVal``),
+    ``MoveTable_CalcMaxPP`` (pokemon.c ``Pokemon_IncreaseValue``; battle_lib.c ``Battler_AddVal``;
+    the battler's PP is skipped for a Transformed battler or a Mimicked slot, :636-641, never
+    the case here: coverage refuses Transform and Mimic, which the engine does not build),
     the move's base PP for a trainer Pokemon (no PP Ups: ``BoxPokemon_SetMoveSlot``); an HP
     item (:663-714) restores ``HP_RESTORED`` (``HP_RESTORED_*`` codes: all, half, a quarter,
     at least 1) to a living battler below max HP (to a fainted one with ``REVIVE``), set as the
@@ -268,11 +290,15 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
 def refused_bag_items(tables: Tables, items) -> jnp.ndarray:
     """``bool[...]``: ``refused_bag_params`` is not empty for each of the bag items ``items``
     (the traced form, for the AI's refusals)."""
-    p = tables.item_party_param[jnp.asarray(items).astype(_I32)].astype(_I32)
+    items = jnp.asarray(items).astype(_I32)
+    p = tables.item_party_param[items].astype(_I32)
+    used = items == ITEM_FULL_RESTORE
+    for param in AI_BRANCH_PARAMS:
+        used = used | (p[..., param] != 0)
     out = (p[..., ItemParam.GUARD_SPEC] != 0) | (p[..., ItemParam.CRIT_STAGES] != 0)
     for give, amount, top in FRIENDSHIP_BANDS:
         gain = p[..., amount]
         boosted = (gain > 0) & (p[..., ItemParam.HOLD_FRIENDSHIP_UP] != 0)
         gain = jnp.where(boosted, gain * 150 // 100, gain)
         out = out | ((p[..., give] != 0) & (top - 1 + gain > FRIENDSHIP_MAX))
-    return out
+    return used & out

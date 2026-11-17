@@ -142,14 +142,14 @@ def test_start_condition_argument_is_checked(tables, names):
 
 
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
-    # E1 ruling G-43: a bag item that sets Mist (Guard Spec) or Focus Energy (Dire Hit) is
-    # refused by name; Super Potion acts by its params.
-    items = [names.item(n) for n in ("Super Potion", "Guard Spec.", "Dire Hit")]
+    # E1 ruling G-43: a bag item the AI can use that sets Mist (Guard Spec.) or Focus Energy
+    # (a Poke Ball's dummy params) is refused by name; Super Potion acts by its params.
+    items = [names.item(n) for n in ("Super Potion", "Guard Spec.", "Poké Ball")]
     trainer = replace(roark_trainer(), items=tuple(items))
     r = check_coverage(tables, names, sample_party(names), trainer, roark_party(names), 0)
     assert not any("Super Potion" in m and "trainer item" in m for m in r.missing)
     assert any("Guard Spec." in m and "Mist" in m for m in r.missing)
-    assert any("Dire Hit" in m and "Focus Energy" in m for m in r.missing)
+    assert any("Poké Ball" in m and "Focus Energy" in m for m in r.missing)
     assert any("mixed items" in m for m in r.missing)
 
 

@@ -102,14 +102,17 @@ def _bag(s, names, item):
 def test_bag_item_params_read_dummy_or_party_params(tables, kaizo_tables, names, kaizo_names):
     # Item_Get (item.c:186-191): a Poke Ball (partyUse FALSE) reads its dummy, 3, for every
     # party param in both games; a Potion its hpRestored 20. A ball's params set Mist and
-    # Focus Energy, which are refused by name; a Full Restore's are modelled.
+    # Focus Energy, which are refused by name; a Full Restore's are modelled. Dire Hit (crit
+    # stages only) has no TrainerAI_ShouldUseItem branch, so it is never used and not refused.
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
-        ball = np.asarray(t.item_party_param)[n.item("Poké Ball")]
+        params = np.asarray(t.item_party_param)
+        ball = params[n.item("Poké Ball")]
         assert ball[: ItemParam.HOLD_FRIENDSHIP_UP].tolist() == [3] * ItemParam.HOLD_FRIENDSHIP_UP
-        assert int(np.asarray(t.item_party_param)[n.item("Potion")][ItemParam.HP_RESTORED]) == 20
-        reasons = refused_bag_params(ball)
+        assert int(params[n.item("Potion")][ItemParam.HP_RESTORED]) == 20
+        reasons = refused_bag_params(ball, n.item("Poké Ball"))
         assert any("Mist" in r for r in reasons) and any("Focus Energy" in r for r in reasons)
-        assert refused_bag_params(np.asarray(t.item_party_param)[n.item("Full Restore")]) == []
+        for item in ("Full Restore", "Dire Hit"):
+            assert refused_bag_params(params[n.item(item)], n.item(item)) == []
 
 
 def test_ai_item_choice_follows_the_param_branches(tables, names):

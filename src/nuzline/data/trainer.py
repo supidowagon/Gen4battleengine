@@ -308,9 +308,14 @@ def load_trainers(dir: Path) -> list[Trainer]:
 class IntermediateData:
     """Thin loader of the extractor's species, form and learnset JSON. ``species`` is indexed
     by species id, ``personal`` and ``learnsets`` by personal row (the species, then the
-    data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row."""
+    data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row.
+    ``patched_builder`` is True for Kaizo's intermediates, which only Kaizo's resolve step
+    writes ``kaizo.json`` into (``tools/kaizo/resolve.py``): their trainers are built by the
+    patched ``TrainerData_BuildParty``, which recalculates stats after the form
+    (docs/kaizo/rom_diff.md, "TrainerData_BuildParty, decoded", step 11)."""
 
     def __init__(self, dir: Path):
+        self.patched_builder = (Path(dir) / "kaizo.json").exists()
         self.species: list[dict] = _read(dir, "species")
         self.personal: list[dict] = self.species + _read(dir, "forms")
         self.form_rows: list[list[int]] = _read(dir, "form_rows")
@@ -431,8 +436,8 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
                 friendship=friendship,
                 form=mon.form,
                 ability_form=0,
-                # vanilla ("vanilla" PID routine): stats stay the base row's; Kaizo: the form's
-                stats_form=0 if trainer.pid_routine == "vanilla" else None,
+                # By game: vanilla's builder keeps the base row's stats, Kaizo's the form's.
+                stats_form=None if inter.patched_builder else 0,
             )
         )
     return party

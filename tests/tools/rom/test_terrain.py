@@ -22,8 +22,9 @@ BUILDING = TERRAIN_NAMES.index("TERRAIN_BUILDING")
 # Mixed trainers (several terrains over the tiles their battles can start on) per game,
 # after the per-trainer narrowing of rules §9.3 step 2 (415 and 371 over whole headers; a
 # rematch row's base unspun, ruling B4-19).
-# E1 ruling G-42 (Pal Park gate) resolves 11 Kaizo rows: 414, 415, 442, 613-618, 892, 893.
-MIXED = {"CPUE": 212, "JAK7": 208}
+# E1 ruling G-42 (Pal Park gate) resolves 11 Kaizo rows: 414, 415, 442, 613-618, 892, 893;
+# G-40 (a past-table id may run any entry) un-narrows vanilla 247-249 and Kaizo 250.
+MIXED = {"CPUE": 215, "JAK7": 209}
 
 
 def _t(name: str) -> int:

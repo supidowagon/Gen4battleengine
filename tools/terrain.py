@@ -1840,11 +1840,14 @@ def decomp_narrowing_inputs(decomp: Path, trainers: Sequence[str]):
         file = f["scriptsArchiveID"]
         if file not in files:
             files[file] = DecompScript(decomp, file, macros, symbols, partner)
-        # A past-table id (past_table_starts) runs no entry here: DecompScript nodes are
-        # commands, not bytes, so the decomp cannot read the word the game jumps by (G-40).
-        # The vanilla ROM reader computes it, and test_terrain_narrowing's ROM-equals-decomp
-        # test pins that vanilla's ten such headers give the same rows either way.
-        sites[h] = HeaderSites(objects, coords, frozenset(other), file)
+        # A past-table id (past_table_starts): DecompScript nodes are commands, not bytes, so
+        # the decomp cannot read the word the game jumps by (G-40); the header may run any
+        # entry of its file. The vanilla ROM reader computes the target, and
+        # test_terrain_narrowing's ROM-equals-decomp test pins that the rows agree.
+        n = len(files[file].entries)
+        ids = other | {c.script for c in coords}
+        runs_any = any(isinstance(i, int) and n < i < COMMON_SCRIPTS[0] for i in ids)
+        sites[h] = HeaderSites(objects, coords, frozenset(other), file, (), runs_any)
     scripts = {k: ScriptFacts(v, common, fr) for k, v in files.items()}
     rows = [(trainer_id[b], [trainer_id[t] for t in ts]) for b, ts in _rematches(decomp).items()]
     # NoUniqueRematches(id) is the row {id, id, END...} (src/overlay005/vs_seeker.c:53): the
@@ -1873,7 +1876,18 @@ def clone_scripts(objects: Mapping[object, Sequence[tuple[int, object, object]]]
     ``MapObjectMan_AddMapObjectFromHeader``'s search (``sub_020624CC``, :803-815, from
     :236-241) finds none and it builds a fresh object from the clone event itself (:244-255),
     whose script ``NO_SCRIPT`` is no local id (65535 starts a fixed file,
-    ``ScriptContext_LoadAndOffsetID``, src/script_manager.c:32-33, :228-254). It adds no id."""
+    ``ScriptContext_LoadAndOffsetID``, src/script_manager.c:32-33, :228-254). It adds no id.
+
+    No chain is followed. A map object keeps its script only when ``sub_0206184C`` keeps it
+    on a seamless header change, which leaves its header ID the one it was built under; the
+    clone keeping path of a full load (``sub_02062714``, :962-970) sets the kept object's
+    script to the clone event's ``NO_SCRIPT`` and marks it a clone (``MAP_OBJ_STATUS_25``,
+    ``sub_02062E94``/``sub_02062C18``, :1630-1634, :1861-1868), and so does a fresh object
+    built from a clone event. So the only objects of header ``flag`` with a script are
+    ``flag``'s own non-clone object events; a clone event of ``flag`` with the same local id
+    (vanilla and Kaizo have nine such pairs, e.g. Route 206/207's local 8) adds nothing, and an
+    object ``flag`` itself kept from a third header still carries that header's ID, which only
+    a clone naming that header keeps."""
     out: dict = {}
     for h, objs in objects.items():
         for local, flag, script in objs:
@@ -1901,20 +1915,20 @@ def past_table_starts(
     """E1 ruling G-40: ``(extra_starts, runs_any)`` of a header whose events or init scripts
     name ``ids`` in a file with ``entries``. A local id past the entry table (and below the
     common scripts) runs ``past_table_target``: an offset inside the file is a start node
-    explored like an entry; one outside it runs memory past the loaded file, no entry of it
-    (Kaizo has five such ids, vanilla Oreburgh City's 45). A table word past the file's end is
-    read from heap memory that the decomp does not fix, so the header may run any entry of its
-    file (``runs_any``, the conservative ruling)."""
+    explored like an entry. A target outside the file runs heap memory past the loaded file
+    (Kaizo has five such ids, vanilla Oreburgh City's 45), and a table word past the file's
+    end is itself read from heap memory; the decomp fixes neither, so in both cases the header
+    may run any entry of its file (``runs_any``, the conservative ruling)."""
     n = len(entries)
     extra: set[int] = set()
     runs_any = False
     for local in ids:
         if n < local < COMMON_SCRIPTS[0]:
             target = past_table_target(script, local)
-            if target is None:
-                runs_any = True
-            elif 0 <= target < len(script):
+            if target is not None and 0 <= target < len(script):
                 extra.add(target)
+            else:
+                runs_any = True
     return tuple(sorted(extra)), runs_any
 
 
