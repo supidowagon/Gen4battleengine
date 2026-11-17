@@ -114,6 +114,7 @@ def _with_player(t, s: BattleState, species: int, slot: int = 0, known: bool = F
     return s._replace(
         species=s.species.at[0, 0].set(species),
         form=s.form.at[0, 0].set(0),
+        ability_form=s.ability_form.at[0, 0].set(0),
         types=s.types.at[0, 0].set(t.species_types[species]),
         ability_slot=s.ability_slot.at[0, 0].set(slot),
         ability=s.ability.at[0, 0].set(t.species_abilities[species, slot]),

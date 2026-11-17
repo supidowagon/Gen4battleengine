@@ -37,10 +37,10 @@ Status families reviewed against their decomp subscripts
 the only type checks there are the target-type immunities poison vs
 Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 ``engine/effects.py`` applies. Paralysis and sleep have none in Gen 4. Their ability immunities
-are Insomnia, Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard
-since the E1 Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
-(``effects._inflict``), and Vital Spirit, Immunity, Water Veil and Magma Armor
-(``AbilityId.UNSUPPORTED``), and
+are Insomnia and Vital Spirit (alike at every site; Vital Spirit since E1 Batch C, G-47),
+Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard since the E1
+Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
+(``effects._inflict``), and Immunity, Water Veil and Magma Armor (``AbilityId.UNSUPPORTED``), and
 Safeguard and Substitute are unsupported moves, so none of those branches can be
 reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
 (E2 batch 5, ``effects._inflict``).
@@ -69,7 +69,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -529,6 +528,13 @@ SLEEP_TALK_EXCLUDED_MOVES: tuple[int, ...] = (264, 253, 448)
 # :3024-3031): decomp effect id -> its MoveFlag (tools/build_tables.py ``_move_flags``).
 THUNDER_EFFECT = 152  # BATTLE_EFFECT_THUNDER
 BLIZZARD_EFFECT = 260  # BATTLE_EFFECT_BLIZZARD
+# The Kaizo ROM's overlay16 change (E1 Batch C, ruling G-50; docs/kaizo/rom_diff.md,
+# data/kaizo/rom_diff.toml): CheckMoveHitAccuracy's sun branch (bcp.c:2915) and
+# CheckMoveHitOverrides' rain branch (:3025) compare the move's effect with 152 or 141 (each
+# Thunder compare gains a `beq` past a `cmp r0, #0x8d`, rom:overlay16@0x0224F068 and
+# @0x0224F384; the Blizzard compare, 260, is unchanged): a Kaizo effect-141 move (Hurricane)
+# carries MoveFlag.THUNDER.
+KAIZO_THUNDER_EFFECTS: frozenset[int] = frozenset({141})
 # Move_IsMultiTurn (battle_lib.c:2975-2992), by decomp effect id: BIDE, CHARGE_TURN_HIGH_CRIT,
 # CHARGE_TURN_HIGH_CRIT_FLINCH, CHARGE_TURN_DEF_UP, SKIP_CHARGE_TURN_IN_SUN, FLY, DIVE, DIG,
 # BOUNCE, SHADOW_FORCE (generated/move_battle_effects.txt).
@@ -662,6 +668,11 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Synchronize": AbilityId.SYNCHRONIZE,
     "Wonder Guard": AbilityId.WONDER_GUARD,
     "Download": AbilityId.DOWNLOAD,
+    "Ice Body": AbilityId.ICE_BODY,
+    "White Smoke": AbilityId.WHITE_SMOKE,
+    "Vital Spirit": AbilityId.VITAL_SPIRIT,
+    "Speed Boost": AbilityId.SPEED_BOOST,
+    "Iron Fist": AbilityId.IRON_FIST,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
@@ -925,8 +936,7 @@ RESIST_BERRY_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
     35: ("HOLD_EFFECT_WEAKEN_NORMAL", RESIST_ANY_NORMAL),
 }
 
-# Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).
-DECOMP_TRAINER_ITEM_TO_ID: dict[str, TrainerItemId] = {
-    "None": TrainerItemId.NONE,  # ITEM_NONE (id 0): an empty bag slot
-    "Potion": TrainerItemId.POTION,  # itemUseParams.hpRestored 20
-}
+# HOLD_EFFECT_FRIENDSHIP_UP (generated/item_hold_effects.txt:54, id 53): a bag item with it
+# raises BattleSystem_UseBagItem's friendship gain by half (battle_system.c:746-748);
+# tables.item_party_param's ItemParam.HOLD_FRIENDSHIP_UP column.
+HOLD_EFFECT_FRIENDSHIP_UP = 53

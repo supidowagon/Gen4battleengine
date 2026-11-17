@@ -574,10 +574,83 @@ def extract_natures(decomp: Path) -> list[dict]:
     return out
 
 
+# itemUseParams keys (tools/dataproc/src/itemproc.c ProcParams) of the PARTY_PARAM_FIELDS
+# that are read straight from the JSON; the others are derived there.
+_PARTY_PARAM_KEYS = {
+    "heal_sleep": "healSleep",
+    "heal_poison": "healPoison",
+    "heal_burn": "healBurn",
+    "heal_freeze": "healFreeze",
+    "heal_paralysis": "healParalysis",
+    "heal_confusion": "healConfusion",
+    "heal_attract": "healAttract",
+    "guard_spec": "guardSpec",
+    "revive": "revive",
+    "pp_restore_all": "restorePPAllMoves",
+    "atk_stages": "atkStages",
+    "def_stages": "defStages",
+    "spatk_stages": "spatkStages",
+    "spdef_stages": "spdefStages",
+    "speed_stages": "speedStages",
+    "acc_stages": "accStages",
+    "crit_stages": "critStages",
+    "friendship_low": "friendshipLow",
+    "friendship_med": "friendshipMed",
+    "friendship_high": "friendshipHigh",
+}
+_STAGE_BITS = {"crit_stages": 2}  # the rest of the *_stages fields are 4 bits
+
+
+def _item_party_params(d: dict, counters: dict[str, int], pocket_balls: str) -> list[int]:
+    """``items.json`` ``party_params`` of one item JSON, as ``tools.rom.readers.items.
+    party_params`` reads the packed ItemData: itemproc.c ``ProcItem`` (:223-279) sets
+    ``dummy`` to a running index of the Poke Balls (``ITEM_USE_FUNC_NONE`` in
+    ``POCKET_BALLS``), rods and mail, in item order, and otherwise packs ``itemUseParams``
+    (``ProcParams``, :131-202; ``partyUse`` TRUE only when they are not null): ppRestored is
+    masked to 7 bits, ``ppRestore`` is ``ppRestored > 0`` without ``restorePPAllMoves``,
+    ``hpRestore`` is the u8 ``hpRestored > 0``, each give-friendship flag is its amount != 0."""
+    from tools.rom.readers.items import project_party_params
+
+    func, dummy = d["fieldUseFunc"], 0
+    if func == "ITEM_USE_FUNC_NONE" and d["fieldPocket"] == pocket_balls:
+        kind = "balls"
+    elif func in ("ITEM_USE_FUNC_OLD_ROD", "ITEM_USE_FUNC_GOOD_ROD", "ITEM_USE_FUNC_SUPER_ROD"):
+        kind = "rods"
+    elif func == "ITEM_USE_FUNC_MAIL":
+        kind = "mail"
+    else:
+        kind = None
+    if kind is not None:
+        dummy = counters[kind]
+        counters[kind] += 1
+        return project_party_params(0, dummy, {})
+    params = d.get("itemUseParams")
+    if func == "ITEM_USE_FUNC_TM_HM" or params is None:
+        return project_party_params(0, 0, {})
+    fields = {}
+    for name, key in _PARTY_PARAM_KEYS.items():
+        v = params.get(key, 0)
+        if name.endswith("_stages"):
+            v = int(v) & ((1 << _STAGE_BITS.get(name, 4)) - 1)
+        elif name.startswith("friendship_"):
+            v = ((int(v) + 128) & 0xFF) - 128  # s8
+        else:
+            v = int(bool(v))
+        fields[name] = v
+    fields["hp_restored"] = int(params.get("hpRestored", 0)) & 0xFF
+    fields["pp_restored"] = int(params.get("ppRestored", 0)) & 0x7F
+    fields["pp_restore"] = int(fields["pp_restored"] > 0 and not fields["pp_restore_all"])
+    fields["hp_restore"] = int(fields["hp_restored"] > 0)
+    for band in ("low", "med", "high"):
+        fields[f"give_friendship_{band}"] = int(fields[f"friendship_{band}"] != 0)
+    return project_party_params(1, 0, fields)
+
+
 def extract_items(decomp: Path) -> list[dict]:
     items = _constants(decomp, "items", "ITEM_")
     hold_id = _index(_constants(decomp, "item_hold_effects", "HOLD_EFFECT_"), "hold effect")
     move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    counters = {"balls": 0, "rods": 0, "mail": 0}
     out = []
     for const in items:
         if const.startswith("ITEM_UNUSED_"):
@@ -590,6 +663,9 @@ def extract_items(decomp: Path) -> list[dict]:
                     "teaches_move": None,
                     "hp_restored": 0,
                     "fling_power": 0,
+                    "party_params": _item_party_params(
+                        {"fieldUseFunc": None, "fieldPocket": None}, counters, "POCKET_BALLS"
+                    ),
                 }
             )
             continue
@@ -607,6 +683,7 @@ def extract_items(decomp: Path) -> list[dict]:
                 # itemUseParams (no party-use data).
                 "hp_restored": int(params.get("hpRestored", 0)) & 0xFF,
                 "fling_power": int(d["flingPower"]),  # ItemData.flingPower (include/item.h:62)
+                "party_params": _item_party_params(d, counters, "POCKET_BALLS"),
             }
         )
     return out

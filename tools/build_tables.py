@@ -34,8 +34,10 @@ Encodings:
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
   ``itemPower`` (``BattleScript_CalcEffortValues``, ``src/battle/battle_script.c:10226-10228``).
-* ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
-  bag (``DECOMP_TRAINER_ITEM_TO_ID``).
+* ``item_party_param[item, ids.ItemParam]``: the game's own ``Item_Get`` of each bag-item
+  party param (``items.json`` ``party_params``, ``tools.rom.readers.items.party_params``),
+  then whether the item's hold effect is ``HOLD_EFFECT_FRIENDSHIP_UP`` (E1 ruling G-43). A
+  trainer's bag item acts by these params alone, in either game.
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
   fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
   is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
@@ -79,7 +81,7 @@ Encodings:
 Kaizo (``--game kaizo``, K2b Task 15): ``tools.kaizo.resolve.resolve`` first cross-checks
 the sources and writes the resolved ``data/intermediate_kaizo/*.json`` (and
 ``docs/kaizo/discrepancies.md``; exit 1 on an unresolved or stale row), then the same packing
-runs with three Kaizo rules: an item maps to its ``ItemId``/``TrainerItemId`` only when the
+runs with three Kaizo rules: an item maps to its ``ItemId`` only when the
 slot keeps its vanilla name (up to spelling) and vanilla's hold effect, else ``UNSUPPORTED``
 (Shoal Salt -> Berserk Gene, Lava Cookie as a Lum clone); a move whose battle effect script
 (``be_seq`` member = effect id) changed is ``UNSUPPORTED`` unless ``rom_diff.toml`` marks the
@@ -104,7 +106,7 @@ import numpy as np
 from nuzline.data.game_constants import AI_POLICIES, POLICY
 from nuzline.data.games import GAMES, KAIZO, VANILLA, get_game
 from nuzline.data.tables import MANIFEST_VERSION
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, MoveTarget, TrainerItemId
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, ItemParam, MoveFlag, MoveTarget
 from tools.effect_map import (
     BLIZZARD_EFFECT,
     CERTAIN_SECONDARY_EFFECTS,
@@ -113,11 +115,12 @@ from tools.effect_map import (
     DECOMP_ABILITY_TO_ID,
     DECOMP_EFFECT_TO_ID,
     DECOMP_ITEM_TO_ID,
-    DECOMP_TRAINER_ITEM_TO_ID,
     DIVISOR_PARAM_MIN,
     FLAVOR_HOLD_EFFECTS,
+    HOLD_EFFECT_FRIENDSHIP_UP,
     INVOKER_MOVES,
     KAIZO_EFFECTS,
+    KAIZO_THUNDER_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
@@ -183,10 +186,11 @@ def _decomp_commit() -> str:
     return m.group(1)
 
 
-def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
+def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]], kaizo: bool = False) -> int:
     """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
     NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
-    for Move_IsMultiTurn, the move's own decomp effect."""
+    for Move_IsMultiTurn, the move's own decomp effect. THUNDER is the weather-accuracy effect
+    152, and in Kaizo also ``KAIZO_THUNDER_EFFECTS`` (the patched overlay16 compares, G-50)."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -202,7 +206,9 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]]) -> int:
         bits |= MoveFlag.NO_SLEEP_TALK
     if move_id in METRONOME_EXCLUDED_MOVES:
         bits |= MoveFlag.NO_METRONOME
-    if move.get("effect") == THUNDER_EFFECT:
+    if move.get("effect") == THUNDER_EFFECT or (
+        kaizo and move.get("effect") in KAIZO_THUNDER_EFFECTS
+    ):
         bits |= MoveFlag.THUNDER
     if move.get("effect") == BLIZZARD_EFFECT:
         bits |= MoveFlag.BLIZZARD
@@ -366,33 +372,38 @@ def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
     ]
 
 
-def _item_maps(items: list[dict], vanilla: list[dict] | None) -> tuple[list[int], list[int]]:
-    """``(ItemId, TrainerItemId)`` per item. Vanilla: the held item by
-    ``effect_map.held_item_ids``, the bag item by name. Kaizo (``vanilla`` given): vanilla's
-    ids of the slot, only when the slot keeps vanilla's name (up to spelling) and hold effect
-    (and, for the bag item, vanilla's ``hp_restored``); a renamed or re-purposed item is
-    ``UNSUPPORTED``. The hold param is the game's own (``item_param``)."""
+def _item_maps(items: list[dict], vanilla: list[dict] | None) -> list[int]:
+    """``ItemId`` per item. Vanilla: the held item by ``effect_map.held_item_ids``. Kaizo
+    (``vanilla`` given): vanilla's id of the slot, only when the slot keeps vanilla's name (up
+    to spelling) and hold effect; a renamed or re-purposed item is ``UNSUPPORTED``. The hold
+    param is the game's own (``item_param``)."""
     if vanilla is None:
-        hold = [int(i) for i in held_item_ids(items)]
-        bag = [
-            int(DECOMP_TRAINER_ITEM_TO_ID.get(i["name"], TrainerItemId.UNSUPPORTED)) for i in items
-        ]
-        return hold, bag
+        return [int(i) for i in held_item_ids(items)]
     from tools.kaizo.resolve import spelling
 
     if len(vanilla) != len(items):
         raise BuildError(f"items: {len(items)} rows, vanilla has {len(vanilla)}")
-    hold, bag = [], []
+    hold = []
     vanilla_held = held_item_ids(vanilla)
     for item, van, held in zip(items, vanilla, vanilla_held, strict=True):
         same_name = spelling(item["name"]) == spelling(van["name"])
         same_hold = same_name and item["hold_effect"] == van["hold_effect"]
-        # A bag item's effect also rests on its restore amount (Potion's 20, ids.py).
-        same_bag = same_hold and item.get("hp_restored") == van.get("hp_restored")
-        used = DECOMP_TRAINER_ITEM_TO_ID.get(van["name"], TrainerItemId.UNSUPPORTED)
         hold.append(int(held if same_hold else ItemId.UNSUPPORTED))
-        bag.append(int(used if same_bag else TrainerItemId.UNSUPPORTED))
-    return hold, bag
+    return hold
+
+
+def _item_party_params(items: list[dict]) -> list[list[int]]:
+    """``item_party_param`` rows: each item's ``party_params`` (``ids.ItemParam`` order up to
+    ``FRIENDSHIP_HIGH``), then ``HOLD_FRIENDSHIP_UP``. ``BuildError`` for an ``items.json``
+    without them (re-extract)."""
+    width = len(ItemParam) - 1
+    out = []
+    for i, item in enumerate(items):
+        params = item.get("party_params")
+        if params is None or len(params) != width:
+            raise BuildError(f"items.json row {i}: no {width} party_params (re-extract the items)")
+        out.append([*params, int(item["hold_effect"] == HOLD_EFFECT_FRIENDSHIP_UP)])
+    return out
 
 
 def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozenset[int], int]:
@@ -577,10 +588,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     ability_names = [a["name"] for a in abilities]
     ability_ids = [int(DECOMP_ABILITY_TO_ID.get(n, AbilityId.UNSUPPORTED)) for n in ability_names]
     unknown = sorted(set(DECOMP_ABILITY_TO_ID) - set(ability_names))
-    unknown += sorted(
-        (set(DECOMP_ITEM_TO_ID) | set(DECOMP_TRAINER_ITEM_TO_ID))
-        - {i["name"] for i in (vanilla_items or items)}
-    )
+    unknown += sorted(set(DECOMP_ITEM_TO_ID) - {i["name"] for i in (vanilla_items or items)})
     if unknown:
         raise BuildError(f"effect_map names absent from the data: {unknown}")
     for m in moves:
@@ -608,7 +616,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
     learnset_moves, learnset_levels = _learnset_grid(level_learnsets, len(species))
     hm_moves = set(tm_moves[NUM_TMS:])
     effects = [_move_effect(m, changed_effects, kaizo) for m in moves]
-    item_ids, trainer_item_ids = _item_maps(items, vanilla_items)
+    item_ids = _item_maps(items, vanilla_items)
     item_ids = _pinch_divisor_ok(items, item_ids)
     supported_item = [e not in (ItemId.UNSUPPORTED, ItemId.NONE) for e in item_ids]
     item_params = [
@@ -647,7 +655,9 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr(
-            [_move_flags(m, i, move_lists) for i, m in enumerate(moves)], np.int32, "move flags"
+            [_move_flags(m, i, move_lists, kaizo) for i, m in enumerate(moves)],
+            np.int32,
+            "move flags",
         ),
         "move_is_hm": _arr([int(i in hm_moves) for i in range(len(moves))], np.int8, "move is hm"),
         "type_chart": _arr(chart, np.int8, "type chart"),
@@ -656,7 +666,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "nature_mods": _arr(nature_mods, np.int8, "nature mods"),
         "item_effect": _arr(item_ids, np.int16, "item effect"),
         "item_param": _arr(item_params, np.int16, "item param"),
-        "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
+        "item_party_param": _arr(_item_party_params(items), np.int16, "item party param"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
         "item_hold_param": _arr([i["hold_param"] for i in items], np.int16, "item hold param"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),

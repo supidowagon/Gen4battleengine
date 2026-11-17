@@ -23,8 +23,8 @@
 Intimidate (``subscript_intimidate.s``): every living foe that is not behind a
 Substitute gets ``ATTACK_DOWN_1_STAGE`` as an ability side effect, through
 ``BtlCmd_ChangeStatStage`` with the holder as the attacker (subscript_intimidate.s:8): the
-foe side's Mist blocks it (battle_script.c:2876-2882, B12-23), then Clear Body or Hyper
-Cutter (B9-6; White Smoke is unsupported), and Simple is applied where the stage is
+foe side's Mist blocks it (battle_script.c:2876-2882, B12-23), then Clear Body, White Smoke
+(:2883-2884, G-46) or Hyper Cutter (B9-6), and Simple is applied where the stage is
 used (``damage.simple_stage``). The decomp runs the switch-in checks over
 ``monSpeedOrder``; in singles each Intimidate only lowers the other side's Attack,
 so the order does not change the result and ``make_state`` runs the player's lead
@@ -89,6 +89,7 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Weather,
+    sleepless,
 )
 from nuzline.engine.order import dislikes_berry, pinch_divisor, player_second
 from nuzline.engine.state import STAGE_MAX, BattleState
@@ -183,6 +184,9 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.CUTE_CHARM: frozenset({CONTACT_STATUS}),
     AbilityId.ROUGH_SKIN: frozenset({CONTACT_DAMAGE}),
     AbilityId.INSOMNIA: frozenset({SLEEP_BLOCKED, STATUS_CURE}),
+    AbilityId.VITAL_SPIRIT: frozenset({SLEEP_BLOCKED, STATUS_CURE}),  # as Insomnia (G-47)
+    # subscript_weather_continues.s:_076 tags the healed battler (G-45).
+    AbilityId.ICE_BODY: frozenset({WEATHER_HP}),
     AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
@@ -411,7 +415,7 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
     woke = (
         cond
         & (
-            ((ability == AbilityId.INSOMNIA) & (status == Status.SLEEP))
+            (sleepless(ability) & (status == Status.SLEEP))  # :4404-4405 (G-47)
             | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
         )
         & (state.hp[side, mon] > 0)
@@ -671,11 +675,14 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     foe = 1 - side if foe is None else foe
     mon, target = state.active[side], state.active[foe]
     # BtlCmd_ChangeStatStage (battle_script.c:2874-2902): the foe side's Mist (:2876-2882; the
-    # holder is the attacker, subscript_intimidate.s:8), B12-23, then the foe's Clear Body or
-    # Hyper Cutter (Battler_IgnorableAbility with the Intimidate holder as attacker, never Mold
-    # Breaker) blocks the drop; its "suppressed" message is built in C (no AI reveal), B9-6.
-    blocks = (state.ability[foe, target] == AbilityId.CLEAR_BODY) | (
-        state.ability[foe, target] == AbilityId.HYPER_CUTTER
+    # holder is the attacker, subscript_intimidate.s:8), B12-23, then the foe's Clear Body,
+    # White Smoke (:2883-2884, G-46) or Hyper Cutter (Battler_IgnorableAbility with the
+    # Intimidate holder as attacker, never Mold Breaker) blocks the drop; its "suppressed"
+    # message is built in C (no AI reveal), B9-6.
+    blocks = (
+        (state.ability[foe, target] == AbilityId.CLEAR_BODY)
+        | (state.ability[foe, target] == AbilityId.WHITE_SMOKE)
+        | (state.ability[foe, target] == AbilityId.HYPER_CUTTER)
     )
     blocks = blocks | mist_blocks_drop(state, foe, -1)
     on = (

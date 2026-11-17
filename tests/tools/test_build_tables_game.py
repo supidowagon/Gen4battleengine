@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import tools.effect_map
-from nuzline.engine.ids import ItemId, MoveFlag, TrainerItemId
+from nuzline.engine.ids import ItemId, MoveFlag
 from tools import build_tables
 
 INTER = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -89,19 +89,10 @@ def test_kaizo_item_maps_need_the_vanilla_name_and_hold_effect():
     # held_item_ids reads the berry range (Cheri..Rowap, effect_map.FIRST_BERRY / LAST_BERRY).
     berries = [_item("Cheri Berry", 5), _item("Rowap Berry", 47)]
     vanilla, kaizo = vanilla + berries, kaizo + berries
-    hold, bag = build_tables._item_maps(kaizo, vanilla)
+    hold = build_tables._item_maps(kaizo, vanilla)
     assert hold[0] == int(ItemId.ORAN_BERRY)  # the same name up to spelling, same hold effect
     assert hold[1] == hold[2] == int(ItemId.UNSUPPORTED)  # re-purposed (hold effect), renamed
-    assert bag[3] == int(TrainerItemId.POTION) and bag[4] == int(TrainerItemId.UNSUPPORTED)
-    assert build_tables._item_maps(vanilla, None)[0][:2] == [ItemId.ORAN_BERRY, ItemId.SITRUS_BERRY]
-
-
-def test_kaizo_bag_item_needs_vanilla_restore_amount():
-    berries = [{"name": n, "hold_effect": h} for n, h in (("Cheri Berry", 5), ("Rowap Berry", 47))]
-    vanilla = [{"name": "Potion", "hold_effect": 0, "hp_restored": 20}, *berries]
-    kaizo = [{"name": "Potion", "hold_effect": 0, "hp_restored": 30}, *berries]
-    assert build_tables._item_maps(kaizo, vanilla)[1][0] == int(TrainerItemId.UNSUPPORTED)
-    assert build_tables._item_maps(vanilla, vanilla)[1][0] == int(TrainerItemId.POTION)
+    assert build_tables._item_maps(vanilla, None)[:2] == [ItemId.ORAN_BERRY, ItemId.SITRUS_BERRY]
 
 
 # --- the Kaizo ROM-change gate counts against the diff, not the entries (final review I1) --

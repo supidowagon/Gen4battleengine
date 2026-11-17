@@ -5,8 +5,8 @@ game that moves or renames those slots would silently change what that code mean
 each such constant is listed here and checked against the game's data when the game is
 loaded (``nuzline.data.games.load_game``):
 
-* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect, hold param or
-  HP restored) it must have. ``scope`` ``"engine"`` is asserted for every game;
+* ``CONSTANTS``: the ids, each with the name (and, for items, the hold effect or hold param)
+  it must have. ``scope`` ``"engine"`` is asserted for every game;
   ``"vanilla_policy"`` and ``"kaizo_policy"`` only for games whose AI policy (``POLICY``)
   reads them, since a game with no transcribed policy is refused by coverage anyway. A
   table both policies read is listed once per scope.
@@ -48,7 +48,6 @@ class Constant:
     name: str
     scope: str
     hold_effect: int | None = None
-    hp_restored: int | None = None
     hold_param: int | None = None
 
 
@@ -444,6 +443,11 @@ CONSTANTS: tuple[Constant, ...] = (
             "Synchronize": 28,
             "Wonder Guard": 25,
             "Download": 88,
+            "Ice Body": 115,
+            "White Smoke": 73,
+            "Vital Spirit": 72,
+            "Speed Boost": 3,
+            "Iron Fist": 89,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -463,7 +467,6 @@ CONSTANTS: tuple[Constant, ...] = (
             "Cloud Nine": 13,
             "Air Lock": 76,
             "Magic Guard": 98,
-            "Ice Body": 115,
         },
     ),
     # Yawn's decomp abilities (subscript_yawn.s:5-9, :14; subscript_fall_asleep.s:7-14), E2
@@ -550,9 +553,8 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
-    # Potion's itemUseParams.hpRestored (res/items/data/potion.json), which
-    # BattleSystem_UseBagItem (src/battle/battle_system.c:435) restores.
-    Constant("nuzline.engine.ids.POTION_HP_RESTORED", "item", 17, "Potion", _E, hp_restored=20),
+    # TrainerAI_ShouldUseItem's by-id test (trainer_ai.c:4099).
+    Constant("nuzline.engine.ids.ITEM_FULL_RESTORE", "item", 23, "Full Restore", _E),
     # Quick Claw's effectParam (res/items/data/quick_claw.json) with
     # HOLD_EFFECT_SOMETIMES_PRIORITY (52): the engine stores speedRand % (100 / param) == 0
     # (battle_lib.c:1278-1286) as one bit, exact only for this param.
@@ -679,7 +681,8 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.SemiKind": _ENGINE_ENCODING,
     "nuzline.engine.ids.Weather": _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemId": _ENGINE_ENCODING,
-    "nuzline.engine.ids.TrainerItemId": _ENGINE_ENCODING,
+    "nuzline.engine.ids.ItemParam": "columns of tables.item_party_param; " + _ENGINE_ENCODING,
+    "nuzline.engine.ids.ItemAiCategory": _ENGINE_ENCODING,
     "nuzline.engine.ids.AbilityId": _ENGINE_ENCODING,
     "nuzline.ai.commands.Battler": _AI_ENCODING + " (AI_BATTLER_*)",
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
@@ -831,6 +834,11 @@ EXEMPT: dict[str, str] = {
         "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
         "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
     ),
+    "tools.effect_map.KAIZO_THUNDER_EFFECTS": (
+        "decomp effect ids the Kaizo ROM's patched CheckMoveHitAccuracy / CheckMoveHitOverrides "
+        "compare beside BATTLE_EFFECT_THUNDER; used only for Kaizo, from its modelled "
+        "rom_diff.toml overlay16 entries (E1 Batch C, G-50)"
+    ),
     "tools.effect_map.DIVISOR_PARAM_MIN": (
         "keyed by engine ItemId, whose ints are the smallest hold params each item may divide "
         "by (battle_lib.c:4778, :1294, :5330-5336; bcp.c:4736-4752), not game ids; each "
@@ -838,9 +846,6 @@ EXEMPT: dict[str, str] = {
     ),
     "tools.effect_map.UNSUPPORTED_MOVES": _KEYED_BY_NAME,
     "tools.effect_map.DECOMP_ITEM_TO_ID": (
-        _KEYED_BY_NAME + "; Task 15 also requires the game's hold effect to equal vanilla's"
-    ),
-    "tools.effect_map.DECOMP_TRAINER_ITEM_TO_ID": (
         _KEYED_BY_NAME + "; Task 15 also requires the game's hold effect to equal vanilla's"
     ),
 }
@@ -869,7 +874,7 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
     lines = []
     if table[c.id].lower() != c.name.lower():
         lines.append(f"{where}: id {c.id} is {table[c.id]!r} in this game, expected {c.name!r}")
-    if c.hold_effect is None and c.hp_restored is None and c.hold_param is None:
+    if c.hold_effect is None and c.hold_param is None:
         return lines
     if c.id >= len(items):
         return [*lines, f"{where}: item {c.id} is missing from this game's items.json"]
@@ -884,12 +889,6 @@ def _check(c: Constant, names: Names, items: Sequence[dict]) -> list[str]:
             f"{where}: {c.name} has hold param {row.get('hold_param')} in this game, "
             f"expected {c.hold_param}"
         )
-    if c.hp_restored is not None:
-        hp = row.get("hp_restored")
-        if hp is None:
-            lines.append(f"{where}: this game's items.json has no hp_restored (re-extract it)")
-        elif hp != c.hp_restored:
-            lines.append(f"{where}: {c.name} restores {hp} in this game, expected {c.hp_restored}")
     return lines
 
 

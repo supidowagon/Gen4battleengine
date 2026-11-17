@@ -231,6 +231,7 @@ from nuzline.engine.ids import (
     Status,
     Type,
     Weather,
+    sleepless,
 )
 from nuzline.engine.order import (
     CALL_ASSIST,
@@ -931,6 +932,14 @@ INPUT_NEUTRAL_ABILITIES = (
     # G-18: a fixed factor of the hit's own battlers and move through the type chart, whose
     # inputs have their clauses (the roost, ingrain, camouflage and switch clauses).
     AbilityId.WONDER_GUARD,
+    # E1 Batch C: Ice Body and Speed Boost act at the turn's end, after every hit (G-45, G-48);
+    # White Smoke only removes stage drops, as Clear Body (G-46); Vital Spirit blocks sleep, as
+    # Insomnia (G-47); Iron Fist is a fixed power factor of the move (G-49).
+    AbilityId.ICE_BODY,
+    AbilityId.SPEED_BOOST,
+    AbilityId.WHITE_SMOKE,
+    AbilityId.VITAL_SPIRIT,
+    AbilityId.IRON_FIST,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -1571,7 +1580,7 @@ def outcome_laws(
         [can_have_status(tables, state, 1 - side, mons[1 - side], param0[side]) for side in (0, 1)]
     )
     limber = (param0 == Status.PARALYSIS) & (ignorable == AbilityId.LIMBER)
-    insomnia = (param0 == Status.SLEEP) & (ignorable == AbilityId.INSOMNIA)
+    insomnia = (param0 == Status.SLEEP) & sleepless(ignorable)  # Vital Spirit too (G-47)
     single = ~multi
 
     def takes(status) -> jnp.ndarray:

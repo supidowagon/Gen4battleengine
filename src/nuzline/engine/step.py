@@ -38,7 +38,7 @@ turn order activated (``order.custap_flags``) is eaten when its holder's move st
 end of the turn runs Leftovers / Black Sludge and the status orbs / Sticky Barb in their
 ``MonCondCheckState`` slots (``END_OF_TURN_ORDER``).
 
-Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
+Implemented so far: the opponent's bag items (``engine.bag``, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
@@ -84,6 +84,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
 )
+from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
     PHYSICAL as PHYSICAL_CATEGORY,
 )
@@ -185,7 +186,6 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
-    POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
@@ -199,9 +199,9 @@ from nuzline.engine.ids import (
     SemiKind,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
+    sleepless,
 )
 from nuzline.engine.levelup import pay_exp, pay_exp_leveled
 from nuzline.engine.order import (
@@ -233,6 +233,7 @@ from nuzline.engine.outcome import (
 from nuzline.engine.state import (
     BAG_SLOTS,
     BATON_PASSED_FIELDS,
+    STAGE_MAX,
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
@@ -497,14 +498,15 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
 
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
-    its personal row's (``tables.species_abilities`` at its ability slot). Only Trace
+    its party Pokemon's (``tables.species_abilities`` at its ``ability_form``'s row and
+    ability slot, as ``make_state`` builds it). Only Trace
     (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
     ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
     (battle_lib.c:124). Run when the battler is switched or dragged out, and when a
     replacement takes a fainted one's place (``_switch_in``): a fainted battler keeps the
     copied ability until then, as its ``BattleMon`` does, and no Pokemon comes back from 0 HP."""
     mon = state.active[side]
-    row = tables.species_form_row[state.species[side, mon], state.form[side, mon]]
+    row = tables.species_form_row[state.species[side, mon], state.ability_form[side, mon]]
     party = tables.species_abilities[row, state.ability_slot[side, mon]]
     value = jnp.where(cond, party, state.ability[side, mon]).astype(state.ability.dtype)
     return state._replace(ability=state.ability.at[side, mon].set(value))
@@ -1475,7 +1477,7 @@ def _use_move(
             | shift_sleep
         )
         & (state.hp[target_side, target] > 0)
-        & (ignorable(state, side, target_side) != AbilityId.INSOMNIA)
+        & ~sleepless(ignorable(state, side, target_side))  # :23-24 Vital Spirit too (G-47)
         & (state.status[target_side, target] != Status.SLEEP)
         # :40 CheckSubstitute comes first: behind a substitute it fails instead (B10-4).
         & (state.substitute_hp[target_side] == 0)
@@ -2048,15 +2050,19 @@ def _consume_trainer_items(state: BattleState, actions) -> BattleState:
 
 
 def _use_trainer_item(tables: Tables, state: BattleState, side, item) -> BattleState:
-    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905): a
-    Potion runs ``subscript_use_potion.s``. ``BattleSystem_UseBagItem``
-    (battle_system.c:435) restores ``POTION_HP_RESTORED`` to the active Pokemon when it
-    has HP left and is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps it at max HP."""
-    mon = state.active[side]
-    hp = state.hp[side, mon].astype(_I32)
-    potion = (tables.trainer_item_effect[item] == TrainerItemId.POTION) & (hp > 0)
-    healed = jnp.minimum(hp + POTION_HP_RESTORED, state.max_hp[side, mon].astype(_I32))
-    return _set_mon(state, "hp", side, mon, healed, potion)
+    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905-1944): the
+    AI's item subscript around ``BattleSystem_UseBagItem`` (``bag.use_bag_item``, E1 ruling
+    G-43).
+
+    Rule (recomputed choice): the decomp picks the subscript from ``usedItemType``, set by
+    ``TrainerAI_ShouldUseItem`` at command selection; ``use_bag_item`` recomputes the item's
+    branch here instead. They agree because ``BattleControllerPlayer_CalcTurnOrder``
+    (battle_controller_player.c:707, :756-766) runs every item and switch command before any
+    move, so only the other battlers' switches and items run between selection and this
+    action, and none of those changes what the branch reads: the user's HP, status,
+    confusion, ``fakeOutTurnNumber``, ``totalTurns`` or its side's Mist (the subscript then
+    reads the item's params, fixed data)."""
+    return use_bag_item(tables, state, side, item, jnp.asarray(item) != 0)
 
 
 def _act(
@@ -2939,11 +2945,22 @@ def _item_condition_then_detrimental(tables: Tables, state: BattleState, side) -
 
 def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
     """``MON_COND_CHECK_STATE_ABILITY`` (battle_controller_player.c:1355), the first
-    end-of-turn check: Shed Skin (``BattleSystem_TriggerAbilityOnTurnEnd``, battle_lib.c:
-    3567-3590) cures any status of a holder with HP left on ``RandNext() % 10 < 3``
-    (``outcome.shed_skin[side]``); the sleep counter and the poison counter reset, and
-    ``subscript_ability_restore_status.s:8`` tags the ability."""
+    end-of-turn check, ``BattleSystem_TriggerTurnEndAbility`` (battle_lib.c:3550-3599): Speed
+    Boost (:3555-3564, ruling G-48) raises the Speed of a holder with HP left, below +6
+    (``MAX_STAT_STAGE``), that did not enter this turn (``fakeOutTurnNumber != totalTurns + 1``:
+    ``fake_out_turn``, ``turn``) by 1 through ``subscript_update_stat_stage.s`` as an ability
+    side effect (its "raised its" message is built in C, ``SetupNicknameAbilityStatMsg``,
+    battle_script.c:2854: no reveal); Shed Skin (:3567-3590) cures any status of a holder with
+    HP left on ``RandNext() % 10 < 3`` (``outcome.shed_skin[side]``); the sleep counter and the
+    poison counter reset, and ``subscript_ability_restore_status.s:8`` tags the ability."""
     mon = state.active[side]
+    boost = (
+        (state.ability[side, mon] == AbilityId.SPEED_BOOST)
+        & (state.hp[side, mon] > 0)
+        & (state.stages[side, Stat.SPE] < STAGE_MAX)
+        & (state.fake_out_turn[side].astype(_I32) != state.turn.astype(_I32) + 1)
+    )
+    state = change_stage(state, side, Stat.SPE, 1, boost)
     cured = (
         (state.ability[side, mon] == AbilityId.SHED_SKIN)
         & (state.status[side, mon] != Status.NONE)
@@ -3035,10 +3052,9 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     Sun (:5585-5596): a Dry Skin or Solar Power holder loses ``Divide(maxHP, 8)``
     (``subscript_weather_continues.s`` :_045 / :_057, after its Magic Guard skip, tag the
     ability). Rain (:5613-5625): a Dry Skin holder below full HP regains ``Divide(maxHP, 8)``
-    (:_076 tags it); Rain Dish and Hydration are unsupported abilities.
-    Sand Veil, Snow Cloak, Dry Skin and Solar Power are ``AbilityId`` members
-    (``state.ability``); Ice Body and Magic Guard, which no table maps, are read from
-    ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
+    (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45); Hydration is unsupported.
+    Sand Veil, Snow Cloak, Ice Body, Dry Skin and Solar Power are read from ``state.ability``;
+    Magic Guard by decomp id from ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
     The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
     (moves.h:50: Dig's UNDERGROUND, Dive's UNDERWATER; :5580, :5587, :5600), rain does not
     (B10-12)."""
@@ -3064,7 +3080,7 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     )
     sand = sand & ~hidden
     hail = (state.weather == Weather.HAIL) & ~hidden
-    ice_body = hail & (ab == WEATHER_ABILITY_IDS["Ice Body"])
+    ice_body = hail & (own == AbilityId.ICE_BODY)  # battle_script.c:5601 (G-45)
     hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
     eighth = jnp.maximum(max_hp // 8, 1)
     sun = (
@@ -3082,7 +3098,8 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
     delta = jnp.where(sun_chip, -eighth, jnp.where(rain, eighth, delta))
     alive = hp > 0
-    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | rain_dish))
+    # :_076 tags every heal's battler, Ice Body's included (G-45).
+    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | heal))
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 

@@ -244,8 +244,9 @@ catch this. Found while reading the decomp for K3b2 (`docs/kaizo/k3b2-rules.md` 
   action `10 + k`, `trainer_item_count`) but apply slot `k`'s item. The two agree when
   the zeroed slots hold the same item, as every M1 bag does (Roark: two Potions); a bag
   mixing items (for example a Potion before a Super Potion) would heal by the wrong
-  item. M1b's coverage registry must refuse a trainer bag that mixes item ids, or that
-  holds an item without a supported `TrainerItemId`.
+  item. Coverage refuses a trainer bag that mixes item ids, and a bag item whose party
+  params set a mechanic the engine does not build (`engine.bag.refused_bag_params`, E1
+  ruling G-43).
 
 - **Field-condition end-of-turn pass: Wish and Trick Room.** Both engines run
   `BattleControllerPlayer_CheckFieldConditions` (`src/battle/battle_controller_player.c:932-1254`;

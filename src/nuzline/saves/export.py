@@ -53,7 +53,7 @@ def party_toml(save: SaveFile, names, tables=None, game: str = VANILLA) -> str:
             continue
         spec = mon.to_spec(tables, save.trainer)
         listed = max([i + 1 for i, m in enumerate(spec.moves) if m] or [1])
-        ability = names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+        ability = names.species_abilities(spec.species, spec.ability_from)[spec.ability_slot]
         lines = [
             "[[pokemon]]",
             f"species = {json.dumps(names.species_names[spec.species])}",
