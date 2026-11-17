@@ -23,7 +23,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 30
+MANIFEST_VERSION = 31
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -111,7 +111,8 @@ class Tables(NamedTuple):
     nature_mods: jnp.ndarray  # int8[25,6], -1/0/+1
     item_effect: jnp.ndarray  # int16[I], ids.ItemId
     item_param: jnp.ndarray  # int16[I,2]
-    trainer_item_effect: jnp.ndarray  # int8[I], ids.TrainerItemId
+    # int16[I, len(ids.ItemParam)]: Item_Get of each bag-item party param (E1 ruling G-43)
+    item_party_param: jnp.ndarray
     item_hold_effect: jnp.ndarray  # int16[I], the decomp hold effect id (0 = none)
     item_hold_param: jnp.ndarray  # int16[I], the decomp hold param (ItemData.effectParam)
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)

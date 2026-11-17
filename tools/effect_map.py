@@ -69,7 +69,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -885,8 +884,7 @@ RESIST_BERRY_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
     35: ("HOLD_EFFECT_WEAKEN_NORMAL", RESIST_ANY_NORMAL),
 }
 
-# Bag items a trainer's AI may use (TrainerAI_ShouldUseItem, trainer_ai.c:4056).
-DECOMP_TRAINER_ITEM_TO_ID: dict[str, TrainerItemId] = {
-    "None": TrainerItemId.NONE,  # ITEM_NONE (id 0): an empty bag slot
-    "Potion": TrainerItemId.POTION,  # itemUseParams.hpRestored 20
-}
+# HOLD_EFFECT_FRIENDSHIP_UP (generated/item_hold_effects.txt:54, id 53): a bag item with it
+# raises BattleSystem_UseBagItem's friendship gain by half (battle_system.c:746-748);
+# tables.item_party_param's ItemParam.HOLD_FRIENDSHIP_UP column.
+HOLD_EFFECT_FRIENDSHIP_UP = 53

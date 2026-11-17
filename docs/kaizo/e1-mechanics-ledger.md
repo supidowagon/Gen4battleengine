@@ -627,3 +627,37 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   narrowing (vanilla intermediates) has no byte offsets, so a past-table id runs no entry there;
   `test_vanilla_rom_narrows_as_the_decomp` pins that the ROM reader's exact answer gives the same
   rows. Moves no row in either game. Tests: `tests/tools/rom/test_terrain_narrowing.py`.
+- G-43 A trainer's bag items act by their party params, generic over every item (no
+  Potion or Poke Ball case). Data: `Item_Get` (src/item.c:153-198) of each party param the AI
+  and `BattleSystem_UseBagItem` read, as the new table `item_party_param[item, ids.ItemParam]`
+  (`tools/rom/readers/items.py` `party_params` from the ROM's `pl_item_data.narc`: `partyUse`
+  byte 12, the union from byte 14, bit fields LSB first per include/item.h:8-54; the decomp
+  extractor packs the JSON as itemproc.c `ProcItem`/`ProcParams` do, :131-279, including the
+  `dummy` index of balls, rods and mail; the two agree on every vanilla item,
+  `tests/tools/rom/test_moves_items.py`). With `partyUse` FALSE every param reads `dummy`
+  (item.c:186-191): a Poke Ball reads 3 everywhere. Kaizo's X Defend, X Accuracy and X
+  Special read 0 everywhere (the AI never uses them; no effect). AI (`engine.bag.
+  bag_item_category`, `ai.policy._use_item`): `TrainerAI_ShouldUseItem`'s first true branch
+  (trainer_ai.c:4099-4189): Full Restore by id below 1/4 HP; an HP item with a nonzero u8
+  `hpRestored` below 1/4 HP or when the whole amount fits; each status cure only for that
+  status (so Full Heal, whose first param is the sleep cure, is used only on a sleeping
+  battler); confusion; then, while `fakeOutTurnNumber - totalTurns >= 0`, a stage param or
+  Guard Spec. Use (`engine.bag.use_bag_item`, `step._use_trainer_item`, reference
+  `_use_item`): the subscript of the item's branch (`bag_item_branch`; the AI chose the item
+  there, and nothing before an item action changes what that choice read), i.e. the
+  category's (battle_controller_player.c:1905-1944;
+  subscript_use_full_restore / _use_potion / _use_status_recovery / _use_stat_booster) around
+  `UseBagItem` (battle_system.c:435-758): status cures, confusion, infatuation, +1 per stage
+  param below +6, PP_RESTORE to move slot 0 and PP_RESTORE_ALL to every slot (capped at the
+  base PP, trainer Pokemon having no PP Ups), HP (0xFF/0xFE/0xFD fractions, at least 1; the
+  potion subscript adds it), the friendship band's amount (x1.5 for a FRIENDSHIP_UP item; no
+  Luxury Ball or egg bonus for a trainer Pokemon). Not built and refused by name in coverage
+  and the AI (`bag.refused_bag_params`): an item whose params set Mist (Guard Spec,
+  :563-573) or Focus Energy (crit stages, :617-626), and one whose friendship amount can pass
+  255 within its band, where `Pokemon_IncreaseValue` wraps the party's u8 friendship
+  (pokemon.c:1859-1874) apart from the battler's clamped value (battle_lib.c:1032-1044). So
+  School Kid Christine (345, Poke Ball x4) stays refused, now for Mist and Focus Energy
+  (and the friendship wrap: the ball's high band adds 3 at 255). `TrainerItemId`,
+  `trainer_item_effect`, `POTION_HP_RESTORED` and `DECOMP_TRAINER_ITEM_TO_ID` are gone;
+  `ids.ITEM_FULL_RESTORE` is a checked game constant. Tests: `tests/engine/test_e1_batch_a.py`
+  (family 3), `tests/engine/test_trainer_items.py`, `tests/engine/test_coverage.py`.

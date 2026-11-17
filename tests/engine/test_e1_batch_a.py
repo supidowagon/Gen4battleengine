@@ -1,18 +1,23 @@
 """E1 Batch A (rulings G-40 onward, docs/kaizo/e1-mechanics-ledger.md): hand cases.
 
 Family 1: trainer Pokemon in a data form (G-41).
+Family 3: trainer bag items by their party params (G-43).
 """
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.trainer import IntermediateData, build_trainer_party, default_moves
-from nuzline.engine.ids import AbilityId, Stat
+from nuzline.engine.actions import FIRST_ITEM_ACTION
+from nuzline.engine.bag import bag_item_category, refused_bag_params
+from nuzline.engine.ids import AbilityId, ItemAiCategory, ItemParam, Stat, Status
+from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import initial_arrays
 from nuzline.engine.stats import calc_stats
 from tests.conftest import KAIZO_INTERMEDIATE
-from tests.engine.helpers import INTERMEDIATE, _inter
+from tests.engine.helpers import INTERMEDIATE, _inter, assert_matches_reference, roark_state
 
 # --- Family 1: trainer Pokemon in a data form (G-41) ----------------------------------------
 
@@ -80,3 +85,77 @@ def test_vanilla_data_form_keeps_the_base_stats_and_moves(tables):
     assert (int(got["max_hp"]), list(got["stats"])) != _calc(tables, opp[k], 499)
     assert list(got["types"]) == list(np.asarray(tables.species_types)[499])
     assert opp[k].moves == default_moves(inter.learnsets[413], opp[k].level)
+
+
+# --- Family 3: trainer bag items by their party params (G-43) --------------------------------
+
+SWITCH_TO_1 = 4 + 1
+
+
+def _bag(s, names, item):
+    return s._replace(
+        trainer_items=s.trainer_items.at[1].set(jnp.asarray([names.item(item), 0, 0, 0])),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+
+
+def test_bag_item_params_read_dummy_or_party_params(tables, kaizo_tables, names, kaizo_names):
+    # Item_Get (item.c:186-191): a Poke Ball (partyUse FALSE) reads its dummy, 3, for every
+    # party param in both games; a Potion its hpRestored 20. A ball's params set Mist and
+    # Focus Energy, which are refused by name; a Full Restore's are modelled.
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        ball = np.asarray(t.item_party_param)[n.item("Poké Ball")]
+        assert ball[: ItemParam.HOLD_FRIENDSHIP_UP].tolist() == [3] * ItemParam.HOLD_FRIENDSHIP_UP
+        assert int(np.asarray(t.item_party_param)[n.item("Potion")][ItemParam.HP_RESTORED]) == 20
+        reasons = refused_bag_params(ball)
+        assert any("Mist" in r for r in reasons) and any("Focus Energy" in r for r in reasons)
+        assert refused_bag_params(np.asarray(t.item_party_param)[n.item("Full Restore")]) == []
+
+
+def test_ai_item_choice_follows_the_param_branches(tables, names):
+    # TrainerAI_ShouldUseItem (trainer_ai.c:4099-4189): only the first true branch is tested.
+    s = roark_state(tables, names)
+    top = int(s.max_hp[1, 0])
+    assert top - 20 >= top // 4  # Geodude: the Potion's "whole amount fits" test decides
+
+    def cat(state, item):
+        return int(bag_item_category(tables, state, 1, names.item(item)))
+
+    assert cat(s.replace_hp(1, 0, top - 21), "Potion") == ItemAiCategory.RECOVER_HP
+    assert cat(s.replace_hp(1, 0, top - 20), "Potion") == ItemAiCategory.NONE
+    # Full Heal's first param is the sleep cure: a poisoned battler gets no Full Heal.
+    poisoned = s._replace(status=s.status.at[1, 0].set(Status.POISON))
+    asleep = s._replace(status=s.status.at[1, 0].set(Status.SLEEP))
+    assert cat(poisoned, "Full Heal") == ItemAiCategory.NONE
+    assert cat(asleep, "Full Heal") == ItemAiCategory.RECOVER_STATUS
+    # Stat items only while fakeOutTurnNumber - totalTurns >= 0 (:4156).
+    assert cat(s, "X Attack") == ItemAiCategory.STAT_BOOSTER
+    assert cat(s._replace(turn=s.turn + 1), "X Attack") == ItemAiCategory.NONE
+
+
+def test_bag_items_match_the_reference(tables, names):
+    # One item turn per kind, the player switching (no damage): BattleSystem_UseBagItem and
+    # its subscript (battle_system.c:435-758; battle_controller_player.c:1905-1944).
+    s = roark_state(tables, names)
+    top = int(s.max_hp[1, 0])
+    o = empty_outcome()
+    acts = [SWITCH_TO_1, FIRST_ITEM_ACTION]
+    # Full Restore: status and confusion cured first, then all HP.
+    hurt = s.replace_hp(1, 0, top // 5)._replace(
+        status=s.status.at[1, 0].set(Status.POISON), confusion=s.confusion.at[1].set(3)
+    )
+    out = assert_matches_reference(tables, _bag(hurt, names, "Full Restore"), acts, o)
+    assert (int(out.hp[1, 0]), int(out.status[1, 0]), int(out.confusion[1])) == (top, 0, 0)
+    # X Accuracy: accuracy +1, and friendship 150 takes the medium band's +1.
+    fond = s._replace(friendship=s.friendship.at[1, 0].set(150))
+    out = assert_matches_reference(tables, _bag(fond, names, "X Accuracy"), acts, o)
+    assert int(out.stages[1, Stat.ACC]) == 1 and int(out.friendship[1, 0]) == 151
+    # Elixir (PP_RESTORE_ALL, 10): every slot below its max, capped.
+    tired = s._replace(pp=s.pp.at[1, 0].set(jnp.asarray([0, 1, 2, 3])))
+    out = assert_matches_reference(tables, _bag(tired, names, "Elixir"), acts, o)
+    full = [int(tables.move_pp[m]) for m in np.asarray(s.moves[1, 0])]
+    assert out.pp[1, 0].tolist() == [min(p + 10, f) for p, f in zip([0, 1, 2, 3], full)]
+    # Persim Berry (confusion): the status subscript's bit-0 branch.
+    dizzy = s._replace(confusion=s.confusion.at[1].set(2))
+    out = assert_matches_reference(tables, _bag(dizzy, names, "Persim Berry"), acts, o)
+    assert int(out.confusion[1]) == 0

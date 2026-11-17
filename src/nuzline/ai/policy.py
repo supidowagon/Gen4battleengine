@@ -108,9 +108,10 @@ from nuzline.ai.switching import (
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
+from nuzline.engine.bag import bag_item_category, refused_bag_items, refused_bag_params
 from nuzline.engine.damage import decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
-from nuzline.engine.ids import POTION_HP_RESTORED, Stat, TrainerItemId
+from nuzline.engine.ids import ItemAiCategory, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
 
@@ -3157,7 +3158,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         present[0][:, None] & jnp.isin(moves[0], jnp.array(c.CALC_DAMAGE_MOVES, _I32)) & copycat
     )
     bag_items = state.trainer_items[1].astype(_I32)
-    bag = (bag_items != 0) & (tables.trainer_item_effect[bag_items] != TrainerItemId.POTION)
+    bag = (bag_items != 0) & refused_bag_items(tables, bag_items)
     scoring = (
         jnp.any(move)
         | jnp.any(ghost_curse)
@@ -3358,9 +3359,10 @@ def _scoring_refusals(
 def _item_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
     names = _names_for(tables, names)
     bag = np.asarray(state.trainer_items[1])
+    params = np.asarray(tables.item_party_param)
     return [
-        f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} is not a transcribed "
-        "TrainerAI_ShouldUseItem item (only Potion)"
+        f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} "
+        + "; ".join(refused_bag_params(params[int(bag[k])]))
         for k in np.flatnonzero(np.asarray(_refused(tables, state, layout).bag))
     ]
 
@@ -3573,18 +3575,17 @@ def maybe_switch(
 
 
 def _use_item(tables: Tables, state: BattleState) -> jnp.ndarray:
-    # TrainerAI_ShouldUseItem (trainer_ai.c:4056; roark.md 12). Embargo is not in M1.
+    # TrainerAI_ShouldUseItem (trainer_ai.c:4056; roark.md 12). Embargo is not built (its
+    # move is refused by coverage), so the :4076 test never stops it.
     alive = jnp.sum(((state.species[1] > 0) & (state.hp[1] > 0)).astype(_I32))
     slot = jnp.arange(BAG_SLOTS)
     count = state.trainer_item_count[1].astype(_I32)
     considered = (slot == 0) | (alive <= count - slot + 1)  # :4092
     items = state.trainer_items[1].astype(_I32)
-    a = state.active[1]
-    hp, max_hp = state.hp[1, a].astype(_I32), state.max_hp[1, a].astype(_I32)
-    # The HP-restore rule (:4103-4116) for a Potion (hpRestored 20).
-    heals = (hp > 0) & ((hp < max_hp // 4) | (max_hp - hp > POTION_HP_RESTORED))
-    potion = tables.trainer_item_effect[items] == TrainerItemId.POTION
-    use = considered & (items != 0) & potion & heals
+    # Each considered slot's branch over its item's party params (bag.bag_item_category,
+    # E1 ruling G-43); a bag mixes no items (coverage), so the used item is the first one.
+    used = jnp.stack([bag_item_category(tables, state, 1, items[k]) for k in range(BAG_SLOTS)])
+    use = considered & (items != 0) & (used != ItemAiCategory.NONE)
     return jnp.where(jnp.any(use), FIRST_ITEM_ACTION + jnp.argmax(use), NO_ITEM).astype(_I32)
 
 

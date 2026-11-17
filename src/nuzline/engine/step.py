@@ -38,7 +38,7 @@ turn order activated (``order.custap_flags``) is eaten when its holder's move st
 end of the turn runs Leftovers / Black Sludge and the status orbs / Sticky Barb in their
 ``MonCondCheckState`` slots (``END_OF_TURN_ORDER``).
 
-Implemented so far: the opponent's bag items (Potion, ``_use_trainer_item``, with the
+Implemented so far: the opponent's bag items (``engine.bag``, ``_use_trainer_item``, with the
 decomp's multi-slot consumption, ``_consume_trainer_items``), the AI inputs
 ``fake_out_turn`` (``_entered``) and ``move_hit`` (``_use_move``, ``_move_end``), the
 AI's knowledge of the player (``last_move``: ``_use_move``, ``_pursuit_hit``;
@@ -85,6 +85,7 @@ from nuzline.engine.actions import (
     locked_slot,
     move_imprisoned,
 )
+from nuzline.engine.bag import use_bag_item
 from nuzline.engine.damage import (
     PHYSICAL as PHYSICAL_CATEGORY,
 )
@@ -182,7 +183,6 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
-    POTION_HP_RESTORED,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
@@ -197,7 +197,6 @@ from nuzline.engine.ids import (
     SemiKind,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -2005,15 +2004,12 @@ def _consume_trainer_items(state: BattleState, actions) -> BattleState:
 
 
 def _use_trainer_item(tables: Tables, state: BattleState, side, item) -> BattleState:
-    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905): a
-    Potion runs ``subscript_use_potion.s``. ``BattleSystem_UseBagItem``
-    (battle_system.c:435) restores ``POTION_HP_RESTORED`` to the active Pokemon when it
-    has HP left and is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps it at max HP."""
-    mon = state.active[side]
-    hp = state.hp[side, mon].astype(_I32)
-    potion = (tables.trainer_item_effect[item] == TrainerItemId.POTION) & (hp > 0)
-    healed = jnp.minimum(hp + POTION_HP_RESTORED, state.max_hp[side, mon].astype(_I32))
-    return _set_mon(state, "hp", side, mon, healed, potion)
+    """``BattleControllerPlayer_ItemCommand`` (battle_controller_player.c:1905-1944): the
+    AI's item subscript around ``BattleSystem_UseBagItem`` (``bag.use_bag_item``, E1 ruling
+    G-43). Its category is the one ``TrainerAI_ShouldUseItem`` chose at selection: nothing
+    that runs before an item action (switches, other items) changes the user's HP, status,
+    confusion, ``fakeOutTurnNumber`` or the turn, which that choice reads."""
+    return use_bag_item(tables, state, side, item, jnp.asarray(item) != 0)
 
 
 def _act(

@@ -21,7 +21,6 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_AI_FLAGS,
     IMPLEMENTED_EFFECTS,
     IMPLEMENTED_ITEMS,
-    IMPLEMENTED_TRAINER_ITEMS,
     IMPLEMENTED_WEATHER,
     Support,
     UnsupportedMechanics,
@@ -143,10 +142,14 @@ def test_start_condition_argument_is_checked(tables, names):
 
 
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
-    potion, super_potion = names.item("Potion"), names.item("Super Potion")
-    trainer = replace(roark_trainer(), items=(potion, super_potion))
+    # E1 ruling G-43: a bag item that sets Mist (Guard Spec) or Focus Energy (Dire Hit) is
+    # refused by name; Super Potion acts by its params.
+    items = [names.item(n) for n in ("Super Potion", "Guard Spec.", "Dire Hit")]
+    trainer = replace(roark_trainer(), items=tuple(items))
     r = check_coverage(tables, names, sample_party(names), trainer, roark_party(names), 0)
-    assert any("Super Potion (trainer item UNSUPPORTED)" in m for m in r.missing)
+    assert not any("Super Potion" in m and "trainer item" in m for m in r.missing)
+    assert any("Guard Spec." in m and "Mist" in m for m in r.missing)
+    assert any("Dire Hit" in m and "Focus Energy" in m for m in r.missing)
     assert any("mixed items" in m for m in r.missing)
 
 
@@ -177,7 +180,6 @@ def test_sampling_only_is_unimplemented():
         IMPLEMENTED_EFFECTS,
         IMPLEMENTED_ABILITIES,
         IMPLEMENTED_ITEMS,
-        IMPLEMENTED_TRAINER_ITEMS,
         *IMPLEMENTED_AI_FLAGS.values(),
         IMPLEMENTED_WEATHER,
     )

@@ -52,10 +52,10 @@ LISTED = [
     "nuzline.engine.coverage.SPECIES_GIRATINA",
     "nuzline.engine.coverage.SPECIES_SHAYMIN",
     "nuzline.engine.coverage.ITEM_GRISEOUS_ORB",
-    # engine, asserted by name and hold effect / hp_restored
+    # engine, asserted by name and hold effect / hold param
     "nuzline.ai.commands.ITEM_EXPERT_BELT",
     "nuzline.ai.switching.ITEM_IRON_BALL",
-    "nuzline.engine.ids.POTION_HP_RESTORED",
+    "nuzline.engine.ids.ITEM_FULL_RESTORE",
     "nuzline.engine.ids.QUICK_CLAW_PARAM",
     # engine: saves/check.py's special routes (final review M12)
     "nuzline.saves.check.SPECIES_SMEARGLE",
@@ -90,7 +90,8 @@ LISTED = [
     "nuzline.engine.ids.MoveFlag",
     "nuzline.engine.ids.Weather",
     "nuzline.engine.ids.ItemId",
-    "nuzline.engine.ids.TrainerItemId",
+    "nuzline.engine.ids.ItemParam",
+    "nuzline.engine.ids.ItemAiCategory",
     "nuzline.engine.ids.AbilityId",
     # EXEMPT: decomp AI-script encodings
     "nuzline.ai.commands.Battler",
@@ -125,7 +126,6 @@ LISTED = [
     "tools.effect_map.TYPE_CHART_STATUS_MOVES",
     # keyed by name
     "tools.effect_map.DECOMP_ITEM_TO_ID",
-    "tools.effect_map.DECOMP_TRAINER_ITEM_TO_ID",
     # keyed by effect id / ability name
     "tools.effect_map.DECOMP_EFFECT_TO_ID",
     "tools.effect_map._EFFECTS",
@@ -206,9 +206,7 @@ def test_classes_are_disjoint_and_well_formed():
     assert not set(GAME_DATA) & set(EXEMPT)
     for c in CONSTANTS:
         assert c.kind in KINDS and c.scope in SCOPES, c
-        assert c.kind == "item" or (
-            c.hold_effect is None and c.hp_restored is None and c.hold_param is None
-        ), c
+        assert c.kind == "item" or (c.hold_effect is None and c.hold_param is None), c
     assert POLICY == {VANILLA: "vanilla", KAIZO: "kaizo"}
     assert set(POLICY) == set(GAMES)
 
@@ -227,10 +225,6 @@ def _code_entries(where: str) -> set:
     obj = _resolve(where)
     if isinstance(obj, AiLayout):  # its script.s:78 compare
         return {(None, obj.water2_ability)}
-    if where == "nuzline.engine.ids.POTION_HP_RESTORED":
-        (potion,) = [c for c in CONSTANTS if c.where == where]
-        assert potion.hp_restored == obj
-        return {("Potion", potion.id)}
     if where == "nuzline.engine.ids.QUICK_CLAW_PARAM":
         (claw,) = [c for c in CONSTANTS if c.where == where]
         assert claw.hold_param == obj
@@ -294,14 +288,13 @@ def test_constants_hold(game, request):  # Kaizo skips without the Kaizo tables
 def test_kaizo_style_mismatch_reported(vanilla_manifest, vanilla_items):
     names = list(vanilla_manifest["move_names"])
     names[165] = "Struggle Bug"
-    potion = [dict(i, hp_restored=30) if i["name"] == "Potion" else i for i in vanilla_items]
-    lines = check_constants(VANILLA, Names({**vanilla_manifest, "move_names": names}), potion)
-    assert any("MOVE_STRUGGLE" in s for s in lines) and any("restores 30" in s for s in lines)
+    claw = [dict(i, hold_param=30) if i["name"] == "Quick Claw" else i for i in vanilla_items]
+    lines = check_constants(VANILLA, Names({**vanilla_manifest, "move_names": names}), claw)
+    assert any("MOVE_STRUGGLE" in s for s in lines) and any("hold param 30" in s for s in lines)
     assert (
         "ai/switching.py MOVE_STRUGGLE: id 165 is 'Struggle Bug' in this game, "
         "expected 'Struggle'" in lines
     )
-    assert "engine/ids.py POTION_HP_RESTORED: Potion restores 30 in this game, expected 20" in lines
 
 
 def test_hold_effect_mismatch_reported(vanilla_manifest, vanilla_items):
@@ -382,9 +375,9 @@ def _tmp_game(tmp_path: Path, items: list[dict] | None) -> Game:
 
 
 def test_load_game_refuses_a_contradicted_constant(tmp_path, vanilla_items):
-    potion = [dict(i, hp_restored=30) if i["name"] == "Potion" else i for i in vanilla_items]
-    with pytest.raises(GameDataError, match="POTION_HP_RESTORED"):
-        load_game(_tmp_game(tmp_path, potion))
+    claw = [dict(i, hold_param=30) if i["name"] == "Quick Claw" else i for i in vanilla_items]
+    with pytest.raises(GameDataError, match="QUICK_CLAW_PARAM"):
+        load_game(_tmp_game(tmp_path, claw))
 
 
 def test_load_game_without_items_names_the_extract_command(tmp_path):

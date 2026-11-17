@@ -6,7 +6,7 @@ import json
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO
-from nuzline.engine.ids import EffectId, ItemId, TrainerItemId
+from nuzline.engine.ids import EffectId, ItemId
 from tools.build_tables import BuildError, resolve_conditions
 from tools.rom.inputs import KAIZO_PATCH_SHA256, VANILLA_SHA1
 
@@ -75,7 +75,6 @@ def test_repurposed_items_unsupported(kaizo_tables, kaizo_names):
     for name in ("Lava Cookie", "Old Gateau", "RageCandyBar", "Big Nugget"):
         i = kaizo_names.item(name)
         assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, name
-        assert int(kaizo_tables.trainer_item_effect[i]) == TrainerItemId.UNSUPPORTED, name
 
 
 def test_kaizo_roark_party_from_the_rom_decode(kaizo_roark, kaizo_roark_party, kaizo_names):

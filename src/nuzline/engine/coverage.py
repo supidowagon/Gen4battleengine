@@ -136,6 +136,7 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
+from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
     METRONOME_DRAW,
@@ -147,7 +148,6 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     Stat,
-    TrainerItemId,
     Weather,
 )
 from nuzline.engine.levelup import (
@@ -195,9 +195,6 @@ IMPLEMENTED_ABILITIES: dict[AbilityId, Support] = {
 }
 IMPLEMENTED_ITEMS: dict[ItemId, Support] = {
     i: Support.EXACT for i in ItemId if i != ItemId.UNSUPPORTED
-}
-IMPLEMENTED_TRAINER_ITEMS: dict[TrainerItemId, Support] = {
-    i: Support.EXACT for i in TrainerItemId if i != TrainerItemId.UNSUPPORTED
 }
 # generated/ai_flags.txt, in bit order (the FlagTable of src/battle/trainer_ai/script.s).
 AI_FLAG_NAMES = (
@@ -881,11 +878,17 @@ def _check_trainer(
     moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
-    effect = np.asarray(tables.trainer_item_effect)
+    # A bag item acts by its party params (engine.bag, E1 ruling G-43); the ones that set a
+    # mechanic the engine does not build are refused by name (bag.refused_bag_params).
+    params = np.asarray(tables.item_party_param)
     bag = [item for item in trainer.items if item]
     for item in bag:
-        support = IMPLEMENTED_TRAINER_ITEMS.get(TrainerItemId(int(effect[item])), Support.NONE)
-        c.add(support, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
+        where = f"{display_name(trainer)}: {names.item_names[item]}"
+        reasons = refused_bag_params(params[item])
+        if not reasons:
+            c.add(Support.EXACT, where, "trainer item")
+        for reason in reasons:
+            c.add(Support.NONE, f"{where} {reason}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
         c.add(
