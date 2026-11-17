@@ -3517,7 +3517,9 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     return GOES_AHEAD
 
 
-def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool = False) -> int:
+def _hit_rate(
+    tables, s: RefState, attacker: int, move: int, target_moved: bool = False, micle=None
+) -> int:
     """``hitRate`` of ``BattleControllerPlayer_CheckMoveHitAccuracy`` (bcp.c:2865-2979) for
     ``attacker``'s ``move`` against the foe's active Pokemon, from the state as it is now;
     ``target_moved``: the foe acted earlier this turn (Zoom Lens). Hustle and the Micle Berry
@@ -3565,7 +3567,8 @@ def _hit_rate(tables, s: RefState, attacker: int, move: int, target_moved: bool 
     lens = _item_effect(tables, atk)
     if lens == ItemId.WIDE_LENS or (lens == ItemId.ZOOM_LENS and target_moved):
         rate = rate * (100 + _t(tables, "item_param", atk.item, 0)) // 100
-    if s.sides[attacker].micle:  # :2967-2970, the Micle Berry's flag (G-59)
+    micle = s.sides[attacker].micle if micle is None else micle
+    if micle:  # :2967-2970, the Micle Berry's flag (G-59)
         rate = rate * 120 // 100
     if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
@@ -3786,6 +3789,16 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         if _active(s, 1 - side).hp == 0:  # TryMove's HasNoTarget: subscript_no_target.s
             _unlock(sd)
             return record
+    # TryMove's CheckMoveHitAccuracy runs after the move script, whatever the script set (a failed
+    # script's MOVE_STATUS_FAILED / NO_MORE_WORK included): past its early returns (accuracy 0,
+    # Future Sight's and an OHKO move's NONSTANDARD_ACC_CHECK) it reads and clears the Micle flag
+    # (bcp.c:2967-2970, G-59); the roll below reads the value it had.
+    micle_now = s.sides[side].micle
+    if _t(tables, "move_accuracy", move) != 0 and _t(tables, "move_effect", move) not in (
+        EffectId.FUTURE_SIGHT,
+        EffectId.OHKO,
+    ):
+        s.sides[side].micle = 0
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:3271-3277, after the script, hit or miss): a move
     # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the foe sets the
     # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
@@ -3942,14 +3955,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     missed = (
         _t(tables, "move_accuracy", move) != 0
         and effect != EffectId.FUTURE_SIGHT  # SYSCTL_NONSTANDARD_ACC_CHECK (bcp.c:2911-2913)
-        and not 0 < roll <= _hit_rate(tables, s, side, move, target_moved)
+        and not 0 < roll <= _hit_rate(tables, s, side, move, target_moved, micle_now)
     )
-    # bcp.c:2967-2970: an accuracy check past its early returns clears the Micle flag (G-59).
-    if _t(tables, "move_accuracy", move) != 0 and effect not in (
-        EffectId.FUTURE_SIGHT,
-        EffectId.OHKO,
-    ):
-        s.sides[side].micle = 0
     # CheckMoveHitOverrides (bcp.c:3001-3014) after the accuracy roll: a protecting foe
     # stops the move, Battler_UnlockMoveChoice; subscript_missed.s unlocks too.
     # A Wonder Guard block ends in subscript_missed.s too (bcp.c:3324-3327), its hits dealing
