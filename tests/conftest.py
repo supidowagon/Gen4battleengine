@@ -107,7 +107,7 @@ class _PeakSampler:
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
     """Drop JAX's in-memory compiled programs after each test module, and after any test that
-    leaves the process above 6 GB resident. One process running the whole suite otherwise
+    leaves the process above max(6 GB, the last clear's resident + 2 GB). One process running the whole suite otherwise
     keeps every module's executables and reached 38 GB of commit (29 GB for tests/engine
     alone; 6 GB peak with this). The trainer-AI modules compile a program per layout (flag
     set, read bound and a fight's effects, E1 Rulings R2, R6, R7) and one of them alone passed

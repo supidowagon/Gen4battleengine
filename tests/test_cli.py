@@ -693,6 +693,7 @@ def test_cli_bad_budget_flags(capsys, tmp_path, command, flags, party, named):
     assert named[0] in err and named[1] in err
 
 
+@pytest.mark.slow  # the whole-engine rank program alone is ~9.5 GB (E1 memory job, 17 Nov)
 def test_cli_user_save_rank(capsys):
     save = os.environ.get("NUZLINE_USER_SAVE")
     if not save:
