@@ -130,9 +130,7 @@ def test_baton_pass_keeps_focus_energy_and_power_trick(tables, names):
         [_mon(n, "Ninjask", ["Baton Pass"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
         [_mon(n, "Bulbasaur", ["Growl"], 20)],
     )
-    s = s._replace(
-        focus_energy=s.focus_energy.at[0].set(1), power_trick=s.power_trick.at[0].set(1)
-    )
+    s = s._replace(focus_energy=s.focus_energy.at[0].set(1), power_trick=s.power_trick.at[0].set(1))
     paused = assert_matches_reference(tables, s, (0, 0), O)
     after = _resume(tables, paused, 1)
     assert int(after.focus_energy[0]) == 1 and int(after.power_trick[0]) == 1
@@ -190,6 +188,102 @@ def test_a_faster_haze_leaves_the_slower_focus_energy_user_the_base_crit_rate(ta
     plain = assert_matches_reference(tables, s, acts, O)
     assert int(hazed.hp[1, 0]) == int(plain.hp[1, 0])  # no crit after the Haze
     assert int(hit.hp[1, 0]) < int(plain.hp[1, 0])  # a crit at Focus Energy's 1 in 4
+
+
+def test_a_faster_knock_off_leaves_the_slower_scope_lens_user_the_base_crit_rate(tables, names):
+    """BattleSystem_CalcCriticalMulti reads the attacker's held item at the CalcCrit
+    (battle_lib.c:7124-7128, :7132): a faster Knock Off (BtlCmd_TryKnockOff, battle_script.c:
+    6608-6632) takes the Scope Lens first, so the slower user's Tackle crits 1 in 16; with a
+    faster Tackle instead, 1 in 8. Draw 9 (r = 8) crits at 1 in 8 only."""
+    from nuzline.engine.step import step
+
+    n = names
+
+    def duel(foe_move):
+        return make_state(
+            tables,
+            [_mon(n, "Slowpoke", ["Tackle"], 40, "Scope Lens")],
+            [_mon(n, "Sneasel", [foe_move], 40)],
+        )
+
+    knock, tackle = duel("Knock Off"), duel("Tackle")
+    acts = jnp.asarray([0, 0], jnp.int32)
+    run = jax.jit(step)
+    for state, rate in ((knock, 16), (tackle, 8)):
+        outcomes, probs = enumerate_turn(tables, state, acts)
+        keys = np.stack([np.asarray(outcomes.hit)[:, 0, 0], np.asarray(outcomes.crit)[:, 0, 0]])
+        _, first, inverse = np.unique(keys.T, axis=0, return_index=True, return_inverse=True)
+        weight = np.bincount(inverse.ravel(), weights=np.asarray(probs, float))
+        full = int(state.max_hp[1, 0])
+        landed, crit = [], []
+        for row in first:
+            o = jax.tree.map(lambda f, i=row: f[i], outcomes)
+            o = o._replace(roll=O.roll)
+            hp = int(run(tables, state, acts, o).hp[1, 0])
+            base = int(run(tables, state, acts, o._replace(crit=O.crit)).hp[1, 0])
+            landed.append(base < full)
+            crit.append(hp < base)
+        p_crit = float(np.sum(weight[np.asarray(crit)])) / float(np.sum(weight[np.asarray(landed)]))
+        assert abs(p_crit - 1 / rate) < 1e-9, (rate, p_crit)
+    nine = O._replace(crit=O.crit.at[0, 0].set(9))
+    knocked = assert_matches_reference(tables, knock, acts, nine)
+    assert int(knocked.item[0, 0]) == 0
+    hit = assert_matches_reference(tables, tackle, acts, nine)
+    plain = assert_matches_reference(tables, knock, acts, O)
+    assert int(knocked.hp[1, 0]) == int(plain.hp[1, 0])  # no crit after the Knock Off
+    assert int(hit.hp[1, 0]) < int(assert_matches_reference(tables, tackle, acts, O).hp[1, 0])
+
+
+def _crit_inputs(state, side: int) -> tuple[int, ...]:
+    """What BattleSystem_CalcCriticalMulti reads of ``side``'s battler (battle_lib.c:7105-7132):
+    its Focus Energy, held item, species and ability."""
+    mon = int(state.active[side])
+    return (
+        int(state.focus_energy[side]),
+        int(state.item[side, mon]),
+        int(state.species[side, mon]),
+        int(state.ability[side, mon]),
+    )
+
+
+def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_inputs(tables, names):
+    """outcome.CRIT_ODDS_EFFECTS against the engine: every move effect in the tables is played
+    (a whole turn, so effects run in step as well as in the effect handlers) on a foe whose
+    crit inputs are all live (Focus Energy, Chansey holding a Lucky Punch, Super Luck); an
+    effect that changes one of them is one of CRIT_ODDS_EFFECTS, and its declared write gives
+    the same inputs. A later batch adding Thief, Trick, Skill Swap, Worry Seed, Embargo
+    (through the item read) or the like fails here until it joins them."""
+    from nuzline.engine.ids import AbilityId
+    from nuzline.engine.outcome import CRIT_ODDS_EFFECTS
+    from nuzline.engine.step import step
+
+    n = names
+    effects = np.asarray(tables.move_effect)
+    first_move = {}
+    for move in range(1, effects.shape[0]):
+        first_move.setdefault(int(effects[move]), move)
+    base = make_state(
+        tables,
+        [_mon(n, "Smeargle", ["Tackle"], 5, "Leftovers")],
+        [_mon(n, "Chansey", ["Growl"], 100, "Lucky Punch")],
+    )
+    base = base._replace(
+        focus_energy=base.focus_energy.at[1].set(1),
+        ability=base.ability.at[1, 0].set(AbilityId.SUPER_LUCK),
+    )
+    procs = O._replace(secondary=jnp.ones_like(O.secondary))
+    acts = jnp.asarray([0, 0], jnp.int32)
+    run = jax.jit(step)
+    before = _crit_inputs(base, 1)
+    writers = set()
+    for effect, move in sorted(first_move.items()):
+        state = base._replace(moves=base.moves.at[0, 0, 0].set(move))
+        after = _crit_inputs(run(tables, state, acts, procs), 1)
+        if after != before:
+            writers.add(effect)
+            assert effect in CRIT_ODDS_EFFECTS, (effect, move, before, after)
+            assert _crit_inputs(CRIT_ODDS_EFFECTS[effect](state), 1) == after, (effect, move)
+    assert writers == set(CRIT_ODDS_EFFECTS), writers
 
 
 def test_psych_up_copies_the_stages_and_ors_focus_energy(tables, names):
@@ -253,7 +347,9 @@ def test_captivate_tags_oblivious_before_the_accuracy_roll(tables, names):
     TryMove (bcp.c:3211-3213): the AI learns the player's Oblivious on a hit and on a miss
     alike."""
     s = make_state(
-        tables, [_mon(names, "Slowpoke", ["Tackle"], 40)], [_mon(names, "Pikachu", ["Captivate"], 40)]
+        tables,
+        [_mon(names, "Slowpoke", ["Tackle"], 40)],
+        [_mon(names, "Pikachu", ["Captivate"], 40)],
     )
     s = _gendered(s, 0, 1)
     for hit in (1, 0):  # outcome.hit's class 0 misses (outcome.py)

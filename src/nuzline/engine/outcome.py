@@ -791,44 +791,75 @@ def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.nd
 # The hit crits when ``(value - 1) % odds == 0`` with the odds at the hit (``crit_lands``): a
 # hand-built 1 always crits.
 CRIT_DRAWS = 48
-# The odds variants of ``crit_variants``: turn start, Focus Energy cleared, held item removed,
-# both.
-CRIT_VARIANTS = 4
-# The moves that can change another battler's crit odds before its CalcCrit (``crit_variants``):
-# Haze clears every battler's Focus Energy (BtlCmd_ResetAllStatChanges, battle_script.c:3544),
-# Knock Off removes its target's held item (effects._knock_off). A new effect that sets or clears
-# another battler's Focus Energy, or changes its held item, species or ability, joins them with
-# its variant.
-CRIT_ODDS_EFFECTS = (EffectId.HAZE, EffectId.KNOCK_OFF)
+
+
+def _clear_focus_energy(state: BattleState) -> BattleState:
+    """Haze's write to the crit inputs: BtlCmd_ResetAllStatChanges clears every battler's
+    VOLATILE_CONDITION_FOCUS_ENERGY (battle_script.c:3534-3549; ``effects._haze``)."""
+    return state._replace(focus_energy=jnp.zeros_like(state.focus_energy))
+
+
+def _remove_held_item(state: BattleState) -> BattleState:
+    """Knock Off's write to the crit inputs: BtlCmd_TryKnockOff sets the defender's heldItem to
+    ITEM_NONE (battle_script.c:6608-6632; ``effects._knock_off``), here every battler's own."""
+    battlers = jnp.arange(state.active.shape[0])
+    return state._replace(item=state.item.at[battlers, state.active].set(0))
+
+
+# The move effects that can change another battler's crit inputs before its CalcCrit
+# (BattleSystem_CalcCriticalMulti, battle_lib.c:7105-7132, reads the attacker's Focus Energy,
+# held item, species and ability), each with its write to those inputs. Every battler's odds are
+# read with every subset of these writes applied (``crit_variants``): a new effect that sets or
+# clears another battler's Focus Energy, or changes its held item, species or ability, joins
+# them with its write (tests/engine/test_batch12.py derives them from the effect handlers).
+CRIT_ODDS_EFFECTS = {
+    EffectId.HAZE: _clear_focus_energy,
+    EffectId.KNOCK_OFF: _remove_held_item,
+}
+# The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
+# is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
+CRIT_VARIANTS = 2 ** len(CRIT_ODDS_EFFECTS)
 
 
 def crit_variants(
-    tables: Tables, state: BattleState, actions, moves=None
+    tables: Tables, state: BattleState, actions, moves=None, before=None
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(int32[2, CRIT_VARIANTS], bool[2, CRIT_VARIANTS])``: the crit odds each side's move can
-    have at its CalcCrit this turn, and which can occur. Variant 0 is the turn start; 1 has the
-    side's Focus Energy cleared (another battler's Haze, while the side holds it); 2 its held
-    item removed (another battler's Knock Off, while it holds a crit item); 3 both
-    (``CRIT_ODDS_EFFECTS``). Over-approximate: the other battler may move later, or fail."""
+    """``(int32[B, CRIT_VARIANTS], bool[B, CRIT_VARIANTS])``: the crit odds each battler's move
+    can have at its CalcCrit this turn, and which can occur. Variant v has the writes of the
+    ``CRIT_ODDS_EFFECTS`` entries in v applied; it can occur when, for each of them, a battler
+    that can act before this one's hit (``before[b, o]``: battler ``o`` may act before ``b``'s
+    hit; default every other battler) uses that effect and the write alone changes ``b``'s odds.
+    Over-approximate: that battler may move later, miss, or aim elsewhere."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
-    sides = jnp.arange(2)
-    mons = state.active
-    no_focus = state._replace(focus_energy=jnp.zeros_like(state.focus_energy))
-    no_item = state._replace(item=state.item.at[sides, mons].set(0))
-    both = no_item._replace(focus_energy=no_focus.focus_energy)
-    odds = jnp.stack(
-        [crit_odds(tables, s, actions, moves) for s in (state, no_focus, no_item, both)], axis=1
-    )
+    n = state.active.shape[0]
+    if before is None:
+        before = ~jnp.eye(n, dtype=bool)
+    before = jnp.asarray(before, bool)
+    writes = tuple(CRIT_ODDS_EFFECTS.values())
+    odds, singles = [], []
+    for v in range(CRIT_VARIANTS):
+        s = state
+        for e, write in enumerate(writes):
+            if v >> e & 1:
+                s = write(s)
+        odds.append(crit_odds(tables, s, actions, moves))
+    base = odds[0]
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     effect = tables.move_effect[moves]
-    # The other battler's move, per side ([::-1]: the other side's battler in singles).
-    haze = (uses_move & (effect == EffectId.HAZE))[::-1] & (state.focus_energy != 0)
-    crit_item = tables.item_effect[state.item[sides, mons]] == ItemId.CRIT_ITEM
-    knock = (uses_move & (effect == EffectId.KNOCK_OFF))[::-1] & crit_item
-    possible = jnp.stack([jnp.ones_like(haze), haze, knock, haze & knock], axis=1)
-    return odds, possible
+    for e, eff in enumerate(CRIT_ODDS_EFFECTS):
+        used = uses_move & (effect == eff)  # [B], by the user
+        reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
+        singles.append(reached & (odds[1 << e] != base))
+    possible = []
+    for v in range(CRIT_VARIANTS):
+        ok = jnp.ones(base.shape, bool)
+        for e in range(len(writes)):
+            if v >> e & 1:
+                ok = ok & singles[e]
+        possible.append(ok)
+    return jnp.stack(odds, axis=1), jnp.stack(possible, axis=1)
 
 
 def crit_class(value, odds, possible) -> jnp.ndarray:

@@ -270,7 +270,6 @@ from nuzline.engine.outcome import (
     Outcome,
     armored,
     crit_class,
-    crit_odds,
     crit_variants,
     empty_outcome,
     future_thresholds,
@@ -358,9 +357,8 @@ class OutcomeLaws(NamedTuple):
 
     hit_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS], outcome.hit_thresholds
     hit_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS], which of them can occur
-    crit_odds: jnp.ndarray  # int32[2], outcome.crit_odds (1 in N) at the turn start
     # B12-4 review: the odds each side's hit can meet at its CalcCrit (outcome.crit_variants).
-    crit_variants: jnp.ndarray  # int32[2, outcome.CRIT_VARIANTS]
+    crit_variants: jnp.ndarray  # int32[2, outcome.CRIT_VARIANTS], variant 0 the turn start
     crit_possible: jnp.ndarray  # bool[2, outcome.CRIT_VARIANTS]
     no_crit: jnp.ndarray  # bool[2], Lucky Chant on the defending side (outcome.py:157)
     secondary_chance: jnp.ndarray  # int32[2], tables.move_effect_chance of the move
@@ -2086,7 +2084,6 @@ def outcome_laws(
     return OutcomeLaws(
         hit_thresholds=thresholds,
         hit_possible=possible,
-        crit_odds=crit_odds(tables, state, actions, moves),
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
