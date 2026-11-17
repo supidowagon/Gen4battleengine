@@ -684,3 +684,113 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   `trainer_item_effect`, `POTION_HP_RESTORED` and `DECOMP_TRAINER_ITEM_TO_ID` are gone;
   `ids.ITEM_FULL_RESTORE` is a checked game constant. Tests: `tests/engine/test_e1_batch_a.py`
   (family 3), `tests/engine/test_trainer_items.py`, `tests/engine/test_coverage.py`.
+
+## Batch C
+
+- G-44 Deep fog (`Weather.FOG`, `coverage.IMPLEMENTED_WEATHER` now EXACT). Every decomp reader:
+  CheckMoveHitAccuracy x6/10 inside `NO_CLOUD_NINE` (battle_controller_player.c:2934-2936;
+  `outcome._rate`, reference `_hit_rate`, after Sand Veil / Snow Cloak, before Tangled Feet);
+  `FIELD_CONDITION_SOLAR_DOWN` (include/constants/battle/condition.h:136-139) halves SolarBeam
+  (battle_lib.c:7058; `damage.py`, B10-13); `FIELD_COND_CHECK_STATE_DEEP_FOG` (bcp.c:1213-1225)
+  only prints "The fog is deep..." through subscript_weather_continues.s, whose
+  `EndOfTurnWeatherEffect` (battle_script.c:5561-5647) matches no fog branch: no countdown, no
+  HP change (`step.field_conditions`, `_TIMED_WEATHERS`). Fog starts only from the map
+  (subscript_overworld_fog.s:11, battle_lib.c:3684-3687) and is one bit of
+  `FIELD_CONDITION_WEATHER` (condition.h:131-135), which every weather move
+  (effect_script_0115.s:8, _0136, _0137, _0164) and weather ability (subscript_drizzle.s:11 and
+  its siblings) clears before it sets its own: the engine's single `BattleState.weather` is
+  replaced the same way, and the abilities' "already up" test reads only their own `*_PERM` bit
+  (battle_lib.c:3746-3778). The AI reads it as `AI_WEATHER_DEEP_FOG` (trainer_ai.c:1436-1437;
+  `commands.load_current_weather`). The other readers belong to refused moves or abilities:
+  Weather Ball (`FIELD_CONDITION_WEATHER`, battle_script.c:6848, battle_lib.c:7896, :8178,
+  trainer_ai.c:3223), Moonlight / Synthesis / Morning Sun (`NO_WEATHER`,
+  battle_script.c:5970-5976: fog is "any other weather", 1/4), Defog (subscript_defog.s:12, :64),
+  Forecast. The enumeration needs no clause: fog never starts mid-battle, so a move's accuracy
+  check reads the start weather or a weather move's replacement (`outcome.hit_thresholds`).
+  Random states already drew it (`tests/strategies.py`). Tests: `tests/engine/test_e1_batch_c.py`,
+  `tests/engine/test_coverage.py`.
+- G-45 Ice Body (`AbilityId.ICE_BODY`, decomp 115). `BtlCmd_EndOfTurnWeatherEffect`'s hail
+  branch (battle_script.c:5597-5610): a holder (`Battler_Ability`) with HP left and no
+  `MOVE_EFFECT_NO_WEATHER_DAMAGE` gains `Divide(maxHP, 16)` below full HP and takes no chip
+  either way (the chip is the `else if`). Both engines now read it from `state.ability`
+  (`step._weather_effect`, reference `_weather_effect`; it left `ids.WEATHER_ABILITY_IDS`).
+  subscript_weather_continues.s:_076 prints "restored HP using its {1}" with
+  `TAG_NICKNAME_ABILITY` for every heal, so the AI learns the holder's ability
+  (`hooks.REVEALS_ON` `WEATHER_HP`; the reference now reveals on every heal, Rain Dish's and Dry
+  Skin's as before). AI: Basic_CheckHail (script.s:853-871), Expert_Hail (:4110) and the tag
+  strategy (:6864, :6873) read it by decomp id (`policy.py`). Tests: `test_e1_batch_c.py`,
+  `tests/engine/test_field_pass.py`.
+- G-46 White Smoke (`AbilityId.WHITE_SMOKE`, decomp 73). `BtlCmd_ChangeStatStage` tests it in
+  Clear Body's branch (battle_script.c:2884-2885: a drop by another battler, after Mist,
+  `Battler_IgnorableAbility`), so it is Clear Body's twin everywhere: a move's drop
+  (`effects._foe_stage`, reference `_drop_blocked`) and Intimidate (`hooks.intimidate`, the
+  reference switch-in). Its messages are built in C (`SetupNicknameAbilityNicknameAbilityMsg`,
+  "prevents stat loss" with the ability id in `msgBuffer`, :2886-2895): no AI reveal. AI:
+  script.s:472, :766, :940, :1516 by decomp id. Tests: `test_e1_batch_c.py`.
+- G-47 Vital Spirit (`AbilityId.VITAL_SPIRIT`, decomp 72). Every decomp site names it beside
+  Insomnia with the same branch: subscript_fall_asleep.s:7-8 (`CheckAbility`, an ability side
+  effect) and :23-24 (`CheckIgnorableAbility`), subscript_yawn.s:5-6, subscript_rest.s:7-8,
+  `BattleSystem_RecoverStatusByAbility`'s shared case (battle_lib.c:4404-4405, :4471-4472) and
+  the disobedience nap (bcp.c:2202-2203; the engine has no obedience check, both games). The
+  engines test `ids.sleepless` / `SLEEPLESS_ABILITIES` at every Insomnia site: the sleep block and
+  its "stayed awake" reveal (`effects._inflict`), Uproar's "kept awake" (`step._use_move`), the
+  status cure (`hooks.recover_status_by_ability`, reveal `STATUS_CURE`), the enumeration's status
+  clause; Yawn already read both by decomp id (`YAWN_ABILITY_IDS`). Worry Seed writes Insomnia
+  only (subscript_give_target_insomnia.s:11). AI: Basic_CheckCannotSleep (script.s:288-295) and
+  :1432-1433 by decomp id. Tests: `test_e1_batch_c.py`.
+- G-48 Speed Boost (`AbilityId.SPEED_BOOST`, decomp 3). `BattleSystem_TriggerTurnEndAbility`
+  (battle_lib.c:3555-3564), run by `MON_COND_CHECK_STATE_ABILITY` (bcp.c:1355) per battler in
+  `monSpeedOrder`: a holder with HP left, Speed below `MAX_STAT_STAGE` (+6) and
+  `fakeOutTurnNumber != totalTurns + 1` (not entered this turn: a switch, a U-turn / Baton Pass
+  newcomer or Roar's victim; a lead's 0 and a faint replacement's previous-turn value pass)
+  gets `SPEED_UP_1_STAGE` through subscript_update_stat_stage.s as an ability side effect
+  (`step._turn_end_ability`, reference `_turn_end_ability`; the switch on the one ability keeps
+  it apart from Shed Skin). Its "raised its" message is built in C
+  (`SetupNicknameAbilityStatMsg`, battle_script.c:2854): no reveal. No new draw. The
+  enumeration needs no clause: it acts after every hit, and the turn-end order was sorted
+  before it (`INPUT_NEUTRAL_ABILITIES`). AI: Basic_CheckLowStatStage_Speed (script.s:438-443)
+  and Expert_ChangeUserAbility's table (:4436). Tests: `test_e1_batch_c.py`.
+- G-49 Iron Fist (`AbilityId.IRON_FIST`, decomp 89). `BattleSystem_CalcMoveDamage`
+  (battle_lib.c:6913-6918): `movePower * 12 / 10` for a move of `sPunchingMoves` when
+  `attackerParams.ability` is Iron Fist, after Rivalry and before the weather block
+  (`damage._pre_random`, reference `_calc_move_damage`). The list is the ROM's
+  (`MoveFlag.PUNCH` from `move_lists.json`), so it covers Kaizo's moves at those ids; the
+  confusion self-hit passes MOVE_STRUGGLE (no punch). The AI's damage (`TrainerAI_CalcDamage`,
+  trainer_ai.c:3082) runs the same formula. Tests: `test_e1_batch_c.py`.
+- G-50 The Kaizo overlay16 accuracy change (data/kaizo/rom_diff.toml: both entries now
+  `modelled`). Decoded again with `python -m tools.rom.decode code overlay16 <symbol>`:
+  CheckMoveHitAccuracy's sun compare `cmp r0, #0x98; bne` became `cmp r0, #0x98; beq; cmp r0,
+  #0x8d; bne` (rom:overlay16@0x0224F068, bcp.c:2915) and CheckMoveHitOverrides' rain compare
+  likewise (rom:overlay16@0x0224F384, bcp.c:3025); Blizzard's compare (260) is unchanged. So a
+  Kaizo move with effect 141 has Thunder's weather accuracy: 50 before the stage scaling in sun,
+  a sure hit in rain, both inside `NO_CLOUD_NINE`. The engines read Thunder's by
+  `MoveFlag.THUNDER`; `tools/effect_map.py` `KAIZO_THUNDER_EFFECTS = {141}` gives it to effect-141
+  moves in the Kaizo build (`tools/build_tables.py` `_move_flags(..., kaizo)`), so Kaizo's
+  Hurricane (move 140) carries it and vanilla's tables are unchanged. Calc repo and sheet: no
+  accuracy rule for it. Hurricane stays refused by its own unmodelled be_seq member 141 (and the
+  AI's untranscribed effect 141); this lifts only the two overlay16 refusals. Tests:
+  `test_e1_batch_c.py`.
+- G-51 `IntermediateData.patched_builder` keys on the game id (`IntermediateData(dir, game)`;
+  `game` defaults to the game whose `intermediate_dir` is `dir`, `games.game_of_intermediate`,
+  ValueError otherwise), no longer on whether `kaizo.json` is in the directory. The CLI, the
+  backlog and trace conversion pass the id. Tests: `test_e1_batch_c.py`.
+- G-52 Persistent map objects and the terrain narrowing (checked 2026-11-17, no change).
+  `sub_0206184C` keeps an object flagged `MAP_OBJ_STATUS_PERSISTENT` across a header change
+  (map_object.c:171-198, :182), with its script id. The flag is set by
+  `MapObject_SetFlagIsPersistent` (:1843-1850) from `ScrCmd_SetObjectFlagIsPersistent`
+  (scrcmd.c:2501-2508), from overlay 9 (ov9_02249960.c:6034, :6059, :7262) and for the player
+  (player_avatar.c:79, :181). Walking every header script file and scripts_common in both ROMs
+  (`tools.rom.readers.maps._walk`): the only `SetObjectFlagIsPersistent ..., TRUE` commands are
+  scripts_eterna_forest's (scr_seq 219, local 0, Cheryl, header 203) and scripts_route_201's
+  (427, local 2, the rival, header 342), the same in Kaizo. Those objects' scripts are 9702 and
+  9700, global ids (`SCRIPT_ID_OFFSET_FOLLOWER_PARTNERS`, include/script_manager.h:108;
+  script_manager.c:44) that run scripts_follower_partners under any header, a file that reaches
+  no battle command and no common script in either ROM. Overlay 9's objects are the Distortion
+  World's moving platforms (script 0: scripts_unk_0402, script_manager.c:248-251, no battle) and
+  its own object events (ov9_02249960.c:12840-13300: scripts 0, 2, 3, 5, 6, 8 and 10002,
+  scripts_field_moves, no battle), whose local ids 2-8 are already runnable on every header with
+  the Distortion World's features (`C_STARTED_SCRIPTS`, G-42); a warp out reloads the objects.
+  The player's object runs no script. So no persistent object can start a trainer battle in a
+  header the narrowing does not credit, and `tools/terrain.py` stays as it is (its
+  `decomp_check_trainer_objects` and `maps.check_trainer_objects` still raise if a header's own
+  script makes one of its trainer objects persistent).

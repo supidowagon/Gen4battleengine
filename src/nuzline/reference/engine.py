@@ -70,6 +70,7 @@ from nuzline.engine.ids import (
     SECRET_POWER_EFFECTS,
     SEMI_HIT_FLAGS,
     SEMI_SET_FLAGS,
+    SLEEPLESS_ABILITIES,
     SNORE_PARAM,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -853,6 +854,9 @@ def _calc_move_damage(
             power = power * 125 // 100
         else:
             power = power * 75 // 100
+    # lib.c:6913-6918 Iron Fist: a punching move (sPunchingMoves, MoveFlag.PUNCH) x12/10 (G-49).
+    if a_ability == AbilityId.IRON_FIST and _t(tables, "move_flags", move) & MoveFlag.PUNCH:
+        power = power * 12 // 10
     # lib.c:6921 NO_CLOUD_NINE gates the weather here and at lib.c:7046.
     weather = s.weather
     if not field_conditions or _weather_suppressed(tables, s):
@@ -1902,11 +1906,12 @@ def _arm_unburden(s: RefState, side: int) -> None:
 
 def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
     """BtlCmd_ChangeStatStage (script.c:2884-2902): a drop by another battler meets the target's
-    Clear Body, Keen Eye on accuracy or Hyper Cutter on Attack (ignorable, ``seen``)."""
+    Clear Body or White Smoke (:2884-2885, G-46), Keen Eye on accuracy or Hyper Cutter on Attack
+    (ignorable, ``seen``)."""
     if delta >= 0:
         return False
     return (
-        seen == AbilityId.CLEAR_BODY
+        seen in (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE)
         or (seen == AbilityId.KEEN_EYE and stat == Stat.ACC)
         or (seen == AbilityId.HYPER_CUTTER and stat == Stat.ATK)
     )
@@ -1926,7 +1931,11 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
     _arm_unburden(s, side)
-    forbidden = {AbilityId.INSOMNIA: Status.SLEEP, AbilityId.LIMBER: Status.PARALYSIS}
+    forbidden = {
+        AbilityId.INSOMNIA: Status.SLEEP,
+        AbilityId.VITAL_SPIRIT: Status.SLEEP,  # :4405, G-47
+        AbilityId.LIMBER: Status.PARALYSIS,
+    }
     if forbidden.get(mon.ability) == mon.status and mon.hp:
         mon.status = Status.NONE
         mon.status_counter = 0
@@ -1935,9 +1944,19 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
 
 
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
-    """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Shed Skin (lib.c:3567-3590) cures a
-    status on ``RandNext() % 10 < 3`` (``outcome.shed_skin``) while the holder has HP."""
+    """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Speed Boost (lib.c:3555-3564, G-48) raises
+    the Speed of a holder with HP below +6 that did not enter this turn (``fakeOutTurnNumber !=
+    totalTurns + 1``) by 1, an ability side effect whose message is built in C (no reveal);
+    Shed Skin (lib.c:3567-3590) cures a status on ``RandNext() % 10 < 3``
+    (``outcome.shed_skin``) while the holder has HP."""
     mon = _active(s, side)
+    if (
+        mon.ability == AbilityId.SPEED_BOOST
+        and mon.hp
+        and s.sides[side].stages[Stat.SPE] < STAGE_MAX
+        and s.sides[side].fake_out_turn != s.turn + 1
+    ):
+        _change_stage(s, side, Stat.SPE, 1)
     if (
         mon.ability == AbilityId.SHED_SKIN
         and mon.status != Status.NONE
@@ -1991,9 +2010,10 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
                 s.ai_ability_known[s.sides[0].active] = 1  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
-    # B10-4; White Smoke and Mist are unsupported). Its "cuts" message is built in C
+    # B10-4; Mist is unsupported). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
-    blockers = (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER)  # script.c:2884-2902 (B9-6)
+    # script.c:2884-2902 (B9-6; White Smoke, G-46).
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
     if (
         mon.hp
         and mon.ability == AbilityId.INTIMIDATE
@@ -2230,9 +2250,9 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     inflicting side). ``direct``: a status move (``SIDE_EFFECT_TYPE_DIRECT``), not a
     secondary effect (``_INDIRECT``)."""
     mon = _active(s, target)
-    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
-    # the other checks and its "stayed awake" message tags the ability.
-    if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) == AbilityId.INSOMNIA:
+    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia or Vital Spirit (:23-24,
+    # G-47) stops the sleep before the other checks and its "stayed awake" message tags it.
+    if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) in SLEEPLESS_ABILITIES:
         if target == 0:
             s.ai_ability_known[s.sides[0].active] = 1
         return
@@ -3883,13 +3903,14 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
         )
-        # A direct sleep on a living foe not asleep, without Insomnia as the user sees it, in an
+        # A direct sleep on a living foe not asleep, without Insomnia or Vital Spirit as the user
+        # sees it, in an
         # uproar: subscript_fall_asleep.s:43-45 -> :_292 sets MOVE_STATUS_NO_MORE_WORK (:_330).
         full = full or (
             effect == EffectId.STATUS_FOE
             and _t(tables, "move_param", move, 0) == Status.SLEEP
             and foe.hp > 0
-            and _ignorable(s, side, 1 - side) != AbilityId.INSOMNIA
+            and _ignorable(s, side, 1 - side) not in SLEEPLESS_ABILITIES
             and foe.status != Status.SLEEP
             and not s.sides[1 - side].substitute_hp  # :40 CheckSubstitute fails it first (B10-4)
             and _uproar_on(s)
@@ -4269,7 +4290,7 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     if sun:
         hp_calc = -_divide(mon.max_hp, 8)
     if s.weather == Weather.HAIL and not hidden:  # the hail branch
-        if ability == WEATHER_ABILITY_IDS["Ice Body"]:
+        if mon.ability == AbilityId.ICE_BODY:  # script.c:5601-5604 (G-45)
             if mon.hp < mon.max_hp:
                 hp_calc = _divide(mon.max_hp, 16)
         elif Type.ICE not in mon.types and mon.ability != AbilityId.SNOW_CLOAK:
@@ -4279,18 +4300,14 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         hp_calc = _divide(mon.max_hp, 16)  # script.c:5614-5618 (B9-6)
     if s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and mon.hp < mon.max_hp:
         hp_calc = _divide(mon.max_hp, 8)
-    rain = (
-        s.weather == Weather.RAIN
-        and mon.ability in (AbilityId.DRY_SKIN, AbilityId.RAIN_DISH)
-        and hp_calc > 0
-    )
     magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
     if hp_calc > 0:  # subscript_weather_continues.s _076
         _gain_hp(s, side, hp_calc)
     elif hp_calc < 0 and not magic_guard:
         _lose_hp(turn, s, side, -hp_calc)
-    # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip).
-    if side == 0 and ((sun and not magic_guard) or rain):
+    # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip); :_076 every
+    # heal, Ice Body's included (G-45).
+    if side == 0 and ((sun and not magic_guard) or hp_calc > 0):
         s.ai_ability_known[s.sides[0].active] = 1
 
 

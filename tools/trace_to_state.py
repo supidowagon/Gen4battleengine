@@ -235,7 +235,8 @@ def initial_state(
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import TERRAIN_EFFECTS, start_weather
 
-    opp = build_trainer_party(trainer, IntermediateData(get_game(game).intermediate_dir))
+    g = get_game(game)
+    opp = build_trainer_party(trainer, IntermediateData(g.intermediate_dir, g.id))
     terrain = battle_terrain(trainer, terrain)
     if terrain < 0:
         effect = np.asarray(tables.move_ai_effect)

@@ -48,7 +48,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
   guess is one coin per guessing read, as the decomp draws it (E1 Ruling R1,
   docs/ai/kaizo_roark.md 8.4), so it needs no per-trainer check;
-* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3). Every
+* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3), and deep
+  fog (``FOG``, E1 Batch C, ruling G-44: the accuracy x6/10 under ``NO_CLOUD_NINE``, bcp.c:
+  2934-2936, ``outcome._rate``; SolarBeam's ``FIELD_CONDITION_SOLAR_DOWN``; no countdown and no
+  turn-end HP, bcp.c:1213-1225; replaced by any weather move or ability). Every
   effect of each on the implemented set is modelled, all gated on Cloud Nine / Air Lock
   (``damage.weather_suppressed``): the damage modifiers (rain and sun on Fire / Water, the
   sandstorm Rock-type SpD boost, Solar Power), the accuracy abilities (Sand Veil, Snow Cloak),
@@ -60,8 +63,7 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   E2 batch 9) are modelled too; the rest belong to unsupported moves (SolarBeam, Weather Ball,
   Moonlight, Kaizo's Hurricane) or abilities (Hydration, Forecast; Leaf Guard is modelled since
   the E1 Gardenia batch, G-14), so they are
-  refused with their holder. Deep fog
-  stays refused (``Weather.FOG``);
+  refused with their holder;
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
   (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
   is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).
@@ -95,8 +97,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``Names.unclassified_rom_changes``) and ``not_reached`` ROM changes whose resolved
   condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
   a battle format or area, a move, ability or held item on either side, a trainer or a
-  trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
-  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
+  trainer bag. A condition that does not hold refuses nothing. Area weather and fog are read
+  through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
 * battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
   (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
@@ -229,7 +231,7 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.RAIN: Support.EXACT,
     Weather.SANDSTORM: Support.EXACT,
     Weather.HAIL: Support.EXACT,
-    Weather.FOG: Support.NONE,
+    Weather.FOG: Support.EXACT,  # E1 Batch C, G-44
 }
 # Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
 IMPLEMENTED_FORMATS: dict[str, Support] = {
