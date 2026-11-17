@@ -4,6 +4,16 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-16 restart: batch 11 tip 49084d6 sent for merge check; batch 12 in progress)
 
+- **Batch 11 merge (18:19):** main a5a60ad merged into 49084d6 on branch e2-b11-merge in
+  _scratch/e2/testwt: 6777c8c merge, 14e5406 backlog, a1a6722 Metronome / Assist draw keys moved
+  to 32+side / 34+side (they collided with Yawn 26, future_band 30, berry_confusion 31),
+  29fa658 cherry-pick of e60f40e, 1bb69c3 Gardenia generators via _teach, d097e68
+  test_stage_b_learn passes taken. Narrow checks green (diff seed 35 ok). FAST TIER running on
+  d097e68 (log _scratch/e2/ft_d097e68.log). Then: merge d097e68 into this branch, send tip + F list.
+  OWED over 8 GB: test_cli_rank_deaths_and_protect 8.47 GB alone, default_budget 7.82 alone
+  (>8 together); test_stage_b_learn::test_a_learn_at_a_terminal_state_stays_terminal (slow) 12.49.
+  Manager's non-blocking items: (b) sampler cost doubled (lax.cond -> select under vmap, so
+  turn_events runs every turn): find a cheaper form; (c) Encore via an invoker has no property test.
 - **Restart 2026-11-16 (manager brief).** Batch 11's merge-check tip = 49084d6 (sent). Batch 12
   WIP committed as 4eeba4d (untested), being reviewed and finished; families sent to the manager:
   stat stages (Calm Mind, Cosmic Power, Flatter, Tickle, Captivate, Acupressure, Haze, Psych Up,
