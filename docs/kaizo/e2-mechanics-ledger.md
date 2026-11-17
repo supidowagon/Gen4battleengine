@@ -2,7 +2,20 @@
 
 Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.md.
 
-## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
+## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
+
+- **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
+  manager with all results; waiting for its merge. Running background work that will notify:
+  (1) batch 13 builder (Opus) in worktree _scratch/e2/b13wt, branch e2-batch13 from 9e08c7e; it
+  builds, tests, gets one review, fixes, reports once. Batch 13 must end up ON TOP of 2c8efd6
+  (merge 2c8efd6 into e2-batch13, rebuild tables, dup scan, unsupported tests, targeted set).
+  (2) Sonnet runner: raw_rolls phases seeds 2 and 5 on the rented pod ci-day
+  (_scratch/rent/DAYBOX.md); send the manager one line with the result.
+  When batch 13 is at its tip: send the manager ONE message with the tip + results AND the
+  doubles plan as batches (deliverable, E1-owned files touched, rough size; 15-20 mechanic groups
+  per batch). Usage rules (main CLAUDE.md 7ebf2ac): clear at ~100k tokens; Sonnet for every
+  mechanical job (test runs, rebuilds, ledger/backlog edits); targeted merge runs go to ci-day via
+  a Sonnet agent that blocks for the result; never end a turn on a progress note.
 
 - **Main c4f0a60 merged (2026-11-17, 18a3f5e; E1 memory work, Batch A, Batch C).** Conflicts:
   Mist (B12-23) and White Smoke (G-46) both kept in `_foe_stage`, `intimidate` and the reference
