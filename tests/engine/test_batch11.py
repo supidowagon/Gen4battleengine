@@ -9,6 +9,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -36,6 +37,7 @@ from nuzline.engine.outcome import (
     pivot_view,
     replacement_known,
     replacement_possible,
+    sample_outcome,
 )
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, turn_events
@@ -435,3 +437,49 @@ def test_replacement_known_counts_a_move_learnt_at_a_later_level(tables, names):
 
     assert replacement_known(tables, state(28))
     assert not replacement_known(tables, state(30))
+
+
+_sample_flag = jax.jit(sample_outcome, static_argnames=("replacement",))
+
+
+def _through(tables, state, actions, first_key, key, replacement):
+    from nuzline.search.playout import step_through
+
+    return step_through(tables, state, actions, first_key, key, -1, replacement)
+
+
+_through_flag = jax.jit(_through, static_argnames=("replacement",))
+
+
+def _same(a, b):
+    for got, want in zip(jax.tree.leaves(a), jax.tree.leaves(b), strict=True):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+
+@pytest.mark.slow  # 444 s, 7.28 GB: four step_through / sample_outcome compiles
+def test_replacement_flag_true_matches_false_where_none_can_fire(tables, names):
+    """The sampler's static flag on its True path (``outcome.replacement_known``; B11-1's
+    redraw compiled in, as the leaf playouts and Stage A run it): Monferno knows Assist (an
+    invoker), so the flag is True; with no party mate Assist calls nothing, and neither side
+    knows or can learn Encore or Sleep Talk, so no replacement can fire and the redraw (a
+    ``lax.cond`` that leaves outcome A where ``replacement_possible`` is false) changes nothing.
+    Over three turns (Assist, Ember, Assist against Tackle), ``sample_outcome`` and
+    ``playout.step_through`` give identical outputs with the flag True and False, key for key."""
+    from tests.engine.helpers import roark_state
+
+    s = roark_state(tables, names, player_count=1, opp_count=1, player_moves=["Assist"])
+    assert replacement_known(tables, s)
+    keys = jax.random.split(jax.random.PRNGKey(5), 3 * 4 * 2).reshape(3, 4, 2, -1)
+    for turn, move in enumerate(("Assist", "Ember", "Assist")):
+        if int(s.over):
+            break
+        acts = jnp.asarray(
+            [names.move_slot(s, 0, move), names.move_slot(s, 1, "Tackle")], jnp.int32
+        )
+        for first_key, key in keys[turn]:
+            on = _sample_flag(first_key, tables, s, acts, replacement=True)
+            _same(on, _sample_flag(first_key, tables, s, acts, replacement=False))
+            on = _through_flag(tables, s, acts, first_key, key, replacement=True)
+            _same(on, _through_flag(tables, s, acts, first_key, key, replacement=False))
+        s, refused = on
+        assert not bool(refused)

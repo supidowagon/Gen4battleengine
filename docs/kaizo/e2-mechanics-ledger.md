@@ -17,7 +17,11 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_protect, kaizo_policy `-k "not batch12"`, test_cli default_budget / deaths_and_protect.
   Batch 12 check on cb7c878: no decomp disagreement, guards green, no duplicates. Its follow-ups:
   replacement_known's level-up half tested (test_batch11), the flag-True leaf path tested
-  (test_leaves), `_move_draws` docstring lists fold_in 41.
+  (test_batch11, slow: 444 s, 7.28 GB), `_move_draws` docstring lists fold_in 41.
+  OWED (owner E2, sampler cost): leaves and Stage A pay about 9.1 GB on a cold compile for a
+  party that has or can learn Encore or an invoker. Measured: `batched_playout`, 16 playouts,
+  fresh compile cache each: replacement=True 208.7 s, peak 9.08 GB (commit 10.44); False
+  160.5 s, peak 7.42 GB (commit 8.63). The flag-False program is itself over 7 GB cold.
 - **Batch 11 tip merged + batch 12 second review + sampler cost (2026-11-16):** 2e7fdff merges
   d097e68 (Acupressure's draw moved to fold_in 36: 29 is Focus Band's; no other shared index),
   064636b the review follow-ups (B12-28), then the sampler flag (B12-29). OWED: B12-22's
