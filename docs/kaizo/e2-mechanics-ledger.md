@@ -4,6 +4,20 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
 
+- **Main c4f0a60 merged (2026-11-17, 18a3f5e; E1 memory work, Batch A, Batch C).** Conflicts:
+  Mist (B12-23) and White Smoke (G-46) both kept in `_foe_stage`, `intimidate` and the reference
+  (battle_script.c:2876-2884); playout keeps E2's replacement-static `_play_jit` and main's
+  two-program `_turn_jit`. Items re-extracted (manifest 31), tables + backlog rebuilt (17 steps, 0
+  errors, 197 -> 168 groups); no duplicates; fold_in indices distinct. B12-31's slow check now
+  steps both ends of every class (Haze moved to Rock Throw at accuracy +1: the turn-start law was
+  one class there). Green: guards 68, test_cli 102 (+1 skip), differential, batch12 35, accuracy
+  classes 24, E1 Batch A+C 21, unsupported 54, B12-31 both tests, diff.py ok 300 37,
+  test_e1_roark_close 23 (clowns 252/254 now pass). Manager's diff seed on c4f0a60 (Metronome
+  last_move 118 vs 0) is B12-30: passes here; fixed test test_invokers
+  test_metronome_with_no_living_foe_still_succeeds. OWED: test_cli default_budget (8.03 GB, killed
+  at the cap); test_accuracy_classes_equal_raw_rolls (slow) whole killed twice by the machine's
+  free-RAM floor, so run in phases of 6 examples (_scratch/e2/rawrolls_phase.py SEED 6 256):
+  seeds 1, 3, 4 ok (6.7 GB, ~10 min each); seeds 2, 5 killed three times by the floor.
 - **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
   Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
   test_accuracy_classes_equal_raw_rolls (slow) killed at 8 GB alone; the rest of the file and
@@ -187,6 +201,12 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 ## Owed
 
 Rules left out because another mechanic is missing; each closes with the mechanic named.
+
+- **Test owed (sampler flag):** `leaves._run` with `replacement=True` has no test since 0855faf
+  replaced the leaves test with an engine test of the replacement flag.
+- **For E1 (bag, after the c4f0a60 merge):** `bag.refused_bag_params` still refuses Guard Spec
+  (Mist) and Dire Hit (Focus Energy) as "another stream's" mechanics; E2 models both (B12-23,
+  batch 12), so the refusal can be lifted on E1's side.
 
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,

@@ -141,6 +141,27 @@ def test_sleep_talk_with_no_living_foe_still_succeeds(tables, names):
         assert int(out.pp[0, 0, 1]) == int(s.pp[0, 0, 1])
 
 
+def test_metronome_with_no_living_foe_still_succeeds(tables, names):
+    """Ruling B12-30 for Metronome (RANGE_SINGLE_TARGET_SPECIAL as Sleep Talk; the case of the
+    manager's diff seed on main c4f0a60): with the foe fainted to its own confusion self-hit
+    first, Metronome passes HasNoTarget (bcp.c:3190), uses its PP and is movePrevByBattler
+    (:3212, :3945-3946); the called Pound finds no defender (battle_script.c:2121-2126)."""
+    t, n = tables, names
+    spec = _mon(n, "Clefairy", ["Metronome", "Tackle"])
+    s = make_state(
+        t,
+        [spec],
+        [_mon(n, "Geodude", ["Tackle"], level=50), _mon(n, "Geodude", ["Tackle"])],
+    )  # a second foe, so the battle goes on past the faint
+    s = s._replace(confusion=s.confusion.at[1].set(3), hp=s.hp.at[1, 0].set(1))
+    pound = metronome_calls(t, spec).index(n.move("Pound"))
+    hurt = _call(pound)._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
+    out, _ = _both(t, s, (0, 0), hurt)
+    assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
+    assert int(out.last_move[0]) == n.move("Metronome")
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+
+
 def test_copycat_copies_the_battles_last_move(tables, names):
     """BtlCmd_TryCopycat (battle_script.c:7328-7341) reads movePrev: the faster foe's move this
     turn, else the turn-start one; MOVE_NONE, a non-Metronome-able move (Protect) fails."""

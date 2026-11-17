@@ -540,12 +540,18 @@ def test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds(tables):
 
 
 def _b12_31_cases(tables, names):
-    """(state, actions, law, outcome, check) per B12-31 case: a faster foe's Haze, Psych Up or
-    Acupressure before the slower Scratch, the hit roll set to the new class."""
+    """(state, actions, law, live, outcome, stages_ok) per B12-31 case: a faster foe's Haze,
+    Psych Up or Acupressure before the slower player move. ``law`` is the move's class law,
+    ``live`` its hit rate at its own check (after the foe's move), ``outcome`` the turn's other
+    draws and ``stages_ok`` the foe's stage write. Before B12-31 each law held only the
+    turn-start rate (100 for all three), one class whose rolls ``live + 1``..100 miss."""
     rolled = empty_outcome()
-    # Haze: the player's accuracy -1 (75) goes back to 0 (100) before Scratch.
-    haze = roark_state(tables, names, opp_moves=["Haze"], opp_faster=True)
-    haze = haze._replace(stages=haze.stages.at[0, Stat.ACC].set(-1))
+    # Haze: the player's accuracy +1 (Rock Throw 90 * 133 / 100, past 100) goes back to 0 (90)
+    # before Rock Throw (BtlCmd_ResetAllStatChanges, battle_script.c:3534-3549).
+    haze = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Haze"], opp_faster=True
+    )
+    haze = haze._replace(stages=haze.stages.at[0, Stat.ACC].set(1))
     # Psych Up: Geodude copies the player's evasion +1 (75 for Scratch).
     psych = roark_state(tables, names, opp_moves=["Psych Up"], opp_faster=True)
     psych = psych._replace(stages=psych.stages.at[0, Stat.EVA].set(1))
@@ -555,38 +561,57 @@ def _b12_31_cases(tables, names):
     return [
         (
             haze,
-            A("Scratch", "Haze", haze, names),
-            {1: 75, 76: 25},
-            rolled._replace(hit=rolled.hit.at[0, 0].set(76)),
-            lambda out, s: int(out.stages[0, Stat.ACC]) == 0 and out.hp[1, 0] < s.hp[1, 0],
+            A("Rock Throw", "Haze", haze, names),
+            {1: 90, 91: 10},
+            90,
+            rolled,
+            lambda out: int(out.stages[0, Stat.ACC]) == 0,
         ),
         (
             psych,
             A("Scratch", "Psych Up", psych, names),
             {1: 75, 76: 25},
-            rolled._replace(hit=rolled.hit.at[0, 0].set(76)),
-            lambda out, s: int(out.stages[1, Stat.EVA]) == 1 and out.hp[1, 0] == s.hp[1, 0],
+            75,
+            rolled,
+            lambda out: int(out.stages[1, Stat.EVA]) == 1,
         ),
         (
             acup,
             A("Scratch", "Acupressure", acup, names),
             {1: 60, 61: 40},
-            drawn._replace(hit=drawn.hit.at[0, 0].set(61)),
-            lambda out, s: int(out.stages[1, Stat.EVA]) == 2 and out.hp[1, 0] == s.hp[1, 0],
+            60,
+            drawn,
+            lambda out: int(out.stages[1, Stat.EVA]) == 2,
         ),
     ]
 
 
 def test_haze_psych_up_acupressure_are_seen_by_hit_thresholds(tables, names):
     """B12-31: a faster foe's Haze, Psych Up or Acupressure changes the stages the slower
-    Scratch's check reads (battle_controller_player.c:2873-2874); hit_thresholds holds the new
-    threshold, so the roll past the turn-start one is its own class."""
-    for s, acts, law, _, _ in _b12_31_cases(tables, names):
+    move's check reads (battle_controller_player.c:2873-2874); hit_thresholds holds the new
+    threshold, so the roll past the live one is its own class."""
+    for s, acts, law, _, _, _ in _b12_31_cases(tables, names):
         assert hit_law(tables, s, acts, 0) == law
 
 
 @pytest.mark.slow
 def test_haze_psych_up_acupressure_classes_match_the_live_check(tables, names):
-    """B12-31: that class is decided by the live check, in both engines."""
-    for s, acts, _, outcome, check in _b12_31_cases(tables, names):
-        assert check(assert_matches_reference(tables, s, acts, outcome), s)
+    """B12-31: each class of the move's law is decided alike by the live check
+    (``roll > hitRate`` misses, battle_controller_player.c:2976-2977) at both its ends, in both
+    engines, and the classes that hit weigh ``live`` of 100. The turn-start law (one class
+    1..100) fails both: its roll 100 misses where its roll 1 hits."""
+    for s, acts, _, live, outcome, stages_ok in _b12_31_cases(tables, names):
+        law = hit_law(tables, s, acts, 0)
+        bounds = sorted(law)
+        hit_weight = 0
+        for lo, hi in zip(bounds, [*bounds[1:], 101], strict=True):
+            hits = []
+            for roll in (lo, hi - 1):
+                out = assert_matches_reference(
+                    tables, s, acts, outcome._replace(hit=outcome.hit.at[0, 0].set(roll))
+                )
+                assert stages_ok(out)
+                hits.append(bool(out.hp[1, 0] < s.hp[1, 0]))
+            assert hits == [lo <= live] * 2, (lo, hi - 1, hits)
+            hit_weight += law[lo] if hits[0] else 0
+        assert hit_weight == live
