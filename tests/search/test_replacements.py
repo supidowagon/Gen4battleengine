@@ -23,7 +23,7 @@ from nuzline.search.playout import (
     replacement_policy,
     send_replacements,
 )
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import drop_programs, roark_state
 from tests.search.fixtures import at_replacement
 from tests.strategies import supported_state
 
@@ -172,7 +172,11 @@ def test_pending_state_with_both_down_resolves_in_a_playout(tables, names):
 def test_result_records_deaths_and_end(tables, names):
     s = roark_state(tables, names)
     key = jax.random.PRNGKey(1)
-    r = playout(tables, s, key)
+    # The playout, its turn-by-turn replay and the one-turn playout are each a whole-engine
+    # program: each is dropped before the next (``drop_programs``; alive together they
+    # passed 16 GB).
+    r = jax.device_get(playout(tables, s, key))
+    drop_programs()
     state = s
     for _ in range(int(r.turns)):
         key, k_policy, k_turn = jax.random.split(key, 3)
@@ -181,6 +185,7 @@ def test_result_records_deaths_and_end(tables, names):
         assert not bool(refused)
     assert np.array_equal(r.deaths, state.deaths)
     assert int(r.ended) == 1 and int(state.over) == 1
+    drop_programs()
     cut = playout(tables, s, key, max_turns=1)
     assert int(cut.turns) == 1 and int(cut.ended) == 0 and int(cut.refused) == 0
 

@@ -33,6 +33,7 @@ from nuzline.search.playout import (
 )
 from tests.engine.helpers import (
     SAMPLE_PARTY,
+    drop_programs,
     _inter,
     _lead,
     _roark,
@@ -85,9 +86,10 @@ def _short_party_trace_f(tables, names):
     )
 
 
-def _replay(tables, state, key, max_turns=100):
+def _replay(tables, state, key, max_turns=100, opponent=True):
     """``playout(tables, state, key)`` turn by turn (the same key splits):
-    ``[(state before, the opponent's action, state after)]``."""
+    ``[(state before, the opponent's action, state after)]``; without ``opponent`` the
+    action is ``None`` (the AI's own program is not compiled)."""
     out = []
     for _ in range(max_turns):
         if int(state.over) != 0:
@@ -96,8 +98,10 @@ def _replay(tables, state, key, max_turns=100):
         action = playout_module._policy_jit(tables, state, k_policy)[0]
         played, refused = playout_module._turn_jit(tables, state, action, k_turn)
         assert not bool(refused)
-        k_ai = jax.random.split(k_turn)[0]  # as _play splits it
-        opp = int(ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state)))
+        opp = None
+        if opponent:
+            k_ai = jax.random.split(k_turn)[0]  # as _play splits it
+            opp = int(ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state)))
         out.append((state, opp, played))
         state = played
     return out
@@ -433,14 +437,19 @@ def _left(tables, state):
 
 
 def test_hp_and_pp_left(tables, names):
+    # Three whole-engine phases, each program dropped before the next (``drop_programs``):
+    # the eight playouts, their turn-by-turn replays, then the 64-wide batch. Alive
+    # together they passed 16 GB.
     state = roark_real_state(tables, names)
-    for i in range(8):
-        key = jax.random.PRNGKey(100 + i)
-        out = playout(tables, state, key)
-        final = _replay(tables, state, key)[-1][2]
+    keys = [jax.random.PRNGKey(100 + i) for i in range(8)]
+    outs = [jax.device_get(playout(tables, state, key)) for key in keys]
+    drop_programs()
+    for key, out in zip(keys, outs):
+        final = _replay(tables, state, key, opponent=False)[-1][2]
         hp, pp = _left(tables, final)
         assert abs(float(out.hp_left) - hp) < 1e-6 and abs(float(out.pp_left) - pp) < 1e-6
         assert 0.0 <= float(out.hp_left) <= 1.0 and 0.0 < float(out.pp_left) <= 1.0
+    drop_programs()
     # A refused playout has no result: 0 and 0.
     root = switch_refusal_root(tables, names)
     keys = jax.random.split(jax.random.PRNGKey(5), 64)
