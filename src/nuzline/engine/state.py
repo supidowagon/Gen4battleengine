@@ -121,6 +121,17 @@ Encodings:
   volatile Baton Pass does not keep (moves.h:46-48). A foe's move aimed at it misses unless its
   script hits that kind (bcp.c:3034-3040; ``MoveFlag.HIT_*``); the charge's lock is
   ``locked_move``.
+* E1 Batch D. ``pp_ups`` is each move slot's ``ppUps`` (``BattleMon.ppUps``, from the party
+  Pokemon, battle_lib.c:85): with the move it gives ``MoveTable_CalcMaxPP`` (move_table.c:25-34),
+  which caps the Leppa Berry's restore (``BattleMon_AddVal``, battle_lib.c:1009-1019) and picks
+  the slot Pluck's Leppa restores (:5611-5621); a level-up move that replaces a slot sets it to 0
+  (``Pokemon_ResetMoveSlot``, pokemon.c:3909-3918). ``micle`` is the active battler's
+  ``MoveEffectsData.micleBerry`` (subscript_held_item_temp_acc_up.s:10), cleared by its next
+  ordinary accuracy check (bcp.c:2967-2970). ``metronome_turns`` / ``metronome_move`` are its
+  ``MoveEffectsData.metronomeTurns`` and ``BattleContext.metronomeMove[battler]`` (the Metronome
+  item's count and the move it counts, battle_lib.c:6160-6198). All three are volatiles: a switch
+  or a faint zeroes ``moveEffectsData`` and ``metronomeMove`` (:2100-2104, :2134; :2212), Baton
+  Pass too (it keeps none of them, :2107-2115).
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -225,6 +236,7 @@ class BattleState(NamedTuple):
     knocked_off: jnp.ndarray
     moves: jnp.ndarray  # int16[2,6,4]
     pp: jnp.ndarray  # int8[2,6,4]
+    pp_ups: jnp.ndarray  # int8[2,6,4], BattleMon.ppUps (E1 Batch D)
     status: jnp.ndarray  # int8, ids.Status
     status_counter: jnp.ndarray  # int8, sleep turns / toxic counter
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
@@ -281,6 +293,9 @@ class BattleState(NamedTuple):
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
+    micle: jnp.ndarray  # int8, MoveEffectsData.micleBerry (E1 Batch D)
+    metronome_turns: jnp.ndarray  # int8, MoveEffectsData.metronomeTurns, 0-10
+    metronome_move: jnp.ndarray  # int16, BattleContext.metronomeMove[battler], 0 = none
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -462,6 +477,9 @@ VOLATILE_FIELDS = (
     "can_unburden",
     "minimized",
     "semi_invulnerable",
+    "micle",
+    "metronome_turns",
+    "metronome_move",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -507,6 +525,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "knocked_off": (_SLOT, np.int8),
     "moves": ((*_SLOT, MOVES), np.int16),
     "pp": ((*_SLOT, MOVES), np.int8),
+    "pp_ups": ((*_SLOT, MOVES), np.int8),
     "status": (_SLOT, np.int8),
     "status_counter": (_SLOT, np.int8),
     "gender": (_SLOT, np.int8),
@@ -561,6 +580,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "can_unburden": (_SIDE, np.int8),
     "minimized": (_SIDE, np.int8),
     "semi_invulnerable": (_SIDE, np.int8),
+    "micle": (_SIDE, np.int8),
+    "metronome_turns": (_SIDE, np.int8),
+    "metronome_move": (_SIDE, np.int16),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -704,6 +726,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves
     a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves] if mon.pp is None else mon.pp
+    a["pp_ups"][side, slot] = mon.pp_ups
     a["status"][side, slot] = mon.status
     a["status_counter"][side, slot] = mon.status_counter
     a["gender"][side, slot] = mon.gender

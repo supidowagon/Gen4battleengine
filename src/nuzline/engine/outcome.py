@@ -221,6 +221,7 @@ def _rate(
     weather=None,
     target_confused=None,
     total=None,
+    micle=None,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against side ``target``'s ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
@@ -232,7 +233,9 @@ def _rate(
     target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
     traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
     clamped stage sum to use instead of the one ``acc`` and ``eva_stage`` give (0-12,
-    ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed."""
+    ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed.
+    ``micle``: the attacker's ``moveEffectsData.micleBerry`` at the check (default
+    ``state.micle[side]``), x120/100 after the held items (bcp.c:2967-2970, G-59)."""
     weather = state.weather if weather is None else weather
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
     fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
@@ -293,7 +296,7 @@ def _rate(
     tangled = (d_ability == AbilityId.TANGLED_FEET) & jnp.asarray(target_confused, bool)
     rate = jnp.where(tangled, rate * 50 // 100, rate)
     # The held items (:2949-2965), after Hustle (an unsupported ability) and Tangled Feet and
-    # before the Micle Berry flag (an unsupported item) and Gravity: the defender's
+    # before the Micle Berry flag and Gravity: the defender's
     # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
     # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
     # HOLD_EFFECT_ACCURACY_UP_SLOWER (Zoom Lens), each * (100 + param) / 100
@@ -309,6 +312,9 @@ def _rate(
         (a_effect == ItemId.ZOOM_LENS) & jnp.asarray(target_moved, bool)
     )
     rate = jnp.where(lens, rate * (100 + a_power) // 100, rate)
+    # bcp.c:2967-2970: the Micle Berry's flag, after the items and before Gravity (G-59).
+    micle = state.micle[side] != 0 if micle is None else jnp.asarray(micle, bool)
+    rate = jnp.where(micle, rate * 120 // 100, rate)
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
@@ -428,7 +434,7 @@ def future_thresholds(
     the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
     (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
-    the turn end's countdown)."""
+    the turn end's countdown); the attacker's Micle Berry flag set or not (G-59)."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -459,13 +465,14 @@ def future_thresholds(
     weathers = jnp.stack(
         [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
     ).astype(_I32)
-    a_mon, d_mon, total, wi, conf, lk = (
+    a_mon, d_mon, total, wi, conf, lk, mc = (
         g.reshape(-1)
         for g in jnp.meshgrid(
             slots,
             slots,
             jnp.arange(_FUTURE_TOTALS),
             jnp.arange(_FUTURE_WEATHERS),
+            jnp.arange(2),
             jnp.arange(2),
             jnp.arange(2),
             indexing="ij",
@@ -484,7 +491,7 @@ def future_thresholds(
         move = state.future_move[d].astype(_I32)
         foe = 1 - a  # the defender is the other side's battler (singles)
 
-        def rate(am, dm, t, w, c, k, a=a, move=move, d=d):
+        def rate(am, dm, t, w, c, k, m, a=a, move=move, d=d):
             s = state._replace(
                 active=state.active.at[a].set(am.astype(state.active.dtype)),
                 lock_on=state.lock_on.at[d].set(k.astype(state.lock_on.dtype)),
@@ -494,11 +501,17 @@ def future_thresholds(
             )
             return _rate(
                 tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
-                weathers[w], c == 1, t,
+                weathers[w], c == 1, t, m == 1,
             )  # fmt: skip
 
-        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk))
+        thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk, mc))
         lock_ok = (lk == 0) | lock_move | (state.lock_on[d] >= 2)
+        # The Micle Berry's flag of the attacker slot's battler at the hit (G-59): 0, or 1 when
+        # it is set now or that battler holds a Micle Berry (its berry can set it this turn).
+        micle_set = jnp.where(a_mon == state.active[a], state.micle[a] != 0, False) | (
+            tables.item_effect[state.item[a, a_mon]] == ItemId.MICLE_BERRY
+        )
+        micle_ok = (mc == 0) | micle_set
 
         def actual(am, dm, keep_acc, a=a, d=d):
             s = state._replace(active=state.active.at[a].set(am.astype(state.active.dtype)))
@@ -509,7 +522,9 @@ def future_thresholds(
         kept = jax.vmap(actual)(a_mon, d_mon, jnp.ones_like(a_mon, bool))
         reset = jax.vmap(actual)(a_mon, d_mon, jnp.zeros_like(a_mon, bool))
         stage_ok = free | (total == kept) | (total == reset)
-        possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok)
+        possible.append(
+            on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok & micle_ok
+        )
     loose = jnp.broadcast_to(tracer, (2,))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
@@ -525,6 +540,7 @@ def _hit_threshold(
     weather=None,
     target_confused=None,
     move=None,
+    micle=None,
 ):
     """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
     a target that has moved; the weather and the target's confusion at the check) instead.
@@ -555,6 +571,7 @@ def _hit_threshold(
         target_moved,
         weather,
         target_confused,
+        micle=micle,
     )
     # A switch or an item use runs no move, so it has no roll.
     no_move = is_switch(actions[side]) | is_item(actions[side])
@@ -576,7 +593,8 @@ def hit_threshold(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
 # as at the start or not (Tangled Feet).
 _STAGE_VARIANTS = 4
 _FIELD_VARIANTS = 4  # weather (start, the foe's move's) x target confusion (start, cleared)
-HIT_VARIANTS = 2 * _STAGE_VARIANTS**2 * _FIELD_VARIANTS
+# x the Micle flag (as at the start, set): G-59.
+HIT_VARIANTS = 2 * 2 * _STAGE_VARIANTS**2 * _FIELD_VARIANTS
 
 
 def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -633,6 +651,9 @@ def hit_thresholds(
       move's after-effects, its switch-in, or a Pluck of the side's berry: ``hooks``,
       ruling G-5; over-approximate: whenever it or the side holds such a berry).
 
+    * the attacker's Micle Berry flag (G-59): its berry can trigger before the check (the
+      second half of the grid, possible for a holder).
+
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
     its repeats here).
@@ -679,6 +700,11 @@ def hit_thresholds(
     )
     zoom = uses_move & (held == ItemId.ZOOM_LENS) & target_may_have_moved
     weather_move = changes & (effect == EffectId.WEATHER)
+    # The Micle Berry's flag set before the side's check (G-59): only the side's own berry can
+    # set it then (hooks.held_item_check at a pinch an earlier hit brings; a Pluck sets the
+    # eater's, after the eater's own check). Over-approximate: the side's active holds one.
+    # Only the side's own check clears it.
+    micle_free = uses_move & (held == ItemId.MICLE_BERRY)
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in (0, 1):
@@ -714,17 +740,20 @@ def hit_thresholds(
         conf_grid = jnp.tile(jnp.repeat(confuseds, n_stage), 4)
         weather_grid = jnp.tile(jnp.repeat(weathers, 2 * n_stage), 2)
         moved_grid = jnp.repeat(jnp.array([False, True]), 4 * n_stage)
-        thresholds.append(
-            jax.vmap(
-                lambda a, e, m, w, c, side=side: _hit_threshold(
-                    tables, state, actions, side, a, e, m, w, c, moves[side]
-                )
-            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
-        )
+        for micle in (state.micle[side] != 0, jnp.asarray(True)):
+            thresholds.append(
+                jax.vmap(
+                    lambda a, e, m, w, c, side=side, micle=micle: _hit_threshold(
+                        tables, state, actions, side, a, e, m, w, c, moves[side], micle
+                    )
+                )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
+            )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
-        possible.append(jnp.concatenate([grid_ok, grid_ok & zoom[side]]))
+        grid_ok = jnp.concatenate([grid_ok, grid_ok & zoom[side]])
+        possible.append(jnp.concatenate([grid_ok, grid_ok & micle_free[side]]))
+    thresholds = [jnp.concatenate(thresholds[2 * k : 2 * k + 2]) for k in (0, 1)]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 

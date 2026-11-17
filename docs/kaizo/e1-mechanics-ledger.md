@@ -794,3 +794,111 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   header the narrowing does not credit, and `tools/terrain.py` stays as it is (its
   `decomp_check_trainer_objects` and `maps.check_trainer_objects` still raise if a header's own
   script makes one of its trainer objects persistent).
+
+## Batch D
+
+The Fantina split's held items. Item data: vanilla `res/items/data/*.json`; Kaizo from the ROM
+(`data/intermediate_kaizo/rom/items.json`): every item keeps vanilla's name and hold effect, with
+these params changed: Ganlon and Apicot 0 (vanilla 4), Jaboca and Rowap 6 (vanilla 8). The calc
+repo and the sheet add no rule for any of them. New state: `pp_ups` (per move slot), `micle`,
+`metronome_turns`, `metronome_move` (per side, volatiles: a switch or faint zeroes
+`moveEffectsData` and `metronomeMove`, battle_lib.c:2100-2104, :2134, :2212; Baton Pass keeps none
+of them, :2107-2115).
+
+- G-53 A pinch berry's trigger `curHP <= maxHP / itemPower` (battle_lib.c:4778 etc., :5201 etc.;
+  Custap :1294) is a plain C `/`. In the Kaizo ROM it calls the ARM9 runtime's `_u32_div_f`
+  (rom:arm9@0x020E2178; from overlay16@0x02257DA2 for Ganlon, @0x02253202 for Custap), whose first
+  instructions `cmp r1, #0; bxeq lr` return the dividend for a zero divisor (the signed
+  `_s32_div_f`, @0x020E1F6C, also returns the dividend). So a param 0, or 1 under Gluttony, gives
+  `maxHP`: Kaizo's Ganlon and Apicot raise Defense / Sp. Def at the first held-item check whatever
+  the HP. `order.pinch_limit` (the reference's `_pinch_limit`) at every pinch site; the pinch
+  berries and Custap leave `effect_map.DIVISOR_PARAM_MIN` (Sticky Barb, Shell Bell and the flavor
+  berries stay: they go through `BattleSystem_Divide`). Pluck's stat raise has no HP test.
+- G-54 Jaboca / Rowap Berry (`HOLD_EFFECT_RECOIL_PHYSICAL` / `_SPECIAL`, `ItemId.JABOCA_BERRY` /
+  `ROWAP_BERRY`): `BattleSystem_TriggerHeldItemOnHit` (battle_lib.c:5400-5419), one switch on the
+  defender's hold effect after the defender's item check (`AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT`,
+  bcp.c:3698-3706). The defender's `physicalDamageTaken` / `specialDamageTaken` (set by the move's
+  class at UpdateHP, bcp.c:3411-3424, this action), a living attacker without Magic Guard, Jaboca
+  also not under `SYSCTL_UTURN_ACTIVE`; no HP test on the holder. The substitute check (:5378)
+  returns first. subscript_held_item_recoil_when_hit.s: the attacker loses `Divide(maxHP,
+  itemPower)` through UPDATE_HP with SKIP_SPRITE_BLINK (no resist berry; it may faint), then
+  `RemoveItem BTLSCR_DEFENDER`. `AFTER_MOVE_EFFECT_HELD_ITEM_STATUS` (bcp.c:3730) then re-checks
+  the attacker's item. Pursuit's pre-switch hit: subscript_pursuit.s:32 writes the damage into
+  `physicalDamageTaken` whatever the class, then OnHit (:44, :90). U-turn:
+  `TriggerHeldItemOnPivotMove`'s Jaboca case (:7368-7375) is the third of four overwriting `if`s
+  (Shell Bell, Life Orb, Jaboca, Sticky Barb). Pluck / Bug Bite eat both with no effect
+  (`PLUCK_EFFECT_NONE` berries). `effects.on_hit_berry`, `effects.pivot_item`, `step._use_move` /
+  `_pursuit_hit`; reference `_on_hit_berry`, `_u_turn`, `_pursuit`.
+- G-55 Enigma Berry (`HOLD_EFFECT_HP_RESTORE_SE`, `ItemId.ENIGMA_BERRY`; param 4 in both games):
+  the same OnHit switch (:5421-5428): a living defender and `MOVE_STATUS_SUPER_EFFECTIVE`, which
+  CheckTypeChart sets for a move with power that is not RANGE_USER (bcp.c:2350-2358) and
+  ApplyTypeChart's end clears under `SYSCTL_IGNORE_TYPE_CHECKS` / `_IGNORE_IMMUNITIES`
+  (battle_lib.c:2649-2678: Night Shade, Seismic Toss, Super Fang, Counter, Endeavor, Future
+  Sight, Present's heal). subscript_held_item_hp_restore.s heals `Divide(maxHP, itemPower)`,
+  capped; its PLUCK_CHECK removes it. `MoveHit.super_effective`, `effects.on_hit_berry`;
+  reference `_super_effective`, `_on_hit_berry`.
+- G-56 Iron Ball (`HOLD_EFFECT_SPEED_DOWN_GROUNDED`, `ItemId.IRON_BALL`): (a) Speed halved by
+  `sSpeedHalvingItemEffects` (battle_lib.c:1160-1169, :1240-1246) through
+  `BattleSystem_GetItemData` on the held item (no Klutz / Embargo), after Swift Swim and before
+  Choice Scarf; the list also holds Macho Brace and the Power items, so `order.effective_speed`
+  halves by `ids.SPEED_HALVING_HOLD_EFFECTS` on the raw hold effect (those items stay refused for
+  their other effects). (b) `BasicTypeMulApplies` (:2534-2537) lifts an immune Flying row
+  (`damage.identified`'s `CHART_GROUNDED`, as Ingrain). (c) ApplyTypeChart's Levitate
+  (:2600-2603) skips a holder (`damage.levitated`). (d) The entry hazards
+  (subscript_hazards_check.s:7) and Arena Trap (`BattlerIsGrounded`, :5500-5507, in
+  `Battler_IsTrapped`) ground the holder (`damage.grounded`, `actions.trapped`). (e) AI:
+  `switching.defender_chart_flags` grounds a holder for every ApplyTypeChart walk;
+  `calc_effectiveness_flags(..., iron)` passes each CalcEffectiveness call's `defenderItemEffect`
+  (`NoImmunityOverrides`, :2759-2764): the bench member's party item (trainer_ai.c:3774), the
+  player's active battler's (:3790, battle_lib.c:8006); speed compares go through
+  `order.effective_speed`. The AI's Iron Ball refusals and `switching.ITEM_IRON_BALL` are gone.
+  Fling (power 130) is unsupported.
+- G-57 Grip Claw (`HOLD_EFFECT_EXTEND_TRAPPING`, `ItemId.GRIP_CLAW`): subscript_bind_start.s:9-12
+  draws `Random 3, 3`, then for an attacker holding the claw sets 6 (`ids.GRIP_CLAW_TURNS`). The
+  duration draw stays in the outcome with its law; a holder does not read it. `effects._trap`.
+- G-58 Leppa Berry (`HOLD_EFFECT_PP_RESTORE`, `ItemId.LEPPA_BERRY`; param 10 in both games):
+  held (battle_lib.c:4636-4653 / :5026-5043): the first slot with a move at 0 PP regains
+  `itemPower` through `BattleMon_AddVal`, capped at `MoveTable_CalcMaxPP(move, ppUps)`
+  (:1009-1019; move_table.c:25-34: `pp + pp * 20 * min(ppUps, 3) / 100` in a u8); no such slot,
+  no trigger. Pluck / Bug Bite (`PLUCK_EFFECT_PP_RESTORE`, :5609-5633): the eater's first slot with
+  the largest `maxPP - ppCur` above 0 regains it, capped. With every move full the decomp's `slot`
+  is uninitialized; in the Kaizo ROM it is PluckBerry's `[sp, #8]` (written @0x02258E3C, read
+  @0x02258E4A), last written by `Battler_Ability`'s `push {r4, r5}` (overlay16@0x02255A54) under
+  `Battler_IgnorableAbility` (@0x02255ABC), called by `BtlCmd_TryPluck` (@0x02247B5C) with r4 = 60
+  (`ABILITY_STICKY_HOLD`), a call made whenever the defender holds an item. So `slot` is 60:
+  `AddVal(BATTLEMON_CUR_PP_1 + 60)` is `BATTLEMON_TRANSFORMED_PERSONALITY`
+  (generated/battle_mon_params.txt), AddVal's default, `ErrorHandling_AssertFail` (compiled in,
+  @0x02252E8A), which does nothing outside a link (error_handling.c:11-16). No PP changes, and
+  the restore subscript still runs (the pluck flag is cleared). `ppUps` is `BattleState.pp_ups`
+  from the party (battle_lib.c:85); a learned move replacing a slot zeroes it
+  (battle_script.c:10169-10170). `hooks._leppa`, `hooks.max_pp`; reference `_held_item`,
+  `_pluck_berry`, `_max_pp`.
+- G-59 Micle Berry (`HOLD_EFFECT_PINCH_ACC_UP`, `ItemId.MICLE_BERRY`; param 4 in both games): at
+  the pinch (`pinch_limit`, Gluttony halves; :4897-4906, :5110-5119)
+  subscript_held_item_temp_acc_up.s:10 sets `moveEffectsData.micleBerry`; its PLUCK_CHECK removes
+  the berry; Pluck sets the eater's flag with no HP test (:5827-5830). The flag gives x120/100
+  after the held items and before Gravity in `CheckMoveHitAccuracy`, which clears it
+  (bcp.c:2967-2970) once past its early returns (accuracy 0, `SYSCTL_FIRST_OF_MULTI_TURN`,
+  `SYSCTL_NONSTANDARD_ACC_CHECK`: Future Sight's use, an OHKO move), at TryMove and at the Future
+  Sight hit (battle_script.c:6115, the stored attacker slot's battler). No new draw: the accuracy
+  roll's classes get a Micle axis (`outcome.hit_thresholds`, possible for a holder, so
+  `HIT_VARIANTS` doubles; `future_thresholds`, possible for a set flag or a holder of the slot).
+- G-60 The Metronome item (`HOLD_EFFECT_BOOST_REPEATED`, `ItemId.METRONOME_ITEM`): CalcDamage
+  multiplies by `(10 + metronomeTurns) / 10` right after Life Orb (battle_script.c:1350-1352; the
+  param is not read). `BattleSystem_UpdateMetronomeCount` (battle_lib.c:6160-6178) runs at the end
+  of BeforeMove (bcp.c:3221: past the status checks and HasNoTarget; DecrementPP never returns
+  TRUE): a holder not uproaring nor move-locked (Thrash is unsupported; `SYSCTL_LAST_OF_MULTI_TURN`
+  is clear at BeforeMove) counts `moveTemp` (the chosen or encored move, Struggle, an invoker):
+  the same move as `metronomeMove` +1 up to 10, another one 0 and it becomes `metronomeMove`; any
+  other battler's count goes to 0. `BattleSystem_VerifyMetronomeCount` at UpdateMoveBuffers
+  (bcp.c:3957; :6181-6198) takes one back for `MOVE_STATUS_NO_EFFECTS` (CheckMoveFailure did not
+  reach USE_MOVE, bcp.c:3312-3331: a miss, Protect, a semi-invulnerable foe, a failure, an
+  immunity, no PP), `metronomeMove == moveTemp`, a count above 0, `repeatedMoveCount` 0 (Rollout's
+  count before its script, battle_script.c:5665), not uproaring, not
+  `SYSCTL_LAST_OF_MULTI_TURN` (a charge move's strike, subscript_charge_move_cleanup.s:7, and
+  Bide's end) and not move-locked; a status-check disruption or no target sets none of those
+  bits. Multi-hit moves loop to TRY_MOVE (bcp.c:3790): one update per action. TrainerAI_CalcDamage
+  has no item factor. The turn-start damage classes use the count the side's own BeforeMove leaves
+  (`enumerate.outcome_laws`). `damage.metronome_boost`, `effects.metronome_update` /
+  `metronome_verify`, `step._use_move`; reference `_move_damage`, `_metronome_update`,
+  `_metronome_verify`.

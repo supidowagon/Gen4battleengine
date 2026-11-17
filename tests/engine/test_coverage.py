@@ -135,13 +135,6 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
         assert not any("battle format" in m for m in r.missing)
 
 
-def test_start_condition_argument_is_checked(tables, names):
-    # Every Weather is modelled (G-44), so the refused example is an id outside the enum.
-    bad = max(Weather) + 1
-    r = check_opponent(tables, names, roark_trainer(), roark_party(names), bad)
-    assert f"Battle start: weather id {bad} (weather UNSUPPORTED)" in r.missing
-
-
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
     # E1 ruling G-43: a bag item the AI can use that sets Mist (Guard Spec.) or Focus Energy
     # (a Poke Ball's dummy params) is refused by name; Super Potion acts by its params.

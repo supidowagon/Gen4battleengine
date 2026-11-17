@@ -52,7 +52,6 @@ def test_decomp_ids_match_the_manifest(names):
         assert names.ability(name) == ability, name
     for name, move in switching.MOVE_IDS.items():
         assert names.move(name) == move, name
-    assert names.item("Iron Ball") == switching.ITEM_IRON_BALL
     assert names.move("Struggle") == switching.MOVE_STRUGGLE
 
 

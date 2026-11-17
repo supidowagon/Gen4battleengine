@@ -53,7 +53,7 @@ from nuzline.ai.switching import (
     wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import calc_move_damage
+from nuzline.engine.damage import calc_move_damage, iron_ball
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 __all__ = ["REFUSED_SLOT", "post_ko_switch_in"]
@@ -85,7 +85,7 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
     score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
-    identified, grounded, roosting = defender_chart_flags(state, 0)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
         tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
@@ -107,9 +107,11 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
     ) & _U8
     # Move_CalcVariableType (:7998): each candidate's own Hidden Power type.
     types = party_move_types(tables, state)  # [SLOTS, MOVES]
-    flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k))(
-        moves.reshape(-1), types.reshape(-1)
-    ).reshape(SLOTS, MOVES)
+    # Battler_HeldItemEffect(defender) (battle_lib.c:8006): the player's Iron Ball (G-56).
+    d_iron = iron_ball(tables, state, 0)
+    flags = jax.vmap(
+        lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k, d_iron)
+    )(moves.reshape(-1), types.reshape(-1)).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)
     pick_1 = jnp.argmax(jnp.where(eligible, score_1, -1)).astype(_I32)

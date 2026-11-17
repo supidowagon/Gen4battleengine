@@ -415,6 +415,10 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     out = state._replace(
         moves=state.moves.at[0, slot, k].set(jnp.where(replaced, move, state.moves[0, slot, k])),
         pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+        # SEQ_GET_EXP_LEARNED_MOVE sets the slot's PP Ups to 0 (battle_script.c:10169-10170, E1 Batch D).
+        pp_ups=state.pp_ups.at[0, slot, k].set(
+            jnp.where(replaced, 0, state.pp_ups[0, slot, k]).astype(state.pp_ups.dtype)
+        ),
         learn_cursor=state.learn_cursor.at[slot].set((cursor + 1).astype(cursor.dtype)),
     )
     return advance_learns(tables, out)

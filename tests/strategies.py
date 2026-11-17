@@ -1630,6 +1630,81 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         teach(side, active, rnd.choice(PUNCH_MOVES))
 
 
+# E1 Batch D (G-53 .. G-60): the Fantina split's held items ``_draw_batch_d`` gives the active
+# Pokemon, with what makes each act.
+BATCH_D_ITEMS = (
+    "Jaboca Berry",
+    "Rowap Berry",
+    "Enigma Berry",
+    "Leppa Berry",
+    "Micle Berry",
+    "Grip Claw",
+    "Metronome",
+    "Iron Ball",
+    "Ganlon Berry",
+    "Apicot Berry",
+)
+BATCH_D_MOVES = {
+    "Grip Claw": ("Wrap", "Bind", "Fire Spin", "Whirlpool", "Clamp"),
+    "Iron Ball": ("Earthquake", "Mud-Slap", "Dig"),
+    "Jaboca Berry": ("Pluck", "Bug Bite"),
+    "Micle Berry": ("Pluck", "Bug Bite"),
+    "Leppa Berry": ("Pluck", "Bug Bite"),
+}
+
+
+def _draw_batch_d(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon a ``BATCH_D_ITEMS`` item, most of the time with what
+    makes it act: low HP for the pinch berries (Micle, Ganlon, Apicot), a slot at 0 PP and PP Ups
+    for Leppa, a binding move for Grip Claw, a Ground move on the foe (a Flying or Levitate holder)
+    for Iron Ball, a running count for Metronome, a foe Pluck for the berries. Also, on its own,
+    a Micle flag (G-59) and a Metronome count (G-60) whatever the item."""
+    rnd = draw(st.randoms(use_true_random=False))
+    if rnd.random() < 0.1:
+        a["micle"][side] = 1
+    own = [int(m) for m in a["moves"][side, active] if m]
+    if rnd.random() < 0.2 and own:
+        a["metronome_move"][side] = rnd.choice(own)
+        a["metronome_turns"][side] = rnd.randint(0, 10)
+    if draw(st.integers(0, 2)) != 0:
+        return
+    name = rnd.choice(BATCH_D_ITEMS)
+    a["item"][side, active] = names.item(name)
+    if rnd.random() >= 0.8:
+        return
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def teach(who: int, mon: int, move_name: str) -> None:
+        move = names.move(move_name)
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, who, mon, move, rnd.randint(0, 3))
+
+    max_hp = int(a["max_hp"][side, active])
+    if name in ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry"):
+        a["hp"][side, active] = rnd.randint(1, max(max_hp // 3, 1))
+    if name == "Leppa Berry":
+        move_pp = np.asarray(tables.move_pp)
+        for k, move in enumerate(a["moves"][side, active]):
+            if move:
+                ups = rnd.randint(0, 3)
+                base = int(move_pp[move])
+                a["pp_ups"][side, active, k] = ups
+                a["pp"][side, active, k] = rnd.randint(0, base + base * 20 * ups // 100)
+        slots = [k for k, m in enumerate(a["moves"][side, active]) if m]
+        if slots and rnd.random() < 0.6:
+            a["pp"][side, active, rnd.choice(slots)] = 0
+    if name == "Metronome" and own:
+        a["metronome_move"][side] = rnd.choice(own)
+        a["metronome_turns"][side] = rnd.randint(0, 10)
+    if name in BATCH_D_MOVES:
+        who = side if name == "Grip Claw" else foe
+        mon = active if name == "Grip Claw" else foe_mon
+        teach(who, mon, rnd.choice(BATCH_D_MOVES[name]))
+    if name == "Iron Ball" and rnd.random() < 0.5:
+        a["ability"][side, active] = AbilityId.LEVITATE
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -1743,6 +1818,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_status_guard(draw, tables, a, side, active, names)
         _draw_guard_download(draw, tables, a, side, active, names)
         _draw_batch_c(draw, tables, a, side, active, names)
+        _draw_batch_d(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one

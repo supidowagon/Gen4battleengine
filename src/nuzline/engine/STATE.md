@@ -390,7 +390,7 @@ three structs has a row.
 | `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
 | `BattleMon.ppCur` | `pp` | mapped |
-| `BattleMon.ppUps` | — | later (M3) |
+| `BattleMon.ppUps` | `pp_ups` | mapped |
 | `BattleMon.level` | `level` | mapped |
 | `BattleMon.friendship` | `friendship` | mapped |
 | `BattleMon.nickname` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
@@ -439,8 +439,8 @@ three structs has a row.
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
 | `MoveEffectsData.embargoTurns` | — | later (M6) |
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
-| `MoveEffectsData.metronomeTurns` | — | later (M6) |
-| `MoveEffectsData.micleBerry` | — | later (M6) |
+| `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
+| `MoveEffectsData.micleBerry` | `micle` | mapped |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
 | `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
 | `MoveEffectsData.meFirst` | — | later (M6) |
@@ -627,7 +627,7 @@ three structs has a row.
 | `BattleContext.conversion2Move` | — | later (M6) |
 | `BattleContext.conversion2Battler` | — | later (M6) |
 | `BattleContext.conversion2Type` | — | later (M6) |
-| `BattleContext.metronomeMove` | — | later (M6) |
+| `BattleContext.metronomeMove` | `metronome_move` | mapped |
 | `BattleContext.storedDamage` | `bide_damage` | mapped |
 | `BattleContext.lastHitByBattler` | — | later (M6) |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
