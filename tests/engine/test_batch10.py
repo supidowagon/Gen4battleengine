@@ -4,7 +4,10 @@ split's mechanics, hand cases each checked against the reference engine
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax.numpy as jnp
+import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.ids import Stat, Status, Type
@@ -540,32 +543,41 @@ def test_gust_doubles_and_earthquake_misses_a_flyer(tables, names):
     assert int(quake.hp[0, 0]) < int(b.hp[0, 0])  # Bounce then landed
 
 
-def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(tables, names):
+@pytest.mark.parametrize(
+    ("foe", "slot", "sun", "user", "revealed"),
+    [
+        ("Hoothoot", 0, False, "Slakoth", True),  # Insomnia (:5)
+        ("Hoothoot", 1, False, "Slakoth", False),  # Keen Eye: not in the subscript
+        ("Mankey", 0, False, "Slakoth", True),  # Vital Spirit (:6)
+        ("Hoppip", 1, True, "Slakoth", True),  # Leaf Guard in sun (:7-9)
+        ("Hoppip", 1, False, "Slakoth", False),  # Leaf Guard out of sun: :8 jumps to _021
+        ("Hoothoot", 0, False, "Cranidos", False),  # Insomnia behind Mold Breaker
+        ("Hoppip", 1, True, "Cranidos", False),  # Leaf Guard in sun behind Mold Breaker
+    ],
+)
+def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(
+    tables, names, foe, slot, sun, user, revealed
+):
     """B10-13: Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript runs on
-    MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test Insomnia
-    before its miss test (:21) and tag it (:31-37, BattleAI_SetAbility, battle_script.c:
-    11798-11806). Another ability is not revealed; neither gets drowsy."""
-    from nuzline.engine.ids import AbilityId, SemiKind
+    MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test Insomnia, Vital
+    Spirit, and Leaf Guard only in sun (:7 CheckIgnoreWeather, :8 FIELD_CONDITION_SUNNY), before
+    its miss test (:21), and tag it (:31-37, BattleAI_SetAbility, battle_script.c:11798-11806).
+    All three are CheckIgnorableAbility (battle_script.c:7705-7709): Battler_IgnorableAbility
+    (battle_lib.c:3108-3123) is FALSE for a Mold Breaker attacker, so nothing is revealed. Another
+    ability is not revealed; nobody gets drowsy (the semi miss, :21)."""
+    from nuzline.engine.ids import SemiKind, Weather
 
     n = names
-    s = make_state(tables, [_mon(n, "Hoothoot", ["Fly"], 10)], [_mon(n, "Slakoth", ["Yawn"], 40)])
+    mon = dataclasses.replace(_mon(n, foe, ["Fly"], 10), ability_slot=slot)
+    s = make_state(tables, [mon], [_mon(n, user, ["Yawn"], 40)])
     s = s._replace(
         semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.AIRBORNE),
         locked_move=s.locked_move.at[0].set(n.move("Fly")),
     )
-
-    # Hoothoot's ability slots (the decomp ability is read from the slot): Insomnia, Keen Eye.
-    def with_slot(k, ability):
-        return s._replace(
-            ability_slot=s.ability_slot.at[0, 0].set(k), ability=s.ability.at[0, 0].set(ability)
-        )
-
-    insomnia = with_slot(0, AbilityId.INSOMNIA)
-    out = assert_matches_reference(tables, insomnia, (0, 0), O)
-    assert int(out.ai_ability_known[0]) == 1 and int(out.yawn[0]) == 0
-    keen = with_slot(1, AbilityId.KEEN_EYE)
-    out = assert_matches_reference(tables, keen, (0, 0), O)
-    assert int(out.ai_ability_known[0]) == 0 and int(out.yawn[0]) == 0
+    if sun:
+        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.ai_ability_known[0]) == int(revealed) and int(out.yawn[0]) == 0
 
 
 def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):

@@ -1,5 +1,6 @@
-# The sample party (sample_party.toml) with Monferno knowing Metronome, whose move
-# effect the engine does not implement: the coverage check must refuse the fight.
+# The sample party (sample_party.toml) with Monferno knowing Metronome: the coverage check
+# must refuse the fight. The tests that use it refuse Metronome themselves (the
+# ``metronome_refused`` fixture), since ruling B5-2 refuses it only while coverage is partial.
 
 [[pokemon]]
 species = "Monferno"

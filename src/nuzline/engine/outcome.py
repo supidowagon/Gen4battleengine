@@ -71,12 +71,16 @@ from nuzline.engine.order import (
     action_order,
     assist_candidates,
     call_kind,
+    disabled_state,
     dislikes_berry,
+    encored_state,
     is_item,
     is_switch,
     metronome_weights,
     move_effects,
+    sealed_state,
     selected_move,
+    takeover_possible,
     used_move,
     used_moves,
 )
@@ -987,46 +991,30 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)
 
 
-def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
-    """Draw every field from its Gen 4 probability for this state and these actions (a paused
-    state: ``pivot_view``'s)."""
-    state, actions = pivot_view(tables, state, actions)
-    k = jax.random.split(key, 14)
-    per_hit, per_side = (2, MAX_HITS), (2,)
-
-    def draw(i, shape, n):
-        """``RandNext() % n`` for each element."""
-        return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
-
-    roar_counts = roar_inputs(state, actions)[1]
-    roar_la, roar_ld = roar_levels(state, actions)
-    speed_tie = draw(5, (), 2)  # battle_lib.c:1445, RandNext() & 1
-    # The invokers' draws (order.invoked_move), from fold_in keys so every other field keeps its
-    # samples: Sleep Talk's value uniform on 0..SLEEP_TALK_VALUES - 1 (BtlCmd_TrySleepTalk's
-    # RandNext() % 4 redraw, battle_script.c:4931-4933), Metronome's candidate by
-    # order.metronome_weights (BtlCmd_Metronome's RandNext() % 467 + 1 redraw, :4538-4560) as its
-    # rank among the candidates.
+def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
+    """``int32[2]``: each side's invoker draw for its move ``chosen`` (``int32[2]``) read with
+    ``state`` (order.invoked_move), from fold_in keys so every other field keeps its samples:
+    Sleep Talk's value uniform on 0..SLEEP_TALK_VALUES - 1 (BtlCmd_TrySleepTalk's RandNext() % 4
+    redraw, battle_script.c:4931-4933), Metronome's candidate by order.metronome_weights
+    (BtlCmd_Metronome's RandNext() % 467 + 1 redraw, :4538-4560) as its rank among the candidates,
+    Assist's RandNext() % numMoves over its list (order.assist_candidates, B10-11), fixed for the
+    turn (the party's moves; the user is its active battler throughout); 0 for any other move."""
     talk = jax.random.randint(jax.random.fold_in(key, 25), (2,), 0, SLEEP_TALK_VALUES, dtype=_I32)
-    ranks = []
+    ranks, assist = [], []
     for side in (0, 1):
         weights = metronome_weights(tables, state, side)
         cands = weights > 0
         pick = jax.random.choice(
-            jax.random.fold_in(key, 26 + side),
+            jax.random.fold_in(key, 32 + side),
             weights.shape[0],
             p=weights / jnp.maximum(jnp.sum(weights), 1),
         )
         ranks.append(jnp.sum(cands & (jnp.arange(weights.shape[0]) < pick)))
-    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    kinds = call_kind(tables, chosen)
-    # Assist (B10-11): RandNext() % numMoves over its list (order.assist_candidates), fixed for
-    # the turn (the party's moves; the user is its active battler throughout).
-    assist = []
-    for side in (0, 1):
         count = jnp.sum(assist_candidates(tables, state, side)[1].astype(_I32))
-        draw_ = jax.random.randint(jax.random.fold_in(key, 30 + side), (), 0, jnp.maximum(count, 1))
+        draw_ = jax.random.randint(jax.random.fold_in(key, 34 + side), (), 0, jnp.maximum(count, 1))
         assist.append(draw_.astype(_I32))
-    call = jnp.where(
+    kinds = call_kind(tables, chosen)
+    return jnp.where(
         kinds == CALL_SLEEP_TALK,
         talk,
         jnp.where(
@@ -1034,14 +1022,24 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jnp.stack(ranks),
             jnp.where(kinds == CALL_ASSIST, jnp.stack(assist), 0),
         ),
-    )
-    # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
-    # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
-    # call follows this outcome's order (the foe's move before it, or the turn-start movePrev).
-    first = action_order(tables, state, actions, empty_outcome()._replace(speed_tie=speed_tie))[0]
-    fight = ~is_switch(actions) & ~is_item(actions)
-    after_foe = jnp.stack([(first == 1 - side) & fight[1 - side] for side in (0, 1)])
-    moves = used_moves(tables, state, actions, call, after_foe)
+    ).astype(_I32)
+
+
+# The fields a battler's move decides the law of (ruling B11-1): redrawn for a replaced move.
+MOVE_FIELDS = ("hit", "crit", "secondary", "fang_flinch", "duration", "future_hit", "call")
+
+
+def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict:
+    """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
+    (``moves``, ``int32[2]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
+    13 and fold_ins 16, 28)."""
+    k = jax.random.split(key, 14)
+    per_hit, per_side = (2, MAX_HITS), (2,)
+
+    def draw(i, shape, n):
+        """``RandNext() % n`` for each element."""
+        return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
+
     future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     future_roll = jax.random.randint(jax.random.fold_in(key, 28), (2,), 1, 101, dtype=_I32)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
@@ -1055,9 +1053,6 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
     chance = secondary_chance(tables, state, moves)[:, None]
     secondary = (draw(2, per_hit, 100) < chance) | (chance == 0)
-    # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
-    first, second = draw(3, per_side, 4), draw(4, per_side, 4)
-    n_hits = jnp.where(first < 2, first + 2, second + 2)
     # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
     # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
     # Random 3, 3 (subscript_bind_start.s, subscript_uproar.s:6), Random 2, 3
@@ -1075,17 +1070,87 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             draw(10, per_side, 4) + jnp.where(three, 3, 2),
         ),
     )
+    return {
+        "hit": hit,
+        "crit": crit,
+        "secondary": secondary,
+        # subscript_paralyze_or_flinch.s:9: the second CheckEffectActivation (battle_script.c:
+        # 8377), RandNext() % 100 < chance, independent of the first (``secondary``). A fang
+        # never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
+        "fang_flinch": jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32)
+        < chance[:, 0],
+        "duration": duration,
+        # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
+        # + 1), as its class over future_thresholds (the raw roll where loose).
+        "future_hit": jnp.where(
+            future_loose, future_roll, hit_class(future_roll, future_thr, future_ok)
+        ),
+    }
+
+
+def replacement_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
+    """``bool``: ``side``'s move can be replaced within the turn by ``foe``'s action (ruling
+    B11-1): a Sleep Talk user whose foe uses a move (a faster Disable or Imprison can change its
+    set: rulings B5-13, B7-13) or an ``order.takeover_possible`` side. ``foe`` is named by the
+    caller (doubles rule 1; B11-11). Over-approximate."""
+    actions = jnp.asarray(actions, _I32)
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    chosen = selected_move(tables, state, side, actions[side])[0]
+    talk = uses_move[side] & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[foe]
+    return talk | takeover_possible(tables, state, actions, side, foe)
+
+
+def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
+    """Draw every field from its Gen 4 probability for this state and these actions (a paused
+    state: ``pivot_view``'s).
+
+    A move replaced within the turn (ruling B11-1, the ledger's "Design: a chosen move replaced
+    mid-turn"): outcome A is drawn for the turn-start prediction (``used_moves``); the turn's
+    events are played on A (``step.turn_events``, only where ``replacement_possible``) and a side
+    whose event fired (``enumerate._split_events``, ``enumerate.taken_events``) takes outcome B's
+    move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
+    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
+    or the encored move a faster Encore forced (``order.encored_state``). Exact: the event is
+    fixed before that side's action starts, and the redrawn fields are read only after it."""
+    from nuzline.engine.enumerate import _split_events, taken_events  # importers of this module
+    from nuzline.engine.step import turn_events
+
+    state_in, actions_in = state, jnp.asarray(actions, _I32)
+    state, actions = pivot_view(tables, state, actions)
+    k = jax.random.split(key, 14)
+    per_hit, per_side = (2, MAX_HITS), (2,)
+
+    def draw(i, shape, n):
+        """``RandNext() % n`` for each element."""
+        return jax.random.randint(k[i], shape, 0, n, dtype=_I32)
+
+    roar_counts = roar_inputs(state, actions)[1]
+    roar_la, roar_ld = roar_levels(state, actions)
+    speed_tie = draw(5, (), 2)  # battle_lib.c:1445, RandNext() & 1
+    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    call = _draw_calls(key, tables, state, chosen)
+    # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
+    # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
+    # call follows this outcome's order (the foe's move before it, or the turn-start movePrev).
+    first = action_order(tables, state, actions, empty_outcome()._replace(speed_tie=speed_tie))[0]
+    fight = ~is_switch(actions) & ~is_item(actions)
+    after_foe = jnp.stack([(first == 1 - side) & fight[1 - side] for side in (0, 1)])
+    moves = used_moves(tables, state, actions, call, after_foe)
+    drawn = _move_draws(key, tables, state, actions, moves)
+    # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
+    first, second = draw(3, per_side, 4), draw(4, per_side, 4)
+    n_hits = jnp.where(first < 2, first + 2, second + 2)
     outcome = Outcome(
         speed_tie=speed_tie,
-        hit=hit,
-        crit=crit,
+        hit=drawn["hit"],
+        crit=drawn["crit"],
         roll=draw(6, per_hit, 16),  # BattleSystem_CalcDamageVariance, rand % 16
-        secondary=secondary,
+        secondary=drawn["secondary"],
         contact_proc=draw(7, per_hit, 10) < 3,  # Static etc., battle_lib.c:4222
         n_hits=n_hits,
         full_para=draw(8, per_side, 4) == 0,  # battle_controller_player.c:2655
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
-        duration=duration,
+        duration=drawn["duration"],
         thaw=draw(11, per_side, 5) == 0,  # battle_controller_player.c:2478, % 5 != 0 stays
         # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
         # RandNext() % 100 < the attacker's King's Rock / Razor Fang param, per hit. From a
@@ -1109,11 +1174,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jax.random.randint(jax.random.fold_in(key, 14), per_side, 0, 100, dtype=_I32)
         ),
         shed_skin=jax.random.randint(jax.random.fold_in(key, 15), per_side, 0, 10, dtype=_I32) < 3,
-        # subscript_paralyze_or_flinch.s:9: the second CheckEffectActivation (battle_script.c:
-        # 8377), RandNext() % 100 < chance, independent of the first (``secondary``). A fang
-        # never has chance 0 (tools/build_tables.py refuses it: the decomp asserts it).
-        fang_flinch=jax.random.randint(jax.random.fold_in(key, 16), per_side, 0, 100, dtype=_I32)
-        < chance[:, 0],
+        fang_flinch=drawn["fang_flinch"],
         present=present_kind(
             jax.random.randint(jax.random.fold_in(key, 17), per_side, 0, 256, dtype=_I32)
         ),
@@ -1147,13 +1208,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
             jax.random.fold_in(key, 23), per_side, 0, jnp.maximum(roar_counts, 1), dtype=_I32
         ),
         call=call,
-        # The Future Sight hit's CheckMoveHit roll at the turn's end (bcp.c:2976, RandNext() % 100
-        # + 1), as its class over future_thresholds (the raw roll where loose). From a fold_in key.
-        future_hit=jnp.where(
-            future_loose,
-            future_roll,
-            hit_class(future_roll, future_thr, future_ok),
-        ),
+        future_hit=drawn["future_hit"],
         # Yawn's sleep at the turn end: subscript_fall_asleep.s ``Random 3, 2`` (BtlCmd_Random,
         # battle_script.c:3200-3210: rand % 4 + 2). From a fold_in key.
         yawn_sleep=jax.random.randint(jax.random.fold_in(key, 26), per_side, 0, 4, dtype=_I32) + 2,
@@ -1168,6 +1223,59 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         berry_confusion=jax.random.randint(jax.random.fold_in(key, 31), per_side, 0, 4, dtype=_I32)
         + 2,
     )
+    outcome = _cast(outcome)
+
+    # B11-1: which replacement each side's action met (the events on A), then outcome B: one
+    # alternative per side, the one that fired (at most one in singles: the foe runs one move
+    # before it), its move from a hypothetical state where only that side's set changed (Copycat
+    # reads the foe's turn-start moveTemp). A side whose event did not fire keeps A's fields.
+    def fired(_):
+        events = turn_events(tables, state_in, actions_in, outcome)
+        disabled, sealed = _split_events(state_in, events)
+        return jnp.stack([disabled, sealed, taken_events(state_in, events)])
+
+    which = jax.lax.cond(
+        jnp.any(
+            jnp.stack([replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)])
+        ),
+        fired,
+        lambda _: jnp.zeros((3, 2), bool),
+        None,
+    )
+    sides = jnp.arange(2)
+    taken = which[2]
+    # The moveTemp each side runs: the encored move where taken. The invokers' draws do not read
+    # the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists ignore
+    # Disable, Imprison and Encore), so one draw serves every alternative.
+    own = jnp.where(taken, state.last_move.astype(_I32), chosen)
+    alt_key = jax.random.fold_in(key, 40)
+    alt_call = _draw_calls(alt_key, tables, state, own)
+    alt_moves = []
+    for side in (0, 1):
+        mine = sides == side
+        hyps = (
+            disabled_state(state, mine),
+            sealed_state(state, mine),
+            encored_state(tables, state, mine),
+        )
+        options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
+        alt_moves.append(
+            jnp.where(which[2, side], options[2], jnp.where(which[1, side], options[1], options[0]))
+        )
+    fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
+    fields["call"] = alt_call
+    replaced = jnp.any(which, axis=0)
+    for name, value in fields.items():
+        old = getattr(outcome, name)
+        mask = replaced.reshape((2,) + (1,) * (old.ndim - 1))
+        outcome = outcome._replace(
+            **{name: jnp.where(mask, jnp.asarray(value).astype(old.dtype), old)}
+        )
+    return outcome
+
+
+def _cast(outcome: Outcome) -> Outcome:
+    """``outcome`` with every field at its stored dtype (``call`` int16, the rest int8)."""
     return Outcome(
         *(
             jnp.asarray(f).astype(jnp.int16 if name == "call" else _I8)

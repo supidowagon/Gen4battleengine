@@ -90,9 +90,9 @@ def roark_expansion(tables, names):
     sizes = []
     real = expand_mod.step_rows
 
-    def recording(tables, states, actions, outcomes):
+    def recording(tables, states, actions, outcomes, *takens):
         sizes.append(len(actions))
-        return real(tables, states, actions, outcomes)
+        return real(tables, states, actions, outcomes, *takens)
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(expand_mod, "CHUNK", EXPAND_ROWS)  # as ``small_chunk``

@@ -377,7 +377,7 @@ def test_line_find_names_refused_playouts_and_skipped_rules(
     assert max_turns == line_search.LineSearchSettings().max_turns
 
 
-def test_line_odds_refused_fight_exit_2(tmp_path, capsys, monkeypatch):
+def test_line_odds_refused_fight_exit_2(tmp_path, capsys, monkeypatch, metronome_refused):
     _no_playouts(monkeypatch)
     unsupported = str(ROOT / "tests" / "fixtures" / "sample_party_unsupported.toml")
     args = ["line", "odds", "--party", unsupported, "--trainer", "roark", "--devices", "1"]

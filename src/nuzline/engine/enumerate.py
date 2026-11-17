@@ -236,14 +236,18 @@ from nuzline.engine.order import (
     call_kind,
     called_move,
     copycat_call,
+    disabled_state,
     dislikes_berry,
     effective_speed,
+    encored_state,
     invoked_move,
     is_item,
     is_switch,
     metronome_weights,
     move_effects,
+    sealed_state,
     selected_move,
+    takeover_possible,
     truant_loafs,
     used_moves,
 )
@@ -1323,7 +1327,7 @@ def damage_inputs_can_change(
 
 
 def outcome_laws(
-    tables: Tables, state: BattleState, actions, call=None, *, loose: bool = False
+    tables: Tables, state: BattleState, actions, call=None, taken=None, *, loose: bool = False
 ) -> OutcomeLaws:
     """The law parameters and relevance masks of ``step(tables, state, actions, .)``
     (module docstring). ``loose`` (tests only: the brute-force reference) drops every
@@ -1336,6 +1340,14 @@ def outcome_laws(
     the turn-start movePrev), which keeps only the consistent ``speed_tie`` branches
     (``branch_ok``). Without ``call`` an invoker runs nothing (``call_pending``:
     ``enumerate_drawn`` refuses those laws).
+
+    ``taken`` (``bool[2]``, a ``call_variants`` variant's tag, default none): the takeover variant
+    (ruling B11-1) of each side it marks, whose chosen move a foe's Encore replaces before its
+    action (BattleControllerPlayer_FightCommand, bcp.c:1866-1873). Its moveTemp is then the
+    encored move (its last move) and every move-dependent law (the move run, its effect, crit
+    odds, damage classes, accuracy thresholds, the call) is the encored move's, read with
+    ``order.encored_state``; the order stays the chosen move's (CalcTurnOrder fixes it at the turn
+    start, before any action). ``call_consistent`` keeps the rows where it happened.
 
     A state paused at a party list (E2 batch 6) is read through ``outcome.pivot_view``: the
     order branch is the stored one (a switch first), and the paused action's King's Rock
@@ -1350,7 +1362,11 @@ def outcome_laws(
     # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
     # the move it runs (Nature Power's and the invokers' call, order.called_move,
     # order.used_moves), whose draws these are.
-    chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    picked = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    # A takeover variant (B11-1): the action runs the encored move (moveTemp) from the start.
+    taken = jnp.zeros((2,), bool) if taken is None else jnp.asarray(taken, bool)
+    took_state = encored_state(tables, state, taken)
+    chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
     kinds = call_kind(tables, chosen)
     copycat = uses_move & (kinds == CALL_COPYCAT)
     if call is None:
@@ -1366,13 +1382,19 @@ def outcome_laws(
         disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
         sealed = talking & (call >= CALL_SEALED)
         after_foe = copycat & (call == 1)
+        disabled = disabled & ~taken
+        sealed = sealed & ~taken
         moves = jnp.where(
             disabled,
-            used_moves(tables, _disabled_state(state, disabled), actions, call, after_foe),
+            used_moves(tables, disabled_state(state, disabled), actions, call, after_foe, chosen),
             jnp.where(
                 sealed,
-                used_moves(tables, _sealed_state(state, sealed), actions, call, after_foe),
-                used_moves(tables, state, actions, call, after_foe),
+                used_moves(tables, sealed_state(state, sealed), actions, call, after_foe, chosen),
+                jnp.where(
+                    taken,
+                    used_moves(tables, took_state, actions, call, after_foe, chosen),
+                    used_moves(tables, state, actions, call, after_foe, chosen),
+                ),
             ),
         )
         call_pending = jnp.asarray(False)
@@ -1438,6 +1460,8 @@ def outcome_laws(
             effect,
             (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER),
         )
+        # Encore's RandNext() % 5 + 3 (battle_script.c:4742): missing until batch 11 (B11-9).
+        | (effect == _E.ENCORE)
         | _inflicts(tables, state, moves, Status.SLEEP)
         # Uproar's Random 3, 3 (subscript_uproar.s:6), only for a user not in an uproar yet
         # (effect_script_0159.s:5; only its own move can start one this turn).
@@ -1561,7 +1585,7 @@ def outcome_laws(
         # order.action_order: priority only between two moves; a tie only between two
         # actions of the same kind.
         priority = jnp.where(
-            uses_move[0] & uses_move[1], tables.move_priority[chosen].astype(_I32), 0
+            uses_move[0] & uses_move[1], tables.move_priority[picked].astype(_I32), 0
         )
         same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
         speed_tie = (
@@ -2824,26 +2848,6 @@ def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
     return on & (jnp.arange(2) == pivot) & target_free
 
 
-def _disabled_state(state: BattleState, sides) -> BattleState:
-    """``state`` with ``disabled_move = last_move`` on ``sides`` (``bool[2]``): the only set
-    change of Sleep Talk a turn can make. BtlCmd_TryDisable (battle_script.c:4586-4594) disables
-    the defender's movePrevByBattler, only while it has PP and nothing is disabled yet; a Sleep
-    Talk user that moves second has not moved this turn, so the move is its turn-start
-    ``last_move``."""
-    value = jnp.where(sides, state.last_move, state.disabled_move)
-    return state._replace(disabled_move=value.astype(state.disabled_move.dtype))
-
-
-def _sealed_state(state: BattleState, sides) -> BattleState:
-    """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
-    (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
-    6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
-    b on side b in singles)."""
-    foe_of = jnp.asarray(sides)[::-1]
-    value = jnp.where(foe_of, 1, state.imprison)
-    return state._replace(imprison=value.astype(state.imprison.dtype))
-
-
 def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(disabled, sealed)`` ``bool[2]``: the Sleep Talk set changed before the side's action
     by a Disable (a move disabled at its start, none at the turn start) or an Imprison (a foe
@@ -2854,18 +2858,29 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
     return disabled, sealed
 
 
+def taken_events(state: BattleState, events) -> jnp.ndarray:
+    """``bool[2]``: the side's chosen move was replaced by an encored move when its action
+    started (the ``encored_at_move`` event of ``step_events``) and it was not encored at the turn
+    start: a foe's Encore landed before its action (ruling B11-1)."""
+    return (jnp.asarray(events["encored_at_move"]) != 0) & (state.encore_move == 0)
+
+
 def call_consistent(
-    tables: Tables, state: BattleState, actions, outcome: Outcome, events
+    tables: Tables, state: BattleState, actions, outcome: Outcome, events, taken=None
 ) -> jnp.ndarray:
-    """``bool``: an outcome row of a call variant keeps its weight (ruling B5-13): for each Sleep
-    Talk side whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` / ``CALL_SEALED``),
-    whether a Disable or an Imprison changed its set before its action (``_split_events``) matches
-    the variant: before, whether a move of it was disabled when its action started (the ``disabled_at_move`` event of ``step_events``
-    on ``state``, ``actions``, ``outcome``) matches the variant. Unsplit rows always keep."""
+    """``bool``: an outcome row of a call variant keeps its weight (rulings B5-13, B11-1). The
+    variant's takeover tag ``taken`` (``bool[2]``, default none; ``call_variants``) must match the
+    turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
+    replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
+    side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
+    ``CALL_SEALED``), whether a Disable or an Imprison changed its set before its action
+    (``_split_events`` of ``step_events`` on ``state``, ``actions``, ``outcome``) matches the
+    variant. Unsplit rows always keep."""
     actions = jnp.asarray(actions, _I32)
+    taken = jnp.zeros((2,), bool) if taken is None else jnp.asarray(taken, bool)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
     talk = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK)
+    talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & ~taken
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
     disabled, sealed = _split_events(state, events)
@@ -2873,7 +2888,12 @@ def call_consistent(
     want = jnp.where(
         call >= CALL_SEALED, CALL_SEALED, jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP)
     )
-    return jnp.all(~split | (seen == want))
+    view, view_actions = pivot_view(tables, state, actions)
+    can_take = jnp.stack(
+        [takeover_possible(tables, view, view_actions, side, 1 - side) for side in (0, 1)]
+    )
+    took = taken_events(state, events)
+    return jnp.all(~split | (seen == want)) & jnp.all(~can_take | (took == taken))
 
 
 class CallLaws(NamedTuple):
@@ -2884,14 +2904,87 @@ class CallLaws(NamedTuple):
     weight: jnp.ndarray  # int32[2, CALL_VALUES]: the integer weight of each call value
     called: jnp.ndarray  # int32[2, CALL_VALUES]: the move each value calls (0: the call fails)
     # int32[2, CALL_VALUES]: Sleep Talk's call of each value from the set a faster foe's Disable
-    # can leave (``_disabled_state``, ruling B5-13); ``called`` where no such set can arise.
+    # can leave (``order.disabled_state``, ruling B5-13); ``called`` where no such set can arise.
     alt: jnp.ndarray
     # int32[2, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
-    # (``_sealed_state``, ruling B7-13); ``called`` where no such set can arise.
+    # (``order.sealed_state``, ruling B7-13); ``called`` where no such set can arise.
     sealed: jnp.ndarray
     # bool[2]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
     can_disable: jnp.ndarray
     can_seal: jnp.ndarray
+    # The takeover variant (ruling B11-1): bool[2] a foe's Encore can replace the side's move
+    # (``order.takeover_possible``), and the call law of the encored move read with the encored
+    # state (``order.encored_state``): its kind, weights and calls as above.
+    can_take: jnp.ndarray
+    taken_kind: jnp.ndarray
+    taken_weight: jnp.ndarray
+    taken_called: jnp.ndarray
+
+
+def _side_call_law(
+    tables: Tables, state: BattleState, side: int, chosen, kind, foe_chosen, foe_uses_move
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(weight int32[CALL_VALUES], called int32[CALL_VALUES])``: the call law of ``side``'s
+    move ``chosen`` of invoker kind ``kind``, read with ``state`` (``call_laws``)."""
+    values = jnp.arange(CALL_VALUES, dtype=_I32)
+    talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
+    talk = jax.vmap(lambda v: invoked_move(tables, state, side, chosen, v))(values)
+    metro_all = metronome_weights(tables, state, side)
+    cands = metro_all > 0
+    n = jnp.sum(cands.astype(_I32))
+    # The candidate of each rank (the k-th true entry), and its weight.
+    rank = jnp.cumsum(cands.astype(_I32)) - 1
+    ids = jnp.arange(metro_all.shape[0], dtype=_I32)
+    by_rank = (
+        jnp.zeros((CALL_VALUES,), _I32)
+        .at[jnp.where(cands, rank, CALL_VALUES)]
+        .set(ids, mode="drop")
+    )
+    metro_w = jnp.where(values < n, metro_all[by_rank], 0)
+    copy_w = ((values == 0) | ((values == 1) & foe_uses_move)).astype(_I32)
+    # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
+    # the turn; position v calls the v-th valid entry.
+    listed, valid = assist_candidates(tables, state, side)
+    n_listed = jnp.sum(valid.astype(_I32))
+    assist_w = (values < n_listed).astype(_I32)
+    listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
+    assist_called = (
+        jnp.zeros((CALL_VALUES,), _I32)
+        .at[jnp.where(valid, listed_rank, CALL_VALUES)]
+        .set(listed, mode="drop")
+    )
+    copy_called = jnp.where(
+        values == 0,
+        copycat_call(tables, state.move_prev),
+        jnp.where(values == 1, copycat_call(tables, foe_chosen), 0),
+    )
+    weight = jnp.where(
+        kind == CALL_SLEEP_TALK,
+        talk_w,
+        jnp.where(
+            kind == CALL_METRONOME,
+            metro_w,
+            jnp.where(
+                kind == CALL_COPYCAT,
+                copy_w,
+                jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
+            ),
+        ),
+    )
+    called = jnp.where(
+        kind == CALL_SLEEP_TALK,
+        talk,
+        jnp.where(
+            kind == CALL_METRONOME,
+            by_rank,
+            jnp.where(
+                kind == CALL_COPYCAT,
+                copy_called,
+                jnp.where(kind == CALL_ASSIST, assist_called, 0),
+            ),
+        ),
+    )
+    return weight, called
 
 
 def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
@@ -2902,15 +2995,21 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     * Sleep Talk: every value 0..``SLEEP_TALK_VALUES`` - 1 weighs 1 (BtlCmd_TrySleepTalk's
       uniform redraw, battle_script.c:4931-4933; ``order.invoked_move`` takes the allowed slot
       ``value % count``), from the turn-start set; ``alt`` from the set a faster foe's Disable can
-      leave (the only implemented change of it within the turn, ruling B5-13), possible while
-      nothing is disabled, the user has a last move and its foe uses a move. Drawn only
-      when it can be read: the user sleeps at the start, or its foe uses an invoker or a move
-      that can put it to sleep (over-approximate);
+      leave (ruling B5-13), possible while nothing is disabled, the user has a last move and its
+      foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13). Drawn
+      only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
+      move that can put it to sleep (over-approximate);
     * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
       the set is fixed through the turn (the user's moves; Gravity and Heal Block are owed);
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
-      move."""
+      move;
+    * the takeover variant (ruling B11-1): where a foe's Encore can replace the side's move
+      (``order.takeover_possible``), the law of the encored move (an invoker or not) read with
+      ``order.encored_state``. Move_CanBeEncored (battle_lib.c:7221-7231) leaves Metronome,
+      Assist, Sleep Talk and Copycat; an encored Sleep Talk always fails
+      (BattleSystem_CheckInvalidMoves, battle_lib.c:2302-2304, leaves it only itself, an invoker:
+      battle_script.c:4916-4930)."""
     state, actions = pivot_view(tables, state, actions)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
@@ -2936,83 +3035,38 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         & ~jnp.stack([imprisoning_foe(state, side) for side in (0, 1)])
         & uses_move[::-1]
     )
-    weights, called, alts, seals = [], [], [], []
+    can_take = jnp.stack(
+        [takeover_possible(tables, state, actions, side, 1 - side) for side in (0, 1)]
+    )
+    encored = state.last_move.astype(_I32)
+    taken_kinds = jnp.where(can_take, call_kind(tables, encored), CALL_NONE)
+    taken_kinds = jnp.where(
+        (taken_kinds == CALL_SLEEP_TALK) & ~sleeps & ~put_to_sleep, CALL_NONE, taken_kinds
+    )
+    weights, called, alts, seals, t_weights, t_called = [], [], [], [], [], []
     for side in (0, 1):
         foe = 1 - side
-        talk_w = (values < SLEEP_TALK_VALUES).astype(_I32)
-        talk = jax.vmap(lambda v, side=side: invoked_move(tables, state, side, chosen[side], v))(
-            values
+        weight, call = _side_call_law(
+            tables, state, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
         )
-        hyp = _disabled_state(state, jnp.arange(2) == side)
+        weights.append(weight)
+        called.append(call)
+        hyp = disabled_state(state, jnp.arange(2) == side)
         alt = jax.vmap(
             lambda v, side=side, hyp=hyp: invoked_move(tables, hyp, side, chosen[side], v)
         )(values)
-        shut = _sealed_state(state, jnp.arange(2) == side)
+        shut = sealed_state(state, jnp.arange(2) == side)
         seal = jax.vmap(
             lambda v, side=side, shut=shut: invoked_move(tables, shut, side, chosen[side], v)
         )(values)
-        metro_all = metronome_weights(tables, state, side)
-        cands = metro_all > 0
-        n = jnp.sum(cands.astype(_I32))
-        # The candidate of each rank (the k-th true entry), and its weight.
-        rank = jnp.cumsum(cands.astype(_I32)) - 1
-        ids = jnp.arange(metro_all.shape[0], dtype=_I32)
-        by_rank = (
-            jnp.zeros((CALL_VALUES,), _I32)
-            .at[jnp.where(cands, rank, CALL_VALUES)]
-            .set(ids, mode="drop")
+        alts.append(jnp.where(can_split[side], alt, call))
+        seals.append(jnp.where(can_seal[side], seal, call))
+        took = encored_state(tables, state, jnp.arange(2) == side)
+        t_weight, t_call = _side_call_law(
+            tables, took, side, encored[side], taken_kinds[side], chosen[foe], uses_move[foe]
         )
-        metro_w = jnp.where(values < n, metro_all[by_rank], 0)
-        copy_w = ((values == 0) | ((values == 1) & uses_move[foe])).astype(_I32)
-        # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
-        # the turn; position v calls the v-th valid entry.
-        listed, valid = assist_candidates(tables, state, side)
-        n_listed = jnp.sum(valid.astype(_I32))
-        assist_w = (values < n_listed).astype(_I32)
-        listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
-        assist_called = (
-            jnp.zeros((CALL_VALUES,), _I32)
-            .at[jnp.where(valid, listed_rank, CALL_VALUES)]
-            .set(listed, mode="drop")
-        )
-        copy_called = jnp.where(
-            values == 0,
-            copycat_call(tables, state.move_prev),
-            jnp.where(values == 1, copycat_call(tables, chosen[foe]), 0),
-        )
-        kind = kinds[side]
-        weights.append(
-            jnp.where(
-                kind == CALL_SLEEP_TALK,
-                talk_w,
-                jnp.where(
-                    kind == CALL_METRONOME,
-                    metro_w,
-                    jnp.where(
-                        kind == CALL_COPYCAT,
-                        copy_w,
-                        jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
-                    ),
-                ),
-            )
-        )
-        called.append(
-            jnp.where(
-                kind == CALL_SLEEP_TALK,
-                talk,
-                jnp.where(
-                    kind == CALL_METRONOME,
-                    by_rank,
-                    jnp.where(
-                        kind == CALL_COPYCAT,
-                        copy_called,
-                        jnp.where(kind == CALL_ASSIST, assist_called, 0),
-                    ),
-                ),
-            )
-        )
-        alts.append(jnp.where(can_split[side], alt, called[-1]))
-        seals.append(jnp.where(can_seal[side], seal, called[-1]))
+        t_weights.append(t_weight)
+        t_called.append(t_call)
     return CallLaws(
         kind=kinds.astype(_I32),
         weight=jnp.stack(weights),
@@ -3021,50 +3075,78 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         sealed=jnp.stack(seals),
         can_disable=can_split,
         can_seal=can_seal,
+        can_take=can_take,
+        taken_kind=taken_kinds.astype(_I32),
+        taken_weight=jnp.stack(t_weights),
+        taken_called=jnp.stack(t_called),
     )
 
 
-def call_variants(laws: CallLaws) -> list[tuple[np.ndarray, int, int]]:
-    """``(call int32[2], numerator, denominator)`` per call variant of one (unbatched) row of
-    ``call_laws``: the product of each side's values grouped by the move they call (one
-    representative value per move, the smallest, with the group's summed weight). A Sleep Talk
-    group whose values call another move from the Disable-shrunk set (``CallLaws.alt``) is two
-    variants of the same weight, ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more,
-    ``CALL_SEALED``, where a faster foe's Imprison can land (B7-13): their rows
-    are kept only where the turn met the variant's assumption (``call_consistent``). Copycat's
-    orders are not a chance: each has weight 1 / 1 and its laws keep only the branches that
-    agree with it, so the variants' rows still sum to 1."""
+def _side_variants(kind, weight, called, alt, sealed, offsets) -> list[tuple[int, int, int]]:
+    """``(value, numerator, denominator)`` per call variant of one side's law
+    (``call_variants``)."""
+    if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
+        groups: dict[tuple[int, int, int], list[int]] = {}
+        for v in np.flatnonzero(weight):
+            key = (int(called[v]), int(alt[v]), int(sealed[v]))
+            groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
+        den = int(weight.sum())
+        out = []
+        for (move, other, shut), (v, w) in groups.items():
+            if move == other == shut:
+                out.append((v, w, den))
+            else:
+                # One variant per set the turn can leave, each kept only where the turn met
+                # its assumption (``call_consistent``).
+                out += [(v + off, w, den) for off in offsets]
+        return out
+    if kind == CALL_COPYCAT:
+        return [(int(v), 1, 1) for v in np.flatnonzero(weight)]
+    return [(0, 1, 1)]
+
+
+class Variant(NamedTuple):
+    """One call variant of a turn (``call_variants``): the invokers' ``call`` (``int32[2]``,
+    ``Outcome.call``'s value), the takeover tag ``taken`` (``bool[2]``: the variant assumes a
+    foe's Encore replaced the side's move before its action, ruling B11-1; a field beside
+    ``call``, never an offset of it) and its weight ``num / den``."""
+
+    call: np.ndarray
+    taken: np.ndarray
+    num: int
+    den: int
+
+
+def call_variants(laws: CallLaws) -> list[Variant]:
+    """The call variants (``Variant``) of one (unbatched) row of ``call_laws``: the product of
+    each side's values grouped by the move they call (one representative value per move, the
+    smallest, with the group's summed weight). A Sleep Talk group whose values call another move
+    from the Disable-shrunk set (``CallLaws.alt``) is two variants of the same weight,
+    ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more, ``CALL_SEALED``, where a
+    faster foe's Imprison can land (B7-13). Where a foe's Encore can replace the side's move
+    (``CallLaws.can_take``), the side also has the takeover variants (``taken``): the encored
+    move's own law, of total weight 1 beside the others' 1 (ruling B11-1). The rows of all these
+    variants are kept only where the turn met the variant's assumption (``call_consistent``), so
+    each side's variants sum to 1 over the rows kept. Copycat's orders are not a chance: each has
+    weight 1 / 1 and its laws keep only the branches that agree with it."""
     laws = jax.tree.map(np.asarray, laws)
     per_side = []
     for side in (0, 1):
-        weight, called, kind = laws.weight[side], laws.called[side], int(laws.kind[side])
-        alt, sealed = laws.alt[side], laws.sealed[side]
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
-        if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
-            groups: dict[tuple[int, int, int], list[int]] = {}
-            for v in np.flatnonzero(weight):
-                key = (int(called[v]), int(alt[v]), int(sealed[v]))
-                groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
-            den = int(weight.sum())
-            out = []
-            for (move, other, shut), (v, w) in groups.items():
-                if move == other == shut:
-                    out.append((v, w, den))
-                else:
-                    # One variant per set the turn can leave, each kept only where the turn met
-                    # its assumption (``call_consistent``).
-                    out += [(v + off, w, den) for off in offsets]
-            per_side.append(out)
-        elif kind == CALL_COPYCAT:
-            per_side.append([(int(v), 1, 1) for v in np.flatnonzero(weight)])
-        else:
-            per_side.append([(0, 1, 1)])
+        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side])
+        out = [(v, False, w, d) for v, w, d in _side_variants(int(laws.kind[side]), *law, offsets)]
+        if bool(laws.can_take[side]):
+            took = laws.taken_called[side]
+            law = (laws.taken_weight[side], took, took, took)
+            kind = int(laws.taken_kind[side])
+            out += [(v, True, w, d) for v, w, d in _side_variants(kind, *law, [])]
+        per_side.append(out)
     return [
-        (np.asarray([a, b], np.int32), wa * wb, da * db)
-        for a, wa, da in per_side[0]
-        for b, wb, db in per_side[1]
+        Variant(np.asarray([a, b], np.int32), np.asarray([ta, tb], bool), wa * wb, da * db)
+        for a, ta, wa, da in per_side[0]
+        for b, tb, wb, db in per_side[1]
     ]
 
 
@@ -3098,20 +3180,23 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     """``enumerate_outcomes`` over every call variant (``call_variants``) of one state and action
     pair: the turn's full enumeration whatever the invokers draw, the ``Outcome.call`` of each
     row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
-    Talk variants (ruling B5-13) are played (``step.turn_events``) and each row is kept only where
-    ``call_consistent``."""
+    Talk variants (ruling B5-13) and takeover variants (B11-1) are played (``step.turn_events``)
+    and each row is kept only where ``call_consistent``."""
     actions = jnp.asarray(actions, _I32)
-    parts = []
+    parts, tags = [], []
     cl = _jit_call_laws(tables, state, actions)
     talks = np.asarray(cl.kind) == CALL_SLEEP_TALK
-    split = False
-    for call, num, den in call_variants(cl):
-        outcomes, probs = enumerate_outcomes(_jit_laws(tables, state, actions, jnp.asarray(call)))
-        parts.append((outcomes, probs, num, den))
-        split = split or bool(np.any(talks & (call >= CALL_KEEP)))
+    split = bool(np.any(np.asarray(cl.can_take)))
+    for v in call_variants(cl):
+        laws = _jit_laws(tables, state, actions, jnp.asarray(v.call), jnp.asarray(v.taken))
+        outcomes, probs = enumerate_outcomes(laws)
+        parts.append((outcomes, probs, v.num, v.den))
+        tags.append(np.broadcast_to(v.taken, (len(probs), 2)))
+        split = split or bool(np.any(talks & ~v.taken & (v.call >= CALL_KEEP)))
     outcomes, probs = combine_variants(parts)
     if split:
-        keep = np.asarray(_jit_keep()(tables, state, actions, outcomes))
+        taken = np.concatenate(tags)
+        keep = np.asarray(_jit_keep()(tables, state, actions, outcomes, taken))
         outcomes = jax.tree.map(lambda f: np.asarray(f)[keep], outcomes)
         probs = probs[keep]
     return outcomes, probs
@@ -3121,8 +3206,8 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
 def _jit_keep():
     from nuzline.engine.step import turn_events  # step imports this module's peers only
 
-    def keep(tables, state, actions, outcome):
+    def keep(tables, state, actions, outcome, taken):
         events = turn_events(tables, state, actions, outcome)
-        return call_consistent(tables, state, actions, outcome, events)
+        return call_consistent(tables, state, actions, outcome, events, taken)
 
-    return jax.jit(jax.vmap(keep, in_axes=(None, None, None, 0)))
+    return jax.jit(jax.vmap(keep, in_axes=(None, None, None, 0, 0)))

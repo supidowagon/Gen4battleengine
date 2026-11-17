@@ -17,7 +17,13 @@ from nuzline.prep.problem import (
     usable_pool,
 )
 from nuzline.saves import load_save
-from tests.engine.helpers import kaizo_names_with, roark_party, roark_trainer, sample_party
+from tests.engine.helpers import (
+    kaizo_names_with,
+    roark_party,
+    roark_trainer,
+    sample_party,
+    unmodelled,
+)
 from tests.prep.fixtures import candidate, problem
 from tests.saves.synthetic import box_record, party_record
 from tests.saves.writer import build_image
@@ -73,7 +79,7 @@ def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
     assert warnings == ["Iron Ball: not offered (hold effect not supported)"]
 
 
-def test_usable_pool_excludes_and_trims(tables, names):
+def test_usable_pool_excludes_and_trims(tables, names, metronome_refused):
     base = sample_party(names)[0]
     metronome, fury = names.move("Metronome"), names.move("Fury Swipes")
     scratch = names.move("Scratch")
@@ -151,7 +157,9 @@ def test_build_problem_errors(tmp_path, tables, names, learnsets, kw, message):
         _build(tables, names, save, learnsets, **kw)
 
 
-def test_protecting_a_left_out_pokemon_is_an_error(tmp_path, tables, names, learnsets):
+def test_protecting_a_left_out_pokemon_is_an_error(
+    tmp_path, tables, names, learnsets, metronome_refused
+):
     save = _save(
         tmp_path,
         tables,
@@ -243,7 +251,9 @@ def test_pick_nickname_on_pool_candidates(tmp_path, tables, names, learnsets):
     assert pick(cands, names, "furret") == 0
 
 
-def test_left_out_party_lists_excluded_and_unsupported(tmp_path, tables, names, learnsets):
+def test_left_out_party_lists_excluded_and_unsupported(
+    tmp_path, tables, names, learnsets, metronome_refused
+):
     save = _save(
         tmp_path,
         tables,
@@ -407,10 +417,15 @@ def test_opponent_explosion_leaves_a_low_defense_candidate_out(tmp_path, tables,
 SHINX_L9 = 419  # exp_table[3][9]; any L8 Shinx (314-418) reaches 9 off Roark's Geodude L12
 
 
+def _charge_off(tables, names):
+    """``tables`` with Charge's effect UNSUPPORTED (``unmodelled``): the refused learnable
+    move of the tests below, whatever the engine models."""
+    return unmodelled(tables, names.move("Charge"))
+
+
 def _shinx_near_9(names, **changes):
-    """Shinx L8 that Roark's Geodude can level to 9, where it learns Charge (an unsupported
-    effect) into its empty last slot; ``coverage.learnable_moves``. (Starly's Endeavor at 17
-    served here until E2 batch 10 modelled it, B10-5.)"""
+    """Shinx L8 that Roark's Geodude can level to 9, where it learns Charge (unsupported in
+    ``_charge_off``) into its empty last slot; ``coverage.learnable_moves``."""
     gap = (names.move("Tackle"), names.move("Leer"), names.move("Quick Attack"), 0)
     spec = replace(
         sample_party(names)[3],
@@ -427,7 +442,7 @@ def _shinx_past_9(names):
 
 
 def test_a_learnable_unsupported_move_leaves_the_candidate_out(tables, names):
-    assert int(tables.move_effect[names.move("Charge")]) == 0  # EffectId.UNSUPPORTED
+    tables = _charge_off(tables, names)
     geodude = roark_party(names)[:1]
     near = _shinx_near_9(names)
     pool, lines = usable_pool(tables, names, [near], geodude)
@@ -446,6 +461,7 @@ def test_check_pool_grades_learnable_moves(tables, names):
     from nuzline.engine.coverage import Support
     from nuzline.prep.pool import check_pool
 
+    tables = _charge_off(tables, names)
     geodude = roark_party(names)[:1]
     report = check_pool(tables, names, [_shinx_near_9(names)], geodude)
     assert report.level == Support.NONE

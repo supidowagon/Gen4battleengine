@@ -93,7 +93,7 @@ def test_check_pool_full(pool_save, tables, names, learnsets):
     assert report.level == Support.EXACT
 
 
-def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets):
+def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets, metronome_refused):
     """Review Focus 1: the boxed Pokemon and the move are named; level is NONE."""
     save = _save(
         tmp_path,

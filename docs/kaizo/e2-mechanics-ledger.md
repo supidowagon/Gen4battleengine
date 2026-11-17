@@ -1,9 +1,23 @@
 # E2 mechanics ledger (Kaizo Roark split)
 
-## RESUME (updated 2026-11-15 night: batch 10 closed, tip with the manager; batch 11 next)
+## RESUME (updated 2026-11-16 morning: batch 10 in main; batch 11 closing; batch 12 planned)
 
-- **Main.** Batches 3-9 are in local main (d420167; main 0bed7e9 merged into this branch at
-  ac351e1, CLAUDE.md only). Never push.
+- **Main = 2c2caea** (batch 10 merged as e022644: 042b1ab + main 8c22d37 + merge fixes c1728c9
+  / 36bdc8f / c1f54cb / b5e4665 Yawn + the 6 stale tests its fast tier found 4cef8f2 / 4d165d8 /
+  e022644). Main merged into this branch at 453e283. Never push.
+- **Batch 11 (this branch, unmerged): code and review done** (e760d9e, 926874a, 71eccee,
+  d78ba49, 8f1e469, 31b3a95 follow-ups, bb35cdc review follow-ups B11-10..12). OWED before
+  sending the tip: test_invokers + test_batch11 incl. sampled tests (5-8 GB), tests/search
+  test_expand / test_playout / test_pivot_search / test_stage_b, tests/test_cli.py, seed 32
+  (log _scratch/e2/logs/b11_diff32.log). E1's merge fast tier holds the machine (~4-5 h from
+  2026-11-16 morning): until it ends one side process under ~4 GB, heavy runs queued.
+- **test_cli under 8 GB (mine):** 9.09 GB peak for test_cli_rank_default_budget_keeps_the_header
+  in the fast tier; the earlier agent's work was stopped twice; restart after E1's tier.
+- **Batch 12 plan (sent to the manager for a check against E1):** Metronome's 65 unmodelled
+  Kaizo callable moves (list: _scratch/e2/metro_list.py), in families stat/HP, healing, power
+  formulas, secondary hits, field/side, move-restricting; ability- and item-changing moves
+  (Role Play, Skill Swap, Gastro Acid, Worry Seed, Fling, Natural Gift, Recycle) pending E1.
+- **History of batch 10's close:** below.
 - **Batch 10 on this branch (unmerged), closed and sent to the manager for its merge check.**
   597ad95 recoil/crash (B10-1/2); ff4490b merge-check follow-ups (B10-3); 939bd45 Substitute
   (B10-4); a9806c2 Endeavor / Pain Split (B10-5); b051b45 Knock Off (B10-6); 683e5dd Safeguard
@@ -22,7 +36,39 @@
   test_rank_lead_and_opponent_active 8.16 (likely the same expand CHUNK padding). Reported.
 - **Owed from batch 10:** Gravity grounding a Fly user (Gravity refused by coverage), Transform
   vs a vanished target, Kaizo Hurricane (effect 141, no fight reaches it).
-- **Batch 11 (start once the batch 10 tip is with the manager):** the takeover mechanism exactly
+- **Batch 11 status (2026-11-16).** Committed: e760d9e the takeover mechanism, the Sleep Talk
+  sampler fix, Encore into the invokers, B11-9, review items (c) (d) (B11-1..3, 7-9); 926874a
+  Encore's AI, both Encore refusals lifted (backlog 230 -> 228), coverage tests on real data
+  (B11-4, B11-6); 71eccee the generator (B11-5) and its duplicate-move fix (next commit);
+  differential seeds 25, 26 clean (300 each). Frequency tests failed on 042b1ab (Sleep Talk +
+  Disable 0.855 vs 0.73, + Imprison 0.855 vs 0.70, Encore into Hypnosis 1.0 vs 0.6), pass now.
+  Checks: test_batch11 + test_invokers 24 passed; batch10 / accuracy / damage classes /
+  enumerate / effect_map / coverage / coverage_exp / observe / pivot_search / read_bounds 222
+  passed (before the sampler's single-alternative rewrite; its sampled tests rerun after: pass);
+  AI + coverage_exp + game_constants 74 passed; test_variants + game_constants + test_backlog 69
+  passed. Owed once the fast tier frees the machine (runs under 4 GB until then, no tests/search,
+  no test_cli): test_invokers and test_batch11's hand tests after the sampler rewrite (peaks
+  5-8 GB), tests/test_cli.py, the review. Sampler cost: see B11-1.
+- **Batch 11 follow-ups after the merge (2026-11-16, on ef4fe39).** outcome.py's two duplicate
+  `151` entries dropped; kaizo_roark.md 5.23 says CHARGE_TURN_DEF_UP is transcribed; the Yawn
+  semi-miss test parametrized (Vital Spirit, Leaf Guard in and out of sun, Mold Breaker users;
+  subscript_yawn.s:5-9, battle_lib.c:3108-3123); test_playout's duplicate `_replay` removed (the
+  later body kept); the generator draws the foe's Yawn at a vanished battler (B10-13; 800 draws,
+  seeds 1-2: the foe knows it 25, uses it 12). Light checks: test_batch10 41, test_batch11 hand
+  tests 5 (`-k "not sampled"`), read_bounds 3, kaizo_policy `-k "encore or solar or charge or
+  shadow"` 55, game_constants 16, tables 34, test_state 24 passed; differential seed 27 clean
+  (300). **Owed heavy runs** (when the fast tier frees the machine):
+  tests/engine/test_invokers.py, the sampled-frequency tests (test_batch11 `-k sampled`),
+  tests/search incl. test_playout.py, tests/test_cli.py, differential seed 32 on the merge.
+- **Batch 11 second review follow-ups (2026-11-16, on 31b3a95).** B11-10 (the generator never
+  gives a move twice, `_teach`; the replacement-coverage property test), B11-11 (the takeover /
+  replacement predicates take `side` and `foe`), B11-12 (Kaizo Expert_Encore and its table are
+  vanilla, ROM-checked). Light checks: test_batch11 `-k "not sampled"` 6 passed (the new
+  property test included; test_encore_into_assist reached 6.1 GB resident), test_batch10 41,
+  kaizo_policy `-k encore` 12 passed; differential seeds 28, 29 clean (300 each). **Owed heavy runs** (unchanged, plus the
+  new generator's draws): tests/engine/test_invokers.py, test_batch11 `-k sampled`, tests/search
+  incl. test_playout.py, tests/test_cli.py, differential seed 32 on the merge.
+- **Batch 11 (as briefed):** the takeover mechanism exactly
   as designed at 88fb6c5 (ledger "Design: a chosen move replaced mid-turn": one event for every
   replaced move, TAKEN law variant from a hypothetical encored state with its tag outside `call`,
   a second sampled outcome returned where the event fired, Outcome shape unchanged), including
@@ -329,6 +375,12 @@ Assist's `call % count` would corrupt). The plan now:
 - Assist (effect 180): the invoker family (Sleep Talk / Metronome / Copycat, B5-1): a random
   move of the user's party mates' known moves minus the exclusion list; find its command and the
   call law shape before starting.
+
+## Batch 11: a chosen move replaced mid-turn, Encore's AI, review items
+
+Implements the ledger's "Design: a chosen move replaced mid-turn" as approved (B11-1..B11-3),
+Encore's AI with both coverage refusals lifted (B11-4), the manager's batch 10 review items
+(B11-5..B11-8) and a law bug the takeover test found (B11-9). Rulings under "Rulings".
 
 ## Batch 6 design: mid-turn switch decision (U-turn, Baton Pass)
 
@@ -1622,7 +1674,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Pokemon (a fainted mate's too), not Move_IsInvoker (`ids.INVOKER_MOVES`, battle_lib.c:
   3032-3045) and Metronome-able (NO_METRONOME; Gravity and Heal Block owed with those moves);
   duplicates count; the call is RandNext() % numMoves (`sample_outcome`: a uniform draw over the
-  list, fold_in 30 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
+  list, fold_in 34 + side; `call_laws`: each position weighs 1, grouped by the move it calls in
   `call_variants`); none listed fails it (MOVE_STATUS_FAILED). Then GoToMoveScript like the other
   invokers (step's generic invoker path; RANGE_SINGLE_TARGET_SPECIAL: its own defender is the
   user). Its AI entry was transcribed generically by E1 (batch 3).
@@ -1713,3 +1765,116 @@ Rules left out because another mechanic is missing; each closes with the mechani
   battler whose action is still after the paused one in the order (`to_come`), a fact about the
   named battler (doubles design section 5 rule 5) instead of "the second actor at position 0";
   the same values in singles.
+- B11-1 (batch 11) A chosen move replaced mid-turn: Encore's takeover (ledger "Design: a chosen
+  move replaced mid-turn", implemented as designed). BattleControllerPlayer_FightCommand
+  (bcp.c:1866-1873) runs an encored battler's encored move, after Struggle, whatever it chose, so
+  a faster foe's Encore this turn (BtlCmd_TryEncore, battle_script.c:4725-4748) replaces the
+  chosen move. One event for every replaced move: `step`'s `encored_at_move` (the encored move
+  replaced the chosen one when the action started) with the turn-start test in
+  `enumerate.taken_events`, beside `disabled_at_move` / `sealed_at_move` (`_split_events`).
+  Laws: `order.takeover_possible` (the side uses a move without Struggling, is not encored at the
+  start, `encore_slot_of` would not fail it, its last move differs from the chosen one, and its
+  foe's move can run Encore: `order.can_call_encore`, Encore itself or Sleep Talk / Metronome /
+  Assist / Copycat whose call can be Encore) gives the side a takeover variant: `call_variants`
+  returns `Variant(call, taken, num, den)`, the tag `taken` a field beside `call`; `outcome_laws(...,
+  taken)` reads every move-dependent law of that side (the move run, effect, crit odds, damage
+  classes, thresholds, the call law) from the encored move with `order.encored_state`, the order
+  staying the chosen move's (CalcTurnOrder fixes it at the turn start). `call_consistent(...,
+  taken)` keeps a row only where the event matches the tag (for a side that can be taken), so
+  each side's variants sum to 1 over the kept rows; `enumerate_turn` and `search.expand` carry the
+  tag per row. Outcome shape unchanged. Sampler: outcome A as before; B redraws each side's
+  move-dependent fields (`outcome.MOVE_FIELDS`: hit, crit, secondary, fang_flinch, duration,
+  future_hit, call) for each alternative (the Disable-shrunk and Imprison-sealed Sleep Talk sets,
+  `order.disabled_state` / `sealed_state`, and the encored move, `order.encored_state`); the
+  turn's events run on A (`step.turn_events`, only where `outcome.replacement_possible`) and a
+  side whose event fired takes B's fields, drawn once for the alternative that fired (the
+  invokers' draws read none of the set changes). Cost: under `vmap` the `lax.cond` becomes a
+  select, so the event pass runs on every row: the sampled-frequency tests (test_enumerate,
+  test_accuracy_classes) went from 49 s / 4.0 GB peak to 97 s / 5.2 GB; playouts pay the same
+  (a second action phase per sampled turn), owed to the parked performance work. Exact: the event is fixed before
+  that side's action starts, and the redrawn fields are read only after it. Singles: at most one
+  replacement per side per turn (one foe move); doubles keeps a short list per battler keyed by
+  its event (doubles design section 5).
+- B11-2 (batch 11) The Sleep Talk + Disable / Imprison sampler gap (B5-13, B7-13): the sampler
+  drew a split Sleep Talk's fields from the turn-start call; B11-1's pass now draws them for the
+  move called from the set the turn leaves. Frequency tests (Ember 100 / Thunder 70, a faster
+  Disable 80 or Imprison) failed before (0.85 against the exact 0.73 / 0.70) and pass after.
+- B11-3 (batch 11) Encore into the invokers. Move_CanBeEncored (battle_lib.c:7221-7231) refuses
+  only Transform, Mimic, Sketch, Mirror Move, Encore and Struggle (ids.CANNOT_ENCORE_MOVES), so
+  Metronome, Assist, Sleep Talk and Copycat can be encored; the takeover variant's call law is
+  the encored invoker's, read with the encored state. An encored Sleep Talk always fails:
+  BattleSystem_CheckInvalidMoves (battle_lib.c:2302-2304) flags every move but the encored one
+  and TrySleepTalk (battle_script.c:4916-4930) flags the invoker itself, so no slot is left
+  (STRUGGLING_ALL, :4928). An encored Copycat taking over after a faster Encore copies that
+  Encore (movePrev, the foe's moveTemp), which then fails on the Encore user (its last move is
+  Encore, refused). Both engines already ran these; the laws and the sampler now follow.
+- B11-4 (batch 11) Encore's AI (ALLIN convention). Basic_CheckCannotEncore (script.s:655-658,
+  entry :188): the player already encored, -8; Expert_Encore (script.s:3177-3200, entry :1689):
+  the player disabled -> the +3 roll; else slower -2; else the player's last move's effect not in
+  Expert_Encore_EncouragedMoveEffects (:3202-3285, `commands.ENCORE_ENCOURAGED_EFFECTS`, 82
+  entries) -2; else +3 unless IfRandomLessThan 30 (:3192, `commands._slot_read`, bound in
+  `read_bounds.READ_BOUNDS` row 90) jumps. IfBattlerUnderEffect (trainer_ai.c:1823-1848) reads
+  `disabledTurns` / `encoredTurns`, not the move (`commands.if_battler_under_effect`). Effect 90
+  joins `outcome.KAIZO_TRANSCRIBED` / `KAIZO_EXPERT_LABELS` / `KAIZO_EXPERT_TRANSCRIBED`; the
+  coverage refusals of Encore (both sides) and of Metronome (which can call it) are lifted.
+- B11-5 (batch 11, manager's review items) The generator (tests/strategies.py) met the batch 10
+  moves too rarely (900 examples: no vanish, Power Herb, Assist, Encore, Pain Split or Safeguard
+  used): `_draw_batch10` now runs one draw in two, a charge user awake or thawed 7 in 10, a
+  status-move user untaunted 7 in 10 (invokers too, `_draw_batch5`), the side's own encore on
+  another move cleared 7 in 10; `legal_action_pair` uses a known `RARE_EFFECTS` move or charge
+  move one draw in two. (A first try gave the move two slots: a duplicate move, which no Pokemon
+  can know, and seed 25 then split the engines on `last_move`; dropped.) 900 draws (seed 1):
+  uses Encore 17, Assist 22, Pain Split 34, Safeguard 28, Endeavor 10, Knock Off 6, Focus Punch
+  6, Metronome 18, Copycat 34, Fly 19, Dig 30, SolarBeam 27; vanished 90, Power Herb 159 (counts
+  by `_scratch/e2/b11/gen_counts.py`).
+- B11-6 (batch 11, review) tests/engine/test_coverage_exp.py: the `endeavor_unsupported` fixture
+  (a faked unsupported effect) is gone; the level-up refusal tests stand on a real unsupported
+  learnset move, Budew's Worry Seed at L16 (vanilla), and the narrowed
+  `test_the_exp_sensitive_moves_are_unsupported` is replaced by
+  `test_every_exp_sensitive_move_meets_its_exp_line`: every §4.2 / §4.4 / §4.5 move, in both
+  games and whatever its support, meets its family's `exp_refusals` line.
+- B11-7 (batch 11, review; doubles design section 5) `step._stale_known_item` loops over the
+  battlers (`forget_item` keeps only the player's record); `order.claw_flags` sets the flag of a
+  FIGHT battler compared with any other FIGHT battler (CalcTurnOrder's pairwise sort,
+  bcp.c:766-778); the RANGE_OPPONENT_SIDE tests of the semi-invulnerable miss, the Future Sight
+  hit and the defender choice go through one helper, `effects.targets_foe_side` (rule 6).
+- B11-8 (batch 11, review) `search.expand`: the opponent's party-list pick is made once,
+  host-side (the laws read it); the row program steps those actions and reads only the pick's
+  refusal (`playout.turn_inputs`), so dropping the pick fails
+  tests/search/test_pivot_search.py::test_the_opponents_list_is_resolved_by_its_ai.
+- B11-9 (batch 11, found by the takeover law test) The laws never drew Encore's own duration
+  (`OutcomeLaws.relevant.duration` lacked `EffectId.ENCORE`, though `duration_kind` had
+  DURATION_ENCORE since B10-9): every enumerated Encore set the empty outcome's count. Fixed;
+  unseen before because coverage refused Encore.
+- B11-10 (batch 11, second review) No generated Pokemon knows a move twice, at the root: every
+  move the generator writes goes through `strategies._teach` (the given slot, or the slot that
+  already holds the move), used by every give-style helper and the other slot writes (species
+  item, Pursuit, pivot, invoker pair, Uproar, Future Sight, batch 7 and Imprison's shared move,
+  the law moves); Uproar's Copycat swap is skipped when Copycat is known, and the outcome-laws
+  strategy's invoker-to-Tackle swap leaves an empty slot when Tackle is known. 31b3a95's double
+  `give("Yawn", ...)` is one call. The new property test asserts the no-duplicate rule on every
+  generated state. tests/engine/test_batch11.py::test_the_replacement_predicates_cover_every_event
+  (300 states, any outcome): a side's replacement event (`taken_events`, or a Sleep Talk side's
+  `_split_events`) never fires where `order.takeover_possible` (taken) or
+  `outcome.replacement_possible` (any) is false, read on the `pivot_view` as the laws and the
+  sampler read them. The generator alone met no event in 300 draws, so the test steers three
+  draws in four (`_steer`: a Speed 999 foe using Encore, Disable or Imprison, no Trick Room).
+  300 draws (seed 0): 28 takeovers, 22 Disables, 8 Imprisons, 58 events, none uncovered; with
+  `takeover_possible` forced false 28 uncovered, with `replacement_possible` reduced to the
+  takeover 30 uncovered. Note: `_split_events` also fires for a side that is not using Sleep
+  Talk (a faster Disable on any move); the sampler then redraws that side's fields for the same
+  move (`disabled_state` does not change a plain move), the same law, so harmless.
+- B11-11 (batch 11, second review; doubles rule 1) `order.takeover_possible` and
+  `outcome.replacement_possible` take `side` and `foe` (the battler whose Encore, Disable or
+  Imprison can land first) and return one `bool`, as `can_call_encore` takes `side`; neither
+  computes `1 - side` or `uses_move[::-1]` any more. The callers (`enumerate.call_consistent`,
+  `enumerate.call_laws`, `outcome.sample_outcome`) name the foe, stacking over the two sides.
+- B11-12 (batch 11, second review; Kaizo check) The Kaizo ROM's Expert_Encore and its encourage
+  table are vanilla. Read with tools/rom (`RomFiles.overlay(14)` of the vanilla ROM and the
+  cached Kaizo ROM, `SymbolMap` of the decomp map): gTrainerAITable starts at overlay14
+  0x022248A4 (sized 0 in the map; compared up to the next sized symbol, 0x0222EE60, 10607
+  words). One word differs, 0x022249CC (0x1A -> 0x57: rom_diff.md's Levitate -> Dry Skin compare,
+  script.s:78); Expert_Encore (script.s:3177-3200, incl. IfRandomLessThan 30 at :3192) is
+  byte-equal. Expert_Encore_EncouragedMoveEffects (script.s:3202-3285) is found once in each ROM,
+  at 0x022292D8, as `commands.ENCORE_ENCOURAGED_EFFECTS` (82 entries) then TABLE_END. Script
+  (not kept): _scratch encore_rom.py, `uv run --group rom`.
