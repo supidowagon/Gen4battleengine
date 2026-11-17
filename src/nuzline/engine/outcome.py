@@ -66,6 +66,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_METRONOME,
+    CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
@@ -1224,7 +1225,33 @@ def replacement_possible(tables: Tables, state: BattleState, actions, side, foe)
     return talk | takeover_possible(tables, state, actions, side, foe)
 
 
-def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
+def replacement_known(tables: Tables, state: BattleState) -> bool:
+    """Host side, on a concrete ``state`` (any leading batch axes): whether some Pokemon of
+    either party knows, or can still learn by level-up (``tables.learnset_*`` at or above its
+    level: ``levelup.advance_learns`` in a playout), a move that can make
+    ``replacement_possible`` true: Encore (``order.takeover_possible``'s foe move) or an invoker
+    (``order.call_kind`` other than CALL_NONE: Sleep Talk, ``replacement_possible``'s own talk
+    and a ``can_call_encore`` caller; Metronome, Assist and Copycat, ``can_call_encore``'s
+    other callers). False means ``replacement_possible`` is false at ``state`` and at every
+    state a turn or a playout reaches from it, so ``sample_outcome``'s static ``replacement``
+    may be False there. A move that changes a battler's set mid-battle (Mimic, Sketch,
+    Transform: unsupported, ``coverage.RELOAD_STATE_EFFECTS``) joins Encore when supported.
+    The guard: tests/engine/test_batch11.py, on generated states."""
+    species = np.asarray(state.species).astype(np.int64)
+    learnt = np.asarray(tables.learnset_move)[species]
+    reachable = np.asarray(tables.learnset_level)[species] >= np.asarray(state.level)[..., None]
+    known = np.concatenate(
+        [np.asarray(state.moves).ravel(), np.where(reachable, learnt, 0).ravel()]
+    )
+    known = np.unique(known[known != 0]).astype(np.int32)
+    if known.size == 0:
+        return False
+    effect = np.asarray(tables.move_effect)[known]
+    kinds = np.asarray(call_kind(tables, jnp.asarray(known)))
+    return bool(np.any((effect == EffectId.ENCORE) | (kinds != CALL_NONE)))
+
+
+def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement=True) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions (a paused
     state: ``pivot_view``'s).
 
@@ -1235,7 +1262,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
     Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
     or the encored move a faster Encore forced (``order.encored_state``). Exact: the event is
-    fixed before that side's action starts, and the redrawn fields are read only after it."""
+    fixed before that side's action starts, and the redrawn fields are read only after it.
+    The events and outcome B are computed only where ``replacement_possible`` holds (a
+    ``lax.cond``; A otherwise, which B left unchanged there). ``replacement`` (a Python bool,
+    static under ``jit``): False leaves both out of the program, for a ``state`` whose
+    ``replacement_known`` is False (where the predicate is always false)."""
     from nuzline.engine.enumerate import _split_events, taken_events  # importers of this module
     from nuzline.engine.step import turn_events
 
@@ -1355,53 +1386,54 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     )
     outcome = _cast(outcome)
 
+    if not replacement:
+        return outcome
+
     # B11-1: which replacement each side's action met (the events on A), then outcome B: one
     # alternative per side, the one that fired (at most one in singles: the foe runs one move
     # before it), its move from a hypothetical state where only that side's set changed (Copycat
     # reads the foe's turn-start moveTemp). A side whose event did not fire keeps A's fields.
-    def fired(_):
+    def fired(outcome):
         events = turn_events(tables, state_in, actions_in, outcome)
         disabled, sealed = _split_events(state_in, events)
-        return jnp.stack([disabled, sealed, taken_events(state_in, events)])
+        which = jnp.stack([disabled, sealed, taken_events(state_in, events)])
+        sides = jnp.arange(2)
+        taken = which[2]
+        # The moveTemp each side runs: the encored move where taken. The invokers' draws do not
+        # read the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists
+        # ignore Disable, Imprison and Encore), so one draw serves every alternative.
+        own = jnp.where(taken, state.last_move.astype(_I32), chosen)
+        alt_key = jax.random.fold_in(key, 40)
+        alt_call = _draw_calls(alt_key, tables, state, own)
+        alt_moves = []
+        for side in (0, 1):
+            mine = sides == side
+            hyps = (
+                disabled_state(state, mine),
+                sealed_state(state, mine),
+                encored_state(tables, state, mine),
+            )
+            options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
+            alt_moves.append(
+                jnp.where(
+                    which[2, side], options[2], jnp.where(which[1, side], options[1], options[0])
+                )
+            )
+        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
+        fields["call"] = alt_call
+        replaced = jnp.any(which, axis=0)
+        for name, value in fields.items():
+            old = getattr(outcome, name)
+            mask = replaced.reshape((2,) + (1,) * (old.ndim - 1))
+            outcome = outcome._replace(
+                **{name: jnp.where(mask, jnp.asarray(value).astype(old.dtype), old)}
+            )
+        return outcome
 
-    which = jax.lax.cond(
-        jnp.any(
-            jnp.stack([replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)])
-        ),
-        fired,
-        lambda _: jnp.zeros((3, 2), bool),
-        None,
+    possible = jnp.stack(
+        [replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)]
     )
-    sides = jnp.arange(2)
-    taken = which[2]
-    # The moveTemp each side runs: the encored move where taken. The invokers' draws do not read
-    # the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists ignore
-    # Disable, Imprison and Encore), so one draw serves every alternative.
-    own = jnp.where(taken, state.last_move.astype(_I32), chosen)
-    alt_key = jax.random.fold_in(key, 40)
-    alt_call = _draw_calls(alt_key, tables, state, own)
-    alt_moves = []
-    for side in (0, 1):
-        mine = sides == side
-        hyps = (
-            disabled_state(state, mine),
-            sealed_state(state, mine),
-            encored_state(tables, state, mine),
-        )
-        options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
-        alt_moves.append(
-            jnp.where(which[2, side], options[2], jnp.where(which[1, side], options[1], options[0]))
-        )
-    fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
-    fields["call"] = alt_call
-    replaced = jnp.any(which, axis=0)
-    for name, value in fields.items():
-        old = getattr(outcome, name)
-        mask = replaced.reshape((2,) + (1,) * (old.ndim - 1))
-        outcome = outcome._replace(
-            **{name: jnp.where(mask, jnp.asarray(value).astype(old.dtype), old)}
-        )
-    return outcome
+    return jax.lax.cond(jnp.any(possible), fired, lambda o: o, outcome)
 
 
 # The Outcome fields stored as int16 (the rest are int8).

@@ -4,6 +4,18 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-16 restart: batch 11 tip 49084d6 sent for merge check; batch 12 in progress)
 
+- **Batch 11 tip merged + batch 12 second review + sampler cost (2026-11-16):** 2e7fdff merges
+  d097e68 (Acupressure's draw moved to fold_in 36: 29 is Focus Band's; no other shared index),
+  064636b the review follow-ups (B12-28), then the sampler flag (B12-29). OWED: B12-22's
+  Psycho Shift onto Synchronize can now be checked against E1's synchronize; test_batch12 needs
+  chunking under 4 GB after the merge (4.06 GB whole); the 8 GB items above; over 4 GB alone:
+  test_batch11 encore_into_assist / _metronome / _copycat, an_encored_sleep_talk; test_invokers
+  brute_force[sleep_talk, _disable, _imprison], sampled_calls_match, random_invoker_turns.
+  DIFF seed 37 (diff.py 300 37) FAILS: last_move JAX 214 vs ref 0 -- Trick Room, the foe faints
+  to its confusion self-hit first, then an awake Sleep Talk (RANGE_SINGLE_TARGET_SPECIAL) with
+  no living foe: ref takes subscript_no_target before UpdateMoveBuffers' movePrev, JAX records
+  Sleep Talk. Case: _scratch/e2/b10/fail_37.pkl. Not from the sampler (step only); decide by
+  the decomp (bcp.c HasNoTarget / BattleSystem_Defender for an invoker).
 - **Batch 11 merge (18:19):** main a5a60ad merged into 49084d6 on branch e2-b11-merge in
   _scratch/e2/testwt: 6777c8c merge, 14e5406 backlog, a1a6722 Metronome / Assist draw keys moved
   to 32+side / 34+side (they collided with Yawn 26, future_band 30, berry_confusion 31),
@@ -1605,3 +1617,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   evasion drop meets Mist before Defog clears it (subscript_defog.s:19-36).
 - B12-27 AI: Basic_CheckAlreadyUnderMist -8 (script.s:161, :587-590), no Expert entry; effect 46
   is in the four CheckHP tables (:7782, :7830, :7884, :7938).
+- B12-28 CRIT_ODDS_EFFECTS (outcome.py) maps each effect that can change another battler's
+  CalcCrit inputs (battle_lib.c:7105-7132: Focus Energy, held item, species, ability) to its
+  write: Haze (battle_script.c:3534-3549), Knock Off (:6608-6632). crit_variants applies every
+  subset, gated per battler by before[b, o] (doubles rule 1) and the write changing the odds.
+  Guard: test_batch12 plays every table effect on a foe with all inputs live.
+- B12-29 sample_outcome's replacement flag (static): outcome.replacement_known, host side, true
+  when a party Pokemon knows or can still learn Encore or an order.call_kind invoker; False
+  leaves turn_events and outcome B out of the program (exact: replacement_possible is then
+  false at every reachable state). Outcome B now runs inside the lax.cond. Threaded through
+  step_through, _play, _turn, playout*, leaves, stage_a and tests.engine.helpers.sample_rows.
+  Mimic, Sketch and Transform must join the flag when supported.

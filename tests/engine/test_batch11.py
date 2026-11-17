@@ -31,16 +31,21 @@ from nuzline.engine.order import (
     selected_move,
     takeover_possible,
 )
-from nuzline.engine.outcome import empty_outcome, pivot_view, replacement_possible, sample_outcome
+from nuzline.engine.outcome import (
+    empty_outcome,
+    pivot_view,
+    replacement_known,
+    replacement_possible,
+)
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, turn_events
-from tests.engine.helpers import assert_matches_reference
+from tests.engine.helpers import assert_matches_reference, sample_rows
 from tests.engine.test_pivot import _mon
 from tests.strategies import _teach, any_outcome, legal_action_pair, supported_state
 
 CHUNK = 256  # one compiled program per kind for every batch in this file (small: under 8 GB)
 _steps = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_samples = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+_samples = sample_rows
 
 
 def _stepped(tables, state, actions, outcomes):
@@ -378,3 +383,31 @@ def test_the_replacement_predicates_cover_every_event(tables, names, data):
     fired, uncovered = _covers(tables, s, acts, data.draw(any_outcome()))
     _FIRED[0] += int(np.sum(np.asarray(fired)))
     assert not np.any(np.asarray(uncovered)), (np.asarray(acts), np.asarray(fired))
+
+
+_possible = jax.jit(
+    lambda t, s, a: jnp.any(
+        jnp.stack([replacement_possible(t, s, a, side, 1 - side) for side in (0, 1)])
+    )
+)
+
+
+@settings(
+    max_examples=300,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(data=st.data())
+def test_replacement_known_holds_wherever_a_replacement_is_possible(tables, names, data):
+    """The sampler's static flag (``outcome.replacement_known``, B11-1's cost cut): wherever
+    ``replacement_possible`` holds for a side on a generated state (three in four steered at a
+    replacement, ``_steer``), the flag is True, so a False flag never drops a possible
+    redraw."""
+    s = data.draw(supported_state(tables, names))
+    steered = _steer(data, tables, names, s)
+    if steered is None:
+        acts = jnp.asarray(data.draw(legal_action_pair(tables, s)), jnp.int32)
+    else:
+        s, acts = steered
+    if bool(_possible(tables, s, acts)):
+        assert replacement_known(tables, s), np.asarray(s.moves)

@@ -31,12 +31,12 @@ from nuzline.engine.enumerate import (
 )
 from nuzline.engine.ids import METRONOME_HEAVY, EffectId, MoveFlag, Status
 from nuzline.engine.order import MOVE_ACTIONS, action_order, metronome_weights
-from nuzline.engine.outcome import empty_outcome, outcome_to_py, sample_outcome
+from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, step_events, turn_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import unmodelled
+from tests.engine.helpers import sample_rows, unmodelled
 from tests.strategies import legal_action_pair, supported_state
 
 
@@ -343,7 +343,7 @@ def test_sampled_calls_match_the_enumeration(tables, names):
     expected = _children(t, s, acts, outcomes, probs)
     count = 4000
     keys = jax.random.split(jax.random.key(5), count)
-    sampled = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))(keys, t, s, acts)
+    sampled = sample_rows(keys, t, s, acts)
     got = Counter(_children(t, s, acts, sampled, np.ones(count)))
     assert set(got) <= set(expected)
     for key, p in expected.items():

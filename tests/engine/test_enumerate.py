@@ -43,13 +43,12 @@ from nuzline.engine.outcome import (
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
-    sample_outcome,
 )
 from nuzline.engine.state import BattleState, make_state
 from nuzline.engine.step import step, step_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import A, roark_real_state, roark_state
+from tests.engine.helpers import A, roark_real_state, roark_state, sample_rows
 from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, spore_1v1
 from tests.strategies import any_outcome, legal_action_pair, outcome_law_state
 
@@ -67,7 +66,7 @@ HYPOTHESIS = {
 _laws = jax.jit(outcome_laws)
 _loose_laws = jax.jit(partial(outcome_laws, loose=True))
 _step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+_sample = sample_rows
 
 
 def laws_of(tables, state, actions, *, loose=False):

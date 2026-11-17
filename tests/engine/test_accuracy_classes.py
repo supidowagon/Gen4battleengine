@@ -32,7 +32,7 @@ from nuzline.engine.outcome import (
     sample_outcome,
 )
 from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
 from tests.strategies import legal_action_pair, outcome_law_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
@@ -43,7 +43,7 @@ HYPOTHESIS = {
 }
 _laws = jax.jit(outcome_laws)
 _step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+_sample = sample_rows
 
 
 def laws_of(tables, state, actions):

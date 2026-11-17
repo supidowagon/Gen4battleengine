@@ -63,7 +63,7 @@ from nuzline.engine.step import (
 )
 from nuzline.prep.problem import _item_refusal
 from nuzline.search.plan_tree import _FLAG_TEXT
-from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_party
+from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_party, sample_rows
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -213,11 +213,8 @@ def test_law_is_one_in_five(tables, names):
     assert _LAWS["quick_claw"](None, 0) == ([0, 1], [4, 1], 5)
     s = _state(tables, names)
     keys = jax.random.split(jax.random.key(3), 20000)
-    from nuzline.engine.outcome import sample_outcome
 
-    draws = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))(
-        keys, tables, s, A("Scratch", "Tackle", s, names)
-    )
+    draws = sample_rows(keys, tables, s, A("Scratch", "Tackle", s, names))
     freq = np.asarray(draws.quick_claw).mean(axis=0)
     assert np.all(np.abs(freq - 0.2) < 5 * math.sqrt(0.16 / 20000))
 

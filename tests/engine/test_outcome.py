@@ -16,7 +16,7 @@ from nuzline.engine.outcome import (
     sample_outcome,
 )
 from nuzline.engine.step import replace
-from tests.engine.helpers import roark_real_state, roark_state
+from tests.engine.helpers import roark_real_state, roark_state, sample_rows
 
 SCRATCH, EMBER, TACKLE = 0, 2, 0  # Monferno's slots 0 and 2; every fixture opponent's slot 0
 N = 20_000
@@ -74,7 +74,7 @@ def test_crit_odds(tables, names):
 def samples(tables, names):
     s = roark_state(tables, names)
     keys = jax.random.split(jax.random.key(0), N)
-    sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+    sample = sample_rows
     return sample(keys, tables, s, acts(EMBER, TACKLE))
 
 
@@ -177,7 +177,7 @@ def test_magnitude_and_shed_skin_draws(tables, names):
     assert Outcome._fields[14:16] == ("magnitude", "shed_skin")
     s = roark_state(tables, names)
     keys = jax.random.split(jax.random.key(0), N)
-    sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+    sample = sample_rows
     o = sample(keys, tables, s, acts(SCRATCH, TACKLE))
     assert o.magnitude.dtype == jnp.int8 and o.shed_skin.dtype == jnp.int8
     magnitude = np.asarray(o.magnitude)

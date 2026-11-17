@@ -95,7 +95,11 @@ from nuzline.engine.hooks import (
 )
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.order import action_order, is_switch, used_move
-from nuzline.engine.outcome import empty_outcome, hit_threshold, sample_outcome
+from nuzline.engine.outcome import (
+    empty_outcome,
+    hit_threshold,
+    sample_outcome,
+)
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import (
     NORMAL_POWER_MUL,
@@ -509,13 +513,16 @@ def turn_inputs(tables: Tables, state: BattleState, actions):
     return actions, opp_list & bad, power_mul, ai_switched
 
 
-def step_through(tables: Tables, state: BattleState, actions, first_key, key, pick=-1):
+def step_through(
+    tables: Tables, state: BattleState, actions, first_key, key, pick=-1, replacement=True
+):
     """``(state, refused)``: the turn from ``state`` to its end. Each pass of one loop makes the
     pick when the state is paused at a party list (``pivot_pick``; at the first pass ``pick``, a
     switch action, overrides the player's own), draws ``sample_outcome`` (``first_key`` at the
     first pass, then from ``key``: each half reads its own draws) and plays ``step``; it loops
     while ``step`` pauses (at most twice a turn). One ``step``, one ``sample_outcome`` and one
-    ``pivot_pick`` in the program. ``refused``: the AI refused its pick."""
+    ``pivot_pick`` in the program. ``refused``: the AI refused its pick. ``replacement``
+    (static): ``sample_outcome``'s, ``outcome.replacement_known`` of the states played."""
 
     def cond(carry):
         s, _, _, refused, n = carry
@@ -530,7 +537,7 @@ def step_through(tables: Tables, state: BattleState, actions, first_key, key, pi
         a = jnp.where(paused, picked, a)
         k, k_half = jax.random.split(k)
         k_half = jnp.where(n == 0, first_key, k_half)
-        played = step(tables, s, a, sample_outcome(k_half, tables, s, a))
+        played = step(tables, s, a, sample_outcome(k_half, tables, s, a, replacement))
         return played, a, k, refused | (paused & bad), n + 1
 
     init = (state, jnp.asarray(actions, _I32), key, jnp.bool_(False), jnp.int32(0))
@@ -539,13 +546,19 @@ def step_through(tables: Tables, state: BattleState, actions, first_key, key, pi
 
 
 def _play(
-    tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA, pick=-1
+    tables: Tables,
+    state: BattleState,
+    player_action,
+    key,
+    layout: AiLayout = VANILLA,
+    pick=-1,
+    replacement=True,
 ):
     """One turn after the player's choice, before the opponent's replacement:
     ``(state after step, ai_refused, ai_switched, power_mul)``. A pause at a party list is
     resumed in the turn (``step_through``). From a paused state (a playout's root) the turn is
     its resume: ``pick`` (a switch action) is the player's pick at its own list, else
-    ``pivot_pick``'s; the AI's action is not used."""
+    ``pivot_pick``'s; the AI's action is not used. ``replacement``: ``step_through``'s."""
     k_ai, k_turn = jax.random.split(key)
     ai_outcome = sample_ai_outcome(k_ai, tables, state, layout)
     opp_action = ai_policy(tables, state, ai_outcome, layout)
@@ -554,16 +567,24 @@ def _play(
     actions = jnp.stack([player_action, jnp.maximum(opp_action, 0)]).astype(_I32)
     power_mul, ai_switched = turn_muls(tables, state, actions)
     played, pick_refused = step_through(
-        tables, state, actions, k_turn, jax.random.fold_in(k_turn, 1), pick
+        tables, state, actions, k_turn, jax.random.fold_in(k_turn, 1), pick, replacement
     )
     return played, ai_refused | pick_refused, ai_switched, power_mul
 
 
 def _turn(
-    tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA, pick=-1
+    tables: Tables,
+    state: BattleState,
+    player_action,
+    key,
+    layout: AiLayout = VANILLA,
+    pick=-1,
+    replacement=True,
 ):
     """One turn after the player's choice: ``(state, refused)``."""
-    played, refused, ai_switched, power_mul = _play(tables, state, player_action, key, layout, pick)
+    played, refused, ai_switched, power_mul = _play(
+        tables, state, player_action, key, layout, pick, replacement
+    )
     played, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
     return _select(refused, state, played), refused
@@ -605,6 +626,7 @@ def _run(
     max_turns: int,
     first_action,
     layout: AiLayout = VANILLA,
+    replacement=True,
 ):
     # A root paused at a party list (E2 batch 6) has nothing pending before its resume: its
     # fainted actives wait for the turn's end.
@@ -630,7 +652,7 @@ def _run(
         resumed = s.pivot_battler != 0
         q_refused = q_refused & ~resumed
         pick = jnp.where(_fixed(turns, first_action), first_action, -1)
-        played, refused = _turn(tables, s, action.astype(_I32), k_turn, layout, pick)
+        played, refused = _turn(tables, s, action.astype(_I32), k_turn, layout, pick, replacement)
         refused = refused | q_refused
         s = _select(q_refused, s, played)
         return s, key, turns + jnp.where(refused | resumed, 0, 1), refused
@@ -651,16 +673,23 @@ def _run(
     )
 
 
-@partial(jax.jit, static_argnames=("max_turns", "layout"))
+@partial(jax.jit, static_argnames=("max_turns", "layout", "replacement"))
 def playout(
-    tables: Tables, state: BattleState, key, max_turns: int = 100, layout: AiLayout = VANILLA
+    tables: Tables,
+    state: BattleState,
+    key,
+    max_turns: int = 100,
+    layout: AiLayout = VANILLA,
+    replacement: bool = True,
 ) -> PlayoutResult:
     """Play from ``state`` with ``playout_policy`` for the player (module docstring); a
-    pending player replacement is resolved first by ``replacement_policy``."""
-    return _run(tables, state, key, max_turns, jnp.int32(-1), layout)
+    pending player replacement is resolved first by ``replacement_policy``. ``replacement``
+    (static): ``sample_outcome``'s; ``outcome.replacement_known(tables, state)`` (no move
+    learnt in a playout changes it) leaves out the mid-turn replacement pass when False."""
+    return _run(tables, state, key, max_turns, jnp.int32(-1), layout, replacement)
 
 
-@partial(jax.jit, static_argnames=("max_turns", "layout"))
+@partial(jax.jit, static_argnames=("max_turns", "layout", "replacement"))
 def playout_from_action(
     tables: Tables,
     state: BattleState,
@@ -668,21 +697,29 @@ def playout_from_action(
     key,
     max_turns: int = 100,
     layout: AiLayout = VANILLA,
+    replacement: bool = True,
 ) -> PlayoutResult:
     """``playout`` with the player's first action fixed to ``action`` (a legal action; at
     a pending player replacement ``MOVE_ACTIONS + slot`` is that replacement and the policy
     chooses from the first turn on);
     the same ``key`` gives every first action the same draws (common random numbers)."""
-    return _run(tables, state, key, max_turns, jnp.asarray(action, _I32), layout)
+    return _run(tables, state, key, max_turns, jnp.asarray(action, _I32), layout, replacement)
 
 
-@partial(jax.jit, static_argnames=("max_turns", "layout"))
+@partial(jax.jit, static_argnames=("max_turns", "layout", "replacement"))
 def batched_playout(
-    tables: Tables, states: BattleState, keys, max_turns: int = 100, layout: AiLayout = VANILLA
+    tables: Tables,
+    states: BattleState,
+    keys,
+    max_turns: int = 100,
+    layout: AiLayout = VANILLA,
+    replacement: bool = True,
 ):
     """``playout`` over a leading batch axis of ``states`` and ``keys`` (``jax.vmap``,
-    ``tables`` shared); ``max_turns`` and ``layout`` are static."""
-    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout))(states, keys)
+    ``tables`` shared); ``max_turns``, ``layout`` and ``replacement`` are static."""
+    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout, replacement))(
+        states, keys
+    )
 
 
 def _opponent_reason(tables: Tables, state: BattleState, ai_switched, power_mul) -> str | None:
@@ -746,8 +783,8 @@ def replacement_refusal(tables: Tables, state: BattleState, ai_switched, power_m
     return reason
 
 
-_play_jit = jax.jit(_play, static_argnames="layout")
-_turn_jit = jax.jit(_turn, static_argnames="layout")
+_play_jit = jax.jit(_play, static_argnames=("layout", "replacement"))
+_turn_jit = jax.jit(_turn, static_argnames=("layout", "replacement"))
 _policy_jit = jax.jit(_policy, static_argnames="layout")
 
 
