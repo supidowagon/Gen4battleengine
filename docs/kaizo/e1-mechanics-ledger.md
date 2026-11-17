@@ -880,9 +880,12 @@ of them, :2107-2115).
   after the held items and before Gravity in `CheckMoveHitAccuracy`, which clears it
   (bcp.c:2967-2970) once past its early returns (accuracy 0, `SYSCTL_FIRST_OF_MULTI_TURN`,
   `SYSCTL_NONSTANDARD_ACC_CHECK`: Future Sight's use, an OHKO move), at TryMove and at the Future
-  Sight hit (battle_script.c:6115, the stored attacker slot's battler). No new draw: the accuracy
-  roll's classes get a Micle axis (`outcome.hit_thresholds`, possible for a holder, so
-  `HIT_VARIANTS` doubles; `future_thresholds`, possible for a set flag or a holder of the slot).
+  Sight hit (battle_script.c:6115, the stored attacker slot's battler). No new draw. The accuracy
+  roll's classes (`outcome.hit_thresholds`): a Micle holder's flag can be set before its check,
+  and the variants share the grid's Zoom Lens half (one item holds one of them; the target
+  having moved changes only Zoom Lens), so `HIT_VARIANTS` is unchanged. The Future Sight hit's
+  grid (`future_thresholds`) reads the active battler's flag of now and keeps the roll whole
+  (`loose`) where it can change (a flag set, or a Micle Berry on the attacker's field).
 - G-60 The Metronome item (`HOLD_EFFECT_BOOST_REPEATED`, `ItemId.METRONOME_ITEM`): CalcDamage
   multiplies by `(10 + metronomeTurns) / 10` right after Life Orb (battle_script.c:1350-1352; the
   param is not read). `BattleSystem_UpdateMetronomeCount` (battle_lib.c:6160-6178) runs at the end
