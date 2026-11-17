@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
+from nuzline.data.tables import to_numpy
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, IMPLEMENTED_WEATHER, Support
 from nuzline.engine.damage import damage_table
@@ -21,6 +22,9 @@ from nuzline.engine.ids import AbilityId, MoveFlag, Stat, Status, Weather
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from nuzline.engine.state import make_state
+from nuzline.engine.step import replace
+from nuzline.reference.convert import from_ref, to_ref
+from nuzline.reference.engine import ref_replace
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 from tools.build_tables import _move_flags
 from tools.effect_map import KAIZO_THUNDER_EFFECTS, THUNDER_EFFECT
@@ -286,3 +290,44 @@ def test_intermediate_data_keys_on_the_game_id():
         assert IntermediateData(GAMES[KAIZO].intermediate_dir).patched_builder
     with pytest.raises(ValueError, match="no game's intermediate directory"):
         IntermediateData(vanilla / "..")
+
+
+# --- review cases -------------------------------------------------------------------------
+
+
+def test_speed_boost_on_a_faint_replacement(tables, names):
+    """A faint replacement enters after the turn end (ReplaceFainted, bcp.c:1848) with
+    ``fakeOutTurnNumber = totalTurns + 1`` (battle_lib.c:2195-2197): nothing on entry, and the
+    next turn's end is not its entry turn (:3558), so it boosts there."""
+    s = _ability(roark_state(tables, names), 0, 1, AbilityId.SPEED_BOOST)
+    s = s._replace(hp=s.hp.at[0, 0].set(0))
+    out = replace(tables, s, 0, 1)
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(s), 0, 1))
+    for name, x, y in zip(out._fields, out, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+    assert int(out.active[0]) == 1 and int(out.stages[0, Stat.SPE]) == 0
+    move = int(np.flatnonzero(np.asarray(out.moves[0, 1]))[0])
+    out = assert_matches_reference(tables, out, A(move, "Leer", out, names), O)
+    assert int(out.stages[0, Stat.SPE]) == 1
+
+
+def test_white_smoke_does_not_block_its_own_drop(tables, names):
+    """battle_script.c:2876: the Clear Body / White Smoke test runs only when the attacker
+    is not ``sideEffectMon``, so the holder's own move still lowers its stats."""
+    move = "Hammer Arm"  # the supported self drop (Speed -1 on every hit, effect 218)
+    s = roark_state(tables, names, player_species="Torkoal", player_moves=[move],
+                    player_ability="White Smoke")  # fmt: skip
+    out = assert_matches_reference(tables, s, A(move, "Leer", s, names), O)
+    assert int(out.stages[0, Stat.SPE]) == -1
+
+
+def test_vital_spirit_blocks_yawn(tables, names):
+    """subscript_yawn.s:6: an ignorable Vital Spirit ends Yawn before it starts its counter."""
+    s = _mankey(tables, names, ["Yawn"])
+    out = assert_matches_reference(tables, s, A("Leer", "Yawn", s, names), O)
+    assert int(out.yawn[0]) == 0
+    # Yawn reads the decomp ability (effects.yawn_blocks): Mankey's other slot, Anger Point.
+    bare = _ability(s, 0, 0, AbilityId.NONE)
+    bare = bare._replace(ability_slot=bare.ability_slot.at[0, 0].set(1))
+    out = assert_matches_reference(tables, bare, A("Leer", "Yawn", bare, names), O)
+    assert int(out.yawn[0]) != 0
