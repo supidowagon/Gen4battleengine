@@ -19,7 +19,12 @@ from hypothesis import strategies as st
 from nuzline.ai.policy import ai_action_distribution
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import to_numpy
-from nuzline.engine.actions import legal_actions, legal_opponent_actions
+from nuzline.engine.actions import (
+    FIRST_ITEM_ACTION,
+    MOVE_ACTIONS,
+    legal_actions,
+    legal_opponent_actions,
+)
 from nuzline.engine.enumerate import (
     WIDTH_CAP,
     SamplingOnly,
@@ -27,7 +32,7 @@ from nuzline.engine.enumerate import (
     enumerate_outcomes,
     outcome_laws,
 )
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status
+from nuzline.engine.ids import ACUPRESSURE_STATS, AbilityId, EffectId, ItemId, Stat, Status
 from nuzline.engine.observe import observation
 from nuzline.engine.order import used_move
 from nuzline.engine.outcome import (
@@ -38,13 +43,12 @@ from nuzline.engine.outcome import (
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
-    sample_outcome,
 )
 from nuzline.engine.state import BattleState, make_state
 from nuzline.engine.step import step, step_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import A, roark_real_state, roark_state
+from tests.engine.helpers import A, roark_real_state, roark_state, sample_rows
 from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, spore_1v1
 from tests.strategies import any_outcome, legal_action_pair, outcome_law_state
 
@@ -62,7 +66,7 @@ HYPOTHESIS = {
 _laws = jax.jit(outcome_laws)
 _loose_laws = jax.jit(partial(outcome_laws, loose=True))
 _step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+_sample = sample_rows
 
 
 def laws_of(tables, state, actions, *, loose=False):
@@ -400,11 +404,28 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
             AbilityId.SHELL_ARMOR,
             AbilityId.BATTLE_ARMOR,
         )
-        return coin(
-            Fraction(0)
-            if lucky or armor
-            else Fraction(1, int(crit_odds(tables, state, actions)[side]))
-        )
+        if lucky or armor:
+            return coin(Fraction(0))
+        # RandNext() % odds == 0 (battle_lib.c:7132) with the odds at the hit: a foe's Haze
+        # clears Focus Energy (battle_script.c:3544), a foe's Knock Off the held item, first.
+        acting = int(state.over) == 0 and int(actions[foe]) < MOVE_ACTIONS
+        foe_effect = int(tables.move_effect[int(used_move(tables, state, foe, actions[foe]))])
+        mon_now = int(state.active[side])
+        hazed = acting and foe_effect == EffectId.HAZE and int(state.focus_energy[side]) != 0
+        crit_item = int(tables.item_effect[int(state.item[side, mon_now])]) == ItemId.CRIT_ITEM
+        knocked = acting and foe_effect == EffectId.KNOCK_OFF and crit_item
+        states = [state]
+        if hazed:
+            states.append(state._replace(focus_energy=state.focus_energy.at[side].set(0)))
+        if knocked:
+            states += [x._replace(item=x.item.at[side, mon_now].set(0)) for x in list(states)]
+        odds = sorted({int(crit_odds(tables, x, actions)[side]) for x in states})
+        if len(odds) == 1:
+            return coin(Fraction(1, odds[0]))
+        groups: dict[tuple, list[int]] = {}
+        for r in range(48):  # lcm of sCriticalStageRates (battle_lib.c:7097-7103)
+            groups.setdefault(tuple(r % o == 0 for o in odds), []).append(r)
+        return {(min(rs) + 1 if any(k) else 0): Fraction(len(rs), 48) for k, rs in groups.items()}
     if name == "roll":
         return {r: Fraction(1, 16) for r in range(16)}
     # Serene Grace doubles effectChance (battle_lib.c:1552-1556, :1571-1575; battle_script.c:
@@ -479,6 +500,15 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         chance = int(tables.item_param[item, 0])
         assert int(tables.item_effect[item]) == ItemId.KINGS_ROCK
         return coin(Fraction(chance, 100))
+    if name == "acupressure":
+        # BtlCmd_BoostRandomStatBy2 (battle_script.c:8943-8950): RandNext() % validStats, the
+        # count of the user's stats below +6 at the move; a foe that acts first (a move or a
+        # switch) may change it: then every residue of the 420 draws.
+        if int(state.over) == 0 and int(actions[1 - side]) < FIRST_ITEM_ACTION:
+            return {v: Fraction(1, 420) for v in range(420)}
+        stages = np.asarray(state.stages)[side]
+        count = sum(int(stages[int(x)]) < 6 for x in ACUPRESSURE_STATS)
+        return {v: Fraction(1, max(count, 1)) for v in range(max(count, 1))}
     raise AssertionError(name)
 
 

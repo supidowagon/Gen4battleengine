@@ -193,7 +193,7 @@ def test_class_law_merges_equal_damage(tables, names):
     laws = laws_of(tables, s, A("Tackle", "Leer", s, names))
     values, weights, den, crits, rolls = damage_class_law(laws, 0)
     table = np.asarray(laws.damage)[0]
-    odds = int(laws.crit_odds[0])
+    odds = int(laws.crit_variants[0, 0])
     assert den == odds * 16
     assert values == list(range(len(weights)))
     keys = {(c, int(table[c, r])) for c in (0, 1) for r in range(16)}

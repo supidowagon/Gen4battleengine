@@ -98,6 +98,9 @@ class RefSide:
     can_unburden: int  # MoveEffectsData.canUnburden
     minimized: int  # MOVE_EFFECT_MINIMIZE
     semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)
+    focus_energy: int  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
+    power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
+    power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

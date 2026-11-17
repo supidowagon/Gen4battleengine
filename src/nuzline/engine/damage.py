@@ -154,6 +154,21 @@ def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.where(traced, _ABILITY_DECOMP[_i32(state.ability)], own)
 
 
+def battle_stats(state: BattleState, side, slot) -> jnp.ndarray:
+    """``int32[5]``: the BattleMon Attack, Defense, Sp. Atk, Sp. Def and Speed of ``side``'s party
+    ``slot``: its stats, Attack and Defense swapped while it is the active battler and its swap
+    is on: MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; battle_lib.c:2137-2141
+    for a Baton Pass newcomer) unless a level-up's reload undid it (``power_trick_desync``,
+    battle_lib.c:169-174), B12-10."""
+    stats = _i32(state.stats[side, slot])
+    on = (state.power_trick[side] != 0) != (state.power_trick_desync[side] != 0)
+    swapped = on & (state.active[side] == slot)
+    trick = (
+        stats.at[Stat.ATK - 1].set(stats[Stat.DEF - 1]).at[Stat.DEF - 1].set(stats[Stat.ATK - 1])
+    )
+    return jnp.where(swapped, trick, stats)
+
+
 def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     """``int32``: ``def_side``'s ability (its active battler's, or party ``slot``'s) as
     ``atk_side``'s active battler sees it: ``Battler_IgnorableAbility`` (battle_lib.c:
@@ -984,7 +999,8 @@ def _pre_random(
     a_gender, d_gender = _i32(s.gender[atk_side, a_slot]), _i32(s.gender[def_side, d_slot])
     d_types = _i32(s.types[def_side, d_slot])
 
-    a_stats, d_stats = _i32(s.stats[atk_side, a_slot]), _i32(s.stats[def_side, d_slot])
+    a_stats = battle_stats(s, atk_side, a_slot)
+    d_stats = battle_stats(s, def_side, d_slot)
     attack, sp_attack = a_stats[Stat.ATK - 1], a_stats[Stat.SPA - 1]  # :6635, :6637
     defense, sp_defense = d_stats[Stat.DEF - 1], d_stats[Stat.SPD - 1]  # :6636, :6638
     a_stages, d_stages = _i32(s.stages[atk_side]), _i32(s.stages[def_side])

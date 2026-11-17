@@ -48,7 +48,7 @@ from nuzline.engine.ids import AbilityId, EffectId, Status, Type
 from nuzline.engine.outcome import Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -298,7 +298,7 @@ def test_sampled_rolls_are_independent_tenths(tables, names):
     acts = A(FANG, "Tackle", s, names)
     n = 40000
     keys = jax.random.split(jax.random.key(1), n)
-    o = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))(keys, tables, s, acts)
+    o = sample_rows(keys, tables, s, acts)
     para = np.asarray(o.secondary)[:, 0, 0] != 0
     flinch = np.asarray(o.fang_flinch)[:, 0] != 0
     for got, p in ((para, 0.1), (flinch, 0.1), (para & flinch, 0.01)):

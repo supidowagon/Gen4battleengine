@@ -46,9 +46,7 @@ def test_fire_fang_burns_and_flinches(tables, names):
     s = make_state(
         tables, [_mon(n, "Growlithe", ["Fire Fang"], 40)], [_mon(n, "Geodude", ["Tackle"], 20)]
     )
-    o = O._replace(
-        secondary=jnp.ones((2, 5), jnp.int8), fang_flinch=jnp.ones((2,), jnp.int8)
-    )
+    o = O._replace(secondary=jnp.ones((2, 5), jnp.int8), fang_flinch=jnp.ones((2,), jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
     assert int(out.status[1, 0]) == Status.BURN
 
@@ -153,13 +151,19 @@ def test_poison_heal_and_bad_dreams(tables, names):
     """B9-8: subscript_poison_damage.s:4-12 heals a Poison Heal holder Divide(maxHP, 8);
     Bad Dreams takes Divide(maxHP, 8) from a sleeping foe (bcp.c:1484-1500)."""
     n = names
-    s = make_state(tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
+    s = make_state(
+        tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)]
+    )
     s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.POISON_HEAL))
     s = s.with_status(0, 0, Status.POISON)._replace(hp=s.hp.at[0, 0].set(1))
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(out.hp[0, 0]) == 1 + max(int(s.max_hp[0, 0]) // 8, 1)
-    d = make_state(tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)])
-    d = d._replace(ability=d.ability.at[0, 0].set(AbilityId.BAD_DREAMS)).with_status(1, 0, Status.SLEEP, 3)
+    d = make_state(
+        tables, [_mon(n, "Shroomish", ["Growl"], 30)], [_mon(n, "Geodude", ["Growl"], 30)]
+    )
+    d = d._replace(ability=d.ability.at[0, 0].set(AbilityId.BAD_DREAMS)).with_status(
+        1, 0, Status.SLEEP, 3
+    )
     out = assert_matches_reference(tables, d, (0, 0), O)
     assert int(out.hp[1, 0]) == int(d.hp[1, 0]) - max(int(d.max_hp[1, 0]) // 8, 1)
 
@@ -167,7 +171,9 @@ def test_poison_heal_and_bad_dreams(tables, names):
 def test_dragon_rage_deals_forty(tables, names):
     """B9-9: effect_script_0041.s sets BTLVAR_DAMAGE -40 under SYSCTL_IGNORE_TYPE_CHECKS."""
     n = names
-    s = make_state(tables, [_mon(n, "Gyarados", ["Dragon Rage"], 30)], [_mon(n, "Onix", ["Growl"], 40)])
+    s = make_state(
+        tables, [_mon(n, "Gyarados", ["Dragon Rage"], 30)], [_mon(n, "Onix", ["Growl"], 40)]
+    )
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == 40
 
@@ -203,18 +209,24 @@ def test_dream_eater_needs_a_sleeper_and_payback_doubles_after_the_target(tables
     """B9-12: effect_script_0008.s fails on an awake defender (MOVE_STATUS_NO_MORE_WORK, :5);
     BtlCmd_CalcPaybackPower doubles once the defender acted (battle_script.c:7198-7209)."""
     n = names
-    s = make_state(tables, [_mon(n, "Drowzee", ["Dream Eater"], 30)], [_mon(n, "Geodude", ["Harden"], 30)])
+    s = make_state(
+        tables, [_mon(n, "Drowzee", ["Dream Eater"], 30)], [_mon(n, "Geodude", ["Harden"], 30)]
+    )
     awake = assert_matches_reference(tables, s, (0, 0), O)
     assert int(awake.hp[1, 0]) == int(s.hp[1, 0])
     asleep = s.with_status(1, 0, Status.SLEEP, 3)._replace(hp=s.hp.at[0, 0].set(1))
     out = assert_matches_reference(tables, asleep, (0, 0), O)
     dealt = int(s.hp[1, 0]) - int(out.hp[1, 0])
     assert dealt > 0 and int(out.hp[0, 0]) == 1 + max(dealt // 2, 1)
-    slow = make_state(tables, [_mon(n, "Slowpoke", ["Payback"], 30)], [_mon(n, "Geodude", ["Harden"], 30)])
+    slow = make_state(
+        tables, [_mon(n, "Slowpoke", ["Payback"], 30)], [_mon(n, "Geodude", ["Harden"], 30)]
+    )
     assert_matches_reference(tables, slow, (0, 0), O)
     # Payback doubles once the faster Geodude has acted (Leer touches neither damage input).
     move = n.move("Payback")
-    lee = make_state(tables, [_mon(n, "Slowpoke", ["Payback"], 30)], [_mon(n, "Geodude", ["Leer"], 30)])
+    lee = make_state(
+        tables, [_mon(n, "Slowpoke", ["Payback"], 30)], [_mon(n, "Geodude", ["Leer"], 30)]
+    )
     out = assert_matches_reference(tables, lee, (0, 0), O)
     from nuzline.engine.damage import damage_for_roll
 
@@ -284,7 +296,9 @@ def test_belly_drum_fails_at_plus_six_and_at_half_hp(tables, names):
     from nuzline.engine.ids import Stat
 
     n = names
-    s = make_state(tables, [_mon(n, "Snorlax", ["Belly Drum"], 30)], [_mon(n, "Geodude", ["Harden"], 30)])
+    s = make_state(
+        tables, [_mon(n, "Snorlax", ["Belly Drum"], 30)], [_mon(n, "Geodude", ["Harden"], 30)]
+    )
     top = s.with_stages(0, atk=6)
     out = assert_matches_reference(tables, top, (0, 0), O)
     assert int(out.hp[0, 0]) == int(s.hp[0, 0])
@@ -316,7 +330,9 @@ def test_swarm_and_flower_gift_raise_the_hit(tables, names):
     """B9-3: Swarm x1.5 power on a Bug move at curHP <= maxHP / 3 (battle_lib.c:6834-6838); Flower
     Gift x1.5 Attack in sun for its holder's side (:6930-6941)."""
     n = names
-    s = make_state(tables, [_mon(n, "Kricketot", ["Bug Bite"], 30)], [_mon(n, "Snorlax", ["Leer"], 40)])
+    s = make_state(
+        tables, [_mon(n, "Kricketot", ["Bug Bite"], 30)], [_mon(n, "Snorlax", ["Leer"], 40)]
+    )
     s = _set_ability(_set_ability(s, 0, AbilityId.SWARM), 1, AbilityId.NONE)
     low = s._replace(hp=s.hp.at[0, 0].set(max(int(s.max_hp[0, 0]) // 3, 1)))
     assert _dealt(tables, low) > _dealt(tables, s)
@@ -331,7 +347,9 @@ def test_water_absorb_rain_dish_aftermath_sonicboom(tables, names):
     Divide(maxHP, 16) in rain at the turn end; Aftermath takes Divide(maxHP, 4) from the contact
     attacker that KOs its holder; SonicBoom deals 20."""
     n = names
-    s = make_state(tables, [_mon(n, "Psyduck", ["Water Gun"], 30)], [_mon(n, "Lotad", ["Leer"], 30)])
+    s = make_state(
+        tables, [_mon(n, "Psyduck", ["Water Gun"], 30)], [_mon(n, "Lotad", ["Leer"], 30)]
+    )
     s = _set_ability(_set_ability(s, 1, AbilityId.WATER_ABSORB), 0, AbilityId.NONE)
     s = s._replace(hp=s.hp.at[1, 0].set(1))
     out = assert_matches_reference(tables, s, (0, 0), O)
@@ -348,7 +366,9 @@ def test_water_absorb_rain_dish_aftermath_sonicboom(tables, names):
     out = assert_matches_reference(tables, a, (0, 0), O)
     assert int(out.hp[1, 0]) == 0
     assert int(a.hp[0, 0]) - int(out.hp[0, 0]) == max(int(a.max_hp[0, 0]) // 4, 1)
-    b = make_state(tables, [_mon(n, "Magnemite", ["SonicBoom"], 30)], [_mon(n, "Snorlax", ["Leer"], 40)])
+    b = make_state(
+        tables, [_mon(n, "Magnemite", ["SonicBoom"], 30)], [_mon(n, "Snorlax", ["Leer"], 40)]
+    )
     assert _dealt(tables, b) == 20
 
 

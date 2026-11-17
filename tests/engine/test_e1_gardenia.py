@@ -1081,12 +1081,12 @@ def test_trace_standoff_copies_the_next_newcomer_before_the_holders_move(tables,
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
     view, _ = pivot_view(tables, s, acts)
     assert int(view.ability[0, 0]) == AbilityId.SUPER_LUCK
-    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 8
-    assert int(outcome_laws(tables, s, A("Tackle", "Tackle", s, n)).crit_odds[0]) == 16
+    assert int(outcome_laws(tables, s, acts).crit_variants[0, 0]) == 8
+    assert int(outcome_laws(tables, s, A("Tackle", "Tackle", s, n)).crit_variants[0, 0]) == 16
     s = _standoff(tables, names, ("Pursuit",))
     acts = A("Pursuit", SWITCH_TO_1, s, n)
     assert int(pivot_view(tables, s, acts)[0].ability[0, 0]) == AbilityId.TRACE
-    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 16
+    assert int(outcome_laws(tables, s, acts).crit_variants[0, 0]) == 16
     out = assert_matches_reference(tables, s, acts, O)
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
 
@@ -1107,7 +1107,7 @@ def test_trace_standoff_copies_a_u_turn_newcomer(tables, names):
     assert int(paused.pivot_battler) == 2
     acts = np.asarray(paused.ts_actions).astype(int).tolist()
     acts[1] = MOVE_ACTIONS + 1
-    assert int(outcome_laws(tables, paused, jnp.asarray(acts)).crit_odds[0]) == 8
+    assert int(outcome_laws(tables, paused, jnp.asarray(acts)).crit_variants[0, 0]) == 8
     out = assert_matches_reference(tables, paused, tuple(acts), O)
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
 

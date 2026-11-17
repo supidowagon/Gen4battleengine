@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 from collections.abc import Sequence
 from dataclasses import replace as _replace_spec
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 
 import jax
@@ -25,7 +25,7 @@ from nuzline.data.trainer import (
     load_trainers,
 )
 from nuzline.engine.ids import AbilityId, EffectId, Stat
-from nuzline.engine.outcome import Outcome, outcome_to_py
+from nuzline.engine.outcome import Outcome, outcome_to_py, replacement_known, sample_outcome
 from nuzline.engine.state import BattleState, make_state
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
@@ -349,3 +349,14 @@ def kaizo_names_with(manifest, conditions):
             "rom_change_conditions": [{**EMPTY_COND, "label": "c", **c} for c in conditions],
         }
     )
+
+
+@partial(jax.jit, static_argnames="replacement")
+def _sample_rows(keys, tables: Tables, state: BattleState, actions, replacement: bool = True):
+    return jax.vmap(lambda k: sample_outcome(k, tables, state, actions, replacement))(keys)
+
+
+def sample_rows(keys, tables: Tables, state: BattleState, actions):
+    """``sample_outcome`` of every key (one program per ``replacement`` value): its static
+    ``replacement`` from ``outcome.replacement_known`` of the concrete ``state``."""
+    return _sample_rows(keys, tables, state, actions, replacement_known(tables, state))
