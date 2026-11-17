@@ -638,6 +638,15 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   Route 203 (247-249) PLAIN -> mixed (PLAIN, GRASS, WATER), its coord battle no longer
   narrowed because Route 203's past-table id 22 may run any entry; Kaizo Byron (250) BUILDING
   -> mixed. Tests: `tests/tools/rom/test_terrain_narrowing.py`, `tests/tools/rom/test_terrain.py`.
+  G-38 still holds under G-40 (checked 2026-11-17 on the Kaizo ROM): Route 202 (header 343,
+  file 428, 31 entries) has no clone object (no object script `0xffff`,
+  `ObjectEvent_HasNoScript`, map_object.c:2322-2331) and no local id past its table (its ids
+  are 1, 29, 30, 31 plus single-battle, visible- and hidden-item ids 3000-3002, 7027, 8161,
+  include/script_manager.h:93-97; `ScriptContext_JumpToOffsetID`,
+  script_manager.c:412-416, is reached only past entry 31), so neither `extra_starts` nor
+  `runs_any` reaches entries 14 and 15, and the clowns stay BUILDING from Jubilife City
+  (header 3, objects running 14 and 15). A table giving them -1 / {PLAIN, GRASS, BUILDING} is
+  an intermediate built before G-38's narrowing; rebuilding at dc46b16 gives 9 / {9}.
 - G-43 A trainer's bag items act by their party params, generic over every item (no
   Potion or Poke Ball case). Data: `Item_Get` (src/item.c:153-198) of each party param the AI
   and `BattleSystem_UseBagItem` read, as the new table `item_party_param[item, ids.ItemParam]`
