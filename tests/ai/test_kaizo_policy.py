@@ -4190,6 +4190,7 @@ def test_batch12_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
+@pytest.mark.slow  # 242 s, 5.7 GB peak at 0x11F on the merged tip (fast tier: 60 s, 4 GB)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch12_stat_family_exact_equals_loose(
     kaizo_tables, kaizo_names, kaizo_roark_party, flags
@@ -4322,6 +4323,7 @@ def test_batch12_healing_expert(
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
+@pytest.mark.slow  # 146 s, 5.1 GB peak at 0x11F on the merged tip (fast tier: 60 s, 4 GB)
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch12_healing_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names

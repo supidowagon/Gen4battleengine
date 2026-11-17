@@ -4,6 +4,17 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-16 restart: batch 11 tip 49084d6 sent for merge check; batch 12 in progress)
 
+- **Main 4676fd4 merged (2026-11-17, 08064fb; only CLAUDE.md came in, no conflicts).** Tables
+  (vanilla + Kaizo) and backlog rebuilt (18 steps, 0 errors, no content change; the backlog's
+  "Groups by kind" tie order flips between runs: Counter.most_common ties). Duplicate scan clean;
+  fold_in indices 14-26, 28-31, 32/33, 34/35, 36, 40, 41 distinct. Targeted not-slow run, all
+  green: guards 68 + test_cli 101+1, unsupported tests 204 + cli_line 7, batch12 35, batch11 10,
+  invokers 16, enumerate 16, state 23, damage_classes 5, terrain 40, outcome 20, fangs 16, present
+  25, batch9 20, quick_claw 27, gardenia 95, kaizo_policy batch12 77, read_bounds/commands/outcome
+  96, stage_b_learn 5, differential 1 + diff.py seed 38 ok 300. Marked slow: kaizo_policy
+  test_batch12_stat_family_exact_equals_loose (242 s, 5.7 GB) and _healing_ (146 s, 5.1 GB).
+  OWED (killed by the free-RAM floor while the nightly held ~8 GB): test_accuracy_classes,
+  test_protect, kaizo_policy `-k "not batch12"`, test_cli default_budget / deaths_and_protect.
 - **Batch 11 tip merged + batch 12 second review + sampler cost (2026-11-16):** 2e7fdff merges
   d097e68 (Acupressure's draw moved to fold_in 36: 29 is Focus Band's; no other shared index),
   064636b the review follow-ups (B12-28), then the sampler flag (B12-29). OWED: B12-22's
