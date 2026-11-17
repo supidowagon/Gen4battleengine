@@ -11,11 +11,9 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   chunking under 4 GB after the merge (4.06 GB whole); the 8 GB items above; over 4 GB alone:
   test_batch11 encore_into_assist / _metronome / _copycat, an_encored_sleep_talk; test_invokers
   brute_force[sleep_talk, _disable, _imprison], sampled_calls_match, random_invoker_turns.
-  DIFF seed 37 (diff.py 300 37) FAILS: last_move JAX 214 vs ref 0 -- Trick Room, the foe faints
-  to its confusion self-hit first, then an awake Sleep Talk (RANGE_SINGLE_TARGET_SPECIAL) with
-  no living foe: ref takes subscript_no_target before UpdateMoveBuffers' movePrev, JAX records
-  Sleep Talk. Case: _scratch/e2/b10/fail_37.pkl. Not from the sampler (step only); decide by
-  the decomp (bcp.c HasNoTarget / BattleSystem_Defender for an invoker).
+  DIFF seed 37 fixed (B12-30): the reference wrongly failed a RANGE_SINGLE_TARGET_SPECIAL
+  invoker (awake Sleep Talk, the foe fainted to its confusion self-hit) at HasNoTarget; the
+  decomp's defender is the user, so last_move is Sleep Talk as JAX had it.
 - **Batch 11 merge (18:19):** main a5a60ad merged into 49084d6 on branch e2-b11-merge in
   _scratch/e2/testwt: 6777c8c merge, 14e5406 backlog, a1a6722 Metronome / Assist draw keys moved
   to 32+side / 34+side (they collided with Yawn 26, future_band 30, berry_confusion 31),
@@ -1628,3 +1626,17 @@ Rules left out because another mechanic is missing; each closes with the mechani
   false at every reachable state). Outcome B now runs inside the lax.cond. Threaded through
   step_through, _play, _turn, playout*, leaves, stage_a and tests.engine.helpers.sample_rows.
   Mimic, Sketch and Transform must join the flag when supported.
+- B12-30 A RANGE_SINGLE_TARGET_SPECIAL move with no living foe still succeeds: FightCommand's
+  defender (bcp.c:1900) is the user (BattleSystem_Defender battle_lib.c:1665-1669, before the
+  randomize branch), so BeforeMove's HasNoTarget (bcp.c:3190, NO_TARGET include/battle/common.h:
+  56-61) passes after the PP decrement (:3181-3185) and SYSCTL_MOVE_SUCCEEDED is set (:3212):
+  movePrevByBattler = moveTemp, the invoker (UpdateMoveBuffers :3945-3946); movePrev and
+  moveProtect follow the attack message as with a living foe (:3937-3939). Sleep Talk, Metronome,
+  Assist, Copycat (and Mirror Move, not modelled) all have this range. Awake Sleep Talk fails in
+  its script (effect_script_0097.s:5, :11-12); asleep, the called move's defender is re-picked by
+  GoToMoveScript (battle_script.c:2120-2126) and a foe-aimed one goes to subscript_no_target,
+  last_move still Sleep Talk. Me First (RANGE_SINGLE_TARGET_ME_FIRST, not modelled) differs: with
+  randomize FALSE it takes the single-target branch (lib.c:1709-1726), gets BATTLER_NONE and fails
+  at :3190 with movePrevByBattler MOVE_NONE. The reference now exempts the whole range from its
+  no-target check (it exempted only Nature Power and Counter's family); JAX already agreed. Guard:
+  test_invokers test_sleep_talk_with_no_living_foe_still_succeeds (awake and asleep).

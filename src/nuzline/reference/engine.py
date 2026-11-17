@@ -3657,11 +3657,15 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         else:
             defender = None  # BATTLER_NONE
         mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, defender, move), 0)
-    # BattleControllerPlayer_HasNoTarget (bcp.c:2306): BattleSystem_Defender found no
-    # living foe for a move aimed at it. Nature Power's defender is its user
-    # (RANGE_SINGLE_TARGET_SPECIAL, lib.c:1665-1669): it never fails here.
+    # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
+    # living foe for a move aimed at it. A RANGE_SINGLE_TARGET_SPECIAL move's defender is its
+    # user (FightCommand bcp.c:1900; lib.c:1665-1669, ahead of the ``randomize`` branch), so it
+    # never fails here and reaches SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): Nature Power, the
+    # invokers (Sleep Talk, Metronome, Copycat, Assist: their called move's defender is
+    # re-picked by GoToMoveScript, below) and Counter / Mirror Coat / Metal Burst, whose
+    # command re-picks the foe. Ruling B12-30.
+    special_range = _move_target(tables, move) == MoveTarget.RANGE_SINGLE_TARGET_SPECIAL
     nature_power = _t(tables, "move_effect", move) == EffectId.NATURE_POWER
-    # A special-range Counter / Mirror Coat / Metal Burst is its own defender until its command.
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
     # A charge move's first use keeps a defender (the user, bcp.c:2327-2334) and runs its script,
@@ -3670,8 +3674,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         s.sides[side].locked_move
     )
     if (
-        not nature_power
-        and not special_counter
+        not special_range
         and not first_charge
         and not _defender_always(tables, move, _ghost(s, side))
         and _active(s, 1 - side).hp == 0

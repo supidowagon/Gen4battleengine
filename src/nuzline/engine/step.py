@@ -941,9 +941,10 @@ def _use_move(
     # The invokers (E2 batch 5, B5-1..): Sleep Talk, Metronome and Copycat run the move their
     # script picks (order.invoked_move: BtlCmd_TrySleepTalk, _Metronome, _TryCopycat) through
     # GoToMoveScript (battle_script.c:2111-2134) as Nature Power does, read now, so a faster
-    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user (RANGE_USER),
-    # so they pass the no-target check; a call that finds no move, or a Sleep Talk whose user is
-    # not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
+    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user
+    # (RANGE_SINGLE_TARGET_SPECIAL, battle_lib.c:1665-1669), so they pass the no-target check
+    # (bcp.c:3190) even with no living foe and set SYSCTL_MOVE_SUCCEEDED, ruling B12-30; a
+    # call that finds no move, or a Sleep Talk whose user is not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
     # ("But it failed!", subscript_missed.s). A called move uses no PP; the status checks above,
     # the PP, priority, movePrevByBattler, movePrev and the Choice lock stay the invoker's
     # (moveTemp).
