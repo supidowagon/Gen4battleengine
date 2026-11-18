@@ -9,7 +9,8 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
   WITH NOTES); its pod runs and the merge are the manager's. Do not commit to e2-batch13 and do
   not touch its worktree (_scratch/e2/b13wt) or its tables.
 - Branch e2-d1 (from 0d30135 plus ledger commits) holds the merge-check notes (B13-41..B13-45)
-  and Owed 13. Next: send the manager the D1 file list (E1-owned files marked), then D1.
+  and Owed 13. D1 plan committed; next, after the manager reports the batch 13 merge, merge
+  main into e2-d1 and do group A.
 - The doubles plan follows docs/doubles-state-design.md; the manager acknowledged it.
 - Batch 14 (the other Metronome moves) is parked behind doubles. Moved to E1: AI blocks #16,
   #57, #114, #173, #215, #267, #109, #116, #252, #82, plus Plus and Minus; mechanics #57,
@@ -34,6 +35,116 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
 5. Singles stays byte-identical. The net: tests/test_differential.py and the singles tests.
 6. E1-owned files D1 re-indexes without changing their logic: the volatile, item and ability
    state fields, and the side conditions (screens, Mist, Safeguard, Tailwind, Lucky Chant).
+
+### D1: change plan
+
+Rules for every file (D = doubles-state-design.md):
+
+- R1 Format: `engine/format.py` defines frozen `Format(B, P, party_of)`: SINGLES (2, 2, (0, 1)),
+  DOUBLES (4, 2, (0, 1, 0, 1)), TWO_TRAINERS (4, 3, (0, 1, 0, 2)), MULTI (4, 4, (0, 1, 2, 3)).
+  `format_of(state)` reads B = `state.active.shape[0]`, P = `state.species.shape[0]`; shapes are
+  static under jit, so no jit signature gains an argument. Helpers: `side_of(b) = b & 1`,
+  `partner(b) = b ^ 2`, `party(fmt, b)` (b when party_of is the identity, `b & 1` when P = 2,
+  else a gather of party_of), `foe(b) = b ^ 1` (the default defender until D2's resolver).
+- R2 `1 - x` with x a battler or side -> `foe(x)` (B = 2: equal to `1 - x`). `1 - x` with x a
+  flag or probability stays (effects.py:1276 power_trick toggle; `1 - p` in ai/, search/).
+- R3 `for side in (0, 1)` / `range(2)` / `jnp.arange(2)` over battlers -> `range(fmt.B)` /
+  `jnp.arange(fmt.B)`; over sides stays `(0, 1)`.
+- R4 Per-side field indexed by a battler variable -> `X[side_of(b)]` (D 5.2). Per-party field
+  `X[b, slot]` -> `X[party(fmt, b), slot]`.
+- R5 Parameters named `side` keep their names and hold battlers. Literal 0 / 1 battler indices
+  in B = 2 entry points stay. No BattleState field is renamed or changes dtype or encoding.
+- R6 Pointer clips `jnp.clip(p - 1, 0, 1)` -> `jnp.clip(p - 1, 0, fmt.B - 1)`.
+- R7 Two-actor turn logic (`first`/`second`, `position == 1`, `speed_tie`, `end_speed_tie`,
+  `war_swaps` bits, enumerate's two-order `Branch`) keeps its structure; only R2-R4 apply
+  (D3, D6-D7).
+
+Field decisions (engine/state.py and reference/state.py):
+
+- [P, 6] party: species..ivs, knocked_off, evs, nature (all `_SLOT` fields).
+- [B] battler: active, stages, every volatile, qc_roll, recycle_item, wish_timer, wish_hp (Wish is
+  per battler, D 4), future_timer/damage/move/attacker, entry_pending, every ts_* `[2]` field,
+  ts_taken [B, 6].
+- [2] side: spikes, toxic_spikes, stealth_rock, reflect, light_screen, safeguard, mist,
+  lucky_chant, tailwind, future_sight.
+- [P]: trainer_items [P, 4], trainer_item_count, ts_alive (a party's HP bitmask, D 4).
+- Party 0 only, unchanged: ai_seen_moves, ai_item_known, ai_ability_known, the exp block, deaths,
+  protected (D 4). Scalars unchanged: weather..winner, speed_tie, war_swaps, ts_cursor, ts_used.
+- 1 + battler pointers: lock_on_target, mean_look_target, future_attacker, pivot_battler,
+  ts_pursued, ts_taken's attacker columns (already so); pursuit_target becomes 1 + battler, 0 =
+  none (only ever cleared today, so values stay 0). `infatuated` stays 0/1 in D1: it is an E1
+  volatile and the pointer is a value change; it goes to D5 on E1's list (D 5.3).
+- ts_order [B] holds battler indices (no none value, not a pointer).
+
+Group A, E2, after main is merged into e2-d1, one commit per line, in this order:
+
+1. src/nuzline/engine/format.py (new): R1.
+2. src/nuzline/engine/state.py + src/nuzline/engine/STATE.md: shape keys `_MON (P, 6)`,
+   `_BATTLER (B,)`, `_SIDE (2,)`, `_PARTY (P,)`; the field decisions; `initial_arrays(fmt, parties,
+   leads)`; `make_state(tables, player, opp, leads, ...)` keeps its signature and calls it with
+   SINGLES; `held_items` over `range(fmt.B)`; `SIDES = 2` stays (the side count).
+3. src/nuzline/reference/state.py: split `RefSide` into `RefParty` (mons, trainer_items,
+   trainer_item_count), `RefBattler` (active, volatiles, qc_roll, wish, future_*, recycle_item)
+   and `RefSideConds` (the [2] fields); `RefState` holds `parties[P]`, `battlers[B]`, `sides[2]`;
+   field tuples MON_, PARTY_, BATTLER_, SIDE_, FIELD_FIELDS.
+4. src/nuzline/reference/convert.py: to_ref / from_ref over the three lists (R3).
+5. src/nuzline/reference/engine.py: `st.sides[x].f` -> `st.battlers[b].f`, `st.sides[side_of(b)].f`
+   or `st.parties[party(fmt, b)]` by the field decisions; R2-R7.
+6. src/nuzline/engine/order.py: R2-R4 (`effective_speed`: tailwind via side_of, D 5.2).
+7. src/nuzline/engine/damage.py: `def_side` becomes a required argument (D 5.1); callers pass
+   `foe(atk_side)`; reflect / light_screen via side_of.
+8. src/nuzline/engine/effects.py, src/nuzline/engine/actions.py: R2-R4.
+9. src/nuzline/engine/outcome.py: Outcome fields `[2, ...]` -> `[B, ...]`; `empty_outcome(fmt=
+   SINGLES)`; R2-R4, R7.
+10. src/nuzline/engine/step.py: R2-R7.
+11. src/nuzline/engine/enumerate.py: Reads `[2]` / `[2, 2]` -> `[B]` / `[2, B]`; R2-R4, R7.
+12. src/nuzline/engine/coverage.py: R2 (:656).
+13. tools/trace_to_state.py: R2, R3.
+14. tests/reference/test_reference_smoke.py: `out.sides[1].party[0]` -> `out.parties[1].mons[0]`.
+    tests/strategies.py: no draw-order change; only constructor calls follow item 2.
+
+No D1 edit: engine/observe.py (D6-D7), engine/levelup.py (party 1 = the foe's, D10), search/,
+prep/, cli.py, saves/, tools/differential.py (D11), every other test (B = 2 literals are valid).
+Done when every `1 - ` left in engine/ and reference/ has a non-battler operand.
+
+Group B, E1, re-index only (R2-R6, no logic change), after group A and only after the manager
+reports E1's trial batch merged; commit subjects carry `[e1-model]`; each is listed in the batch
+report:
+
+1. src/nuzline/engine/hooks.py: R2 (:766 default `foe(side)`, :819), R3 (:322, :337-338), R4.
+2. src/nuzline/engine/bag.py: R4 (trainer_items by party; `mist[1]` is a side read, stays).
+3. src/nuzline/ai/commands.py: R4; `Battler.DEFENDER/ATTACKER` and `_side` stay (D8 changes
+   `_side`).
+4. src/nuzline/ai/switching.py: R2 (:348, :353), R4.
+5. src/nuzline/ai/policy.py, src/nuzline/ai/replacement.py, src/nuzline/ai/outcome.py: R4, R3
+   where an axis is per battler.
+
+Test net (singles byte-identical):
+
+- Before any edit, on the merged pre-D1 tip, after `bash tools/ops/build_tables.sh` (vanilla and
+  Kaizo): write `_scratch/e2/d1_snap.py` with `capture DIR A-B` / `compare DIR A-B`. Capture, per
+  seed of tools/differential.py's generator, 5 turns: the drawn input state, actions and outcome;
+  `step_events` and `jit(step)` outputs; `ref_step` via from_ref; `sample_outcome(PRNGKey(seed))`;
+  `enumerate_turn` (or its SamplingOnly refusal); `ai_action_distribution`; `decision_actions`;
+  `root_belief`. Also roark_01's replay states and `rank_actions` at `roark_real_state`, N = 256,
+  PRNGKey(0). Compare reruns from the saved inputs and checks dtype, shape and bytes per field.
+- `uv run python _scratch/e2/d1_snap.py capture _scratch/e2/d1_pre 0-199` in chunks of 25 seeds.
+- After each commit of group A and group B:
+  `uv run python _scratch/e2/d1_snap.py compare _scratch/e2/d1_pre 0-199` (same chunks);
+  `uv run python -m tools.differential 50 0-39`;
+  `uv run pytest tests/prep/test_variants.py tests/data/test_game_constants.py
+  tests/tools/test_backlog.py tests/test_cli.py tests/test_golden.py tests/test_trace_to_state.py
+  tests/reference -m "not slow"`.
+- At the end of each group: `uv run pytest tests/engine tests/ai tests/search -m "not slow"` and,
+  one at a time, `uv run pytest -m slow tests/test_differential.py tests/test_golden.py
+  tests/search/test_k0_regression.py`.
+- Limits: every test and every snap chunk under 60 s and 4 GB; a chunk over either is halved; a
+  test over either is marked slow. Any byte difference stops the group until it is fixed.
+
+Who: a Sonnet subagent per group-A item (and per group-B item) makes the edit and runs the compare,
+the differential and the guards on the spot. Opus writes format.py, the reference split (items
+3-5) and the snap script, decides any field not listed above from the decomp, and fixes any
+compare failure.
 
 ### D2-D12
 
