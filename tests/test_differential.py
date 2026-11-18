@@ -30,6 +30,7 @@ from tests.strategies import (
     legal_action_pair,
     pivot_actions,
     possible_genders,
+    recalc_stats,
     supported_state,
 )
 
@@ -104,7 +105,8 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
     """``s`` with the player's exp block redrawn to reach the payout's edges: exp anywhere in
     the level or just short of the next one, EVs near the 510 / 255 caps, friendship near the
     tier limits, the payout items, Pokerus, a Luxury Ball, any participation mask (fainted
-    slots included) and pending learn markers; sometimes a level-99 or level-100 Pokemon."""
+    slots included) and pending learn markers; sometimes a level-99 or level-100 Pokemon. The
+    stats and max HP are then ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
     for slot in np.flatnonzero(a["species"][0]):
@@ -136,6 +138,8 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
             a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
             a["learn_cursor"][slot] = draw(st.integers(0, 20))
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
+    for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
+        recalc_stats(tables, a, 0, int(slot))
     return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
 
 
