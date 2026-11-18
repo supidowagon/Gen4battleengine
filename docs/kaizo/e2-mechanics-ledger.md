@@ -94,6 +94,10 @@ Each is open; close it with its ruling.
 12. E1's Fantina list: the AI move-effect transcriptions not moved to E1. Still open in the
     backlog and not on E1's list: #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259
     (and #233 with Fling). Confirm with the manager which of these the Fantina list gives E2.
+13. The scratch differential runner (`diff.py N SEED`: N random fights per seed, JAX vs the
+    reference, 300 per seed) and `replay.py` were lost in the 18 Nov cleanup. Before D1, rebuild
+    it as a committed tool (tools/, from tests/test_differential.py's generator) so D1 can check
+    singles byte-identity over many seeds.
 
 ### Closes with its mechanic
 
