@@ -79,6 +79,24 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   accuracy / damage classes + enumerate + coverage not-slow 109 (7.1 GB), batch13 + invokers
   not-slow 68 (7.8 GB), batch12 not-slow 35, test_cli not-slow 102 + 1 skipped (the two
   over-8 GB nodes not run).
+  MERGED main aaf2ef7 (1638c33, E1 Batch D): the resolution checked against the decomp; Micle
+  with Triple Kick: every hit's check clears the flag (bcp.c:2967-2970), the later column reads
+  only a berry eaten since (outcome later_micle); the Metronome item counts once per action
+  (bcp.c:3221, the loop goes to TRY_MOVE), every Triple Kick hit reads that count, Beat Up none
+  (no CalcDamage); Jaboca / Rowap recoil marks ts_assurance; every new RemoveItem path writes
+  recycle_item in both engines; Iron Ball halves Gyro Ball's speeds through effective_speed and
+  gyro_speed_line now refuses a halving-item holder below Speed 32 (B13-14). MANIFEST_VERSION 32
+  (main changed no column). Tables + backlog rebuilt (17 steps, 0 errors), read_bounds
+  unchanged. Scans: no duplicate VOLATILE_FIELDS, LAYOUT, RefSide, EffectId / ItemId / MoveFlag
+  values or names, BattleState / Outcome / Tables fields, game_constants rows (ITEM_IRON_BALL
+  dropped, as main did); fold_in 14-26, 28-31, 32/33, 34/35, 36, 40, 41, 42 distinct. Green:
+  unsupported nodes 29, variants / game_constants / backlog 68, state / tables / layout /
+  read_bounds 73, e1_batch_d not-slow 19, batch13 not-slow 52 (6.6 GB), test_cli not-slow 102 +
+  1 skipped (the two over-8 GB nodes not run), test_differential not-slow 1 (the Figy Berry
+  case no longer fails).
+- Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
+  plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
+  does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
 
 - **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
   manager with all results; waiting for its merge. Running background work that will notify:
