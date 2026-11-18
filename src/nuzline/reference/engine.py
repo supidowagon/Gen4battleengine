@@ -563,8 +563,9 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
 def _restore_moves(s: RefState, side: int) -> None:
     """The leaving battler's Mimic copies end: ``mimic_slots``' move slots take the party's move
     and PP back from the shadow, and the shadow and the mask clear (``BattleSystem_InitBattleMon``
-    reads moves and PP from the party Pokemon, lib.c:80-85; ``BattleMon_CopyToParty`` skipped the
-    flagged slots, lib.c:1819-1825; ``moveEffectsData`` is cleared, :2100-2104)."""
+    reads moves and PP from the party Pokemon, lib.c:80-85; ``BtlIOCmd_UpdatePartyMon``, which
+    ``BattleMon_CopyToParty`` sends, skipped the flagged slots, battle_io_command.c:581-587;
+    ``moveEffectsData`` is cleared, :2100-2104)."""
     mon, sd = _active(s, side), s.sides[side]
     for k in range(len(mon.moves)):
         if sd.mimic_slots >> k & 1:

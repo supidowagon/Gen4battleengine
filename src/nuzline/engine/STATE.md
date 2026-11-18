@@ -279,7 +279,7 @@ three structs has a row.
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
-  (battle_lib.c:1819-1825; battle_io_command.c:574-587), a level-up's learn writes the shadow, and
+  (its `BtlIOCmd_UpdatePartyMon`, battle_io_command.c:581-587), a level-up's learn writes the shadow, and
   leaving (`step._restore_moves`) puts the party's back (`InitBattleMon`, battle_lib.c:80-85).
 - **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,

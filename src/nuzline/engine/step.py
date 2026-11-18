@@ -538,7 +538,8 @@ def _restore_moves(state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: the move slots Mimic changed
     (``mimic_slots``) get the party's move and PP back from ``shadow_moves`` / ``shadow_pp``, and
     the shadow and the mask clear. The decomp's party Pokemon never saw the copy
-    (``BattleMon_CopyToParty`` skips the flagged slots, battle_lib.c:1819-1825) and
+    (``BattleMon_CopyToParty``, battle_lib.c:1819-1825, sends ``BtlIOCmd_UpdatePartyMon``,
+    which skips the flagged slots, battle_io_command.c:581-587) and
     ``BattleSystem_InitBattleMon`` loads moves and PP from it on the next switch-in
     (:80-85); ``moveEffectsData`` (the mask) is cleared when the battler leaves (:2100-2104) and
     Baton Pass keeps none of it (:2107-2114). Run when the battler is switched or dragged out, and

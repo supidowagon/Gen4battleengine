@@ -360,10 +360,10 @@ def iron_ball(tables: Tables, state: BattleState, side, slot=None) -> jnp.ndarra
 def levitated(tables: Tables, state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_LEVITATED`` (battle_lib.c:
     2600-2603) for a Ground-type move against a Levitate holder as the attacker sees it
-    (``Battler_IgnorableAbility``, whose ``Battler_Ability`` reads an ingrained holder's
-    Levitate as none: ``ignorable``) that holds no Iron Ball (:2602, ``iron_ball``, G-56). The
-    Gravity exception of ``CalcEffectiveness`` (:2701) is not ``ApplyTypeChart``'s. The flag is
-    part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
+    (``Battler_IgnorableAbility``, :3108-3121, whose ``Battler_Ability`` reads Levitate as none
+    under Gravity, :3095-3098, and for an ingrained holder, :3100-3103: ``ignorable``) that
+    holds no Iron Ball (:2602, ``iron_ball``, G-56). The flag is part of
+    ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
     seen = ignorable(state, atk_side, def_side)
     return (
         (seen == AbilityId.LEVITATE)

@@ -156,7 +156,8 @@ Encodings:
   ``BattleMon`` apart; the engine's per-slot ``moves`` / ``pp`` are both. Where the battler's
   differ from the party's, ``mimic_slots`` (``MoveEffectsData.mimickedMoveSlot``) flags the move
   slots and ``shadow_moves`` / ``shadow_pp`` hold the party's value of each (battle_script.c:
-  4502-4516). Every ``BattleMon_CopyToParty`` skips a flagged slot (battle_lib.c:1819-1825), a
+  4502-4516). Every ``BattleMon_CopyToParty`` skips a flagged slot (its ``BtlIOCmd_UpdatePartyMon``,
+  battle_io_command.c:581-587), a
   level-up's learn writes the party only (:10168-10176) and ``ReloadPokemon`` reloads the other
   slots (:183-191), and the next ``InitBattleMon`` brings the party's back (``step._restore_moves``
   on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
