@@ -294,7 +294,7 @@ _ABILITY_DECOMP = jnp.array([ABILITY_DECOMP_IDS.get(a, -1) for a in AbilityId], 
 
 
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
+    """``int32[P, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
     ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
     ability slot; for
     a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
@@ -1311,9 +1311,10 @@ def _pre_random(
     Magnitude's level (``Outcome.magnitude``); ``present`` is Present's draw
     (``Outcome.present``: 0-2 is the power 40/80/120, any other value keeps the table
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
-    Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
-    is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
+    Rollout or Present case: they keep the move's table power. ``def_side`` (required) is the
+    defender's battler: the engine's callers pass ``foe(atk_side)``, ``ai`` callers
+    ``AI_CONTEXT.defender`` (``ai_case_power``'s ``def_side``, default ``foe(atk_side)``); a
+    ``self_hit`` ignores it (the attacker). ``ai_ivs`` is the IVs the AI passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
     passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and ``ai_draw`` the class of
     its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
     ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``).

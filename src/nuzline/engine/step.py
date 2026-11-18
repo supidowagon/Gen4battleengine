@@ -166,8 +166,8 @@ from nuzline.engine.effects import (
     yawn_blocks,
     yawn_sleep,
 )
+from nuzline.engine.format import Format, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.hooks import (
     ABSORB,
     DAMAGE_AVOIDED,
@@ -590,13 +590,13 @@ def _send_out(
 
 
 def _alive_mask(state: BattleState) -> jnp.ndarray:
-    """``int8[2]``: per side the party bitmask of HP > 0 (``BattleState.ts_alive``)."""
+    """``int8[P]``: per party the bitmask of HP > 0 (``BattleState.ts_alive``)."""
     bits = jnp.left_shift(jnp.int32(1), jnp.arange(state.hp.shape[1], dtype=_I32))
     return jnp.sum(jnp.where(state.hp > 0, bits[None, :], 0), axis=1).astype(jnp.int8)
 
 
 def _with_alive(state: BattleState, mask) -> BattleState:
-    """``state`` with ``hp`` 1 where ``mask`` (``int8[2]``, ``_alive_mask``) has the slot, else 0:
+    """``state`` with ``hp`` 1 where ``mask`` (``int8[P]``, ``_alive_mask``) has the slot, else 0:
     the ``before`` of a faint check or a payout, which read only ``before.hp > 0``
     (``_faint_check``; ``levelup.pay_exp_leveled``)."""
     slots = jnp.arange(state.hp.shape[1], dtype=_I32)
@@ -625,9 +625,10 @@ def _blacked_out(state: BattleState, side) -> jnp.ndarray:
     return ~jnp.any((state.species[party(fmt, side)] != 0) & (state.hp[party(fmt, side)] > 0))
 
 
-def _empty_events() -> dict:
-    """The turn's events before any action ran: every per-side field 0."""
-    side = jnp.zeros((2,), _I32)
+def _empty_events(fmt: Format) -> dict:
+    """The turn's events before any action ran: every per-battler field 0 (``[B]``, ``crit``
+    ``[B, MAX_HITS]``)."""
+    side = jnp.zeros((fmt.B,), _I32)
     events = {
         name: side
         for name in (
@@ -653,7 +654,7 @@ def _empty_events() -> dict:
             *EVENT_FLAGS,
         )
     }
-    events["crit"] = jnp.zeros((2, MAX_HITS), _I32)
+    events["crit"] = jnp.zeros((fmt.B, MAX_HITS), _I32)
     return events
 
 
@@ -718,7 +719,7 @@ def _use_move(
     ``target_moved``: the other side has already acted this turn. ``foe_protecting``: its
     Protect succeeded earlier this turn (the decomp's ``turnFlags.protecting``, a per-turn
     flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193). ``custap``
-    (``bool[2]``): each side's ``moveEffectsData.custapBerry`` from the turn order
+    (``bool[B]``): each side's ``moveEffectsData.custapBerry`` from the turn order
     (``order.custap_flags``). ``foe_roosting``: the foe's Roost succeeded earlier this turn
     (``turnFlags.roosting``, cleared at the turn end, battle_lib.c:2231): the type chart of the
     move skips its Flying rows (``damage.chart_types``). ``foe_taken``: the
@@ -2607,14 +2608,14 @@ def _execute_actions(
     consumed = _consume_trainer_items(state, real).trainer_items
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
-    read = _empty_events()
+    read = _empty_events(format_of(state))
     for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "roosting")):
         read[name] = jnp.where(paused, getattr(state, field).astype(_I32), 0)
     for k, name in enumerate(_TAKEN):
         read[name] = jnp.where(paused, state.ts_taken[:, k].astype(_I32), 0)
     read["dragged"] = jnp.where(paused, state.ts_dragged.astype(_I32), 0)
     read["move_failed"] = jnp.where(paused, state.ts_move_failed.astype(_I32), 0)
-    shown = _empty_events()
+    shown = _empty_events(format_of(state))
 
     def put(events_pair, side, values, cond):
         a, b = events_pair
@@ -3056,7 +3057,7 @@ def _stale_known_item(before: BattleState, after: BattleState, fought) -> Battle
     the segment (an action, the end of the turn) in which such an event came is exact for the
     AI, which reads the record only at its next choice. ``before``: the segment's start; the slot
     must have been knocked off by then (the knock-off's own hit updates the HP first). ``fought``
-    (``bool[2]``): each battler made a FIGHT attempt in the segment. Every battler is checked
+    (``bool[B]``): each battler made a FIGHT attempt in the segment. Every battler is checked
     (doubles design section 5 rule 4); ``forget_item`` keeps the record of the player's only (the
     AI's own items are not in it)."""
     fmt = format_of(before)
@@ -3304,7 +3305,7 @@ END_OF_TURN_ORDER = (
 
 
 def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> jnp.ndarray:
-    """``int32[2]``: the sides in ``monSpeedOrder``, which
+    """``int32[B]``: the sides in ``monSpeedOrder``, which
     ``BattleSystem_SortMonSpeedOrder`` (battle_lib.c:3364) sets after the last action
     (battle_controller_player.c:887). It compares with ``ignoreQuickClaw = TRUE``:
     no priority, so ``order.player_second`` with Quick Claw (the flag is still computed,
@@ -3667,7 +3668,7 @@ def _unlock_sleepers(state: BattleState) -> BattleState:
 
 
 def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp.ndarray:
-    """``int32[2]``: the side's Quick Claw animation played (``subscript_check_quick_claw.s``,
+    """``int32[B]``: the side's Quick Claw animation played (``subscript_check_quick_claw.s``,
     the first step of ``BeforeMove``, bcp.c:3140-3143). ``CalcTurnOrder`` sets the battler's
     ``moveEffectsData.quickClaw`` only when two FIGHT commands are compared
     (``ignoreQuickClaw = FALSE``, bcp.c:772-786; battle_lib.c:1281-1284), whatever the
@@ -3740,7 +3741,7 @@ def step_events(
 
 
 def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
-    """``int8[2]``: ``turnFlags.roosting`` per battler from the turn's ``roosted`` events: a
+    """``int8[B]``: ``turnFlags.roosting`` per battler from the turn's ``roosted`` events: a
     battler with no HP left has none (``BattleSystem_CleanupFaintedMon`` clears its turn flags,
     battle_lib.c:2189-2192). Per battler slot: a Pokemon Roar dragged in after its side's Roost
     keeps it, as the decomp's ``turnFlags[battler]`` does."""
@@ -3751,12 +3752,12 @@ def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
 
 
 def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
-    """Play one turn: ``actions`` is ``int32[2]`` (player, opponent; see ``order``)."""
+    """Play one turn: ``actions`` is ``int32[B]`` (singles: player, opponent; see ``order``)."""
     return step_events(tables, state, actions, outcome)[0]
 
 
 def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``bool[2]``: the side's ``speedRand`` can be read as a Quick Claw before it is redrawn
+    """``bool[B]``: the side's ``speedRand`` can be read as a Quick Claw before it is redrawn
     (the tight storage rule, docs/kaizo/k3b2-rules.md §5b). Between turns its readers are the
     next command selection's AI ``IfSpeedCompare*`` (trainer_ai.c:1102-1124) and
     ``LoadBattlerSpeedRank`` (trainer_ai.c:2081, a ``SortMonSpeedOrder``-like sort), the next turn's
@@ -3797,7 +3798,7 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     exact 13108/65536), for the sides ``qc_kept`` reads; 0 elsewhere. Then a weather war the
     battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
-    draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
+    draw = jax.random.randint(key, (format_of(state).B,), 0, QUICK_CLAW_MODULUS) == 0
     state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
     return sample_war(jax.random.fold_in(key, 1), state)
 
@@ -3859,7 +3860,7 @@ def sample_war(key, state: BattleState) -> BattleState:
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:
-    """``int8[2]``: 1 where a side's active Pokemon has fainted and a healthy one is
+    """``int8[B]``: 1 where a side's active Pokemon has fainted and a healthy one is
     left to send in, while the battle goes on. A player faint is not terminal (the battle
     ends at a whiteout, ``_faint_check``), so both sides are served."""
     fmt = format_of(state)

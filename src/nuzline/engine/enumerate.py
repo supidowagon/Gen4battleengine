@@ -219,8 +219,8 @@ from nuzline.engine.effects import (
     protect_blocks,
     psycho_shift_status,
 )
+from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.format import foes, format_of, party, side_of
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
@@ -329,7 +329,7 @@ _FLINCH_EFFECTS = (_E.FLINCH, _E.FAKE_OUT, _E.FANG_PARALYZE_FLINCH)
 
 
 class Reads(NamedTuple):
-    """Inputs of the conditional reads (``_move_reads``), per side (``bool[2]``) unless
+    """Inputs of the conditional reads (``_move_reads``), per side (``bool[B]``) unless
     noted; ``[2, 2]`` is ``[speed_tie branch, side]``."""
 
     first: jnp.ndarray  # int32[2]: the side acting first under speed_tie = 0, 1
@@ -343,19 +343,19 @@ class Reads(NamedTuple):
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
     roar: jnp.ndarray  # it uses Roar: its slot pick needs the level check to pass
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
-    confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
+    confused_by_foe: jnp.ndarray  # bool[2, B]: it moves after a foe move that confuses
     para_own: jnp.ndarray  # it moves paralyzed at the start
-    para_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that paralyzes
+    para_by_foe: jnp.ndarray  # bool[2, B]: it moves after a foe move that paralyzes
     freeze_own: jnp.ndarray  # it moves frozen at the start
-    freeze_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that freezes
+    freeze_by_foe: jnp.ndarray  # bool[2, B]: it moves after a foe move that freezes
     infatuated_own: jnp.ndarray  # it moves in love at the start (its source stays)
-    infatuated_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe Attract that can work
+    infatuated_by_foe: jnp.ndarray  # bool[2, B]: it moves after a foe Attract that can work
     future_roll: jnp.ndarray  # its Future Sight can be set: TryFutureSight's roll[s, 0]
     crash: jnp.ndarray  # its move crashes on a miss (EffectId.CRASH): crit / roll[s, 0] then too
     # E1 Gardenia batch (G-1, G-5).
-    band_move: jnp.ndarray  # bool[2, MAX_HITS]: the foe's Focus Band rolls at that hit
+    band_move: jnp.ndarray  # bool[B, MAX_HITS]: the foe's Focus Band rolls at that hit
     band_self: jnp.ndarray  # it holds a Focus Band: a confusion self-hit rolls focus_band[s, 0]
-    berry_by_foe: jnp.ndarray  # bool[2, 2]: a foe move first can feed it a disliked flavor berry
+    berry_by_foe: jnp.ndarray  # bool[2, B]: a foe move first can feed it a disliked flavor berry
     pending_own: jnp.ndarray  # it moves with a CONFUSION_PENDING counter at the start
     # G-30: it uses Present against a side with a Wonder Guard Pokemon: the draw picks the heal
     # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
@@ -367,41 +367,41 @@ class OutcomeLaws(NamedTuple):
     """Integer law parameters of one (state, action pair), per side, and the relevance
     masks. Fixed shapes; a batch adds a leading axis to every field."""
 
-    hit_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS], outcome.hit_thresholds
-    hit_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS], which of them can occur
+    hit_thresholds: jnp.ndarray  # int32[B, outcome.HIT_VARIANTS], outcome.hit_thresholds
+    hit_possible: jnp.ndarray  # bool[B, outcome.HIT_VARIANTS], which of them can occur
     # B13-6: a later Triple Kick hit's thresholds (outcome.hit_thresholds, overrides=False).
-    hit_later_thresholds: jnp.ndarray  # int32[2, outcome.HIT_VARIANTS]
-    hit_later_possible: jnp.ndarray  # bool[2, outcome.HIT_VARIANTS]
+    hit_later_thresholds: jnp.ndarray  # int32[B, outcome.HIT_VARIANTS]
+    hit_later_possible: jnp.ndarray  # bool[B, outcome.HIT_VARIANTS]
     # B12-4 review: the odds each side's hit can meet at its CalcCrit (outcome.crit_variants).
-    crit_variants: jnp.ndarray  # int32[2, outcome.CRIT_VARIANTS], variant 0 the turn start
-    crit_possible: jnp.ndarray  # bool[2, outcome.CRIT_VARIANTS]
-    no_crit: jnp.ndarray  # bool[2], Lucky Chant on the defending side (outcome.py:157)
-    secondary_chance: jnp.ndarray  # int32[2], tables.move_effect_chance of the move
-    duration_kind: jnp.ndarray  # int32[2], DURATION_*
+    crit_variants: jnp.ndarray  # int32[B, outcome.CRIT_VARIANTS], variant 0 the turn start
+    crit_possible: jnp.ndarray  # bool[B, outcome.CRIT_VARIANTS]
+    no_crit: jnp.ndarray  # bool[B], Lucky Chant on the defending side (outcome.py:157)
+    secondary_chance: jnp.ndarray  # int32[B], tables.move_effect_chance of the move
+    duration_kind: jnp.ndarray  # int32[B], DURATION_*
     relevant: Outcome  # bool, each field shaped like the ``Outcome`` field: any branch
     branch_relevant: Outcome  # bool, a leading axis [2]: the branch speed_tie = 0, 1
     reads: Reads  # the conditional reads' inputs
-    # int32[2, MAX_HITS, 2, ROLLS]: per side and hit, hit_damage_table at the turn start (one
+    # int32[B, MAX_HITS, 2, ROLLS]: per side and hit, hit_damage_table at the turn start (one
     # table for every hit but Triple Kick's power and Beat Up's member, B13-5, B13-10)
     damage: jnp.ndarray
-    protect_count: jnp.ndarray  # int32[2]: the turn-start chain (protect's law, 0-3)
-    roar_level_weight: jnp.ndarray  # int32[2]: of ROAR_LEVEL_VALUES, how many pass (roar_level)
-    roar_bench: jnp.ndarray  # int32[2]: the eligible bench Pokemon Roar picks from (roar_target)
-    compress: jnp.ndarray  # bool[2, 2, MAX_HITS]: [branch, side, hit] uses damage classes
-    flinch_item_chance: jnp.ndarray  # int32[2]: the King's Rock param (outcome.kings_rock_chance)
+    protect_count: jnp.ndarray  # int32[B]: the turn-start chain (protect's law, 0-3)
+    roar_level_weight: jnp.ndarray  # int32[B]: of ROAR_LEVEL_VALUES, how many pass (roar_level)
+    roar_bench: jnp.ndarray  # int32[B]: the eligible bench Pokemon Roar picks from (roar_target)
+    compress: jnp.ndarray  # bool[2, B, MAX_HITS]: [branch, side, hit] uses damage classes
+    flinch_item_chance: jnp.ndarray  # int32[B]: the King's Rock param (outcome.kings_rock_chance)
     # E2 batch 5: the invokers' call these laws assume (``call_laws``, ``call_variants``).
-    call: jnp.ndarray  # int32[2]: the Outcome.call value the rows carry (Copycat: 0 / 1, none)
+    call: jnp.ndarray  # int32[B]: the Outcome.call value the rows carry (Copycat: 0 / 1, none)
     branch_ok: jnp.ndarray  # bool[2]: the speed_tie branches this call is consistent with
     call_pending: jnp.ndarray  # bool[]: an invoker is used but no call was given
     # E2 batch 5: the Future Sight hit of this turn's end (outcome.future_thresholds), per defender.
-    future_thresholds: jnp.ndarray  # int32[2, K]
-    future_possible: jnp.ndarray  # bool[2, K]
-    future_loose: jnp.ndarray  # bool[2]: every roll its own class
+    future_thresholds: jnp.ndarray  # int32[B, K]
+    future_possible: jnp.ndarray  # bool[B, K]
+    future_loose: jnp.ndarray  # bool[B]: every roll its own class
     # E2 batch 12 (B12-9): Acupressure's draw, per side: the count of its user's stats below +6
     # at the turn start, and whether that count can change before the move (every residue class
     # of the 420 draws its own value then).
-    acupressure_count: jnp.ndarray  # int32[2]
-    acupressure_loose: jnp.ndarray  # bool[2]
+    acupressure_count: jnp.ndarray  # int32[B]
+    acupressure_loose: jnp.ndarray  # bool[B]
 
 
 class SamplingOnly(Exception):
@@ -453,7 +453,7 @@ def _entry_abilities(tables: Tables, state: BattleState, actions) -> jnp.ndarray
 
 
 def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarray:
-    """``bool[2]``: side ``d``'s active Pokemon, or the one it switches in this turn, has one
+    """``bool[B]``: side ``d``'s active Pokemon, or the one it switches in this turn, has one
     of ``abilities``: the incoming one by its own ability or the one it traces on entry
     (``_entry_abilities``; both, so a Trace newcomer counts as Trace too)."""
     fmt = format_of(state)
@@ -467,7 +467,7 @@ def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarra
 
 
 def _holds_item(tables: Tables, state: BattleState, actions, items) -> jnp.ndarray:
-    """``bool[2]``: as ``_holds``, for held items with one of the effects ``items``."""
+    """``bool[B]``: as ``_holds``, for held items with one of the effects ``items``."""
     fmt = format_of(state)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.item.shape[1] - 1)
     sides = jnp.arange(fmt.B)
@@ -635,7 +635,7 @@ def _end_speeds(
 
 def _branch_masks(foe_first, first_self, base: dict) -> dict:
     """Order-dependent masks of one branch (``outcome_laws``): ``foe_first`` /
-    ``first_self`` (``bool[2]``) say whether each side's foe / the side itself acts
+    ``first_self`` (``bool[B]``) say whether each side's foe / the side itself acts
     first."""
     b = base
     para_by_foe = b["uses_move"] & foe_first & foes(b["para_inflict"])
@@ -1294,10 +1294,10 @@ NON_TABLE_DAMAGE_EFFECTS = (
 def damage_inputs_can_change(
     tables: Tables, state: BattleState, actions, foe_first, moves=None
 ) -> jnp.ndarray:
-    """``bool[2, MAX_HITS]``: ``[side, hit]`` can deal damage other than
+    """``bool[B, MAX_HITS]``: ``[side, hit]`` can deal damage other than
     ``hit_damage_table`` at the turn start says, for some ``(crit, roll)``, because an
     event earlier in the turn can change one of its damage inputs (``damage._pre_random``,
-    ``damage._finish``). ``foe_first`` (``bool[2]``): the side's foe acts before it (one
+    ``damage._finish``). ``foe_first`` (``bool[B]``): the side's foe acts before it (one
     order branch). Sound, not tight: true whenever some clause below can apply.
 
     Inputs and the events that can change them before ``[side, hit]``:
@@ -1474,7 +1474,7 @@ def damage_inputs_can_change(
     any_switch = jnp.any(live & is_switch(actions))
 
     def lowerable(stat) -> jnp.ndarray:
-        """``bool[2]``: per side ``s``, a move this turn changes stage ``stat[s]`` (the
+        """``bool[B]``: per side ``s``, a move this turn changes stage ``stat[s]`` (the
         stage ``s``'s hit reads) of some battler, or a Pokemon switches in."""
         moved = jnp.stack(
             [
@@ -1541,14 +1541,14 @@ def outcome_laws(
     order and eligibility gate and every conditional read: each element any order or
     event can read is relevant in both branches, and ``reads`` gates nothing.
 
-    ``call`` (``int32[2]``, one variant of ``call_variants``): the invokers' call these laws
+    ``call`` (``int32[B]``, one variant of ``call_variants``): the invokers' call these laws
     assume: Sleep Talk's and Metronome's ``Outcome.call`` value, which the rows carry, and
     Copycat's order (1: its foe used a move before it, so movePrev is the foe's moveTemp; 0:
     the turn-start movePrev), which keeps only the consistent ``speed_tie`` branches
     (``branch_ok``). Without ``call`` an invoker runs nothing (``call_pending``:
     ``enumerate_drawn`` refuses those laws).
 
-    ``taken`` (``bool[2]``, a ``call_variants`` variant's tag, default none): the takeover variant
+    ``taken`` (``bool[B]``, a ``call_variants`` variant's tag, default none): the takeover variant
     (ruling B11-1) of each side it marks, whose chosen move a foe's Encore replaces before its
     action (BattleControllerPlayer_FightCommand, bcp.c:1866-1873). Its moveTemp is then the
     encored move (its last move) and every move-dependent law (the move run, its effect, crit
@@ -1566,7 +1566,7 @@ def outcome_laws(
     live = state.over == 0
     sides = jnp.arange(fmt.B)
     switch, item = is_switch(actions), is_item(actions)
-    uses_move = live & ~switch & ~item  # bool[2]
+    uses_move = live & ~switch & ~item  # bool[B]
     # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
     # the move it runs (Nature Power's and the invokers' call, order.called_move,
     # order.used_moves), whose draws these are.
@@ -2547,8 +2547,10 @@ _LAWS = {
 
 
 @cache
-def _empty() -> Outcome:
-    return Outcome(*(np.asarray(f) for f in empty_outcome()))
+def _empty(b: int) -> Outcome:
+    """``empty_outcome`` as numpy for ``b`` battlers (an ``Outcome`` depends on ``B`` only),
+    cached per battler count."""
+    return Outcome(*(np.asarray(f) for f in empty_outcome(next(f for f in FORMATS if f.B == b))))
 
 
 # --- Conditional reads and joint factors -------------------------------------------------
@@ -3172,7 +3174,7 @@ def enumerate_drawn(laws: OutcomeLaws) -> tuple[Outcome, np.ndarray, Outcome]:
         budget = WIDTH_CAP - sum(len(p[1]) for p in parts)
         parts.append(_branch_rows(laws, branch, budget, (1, 2) if tied else (1, 1)))
     k = sum(len(p[1]) for p in parts)
-    empty = _empty()
+    empty = _empty(np.shape(laws.relevant.full_para)[0])
     fields = {name: np.repeat(f[None], k, axis=0) for name, f in zip(Outcome._fields, empty)}
     drawn = {name: np.zeros((k, *np.shape(f)), bool) for name, f in zip(Outcome._fields, empty)}
     if tied and parts:
@@ -3232,12 +3234,12 @@ CALL_SEALED = 3 * SLEEP_TALK_VALUES
 
 
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``bool[2]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
+    """``bool[B]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
     a paused U-turn whose hit damaged its target (``ts_damaged``), with
     ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``ts_acted``); whether the
     newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
     fmt = format_of(state)
-    pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, 1)
+    pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
     flag = (tables.move_flags[state.ts_used] & MoveFlag.KINGS_ROCK) != 0
     on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag
     # The target: the other battler (singles), not yet acted.
@@ -3246,7 +3248,7 @@ def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(disabled, sealed)`` ``bool[2]``: the Sleep Talk set changed before the side's action
+    """``(disabled, sealed)`` ``bool[B]``: the Sleep Talk set changed before the side's action
     by a Disable (a move disabled at its start, none at the turn start) or an Imprison (a foe
     imprisoning at its start, none at the turn start)."""
     fmt = format_of(state)
@@ -3257,7 +3259,7 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
 
 
 def taken_events(state: BattleState, events) -> jnp.ndarray:
-    """``bool[2]``: the side's chosen move was replaced by an encored move when its action
+    """``bool[B]``: the side's chosen move was replaced by an encored move when its action
     started (the ``encored_at_move`` event of ``step_events``) and it was not encored at the turn
     start: a foe's Encore landed before its action (ruling B11-1)."""
     return (jnp.asarray(events["encored_at_move"]) != 0) & (state.encore_move == 0)
@@ -3267,7 +3269,7 @@ def call_consistent(
     tables: Tables, state: BattleState, actions, outcome: Outcome, events, taken=None
 ) -> jnp.ndarray:
     """``bool``: an outcome row of a call variant keeps its weight (rulings B5-13, B11-1). The
-    variant's takeover tag ``taken`` (``bool[2]``, default none; ``call_variants``) must match the
+    variant's takeover tag ``taken`` (``bool[B]``, default none; ``call_variants``) must match the
     turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
     replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
     side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
@@ -3301,19 +3303,19 @@ class CallLaws(NamedTuple):
     """Each side's invoker draw before the turn (``call_laws``). Fixed shapes; a batch adds a
     leading axis."""
 
-    kind: jnp.ndarray  # int32[2]: order.CALL_*, CALL_NONE when nothing is drawn
-    weight: jnp.ndarray  # int32[2, CALL_VALUES]: the integer weight of each call value
-    called: jnp.ndarray  # int32[2, CALL_VALUES]: the move each value calls (0: the call fails)
-    # int32[2, CALL_VALUES]: Sleep Talk's call of each value from the set a faster foe's Disable
+    kind: jnp.ndarray  # int32[B]: order.CALL_*, CALL_NONE when nothing is drawn
+    weight: jnp.ndarray  # int32[B, CALL_VALUES]: the integer weight of each call value
+    called: jnp.ndarray  # int32[B, CALL_VALUES]: the move each value calls (0: the call fails)
+    # int32[B, CALL_VALUES]: Sleep Talk's call of each value from the set a faster foe's Disable
     # can leave (``order.disabled_state``, ruling B5-13); ``called`` where no such set can arise.
     alt: jnp.ndarray
-    # int32[2, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
+    # int32[B, CALL_VALUES]: likewise from the set a faster foe's Imprison can leave
     # (``order.sealed_state``, ruling B7-13); ``called`` where no such set can arise.
     sealed: jnp.ndarray
-    # bool[2]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
+    # bool[B]: a faster foe's Disable / Imprison can change the side's Sleep Talk set this turn.
     can_disable: jnp.ndarray
     can_seal: jnp.ndarray
-    # The takeover variant (ruling B11-1): bool[2] a foe's Encore can replace the side's move
+    # The takeover variant (ruling B11-1): bool[B] a foe's Encore can replace the side's move
     # (``order.takeover_possible``), and the call law of the encored move read with the encored
     # state (``order.encored_state``): its kind, weights and calls as above.
     can_take: jnp.ndarray
@@ -3512,8 +3514,8 @@ def _side_variants(kind, weight, called, alt, sealed, offsets) -> list[tuple[int
 
 
 class Variant(NamedTuple):
-    """One call variant of a turn (``call_variants``): the invokers' ``call`` (``int32[2]``,
-    ``Outcome.call``'s value), the takeover tag ``taken`` (``bool[2]``: the variant assumes a
+    """One call variant of a turn (``call_variants``): the invokers' ``call`` (``int32[B]``,
+    ``Outcome.call``'s value), the takeover tag ``taken`` (``bool[B]``: the variant assumes a
     foe's Encore replaced the side's move before its action, ruling B11-1; a field beside
     ``call``, never an offset of it) and its weight ``num / den``."""
 
@@ -3588,6 +3590,7 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
     Talk variants (ruling B5-13) and takeover variants (B11-1) are played (``step.turn_events``)
     and each row is kept only where ``call_consistent``."""
+    fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     parts, tags = [], []
     cl = _jit_call_laws(tables, state, actions)
@@ -3597,7 +3600,7 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
         laws = _jit_laws(tables, state, actions, jnp.asarray(v.call), jnp.asarray(v.taken))
         outcomes, probs = enumerate_outcomes(laws)
         parts.append((outcomes, probs, v.num, v.den))
-        tags.append(np.broadcast_to(v.taken, (len(probs), 2)))
+        tags.append(np.broadcast_to(v.taken, (len(probs), fmt.B)))
         split = split or bool(np.any(talks & ~v.taken & (v.call >= CALL_KEEP)))
     outcomes, probs = combine_variants(parts)
     if split:

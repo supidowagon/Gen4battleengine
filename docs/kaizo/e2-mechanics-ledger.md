@@ -173,6 +173,21 @@ Group A status and decisions (commits 1-5):
   tests/test_damage_oracle.py pass `def_side` to `_pre_random`.
 - Open: party-to-battler reductions rewritten by reading are not exercised under singles; the D3
   and D6 doubles tests cover them.
+- Review fixes (group A): R6 clips to `fmt.B - 1` in outcome.py (`future_threshold`,
+  `future_thresholds` x2, `pivot_view`) and enumerate.py (`_paused_rock`); search/playout.py:484
+  `pivot_pick` keeps its clip (search/ is not a D1 file).
+- step.py `_empty_events(fmt)` sizes per-battler events [B] / [B, MAX_HITS]; observe.py's
+  `replacement_observation` passes `format_of(after)` (its `order` stays [2]: D6-D7).
+- step.py `sample_root` draws `qc_roll` with shape (B,): the same key and shape, so B = 2 is
+  bit-identical.
+- enumerate.py `_empty(b)` is cached per battler count (an Outcome depends on B only), B read
+  from `laws.relevant`; `enumerate_turn`'s `taken` tags broadcast to (rows, B).
+- outcome.py `_can_go_first`, `_threshold_grid`, `sample_outcome` pass `fmt` to `empty_outcome`.
+- tools/trace_to_state.py reads per-party state fields through `_party_of(state, b)` (R4):
+  `_hit_state`, `_holds_quick_claw`, `_used_slots`, `_roared`, `action_choices`, the contact
+  ability check, `_roar_options`, `_statuses`. The trace's own per-side records stay (B = 2 input).
+- Docstrings: `damage._pre_random`'s required `def_side`; `[2]` -> `[B]` (per battler), `[P]` (per
+  party: `_alive_mask`, `decomp_abilities`) in the touched files; speed_tie-branch `[2]` axes stay.
 - Rule: tests run on the pod (send the manager the tip and the test-file list during a batch and
   for the final tip); locally one process, one file, more than 6 GB free.
 

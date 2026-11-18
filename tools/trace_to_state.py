@@ -62,7 +62,7 @@ from nuzline.engine.damage import (
     damage_for_roll,
 )
 from nuzline.engine.format import foe as foe_of
-from nuzline.engine.format import format_of
+from nuzline.engine.format import format_of, party
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
@@ -335,6 +335,11 @@ def _check_start(state: BattleState, fields: dict[str, np.ndarray]) -> None:
             )
 
 
+def _party_of(state: BattleState, b: int) -> int:
+    """The party index (the leading axis of the per-party fields) battler ``b`` sends from."""
+    return int(party(format_of(state), b))
+
+
 def _hit_state(state: BattleState, record: dict) -> BattleState:
     """The turn's start state with a ``hit`` record's active slots, HP, status and
     stages written over it."""
@@ -342,8 +347,9 @@ def _hit_state(state: BattleState, record: dict) -> BattleState:
     hp, status = np.asarray(state.hp).copy(), np.asarray(state.status).copy()
     counter, stages = np.asarray(state.status_counter).copy(), np.asarray(state.stages).copy()
     for b in range(format_of(state).B):
-        hp[b, active[b]] = record["hp"][b]
-        status[b, active[b]], counter[b, active[b]] = decode_status(record["status"][b])
+        p = _party_of(state, b)
+        hp[p, active[b]] = record["hp"][b]
+        status[p, active[b]], counter[p, active[b]] = decode_status(record["status"][b])
         stages[b] = _stage_row(record["stages"][b])
     return state._replace(
         active=jnp.asarray(active),
@@ -415,7 +421,7 @@ def _answer_prompts(tables, state, choices):
 
 
 def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices):
-    """``(apply_turn, needs_replacement(...) != 0 after the step (bool[2]), the state after
+    """``(apply_turn, needs_replacement(...) != 0 after the step (bool[B]), the state after
     the learn answers and before the replacements)``."""
     s = step(tables, state, jnp.asarray(actions, _I32), outcome)
     need = needs_replacement(s) != 0
@@ -490,7 +496,8 @@ def replay_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_ch
 
 
 def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -> bool:
-    return int(tables.item_effect[int(state.item[side, mon])]) == ItemId.QUICK_CLAW
+    item = int(state.item[_party_of(state, side), mon])
+    return int(tables.item_effect[item]) == ItemId.QUICK_CLAW
 
 
 def _mismatches(
@@ -533,10 +540,10 @@ class _Turn:
         whose move a learn-move prompt replaced this turn (its move differs in the next
         record) shows the new move's PP, not a drop: it counts as used when the side's
         ``hit`` or ``move_end`` records name its start move."""
-        mon = int(self.state.active[side])
-        start = np.asarray(self.state.moves[side, mon])
-        same = start == self.after["moves"][side, mon]
-        drop = np.asarray(self.state.pp[side, mon], np.int32) - self.after["pp"][side, mon]
+        mon, p = int(self.state.active[side]), _party_of(self.state, side)
+        start = np.asarray(self.state.moves[p, mon])
+        same = start == self.after["moves"][p, mon]
+        drop = np.asarray(self.state.pp[p, mon], np.int32) - self.after["pp"][p, mon]
         used = np.flatnonzero((drop > 0) & same)
         if used.size == 0 and not same.all():
             named = {
@@ -552,12 +559,12 @@ class _Turn:
     def _roared(self, side: int) -> bool:
         """The foe used Roar / Whirlwind this turn (a PP drop on one), so the side's active
         Pokemon may have been dragged out rather than switched."""
-        used = self._used_slots(foe_of(side))
+        foe = foe_of(side)
+        used = self._used_slots(foe)
         if used.size == 0:
             return False
-        move = int(
-            self.state.moves[foe_of(side), int(self.state.active[foe_of(side)]), int(used[0])]
-        )
+        p = _party_of(self.state, foe)
+        move = int(self.state.moves[p, int(self.state.active[foe]), int(used[0])])
         return int(self.tables.move_effect[move]) == EffectId.ROAR
 
     def action_choices(self, side: int) -> list[int]:
@@ -568,7 +575,8 @@ class _Turn:
             return [int(used[0])]
         legal = np.asarray(legal_actions(self.tables, state, side))
         roared = self._roared(side)
-        if int(after["active"][side]) != mon and int(after["hp"][side, mon]) > 0 and not roared:
+        alive = int(after["hp"][_party_of(state, side), mon]) > 0
+        if int(after["active"][side]) != mon and alive and not roared:
             return [MOVE_ACTIONS + int(after["active"][side])]
         if roared:
             # A foe's Roar drags the side's Pokemon out (step._use_move) and the newcomer does
@@ -775,7 +783,8 @@ class _Turn:
                 AbilityId.FLAME_BODY,
                 AbilityId.CUTE_CHARM,
             )
-            if any(int(state.ability[target, mon]) in rolled for mon in defenders):
+            target_party = _party_of(state, target)
+            if any(int(state.ability[target_party, mon]) in rolled for mon in defenders):
                 options.append(("contact_proc", (target, slice(None)), [0, 1]))
             sleep = (
                 effect in (EffectId.STATUS_FOE, EffectId.SECONDARY_STATUS)
@@ -807,13 +816,14 @@ class _Turn:
         target = int(state.active[foe])
         if MOVE_ACTIONS <= actions[foe] < FIRST_ITEM_ACTION:
             target = actions[foe] - MOVE_ACTIONS
+        own, foes_party = _party_of(state, side), _party_of(state, foe)
         bench = [
             k
             for k in range(SLOTS)
-            if k != target and int(state.species[foe, k]) and int(state.hp[foe, k])
+            if k != target and int(state.species[foes_party, k]) and int(state.hp[foes_party, k])
         ]
         out: list[tuple[str, tuple, list]] = []
-        if int(state.level[side, int(state.active[side])]) < int(state.level[foe, target]):
+        if int(state.level[own, int(state.active[side])]) < int(state.level[foes_party, target]):
             out.append(("roar_level", (side,), [1, 0]))
         if len(bench) >= 2:
             out.append(("roar_target", (side,), list(range(len(bench)))))
@@ -824,8 +834,8 @@ class _Turn:
         shows: at the start, in a ``hit`` record and in the next record. A status
         inflicted before the mon moves (Stun Spore, Static) needs its ``full_para`` or
         ``thaw`` draw on the same turn."""
-        mon = int(self.state.active[side])
-        statuses = {int(self.state.status[side, mon]), int(self.after["status"][side, mon])}
+        mon, p = int(self.state.active[side]), _party_of(self.state, side)
+        statuses = {int(self.state.status[p, mon]), int(self.after["status"][p, mon])}
         for e in self.events:
             if e["kind"] == "hit" and e["active"][side] == mon:
                 statuses.add(int(decode_status(e["status"][side])[0]))
