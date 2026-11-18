@@ -140,6 +140,7 @@ from nuzline.data.trainer import (
 )
 from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
+from nuzline.engine.format import foe as _foe
 from nuzline.engine.ids import (
     METRONOME_DRAW,
     SPEED_HALVING_HOLD_EFFECTS,
@@ -653,7 +654,7 @@ def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> lis
     base = set(ai_refusals(fight, armed, names))
     out: list[str] = []
     for side, slot in holders:
-        foe = 1 - side
+        foe = _foe(side)
         copies = {
             (int(armed.ability[foe, s]), int(decomp[foe, s]))
             for s in range(species.shape[1])
