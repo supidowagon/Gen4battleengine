@@ -12,14 +12,14 @@ Operations scripts for the work streams and the rented test pods. How they are u
 - `pod/run_parts.sh`: runs the test parts in parallel and records time and memory.
 - `pod/progress.sh`: prints per-part progress and memory on the pod.
 
-Daytime pod (`day/`, recipe and caps in `day/DAYBOX.md`):
+Test pod (`day/`, bring-up and run scripts in `day/DAYBOX.md`; pod shape, caps and chunking in `docs/process.md` section 5):
 
 - `day/daybox.sh`: PC side; packs a commit and its built tables and prints the pod commands.
-- `day/push_bin.sh`: PC side; morning bring-up, sends the pod scripts.
+- `day/push_bin.sh`: PC side; pod bring-up, sends the pod scripts.
 - `day/pod/bootstrap.sh`, `start_run.sh`, `inner_run.sh`, `status.sh`, `freemem.sh`, `fetch.sh`: pod side; install tools, start a run behind the memory guard, report state, return logs.
 
-Environment variables:
+Environment variables (set `NUZLINE_REPO` and `NUZLINE_SCRATCH` before running any script here):
 
-- `NUZLINE_REPO`: the repo checkout (PowerShell default: two folders above the script).
-- `NUZLINE_SCRATCH`: the scratch folder (PowerShell default: `_scratch` beside the repo).
+- `NUZLINE_REPO`: the repo checkout.
+- `NUZLINE_SCRATCH`: `_scratch/` inside the project folder (git-ignored). Always set it: the PowerShell scripts otherwise fall back to a folder beside the project.
 - `NUZLINE_REPO_URL`: the git URL the pod clones (`pod/pod_setup_and_run.sh`).

@@ -6,33 +6,42 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 ## 1. Sessions and roles
 
 - **Managing session.** The only session the user talks to. It does not build. It gates
-  merges into `main`, pushes `main`, watches the streams, creates and deletes test pods and
-  tracks usage. It reports to the user only decisions, finished milestones and real problems.
+  merges into `main`, pushes `main`, watches the streams, rents, uses and deletes test pods
+  and tracks usage. It reports to the user only decisions, finished milestones and real
+  problems.
 - **Work streams.** Opus sessions, each in its own git worktree and branch:
-  - E1: abilities, held items, battle conditions, AI flags, test memory.
-  - E2: move-effect families (mechanic plus trainer AI), then the doubles/tag/multi format.
+  - E1: abilities, held items, battle conditions, AI flags.
+  - E2: the doubles/tag/multi format.
+  - E3: singles move-effect families, mechanic plus trainer AI.
   A stream never pushes, never creates billable resources and never writes to `main`.
-- **Subagents.** A stream builds each batch with one builder agent, gets one fresh review
-  agent, and fixes what the review finds. Model choice: section 8.
+- **Subagents.** Each batch runs the pipeline in section 2.
 
 ## 2. A batch, start to merge
 
 1. The stream sends its family list (CLAUDE.md, Batches) to the managing session, which
-   checks ownership against the other stream.
-2. One builder agent implements each rule in both engines (JAX and the NumPy reference),
-   with the trainer AI's handling and the coverage check, each rule cited to the decomp by
-   file and line. Rulings go in the stream's ledger (`docs/kaizo/e1-mechanics-ledger.md`,
-   `docs/kaizo/e2-mechanics-ledger.md`).
-3. One fresh review agent checks the batch; the stream fixes the blockers.
-4. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
-   the targeted run on the merged tip (CLAUDE.md, Merges).
-5. The stream sends one message: the tip, the batch contents with citations, the review
-   outcome, and the targeted run's results with time and peak memory per test.
-6. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
+   checks ownership against the other streams.
+2. An Opus rule writer reads the decomp, both the C (`src/battle`) and the battle scripts
+   (`res/battle/scripts`), and writes one rule sheet per mechanic group, every rule cited by
+   file and line. Each sheet states what the effect does to each of these, or "none" with the
+   cite: hit chance (accuracy and evasion, including same-turn changes by a faster battler),
+   damage inputs, crit inputs, held items read later in the turn, and the trainer AI's view.
+3. Sonnet builders implement each sheet in the JAX engine and the NumPy reference, with the
+   trainer AI's handling, the coverage check and tests. Rulings go in the stream's ledger
+   (`docs/kaizo/e1-mechanics-ledger.md`, `docs/kaizo/e2-mechanics-ledger.md`,
+   `docs/kaizo/e3-ledger.md`).
+4. The batch's tests run on the test pod while it is in work (CLAUDE.md, Where tests run;
+   section 5).
+5. One Opus review agent checks the batch; one fix round fixes its findings. Commits added
+   after a review get their own review before the merge.
+6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
+   the targeted run on the merged tip (CLAUDE.md, Merges) on the pod.
+7. The stream sends one message: the final tip, the batch contents with citations, the
+   review outcome, and the targeted run's results with time and peak memory per test file.
+8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
    diff range and the criteria, never the stream's conclusions. Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
-7. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
+9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
    new tip and the non-blocking notes, and tell the user in at most three lines.
 
 ## 3. Tests
@@ -42,8 +51,7 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
   the ROM, saves, the calc archive or the docs sheet skip there; run them locally afterwards.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
-- **Local limits:** heavy search tests compile the whole engine (about 9 GB). Run them one
-  process at a time, behind a memory guard, with a free-memory check before each start.
+- **Local runs:** CLAUDE.md, Where tests run.
 
 ## 4. Progress measure
 
@@ -62,14 +70,20 @@ per day is the rate used for estimates.
   fetches the logs and reports.
 - **Nightly pod (`ci-nightly`):** at most $6 per run. Brief: `tools/ops/nightly_brief.md`.
   Delete the pod within 4.5 hours of creation.
-- **Daytime pod (`ci-day`):** at most $10 per day, for the streams' targeted merge runs.
-  Recipe: `tools/ops/day/DAYBOX.md`. Streams have no pod tool: a stream sends the managing
-  session one line (commit, pytest paths or expression, memory guard); the managing session
-  dispatches a Sonnet runner that uploads that commit and its built tables and starts the
-  run, then a later runner reports counts, time and peak memory. Only committed code runs
-  on the pod. A stopped CPU pod keeps no disk, so the pod is deleted each night (section 7)
-  and re-created (about 3 minutes) when first needed the next day.
-- Only the managing session creates and deletes pods. Use generic names. Verify every
+- **Test pod (`ci-day`):** 32 vCPU / 128 GB CPU, at most $10 per day, for every stream test
+  run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
+  nothing is queued. Delete and re-create a pod whose container has not started within
+  5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
+- **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
+  and test-file list; the managing session dispatches a Sonnet runner that uploads that
+  commit and its built tables and starts the run, then a later runner reports counts, time
+  and peak memory per file. Only committed code runs on the pod.
+- **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
+  about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
+  files, about 40 for other files. Start a chunk only while container memory
+  (`/sys/fs/cgroup/memory.current`) is under 88 GB. The passed, failed and skipped totals
+  per file equal its collected count; a file whose totals differ has not run.
+- Only the managing session rents, uses and deletes pods. Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
@@ -96,7 +110,7 @@ or clear. Times are local cron expressions; the scheduler adds jitter.
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
 | `7 22 * * *` | Launch the nightly fast tier on the nightly pod |
-| `57 22 * * *` | Delete the daytime pod, verify with a pod listing, log the cost |
+| `57 22 * * *` | Delete the test pod if nothing is queued, verify with a pod listing, log the cost |
 
 ## 8. Usage rules
 
@@ -107,10 +121,7 @@ managing session lowers cost per unit of work and never throttles the streams.
 - The managing session compacts at about 100k tokens, and only right after a user message.
 - Batch size (CLAUDE.md, Batches) spreads the fixed cost per batch: review, merge check,
   merge of `main`, table rebuild, targeted run.
-- Models: Sonnet for every mechanical subagent job; Opus for decomp work, reviews and
-  merges.
-- Trial: on one E1 batch Sonnet builds and Opus reviews. It becomes the rule if it costs at
-  most one extra fix round and lets no wrong rule reach the merge gate.
+- Models: CLAUDE.md, Usage.
 - The managing session wakes only for a user message, a watch-loop exit, a stream's merge
   tip or blocker, or a scheduled prompt. It never reads logs or agent transcripts whole.
 - Sessions load only the connectors they use; mail, drive and browser connectors are off
