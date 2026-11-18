@@ -337,7 +337,7 @@ def test_ref_roundtrip_new_fields(tables, names):
     back = from_ref(to_ref(s))
     for name, x, y in zip(s._fields, s, back, strict=True):
         assert x.dtype == y.dtype and bool((x == y).all()), name
-    assert [side.disabled_move for side in to_ref(s).sides] == [33, 1000]
+    assert [b.disabled_move for b in to_ref(s).battlers] == [33, 1000]
 
 
 def test_rotom_wash_state_uses_its_row(tables, sample_spec):
