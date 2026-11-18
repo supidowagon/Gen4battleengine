@@ -1182,3 +1182,12 @@ of them, :2107-2115).
   `BATTLE_EFFECT_CHATTER` has no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof`
   `:131` by move id (`commands.SOUND_MOVES`, already transcribed): `KAIZO_TRANSCRIBED`; the damage estimate is
   the table power and type. Tests: `tests/engine/test_chatter.py`.
+- Batch 13 merge check (B13-39, branch `claude/e1-trial-on-b13`). Chatter's roll moves to fold_in 43:
+  42 is batch 13's `outcome.SIXTH_HIT_FOLD`. The reference `_magnet_risen` reads the Iron Ball through
+  the gated accessor (`_iron_ball(tables, s, mon)`): ApplyTypeChart's `defenderItemEffect` is
+  `Battler_HeldItemEffect` (battle_lib.c:2579, :2605-2608). Checked and unchanged: every other trial
+  item read goes through `held_item` / `holds` / `iron_ball` (Focus Band and Focus Sash under Endure:
+  bcp.c:3348-3349, :3386-3404, and the Sash removal's CheckItemHoldEffect, battle_script.c:7919-7922);
+  per-hit arrays use `MAX_HITS` (6); the Metronome item count runs once, before the move script
+  (B13-34); Pluck and the Custap gate are batch 13's (battle_lib.c:5839-5844,
+  subscript_check_quick_claw.s:26-27).

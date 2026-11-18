@@ -1608,8 +1608,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         berry_confusion=jax.random.randint(jax.random.fold_in(key, 31), per_side, 0, 4, dtype=_I32)
         + 2,
         # Chatter's confusion (battle_script.c:8428-8430): RandNext() % 100 <= the user's chance,
-        # uniform by the % n convention (G-70).
-        chatter=jax.random.randint(jax.random.fold_in(key, 42), per_side, 0, 100, dtype=_I32)
+        # uniform by the % n convention (G-70). fold_in 43: 42 is SIXTH_HIT_FOLD.
+        chatter=jax.random.randint(jax.random.fold_in(key, 43), per_side, 0, 100, dtype=_I32)
         <= jnp.asarray(CHATTER_CHANCES, _I32)[jnp.clip(state.chatot_cry.astype(_I32), 0, 2)],
     )
     outcome = _cast(outcome)

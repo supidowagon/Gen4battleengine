@@ -664,7 +664,7 @@ def _magnet_risen(tables, s: RefState, defender: int, move_type: int) -> bool:
         move_type == Type.GROUND
         and sd.magnet_rise_turns != 0
         and not sd.ingrain
-        and not _iron_ball(tables, _active(s, defender))
+        and not _iron_ball(tables, s, _active(s, defender))
     )
 
 
