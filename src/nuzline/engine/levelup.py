@@ -38,10 +38,19 @@ slot that holds a move, between a mid-turn payout and the resolve, are exact und
   selection (bcp.c:525-527) and re-reads ``moves[moveSlot]`` when the move runs
   (bcp.c:1885-1895; the PP slot by ``Battler_SlotForMove``, bcp.c:2272-2283), so only a
   prompt that replaces the selected slot differs: ``learn_pin`` masks that option;
-* the end-of-turn Disable check reads only whether ``disabledMove`` is still known
-  (bcp.c:1565-1586): masked with the disabled move (ruling D2);
+* the end-of-turn Disable and Encore checks end each once ``disabledMove`` / ``encoredMove``
+  is no longer known (bcp.c:1565-1576, :1591-1602), while the engine runs them before the
+  resolve: masked with the disabled and the encored move (ruling D2);
+* the locked move and the Choice lock are read by move id: ``FightCommand`` runs
+  ``moveLockedInto`` (bcp.c:1885-1888) and spends no PP for it (``ppDecremented``,
+  bcp.c:335; no slot, :2272-2294), as ``order.selected_move`` and ``actions.locked_slot``
+  do, and ``CHECK_INVALID_CHOICE_ITEM`` clears a lock the battler no longer knows
+  (battle_lib.c:2307-2310), which ``actions.choice_locked`` reads as no lock: replacing
+  either move is exact and offered;
 * a newcomer the hazards faint inside the opponent's replacement loop: refused
   (``exp_refused``, window (c)).
+
+The converter refuses a recorded answer the masks drop (``tools.trace_to_state._learn_refusal``).
 
 Prompts still pending when the battle ends stay in the state (ruling D8).
 """
@@ -424,9 +433,10 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
 
     * its move is not an HM (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:
       1724-1735; ``Item_IsHMMove``, src/item.c:306-315): a game rule;
-    * for the player's active learner: it is not the disabled, locked or choice-locked move
-      (ruling D2), and not the slot the player selected this turn (``learn_pin``, window (a),
-      ruling U1);
+    * for the player's active learner: it is not the disabled or the encored move (ruling D2:
+      the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
+      bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
+      (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
       D10). Coverage refuses an unsupported move only where it could be learned without a
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
@@ -435,8 +445,10 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     A slot the AI has seen is open: ``ai_seen_moves`` holds move ids, so the replaced move's id
     stays in it as in the decomp's list (``TrainerAI_RecordLastMove``,
     src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68) and the AI does not know the new move.
-    The D2, pin and D10 masks drop legal game choices, so plan values at learn nodes are
-    achievable lower bounds, except the mid-turn-prompt case (``STATE.md``, Experience)."""
+    The locked and the choice-locked move are offered: both are read by id (module
+    docstring). The D2, pin and D10 masks drop legal game choices, so plan values at learn
+    nodes are achievable lower bounds, except the mid-turn-prompt case (``STATE.md``,
+    Experience)."""
     slot = _learner(state)
     moves, _ = _party_moves(state, slot)
     width = tables.learnset_level.shape[1]
@@ -450,8 +462,7 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     live = state.moves[0, slot]
     held = (
         (live == state.disabled_move[0])
-        | (live == state.locked_move[0])
-        | (live == state.choice_lock[0])
+        | (live == state.encore_move[0])
         | (jnp.arange(MOVES) + 1 == state.learn_pin)
     )
     ok = ok & ~((slot == state.active[0]) & held)
@@ -466,7 +477,8 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     same level from the next entry (``SEQ_GET_EXP_LEARNED_MOVE_WAIT`` and
     ``SEQ_GET_EXP_GIVE_UP_LEARNING_WAIT`` -> ``SEQ_GET_EXP_CHECK_LEARN_MOVE``,
     bs.c:10132-10135, :10183-10187). Every option is applied as given: ``learn_options`` is
-    the search's mask, not a game rule here (the converter fits all non-HM options). Replacing
+    the search's mask, not a game rule here (the converter fits all non-HM options and
+    refuses a fitted answer the mask drops, ``tools.trace_to_state._learn_refusal``). Replacing
     a slot the AI has seen keeps the old move's id in ``ai_seen_moves``, as the decomp's list does
     (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68), and the
     AI does not know the new move. A flagged Mimic slot of the active learner (``_masked``)

@@ -346,8 +346,10 @@ three structs has a row.
     code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
     resolve set them.
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
-    replacing the active learner's disabled, locked or choice-locked move,
-    or the slot pinned by `learn_pin`, and every replacement when the offered move's effect is
+    replacing the active learner's disabled or encored move, or the slot pinned by
+    `learn_pin` (the decomp ends Disable and Encore, and re-reads the pinned slot, after a
+    mid-turn learn; the locked and choice-locked moves are read by id and stay offered;
+    `levelup` module docstring), and every replacement when the offered move's effect is
     unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
     empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
     values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout

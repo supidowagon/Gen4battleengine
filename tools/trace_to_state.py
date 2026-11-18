@@ -62,7 +62,7 @@ from nuzline.engine.damage import (
     damage_for_roll,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
-from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, read_chance
 from nuzline.engine.state import LAYOUT, MOVES, SLOTS, BattleState, make_state
@@ -1087,9 +1087,10 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     way the scan goes on (bs.c:10183-10187), possibly to another prompt (bs.c:10007-10018).
     Answers that give the same moves and PP replay the same records, so the first is kept.
 
-    ``learn_options``' masks are the search's only: ``levelup.learn`` replays every answer.
-    ``TraceError`` for a move the engine does not support learned by an answer or into an
-    empty slot (ruling D10)."""
+    ``levelup.learn`` applies every answer, but after a mid-turn payout it is exact only for
+    the answers ``learn_options`` offers (``levelup``'s module docstring). ``TraceError`` for
+    an answer it masks (``_learn_refusal``), and for a move the engine does not support
+    learned by an answer or into an empty slot (ruling D10)."""
     if not bool(needs_learn(fit.state)):
         _check_learned(tables, inference, fit.state, ())
         return fit
@@ -1125,12 +1126,49 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     wrong = _mismatches(jax.tree.map(lambda x: x[None], final), after)[0]
     if not wrong.any():  # refuse only a path that reproduces the record; else report it
         _check_learned(tables, inference, final, choices)
+        for n in range(len(choices)):
+            _learn_refusal(tables, inference, run(choices[:n])[2], choices[n])
     return dataclasses.replace(
         fit,
         state=final,
         mismatched=tuple(name for name, w in zip(COMPARED_FIELDS, wrong) if w),
         need=(bool(need[0]), bool(need[1])),
         learn_choices=choices,
+    )
+
+
+def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice: int) -> None:
+    """``TraceError`` when ``choice`` answers ``state``'s prompt with an option
+    ``levelup.learn_options`` masks. The converter fits it (it happened), but after a mid-turn
+    payout the engine does not replay it exactly (``levelup``'s module docstring), for the
+    active learner:
+
+    * the slot selected this turn (``learn_pin``, ruling U1): the game re-reads
+      ``moves[moveSlot]`` when the move runs (battle_controller_player.c:1891-1895), the engine
+      runs the move it selected;
+    * the disabled or the encored move (ruling D2): the end-of-turn checks end Disable and
+      Encore once the move is no longer known (battle_controller_player.c:1565-1576,
+      :1591-1602), the engine runs them before the resolve.
+
+    The locked and the choice-locked move are read by id and replay exactly (offered by
+    ``learn_options``); a move the AI has seen keeps its id in ``ai_seen_moves``
+    (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68). The
+    D10 mask (an unsupported offered move) is refused first, by ``_check_learned``."""
+    if choice == GIVE_UP or bool(learn_options(tables, state)[choice]):
+        return
+    slot = int(np.argmax(np.asarray(state.learn_level) > 0))
+    move = int(state.moves[0, slot, choice])
+    if int(state.learn_pin) == choice + 1:
+        why = "the slot selected this turn, re-read when its move runs (bcp.c:1891-1895)"
+    elif move == int(state.disabled_move[0]):
+        why = "the disabled move, whose Disable the turn's end would end (bcp.c:1565-1576)"
+    elif move == int(state.encore_move[0]):
+        why = "the encored move, whose Encore the turn's end would end (bcp.c:1591-1602)"
+    else:
+        why = "an option the engine masks (levelup.learn_options: ruling D10)"
+    raise inference.fail(
+        f"the player replaced move {move} (party slot {slot}, move slot {choice}) at a "
+        f"learn-move prompt: {why}"
     )
 
 

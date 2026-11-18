@@ -398,8 +398,7 @@ def fight_tables(tables: Tables, trainer, party, flags: int | None = None, foe_m
     if copies_moves(tables, moves):
         pool = foe_moves() if callable(foe_moves) else foe_moves
         moves += [int(m) for m in dict.fromkeys(pool) if m and m not in moves]
-    if len(moves) > AI_MOVES_ROWS:
-        raise ValueError(f"{len(moves)} opponent moves: more than {AI_MOVES_ROWS}")
+    assert len(moves) <= AI_MOVES_ROWS, (len(moves), AI_MOVES_ROWS)
     padded = np.zeros(AI_MOVES_ROWS, np.int16)
     padded[: len(moves)] = moves
     return tables._replace(

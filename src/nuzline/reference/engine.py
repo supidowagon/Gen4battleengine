@@ -2054,9 +2054,10 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
     """``engine.levelup.learn_options``: replacing a slot whose move is an HM is not allowed
     (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:1724-1735;
     ``Item_IsHMMove``, src/item.c:306-315); the search also skips, for the active learner, the
-    disabled, locked and choice-locked moves (ruling D2) and the slot
-    pinned by ``learn_pin`` (ruling U1), and every replacement when the offered move's effect
-    is unsupported (ruling D10). Giving up is always allowed."""
+    disabled and the encored move (ruling D2; the locked and the choice-locked move are read by
+    id and offered, ``engine.levelup``'s module docstring) and the slot pinned by
+    ``learn_pin`` (ruling U1), and every replacement when the offered move's effect is
+    unsupported (ruling D10). Giving up is always allowed."""
     prompted = _prompted(state)
     slot = 0 if prompted is None else prompted
     side = state.sides[0]
@@ -2076,8 +2077,7 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
         move = party[k]
         ok = supported and not _t(tables, "move_is_hm", move)
         if slot == side.active and (
-            mon.moves[k] in (side.disabled_move, side.locked_move, side.choice_lock)
-            or state.learn_pin == k + 1
+            mon.moves[k] in (side.disabled_move, side.encore_move) or state.learn_pin == k + 1
         ):
             ok = False
         options.append(ok)

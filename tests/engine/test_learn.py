@@ -238,13 +238,23 @@ def test_an_hm_cannot_be_forgotten(tables, names):
 
 
 @pytest.mark.parametrize(
-    ("field", "move"),
-    [("disabled_move", "Tackle"), ("locked_move", "Growl"), ("choice_lock", "Leech Seed")],
+    ("field", "move", "masked"),
+    [
+        # The decomp ends Disable and Encore once the move is not known (bcp.c:1565-1576,
+        # :1591-1602), at a turn's end the engine runs before the resolve: masked.
+        ("disabled_move", "Tackle", True),
+        ("encore_move", "Vine Whip", True),
+        # Read by id (bcp.c:1885-1888; battle_lib.c:2307-2310): offered.
+        ("locked_move", "Growl", False),
+        ("choice_lock", "Leech Seed", False),
+    ],
 )
-def test_the_active_learner_keeps_its_held_moves(tables, names, field, move):
+def test_the_active_learner_keeps_its_disabled_and_encored_moves(
+    tables, names, field, move, masked
+):
     s = _prompt(tables, names)
     s = s._replace(**{field: getattr(s, field).at[0].set(names.move(move))})
-    want = [m != move for m in ("Tackle", "Growl", "Leech Seed", "Vine Whip")]
+    want = [not (masked and m == move) for m in ("Tackle", "Growl", "Leech Seed", "Vine Whip")]
     assert _options(tables, s) == [*want, True]
     # On the bench (slot 1 active) the battler's volatiles are not the learner's.
     bench = s._replace(active=s.active.at[0].set(1))

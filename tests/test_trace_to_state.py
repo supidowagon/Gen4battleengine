@@ -1287,6 +1287,43 @@ def test_a_seen_move_answer_replays_and_an_unsupported_learn_is_refused(
     assert [t.learn_choices for t in convert(path, unsupported, names)][1] == (GIVE_UP,)
 
 
+@pytest.mark.parametrize(
+    ("field", "slot", "why"),
+    [
+        ("learn_pin", 3, "selected this turn"),  # bcp.c:1891-1895
+        ("disabled_move", 0, "disabled move"),  # bcp.c:1565-1576
+        ("encore_move", 3, "encored move"),  # bcp.c:1591-1602
+        ("locked_move", 1, None),  # by id: bcp.c:1885-1888
+        ("choice_lock", 2, None),  # by id: battle_lib.c:2307-2310
+        ("ai_seen_moves", 1, None),  # move ids: trainer_ai.c:2705-2716
+    ],
+)
+def test_a_learn_answer_the_engine_cannot_replay_is_refused(tables, names, field, slot, why):
+    # The active learner (Bulbasaur: Tackle, Growl, Leech Seed, Vine Whip) prompted for
+    # PoisonPowder; replacing ``slot`` while ``field`` holds it.
+    from types import SimpleNamespace
+
+    from tests.engine.test_learn import _prompt
+    from tools.trace_to_state import _learn_refusal
+
+    s = _prompt(tables, names)
+    move = int(s.moves[0, 0, slot])
+    if field == "learn_pin":
+        s = s._replace(learn_pin=jnp.int8(slot + 1))
+    elif field == "ai_seen_moves":
+        s = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(move))
+    else:
+        s = s._replace(**{field: getattr(s, field).at[0].set(move)})
+    inference = SimpleNamespace(fail=lambda message: TraceError(f"turn 1: {message}"))
+    _learn_refusal(tables, inference, s, GIVE_UP)
+    if why is None:
+        _learn_refusal(tables, inference, s, slot)
+        return
+    with pytest.raises(TraceError, match=f"turn 1: the player replaced move {move} .*{why}"):
+        _learn_refusal(tables, inference, s, slot)
+    _learn_refusal(tables, inference, s, (slot + 1) % 4 if field != "learn_pin" else 0)
+
+
 def _two_learns_party(tables, names, tmp_path: Path) -> Path:
     """The golden party with Monferno (slot 0) at 15 holding an Exp. Share, 1 exp short of
     16 (Fury Swipes), and Prinplup (slot 1) 1 exp short of 15 (Peck)."""
