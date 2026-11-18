@@ -300,6 +300,16 @@ def _forget_item(s: RefState, side: int) -> None:
         s.ai_item_known[s.sides[0].active] = 0
 
 
+def _remove_item(s: RefState, side: int) -> None:
+    """``BtlCmd_RemoveItem`` (battle_script.c:8972-8984) on ``side``'s active Pokemon: its item
+    goes to ``recycleItem[battler]`` (``recycle_item``, per battler) and the slot's
+    ``item_consumed``, then the CopyToParty (``_forget_item``)."""
+    mon = _active(s, side)
+    s.sides[side].recycle_item = mon.item
+    mon.item_consumed, mon.item = mon.item, 0
+    _forget_item(s, side)
+
+
 def _t(tables, name: str, *index) -> int:
     return int(getattr(tables, name)[index])
 
@@ -1853,9 +1863,7 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
     elif not _cure(s, side, effect):
         return False
     if not keep:
-        mon.item_consumed = mon.item
-        mon.item = 0
-        _forget_item(s, side)
+        _remove_item(s, side)
     if disliked:  # subscript_held_item_dislike_flavor.s:13, after the heal's PLUCK_CHECK
         _berry_confuse(turn, s, side)
     return True
@@ -1898,9 +1906,7 @@ def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -
     if not (armed and damage > 0 and mon.hp - damage <= 0):
         return damage
     if _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
-        mon.item_consumed = mon.item
-        mon.item = 0
-        _forget_item(s, side)
+        _remove_item(s, side)
     return mon.hp - 1
 
 
@@ -1942,9 +1948,7 @@ def _resist_berry(
     else:
         triggered = super_effective and move_type == resisted
     if triggered:
-        mon.item_consumed = mon.item
-        mon.item = 0
-        _forget_item(s, side)
+        _remove_item(s, side)
     return triggered
 
 
@@ -2529,9 +2533,7 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
     else:
         return
     item = foe.item
-    foe.item_consumed = foe.item
-    foe.item = 0
-    _forget_item(s, target)  # subscript_pluck.s:7 names it, :10 removes it
+    _remove_item(s, target)  # subscript_pluck.s:7 names it, :10 removes it
     if heal:
         did = user.hp != user.max_hp
         if did:
@@ -3768,8 +3770,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
     if turn.custap[side]:
         turn.custap[side] = False
-        mon.item_consumed, mon.item = mon.item, 0
-        _forget_item(s, side)
+        _remove_item(s, side)
     s.sides[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
     # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
     # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
@@ -3883,8 +3884,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         )
         herb = not second and not sun_now and _item_effect(tables, mon) == ItemId.POWER_HERB
         if herb:
-            mon.item_consumed, mon.item = mon.item, 0  # RemoveItem
-            _forget_item(s, side)
+            _remove_item(s, side)  # RemoveItem
             if flags & MoveFlag.CHARGE_DEF_UP:
                 _change_stage(s, side, Stat.DEF, 1)
         elif not second and not sun_now:
@@ -4734,8 +4734,7 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         if "endured" in flags:
             _reveal_item(s, d)  # :44 tags msgBattlerTemp's item (bcp.c:1776)
         if "endured" in flags and sash:
-            mon.item_consumed, mon.item = mon.item, 0
-            _forget_item(s, d)
+            _remove_item(s, d)
         _faint_check(turn, s, decide=False)
     _perish_song_check(turn, s, order)
     _faint_check(turn, s)  # TurnEnd's CheckBattleOver (bcp.c:1845)

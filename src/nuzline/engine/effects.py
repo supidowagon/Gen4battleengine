@@ -2550,10 +2550,12 @@ def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray
 
 def consume_item(state: BattleState, side, cond) -> BattleState:
     """``BtlCmd_RemoveItem`` (battle_script.c:8972) on ``side``'s active Pokemon where
-    ``cond``: the item goes to ``item_consumed``; its ``BattleMon_CopyToParty`` (:8981) then
-    clears the AI's record of the item (``forget_item``)."""
+    ``cond``: the item goes to ``recycleItem[battler]`` (``recycle_item``, :8977, B13-19) and
+    ``item_consumed``; its ``BattleMon_CopyToParty`` (:8981) then clears the AI's record of the
+    item (``forget_item``)."""
     mon = state.active[side]
     item = state.item[side, mon]
+    state = _set(state, "recycle_item", side, item, cond)
     state = _set(state, "item_consumed", (side, mon), item, cond)
     state = forget_item(state, side, mon, cond)
     return _set(state, "item", (side, mon), 0, cond)

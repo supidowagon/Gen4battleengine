@@ -249,7 +249,10 @@ three structs has a row.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
-- **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
+- **recycleItem -> `recycle_item`** (per battler, as the decomp keeps it: `BtlCmd_RemoveItem`
+  writes it, `BtlCmd_TryRecycle` reads and clears it, battle_script.c:8977, :9005-9007; a switch
+  keeps it, B13-19); `item_consumed` is the engine's per-party-slot record of the same removals,
+  read by the observation only.
 - **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
   (per player party slot, an item id; set by `effects.reveal_item` where an item tag of
@@ -571,7 +574,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting`, `ts_assurance` (`assuranceDamageMask != 0`, per battler, B13-17) | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
@@ -646,7 +649,7 @@ three structs has a row.
 | `BattleContext.magnitude` | — | later (M6) |
 | `BattleContext.fieldWeatherChecked` | — | not needed because `make_state` applies the start weather directly |
 | `BattleContext.hpTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.recycleItem` | `item_consumed` | mapped |
+| `BattleContext.recycleItem` | `recycle_item`, `item_consumed` | mapped |
 | `BattleContext.partyOrder` | — | not needed because BattleState keeps party slots in a fixed order and switching only changes `active` |
 | `BattleContext.expJinglePlayed` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleContext.linkBattleTimeout` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

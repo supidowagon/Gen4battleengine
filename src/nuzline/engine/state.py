@@ -107,6 +107,12 @@ Encodings:
   it for every lead holding an item, whatever its ability (a lead that gains Unburden later
   keeps it). Nothing clears it but a switch (a volatile).
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
+* ``recycle_item`` is ``BattleContext.recycleItem[battler]`` (battle_context.h:307; E2 batch 13,
+  B13-19): ``BtlCmd_RemoveItem`` writes the item it removes (battle_script.c:8977; every
+  ``RemoveItem``: ``effects.consume_item``, ``hooks.held_item_check``, ``hooks.pluck_berry``) and
+  ``BtlCmd_TryRecycle`` reads and clears it (:9005-9007). It belongs to the battler position, not
+  the Pokemon: nothing else writes it, so a switch keeps it for the newcomer. The party slot's
+  ``item_consumed`` is the engine's own record of the same removals (observation only).
 * ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
   Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
   does not keep (moves.h:46-48).
@@ -289,6 +295,7 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    recycle_item: jnp.ndarray  # int16[2], BattleContext.recycleItem per battler (B13-19)
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
@@ -577,6 +584,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "imprisoned": (_SIDE, np.int8),
     "roosting": (_SIDE, np.int8),
     "can_unburden": (_SIDE, np.int8),
+    "recycle_item": (_SIDE, np.int16),
     "minimized": (_SIDE, np.int8),
     "semi_invulnerable": (_SIDE, np.int8),
     "focus_energy": (_SIDE, np.int8),

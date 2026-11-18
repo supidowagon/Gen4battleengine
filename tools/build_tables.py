@@ -34,6 +34,11 @@ Encodings:
   ``Item_LoadParam(item, ITEM_PARAM_EFFECT_PARAM)`` returns, ``src/item.c:160-161``), whether or
   not the engine supports the item. The level-up EV gain reads it as a Power item's
   ``itemPower`` (``BattleScript_CalcEffortValues``, ``src/battle/battle_script.c:10226-10228``).
+* ``item_fling_power`` / ``item_fling_effect`` / ``item_gift_power`` / ``item_gift_type``
+  ``[item]``: ``ItemData.flingPower``, ``.flingEffect``, ``.naturalGiftPower`` and
+  ``.naturalGiftType`` as stored (include/item.h:61-64; 0x1F = no Natural Gift type), whether or
+  not the engine supports the item: Fling (``Battler_ItemFlingPower`` / ``_ItemFlingEffect``,
+  battle_lib.c:5482-5498) and Natural Gift (``Battler_NaturalGiftPower`` / ``_Type``, :5465-5480).
 * ``trainer_item_effect[item]``: ``ids.TrainerItemId`` of the item used from a trainer's
   bag (``DECOMP_TRAINER_ITEM_TO_ID``).
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
@@ -671,6 +676,12 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "trainer_item_effect": _arr(trainer_item_ids, np.int8, "trainer item effect"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
         "item_hold_param": _arr([i["hold_param"] for i in items], np.int16, "item hold param"),
+        "item_fling_power": _arr([i["fling_power"] for i in items], np.int16, "item fling power"),
+        "item_fling_effect": _arr([i["fling_effect"] for i in items], np.int8, "fling effect"),
+        "item_gift_power": _arr(
+            [i["natural_gift_power"] for i in items], np.int16, "natural gift power"
+        ),
+        "item_gift_type": _arr([i["natural_gift_type"] for i in items], np.int8, "gift type"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
     }
     manifest = {

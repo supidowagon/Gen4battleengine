@@ -568,6 +568,10 @@ def held_item_check(
         item_consumed=state.item_consumed.at[side, mon].set(
             jnp.where(spent, item, state.item_consumed[side, mon]).astype(state.item_consumed.dtype)
         ),
+        # RemoveItem's recycleItem[battler] (battle_script.c:8977, B13-19).
+        recycle_item=state.recycle_item.at[side].set(
+            jnp.where(spent, item, state.recycle_item[side]).astype(state.recycle_item.dtype)
+        ),
     )
     disliked = healed & dislikes_berry(tables, state, side, mon, item)
     return berry_confuse(tables, state, side, mon, disliked), on
@@ -655,6 +659,9 @@ def pluck_berry(
         item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[foe, target].set(
             jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
+        ),
+        recycle_item=state.recycle_item.at[foe].set(
+            jnp.where(on, item, state.recycle_item[foe]).astype(state.recycle_item.dtype)
         ),
     )
     disliked = healed & dislikes_berry(tables, state, side, user, item)
