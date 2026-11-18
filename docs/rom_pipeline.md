@@ -37,7 +37,7 @@ Metrowerks linker map of the vanilla decomp build (`build/main.nef.xMAP`, writte
 
 0. Precheck, in PowerShell: `wsl -l -v` must list `Ubuntu` with `VERSION 2`. On WSL 1,
    `INSTALL.md` advises building on the Windows drive instead of the Linux filesystem;
-   stop and ask rather than adapting the steps.
+   stop and ask; do not adapt the steps.
 1. In `wsl -d Ubuntu` (needs your sudo password; `INSTALL.md:72-75`):
    `sudo dpkg --add-architecture i386 && sudo apt update`
    `sudo apt install bison flex g++ gcc-arm-none-eabi git make ninja-build pkg-config wget python3 xz-utils nasm libc6:i386 libpng-dev`
@@ -48,8 +48,7 @@ Metrowerks linker map of the vanilla decomp build (`build/main.nef.xMAP`, writte
    `0862ec35…755c`, `INSTALL.md:334`).
 3. `ls build/*.xMAP`. Expected `build/main.nef.xMAP`.
 4. Copy the map and `platinum.us/main.lsf` into the worktree. In WSL, with `WT` set to the
-   worktree's Windows path exactly as `git rev-parse --show-toplevel` prints it there (for
-   example `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine/.claude/worktrees/k1-rom-pipeline`):
+   worktree's Windows path exactly as `git rev-parse --show-toplevel` prints it there:
    ```bash
    DEST="$(wslpath -a "$WT")/.cache/decomp/579d2d5c65e736a1a4268fb7acbfd70712177c6c"
    mkdir -p "$DEST" && cp build/main.nef.xMAP platinum.us/main.lsf "$DEST/" && ls -l "$DEST"
@@ -137,7 +136,7 @@ are unchanged, and then runs every reader on the patched ROM (K2b Task 8):
 
 ## Known Kaizo differences
 
-Found by the K1 final review; each is refused or reported rather than read silently.
+Each is refused or reported, never read silently.
 
 - **Map headers moved.** Kaizo rewrote every `MapHeader_Get*` accessor (`muls` /
   `&sMapHeaders + field` became `adds` / `nop` with a bare field-offset literal) and

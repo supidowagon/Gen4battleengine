@@ -1,12 +1,12 @@
 # Stage B facts: `Outcome`, `sample_outcome`, where `step` reads each field, damage tables, AI API, Roark widths
 
-Repo: `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine` at commit 6e817e1 (clean main).
+Repo: `<repo>` at commit 6e817e1 (clean main).
 All paths are relative to the repo root. "outcome.py" = `src/nuzline/engine/outcome.py`,
 "step.py" = `src/nuzline/engine/step.py`, "effects.py" = `src/nuzline/engine/effects.py`,
 "damage.py" = `src/nuzline/engine/damage.py`, "order.py" = `src/nuzline/engine/order.py`.
 
 Verified by running code (scratch scripts in
-`C:/Users/Farry/AppData/Local/Temp/claude/G--Farry-Claude-Workspace-Pokemon-Platinum-Game-Engine/85796cb6-f7cf-40cf-b587-639d7f9398fa/scratchpad/stageb/`:
+`<scratchpad>/`:
 `dump_roark.py`, `check_rolls.py`, `widths.py`).
 
 ---

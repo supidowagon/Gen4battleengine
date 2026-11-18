@@ -1,6 +1,6 @@
 # Stage B critic: verification of the three mapping reports, corrections, and gaps
 
-Repo `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine`, HEAD 6e817e1, no repo file edited.
+Repo `<repo>`, HEAD 6e817e1, no repo file edited.
 Inputs reviewed: the design doc `docs/superpowers/specs/2026-10-30-stage-b-solver-design.md` and the
 reports `outcomes.md`, `observe.md`, `integration.md` (same scratchpad folder).
 Probe scripts I ran (scratchpad `stageb/`): `critic_probe.py`, `critic_ref.py`, `critic_moves.py`.
