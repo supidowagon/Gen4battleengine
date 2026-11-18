@@ -99,6 +99,8 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     # Expert_KnockOff (REMOVE_HELD_ITEM, 188) below 30 % (:4574)
     23: (("less", 40),),
     108: (("less", 40),),
+    # E1 trial batch: EVA_UP (16, Double Team) shares Expert_StatusEvasionUp (:2247).
+    16: (("less", 40),),
     188: (("less", 30),),
     # E2 batch 12 (B12-18): Expert_Refresh (HEAL_STATUS, 193) tests the player below 50 %
     # (script.s:4646), Expert_PsychoShift (TRANSFER_STATUS, 234) below 30 % (:5302).

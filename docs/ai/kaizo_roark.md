@@ -530,8 +530,10 @@ Me, Assist, Uproar, Secret Power's terrain, ...); the AI side no longer adds a l
 The stat raises Kaizo moves carry: ATK_UP, DEF_UP, SP_ATK_UP, ATK_UP_2, DEF_UP_2, SP_ATK_UP_2
 and SP_DEF_UP_2 (SPEED_UP_2 was Roark's). No Kaizo move has SPEED_UP, SP_DEF_UP, ACC_UP,
 ACC_UP_2 or DEF_UP_DOUBLE_ROLLOUT_POWER, so their paths (the accuracy labels among them) are
-not transcribed. The evasion raises (EVA_UP, EVA_UP_2, EVA_UP_2_MINIMIZE) wait for a per-fight
-read bound: `Expert_StatusEvasionUp` alone can make 7 random reads on one path (8.3).
+not transcribed. The evasion raises waited for a per-fight read bound (`Expert_StatusEvasionUp`
+alone can make 7 random reads on one path, 8.3): Minimize (EVA_UP_2_MINIMIZE) came in prep P1
+(5.21) and EVA_UP (Double Team) in the E1 trial batch. EVA_UP_2 (56) has no Kaizo move and
+stays untranscribed.
 
 - BASIC: `Basic_CheckHighStatStage_<stat>` (`script.s:343-392`; dispatch `:137-141`,
   `:164-168`): -10 when the attacker is already at the top, above +2 under Simple
@@ -769,6 +771,9 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
 - ACC_DOWN (23) and EVA_UP_2_MINIMIZE (108): `Basic_CheckLowStatStage_Accuracy` /
   `Basic_CheckHighStatStage_Evasion`; `Expert_StatusAccuracyDown` (`:2431-2498`) and
   `Expert_StatusEvasionUp` (`:2184-2253`), the player below 40 % (a per-effect HP cut).
+  EVA_UP (16, Double Team, E1 trial batch) shares both labels (`:143`, `:1639`) and the
+  40 % cut; it is also in the SetupFirstTurn and CheckHP tables, so its read bounds add the
+  CheckHP reads that Minimize's lack.
 - PREVENT_ESCAPE (106): `Basic_CheckMeanLook` (`:674-677`); `Expert_BindingMove`
   (`:2808-2825`).
 - REMOVE_HELD_ITEM (188): `Basic_CheckCanRemoveItem` (`:898-904`); `Expert_KnockOff`

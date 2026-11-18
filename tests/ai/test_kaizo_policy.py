@@ -3452,22 +3452,38 @@ def test_accuracy_down(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
+@pytest.mark.parametrize("move", ["Minimize", "Double Team"])  # EVA_UP_2_MINIMIZE (108), EVA_UP (16)
 @pytest.mark.parametrize(
-    ("evasion", "jumps", "basic", "expert"),
+    ("evasion", "simple", "jumps", "basic", "expert"),
     [
         # Basic_CheckHighStatStage_Evasion (script.s:407-418) / Expert_StatusEvasionUp
         # (:2184-2253): at full HP +3 unless :2204 jumps, then the HP ranges end it
-        (0, (), 0, 3),
-        (0, (2204,), 0, 0),
-        (6, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
+        (0, False, (), 0, 3),
+        (0, False, (2204,), 0, 0),
+        (6, False, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
+        (3, True, (), -10, None),  # Simple: above +2 is already the top (:412-413)
     ],
 )
-def test_minimize(kaizo_tables, kaizo_names, kaizo_roark_party, evasion, jumps, basic, expert):
+def test_evasion_up(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, evasion, simple, jumps, basic, expert
+):
     t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Minimize", "Accelerock", "", ""))
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
     s = s._replace(stages=s.stages.at[1, Stat.EVA].set(evasion))
+    if simple:  # a species whose ability slot 0 is Simple (the AI reads the species')
+        abilities = np.asarray(t.species_abilities_decomp)
+        rows = np.asarray(t.species_form_row)[:, 0]
+        species = next(
+            sp
+            for sp in range(1, rows.shape[0])
+            if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
+        )
+        s = s._replace(
+            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
+        )
     assert _delta(t, s, 0x2, 0x3)[0] == basic
-    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+    if expert is not None:
+        assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
 @pytest.mark.parametrize(

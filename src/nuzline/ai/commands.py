@@ -272,6 +272,7 @@ class BattleEffect(IntEnum):
     DEF_UP = 11
     SP_ATK_UP = 13
     SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
+    EVA_UP = 16  # Double Team (Basic_CheckHighStatStage_Evasion :143; Expert_StatusEvasionUp :1639)
     ATK_DOWN = 18
     DEF_DOWN = 19
     SPEED_DOWN = 20

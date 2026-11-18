@@ -3134,6 +3134,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
     (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
     (BattleEffect.SP_ATK_UP, _basic_check_high_spa),  # :140
+    (BattleEffect.EVA_UP, _basic_check_high_evasion),  # :143
     (BattleEffect.ATK_DOWN, _basic_check_low_attack),  # :144
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
     (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
@@ -3233,6 +3234,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
+    (BattleEffect.EVA_UP, _expert_status_evasion_up),  # :1639
     (BattleEffect.BYPASS_ACCURACY, _expert_bypass_accuracy),  # :1640
     (BattleEffect.ATK_DOWN, _expert_status_attack_down),  # :1641
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642

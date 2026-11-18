@@ -496,8 +496,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         274,  # FLINCH_FREEZE_HIT
         276,  # RAISE_SP_ATK_HIT
         # E1 batch 4: the stat raises (Basic_CheckHighStatStage_*, script.s:343-392;
-        # Expert_Status*Up, :1978-2155) of the Kaizo moves, but evasion
-        # (docs/ai/kaizo_roark.md 5.10).
+        # Expert_Status*Up, :1978-2155) of the Kaizo moves; evasion came in
+        # prep P1 (Minimize, 108) and the E1 trial batch (EVA_UP, 16; docs/ai/kaizo_roark.md 5.10).
         10,  # ATK_UP: Expert_StatusAttackUp (:1633), :1989, :1995, :2001
         11,  # DEF_UP: Expert_StatusDefenseUp (:1634), :2023, :2029, :2034, :2043, :2046
         13,  # SP_ATK_UP: Expert_StatusSpAttackUp (:1636), :2092, :2098, :2104
@@ -638,6 +638,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         179,  # HEAL_IN_3_TURNS: no Basic_ScoreMoveEffect or Expert_Main entry
         193,  # HEAL_STATUS: Basic_CheckCanRefreshStatus (:243); Expert_Refresh (:1745)
         234,  # TRANSFER_STATUS: Basic_CheckCanPsychoShift (:264); Expert_PsychoShift, :5301
+        # E1 trial batch (EVA_UP shares both labels with EVA_UP_2_MINIMIZE, 108).
+        16,  # EVA_UP: Basic_CheckHighStatStage_Evasion (:143); Expert_StatusEvasionUp (:1639)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -764,6 +766,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     132: ("Expert_Synthesis", 1707),
     193: ("Expert_Refresh", 1745),
     234: ("Expert_PsychoShift", 1777),
+    16: ("Expert_StatusEvasionUp", 1639),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -877,6 +880,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         132,  # HEAL_HALF_MORE_IN_SUN: Expert_Synthesis
         193,  # HEAL_STATUS: Expert_Refresh
         234,  # TRANSFER_STATUS: Expert_PsychoShift
+        16,  # EVA_UP: Expert_StatusEvasionUp
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
