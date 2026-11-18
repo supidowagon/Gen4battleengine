@@ -716,7 +716,11 @@ def pluck_berry(
     hp = state.hp[side, user].astype(_I32)
     max_hp = state.max_hp[side, user].astype(_I32)
     blocked = jnp.asarray(foe_custap) & (item != 0)
-    on = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
+    eaten = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
+    # :5839-5844: an eater with Klutz (Battler_Ability) or MOVE_EFFECT_EMBARGO gets scriptTemp 0:
+    # the berry is eaten with no effect and the pluck flag stays set (B13-31).
+    numb = (state.ability[side, user] == AbilityId.KLUTZ) | (state.embargo[side] != 0)
+    on = eaten & ~numb
     heal = _hp_restore(effect, power, max_hp)
     healed = on & (heal > 0) & (hp != max_hp)
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
@@ -736,19 +740,21 @@ def pluck_berry(
     raised = raised | restored | micled
     # subscript_pluck.s:7 names the berry (BTLSCR_DEFENDER), then RemoveItem BTLSCR_DEFENDER
     # (:10) clears the record again (forget_item).
-    state = forget_item(state, foe, target, on)
+    state = forget_item(state, foe, target, eaten)
     state = state._replace(
-        item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
+        item=state.item.at[foe, target].set(jnp.where(eaten, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[foe, target].set(
-            jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
+            jnp.where(eaten, item, state.item_consumed[foe, target]).astype(
+                state.item_consumed.dtype
+            )
         ),
         recycle_item=state.recycle_item.at[foe].set(
-            jnp.where(on, item, state.recycle_item[foe]).astype(state.recycle_item.dtype)
+            jnp.where(eaten, item, state.recycle_item[foe]).astype(state.recycle_item.dtype)
         ),
     )
     disliked = healed & dislikes_berry(tables, state, side, user, item)
     state = berry_confuse(tables, state, side, user, disliked)
-    return state, on & ~healed & ~cured & ~raised
+    return state, eaten & ~healed & ~cured & ~raised
 
 
 def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:

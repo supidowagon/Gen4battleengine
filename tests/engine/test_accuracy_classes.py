@@ -503,6 +503,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # (B13-19, B13-20); no accuracy item can be consumed, so none comes back.
     EffectId.RECYCLE,
     EffectId.NATURAL_GIFT,
+    # Embargo writes the defender's embargoTurns, no stage (B13-31); the Wide Lens it hides is
+    # hit_thresholds' second half (outcome._threshold_grid).
+    EffectId.EMBARGO,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

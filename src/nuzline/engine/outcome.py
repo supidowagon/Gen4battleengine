@@ -481,7 +481,8 @@ def future_thresholds(
     (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
-    roll kept whole where it can change (G-59)."""
+    roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
+    (B13-31)."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -575,7 +576,12 @@ def future_thresholds(
         ]
     )
     attackers = jnp.clip(state.future_attacker.astype(_I32) - 1, 0, 1)
-    loose = jnp.broadcast_to(tracer, (2,)) | micle_field[attackers]
+    # Embargo (B13-31): an Embargo used this turn, or a count that the turn end's
+    # MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677) can end before the side-condition pass's
+    # hit (:1758-1783), changes which items the hit reads (state.held_item): the roll is kept
+    # whole, rare and sound.
+    embargo_field = jnp.any(uses & (effect == EffectId.EMBARGO)) | jnp.any(state.embargo != 0)
+    loose = jnp.broadcast_to(tracer | embargo_field, (2,)) | micle_field[attackers]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
 
@@ -787,6 +793,14 @@ def _threshold_grid(
     # eater's, after the eater's own check). Over-approximate: the side's active holds one.
     # Only the side's own check clears it.
     micle_free = uses_move & (held == ItemId.MICLE_BERRY)
+    # The foe's Embargo before the side's check (B13-31; effects._embargo, in singles only when
+    # the foe acts first) hides the side's Wide Lens (battle_lib.c:5358, bcp.c:2955-2957): the
+    # second half, which a Wide Lens holder (no Zoom Lens, no Micle Berry) never used, is its
+    # threshold without the lens. A Zoom Lens or Micle holder's hidden item is the first half's
+    # (no Zoom bonus, no berry); a hidden Bright Powder needs the defender embargoed before
+    # the side's own move: only the side itself could do it.
+    wide = held == ItemId.WIDE_LENS
+    foe_embargo = (changes & (effect == EffectId.EMBARGO))[::-1]
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in (0, 1):
@@ -857,17 +871,26 @@ def _threshold_grid(
         # A later Triple Kick hit ("both"'s second column): the first hit's check cleared the
         # flag (bcp.c:2968), so only the holder's berry eaten since sets it (B13-6, G-59).
         later_grid = moved_grid & holder if overrides == "both" else None
+        hide_grid = moved_grid & wide[side]
+
+        def point(a, e, m, w, c, k, lk, hide, side=side):
+            embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
+            hidden = state._replace(embargo=state.embargo.at[side].set(embargo))
+            return _hit_threshold(
+                tables, hidden, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
+            )
+
         thresholds.append(
-            jax.vmap(
-                lambda a, e, m, w, c, k, lk, side=side: _hit_threshold(
-                    tables, state, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
-                )
-            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid, later_grid)
+            jax.vmap(point)(
+                acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid, later_grid,
+                hide_grid,
+            )
         )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
-        possible.append(jnp.concatenate([grid_ok, grid_ok & (zoom[side] | micle_free[side])]))
+        second = zoom[side] | micle_free[side] | (uses_move[side] & wide[side] & foe_embargo[side])
+        possible.append(jnp.concatenate([grid_ok, grid_ok & second]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 
@@ -946,6 +969,13 @@ def _remove_held_item(state: BattleState) -> BattleState:
     return state._replace(item=state.item.at[battlers, state.active].set(0))
 
 
+def _embargo_all(state: BattleState) -> BattleState:
+    """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
+    embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
+    7117; ``effects._embargo``, B13-31), here every battler's own."""
+    return state._replace(embargo=jnp.full_like(state.embargo, 5))
+
+
 # The move effects that can change another battler's crit inputs before its CalcCrit
 # (BattleSystem_CalcCriticalMulti, battle_lib.c:7105-7132, reads the attacker's Focus Energy,
 # held item, species and ability), each with its write to those inputs. Every battler's odds are
@@ -955,6 +985,7 @@ def _remove_held_item(state: BattleState) -> BattleState:
 CRIT_ODDS_EFFECTS = {
     EffectId.HAZE: _clear_focus_energy,
     EffectId.KNOCK_OFF: _remove_held_item,
+    EffectId.EMBARGO: _embargo_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.

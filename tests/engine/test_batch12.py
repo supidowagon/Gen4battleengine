@@ -236,11 +236,14 @@ def test_a_faster_knock_off_leaves_the_slower_scope_lens_user_the_base_crit_rate
 
 def _crit_inputs(state, side: int) -> tuple[int, ...]:
     """What BattleSystem_CalcCriticalMulti reads of ``side``'s battler (battle_lib.c:7105-7132):
-    its Focus Energy, held item, species and ability."""
+    its Focus Energy, held item (Battler_HeldItem, :7117: ``state.held_item``, B13-29), species
+    and ability."""
+    from nuzline.engine.state import held_item
+
     mon = int(state.active[side])
     return (
         int(state.focus_energy[side]),
-        int(state.item[side, mon]),
+        int(held_item(state, side)),
         int(state.species[side, mon]),
         int(state.ability[side, mon]),
     )

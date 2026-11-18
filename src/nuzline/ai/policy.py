@@ -850,6 +850,21 @@ def _basic_check_can_recycle(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_embargo(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckEmbargo`` (script.s:1184-1197): the defender already under Embargo
+    (``IfMoveEffect MOVE_EFFECT_EMBARGO``) -10; else a recycle item of the defender's battler
+    (``LoadRecycleItem``) in a Frontier battle (``BATTLE_TYPE_FRONTIER``: never in the story)
+    -10, B13-32."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.EMBARGO))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_recycle_item(ctx, _D)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # ITEM_NONE -> _Terminate
+    ctx = c.load_battle_type(ctx)
+    ctx, t = _split(c.if_loaded_mask(ctx, c.BATTLE_TYPE_FRONTIER))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_natural_gift(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckNaturalGift`` (script.s:1053-1059): the attacker's true held item
     (``LoadHeldItem``) not a berry of ``Basic_NaturalGiftBerries`` (:1061-1126), -10; else
@@ -1691,6 +1706,12 @@ def _expert_recycle(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.go_to(ctx))  # -> _End
     # Expert_Recycle_ScoreMinus2 (:4530)
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+
+
+def _expert_embargo(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Embargo`` (script.s:5223-5229): +1 unless the 128 roll (:5225) jumps, B13-32."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 5225))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
 
 
 def _expert_water_spout(ctx: AiContext, mask) -> AiContext:
@@ -3363,6 +3384,7 @@ _BASIC_LABELS = (
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
+    (BattleEffect.PREVENT_ITEM_USE, _basic_check_embargo),  # :262 (B13-32)
     (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
@@ -3479,6 +3501,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.DOUBLE_POWER_IF_TARGET_HIT, _expert_assurance),  # :1774 (B13-23)
+    (BattleEffect.PREVENT_ITEM_USE, _expert_embargo),  # :1775 (B13-32)
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)

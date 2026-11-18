@@ -1745,9 +1745,16 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         teach(side, active, rnd.choice(PUNCH_MOVES))
 
 
-def _draw_klutz(draw, a: dict, side: int, active: int) -> None:
+def _draw_klutz(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """B13-29: maybe (1 in 6) give the active Pokemon Klutz (its item, from the item draws, is
-    then hidden from every gated read), sometimes a bench member too."""
+    then hidden from every gated read), sometimes a bench member too. B13-31: maybe (1 in 6) an
+    Embargo count 1-5 on the active battler, and maybe (1 in 6) Embargo taught to it."""
+    if draw(st.integers(0, 5)) == 0:
+        a["embargo"][side] = draw(st.integers(1, 5))
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Embargo")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
     if draw(st.integers(0, 5)) != 0:
         return
     a["ability"][side, active] = AbilityId.KLUTZ
@@ -1945,7 +1952,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_guard_download(draw, tables, a, side, active, names)
         _draw_batch_c(draw, tables, a, side, active, names)
         _draw_batch_d(draw, tables, a, side, active, names)
-        _draw_klutz(draw, a, side, active)
+        _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
@@ -2164,6 +2171,7 @@ RARE_EFFECTS = (
     EffectId.JUDGMENT,
     EffectId.RECYCLE,  # B13-19
     EffectId.NATURAL_GIFT,  # B13-20
+    EffectId.EMBARGO,  # B13-31
 )
 
 

@@ -418,6 +418,7 @@ SITE_N: dict[int, int] = {
     5212: 128,  # Expert_Assurance_TryScorePlus1
     5333: 30,  # Expert_TrumpCard (the Pressure +1)
     5347: 100,  # Expert_TrumpCard_ScorePlus1
+    5225: 128,  # Expert_Embargo (+1 when it does NOT jump), B13-32
     5935: 128,  # Expert_Punishment_TryScorePlus4
     5939: 128,  # Expert_Punishment_TryScorePlus3
     5943: 128,  # Expert_Punishment_TryScorePlus2
@@ -670,6 +671,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         235,  # HIGHER_POWER_WHEN_LOW_PP: NonStandard (:265); Expert_TrumpCard (:1778), :5333,
         # :5347
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: NonStandard (:274); Expert_Punishment (:1788)
+        232,  # PREVENT_ITEM_USE: Basic_CheckEmbargo (:262); Expert_Embargo (:1775), :5225 (B13-32)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -803,6 +805,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     209: ("Expert_HighCritical", 1754),
     217: ("Expert_WakeUpSlap", 1761),
     219: ("Expert_GyroBall", 1763),
+    232: ("Expert_Embargo", 1775),  # B13-32
     231: ("Expert_Assurance", 1774),
     235: ("Expert_TrumpCard", 1778),
     245: ("Expert_Punishment", 1788),
@@ -927,6 +930,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         217,  # DOUBLE_POWER_HEAL_SLEEP: Expert_WakeUpSlap
         219,  # POWER_BASED_ON_LOW_SPEED: Expert_GyroBall (no score change)
         231,  # DOUBLE_POWER_IF_TARGET_HIT: Expert_Assurance
+        232,  # PREVENT_ITEM_USE: Expert_Embargo (B13-32)
         235,  # HIGHER_POWER_WHEN_LOW_PP: Expert_TrumpCard
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: Expert_Punishment
     }

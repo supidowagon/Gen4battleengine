@@ -1490,11 +1490,14 @@ def uproar_on(state: BattleState) -> jnp.ndarray:
     return jnp.any(state.uproar != 0)
 
 
-def primary_effect_fails(tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
+def primary_effect_fails(
+    tables, state: BattleState, side, target_side, move, foe_claw=False, foe_custap=False
+) -> jnp.ndarray:
     """``bool``: ``side``'s ``move``, if it lands, has a direct effect that ends it with
     ``MOVE_STATUS_FAILED`` or ``_NO_MORE_WORK``, which ``BattleControllerPlayer_CheckMoveFailure``
     (bcp.c:3312-3331) sends past AfterMoveEffects: Swagger (``swagger_fails``), Dragon Dance
-    (``dragon_dance_fails``). ``target_side``: the defender's side."""
+    (``dragon_dance_fails``). ``target_side``: the defender's side; ``foe_claw`` /
+    ``foe_custap``: its quickClaw / custapBerry flags (``play_hit``'s)."""
     effect = tables.move_effect[jnp.asarray(move, _I32)]
     param = tables.move_param[jnp.asarray(move, _I32)].astype(_I32)
     return (
@@ -1532,6 +1535,11 @@ def primary_effect_fails(tables, state: BattleState, side, target_side, move) ->
         | ((effect == _E.FOCUS_ENERGY) & (state.focus_energy[side] != 0))
         # effect_script_0265.s:5-9 (MOVE_STATUS_NO_MORE_WORK).
         | ((effect == _E.CAPTIVATE) & captivate_fails(tables, state, side, target_side)[0])
+        # subscript_embargo_start.s:5-11, :57 (MOVE_STATUS_FAILED), B13-31.
+        | (
+            (effect == _E.EMBARGO)
+            & embargo_fails(tables, state, target_side, foe_claw, foe_custap)
+        )
         # effect_script_0226.s:5, BtlCmd_BoostRandomStatBy2's jump (MOVE_STATUS_FAILED), on its
         # defender (RANGE_USER_OR_ALLY: defender_side, the user in singles).
         | (
@@ -1970,6 +1978,44 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
     )
     state = _set(state, "item", (h.target_side, h.target), 0, cond)
     return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
+
+
+EMBARGO_TURNS = 5  # subscript_embargo_start.s:14
+
+
+def embargo_fails(tables, state: BattleState, target_side, foe_claw=False, foe_custap=False):
+    """``bool``: subscript_embargo_start.s fails (MOVE_STATUS_FAILED, :57-58) on a defender that
+    landed (its miss / semi-invulnerable test, :5, is ``h.effective``'s): behind a substitute
+    (:6, CheckSubstitute; the script's own test, effect_script_0232.s:5, is the same), with
+    Multitype (:7, its BATTLEMON_ABILITY), already under Embargo (:8, embargoTurns), holding the
+    Griseous Orb (:9, its BATTLEMON_HELD_ITEM: the raw item) or with its quickClaw (:10,
+    ``foe_claw``) or custapBerry (:11, ``foe_custap``) flag set (B13-31)."""
+    target_side = jnp.asarray(target_side, _I32)
+    target = state.active[target_side]
+    raw = decomp_abilities(tables, state)[target_side, target]
+    return (
+        (state.substitute_hp[target_side] != 0)
+        | (raw == ABILITY_MULTITYPE)
+        | (state.embargo[target_side] != 0)
+        | (state.item[target_side, target] == ITEM_GRISEOUS_ORB)
+        | jnp.asarray(foe_claw, bool)
+        | jnp.asarray(foe_custap, bool)
+    )
+
+
+def _embargo(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
+    """Embargo (effect_script_0232.s: a direct ON_HIT TO_DEFENDER subscript_embargo_start.s, run
+    for a move without MOVE_STATUS_NO_EFFECTS, battle_lib.c:1484-1489): unless it fails
+    (``embargo_fails``), the defender's embargoTurns = 5 with its MOVE_EFFECT_EMBARGO bit
+    (:13-14; ``BattleState.embargo``). The message tags the defender's nickname only. A failure
+    skips AfterMoveEffects (``primary_effect_fails``), B13-31."""
+    cond = (
+        (h.effect == _E.EMBARGO)
+        & h.effective
+        & ~h.shielded
+        & ~embargo_fails(tables, state, h.target_side, foe_claw, foe_custap)
+    )
+    return _set(state, "embargo", h.target_side, EMBARGO_TURNS, cond)
 
 
 def _leech_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3065,6 +3111,7 @@ def play_hit(
         state = fn(tables, state, h, outcome)
     state, pluck_flag = _eat_berry(tables, state, h, outcome, foe_custap)
     state = _knock_off(tables, state, h, foe_custap, foe_claw)
+    state = _embargo(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)

@@ -62,7 +62,8 @@ class EffectId(IntEnum):
     * ``WEATHER_BALL``, ``GYRO_BALL``, ``ASSURANCE``, ``TRUMP_CARD``, ``PUNISHMENT``,
       ``JUDGMENT``: zeros; their power or type comes from the battle (``damage._pre_random``,
       ``damage.move_type_of``), E2 batch 13. ``NATURAL_GIFT``: zeros; the power and type of the
-      held item (``damage.gift_item``), which the script removes. ``RECYCLE``: zeros.
+      held item (``damage.gift_item``), which the script removes. ``RECYCLE``, ``EMBARGO``:
+      zeros.
     * ``FANG_PARALYZE_FLINCH`` (Thunder Fang, ``BATTLE_EFFECT_FLINCH_PARALYZE_HIT``):
       ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
       paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
@@ -459,6 +460,13 @@ class EffectId(IntEnum):
     # (Battler_HeldItem: Klutz and Embargo, both unsupported, hide it), failing at power 0; the
     # script then RemoveItem's the item (:8) before TryMove. ``damage.gift_item``.
     NATURAL_GIFT = 114
+    # Embargo (232, effect_script_0232.s): zeros. Fails behind a substitute (:5, :7-8); else a
+    # direct ON_HIT subscript_embargo_start.s on the defender: fails (MOVE_STATUS_FAILED, :57)
+    # on a miss, a substitute, Multitype, an embargo already up, a held Griseous Orb or the
+    # defender's quickClaw / custapBerry flag (:5-11); else embargoTurns = 5 and its
+    # MOVE_EFFECT_EMBARGO bit (:13-14): ``BattleState.embargo``, read by ``state.held_item``
+    # (B13-31).
+    EMBARGO = 115
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

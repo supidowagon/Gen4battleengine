@@ -4361,6 +4361,11 @@ def _item(s, side: int, item: int, slot: int = 0):
         # Basic_CheckNonStandardDamageOrChargeTurn (:572-585) against a non-Wonder Guard player.
         ("Trump Card", "neutral", 0),
         ("Punishment", "neutral", 0),
+        # Basic_CheckEmbargo (:1184-1197, B13-32): the player under Embargo -10; else its
+        # battler's recycle item outside the Frontier, nothing.
+        ("Embargo", "neutral", 0),
+        ("Embargo", "player embargoed", -10),
+        ("Embargo", "player recycle Lum", 0),
     ],
 )
 def test_batch13_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, expected):
@@ -4368,6 +4373,10 @@ def test_batch13_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case,
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
     if case == "recycle Lum":
         s = s._replace(recycle_item=s.recycle_item.at[1].set(n.item_names.index("Lum Berry")))
+    elif case == "player recycle Lum":
+        s = s._replace(recycle_item=s.recycle_item.at[0].set(n.item_names.index("Lum Berry")))
+    elif case == "player embargoed":
+        s = s._replace(embargo=s.embargo.at[0].set(3))
     elif case.startswith("hold "):
         s = _item(s, 1, n.item_names.index(case[5:]))
     assert _delta(t, s, 0x2, 0x3)[0] == expected
@@ -4421,6 +4430,9 @@ def test_batch13_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case,
         ("Recycle", "recycle Oran", (), -2),
         ("Recycle", "recycle Lum", (), 1),
         ("Recycle", "recycle Lum", (4526,), 0),
+        # Expert_Embargo (:5223-5229, B13-32): +1 unless the 128 roll (:5225) jumps.
+        ("Embargo", "faster", (), 1),
+        ("Embargo", "faster", (5225,), 0),
     ],
 )
 def test_batch13_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, jumps, expected):
@@ -4467,7 +4479,7 @@ def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
     for name in (
         "Twineedle", "Triple Kick", "Rock Wrecker", "Hurricane", "Beat Up", "Recycle",
         "Water Spout", "Blaze Kick", "Weather Ball", "Cross Poison", "Wake-Up Slap",
-        "Natural Gift", "Assurance", "Trump Card", "Punishment", "Judgment",
+        "Natural Gift", "Assurance", "Trump Card", "Punishment", "Judgment", "Embargo",
     ):  # fmt: skip
         kinds = policy.opponent_move_refusals(t, n.move_names.index(name), ALLIN)
         assert kinds == (["move type"] if name == "Weather Ball" else []), (name, kinds)
@@ -4498,6 +4510,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Recycle", "Water Spout", "Wake-Up Slap", "Assurance"),
         ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
         ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
+        ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))

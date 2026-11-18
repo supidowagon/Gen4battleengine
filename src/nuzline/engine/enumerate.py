@@ -292,7 +292,7 @@ from nuzline.engine.outcome import (
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
 )
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
+from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, held_items
 
 _I32 = jnp.int32
 _E = EffectId
@@ -886,6 +886,9 @@ INPUT_CLAUSE_EFFECTS = (
     # B13-19: the foe's Recycle gives it back an item (a berry it eats after the side's hit, a
     # White Herb, ...): the recycle clause.
     _E.RECYCLE,
+    # B13-31: the foe's Embargo hides the side's held item from its later hits' damage reads
+    # (Battler_HeldItem, battle_lib.c:5358): the embargo clause.
+    _E.EMBARGO,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1271,6 +1274,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     # which the script removes before the hit (damage.gift_item).
     _E.RECYCLE,
     _E.NATURAL_GIFT,
+    _E.EMBARGO,  # B13-31: a status move, no damage
 )
 
 
@@ -1312,6 +1316,8 @@ def damage_inputs_can_change(
     * **pluck**: the foe's earlier Pluck / Bug Bite eats the side's stat pinch berry of the
       foe's defending stat (``hooks.pluck_berry`` raises the eater's stage);
     * **recycle**: the foe's earlier Recycle gives it back an item (B13-19; any, conservative);
+    * **embargo**: the foe's earlier Embargo hides the side's held item (B13-31: a holder of one
+      as ``state.held_item`` reads it at the turn start);
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1361,6 +1367,7 @@ def damage_inputs_can_change(
     stomp = (effect == _E.FLINCH) & (params[:, 2] == STOMP_PARAM)
 
     held = state.item[sides, mons]
+    gated = held_items(state)  # state.held_item, B13-29
     pinch_stat = tables.item_param[held, 1]
     pinch = item == ItemId.PINCH_BERRY
     foe_effect, foe_param0, foe_param1 = effect[::-1], param0[::-1], param1[::-1]
@@ -1419,6 +1426,8 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
         # B13-19: the foe's Recycle restores an item it then holds through the side's hits.
         | (foe_effect == _E.RECYCLE)
+        # B13-31: the foe's Embargo hides the side's item from its hit's reads.
+        | ((foe_effect == _E.EMBARGO) & (gated != 0))
         # B10-12: a charge move sets or (its second turn, or an unlock on its disruption) clears
         # its user's semi-invulnerable bit, which a DOUBLE_SEMI hit's power reads; Skull Bash's
         # charge raises the foe's Defense.
@@ -1935,8 +1944,14 @@ def outcome_laws(
         for side in (0, 1)
     ]
     (speed0, ok0), (speed1, ok1) = speeds
-    end_speed_tie = live & jnp.any(
-        ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])
+    # B13-31: a foe's Embargo can hide a side's Choice Scarf (CompareBattlerSpeed's
+    # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
+    # does not follow: the tie draw is then always enumerated (over-approximate, sound).
+    scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
+    embargo_speed = jnp.any(scarf & (uses_move & (effect == _E.EMBARGO))[::-1])
+    end_speed_tie = live & (
+        jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :]))
+        | embargo_speed
     )
     # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not

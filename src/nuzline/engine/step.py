@@ -1131,6 +1131,11 @@ def _use_move(
     gift_fails = natural_gift_params(tables, held_item(state, side, user))[0] == 0
     failed = failed | (gift & gift_fails)
     state = consume_item(state, side, script_on & gift & ~gift_fails)
+    # Embargo (effect_script_0232.s:5, :7-8): CheckSubstitute on the defender, MOVE_STATUS_FAILED
+    # before TryMove (its subscript's own failures come at the hit: effects._embargo), B13-31.
+    failed = failed | (
+        (effect_used == EffectId.EMBARGO) & (state.substitute_hp[target_side] != 0)
+    )
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
@@ -1413,7 +1418,17 @@ def _use_move(
     # A direct effect that fails (Swagger) or does nothing (Dragon Dance at +6 / +6):
     # MOVE_STATUS_FAILED / _NO_MORE_WORK skip AfterMoveEffects (effects.primary_effect_fails).
     no_more_work = no_more_work | (
-        connected & primary_effect_fails(tables, state, side, target_side, used)
+        connected
+        & primary_effect_fails(
+            tables,
+            state,
+            side,
+            target_side,
+            used,
+            # play_hit's flags (below): the defender's quickClaw and custapBerry until it moved.
+            foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
+            foe_custap=custap[target_side] & ~jnp.asarray(target_moved, bool),
+        )
     )
     # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286, :2782-2810): a move that hit
     # (no MOVE_STATUS_DID_NOT_HIT: missed, protected, immune) meets the defender's Dry Skin
@@ -1745,7 +1760,9 @@ def _use_move(
             target_moved=target_moved,
             struggling=struggling,
             focus_armed=armed,
-            foe_custap=custap[target_side],
+            # moveEffectsData.custapBerry, cleared when its holder's move starts
+            # (subscript_check_quick_claw.s:26-27, above), B13-31.
+            foe_custap=custap[target_side] & ~jnp.asarray(target_moved, bool),
             # moveEffectsData.quickClaw (order.claw_flags), cleared once its holder moved.
             foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
             counter_damage=counter_damage,
@@ -2997,9 +3014,20 @@ def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
     return state._replace(taunt=state.taunt.at[side].set(taunt))
 
 
+def _embargo_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_EMBARGO`` (battle_controller_player.c:1671-1677): a nonzero
+    embargoTurns drops by 1; at 0 subscript_embargo_end.s clears the MOVE_EFFECT_EMBARGO bit
+    (:9) and names the battler only (no HP condition, no AI record), B13-31."""
+    embargo = state.embargo[side] - (state.embargo[side] > 0).astype(state.embargo.dtype)
+    return state._replace(embargo=state.embargo.at[side].set(embargo))
+
+
 def _taunt_then_yawn(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
-    """``MON_COND_CHECK_STATE_TAUNT`` then ``_YAWN`` (``effects.yawn_sleep``): one faint check."""
-    return yawn_sleep(tables, _taunt_check(tables, state, side), side, outcome)
+    """``MON_COND_CHECK_STATE_TAUNT``, ``_EMBARGO`` (bcp.c:1671, after the unsupported Magnet Rise
+    and Heal Block) then ``_YAWN`` (``effects.yawn_sleep``): only Yawn's sleep changes a
+    battler, so one faint check."""
+    state = _embargo_check(_taunt_check(tables, state, side), side)
+    return yawn_sleep(tables, state, side, outcome)
 
 
 def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -3159,9 +3187,9 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
     # only check that reads the turn's moveFailFlags)
     ("uproar_disable", _uproar_then_disable),
-    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then (Magnet Rise, Heal Block
-    # and Embargo, unsupported, between) _YAWN, :1684 (``_taunt_then_yawn``: neither changes
-    # HP; the Yawn reads the turn's ``Outcome``)
+    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then (Magnet Rise and Heal
+    # Block, unsupported, between) _EMBARGO, :1671 (B13-31), then _YAWN, :1684
+    # (``_taunt_then_yawn``: none changes HP; the Yawn reads the turn's ``Outcome``)
     ("taunt_yawn", _taunt_then_yawn),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry
     # check, after the residual damage above; then MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT,

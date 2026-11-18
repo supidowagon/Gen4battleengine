@@ -210,6 +210,7 @@ class MoveEffectMask(IntEnum):
     AQUA_RING = 1 << 24  # :37; BattleState.aqua_ring
     IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
+    EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -222,8 +223,11 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.AQUA_RING: "aqua_ring",
     MoveEffectMask.IMPRISONED: "imprisoned",
     MoveEffectMask.POWER_TRICK: "power_trick",
+    MoveEffectMask.EMBARGO: "embargo",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
+# include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
+BATTLE_TYPE_FRONTIER = 1 << 7
 
 
 class Gender(IntEnum):
@@ -423,6 +427,7 @@ class BattleEffect(IntEnum):
     POWER_BASED_ON_LOW_SPEED = 219  # Gyro Ball: NonStandard (:256), Expert_GyroBall (:1763)
     NATURAL_GIFT = 222  # Basic_CheckNaturalGift (:258)
     DOUBLE_POWER_IF_TARGET_HIT = 231  # Assurance: Expert_Assurance (:1774)
+    PREVENT_ITEM_USE = 232  # Embargo: Basic_CheckEmbargo (:262), Expert_Embargo (:1775), B13-32
     HIGHER_POWER_WHEN_LOW_PP = 235  # Trump Card: NonStandard (:265), Expert_TrumpCard (:1778)
     INCREASE_POWER_WITH_MORE_STAT_UP = 245  # Punishment: NonStandard (:274), Expert (:1788)
     JUDGEMENT = 268  # Judgment: no script entry

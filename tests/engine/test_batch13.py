@@ -22,7 +22,16 @@ from nuzline.engine.damage import (
     weather_ball_params,
 )
 from nuzline.engine.effects import assurance_mark
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, SemiKind, Status, Type, Weather
+from nuzline.engine.ids import (
+    ITEM_GRISEOUS_ORB,
+    AbilityId,
+    EffectId,
+    MoveFlag,
+    SemiKind,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -1229,3 +1238,98 @@ def test_klutz_keeps_the_raw_item_reads(tables, names):
     g = _ability(_held(g, 0, names.item("Oran Berry")), 0, AbilityId.KLUTZ)
     out = assert_matches_reference(tables, g, A("Natural Gift", "Tail Whip", g, names), O)
     assert int(out.item[0, 0]) == names.item("Oran Berry") and _loss(g, out) == 0
+
+
+# --- B13-31: Embargo (effect_script_0232.s, subscript_embargo_start.s / _end.s) --------------
+
+
+def _embargoed(s, side: int, turns: int):
+    return s._replace(embargo=s.embargo.at[side].set(turns))
+
+
+def test_embargo_tables_both_games(tables, names, kaizo_tables, kaizo_names):
+    """effect_script_0232.s maps to EffectId.EMBARGO in both games; the field is a volatile
+    Baton Pass keeps (moves.h:46-48, battle_lib.c:2112)."""
+    from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS
+
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Embargo")]) == EffectId.EMBARGO
+    assert "embargo" in VOLATILE_FIELDS and "embargo" in BATON_PASSED_FIELDS
+
+
+def test_embargo_hides_the_targets_item_for_five_turns(tables, names):
+    """A faster Embargo sets the defender's embargoTurns to 5 (subscript_embargo_start.s:14):
+    its Choice Band no longer boosts or locks its Tackle that turn, its Leftovers heal nothing
+    (MON_COND_CHECK_STATE_LEFTOVERS, bcp.c:1369, before the count), and the count drops to 4
+    at MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677)."""
+    m = names.move("Tackle")
+    for item in ("Choice Band", "Leftovers"):
+        s = _plain(_state(tables, names, ("Snorlax", "Tackle"), ("Jolteon", "Embargo")))
+        s = _held(s, 0, names.item(item)).replace_hp(0, 0, 100)
+        out = assert_matches_reference(tables, s, A("Tackle", "Embargo", s, names), O)
+        assert int(out.embargo[0]) == 4 and int(out.embargo[1]) == 0, item
+        assert int(out.item[0, 0]) == names.item(item), item  # held, not removed
+        bare = _held(s, 0, 0)
+        want = assert_matches_reference(tables, bare, A("Tackle", "Embargo", bare, names), O)
+        assert int(out.hp[1, 0]) == int(want.hp[1, 0]), item  # no Choice Band boost
+        assert int(out.hp[0, 0]) == 100 and int(out.choice_lock[0]) == 0, item
+    assert int(_dfr(tables, _embargoed(_held(s, 0, names.item("Choice Band")), 0, 3), m)) == int(
+        _dfr(tables, bare, m)
+    )
+
+
+def test_embargo_ends_before_the_item_checks(tables, names):
+    """At embargoTurns 1 the turn end's count reaches 0 (subscript_embargo_end.s) after
+    Leftovers (bcp.c:1369: no heal yet) and before MON_COND_CHECK_STATE_ITEM_CONDITION /
+    _ITEM_DETRIMENTAL_EFFECT (:1699, :1710): a Flame Orb burns its holder that same turn."""
+    s = _plain(_state(tables, names, ("Snorlax", "Defense Curl"), ("Geodude", "Tail Whip")))
+    s = _embargoed(s, 0, 1).replace_hp(0, 0, 100)
+    lefties = _held(s, 0, names.item("Leftovers"))
+    out = assert_matches_reference(tables, lefties, A("Defense Curl", "Tail Whip", s, names), O)
+    assert int(out.embargo[0]) == 0 and int(out.hp[0, 0]) == 100
+    orb = _held(s, 0, names.item("Flame Orb"))
+    out = assert_matches_reference(tables, orb, A("Defense Curl", "Tail Whip", s, names), O)
+    assert int(out.embargo[0]) == 0 and int(out.status[0, 0]) == Status.BURN
+
+
+def test_embargo_failures(tables, names):
+    """subscript_embargo_start.s fails (MOVE_STATUS_FAILED, :57): an embargo already up (:8;
+    the count then only drops), a held Griseous Orb (:9, the raw item), a defender whose
+    custapBerry flag is still set (:11: only before its own move starts, which clears it,
+    subscript_check_quick_claw.s:26-27); effect_script_0232.s:5 behind a substitute.
+    A switch clears it (UpdateAfterSwitch zeroes moveEffectsData, battle_lib.c:2100-2104)."""
+    base = _plain(_state(tables, names, ("Snorlax", "Defense Curl"), ("Jolteon", "Embargo")))
+    acts = A("Defense Curl", "Embargo", base, names)
+    up = assert_matches_reference(tables, _embargoed(base, 0, 3), acts, O)
+    assert int(up.embargo[0]) == 2
+    orb = assert_matches_reference(tables, _held(base, 0, ITEM_GRISEOUS_ORB), acts, O)
+    assert int(orb.embargo[0]) == 0
+    sub = base._replace(substitute_hp=base.substitute_hp.at[0].set(30))
+    assert int(assert_matches_reference(tables, sub, acts, O).embargo[0]) == 0
+    custap = _held(base, 0, names.item("Custap Berry")).replace_hp(0, 0, 10)
+    out = assert_matches_reference(tables, custap, acts, O)
+    # It moved first and ate the berry: its move start cleared the flag
+    # (subscript_check_quick_claw.s:26-27), so the Embargo lands.
+    assert int(out.item[0, 0]) == 0 and int(out.embargo[0]) == 4
+    two = make_state(
+        tables,
+        [_mon(names, "Snorlax", ["Tackle"], 40), _mon(names, "Machop", ["Tackle"], 40)],
+        [_mon(names, "Geodude", ["Tail Whip"], 40)],
+    )
+    two = _embargoed(two, 0, 3)
+    out = assert_matches_reference(tables, two, A(MOVE_ACTIONS + 1, "Tail Whip", two, names), O)
+    assert int(out.active[0]) == 1 and int(out.embargo[0]) == 0
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_embargo_law_exact_and_sampled(tables, names):
+    """B13-31: a faster Embargo hides the slower attacker's Wide Lens (its accuracy check: the
+    threshold grid's second half) and Scope Lens (crit_variants) and its damage items (the
+    embargo clause); the enumeration equals the brute force and the sampler."""
+    for item in ("Wide Lens", "Scope Lens"):
+        s = _plain(_state(tables, names, ("Snorlax", "Mega Kick"), ("Jolteon", "Embargo")))
+        s = _held(s, 0, names.item(item))
+        acts = A("Mega Kick", "Embargo", s, names)
+        assert_equals_bruteforce(tables, s, acts)
+        n_ = 20_000
+        check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)

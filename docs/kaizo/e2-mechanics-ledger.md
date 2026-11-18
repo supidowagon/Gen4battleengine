@@ -94,9 +94,10 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   read_bounds 73, e1_batch_d not-slow 19, batch13 not-slow 52 (6.6 GB), test_cli not-slow 102 +
   1 skipped (the two over-8 GB nodes not run), test_differential not-slow 1 (the Figy Berry
   case no longer fails).
-  Held items, part 2 (agent F, B13-29..): e1-model gated accessor state.held_item
-  (Battler_HeldItem: Klutz, Embargo) with every gated read routed, new state field embargo;
-  Klutz supported (B13-29, B13-30). Embargo and Fling: in progress.
+  Held items, part 2 (agent F, B13-29..B13-32): e1-model 863e9cb gated accessor
+  state.held_item (Battler_HeldItem: Klutz, Embargo) with every gated read routed, new state
+  field embargo; Klutz supported (B13-29, B13-30); EMBARGO modelled with its AI (B13-31,
+  B13-32), Pluck's Klutz / Embargo eater gate. Fling: in progress.
 - Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
   plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
   does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
@@ -458,10 +459,21 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
   can move items mid-turn: Trick, Thief, Fling (and Recycle, once Fling can put a King's Rock
   into recycleItem).
-- **Batch 13, held-item moves left UNSUPPORTED (B13-22):** Fling #233 (the flung item's effect
-  on the target, its per-time item view, the law relevance of each fling effect, Recycle of a
-  flung item) and Embargo #232 (the Klutz / Embargo item suppression at every held-item read;
-  embargoTurns, its turn-end count, Baton Pass, the bag block). Both with Klutz.
+- **Batch 13, Fling #233 left UNSUPPORTED (B13-22, B13-33):** BattleSystem_FlingItem
+  (battle_lib.c:5854-6156) gives the target one of 30 fling effects through the INDIRECT
+  ON_HIT flingScript: the HP and flavor berries' heals (and confusion), the status and PP
+  cures, White Herb's reset (at TryFling time, before the accuracy roll and CalcDamage,
+  :6029-6034), Mental Herb's infatuation cure, King's Rock / Razor Fang's flinch, Light Ball /
+  Poison Barb / the orbs' statuses, the pinch berries' raises, Starf's random +2, Lansat's
+  crit stage, Micle's flag, each skipped on a target under Embargo (:6145) and with the pluck
+  flag semantics; Fling's power is Battler_ItemFlingPower (embargo only, no Klutz, :5491-5498)
+  and its effect Battler_ItemFlingEffect; CalcDamage / CalcCrit read the item still held,
+  ApplyTypeChart (Expert Belt) and the accuracy (Wide / Zoom Lens) the flung one gone. Each
+  effect needs its law relevance (status, stage, confusion, flinch, crit-stage, Micle reads,
+  the order speeds), a per-time item view in damage, and Recycle of a flung item makes
+  ``outcome.kings_rock_chance`` (turn-start item) and the focus_band / Bright Powder / Quick
+  Claw reads time-dependent (the King's Rock Owed item above). Embargo and Klutz are done
+  (B13-29..B13-31).
 - Kaizo's Ganlon and Apicot Berries (param 0) are refused by the divisor guard
   (`effect_map.DIVISOR_PARAM_MIN`, B2-3). Finding: `curHP <= maxHP / itemPower`
   (battle_lib.c:4778, :1294) is a C `/` on ints, which the compiler emits as a call to the
@@ -2136,7 +2148,36 @@ Rules left out because another mechanic is missing; each closes with the mechani
   gated items at the turn start (hit thresholds, crit odds, King's Rock chance); the possibility
   flags keep raw items (over-approximate). step.qc_kept keeps the raw item (over-keeping only
   splits states). Behaviour-neutral without Klutz or Embargo.
-- B13-30 Klutz (AbilityId.KLUTZ, decomp 103) is supported: its only battle reads are the gate
-  (:5354) and Fling's (:5840, an unsupported move); its AI reads are in Fling's, Trick's and
-  Skill Swap's scripts (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported
-  moves). INPUT_NEUTRAL (it holds from the turn start; nothing changes it mid-turn).
+- B13-30 Klutz (AbilityId.KLUTZ, decomp 103) is supported: its battle reads are the gate
+  (:5354) and BattleSystem_PluckBerry's eater test (:5839-5844, with MOVE_EFFECT_EMBARGO: the
+  berry is eaten with no effect, scriptTemp 0, the pluck flag left set; hooks.pluck_berry, in
+  the Embargo commit, B13-31); its AI reads are in Fling's, Trick's and Skill Swap's scripts
+  (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported moves).
+  INPUT_NEUTRAL (it holds from the turn start; nothing changes it mid-turn).
+- B13-31 Embargo (232, EffectId.EMBARGO): effect_script_0232.s:5 fails (MOVE_STATUS_FAILED,
+  before TryMove) behind a substitute; else a direct ON_HIT TO_DEFENDER
+  subscript_embargo_start.s (run without MOVE_STATUS_NO_EFFECTS, battle_lib.c:1484-1489) fails
+  (:57) on a substitute, Multitype (raw ability), embargoTurns != 0, a raw Griseous Orb, the
+  defender's quickClaw (until it moved) or custapBerry flag (:6-11; the custapBerry flag clears
+  when its holder's move starts, subscript_check_quick_claw.s:26-27: play_hit's foe_custap now
+  reads it so, which also matches the reference's Pluck / Knock Off), skipping AfterMoveEffects
+  (primary_effect_fails); else embargoTurns = 5 (:14). MON_COND_CHECK_STATE_EMBARGO
+  (bcp.c:1671-1677) counts it down after Taunt and before Yawn and the item checks (a count
+  reaching 0 lets ITEM_CONDITION / _DETRIMENTAL act that turn; Leftovers, :1369, came first). A
+  switch clears it, Baton Pass keeps it (B13-29). Trainer bag items ignore it (the bag UI's
+  embargoRemainingTurns, battle_display.c:3847, is the player's; TrainerAI_ShouldUseItem and
+  BattleSystem_UseBagItem never read it). Laws: INPUT_CLAUSE (the embargo clause: a holder of
+  a gated item), NON_TABLE; CRIT_ODDS_EFFECTS write (embargo on every battler); the hit grid's
+  second half is a Wide Lens holder's threshold with the lens hidden (possible when the foe's
+  Embargo can go first; a hidden Zoom Lens / Micle Berry is the first half); Future Sight's
+  roll is kept whole while an Embargo is used or up (its turn-end count can end before the
+  hit); the turn end's speed tie is enumerated whenever a foe's Embargo can hide a Choice
+  Scarf. No new fold_in index, no Outcome field.
+- B13-32 Trainer AI of Embargo: Basic_CheckEmbargo (script.s:262 -> :1184-1197: the defender's
+  MOVE_EFFECT_EMBARGO -10; a defender recycle item in a Frontier battle -10, never in the
+  story) and Expert_Embargo (:1775 -> :5223-5229, +1 unless the 128 roll at :5225 jumps);
+  commands.MoveEffectMask.EMBARGO (moves.h:34), BATTLE_TYPE_FRONTIER (battle.h:33);
+  read_bounds regenerated.
+- B13-33 Fling (233) stays UNSUPPORTED (Owed list): its 30 fling effects on the target
+  (battle_lib.c:5854-6156) each need their own law relevance and a per-time item view; its AI
+  entries (Basic_CheckFling, Expert_Fling) are not transcribed while the move is refused.

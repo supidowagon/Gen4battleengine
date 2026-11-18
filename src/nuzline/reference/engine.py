@@ -1346,7 +1346,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
 BATON_PASSED = (
     "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
     "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
-    "perish_song", "perish_song_turns", "curse", "focus_energy", "power_trick",
+    "perish_song", "perish_song_turns", "curse", "focus_energy", "power_trick", "embargo",
 )  # fmt: skip
 
 
@@ -1407,6 +1407,7 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "focus_energy",  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
         "power_trick",  # MOVE_EFFECT_POWER_TRICK (B12-10)
         "power_trick_desync",  # a Baton Pass newcomer is swapped by the bit (lib.c:2137-2141)
+        "embargo",  # MoveEffectsData.embargoTurns (B13-29)
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -2682,6 +2683,11 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         return
     item = foe.item
     _remove_item(s, target)  # subscript_pluck.s:7 names it, :10 removes it
+    # lib.c:5839-5844: an eater with Klutz or MOVE_EFFECT_EMBARGO gets scriptTemp 0: no effect,
+    # its pluck flag left set (B13-31).
+    if user.ability == AbilityId.KLUTZ or s.sides[side].embargo:
+        turn.pluck_flag = True
+        return
     if heal:
         did = user.hp != user.max_hp
         if did:
@@ -2969,6 +2975,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         )
         if foe.item and not blocked and not sticky:
             foe.item, foe.knocked_off = 0, 1
+    elif effect == EffectId.EMBARGO and effective:
+        # effect_script_0232.s: a direct ON_HIT subscript_embargo_start.s (no HP check); its
+        # failures (:5-11) then embargoTurns = 5 with the bit (:13-14), B13-31.
+        if not _shielded(turn, s, target) and not _embargo_fails(
+            tables, s, turn, target, target_moved
+        ):
+            s.sides[target].embargo = 5
     elif effect == EffectId.EAT_BERRY and effective:
         # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check;
         # BattleSystem_PluckBerry returns early on a substitute hit (lib.c:5546).
@@ -4557,6 +4570,11 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             effect == EffectId.MEAN_LOOK and bool(foe_sd.mean_look or foe_sd.substitute_hp)
         )
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
+        # subscript_embargo_start.s:6-11, :57 (MOVE_STATUS_FAILED), B13-31.
+        full = full or (
+            effect == EffectId.EMBARGO
+            and _embargo_fails(tables, s, turn, 1 - side, target_moved)
+        )
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, 1 - side)[0])
         full = full or (
             effect == EffectId.CURSE
@@ -5075,6 +5093,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _encore_check,  # MON_COND_CHECK_STATE_ENCORE, bcp.c:1591 (B10-9)
             _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
+            _embargo_check,  # MON_COND_CHECK_STATE_EMBARGO, bcp.c:1671 (B13-31)
             _yawn_check,  # MON_COND_CHECK_STATE_YAWN, bcp.c:1684
             _held_item_hp,  # MON_COND_CHECK_STATE_ITEM_CONDITION, bcp.c:1699
             _detrimental_item_check,  # MON_COND_CHECK_STATE_ITEM_DETRIMENTAL_EFFECT, :1710
@@ -5421,6 +5440,28 @@ def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
         sd.taunt -= 1
 
 
+def _embargo_check(turn: _Turn, s: RefState, side: int) -> None:
+    """MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677): the count drops; at 0
+    subscript_embargo_end.s clears the bit (B13-31)."""
+    sd = s.sides[side]
+    if sd.embargo:
+        sd.embargo -= 1
+
+
+def _embargo_fails(tables, s: RefState, turn: _Turn, target: int, target_moved: bool) -> bool:
+    """subscript_embargo_start.s:6-11: a substitute, Multitype, an embargo up, a held Griseous
+    Orb (raw), the defender's quickClaw (until it moved) or custapBerry flag (B13-31)."""
+    foe = _active(s, target)
+    return bool(
+        s.sides[target].substitute_hp
+        or _decomp_ability(tables, foe) == ABILITY_MULTITYPE
+        or s.sides[target].embargo
+        or foe.item == ITEM_GRISEOUS_ORB
+        or (turn.claw[target] and not target_moved)
+        or turn.custap[target]
+    )
+
+
 # --------------------------------------------------------------------------- the turn
 
 
@@ -5470,6 +5511,8 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         # CheckSubstitute (:5; no hit of the action yet) then the sleep test (:6), B10-4.
         foe_sd = s.sides[1 - side]
         return bool(foe_sd.substitute_hp) or _active(s, 1 - side).status != Status.SLEEP
+    if effect == EffectId.EMBARGO:  # effect_script_0232.s:5, :7-8: CheckSubstitute (B13-31)
+        return bool(s.sides[1 - side].substitute_hp)
     if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-7, :13-14 (B10-5)
         return _active(s, 1 - side).hp <= _active(s, side).hp
     if effect == EffectId.IMPRISON:
