@@ -97,7 +97,18 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   Held items, part 2 (agent F, B13-29..B13-32): e1-model 863e9cb gated accessor
   state.held_item (Battler_HeldItem: Klutz, Embargo) with every gated read routed, new state
   field embargo; Klutz supported (B13-29, B13-30); EMBARGO modelled with its AI (B13-31,
-  B13-32), Pluck's Klutz / Embargo eater gate. Fling: in progress.
+  B13-32), Pluck's Klutz / Embargo eater gate (B13-30, B13-31); commits 863e9cb (e1-model),
+  6212174, + STATE.md row fix. Fling left UNSUPPORTED (B13-33, Owed). No new fold_in.
+  Checks: test_batch13 + batch12 not-slow 94, embargo law (slow) 1 (5.6 GB), accuracy_classes
+  24, damage_classes 5, enumerate 16, coverage / effect_map / variants / game_constants /
+  backlog 157, unsupported nodes 25, state 24, read_bounds / plan_tree 26, layout 11, kaizo
+  policy batch13 + embargo 18, e1 batch a / c / d 5 / 16 / 19, gardenia 96 (in two runs: 7.8 GB
+  for its last 17 together), roark_close 23, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run), diff.py seed 48 ok 300. FOUND, not ours: test_differential and
+  seed 49 fail on metronome_turns with a Metronome-item holder locked in a charge move's second
+  turn (Dive, Shadow Force): JAX counts, the reference does not; the first case reproduces on
+  base 183158a (repro _scratch/e2/b13/repro_base.py), no Klutz / Embargo in either.
+  test_kaizo_outcome not run (killed three times by the machine RAM floor, no failure seen).
 - Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
   plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
   does not model it: Hurricane is be_seq 141); dropped from parked batch 14.

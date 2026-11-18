@@ -451,7 +451,7 @@ three structs has a row.
 | `MoveEffectsData.lastResortCount` | — | later (M6) |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
-| `MoveEffectsData.embargoTurns` | `embargo` (with its `MOVE_EFFECT_EMBARGO` bit; read by `state.held_item`, B13-29) | mapped |
+| `MoveEffectsData.embargoTurns` | `embargo` | mapped |
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
