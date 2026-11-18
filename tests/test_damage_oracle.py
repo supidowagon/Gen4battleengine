@@ -135,7 +135,7 @@ def _smogon_departs(
 
 
 # The engine's damage before the variance roll (``damage._pre_random``) and the move type.
-_pre_chart = jax.jit(lambda t, s, move, crit: _pre_random(t, s, 0, move, crit)[:2])
+_pre_chart = jax.jit(lambda t, s, move, crit: _pre_random(t, s, 0, move, crit, def_side=1)[:2])
 
 
 def _divide(x: int, d: int) -> int:
