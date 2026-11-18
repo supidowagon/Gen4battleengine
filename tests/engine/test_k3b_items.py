@@ -27,7 +27,7 @@ from nuzline.engine.damage import damage_table
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.ids import AbilityId, ItemId, Stat, Status
 from nuzline.engine.order import action_order
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import (
     WINNER_OPPONENT,
@@ -96,7 +96,7 @@ def test_focus_sash_leaves_one_hp_and_is_consumed(tables, names):
 
 def test_focus_sash_crit(tables, names):
     s = _sash(roark_state(tables, names), 1, names, 5)
-    crit = empty_outcome()._replace(crit=jnp.ones((2, 5), jnp.int8))
+    crit = empty_outcome()._replace(crit=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, s, A("Mach Punch", "Leer", s, names), crit)
     assert int(out.hp[1, 0]) == 1 and _consumed(out, 1, "Focus Sash", names)
 
@@ -248,7 +248,7 @@ def test_pluck_flag_keeps_the_eaters_own_berry(tables, names):
     s = roark_state(tables, names, player_moves=["Bug Bite"], opp_species="Shinx")
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.STATIC))
     s = _item(_item(s, 1, 0, "Pecha Berry", names), 0, 0, "Lum Berry", names)
-    procs = empty_outcome()._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
+    procs = empty_outcome()._replace(contact_proc=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, s, A("Bug Bite", "Leer", s, names), procs)
     assert _consumed(out, 1, "Pecha Berry", names)
     assert int(out.status[0, 0]) == Status.NONE

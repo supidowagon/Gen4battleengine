@@ -18,7 +18,7 @@ from nuzline.engine.actions import legal_opponent_actions
 from nuzline.engine.ids import MOVE_STRUGGLE
 from nuzline.engine.observe import ACT_DISABLED, OBS_FIELDS, observe
 from nuzline.engine.order import selected_move
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import ACT_MOVE, step, step_events
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
@@ -43,7 +43,7 @@ def state(tables, names):
 def outcome(duration=4, hit=1):
     return empty_outcome()._replace(
         duration=jnp.full((2,), duration, jnp.int8),
-        hit=jnp.full((2, 5), hit, jnp.int8),
+        hit=jnp.full((2, MAX_HITS), hit, jnp.int8),
     )
 
 

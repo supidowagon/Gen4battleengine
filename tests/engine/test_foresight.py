@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_table, effectiveness
-from nuzline.engine.outcome import empty_outcome, hit_threshold
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
@@ -85,7 +85,7 @@ def test_identified_ignores_positive_evasion(tables, names, state):
 
 @pytest.mark.slow
 def test_foresight_matches_reference(tables, names, state):
-    hits = empty_outcome()._replace(hit=jnp.ones((2, 5), jnp.int8))
+    hits = empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, state, A("Foresight", "Tackle", state, names), hits)
     assert int(out.foresight[1]) == 1
     ident = identify(state)

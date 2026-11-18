@@ -27,7 +27,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.ids import EffectId, Type
 from nuzline.engine.observe import OBS_FIELDS, observation
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step, step_events
 from nuzline.prep.variants import flail_cuts, hp_cuts, hp_regions, max_hp_of
 from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_party
@@ -79,9 +79,9 @@ def with_level(s, side, level):
 
 def outcome(*, crit=0, roll=15, magnitude=4):
     return empty_outcome()._replace(
-        hit=jnp.ones((2, 5), jnp.int8),
-        crit=jnp.full((2, 5), crit, jnp.int8),
-        roll=jnp.full((2, 5), roll, jnp.int8),
+        hit=jnp.ones((2, MAX_HITS), jnp.int8),
+        crit=jnp.full((2, MAX_HITS), crit, jnp.int8),
+        roll=jnp.full((2, MAX_HITS), roll, jnp.int8),
         magnitude=jnp.full((2,), magnitude, jnp.int8),
     )
 
@@ -243,7 +243,7 @@ def test_night_shade_crit_is_not_seen(tables, names):
     s = night_shade_state(tables, names)
     acts = A("Night Shade", "Leer", s, names)
     _, events = _events(tables, s, acts, outcome(crit=1))
-    assert np.asarray(events["crit"][0]).tolist() == [0] * 5
+    assert np.asarray(events["crit"][0]).tolist() == [0] * MAX_HITS
     assert int(events["hits"][0]) == 1
     # A normal damaging move shows it.
     t = night_shade_state(tables, names, move="Poison Sting")
@@ -303,7 +303,7 @@ def test_magnitude_event_needs_the_move(tables, names):
     after, events = _events(tables, s, acts, outcome(magnitude=9))
     assert int(events["act_id"][0]) == other
     assert np.asarray(observation(events, after))[FIELDS["magnitude"]].tolist() == [0, 0]
-    missed = outcome(magnitude=9)._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    missed = outcome(magnitude=9)._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     acts = A("Magnitude", "Leer", s, names)
     after, events = _events(tables, s, acts, missed)
     assert int(events["missed"][0]) == 1

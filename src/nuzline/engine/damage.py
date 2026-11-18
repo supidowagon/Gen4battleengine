@@ -48,9 +48,11 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
+    FLAIL_FALLOFF,
     ITEM_GRISEOUS_ORB,
     MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
+    POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
@@ -78,7 +80,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import BattleState, held_item
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105-7144)
@@ -130,6 +132,155 @@ def flail_power(cur, max_hp):
     pixels = hp_pixels(cur, max_hp)
     row = jnp.sum(pixels > jnp.asarray(FLAIL_BOUNDS, jnp.int32))
     return FLAIL_POWER[jnp.minimum(row, len(FLAIL_BOUNDS) - 1)]
+
+
+def falloff_power(power, cur, max_hp) -> jnp.ndarray:
+    """``int32``: Water Spout's / Eruption's power (``BtlCmd_CalcHPFalloffPower``,
+    battle_script.c:6645-6657): ``power * curHP / maxHP`` of the attacker, 1 when that is 0.
+    The script runs once per action, before the move's only hit (B13-13)."""
+    out = _i32(power) * _i32(cur) // jnp.maximum(_i32(max_hp), 1)
+    return jnp.maximum(out, 1)
+
+
+# BtlCmd_CalcWeatherBallParams (battle_script.c:6843-6872): moveType per weather; fog
+# (FIELD_CONDITION_DEEP_FOG, part of FIELD_CONDITION_WEATHER, condition.h:131-135) doubles the
+# power and sets no type (the move's own). Indexed by ids.Weather.
+WEATHER_BALL_TYPES = (
+    Type.NORMAL,  # NONE (unused: no weather leaves the table type)
+    Type.FIRE,  # SUN: WEATHER_IS_SUN
+    Type.WATER,  # RAIN: WEATHER_IS_RAIN
+    Type.ROCK,  # SANDSTORM: WEATHER_IS_SAND
+    Type.ICE,  # HAIL: WEATHER_IS_HAIL
+    Type.NORMAL,  # FOG: no WEATHER_IS_* holds (unused: the table type)
+)
+
+
+def weather_ball_params(tables, state, move) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(on, power, type)`` of Weather Ball (``BtlCmd_CalcWeatherBallParams``,
+    battle_script.c:6843-6872): under ``NO_CLOUD_NINE`` (``weather_suppressed``) and any weather
+    (FIELD_CONDITION_WEATHER, fog included) the script sets movePower = power x 2 and moveType
+    (``WEATHER_BALL_TYPES``; fog sets none); else it sets nothing, so CalcMoveDamage and the
+    chart use the move's own power and type (battle_lib.c:6673-6684, :2582-2588). ``on``: the
+    script doubled the power (B13-12)."""
+    move = _i32(move)
+    weather = _i32(state.weather)
+    on = (weather != Weather.NONE) & ~weather_suppressed(tables, state)
+    table_power = _i32(tables.move_power[move])
+    table_type = _i32(tables.move_type[move])
+    kind = jnp.asarray(WEATHER_BALL_TYPES, _I32)[jnp.clip(weather, 0, len(WEATHER_BALL_TYPES) - 1)]
+    typed = on & (weather != Weather.FOG)
+    return on, jnp.where(on, table_power * 2, table_power), jnp.where(typed, kind, table_type)
+
+
+# effect_script_0268.s:5-95: HOLD_EFFECT_ARCEUS_* (generated/item_hold_effects.txt, id = line
+# - 1) -> the moveType Judgment takes; tests/engine/test_batch13.py reads it back from the
+# script and tools.effect_map.TYPE_BOOST_HOLD_EFFECTS.
+PLATE_TYPES: dict[int, int] = {
+    126: Type.FIRE,
+    127: Type.WATER,
+    128: Type.ELECTRIC,
+    129: Type.GRASS,
+    130: Type.ICE,
+    131: Type.FIGHTING,
+    132: Type.POISON,
+    133: Type.GROUND,
+    134: Type.FLYING,
+    135: Type.PSYCHIC,
+    136: Type.BUG,
+    137: Type.ROCK,
+    138: Type.GHOST,
+    139: Type.DRAGON,
+    140: Type.DARK,
+    141: Type.STEEL,
+}
+_PLATE_LO = min(PLATE_TYPES)
+_PLATE_ROWS = tuple(int(PLATE_TYPES[h]) for h in range(_PLATE_LO, max(PLATE_TYPES) + 1))
+
+
+def judgment_type(tables, item, table_type) -> jnp.ndarray:
+    """``int32``: Judgment's type for a holder of ``item`` (effect_script_0268.s:5-95): the
+    type of its HOLD_EFFECT_ARCEUS_* hold effect (``tables.item_hold_effect``, the game's own,
+    as ``Battler_HeldItemEffect`` reads it), else ``table_type`` (no UpdateVar: the move's own
+    type). Any holder, not only Multitype; callers pass ``state.held_item`` (Klutz and Embargo
+    hide the item, ``Battler_HeldItem``, battle_lib.c:5352-5363; B13-12, B13-29). Pure, for the
+    trainer AI too."""
+    rows = jnp.asarray(_PLATE_ROWS, _I32)
+    index = _i32(tables.item_hold_effect[_i32(item)]) - _PLATE_LO
+    plate = (index >= 0) & (index < rows.shape[0])
+    return jnp.where(plate, rows[jnp.clip(index, 0, rows.shape[0] - 1)], _i32(table_type))
+
+
+def gift_item(state, side, gift=0) -> jnp.ndarray:
+    """``int32``: the item whose Natural Gift power and type ``side``'s active Pokemon's
+    Natural Gift reads (BtlCmd_CalcNaturalGiftParams, battle_script.c:8088-8102, through
+    ``Battler_NaturalGiftPower`` / ``_Type``, battle_lib.c:5465-5480, on ``Battler_HeldItem``):
+    the item it holds as ``Battler_HeldItem`` sees it (``state.held_item``: none under Klutz or
+    Embargo, so the move fails at power 0 and removes nothing, B13-29). ``gift`` (> 0) is the
+    item this action's own ``RemoveItem BTLSCR_ATTACKER`` (effect_script_0222.s:8) took, before
+    TryMove and the hit (``step._use_move`` passes it): CalcDamage ran on it before the removal
+    (:6-7). Never ``recycle_item`` itself: that record is per battler and outlives the action,
+    the turn and switches (battle_script.c:8977, :9005-9007), so a holder of nothing fails at
+    power 0 whatever an earlier berry left there (B13-20, B13-37)."""
+    gift = _i32(gift)
+    return jnp.where(gift != 0, gift, held_item(state, _i32(side)))
+
+
+def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(power, type)``: ``item``'s ``naturalGiftPower`` and ``naturalGiftType``
+    (``Tables.item_gift_power`` / ``item_gift_type``); power 0 fails the move
+    (battle_script.c:8094-8099). Pure, for the trainer AI too."""
+    item = _i32(item)
+    return _i32(tables.item_gift_power[item]), _i32(tables.item_gift_type[item])
+
+
+GYRO_BALL_MAX = 150  # battle_script.c:7128-7129
+
+
+def gyro_ball_power(user_speed, target_speed) -> jnp.ndarray:
+    """``int32``: ``BtlCmd_CalcGyroBallPower`` (battle_script.c:7123-7131): ``1 + 25 *
+    target_speed / user_speed``, at most 150, from ``monSpeedValues`` (CompareBattlerSpeed's
+    speeds, ``order.effective_speed``). A user speed of 0 divides by zero (the ROM's division
+    routine decides): coverage refuses a Gyro Ball user that can reach it
+    (``coverage.GYRO_SPEED_MIN``), so the guard here is never read (B13-14). Pure, for the
+    trainer AI too."""
+    power = 1 + 25 * _i32(target_speed) // jnp.maximum(_i32(user_speed), 1)
+    return jnp.minimum(power, GYRO_BALL_MAX)
+
+
+def gyro_ball_speeds_power(tables, state, side, target_side) -> jnp.ndarray:
+    """``int32``: Gyro Ball's power for ``side``'s active battler against ``target_side``'s at
+    ``state``: BranchActions' ``SortMonSpeedOrder`` (bcp.c:888) runs CompareBattlerSpeed on the
+    battlers at the start of every action, which writes ``monSpeedValues`` (battle_lib.c:
+    1372-1373) that the script reads, so ``state`` is the one at the user's action start
+    (``step._use_move``), B13-14."""
+    from nuzline.engine.order import effective_speed  # order imports this module
+
+    return gyro_ball_power(
+        effective_speed(tables, state, side), effective_speed(tables, state, target_side)
+    )
+
+
+# sCurrentPPScaledPower (battle_script.c:7211-7217), indexed by min(ppCur, 4).
+TRUMP_CARD_POWER = (200, 80, 60, 50, 40)
+
+
+def trump_card_power(pp) -> jnp.ndarray:
+    """``int32``: ``BtlCmd_CalcTrumpCardPower`` (battle_script.c:7233-7245): the power for
+    ``ppCur`` of the user's ``moveSlot`` after the PP decrement (bcp.c:3182, before the
+    script), capped at 4 (B13-15). Pure."""
+    index = jnp.clip(_i32(pp), 0, len(TRUMP_CARD_POWER) - 1)
+    return jnp.asarray(TRUMP_CARD_POWER, _I32)[index]
+
+
+PUNISHMENT_MAX = 200  # battle_script.c:7367-7368
+
+
+def punishment_power(stages) -> jnp.ndarray:
+    """``int32``: ``BtlCmd_CalcPunishmentPower`` (battle_script.c:7354-7371): 60 + 20 x the
+    sum of the defender's stages above neutral over BATTLE_STAT_HP..BATTLE_STAT_MAX - 1
+    (``stages``: ``int[8]``, 0 neutral, ``ids.Stat`` order), at most 200 (B13-15). Pure."""
+    raised = jnp.sum(jnp.maximum(_i32(stages), 0))
+    return jnp.minimum(60 + 20 * raised, PUNISHMENT_MAX)
 
 
 def _i32(x) -> jnp.ndarray:
@@ -188,10 +339,9 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
 
 def iron_ball(tables: Tables, state: BattleState, side, slot=None) -> jnp.ndarray:
     """``bool``: ``side``'s active battler (or party ``slot``) holds an Iron Ball
-    (``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` through ``Battler_HeldItemEffect``; Klutz and Embargo
-    are unsupported), ruling G-56."""
-    slot = state.active[side] if slot is None else slot
-    return tables.item_effect[state.item[side, slot]] == ItemId.IRON_BALL
+    (``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` through ``Battler_HeldItemEffect``: ``state.held_item``,
+    B13-29), ruling G-56."""
+    return tables.item_effect[held_item(state, side, slot)] == ItemId.IRON_BALL
 
 
 def levitated(tables: Tables, state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
@@ -463,7 +613,8 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     battler: SmellingSalt against a paralyzed defender (effect_script_0171.s:6), Facade for a
     user with ``MON_CONDITION_FACADE_BOOST`` (effect_script_0169.s:5), Brine against
     ``curHP <= maxHP / 2`` (effect_script_0221.s:5-8; ``OPCODE_DIV`` is a plain ``/``,
-    battle_script.c:2711-2712). SmellingSalt's ``CheckSubstitute`` (effect_script_0171.s:5) jumps
+    battle_script.c:2711-2712), Wake-Up Slap against a sleeping one (effect_script_0217.s:6).
+    SmellingSalt's and Wake-Up Slap's ``CheckSubstitute`` (effect_script_0171.s:5) jumps
     past the x2 for a defender behind a substitute (its bit: no hit of the action came first)."""
     move = _i32(move)
     cond = _i32(tables.move_param[move, 0])
@@ -473,11 +624,18 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     )
     statused = jnp.isin(state.status[atk_side, user], jnp.asarray(FACADE_STATUSES, jnp.int8))
     half = _i32(state.hp[def_side, target]) <= _i32(state.max_hp[def_side, target]) // 2
+    # Wake-Up Slap (effect_script_0217.s:5-8): SmellingSalt's CheckSubstitute, then
+    # MON_CONDITION_SLEEP (any sleep count), B13-16.
+    asleep = (state.status[def_side, target] == Status.SLEEP) & (state.substitute_hp[def_side] == 0)
     holds = jnp.where(
         cond == POWER_IF_TARGET_PARALYZED,
         paralyzed,
         jnp.where(
-            cond == POWER_IF_USER_STATUSED, statused, half & (cond == POWER_IF_TARGET_HALF_HP)
+            cond == POWER_IF_USER_STATUSED,
+            statused,
+            jnp.where(
+                cond == POWER_IF_TARGET_ASLEEP, asleep, half & (cond == POWER_IF_TARGET_HALF_HP)
+            ),
         ),
     )
     return (tables.move_effect[move] == EffectId.DOUBLE_POWER) & holds
@@ -573,14 +731,30 @@ def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
     return kind, power * 40 // 63 + 30
 
 
-def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
-    """``int32``: the type of ``move`` used by ``side``'s active Pokemon: Hidden Power's
-    IV type, else ``tables.move_type`` (battle_lib.c:6682 ``moveType``)."""
+def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.ndarray:
+    """``int32``: the type of ``move`` used by ``side``'s active Pokemon: the
+    ``battleCtx->moveType`` its script sets (Hidden Power's IV type, battle_script.c:6028;
+    Weather Ball's, ``weather_ball_params``; Judgment's plate type, ``judgment_type``), else
+    ``tables.move_type`` (battle_lib.c:6682 ``moveType``). The script runs before the
+    accuracy check, the type chart and the absorbing abilities (bcp.c:3212-3216, the TryMove
+    states), which all read it, and nothing in the action changes its inputs in between
+    (B13-12)."""
     move = _i32(move)
     side = _i32(side)
     base = _i32(tables.move_type[move])
-    iv_type = hidden_power(state.ivs[side, state.active[side]])[0]
-    return jnp.where(tables.move_effect[move] == EffectId.HIDDEN_POWER, iv_type, base)
+    mon = state.active[side]
+    iv_type = hidden_power(state.ivs[side, mon])[0]
+    effect = tables.move_effect[move]
+    out = jnp.where(effect == EffectId.HIDDEN_POWER, iv_type, base)
+    ball = weather_ball_params(tables, state, move)[2]
+    out = jnp.where(effect == EffectId.WEATHER_BALL, ball, out)
+    plate = judgment_type(tables, held_item(state, side, mon), base)
+    out = jnp.where(effect == EffectId.JUDGMENT, plate, out)
+    # BtlCmd_CalcNaturalGiftParams (battle_script.c:8095-8096), B13-20: only with a gift power
+    # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
+    # ``gift``: the action's removed berry (``gift_item``, B13-37).
+    gift_power, gift_type = natural_gift_params(tables, gift_item(state, side, gift))
+    return jnp.where((effect == EffectId.NATURAL_GIFT) & (gift_power > 0), gift_type, out)
 
 
 def fixed_damage(
@@ -663,10 +837,19 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
-# decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
-# Ball) are refused (ai.commands.CALC_DAMAGE_MOVES).
+# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003, monSpeedValues:
+# the last CompareBattlerSpeed's speeds, battle_lib.c:1372-1373) is refused
+# (ai.commands.CALC_DAMAGE_MOVES; B13-27).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
+# E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
+# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3209-3227), B13-25..26.
+AI_NATURAL_GIFT, AI_JUDGMENT, AI_WEATHER_BALL = 363, 449, 311
+# TYPE_MYSTERY: no sTypeMatchupMultipliers row and no species type (Tables.type_chart row 9 is
+# neutral). A TrainerAI_MoveType result that is no type id (a non-berry's naturalGiftType,
+# 0x1F, itemproc.c:242) matches no chart row and no attacker type in ApplyTypeChart
+# (battle_lib.c:2588-2640, its u8 moveType), as TYPE_MYSTERY does (B13-26).
+AI_TYPELESS = Type.MYSTERY
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
 # The two cases that draw: MOVE_PSYWAVE's damage ``level * (RandNext() % 11 + 5) / 10``
 # (trainer_ai.c:3014-3016) and MOVE_MAGNITUDE's power, ``RandNext() % 100`` bucketed
@@ -684,7 +867,7 @@ _WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
 
 
 def ai_case_power(
-    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0
+    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0, item=None
 ) -> jnp.ndarray:
     """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
     ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
@@ -697,10 +880,19 @@ def ai_case_power(
     A computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
     (default the other side) and ``ivs`` the ``ivs`` argument (default the attacker's own):
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240) passes the player as attacker,
-    the player again as defender and the AI attacker's IVs."""
+    the player again as defender and the AI attacker's IVs. Natural Gift (:2885-2895) the
+    ``naturalGiftPower`` of ``item``, the ``heldItem`` argument (default the attacker's own
+    ``battleMons`` item; ``IfPartyMemberDealsMoreDamage`` passes the member's, :2156-2165);
+    Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
+    embargoTurns == 0`` (:2886, :2898): the default ``item`` is the attacker's
+    ``state.held_item`` (none under either, which reads as the cases' power 0 and
+    TYPE_NORMAL), and a caller passing another item (a party member's) passes 0 for a Klutz
+    member (its ``embargoTurns`` argument is FALSE, :2163), B13-29."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side if def_side is None else _i32(def_side)
     move = _i32(move)
+    item = held_item(s, atk_side) if item is None else item
+    gift = natural_gift_params(tables, item)[0]
     friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
     weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
@@ -714,10 +906,49 @@ def ai_case_power(
             (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
             move == AI_HIDDEN_POWER,
             move == AI_MAGNITUDE,
+            move == AI_NATURAL_GIFT,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude, gift],
         0,
     )
+
+
+def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, item=None):
+    """``int32``: the type ``TrainerAI_CalcDamage`` passes to ``BattleSystem_CalcMoveDamage``
+    and ``BattleSystem_ApplyTypeChart`` (trainer_ai.c:3074-3097), resolved as they read it: 0
+    (``TYPE_NORMAL``) means the move's table type (battle_lib.c:6680-6684, :2588-2590). Hidden
+    Power its IV type (:2973-2993, ``ivs``); Natural Gift the ``naturalGiftType`` of ``item``
+    when its ``naturalGiftPower`` is not 0, else ``TYPE_NORMAL`` (:2885-2895); Judgment the
+    type of ``item``'s ``HOLD_EFFECT_ARCEUS_*``, else ``TYPE_NORMAL`` (:2897-2971,
+    ``judgment_type``); every other move ``TYPE_NORMAL``. ``item`` as ``ai_case_power``'s.
+    Weather Ball takes the default case: its table power and type, whatever the weather."""
+    atk_side = _i32(atk_side)
+    move = _i32(move)
+    ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
+    item = held_item(s, atk_side) if item is None else item
+    table_type = _i32(tables.move_type[move])
+    gift_power, gift_type = natural_gift_params(tables, item)
+    gift = jnp.where(gift_power != 0, gift_type, Type.NORMAL)
+    case = jnp.where(move == AI_JUDGMENT, judgment_type(tables, item, Type.NORMAL), Type.NORMAL)
+    case = jnp.where(move == AI_NATURAL_GIFT, gift, case)
+    case = jnp.where(move == AI_HIDDEN_POWER, hidden_power(ivs)[0], case)
+    # CalcMoveDamage: TYPE_NORMAL is the table's moveType, else ``inType & 0x3F``
+    # (battle_lib.c:6681-6685).
+    return jnp.where(case == Type.NORMAL, table_type, case & 0x3F)
+
+
+def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
+    """``bool``: ``TrainerAI_MoveType``'s Weather Ball case assigns its result
+    (trainer_ai.c:3209-3227): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
+    weather, fog alone, or Cloud Nine / Air Lock on the field) the case assigns nothing and the
+    function returns an uninitialized register: the ROM's TrainerAI_MoveType (overlay14
+    0x0222327C-0x022233E6) returns r5, which it never wrote on that path and which holds the
+    caller's r5 (the BattleContext pointer in AICmd_CalcMaxEffectiveness at 0x02221064, the
+    BattleSystem pointer in AICmd_IfMoveEffectivenessEquals at 0x0222111A), a heap address
+    whose low byte ApplyTypeChart reads as the type (battle_lib.c:2564, u8 moveType). The
+    policy refuses that state (``ai.commands.MOVE_TYPE_MOVES``, B13-26)."""
+    weather = _i32(s.weather)
+    return (weather != Weather.NONE) & (weather != Weather.FOG) & ~weather_suppressed(tables, s)
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
@@ -725,15 +956,33 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
-    :6681-6684). Natural Gift, Judgment and Weather Ball are refused
-    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``ivs``, by default ``side``'s own;
+    :6681-6684); Natural Gift, Judgment and Weather Ball by their cases (:3132-3227, below;
+    Weather Ball's unassigned result is refused, ``ai_weather_ball_typed``). It reads ``ivs``, by default ``side``'s own;
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2206-2237) types the player's move with the AI
     attacker's IVs (``TrainerAI_CalcDamage``'s Hidden Power case, :2973-2993)."""
     side = _i32(side)
     move = _i32(move)
     ivs = s.ivs[side, s.active[side]] if ivs is None else ivs
     iv_type = hidden_power(ivs)[0]
-    return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
+    table_type = _i32(tables.move_type[move])
+    # E2 batch 13 (B13-26). Natural Gift: Battler_NaturalGiftType (battle_lib.c:5477-5481) of
+    # the battler's held item, whatever its power (no item: 0, the table type; a non-berry:
+    # 0x1F, typeless, AI_TYPELESS). Judgment: Battler_HeldItemEffect's plate type, else
+    # TYPE_NORMAL. Both through Battler_HeldItem (:5352-5363: ``state.held_item``, B13-29).
+    item = held_item(s, side)
+    gift = _i32(tables.item_gift_type[item])
+    gift = jnp.where(gift == Type.NORMAL, table_type, gift)
+    gift = jnp.where((gift < 0) | (gift > Type.DARK), AI_TYPELESS, gift)
+    plate = judgment_type(tables, item, table_type)
+    # Weather Ball: the weather's type where the case assigns one (ai_weather_ball_typed),
+    # else refused; the table type stands in.
+    ball = weather_ball_params(tables, s, move)[2]
+    # Nested where, not jnp.select: select's argmax carries an int64 axes param under vmap
+    # (tests/ai/test_switching.py test_jit_without_64bit).
+    out = jnp.where(move == AI_WEATHER_BALL, ball, table_type)
+    out = jnp.where(move == AI_JUDGMENT, plate, out)
+    out = jnp.where(move == AI_NATURAL_GIFT, gift, out)
+    return jnp.where(move == AI_HIDDEN_POWER, iv_type, out)
 
 
 def ai_case_fixed(s: BattleState, atk_side, move, draw=0) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -806,15 +1055,15 @@ def _item_modifiers(
 ):
     """``(power, (attack, sp_attack, defense, sp_defense))`` after the held-item block of
     ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6716-6783), in its order. The items are
-    ``BattleSystem_GetItemData`` of ``Battler_HeldItem`` (:6662-6668; Klutz and Embargo,
-    which hide it, are unsupported), the attacker's and the defender's (the attacker's own
+    ``BattleSystem_GetItemData`` of ``Battler_HeldItem`` (:6662-6668; ``state.held_item``,
+    B13-29), the attacker's and the defender's (the attacker's own
     for the confusion self-hit). ``movePower`` and the stats are ``u16`` there; no value the
     engine reaches comes near 65536, so the stores never truncate. Soul Dew's Battle Frontier
     test (:6731, :6736) never holds for a trainer battle; the Griseous Orb's Transform test
     (:6770) never holds while Transform is an unsupported move."""
     attack, sp_attack, defense, sp_defense = stats
     a_slot, d_slot = s.active[atk_side], s.active[def_side]
-    a_item, d_item = _i32(s.item[atk_side, a_slot]), _i32(s.item[def_side, d_slot])
+    a_item, d_item = held_item(s, atk_side), held_item(s, def_side)
     a_effect, d_effect = _i32(tables.item_effect[a_item]), _i32(tables.item_effect[d_item])
     a_param = _i32(tables.item_param[a_item, 0])  # attackerParams.heldItemPower (:6664)
     a_species, d_species = _i32(s.species[atk_side, a_slot]), _i32(s.species[def_side, d_slot])
@@ -887,7 +1136,7 @@ def life_orb(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
     ``BattleScript_CalcMoveDamage`` (battle_script.c:1346-1348): ``damage * (100 + param) /
     100`` for ``HOLD_EFFECT_HP_DRAIN_ON_ATK`` (``Battler_HeldItemPower``, Life Orb's 30)."""
     atk_side = _i32(atk_side)
-    item = _i32(s.item[atk_side, s.active[atk_side]])
+    item = held_item(s, atk_side)  # Battler_HeldItemEffect / _HeldItemPower (B13-29)
     orb = tables.item_effect[item] == ItemId.LIFE_ORB
     return jnp.where(orb, damage * (100 + _i32(tables.item_param[item, 0])) // 100, damage)
 
@@ -897,7 +1146,7 @@ def metronome_boost(tables: Tables, s: BattleState, atk_side, damage) -> jnp.nda
     ``BattleScript_CalcMoveDamage`` (battle_script.c:1350-1352): ``damage * (10 +
     metronomeTurns) / 10`` for ``HOLD_EFFECT_BOOST_REPEATED`` (its param is not read), G-60."""
     atk_side = _i32(atk_side)
-    item = _i32(s.item[atk_side, s.active[atk_side]])
+    item = held_item(s, atk_side)  # Battler_HeldItemEffect (B13-29)
     held = tables.item_effect[item] == ItemId.METRONOME_ITEM
     turns = _i32(s.metronome_turns[atk_side])
     return jnp.where(held, damage * (10 + turns) // 10, damage)
@@ -912,6 +1161,69 @@ def pinch_ability(move_type, ability) -> jnp.ndarray:
         | ((move_type == Type.WATER) & (ability == AbilityId.TORRENT))
         | ((move_type == Type.BUG) & (ability == AbilityId.SWARM))
     )
+
+
+def triple_kick_power(tables: Tables, move, hit) -> jnp.ndarray:
+    """``int32``: ``BTLVAR_MOVE_POWER`` at hit ``hit`` (0-based) of a ``TRIPLE_KICK`` move:
+    BattleContext_Init zeroes it once per action (battle_lib.c:1979), BattleSystem_SetupLoop
+    keeps it between hits (:3357-3362), and the reloaded script adds its step before CalcDamage
+    every hit (effect_script_0104.s:7: 10; Kaizo's be_seq 104 and 88: the move's own power,
+    ``GetCurrentMoveData MOVEATTRIBUTE_POWER``, step 0 here), so hit k (1-3) has k x step;
+    CalcMoveDamage uses it as ``inPower`` (battle_lib.c:6673-6677), B13-5."""
+    move = _i32(move)
+    step = _i32(tables.move_param[move, 0])
+    step = jnp.where(step != 0, step, _i32(tables.move_power[move]))
+    return step * (_i32(hit) + 1)
+
+
+def beat_up_slots(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[SLOTS], int32)``: the party slots of ``side`` Beat Up hits with, in hit order,
+    and how many. BtlCmd_BeatUp (battle_script.c:6173-6247) walks the party in slot order
+    (BattleSystem_GetPartyPokemon, the party array, not the display order) and hits with every
+    slot BeatUpEligibleMon passes (:6157-6164): the user's own (``selectedPartySlot``) whatever
+    its HP or status, or one with HP, a species, no egg and ``MON_CONDITION_NONE``. Nothing
+    changes a benched Pokemon's HP or status during the move, so the list at the move's start
+    holds for every hit (B13-9). Slots past the count are ineligible ones."""
+    side = _i32(side)
+    slots = jnp.arange(state.hp.shape[1], dtype=jnp.int32)
+    eligible = (slots == _i32(state.active[side])) | (
+        (state.hp[side] > 0) & (state.species[side] != 0) & (state.status[side] == Status.NONE)
+    )
+    order = jnp.argsort(jnp.where(eligible, slots, slots + state.hp.shape[1]))
+    return order.astype(jnp.int32), jnp.sum(eligible.astype(jnp.int32))
+
+
+def beat_up_damage(
+    tables: Tables, state: BattleState, atk_side, def_side, move, hit, crit, roll
+) -> jnp.ndarray:
+    """``int32``: the damage of Beat Up's hit ``hit`` (0-based) by ``atk_side`` on ``def_side``'s
+    active Pokemon (DEFENDING_MON, battle_script.c:6209; B13-38): BtlCmd_BeatUp
+    (battle_script.c:6203-6219) with the hit's party member (``beat_up_slots``): its species'
+    base Attack x the move's power x (its level x 2 / 5 + 2) / the defender's species base
+    Defense (DEFENDING_MON.species and formNum: the personal rows, ``species_form_row``) / 50 +
+    2, x criticalMul (2, Sniper
+    3: BattleSystem_CalcCriticalMulti, battle_lib.c:7139-7144, the user's ability), then
+    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Helping Hand (:6214) is a doubles
+    flag. No CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
+    SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
+    or effectiveness (B13-10)."""
+    atk_side = _i32(atk_side)
+    def_side = _i32(def_side)
+    order, _ = beat_up_slots(state, atk_side)
+    slot = order[jnp.clip(_i32(hit), 0, order.shape[0] - 1)]
+    # SpeciesData_GetFormValue(species, form, ...): the personal row of the species and form.
+    row = tables.species_form_row[state.species[atk_side, slot], state.form[atk_side, slot]]
+    base_atk = _i32(tables.species_base_stats[row, Stat.ATK])
+    level = _i32(state.level[atk_side, slot])
+    d_slot = state.active[def_side]
+    d_row = tables.species_form_row[state.species[def_side, d_slot], state.form[def_side, d_slot]]
+    base_def = jnp.maximum(_i32(tables.species_base_stats[d_row, Stat.DEF]), 1)
+    damage = base_atk * _i32(tables.move_power[_i32(move)]) * (level * 2 // 5 + 2)
+    damage = damage // base_def // 50 + 2
+    user_ability = _i32(state.ability[atk_side, state.active[atk_side]])
+    crit_mul = jnp.where(user_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
+    damage = jnp.where(jnp.asarray(crit, jnp.bool_), damage * crit_mul, damage)
+    return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
 
 
 def _pre_random(
@@ -929,6 +1241,10 @@ def _pre_random(
     def_side=None,
     ai_ivs=None,
     ai_draw=0,
+    ai_item=None,
+    hit=0,
+    in_power=0,
+    gift=0,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -941,8 +1257,15 @@ def _pre_random(
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
     Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
     is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``), and ``ai_draw`` the class of
-    its ``RandNext`` draw (Magnitude's case)."""
+    passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
+    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and ``ai_draw`` the class of
+    its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
+    ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``).
+    ``in_power`` (> 0) is the power a move script set from state this function does not see at
+    the hit (CalcMoveDamage's ``inPower``, battle_lib.c:6673-6677): Gyro Ball's speeds at the
+    action start, Trump Card's PP of the action's move slot (``step._use_move``); 0 computes
+    them from ``s`` (the turn-start tables). ``gift`` (> 0): the berry Natural Gift's script
+    removed this action (``gift_item``, B13-37)."""
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
@@ -984,7 +1307,9 @@ def _pre_random(
         | (effect == EffectId.FLAIL)
     )
     if ai:
-        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw)
+        case = ai_case_power(
+            tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw, item=ai_item
+        )
         power = jnp.where(case > 0, case, base_power)
     else:
         power = jnp.where(has_variable, variable, base_power)
@@ -995,6 +1320,36 @@ def _pre_random(
         )
         by_defender = (effect == EffectId.HP_POWER) | (effect == EffectId.WEIGHT_POWER)
         power = jnp.where(by_defender, defender_power, power)
+        # Triple Kick's BTLVAR_MOVE_POWER, added to per hit (B13-5).
+        kick = effect == EffectId.TRIPLE_KICK
+        power = jnp.where(kick, triple_kick_power(tables, move, hit), power)
+        # E2 batch 13. CalcHPFalloffPower (battle_script.c:6645-6657): FLAIL kind FLAIL_FALLOFF.
+        falloff = (effect == EffectId.FLAIL) & (_i32(tables.move_param[move, 0]) == FLAIL_FALLOFF)
+        a_cur, a_max = s.hp[atk_side, a_slot], s.max_hp[atk_side, a_slot]
+        power = jnp.where(falloff, falloff_power(base_power, a_cur, a_max), power)
+        # CalcWeatherBallParams (:6843-6872).
+        ball = weather_ball_params(tables, s, move)[1]
+        power = jnp.where(effect == EffectId.WEATHER_BALL, ball, power)
+        # CalcPunishmentPower (:7354-7371): the defender's raised stages.
+        punish = punishment_power(s.stages[def_side])
+        power = jnp.where(effect == EffectId.PUNISHMENT, punish, power)
+        # effect_script_0231.s:5-9: Assurance's movePower x2 on the defender's
+        # turnFlags.assuranceDamageMask (BattleState.ts_assurance), B13-17.
+        assured = (effect == EffectId.ASSURANCE) & (s.ts_assurance[def_side] != 0)
+        power = jnp.where(assured, base_power * 2, power)
+        # CalcGyroBallPower (:7123-7131) and CalcTrumpCardPower (:7233-7245) from ``s`` unless
+        # the caller passes the action's value (``in_power``): the turn-start tables read the
+        # speeds now and the first slot holding the move after one PP.
+        gyro = gyro_ball_speeds_power(tables, s, atk_side, def_side)
+        power = jnp.where(effect == EffectId.GYRO_BALL, gyro, power)
+        holding = s.moves[atk_side, a_slot] == move
+        first = jnp.argmax(holding)
+        pp_left = jnp.maximum(_i32(s.pp[atk_side, a_slot, first]) - 1, 0)
+        power = jnp.where(effect == EffectId.TRUMP_CARD, trump_card_power(pp_left), power)
+        # BtlCmd_CalcNaturalGiftParams (:8088-8102): the item's naturalGiftPower (B13-20).
+        gift_power = natural_gift_params(tables, gift_item(s, atk_side, gift))[0]
+        power = jnp.where(effect == EffectId.NATURAL_GIFT, gift_power, power)
+        power = jnp.where(_i32(in_power) > 0, _i32(in_power), power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
     present = _i32(present)
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
@@ -1007,12 +1362,12 @@ def _pre_random(
     technician = technician & (move != MOVE_STRUGGLE)
     power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
-    # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881) but
-    # Hidden Power's IV type (:2973-2993; ai_move_type).
+    # the AI passes its case's type (trainer_ai.c:3074-3097; ai_case_type): Hidden Power's IV
+    # type, Natural Gift's and Judgment's item types, else 0 (the table's).
     move_type = (
-        ai_move_type(tables, s, atk_side, move, ivs=ai_ivs)
+        ai_case_type(tables, s, atk_side, move, ivs=ai_ivs, item=ai_item)
         if ai
-        else move_type_of(tables, s, atk_side, move)
+        else move_type_of(tables, s, atk_side, move, gift)
     )
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
@@ -1247,7 +1602,7 @@ def _finish(
     damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
     # :2663-2665 then the attacker's Expert Belt (Battler_HeldItemEffect): damage *
     # (100 + param) / 100 on the same super-effective hit (attackerItemPower, :2578).
-    a_item = _i32(s.item[atk_side, s.active[atk_side]])
+    a_item = held_item(s, atk_side)
     belt = super_effective & (tables.item_effect[a_item] == ItemId.EXPERT_BELT)
     damage = jnp.where(belt, damage * (100 + _i32(tables.item_param[a_item, 0])) // 100, damage)
     # :2668-2672 Tinted Lens (Battler_Ability) doubles a MOVE_STATUS_NOT_VERY_EFFECTIVE hit,
@@ -1276,18 +1631,20 @@ def _finish(
 
 
 def damage_table(
-    tables: Tables, state: BattleState, atk_side, move, crit, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, crit, wonder_guard=True, hit=0
 ) -> jnp.ndarray:
     """``int32[16]``: damage of ``move`` by ``atk_side``'s active Pokemon against the
     other side's active Pokemon for rolls 0..15 (``85 + roll`` percent). A ``LEVEL_DAMAGE``
     move has no roll: all 16 entries are ``fixed_damage``. Magnitude is taken at level 4
     (its weakest hit; the playout heuristic's documented under-estimate); Bide's unleash
     stays 0 (it is a forced locked action, never a chosen attack). Present keeps its table
-    power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s."""
+    power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s. ``hit``: the hit
+    of the move (0-based): Triple Kick's power, Beat Up's party member (B13-5, B13-10)."""
     # The defender is the other side's active Pokemon (this table's contract).
-    power_mul = script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, 10)
+    def_side = 1 - _i32(atk_side)
+    power_mul = script_power_mul(tables, state, atk_side, def_side, move, 10)
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul
+        tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
@@ -1298,19 +1655,24 @@ def damage_table(
     )  # fmt: skip
     fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
+    beat_up = beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, rolls)
+    table = jnp.where(tables.move_effect[_i32(move)] == EffectId.BEAT_UP, beat_up, table)
     return jnp.where(fixed, amount, table)
 
 
 def hit_damage_table(
-    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True, hit=0
 ) -> jnp.ndarray:
     """``int32[2, ROLLS]``: one hit's damage for every ``(crit, roll)`` pair (``crit`` 0
     or 1, then ``damage_table``'s rolls), at ``state``. It equals ``damage_for_roll`` at
     the default ``power_mul`` for every move but Magnitude (``damage_table`` takes level 4)
     and Bide (0 here); ``enumerate``'s damage classes use neither. ``wonder_guard``: as
-    ``_finish``'s."""
+    ``_finish``'s; ``hit``: as ``damage_table``'s."""
     return jnp.stack(
-        [damage_table(tables, state, atk_side, move, crit, wonder_guard) for crit in (False, True)]
+        [
+            damage_table(tables, state, atk_side, move, crit, wonder_guard, hit)
+            for crit in (False, True)
+        ]
     )
 
 
@@ -1325,12 +1687,19 @@ def damage_for_roll(
     magnitude=MAGNITUDE_MIN,
     present=PRESENT_TABLE,
     wonder_guard=True,
+    hit=0,
+    in_power=0,
+    gift=0,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
     ``magnitude`` is Magnitude's level; ``present`` is Present's draw, and its heal path
     (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
-    ``CalcDamage``. ``wonder_guard``: as ``_finish``'s."""
+    ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
+    power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
+    ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
+    ``gift``: its Natural Gift berry removed this action (B13-37)."""
+    def_side = 1 - _i32(atk_side)  # the other side's active Pokemon (this function's contract)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1338,9 +1707,12 @@ def damage_for_roll(
         move,
         crit,
         # Reckless, the DOUBLE_POWER scripts; the defender is the other side's active Pokemon.
-        power_mul=script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, power_mul),
+        power_mul=script_power_mul(tables, state, atk_side, def_side, move, power_mul),
         magnitude=magnitude,
         present=present,
+        hit=hit,
+        in_power=in_power,
+        gift=gift,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
@@ -1354,6 +1726,10 @@ def damage_for_roll(
     # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
     heal = (_i32(tables.move_effect[_i32(move)]) == EffectId.PRESENT) & (
         _i32(present) == PRESENT_HEAL
+    )
+    beat_up = _i32(tables.move_effect[_i32(move)]) == EffectId.BEAT_UP
+    rolled = jnp.where(
+        beat_up, beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, roll), rolled
     )
     return jnp.where(heal, 0, jnp.where(fixed, amount, rolled))
 
@@ -1369,7 +1745,16 @@ def calc_move_damage(
 
 
 def ai_damage_for_roll(
-    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None, draw=0
+    tables: Tables,
+    state: BattleState,
+    atk_side,
+    move,
+    roll,
+    *,
+    def_side=None,
+    ivs=None,
+    draw=0,
+    item=None,
 ) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
@@ -1380,9 +1765,19 @@ def ai_damage_for_roll(
     (default the attacker's own): ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2229-2237) has
     the player attack itself with the AI attacker's IVs. ``draw`` is the class of the
     ``RandNext`` draw of Psywave's or Magnitude's case (``ai_case_fixed``, ``ai_case_power``;
-    ignored for any other move)."""
+    ignored for any other move). ``item`` is the ``heldItem`` argument (default the attacker's
+    own; ``ai_case_power``)."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs, ai_draw=draw
+        tables,
+        state,
+        atk_side,
+        move,
+        False,
+        ai=True,
+        def_side=def_side,
+        ai_ivs=ivs,
+        ai_draw=draw,
+        ai_item=item,
     )
     computed = _finish(
         tables,

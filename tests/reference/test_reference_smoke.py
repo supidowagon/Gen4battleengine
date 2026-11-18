@@ -6,7 +6,7 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import AbilityId, Status
-from nuzline.engine.outcome import empty_outcome, outcome_to_py
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, outcome_to_py
 from nuzline.engine.step import replace, step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_damage_table, ref_replace, ref_step
@@ -97,7 +97,7 @@ def _scenarios(tables, names):
         "struggle_recoil_before_static": (
             struggle,
             A(0, "Tackle", struggle, names),
-            o._replace(contact_proc=jnp.ones((2, 5), jnp.int8)),
+            o._replace(contact_proc=jnp.ones((2, MAX_HITS), jnp.int8)),
         ),
         "stealth_rock_after_foe_fainted": (rocks, A("Stealth Rock", "Take Down", rocks, names), o),
         "natural_cure_before_pursuit": (cure, A(4 + 1, "Pursuit", cure, names), o),

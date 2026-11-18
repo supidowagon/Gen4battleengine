@@ -101,9 +101,11 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost and Ingrain
-# (_SWITCH_REFUSED): moves whose decomp handling the switch check does not model. Roost and
-# Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags).
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain and the
+# variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the switch check does not
+# model. Roost and Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags);
+# Weather Ball, Natural Gift and Judgment are typed since E2 batch 13 (B13-35:
+# switching.party_move_types; Weather Ball refused only where its case assigns no type).
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -116,7 +118,9 @@ _SWITCH_MOVES = {
     "Judgment": 449,
 }
 _SWITCH_REFUSED = {
-    k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
+    k: v
+    for k, v in _SWITCH_MOVES.items()
+    if k not in ("Hidden Power", "Roost", "Ingrain", "Weather Ball", "Natural Gift", "Judgment")
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
@@ -159,15 +163,27 @@ _AI_MOVE_IDS = {
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
 # Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
-# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES).
-_CALC_DAMAGE_MOVES = {
-    "Natural Gift": 363,
-    "Judgment": 449,
-    "Gyro Ball": 360,
-}
-# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
-# Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
-_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Weather Ball": 311}
+# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES),
+# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25).
+_CALC_DAMAGE_MOVES = {"Gyro Ball": 360}
+# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3227)
+# refused in some state: Weather Ball where its case assigns no type (B13-26). Hidden Power's
+# (E1 batch 14), Natural Gift's and Judgment's (B13-26) are modelled (engine.damage.ai_move_type).
+_MOVE_TYPE_MOVES = {"Weather Ball": 311}
+# E2 batch 13 (B13-23): the item tables of Basic_CheckNaturalGift (script.s:1061-1126),
+# Expert_Recycle (:4536-4540) and Expert_Assurance (:5218-5221); generated/items.txt.
+_BERRIES = (
+    "Cheri", "Chesto", "Pecha", "Rawst", "Aspear", "Leppa", "Oran", "Persim", "Lum", "Sitrus",
+    "Figy", "Wiki", "Mago", "Aguav", "Iapapa", "Razz", "Bluk", "Nanab", "Wepear", "Pinap",
+    "Pomeg", "Kelpsy", "Qualot", "Hondew", "Grepa", "Tamato", "Cornn", "Magost", "Rabuta",
+    "Nomel", "Spelon", "Pamtre", "Watmel", "Durin", "Belue", "Occa", "Passho", "Wacan", "Rindo",
+    "Yache", "Chople", "Kebia", "Shuca", "Coba", "Payapa", "Tanga", "Charti", "Kasib", "Haban",
+    "Colbur", "Babiri", "Chilan", "Liechi", "Ganlon", "Salac", "Petaya", "Apicot", "Lansat",
+    "Starf", "Enigma", "Micle", "Custap", "Jaboca", "Rowap",
+)  # fmt: skip
+_NATURAL_GIFT_BERRIES = {f"{name} Berry": 149 + i for i, name in enumerate(_BERRIES)}
+_RECYCLE_DESIRABLE_ITEMS = {"Chesto Berry": 150, "Lum Berry": 157, "Starf Berry": 207}
+_ASSURANCE_RECOIL_BERRIES = {"Jaboca Berry": 211, "Rowap Berry": 212}
 # ai/commands.py COPYCAT_ENCOURAGED_MOVES: Expert_Copycat_EncouragedMoves (script.s:5582-5630).
 _COPYCAT_ENCOURAGED_MOVES = {
     "Sleep Powder": 79, "Lovely Kiss": 142, "Spore": 147, "Hypnosis": 95, "Sing": 47,
@@ -253,6 +269,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hyper Cutter": 52,
             "Speed Boost": 3,
             "No Guard": 99,
+            "Pressure": 46,
+            "Rough Skin": 24,
             "Swift Swim": 33,
             "Rain Dish": 44,
             "Ice Body": 115,
@@ -448,6 +466,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Vital Spirit": 72,
             "Speed Boost": 3,
             "Iron Fist": 89,
+            "Klutz": 103,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -550,6 +569,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
+    *_table("nuzline.ai.commands.NATURAL_GIFT_BERRIES", "item", _E, _NATURAL_GIFT_BERRIES),
+    *_table("nuzline.ai.commands.RECYCLE_DESIRABLE_ITEMS", "item", _E, _RECYCLE_DESIRABLE_ITEMS),
+    *_table("nuzline.ai.commands.ASSURANCE_RECOIL_BERRIES", "item", _E, _ASSURANCE_RECOIL_BERRIES),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
     # TrainerAI_ShouldUseItem's by-id test (trainer_ai.c:4099).
@@ -775,6 +797,7 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.MULTI_TURN_EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.CHARGE_FLAG_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
     "tools.effect_map.SEMI_HIT_EFFECTS": _KEYED_BY_EFFECT,  # B10-12
+    "tools.effect_map.SCRIPT_FLAG_EFFECTS": _KEYED_BY_EFFECT,  # B13-1, B13-2
     # E2 batch 5: move ids the battle code compares against (BtlCmd_TrySleepTalk,
     # Move_IsInvoker, sCannotMetronomeMoves), turned into MoveFlag bits at table build.
     "tools.effect_map.INVOKER_MOVES": _CODE_MOVE_IDS,
@@ -793,6 +816,11 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id, read off the vanilla sTypeBoostingItems "
         "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's code changes are rom_diff.toml entries"
+    ),
+    "nuzline.engine.damage.PLATE_TYPES": (
+        "keyed by decomp hold effect id, read off the vanilla effect_script_0268.s (Judgment, "
+        "B13-12; unchanged in Kaizo's be_seq): the engine reads each game's own item hold "
+        "effect (Tables.item_hold_effect); tests/engine/test_batch13.py reads it back"
     ),
     "tools.effect_map.FLAVOR_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's flavor berries "
@@ -837,6 +865,10 @@ EXEMPT: dict[str, str] = {
     "tools.effect_map.KAIZO_EFFECTS": (
         "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed; it is used "
         "only for Kaizo and only for a member rom_diff.toml marks modelled (Ruling 13, B9-4)"
+    ),
+    "tools.effect_map.KAIZO_FLAG_EFFECTS": (
+        "keyed by the decomp effect id of a be_seq member the Kaizo ROM changed: its MoveFlag "
+        "bits, used only for Kaizo and only with its KAIZO_EFFECTS entry (Ruling 13, B13-3)"
     ),
     "tools.effect_map.KAIZO_THUNDER_EFFECTS": (
         "decomp effect ids the Kaizo ROM's patched CheckMoveHitAccuracy / CheckMoveHitOverrides "

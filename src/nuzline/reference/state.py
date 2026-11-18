@@ -97,6 +97,7 @@ class RefSide:
     imprisoned: int  # MOVE_EFFECT_IMPRISONED
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     can_unburden: int  # MoveEffectsData.canUnburden
+    recycle_item: int  # BattleContext.recycleItem[battler]: never cleared by a switch (B13-19)
     minimized: int  # MOVE_EFFECT_MINIMIZE
     semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)
     micle: int  # MoveEffectsData.micleBerry (E1 Batch D)
@@ -105,6 +106,7 @@ class RefSide:
     focus_energy: int  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
+    embargo: int  # MoveEffectsData.embargoTurns (B13-29)
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -182,6 +184,7 @@ class RefState:
     ts_power_mul: int
     ts_switched: list[int]
     ts_pick_mul: int
+    ts_assurance: list[int]  # turnFlags.assuranceDamageMask != 0 (B13-17)
 
 
 # BattleState field names by level.

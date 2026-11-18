@@ -45,7 +45,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, ItemId, Type
-from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
+from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, held_item
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 NUM_ACTIONS = MOVE_ACTIONS + SLOTS
@@ -68,7 +68,8 @@ def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     move it knows (``CHECK_INVALID_CHOICE_ITEM``, battle_lib.c:2307-2315)."""
     mon = state.active[side]
     lock = state.choice_lock[side]
-    held = jnp.isin(tables.item_effect[state.item[side, mon]], jnp.asarray(CHOICE_ITEMS))
+    # Battler_HeldItemEffect (:2309: ``held_item``, B13-29).
+    held = jnp.isin(tables.item_effect[held_item(state, side, mon)], jnp.asarray(CHOICE_ITEMS))
     return held & (lock != 0) & jnp.any(state.moves[side, mon] == lock)
 
 
@@ -139,7 +140,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     own = state.ability[side, mon]
     types = state.types[side, mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
-    iron = tables.item_effect[state.item[side, mon]] == ItemId.IRON_BALL
+    iron = tables.item_effect[held_item(state, side, mon)] == ItemId.IRON_BALL
     grounded = (
         ((own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)) | iron | (state.gravity != 0)
     )

@@ -123,7 +123,7 @@ def test_sleep_talk_with_no_living_foe_still_succeeds(tables, names):
     passes HasNoTarget (bcp.c:3190), uses its PP and sets SYSCTL_MOVE_SUCCEEDED (:3212):
     movePrevByBattler is Sleep Talk (:3945-3946), awake (the script fails,
     effect_script_0097.s:5) or asleep (the called Tackle finds no defender in GoToMoveScript,
-    battle_script.c:2121-2126)."""
+    battle_script.c:2120-2129)."""
     t, n = tables, names
     s = make_state(
         t,
@@ -135,6 +135,9 @@ def test_sleep_talk_with_no_living_foe_still_succeeds(tables, names):
     for asleep in (False, True):
         start = s.with_status(0, 0, Status.SLEEP, 3) if asleep else s
         out, ev = _both(t, start, (0, 0), hurt)
+        # The foe (Speed 32 vs 27) acts first and faints to its self-hit, so Sleep Talk and
+        # its Tackle run with no living defender (not a Tackle KO of the 1 HP foe).
+        assert int(ev["order"][0]) == 1, asleep
         assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
         assert int(out.last_move[0]) == n.move("Sleep Talk"), asleep
         assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
@@ -145,7 +148,7 @@ def test_metronome_with_no_living_foe_still_succeeds(tables, names):
     """Ruling B12-30 for Metronome (RANGE_SINGLE_TARGET_SPECIAL as Sleep Talk; the case of the
     manager's diff seed on main c4f0a60): with the foe fainted to its own confusion self-hit
     first, Metronome passes HasNoTarget (bcp.c:3190), uses its PP and is movePrevByBattler
-    (:3212, :3945-3946); the called Pound finds no defender (battle_script.c:2121-2126)."""
+    (:3212, :3945-3946); the called Pound finds no defender (battle_script.c:2120-2129)."""
     t, n = tables, names
     spec = _mon(n, "Clefairy", ["Metronome", "Tackle"])
     s = make_state(
@@ -156,7 +159,10 @@ def test_metronome_with_no_living_foe_still_succeeds(tables, names):
     s = s._replace(confusion=s.confusion.at[1].set(3), hp=s.hp.at[1, 0].set(1))
     pound = metronome_calls(t, spec).index(n.move("Pound"))
     hurt = _call(pound)._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
-    out, _ = _both(t, s, (0, 0), hurt)
+    out, ev = _both(t, s, (0, 0), hurt)
+    # The foe (Speed 32 vs 30) acts first and faints to its self-hit, so the called Pound finds
+    # no defender (not a Pound KO of the 1 HP foe).
+    assert int(ev["order"][0]) == 1
     assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
     assert int(out.last_move[0]) == n.move("Metronome")
     assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1

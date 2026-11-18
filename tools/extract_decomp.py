@@ -574,6 +574,24 @@ def extract_natures(decomp: Path) -> list[dict]:
     return out
 
 
+NO_GIFT_TYPE = 0x1F  # ItemData.naturalGiftType of an item with none (itemproc.c:242)
+
+
+def _fling_effects(decomp: Path):
+    """``FLING_EFFECT_*`` name -> id from ``include/constants/items.h`` (``#define``s 0-30)."""
+    text = (decomp / "include" / "constants" / "items.h").read_text(encoding="utf-8")
+    found = {m[1]: int(m[2]) for m in re.finditer(r"#define\s+(FLING_EFFECT_\w+)\s+(\d+)", text)}
+    if sorted(found.values()) != list(range(len(found))):
+        raise ExtractError(f"FLING_EFFECT_* ids are not 0..{len(found) - 1}")
+
+    def get(name: str) -> int:
+        if name not in found:
+            raise ExtractError(f"unknown fling effect constant {name!r}")
+        return found[name]
+
+    return get
+
+
 # itemUseParams keys (tools/dataproc/src/itemproc.c ProcParams) of the PARTY_PARAM_FIELDS
 # that are read straight from the JSON; the others are derived there.
 _PARTY_PARAM_KEYS = {
@@ -650,6 +668,8 @@ def extract_items(decomp: Path) -> list[dict]:
     items = _constants(decomp, "items", "ITEM_")
     hold_id = _index(_constants(decomp, "item_hold_effects", "HOLD_EFFECT_"), "hold effect")
     move_id = _index(_constants(decomp, "moves", "MOVE_"), "move")
+    type_id = _index(_constants(decomp, "pokemon_types", "TYPE_"), "type")
+    fling_id = _fling_effects(decomp)
     counters = {"balls": 0, "rods": 0, "mail": 0}
     out = []
     for const in items:
@@ -663,6 +683,9 @@ def extract_items(decomp: Path) -> list[dict]:
                     "teaches_move": None,
                     "hp_restored": 0,
                     "fling_power": 0,
+                    "fling_effect": 0,
+                    "natural_gift_power": 0,
+                    "natural_gift_type": 0,
                     "party_params": _item_party_params(
                         {"fieldUseFunc": None, "fieldPocket": None}, counters, "POCKET_BALLS"
                     ),
@@ -683,6 +706,15 @@ def extract_items(decomp: Path) -> list[dict]:
                 # itemUseParams (no party-use data).
                 "hp_restored": int(params.get("hpRestored", 0)) & 0xFF,
                 "fling_power": int(d["flingPower"]),  # ItemData.flingPower (include/item.h:62)
+                # ItemData.flingEffect, .naturalGiftPower, .naturalGiftType (include/item.h:61-64),
+                # read by Battler_ItemFlingEffect / Battler_NaturalGiftPower / _Type
+                # (battle_lib.c:5465-5489).
+                "fling_effect": fling_id(d["flingEffect"]),
+                "natural_gift_power": int(d["naturalGiftPower"]),
+                # tools/dataproc/src/itemproc.c:241-242: a null type is stored as 0x1F.
+                "natural_gift_type": (
+                    type_id(d["naturalGiftType"]) if d.get("naturalGiftType") else NO_GIFT_TYPE
+                ),
                 "party_params": _item_party_params(d, counters, "POCKET_BALLS"),
             }
         )

@@ -91,9 +91,13 @@ from nuzline.engine.state import (
     STAGE_MIN,
     VOLATILE_FIELDS,
     BattleState,
+    held_item,
+    held_items,
 )
 
-MAX_HITS = 5
+# Beat Up hits once per eligible party member, up to the six of a full party
+# (BtlCmd_BeatUp, battle_script.c:6173-6247; E2 batch 13, B13-9).
+MAX_HITS = 6
 _I8, _I32 = jnp.int8, jnp.int32
 
 # HitRateByStage (include/data/hit_rate_stages.h), indexed by the clamped stage sum 0..12.
@@ -105,11 +109,13 @@ _CRIT_ODDS = jnp.array([16, 8, 4, 3, 2], _I32)
 
 class Outcome(NamedTuple):
     speed_tie: jnp.ndarray  # int8[], 0 = player first on equal speed
-    hit: jnp.ndarray  # int8[2,5], index 0: the accuracy roll's class (module docstring)
-    crit: jnp.ndarray  # int8[2,5], the crit draw's class (CRIT_DRAWS): 0 never, 1 always crits
-    roll: jnp.ndarray  # int8[2,5], 0-15 (85-100 %)
-    secondary: jnp.ndarray  # int8[2,5], the attacker's own secondary effect
-    contact_proc: jnp.ndarray  # int8[2,5], the defender's contact ability
+    # int8[2,6], index 0: the accuracy roll's class (module docstring); index k > 0: Triple Kick's
+    # hit k's own roll, its class over the thresholds without the overrides (B13-6)
+    hit: jnp.ndarray
+    crit: jnp.ndarray  # int8[2,6], the crit draw's class (CRIT_DRAWS): 0 never, 1 always crits
+    roll: jnp.ndarray  # int8[2,6], 0-15 (85-100 %)
+    secondary: jnp.ndarray  # int8[2,6], the attacker's own secondary effect
+    contact_proc: jnp.ndarray  # int8[2,6], the defender's contact ability
     n_hits: jnp.ndarray  # int8[2], 2-5
     full_para: jnp.ndarray  # int8[2]
     confusion_hit: jnp.ndarray  # int8[2]
@@ -117,7 +123,7 @@ class Outcome(NamedTuple):
         jnp.ndarray
     )  # int8[2], sleep/confusion/Bind/Taunt/Disable/Uproar counter rolled at infliction
     thaw: jnp.ndarray  # int8[2]
-    flinch_item: jnp.ndarray  # int8[2,5], King's Rock / Razor Fang's flinch roll per hit
+    flinch_item: jnp.ndarray  # int8[2,6], King's Rock / Razor Fang's flinch roll per hit
     quick_claw: jnp.ndarray  # int8[2], this turn's speedRand % 5 == 0 (Quick Claw)
     end_speed_tie: jnp.ndarray  # int8[], 0 = player first in the end-of-turn order on equal speed
     magnitude: jnp.ndarray  # int8[2], Magnitude's level 4-10 of each side's move
@@ -142,7 +148,7 @@ class Outcome(NamedTuple):
     # value in [0, ACUPRESSURE_DRAWS): the stat is rank ``value % validStats`` among the stats
     # below +6 at the move (``effects.acupressure_stat``), B12-9.
     acupressure: jnp.ndarray
-    # int8[2,5], 1 = a Focus Band roll passes (``RandNext() % 100 < FOCUS_BAND_PARAM``,
+    # int8[2,6], 1 = a Focus Band roll passes (``RandNext() % 100 < FOCUS_BAND_PARAM``,
     # bcp.c:3387, battle_script.c:9110): ``[s, i]`` the defender's roll at hit ``i`` of ``s``'s
     # move (``BattleControllerPlayer_UpdateHP``; Pursuit's ``CheckHoldOnWith1HP`` at ``[pursuer,
     # 0]``), ``[s, 0]`` also ``s``'s own roll at its confusion self-hit (its move does not run
@@ -227,7 +233,9 @@ def _rate(
     weather=None,
     target_confused=None,
     total=None,
+    overrides=True,
     micle=None,
+    later_micle=None,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against side ``target``'s ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
@@ -240,8 +248,15 @@ def _rate(
     traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
     clamped stage sum to use instead of the one ``acc`` and ``eva_stage`` give (0-12,
     ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed.
+    ``overrides`` (static): ``CheckMoveHitOverrides`` runs after the roll (No Guard, Lock-On,
+    Thunder in rain, Blizzard in hail give 100); False for a Triple Kick hit after the first,
+    whose SYSCTL_SKIP_ACCURACY_OVERRIDES skips it (bcp.c:3264-3268, system_control.h:81-86),
+    B13-6; ``"both"``: the two as a trailing axis ``[with, without]``, one computation.
     ``micle``: the attacker's ``moveEffectsData.micleBerry`` at the check (default
-    ``state.micle[side]``), x120/100 after the held items (bcp.c:2967-2970, G-59)."""
+    ``state.micle[side]``), x120/100 after the held items (bcp.c:2967-2970, G-59);
+    ``later_micle``: with ``"both"``, the flag for the column without the overrides (a later
+    Triple Kick hit's: the first hit's check cleared the flag, :2968, so only a berry eaten
+    since sets it; default ``micle``)."""
     weather = state.weather if weather is None else weather
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
     fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
@@ -306,12 +321,12 @@ def _rate(
     # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
     # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
     # HOLD_EFFECT_ACCURACY_UP_SLOWER (Zoom Lens), each * (100 + param) / 100
-    # (Battler_HeldItemEffect / Battler_HeldItemPower: Klutz and Embargo are unsupported).
-    d_item = state.item[target, target_mon]
+    # (Battler_HeldItemEffect / Battler_HeldItemPower: ``state.held_item``, B13-29).
+    d_item = held_item(state, target, target_mon)
     d_power = tables.item_param[d_item, 0].astype(_I32)
     reduce = tables.item_effect[d_item] == ItemId.BRIGHT_POWDER
     rate = jnp.where(reduce, rate * (100 - d_power) // 100, rate)
-    a_item = state.item[side, state.active[side]]
+    a_item = held_item(state, side)
     a_effect = tables.item_effect[a_item]
     a_power = tables.item_param[a_item, 0].astype(_I32)
     lens = (a_effect == ItemId.WIDE_LENS) | (
@@ -320,8 +335,13 @@ def _rate(
     rate = jnp.where(lens, rate * (100 + a_power) // 100, rate)
     # bcp.c:2967-2970: the Micle Berry's flag, after the items and before Gravity (G-59).
     micle = state.micle[side] != 0 if micle is None else jnp.asarray(micle, bool)
-    rate = jnp.where(micle, rate * 120 // 100, rate)
-    rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
+
+    def finish(rate, micle):
+        rate = jnp.where(micle, rate * 120 // 100, rate)
+        return jnp.where(state.gravity != 0, rate * 10 // 6, rate)
+
+    before_micle = rate
+    rate = finish(before_micle, micle)
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
     no_guard = (a_ability == AbilityId.NO_GUARD) | (own == AbilityId.NO_GUARD)
@@ -355,20 +375,40 @@ def _rate(
     )
     ohko = tables.move_effect[move] == EffectId.OHKO
     # Accuracy 0 never misses (the check returns before rolling).
-    return jnp.where(ohko, ohko_rate, jnp.where((accuracy == 0) | no_guard, 100, rate))
+    full = jnp.where(ohko, ohko_rate, jnp.where((accuracy == 0) | no_guard, 100, rate))
+    # SYSCTL_SKIP_ACCURACY_OVERRIDES (B13-6): the roll alone decides (a Triple Kick hit; no
+    # OHKO move has one).
+    raw = jnp.where(accuracy == 0, 100, rate)
+    if overrides == "both":
+        if later_micle is not None:
+            later = finish(before_micle, jnp.asarray(later_micle, bool))
+            raw = jnp.where(accuracy == 0, 100, later)
+        return jnp.stack([full, raw], axis=-1)
+    return full if overrides else raw
 
 
 def live_hit_threshold(
-    tables: Tables, state: BattleState, side, move, target_moved=False
+    tables: Tables, state: BattleState, side, move, target_moved=False, overrides=True
 ) -> jnp.ndarray:
     """``int32``: the threshold of ``side``'s ``move`` at its accuracy check, read from
     ``state`` as it is at that moment (``step``): the stages, abilities, items, weather and
-    HP of the two active battlers then; ``target_moved``: the target has acted this turn."""
+    HP of the two active battlers then; ``target_moved``: the target has acted this turn.
+    ``overrides``: as ``_rate``'s (False: a later Triple Kick hit, B13-6)."""
     target_mon = state.active[1 - side]
     eva = state.stages[1 - side, Stat.EVA]
     acc = state.stages[side, Stat.ACC]
     return _rate(
-        tables, state, side, move, 1 - side, target_mon, jnp.asarray(False), acc, eva, target_moved
+        tables,
+        state,
+        side,
+        move,
+        1 - side,
+        target_mon,
+        jnp.asarray(False),
+        acc,
+        eva,
+        target_moved,
+        overrides=overrides,
     )
 
 
@@ -441,7 +481,8 @@ def future_thresholds(
     (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
-    roll kept whole where it can change (G-59)."""
+    roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
+    (B13-31)."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -507,7 +548,7 @@ def future_thresholds(
             )
             return _rate(
                 tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
-                weathers[w], c == 1, t, (am == state.active[a]) & (state.micle[a] != 0),
+                weathers[w], c == 1, t, micle=(am == state.active[a]) & (state.micle[a] != 0),
             )  # fmt: skip
 
         thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk))
@@ -535,7 +576,12 @@ def future_thresholds(
         ]
     )
     attackers = jnp.clip(state.future_attacker.astype(_I32) - 1, 0, 1)
-    loose = jnp.broadcast_to(tracer, (2,)) | micle_field[attackers]
+    # Embargo (B13-31): an Embargo used this turn, or a count that the turn end's
+    # MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677) can end before the side-condition pass's
+    # hit (:1758-1783), changes which items the hit reads (state.held_item): the roll is kept
+    # whole, rare and sound.
+    embargo_field = jnp.any(uses & (effect == EffectId.EMBARGO)) | jnp.any(state.embargo != 0)
+    loose = jnp.broadcast_to(tracer | embargo_field, (2,)) | micle_field[attackers]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
 
@@ -550,14 +596,17 @@ def _hit_threshold(
     weather=None,
     target_confused=None,
     move=None,
+    overrides=True,
     micle=None,
+    later_micle=None,
 ):
     """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
     a target that has moved; the weather and the target's confusion at the check) instead.
     The default weather is the one after the target's switch-in, which goes first
     (``damage.entry_weather``). Nature Power's accuracy check is its called move's
     (``order.called_move``). ``move``: the move the side runs (default ``used_move`` without a
-    call; an invoker's called move comes from ``hit_thresholds``' ``moves``)."""
+    call; an invoker's called move comes from ``hit_thresholds``' ``moves``). ``overrides``:
+    as ``_rate``'s."""
     if move is None:
         move = used_move(tables, state, side, actions[side])
     target, target_switches, target_mon = _target_mon(state, actions, side)
@@ -581,7 +630,9 @@ def _hit_threshold(
         target_moved,
         weather,
         target_confused,
+        overrides=overrides,
         micle=micle,
+        later_micle=later_micle,
     )
     # A switch or an item use runs no move, so it has no roll.
     no_move = is_switch(actions[side]) | is_item(actions[side])
@@ -631,7 +682,23 @@ def _stage_variants(start, changed, from_zero, changes, herb) -> tuple[jnp.ndarr
 
 
 def hit_thresholds(
+    tables: Tables, state: BattleState, actions, moves=None, overrides=True
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``_threshold_grid`` with or without the overrides (its docstring)."""
+    return _threshold_grid(tables, state, actions, moves, overrides)
+
+
+def hit_threshold_pair(
     tables: Tables, state: BattleState, actions, moves=None
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(thresholds, possible, later)``: ``hit_thresholds`` and, on the same grid in the same
+    pass, the thresholds without the overrides (a later Triple Kick hit's, B13-6)."""
+    both, possible = _threshold_grid(tables, state, actions, moves, "both")
+    return both[..., 0], possible, both[..., 1]
+
+
+def _threshold_grid(
+    tables: Tables, state: BattleState, actions, moves, overrides
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(int32[2, HIT_VARIANTS], bool[2, HIT_VARIANTS])``: every threshold each side's
     move can have at its accuracy check this turn, and which of them are possible.
@@ -669,8 +736,8 @@ def hit_thresholds(
       second half of the grid, Zoom Lens's, possible for a holder: one item holds one of them).
 
     Each applies once: a move has one effect, and the only repeated hits are
-    ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
-    its repeats here).
+    ``MULTI_HIT``'s and Twineedle's (``MoveFlag.HIT_TWICE``, a poison), which change no stage
+    (a future multi-hit stat effect must add its repeats here).
 
     Switches (which go first) are in the turn-start threshold already, with the
     newcomer's switch-in checks: the weather its ability sets and the ability it traces
@@ -681,7 +748,14 @@ def hit_thresholds(
     copy, ``pivot_view``), and a faint of either battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
     changes): an extra threshold splits a class, never merges two. ``moves`` (``int32[2]``): the moves the sides run (an invoker's call,
-    ``order.used_moves``), default ``used_move`` without a call."""
+    ``order.used_moves``), default ``used_move`` without a call.
+
+    ``overrides=False``: the thresholds of a Triple Kick hit after the first (B13-6), its
+    accuracy check without ``CheckMoveHitOverrides``. Between the first hit and a later one only
+    the move's own hits run; of what they can change, the target's confusion (a disliked flavor
+    berry eaten after a hit, ruling G-5) is the second confusion variant already, and a White
+    Herb the herb variants; a stat pinch berry raises no accuracy or evasion. So the same grid
+    covers them."""
     actions = jnp.asarray(actions, _I32)
     live = state.over == 0
     uses_move = live & ~is_switch(actions) & ~is_item(actions)
@@ -701,7 +775,7 @@ def hit_thresholds(
         & ((effect == EffectId.STAT_SELF) | (effect == EffectId.SECONDARY_STAT_SELF))
         & (stat == Stat.EVA)
     )
-    held = tables.item_effect[state.item[jnp.arange(2), state.active]]
+    held = tables.item_effect[held_items(state)]
     herb = held == ItemId.WHITE_HERB
     firsts = [
         action_order(tables, state, actions, empty_outcome()._replace(speed_tie=jnp.int8(t)))[0]
@@ -719,6 +793,14 @@ def hit_thresholds(
     # eater's, after the eater's own check). Over-approximate: the side's active holds one.
     # Only the side's own check clears it.
     micle_free = uses_move & (held == ItemId.MICLE_BERRY)
+    # The foe's Embargo before the side's check (B13-31; effects._embargo, in singles only when
+    # the foe acts first) hides the side's Wide Lens (battle_lib.c:5358, bcp.c:2955-2957): the
+    # second half, which a Wide Lens holder (no Zoom Lens, no Micle Berry) never used, is its
+    # threshold without the lens. A Zoom Lens or Micle holder's hidden item is the first half's
+    # (no Zoom bonus, no berry); a hidden Bright Powder needs the defender embargoed before
+    # the side's own move: only the side itself could do it.
+    wide = held == ItemId.WIDE_LENS
+    foe_embargo = (changes & (effect == EffectId.EMBARGO))[::-1]
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in (0, 1):
@@ -786,17 +868,29 @@ def hit_thresholds(
         # Micle holder's berry can set before the check.
         holder = held[side] == ItemId.MICLE_BERRY
         micle_grid = (state.micle[side] != 0) | (moved_grid & holder)
+        # A later Triple Kick hit ("both"'s second column): the first hit's check cleared the
+        # flag (bcp.c:2968), so only the holder's berry eaten since sets it (B13-6, G-59).
+        later_grid = moved_grid & holder if overrides == "both" else None
+        hide_grid = moved_grid & wide[side]
+
+        def point(a, e, m, w, c, k, lk, hide, side=side):
+            embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
+            hidden = state._replace(embargo=state.embargo.at[side].set(embargo))
+            return _hit_threshold(
+                tables, hidden, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
+            )
+
         thresholds.append(
-            jax.vmap(
-                lambda a, e, m, w, c, k, side=side: _hit_threshold(
-                    tables, state, actions, side, a, e, m, w, c, moves[side], k
-                )
-            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid)
+            jax.vmap(point)(
+                acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid, later_grid,
+                hide_grid,
+            )
         )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
-        possible.append(jnp.concatenate([grid_ok, grid_ok & (zoom[side] | micle_free[side])]))
+        second = zoom[side] | micle_free[side] | (uses_move[side] & wide[side] & foe_embargo[side])
+        possible.append(jnp.concatenate([grid_ok, grid_ok & second]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 
@@ -821,7 +915,8 @@ def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarra
     their species, :7124-7128), Super Luck (+1, :7126), capped at 4 (:7130)."""
     stage = (tables.move_effect[move] == EffectId.HIGH_CRIT).astype(_I32)
     # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
-    # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
+    # _0075.s:16; MoveFlag.CRIT_UP), B10-12; Blaze Kick, Poison Tail, Cross Poison (_0200.s:5,
+    # _0209.s:5), B13-2.
     stage = stage + ((tables.move_flags[move].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
     mon = state.active[side]
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
@@ -829,8 +924,9 @@ def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarra
     # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
     stage = stage + 2 * (state.focus_energy[side] != 0).astype(_I32)
     # :7124-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
-    # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
-    item = state.item[side, mon]
+    # Chansey and Stick on Farfetch'd (Battler_HeldItem: ``state.held_item``, B13-29;
+    # ids.ItemId.CRIT_ITEM).
+    item = held_item(state, side, mon)
     species = state.species[side, mon].astype(_I32)
     needs = tables.item_param[item, 1].astype(_I32)
     held = tables.item_effect[item] == ItemId.CRIT_ITEM
@@ -873,6 +969,13 @@ def _remove_held_item(state: BattleState) -> BattleState:
     return state._replace(item=state.item.at[battlers, state.active].set(0))
 
 
+def _embargo_all(state: BattleState) -> BattleState:
+    """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
+    embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
+    7117; ``effects._embargo``, B13-31), here every battler's own."""
+    return state._replace(embargo=jnp.full_like(state.embargo, 5))
+
+
 # The move effects that can change another battler's crit inputs before its CalcCrit
 # (BattleSystem_CalcCriticalMulti, battle_lib.c:7105-7132, reads the attacker's Focus Energy,
 # held item, species and ability), each with its write to those inputs. Every battler's odds are
@@ -882,6 +985,7 @@ def _remove_held_item(state: BattleState) -> BattleState:
 CRIT_ODDS_EFFECTS = {
     EffectId.HAZE: _clear_focus_energy,
     EffectId.KNOCK_OFF: _remove_held_item,
+    EffectId.EMBARGO: _embargo_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
@@ -1167,8 +1271,10 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2]``: the hold param of each side's active King's Rock / Razor Fang
     (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
     battle_controller_player.c:4633), else 0. The attacker's item cannot become one during the
-    turn (no implemented path gives a King's Rock)."""
-    item = state.item[jnp.arange(2), state.active]
+    turn (no implemented path gives a King's Rock: Recycle gives back only an item a RemoveItem
+    took, never a King's Rock while Fling is unsupported, and only to its user, whose move has
+    run)."""
+    item = held_items(state)  # Battler_HeldItemEffect (B13-29)
     holder = tables.item_effect[item] == ItemId.KINGS_ROCK
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)
 
@@ -1211,12 +1317,31 @@ def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
 MOVE_FIELDS = ("hit", "crit", "secondary", "fang_flinch", "duration", "future_hit", "call")
 
 
+# The sixth hit's column of every per-hit draw (Beat Up's sixth member, B13-9) comes from
+# ``fold_in(key, SIXTH_HIT_FOLD)``, split per field (``SIXTH_HIT_FIELDS``): columns 0-4 keep the
+# samples they had while MAX_HITS was 5.
+SIXTH_HIT_FOLD = 42
+SIXTH_HIT_FIELDS = ("hit", "crit", "crit_class", "secondary", "roll", "contact_proc",
+                    "flinch_item", "focus_band")  # fmt: skip
+
+
+def _per_hit(key, field_key, field: str, low, high) -> jnp.ndarray:
+    """``int32[2, MAX_HITS]``: ``randint(field_key)`` for hits 0-4, as before the sixth hit
+    existed, and the sixth from ``fold_in(key, SIXTH_HIT_FOLD)``'s ``field`` key."""
+    first = jax.random.randint(field_key, (2, MAX_HITS - 1), low, high, dtype=_I32)
+    sixth_key = jax.random.split(jax.random.fold_in(key, SIXTH_HIT_FOLD), len(SIXTH_HIT_FIELDS))
+    sixth = jax.random.randint(
+        sixth_key[SIXTH_HIT_FIELDS.index(field)], (2, 1), low, high, dtype=_I32
+    )
+    return jnp.concatenate([first, sixth], axis=1)
+
+
 def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict:
     """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
     (``moves``, ``int32[2]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
     13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw)."""
     k = jax.random.split(key, 14)
-    per_hit, per_side = (2, MAX_HITS), (2,)
+    per_side = (2,)
 
     def draw(i, shape, n):
         """``RandNext() % n`` for each element."""
@@ -1225,8 +1350,13 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     future_thr, future_ok, future_loose = future_thresholds(tables, state, actions, moves)
     future_roll = jax.random.randint(jax.random.fold_in(key, 28), (2,), 1, 101, dtype=_I32)
     # The roll u = RandNext() % 100 + 1 (battle_controller_player.c:2976), as its class.
-    thresholds, possible = hit_thresholds(tables, state, actions, moves)
-    hit = hit_class(draw(0, per_hit, 100) + 1, thresholds[:, None, :], possible[:, None, :])
+    # A Triple Kick hit after the first rolls its own check without the overrides (B13-6):
+    # hit[s, k > 0] is its class over those thresholds (no other move reads it).
+    thresholds, possible, later = hit_threshold_pair(tables, state, actions, moves)
+    rolls = _per_hit(key, k[0], "hit", 0, 100) + 1
+    hit = hit_class(rolls, thresholds[:, None, :], possible[:, None, :])
+    later_hit = hit_class(rolls, later[:, None, :], possible[:, None, :])
+    hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
     no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
@@ -1236,14 +1366,14 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     # meet (crit_class), from a fold_in key (every other field keeps its samples).
     odds, odds_ok = crit_variants(tables, state, actions, moves)
     moving = jnp.any(odds_ok & (odds != odds[:, :1]), axis=1)[:, None]
-    fixed = (draw(1, per_hit, odds[:, :1]) == 0).astype(_I32)
-    r = jax.random.randint(jax.random.fold_in(key, 41), per_hit, 0, CRIT_DRAWS, dtype=_I32)
+    fixed = (_per_hit(key, k[1], "crit", 0, odds[:, :1]) == 0).astype(_I32)
+    r = _per_hit(key, jax.random.fold_in(key, 41), "crit_class", 0, CRIT_DRAWS)
     crit = jnp.where(moving, crit_class(r, odds[:, None, :], odds_ok[:, None, :]), fixed)
     crit = jnp.where(no_crit, 0, crit)
     # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
     chance = secondary_chance(tables, state, moves)[:, None]
-    secondary = (draw(2, per_hit, 100) < chance) | (chance == 0)
+    secondary = (_per_hit(key, k[2], "secondary", 0, 100) < chance) | (chance == 0)
     # BtlCmd_Random (battle_script.c:3207) ``Random r, o`` is rand % (r + 1) + o, by the
     # acting side's move: Random 3, 2 (subscript_fall_asleep.s, subscript_confuse.s),
     # Random 3, 3 (subscript_bind_start.s, subscript_uproar.s:6), Random 2, 3
@@ -1339,7 +1469,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     state_in, actions_in = state, jnp.asarray(actions, _I32)
     state, actions = pivot_view(tables, state, actions)
     k = jax.random.split(key, 14)
-    per_hit, per_side = (2, MAX_HITS), (2,)
+    per_side = (2,)
 
     def draw(i, shape, n):
         """``RandNext() % n`` for each element."""
@@ -1365,9 +1495,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         speed_tie=speed_tie,
         hit=drawn["hit"],
         crit=drawn["crit"],
-        roll=draw(6, per_hit, 16),  # BattleSystem_CalcDamageVariance, rand % 16
+        roll=_per_hit(key, k[6], "roll", 0, 16),  # BattleSystem_CalcDamageVariance, rand % 16
         secondary=drawn["secondary"],
-        contact_proc=draw(7, per_hit, 10) < 3,  # Static etc., battle_lib.c:4222
+        contact_proc=_per_hit(key, k[7], "contact_proc", 0, 10) < 3,  # battle_lib.c:4222
         n_hits=n_hits,
         full_para=draw(8, per_side, 4) == 0,  # battle_controller_player.c:2655
         confusion_hit=draw(9, per_side, 2) == 1,  # battle_controller_player.c:2621
@@ -1376,7 +1506,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
         # RandNext() % 100 < the attacker's King's Rock / Razor Fang param, per hit. From a
         # fold_in key: every field above keeps its samples.
-        flinch_item=jax.random.randint(jax.random.fold_in(key, 24), per_hit, 0, 100, dtype=_I32)
+        flinch_item=_per_hit(key, jax.random.fold_in(key, 24), "flinch_item", 0, 100)
         < kings_rock_chance(tables, state)[:, None],
         # The turn's speedRand (bcp.c:853-857, after the order is fixed), Quick Claw's
         # % (100 / param) == 0 (battle_lib.c:1278-1286): uniform 1/5 by the project's % n
@@ -1441,7 +1571,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         ),
         # Focus Band (bcp.c:3387, battle_script.c:9110): RandNext() % 100 < param, uniform by the
         # % n convention, per hit and for the Future Sight hit. From fold_in keys (G-1).
-        focus_band=jax.random.randint(jax.random.fold_in(key, 29), per_hit, 0, 100, dtype=_I32)
+        focus_band=_per_hit(key, jax.random.fold_in(key, 29), "focus_band", 0, 100)
         < FOCUS_BAND_PARAM,
         future_band=jax.random.randint(jax.random.fold_in(key, 30), per_side, 0, 100, dtype=_I32)
         < FOCUS_BAND_PARAM,

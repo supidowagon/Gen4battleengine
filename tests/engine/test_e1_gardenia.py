@@ -34,7 +34,7 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
@@ -58,7 +58,7 @@ def _full(s, side, slot, hp):
 
 def _band(o, side, hits):
     """``o`` with ``focus_band[side, i] = 1`` for each ``i`` in ``hits``."""
-    band = np.zeros((2, 5), np.int8)
+    band = np.zeros((2, MAX_HITS), np.int8)
     for i in hits:
         band[side, i] = 1
     return o._replace(focus_band=jnp.asarray(band))
@@ -1400,7 +1400,7 @@ def test_synchronize_runs_after_every_hit_of_a_multi_hit_move(tables, names):
     inside the multi-hit loop): Double Kick's second hit meets the foe's Static
     (TriggerAbilityOnHit, sideEffectMon the Synchronize attacker), and the step after that hit
     passes the paralysis back. (Twineedle, the one multi-hit move with a status secondary, is
-    not a supported effect in these tables.)"""
+    tests/engine/test_batch13.py's, B13-1.)"""
     n = names
     s = make_state(
         tables,

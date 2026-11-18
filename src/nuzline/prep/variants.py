@@ -19,7 +19,16 @@ from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
 from nuzline.engine.damage import FLAIL_BOUNDS
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Status, Type, Weather
+from nuzline.engine.ids import (
+    FLAIL_FALLOFF,
+    AbilityId,
+    EffectId,
+    ItemId,
+    MoveFlag,
+    Status,
+    Type,
+    Weather,
+)
 from nuzline.engine.state import make_state
 from nuzline.engine.stats import calc_stats
 from nuzline.prep.problem import (
@@ -45,6 +54,7 @@ __all__ = [
     "ai_kill_damage",
     "base_member",
     "designated_change",
+    "falloff_cuts",
     "flail_cuts",
     "hp_cuts",
     "hp_regions",
@@ -353,13 +363,22 @@ def flail_cuts(max_hp: int) -> tuple[int, ...]:
     return tuple(((b + 1) * max_hp - 1) // 64 for b in FLAIL_BOUNDS[:-1])
 
 
+def falloff_cuts(max_hp: int, power: int) -> tuple[int, ...]:
+    """The highest HP of each Water Spout / Eruption power below the top one
+    (``BtlCmd_CalcHPFalloffPower``, battle_script.c:6645-6657: ``power * hp // max_hp``, at
+    least 1): power ``p`` (1 .. ``power - 1``) holds up to ``((p + 1) * max_hp - 1) // power``
+    (B13-13)."""
+    return tuple(((p + 1) * max_hp - 1) // power for p in range(1, power))
+
+
 def hp_cuts(
     tables: Tables, spec: PokemonSpec, max_hp: int, kill_damage: Sequence[int] = ()
 ) -> tuple[int, ...]:
     """The region tops below ``max_hp`` (ruling 5): the AI's percent checks of ``tables``'
     policy (``ai_defender_hp_checks``), each kill damage in ``1..max_hp - 1`` and the pinch cut
     ``max_hp // 3`` for Blaze, Torrent and Overgrow, the Flail bands' tops when ``spec`` has
-    a ``FLAIL`` move (``flail_cuts``), and ``max_hp - 1`` for a Focus Sash holder (it only
+    a ``FLAIL`` move (``flail_cuts``; every power of a Water Spout / Eruption one,
+    ``falloff_cuts``), and ``max_hp - 1`` for a Focus Sash holder (it only
     saves a holder at full HP, bcp.c:3391). Unsorted, may repeat."""
     cuts = []
     for kind, percent in ai_defender_hp_checks(tables):
@@ -370,8 +389,13 @@ def hp_cuts(
     if ability in _PINCH_ABILITIES:
         cuts.append(max_hp // 3)
     effect = np.asarray(tables.move_effect)
-    if any(m and int(effect[m]) == EffectId.FLAIL for m in spec.moves):
-        cuts.extend(flail_cuts(max_hp))
+    kind = np.asarray(tables.move_param)[:, 0]
+    power = np.asarray(tables.move_power)
+    for m in spec.moves:
+        if m and int(effect[m]) == EffectId.FLAIL:
+            # Flail's bands, or Water Spout's / Eruption's every power (FLAIL_FALLOFF, B13-13).
+            falloff = int(kind[m]) == FLAIL_FALLOFF
+            cuts.extend(falloff_cuts(max_hp, int(power[m])) if falloff else flail_cuts(max_hp))
     if int(np.asarray(tables.item_effect)[spec.item]) == ItemId.FOCUS_SASH:
         cuts.append(max_hp - 1)
     return tuple(c for c in cuts if 1 <= c < max_hp)

@@ -70,11 +70,12 @@ Refused, never approximated (``switching_refusals`` names each one):
   the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
   Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
-* moves whose state the engine does not carry: Magnet Rise, Miracle Eye, Perish Song (step 3),
-  and the variable-type moves Weather
-  Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127; Hidden Power's IV type is
-  modelled on both sides: ``damage.ai_move_type``, and a bench member's own,
-  ``Move_CalcVariableType``, battle_lib.c:8162-8175);
+* moves whose state the engine does not carry: Magnet Rise, Miracle Eye, Perish Song (step 3);
+  the variable-type moves are modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type``
+  for the AI's active and the player's ``moveHit``; ``Move_CalcVariableType``,
+  battle_lib.c:8097, ``party_move_types`` for a bench member: Hidden Power, Natural Gift,
+  Judgment, Weather Ball, B13-35), except Weather Ball where its case assigns no type
+  (``weather_ball_refused``);
 * a state where ``AI_OnlyIneffectiveMoves`` (step 5, :3361) applies;
 * a layout with more than ``sites`` sites (never under ``KAIZO_SWITCH_SITES``, which is the
   six-party maximum).
@@ -99,12 +100,19 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
+    AI_JUDGMENT,
+    AI_NATURAL_GIFT,
+    AI_TYPELESS,
+    AI_WEATHER_BALL,
     ai_move_type,
+    ai_weather_ball_typed,
     decomp_abilities,
     divide,
     hidden_power,
     iron_ball,
+    judgment_type,
     on_damaging_turn,
+    weather_ball_params,
 )
 from nuzline.engine.ids import ItemId
 from nuzline.engine.state import MOVES, SLOTS, BattleState
@@ -145,7 +153,7 @@ SUPER_EFFECTIVE, NOT_VERY_EFFECTIVE, INEFFECTIVE = 1 << 1, 1 << 2, 1 << 3
 
 # Decomp ids, checked against the manifest by tests/ai/test_switching.py.
 MOVE_STRUGGLE = 165
-_TYPE_FLYING, _TYPE_STEEL = 2, 8
+_TYPE_FLYING, _TYPE_STEEL, _TYPE_DARK = 2, 8, 17
 ABILITY_IDS = {
     "Levitate": 26,
     "Wonder Guard": 25,
@@ -187,9 +195,6 @@ _MOVES = {
     "Magnet Rise": "MAGNET_RISE in ApplyTypeChart",
     "Miracle Eye": "lifts the Dark immunity",
     "Perish Song": "AI_PerishSongKO",
-    "Weather Ball": "variable type (TrainerAI_MoveType)",
-    "Natural Gift": "variable type (TrainerAI_MoveType)",
-    "Judgment": "variable type (TrainerAI_MoveType)",
 }
 # What the AI refuses on the player's side (side 0): the any-side abilities and every refused
 # move (Hidden Power's IV type is modelled on both sides, see ``_layout``). Decomp ids.
@@ -281,14 +286,46 @@ def chart_multipliers(
 
 
 def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.ndarray:
-    """``int32[SLOTS, MOVES]``: ``Move_CalcVariableType`` (battle_lib.c:8097) of each party
-    member's moves on ``side``: Hidden Power its own IV type (:8162-8175), any other move
-    its table type (Natural Gift, Judgment and Weather Ball are refused)."""
+    """``int32[SLOTS, MOVES]``: ``Move_CalcVariableType`` (battle_lib.c:8097-8203) of each party
+    member's moves on ``side``, resolved as ``BattleSystem_CalcEffectiveness`` (:2690-2696) and
+    ``ApplyTypeChart`` read it (``TYPE_NORMAL``, 0, is the move's table type): Hidden Power its
+    own IV type (:8162-8175); Natural Gift the ``naturalGiftType`` of the member's party item,
+    ``MON_DATA_HELD_ITEM`` (:8102-8104: no Klutz or Embargo gate, whatever its power; a
+    non-berry's 0x1F is no type id, ``AI_TYPELESS``); Judgment the ``HOLD_EFFECT_ARCEUS_*`` type
+    of that item, else ``TYPE_NORMAL`` (:8106-8160, ``damage.judgment_type``); Weather Ball the
+    weather's type under ``NO_CLOUD_NINE`` and rain, sand, sun or hail (:8177-8195,
+    ``damage.weather_ball_params``). Elsewhere Weather Ball's case assigns nothing and the
+    function returns its uninitialized ``type``: refused (``weather_ball_refused``), the table
+    type stands in. Any other move: its table type (B13-35)."""
     moves = state.moves[side].astype(_I32)
+    table = tables.move_type[moves].astype(_I32)
     iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[side])  # [SLOTS]
-    return jnp.where(
-        moves == MOVE_IDS["Hidden Power"], iv_types[:, None], tables.move_type[moves].astype(_I32)
-    )
+    items = state.item[side].astype(_I32)[:, None]  # the party's own items
+    gift = tables.item_gift_type[items].astype(_I32)
+    gift = jnp.where(gift == 0, table, gift)
+    gift = jnp.where((gift < 0) | (gift > _TYPE_DARK), AI_TYPELESS, gift)
+    plate = judgment_type(tables, items, table)
+    ball = weather_ball_params(tables, state, AI_WEATHER_BALL)[2]
+    out = jnp.where(moves == AI_WEATHER_BALL, ball, table)
+    out = jnp.where(moves == AI_JUDGMENT, plate, out)
+    out = jnp.where(moves == AI_NATURAL_GIFT, gift, out)
+    return jnp.where(moves == MOVE_IDS["Hidden Power"], iv_types[:, None], out)
+
+
+def weather_ball_refused(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool``: a type read of the voluntary-switch rule or the post-KO replacement meets
+    Weather Ball where its case assigns no type (``damage.ai_weather_ball_typed``: no weather,
+    fog alone, or Cloud Nine / Air Lock): ``TrainerAI_MoveType`` (trainer_ai.c:3209-3227) of
+    the AI's active's moves (:3302, :3387, :3578, :3605) or of the player's ``moveHit`` (:3767),
+    and ``Move_CalcVariableType`` (battle_lib.c:8177-8195) of an AI party member's (:3324,
+    :3443, :3502, :3782; battle_lib.c:7998, :8051) return an uninitialized register, not
+    knowable (B13-26, B13-35). Any present AI party member with Weather Ball, or a
+    Weather Ball ``moveHit``, in such a state: refused."""
+    ball = AI_WEATHER_BALL
+    present = state.species[1] > 0
+    held = jnp.any(present[:, None] & (state.moves[1].astype(_I32) == ball))
+    hit = state.move_hit[1].astype(_I32) == ball
+    return (held | hit) & ~ai_weather_ball_typed(tables, state)
 
 
 def apply_type_chart(
@@ -415,6 +452,7 @@ class _Layout(NamedTuple):
     only_ineffective: jnp.ndarray  # bool, AI_OnlyIneffectiveMoves applies
     ability_refused: jnp.ndarray  # bool[2, SLOTS]
     move_refused: jnp.ndarray  # bool[2, SLOTS, MOVES]
+    weather_ball: jnp.ndarray  # bool, weather_ball_refused
     refused: jnp.ndarray  # bool
 
 
@@ -523,7 +561,9 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         jnp.isin(ability, _ANY_SIDE_IDS) | ((side == 1) & jnp.isin(ability, _AI_SIDE_IDS))
     )
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
+    weather_ball = weather_ball_refused(tables, state)
     refused = (count > sites) | only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
+    refused = refused | weather_ball
     kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
     return _Layout(
         kinds,
@@ -532,6 +572,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         only_ineffective,
         ability_refused,
         move_refused,
+        weather_ball,
         refused,
     )
 
@@ -548,6 +589,12 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
         name = _MOVE_NAMES[int(moves[side, s, k])]
         out.append(
             f"switching: side {side} slot {s}: move {name} ({_MOVES[name]}) is not implemented"
+        )
+    if bool(lay.weather_ball):
+        out.append(
+            "switching: Weather Ball's type case assigns nothing in this weather "
+            "(TrainerAI_MoveType, trainer_ai.c:3209-3227; Move_CalcVariableType, "
+            "battle_lib.c:8177-8195): an uninitialized register"
         )
     if bool(lay.only_ineffective):
         out.append(

@@ -440,14 +440,17 @@ def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, ka
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
     t = kaizo_tables
-    hurricane = 140
-    assert names.move_names[hurricane] == "Barrage"
-    assert kaizo_names.move_names[hurricane] == "Hurricane"
-    s = _state(t, kaizo_roark_party, BONSLY, [STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, hurricane])
+    # Kaizo's Mystical Fire (vanilla Bind's id, LOWER_SP_ATK_HIT, not transcribed); Hurricane
+    # (Barrage's id) was the example until its effect was transcribed (E2 batch 13, B13-23).
+    mystical_fire = 20
+    assert names.move_names[mystical_fire] == "Bind"
+    assert kaizo_names.move_names[mystical_fire] == "Mystical Fire"
+    moves = [STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, mystical_fire]
+    s = _state(t, kaizo_roark_party, BONSLY, moves)
     reasons = policy.ai_refusals(t, s)
     assert reasons == policy.ai_refusals(t, s, kaizo_names), reasons
-    assert any("Hurricane" in r for r in reasons) and not any("Barrage" in r for r in reasons)
-    with pytest.raises(policy.UnsupportedAi, match="Hurricane"):
+    assert any("Mystical Fire" in r for r in reasons) and not any("Bind" in r for r in reasons)
+    with pytest.raises(policy.UnsupportedAi, match="Mystical Fire"):
         policy.ai_action_distribution(t, s)
 
 
@@ -4332,6 +4335,189 @@ def test_batch12_healing_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roa
         for own, status, faster in ((100, Status.NONE, True), (45, Status.BURN, False)):
             s2 = _hp(s, 1, own)._replace(status=s.status.at[1, 0].set(status))
             s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
+            layout = layout_for(t, flags, s2)
+            assert policy.ai_refusals(t, s2, n, layout) == []
+            _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E2 batch 13 (B13-23..27): the variable-power and secondary hits, Recycle --------------
+
+
+def _item(s, side: int, item: int, slot: int = 0):
+    return s._replace(item=s.item.at[side, slot].set(item))
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "expected"),
+    [
+        # Basic_CheckCanRecycle (script.s:911-915): nothing to recycle -10.
+        ("Recycle", "neutral", -10),
+        ("Recycle", "recycle Lum", 0),
+        # Basic_CheckNaturalGift (:1053-1059): not a berry -10; a berry the player is not
+        # immune to (Cheri, Fire, against Gible), nothing.
+        ("Natural Gift", "neutral", -10),
+        ("Natural Gift", "hold Leftovers", -10),
+        ("Natural Gift", "hold Cheri Berry", 0),
+        # Basic_CheckNonStandardDamageOrChargeTurn (:572-585) against a non-Wonder Guard player.
+        ("Trump Card", "neutral", 0),
+        ("Punishment", "neutral", 0),
+        # Basic_CheckEmbargo (:1184-1197, B13-32): the player under Embargo -10; else its
+        # battler's recycle item outside the Frontier, nothing.
+        ("Embargo", "neutral", 0),
+        ("Embargo", "player embargoed", -10),
+        ("Embargo", "player recycle Lum", 0),
+    ],
+)
+def test_batch13_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    if case == "recycle Lum":
+        s = s._replace(recycle_item=s.recycle_item.at[1].set(n.item_names.index("Lum Berry")))
+    elif case == "player recycle Lum":
+        s = s._replace(recycle_item=s.recycle_item.at[0].set(n.item_names.index("Lum Berry")))
+    elif case == "player embargoed":
+        s = s._replace(embargo=s.embargo.at[0].set(3))
+    elif case.startswith("hold "):
+        s = _item(s, 1, n.item_names.index(case[5:]))
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("move", "case", "jumps", "expected"),
+    [
+        # Expert_HighCritical (script.s:2827-2843) by Blaze Kick (:1748), Cross Poison (:1754):
+        # resisted (Fire, Poison against Gible), nothing; neutral (Snorlax) +1 unless a roll
+        # (:2836, :2839) jumps.
+        ("Blaze Kick", "faster", (), 0),
+        ("Cross Poison", "snorlax", (), 1),
+        ("Cross Poison", "snorlax", (2836,), 0),
+        ("Blaze Kick", "snorlax", (2839,), 0),
+        # Expert_WaterSpout (:4610-4632): Water against Gible is neutral.
+        ("Water Spout", "faster", (), 0),
+        ("Water Spout", "faster, player 40", (), -1),
+        ("Water Spout", "slower, player 60", (), -1),
+        ("Water Spout", "slower, player 80", (), 0),
+        # Expert_WakeUpSlap (:4829-4847)
+        ("Wake-Up Slap", "faster", (), 0),
+        ("Wake-Up Slap", "player asleep", (), 1),
+        # Expert_GyroBall (:4869-4871): no score change.
+        ("Gyro Ball", "faster", (), 0),
+        # Expert_Assurance (:5189-5216): faster, nothing; slower, :5204 then :5212.
+        ("Assurance", "faster", (), 0),
+        ("Assurance", "slower", (), 0),
+        ("Assurance", "slower", (5204,), 1),
+        ("Assurance", "slower", (5204, 5212), 0),
+        # Expert_TrumpCard (:5308-5359) by the move's PP left.
+        ("Trump Card", "pp 1", (), 3),
+        ("Trump Card", "pp 2", (), 2),
+        ("Trump Card", "pp 2", (5347,), 1),
+        ("Trump Card", "pp 3", (), 1),
+        ("Trump Card", "pp 3", (5347,), 0),
+        ("Trump Card", "faster", (), 0),
+        ("Trump Card", "player eva +3", (), 1),
+        ("Trump Card", "player eva +5", (), 2),
+        ("Trump Card", "own acc -3", (), 1),
+        # Expert_Punishment (:5900-5951): each entered label adds unless its roll jumps and
+        # falls into the next one.
+        ("Punishment", "faster", (), 0),
+        ("Punishment", "player +3", (), 1),
+        ("Punishment", "player +3", (5947,), 0),
+        ("Punishment", "player +5", (), 2 + 1),
+        ("Punishment", "player +7", (), 4 + 3 + 2 + 1),
+        ("Punishment", "player +7", (5935, 5943), 3 + 1),
+        # Expert_Recycle (:4517-4534)
+        ("Recycle", "faster", (), -2),
+        ("Recycle", "recycle Oran", (), -2),
+        ("Recycle", "recycle Lum", (), 1),
+        ("Recycle", "recycle Lum", (4526,), 0),
+        # Expert_Embargo (:5223-5229, B13-32): +1 unless the 128 roll (:5225) jumps.
+        ("Embargo", "faster", (), 1),
+        ("Embargo", "faster", (5225,), 0),
+    ],
+)
+def test_batch13_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if "slower" in case else _speeds(s, player=1, opp=500)
+    if case == "snorlax":
+        s = _with_player(t, s, n.species_names.index("Snorlax"), 0, known=True)
+    for hp in (40, 60, 80):
+        if f"player {hp}" in case:
+            s = _hp(s, 0, hp)
+    if case == "player asleep":
+        s = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    if case.startswith("pp "):
+        s = s._replace(pp=s.pp.at[1, 0, 0].set(int(case[3:])))
+    elif move == "Trump Card":  # Kaizo's Trump Card has 1 PP: a synthetic 4 left
+        s = s._replace(pp=s.pp.at[1, 0, 0].set(4))
+    if case == "player eva +3":
+        s = _stage(s, 0, Stat.EVA, 3)
+    elif case == "player eva +5":
+        s = _stage(s, 0, Stat.EVA, 5)
+    elif case == "own acc -3":
+        s = _stage(s, 1, Stat.ACC, -3)
+    elif case == "player +3":
+        s = _stage(s, 0, Stat.ATK, 3)
+    elif case == "player +5":
+        s = _stage(_stage(s, 0, Stat.ATK, 3), 0, Stat.SPE, 2)
+    elif case == "player +7":
+        s = _stage(_stage(s, 0, Stat.ATK, 6), 0, Stat.DEF, 1)
+    elif case.startswith("recycle "):
+        item = n.item_names.index(case[8:] + " Berry")
+        s = s._replace(recycle_item=s.recycle_item.at[1].set(item))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """B13-23..27: the batch's effects are transcribed (no "not transcribed" or "expert
+    label"); Natural Gift and Judgment take modelled id cases; Gyro Ball's TrainerAI_CalcDamage
+    case stays refused (monSpeedValues), and Weather Ball's TrainerAI_MoveType case is refused
+    exactly where it assigns no type (trainer_ai.c:3209-3227)."""
+    from nuzline.ai.layout import ALLIN
+
+    t, n = kaizo_tables, kaizo_names
+    for name in (
+        "Twineedle", "Triple Kick", "Rock Wrecker", "Hurricane", "Beat Up", "Recycle",
+        "Water Spout", "Blaze Kick", "Weather Ball", "Cross Poison", "Wake-Up Slap",
+        "Natural Gift", "Assurance", "Trump Card", "Punishment", "Judgment", "Embargo",
+    ):  # fmt: skip
+        kinds = policy.opponent_move_refusals(t, n.move_names.index(name), ALLIN)
+        assert kinds == (["move type"] if name == "Weather Ball" else []), (name, kinds)
+    gyro = n.move_names.index("Gyro Ball")
+    assert policy.opponent_move_refusals(t, gyro, ALLIN) == ["calc damage"]
+    moves = _ids(n, "Weather Ball", "Natural Gift", "Judgment", "")
+    s = _state(t, kaizo_roark_party, BONSLY, moves)
+    r = policy._refused(t, s, KAIZO)
+    assert bool(r.move_type[0, 0]) and not np.asarray(r.move_type)[0, 1:].any()
+    assert not np.asarray(r.calc_damage).any()
+    for weather, refused in (
+        (Weather.RAIN, False),
+        (Weather.SUN, False),
+        (Weather.SANDSTORM, False),
+        (Weather.HAIL, False),
+        (Weather.FOG, True),
+    ):
+        s2 = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        assert bool(policy._refused(t, s2, KAIZO).move_type[0, 0]) == refused, weather
+
+
+@pytest.mark.slow  # 307 s, 5.0 GB peak at 0x11F (fast tier: 60 s, 4 GB)
+@pytest.mark.parametrize("flags", SWEEP_FLAGS)
+def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+    t, n = kaizo_tables, kaizo_names
+    lum = n.item_names.index("Lum Berry")
+    for moves in (
+        ("Recycle", "Water Spout", "Wake-Up Slap", "Assurance"),
+        ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
+        ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
+        ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
+    ):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
+        s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
+        for faster, stage in ((True, 3), (False, 6)):
+            s2 = _stage(s, 0, Stat.ATK, stage)
+            s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
+            s2 = s2._replace(pp=s2.pp.at[1, 0, 0].set(2))
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)

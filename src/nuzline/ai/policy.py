@@ -109,7 +109,7 @@ from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.bag import bag_item_category, refused_bag_items, refused_bag_params
-from nuzline.engine.damage import decomp_abilities
+from nuzline.engine.damage import ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import ItemAiCategory, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
@@ -840,6 +840,40 @@ def _basic_check_non_standard_damage(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
     ctx, t = _split(c.go_to(ctx))  # -> ScoreMinus10
     return _score(ctx, t, -10)
+
+
+def _basic_check_can_recycle(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCanRecycle`` (script.s:911-915): no item to recycle (``LoadRecycleItem``,
+    ``recycleItem[attacker]``) -10, B13-23."""
+    ctx = c.load_recycle_item(_at(ctx, mask), _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, 0))  # ITEM_NONE
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_embargo(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckEmbargo`` (script.s:1184-1197): the defender already under Embargo
+    (``IfMoveEffect MOVE_EFFECT_EMBARGO``) -10; else a recycle item of the defender's battler
+    (``LoadRecycleItem``) in a Frontier battle (``BATTLE_TYPE_FRONTIER``: never in the story)
+    -10, B13-32."""
+    ctx = _at(ctx, mask)
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.EMBARGO))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_recycle_item(ctx, _D)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))  # ITEM_NONE -> _Terminate
+    ctx = c.load_battle_type(ctx)
+    ctx, t = _split(c.if_loaded_mask(ctx, c.BATTLE_TYPE_FRONTIER))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_natural_gift(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckNaturalGift`` (script.s:1053-1059): the attacker's true held item
+    (``LoadHeldItem``) not a berry of ``Basic_NaturalGiftBerries`` (:1061-1126), -10; else
+    immune by its ``TrainerAI_MoveType`` (the berry's type, B13-26), -10, B13-23."""
+    ctx = c.load_held_item(_at(ctx, mask), _A)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.NATURAL_GIFT_BERRIES))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    return c.pop_or_end(_score(ctx, t, -10))
 
 
 def _basic_check_safeguard(ctx: AiContext, mask) -> AiContext:
@@ -1660,6 +1694,139 @@ def _expert_brine(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.go_to(ctx))  # -> _End
     # Expert_Brine_ScoreMinus1 (:4886)
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))
+
+
+def _expert_recycle(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Recycle`` (script.s:4517-4534): a recycle item (``LoadRecycleItem``) other than
+    Chesto, Lum or Starf Berry -2; else +1 unless the 50 roll (:4526) jumps, B13-23."""
+    ctx = c.load_recycle_item(_at(ctx, mask), _A)
+    ctx, minus2 = _split(c.if_loaded_not_in_table(ctx, c.RECYCLE_DESIRABLE_ITEMS))
+    ctx, _ = _split(c.if_random_less_than(ctx, 50, 4526))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Recycle_ScoreMinus2 (:4530)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+
+
+def _expert_embargo(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Embargo`` (script.s:5223-5229): +1 unless the 128 roll (:5225) jumps, B13-32."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 5225))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_water_spout(ctx: AiContext, mask) -> AiContext:
+    """``Expert_WaterSpout`` (script.s:4610-4632): resisted (immune, quarter, half) -1; else
+    slower than the player (the SLOWER compare, no tie read) with the player above 70 % HP, or
+    not slower with it above 50 %, nothing; otherwise -1 (the decomp's BUG note: the
+    defender's HP, not the user's), B13-23."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    for cls in (TypeMulti.QUARTER, TypeMulti.HALF):
+        ctx, t = _split(c.if_move_effectiveness_equals(ctx, cls))
+        minus1 = minus1 | t
+    ctx, slower = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 50))  # -> _End
+    ctx, t = _split(c.go_to(ctx))  # -> _ScoreMinus1
+    minus1 = minus1 | t
+    # Expert_WaterSpout_SlowerCheckHP (:4625), falling into _ScoreMinus1 (:4628)
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, slower), _D, 70))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1 | ctx.live), -1))
+
+
+def _expert_wake_up_slap(ctx: AiContext, mask) -> AiContext:
+    """``Expert_WakeUpSlap`` (script.s:4829-4847): resisted -1; else the player asleep (any
+    sleep count) +1, B13-23."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, plus1 = _split(c.if_status(ctx, _D, c.MonCondition.SLEEP))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:4839)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))  # _ScorePlus1 (:4843)
+
+
+def _expert_gyro_ball(ctx: AiContext, mask) -> AiContext:
+    """``Expert_GyroBall`` (script.s:4869-4871): ``PopOrEnd`` only, B13-23."""
+    return c.pop_or_end(_at(ctx, mask))
+
+
+def _expert_assurance(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Assurance`` (script.s:5189-5216): resisted -1; faster than the player (its tie a
+    read, E1 Ruling R8), nothing; else a Rough Skin attacker, or one whose hold effect is in
+    ``Expert_Assurance_RecoilBerries`` (item ids compared with a hold effect: never, decomp
+    quirk), or the 128 roll (:5204) jumping, goes to ``_TryScorePlus1`` (+1 unless the 128 roll
+    at :5212 jumps); otherwise nothing, B13-23."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_FASTER))  # -> _End
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, plus1 = _split(c.if_loaded_equal_to(ctx, _ABILITY["Rough Skin"]))
+    ctx = c.load_held_item_effect(ctx, _A)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.ASSURANCE_RECOIL_BERRIES))
+    plus1 = plus1 | t
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 5204))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:5207)
+    # Expert_Assurance_TryScorePlus1 (:5211)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1), 128, 5212))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_trump_card(ctx: AiContext, mask) -> AiContext:
+    """``Expert_TrumpCard`` (script.s:5308-5359): resisted -1; the move's ``ppCur`` 1, +3; 2,
+    ``_ScorePlus1Maybe2``; 3, ``_ScorePlus1``; else a Pressure player (a guessing read)
+    gives +1 unless the 30 roll (:5333) jumps, then the player's evasion above 10 (decomp
+    units) or the attacker's accuracy below 2 goes to ``_ScorePlus1Maybe2``, above 8 / below 4
+    to ``_ScorePlus1``. ``_ScorePlus1Maybe2`` is +1 falling into ``_ScorePlus1``: +1 unless the
+    100 roll (:5347) jumps, B13-23."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx = c.load_current_move_pp(ctx)
+    ctx, plus3 = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx, maybe2 = _split(c.if_loaded_equal_to(ctx, 2))
+    ctx, plus1 = _split(c.if_loaded_equal_to(ctx, 3))
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, stats = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Pressure"]))
+    ctx, t = _split(c.if_random_less_than(ctx, 30, 5333))
+    stats = stats | t
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_TrumpCard_CheckStats (:5336)
+    ctx = _at(ctx, stats | ctx.live)
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 10))
+    maybe2 = maybe2 | t
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, Stat.ACC, 2))
+    maybe2 = maybe2 | t
+    ctx, t = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    plus1 = plus1 | t
+    ctx, t = _split(c.if_stat_stage_less_than(ctx, _A, Stat.ACC, 4))
+    plus1 = plus1 | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_TrumpCard_ScorePlus1Maybe2 (:5343), falling into _ScorePlus1 (:5346)
+    ctx = c.add_to_move_score(_at(ctx, maybe2), 1)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus1 | ctx.live), 100, 5347))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, plus3), 3))  # _ScorePlus3 (:5351)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:5355)
+
+
+def _expert_punishment(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Punishment`` (script.s:5900-5951): resisted, nothing; else the player's
+    ``SumPositiveStatStages`` above 6 enters ``_TryScorePlus4``, above 5 ``_TryScorePlus3``,
+    above 4 ``_TryScorePlus2``, above 2 ``_TryScorePlus1``. Each of those labels adds its
+    value unless its 128 roll (:5935, :5939, :5943, :5947) jumps, and falls into the next
+    one (no GoTo: the decomp's comment's distribution is not what the script does), B13-23."""
+    ctx, _ = _not_resisted(_at(ctx, mask))  # -> _End
+    ctx = c.sum_positive_stat_stages(ctx, _D)
+    entry = {}
+    for above, value in ((6, 4), (5, 3), (4, 2), (3, 1), (2, 1)):
+        ctx, t = _split(c.if_loaded_greater_than(ctx, above))
+        entry[value] = entry[value] | t if value in entry else t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    live = jnp.zeros_like(ctx.live)
+    for value, line in ((4, 5935), (3, 5939), (2, 5943), (1, 5947)):
+        # Expert_Punishment_TryScorePlus<value>: entered here, fallen into or jumped to
+        ctx = _at(ctx, live | entry[value])
+        ctx, jumped = _split(c.if_random_less_than(ctx, 128, line))
+        ctx = c.add_to_move_score(ctx, value)
+        live = ctx.live | jumped
+    return c.pop_or_end(_at(ctx, live))
 
 
 def _expert_destiny_bond(ctx: AiContext, mask) -> AiContext:
@@ -3200,6 +3367,7 @@ _BASIC_LABELS = (
     (BattleEffect.BOOST_ALLY_POWER_BY_50_PERCENT, _basic_check_helping_hand),  # :234
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _basic_check_already_ingrained),  # :236
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _basic_check_non_standard_damage),  # :237
+    (BattleEffect.RECYCLE, _basic_check_can_recycle),  # :238 (B13-23)
     (BattleEffect.REMOVE_HELD_ITEM, _basic_check_remove_item),  # :240
     (BattleEffect.SET_HP_EQUAL_TO_USER, _basic_check_non_standard_damage),  # :241
     (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _basic_check_imprison),  # :242
@@ -3211,14 +3379,19 @@ _BASIC_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
+    (BattleEffect.POWER_BASED_ON_LOW_SPEED, _basic_check_non_standard_damage),  # :256
+    (BattleEffect.NATURAL_GIFT, _basic_check_natural_gift),  # :258 (B13-23)
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
+    (BattleEffect.PREVENT_ITEM_USE, _basic_check_embargo),  # :262 (B13-32)
     (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
+    (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
     (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
+    (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _basic_check_non_standard_damage),  # :274
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
@@ -3302,18 +3475,24 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _expert_ingrain),  # :1734
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
+    (BattleEffect.RECYCLE, _expert_recycle),  # :1737 (B13-23)
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
     (BattleEffect.SET_HP_EQUAL_TO_USER, _expert_endeavor),  # :1741
+    (BattleEffect.DECREASE_POWER_WITH_LESS_USER_HP, _expert_water_spout),  # :1742
     (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _expert_imprison),  # :1744
     (BattleEffect.HEAL_STATUS, _expert_refresh),  # :1745 (B12-18)
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747
+    (BattleEffect.HIGH_CRITICAL_BURN_HIT, _expert_high_critical),  # :1748 (B13-23)
     (BattleEffect.ATK_DEF_DOWN, _expert_status_defense_down),  # :1751 (B12-11)
     (BattleEffect.DEF_SPD_UP, _expert_status_spd_up),  # :1752 (B12-11)
     (BattleEffect.ATK_DEF_UP, _expert_status_def_up),  # :1753
+    (BattleEffect.HIGH_CRITICAL_POISON_HIT, _expert_high_critical),  # :1754 (B13-23)
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
+    (BattleEffect.DOUBLE_POWER_HEAL_SLEEP, _expert_wake_up_slap),  # :1761 (B13-23)
+    (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
@@ -3321,11 +3500,15 @@ _EXPERT_LABELS = (
     (BattleEffect.METAL_BURST, _expert_metal_burst),  # :1770
     (BattleEffect.SWITCH_HIT, _expert_u_turn),  # :1771
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
+    (BattleEffect.DOUBLE_POWER_IF_TARGET_HIT, _expert_assurance),  # :1774 (B13-23)
+    (BattleEffect.PREVENT_ITEM_USE, _expert_embargo),  # :1775 (B13-32)
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
+    (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
+    (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _expert_punishment),  # :1788
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
@@ -3624,7 +3807,9 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
+    # Weather Ball's TrainerAI_MoveType case assigns nothing outside its weathers (B13-26).
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
+    move_type = move_type & ~ai_weather_ball_typed(tables, state)
     policy = tables.ai_policy != AI_POLICIES.index(layout.name)
     if layout.runtime_flags:
         # The fight's flags must be set and transcribed (kaizo_layout refuses another set);
@@ -3722,7 +3907,7 @@ def opponent_move_refusals(
         out.append("expert label")
     if move in c.CALC_DAMAGE_MOVES:
         out.append("calc damage")
-    if move in c.MOVE_TYPE_MOVES:
+    if move in c.MOVE_TYPE_MOVES:  # in the states where its case assigns no type (B13-26)
         out.append("move type")
     return out
 
@@ -3819,8 +4004,9 @@ def _scoring_refusals(
     for s, k in zip(*np.nonzero(np.asarray(r.move_type)), strict=True):
         out.append(
             f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
-            "takes a TrainerAI_MoveType move-id case (trainer_ai.c:3132-3222) that is not "
-            "transcribed"
+            "takes TrainerAI_MoveType's Weather Ball case (trainer_ai.c:3209-3227), which "
+            "assigns no type outside rain, sand, sun and hail or under Cloud Nine / Air Lock: "
+            "the ROM returns an unwritten register (B13-26)"
         )
     for s in np.flatnonzero(np.asarray(r.sites)):
         out.append(

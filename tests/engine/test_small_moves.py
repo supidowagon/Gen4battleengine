@@ -28,7 +28,7 @@ from nuzline.engine.damage import damage_table
 from nuzline.engine.effects import apply_move_effect
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.ids import EffectId, Stat
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step, step_events
 from nuzline.prep.pool import Candidate, check_pool
 from tests.engine.helpers import (
@@ -40,8 +40,8 @@ from tests.engine.helpers import (
     sample_party,
 )
 
-PROC = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
-MISS = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+PROC = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
+MISS = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
 _step = jax.jit(step)
 _events = jax.jit(step_events)
 
@@ -230,14 +230,16 @@ def test_doubleslap_two_hits_one_accuracy(tables, names):
     s = roark_state(tables, names, player_moves=["Double Kick"])
     acts = A("Double Kick", "Leer", s, names)
     one = int(damage_table(tables, s, 0, kick, False)[15])
-    for n in (2, 5):  # the drawn 2-5 count is not read
+    for n in (2, MAX_HITS):  # the drawn 2-5 count is not read
         o = empty_outcome()._replace(n_hits=jnp.array([n, 2], jnp.int8))
         out = assert_matches_reference(tables, s, acts, o)
         assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == 2 * one
         _, events = _events(tables, s, acts, o)
         assert int(events["hits"][0]) == 2
     # One accuracy check: only hit[0] is read.
-    first_only = empty_outcome()._replace(hit=jnp.array([[1, 0, 0, 0, 0], [1] * 5], jnp.int8))
+    first_only = empty_outcome()._replace(
+        hit=jnp.array([[1] + [0] * (MAX_HITS - 1), [1] * MAX_HITS], jnp.int8)
+    )
     out = assert_matches_reference(tables, s, acts, first_only)
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == 2 * one
     out = assert_matches_reference(tables, s, acts, MISS)

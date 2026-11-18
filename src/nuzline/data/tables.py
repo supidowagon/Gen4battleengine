@@ -23,7 +23,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 31
+MANIFEST_VERSION = 32  # 32: E1 item_party_param + E2 batch 13 fling / Natural Gift columns
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -115,6 +115,12 @@ class Tables(NamedTuple):
     item_party_param: jnp.ndarray
     item_hold_effect: jnp.ndarray  # int16[I], the decomp hold effect id (0 = none)
     item_hold_param: jnp.ndarray  # int16[I], the decomp hold param (ItemData.effectParam)
+    # ItemData.flingPower, .flingEffect (FLING_EFFECT_*), .naturalGiftPower and .naturalGiftType
+    # (0x1F = none) as stored, whether or not the engine supports the item (E2 batch 13).
+    item_fling_power: jnp.ndarray  # int16[I]
+    item_fling_effect: jnp.ndarray  # int8[I]
+    item_gift_power: jnp.ndarray  # int16[I]
+    item_gift_type: jnp.ndarray  # int8[I]
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)
     # int32[]: the fight's trainer AI flags (TrainerHeader.aiMask, trainer_ai.c:249), which the
     # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:

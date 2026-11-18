@@ -13,11 +13,11 @@ import pytest
 
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.order import effective_speed
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import A, roark_state
 
-NO_PROC = jnp.zeros((2, 5), jnp.int8)
+NO_PROC = jnp.zeros((2, MAX_HITS), jnp.int8)
 
 
 @pytest.mark.slow
@@ -29,7 +29,7 @@ def test_paralysis_quarters_speed_and_full_para_skips(tables, names):
         tables,
         s,
         A("Spark", "Leer", s, names),
-        empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8)),
+        empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8)),
     )
     assert int(hit.status[1, 0]) == Status.PARALYSIS
     # Shinx outspeeds the paralyzed Cranidos (Speed / 4), so it moves first.
@@ -178,7 +178,7 @@ def test_poison_point_procs_on_contact(tables, names):
         opp_moves=["Headbutt"],
     )
     o = empty_outcome()._replace(
-        contact_proc=jnp.array([[1, 0, 0, 0, 0], [0, 0, 0, 0, 0]], jnp.int8)
+        contact_proc=jnp.array([[1] + [0] * (MAX_HITS - 1), [0] * MAX_HITS], jnp.int8)
     )
     out = step(tables, s, A("Absorb", "Headbutt", s, names), o)
     assert int(out.status[1, 0]) == Status.POISON
@@ -194,7 +194,9 @@ def test_static_paralyzes_contact_attackers_only(tables, names):
     s = roark_state(
         tables, names, player_species="Pikachu", player_moves=["Growl"], player_ability="Static"
     )
-    proc = empty_outcome()._replace(contact_proc=jnp.array([[1] * 5, [0] * 5], jnp.int8))
+    proc = empty_outcome()._replace(
+        contact_proc=jnp.array([[1] * MAX_HITS, [0] * MAX_HITS], jnp.int8)
+    )
     tackle = step(tables, s, A("Growl", "Tackle", s, names), proc)
     assert int(tackle.status[1, 0]) == Status.PARALYSIS
     rock_throw = step(tables, s, A("Growl", "Rock Throw", s, names), proc)
@@ -203,7 +205,7 @@ def test_static_paralyzes_contact_attackers_only(tables, names):
     assert int(step(tables, burned, A("Growl", "Tackle", s, names), proc).status[1, 0]) == (
         Status.BURN
     )
-    missed = proc._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    missed = proc._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     assert int(step(tables, s, A("Growl", "Tackle", s, names), missed).status[1, 0]) == (
         Status.NONE
     )

@@ -599,7 +599,10 @@ def main(out_path):
                         k = ("AI", f"move effect #{e} {name} not transcribed ({labels})")
                     elif kind in ("calc damage", "move type"):
                         helper = "CalcDamage" if kind == "calc damage" else "MoveType"
-                        k = ("AI", f"move-id case of TrainerAI_{helper}")
+                        # Weather Ball's MoveType case: refused where it assigns no type
+                        # (outside rain, sand, sun and hail; B13-26).
+                        where = " where it assigns no type" if kind == "move type" else ""
+                        k = ("AI", f"move-id case of TrainerAI_{helper}{where}")
                     else:
                         k = ("AI", f"move effect #{e} {name}: {kind}")
                     out.add(k)

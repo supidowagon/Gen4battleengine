@@ -52,7 +52,9 @@ from nuzline.engine.ids import (
     COUNTER_ANY,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
+    FLAIL_FALLOFF,
     MINIMIZE_PARAM,
+    POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
@@ -474,6 +476,50 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     146: ("BATTLE_EFFECT_FLINCH_DOUBLE_DAMAGE_FLY_OR_BOUNCE", _E.FLINCH, (0, 0, 0)),
     # Sky Uppercut: effect_script_0207.s, SYSCTL_HIT_DURING_FLY then CalcCrit, CalcDamage.
     207: ("BATTLE_EFFECT_HIT_FLY", _E.PLAIN, (0, 0, 0)),
+    # E2 batch 13. Twineedle (effect_script_0077.s): effect 2's indirect TO_DEFENDER poison (:5)
+    # plus SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (:6): two hits, each its own effect-chance roll
+    # (the script reloads per hit, bcp.c:3789; MULTI_HIT_TRIGGER_SECONDARY :3544-3554);
+    # MoveFlag.HIT_TWICE (SCRIPT_FLAG_EFFECTS), B13-1.
+    77: ("BATTLE_EFFECT_POISON_MULTI_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
+    # Blaze Kick (_0200.s), Poison Tail / Cross Poison (_0209.s): BTLVAR_CRITICAL_BOOSTS + 1
+    # (:5, MoveFlag.CRIT_UP) then effect 4's burn / effect 2's poison (:6), B13-2.
+    200: ("BATTLE_EFFECT_HIGH_CRITICAL_BURN_HIT", _E.SECONDARY_STATUS, (Status.BURN, 0, 0)),
+    209: ("BATTLE_EFFECT_HIGH_CRITICAL_POISON_HIT", _E.SECONDARY_STATUS, (Status.POISON, 0, 0)),
+    # E2 batch 13, the multi-hit power family. Triple Kick (effect_script_0104.s): SetMultiHit 3,
+    # SYSCTL_TRIPLE_KICK (:5), then per hit BTLVAR_MOVE_POWER += 10 (:7), CalcCrit, CalcDamage:
+    # hit k at power 10k, each later hit with its own accuracy roll (B13-5..B13-8).
+    104: ("BATTLE_EFFECT_HIT_THREE_TIMES", _E.TRIPLE_KICK, (10, 0, 0)),
+    # Beat Up (effect_script_0154.s): SYSCTL_IGNORE_IMMUNITIES (:5), CalcCrit, BtlCmd_BeatUp
+    # (battle_script.c:6173-6247): a hit per eligible party member (B13-9..B13-11).
+    154: ("BATTLE_EFFECT_BEAT_UP", _E.BEAT_UP, (0, 0, 0)),
+    # E2 batch 13, single-hit variable power and type (B13-12..). Water Spout / Eruption:
+    # effect_script_0190.s, CalcHPFalloffPower (FLAIL kind FLAIL_FALLOFF), B13-13.
+    190: ("BATTLE_EFFECT_DECREASE_POWER_WITH_LESS_USER_HP", _E.FLAIL, (FLAIL_FALLOFF, 0, 0)),
+    # Weather Ball: effect_script_0203.s, CalcWeatherBallParams (B13-12).
+    203: ("BATTLE_EFFECT_CHANGE_TYPE_WITH_WEATHER", _E.WEATHER_BALL, (0, 0, 0)),
+    # Wake-Up Slap: effect_script_0217.s, SmellingSalt's script on MON_CONDITION_SLEEP with
+    # subscript_heal_target_sleep.s (B13-16).
+    217: (
+        "BATTLE_EFFECT_DOUBLE_POWER_HEAL_SLEEP",
+        _E.DOUBLE_POWER,
+        (POWER_IF_TARGET_ASLEEP, 1, 0),
+    ),
+    # Gyro Ball: effect_script_0219.s, CalcGyroBallPower (B13-14).
+    219: ("BATTLE_EFFECT_POWER_BASED_ON_LOW_SPEED", _E.GYRO_BALL, (0, 0, 0)),
+    # Assurance: effect_script_0231.s, x2 on BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK (B13-17).
+    231: ("BATTLE_EFFECT_DOUBLE_POWER_IF_TARGET_HIT", _E.ASSURANCE, (0, 0, 0)),
+    # Trump Card: effect_script_0235.s, CalcTrumpCardPower (B13-15).
+    235: ("BATTLE_EFFECT_HIGHER_POWER_WHEN_LOW_PP", _E.TRUMP_CARD, (0, 0, 0)),
+    # Punishment: effect_script_0245.s, CalcPunishmentPower (B13-15).
+    245: ("BATTLE_EFFECT_INCREASE_POWER_WITH_MORE_STAT_UP", _E.PUNISHMENT, (0, 0, 0)),
+    # Recycle: effect_script_0184.s, the battler's recycleItem back (B13-19).
+    184: ("BATTLE_EFFECT_RECYCLE", _E.RECYCLE, (0, 0, 0)),
+    # Natural Gift: effect_script_0222.s, the held berry's power and type, eaten (B13-20).
+    222: ("BATTLE_EFFECT_NATURAL_GIFT", _E.NATURAL_GIFT, (0, 0, 0)),
+    # Embargo: effect_script_0232.s, subscript_embargo_start.s: embargoTurns 5 (B13-31).
+    232: ("BATTLE_EFFECT_PREVENT_ITEM_USE", _E.EMBARGO, (0, 0, 0)),
+    # Judgment: effect_script_0268.s, the held plate's type (B13-12).
+    268: ("BATTLE_EFFECT_JUDGEMENT", _E.JUDGMENT, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -485,10 +531,26 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
 #   Impact, Draco Meteor).
 # * 182: byte-identical to the vanilla effect 48 script: Reckless and 1/4 recoil (Take Down, Close
 #   Combat, Brave Bird).
+# * 141 (E2 batch 13, B13-3): the unused plain script becomes effect 76's indirect TO_DEFENDER
+#   confusion (effect_script_0076.s:5) plus SYSCTL_HIT_DURING_FLY: Hurricane. Its flags are
+#   KAIZO_FLAG_EFFECTS'.
+# * 104, 88 (E2 batch 13, B13-5): Triple Kick's three hits at k x the move's power.
 KAIZO_EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     48: ("Kaizo effect 48: Reckless, 1/2 recoil", _E.RECOIL, (2, 0, 0)),
     182: ("Kaizo effect 182: Reckless, 1/4 recoil", _E.RECOIL, (4, 0, 0)),
+    141: ("Kaizo effect 141: confusion hit that hits a Fly user", _E.SECONDARY_CONFUSE, (0, 0, 0)),
+    # E2 batch 13 (B13-5): 104 is Triple Kick with GetCurrentMoveData MOVEATTRIBUTE_POWER added
+    # per hit in place of 10 (hit k at k x the move's power: Triple Kick, Rock Wrecker); 88, the
+    # Psywave script in vanilla, is byte-identical to Kaizo's 104 (Triple Axel, Fury Cutter).
+    # Step 0 = the move's own power (ids.EffectId.TRIPLE_KICK). Neither sets a MoveFlag bit.
+    104: ("Kaizo effect 104: three hits at 1x, 2x, 3x power", _E.TRIPLE_KICK, (0, 0, 0)),
+    88: ("Kaizo effect 88: three hits at 1x, 2x, 3x power", _E.TRIPLE_KICK, (0, 0, 0)),
 }
+# The MoveFlag bits of a modelled Kaizo script (tools/build_tables.py ``_move_flags``), used for
+# that game in place of the vanilla effect-keyed bits of the same id. 141 (B13-3):
+# SYSCTL_HIT_DURING_FLY (MoveFlag.HIT_AIR, as Thunder's effect_script_0152.s:6). Its
+# MoveFlag.THUNDER (B13-4) comes from the overlay16 compares, ``KAIZO_THUNDER_EFFECTS`` (E1 G-50).
+KAIZO_FLAG_EFFECTS: dict[int, int] = {141: MoveFlag.HIT_AIR}
 
 DECOMP_EFFECT_NAMES: dict[int, str] = {k: v[0] for k, v in _EFFECTS.items()}
 DECOMP_EFFECT_TO_ID: dict[int, tuple[EffectId, tuple[int, int, int]]] = {
@@ -569,6 +631,14 @@ SEMI_HIT_EFFECTS: dict[int, int] = {
     148: _ALL_HIT,
     168: _ALL_HIT,
     176: _ALL_HIT,
+}
+# E2 batch 13: bits of a script that adds a command to another family's effect, by decomp effect
+# id. Twineedle's SetMultiHit 2 (effect_script_0077.s:6): HIT_TWICE (B13-1); Blaze Kick's and
+# Poison Tail's BTLVAR_CRITICAL_BOOSTS + 1 (_0200.s:5, _0209.s:5): CRIT_UP (B13-2).
+SCRIPT_FLAG_EFFECTS: dict[int, int] = {
+    77: MoveFlag.HIT_TWICE,
+    200: MoveFlag.CRIT_UP,
+    209: MoveFlag.CRIT_UP,
 }
 # sCannotMetronomeMoves up to FORBIDDEN_BY_METRONOME_DELIM (battle_lib.c:7152-7178):
 # Metronome, Struggle, Sketch, Mimic, Chatter, Sleep Talk, Assist, Mirror Move, Counter, Mirror
@@ -673,6 +743,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Vital Spirit": AbilityId.VITAL_SPIRIT,
     "Speed Boost": AbilityId.SPEED_BOOST,
     "Iron Fist": AbilityId.IRON_FIST,
+    "Klutz": AbilityId.KLUTZ,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

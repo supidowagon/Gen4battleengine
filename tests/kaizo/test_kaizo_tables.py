@@ -7,7 +7,8 @@ import pytest
 
 from nuzline.data.games import GAMES, KAIZO
 from nuzline.engine.ids import EffectId, ItemId
-from tools.build_tables import BuildError, resolve_conditions
+from tools.build_tables import BuildError, _move_effect, resolve_conditions
+from tools.effect_map import KAIZO_EFFECTS
 from tools.rom.inputs import KAIZO_PATCH_SHA256, VANILLA_SHA1
 
 PROVENANCE = (
@@ -64,10 +65,21 @@ def test_kaizo_manifest_provenance(kaizo_manifest):
 
 
 def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
+    """Ruling 13: a changed be_seq member not marked modelled makes its moves UNSUPPORTED; a
+    modelled one maps them to its KAIZO_EFFECTS entry. Since E2 batch 13 (B13-5: members 88 and
+    104) every changed member is modelled, so the first path is checked on Triple Axel's (149)
+    member 88 as if it were not."""
     moves = moves_with_effects(kaizo_manifest["changed_effects"])
-    assert moves  # Triple Axel (149) runs the patched multi-hit member 88
     for m in moves:
         assert int(kaizo_tables.move_effect[m]) == EffectId.UNSUPPORTED
+    rows = json.loads((GAMES[KAIZO].intermediate_dir / "moves.json").read_text("utf-8"))
+    axel = rows[MOVE_TRIPLE_AXEL_SLOT]
+    assert axel["effect"] == 88
+    assert _move_effect(axel, frozenset({88}), kaizo=True)[0] == EffectId.UNSUPPORTED
+    for e, (_, eid, params) in KAIZO_EFFECTS.items():
+        for m in moves_with_effects([e]):
+            assert int(kaizo_tables.move_effect[m]) == eid, (e, m)
+            assert [int(x) for x in kaizo_tables.move_param[m]] == list(params), (e, m)
 
 
 def test_repurposed_items_unsupported(kaizo_tables, kaizo_names):

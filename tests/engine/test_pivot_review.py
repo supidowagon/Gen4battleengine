@@ -13,7 +13,7 @@ import pytest
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import enumerate_turn
 from nuzline.engine.ids import Stat, Status
-from nuzline.engine.outcome import empty_outcome, live_hit_threshold
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
@@ -76,7 +76,7 @@ def test_destiny_bond_and_rough_skin_stop_the_switch(tables, names):
         [_mon(n, "Carvanha", ["Tackle"], 30)],
     ).replace_hp(0, 0, 1)
     out = assert_matches_reference(
-        tables, s, (0, 0), O._replace(flinch_item=jnp.ones((2, 5), jnp.int8))
+        tables, s, (0, 0), O._replace(flinch_item=jnp.ones((2, MAX_HITS), jnp.int8))
     )
     assert int(out.pivot_battler) == 0
 

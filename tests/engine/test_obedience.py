@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_for_roll
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BattleState
 from nuzline.engine.step import step
 from tests.engine.helpers import synthetic_state
@@ -29,7 +29,7 @@ def test_player_mon_always_obeys(tables):
     # Give the opponent the move too: with no PP it would use Struggle, whose recoil
     # would also lower its own HP.
     s = s._replace(moves=s.moves.at[1, 0, 0].set(move), pp=s.pp.at[1, 0, 0].set(30))
-    o = empty_outcome()._replace(roll=jnp.zeros((2, 5), jnp.int8))
+    o = empty_outcome()._replace(roll=jnp.zeros((2, MAX_HITS), jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), o)
     expected = int(damage_for_roll(tables, s, 0, move, crit=False, roll=0))
     assert expected > 0

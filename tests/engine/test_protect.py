@@ -63,7 +63,7 @@ from nuzline.engine.ids import (
     Status,
 )
 from nuzline.engine.observe import observe
-from nuzline.engine.outcome import PROTECT_RATES, Outcome, empty_outcome, sample_outcome
+from nuzline.engine.outcome import MAX_HITS, PROTECT_RATES, Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace, step, step_events
 from nuzline.search.plan_tree import _FLAG_TEXT
@@ -350,7 +350,7 @@ def test_flagged_moves_are_blocked(tables, names, move):
     s = s.replace_hp(1, 0, max(int(s.max_hp[1, 0]) // 2, 1))  # Absorb could heal
     assert int(tables.move_flags[names.move(move)]) & MoveFlag.PROTECT
     acts = A("Protect", move, s, names)
-    o = _o(secondary=np.ones((2, 5)), crit=np.ones((2, 5)), n_hits=[5, 5])
+    o = _o(secondary=np.ones((2, MAX_HITS)), crit=np.ones((2, MAX_HITS)), n_hits=[5, 5])
     out = assert_matches_reference(tables, s, acts, o)
     for name in ("hp", "status", "stages", "flinched"):
         assert np.array_equal(np.asarray(getattr(out, name)), np.asarray(getattr(s, name))), name
@@ -374,7 +374,7 @@ def test_a_miss_into_protect_shows_protected(tables, names):
     # PROTECTED is tested before MISSED in subscript_missed.s (:18 vs :157).
     s = _state(tables, names)
     acts = A("Protect", "Tackle", s, names)
-    ev = _events(tables, s, acts, _o(hit=np.zeros((2, 5))))
+    ev = _events(tables, s, acts, _o(hit=np.zeros((2, MAX_HITS))))
     assert ev["protected"][1] == 1 and ev["missed"][1] == 0
 
 
@@ -388,7 +388,7 @@ def test_selfdestruct_user_faints_into_protect(tables, names):
 
 def test_contact_ability_does_not_trigger(tables, names):
     s = _ability(_state(tables, names), 0, AbilityId.STATIC)
-    o = _o(contact_proc=np.ones((2, 5)))
+    o = _o(contact_proc=np.ones((2, MAX_HITS)))
     out = assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), o)
     assert int(out.status[1, 0]) == Status.NONE
 
@@ -447,14 +447,14 @@ def test_fake_out_against_protect_kaizo(kaizo_tables, kaizo_names):
     assert ev["protected"][1] == 0 and ev["protect_ok"][0] == 1
     # Fake Out first: Wormadam flinches, never shows Protect, and its chain resets.
     slow = s._replace(stats=s.stats.at[1, 0, _SPE].set(spe + 1))
-    out = assert_matches_reference(t, slow, acts, _o((1, 1), secondary=np.ones((2, 5))))
+    out = assert_matches_reference(t, slow, acts, _o((1, 1), secondary=np.ones((2, MAX_HITS))))
     assert _hp(out, 0) < _hp(s, 0) and int(out.protect_count[0]) == 0
-    ev = _events(t, slow, acts, _o((1, 1), secondary=np.ones((2, 5))))
+    ev = _events(t, slow, acts, _o((1, 1), secondary=np.ones((2, MAX_HITS))))
     assert ev["flinched"][0] == 1 and ev["protect_ok"][0] == 0 and ev["protect_failed"][0] == 0
     # The tie: either order (speed_tie).
     tie = s._replace(stats=s.stats.at[1, 0, _SPE].set(spe))
     for tie_roll, protected in ((0, 1), (1, 0)):
-        ev = _events(t, tie, acts, _o((1, 1), speed_tie=tie_roll, secondary=np.ones((2, 5))))
+        ev = _events(t, tie, acts, _o((1, 1), speed_tie=tie_roll, secondary=np.ones((2, MAX_HITS))))
         assert ev["protected"][1] == protected
 
 
@@ -462,7 +462,7 @@ def test_vanilla_protect_outspeeds_fake_out(tables, names):
     # Vanilla: Protect +3, Fake Out +1. A slower Protect user still goes first.
     s = _state(tables, names, opp="Fake Out", order="opp")
     acts = A("Protect", "Fake Out", s, names)
-    out = assert_matches_reference(tables, s, acts, _o(secondary=np.ones((2, 5))))
+    out = assert_matches_reference(tables, s, acts, _o(secondary=np.ones((2, MAX_HITS))))
     assert _hp(out, 0) == _hp(s, 0) and int(out.protect_count[0]) == 1
 
 
@@ -508,7 +508,7 @@ def test_reference_agreement_over_draws(tables, names):
         s = _state(tables, names, opp=opp, order=order, count=count, opp_count=count)
         acts = A(mine, opp, s, names)
         for p0, p1, hit, tie in itertools.product((0, 1), (0, 1), (0, 1), (0, 1)):
-            o = _o((p0, p1), hit=np.full((2, 5), hit), speed_tie=tie)
+            o = _o((p0, p1), hit=np.full((2, MAX_HITS), hit), speed_tie=tie)
             assert_matches_reference(tables, s, acts, o)
 
 
