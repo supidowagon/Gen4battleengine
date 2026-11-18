@@ -4,6 +4,12 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
 
+- **PAUSED 2026-11-17 ~23:00 (user order via manager; restart on "go").** Batch 13 (b13wt, e2-batch13 tip 327d0c6: families A, C, D-part, E trainer AI, merge 932af5a) has the merge of main aaf2ef7 STAGED, conflicts resolved, not committed: on restart check it, rebuild both tables, scan VOLATILE_FIELDS/LAYOUT/RefSide for doubles, run guards + differential, commit, then families B and D (Fling, Embargo), one review, send tip + doubles plan.
+- Builder was starting agent D (held-item moves Fling/Embargo) when stopped; family B (multi-hit power) agent stopped mid-work, its edits unstaged in b13wt. Owed from batch 13: Gyro Ball AI damage case (B13-27), switching Natural Gift/Judgment/Weather Ball (B13-28); report whether sub_seq #238 is covered.
+- E1 now owns (manager 17 Nov): AI #16 #57 #114 #173 #215 #267 #109 #116 #252 #82, Plus/Minus; mechanics #57 #215 #267 #116 #252 #82 (+sub_seq #238 if not covered): drop from batch 14.
+- raw_rolls: seed 2 ok (11 min); seed 5 not run: `drive_rawrolls.ps1 5` after the builder's tests (driver hang fix untested).
+- At the next clear point: remove merged worktrees (testwt), delete stale _scratch/e2 outputs (report GB), rewrite ledger + archive as orders without personal paths/session ids; new files only under <project>/_scratch/e2.
+
 - **Cleared 2026-11-17 evening; pause LIFTED.** Running (their notifications wake this session;
   SendMessage by id to steer): batch 13 builder agent a588f3a6a881df34a (Opus; worktree
   _scratch/e2/b13wt, branch e2-batch13; its own RESUME there) building, merging main 932af5a,
