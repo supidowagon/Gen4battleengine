@@ -19,3 +19,10 @@ Environment variables:
 - `NUZLINE_REPO_URL`: git URL the pod clones (used by `pod/pod_setup_and_run.sh`).
 
 See docs/process.md for how these are used.
+
+Daytime test pod (`day/`): a rented CPU pod that runs merge test runs while the PC keeps working; at most $10 per day, and only source code at a commit plus built tables leave the PC.
+
+- `day/DAYBOX.md`: the recipe, rules and caps.
+- `day/daybox.sh`: PC side, packs a commit and built tables and prints the pod commands.
+- `day/push_bin.sh`: PC side, morning bring-up, sends the pod scripts.
+- `day/pod/bootstrap.sh`, `start_run.sh`, `inner_run.sh`, `status.sh`, `freemem.sh`, `fetch.sh`: pod side, installs tools, starts a run behind a memory guard, reports state, returns logs.

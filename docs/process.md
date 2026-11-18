@@ -79,8 +79,13 @@ The local PC has 32 GB of RAM, so only one heavy test runs at a time; a local ni
   a detached worktree, upload, split the fast tier into parts dealt round-robin, run, fetch
   logs, delete the pod within 4.5 hours, then run the skipped tests locally and report.
 - **Daytime pod (`ci-day`):** at most $10 per day, for the streams' targeted merge runs so
-  they stop queueing on the PC. Its recipe is `DAYBOX.md` next to the day scripts. A
-  scheduled prompt deletes it each night and logs the cost.
+  they stop queueing on the PC. Its recipe is `tools/ops/day/DAYBOX.md`. The streams have
+  no tool to run commands on the pod, so a stream sends the managing session one line
+  (commit, the pytest paths or expression, the memory guard) and the managing session
+  dispatches a Sonnet runner that uploads that commit and its built tables, runs the tests,
+  fetches the logs and reports counts, time and peak memory. Only committed code runs
+  there. A CPU pod keeps no disk when stopped, so a scheduled prompt deletes it each night
+  and logs the cost, and it is re-created (about 3 minutes) when first needed the next day.
 - Only the managing session creates and deletes pods, with generic names, and verifies with
   a pod listing after every delete. Each spending limit is the user's explicit approval;
   anything larger or longer needs a new one.
@@ -123,6 +128,10 @@ The weekly usage limit, not test time, caps how much work lands in a week.
 - Sonnet for every mechanical subagent job; Opus for decomp work, reviews and merges.
 - The managing session wakes only for a user message, a watch-loop exit, a stream's merge
   tip or blocker, or a scheduled prompt; it never reads logs or agent transcripts whole.
+- Sessions load only the connectors they use: mail, drive and browser connectors are off
+  for this project (each costs context on every turn). Subagents run at default effort.
+- Usage limits are the user's side; the managing session optimises cost per unit of work
+  and does not throttle the streams over the weekly pace.
 - Trial (17 Nov): on one E1 batch Sonnet builds and Opus reviews. It becomes the rule if it
   costs at most one extra fix round and lets no wrong rule reach the merge gate.
 
