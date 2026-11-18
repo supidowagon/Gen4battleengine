@@ -585,7 +585,7 @@ def test_if_move_effect_known_defender_seen_moves(tables, names):
     effect = int(tables.move_ai_effect[moves[slot]])
     assert not _jump(c.if_move_effect_known(_ctx(tables, s), _D, effect))
     assert _jump(c.if_move_effect_not_known(_ctx(tables, s), _D, effect))
-    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, slot].set(1))
+    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(moves[slot]))
     assert _jump(c.if_move_effect_known(_ctx(tables, seen), _D, effect))
     assert not _jump(c.if_move_effect_not_known(_ctx(tables, seen), _D, effect))
     # The pending last move counts as seen (TrainerAI_RecordLastMove first, :295).

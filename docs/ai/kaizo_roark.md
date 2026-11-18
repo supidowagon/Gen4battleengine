@@ -872,6 +872,16 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   or ends. The AI's own move list under Gravity follows `actions.usable_moves` (the banned moves
   are invalid, `trainer_ai.c:234`).
 
+### 5.26 E1 trial batch: Mimic (G-68), Transform (G-69), Chatter (G-70)
+
+- COPY_MOVE_FOR_BATTLE (82, Mimic, G-68): no Basic or Expert entry and no other `script.s` mention;
+  the generic paths score a status move of power 0. The AI's own copied move is scored by the
+  copied move's effect label (`layout.fight_effects`): a fight with a Mimic or Transform user
+  holds the effects of the foe's possible moves (`layout.fight_tables(foe_moves=...)`).
+- The seen-move record is move ids now (`BattleState.ai_seen_moves`, int16[6, 4], first-free order,
+  `TrainerAI_RecordLastMove` `trainer_ai.c:2705-2716`; `state.record_seen_move`): a player that
+  Mimics shows Mimic and then the copy, and its own Struggle is recorded like any move.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

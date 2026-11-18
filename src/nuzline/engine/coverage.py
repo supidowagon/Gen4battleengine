@@ -422,10 +422,10 @@ ITEM_MOVING_EFFECTS = (
 # BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
 # effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
 FRIENDSHIP_POWER_EFFECTS = (121, 123)
-# BATTLE_EFFECT_TRANSFORM (57), _COPY_MOVE_FOR_BATTLE (82, Mimic) and _SWAP_ATK_DEF (238, Power
-# Trick): BattleSystem_ReloadPokemon (battle_lib.c:169-194) skips a Transformed battler's moves
-# and exp and a Mimicked slot, and overwrites a Power Trick's swapped Attack and Defense.
-RELOAD_STATE_EFFECTS = (57, 82, 238)
+# BATTLE_EFFECT_TRANSFORM (57) and _SWAP_ATK_DEF (238, Power Trick): BattleSystem_ReloadPokemon
+# (battle_lib.c:169-194) skips a Transformed battler's moves and exp, and overwrites a Power Trick's
+# swapped Attack and Defense. Mimic (82) left with G-68: the party shadow (``mimic_slots``).
+RELOAD_STATE_EFFECTS = (57, 238)
 # The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
 # Share, Soothe Bell, Lucky Egg and the six Power items.
 EXP_ITEM_HOLD_EFFECTS = (
@@ -671,7 +671,9 @@ def trace_copy_line(
         _party_abilities(tables, [spec]) | _party_abilities(tables, opp)
     ):
         return None
-    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    fight, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, [spec], opp)
+    )
     if error is not None:  # refused for the fight by check_opponent
         return None
     state = make_state(fight, [spec], list(opp), opp_items=trainer.items, terrain=trainer.terrain)
@@ -990,23 +992,41 @@ def check_opponent(
     if not unknown_start(trainer):
         weathers.append(start_weather(trainer))
     _check_weather(c, weathers)
-    _, error = _fight_ai_tables(tables, names, trainer, opp)
+    _, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, player, opp, extra_moves)
+    )
     if error is not None:
         c.add(Support.NONE, f"{display_name(trainer)}: {error}", "trainer AI")
     return c.report
 
 
-def _fight_ai_tables(tables, names, trainer, opp):
+def foe_moves(
+    tables: Tables,
+    player: Sequence[PokemonSpec],
+    opp: Sequence[PokemonSpec],
+    extra: Sequence[int] = (),
+) -> list[int]:
+    """The moves the player's side may have in a fight against ``opp``: each ``player`` spec's
+    moves and its ``learnable_moves``, then ``extra``; distinct. The AI's Mimic and Transform
+    copy one of them, scored by its effect's label (``ai.layout.fight_tables``, G-68)."""
+    out: list[int] = []
+    for spec in player:
+        out += [*spec.moves, *learnable_moves(tables, spec, opp)]
+    return list(dict.fromkeys(m for m in (*out, *extra) if m))
+
+
+def _fight_ai_tables(tables, names, trainer, opp, foe=()):
     """``(tables, error)``: the fight's tables (``ai.layout.fight_tables``) under the trainer's
     transcribed flags (a set with others is refused by its flag lines, ``_check_ai_flags``),
     and the reason its AI layout cannot be built, or None: a read bound past ``WIDTH_CAP``
-    (E1 Ruling R6)."""
+    (E1 Ruling R6). ``foe``: the player's possible moves (``foe_moves``; a callable is called only
+    when the AI copies moves)."""
     from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_tables, layout_of
 
     flags = int(trainer.ai_flags)
     if POLICY.get(names.game) == "kaizo":
         flags &= sum(1 << bit for bit in KAIZO_FLAG_BITS)
-    fight = fight_tables(tables, trainer, opp, flags)
+    fight = fight_tables(tables, trainer, opp, flags, foe)
     try:
         layout_of(fight)
     except ValueError as err:
@@ -1083,7 +1103,9 @@ def check_coverage(
     # The trainer's flag set (E1 Ruling R2). A set with a flag the AI does not transcribe is
     # refused by its flag lines (_check_ai_flags); its other AI lines are listed under the
     # flags it has that the AI does transcribe.
-    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    fight, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, player, opp, extra)
+    )
     if error is not None:  # listed by check_opponent
         return c.report
     refusals = ai_refusals(fight, state, names)

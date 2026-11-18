@@ -253,7 +253,7 @@ def test_the_active_learner_keeps_its_held_moves(tables, names, field, move):
 
 def test_a_seen_slot_and_the_pinned_slot_are_masked(tables, names):
     s = _prompt(tables, names)
-    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 1].set(1))
+    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(int(s.moves[0, 0, 1])))
     assert _options(tables, seen) == [True, False, True, True, True]
     pinned = s._replace(learn_pin=jnp.int8(4))
     assert _options(tables, pinned) == [True, True, True, False, True]

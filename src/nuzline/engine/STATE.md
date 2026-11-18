@@ -83,7 +83,8 @@ three structs has a row.
   the swap and keeps the bit: `power_trick_desync`). Magnet Rise -> `magnet_rise` (the
   `MOVE_EFFECT_MAGNET_RISE` bit) and `magnet_rise_turns` (`MoveEffectsData.magnetRiseTurns`) (E1
   trial batch, G-66: set by effect_script_0252.s, counted down after Taunt, kept by Baton Pass; the
-  bit stays when Gravity zeroes the turns). The rest (Charge, Grudge, Gastro Acid, Miracle Eye,
+  bit stays when Gravity zeroes the turns). Mimic -> `mimic_slots`, `shadow_moves`, `shadow_pp` (E1
+  trial batch, G-68: the BattleMon / party split of the move and PP arrays, below). The rest (Charge, Grudge, Gastro Acid, Miracle Eye,
   Heal Block, Embargo) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
@@ -253,7 +254,13 @@ three structs has a row.
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
-- **aiContext**: `battlerMoves` (moves the AI has seen) -> `ai_seen_moves`,
+- **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
+  Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
+  party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
+  (battle_lib.c:1819-1825; battle_io_command.c:574-587), a level-up's learn writes the shadow, and
+  leaving (`step._restore_moves`) puts the party's back (`InitBattleMon`, battle_lib.c:80-85).
+- **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
+  `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
   (per player party slot, an item id; set by `effects.reveal_item` where an item tag of
   `BTLSCR_ATTACKER` / `DEFENDER` / `MSG_BATTLER_TEMP` names it, battle_script.c:11726-11745:
@@ -369,7 +376,7 @@ three structs has a row.
 | `BattleMon.speed` | `stats` | mapped |
 | `BattleMon.spAttack` | `stats` | mapped |
 | `BattleMon.spDefense` | `stats` | mapped |
-| `BattleMon.moves` | `moves` | mapped |
+| `BattleMon.moves` | `moves`, `shadow_moves`, `mimic_slots` | mapped |
 | `BattleMon.hpIV` | `ivs` | mapped |
 | `BattleMon.attackIV` | `ivs` | mapped |
 | `BattleMon.defenseIV` | `ivs` | mapped |
@@ -398,7 +405,7 @@ three structs has a row.
 | `BattleMon.moldBreakerAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.pressureAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in (the message's AI reveal, ruling G-10, is `ai_ability_known`) |
 | `BattleMon.padding0028_0B` | — | not needed because it is padding |
-| `BattleMon.ppCur` | `pp` | mapped |
+| `BattleMon.ppCur` | `pp`, `shadow_pp`, `mimic_slots` | mapped |
 | `BattleMon.ppUps` | `pp_ups` | mapped |
 | `BattleMon.level` | `level` | mapped |
 | `BattleMon.friendship` | `friendship` | mapped |
@@ -440,7 +447,7 @@ three structs has a row.
 | `MoveEffectsData.truant` | `fake_out_turn` | mapped |
 | `MoveEffectsData.flashFire` | — | later (M6) |
 | `MoveEffectsData.lockOnTarget` | `lock_on_target` | mapped |
-| `MoveEffectsData.mimickedMoveSlot` | — | later (M6) |
+| `MoveEffectsData.mimickedMoveSlot` | `mimic_slots` | mapped |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |
 | `MoveEffectsData.meanLookTarget` | `mean_look_target` | mapped |
 | `MoveEffectsData.lastResortCount` | — | later (M6) |

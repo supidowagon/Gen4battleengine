@@ -795,6 +795,11 @@ EXEMPT: dict[str, str] = {
     # sMovesAffectedByGravity (battle_lib.c:3385-3392), E1 trial batch (G-67): Kaizo's id 150 is
     # "Hidden Power Water", not Splash; the ban is by id in both games.
     "nuzline.engine.ids.GRAVITY_MOVES": _CODE_MOVE_IDS,
+    # Move_CanBeMimicked's sCannotMetronomeMoves prefix (battle_lib.c:7152-7158, :7182-7192), by id
+    # in both games (E1 trial batch, G-68).
+    "nuzline.engine.ids.MIMIC_FORBIDDEN": _CODE_MOVE_IDS,
+    # BATTLE_EFFECT_TRANSFORM and _COPY_MOVE_FOR_BATTLE (G-68, G-69): the AI's copier moves.
+    "nuzline.ai.layout.COPIER_EFFECTS": _KEYED_BY_EFFECT,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

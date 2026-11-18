@@ -269,11 +269,14 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MAGNET_RISE_TURNS,
+    MIMIC_FORBIDDEN,
+    MIMIC_PP_CAP,
     MINIMIZE_PARAM,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
+    MOVE_MIMIC,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_MOVED,
     REFRESH_STATUSES,
@@ -1628,6 +1631,47 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
     )
     return gravity_ground(state, cond)
+
+
+def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
+    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
+    battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
+    (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
+    user's first Mimic slot (:4494-4499; the script runs only from the user's own slot, so one
+    exists), takes the move with ``min(5, its table PP)`` (:4502-4513) and its bit joins
+    ``mimickedMoveSlot`` (:4515): the party Pokemon never sees the copy, so the slot's move and
+    its PP after Mimic's own use go to ``shadow_moves`` / ``shadow_pp`` (``step._restore_moves``
+    gives them back). The Transform gate (:4482, VOLATILE_CONDITION_TRANSFORM) joins with
+    Transform (G-69)."""
+    side, user = h.side, h.user
+    last = state.last_move[h.target_side].astype(_I32)
+    moves = state.moves[side, user].astype(_I32)
+    mimics = moves == MOVE_MIMIC
+    j = jnp.argmax(mimics)
+    cond = (
+        (h.effect == _E.MIMIC)
+        & h.landed
+        & ~jnp.any(last == jnp.asarray(MIMIC_FORBIDDEN, _I32))
+        & (last != 0)
+        & (state.substitute_hp[h.target_side] == 0)
+        & ~jnp.any(moves == last)
+        & jnp.any(mimics)
+    )
+    copy_pp = jnp.minimum(tables.move_pp[last].astype(_I32), MIMIC_PP_CAP)
+    live_pp = state.pp[side, user, j]
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    return state._replace(
+        moves=put(state.moves, (side, user, j), last),
+        pp=put(state.pp, (side, user, j), copy_pp),
+        shadow_moves=put(state.shadow_moves, (side, j), moves[j]),
+        shadow_pp=put(state.shadow_pp, (side, j), live_pp),
+        mimic_slots=put(state.mimic_slots, side, state.mimic_slots[side].astype(_I32) | (1 << j)),
+    )
 
 
 def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3016,6 +3060,7 @@ def play_hit(
         _aqua_ring,
         _magnet_rise,
         _gravity,
+        _mimic,
         _ingrain,
         _mean_look,
         _imprison,

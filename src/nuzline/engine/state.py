@@ -146,6 +146,16 @@ Encodings:
   :10022-10027, :10173-10177) and leaves the bit, so the swap is ``power_trick XOR
   power_trick_desync``; Power Trick toggles both (unchanged), any switch clears it (a Baton Pass
   newcomer is swapped by the bit alone, battle_lib.c:2137-2141), B12-10.
+* E1 trial batch (G-68, Mimic). The decomp keeps the party ``Pokemon`` and the active
+  ``BattleMon`` apart; the engine's per-slot ``moves`` / ``pp`` are both. Where the battler's
+  differ from the party's, ``mimic_slots`` (``MoveEffectsData.mimickedMoveSlot``) flags the move
+  slots and ``shadow_moves`` / ``shadow_pp`` hold the party's value of each (battle_script.c:
+  4502-4516). Every ``BattleMon_CopyToParty`` skips a flagged slot (battle_lib.c:1819-1825), a
+  level-up's learn writes the party only (:10168-10176) and ``ReloadPokemon`` reloads the other
+  slots (:183-191), and the next ``InitBattleMon`` brings the party's back (``step._restore_moves``
+  on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
+  ``battlerMoves`` as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
+  move can change under Mimic, so the record cannot be flags.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -315,6 +325,14 @@ class BattleState(NamedTuple):
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
     magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
+    # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
+    # active slot are the BattleMon's, and these hold the party's values of the slots the battler
+    # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
+    # k holds a Mimic copy), ``shadow_moves`` / ``shadow_pp`` the party's move and PP of each such
+    # slot (0 elsewhere).
+    mimic_slots: jnp.ndarray  # int8, MoveEffectsData.mimickedMoveSlot bitmask (G-68)
+    shadow_moves: jnp.ndarray  # int16[2,4], the party's move of each masked slot (G-68)
+    shadow_pp: jnp.ndarray  # int8[2,4], the party's PP of each masked slot (G-68)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -349,7 +367,8 @@ class BattleState(NamedTuple):
     winner: jnp.ndarray  # int8
     player_faints: jnp.ndarray  # int8
     # AI knowledge of the player
-    ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
+    # int16[6,4], battlerMoves of the player's slot: move ids in first-free order (G-68)
+    ai_seen_moves: jnp.ndarray
     ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
     ai_ability_known: jnp.ndarray  # int8[6]
     # experience (K3d-exp, design §2.1; see the module docstring)
@@ -426,6 +445,19 @@ class BattleState(NamedTuple):
         return self._replace(
             faint_budget=jnp.asarray(k, jnp.int8), protected=jnp.asarray(mask, jnp.int8)
         )
+
+
+def record_seen_move(row, move):
+    """``TrainerAI_RecordLastMove``'s list update (trainer_ai.c:2705-2716) on one battler's
+    ``battlerMoves`` ``row`` (``ai_seen_moves[slot]``, move ids in first-free order): ``move``
+    goes into the first empty entry unless the list already holds it or is full; MOVE_NONE
+    matches the first empty entry and records nothing (G-68)."""
+    row = jnp.asarray(row)
+    move = jnp.asarray(move, row.dtype)
+    free = row == 0
+    add = ~jnp.any(row == move) & jnp.any(free) & (move != 0)
+    first = jnp.arange(row.shape[0]) == jnp.argmax(free)
+    return jnp.where(add & first, move, row)
 
 
 def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
@@ -506,6 +538,9 @@ VOLATILE_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
 )
+# ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
+# faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
+# enters (``step._restore_moves``, as ``_restore_ability``), which clears them.
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
 # confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``), Focus Energy (B12-4)),
@@ -618,6 +653,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "power_trick_desync": (_SIDE, np.int8),
     "magnet_rise": (_SIDE, np.int8),
     "magnet_rise_turns": (_SIDE, np.int8),
+    "mimic_slots": (_SIDE, np.int8),
+    "shadow_moves": ((SIDES, MOVES), np.int16),
+    "shadow_pp": ((SIDES, MOVES), np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -649,7 +687,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
-    "ai_seen_moves": ((SLOTS, MOVES), np.int8),
+    "ai_seen_moves": ((SLOTS, MOVES), np.int16),
     "ai_item_known": ((SLOTS,), np.int16),
     "ai_ability_known": ((SLOTS,), np.int8),
     "exp": ((SLOTS,), np.int32),

@@ -396,6 +396,10 @@ class EffectId(IntEnum):
     # with ``FIELD_CONDITION_GRAVITY`` up, else the indirect subscript_gravity_start.s: Gravity for
     # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
     GRAVITY = 107
+    # Mimic (82, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE): zeros. effect_script_0082.s runs
+    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
+    # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
+    MIMIC = 108
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1286,6 +1290,13 @@ MOVE_IMPRISON = 286
 # FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
 MOVE_SOLAR_BEAM = 76
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
+# ``Move_CanBeMimicked`` (battle_lib.c:7182-7192): the entries of ``sCannotMetronomeMoves`` before
+# ``FORBIDDEN_BY_MIMIC_DELIM`` (:7152-7158): Metronome, Struggle, Sketch, Mimic, Chatter
+# (generated/moves.txt lines 119, 166, 167, 103, 449), G-68.
+MOVE_MIMIC = 102
+MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
+# ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
+MIMIC_PP_CAP = 5
 # sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
 # 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``
 # (:3394-3407) bans them at selection (CHECK_INVALID_GRAVITY, :2292), at the status check

@@ -10,6 +10,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.ids import MOVE_MIMIC
 from nuzline.engine.levelup import advance_learns, learn, learn_options, needs_learn, pay_exp
 from nuzline.engine.outcome import outcome_to_py
 from nuzline.engine.step import needs_replacement, replace, step
@@ -246,8 +247,22 @@ def _learn_party(draw, tables, s):
                 move = draw(st.sampled_from(learnable))
                 a["moves"][0, slot, k] = move
                 a["pp"][0, slot, k] = int(tables.move_pp[move])
-        a["ai_seen_moves"][slot] = [draw(st.integers(0, 1)) for _ in range(4)]
+        a["ai_seen_moves"][slot] = 0
+        ids = [int(m) for m in a["moves"][0, slot] if m]
+        picked = draw(st.lists(st.sampled_from(ids), unique=True, max_size=4)) if ids else []
+        a["ai_seen_moves"][slot, : len(picked)] = picked
     side = int(a["active"][0])
+    # E1 trial batch (G-68): the active Pokemon's slot may hold a Mimic copy, the party's move
+    # (the learn's reads and writes) in the shadow.
+    a["mimic_slots"][0] = a["shadow_moves"][0] = a["shadow_pp"][0] = 0
+    flagged = [k for k in range(4) if a["moves"][0, side, k]]
+    if flagged and draw(st.integers(0, 2)) == 0:
+        k = draw(st.sampled_from(flagged))
+        a["mimic_slots"][0] = 1 << k
+        a["shadow_moves"][0, k] = draw(
+            st.sampled_from((0, MOVE_MIMIC, int(a["moves"][0, side, k])))
+        )
+        a["shadow_pp"][0, k] = draw(st.integers(0, 10)) if a["shadow_moves"][0, k] else 0
     held = [int(m) for m in a["moves"][0, side] if m] or [0]
     for name in ("disabled_move", "locked_move", "choice_lock"):
         a[name][0] = draw(st.sampled_from((0, 0, *held)))

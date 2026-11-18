@@ -626,8 +626,10 @@ def _fight(args):
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
+    from nuzline.engine.coverage import foe_moves
 
-    tables = fight_tables(tables, trainer, opp)
+    # A Mimic or Transform user's copies are scored by the copied move's label (G-68).
+    tables = fight_tables(tables, trainer, opp, foe_moves=lambda: foe_moves(tables, player, opp))
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
     return game, tables, names, trainer, player, opp, start_weather(trainer), save
@@ -921,8 +923,21 @@ def _prep(args) -> int:
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
     from nuzline.ai.layout import fight_tables
+    from nuzline.engine.coverage import foe_moves
+    from nuzline.prep.pool import pool_candidates
 
-    tables = fight_tables(tables, trainer, opp)
+    learnsets = load_learnsets(game.tables_dir)
+
+    def pool_moves():
+        # No team yet: the moves of every save Pokemon at the cap and what it can learn (G-68).
+        at_cap = args.cap if args.cap is not None else default_cap(trainer, game=game.id)
+        pool, _ = pool_candidates(save, tables, names, learnsets, at_cap)
+        out = []
+        for c in pool:
+            out += [*c.spec.moves, *c.relearner, *(m for _, m in c.tms)]
+        return foe_moves(tables, [c.spec for c in pool], opp, out)
+
+    tables = fight_tables(tables, trainer, opp, foe_moves=pool_moves)
     weather = start_weather(trainer)
     # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
     # player party here: the team is not chosen yet, so build_problem's usable_pool checks
@@ -940,7 +955,7 @@ def _prep(args) -> int:
         trainer,
         opp,
         weather,
-        load_learnsets(game.tables_dir),
+        learnsets,
         cap=cap,
         deaths=args.deaths,
         protect=args.protect,
@@ -1085,7 +1100,9 @@ def line_setup(
     opp = build_trainer_party(trainer, inter)
     # The trainer's AI flag set and its party's moves pick the AI layout (E1 Rulings R2, R6;
     # ai.layout.layout_of).
-    tables = fight_tables(tables, trainer, opp)
+    from nuzline.engine.coverage import foe_moves
+
+    tables = fight_tables(tables, trainer, opp, foe_moves=lambda: foe_moves(tables, player, opp))
     if player[0].current_hp == 0:
         raise ValueError("the lead (team slot 0) has fainted")
     rules = resolve_rules(file, names, player, opp)

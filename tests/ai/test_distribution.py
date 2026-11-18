@@ -21,7 +21,7 @@ from nuzline.ai.policy import (
 from nuzline.ai.switching import switching_refusals
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 from tests.ai.fixtures import CRANIDOS, outcome, trace_a, trace_e, trace_f, versus
-from tests.strategies import supported_state
+from tests.strategies import draw_seen_moves, supported_state
 
 # Traced (jit), so a refused state gives NaN instead of raising, as in Stage A.
 factored = jax.jit(ai_action_distribution)
@@ -66,7 +66,7 @@ def roark_states(draw, tables, names) -> BattleState:
     bag = draw(st.lists(st.sampled_from([0, names.item("Potion")]), min_size=count, max_size=count))
     a["trainer_items"][1] = bag + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
-    a["ai_seen_moves"][...] = _flags(draw, a["ai_seen_moves"].shape)
+    draw_seen_moves(draw, a)
     a["ai_ability_known"][...] = _flags(draw, a["ai_ability_known"].shape)
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 

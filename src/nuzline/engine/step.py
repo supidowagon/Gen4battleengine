@@ -240,10 +240,12 @@ from nuzline.engine.outcome import (
 from nuzline.engine.state import (
     BAG_SLOTS,
     BATON_PASSED_FIELDS,
+    MOVES,
     STAGE_MAX,
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
+    record_seen_move,
 )
 
 _I32 = jnp.int32
@@ -454,22 +456,21 @@ def _set_last_move(state: BattleState, side, move, cond) -> BattleState:
 
 def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleState:
     """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
-    the AI adds the player's ``movePrevByBattler`` to its list of the player's moves.
-    It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``, :295, after
-    ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989), and not when
-    the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
+    the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
+    (``state.record_seen_move``). It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``,
+    :295, after ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989), and not
+    when the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
     skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433) and for a locked
-    opponent (:335). The list holds
-    the moves as slots of the player's active Pokemon (``ai_seen_moves``); Struggle is
-    in no slot and is not recorded (docs/discrepancies.md)."""
+    opponent (:335). The list holds the moves by id (``ai_seen_moves``, G-68), so a Mimic copy, a
+    level-up's replacement and the player's own Struggle (``MOVE_STRUGGLE``) are recorded as the
+    decomp does."""
     mon = state.active[0]
     pending = state.last_move[0]
     _, struggling = selected_move(tables, state, 1, actions[1])
     locked = locked_slot(state, 1) >= 0  # a locked battler picks no command (:335)
     fight = (actions[1] < MOVE_ACTIONS) & ~struggling & ~locked
-    match = (state.moves[0, mon] == pending) & (pending != 0) & fight
     seen = state.ai_seen_moves
-    row = jnp.where(match, 1, seen[mon]).astype(seen.dtype)
+    row = jnp.where(fight, record_seen_move(seen[mon], pending), seen[mon]).astype(seen.dtype)
     return state._replace(ai_seen_moves=seen.at[mon].set(row))
 
 
@@ -487,6 +488,37 @@ def _forget(state: BattleState, side, slot) -> BattleState:
         ),
         ai_item_known=state.ai_item_known.at[slot].set(
             jnp.where(on, 0, state.ai_item_known[slot]).astype(state.ai_item_known.dtype)
+        ),
+    )
+
+
+def _restore_moves(state: BattleState, side, cond) -> BattleState:
+    """``side``'s active battler leaves the field where ``cond``: the move slots Mimic changed
+    (``mimic_slots``) get the party's move and PP back from ``shadow_moves`` / ``shadow_pp``, and
+    the shadow and the mask clear. The decomp's party Pokemon never saw the copy
+    (``BattleMon_CopyToParty`` skips the flagged slots, battle_lib.c:1819-1825) and
+    ``BattleSystem_InitBattleMon`` loads moves and PP from it on the next switch-in
+    (:80-85); ``moveEffectsData`` (the mask) is cleared when the battler leaves (:2100-2104) and
+    Baton Pass keeps none of it (:2107-2114). Run when the battler is switched or dragged out, and
+    at the battle's end (``_faint_check``); a fainted battler keeps its copy until its
+    replacement enters, as ``_restore_ability``'s."""
+    mon = state.active[side]
+    masked = ((state.mimic_slots[side].astype(_I32) >> jnp.arange(MOVES)) & 1) == 1
+    use = jnp.asarray(cond) & masked
+    moves = jnp.where(use, state.shadow_moves[side], state.moves[side, mon])
+    pp = jnp.where(use, state.shadow_pp[side], state.pp[side, mon])
+    zero = jnp.asarray(cond)
+    return state._replace(
+        moves=state.moves.at[side, mon].set(moves.astype(state.moves.dtype)),
+        pp=state.pp.at[side, mon].set(pp.astype(state.pp.dtype)),
+        mimic_slots=state.mimic_slots.at[side].set(
+            jnp.where(zero, 0, state.mimic_slots[side]).astype(state.mimic_slots.dtype)
+        ),
+        shadow_moves=state.shadow_moves.at[side].set(
+            jnp.where(zero, 0, state.shadow_moves[side]).astype(state.shadow_moves.dtype)
+        ),
+        shadow_pp=state.shadow_pp.at[side].set(
+            jnp.where(zero, 0, state.shadow_pp[side]).astype(state.shadow_pp.dtype)
         ),
     )
 
@@ -532,6 +564,7 @@ def _switch_in(
     switch (``_reset_battler``)."""
     state = _restore_types(tables, state, side, True)
     state = _restore_ability(tables, state, side, True)
+    state = _restore_moves(state, side, True)
     state = _reset_battler(state, side, True, baton)
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
@@ -2415,6 +2448,10 @@ def _faint_check(
         over=jnp.where(ended, 1, after.over).astype(after.over.dtype),
         winner=jnp.where(ended, winner, after.winner).astype(after.winner.dtype),
     )
+    # The battle's end: the player's party is what the next battle carries, and it never saw a
+    # Mimic copy (``_restore_moves``). The opponent's active keeps its battler until the payout
+    # has read it (the copied species of a Transform, G-69).
+    after = _restore_moves(after, 0, ended)
     for side in (0, 1):
         active_fainted = fainted[side, after.active[side]]
         after = _restore_types(tables, after, side, active_fainted)

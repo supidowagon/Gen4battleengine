@@ -280,6 +280,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0215.s (Gravity): fails with FIELD_CONDITION_GRAVITY up, else the indirect
     # subscript_gravity_start.s (FIELD_CONDITION_GRAVITY_INIT and the grounding loop).
     215: ("BATTLE_EFFECT_GRAVITY", _E.GRAVITY, (0, 0, 0)),
+    # effect_script_0082.s (Mimic): a direct ON_HIT subscript_mimic.s -> BtlCmd_TryMimic
+    # (battle_script.c:4476-4523), engine/effects.py ``_mimic`` (G-68).
+    82: ("BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE", _E.MIMIC, (0, 0, 0)),
     # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
     # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
     # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;

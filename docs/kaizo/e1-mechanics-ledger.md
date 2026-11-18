@@ -1032,3 +1032,32 @@ of them, :2107-2115).
   (script.s:1026-1029), `Expert_Gravity` (:4782-4803, dispatch :1759, rolls :4795 and :4799;
   `commands.FieldCondition.GRAVITY` over `state.gravity`). Tests: `test_e1_trial.py`,
   `test_kaizo_policy.py`, `test_coverage.py`.
+- G-68 Mimic (`EffectId.MIMIC`, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE 82), in both games; the party / battler
+  split of the move and PP arrays. effect_script_0082.s:3 runs `subscript_mimic.s` on a hit that
+  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4523) fails
+  (subscript_mimic.s:16, MOVE_STATUS_FAILED) when `movePrevByBattler[defender]` is MOVE_NONE or not
+  Mimic-able (`Move_CanBeMimicked`, battle_lib.c:7152-7158, :7182-7192: Metronome, Struggle, Sketch,
+  Mimic, Chatter, `ids.MIMIC_FORBIDDEN`), the user is Transformed (:4482, G-69), the defender has a
+  Substitute (:4483) or the user already knows the move (:4490-4492, :4519-4521). Success: slot `j`
+  is the user's first Mimic slot (:4494-4499; `j` always exists, the script runs only from the user's
+  own slot, as itself or through Sleep Talk: Metronome, Copycat and Assist cannot call it,
+  `Move_CanBeMetronomed` :7196-7218), `moves[j]` = the move, `ppCur[j]` = min(5, its table PP) (:4502-
+  4513), `mimickedMoveSlot |= 1 << j` (:4515). The decomp keeps the party Pokemon and the BattleMon
+  apart and Mimic writes the BattleMon only: PP use and every `BattleMon_CopyToParty` skip flagged
+  slots (battle_lib.c:1819-1825; battle_io_command.c:574-587), so the party keeps Mimic with its PP
+  after Mimic's own use; a level-up's learn writes the party (battle_script.c:10168-10176) and
+  `BattleSystem_ReloadPokemon` reloads only unflagged slots (battle_lib.c:183-191); leaving the field
+  clears `moveEffectsData` (:2100-2104; Baton Pass keeps no `mimickedMoveSlot`, :2107-2114) and the next
+  `InitBattleMon` loads moves and PP from the party (:80-85). The engine's per-slot `moves` / `pp` are
+  both, so a per-battler shadow (`mimic_slots`, `shadow_moves`, `shadow_pp`) holds the party's value of each
+  flagged slot: `effects._mimic` writes it, `step._restore_moves` (beside `_restore_types` /
+  `_restore_ability`) puts it back on a switch, a drag, the replacement of a fainted battler and, for
+  the player's party, at the battle's end (`_faint_check`); `levelup` learns into the shadow of a flagged
+  slot. The AI record `ai_seen_moves` is move ids in first-free order (`TrainerAI_RecordLastMove`,
+  trainer_ai.c:2705-2716; `state.record_seen_move`), so a Mimic copy, a replaced slot and the player's
+  Struggle are recorded as the decomp does (docs/discrepancies.md's Struggle entry is gone). The
+  AI side: no Basic or Expert entry and no other script.s mention (`KAIZO_TRANSCRIBED`); an AI Mimic's copy
+  is scored by the copied move's label, so a fight with a Mimic or Transform user adds the effects of the
+  foe's possible moves to its layout (`layout.fight_tables(foe_moves=...)`). Coverage no longer refuses a
+  Mimic user that levels up (82 left `RELOAD_STATE_EFFECTS`). Tests: `test_e1_trial.py`,
+  `test_knowledge.py`, `test_learn.py`.

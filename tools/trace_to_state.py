@@ -1141,9 +1141,10 @@ def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice:
     ``levelup.learn_options`` masks. The converter fits it (it happened), but the engine
     does not replay it exactly:
 
-    * the slot's move is one the AI has seen: the decomp's AI keeps a list of move ids per
-      battler (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716)
-      that keeps the old id after the replacement, while ``ai_seen_moves`` flags slots;
+    * the slot's move is one the AI has seen: the engine masks replacing it (ruling D2), while
+      the decomp's AI keeps the old id in its list of move ids per battler
+      (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716), as
+      ``ai_seen_moves`` does since G-68, and the player may replace it;
     * the offered move is one the engine does not support (ruling D10);
     * for the active learner: the disabled, locked or choice-locked move (ruling D2), or the
       slot selected this turn (``learn_pin``, ruling U1)."""
@@ -1151,7 +1152,7 @@ def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice:
         return
     slot = int(np.argmax(np.asarray(state.learn_level) > 0))
     move = int(state.moves[0, slot, choice])
-    if int(state.ai_seen_moves[slot, choice]):
+    if move and move in np.asarray(state.ai_seen_moves[slot]).tolist():
         why = "the AI has seen it, and its move list would keep it (trainer_ai.c:2705-2716)"
     else:
         why = "an option the engine masks (levelup.learn_options: rulings D2, U1, D10)"

@@ -191,7 +191,7 @@ def kaizo_states(draw, t, party) -> BattleState:
         turn=jnp.asarray(draw(st.integers(0, 3)), s.turn.dtype),
         fake_out_turn=s.fake_out_turn.at[1].set(draw(st.integers(0, 3))),
         moves=s.moves.at[0, 0, 3].set(U_TURN),
-        ai_seen_moves=s.ai_seen_moves.at[0, 3].set(int(draw(st.booleans()))),
+        ai_seen_moves=s.ai_seen_moves.at[0, 0].set(U_TURN if draw(st.booleans()) else 0),
     )
     empty_pp = draw(st.lists(st.booleans(), min_size=3, max_size=3))
     for k, empty in enumerate(empty_pp, start=1):

@@ -650,6 +650,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         116,  # SURVIVE_WITH_1_HP: no Basic entry; Expert_Endure (:1704), :3645
         252,  # GIVE_GROUND_IMMUNITY: Basic_CheckMagnetRise (:280); Expert_MagnetRise (:1795), :6113
         215,  # GRAVITY: Basic_CheckGravityActive (:254); Expert_Gravity (:1759), :4795, :4799
+        82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

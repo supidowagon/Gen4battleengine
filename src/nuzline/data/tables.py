@@ -59,8 +59,9 @@ def _read_manifest(dir: Path) -> dict:
 
 AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer's
 # Tables.ai_moves: the move ids of the fight's opponent party (6 Pokemon x 4 moves, 0 for
-# none); all -1 until a fight sets them.
-AI_MOVES_ROWS = 24
+# none), then, when one of them copies moves (Mimic, Transform: ai.layout.COPIER_EFFECTS), the
+# distinct moves the foe's party may have for them to copy (G-68); all -1 until a fight sets them.
+AI_MOVES_ROWS = 256
 AI_MOVES_UNSET = np.full(AI_MOVES_ROWS, -1, np.int16)
 # Tables.battle_type: BattleSystem.battleType (include/constants/battle.h:20-47) as
 # Encounter_NewVsTrainer sets it from the trainers of the fight (encounter.c:724-740).
@@ -123,7 +124,8 @@ class Tables(NamedTuple):
     # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:
     # ai.layout.layout_of refuses it for a per-flag-set policy (E1 Ruling R2).
     ai_flags: jnp.ndarray = AI_FLAGS_UNSET
-    # int16[24]: the move ids of the fight's opponent party, from which ai.layout.layout_of
+    # int16[AI_MOVES_ROWS]: the move ids of the fight's opponent party (and the moves its
+    # copiers can copy, ai.layout.fight_tables), from which ai.layout.layout_of
     # derives the AI's read bound and transcribed effects for the fight (E1 Rulings R6, R7);
     # the fight's entry point sets them with ai_flags (ai.layout.fight_tables); not in
     # tables.npz.

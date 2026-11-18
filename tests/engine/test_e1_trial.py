@@ -16,6 +16,9 @@ from nuzline.engine.ids import (
     GRAVITY_MOVES,
     GRAVITY_TURNS,
     MAGNET_RISE_TURNS,
+    MIMIC_FORBIDDEN,
+    MIMIC_PP_CAP,
+    MOVE_MIMIC,
     AbilityId,
     EffectId,
     SemiKind,
@@ -24,9 +27,9 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import copycat_call, metronome_candidates
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import ACT_GRAVITY
-from nuzline.reference.convert import to_ref
-from nuzline.reference.engine import ref_damage_table
+from nuzline.engine.step import ACT_GRAVITY, replace
+from nuzline.reference.convert import from_ref, to_ref
+from nuzline.reference.engine import ref_damage_table, ref_replace
 from tests.engine.helpers import A, assert_matches_reference, drop_programs, roark_state
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
@@ -550,3 +553,249 @@ def test_gravity_move_ids_match_the_decomp():
     table = lib[lib.index("sMovesAffectedByGravity[] = {") :]
     listed = re.findall(r"(MOVE_\w+),", table[: table.index("};")])
     assert [moves.index(m) for m in listed] == list(GRAVITY_MOVES)
+
+
+# --- Mimic (G-68) ----------------------------------------------------------------------------
+
+MIMIC_MOVES = ("Mimic", "Scratch", "Swords Dance", "Protect")
+
+
+def _mimic(tables, names, *, last=None, order="player", opp="Leer", **kw):
+    """Monferno (Mimic first) against Geodude (``opp`` first); ``last`` (a move name or id) is the
+    foe's ``movePrevByBattler``. ``order`` "player": Mimic runs before the foe's move."""
+    s = _state(tables, names, mine=MIMIC_MOVES, opp=opp, order=order, **kw)
+    if last is not None:
+        move = names.move(last) if isinstance(last, str) else last
+        s = s._replace(last_move=s.last_move.at[1].set(move))
+    return s
+
+
+def _mimicked(s, names, side=0, slot=0, copy="Tackle", pp=5):
+    """``s`` after a Mimic that copied ``copy`` into move slot ``slot`` of ``side``'s active
+    Pokemon: the live move and PP, the flag, and the party's Mimic with 9 PP in the shadow."""
+    mon = int(s.active[side])
+    return s._replace(
+        moves=s.moves.at[side, mon, slot].set(names.move(copy)),
+        pp=s.pp.at[side, mon, slot].set(pp),
+        mimic_slots=s.mimic_slots.at[side].set(1 << slot),
+        shadow_moves=s.shadow_moves.at[side, slot].set(names.move("Mimic")),
+        shadow_pp=s.shadow_pp.at[side, slot].set(9),
+    )
+
+
+def _same_as_reference(sent, ref):
+    for name, x, y in zip(sent._fields, sent, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+
+
+def test_mimic_is_mapped_and_pinned(tables, names, kaizo_tables, kaizo_names):
+    from tools.effect_map import DECOMP_EFFECT_TO_ID
+
+    assert DECOMP_EFFECT_TO_ID[82] == (EffectId.MIMIC, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        m = n.move("Mimic")
+        assert m == MOVE_MIMIC and int(t.move_effect[m]) == EffectId.MIMIC
+        assert int(t.move_accuracy[m]) == 0 and int(t.move_power[m]) == 0
+        assert int(t.move_pp[m]) == 10
+    assert MIMIC_PP_CAP == 5
+
+
+def test_mimic_forbidden_ids_match_the_decomp():
+    """``ids.MIMIC_FORBIDDEN`` is the head of ``sCannotMetronomeMoves`` (battle_lib.c:7152-7158)."""
+    import re
+    from pathlib import Path
+
+    decomp = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+    moves = (decomp / "generated" / "moves.txt").read_text().split()
+    lib = (decomp / "src" / "battle" / "battle_lib.c").read_text(encoding="utf-8")
+    table = lib[lib.index("sCannotMetronomeMoves[] = {") :]
+    head = table[: table.index("FORBIDDEN_BY_MIMIC_DELIM,")]
+    assert [moves.index(m) for m in re.findall(r"(MOVE_\w+),", head)] == list(MIMIC_FORBIDDEN)
+
+
+def test_mimic_copies_the_foes_last_move_with_five_pp(tables, names):
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
+    s = _mimic(tables, names, last="Tackle")
+    out = assert_matches_reference(tables, s, A("Mimic", "Leer", s, names), _o())
+    tackle = names.move("Tackle")
+    assert out.moves[0, 0].tolist() == [tackle, *s.moves[0, 0, 1:].tolist()]
+    # Mimic's own use came first: the party keeps Mimic with 9 PP (10 - 1), the copy has 5.
+    assert int(out.pp[0, 0, 0]) == 5 == MIMIC_PP_CAP
+    assert (int(out.mimic_slots[0]), int(out.shadow_moves[0, 0]), int(out.shadow_pp[0, 0])) == (
+        1,
+        names.move("Mimic"),
+        9,
+    )
+    assert int(out.mimic_slots[1]) == 0 and out.shadow_moves[1].tolist() == [0] * 4
+    # A move with less base PP keeps it (min(5, PP), battle_script.c:4508-4513).
+    few = tables._replace(move_pp=tables.move_pp.at[tackle].set(3))
+    out = assert_matches_reference(few, s, A("Mimic", "Leer", s, names), _o())
+    assert int(out.pp[0, 0, 0]) == 3
+
+
+def test_mimic_fails_without_a_target_move_or_on_a_known_or_forbidden_one(tables, names):
+    cases = {"no last move": _mimic(tables, names, last=0)}
+    for name in ("Metronome", "Struggle", "Sketch", "Mimic", "Chatter"):
+        cases[name] = _mimic(tables, names, last=name)
+    behind = _mimic(tables, names, last="Tackle")
+    cases["substitute"] = behind._replace(substitute_hp=behind.substitute_hp.at[1].set(20))
+    cases["known"] = _mimic(tables, names, last="Scratch")
+    for name, s in cases.items():
+        out = assert_matches_reference(tables, s, A("Mimic", "Leer", s, names), _o())
+        assert out.moves[0, 0].tolist() == s.moves[0, 0].tolist(), name
+        assert int(out.mimic_slots[0]) == 0 and out.shadow_moves[0].tolist() == [0] * 4, name
+        assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1, name  # Mimic's own PP use
+
+
+def test_protect_blocks_mimic_and_a_fast_foe_sets_what_it_copies(tables, names):
+    s = _mimic(tables, names, order="opp", opp="Protect")
+    out = assert_matches_reference(tables, s, A("Mimic", "Protect", s, names), _o())
+    assert int(out.mimic_slots[0]) == 0 and int(out.moves[0, 0, 0]) == names.move("Mimic")
+    # A faster foe's own move of this turn is what Mimic copies.
+    s = _mimic(tables, names, order="opp", opp="Leer")
+    out = assert_matches_reference(tables, s, A("Mimic", "Leer", s, names), _o())
+    assert int(out.moves[0, 0, 0]) == names.move("Leer") and int(out.mimic_slots[0]) == 1
+
+
+def test_mimic_copy_spends_the_live_pp_only(tables, names):
+    s = _mimicked(_mimic(tables, names), names)
+    out = assert_matches_reference(tables, s, (0, 0), _o())  # Tackle, the copy in slot 0
+    assert int(out.pp[0, 0, 0]) == 4 and int(out.shadow_pp[0, 0]) == 9
+    assert int(out.moves[0, 0, 0]) == names.move("Tackle") and int(out.mimic_slots[0]) == 1
+
+
+def test_leaving_the_field_brings_mimic_back_with_its_party_pp(tables, names):
+    original = [names.move(m) for m in MIMIC_MOVES]
+    s = _mimicked(_mimic(tables, names), names)
+    out = assert_matches_reference(tables, s, A(4 + 1, "Leer", s, names), _o())  # switch
+    assert out.moves[0, 0].tolist() == original and int(out.pp[0, 0, 0]) == 9
+    assert int(out.mimic_slots[0]) == 0 and out.shadow_moves[0].tolist() == [0] * 4
+    assert out.shadow_pp[0].tolist() == [0] * 4
+    # A faint: the fainted battler keeps its copy until its replacement enters (as its ability).
+    dying = _mimicked(_mimic(tables, names, opp="Tackle"), names)
+    dying = dying._replace(hp=dying.hp.at[0, 0].set(1))
+    fell = assert_matches_reference(tables, dying, (0, 0), _o())
+    assert int(fell.hp[0, 0]) == 0 and int(fell.mimic_slots[0]) == 1
+    sent = replace(tables, fell, 0, 1)
+    _same_as_reference(sent, from_ref(ref_replace(to_numpy(tables), to_ref(fell), 0, 1)))
+    assert sent.moves[0, 0].tolist() == original and int(sent.pp[0, 0, 0]) == 9
+    assert int(sent.mimic_slots[0]) == 0
+
+
+def test_mimic_battle_end_restores_the_players_party(tables, names):
+    original = [names.move(m) for m in MIMIC_MOVES]
+    s = _mimicked(_mimic(tables, names), names)
+    last = s._replace(hp=s.hp.at[1].set(jnp.asarray([1, 0, 0, 0, 0, 0], s.hp.dtype)))
+    last = last._replace(species=last.species.at[1, 1:].set(0))
+    out = assert_matches_reference(tables, last, A("Scratch", "Leer", last, names), _o())
+    assert int(out.over) == 1 and int(out.winner) == 2
+    assert out.moves[0, 0].tolist() == original and int(out.pp[0, 0, 0]) == 9
+    assert int(out.mimic_slots[0]) == 0
+
+
+def test_baton_pass_keeps_no_mimic_copy(tables, names):
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ninjask", ["Mimic", "Baton Pass"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Leer"], 20)],
+    )
+    s = _mimicked(s, n)
+    paused = assert_matches_reference(tables, s, (1, 0), empty_outcome())
+    after = _resume(tables, paused, 1)
+    assert int(after.active[0]) == 1 and int(after.mimic_slots[0]) == 0
+    assert after.shadow_moves[0].tolist() == [0] * 4
+    assert after.moves[0, 0].tolist()[:2] == [n.move("Mimic"), n.move("Baton Pass")]
+    assert int(after.pp[0, 0, 0]) == 9
+
+
+def test_the_ai_records_move_ids_so_a_mimic_copy_is_known(tables, names):
+    """Scratch, then Mimic (copying the foe's Leer), then the copy: the list holds Scratch, Mimic
+    and Leer in that order, at the AI's FIGHT decision of each following turn."""
+    from nuzline.ai import commands as c
+    from tests.ai.test_kaizo_commands import _ctx
+
+    s = _mimic(tables, names)
+    scratch, mimic, leer = names.move("Scratch"), names.move("Mimic"), names.move("Leer")
+    t = assert_matches_reference(tables, s, A("Scratch", "Leer", s, names), _o())
+    t = assert_matches_reference(tables, t, A("Mimic", "Leer", t, names), _o())
+    assert t.ai_seen_moves[0].tolist() == [scratch, 0, 0, 0]
+    t = assert_matches_reference(tables, t, (0, 0), _o())  # the copy, Leer, in slot 0
+    assert t.ai_seen_moves[0].tolist() == [scratch, mimic, 0, 0]
+    t = assert_matches_reference(tables, t, A("Scratch", "Leer", t, names), _o())
+    assert t.ai_seen_moves[0].tolist() == [scratch, mimic, leer, 0]
+    ctx = _ctx(tables, t)
+    for move in (scratch, mimic, leer):
+        assert bool(c.if_move_known(ctx, c.Battler.DEFENDER, move).jump)
+    assert not bool(c.if_move_known(ctx, c.Battler.DEFENDER, names.move("Tackle")).jump)
+
+
+def test_mimic_seen_list_takes_four_distinct_moves_and_no_repeats():
+    from nuzline.engine.state import record_seen_move
+
+    row = jnp.zeros(4, jnp.int16)
+    for move in (5, 6, 5, 7, 8, 9, 0):
+        row = record_seen_move(row, move)
+    assert row.tolist() == [5, 6, 7, 8]  # the fifth distinct move (9) finds no entry
+
+
+def test_a_level_up_learn_goes_to_the_party_not_the_mimic_copy(tables, names):
+    from tests.engine.test_learn import _learn, _prompt
+
+    s = _prompt(tables, names)  # Bulbasaur L13: a prompt for PoisonPowder, four moves known
+    copy = names.move("Scratch")
+    flagged = s._replace(
+        moves=s.moves.at[0, 0, 1].set(copy),
+        pp=s.pp.at[0, 0, 1].set(5),
+        mimic_slots=s.mimic_slots.at[0].set(1 << 1),
+        shadow_moves=s.shadow_moves.at[0, 1].set(names.move("Mimic")),
+        shadow_pp=s.shadow_pp.at[0, 1].set(7),
+    )
+    out = _learn(tables, flagged, 1)  # replace move slot 1
+    new = names.move("PoisonPowder")
+    # The battler keeps the copy; the party's slot (the shadow) takes the new move.
+    assert int(out.moves[0, 0, 1]) == copy and int(out.pp[0, 0, 1]) == 5
+    assert (int(out.shadow_moves[0, 1]), int(out.shadow_pp[0, 1])) == (new, 35)
+    assert int(out.mimic_slots[0]) == 1 << 1
+    # An unflagged slot is written as before.
+    out = _learn(tables, flagged, 0)
+    assert int(out.moves[0, 0, 0]) == new and int(out.shadow_moves[0, 1]) == names.move("Mimic")
+
+
+def test_mimic_auto_learn_skips_the_flagged_slot_and_reads_the_party(tables, names):
+    """Magikarp's L15 Tackle goes into the party's first empty slot (2): slot 1 holds Mimic there
+    (the shadow) although the battler shows the copy; the battler then shows Tackle in slot 2."""
+    from tests.engine.test_learn import _advance, _mark, _moves, _set_moves, _state
+    from tests.engine.test_levelup import _mon as _lmon
+
+    s = _state(tables, names, _lmon(names, "Magikarp", 15))
+    s = _mark(_set_moves(tables, names, s, 0, "Splash", "Scratch", "", ""), 0, 15)
+    s = s._replace(
+        mimic_slots=s.mimic_slots.at[0].set(1 << 1),
+        shadow_moves=s.shadow_moves.at[0, 1].set(names.move("Mimic")),
+        shadow_pp=s.shadow_pp.at[0, 1].set(7),
+    )
+    out = _advance(tables, s)
+    assert _moves(names, out) == ["Splash", "Scratch", "Tackle", ""]
+    assert (int(out.shadow_moves[0, 1]), int(out.shadow_pp[0, 1])) == (names.move("Mimic"), 7)
+
+
+def test_mimic_fight_holds_the_foes_possible_moves(tables, names):
+    """``layout.fight_tables``: a Mimic or Transform user adds the effects (and read bounds) of the
+    moves the foe's side may have, so the copy is scored by its own label (G-68)."""
+    import types
+
+    from nuzline.ai.layout import copies_moves, fight_effects, fight_tables
+
+    n = names
+    trainer = types.SimpleNamespace(ai_flags=0b10111, format="single")
+    mimic = _mon(n, "Ditto", ["Mimic", "Tackle"], 30)
+    plain = _mon(n, "Geodude", ["Tackle"], 30)
+    earthquake = n.move("Earthquake")
+    assert copies_moves(tables, mimic.moves) and not copies_moves(tables, plain.moves)
+    t = fight_tables(tables, trainer, [mimic], foe_moves=[earthquake, 0, n.move("Tackle")])
+    held = [int(m) for m in np.asarray(t.ai_moves) if m > 0]
+    assert earthquake in held and held.count(n.move("Tackle")) == 1
+    assert int(tables.move_ai_effect[earthquake]) in fight_effects(t, t.ai_moves)
+    t = fight_tables(tables, trainer, [plain], foe_moves=[earthquake])
+    assert earthquake not in [int(m) for m in np.asarray(t.ai_moves)]

@@ -3850,7 +3850,7 @@ def _seen_protect(t, n, s):
     protect = n.move_names.index("Protect")
     assert int(t.move_ai_effect[protect]) == BattleEffect.PROTECT
     return s._replace(
-        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1)
+        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 0].set(protect)
     )
 
 
@@ -4482,7 +4482,7 @@ def test_magnet_rise_expert(
     if known:
         s = s._replace(
             moves=s.moves.at[0, 0, 3].set(n.move("Earthquake")),
-            ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1),
+            ai_seen_moves=s.ai_seen_moves.at[0, 0].set(n.move("Earthquake")),
         )
     assert _delta(t, s, 0x2, 0x3)[0] == 0
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert

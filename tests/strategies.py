@@ -37,6 +37,7 @@ from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
+    MOVE_MIMIC,
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
     SEMI_SET_FLAGS,
@@ -1300,7 +1301,41 @@ BATCH12_MOVES = (
     "Psycho Shift",
     "Mist",  # B12-23
     "Magnet Rise",  # E1 trial batch (G-66)
+    "Mimic",  # E1 trial batch (G-68)
 )
+
+
+def draw_seen_moves(draw, a: dict) -> None:
+    """``a["ai_seen_moves"]``: per player slot the move ids the AI has seen (``battlerMoves``,
+    first-free order, G-68): a drawn subset of the slot's moves in a drawn order, and sometimes a
+    move the slot no longer has (a Mimic copy, a replaced move)."""
+    seen = a["ai_seen_moves"]
+    seen[...] = 0
+    stale = int(a["moves"][1, 0, 0])
+    for slot in range(seen.shape[0]):
+        pool = [int(m) for m in a["moves"][0, slot] if m] + ([stale] if stale else [])
+        ids = (
+            draw(st.lists(st.sampled_from(pool), unique=True, max_size=seen.shape[1]))
+            if pool
+            else []
+        )
+        seen[slot, : len(ids)] = ids
+
+
+def _draw_mimic(draw, a: dict, side: int, active: int) -> None:
+    """E1 trial batch (G-68): maybe (1 in 6) a Mimic copy on the active battler: one of its move
+    slots is flagged in ``mimic_slots`` with the party's Mimic and PP in the shadow (the slot's own
+    move is the copy)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    a["mimic_slots"][side] = 0
+    a["shadow_moves"][side] = 0
+    a["shadow_pp"][side] = 0
+    slots = [k for k in range(4) if a["moves"][side, active, k] not in (0, MOVE_MIMIC)]
+    if slots and rnd.random() < 1 / 6:
+        k = rnd.choice(slots)
+        a["mimic_slots"][side] = 1 << k
+        a["shadow_moves"][side, k] = MOVE_MIMIC
+        a["shadow_pp"][side, k] = rnd.randint(0, 10)
 
 
 def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1944,6 +1979,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_batch12(draw, tables, a, side, active, names)
+        _draw_mimic(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
@@ -1977,9 +2013,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
     a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
     a["turn"][...] = turn
-    for name in ("ai_seen_moves", "ai_ability_known"):
-        flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
-        a[name][...] = np.reshape(flags, a[name].shape)
+    draw_seen_moves(draw, a)
+    flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
+    a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
     # The AI's record of each player item (batch 7): none, or the item a message named, which
     # the Pokemon still holds (every removal clears the record, effects.forget_item).
     known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
@@ -2159,6 +2195,7 @@ RARE_EFFECTS = (
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
+    EffectId.MIMIC,  # G-68
 )
 
 

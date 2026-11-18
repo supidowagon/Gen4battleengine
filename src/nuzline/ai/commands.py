@@ -88,7 +88,7 @@ from nuzline.engine.order import (
     battler_slower,
     compare_speed,
 )
-from nuzline.engine.state import MOVES, BattleState
+from nuzline.engine.state import MOVES, BattleState, record_seen_move
 
 _I32 = jnp.int32
 
@@ -1212,7 +1212,9 @@ class AiContext(NamedTuple):
     live: jnp.ndarray  # bool: the decomp's script cursor is on the current path
     jump: jnp.ndarray  # bool: the last jump command's condition
     calc_temp: jnp.ndarray  # int32, calcTemp
-    seen_moves: jnp.ndarray  # int32[4]: the player's active's moves the AI has seen, else 0
+    seen_moves: (
+        jnp.ndarray
+    )  # int32[4]: the player's active's move ids the AI has seen (battlerMoves)
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     # int32[4, len(SITE_LINES)]: the flat layout's script_rolls index of each line; an
     # unused int32[] in a per-slot layout, whose reads go by order (per_slot)
@@ -1677,10 +1679,7 @@ def new_context(
     before scoring, so the scores already know the move the player used last turn;
     ``step`` commits it to ``ai_seen_moves`` when the AI fights."""
     d = state.active[0]
-    moves = state.moves[0, d].astype(_I32)
-    pending = state.last_move[0].astype(_I32)
-    known = (state.ai_seen_moves[d] > 0) | ((moves == pending) & (pending != 0))
-    seen = jnp.where(known, moves, 0).astype(_I32)
+    seen = record_seen_move(state.ai_seen_moves[d], state.last_move[0]).astype(_I32)
     scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
     false = jnp.asarray(False)
     slotted = jnp.ndim(outcome.script_rolls) == 2

@@ -33,6 +33,7 @@ tables and does nothing here. Actions are assumed legal (``engine.actions``).
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from nuzline.engine.ids import (
@@ -56,12 +57,15 @@ from nuzline.engine.ids import (
     ITEM_GRISEOUS_ORB,
     MAGNET_RISE_TURNS,
     METRONOME_DRAW,
+    MIMIC_FORBIDDEN,
+    MIMIC_PP_CAP,
     MINIMIZE_PARAM,
     MOVE_BATON_PASS,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
+    MOVE_MIMIC,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
@@ -427,6 +431,55 @@ def _restore_types(tables, s: RefState, side: int) -> None:
     mon = _active(s, side)
     row = _t(tables, "species_form_row", mon.species, mon.form)
     mon.types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
+
+
+def _record_seen_move(row: list[int], move: int) -> None:
+    """``TrainerAI_RecordLastMove``'s loop (trainer_ai.c:2705-2716) on one ``battlerMoves`` row."""
+    for i in range(len(row)):
+        if row[i] == move:
+            break
+        if row[i] == 0:
+            row[i] = move
+            break
+
+
+def _restore_moves(s: RefState, side: int) -> None:
+    """The leaving battler's Mimic copies end: ``mimic_slots``' move slots take the party's move
+    and PP back from the shadow, and the shadow and the mask clear (``BattleSystem_InitBattleMon``
+    reads moves and PP from the party Pokemon, lib.c:80-85; ``BattleMon_CopyToParty`` skipped the
+    flagged slots, lib.c:1819-1825; ``moveEffectsData`` is cleared, :2100-2104)."""
+    mon, sd = _active(s, side), s.sides[side]
+    for k in range(len(mon.moves)):
+        if sd.mimic_slots >> k & 1:
+            mon.moves[k], mon.pp[k] = sd.shadow_moves[k], sd.shadow_pp[k]
+    sd.mimic_slots = 0
+    sd.shadow_moves = [0] * len(sd.shadow_moves)
+    sd.shadow_pp = [0] * len(sd.shadow_pp)
+
+
+@contextmanager
+def _party_moves(s: RefState, slot: int):
+    """Player party ``slot``'s moves and PP as the party Pokemon holds them, for a learn
+    (``Pokemon_SetMoveSlot``, script.c:10168-10176; ``BoxPokemon_AddMove``, pokemon.c:3852): the
+    active Pokemon's flagged Mimic slots (``mimic_slots``) hold the copy on the battler, so inside
+    the block ``party[slot].moves`` / ``.pp`` are the shadow's, and the shadow the battler's
+    (G-68)."""
+    sd = s.sides[0]
+    flagged = [
+        k for k in range(len(sd.shadow_moves)) if slot == sd.active and sd.mimic_slots >> k & 1
+    ]
+    mon = sd.party[slot]
+
+    def swap():
+        for k in flagged:
+            mon.moves[k], sd.shadow_moves[k] = sd.shadow_moves[k], mon.moves[k]
+            mon.pp[k], sd.shadow_pp[k] = sd.shadow_pp[k], mon.pp[k]
+
+    swap()
+    try:
+        yield
+    finally:
+        swap()
 
 
 def _restore_ability(tables, s: RefState, side: int) -> None:
@@ -1414,6 +1467,8 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
         s.over, s.winner = 1, WINNER_OPPONENT
     elif all(m.species == 0 or m.hp == 0 for m in s.sides[1].party):
         s.over, s.winner = 1, WINNER_PLAYER
+    if s.over:  # the player's party never saw a Mimic copy (engine.step._faint_check, G-68)
+        _restore_moves(s, 0)
 
 
 # --------------------------------------------------------------------------- experience
@@ -1699,9 +1754,10 @@ def _scan_learnsets(tables, s: RefState) -> None:
     (``GET_EXP_LEARNSET_INDEX = 0``, :9882)."""
     for slot, mon in enumerate(s.sides[0].party):
         while s.learn_level[slot]:
-            result, _, index = _level_up_move(
-                tables, mon, s.learn_level[slot], s.learn_cursor[slot]
-            )
+            with _party_moves(s, slot):
+                result, _, index = _level_up_move(
+                    tables, mon, s.learn_level[slot], s.learn_cursor[slot]
+                )
             if result == LEARNSET_ALL_SLOTS_FILLED:
                 s.learn_cursor[slot] = index - 1
                 return
@@ -1746,11 +1802,15 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
         offered = 0 if entry == LEARNSET_SENTINEL_ENTRY else entry & 0x1FF
         supported = _t(tables, "move_effect", offered) != EffectId.UNSUPPORTED
     options = []
+    with _party_moves(state, slot):
+        party = list(mon.moves)
     for k in range(LEARNED_MOVES_MAX):
-        move = mon.moves[k]
-        ok = supported and not _t(tables, "move_is_hm", move) and not state.ai_seen_moves[slot][k]
+        move = party[k]
+        # The AI has seen the party's move of the slot when its id is in its list (G-68).
+        seen = move != 0 and move in state.ai_seen_moves[slot]
+        ok = supported and not _t(tables, "move_is_hm", move) and not seen
         if slot == side.active and (
-            move in (side.disabled_move, side.locked_move, side.choice_lock)
+            mon.moves[k] in (side.disabled_move, side.locked_move, side.choice_lock)
             or state.learn_pin == k + 1
         ):
             ok = False
@@ -1769,8 +1829,9 @@ def ref_learn(tables, state: RefState, option: int) -> RefState:
     index = s.learn_cursor[slot]
     move = _learnset(tables, mon)[index] & 0x1FF
     if option != LEARN_GIVE_UP:
-        mon.moves[option] = move
-        mon.pp[option] = _t(tables, "move_pp", move)  # MoveTable_CalcMaxPP(move, 0)
+        with _party_moves(s, slot):  # a flagged Mimic slot takes it into the shadow (G-68)
+            mon.moves[option] = move
+            mon.pp[option] = _t(tables, "move_pp", move)  # MoveTable_CalcMaxPP(move, 0)
         mon.pp_ups[option] = 0
     s.learn_cursor[slot] = index + 1
     _scan_learnsets(tables, s)
@@ -2312,6 +2373,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     sd = s.sides[side]
     _restore_types(turn.tables, s, side)  # the outgoing battler's Camouflage ends
     _restore_ability(turn.tables, s, side)  # and its traced ability
+    _restore_moves(s, side)  # and its Mimic copies (G-68)
     sd.active = slot
     _reset_battler(sd, baton)
     sd.fake_out_turn = turn.entry_turn
@@ -2858,6 +2920,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.sides[side].magnet_rise = 1
         s.sides[side].magnet_rise_turns = MAGNET_RISE_TURNS
+    elif effect == EffectId.MIMIC and landed:
+        _mimic(tables, s, side, target)
     elif effect == EffectId.YAWN and landed and _active(s, target).hp:
         # subscript_yawn.s: an ability that blocks it is tagged; else unless it fails the count 2.
         fails, by_ability = _yawn_blocks(tables, s, side, target)
@@ -5370,6 +5434,26 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     )
 
 
+def _mimic(tables, s: RefState, side: int, target: int) -> None:
+    """Mimic (effect_script_0082.s:3; ``BtlCmd_TryMimic``, script.c:4476-4523): fails on a
+    defender's ``movePrevByBattler`` that is MOVE_NONE or not Mimic-able (``MIMIC_FORBIDDEN``,
+    lib.c:7152-7158, :7182-7192), on a defender with a Substitute, and on a move the user knows;
+    else the user's first Mimic slot takes the move with ``min(5, table PP)`` and joins
+    ``mimickedMoveSlot``. The party's move and PP of that slot (after Mimic's own PP use) go to the
+    shadow (G-68)."""
+    last = s.sides[target].last_move
+    mon, sd = _active(s, side), s.sides[side]
+    if last in MIMIC_FORBIDDEN or not last or s.sides[target].substitute_hp or last in mon.moves:
+        return
+    if MOVE_MIMIC not in mon.moves:  # the script runs from the user's own Mimic slot
+        return
+    j = mon.moves.index(MOVE_MIMIC)
+    sd.shadow_moves[j], sd.shadow_pp[j] = mon.moves[j], mon.pp[j]
+    mon.moves[j] = last
+    mon.pp[j] = min(MIMIC_PP_CAP, _t(tables, "move_pp", last))
+    sd.mimic_slots |= 1 << j
+
+
 def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> bool:
     """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
     sd = s.sides[side]
@@ -5462,14 +5546,11 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     commands = [_command(a) for a in actions]
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
     # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
-    # player's movePrevByBattler joins the AI's list, as the matching move slot of the
-    # player's active Pokemon (Struggle matches none and is not recorded).
+    # player's movePrevByBattler joins the AI's list of move ids: the first empty entry, unless
+    # it is there already or the list is full (:2705-2716; Struggle is recorded too, G-68).
     if commands[1] == FIGHT and not choices[1][1] and not choices[1][2]:
         player = s.sides[0]
-        pending = player.last_move
-        for k, m in enumerate(_active(s, 0).moves):
-            if pending and m == pending:
-                s.ai_seen_moves[player.active][k] = 1
+        _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
     # The search's turn powerMul (step.replacement_power_mul): the player's switch meets the
     # opponent's Pursuit, judged on the turn-start state.
     turn.power_mul = PURSUIT_POWER_MUL if _pursues(tables, s, 0, actions, choices) else 10
