@@ -1066,6 +1066,14 @@ def _use_move(
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
     succeeded = can_act & (has_target | nature_power | invoker | first_charge)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
+    # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
+    # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
+    # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
+    # script (bcp.c:3214) and its damage (G-60). So it reads the state before the script: a
+    # charge move's second turn is still VOLATILE_CONDITION_MOVE_LOCKED (the script's
+    # subscript_charge_move_cleanup.s:6 clears it later) and does not count; a Recycle (or a
+    # Natural Gift, a Power Herb) changes the held item only after it (B13-34).
+    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
     # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
@@ -1210,12 +1218,7 @@ def _use_move(
         & (tables.move_effect[used] != EffectId.OHKO)
     )
     state = _set_side(state, "micle", side, 0, accuracy_run)
-    # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
-    # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
-    # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
-    # script and its damage (G-60).
     repeated = (tables.move_effect[used] == EffectId.ROLLOUT) & (state.rollout_count[side] != 0)
-    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
     # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
     # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses

@@ -1333,3 +1333,26 @@ def test_embargo_law_exact_and_sampled(tables, names):
         assert_equals_bruteforce(tables, s, acts)
         n_ = 20_000
         check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
+
+
+def test_metronome_item_skips_a_charge_moves_second_turn(tables, names):
+    """B13-34: BattleSystem_UpdateMetronomeCount (battle_lib.c:6160-6178) runs at the end of
+    BeforeMove (bcp.c:3221), before the move's script: a charge move's strike turn is still
+    VOLATILE_CONDITION_MOVE_LOCKED (subscript_charge_move_cleanup.s:6 clears it in the script),
+    so the count is left as it was; the charge turn itself counts (+1)."""
+    s = _plain(_state(tables, names, ("Snorlax", "Dig"), ("Snorlax", "Growl")))
+    dig = names.move("Dig")
+    s = _held(s, 0, names.item("Metronome"))
+    s = s._replace(
+        metronome_move=s.metronome_move.at[0].set(dig),
+        metronome_turns=s.metronome_turns.at[0].set(2),
+    )
+    charge = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(charge.metronome_turns[0]) == 3 and int(charge.locked_move[0]) == dig
+    strike = s._replace(
+        semi_invulnerable=s.semi_invulnerable.at[0].set(SemiKind.UNDERGROUND),
+        locked_move=s.locked_move.at[0].set(dig),
+    )
+    out = assert_matches_reference(tables, strike, (0, 0), O)
+    assert int(out.hp[1, 0]) < int(strike.hp[1, 0])
+    assert int(out.metronome_turns[0]) == 2 and int(out.locked_move[0]) == 0
