@@ -1168,11 +1168,15 @@ of them, :2107-2115).
   `audioData[15]` in [-128, -30) -> 1, [30, 128) -> 2, else 0 (sound_chatot.c:193-213);
   `initial_arrays` / `make_state` take it as `chatot_cry` (side 0; 0 by default). Data order (pipeline.md): the
   ROM has no cry (save data), the calc repo states the 1 % no-recording case (pkcalc.json:8696), the sheet has
-  nothing. So coverage (`check_coverage(chatot_cry=...)`, None = unknown) refuses a player Chatot that knows or can
-  learn Chatter: "Chatter's confusion chance needs the save's Chatot cry" (data, not a mechanic); an enemy Chatter is
-  never refused. Not built: the save reader for the SAVE_TABLE_ENTRY_CHATOT page (save_table.c:71, the normal
-  block): its offset is the sum of the sizes of the 22 pages before it (SYSTEM .. SEAL_CASE, each `sizeof` rounded
-  as `s += 4 - s % 4; s += 4`), of which `saves/layout.py` knows the first four; no save is read for it yet. AI:
+  nothing; the save does: `saves.load_save` reads the SAVE_TABLE_ENTRY_CHATOT page (save_table.c:71) at
+  `layout.CHATOT_CRY` = 0x64EC of the normal block, the sum of the 22 pages before it (`layout.NORMAL_PAGES`,
+  each `sizeof` rounded as `s += 4 - s % 4; s += 4`, savedata.c:813-823; the 37 pages sum to the block, and
+  the per-page CRC16s of the pages after it, savedata.c:1349-1362, match in the real saves), and
+  `SaveFile.chatot_cry` is its parameter (`saves.chatot_parameter`). The cli, `nuzline line` and the prep
+  problem (`PrepProblem.chatot_cry`) pass it to coverage and `make_state`; a party file gives it as a
+  top-level `chatot_cry` (`data.party.load_chatot_cry`), and without one (unknown: None) coverage refuses a
+  player Chatot that knows or can learn Chatter: "Chatter's confusion chance needs the save's Chatot cry"
+  (data, not a mechanic); an enemy Chatter is never refused. AI:
   `BATTLE_EFFECT_CHATTER` has no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof`
   `:131` by move id (`commands.SOUND_MOVES`, already transcribed): `KAIZO_TRANSCRIBED`; the damage estimate is
   the table power and type. Tests: `tests/engine/test_chatter.py`.

@@ -164,7 +164,9 @@ def check_pool(
         row = personal_row(tables, spec.species, spec.form)
         ability_row = personal_row(tables, spec.species, spec.ability_from)
         ability = AbilityId(int(abilities[ability_row, slot]))
-        ability_name = names.ability_names[names.species_abilities(spec.species, spec.ability_from)[slot]]
+        ability_name = names.ability_names[
+            names.species_abilities(spec.species, spec.ability_from)[slot]
+        ]
         support = IMPLEMENTED_ABILITIES.get(ability, Support.NONE)
         c.add(support, f"{cand.label}: {ability_name}", "ability")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:

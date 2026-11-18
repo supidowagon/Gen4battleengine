@@ -147,10 +147,12 @@ def test_the_chatot_cry_is_a_player_constant_checked_at_the_start(tables, names)
     assert s.chatot_cry.tolist() == [2, 0]
 
 
-def test_a_player_chatot_that_knows_chatter_needs_its_cry(tables, names):
-    """Coverage (G-70): the player's Chatter confusion chance is the save's Chatot cry: unknown
-    (None) refuses a Chatot that knows or can learn Chatter; any parameter 0-2 is fine; an enemy
-    Chatter is never refused."""
+def test_a_player_chatot_that_knows_chatter_needs_its_cry(tables, names, tmp_path):
+    """Coverage (G-70): the player's Chatter confusion chance is the save's Chatot cry
+    (``SaveFile.chatot_cry``) or a party file's ``chatot_cry``; a party file without one leaves
+    it unknown (None), which refuses a Chatot that knows or can learn Chatter; any parameter 0-2
+    is fine; an enemy Chatter is never refused."""
+    from nuzline.data.party import load_chatot_cry
     from nuzline.engine.coverage import check_coverage
     from tests.engine.helpers import roark_party, roark_trainer
 
@@ -164,6 +166,11 @@ def test_a_player_chatot_that_knows_chatter_needs_its_cry(tables, names):
 
     assert refused(None)
     assert not any(refused(cry) for cry in (0, 1, 2))
+    party = tmp_path / "party.toml"
+    party.write_text("chatot_cry = 2", encoding="utf-8")
+    assert load_chatot_cry(party) == 2
+    party.write_text("[[pokemon]]", encoding="utf-8")
+    assert load_chatot_cry(party) is None
     plain = [_mon(names, "Chatot", ["Leer", "Fury Attack"], 30)]
     report = check_coverage(tables, names, plain, roark_trainer(), opp, 0)
     assert not any(refusal in line for line in report.missing)

@@ -249,6 +249,7 @@ def setup_states(tables: Tables, problem: PrepProblem, setups: Sequence[Setup]) 
         protected=[protected_slots(problem, s) for s in setups],
         terrain=problem.trainer.terrain,
         gravity=start_gravity(problem.trainer),
+        chatot_cry=problem.chatot_cry,
     )
 
 

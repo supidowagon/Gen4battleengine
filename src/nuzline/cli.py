@@ -573,6 +573,16 @@ def _starter(save) -> int | None:
     return None if save is None else save.player_starter or None
 
 
+def _chatot_cry(save, party_path) -> int | None:
+    """The player's Chatter parameter (G-70): the save's Chatot cry, else the party file's
+    ``chatot_cry`` (None when it gives none: coverage then refuses a Chatter Chatot)."""
+    if save is not None:
+        return save.chatot_cry
+    from nuzline.data.party import load_chatot_cry
+
+    return load_chatot_cry(party_path)
+
+
 def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
     """Raise ``_Refused`` with the trainer-only coverage report when the fight cannot be set
     up: its start condition is a pending user call ("unknown", never read as a weather) or a
@@ -643,7 +653,8 @@ def _coverage(args) -> int:
 
     print(_trainer_line(trainer))
     leads = (args.lead, args.opp_active)
-    report = check_coverage(tables, names, player, trainer, opp, weather, leads)
+    cry = _chatot_cry(save, args.party)
+    report = check_coverage(tables, names, player, trainer, opp, weather, leads, cry)
     _print_report(report)
     if save is not None:
         _print_pool(args, game, tables, names, player, trainer, opp, save)
@@ -700,12 +711,13 @@ def _rank(args) -> int:
     game = _game(args)
     # Before anything compiles: JAX opens the persistent cache at the first compile.
     enable_compile_cache(_table_version(game) + code_version(), game.id)
-    _, tables, names, trainer, player, opp, weather, _ = _fight(args)
+    _, tables, names, trainer, player, opp, weather, save = _fight(args)
+    cry = _chatot_cry(save, args.party)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
     try:
-        require_coverage(tables, names, player, trainer, opp, weather, leads)
+        require_coverage(tables, names, player, trainer, opp, weather, leads, cry)
     except UnsupportedMechanics as e:
         _print_report(e.report)
         return EXIT_REFUSED
@@ -720,6 +732,7 @@ def _rank(args) -> int:
         leads=leads,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        chatot_cry=cry or 0,
     )
     state = state.with_budget(args.deaths, slots)
     try:
@@ -794,12 +807,13 @@ def _solve(args) -> int:
     # _fight loads the tables from game.tables_dir: the version the run records.
     tables_version = _table_version(game)
     enable_compile_cache(tables_version + code_version(), game.id)
-    _, tables, names, trainer, player, opp, weather, _ = _fight(args)
+    _, tables, names, trainer, player, opp, weather, save = _fight(args)
+    cry = _chatot_cry(save, args.party)
     slots = protected_slots(player, names, args.protect)
     leads = (args.lead, args.opp_active)
     print(_trainer_line(trainer))
     try:
-        require_coverage(tables, names, player, trainer, opp, weather, leads)
+        require_coverage(tables, names, player, trainer, opp, weather, leads, cry)
     except UnsupportedMechanics as e:
         _say(f"refused: {e}")
         _print_report(e.report)
@@ -815,6 +829,7 @@ def _solve(args) -> int:
         leads=leads,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        chatot_cry=cry or 0,
     )
     state = state.with_budget(args.deaths, slots)
     try:
@@ -1086,12 +1101,14 @@ def line_setup(
             raise ValueError(f"{line_path}: --save needs the line file's [[team]] (who to bring)")
         save = _load_save(save_path, allow_corrupt, game, tables, names)
         player = team_from_save(file, save, tables, names)
+        cry = save.chatot_cry
     else:
         if file.team:
             raise ValueError(
                 f"{line_path}: [[team]] needs --save; with --party the party file is the team"
             )
         player = load_party(party_path, names, tables)
+        cry = _chatot_cry(None, party_path)
     trainer = resolve_trainer(trainers, trainer_id=trainer_id)
     from nuzline.ai.layout import fight_tables
 
@@ -1108,7 +1125,7 @@ def line_setup(
     rules = resolve_rules(file, names, player, opp)
     slots = protected_slots(player, names, protect, member="team")
     weather = start_weather(trainer)
-    require_coverage(tables, names, player, trainer, opp, weather, (0, 0))
+    require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
     from nuzline.engine.coverage import start_gravity
 
     state = make_state(
@@ -1119,6 +1136,7 @@ def line_setup(
         opp_items=trainer.items,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        chatot_cry=cry or 0,
     ).with_budget(deaths, slots)
     return LineSetup(tables, names, trainer, player, opp, state, file, rules, rules_to_line(rules))
 

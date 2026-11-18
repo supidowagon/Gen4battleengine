@@ -19,6 +19,10 @@ percent; omitted means 100, the user's own Pokemon), ``pokerus`` and ``friend_bo
 omitted means 0). Coverage inputs (``PokemonSpec``): ``egg_location`` (a location id, omitted
 means 0) and ``pp_ups`` (four values 0-3, one per move slot including empty ones; omitted means
 none).
+
+The player's Chatot cry (G-70): an optional top-level ``chatot_cry`` (0, 1 or 2, the Chatter
+parameter ``saves.chatot_parameter`` reads from a save; ``load_chatot_cry``). Omitted, it is
+unknown, and coverage refuses a Chatot that knows or can learn Chatter.
 """
 
 from __future__ import annotations
@@ -157,6 +161,17 @@ def _spec(entry: dict, names: Names) -> PokemonSpec:
         stats=_six(entry, "stats") if "stats" in entry else None,
         **_exp_fields(entry),
     )
+
+
+def load_chatot_cry(path: Path) -> int | None:
+    """The party file's ``chatot_cry`` (0-2), None when it does not give one."""
+    with open(path, "rb") as f:
+        value = tomllib.load(f).get("chatot_cry")
+    if value is None:
+        return None
+    if not isinstance(value, int) or not 0 <= value <= 2:
+        raise ValueError(f"{path}: chatot_cry {value!r} is not a Chatter parameter 0-2")
+    return value
 
 
 def load_party(path: Path, names: Names, tables: Tables | None = None) -> list[PokemonSpec]:

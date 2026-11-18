@@ -287,6 +287,7 @@ def _root(problem: PrepProblem, setup: Setup, tables: Tables) -> BattleState:
         problem.trainer.items,
         terrain=problem.trainer.terrain,
         gravity=start_gravity(problem.trainer),
+        chatot_cry=problem.chatot_cry,
     )
 
 
