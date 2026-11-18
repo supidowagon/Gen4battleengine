@@ -640,6 +640,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         234,  # TRANSFER_STATUS: Basic_CheckCanPsychoShift (:264); Expert_PsychoShift, :5301
         # E1 trial batch (EVA_UP shares both labels with EVA_UP_2_MINIMIZE, 108).
         16,  # EVA_UP: Basic_CheckHighStatStage_Evasion (:143); Expert_StatusEvasionUp (:1639)
+        114,  # ALL_FAINT_3_TURNS: Basic_CheckPerishSong (:199); no Expert entry
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

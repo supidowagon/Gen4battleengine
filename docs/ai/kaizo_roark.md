@@ -837,6 +837,13 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   column 10). `policy._harrassment`; `layout.KAIZO_FLAG_BITS` and coverage's
   `IMPLEMENTED_AI_FLAGS["kaizo"]` carry bit 10.
 
+### 5.25 E1 trial batch: Perish Song (G-64), Nature Power, Ghost Curse, Endure, Magnet Rise, Gravity
+
+- ALL_FAINT_3_TURNS (114): `Basic_CheckPerishSong` (`:720-723`), the player already perishing
+  -10; no Expert entry. Switching step 3, `AI_PerishSongKO` (`trainer_ai.c:3263-3272`): the AI's
+  active with the effect at `perishSongTurns == 0` switches before any draw
+  (`switching._Layout.perish`; the pick is `BattleAI_PostKOSwitchIn`'s).
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

@@ -54,6 +54,14 @@ MOVE_EFFECT_INGRAIN`` (``ingrain``, :3907); Shadow Tag or Arena Trap on ``D`` (:
 Magnet Pull on ``D`` with ``A`` Steel type (:3910-3911); no other living party member; and
 positive stages summing to 4 or more (which ends the check after the keep draws).
 
+Step 3, ``AI_PerishSongKO`` (trainer_ai.c:3263-3272), runs after the trap gate and with a bench
+(:3906-3913, :3941), before the Wonder Guard step and without a draw: the AI's active has
+``MOVE_EFFECT_PERISH_SONG`` and ``perishSongTurns == 0`` (it faints at this turn's end:
+battle_controller_player.c:1799-1809; the comment at :3253-3262 says "does nothing", the code
+does not) -> it switches (``aiSwitchedPartySlot = 6``, :3269-3270, TRUE). ``_Layout.perish``;
+no site exists then, and ``switch_action`` returns the ``TrainerAI_PickCommand`` slot (:4001-4026,
+``BattleAI_PostKOSwitchIn``, battle_lib.c:7923, ``replacement``) whatever the stop (E1 ruling G-64).
+
 Effectiveness is the decomp's status mask, built in chart-row order
 (``tables.type_chart_order``): ``BattleSystem_ApplyTypeChart`` (battle_lib.c:2560) for
 the keep draws, where only moves with power update the super/not-very-effective bits
@@ -70,8 +78,8 @@ Refused, never approximated (``switching_refusals`` names each one):
   the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
   Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
-* moves whose state the engine does not carry: Magnet Rise, Miracle Eye, Perish Song (step 3),
-  and the variable-type moves Weather
+* moves whose state the engine does not carry: Magnet Rise, Miracle Eye, and the variable-type
+  moves Weather
   Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127; Hidden Power's IV type is
   modelled on both sides: ``damage.ai_move_type``, and a bench member's own,
   ``Move_CalcVariableType``, battle_lib.c:8162-8175);
@@ -186,7 +194,6 @@ _AI_SIDE_ABILITIES = {
 _MOVES = {
     "Magnet Rise": "MAGNET_RISE in ApplyTypeChart",
     "Miracle Eye": "lifts the Dark immunity",
-    "Perish Song": "AI_PerishSongKO",
     "Weather Ball": "variable type (TrainerAI_MoveType)",
     "Natural Gift": "variable type (TrainerAI_MoveType)",
     "Judgment": "variable type (TrainerAI_MoveType)",
@@ -416,6 +423,7 @@ class _Layout(NamedTuple):
     ability_refused: jnp.ndarray  # bool[2, SLOTS]
     move_refused: jnp.ndarray  # bool[2, SLOTS, MOVES]
     refused: jnp.ndarray  # bool
+    perish: jnp.ndarray  # bool, AI_PerishSongKO (step 3) switches the AI's active out
 
 
 @partial(jax.jit, static_argnames="sites")
@@ -443,6 +451,10 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     bench = (jnp.arange(SLOTS) != a) & present[1] & (state.hp[1] > 0)
     gate = gate | ~jnp.any(bench)
 
+    # Step 3, AI_PerishSongKO (trainer_ai.c:3263-3272): after the trap gate and the bench test,
+    # before the Wonder Guard step; no draw. Everything after it (steps 4-11) is not reached.
+    perish = ~gate & (state.perish_song[1] != 0) & (state.perish_song_turns[1] == 0)
+
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
     identified, grounded, roosting = defender_chart_flags(tables, state, 0)
@@ -462,6 +474,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     damaging = (a_moves != 0) & (tables.move_power[a_moves] > 0)
     only_ineffective = (
         ~gate
+        & ~perish
         & (jnp.sum(damaging.astype(_I32)) >= 2)
         & jnp.all(~damaging | ((a_flags & INEFFECTIVE) != 0))
     )
@@ -510,7 +523,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # order (``bench_se``), draw (:3338). Doubles return FALSE (:3294), so singles only.
     guard = (d_ability == _WONDER_GUARD) & ~jnp.any(keep)
     guard_draws = (guard & bench[:, None] & bench_se).reshape(-1)
-    exists = jnp.concatenate([guard_draws, keep, *passes]) & ~gate  # [_CANDIDATES]
+    exists = jnp.concatenate([guard_draws, keep, *passes]) & ~gate & ~perish  # [_CANDIDATES]
 
     position = jnp.cumsum(exists.astype(_I32)) - 1
     target = jnp.where(exists, position, sites)  # out of range: dropped
@@ -533,6 +546,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         ability_refused,
         move_refused,
         refused,
+        perish,
     )
 
 
@@ -604,4 +618,11 @@ def switch_action(
         | (kind == SwitchSite.WONDER_GUARD)
     )
     action = jnp.where(is_pass, MOVE_ACTIONS + lay.targets[index].astype(_I32), NO_SWITCH)
+    # AI_PerishSongKO switches whatever the stop (no draw precedes it): TrainerAI_PickCommand
+    # (trainer_ai.c:4001-4026) sends BattleAI_PostKOSwitchIn's pick, or the first living
+    # non-active slot (:4014-4022; the pick is always one while a bench exists).
+    from nuzline.ai.replacement import post_ko_pick  # circular at module level
+
+    pick, stale = post_ko_pick(tables, state)
+    action = jnp.where(lay.perish, jnp.where(stale, REFUSED_ACTION, MOVE_ACTIONS + pick), action)
     return jnp.where(lay.refused | (stop == SWITCH_REFUSED), REFUSED_ACTION, action).astype(_I32)

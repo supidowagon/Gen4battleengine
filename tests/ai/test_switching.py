@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from nuzline.ai import switching
+from nuzline.ai import replacement, switching
 from nuzline.ai.outcome import enumerate_ai_outcomes, sample_ai_outcome
 from nuzline.ai.switching import (
     INEFFECTIVE,
@@ -276,8 +276,10 @@ def test_jit_without_64bit(tables, names):
     s = _trace_f(tables, names)
     jaxpr = str(jax.make_jaxpr(switch_sites)(tables, s))
     assert "int64" not in jaxpr and "float64" not in jaxpr
+    # switch_action also traces BattleAI_PostKOSwitchIn (the Perish Song step), whose reductions
+    # carry ``np.int64`` axis parameters: no 64-bit array type (``i64[`` / ``f64[``) appears.
     jaxpr = str(jax.make_jaxpr(switch_action)(tables, s, jnp.int8(0)))
-    assert "int64" not in jaxpr and "float64" not in jaxpr
+    assert "i64[" not in jaxpr and "f64[" not in jaxpr and "float64" not in jaxpr
 
 
 def test_party_hidden_power_takes_each_members_ivs(tables, names):
@@ -299,3 +301,65 @@ def test_party_hidden_power_takes_each_members_ivs(tables, names):
     assert (types[0, 3], types[1, 3]) == (1, 17)
     other = int(s.moves[1, 0, 0])
     assert types[0, 0] == int(tables.move_type[other])
+
+
+def _perishing(tables, names, turns=0):
+    """Trace F's Cranidos with Perish Song under way (``perish_song_turns = turns``)."""
+    s = _trace_f(tables, names)
+    return s._replace(
+        perish_song=s.perish_song.at[1].set(1),
+        perish_song_turns=s.perish_song_turns.at[1].set(turns),
+    )
+
+
+def test_perish_song_ko_switches_without_a_draw(tables, names):
+    """AI_PerishSongKO (trainer_ai.c:3263-3272, step 3): the AI's active with the effect at
+    perishSongTurns 0 switches before every draw, to BattleAI_PostKOSwitchIn's pick
+    (TrainerAI_PickCommand, :4001-4026), whatever the stop (E1 ruling G-64)."""
+    s = _perishing(tables, names)
+    assert switch_sites(tables, s).tolist() == [K.NONE] * SWITCH_SITES
+    pick = int(replacement.post_ko_switch_in(tables, s))
+    assert pick in (0, 1)
+    assert _actions(tables, s) == [4 + pick] * (SWITCH_SITES + 1)
+    assert switching_refusals(tables, s) == []
+    # The decision is certain: the enumeration has one outcome weight.
+    outs, probs = enumerate_ai_outcomes(tables, s)
+    act = np.asarray(jax.vmap(lambda st: switch_action(tables, s, st))(outs.switch_stop))
+    assert set(act.tolist()) == {4 + pick}
+    assert abs(float(np.asarray(probs, np.float64).sum()) - 1) < 1e-5
+
+
+def test_perish_song_turns_above_zero_keep_the_usual_layout(tables, names):
+    usual = switch_sites(tables, _trace_f(tables, names)).tolist()
+    for turns in (1, 2, 3):
+        s = _perishing(tables, names, turns)
+        assert switch_sites(tables, s).tolist() == usual
+        assert _actions(tables, s) == _actions(tables, _trace_f(tables, names))
+    # Only the AI's own battler counts: the player's Perish Song does not switch it.
+    s = _trace_f(tables, names)
+    mine = s._replace(perish_song=s.perish_song.at[0].set(1))
+    assert _actions(tables, mine) == _actions(tables, s)
+
+
+def test_perish_song_ko_follows_the_gates(tables, names):
+    s = _perishing(tables, names)
+    # Step 1 comes first: a trapped (Mean Look) or ingrained AI battler never switches.
+    for gated in (
+        s._replace(mean_look=s.mean_look.at[1].set(1)),
+        s._replace(ingrain=s.ingrain.at[1].set(1)),
+        s._replace(trapped=s.trapped.at[1].set(2)),
+    ):
+        assert _actions(tables, gated) == [NO_SWITCH] * (SWITCH_SITES + 1)
+    # Step 2 (no living bench): nobody to switch to.
+    alone = s._replace(hp=s.hp.at[1, :2].set(0))
+    assert _actions(tables, alone) == [NO_SWITCH] * (SWITCH_SITES + 1)
+
+
+def test_perish_song_ko_pick_is_post_ko_switch_in_not_the_first_slot(tables, names):
+    """Geodude (slot 0) has no move that is super effective against Starly; Onix (slot 1)
+    does, so BattleAI_PostKOSwitchIn's stage 1 picks slot 1 over the first living slot 0."""
+    s = _perishing(tables, names)
+    tackle = names.move("Tackle")
+    s = s._replace(moves=s.moves.at[1, 0].set(jnp.asarray([tackle, 0, 0, 0], s.moves.dtype)))
+    assert int(replacement.post_ko_switch_in(tables, s)) == 1
+    assert _actions(tables, s) == [5] * (SWITCH_SITES + 1)

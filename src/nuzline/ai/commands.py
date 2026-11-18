@@ -277,6 +277,7 @@ class BattleEffect(IntEnum):
     DEF_DOWN = 19
     SPEED_DOWN = 20
     EVA_DOWN = 24
+    ALL_FAINT_3_TURNS = 114  # Perish Song (Basic_CheckPerishSong :199)
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic

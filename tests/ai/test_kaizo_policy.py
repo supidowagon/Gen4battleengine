@@ -4351,3 +4351,17 @@ def test_batch12_healing_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roa
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 trial batch: Perish Song (G-64) ------------------------------------------------------
+
+
+@pytest.mark.parametrize(("perishing", "basic"), [(False, 0), (True, -10)])
+def test_perish_song(kaizo_tables, kaizo_names, kaizo_roark_party, perishing, basic):
+    """Basic_CheckPerishSong (script.s:720-723): -10 when the player already has the effect;
+    no Expert entry for ALL_FAINT_3_TURNS (:1628-1808)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Perish Song", "Accelerock", "", ""))
+    s = s._replace(perish_song=s.perish_song.at[0].set(int(perishing)))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == 0

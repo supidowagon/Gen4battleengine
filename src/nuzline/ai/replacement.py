@@ -136,6 +136,12 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
 _post_ko_jit = jax.jit(_post_ko)
 
 
+def post_ko_pick(tables: Tables, state: BattleState, power_mul=10) -> tuple:
+    """``(slot, stale)``, both traceable: ``post_ko_switch_in``'s pick and whether it is
+    one of the refused stale-score states (``switching.switch_action``'s Perish Song step)."""
+    return _post_ko(tables, state, power_mul)
+
+
 def post_ko_switch_in(tables: Tables, state: BattleState, power_mul=10) -> jnp.ndarray:
     """``int32``: the party slot the opponent sends in for its fainted active Pokemon
     (module docstring), always a ``legal_replacements(state, 1)`` slot when one exists.

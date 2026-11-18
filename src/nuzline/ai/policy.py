@@ -1071,6 +1071,12 @@ def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_perish_song(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckPerishSong`` (script.s:720-723): the player already perishing, -10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.PERISH_SONG))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _expert_ingrain(ctx: AiContext, mask) -> AiContext:
     """``Expert_Ingrain`` (script.s:4463-4465): no score change."""
     return c.pop_or_end(_at(ctx, mask))
@@ -3176,6 +3182,7 @@ _BASIC_LABELS = (
     (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
+    (BattleEffect.ALL_FAINT_3_TURNS, _basic_check_perish_song),  # :199
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
     (BattleEffect.POWER_BASED_ON_FRIENDSHIP, _basic_check_non_standard_damage),  # :203

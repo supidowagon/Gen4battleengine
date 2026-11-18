@@ -946,3 +946,17 @@ of them, :2107-2115).
   doubles layout extends; reference `_side_ability_count`), read in `damage._pre_random` and the
   reference `_calc_move_damage` at the decomp's position. The AI scripts never read either ability.
   Tests: `test_e1_trial.py`.
+- G-64 Perish Song, the AI's switching step 3. `TrainerAI_ShouldSwitch` (trainer_ai.c:3894-3987), after
+  the trap gate (:3906-3913) and the bench test (:3941), runs `AI_PerishSongKO` (:3263-3272) before
+  the Wonder Guard step (:3945) and without a draw: the AI's active battler has
+  `MOVE_EFFECT_PERISH_SONG` and `perishSongTurns == 0` -> `aiSwitchedPartySlot = 6`, TRUE. The
+  comment above it (:3253-3262, "does nothing") is wrong; the code is followed. Reachability:
+  `BtlCmd_TryPerishSong` sets 3 (battle_script.c:5480-5481), the turn-end pass shows and decrements
+  3 -> 2 -> 1 -> 0 and faints at 0 (battle_controller_player.c:1799-1809), so at the selection of
+  the turn on whose end it faints the AI sees 0. `TrainerAI_PickCommand` (:4001-4026) then sends
+  `BattleAI_PostKOSwitchIn`'s pick (battle_lib.c:7923), else the first living slot that is not the
+  active (:4014-4022). Built as `switching._Layout.perish`: no switch site exists then
+  (`exists & ~perish`), and `switch_action` returns the `replacement` pick for every stop; the
+  scoring side is `Basic_CheckPerishSong` (script.s:720-723, -10 against a perishing player),
+  ALL_FAINT_3_TURNS (114) transcribed with no Expert entry. Tests: `test_switching.py`,
+  `test_kaizo_policy.py`.
