@@ -70,7 +70,7 @@ per day is the rate used for estimates.
   fetches the logs and reports.
 - **Nightly pod (`ci-nightly`):** at most $6 per run. Brief: `tools/ops/nightly_brief.md`.
   Delete the pod within 4.5 hours of creation.
-- **Test pod (`ci-day`):** 32 vCPU / 128 GB CPU, at most $10 per day, for every stream test
+- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, at most $15 per day, for every stream test
   run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
