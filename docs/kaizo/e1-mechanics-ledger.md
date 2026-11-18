@@ -1191,3 +1191,17 @@ of them, :2107-2115).
   per-hit arrays use `MAX_HITS` (6); the Metronome item count runs once, before the move script
   (B13-34); Pluck and the Custap gate are batch 13's (battle_lib.c:5839-5844,
   subscript_check_quick_claw.s:26-27).
+- Trial accuracy classes: Gravity and Transform in `outcome.hit_thresholds` (branch `claude/e1-trial-on-b13`).
+  A faster foe's move can change the slower move's threshold before its check: Gravity sets
+  FIELD_CONDITION_GRAVITY, read as `hitRate * 10 / 6` (battle_controller_player.c:2972-2974); Transform
+  (`BtlCmd_Transform`, battle_script.c:5330-5373) copies the BattleMon up to `ability`, so `statBoosts`
+  (battle_mon.h:75) and `ability` (:84): the target's evasion becomes the side's own (as Psych Up's), and
+  the target holds the side's ability (Sand Veil / Snow Cloak :2927-2933, Tangled Feet :2944-2947, Simple /
+  Unaware :2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags (:5350-5358) rerun
+  its switch-in checks, so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
+  `_threshold_grid`: the eva copy joins Psych Up's, and the second weather variant is now the foe's field
+  move (weather move, Gravity, or Transform with its copied ability and weather); one move has one effect.
+  `future_thresholds` keeps the Future Sight roll whole (`loose`) when a Gravity or Transform is used this
+  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1235, ends it before the hit
+  :1758-1783). The reference engine's live check (`_hit_rate`, `_transform`) already read both; no change.
+  Tests: `test_accuracy_classes.py` (registry, `test_gravity_and_transform_are_seen_by_hit_thresholds`).

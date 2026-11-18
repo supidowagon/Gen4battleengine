@@ -46,6 +46,7 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
     PRESENT_HEAL,
+    ability_weather,
     entry_ability,
     entry_weather,
     hazards_loss,
@@ -55,6 +56,7 @@ from nuzline.engine.damage import (
 from nuzline.engine.ids import (
     CHATTER_CHANCES,
     FOCUS_BAND_PARAM,
+    GRAVITY_TURNS,
     ON_HIT_EFFECTS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
@@ -481,7 +483,8 @@ def future_thresholds(
 
     The hit reads the battlers on the field at the turn's end. The attacker's slot holds its
     active Pokemon, the one it switches in, or (a foe's Roar) any living party member; likewise
-    the defender's. Their abilities and items do not change within a turn but by Trace (``loose``).
+    the defender's. Their abilities and items do not change within a turn but by Trace or Transform
+    (``loose``; a Gravity that is set or ends this turn is ``loose`` too).
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
     stat effect on accuracy or evasion, Foresight, a White Herb); else the start stages of a battler
     that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
@@ -589,7 +592,15 @@ def future_thresholds(
     # hit (:1758-1783), changes which items the hit reads (state.held_item): the roll is kept
     # whole, rare and sound.
     embargo_field = jnp.any(uses & (effect == EffectId.EMBARGO)) | jnp.any(state.embargo != 0)
-    loose = jnp.broadcast_to(tracer | embargo_field, (2,)) | micle_field[attackers]
+    # Gravity at the hit (x10/6, bcp.c:2972-2974) is the turn end's: a Gravity used this turn
+    # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1235) ends a count of 1 before the
+    # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
+    # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373). Either way the roll is
+    # kept whole, rare and sound.
+    field_change = jnp.any(
+        uses & ((effect == EffectId.GRAVITY) | (effect == EffectId.TRANSFORM))
+    ) | (state.gravity == 1)
+    loose = jnp.broadcast_to(tracer | embargo_field | field_change, (2,)) | micle_field[attackers]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
 
@@ -725,7 +736,9 @@ def _threshold_grid(
       stages to 0; Psych Up (``effects.copy_stat_stages``, BtlCmd_CopyStatStages :6042-6053):
       the target's evasion becomes the side's own; Acupressure (``effects._acupressure``,
       BtlCmd_BoostRandomStatBy2 :8932-8956, evasion among the drawn stats): the target's
-      evasion +2 (B12-31);
+      evasion +2 (B12-31); Transform (``effects._transform``, BtlCmd_Transform :5330-5373, the
+      BattleMon copy up to ``ability`` includes ``statBoosts``, battle_mon.h:75, :84): the target's
+      evasion becomes the side's own, as Psych Up's;
     * a White Herb on either battler, which resets a lowered stage to 0;
     * the order: a Zoom Lens (``HOLD_EFFECT_ACCURACY_UP_SLOWER``) raises the rate against a
       target that has moved, i.e. when the side acts second (the second half of the grid,
@@ -734,6 +747,13 @@ def _threshold_grid(
     * the weather (Sand Veil, Snow Cloak): the foe's weather move (``EffectId.WEATHER``,
       ``effects._weather``) sets its weather first; a switch-in weather ability is in the
       turn-start threshold (``damage.entry_weather``);
+    * the foe's field move, the second weather variant (one move has one effect): its weather
+      move's weather; its Gravity (``effects._gravity``), FIELD_CONDITION_GRAVITY's x10/6
+      (battle_controller_player.c:2972-2974); its Transform into the side's battler, which then
+      holds the side's ability (Sand Veil, Snow Cloak, Tangled Feet, Simple, Unaware, No Guard,
+      Cloud Nine as the target, :2876-2947, bcp.c:3016-3021) and runs its switch-in checks again
+      (step._use_move, the announce flags cleared :5350-5358), so a copied weather ability sets
+      its weather (``hooks.weather_ability``, battle_lib.c:3740-3790);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
@@ -750,8 +770,9 @@ def _threshold_grid(
     Switches (which go first) are in the turn-start threshold already, with the
     newcomer's switch-in checks: the weather its ability sets and the ability it traces
     (``damage.entry_weather``, ``damage.entry_ability``: a Trace newcomer facing a Sand Veil
-    attacker in sand holds Sand Veil at the check). No implemented move changes Gravity, an
-    ability or Foresight's flag on the target before the target's foe moves (an armed Trace
+    attacker in sand holds Sand Veil at the check). No implemented move but Gravity and Transform
+    (above) changes Gravity, an ability or Foresight's flag on the target before the target's foe
+    moves (an armed Trace
     holder copies the newcomer the foe's switch brings, before either moves: the view holds the
     copy, ``pivot_view``), and a faint of either battler leaves no check. The
     variants over-approximate (Keen Eye, misses and the chance of a secondary only remove
@@ -820,8 +841,11 @@ def _threshold_grid(
         # The foe's move's one stage write each (B12-31): a stat move's delta, Haze's 0,
         # Psych Up's copy of the side's own evasion (the side has not moved: its turn-start
         # stage), Acupressure's +2 (its defender is its user in singles).
-        haze, psych = effect[foe] == EffectId.HAZE, effect[foe] == EffectId.PSYCH_UP
-        acup = effect[foe] == EffectId.ACUPRESSURE
+        haze, acup = effect[foe] == EffectId.HAZE, effect[foe] == EffectId.ACUPRESSURE
+        # Psych Up and Transform copy the side's stages onto the foe (BtlCmd_CopyStatStages;
+        # BtlCmd_Transform's BattleMon copy, statBoosts at battle_mon.h:75).
+        xform = effect[foe] == EffectId.TRANSFORM
+        psych = (effect[foe] == EffectId.PSYCH_UP) | xform
         acc_delta = jnp.clip(delta[foe], STAGE_MIN, STAGE_MAX).astype(_I32)
         accs, acc_ok = _stage_variants(
             acc0,
@@ -849,11 +873,21 @@ def _threshold_grid(
         weather0 = jnp.where(
             foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
         )
-        # The foe's move's weather, only for a weather move (another move's param 0 is no
-        # weather): else the start weather again, which adds no threshold.
-        moved_weather = jnp.where(effect[foe] == EffectId.WEATHER, stat[foe], weather0)
+        # The foe's field move (the second variant): a weather move's weather (another move's
+        # param 0 is no weather); a Transform's copied weather ability, which its switch-in checks
+        # set (hooks.weather_ability); Gravity; the side's ability on the transformed foe.
+        side_ability = state.ability[side, state.active[side]]
+        copied_weather = ability_weather(side_ability)
+        moved_weather = jnp.where(
+            effect[foe] == EffectId.WEATHER,
+            stat[foe],
+            jnp.where(xform & (copied_weather != Weather.NONE), copied_weather, weather0),
+        )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
-        weather_ok = jnp.stack([jnp.asarray(True), weather_move[foe]])
+        gravity_move = effect[foe] == EffectId.GRAVITY
+        field_move = weather_move[foe] | (changes[foe] & (gravity_move | xform))
+        weather_ok = jnp.stack([jnp.asarray(True), field_move])
+        field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
         # The second variant is the other confusion value: snapping out (confused now), or a
         # disliked flavor berry eaten before the check (not confused now), ruling G-5.
@@ -881,17 +915,46 @@ def _threshold_grid(
         later_grid = moved_grid & holder if overrides == "both" else None
         hide_grid = moved_grid & wide[side]
 
-        def point(a, e, m, w, c, k, lk, hide, side=side):
+        def point(
+            a,
+            e,
+            m,
+            w,
+            c,
+            k,
+            lk,
+            hide,
+            f,
+            side=side,
+            foe=foe,
+            xf=xform,
+            grav=gravity_move,
+            copied=side_ability,
+        ):
             embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
-            hidden = state._replace(embargo=state.embargo.at[side].set(embargo))
+            foe_mon = state.active[foe]
+            ability = jnp.where(f & xf, copied, state.ability[foe, foe_mon])
+            gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
+            hidden = state._replace(
+                embargo=state.embargo.at[side].set(embargo),
+                ability=state.ability.at[foe, foe_mon].set(ability.astype(state.ability.dtype)),
+                gravity=gravity.astype(state.gravity.dtype),
+            )
             return _hit_threshold(
                 tables, hidden, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
             )
 
         thresholds.append(
             jax.vmap(point)(
-                acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid, later_grid,
+                acc_grid,
+                eva_grid,
+                moved_grid,
+                weather_grid,
+                conf_grid,
+                micle_grid,
+                later_grid,
                 hide_grid,
+                field_grid,
             )
         )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
