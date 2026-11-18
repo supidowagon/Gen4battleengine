@@ -227,8 +227,8 @@ Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard i
 ``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
 Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
-Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities;
-Grip Claw is an unsupported item. Shield Dust (``_shield_dust``) and the weather moves
+Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities
+(Grip Claw is E1 Batch D's, ``_trap``). Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
 (``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
 Levitate and Scrappy on the type chart (``damage.levitated``, ``damage.identified``) and
@@ -243,6 +243,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
+    PHYSICAL,
     PRESENT_HEAL,
     STATUS,
     damage_for_roll,
@@ -263,6 +264,7 @@ from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
     GENDER_NONE,
+    GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MINIMIZE_PARAM,
@@ -1511,7 +1513,11 @@ def _trap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.trapped[h.target_side] == 0)
         & ~h.shielded
     )
-    state = _set(state, "trapped", h.target_side, outcome.duration[h.side], cond)
+    # subscript_bind_start.s:10-12: the attacker's Grip Claw (HOLD_EFFECT_EXTEND_TRAPPING,
+    # CheckItemHoldEffect: Battler_HeldItemEffect) sets the count to 6 after the draw (G-57).
+    grip = holds(tables, state, h.side, ItemId.GRIP_CLAW)
+    turns = jnp.where(grip, GRIP_CLAW_TURNS, outcome.duration[h.side])
+    state = _set(state, "trapped", h.target_side, turns, cond)
     return _set(state, "trap_move", h.target_side, h.move, cond)
 
 
@@ -2243,6 +2249,60 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
     return _set(state, "item", (foe, target), 0, on)
 
 
+def on_hit_berry(
+    tables: Tables, state: BattleState, side, foe, physical, special, super_effective, cond
+) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, recoiled)``: the berry cases of ``BattleSystem_TriggerHeldItemOnHit``
+    (battle_lib.c:5370-5435) on ``foe``'s (the defender's side) active Pokemon after a hit of
+    ``side``'s move, where ``cond`` (the caller's gate: ``AFTER_MOVE_EFFECT_TRIGGER_ITEMS_ON_HIT``,
+    bcp.c:3698-3706, or subscript_pursuit.s:44, :90; the substitute was not hit this action,
+    :5378). One switch on the defender's hold effect (``Battler_HeldItemEffect``; Klutz and
+    Embargo are unsupported), so the Sticky Barb case (``sticky_barb_transfer``) never meets these:
+
+    * Jaboca Berry (``HOLD_EFFECT_RECOIL_PHYSICAL``, :5400-5409): the defender's
+      ``physicalDamageTaken`` (``physical``), a living attacker without Magic Guard; Rowap Berry
+      (``_RECOIL_SPECIAL``, :5411-5419) the same with ``specialDamageTaken`` (``special``). The
+      holder may have fainted (no HP test on it). subscript_held_item_recoil_when_hit.s: the
+      attacker loses ``BattleSystem_Divide(maxHP * -1, itemPower)`` through
+      ``BATTLE_SUBSCRIPT_UPDATE_HP`` with ``SYSCTL_SKIP_SPRITE_BLINK`` (no resist berry; it may
+      faint), then ``RemoveItem BTLSCR_DEFENDER``. ``recoiled``: this ran (the caller then
+      re-checks the attacker's held item, ``AFTER_MOVE_EFFECT_HELD_ITEM_STATUS``, bcp.c:3730).
+    * Enigma Berry (``HOLD_EFFECT_HP_RESTORE_SE``, :5421-5428): a living defender and
+      ``MOVE_STATUS_SUPER_EFFECTIVE`` (``super_effective``): subscript_held_item_hp_restore.s
+      heals ``BattleSystem_Divide(maxHP, itemPower)``, capped, and its ``PLUCK_CHECK`` removes
+      the berry (the attacker's pluck flag cannot be set: a Pluck of this hit ate the defender's
+      berry first).
+
+    ``physical`` / ``special``: the damage-taken flags the move's class set this action
+    (bcp.c:3411-3424). Ruling G-54, G-55."""
+    side = jnp.asarray(side, _I32)
+    foe = jnp.asarray(foe, _I32)
+    user, target = state.active[side], state.active[foe]
+    item = state.item[foe, target]
+    effect = tables.item_effect[item]
+    power = tables.item_param[item, 0].astype(_I32)
+    cond = jnp.asarray(cond)
+    a_hp = state.hp[side, user].astype(_I32)
+    magic_guard = decomp_abilities(tables, state)[side, user] == WEATHER_ABILITY_IDS["Magic Guard"]
+    recoil = (
+        cond
+        & (
+            ((effect == ItemId.JABOCA_BERRY) & jnp.asarray(physical))
+            | ((effect == ItemId.ROWAP_BERRY) & jnp.asarray(special))
+        )
+        & (a_hp > 0)
+        & ~magic_guard
+    )
+    loss = divide(state.max_hp[side, user].astype(_I32), jnp.maximum(power, 1))
+    state = _set(state, "hp", (side, user), jnp.maximum(a_hp - loss, 0), recoil)
+    d_hp = state.hp[foe, target].astype(_I32)
+    d_max = state.max_hp[foe, target].astype(_I32)
+    heal = cond & (effect == ItemId.ENIGMA_BERRY) & (d_hp > 0) & jnp.asarray(super_effective)
+    gain = divide(d_max, jnp.maximum(power, 1))
+    state = _set(state, "hp", (foe, target), jnp.minimum(d_hp + gain, d_max), heal)
+    return consume_item(state, foe, recoil | heal), recoil
+
+
 def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jnp.ndarray:
     """``bool``: ``side``'s attacker would take ``foe``'s Sticky Barb (``sticky_barb_transfer``'s
     tests but the damage flag)."""
@@ -2265,14 +2325,19 @@ def pivot_item(
     subscript_attack_then_switch_out.s:11: four independent ``if``s each overwrite the subscript,
     so only the last match runs: the defender's Sticky Barb (:7378-7385: a living attacker holding
     nothing, the defender's damage taken, a contact move; no U-turn guard, the knocked-off mask comes
-    with Knock Off), else the defender's Jaboca Berry (:7368-7375, ``HOLD_EFFECT_RECOIL_PHYSICAL``,
-    an unsupported item), else the attacker's Life Orb (:7357-7366: ``SYSCTL_MOVE_HIT``, not a
-    status move, a living holder without Magic Guard) or Shell Bell (:7345-7355; one holder holds
-    one of them). ``move_hit``: ``SYSCTL_MOVE_HIT``; ``damaged``: the defender's
-    physical / specialDamageTaken; ``shell_dealt``: ``shellBellDamageDealt``."""
+    with Knock Off), else the defender's Jaboca Berry (:7368-7375, ``HOLD_EFFECT_RECOIL_PHYSICAL``:
+    the defender's physicalDamageTaken, a living attacker without Magic Guard;
+    ``on_hit_berry``'s recoil, G-54), else the attacker's Life Orb (:7357-7366:
+    ``SYSCTL_MOVE_HIT``, not a status move, a living holder without Magic Guard) or Shell Bell
+    (:7345-7355; one holder holds one of them). ``move_hit``: ``SYSCTL_MOVE_HIT``; ``damaged``:
+    the defender's physical / specialDamageTaken; ``shell_dealt``: ``shellBellDamageDealt``."""
     barb = jnp.asarray(damaged) & sticky_barb_ready(tables, state, side, foe, move)
     state = sticky_barb_transfer(tables, state, side, foe, move, barb)
-    hit = jnp.asarray(move_hit) & ~barb
+    physical = jnp.asarray(damaged) & (tables.move_category[move] == PHYSICAL)
+    holder = state.item[foe, state.active[foe]]
+    jaboca = ~barb & physical & (tables.item_effect[holder] == ItemId.JABOCA_BERRY)
+    state, jabbed = on_hit_berry(tables, state, side, foe, physical, False, False, jaboca)
+    hit = jnp.asarray(move_hit) & ~barb & ~jabbed
     state = shell_bell_heal(tables, state, side, shell_dealt, hit)
     return life_orb_recoil(tables, state, side, hit & (tables.move_category[move] != STATUS))
 
@@ -2324,7 +2389,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
     guarded = state.ability[side, mon] == AbilityId.MAGIC_GUARD
-    down = grounded(state, side, mon) & ~guarded
+    down = grounded(tables, state, side, mon) & ~guarded
     layers = state.toxic_spikes[side].astype(_I32)
     poison_type = jnp.any(state.types[side, mon] == Type.POISON)
     absorbed = down & (layers > 0) & poison_type
@@ -2360,7 +2425,9 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     )
     state = _set_status(state, side, mon, status, poisoned)
     hp = state.hp[side, mon].astype(_I32)
-    spikes = jnp.where((hp > 0) & ~guarded, jnp.minimum(spikes_loss(state, side, mon), hp), 0)
+    spikes = jnp.where(
+        (hp > 0) & ~guarded, jnp.minimum(spikes_loss(tables, state, side, mon), hp), 0
+    )
     hp = hp - spikes
     rock = jnp.where(
         (hp > 0) & ~guarded, jnp.minimum(stealth_rock_loss(tables, state, side, mon), hp), 0
@@ -2403,6 +2470,8 @@ class MoveHit(NamedTuple):
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), set by this hit or an earlier one
     # of the action; it lasts until BattleContext_Init at the action's end (battle_lib.c:2014).
     sub_hit: jnp.ndarray
+    # MOVE_STATUS_SUPER_EFFECTIVE after the hit's type chart (the Enigma Berry, on_hit_berry).
+    super_effective: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -2488,6 +2557,66 @@ def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleSta
     on = jnp.asarray(cond) & holds(tables, state, side, ItemId.LIFE_ORB) & (hp > 0) & ~magic_guard
     loss = divide(state.max_hp[side, mon].astype(_I32), 10)
     return _set(state, "hp", (side, mon), jnp.maximum(hp - loss, 0), on)
+
+
+METRONOME_MAX_TURNS = 10  # BattleSystem_UpdateMetronomeCount's cap (battle_lib.c:6168)
+
+
+def metronome_update(tables: Tables, state: BattleState, side, move, cond) -> BattleState:
+    """``BattleSystem_UpdateMetronomeCount`` (battle_lib.c:6160-6178) for ``side``'s battler
+    where ``cond`` (the end of ``BattleControllerPlayer_BeforeMove``, bcp.c:3221: the move got
+    past the status checks and has a target). A holder of ``HOLD_EFFECT_BOOST_REPEATED``
+    (``Battler_HeldItemEffect``) that is not uproaring nor ``VOLATILE_CONDITION_MOVE_LOCKED``
+    (``locked_move``; Thrash is unsupported, and ``SYSCTL_LAST_OF_MULTI_TURN`` is clear at
+    BeforeMove, BattleContext_Init cleared it) counts ``moveTemp`` (``move``: the chosen or
+    encored move, Struggle, an invoker itself): the same move as ``metronomeMove`` adds 1 up to
+    10, another one sets the count to 0 and becomes ``metronomeMove``. A battler that holds no
+    Metronome has its own count reset to 0 (:6176-6177). As the update follows the
+    ``MOVE_STATUS_NO_EFFECTS`` branch (bcp.c:3209-3221), a move DecrementPP flagged
+    ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite empties a chosen move's PP before
+    its use, an unsupported move (the encored move with no PP, B10-9, takes the same path). G-60."""
+    side = jnp.asarray(side, _I32)
+    move = jnp.asarray(move, _I32)
+    cond = jnp.asarray(cond)
+    holder = holds(tables, state, side, ItemId.METRONOME_ITEM)
+    exempt = (state.uproar[side] != 0) | (state.locked_move[side] != 0)
+    turns = state.metronome_turns[side].astype(_I32)
+    same = state.metronome_move[side].astype(_I32) == move
+    counts = cond & holder & ~exempt
+    new = jnp.where(same, jnp.minimum(turns + 1, METRONOME_MAX_TURNS), 0)
+    turns = jnp.where(counts, new, jnp.where(cond & ~holder, 0, turns))
+    state = _set(state, "metronome_turns", side, turns, True)
+    return _set(state, "metronome_move", side, move, counts & ~same)
+
+
+def metronome_verify(
+    tables: Tables, state: BattleState, side, move, no_effects, repeated, last_of_multi, cond
+) -> BattleState:
+    """``BattleSystem_VerifyMetronomeCount`` (battle_lib.c:6181-6198) at
+    ``UpdateMoveBuffers`` (bcp.c:3957) where ``cond``: a holder whose move had
+    ``MOVE_STATUS_NO_EFFECTS`` (``no_effects``) takes back the count it added: ``moveTemp`` is
+    ``metronomeMove``, the count is above 0, ``repeatedMoveCount`` is 0 (``repeated``: Rollout's
+    count before its script, battle_script.c:5665), not uproaring, not
+    ``SYSCTL_LAST_OF_MULTI_TURN`` (``last_of_multi``: a charge move's strike, Bide's end), not
+    move-locked (``locked_move`` now). A battler that holds no Metronome has its own count reset
+    to 0 (:6195-6196). G-60."""
+    side = jnp.asarray(side, _I32)
+    cond = jnp.asarray(cond)
+    holder = holds(tables, state, side, ItemId.METRONOME_ITEM)
+    turns = state.metronome_turns[side].astype(_I32)
+    back = (
+        cond
+        & holder
+        & jnp.asarray(no_effects)
+        & (state.metronome_move[side].astype(_I32) == jnp.asarray(move, _I32))
+        & (turns > 0)
+        & ~jnp.asarray(repeated)
+        & (state.uproar[side] == 0)
+        & ~jnp.asarray(last_of_multi)
+        & (state.locked_move[side] == 0)
+    )
+    turns = jnp.where(back, turns - 1, jnp.where(cond & ~holder, 0, turns))
+    return _set(state, "metronome_turns", side, turns, True)
 
 
 def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
@@ -2669,10 +2798,10 @@ def play_hit(
             tables,
             counter_type,
             state.types[target_side, target],
-            identified(state, side, target_side),
+            identified(tables, state, side, target_side),
         )
         == 0
-    ) | levitated(state, side, target_side, counter_type)
+    ) | levitated(tables, state, side, target_side, counter_type)
     # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
     immune = immune | wonder_guarded(tables, state, side, move, counter_type, target_side)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
@@ -2722,7 +2851,7 @@ def play_hit(
                 tables,
                 move_type,
                 state.types[target_side, target],
-                identified(state, side, target_side),
+                identified(tables, state, side, target_side),
             )
             > 100
         )
@@ -2761,10 +2890,10 @@ def play_hit(
             tables,
             move_type,
             state.types[target_side, target],
-            identified(state, side, target_side),
+            identified(tables, state, side, target_side),
         )
         > 0
-    ) & ~levitated(state, side, target_side, move_type)
+    ) & ~levitated(tables, state, side, target_side, move_type)
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
     chance = tables.move_effect_chance[move]
     h = _Hit(
@@ -2883,4 +3012,10 @@ def play_hit(
         taken=jnp.where(real, taken, 0),
         effective=h.effective,
         sub_hit=sub_hit,
+        # ApplyTypeChart's end (battle_lib.c:2649-2678) clears the bit under
+        # SYSCTL_IGNORE_TYPE_CHECKS / _IGNORE_IMMUNITIES (IGNORES_TYPE_CHECKS); Present's heal
+        # skips CheckTypeChart (effect_script_0122.s:13, bcp.c:2350-2356).
+        super_effective=super_effective
+        & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
+        & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
     )

@@ -56,7 +56,6 @@ LISTED = [
     "nuzline.engine.coverage.ITEM_GRISEOUS_ORB",
     # engine, asserted by name and hold effect / hold param
     "nuzline.ai.commands.ITEM_EXPERT_BELT",
-    "nuzline.ai.switching.ITEM_IRON_BALL",
     "nuzline.engine.ids.ITEM_FULL_RESTORE",
     "nuzline.engine.ids.QUICK_CLAW_PARAM",
     # engine: saves/check.py's special routes (final review M12)

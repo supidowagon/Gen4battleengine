@@ -720,6 +720,12 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "Petaya Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_SPATK_UP (39), param 4
     "Apicot Berry": ItemId.PINCH_BERRY,  # HOLD_EFFECT_PINCH_SPDEF_UP (40), param 4
     "Custap Berry": ItemId.CUSTAP_BERRY,  # HOLD_EFFECT_PINCH_PRIORITY (45), PLUCK_EFFECT_NONE
+    # E1 Batch D (G-54 .. G-59).
+    "Leppa Berry": ItemId.LEPPA_BERRY,  # HOLD_EFFECT_PP_RESTORE (10), PLUCK_EFFECT_PP_RESTORE
+    "Enigma Berry": ItemId.ENIGMA_BERRY,  # HOLD_EFFECT_HP_RESTORE_SE (43), PLUCK_EFFECT_NONE
+    "Micle Berry": ItemId.MICLE_BERRY,  # HOLD_EFFECT_PINCH_ACC_UP (44), PLUCK_EFFECT_TEMP_ACC_UP
+    "Jaboca Berry": ItemId.JABOCA_BERRY,  # HOLD_EFFECT_RECOIL_PHYSICAL (46), PLUCK_EFFECT_NONE
+    "Rowap Berry": ItemId.ROWAP_BERRY,  # HOLD_EFFECT_RECOIL_SPECIAL (47), PLUCK_EFFECT_NONE
 }
 
 # The stat pinch berries' hold effects (BattleSystem_TriggerHeldItem, battle_lib.c:4773-4836,
@@ -733,22 +739,24 @@ PINCH_STAT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
     39: ("HOLD_EFFECT_PINCH_SPATK_UP", Stat.SPA),
     40: ("HOLD_EFFECT_PINCH_SPDEF_UP", Stat.SPD),
 }
-# The berries whose trigger divides maxHP by their param (the stat pinch berries, Custap): a
-# param below 2 divides by zero (param 0, or 1 halved by Gluttony; battle_lib.c:4778, :1294),
-# whose result is the ROM's division routine's, not the decomp's: build_tables maps such an
-# item to UNSUPPORTED (Kaizo's Ganlon and Apicot Berries have param 0).
+# The berries whose trigger divides maxHP by their param (the stat pinch berries, Custap, Micle:
+# battle_lib.c:4778, :1294, :4902): a param 0 (Kaizo's Ganlon and Apicot Berries), or 1 halved by
+# Gluttony, divides by zero, and the ROM's ``_u32_div_f`` returns the dividend then
+# (``order.pinch_limit``, ruling G-53), so every param is supported.
 PINCH_DIVISOR_ITEMS = (ItemId.PINCH_BERRY, ItemId.CUSTAP_BERRY)
-# Every item that divides by its hold param, and the smallest param that never divides by
-# zero: the pinch-divisor berries above (2: Gluttony halves the param), Sticky Barb's
-# end-of-turn ``Divide(maxHP, param)`` (battle_lib.c:5330-5336) and Shell Bell's
-# ``Divide(dealt, param)`` (bcp.c:4736-4752, battle_lib.c:7345-7355) (1). build_tables maps an
-# item below its minimum to UNSUPPORTED.
+# Every other item that divides by its hold param, and the smallest param that never divides by
+# zero: Sticky Barb's end-of-turn ``Divide(maxHP, param)`` (battle_lib.c:5330-5336) and Shell
+# Bell's ``Divide(dealt, param)`` (bcp.c:4736-4752, battle_lib.c:7345-7355) (1). build_tables
+# maps an item below its minimum to UNSUPPORTED.
 DIVISOR_PARAM_MIN: dict[ItemId, int] = {
-    **{item: 2 for item in PINCH_DIVISOR_ITEMS},
     ItemId.STICKY_BARB: 1,
     ItemId.SHELL_BELL: 1,
     # BattleSystem_Divide(maxHP, itemPower) (battle_lib.c:4700 etc., :5680 etc.), ruling G-4.
     ItemId.FLAVOR_BERRY: 1,
+    # BattleSystem_Divide(maxHP, itemPower) (battle_lib.c:5407, :5416, :5423), Batch D.
+    ItemId.JABOCA_BERRY: 1,
+    ItemId.ROWAP_BERRY: 1,
+    ItemId.ENIGMA_BERRY: 1,
 }
 
 # sTypeBoostingItems (src/battle/battle_lib.c:6514-6549), applied at :6716-6722: decomp hold
@@ -864,6 +872,18 @@ HOLD_EFFECT_TO_ID.update(
 # E1 Gardenia batch. Focus Band (BattleControllerPlayer_UpdateHP, bcp.c:3386-3389;
 # BtlCmd_CheckHoldOnWith1HP, battle_script.c:9109-9112), ruling G-1.
 HOLD_EFFECT_TO_ID[65] = ("HOLD_EFFECT_MAYBE_ENDURE", ItemId.FOCUS_BAND)
+
+# E1 Batch D. The Metronome item (BtlCmd_CalcDamage, battle_script.c:1350-1352;
+# BattleSystem_UpdateMetronomeCount / _VerifyMetronomeCount, battle_lib.c:6160-6198), G-60; Iron
+# Ball (sSpeedHalvingItemEffects, battle_lib.c:1160-1169, and the grounding sites), G-56; Grip
+# Claw (subscript_bind_start.s:10-12), G-57.
+HOLD_EFFECT_TO_ID.update(
+    {
+        105: ("HOLD_EFFECT_BOOST_REPEATED", ItemId.METRONOME_ITEM),
+        106: ("HOLD_EFFECT_SPEED_DOWN_GROUNDED", ItemId.IRON_BALL),
+        114: ("HOLD_EFFECT_EXTEND_TRAPPING", ItemId.GRIP_CLAW),
+    }
+)
 
 # The flavor berries (BattleSystem_TriggerHeldItem, battle_lib.c:4698-4771, and ..._OnStatus,
 # :5121-5194; BattleSystem_PluckBerry's PLUCK_EFFECT_HP_RESTORE_*, :5678-5751): decomp hold

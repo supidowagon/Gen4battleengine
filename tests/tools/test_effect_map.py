@@ -478,10 +478,11 @@ def test_batch2_berries_follow_their_item_data():
         assert f"msgTemp = BATTLE_STAT_{stat_names[stat]};" in case[: case.index("break;")]
 
 
-def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, kaizo_names):
+def test_pinch_berries_take_any_param(tables, names, kaizo_tables, kaizo_names):
     """A stat pinch berry or Custap Berry with a param below 2 divides maxHP by zero
-    (battle_lib.c:4778, :1294; Gluttony halves the param): UNSUPPORTED (build_tables'
-    _pinch_divisor_ok). Kaizo sets Ganlon's and Apicot's param to 0."""
+    (battle_lib.c:4778, :1294; Gluttony halves the param), which the ROM's ``_u32_div_f``
+    answers with the dividend (``order.pinch_limit``, G-53): Kaizo's Ganlon and Apicot (param 0)
+    stay PINCH_BERRY."""
     from nuzline.engine.ids import ItemId
 
     for berry in ("Liechi Berry", "Ganlon Berry", "Salac Berry", "Petaya Berry", "Apicot Berry"):
@@ -490,25 +491,23 @@ def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, ka
     for berry in ("Ganlon Berry", "Apicot Berry"):
         i = kaizo_names.item(berry)
         assert int(kaizo_tables.item_hold_param[i]) == 0
-        assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, berry
-    i = kaizo_names.item("Liechi Berry")
-    assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY
+        assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY, berry
 
 
 def test_divisor_items_need_a_param_to_divide_by():
     """Sticky Barb (``Divide(maxHP, param)``, battle_lib.c:5330-5336) and Shell Bell
-    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0, and a pinch berry below 2, are
-    UNSUPPORTED (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN)."""
+    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0 are UNSUPPORTED
+    (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN); a pinch berry is not (G-53)."""
     from nuzline.engine.ids import ItemId
     from tools.build_tables import _pinch_divisor_ok
 
     ids = [ItemId.STICKY_BARB, ItemId.SHELL_BELL, ItemId.STICKY_BARB, ItemId.PINCH_BERRY]
-    items = [{"hold_param": p} for p in (0, 0, 8, 1)]
+    items = [{"hold_param": p} for p in (0, 0, 8, 0)]
     assert _pinch_divisor_ok(items, [int(i) for i in ids]) == [
         ItemId.UNSUPPORTED,
         ItemId.UNSUPPORTED,
         ItemId.STICKY_BARB,
-        ItemId.UNSUPPORTED,
+        ItemId.PINCH_BERRY,
     ]
 
 

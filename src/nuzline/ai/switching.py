@@ -70,7 +70,6 @@ Refused, never approximated (``switching_refusals`` names each one):
   the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
   Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
-* Iron Ball (``HOLD_EFFECT_SPEED_DOWN_GROUNDED``) on either side;
 * moves whose state the engine does not carry: Magnet Rise, Miracle Eye, Perish Song (step 3),
   and the variable-type moves Weather
   Ball, Natural Gift and Judgment (``TrainerAI_MoveType``, :3127; Hidden Power's IV type is
@@ -104,8 +103,10 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     hidden_power,
+    iron_ball,
     on_damaging_turn,
 )
+from nuzline.engine.ids import ItemId
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
@@ -144,7 +145,6 @@ SUPER_EFFECTIVE, NOT_VERY_EFFECTIVE, INEFFECTIVE = 1 << 1, 1 << 2, 1 << 3
 
 # Decomp ids, checked against the manifest by tests/ai/test_switching.py.
 MOVE_STRUGGLE = 165
-ITEM_IRON_BALL = 278
 _TYPE_FLYING, _TYPE_STEEL = 2, 8
 ABILITY_IDS = {
     "Levitate": 26,
@@ -298,10 +298,10 @@ def apply_type_chart(
     ``move`` by ``atk_side``'s active Pokemon against the other side's: STAB x15/10
     (:2592), then each ``chart_multipliers`` factor through ``ApplyTypeMultiplier``'s
     ``BattleSystem_Divide(value * mul, 10)`` (:7547); Struggle returns ``value``
-    unchanged (:2573). The defender's Foresight, Ingrain and roosting flags are read
+    unchanged (:2573). The defender's Foresight, Ingrain / Iron Ball and roosting flags are read
     (``chart_multipliers``); Wonder Guard sets a flag only (``wonder_guard_bit``), the value
     is unchanged; the other type-chart modifiers (Adaptability, Normalize, Scrappy, Levitate,
-    Iron Ball, Miracle Eye, Magnet Rise) are not implemented: ``policy.ai_refusals`` refuses
+    Miracle Eye, Magnet Rise) are not implemented: ``policy.ai_refusals`` refuses
     them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
@@ -313,7 +313,7 @@ def apply_type_chart(
         move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
-    identified, grounded, roosting = defender_chart_flags(state, 1 - atk_side)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 1 - atk_side)
     for mul in chart_multipliers(
         tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
     ):
@@ -321,12 +321,13 @@ def apply_type_chart(
     return jnp.where(move == MOVE_STRUGGLE, value, out)
 
 
-def defender_chart_flags(state: BattleState, side) -> tuple:
+def defender_chart_flags(tables: Tables, state: BattleState, side) -> tuple:
     """``(identified, grounded, roosting)`` of ``side``'s active battler as
     ``BattleSystem_ApplyTypeChart`` reads them (``chart_multipliers``): Foresight
-    (battle_lib.c:2615), ``MOVE_EFFECT_INGRAIN`` and ``turnFlags.roosting``
-    (``BasicTypeMulApplies``, :2534-2543)."""
-    return state.foresight[side] != 0, state.ingrain[side] != 0, state.roosting[side] != 0
+    (battle_lib.c:2615), ``MOVE_EFFECT_INGRAIN`` or an Iron Ball (``Battler_HeldItemEffect``,
+    ruling G-56) and ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543)."""
+    grounded = (state.ingrain[side] != 0) | iron_ball(tables, state, side)
+    return state.foresight[side] != 0, grounded, state.roosting[side] != 0
 
 
 def _chart_flags(
@@ -397,12 +398,14 @@ def wonder_guard_bit(
 
 
 def calc_effectiveness_flags(
-    tables: Tables, move, def_types, gravity, move_type=None
+    tables: Tables, move, def_types, gravity, move_type=None, iron=False
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_CalcEffectiveness`` leaves
     for ``move`` against ``def_types`` (int8[2]), for any move, power or not.
-    ``move_type`` overrides the move's table type (``damage.ai_move_type``)."""
-    return _chart_flags(tables, move, def_types, gravity, True, move_type=move_type)
+    ``move_type`` overrides the move's table type (``damage.ai_move_type``). ``iron``: the
+    caller's ``defenderItemEffect`` is ``HOLD_EFFECT_SPEED_DOWN_GROUNDED``, which lifts the
+    Flying immunity like Gravity (``NoImmunityOverrides``, battle_lib.c:2759-2764; G-56)."""
+    return _chart_flags(tables, move, def_types, gravity, True, move_type=move_type, grounded=iron)
 
 
 class _Layout(NamedTuple):
@@ -411,7 +414,6 @@ class _Layout(NamedTuple):
     count: jnp.ndarray  # int32, sites found
     only_ineffective: jnp.ndarray  # bool, AI_OnlyIneffectiveMoves applies
     ability_refused: jnp.ndarray  # bool[2, SLOTS]
-    item_refused: jnp.ndarray  # bool[2, SLOTS]
     move_refused: jnp.ndarray  # bool[2, SLOTS, MOVES]
     refused: jnp.ndarray  # bool
 
@@ -443,7 +445,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
-    identified, grounded, roosting = defender_chart_flags(state, 0)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
     a_flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -472,9 +474,11 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     hit_ok = (hit != 0) & (tables.move_power[hit] > 0)
     # TrainerAI_MoveType (:3767): the type of moveHit as its user (the player's active) used it.
     hit_type = ai_move_type(tables, state, 0, hit)
-    hit_flags = jax.vmap(lambda t: calc_effectiveness_flags(tables, hit, t, gravity, hit_type))(
-        state.types[1]
-    )
+    # The bench member's own party item hold effect (:3774, BattleSystem_GetItemData).
+    bench_iron = tables.item_effect[state.item[1]] == ItemId.IRON_BALL
+    hit_flags = jax.vmap(
+        lambda t, i: calc_effectiveness_flags(tables, hit, t, gravity, hit_type, i)
+    )(state.types[1], bench_iron)
     # CalcEffectiveness's Wonder Guard (battle_lib.c:2734-2739) with the bench Pokemon as the
     # defender (MON_DATA_ABILITY) and Battler_Ability(moveHitBattler), the player's active, as
     # the attacker: INEFFECTIVE unless Mold Breaker, a super-effective moveHit or one not on its
@@ -489,9 +493,11 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     bench_moves = state.moves[1].astype(_I32).reshape(-1)  # [SLOTS * MOVES], slot-major
     # Move_CalcVariableType (:3780): each bench member's own Hidden Power type.
     bench_types = party_move_types(tables, state).reshape(-1)
-    bench_flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, gravity, k))(
-        bench_moves, bench_types
-    ).reshape(SLOTS, MOVES)
+    # Battler_HeldItemEffect(moveHitBattler), the player's active (:3790).
+    d_iron = iron_ball(tables, state, 0)
+    bench_flags = jax.vmap(
+        lambda m, k: calc_effectiveness_flags(tables, m, d_types, gravity, k, d_iron)
+    )(bench_moves, bench_types).reshape(SLOTS, MOVES)
     bench_moves = bench_moves.reshape(SLOTS, MOVES)
     bench_se = (bench_moves != 0) & ((bench_flags & SUPER_EFFECTIVE) != 0)
     passes = [
@@ -516,15 +522,8 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     ability_refused = present & (
         jnp.isin(ability, _ANY_SIDE_IDS) | ((side == 1) & jnp.isin(ability, _AI_SIDE_IDS))
     )
-    item_refused = present & (state.item.astype(_I32) == ITEM_IRON_BALL)
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
-    refused = (
-        (count > sites)
-        | only_ineffective
-        | jnp.any(ability_refused)
-        | jnp.any(item_refused)
-        | jnp.any(move_refused)
-    )
+    refused = (count > sites) | only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
     kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
     return _Layout(
         kinds,
@@ -532,7 +531,6 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         count,
         only_ineffective,
         ability_refused,
-        item_refused,
         move_refused,
         refused,
     )
@@ -545,11 +543,6 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
         name = _ABILITY_NAMES[int(ability[side, s])]
         why = (_ANY_SIDE_ABILITIES | _AI_SIDE_ABILITIES)[name]
         out.append(f"switching: side {side} slot {s}: ability {name} ({why}) is not implemented")
-    for side, s in zip(*np.nonzero(np.asarray(lay.item_refused)), strict=True):
-        out.append(
-            f"switching: side {side} slot {s}: item Iron Ball (grounds the holder) "
-            "is not implemented"
-        )
     moves = np.asarray(state.moves)
     for side, s, k in zip(*np.nonzero(np.asarray(lay.move_refused)), strict=True):
         name = _MOVE_NAMES[int(moves[side, s, k])]

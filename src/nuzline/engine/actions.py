@@ -44,7 +44,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, Type
+from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, ItemId, Type
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
@@ -126,7 +126,7 @@ def legal_replacements(state: BattleState, side) -> jnp.ndarray:
     return (slots != state.active[side]) & (state.species[side] > 0) & (state.hp[side] > 0)
 
 
-def trapped(state: BattleState, side) -> jnp.ndarray:
+def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool``: ``Battler_IsTrapped`` (battle_lib.c:5514-5536), which the party menu reads
     (battle_controller_player.c:572): ``VOLATILE_CONDITION_TRAPPED`` (the Bind of ``trapped`` and
     ``mean_look``, condition.h:77-78) or ``MOVE_EFFECT_INGRAIN``; a living foe's Shadow Tag unless
@@ -138,7 +138,11 @@ def trapped(state: BattleState, side) -> jnp.ndarray:
     mon = state.active[side]
     own = state.ability[side, mon]
     types = state.types[side, mon]
-    grounded = ((own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)) | (state.gravity != 0)
+    # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
+    iron = tables.item_effect[state.item[side, mon]] == ItemId.IRON_BALL
+    grounded = (
+        ((own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)) | iron | (state.gravity != 0)
+    )
     steel = jnp.any(types == Type.STEEL)
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):
@@ -164,7 +168,7 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     usable = usable_moves(tables, state, side)
     struggle = ~jnp.any(usable)
     usable = usable.at[0].set(usable[0] | struggle)
-    switches = legal_replacements(state, side) & ~trapped(state, side)
+    switches = legal_replacements(state, side) & ~trapped(tables, state, side)
     switches = switches & (locked_slot(state, side) < 0)
     return jnp.concatenate([usable, switches])
 

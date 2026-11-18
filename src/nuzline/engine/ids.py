@@ -844,7 +844,44 @@ class ItemId(IntEnum):
     # E1 Gardenia batch (G-1 .. G-6).
     FOCUS_BAND = 52
     FLAVOR_BERRY = 53
+    # E1 Batch D (G-53 ..): the Fantina split's held items.
+    # Leppa Berry (HOLD_EFFECT_PP_RESTORE): the first move slot at 0 PP regains ``param`` PP,
+    # capped at its max PP (battle_lib.c:4636-4653, :5026-5043; Pluck :5609-5633), G-58.
+    LEPPA_BERRY = 54
+    # Jaboca / Rowap Berry (HOLD_EFFECT_RECOIL_PHYSICAL / _SPECIAL): a physical / special hit's
+    # attacker loses ``Divide(maxHP, param)`` (TriggerHeldItemOnHit, battle_lib.c:5400-5419;
+    # Jaboca also TriggerHeldItemOnPivotMove, :7368-7375), G-54.
+    JABOCA_BERRY = 55
+    ROWAP_BERRY = 56
+    # Enigma Berry (HOLD_EFFECT_HP_RESTORE_SE): a super-effective hit's living holder heals
+    # ``Divide(maxHP, param)`` (battle_lib.c:5421-5428), G-55.
+    ENIGMA_BERRY = 57
+    # Micle Berry (HOLD_EFFECT_PINCH_ACC_UP): at ``curHP <= maxHP / param`` sets the holder's
+    # moveEffectsData.micleBerry, x120/100 on its next accuracy check (battle_lib.c:4897-4906,
+    # :5110-5119; bcp.c:2967-2970; ``BattleState.micle``), G-59.
+    MICLE_BERRY = 58
+    # Grip Claw (HOLD_EFFECT_EXTEND_TRAPPING): its holder's Bind lasts 6 turns
+    # (subscript_bind_start.s:10-12), G-57.
+    GRIP_CLAW = 59
+    # Metronome (HOLD_EFFECT_BOOST_REPEATED): damage x(10 + metronomeTurns)/10 for the same move
+    # used again (battle_script.c:1350-1352; battle_lib.c:6160-6198), G-60.
+    METRONOME_ITEM = 60
+    # Iron Ball (HOLD_EFFECT_SPEED_DOWN_GROUNDED): Speed halved (battle_lib.c:1240-1246, read
+    # by the raw held item), grounds its holder (:2534, :2602-2607, :2702, :2760, :3215, :5505;
+    # subscript_hazards_check.s:7), G-56.
+    IRON_BALL = 61
 
+
+# subscript_bind_start.s:10-12: an attacker holding HOLD_EFFECT_EXTEND_TRAPPING (Grip Claw) sets
+# the bind count to 6 instead of the Random 3, 3 draw (ruling G-57).
+GRIP_CLAW_TURNS = 6
+
+# sSpeedHalvingItemEffects (battle_lib.c:1160-1169): decomp hold effects (generated/
+# item_hold_effects.txt line N+1 is id N) that halve Speed in BattleSystem_CompareBattlerSpeed
+# (:1240-1246, :1302-1308), read through BattleSystem_GetItemData on the held item, so no Klutz
+# or Embargo: Macho Brace (EVS_UP_SPEED_DOWN), Iron Ball (SPEED_DOWN_GROUNDED), the Power items
+# (LVLUP_HP/ATK/DEF/SPEED/SPATK/SPDEF_EV_UP). Ruling G-56.
+SPEED_HALVING_HOLD_EFFECTS = (50, 106, 122, 117, 118, 121, 119, 120)
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
 # ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold

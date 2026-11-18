@@ -278,17 +278,22 @@ def test_trapping_abilities(tables, names):
         return _set_ability(_set_ability(s, 1, foe_ability), 0, AbilityId.NONE)
 
     tag = pair("Bidoof", AbilityId.SHADOW_TAG)
-    assert bool(trapped(tag, 0))
-    assert not bool(trapped(_set_ability(tag, 0, AbilityId.SHADOW_TAG), 0))
-    assert not bool(trapped(tag._replace(hp=tag.hp.at[1, 0].set(0)), 0))  # a fainted trapper
+    assert bool(trapped(tables, tag, 0))
+    assert not bool(trapped(tables, _set_ability(tag, 0, AbilityId.SHADOW_TAG), 0))
+    assert not bool(
+        trapped(tables, tag._replace(hp=tag.hp.at[1, 0].set(0)), 0)
+    )  # a fainted trapper
     arena = pair("Bidoof", AbilityId.ARENA_TRAP)
-    assert bool(trapped(arena, 0))
-    assert not bool(trapped(_set_ability(arena, 0, AbilityId.LEVITATE), 0))
+    assert bool(trapped(tables, arena, 0))
+    assert not bool(trapped(tables, _set_ability(arena, 0, AbilityId.LEVITATE), 0))
     bird = pair("Pidgey", AbilityId.ARENA_TRAP)
-    assert not bool(trapped(bird, 0))
-    assert bool(trapped(bird._replace(gravity=jnp.int8(5)), 0))
-    assert bool(trapped(pair("Magnemite", AbilityId.MAGNET_PULL), 0))
-    assert not bool(trapped(pair("Bidoof", AbilityId.MAGNET_PULL), 0))
+    assert not bool(trapped(tables, bird, 0))
+    assert bool(trapped(tables, bird._replace(gravity=jnp.int8(5)), 0))
+    # E1 Batch D (G-56): BattlerIsGrounded's Iron Ball (:5505).
+    ball = bird._replace(item=bird.item.at[0, 0].set(n.item("Iron Ball")))
+    assert bool(trapped(tables, ball, 0))
+    assert bool(trapped(tables, pair("Magnemite", AbilityId.MAGNET_PULL), 0))
+    assert not bool(trapped(tables, pair("Bidoof", AbilityId.MAGNET_PULL), 0))
 
 
 def test_belly_drum_fails_at_plus_six_and_at_half_hp(tables, names):

@@ -3644,10 +3644,10 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         ]
     )
     ability_bad = present & ability_bad
+    # The AI side's Expert Belt (its damage factor is not transcribed); the player's Iron Ball is
+    # modelled since E1 Batch D (switching.defender_chart_flags, G-56).
     items = state.item.astype(_I32)
-    item_bad = present & (
-        items == jnp.array([[switching.ITEM_IRON_BALL], [c.ITEM_EXPERT_BELT]], _I32)
-    )
+    item_bad = present & (jnp.arange(2)[:, None] == 1) & (items == c.ITEM_EXPERT_BELT)
     state_ids = jnp.array(list(_STATE_MOVE_IDS.values()), _I32)
     state_move = present[..., None] & jnp.isin(moves, state_ids)
     # Expert_Copycat's IfBattlerDealsMoreDamage (trainer_ai.c:2229-2237) runs the player's

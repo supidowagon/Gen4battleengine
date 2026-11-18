@@ -56,6 +56,7 @@ from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
     SECRET_POWER_EFFECTS,
+    SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     AbilityId,
@@ -463,8 +464,13 @@ def effective_speed(
         | ((ability == AbilityId.CHLOROPHYLL) & (weather == Weather.SUN))
     ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
-    # :1248 Choice Scarf (Battler_HeldItemEffect), after the speed-halving items (:1240-1246,
-    # unsupported) and before paralysis.
+    # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),
+    # read through BattleSystem_GetItemData on the held item (no Klutz / Embargo), G-56.
+    hold = tables.item_hold_effect[state.item[side, mon]].astype(_I32)
+    halved = jnp.isin(hold, jnp.asarray(SPEED_HALVING_HOLD_EFFECTS, _I32))
+    speed = jnp.where(halved, speed // 2, speed)
+    # :1248 Choice Scarf (Battler_HeldItemEffect), after the speed-halving items and before
+    # paralysis.
     scarf = tables.item_effect[state.item[side, mon]] == ItemId.CHOICE_SCARF
     speed = jnp.where(scarf, speed * 15 // 10, speed)
     # :1257-1261 Quick Feet (Battler_Ability) with any status (MON_CONDITION_ANY): x15/10,
@@ -495,11 +501,22 @@ def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.nd
     """``int32``: the hold param of a pinch berry or Custap Berry ``item`` held by ``side``'s
     party ``mon``, halved (``itemPower /= 2``) when the holder's own ability is Gluttony
     (``Battler_Ability``: battle_lib.c:4774-4776, :1289-1291). The berry triggers at
-    ``curHP <= maxHP / divisor`` (C integer division); build_tables keeps the divisor >= 1
-    (``tools.effect_map.PINCH_DIVISOR_ITEMS``)."""
+    ``curHP <= maxHP / divisor`` (``pinch_limit``)."""
     power = tables.item_param[item, 0].astype(_I32)
     gluttony = state.ability[side, mon] == AbilityId.GLUTTONY
     return jnp.where(gluttony, power // 2, power)
+
+
+def pinch_limit(max_hp, divisor) -> jnp.ndarray:
+    """``int32``: ``maxHP / divisor`` as the ROM computes it at every pinch-berry and Custap
+    site (battle_lib.c:4778 etc., :1294, :5201 etc.): the compiler calls the ARM9 runtime's
+    unsigned divide ``_u32_div_f`` (rom:arm9@0x020E2178, e.g. from overlay16@0x02257DA2 for
+    Ganlon, @0x02253202 for Custap), whose first instructions ``cmp r1, #0; bxeq lr`` return
+    the dividend for a zero divisor (ruling G-53). So a param 0 (Kaizo's Ganlon and Apicot) or
+    1 under Gluttony gives ``maxHP``: the berry's HP test always passes."""
+    max_hp = jnp.asarray(max_hp, _I32)
+    divisor = jnp.asarray(divisor, _I32)
+    return jnp.where(divisor == 0, max_hp, max_hp // jnp.maximum(divisor, 1))
 
 
 def dislikes_berry(tables: Tables, state: BattleState, side, mon, item) -> jnp.ndarray:
@@ -514,7 +531,7 @@ def dislikes_berry(tables: Tables, state: BattleState, side, mon, item) -> jnp.n
 
 def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[2]``: each side's active battler holds a Custap Berry
-    (``HOLD_EFFECT_PINCH_PRIORITY``) at ``curHP <= maxHP / pinch_divisor``: the decomp's
+    (``HOLD_EFFECT_PINCH_PRIORITY``) at ``curHP <= pinch_limit(maxHP, pinch_divisor)``: the decomp's
     ``battlerNQuickClaw`` flag (battle_lib.c:1288-1300, :1354-1366), whatever
     ``ignoreQuickClaw``."""
     out = []
@@ -523,7 +540,7 @@ def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
         item = state.item[side, mon]
         hp = state.hp[side, mon].astype(_I32)
         max_hp = state.max_hp[side, mon].astype(_I32)
-        low = hp <= max_hp // pinch_divisor(tables, state, side, mon, item)
+        low = hp <= pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
         out.append((tables.item_effect[item] == ItemId.CUSTAP_BERRY) & low)
     return jnp.stack(out)
 
