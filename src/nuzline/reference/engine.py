@@ -2052,8 +2052,8 @@ def _prompted(s: RefState) -> int | None:
 def ref_learn_options(tables, state: RefState) -> list[bool]:
     """``engine.levelup.learn_options``: replacing a slot whose move is an HM is not allowed
     (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:1724-1735;
-    ``Item_IsHMMove``, src/item.c:306-315); the search also skips an AI-seen slot and, for the
-    active learner, the disabled, locked and choice-locked moves (ruling D2) and the slot
+    ``Item_IsHMMove``, src/item.c:306-315); the search also skips, for the active learner, the
+    disabled, locked and choice-locked moves (ruling D2) and the slot
     pinned by ``learn_pin`` (ruling U1), and every replacement when the offered move's effect
     is unsupported (ruling D10). Giving up is always allowed."""
     prompted = _prompted(state)
@@ -2073,9 +2073,7 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
         party = list(mon.moves)
     for k in range(LEARNED_MOVES_MAX):
         move = party[k]
-        # The AI has seen the party's move of the slot when its id is in its list (G-68).
-        seen = move != 0 and move in state.ai_seen_moves[slot]
-        ok = supported and not _t(tables, "move_is_hm", move) and not seen
+        ok = supported and not _t(tables, "move_is_hm", move)
         if slot == side.active and (
             mon.moves[k] in (side.disabled_move, side.locked_move, side.choice_lock)
             or state.learn_pin == k + 1

@@ -62,7 +62,7 @@ from nuzline.engine.damage import (
     damage_for_roll,
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
-from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
+from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, read_chance
 from nuzline.engine.state import LAYOUT, MOVES, SLOTS, BattleState, make_state
@@ -1087,9 +1087,9 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     way the scan goes on (bs.c:10183-10187), possibly to another prompt (bs.c:10007-10018).
     Answers that give the same moves and PP replay the same records, so the first is kept.
 
-    ``TraceError`` for an answer the engine cannot replay exactly: one ``learn_options``
-    masks (``_learn_refusal``), and a move the engine does not support learned by an answer
-    or into an empty slot (ruling D10)."""
+    ``learn_options``' masks are the search's only: ``levelup.learn`` replays every answer.
+    ``TraceError`` for a move the engine does not support learned by an answer or into an
+    empty slot (ruling D10)."""
     if not bool(needs_learn(fit.state)):
         _check_learned(tables, inference, fit.state, ())
         return fit
@@ -1125,40 +1125,12 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     wrong = _mismatches(jax.tree.map(lambda x: x[None], final), after)[0]
     if not wrong.any():  # refuse only a path that reproduces the record; else report it
         _check_learned(tables, inference, final, choices)
-        for n in range(len(choices)):
-            _learn_refusal(tables, inference, run(choices[:n])[2], choices[n])
     return dataclasses.replace(
         fit,
         state=final,
         mismatched=tuple(name for name, w in zip(COMPARED_FIELDS, wrong) if w),
         need=(bool(need[0]), bool(need[1])),
         learn_choices=choices,
-    )
-
-
-def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice: int) -> None:
-    """``TraceError`` when ``choice`` answers ``state``'s prompt with an option
-    ``levelup.learn_options`` masks. The converter fits it (it happened), but the engine
-    does not replay it exactly:
-
-    * the slot's move is one the AI has seen: the engine masks replacing it (ruling D2), while
-      the decomp's AI keeps the old id in its list of move ids per battler
-      (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716), as
-      ``ai_seen_moves`` does since G-68, and the player may replace it;
-    * the offered move is one the engine does not support (ruling D10);
-    * for the active learner: the disabled, locked or choice-locked move (ruling D2), or the
-      slot selected this turn (``learn_pin``, ruling U1)."""
-    if choice == GIVE_UP or bool(learn_options(tables, state)[choice]):
-        return
-    slot = int(np.argmax(np.asarray(state.learn_level) > 0))
-    move = int(state.moves[0, slot, choice])
-    if move and move in np.asarray(state.ai_seen_moves[slot]).tolist():
-        why = "the AI has seen it, and its move list would keep it (trainer_ai.c:2705-2716)"
-    else:
-        why = "an option the engine masks (levelup.learn_options: rulings D2, U1, D10)"
-    raise inference.fail(
-        f"the player replaced move {move} (party slot {slot}, move slot {choice}) at a "
-        f"learn-move prompt: {why}"
     )
 
 

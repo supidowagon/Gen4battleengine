@@ -1267,14 +1267,13 @@ def test_a_learn_move_answer_is_inferred(tables, names, tmp_path, monkeypatch, c
 
 
 @pytest.mark.slow
-def test_a_learn_move_answer_the_engine_cannot_replay_is_refused(
+def test_a_seen_move_answer_replays_and_an_unsupported_learn_is_refused(
     tables, names, tmp_path, monkeypatch
 ):
     # Replacing Growl, which the AI has seen: the decomp's AI list keeps Growl's id
-    # (trainer_ai.c:2705-2716), the engine's slot flag would mark Peck as seen.
+    # (trainer_ai.c:2705-2716), as ai_seen_moves does (move ids, G-68): it replays.
     path, _ = _learn_trace(tables, names, tmp_path, monkeypatch, GROWL_SLOT)
-    with pytest.raises(TraceError, match="turn 1: the player replaced move 45 .*AI has seen"):
-        convert(path, tables, names)
+    assert [t.learn_choices for t in convert(path, tables, names)][1] == (GROWL_SLOT,)
     # Ruling D10: a recording in which the player learned a move the engine does not
     # support is refused; giving it up replays.
     peck = names.move("Peck")

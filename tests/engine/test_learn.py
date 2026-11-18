@@ -251,10 +251,12 @@ def test_the_active_learner_keeps_its_held_moves(tables, names, field, move):
     assert _options(tables, bench) == [True] * 5
 
 
-def test_a_seen_slot_and_the_pinned_slot_are_masked(tables, names):
+def test_a_seen_slot_is_open_and_the_pinned_slot_is_masked(tables, names):
+    # ai_seen_moves holds move ids: replacing a seen move keeps its id in the AI's list, as
+    # TrainerAI_RecordLastMove's (trainer_ai.c:2705-2716) does, so the search may take it.
     s = _prompt(tables, names)
     seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(int(s.moves[0, 0, 1])))
-    assert _options(tables, seen) == [True, False, True, True, True]
+    assert _options(tables, seen) == [True] * 5
     pinned = s._replace(learn_pin=jnp.int8(4))
     assert _options(tables, pinned) == [True, True, True, False, True]
     assert _options(tables, pinned._replace(active=s.active.at[0].set(1))) == [True] * 5

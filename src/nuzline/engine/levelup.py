@@ -424,7 +424,6 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
 
     * its move is not an HM (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:
       1724-1735; ``Item_IsHMMove``, src/item.c:306-315): a game rule;
-    * the AI has not seen it (its id is not in ``ai_seen_moves``; ruling D2);
     * for the player's active learner: it is not the disabled, locked or choice-locked move
       (ruling D2), and not the slot the player selected this turn (``learn_pin``, window (a),
       ruling U1);
@@ -433,6 +432,9 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
       battle_script.c:10007-10027); as a prompt the player may always give it up.
 
+    A slot the AI has seen is open: ``ai_seen_moves`` holds move ids, so the replaced move's id
+    stays in it as in the decomp's list (``TrainerAI_RecordLastMove``,
+    src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68) and the AI does not know the new move.
     The D2, pin and D10 masks drop legal game choices, so plan values at learn nodes are
     achievable lower bounds, except the mid-turn-prompt case (``STATE.md``, Experience)."""
     slot = _learner(state)
@@ -444,10 +446,7 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     real = (cursor < width) & (tables.learnset_level[row, col] > 0)
     offered = jnp.where(real, tables.learnset_move[row, col], 0)
     supported = (tables.move_effect[offered] != EffectId.UNSUPPORTED) | ~needs_learn(state)
-    # The AI has seen the party's move of the slot when its id is in its list (G-68).
-    listed = state.ai_seen_moves[slot].astype(_I32)
-    seen = jnp.any((moves[:, None] == listed[None, :]) & (moves[:, None] != 0), axis=1)
-    ok = (tables.move_is_hm[moves] == 0) & ~seen & supported
+    ok = (tables.move_is_hm[moves] == 0) & supported
     live = state.moves[0, slot]
     held = (
         (live == state.disabled_move[0])
@@ -470,9 +469,8 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     the search's mask, not a game rule here (the converter fits all non-HM options). Replacing
     a slot the AI has seen keeps the old move's id in ``ai_seen_moves``, as the decomp's list does
     (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68), and the
-    AI does not know the new move; the converter still refuses a recorded answer that
-    ``learn_options`` masks (``tools.trace_to_state._learn_refusal``). A flagged Mimic slot of
-    the active learner (``_masked``) takes the move into the party's shadow."""
+    AI does not know the new move. A flagged Mimic slot of the active learner (``_masked``)
+    takes the move into the party's shadow."""
     slot = _learner(state)
     cursor = state.learn_cursor[slot]
     move = tables.learnset_move[_row(tables, state, slot), cursor]

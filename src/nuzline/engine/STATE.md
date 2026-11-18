@@ -346,7 +346,7 @@ three structs has a row.
     code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
     resolve set them.
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
-    replacing an AI-seen slot, the active learner's disabled, locked or choice-locked move,
+    replacing the active learner's disabled, locked or choice-locked move,
     or the slot pinned by `learn_pin`, and every replacement when the offered move's effect is
     unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
     empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
