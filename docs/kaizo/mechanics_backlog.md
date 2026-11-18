@@ -165,35 +165,35 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 65 | 31 | 31 |
-| Gardenia Split | 28 | 410 (65) | 65 | 31 | 0 |
-| Fantina Split | 38 | 463 (69) | 65 | 31 | 0 |
-| Maylene Split | 47 | 480 (73) | 66 | 31 | 0 |
-| Wake Split | 54 | 482 (71) | 66 | 31 | 0 |
-| Byron Split | 65 | 486 (72) | 66 | 31 | 0 |
-| Candice Split | 74 | 486 (72) | 66 | 31 | 0 |
-| Galactic Split | 100 | 493 (73) | 67 | 32 | 1 |
-| Volkner Split | 84 | 487 (73) | 66 | 31 | 0 |
-| Elite Four Split | 100 | 493 (73) | 67 | 32 | 0 |
-| **Whole game** | | | 67 | 32 | 32 |
+| Roark Split | 16 | 358 (64) | 63 | 29 | 29 |
+| Gardenia Split | 28 | 410 (65) | 63 | 29 | 0 |
+| Fantina Split | 38 | 463 (69) | 63 | 29 | 0 |
+| Maylene Split | 47 | 480 (73) | 64 | 29 | 0 |
+| Wake Split | 54 | 482 (71) | 64 | 29 | 0 |
+| Byron Split | 65 | 486 (72) | 64 | 29 | 0 |
+| Candice Split | 74 | 486 (72) | 64 | 29 | 0 |
+| Galactic Split | 100 | 493 (73) | 64 | 29 | 0 |
+| Volkner Split | 84 | 487 (73) | 64 | 29 | 0 |
+| Elite Four Split | 100 | 493 (73) | 64 | 29 | 0 |
+| **Whole game** | | | 64 | 29 | 29 |
 
-Of your 67 groups, 35 are also needed by opposing trainers and 32 are player-only.
+Of your 64 groups, 35 are also needed by opposing trainers and 29 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 9 | 7 | 9 | 6 | 0 | 0 | 31 |
+| Roark Split | 0 | 7 | 7 | 9 | 6 | 0 | 0 | 29 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Wake Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Byron Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Candice Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Galactic Split | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **10** | **7** | **9** | **6** | **0** | **0** | **32** |
+| **Whole game** | **0** | **7** | **7** | **9** | **6** | **0** | **0** | **29** |
 
 ### Player-only groups
 
@@ -205,10 +205,7 @@ Of your 67 groups, 35 are also needed by opposing trainers and 32 are player-onl
 | AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Magnet Rise (MAGNET_RISE in ApplyTypeChart) is not implemented: Magnet Rise | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Miracle Eye (lifts the Dark immunity) is not implemented: Miracle Eye | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Natural Gift (variable type (TrainerAI_MoveType)) is not implemented: Natural Gift | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Perish Song (AI_PerishSongKO) is not implemented: Perish Song | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Weather Ball (variable type (TrainerAI_MoveType)) is not implemented: Weather Ball | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Judgment (variable type (TrainerAI_MoveType)) is not implemented: Judgment | Galactic Split |
 | move effects | move effect #174: Charge | Roark Split |
 | move effects | move effect #194: Grudge | Roark Split |
 | move effects | move effect #216: Miracle Eye | Roark Split |

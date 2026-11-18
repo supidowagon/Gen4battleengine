@@ -101,9 +101,11 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost and Ingrain
-# (_SWITCH_REFUSED): moves whose decomp handling the switch check does not model. Roost and
-# Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags).
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain and the
+# variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the switch check does not
+# model. Roost and Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags);
+# Weather Ball, Natural Gift and Judgment are typed since E2 batch 13 (B13-35:
+# switching.party_move_types; Weather Ball refused only where its case assigns no type).
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -116,7 +118,9 @@ _SWITCH_MOVES = {
     "Judgment": 449,
 }
 _SWITCH_REFUSED = {
-    k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
+    k: v
+    for k, v in _SWITCH_MOVES.items()
+    if k not in ("Hidden Power", "Roost", "Ingrain", "Weather Ball", "Natural Gift", "Judgment")
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}

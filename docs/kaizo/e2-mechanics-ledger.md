@@ -109,6 +109,12 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   turn (Dive, Shadow Force): JAX counts, the reference does not; the first case reproduces on
   base 183158a (repro _scratch/e2/b13/repro_base.py), no Klutz / Embargo in either.
   test_kaizo_outcome not run (killed three times by the machine RAM floor, no failure seen).
+  Agent G: MERGED main f588250 (E1 Batch E: Guard Spec's Mist and Dire Hit's Focus Energy reuse
+  BattleState.mist / focus_energy, G-62; E1 mem2) at 2f73331; conflict: reference _iron_ball
+  keeps the gated signature; backlog regenerated (Roark 4 groups). FIXED the Metronome-item
+  charge-turn mismatch (B13-34, step.py; the reference was right). AI: switching's and the
+  post-KO replacement's Natural Gift / Judgment / Weather Ball typed (B13-35); Gyro Ball's AI
+  damage case still refused, its decomp model written down (B13-36, Owed).
 - Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
   plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
   does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
@@ -342,7 +348,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - **Batch 13 AI (B13-27, B13-28):** Gyro Ball's TrainerAI_CalcDamage case (monSpeedValues: a
   per-battler record of the last CompareBattlerSpeed and the AI's compare order across
   slots); the voluntary-switch rule's Natural Gift, Judgment and Weather Ball
-  (switching._MOVES: TrainerAI_MoveType per caller, Move_CalcVariableType for the bench).
+  (switching._MOVES: TrainerAI_MoveType per caller, Move_CalcVariableType for the bench): the
+  switching half done (B13-35); Gyro Ball's left, its model written down (B13-36).
 - **Batch 13, vanilla only (no Kaizo move uses either: Kaizo's Fury Cutter is be_seq 88 and its
   Rock Wrecker / Hyper Beam family left effect 80):** Fury Cutter #119 (CalcFuryCutterPower,
   effect_script_0119.s:5: a per-battler furyCutterCount that doubles the power per use and
@@ -2192,3 +2199,38 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B13-33 Fling (233) stays UNSUPPORTED (Owed list): its 30 fling effects on the target
   (battle_lib.c:5854-6156) each need their own law relevance and a per-time item view; its AI
   entries (Basic_CheckFling, Expert_Fling) are not transcribed while the move is refused.
+- B13-34 The Metronome item's count (BattleSystem_UpdateMetronomeCount, battle_lib.c:6160-6178)
+  is updated at the end of BeforeMove (bcp.c:3221), before the move's script (:3214): a charge
+  move's strike turn is still VOLATILE_CONDITION_MOVE_LOCKED there (subscript_charge_move_cleanup.s:6
+  clears it inside the script), so it does not count; a Recycle, Natural Gift or Power Herb
+  changes the held item only after it. The reference was right; step.py ran the update after
+  the script's cleanup (fixed: it now follows _set_last_move). E1 owns the item (G-60).
+- B13-35 The voluntary-switch rule and the post-KO replacement type a party member's move with
+  Move_CalcVariableType (battle_lib.c:8097-8203; trainer_ai.c:3324, :3443, :3502, :3782;
+  battle_lib.c:7998, :8051): Natural Gift the naturalGiftType of the member's party item
+  (MON_DATA_HELD_ITEM, no Klutz / Embargo gate, whatever its power; 0 is the table type through
+  CalcEffectiveness, :2692-2696; a non-berry's 0x1F no type), Judgment its HOLD_EFFECT_ARCEUS_*
+  type (else TYPE_NORMAL), Weather Ball the weather's type under NO_CLOUD_NINE and rain, sand,
+  sun or hail; elsewhere the case leaves ``type`` unassigned, an uninitialized register:
+  refused there (switching.weather_ball_refused: an AI party Weather Ball or a Weather Ball
+  moveHit, typed by TrainerAI_MoveType at :3767; replacement: a candidate's). The AI's active
+  and the player's moveHit go through TrainerAI_MoveType (damage.ai_move_type, B13-26). The
+  three moves leave switching._MOVES and PLAYER_MOVE_REFUSALS.
+- B13-36 Gyro Ball's TrainerAI_CalcDamage case (trainer_ai.c:2995-3003) stays refused (Owed);
+  its model from the decomp: monSpeedValues is written only by CompareBattlerSpeed
+  (battle_lib.c:1372-1373), after its both-alive short-circuit (:1204-1210 returns first), with
+  values that are a function of the state at the call (no Quick Claw term). Writers:
+  SortMonSpeedOrder (battle_lib.c:3364-3381) at TrainerMessage and ShowBattleMon (bcp.c:251,
+  :263, battle start after the switch-in effects), BranchActions (bcp.c:888: before every action
+  and once after the last, so the value an AI decision reads first is the one of the last
+  BranchActions of the previous turn with both actives alive; replacements and the turn end
+  write none), CalcTurnOrder (:780) and the Trick Room re-sort (:3991-3992), each followed by a
+  BranchActions on the same state; and within the decision IfSpeedCompareEqualTo
+  (trainer_ai.c:1109, :1121) and LoadBattlerSpeedRank (:2081), which write the current speeds
+  (ShouldSwitch and ShouldUseItem make none). So it needs a per-battler state field (both
+  engines, the differential) and an AI context bit "a compare ran" carried flag-major,
+  slot-minor (_run_flags), choosing the stale or the current estimate at FlagMoveDamageScore,
+  the kill checks and IfPartyMemberDealsMoreDamage (IfBattlerDealsMoreDamage's Copycat case
+  divides the player's value by itself: 26). The per-slot exact distribution runs one read
+  pattern for every slot (_slot_move_distribution), so a compare reached past a random read in
+  an earlier slot correlates the slots: refuse that state when the two powers differ.
