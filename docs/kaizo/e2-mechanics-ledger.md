@@ -94,6 +94,9 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   read_bounds 73, e1_batch_d not-slow 19, batch13 not-slow 52 (6.6 GB), test_cli not-slow 102 +
   1 skipped (the two over-8 GB nodes not run), test_differential not-slow 1 (the Figy Berry
   case no longer fails).
+  Held items, part 2 (agent F, B13-29..): e1-model gated accessor state.held_item
+  (Battler_HeldItem: Klutz, Embargo) with every gated read routed, new state field embargo;
+  Klutz supported (B13-29, B13-30). Embargo and Fling: in progress.
 - Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
   plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
   does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
@@ -2108,3 +2111,32 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Move_CalcVariableType (battle_lib.c:8097, its Natural Gift, Judgment and
   Weather Ball cases), the player's moveHit with
   TrainerAI_MoveType (trainer_ai.c:3767). And Gyro Ball's AI damage (B13-27).
+- B13-29 Battler_HeldItem's gate (battle_lib.c:5352-5363): ITEM_NONE under Klutz
+  (Battler_Ability, :5354) or a nonzero embargoTurns (:5358), else heldItem: e1-model
+  ``state.held_item`` (Embargo the active battler's; new per-battler field ``embargo``,
+  embargoTurns with its MOVE_EFFECT_EMBARGO bit, volatile, kept by Baton Pass, moves.h:46-48,
+  battle_lib.c:2112). Gated (every Battler_HeldItemEffect / _HeldItemPower(ALL or 0) /
+  _NaturalGift* read, :5438-5481): CalcMoveDamage's items (:6662-6668, the AI estimate too),
+  ApplyTypeChart's Expert Belt (:2578), CompareBattlerSpeed's Choice Scarf, Quick Claw, Custap,
+  Lagging Tail (:1215-1218), the crit items (:7117), the accuracy items (bcp.c:2949-2957), the
+  item triggers (:4581, Leftovers :4927, detrimental :5310, on hit :5381, pivot :7340-7342),
+  CheckItemHoldEffect / GetItemHoldEffect / GetItemEffectParam (battle_script.c:7912-7976: Big
+  Root, resist berries, Grip Claw, Power Herb, Judgment), Light Clay (:4229), weather rocks,
+  Life Orb / Metronome (:1346-1352), the Choice lock and its move ban (:6943, battle_lib.c:2257),
+  Focus Band / Sash (:9106), King's Rock (bcp.c:4633), Shell Bell / Life Orb recoil
+  (bcp.c:4719-4720), Iron Ball's grounding (:5505, the AI chart's trainer_ai.c:3333-3791),
+  Natural Gift (:5465-5481), TrainerAI_MoveType (trainer_ai.c:3137). Raw heldItem: the
+  speed-halving items (:1240-1246), Unburden (:1268-1272, :4434, :161-166), Knock Off
+  (battle_script.c:6614-6627), Pluck (:8122-8127, battle_lib.c:5479, :5544, :5833), RemoveItem
+  (:8978), Recycle (effect_script_0184.s:5), Trace's Griseous Orb (:3723), Sticky Barb's empty
+  attacker (:5389, :7379), the exp payout's party items, the AI's LoadHeldItem /
+  IfHeldItemEqualTo / LoadHeldItemEffect (trainer_ai.c:1891-1931); TrainerAI_CalcDamage's
+  Natural Gift / Judgment cases test their ability / embargoTurns arguments (:2886, :2898): the
+  active's gated item, a Klutz party member's none (its embargo FALSE, :2163). The laws read the
+  gated items at the turn start (hit thresholds, crit odds, King's Rock chance); the possibility
+  flags keep raw items (over-approximate). step.qc_kept keeps the raw item (over-keeping only
+  splits states). Behaviour-neutral without Klutz or Embargo.
+- B13-30 Klutz (AbilityId.KLUTZ, decomp 103) is supported: its only battle reads are the gate
+  (:5354) and Fling's (:5840, an unsupported move); its AI reads are in Fling's, Trick's and
+  Skill Swap's scripts (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported
+  moves). INPUT_NEUTRAL (it holds from the turn start; nothing changes it mid-turn).

@@ -244,6 +244,7 @@ from nuzline.engine.state import (
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
+    held_item,
 )
 
 _I32 = jnp.int32
@@ -412,8 +413,8 @@ def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
 
 def _holds_choice(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``side``'s active Pokemon holds a Choice item (``HOLD_EFFECT_CHOICE_ATK``, ``_SPEED``,
-    ``_SPATK``: ``Battler_HeldItemEffect``)."""
-    item = tables.item_effect[state.item[side, state.active[side]]]
+    ``_SPATK``: ``Battler_HeldItemEffect``, ``state.held_item``, B13-29)."""
+    item = tables.item_effect[held_item(state, side)]
     return jnp.isin(item, jnp.asarray(CHOICE_ITEMS, item.dtype))
 
 
@@ -1125,7 +1126,9 @@ def _use_move(
     # RemoveItem BTLSCR_ATTACKER (:8) before TryMove: a miss or Protect still eats the berry.
     # The hit reads its power and type through damage.gift_item (B13-20).
     gift = effect_used == EffectId.NATURAL_GIFT
-    gift_fails = natural_gift_params(tables, held_now)[0] == 0
+    # Battler_NaturalGiftPower reads Battler_HeldItem (battle_lib.c:5465-5469: none under Klutz
+    # or Embargo, B13-29); Recycle's test above reads BATTLEMON_HELD_ITEM itself.
+    gift_fails = natural_gift_params(tables, held_item(state, side, user))[0] == 0
     failed = failed | (gift & gift_fails)
     state = consume_item(state, side, script_on & gift & ~gift_fails)
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
@@ -1606,7 +1609,7 @@ def _use_move(
     )
     resumed_rock = (
         rock
-        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & (tables.item_effect[held_item(state, side)] == ItemId.KINGS_ROCK)
         & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
         & (state.hp[target_side, state.active[target_side]] > 0)
     )
@@ -1623,7 +1626,7 @@ def _use_move(
         tail_fainted
         & (state_in.ts_damaged != 0)
         & (outcome.flinch_item[side, 0] != 0)
-        & (tables.item_effect[state.item[side, state.active[side]]] == ItemId.KINGS_ROCK)
+        & (tables.item_effect[held_item(state, side)] == ItemId.KINGS_ROCK)
         & ((tables.move_flags[used_t] & MoveFlag.KINGS_ROCK) != 0)
         & (state.hp[target_side, state.active[target_side]] > 0)
     )
@@ -1839,7 +1842,7 @@ def _use_move(
         sync_flag = sync_flag ^ def_landed ^ att_landed
         sync_sem = jnp.where(att_landed, side, jnp.where(def_landed, target_side, sync_sem))
         attacker_rock = (
-            tables.item_effect[hit_state.item[side, hit_state.active[side]]] == ItemId.KINGS_ROCK
+            tables.item_effect[held_item(hit_state, side)] == ItemId.KINGS_ROCK
         )
         rock_test = (
             attacker_rock
@@ -3010,7 +3013,7 @@ def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
     (``subscript_lose_hp_from_item_with_message.s``: ``SYSCTL_SKIP_SPRITE_BLINK``, capped at
     its HP; it may faint). Neither item is used up."""
     mon = state.active[side]
-    item = state.item[side, mon]
+    item = held_item(state, side, mon)  # Battler_HeldItemEffect (battle_lib.c:4927, B13-29)
     effect = tables.item_effect[item]
     hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
     poison = jnp.any(state.types[side, mon] == Type.POISON)
@@ -3046,7 +3049,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
     Immunity, Water Veil, Leaf Guard and Magic Guard are read by decomp ability id
     (``ids.ITEM_ABILITY_IDS``, ``WEATHER_ABILITY_IDS``)."""
     mon = state.active[side]
-    item = state.item[side, mon]
+    item = held_item(state, side, mon)  # Battler_HeldItemEffect (battle_lib.c:4971, B13-29)
     effect = tables.item_effect[item]
     hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
     alive = hp > 0
@@ -3622,6 +3625,8 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     living Quick Claw holder. Elsewhere nothing reads it before the pre-move redraw
     (bcp.c:853-857): a Pokemon that switches in during a turn is first read by that turn's
     end-of-turn sort, which reads that turn's draw."""
+    # The raw item (a Klutz holder or an embargoed one keeps the draw: over-keeping only splits
+    # states, B13-29).
     holds = tables.item_effect[state.item] == ItemId.QUICK_CLAW
     alive = (state.species != 0) & (state.hp > 0)
     on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]

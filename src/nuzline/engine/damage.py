@@ -80,7 +80,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import BattleState, held_item
 
 PHYSICAL, SPECIAL, STATUS = 0, 1, 2  # tables.move_category
 CRIT_MUL = 2  # BattleSystem_CalcCriticalMulti (battle_lib.c:7105-7144)
@@ -201,9 +201,9 @@ def judgment_type(tables, item, table_type) -> jnp.ndarray:
     """``int32``: Judgment's type for a holder of ``item`` (effect_script_0268.s:5-95): the
     type of its HOLD_EFFECT_ARCEUS_* hold effect (``tables.item_hold_effect``, the game's own,
     as ``Battler_HeldItemEffect`` reads it), else ``table_type`` (no UpdateVar: the move's own
-    type). Any holder, not only Multitype; Klutz and Embargo, which hide the item
-    (``Battler_HeldItem``, battle_lib.c:5352-5363), are an unsupported ability and move
-    (B13-12). Pure, for the trainer AI too."""
+    type). Any holder, not only Multitype; callers pass ``state.held_item`` (Klutz and Embargo
+    hide the item, ``Battler_HeldItem``, battle_lib.c:5352-5363; B13-12, B13-29). Pure, for the
+    trainer AI too."""
     rows = jnp.asarray(_PLATE_ROWS, _I32)
     index = _i32(tables.item_hold_effect[_i32(item)]) - _PLATE_LO
     plate = (index >= 0) & (index < rows.shape[0])
@@ -216,12 +216,12 @@ def gift_item(state, side) -> jnp.ndarray:
     ``Battler_NaturalGiftPower`` / ``_Type``, battle_lib.c:5465-5480): the item it holds; once
     the script's ``RemoveItem BTLSCR_ATTACKER`` (effect_script_0222.s:8) has run, before TryMove
     and the hit, the item it put into ``recycleItem[battler]`` (battle_script.c:8977;
-    ``BattleState.recycle_item``), which nothing else writes before the hit (B13-20). Klutz and
-    Embargo, which hide a held item (``Battler_HeldItem``, :5352-5363), are an unsupported
-    ability and move."""
+    ``BattleState.recycle_item``), which nothing else writes before the hit (B13-20). The held
+    item as ``Battler_HeldItem`` sees it (``state.held_item``: none under Klutz or Embargo, so the
+    move fails at power 0 and removes nothing, B13-29)."""
     side = _i32(side)
     held = _i32(state.item[side, state.active[side]])
-    return jnp.where(held != 0, held, _i32(state.recycle_item[side]))
+    return jnp.where(held != 0, held_item(state, side), _i32(state.recycle_item[side]))
 
 
 def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -338,10 +338,9 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
 
 def iron_ball(tables: Tables, state: BattleState, side, slot=None) -> jnp.ndarray:
     """``bool``: ``side``'s active battler (or party ``slot``) holds an Iron Ball
-    (``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` through ``Battler_HeldItemEffect``; Klutz and Embargo
-    are unsupported), ruling G-56."""
-    slot = state.active[side] if slot is None else slot
-    return tables.item_effect[state.item[side, slot]] == ItemId.IRON_BALL
+    (``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` through ``Battler_HeldItemEffect``: ``state.held_item``,
+    B13-29), ruling G-56."""
+    return tables.item_effect[held_item(state, side, slot)] == ItemId.IRON_BALL
 
 
 def levitated(tables: Tables, state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
@@ -748,7 +747,7 @@ def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     out = jnp.where(effect == EffectId.HIDDEN_POWER, iv_type, base)
     ball = weather_ball_params(tables, state, move)[2]
     out = jnp.where(effect == EffectId.WEATHER_BALL, ball, out)
-    plate = judgment_type(tables, state.item[side, mon], base)
+    plate = judgment_type(tables, held_item(state, side, mon), base)
     out = jnp.where(effect == EffectId.JUDGMENT, plate, out)
     # BtlCmd_CalcNaturalGiftParams (battle_script.c:8095-8096), B13-20: only with a gift power
     # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
@@ -882,13 +881,15 @@ def ai_case_power(
     the player again as defender and the AI attacker's IVs. Natural Gift (:2885-2895) the
     ``naturalGiftPower`` of ``item``, the ``heldItem`` argument (default the attacker's own
     ``battleMons`` item; ``IfPartyMemberDealsMoreDamage`` passes the member's, :2156-2165);
-    Judgment's case leaves 0 (:2897-2899). Klutz and Embargo (``ability != ABILITY_KLUTZ &&
-    embargoTurns == 0``, :2886, :2898) are an unsupported ability and move (B13-22), so a
-    supported fight always takes the item branch."""
+    Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
+    embargoTurns == 0`` (:2886, :2898): the default ``item`` is the attacker's
+    ``state.held_item`` (none under either, which reads as the cases' power 0 and
+    TYPE_NORMAL), and a caller passing another item (a party member's) passes 0 for a Klutz
+    member (its ``embargoTurns`` argument is FALSE, :2163), B13-29."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side if def_side is None else _i32(def_side)
     move = _i32(move)
-    item = s.item[atk_side, s.active[atk_side]] if item is None else item
+    item = held_item(s, atk_side) if item is None else item
     gift = natural_gift_params(tables, item)[0]
     friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
     weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
@@ -922,7 +923,7 @@ def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, it
     atk_side = _i32(atk_side)
     move = _i32(move)
     ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
-    item = s.item[atk_side, s.active[atk_side]] if item is None else item
+    item = held_item(s, atk_side) if item is None else item
     table_type = _i32(tables.move_type[move])
     gift_power, gift_type = natural_gift_params(tables, item)
     gift = jnp.where(gift_power != 0, gift_type, Type.NORMAL)
@@ -963,8 +964,8 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     # E2 batch 13 (B13-26). Natural Gift: Battler_NaturalGiftType (battle_lib.c:5477-5481) of
     # the battler's held item, whatever its power (no item: 0, the table type; a non-berry:
     # 0x1F, typeless, AI_TYPELESS). Judgment: Battler_HeldItemEffect's plate type, else
-    # TYPE_NORMAL. Klutz and Embargo (Battler_HeldItem, :5352-5363) are unsupported (B13-22).
-    item = _i32(s.item[side, s.active[side]])
+    # TYPE_NORMAL. Both through Battler_HeldItem (:5352-5363: ``state.held_item``, B13-29).
+    item = held_item(s, side)
     gift = _i32(tables.item_gift_type[item])
     gift = jnp.where(gift == Type.NORMAL, table_type, gift)
     gift = jnp.where((gift < 0) | (gift > Type.DARK), AI_TYPELESS, gift)
@@ -1050,15 +1051,15 @@ def _item_modifiers(
 ):
     """``(power, (attack, sp_attack, defense, sp_defense))`` after the held-item block of
     ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6716-6783), in its order. The items are
-    ``BattleSystem_GetItemData`` of ``Battler_HeldItem`` (:6662-6668; Klutz and Embargo,
-    which hide it, are unsupported), the attacker's and the defender's (the attacker's own
+    ``BattleSystem_GetItemData`` of ``Battler_HeldItem`` (:6662-6668; ``state.held_item``,
+    B13-29), the attacker's and the defender's (the attacker's own
     for the confusion self-hit). ``movePower`` and the stats are ``u16`` there; no value the
     engine reaches comes near 65536, so the stores never truncate. Soul Dew's Battle Frontier
     test (:6731, :6736) never holds for a trainer battle; the Griseous Orb's Transform test
     (:6770) never holds while Transform is an unsupported move."""
     attack, sp_attack, defense, sp_defense = stats
     a_slot, d_slot = s.active[atk_side], s.active[def_side]
-    a_item, d_item = _i32(s.item[atk_side, a_slot]), _i32(s.item[def_side, d_slot])
+    a_item, d_item = held_item(s, atk_side), held_item(s, def_side)
     a_effect, d_effect = _i32(tables.item_effect[a_item]), _i32(tables.item_effect[d_item])
     a_param = _i32(tables.item_param[a_item, 0])  # attackerParams.heldItemPower (:6664)
     a_species, d_species = _i32(s.species[atk_side, a_slot]), _i32(s.species[def_side, d_slot])
@@ -1131,7 +1132,7 @@ def life_orb(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
     ``BattleScript_CalcMoveDamage`` (battle_script.c:1346-1348): ``damage * (100 + param) /
     100`` for ``HOLD_EFFECT_HP_DRAIN_ON_ATK`` (``Battler_HeldItemPower``, Life Orb's 30)."""
     atk_side = _i32(atk_side)
-    item = _i32(s.item[atk_side, s.active[atk_side]])
+    item = held_item(s, atk_side)  # Battler_HeldItemEffect / _HeldItemPower (B13-29)
     orb = tables.item_effect[item] == ItemId.LIFE_ORB
     return jnp.where(orb, damage * (100 + _i32(tables.item_param[item, 0])) // 100, damage)
 
@@ -1141,7 +1142,7 @@ def metronome_boost(tables: Tables, s: BattleState, atk_side, damage) -> jnp.nda
     ``BattleScript_CalcMoveDamage`` (battle_script.c:1350-1352): ``damage * (10 +
     metronomeTurns) / 10`` for ``HOLD_EFFECT_BOOST_REPEATED`` (its param is not read), G-60."""
     atk_side = _i32(atk_side)
-    item = _i32(s.item[atk_side, s.active[atk_side]])
+    item = held_item(s, atk_side)  # Battler_HeldItemEffect (B13-29)
     held = tables.item_effect[item] == ItemId.METRONOME_ITEM
     turns = _i32(s.metronome_turns[atk_side])
     return jnp.where(held, damage * (10 + turns) // 10, damage)
@@ -1592,7 +1593,7 @@ def _finish(
     damage = jnp.where(solid_rock, divide(damage * 3, 4), damage)
     # :2663-2665 then the attacker's Expert Belt (Battler_HeldItemEffect): damage *
     # (100 + param) / 100 on the same super-effective hit (attackerItemPower, :2578).
-    a_item = _i32(s.item[atk_side, s.active[atk_side]])
+    a_item = held_item(s, atk_side)
     belt = super_effective & (tables.item_effect[a_item] == ItemId.EXPERT_BELT)
     damage = jnp.where(belt, damage * (100 + _i32(tables.item_param[a_item, 0])) // 100, damage)
     # :2668-2672 Tinted Lens (Battler_Ability) doubles a MOVE_STATUS_NOT_VERY_EFFECTIVE hit,

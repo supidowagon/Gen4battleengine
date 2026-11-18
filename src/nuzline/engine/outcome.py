@@ -91,6 +91,8 @@ from nuzline.engine.state import (
     STAGE_MIN,
     VOLATILE_FIELDS,
     BattleState,
+    held_item,
+    held_items,
 )
 
 # Beat Up hits once per eligible party member, up to the six of a full party
@@ -319,12 +321,12 @@ def _rate(
     # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
     # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
     # HOLD_EFFECT_ACCURACY_UP_SLOWER (Zoom Lens), each * (100 + param) / 100
-    # (Battler_HeldItemEffect / Battler_HeldItemPower: Klutz and Embargo are unsupported).
-    d_item = state.item[target, target_mon]
+    # (Battler_HeldItemEffect / Battler_HeldItemPower: ``state.held_item``, B13-29).
+    d_item = held_item(state, target, target_mon)
     d_power = tables.item_param[d_item, 0].astype(_I32)
     reduce = tables.item_effect[d_item] == ItemId.BRIGHT_POWDER
     rate = jnp.where(reduce, rate * (100 - d_power) // 100, rate)
-    a_item = state.item[side, state.active[side]]
+    a_item = held_item(state, side)
     a_effect = tables.item_effect[a_item]
     a_power = tables.item_param[a_item, 0].astype(_I32)
     lens = (a_effect == ItemId.WIDE_LENS) | (
@@ -767,7 +769,7 @@ def _threshold_grid(
         & ((effect == EffectId.STAT_SELF) | (effect == EffectId.SECONDARY_STAT_SELF))
         & (stat == Stat.EVA)
     )
-    held = tables.item_effect[state.item[jnp.arange(2), state.active]]
+    held = tables.item_effect[held_items(state)]
     herb = held == ItemId.WHITE_HERB
     firsts = [
         action_order(tables, state, actions, empty_outcome()._replace(speed_tie=jnp.int8(t)))[0]
@@ -899,8 +901,9 @@ def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarra
     # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
     stage = stage + 2 * (state.focus_energy[side] != 0).astype(_I32)
     # :7124-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
-    # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
-    item = state.item[side, mon]
+    # Chansey and Stick on Farfetch'd (Battler_HeldItem: ``state.held_item``, B13-29;
+    # ids.ItemId.CRIT_ITEM).
+    item = held_item(state, side, mon)
     species = state.species[side, mon].astype(_I32)
     needs = tables.item_param[item, 1].astype(_I32)
     held = tables.item_effect[item] == ItemId.CRIT_ITEM
@@ -1240,7 +1243,7 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     turn (no implemented path gives a King's Rock: Recycle gives back only an item a RemoveItem
     took, never a King's Rock while Fling is unsupported, and only to its user, whose move has
     run)."""
-    item = state.item[jnp.arange(2), state.active]
+    item = held_items(state)  # Battler_HeldItemEffect (B13-29)
     holder = tables.item_effect[item] == ItemId.KINGS_ROCK
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)
 

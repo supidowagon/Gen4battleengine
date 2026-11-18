@@ -421,9 +421,9 @@ def _armored(s: RefState, attacker: int, defender: int) -> bool:
     return _ignorable(s, attacker, defender) in (AbilityId.SHELL_ARMOR, AbilityId.BATTLE_ARMOR)
 
 
-def _iron_ball(tables, mon: RefPokemon) -> bool:
-    """``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` (``Battler_HeldItemEffect``), G-56."""
-    return _item_effect(tables, mon) == ItemId.IRON_BALL
+def _iron_ball(tables, s: RefState, mon: RefPokemon) -> bool:
+    """``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` (``Battler_HeldItemEffect``), G-56, B13-29."""
+    return _item_effect(tables, mon, s) == ItemId.IRON_BALL
 
 
 # sCriticalStageRates (lib.c:7097-7103): 1 in N at stage 0..4.
@@ -441,7 +441,7 @@ def _crits(tables, s: RefState, side: int, move: int, value: int) -> bool:
     stage += int(bool(_t(tables, "move_flags", move) & MoveFlag.CRIT_UP))
     stage += int(mon.ability == AbilityId.SUPER_LUCK)
     stage += 2 * int(bool(s.sides[side].focus_energy))
-    if _t(tables, "item_effect", mon.item) == ItemId.CRIT_ITEM:
+    if _item_effect(tables, mon, s) == ItemId.CRIT_ITEM:  # Battler_HeldItem (B13-29)
         needs = _t(tables, "item_param", mon.item, 1)
         stage += 1 if needs == 0 else 2 if needs == mon.species else 0
     return value > 0 and (value - 1) % _CRIT_RATES[min(stage, 4)] == 0
@@ -454,7 +454,7 @@ def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int
     return (
         move_type == Type.GROUND
         and _ignorable(s, attacker, defender) == AbilityId.LEVITATE
-        and not _iron_ball(tables, _active(s, defender))
+        and not _iron_ball(tables, s, _active(s, defender))
     )
 
 
@@ -506,7 +506,7 @@ def _identified(tables, s: RefState, attacker: int, defender: int) -> int:
     skips an immune Flying row for an ingrained defender or one holding an Iron Ball
     (lib.c:2534-2537, G-56)."""
     seen = bool(s.sides[defender].foresight) or _active(s, attacker).ability == AbilityId.SCRAPPY
-    rooted = s.sides[defender].ingrain or _iron_ball(tables, _active(s, defender))
+    rooted = s.sides[defender].ingrain or _iron_ball(tables, s, _active(s, defender))
     return int(seen) | (2 if rooted else 0)
 
 
@@ -545,7 +545,7 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
     if effect == EffectId.WEATHER_BALL and _weather_ball_on(tables, s):
         return WEATHER_BALL_TYPES.get(s.weather, _t(tables, "move_type", move))
     if effect == EffectId.JUDGMENT:
-        hold = _t(tables, "item_hold_effect", _active(s, side).item)
+        hold = _t(tables, "item_hold_effect", _held(s, _active(s, side)))
         return PLATE_TYPES.get(hold, _t(tables, "move_type", move))
     # CalcNaturalGiftParams (script.c:8095-8096), B13-20: only with a gift power (else it fails).
     if effect == EffectId.NATURAL_GIFT and _t(tables, "item_gift_power", _gift_item(s, side)):
@@ -555,8 +555,10 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
 
 def _gift_item(s: RefState, side: int) -> int:
     """The item Natural Gift reads: the held one, or after the script's RemoveItem
-    (effect_script_0222.s:8) the battler's recycleItem it went to (B13-20)."""
-    return _active(s, side).item or s.sides[side].recycle_item
+    (effect_script_0222.s:8) the battler's recycleItem it went to (B13-20). The held one through
+    Battler_HeldItem (none under Klutz or Embargo, B13-29)."""
+    mon = _active(s, side)
+    return _held(s, mon) if mon.item else s.sides[side].recycle_item
 
 
 # BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
@@ -758,7 +760,7 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     if _t(tables, "item_hold_effect", mon.item) in SPEED_HALVING_HOLD_EFFECTS:
         speed //= 2
     # lib.c:1248: Choice Scarf.
-    if _item_effect(tables, mon) == ItemId.CHOICE_SCARF:
+    if _item_effect(tables, mon, s) == ItemId.CHOICE_SCARF:
         speed = speed * 15 // 10
     # lib.c:1257-1261: Quick Feet with any status x15/10, else paralysis quarters it.
     if mon.ability == AbilityId.QUICK_FEET and mon.status != Status.NONE:
@@ -773,8 +775,20 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     return speed
 
 
-def _item_effect(tables, mon: RefPokemon) -> int:
-    return _t(tables, "item_effect", mon.item)
+def _held(s: RefState, mon: RefPokemon) -> int:
+    """``Battler_HeldItem`` (lib.c:5352-5363) of ``mon``: none for a Klutz holder or the active
+    battler of a side under Embargo (``embargoTurns``), else its item (B13-29)."""
+    if mon.ability == AbilityId.KLUTZ:
+        return 0
+    if any(sd.embargo and sd.party[sd.active] is mon for sd in s.sides):
+        return 0
+    return mon.item
+
+
+def _item_effect(tables, mon: RefPokemon, s: RefState | None) -> int:
+    """The item effect of ``mon``'s item as ``Battler_HeldItemEffect`` reads it (``_held``), or
+    of the raw item where ``s`` is None."""
+    return _t(tables, "item_effect", mon.item if s is None else _held(s, mon))
 
 
 def _pinch_divisor(tables, mon: RefPokemon) -> int:
@@ -794,7 +808,7 @@ def _pinch_limit(tables, mon: RefPokemon) -> int:
 def _custap_active(tables, s: RefState, side: int) -> bool:
     """The active battler holds a Custap Berry at ``curHP <= maxHP / param`` (lib.c:1288-1300)."""
     mon = _active(s, side)
-    if _item_effect(tables, mon) != ItemId.CUSTAP_BERRY:
+    if _item_effect(tables, mon, s) != ItemId.CUSTAP_BERRY:
         return False
     return mon.hp <= _pinch_limit(tables, mon)
 
@@ -816,7 +830,7 @@ def _player_second(
     # Quick Claw (HOLD_EFFECT_SOMETIMES_PRIORITY, lib.c:1278-1286) or a Custap Berry in its
     # pinch (HOLD_EFFECT_PINCH_PRIORITY, lib.c:1288-1300): one flag.
     claw = [
-        (_item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0)
+        (_item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0)
         or _custap_active(tables, s, side)
         for side in (0, 1)
     ]
@@ -826,7 +840,7 @@ def _player_second(
         return speed0 < speed1
     if claw[0] != claw[1]:  # lib.c:1408-1411: the lone activated holder goes first
         return claw[1]
-    lag = [_item_effect(tables, _active(s, side)) == ItemId.LAGGING_TAIL for side in (0, 1)]
+    lag = [_item_effect(tables, _active(s, side), s) == ItemId.LAGGING_TAIL for side in (0, 1)]
     if lag[0] and lag[1]:  # lib.c:1412-1417: the faster goes second, Trick Room ignored
         if speed0 == speed1:
             return tie_roll != 0
@@ -938,7 +952,7 @@ def _calc_move_damage(
     # lib.c:6716-6783: the held items (BattleSystem_GetItemData of Battler_HeldItem,
     # lib.c:6662-6668), the attacker's and the defender's; movePower and the stats are u16,
     # which no value here reaches.
-    a_item, d_item = _item_effect(tables, atk), _item_effect(tables, dfn)
+    a_item, d_item = _item_effect(tables, atk, s), _item_effect(tables, dfn, s)
     a_power = _t(tables, "item_param", atk.item, 0)
     # lib.c:6716-6722: sTypeBoostingItems.
     if a_item == ItemId.TYPE_BOOST and move_type == _t(tables, "item_param", atk.item, 1):
@@ -1172,7 +1186,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
         damage = _divide(damage * 3, 4)
     # lib.c:2663-2665: then the attacker's Expert Belt.
     atk = _active(s, attacker)
-    if "super" in flags and update and _item_effect(tables, atk) == ItemId.EXPERT_BELT:
+    if "super" in flags and update and _item_effect(tables, atk, s) == ItemId.EXPERT_BELT:
         damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     # lib.c:2668-2672: Tinted Lens on a not-very-effective hit.
     if "not_very" in flags and update and atk.ability == AbilityId.TINTED_LENS:
@@ -1294,10 +1308,10 @@ def _move_damage(
     )
     # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
-    if _item_effect(tables, atk) == ItemId.LIFE_ORB:
+    if _item_effect(tables, atk, s) == ItemId.LIFE_ORB:
         damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     # script.c:1350-1352: the Metronome item, (10 + metronomeTurns) / 10 (G-60).
-    if _item_effect(tables, atk) == ItemId.METRONOME_ITEM:
+    if _item_effect(tables, atk, s) == ItemId.METRONOME_ITEM:
         damage = damage * (10 + s.sides[attacker].metronome_turns) // 10
     damage = _variance(damage, roll)
     kind = _move_type(tables, s, attacker, move)
@@ -1897,7 +1911,7 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
     mon = _active(s, side)
     if mon.hp == 0:
         return False
-    effect = _item_effect(tables, mon)
+    effect = _item_effect(tables, mon, s)
     power = _t(tables, "item_param", mon.item, 0)
     disliked = False
     if effect in (ItemId.ORAN_BERRY, ItemId.BERRY_JUICE, ItemId.SITRUS_BERRY):
@@ -1952,7 +1966,7 @@ def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
     with MOVE_STATUS_NO_PP (bcp.c:2285) counts too: the update follows the NO_EFFECTS branch
     (bcp.c:3209-3221); only the unsupported Spite (or an encored move with no PP) gets there."""
     sd = s.sides[side]
-    if _item_effect(tables, _active(s, side)) != ItemId.METRONOME_ITEM:
+    if _item_effect(tables, _active(s, side), s) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
     elif not sd.uproar and not sd.locked_move:
         if sd.metronome_move == move:
@@ -1967,7 +1981,7 @@ def _metronome_verify(
 ) -> None:
     """``BattleSystem_VerifyMetronomeCount`` (lib.c:6181-6198), G-60."""
     sd = s.sides[side]
-    if _item_effect(tables, _active(s, side)) != ItemId.METRONOME_ITEM:
+    if _item_effect(tables, _active(s, side), s) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
     elif (
         no_effects
@@ -2017,21 +2031,21 @@ def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -
     mon = _active(s, side)
     if not (armed and damage > 0 and mon.hp - damage <= 0):
         return damage
-    if _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
+    if _item_effect(turn.tables, mon, s) == ItemId.FOCUS_SASH:
         _remove_item(s, side)
     return mon.hp - 1
 
 
 def _sash_at_full_hp(turn: _Turn, s: RefState, side: int) -> bool:
     mon = _active(s, side)
-    return _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
+    return _item_effect(turn.tables, mon, s) == ItemId.FOCUS_SASH and mon.hp == mon.max_hp
 
 
 def _band_rolls(turn: _Turn, s: RefState, side: int, roll: int) -> bool:
     """A Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) on ``side``'s active Pokemon whose roll
     ``RandNext() % 100 < param`` passed (``roll``, an ``Outcome.focus_band`` /
     ``future_band`` element): bcp.c:3387, script.c:9109-9112, ruling G-1."""
-    return _item_effect(turn.tables, _active(s, side)) == ItemId.FOCUS_BAND and bool(roll)
+    return _item_effect(turn.tables, _active(s, side), s) == ItemId.FOCUS_BAND and bool(roll)
 
 
 def _hung_on(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> None:
@@ -2052,7 +2066,7 @@ def _resist_berry(
     removed. Returns
     whether it triggered (the caller halves ``hpCalcTemp``)."""
     mon = _active(s, side)
-    if _item_effect(turn.tables, mon) != ItemId.RESIST_BERRY:
+    if _item_effect(turn.tables, mon, s) != ItemId.RESIST_BERRY:
         return False
     resisted = _t(turn.tables, "item_param", mon.item, 1)
     if resisted == RESIST_ANY_NORMAL:
@@ -2095,7 +2109,7 @@ def _big_root(turn: _Turn, s: RefState, side: int, heal: int) -> int:
     with a Big Root (``HOLD_EFFECT_LEECH_BOOST``) the heal becomes ``heal * (param + 100)
     / 100`` (param 30), no minimum."""
     mon = _active(s, side)
-    if _item_effect(turn.tables, mon) != ItemId.BIG_ROOT:
+    if _item_effect(turn.tables, mon, s) != ItemId.BIG_ROOT:
         return heal
     return heal * (_t(turn.tables, "item_param", mon.item, 0) + 100) // 100
 
@@ -2115,7 +2129,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
     levitate = mon.ability == AbilityId.LEVITATE and not s.sides[side].ingrain
     airborne = levitate or Type.FLYING in mon.types
     # :7 an Iron Ball grounds it too (CheckItemHoldEffect), G-56.
-    if s.gravity or _iron_ball(tables, mon) or not airborne:
+    if s.gravity or _iron_ball(tables, s, mon) or not airborne:
         if sd.toxic_spikes:
             if Type.POISON in mon.types:
                 sd.toxic_spikes = 0
@@ -2586,7 +2600,7 @@ def _life_orb_recoil(turn: _Turn, s: RefState, side: int) -> None:
     (decomp ability id; unsupported) loses ``Divide(maxHP, 10)`` through
     ``subscript_lose_hp_from_item.s`` (no resist berry, no Bide memory)."""
     mon = _active(s, side)
-    if _item_effect(turn.tables, mon) != ItemId.LIFE_ORB or mon.hp == 0:
+    if _item_effect(turn.tables, mon, s) != ItemId.LIFE_ORB or mon.hp == 0:
         return
     if _decomp_ability(turn.tables, mon) == WEATHER_ABILITY_IDS["Magic Guard"]:
         return
@@ -2594,7 +2608,7 @@ def _life_orb_recoil(turn: _Turn, s: RefState, side: int) -> None:
 
 
 def _holds_choice(tables, s: RefState, side: int) -> bool:
-    return _item_effect(tables, _active(s, side)) in CHOICE_ITEMS
+    return _item_effect(tables, _active(s, side), s) in CHOICE_ITEMS
 
 
 def _update_choice_lock(
@@ -2634,7 +2648,7 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
     # Berry flag (set by this turn's order) is up.
     if foe.item and turn.custap[target]:
         return
-    effect = _item_effect(tables, foe)
+    effect = _item_effect(tables, foe, None)  # Battler_ItemPluckEffect: raw (lib.c:5479, B13-29)
     power = _t(tables, "item_param", foe.item, 0)
     if effect == ItemId.ORAN_BERRY:
         heal = power
@@ -2849,7 +2863,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # CHECK_HP_AND_SUBSTITUTE (lib.c:1537-1544) and bind_start.s:5 CheckSubstitute.
         if target_alive and not s.sides[target].trapped and not _shielded(turn, s, target):
             # :10-12: the attacker's Grip Claw (HOLD_EFFECT_EXTEND_TRAPPING) sets 6 (G-57).
-            grip = _item_effect(tables, _active(s, side)) == ItemId.GRIP_CLAW
+            grip = _item_effect(tables, _active(s, side), s) == ItemId.GRIP_CLAW
             s.sides[target].trapped = GRIP_CLAW_TURNS if grip else o.duration[side]
             s.sides[target].trap_move = move
     elif effect == EffectId.TAUNT and effective:
@@ -2930,7 +2944,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         if not getattr(s.sides[side], name):
             user = _active(s, side)
             extra = 0
-            if _item_effect(tables, user) == ItemId.LIGHT_CLAY:
+            if _item_effect(tables, user, s) == ItemId.LIGHT_CLAY:
                 extra = _t(tables, "item_param", user.item, 0)
             setattr(s.sides[side], name, 5 + extra)
     elif effect == EffectId.BRICK_BREAK and landed:
@@ -2986,7 +3000,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             user = _active(s, side)
             extra = 0
             if (
-                _item_effect(tables, user) == ItemId.WEATHER_ROCK
+                _item_effect(tables, user, s) == ItemId.WEATHER_ROCK
                 and _t(tables, "item_param", user.item, 1) == p0
             ):
                 extra = _t(tables, "item_param", user.item, 0)
@@ -3331,7 +3345,7 @@ def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: i
     on a contact move (``subscript_transfer_sticky_barb.s``; no RemoveItem)."""
     tables = turn.tables
     user, holder = _active(s, side), _active(s, foe)
-    if _item_effect(tables, holder) != ItemId.STICKY_BARB:
+    if _item_effect(tables, holder, s) != ItemId.STICKY_BARB:
         return
     # lib.c:5390-5391 (B10-6): not a knocked-off attacker, not Knock Off itself.
     if user.knocked_off or move == MOVE_KNOCK_OFF:
@@ -3381,7 +3395,7 @@ def _on_hit_berry(
     (subscript_held_item_hp_restore.s). Returns whether a recoil ran (G-54, G-55)."""
     tables = turn.tables
     user, holder = _active(s, side), _active(s, foe)
-    effect = _item_effect(tables, holder)
+    effect = _item_effect(tables, holder, s)
     power = _t(tables, "item_param", holder.item, 0)
     recoil = (effect == ItemId.JABOCA_BERRY and physical) or (
         effect == ItemId.ROWAP_BERRY and special
@@ -3403,7 +3417,7 @@ def _shell_bell(turn: _Turn, s: RefState, side: int, dealt: int) -> None:
     (``shellBellDamageDealt``) nonzero, a living holder below full HP regains
     ``Divide(dealt, param)`` (``subscript_restore_a_little_hp.s``, capped)."""
     mon = _active(s, side)
-    if _item_effect(turn.tables, mon) != ItemId.SHELL_BELL or not dealt:
+    if _item_effect(turn.tables, mon, s) != ItemId.SHELL_BELL or not dealt:
         return
     if mon.hp and mon.hp < mon.max_hp:
         _reveal_item(s, side)  # subscript_restore_a_little_hp.s:10
@@ -3419,7 +3433,7 @@ def _leftovers_check(turn: _Turn, s: RefState, side: int) -> None:
     mon = _active(s, side)
     if not mon.hp:
         return
-    effect = _item_effect(tables, mon)
+    effect = _item_effect(tables, mon, s)
     if effect == ItemId.LEFTOVERS or (effect == ItemId.BLACK_SLUDGE and Type.POISON in mon.types):
         if mon.hp < mon.max_hp:
             _reveal_item(s, side)  # subscript_restore_a_little_hp.s:10
@@ -3443,7 +3457,7 @@ def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
     mon = _active(s, side)
     if not mon.hp:
         return
-    effect = _item_effect(tables, mon)
+    effect = _item_effect(tables, mon, s)
     ability = _decomp_ability(tables, mon)
     sun = s.weather == Weather.SUN and not _weather_suppressed(tables, s)
     leaf_guard = sun and ability == ITEM_ABILITY_IDS["Leaf Guard"]
@@ -3624,7 +3638,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     rock = (
         update_hp
         and taken
-        and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
+        and _item_effect(tables, _active(s, side), s) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and _active(s, target).hp > 0
@@ -3673,7 +3687,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     user, holder = _active(s, side), _active(s, foe)
     barb = (
         turn.damaged
-        and _item_effect(tables, holder) == ItemId.STICKY_BARB
+        and _item_effect(tables, holder, s) == ItemId.STICKY_BARB
         and user.hp
         and user.item == 0
         and not user.knocked_off  # lib.c:7380 (B10-6)
@@ -3683,7 +3697,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         not barb
         and turn.damaged
         and _t(tables, "move_category", move) == PHYSICAL
-        and _item_effect(tables, holder) == ItemId.JABOCA_BERRY
+        and _item_effect(tables, holder, s) == ItemId.JABOCA_BERRY
         and _on_hit_berry(turn, s, side, foe, True, False, False)
     )  # lib.c:7368-7375 (G-54)
     if barb:
@@ -3716,7 +3730,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
     rock = (
         turn.damaged
-        and _item_effect(tables, user) == ItemId.KINGS_ROCK
+        and _item_effect(tables, user, s) == ItemId.KINGS_ROCK
         and o.flinch_item[side][hit]
         and _t(tables, "move_flags", move) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
@@ -3920,9 +3934,9 @@ def _hit_rate(
     # :2949-2965: the defender's BrightPowder / Lax Incense, the attacker's Wide Lens and, after
     # the target moved, Zoom Lens.
     foe = _active(s, defender)
-    if _item_effect(tables, foe) == ItemId.BRIGHT_POWDER:
+    if _item_effect(tables, foe, s) == ItemId.BRIGHT_POWDER:
         rate = rate * (100 - _t(tables, "item_param", foe.item, 0)) // 100
-    lens = _item_effect(tables, atk)
+    lens = _item_effect(tables, atk, s)
     if lens == ItemId.WIDE_LENS or (lens == ItemId.ZOOM_LENS and target_moved):
         rate = rate * (100 + _t(tables, "item_param", atk.item, 0)) // 100
     micle = s.sides[attacker].micle if micle is None else micle
@@ -4124,7 +4138,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
             and s.weather == Weather.SUN
             and not _weather_suppressed(tables, s)
         )
-        herb = not second and not sun_now and _item_effect(tables, mon) == ItemId.POWER_HERB
+        herb = not second and not sun_now and _item_effect(tables, mon, s) == ItemId.POWER_HERB
         if herb:
             _remove_item(s, side)  # RemoveItem
             if flags & MoveFlag.CHARGE_DEF_UP:
@@ -4225,7 +4239,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # Natural Gift (effect_script_0222.s): fails at naturalGiftPower 0 (script.c:8094-8099);
     # else the script removes the berry (:8) before TryMove, B13-20.
     if effect == EffectId.NATURAL_GIFT:
-        if not _t(tables, "item_gift_power", mon.item):
+        if not _t(tables, "item_gift_power", _held(s, mon)):  # Battler_HeldItem (B13-29)
             _unlock(s.sides[side])
             return record
         _remove_item(s, side)
@@ -5123,7 +5137,7 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         if flags & {"missed", "protected", "semi"}:
             continue
         damage = sd.future_damage
-        sash = _item_effect(tables, mon) == ItemId.FOCUS_SASH
+        sash = _item_effect(tables, mon, s) == ItemId.FOCUS_SASH
         if sd.substitute_hp:
             # :13-21 (B10-4): the substitute takes it, 0 at substituteHP <= damage; no HP change,
             # no flag; then :92 (an endured first hit still removes the sash).
@@ -5580,7 +5594,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
             turn.custap = [_custap_active(tables, s, side) for side in (0, 1)]
             qc = _qc_rolls(s)
             turn.claw = [
-                _item_effect(tables, _active(s, side)) == ItemId.QUICK_CLAW and qc[side] != 0
+                _item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0
                 for side in (0, 1)
             ]
     turn.actions, turn.choices, turn.items = actions, choices, items
@@ -5888,7 +5902,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     holder = _active(s, foe)
     rock = (
         damaged
-        and _item_effect(tables, _active(s, side)) == ItemId.KINGS_ROCK
+        and _item_effect(tables, _active(s, side), s) == ItemId.KINGS_ROCK
         and o.flinch_item[side][0]
         and _t(tables, "move_flags", used) & MoveFlag.KINGS_ROCK
         and holder.hp > 0
@@ -5944,7 +5958,8 @@ def _qc_kept(tables, s: RefState) -> list[bool]:
     for sd in s.sides:
 
         def claw(mon):
-            return mon.species and mon.hp and _item_effect(tables, mon) == ItemId.QUICK_CLAW
+            # The raw item, as step.qc_kept (B13-29).
+            return mon.species and mon.hp and _item_effect(tables, mon, None) == ItemId.QUICK_CLAW
 
         active = sd.party[sd.active]
         bench = [m for i, m in enumerate(sd.party) if i != sd.active]

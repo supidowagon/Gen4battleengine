@@ -80,8 +80,11 @@ three structs has a row.
   subscript_user_swap_atk_and_def.s:5; the BattleMon Attack and Defense it swaps are read
   through `damage.battle_stats`; Baton Pass keeps it, moves.h:47, and swaps the newcomer's,
   battle_lib.c:2137-2141); a level-up's BattleSystem_ReloadPokemon, battle_lib.c:169-174, undoes
-  the swap and keeps the bit: `power_trick_desync`). The rest (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block,
-  Embargo, Magnet Rise) are later (M6).
+  the swap and keeps the bit: `power_trick_desync`); Embargo -> `embargo` (E2 batch 13, B13-29:
+  embargoTurns with its bit, set to 5 by subscript_embargo_start.s:13-14, counted down at the
+  turn end, battle_controller_player.c:1671-1677, kept by Baton Pass, moves.h:46-48,
+  battle_lib.c:2112; `state.held_item` reads it). The rest (Charge, Grudge, Gastro Acid, Miracle
+  Eye, Heal Block, Magnet Rise) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -448,7 +451,7 @@ three structs has a row.
 | `MoveEffectsData.lastResortCount` | — | later (M6) |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
-| `MoveEffectsData.embargoTurns` | — | later (M6) |
+| `MoveEffectsData.embargoTurns` | `embargo` (with its `MOVE_EFFECT_EMBARGO` bit; read by `state.held_item`, B13-29) | mapped |
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
 | `MoveEffectsData.micleBerry` | `micle` | mapped |

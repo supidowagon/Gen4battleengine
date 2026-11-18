@@ -980,6 +980,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.WHITE_SMOKE,
     AbilityId.VITAL_SPIRIT,
     AbilityId.IRON_FIST,
+    # B13-29: Klutz hides its holder's item from every gated read (state.held_item) from the
+    # start of the turn; nothing changes it mid-turn.
+    AbilityId.KLUTZ,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause

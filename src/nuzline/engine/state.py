@@ -195,6 +195,13 @@ Encodings:
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
   scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
   them (later K3d-exp tasks).
+* E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
+  ``MoveEffectsData.embargoTurns`` (battle_mon.h:30, 3 bits), 0 = none. Its
+  ``MOVE_EFFECT_EMBARGO`` bit (moves.h:34) is set and cleared with it (subscript_embargo_start.s:
+  13-14, subscript_embargo_end.s:9 right after the count reaches 0, battle_controller_player.c:
+  1671-1677) and both are volatiles Baton Pass keeps (moves.h:46-48, battle_lib.c:2112), so one
+  field holds both. ``held_item`` is ``Battler_HeldItem`` (battle_lib.c:5352-5363): the held item
+  as every gated read sees it, none under Klutz or Embargo.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -220,7 +227,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -320,6 +327,7 @@ class BattleState(NamedTuple):
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
+    embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -508,6 +516,7 @@ VOLATILE_FIELDS = (
     "focus_energy",
     "power_trick",
     "power_trick_desync",
+    "embargo",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -534,6 +543,7 @@ BATON_PASSED_FIELDS = (
     "curse",
     "focus_energy",
     "power_trick",
+    "embargo",
 )
 
 
@@ -617,6 +627,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "focus_energy": (_SIDE, np.int8),
     "power_trick": (_SIDE, np.int8),
     "power_trick_desync": (_SIDE, np.int8),
+    "embargo": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -693,6 +704,33 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
 }
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
+
+
+def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
+    """``int32``: ``Battler_HeldItem`` (battle_lib.c:5352-5363) of ``side``'s active battler, or
+    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` is Klutz (:5354-5356; no
+    supported mechanic makes ``Battler_Ability`` differ from the held ability for Klutz:
+    Gastro Acid is unsupported, :3088-3106) or its ``embargoTurns`` is nonzero (:5358-5360),
+    else its ``heldItem``. Every ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower(...,
+    ITEM_POWER_CHECK_ALL)`` / ``Battler_NaturalGift*`` read goes through it (:5438-5481); the
+    reads of ``battleMons[b].heldItem`` itself (the speed-halving items, :1240-1246, Unburden's
+    test, :1268-1272, Knock Off, Pluck, RemoveItem, Recycle, Trace's and Embargo's Griseous Orb,
+    the party data of the exp payout) read ``state.item`` directly (ruling B13-29). Embargo is
+    the active battler's: a bench ``slot`` (a newcomer read before it is in) gets none, which
+    is what a plain switch gives it (``VOLATILE_FIELDS``); a Baton Pass newcomer is read after
+    the pass, as the active battler."""
+    side = jnp.asarray(side, jnp.int32)
+    active = state.active[side]
+    slot = active if slot is None else jnp.asarray(slot, jnp.int32)
+    hidden = (state.ability[side, slot] == AbilityId.KLUTZ) | (
+        (state.embargo[side] != 0) & (slot == active)
+    )
+    return jnp.where(hidden, 0, state.item[side, slot].astype(jnp.int32))
+
+
+def held_items(state: BattleState) -> jnp.ndarray:
+    """``int32[2]``: ``held_item`` of each side's active battler."""
+    return jnp.stack([held_item(state, side) for side in range(state.active.shape[0])])
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 

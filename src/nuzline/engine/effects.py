@@ -310,7 +310,7 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome, crit_lands
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
+from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, held_item
 
 _I32 = jnp.int32
 _E = EffectId
@@ -738,7 +738,7 @@ def big_root(tables: Tables, state: BattleState, side, heal) -> jnp.ndarray:
     ``heal * (100 + param) / 100`` (param 30), plain integer division after the base
     amount, no minimum (``subscript_drain_half_damage_dealt.s:_011-_031``,
     ``subscript_leech_seed_effect.s``)."""
-    item = state.item[side, state.active[side]]
+    item = held_item(state, side)  # CheckItemHoldEffect / GetItemEffectParam (B13-29)
     boost = tables.item_param[item, 0].astype(_I32) + 100
     root = tables.item_effect[item] == ItemId.BIG_ROOT
     return jnp.where(root, heal * boost // 100, heal)
@@ -1873,7 +1873,7 @@ def _screen(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     :4257) fail when the user's side has it, else set it for ``NUM_SCREEN_TURNS``, plus the
     hold param of the user's Light Clay (``HOLD_EFFECT_EXTEND_SCREENS``, script.c:4229, :4272:
     ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower`` of the attacker)."""
-    item = state.item[h.side, h.user]
+    item = held_item(state, h.side, h.user)
     clay = tables.item_effect[item] == ItemId.LIGHT_CLAY
     turns = SCREEN_TURNS + jnp.where(clay, tables.item_param[item, 0].astype(_I32), 0)
     for effect, field in ((_E.LIGHT_SCREEN, "light_screen"), (_E.REFLECT, "reflect")):
@@ -1901,7 +1901,7 @@ def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (``CheckItemHoldEffect`` / ``GetItemEffectParam`` on the attacker). The failure skips
     ``AfterMoveEffects`` (``step._use_move``)."""
     weather = h.param[0]
-    item = state.item[h.side, h.user]
+    item = held_item(state, h.side, h.user)  # Battler_HeldItemEffect (B13-29)
     rock = (tables.item_effect[item] == ItemId.WEATHER_ROCK) & (
         tables.item_param[item, 1].astype(_I32) == weather
     )
@@ -2238,7 +2238,7 @@ def kings_rock_flinch(tables, state, side, target_side, move, cond) -> BattleSta
     ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, a living target, and subscript_flinch_mon.s's Inner Focus
     (:7) and Shield Dust (:9) as this attacker sees them (``Battler_IgnorableAbility``)."""
     user, target = state.active[side], state.active[target_side]
-    item = state.item[side, user]
+    item = held_item(state, side, user)
     flag = (tables.move_flags[move] & MoveFlag.KINGS_ROCK) != 0
     seen = ignorable(state, side, target_side)
     on = (
@@ -2284,7 +2284,8 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
     ``subscript_transfer_sticky_barb.s`` moves the item: the attacker holds it, the defender
     nothing (no ``RemoveItem``: ``item_consumed`` is untouched). ``foe``: the defender's side."""
     user, target = state.active[side], state.active[foe]
-    barb = state.item[foe, target]
+    # The defender's Battler_HeldItemEffect (:5383, B13-29); the attacker's raw heldItem (:5389).
+    barb = held_item(state, foe, target)
     contact = (tables.move_flags[move] & MoveFlag.CONTACT) != 0
     on = (
         jnp.asarray(cond)
@@ -2330,7 +2331,7 @@ def on_hit_berry(
     side = jnp.asarray(side, _I32)
     foe = jnp.asarray(foe, _I32)
     user, target = state.active[side], state.active[foe]
-    item = state.item[foe, target]
+    item = held_item(state, foe, target)  # Battler_HeldItemEffect / _HeldItemPower (B13-29)
     effect = tables.item_effect[item]
     power = tables.item_param[item, 0].astype(_I32)
     cond = jnp.asarray(cond)
@@ -2364,7 +2365,7 @@ def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jn
     user, target = state.active[side], state.active[foe]
     contact = (tables.move_flags[move] & MoveFlag.CONTACT) != 0
     return (
-        (tables.item_effect[state.item[foe, target]] == ItemId.STICKY_BARB)
+        (tables.item_effect[held_item(state, foe, target)] == ItemId.STICKY_BARB)
         & _alive(state, side, user)
         & (state.item[side, user] == 0)
         & contact
@@ -2389,7 +2390,7 @@ def pivot_item(
     barb = jnp.asarray(damaged) & sticky_barb_ready(tables, state, side, foe, move)
     state = sticky_barb_transfer(tables, state, side, foe, move, barb)
     physical = jnp.asarray(damaged) & (tables.move_category[move] == PHYSICAL)
-    holder = state.item[foe, state.active[foe]]
+    holder = held_item(state, foe)  # defenderItemEffect (battle_lib.c:7342, B13-29)
     jaboca = ~barb & physical & (tables.item_effect[holder] == ItemId.JABOCA_BERRY)
     state, jabbed = on_hit_berry(tables, state, side, foe, physical, False, False, jaboca)
     hit = jnp.asarray(move_hit) & ~barb & ~jabbed
@@ -2408,7 +2409,7 @@ def shell_bell_heal(tables: Tables, state: BattleState, side, dealt, cond) -> Ba
     ``dealt`` is nonzero (attacker != defender); U-turn is unsupported."""
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
-    item = state.item[side, mon]
+    item = held_item(state, side, mon)  # bcp.c:4719-4720 (B13-29)
     hp = state.hp[side, mon].astype(_I32)
     max_hp = state.max_hp[side, mon].astype(_I32)
     dealt = jnp.asarray(dealt, _I32)
@@ -2577,7 +2578,7 @@ def resist_berry(
     ``MOVE_STATUS_SUPER_EFFECTIVE``. Chilan (``RESIST_ANY_NORMAL``) needs a Normal type
     only (:_128); every other one a super-effective hit of its type (:_135-_240). The caller skips
     ``IGNORES_TYPE_CHECKS`` effects (:5; OHKO moves, :6, are unsupported)."""
-    item = state.item[side, state.active[side]]
+    item = held_item(state, side)  # CheckItemHoldEffect / GetItemEffectParam (B13-29)
     resisted = tables.item_param[item, 1].astype(_I32)
     move_type = jnp.asarray(move_type, _I32)
     halves = jnp.where(
@@ -2680,8 +2681,9 @@ def metronome_verify(
 
 
 def holds(tables: Tables, state: BattleState, side, item: ItemId) -> jnp.ndarray:
-    """``side``'s active Pokemon holds an item with effect ``item``."""
-    return tables.item_effect[state.item[side, state.active[side]]] == item
+    """``side``'s active Pokemon holds an item with effect ``item`` as ``Battler_HeldItemEffect``
+    reads it (``state.held_item``: none under Klutz or Embargo, B13-29)."""
+    return tables.item_effect[held_item(state, side)] == item
 
 
 def consume_item(state: BattleState, side, cond) -> BattleState:

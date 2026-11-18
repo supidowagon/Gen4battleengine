@@ -649,6 +649,11 @@ class AbilityId(IntEnum):
     VITAL_SPIRIT = 84
     SPEED_BOOST = 85
     IRON_FIST = 86
+    # E2 batch 13 (B13-29): Klutz. Battler_HeldItem returns ITEM_NONE for it (battle_lib.c:
+    # 5354-5356): every gated held-item read (``state.held_item``). Its other reads are Fling's
+    # (:5840, an unsupported move) and the AI scripts of Fling, Trick and Skill Swap
+    # (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported moves).
+    KLUTZ = 87
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -743,6 +748,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.VITAL_SPIRIT: 72,
     AbilityId.SPEED_BOOST: 3,
     AbilityId.IRON_FIST: 89,
+    AbilityId.KLUTZ: 103,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and

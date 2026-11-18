@@ -79,7 +79,7 @@ from nuzline.engine.damage import (
     ai_move_type,
     decomp_abilities,
 )
-from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
@@ -87,7 +87,7 @@ from nuzline.engine.order import (
     battler_slower,
     compare_speed,
 )
-from nuzline.engine.state import MOVES, BattleState
+from nuzline.engine.state import MOVES, BattleState, held_item
 
 _I32 = jnp.int32
 
@@ -1480,7 +1480,9 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     (``AI_CONTEXT.attacker``: its stats, level, types, ability and item in
     ``CalcMoveDamage``), with the member's IVs (Hidden Power's case) and held item (Natural
     Gift's and Judgment's cases, :2156-2165) passed; its ability parameter reaches only the
-    Klutz tests, an unsupported ability (B13-25). Only
+    cases' Klutz tests (:2886, :2898), with ``embargoTurns`` FALSE (:2163): a Klutz member's item
+    is passed as none, and the active's as ``state.held_item`` (its ``Battler_Ability`` and
+    ``embargoTurns``, :2133-2138), B13-25, B13-29. Only
     ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted).
 
     Psywave's and Magnitude's cases draw for every such move estimated (:2130 the active's,
@@ -1501,8 +1503,9 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
             lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases, item=item)
         )(moves.astype(_I32))
 
-    mine = estimates(state.moves[a, active], state.ivs[a, active], state.item[a, active])
-    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a], state.item[a])  # [SLOTS, 4, C]
+    mine = estimates(state.moves[a, active], state.ivs[a, active], held_item(state, a))
+    member_items = jnp.where(state.ability[a] == AbilityId.KLUTZ, 0, state.item[a])
+    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a], member_items)  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
     alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
     # A member that is not estimated draws nothing (:2145-2148).

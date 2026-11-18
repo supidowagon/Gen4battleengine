@@ -13,6 +13,7 @@ from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     PLATE_TYPES,
     damage_for_roll,
+    iron_ball,
     falloff_power,
     gyro_ball_power,
     move_type_of,
@@ -30,7 +31,7 @@ from nuzline.engine.outcome import (
     empty_outcome,
     live_hit_threshold,
 )
-from nuzline.engine.state import make_state
+from nuzline.engine.state import held_item, make_state
 from tests.engine.helpers import A, assert_matches_reference
 from tests.engine.test_enumerate import (
     assert_equals_bruteforce,
@@ -1168,3 +1169,63 @@ def test_recycle_law_exact_and_sampled(tables, names):
     assert_equals_bruteforce(tables, s, acts)
     n_ = 20_000
     check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
+
+
+# --- B13-29: Battler_HeldItem's gate (Klutz, Embargo) ----------------------------------------
+
+
+def test_held_item_gate_reads_klutz_and_embargo(tables, names):
+    """Battler_HeldItem (battle_lib.c:5352-5363): none for a Klutz holder (:5354) or a battler
+    with embargoTurns (:5358), else heldItem; Embargo is the active battler's, a bench member's
+    read is its own item."""
+    band = names.item("Choice Band")
+    s = make_state(
+        tables,
+        [_mon(names, "Snorlax", ["Tackle"], 40, "Choice Band"),
+         _mon(names, "Machop", ["Tackle"], 40, "Choice Band")],
+        [_mon(names, "Geodude", ["Tackle"], 40, "Choice Band")],
+    )  # fmt: skip
+    s = _plain(s)
+    assert int(held_item(s, 0)) == band and int(held_item(s, 1)) == band
+    assert int(held_item(_ability(s, 0, AbilityId.KLUTZ), 0)) == 0
+    e = s._replace(embargo=s.embargo.at[0].set(3))
+    assert int(held_item(e, 0)) == 0 and int(held_item(e, 0, 1)) == band
+    assert int(held_item(e, 1)) == band
+    assert int(e.item[0, 0]) == band  # the raw item stays
+
+
+def test_klutz_holder_gets_nothing_from_its_item(tables, names):
+    """A Klutz Choice Band holder hits as with no item (CalcMoveDamage's Battler_HeldItem,
+    battle_lib.c:6662-6664), is not locked (BtlCmd_..., battle_script.c:6943-6949), takes no
+    Life Orb recoil and heals nothing from Leftovers (Battler_HeldItemEffect, bcp.c:4719-4720,
+    battle_lib.c:4927); the item stays held (B13-29)."""
+    m = names.move("Tackle")
+    for item in ("Choice Band", "Life Orb", "Leftovers"):
+        s = _plain(_state(tables, names, ("Snorlax", "Tackle"), ("Geodude", "Defense Curl")))
+        s = _held(s, 0, names.item(item)).replace_hp(0, 0, 100)
+        k = _ability(s, 0, AbilityId.KLUTZ)
+        bare = _held(k, 0, 0)
+        assert int(_dfr(tables, k, m)) == int(_dfr(tables, bare, m)), item
+        out = assert_matches_reference(tables, k, A("Tackle", "Defense Curl", k, names), O)
+        ref = assert_matches_reference(tables, bare, A("Tackle", "Defense Curl", bare, names), O)
+        assert int(out.hp[0, 0]) == int(ref.hp[0, 0]) == 100, item
+        assert int(out.item[0, 0]) == names.item(item) and int(out.choice_lock[0]) == 0, item
+
+
+def test_klutz_keeps_the_raw_item_reads(tables, names):
+    """Reads of heldItem itself ignore Klutz: the speed-halving Iron Ball (battle_lib.c:1240-1246,
+    "not ignored by any negation effect"), while its grounding (Battler_HeldItemEffect, :2602)
+    is gone; Knock Off removes the item (battle_script.c:6614-6627); Natural Gift reads
+    Battler_NaturalGiftPower (:5465-5469) and fails, keeping the berry (B13-29)."""
+    iron = names.item("Iron Ball")
+    s = _plain(_state(tables, names, ("Snorlax", "Tackle"), ("Geodude", "Knock Off")))
+    s = _held(s, 0, iron)
+    k = _ability(s, 0, AbilityId.KLUTZ)
+    assert int(effective_speed(tables, k, 0)) == int(effective_speed(tables, s, 0))
+    assert bool(iron_ball(tables, s, 0)) and not bool(iron_ball(tables, k, 0))
+    out = assert_matches_reference(tables, k, A("Tackle", "Knock Off", k, names), O)
+    assert int(out.item[0, 0]) == 0 and int(out.knocked_off[0, 0]) == 1
+    g = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), ("Machop", "Tail Whip")))
+    g = _ability(_held(g, 0, names.item("Oran Berry")), 0, AbilityId.KLUTZ)
+    out = assert_matches_reference(tables, g, A("Natural Gift", "Tail Whip", g, names), O)
+    assert int(out.item[0, 0]) == names.item("Oran Berry") and _loss(g, out) == 0
