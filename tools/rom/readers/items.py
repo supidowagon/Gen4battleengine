@@ -27,6 +27,11 @@ HOLD_EFFECT_OFFSET = 2  # include/item.h:57-59
 HOLD_PARAM_OFFSET = 3
 # u16 price, holdEffect, effectParam, pluckEffect, flingEffect, flingPower (include/item.h:56-62)
 FLING_POWER_OFFSET = 6
+FLING_EFFECT_OFFSET = 5
+NATURAL_GIFT_POWER_OFFSET = 7
+# u16 naturalGiftType : 5 at byte 8, the low bits of the little-endian bit field (include/item.h:64).
+NATURAL_GIFT_TYPE_OFFSET = 8
+NATURAL_GIFT_TYPE_MASK = 0x1F
 # ItemData.partyUseParam starts at byte 14, after padding_0D (include/item.h:72-75); its u8
 # hpRestored follows seven bytes of bit fields and six s8 EVs (include/item.h:9-48): byte 27.
 HP_RESTORED_OFFSET = 27
@@ -135,6 +140,9 @@ def read_items(
                     "teaches_move": None,
                     "hp_restored": 0,
                     "fling_power": 0,
+                    "fling_effect": 0,
+                    "natural_gift_power": 0,
+                    "natural_gift_type": 0,
                     "party_params": [0] * len(PARTY_PARAM_FIELDS),
                 }
             )
@@ -160,6 +168,12 @@ def read_items(
                 "teaches_move": teaches[item - tm01] if tm01 <= item <= hm08 else None,
                 "hp_restored": members[data_id][HP_RESTORED_OFFSET],
                 "fling_power": members[data_id][FLING_POWER_OFFSET],
+                "fling_effect": members[data_id][FLING_EFFECT_OFFSET],
+                "natural_gift_power": members[data_id][NATURAL_GIFT_POWER_OFFSET],
+                "natural_gift_type": struct.unpack_from(
+                    "<H", members[data_id], NATURAL_GIFT_TYPE_OFFSET
+                )[0]
+                & NATURAL_GIFT_TYPE_MASK,
                 "party_params": party_params(
                     members[data_id][PARTY_USE_OFFSET],
                     members[data_id][PARTY_PARAM_OFFSET : PARTY_PARAM_OFFSET + PARTY_PARAM_BYTES],

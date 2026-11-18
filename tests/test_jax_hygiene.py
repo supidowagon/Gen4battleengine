@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from nuzline.engine.outcome import empty_outcome, sample_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, sample_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import roark_state
 
@@ -33,4 +33,4 @@ def test_sample_outcome_is_jittable(tables, names):
     o = jax.jit(sample_outcome, static_argnums=())(
         jax.random.PRNGKey(0), tables, s, jnp.zeros(2, jnp.int32)
     )
-    assert o.roll.shape == (2, 5) and int(o.roll.max()) <= 15
+    assert o.roll.shape == (2, MAX_HITS) and int(o.roll.max()) <= 15

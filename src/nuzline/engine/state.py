@@ -110,6 +110,12 @@ Encodings:
   it for every lead holding an item, whatever its ability (a lead that gains Unburden later
   keeps it). Nothing clears it but a switch (a volatile).
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
+* ``recycle_item`` is ``BattleContext.recycleItem[battler]`` (battle_context.h:307; E2 batch 13,
+  B13-19): ``BtlCmd_RemoveItem`` writes the item it removes (battle_script.c:8977; every
+  ``RemoveItem``: ``effects.consume_item``, ``hooks.held_item_check``, ``hooks.pluck_berry``) and
+  ``BtlCmd_TryRecycle`` reads and clears it (:9005-9007). It belongs to the battler position, not
+  the Pokemon: nothing else writes it, so a switch keeps it for the newcomer. The party slot's
+  ``item_consumed`` is the engine's own record of the same removals (observation only).
 * ``minimized`` is the active battler's ``MOVE_EFFECT_MINIMIZE`` (moves.h:16; E2 batch 9): set by
   Minimize (subscript_minimize.s:5), read by Stomp (effect_script_0150.s:7); a volatile Baton Pass
   does not keep (moves.h:46-48).
@@ -121,6 +127,17 @@ Encodings:
   volatile Baton Pass does not keep (moves.h:46-48). A foe's move aimed at it misses unless its
   script hits that kind (bcp.c:3034-3040; ``MoveFlag.HIT_*``); the charge's lock is
   ``locked_move``.
+* E1 Batch D. ``pp_ups`` is each move slot's ``ppUps`` (``BattleMon.ppUps``, from the party
+  Pokemon, battle_lib.c:85): with the move it gives ``MoveTable_CalcMaxPP`` (move_table.c:25-34),
+  which caps the Leppa Berry's restore (``BattleMon_AddVal``, battle_lib.c:1009-1019) and picks
+  the slot Pluck's Leppa restores (:5611-5621); a level-up move that replaces a slot sets it to 0
+  (``Pokemon_ResetMoveSlot``, pokemon.c:3909-3918). ``micle`` is the active battler's
+  ``MoveEffectsData.micleBerry`` (subscript_held_item_temp_acc_up.s:10), cleared by its next
+  ordinary accuracy check (bcp.c:2967-2970). ``metronome_turns`` / ``metronome_move`` are its
+  ``MoveEffectsData.metronomeTurns`` and ``BattleContext.metronomeMove[battler]`` (the Metronome
+  item's count and the move it counts, battle_lib.c:6160-6198). All three are volatiles: a switch
+  or a faint zeroes ``moveEffectsData`` and ``metronomeMove`` (:2100-2104, :2134; :2212), Baton
+  Pass too (it keeps none of them, :2107-2115).
 * E2 batch 12 (rulings B12-n). ``focus_energy`` is the active battler's
   VOLATILE_CONDITION_FOCUS_ENERGY (condition.h:52), 0/1: Focus Energy sets it
   (subscript_focus_energy.s:6), Psych Up ORs the defender's in (battle_script.c:6050), Haze
@@ -178,6 +195,13 @@ Encodings:
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
   scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
   them (later K3d-exp tasks).
+* E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
+  ``MoveEffectsData.embargoTurns`` (battle_mon.h:30, 3 bits), 0 = none. Its
+  ``MOVE_EFFECT_EMBARGO`` bit (moves.h:34) is set and cleared with it (subscript_embargo_start.s:
+  13-14, subscript_embargo_end.s:9 right after the count reaches 0, battle_controller_player.c:
+  1671-1677) and both are volatiles Baton Pass keeps (moves.h:46-48, battle_lib.c:2112), so one
+  field holds both. ``held_item`` is ``Battler_HeldItem`` (battle_lib.c:5352-5363): the held item
+  as every gated read sees it, none under Klutz or Embargo.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -203,7 +227,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -239,6 +263,7 @@ class BattleState(NamedTuple):
     knocked_off: jnp.ndarray
     moves: jnp.ndarray  # int16[2,6,4]
     pp: jnp.ndarray  # int8[2,6,4]
+    pp_ups: jnp.ndarray  # int8[2,6,4], BattleMon.ppUps (E1 Batch D)
     status: jnp.ndarray  # int8, ids.Status
     status_counter: jnp.ndarray  # int8, sleep turns / toxic counter
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
@@ -293,11 +318,16 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    recycle_item: jnp.ndarray  # int16[2], BattleContext.recycleItem per battler (B13-19)
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
+    micle: jnp.ndarray  # int8, MoveEffectsData.micleBerry (E1 Batch D)
+    metronome_turns: jnp.ndarray  # int8, MoveEffectsData.metronomeTurns, 0-10
+    metronome_move: jnp.ndarray  # int16, BattleContext.metronomeMove[battler], 0 = none
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
+    embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -376,6 +406,7 @@ class BattleState(NamedTuple):
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
     ts_switched: jnp.ndarray  # int8[2], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
+    ts_assurance: jnp.ndarray  # int8[2], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -479,9 +510,13 @@ VOLATILE_FIELDS = (
     "can_unburden",
     "minimized",
     "semi_invulnerable",
+    "micle",
+    "metronome_turns",
+    "metronome_move",
     "focus_energy",
     "power_trick",
     "power_trick_desync",
+    "embargo",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
@@ -508,6 +543,7 @@ BATON_PASSED_FIELDS = (
     "curse",
     "focus_energy",
     "power_trick",
+    "embargo",
 )
 
 
@@ -529,6 +565,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "knocked_off": (_SLOT, np.int8),
     "moves": ((*_SLOT, MOVES), np.int16),
     "pp": ((*_SLOT, MOVES), np.int8),
+    "pp_ups": ((*_SLOT, MOVES), np.int8),
     "status": (_SLOT, np.int8),
     "status_counter": (_SLOT, np.int8),
     "gender": (_SLOT, np.int8),
@@ -581,11 +618,16 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "imprisoned": (_SIDE, np.int8),
     "roosting": (_SIDE, np.int8),
     "can_unburden": (_SIDE, np.int8),
+    "recycle_item": (_SIDE, np.int16),
     "minimized": (_SIDE, np.int8),
     "semi_invulnerable": (_SIDE, np.int8),
+    "micle": (_SIDE, np.int8),
+    "metronome_turns": (_SIDE, np.int8),
+    "metronome_move": (_SIDE, np.int16),
     "focus_energy": (_SIDE, np.int8),
     "power_trick": (_SIDE, np.int8),
     "power_trick_desync": (_SIDE, np.int8),
+    "embargo": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -658,9 +700,37 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_power_mul": (_FIELD, np.int8),
     "ts_switched": (_SIDE, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
+    "ts_assurance": (_SIDE, np.int8),
 }
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
+
+
+def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
+    """``int32``: ``Battler_HeldItem`` (battle_lib.c:5352-5363) of ``side``'s active battler, or
+    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` is Klutz (:5354-5356; no
+    supported mechanic makes ``Battler_Ability`` differ from the held ability for Klutz:
+    Gastro Acid is unsupported, :3088-3106) or its ``embargoTurns`` is nonzero (:5358-5360),
+    else its ``heldItem``. Every ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower(...,
+    ITEM_POWER_CHECK_ALL)`` / ``Battler_NaturalGift*`` read goes through it (:5438-5481); the
+    reads of ``battleMons[b].heldItem`` itself (the speed-halving items, :1240-1246, Unburden's
+    test, :1268-1272, Knock Off, Pluck, RemoveItem, Recycle, Trace's and Embargo's Griseous Orb,
+    the party data of the exp payout) read ``state.item`` directly (ruling B13-29). Embargo is
+    the active battler's: a bench ``slot`` (a newcomer read before it is in) gets none, which
+    is what a plain switch gives it (``VOLATILE_FIELDS``); a Baton Pass newcomer is read after
+    the pass, as the active battler."""
+    side = jnp.asarray(side, jnp.int32)
+    active = state.active[side]
+    slot = active if slot is None else jnp.asarray(slot, jnp.int32)
+    hidden = (state.ability[side, slot] == AbilityId.KLUTZ) | (
+        (state.embargo[side] != 0) & (slot == active)
+    )
+    return jnp.where(hidden, 0, state.item[side, slot].astype(jnp.int32))
+
+
+def held_items(state: BattleState) -> jnp.ndarray:
+    """``int32[2]``: ``held_item`` of each side's active battler."""
+    return jnp.stack([held_item(state, side) for side in range(state.active.shape[0])])
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
@@ -729,6 +799,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves
     a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves] if mon.pp is None else mon.pp
+    a["pp_ups"][side, slot] = mon.pp_ups
     a["status"][side, slot] = mon.status
     a["status_counter"][side, slot] = mon.status_counter
     a["gender"][side, slot] = mon.gender

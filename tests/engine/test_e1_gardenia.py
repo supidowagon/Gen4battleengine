@@ -34,7 +34,7 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
@@ -58,7 +58,7 @@ def _full(s, side, slot, hp):
 
 def _band(o, side, hits):
     """``o`` with ``focus_band[side, i] = 1`` for each ``i`` in ``hits``."""
-    band = np.zeros((2, 5), np.int8)
+    band = np.zeros((2, MAX_HITS), np.int8)
     for i in hits:
         band[side, i] = 1
     return o._replace(focus_band=jnp.asarray(band))
@@ -1159,6 +1159,28 @@ def test_weather_war_tie_and_quick_claw_are_root_draws(tables, names):
     assert belief == pytest.approx({(1, Weather.RAIN): 0.2, (0, Weather.SUN): 0.8})
 
 
+def test_root_draws_take_a_host_state(tables, names):
+    """A NumPy-backed state (``prep``'s and the CLI's, ``to_numpy`` of a state) at the root
+    chance node: ``root_belief`` and ``sample_root`` settle its weather war as they do a JAX
+    state's (the tie's ``reveal_ability`` writes with ``.at``)."""
+    import jax
+    import numpy as np
+
+    from nuzline.engine.step import root_belief, sample_root
+
+    tie = _war(tables, names, (50, 50))
+    host = jax.tree.map(np.asarray, tie)
+    assert isinstance(host.ai_ability_known, np.ndarray)
+
+    def outcomes(state):
+        belief = root_belief(tables, state)
+        return sorted((int(b.weather), int(b.ai_ability_known[0]), p) for b, p in belief)
+
+    assert outcomes(host) == outcomes(tie) and len(outcomes(tie)) == 2
+    key = jax.random.PRNGKey(3)
+    assert int(sample_root(key, tables, host).weather) == int(sample_root(key, tables, tie).weather)
+
+
 def _double_ko(tables, names, levels):
     """Geodude leads, both down; the player's bench Groudon (Drought, level ``levels[0]``) and
     the opponent's only bench Pokemon Kyogre (Drizzle, ``levels[1]``) come in together."""
@@ -1378,7 +1400,7 @@ def test_synchronize_runs_after_every_hit_of_a_multi_hit_move(tables, names):
     inside the multi-hit loop): Double Kick's second hit meets the foe's Static
     (TriggerAbilityOnHit, sideEffectMon the Synchronize attacker), and the step after that hit
     passes the paralysis back. (Twineedle, the one multi-hit move with a status secondary, is
-    not a supported effect in these tables.)"""
+    tests/engine/test_batch13.py's, B13-1.)"""
     n = names
     s = make_state(
         tables,

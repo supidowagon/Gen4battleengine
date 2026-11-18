@@ -19,7 +19,7 @@ modelling the real behaviour. It never removes a refusal by approximating or by 
 leaving things out. Prep and solve on Kaizo Roark come next (K4, the exhaustive gate), and
 they depend on everything here being right.
 
-The save is `G:\Farry\Downloads\Platinum Kaizo Base.dsv`, configured through
+The save is `<pre-Roark Kaizo save>`, configured through
 `kaizo_save_pre_roark` in `data/local.toml` or `NUZLINE_KAIZO_SAVE_PRE_ROARK`. It is used
 in place and is never copied or committed.
 

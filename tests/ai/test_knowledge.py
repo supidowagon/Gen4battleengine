@@ -26,7 +26,7 @@ from nuzline.ai.outcome import enumerate_ai_outcomes, sample_ai_outcome
 from nuzline.ai.policy import ai_scores, resolve_player_ability
 from nuzline.data.tables import to_numpy
 from nuzline.engine.ids import MOVE_STRUGGLE, Status
-from nuzline.engine.outcome import empty_outcome, outcome_to_py
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, outcome_to_py
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
@@ -91,7 +91,7 @@ def test_ai_switch_records_nothing(tables, names):
 @pytest.mark.slow
 def test_flinched_or_fully_paralysed_turn_records_nothing(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Headbutt"], opp_faster=True)
-    flinch = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    flinch = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     flinched = _both(tables, s, A("Scratch", "Headbutt", s, names), flinch)
     assert int(flinched.last_move[0]) == 0
     assert _seen(_both(tables, flinched, A("Scratch", "Tackle", flinched, names))) == [0] * 4
@@ -123,7 +123,7 @@ def test_a_miss_is_seen(tables, names):
         tables,
         s,
         A("Scratch", "Leer", s, names),
-        empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8)),
+        empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8)),
     )
     assert int(missed.last_move[0]) == names.move("Scratch")
 
@@ -267,7 +267,7 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
 def test_poison_point_reveals_when_it_poisons(tables, names):
     """subscript_poison.s:57 tags ``BTLSCR_MSG_BATTLER_TEMP``'s (the holder's) ability."""
     s = roark_state(tables, names, player_species="Budew", player_ability="Poison Point")
-    contact = empty_outcome()._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
+    contact = empty_outcome()._replace(contact_proc=jnp.ones((2, MAX_HITS), jnp.int8))
     acts = A("Growth", "Tackle", s, names)
     poisoned = _both(tables, s, acts, contact)
     assert int(poisoned.status[1, 0]) == Status.POISON

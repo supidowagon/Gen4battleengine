@@ -6,7 +6,7 @@ import pytest
 
 from nuzline.engine.hooks import after_damage_items
 from nuzline.engine.ids import AbilityId, ItemId, Status
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import replace, step
 from tests.engine.helpers import A, roark_state
 
@@ -196,7 +196,7 @@ def test_struggle_recoil_comes_before_static(tables, names):
     # a recoil faint leaves Monferno unparalyzed.
     s = roark_state(tables, names).with_pp(0, 0, [0, 0, 0, 0]).replace_hp(0, 0, 1)
     s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.STATIC))
-    o = empty_outcome()._replace(contact_proc=jnp.ones((2, 5), jnp.int8))
+    o = empty_outcome()._replace(contact_proc=jnp.ones((2, MAX_HITS), jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), o)
     assert int(out.hp[0, 0]) == 0
     assert int(out.status[0, 0]) == Status.NONE

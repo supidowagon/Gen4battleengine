@@ -17,7 +17,7 @@ import pytest
 
 from nuzline.engine.actions import legal_actions, legal_opponent_actions, locked_slot
 from nuzline.engine.ids import Status
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
@@ -100,7 +100,8 @@ def test_unleash_ignores_roll_and_crit(tables, names):
     seen = set()
     for roll, crit in ((0, 0), (15, 1)):
         o = empty_outcome()._replace(
-            roll=jnp.full((2, 5), roll, jnp.int8), crit=jnp.full((2, 5), crit, jnp.int8)
+            roll=jnp.full((2, MAX_HITS), roll, jnp.int8),
+            crit=jnp.full((2, MAX_HITS), crit, jnp.int8),
         )
         out = play(tables, s, acts(s, names), o)
         seen.add(int(s.hp[1, 0]) - int(out.hp[1, 0]))
@@ -218,7 +219,7 @@ def test_falling_asleep_unlocks(tables, names):
 
 def test_freezing_unlocks(tables, names):
     s = locked_into_bide(bide_state(tables, names, opp_moves=("Ice Beam",)), names)
-    o = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    o = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     out = play(tables, s, acts(s, names, "Ice Beam"), o)
     assert int(out.status[0, 0]) == Status.FREEZE
     assert int(out.locked_move[0]) == 0 and int(out.bide_turns[0]) == 0
@@ -305,14 +306,14 @@ def test_defense_curl_sets_the_flag_at_plus_six(tables, names):
 
 def test_rollout_miss_unlocks(tables, names):
     s = rolling(rollout_state(tables, names), names)
-    miss = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     out = play(tables, s, acts(s, names, "Leer"), miss)
     assert int(out.locked_move[0]) == 0 and int(out.rollout_count[0]) == 0
 
 
 def test_first_rollout_miss_never_locks(tables, names):
     s = rollout_state(tables, names)
-    miss = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     out = play(tables, s, A("Rollout", "Leer", s, names), miss)
     assert int(out.locked_move[0]) == 0 and int(out.rollout_count[0]) == 0
     assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
@@ -353,7 +354,7 @@ def test_locks_match_reference(tables, names):
             for curled in (0, 1):
                 for hit in (0, 1):
                     s = rolling(r, names, left, move)._replace(curled=r.curled.at[0].set(curled))
-                    o = empty_outcome()._replace(hit=jnp.full((2, 5), hit, jnp.int8))
+                    o = empty_outcome()._replace(hit=jnp.full((2, MAX_HITS), hit, jnp.int8))
                     play(tables, s, acts(s, names, "Leer"), o)
         play(tables, r, A(move, "Leer", r, names))
         play(tables, r, A("Defense Curl", "Leer", r, names))

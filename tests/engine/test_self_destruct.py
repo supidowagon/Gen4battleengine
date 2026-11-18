@@ -27,7 +27,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import check_coverage
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Weather
-from nuzline.engine.outcome import empty_outcome, hit_threshold
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER, step_events
 from nuzline.prep.pool import Candidate, check_pool
 from nuzline.prep.problem import levelled_moves, usable_pool
@@ -42,7 +42,7 @@ from tests.engine.helpers import (
     sample_party,
 )
 
-MISS = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+MISS = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
 _events = jax.jit(step_events)
 
 
@@ -81,7 +81,7 @@ def test_self_destruct_user_faints_on_hit_miss_and_ghost(tables, names):
     # spent and no move recorded.
     both = roark_state(tables, names, player_moves=["Selfdestruct"], opp_moves=["Selfdestruct"],
                        opp_faster=True)  # fmt: skip
-    foe_misses = empty_outcome()._replace(hit=jnp.array([[1] * 5, [0] * 5], jnp.int8))
+    foe_misses = empty_outcome()._replace(hit=jnp.array([[1] * MAX_HITS, [0] * MAX_HITS], jnp.int8))
     acts = A("Selfdestruct", "Selfdestruct", both, names)
     out = assert_matches_reference(tables, both, acts, foe_misses)
     assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(both.hp[0, 0])
@@ -259,9 +259,9 @@ def test_self_destruct_matches_reference(tables, names):
                          opp_moves=["Selfdestruct"], opp_faster=True)  # fmt: skip
     last = roark_state(tables, names, player_count=1, opp_count=1,
                        player_moves=["Selfdestruct"], opp_moves=["Selfdestruct"])  # fmt: skip
-    crit = empty_outcome()._replace(crit=jnp.ones((2, 5), jnp.int8))
+    crit = empty_outcome()._replace(crit=jnp.ones((2, MAX_HITS), jnp.int8))
     outcomes = [empty_outcome(), MISS, crit,
-                empty_outcome()._replace(hit=jnp.array([[0] * 5, [1] * 5], jnp.int8))]  # fmt: skip
+                empty_outcome()._replace(hit=jnp.array([[0] * MAX_HITS, [1] * MAX_HITS], jnp.int8))]  # fmt: skip
     for state in (s, hurt, sand, faster, last):
         for p in ("Selfdestruct", "Leer"):
             for o in ("Selfdestruct", "Leer"):

@@ -508,6 +508,31 @@ def _max_hp(tables: Tables, species, ivs, evs, level, nature) -> int:
     return int(stats[Stat.HP])
 
 
+def recalc_stats(tables: Tables, a: dict, side: int, slot: int) -> None:
+    """Slot ``slot`` of ``side``'s max HP and stats recomputed (``calc_stats`` of its species and
+    form row, IVs, EVs, level and nature) after a draw changed one of those. In the game the
+    stored max HP is ``Pokemon_CalcStats``'s (src/pokemon.c:597-603, rerun on every level gain)
+    with EVs that only grow since, so the next level's max is never below it and the level-up's
+    ``hp += newMax - oldMax`` never takes a living Pokemon to 0 (:633-645); a stale max HP above
+    the formula's lets it, and ``pay_exp``'s telescoped HP then leaves the per-level rule (and a
+    negative HP is alive to the reference, fainted to JAX). HP stays full if it was, else is
+    capped at the new max (a fainted Pokemon stays at 0)."""
+    species = int(a["species"][side, slot])
+    row = int(tables.species_form_row[species, int(a["form"][side, slot])])
+    new = calc_stats(
+        np.asarray(tables.species_base_stats[row]),
+        a["ivs"][side, slot],
+        a["evs"][side, slot],
+        int(a["level"][side, slot]),
+        np.asarray(tables.nature_mods[int(a["nature"][side, slot])]),
+        species,
+    )
+    hp, old_max = int(a["hp"][side, slot]), int(a["max_hp"][side, slot])
+    a["hp"][side, slot] = new[Stat.HP] if hp == old_max else min(hp, int(new[Stat.HP]))
+    a["max_hp"][side, slot] = new[Stat.HP]
+    a["stats"][side, slot] = new[Stat.ATK :]
+
+
 def possible_genders(ratio: int) -> tuple[int, ...]:
     """Genders (0 male, 1 female, 2 genderless) a species with this decomp ratio can have."""
     if ratio == GENDERLESS:
@@ -632,26 +657,14 @@ def _draw_battle_item(draw, tables: Tables, a: dict, side: int, active: int, nam
 def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 4) make the active Pokemon a ``SPECIES_ITEMS`` species holding its item
     (the species items only work for their species), an orb's holder with a move its orb
-    boosts in slot 0 (full PP). Its stats and max HP are the new species' (``calc_stats`` with
-    its IVs, EVs, level and nature: an exp payout's level-up recomputes them from the species,
-    so a stale max HP could fall), its HP capped at the new max."""
+    boosts in slot 0 (full PP). Its stats and max HP are the new species' (``recalc_stats``)."""
     if draw(st.integers(0, 3)) != 0:
         return
     species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
     sid = names.species(species)
     a["species"][side, active] = sid
     a["item"][side, active] = names.item(item)
-    stats = calc_stats(
-        np.asarray(tables.species_base_stats[sid]),
-        a["ivs"][side, active],
-        a["evs"][side, active],
-        int(a["level"][side, active]),
-        np.asarray(tables.nature_mods[int(a["nature"][side, active])]),
-        sid,
-    )
-    a["max_hp"][side, active] = stats[Stat.HP]
-    a["stats"][side, active] = stats[Stat.ATK :]
-    a["hp"][side, active] = min(int(a["hp"][side, active]), int(stats[Stat.HP]))
+    recalc_stats(tables, a, side, active)
     if moves:
         _teach(tables, a, side, active, names.move(draw(st.sampled_from(moves))), 0)
 
@@ -774,6 +787,7 @@ def _draw_gardenia_item(
         if rnd.random() < 0.5:
             disliking = [k for k, f in enumerate(NATURE_DISLIKED_FLAVOR) if f == flavor]
             a["nature"][side, active] = rnd.choice(disliking)
+            recalc_stats(tables, a, side, active)
         if rnd.random() < 0.3:
             foe = 1 - side
             foe_mon = int(a["active"][foe])
@@ -1144,8 +1158,9 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
-    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
-    (B10-6; an item on the foe, a knocked-off user with no item for the barb). One draw in two,
+    Guard, a low-level foe: a small max HP for the cap), Endeavor / Pain Split (B10-5; a low
+    user), Knock Off (B10-6; an item on the foe, a knocked-off user with no item for the barb).
+    One draw in two,
     and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
     under uniform draws the differential met these moves too rarely (batch 11 review)."""
     if draw(st.integers(0, 1)) != 0:
@@ -1236,9 +1251,9 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             give(rnd.choice(("Protect", "Detect")), foe, foe_mon)
         elif roll < 0.5:
             a["types"][foe, foe_mon] = (Type.GHOST, Type.GHOST)
-        if rnd.random() < 0.3:  # a small foe: the crash's cap
-            a["max_hp"][foe, foe_mon] = rnd.randint(10, 40)
-            a["hp"][foe, foe_mon] = min(int(a["hp"][foe, foe_mon]), int(a["max_hp"][foe, foe_mon]))
+        if rnd.random() < 0.3:  # a low-level foe: a small max HP, the crash's cap
+            a["level"][foe, foe_mon] = rnd.randint(1, 8)
+            recalc_stats(tables, a, foe, foe_mon)
     if rnd.random() < 0.3:  # a low user: the recoil or crash can faint it
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
     if charge and rnd.random() < 0.4 and a["status"][side, active] != Status.SLEEP:
@@ -1360,6 +1375,7 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
 SUBSTITUTE_FOE_MOVES = (
     "Tackle",
     "Double Kick",
+    "Twineedle",  # hit 2's poison after hit 1 broke the substitute (B13-1)
     "Thunder Wave",
     "Growl",
     "Toxic",
@@ -1453,6 +1469,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
                 a["ability"][side, active] = AbilityId.NO_GUARD
             elif choice == 1:
                 a["level"][foe, foe_mon] = int(a["level"][side, active]) + 1
+                recalc_stats(tables, a, foe, foe_mon)
             else:
                 a["ability"][foe, foe_mon] = AbilityId.STURDY
     if draw(st.integers(0, 2)) == 0:
@@ -1728,6 +1745,98 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         teach(side, active, rnd.choice(PUNCH_MOVES))
 
 
+def _draw_klutz(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """B13-29: maybe (1 in 6) give the active Pokemon Klutz (its item, from the item draws, is
+    then hidden from every gated read), sometimes a bench member too. B13-31: maybe (1 in 6) an
+    Embargo count 1-5 on the active battler, and maybe (1 in 6) Embargo taught to it."""
+    if draw(st.integers(0, 5)) == 0:
+        a["embargo"][side] = draw(st.integers(1, 5))
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Embargo")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+    if draw(st.integers(0, 5)) != 0:
+        return
+    a["ability"][side, active] = AbilityId.KLUTZ
+    if draw(st.integers(0, 3)) == 0:
+        a["ability"][side, (active + 1) % SLOTS] = AbilityId.KLUTZ
+
+
+# E1 Batch D (G-53 .. G-60): the Fantina split's held items ``_draw_batch_d`` gives the active
+# Pokemon, with what makes each act.
+BATCH_D_ITEMS = (
+    "Jaboca Berry",
+    "Rowap Berry",
+    "Enigma Berry",
+    "Leppa Berry",
+    "Micle Berry",
+    "Grip Claw",
+    "Metronome",
+    "Iron Ball",
+    "Ganlon Berry",
+    "Apicot Berry",
+)
+BATCH_D_MOVES = {
+    "Grip Claw": ("Wrap", "Bind", "Fire Spin", "Whirlpool", "Clamp"),
+    "Iron Ball": ("Earthquake", "Mud-Slap", "Dig"),
+    "Jaboca Berry": ("Pluck", "Bug Bite"),
+    "Micle Berry": ("Pluck", "Bug Bite"),
+    "Leppa Berry": ("Pluck", "Bug Bite"),
+}
+
+
+def _draw_batch_d(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) give the active Pokemon a ``BATCH_D_ITEMS`` item, most of the time with what
+    makes it act: low HP for the pinch berries (Micle, Ganlon, Apicot), a slot at 0 PP and PP Ups
+    for Leppa, a binding move for Grip Claw, a Ground move on the foe (a Flying or Levitate holder)
+    for Iron Ball, a running count for Metronome, a foe Pluck for the berries. Also, on its own,
+    a Micle flag (G-59) and a Metronome count (G-60) whatever the item."""
+    rnd = draw(st.randoms(use_true_random=False))
+    if rnd.random() < 0.1:
+        a["micle"][side] = 1
+    own = [int(m) for m in a["moves"][side, active] if m]
+    if rnd.random() < 0.2 and own:
+        a["metronome_move"][side] = rnd.choice(own)
+        a["metronome_turns"][side] = rnd.randint(0, 10)
+    if draw(st.integers(0, 2)) != 0:
+        return
+    name = rnd.choice(BATCH_D_ITEMS)
+    a["item"][side, active] = names.item(name)
+    if rnd.random() >= 0.8:
+        return
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def teach(who: int, mon: int, move_name: str) -> None:
+        move = names.move(move_name)
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, who, mon, move, rnd.randint(0, 3))
+
+    max_hp = int(a["max_hp"][side, active])
+    if name in ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry"):
+        a["hp"][side, active] = rnd.randint(1, max(max_hp // 3, 1))
+    if name == "Leppa Berry":
+        move_pp = np.asarray(tables.move_pp)
+        for k, move in enumerate(a["moves"][side, active]):
+            if move:
+                ups = rnd.randint(0, 3)
+                base = int(move_pp[move])
+                a["pp_ups"][side, active, k] = ups
+                a["pp"][side, active, k] = rnd.randint(0, base + base * 20 * ups // 100)
+        slots = [k for k, m in enumerate(a["moves"][side, active]) if m]
+        if slots and rnd.random() < 0.6:
+            a["pp"][side, active, rnd.choice(slots)] = 0
+    if name == "Metronome" and own:
+        a["metronome_move"][side] = rnd.choice(own)
+        a["metronome_turns"][side] = rnd.randint(0, 10)
+    if name in BATCH_D_MOVES:
+        who = side if name == "Grip Claw" else foe
+        mon = active if name == "Grip Claw" else foe_mon
+        teach(who, mon, rnd.choice(BATCH_D_MOVES[name]))
+    if name == "Iron Ball" and rnd.random() < 0.5:
+        a["ability"][side, active] = AbilityId.LEVITATE
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -1842,6 +1951,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_status_guard(draw, tables, a, side, active, names)
         _draw_guard_download(draw, tables, a, side, active, names)
         _draw_batch_c(draw, tables, a, side, active, names)
+        _draw_batch_d(draw, tables, a, side, active, names)
+        _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
@@ -2049,6 +2160,18 @@ RARE_EFFECTS = (
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
+    EffectId.TRIPLE_KICK,  # B13-5
+    EffectId.BEAT_UP,  # B13-9
+    # B13-12..B13-17: the variable power / type hits.
+    EffectId.WEATHER_BALL,
+    EffectId.GYRO_BALL,
+    EffectId.ASSURANCE,
+    EffectId.TRUMP_CARD,
+    EffectId.PUNISHMENT,
+    EffectId.JUDGMENT,
+    EffectId.RECYCLE,  # B13-19
+    EffectId.NATURAL_GIFT,  # B13-20
+    EffectId.EMBARGO,  # B13-31
 )
 
 
@@ -2184,6 +2307,24 @@ LAW_MOVES = (
     "Uproar",
     "Future Sight",
     "Doom Desire",
+    # E2 batch 13: Twineedle's two hits with a poison roll each (B13-1), Blaze Kick's crit stage
+    # with its burn roll (B13-2).
+    "Twineedle",
+    "Blaze Kick",
+    # B13-5..B13-10: Triple Kick's later accuracy rolls and per-hit power, Beat Up's members.
+    "Triple Kick",
+    "Beat Up",
+    # B13-12..B13-17: Weather Ball's type, Gyro Ball's speeds, Assurance's flag, Wake-Up Slap's
+    # wake-up, Trump Card's PP, Water Spout's HP.
+    "Weather Ball",
+    "Gyro Ball",
+    "Assurance",
+    "Wake-Up Slap",
+    "Trump Card",
+    "Water Spout",
+    # B13-19, B13-20: Recycle's item back, Natural Gift's berry power, type and removal.
+    "Recycle",
+    "Natural Gift",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

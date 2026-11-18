@@ -192,7 +192,7 @@ def test_class_law_merges_equal_damage(tables, names):
     s = _state(tables, names, "Tackle", "Leer")
     laws = laws_of(tables, s, A("Tackle", "Leer", s, names))
     values, weights, den, crits, rolls = damage_class_law(laws, 0)
-    table = np.asarray(laws.damage)[0]
+    table = np.asarray(laws.damage)[0, 0]
     odds = int(laws.crit_variants[0, 0])
     assert den == odds * 16
     assert values == list(range(len(weights)))
@@ -253,7 +253,7 @@ def test_compressed_rows_draw_crit_and_roll_together(tables, names):
     assert (np.asarray(drawn.crit)[:, 0, :2] == np.asarray(drawn.roll)[:, 0, :2]).all()
     assert abs(math.fsum(probs) - 1) < 1e-12
     # Every drawn (crit, roll) is its class representative: the lowest roll of its damage.
-    table = np.asarray(laws.damage)[0]
+    table = np.asarray(laws.damage)[0, 0]
     crit = np.asarray(outcomes.crit)[:, 0, :2]
     roll = np.asarray(outcomes.roll)[:, 0, :2]
     read = np.asarray(drawn.roll)[:, 0, :2]

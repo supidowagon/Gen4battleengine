@@ -4,7 +4,7 @@ import pytest
 
 from nuzline.engine.ids import Status
 from nuzline.engine.order import action_order
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import needs_replacement, replace, step
 
 # roark_state: the sample party vs the built Roark party, both leads in slot 0.
@@ -31,7 +31,7 @@ def test_speed_tie_uses_outcome(tables, names):
 
 def test_miss_deals_no_damage(tables, names):
     s = roark_state(tables, names)
-    o = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    o = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), o)
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
 
@@ -74,7 +74,7 @@ def test_struggle_when_no_pp(tables, names):
 def test_struggle_recoil_is_quarter_max_hp_and_spends_no_pp(tables, names):
     # subscript_struggle.s: recoil = BattleSystem_Divide(-maxHP, 4); Struggle has no PP to spend.
     s = roark_state(tables, names).with_pp(0, 0, [0, 0, 0, 0])
-    miss = empty_outcome()._replace(hit=jnp.array([[1] * 5, [0] * 5], jnp.int8))
+    miss = empty_outcome()._replace(hit=jnp.array([[1] * MAX_HITS, [0] * MAX_HITS], jnp.int8))
     out = step(tables, s, jnp.array([0, 0]), miss)  # Geodude's Tackle misses
     assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4
     assert out.pp[0, 0].tolist() == [0, 0, 0, 0]

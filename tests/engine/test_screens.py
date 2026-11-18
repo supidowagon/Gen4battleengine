@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import _pre_random, damage_table
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
 
@@ -21,7 +21,7 @@ def _put(s, field, side, value):
 
 
 def _miss():
-    return empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    return empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
 
 
 @pytest.mark.slow

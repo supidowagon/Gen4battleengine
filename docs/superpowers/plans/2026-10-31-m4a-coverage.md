@@ -397,7 +397,7 @@ Read first: `src/nuzline/engine/coverage.py`, `src/nuzline/cli.py` (`_fight`, `_
 - [ ] **Step 1: Write the tests** (module skipped unless `NUZLINE_USER_SAVE` is set: `pytestmark = pytest.mark.skipif(not os.environ.get("NUZLINE_USER_SAVE"), reason="NUZLINE_USER_SAVE not set")`)
   - `test_roark_coverage_is_full(capsys)`: `main(["coverage", "--save", path, "--trainer", "roark"])` returns 0; the output contains `Support: EXACT` twice, `Pool at level cap 16 (11 Pokemon):`, `Missing: none` twice, and no `UNSUPPORTED`.
   - `test_user_pool`: 11 candidates, all level 16; candies party 0 x6, Bidoof 12, Venonat 6 and 6, Kricketot 11, Geodude 10; the union of current moves (`spec.moves`) contains Foresight, Night Shade, Disable, Bide and Mud Sport (all already known, so ruling 2 keeps them out of the options); the union of option moves (`relearner` and the TM moves) contains Confusion, Rollout, Magnitude, Bug Bite and Hidden Power; every candidate but Kricketot has the TM10 option; `check_pool(...).missing == []`.
-- [ ] **Step 2: Run** `NUZLINE_USER_SAVE="G:/Farry/Downloads/4998 - Pokemon - Platinum Version (v01) (U)-patched.dsv" uv run pytest tests/test_user_save.py -v`; expected: 2 passed. Without the variable: 2 skipped.
+- [ ] **Step 2: Run** `NUZLINE_USER_SAVE="<user save>" uv run pytest tests/test_user_save.py -v`; expected: 2 passed. Without the variable: 2 skipped.
 - [ ] **Step 3: Run** `uv run nuzline coverage --save "$NUZLINE_USER_SAVE" --trainer roark`; expected: exit 0, both sections `Support: EXACT`, `Missing: none`.
 - [ ] **Step 4: Run** the full `uv run pytest -q` and `uv run ruff check src tests tools`; expected: pass.
 - [ ] **Step 5: Commit** `test: full Roark coverage on the user's save (NUZLINE_USER_SAVE)`.

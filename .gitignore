@@ -34,9 +34,10 @@ traces/
 Thumbs.db
 .DS_Store
 
-# Worktrees and SDD scratch
+# Worktrees and scratch
 .worktrees/
 .superpowers/
+_scratch/
 
 # Node (tools/smogon_calc: commit package.json and package-lock.json only)
 node_modules/

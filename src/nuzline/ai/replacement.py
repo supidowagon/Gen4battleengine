@@ -29,8 +29,10 @@ comparison after it still runs (battle_lib.c:8080), on the ``score`` left over f
 1, which this module does not track. Wonder Guard's ``MOVE_STATUS_IMMUNE`` bit zeroes a stage-2
 score (``switching.wonder_guard_bit``, ruling G-23). The type-chart modifiers (Levitate,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball, Miracle Eye, Natural Gift, Judgment and Weather Ball; Hidden Power takes each
-candidate's own IV type, ``switching.party_move_types``; the player's Foresight, Ingrain and
+Ball, Miracle Eye; Hidden Power, Natural Gift, Judgment and Weather Ball take each
+candidate's ``Move_CalcVariableType``, ``switching.party_move_types``, B13-35; a candidate's
+Weather Ball where that case assigns no type is refused here
+(``damage.ai_weather_ball_typed``); the player's Foresight, Ingrain and
 roosting flags are read through ``apply_type_chart``: a replacement is where the AI reads
 roosting, battle_lib.c:2540) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
@@ -53,7 +55,12 @@ from nuzline.ai.switching import (
     wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import calc_move_damage
+from nuzline.engine.damage import (
+    AI_WEATHER_BALL,
+    ai_weather_ball_typed,
+    calc_move_damage,
+    iron_ball,
+)
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 __all__ = ["REFUSED_SLOT", "post_ko_switch_in"]
@@ -85,7 +92,7 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
     score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
-    identified, grounded, roosting = defender_chart_flags(state, 0)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
         tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
@@ -107,9 +114,11 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
     ) & _U8
     # Move_CalcVariableType (:7998): each candidate's own Hidden Power type.
     types = party_move_types(tables, state)  # [SLOTS, MOVES]
-    flags = jax.vmap(lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k))(
-        moves.reshape(-1), types.reshape(-1)
-    ).reshape(SLOTS, MOVES)
+    # Battler_HeldItemEffect(defender) (battle_lib.c:8006): the player's Iron Ball (G-56).
+    d_iron = iron_ball(tables, state, 0)
+    flags = jax.vmap(
+        lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k, d_iron)
+    )(moves.reshape(-1), types.reshape(-1)).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)
     pick_1 = jnp.argmax(jnp.where(eligible, score_1, -1)).astype(_I32)
@@ -125,6 +134,10 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
 
     stage_2 = ~jnp.any(eligible)
     stale = stage_2 & jnp.any(candidate) & ~scored[first, 0]
+    # Move_CalcVariableType of the candidates' moves (battle_lib.c:7998, :8051): an unassigned
+    # Weather Ball type is refused (B13-35).
+    ball = candidate[:, None] & (moves == AI_WEATHER_BALL)
+    stale = stale | (jnp.any(ball) & ~ai_weather_ball_typed(tables, state))
     pick = jnp.where(
         jnp.any(eligible), pick_1, jnp.where(jnp.max(score_2) > 0, pick_2, first)
     )  # 3: battle_display.c:4548-4556
@@ -143,6 +156,7 @@ def post_ko_switch_in(tables: Tables, state: BattleState, power_mul=10) -> jnp.n
         raise UnsupportedAi(
             "replacement: stage 2 of BattleAI_PostKOSwitchIn compares the stale stage-1 "
             "score after the first candidate's empty or power-1 move slot 0 "
-            "(battle_lib.c:8080); not implemented"
+            "(battle_lib.c:8080), or Weather Ball's type case assigns nothing in this "
+            "weather (battle_lib.c:8177-8195); not implemented"
         )
     return jnp.where(stale, REFUSED_SLOT, pick).astype(_I32)

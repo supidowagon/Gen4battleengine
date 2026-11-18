@@ -21,7 +21,7 @@ import pytest
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import effective_speed
-from nuzline.engine.outcome import empty_outcome, hit_threshold
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
 SPD, SPE = Stat.SPD - 1, Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
@@ -194,7 +194,7 @@ def test_weather_abilities_match_reference(tables, names, hit):
 
 # --- freeze in sun under a weather lock (subscript_freeze.s:6-7) -----------------------
 
-FREEZE = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))  # every proc
+FREEZE = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))  # every proc
 
 
 def _freeze_case(tables, names, holder):

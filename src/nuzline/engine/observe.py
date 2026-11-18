@@ -203,6 +203,9 @@ _NONZERO_SIDE = (
     # Attack and Defense!" (subscript_user_swap_atk_and_def.s:10).
     "focus_energy",
     "power_trick",
+    # E2 batch 13: "{0} can't use items anymore!" (subscript_embargo_start.s:16) until "{0} can
+    # use items again!" (subscript_embargo_end.s:6); the count is hidden (B13-31).
+    "embargo",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

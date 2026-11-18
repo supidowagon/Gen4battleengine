@@ -71,12 +71,13 @@ def test_resources_from_bag(tables, names, learnsets):
 
 
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
-    # Iron Ball is unsupported (Razor Claw was, until E2 batch 4).
-    rock, honey = names.item("Iron Ball"), names.item("Honey")
+    # A held item still unsupported, picked from the coverage table at run time.
+    (name,) = _refused_items(tables, names, 1)
+    rock, honey = names.item(name), names.item("Honey")
     bag = {"items": [(rock, 1), (honey, 1)], "berries": [(names.item("Oran Berry"), 1)]}
     resources, warnings = bag_resources(bag, tables, names, learnsets, ())
     assert rock not in dict(resources.held)
-    assert warnings == ["Iron Ball: not offered (hold effect not supported)"]
+    assert warnings == [f"{name}: not offered (hold effect not supported)"]
 
 
 def test_usable_pool_excludes_and_trims(tables, names, metronome_refused):
@@ -103,10 +104,11 @@ def test_usable_pool_excludes_and_trims(tables, names, metronome_refused):
 
 
 def test_unsupported_item_is_taken_off(tables, names):
-    spec = replace(sample_party(names)[0], item=names.item("Iron Ball"))
+    (name,) = _refused_items(tables, names, 1)
+    spec = replace(sample_party(names)[0], item=names.item(name))
     pool, lines = usable_pool(tables, names, [candidate(names, spec, 0)], ())
     assert pool[0].spec.item == 0
-    assert len(lines) == 1 and "Iron Ball taken off" in lines[0]
+    assert len(lines) == 1 and f"{name} taken off" in lines[0]
 
 
 def test_pick_ambiguous_and_locations(names):
@@ -488,3 +490,13 @@ def test_usable_pool_applies_the_exp_refusals(tables, names):
             "there inherits"
         )
     ]
+
+
+def _refused_items(tables, names, k: int) -> list[str]:
+    """The names of the first ``k`` held items the coverage table still maps to
+    ``ItemId.UNSUPPORTED`` (picked at run time, not hard-coded)."""
+    from nuzline.engine.ids import ItemId
+
+    effects = np.asarray(tables.item_effect)
+    ids = [i for i in range(1, len(effects)) if effects[i] == ItemId.UNSUPPORTED]
+    return [names.item_names[i] for i in ids[:k]]

@@ -38,6 +38,11 @@ Encodings:
   party param (``items.json`` ``party_params``, ``tools.rom.readers.items.party_params``),
   then whether the item's hold effect is ``HOLD_EFFECT_FRIENDSHIP_UP`` (E1 ruling G-43). A
   trainer's bag item acts by these params alone, in either game.
+* ``item_fling_power`` / ``item_fling_effect`` / ``item_gift_power`` / ``item_gift_type``
+  ``[item]``: ``ItemData.flingPower``, ``.flingEffect``, ``.naturalGiftPower`` and
+  ``.naturalGiftType`` as stored (include/item.h:61-64; 0x1F = no Natural Gift type), whether or
+  not the engine supports the item: Fling (``Battler_ItemFlingPower`` / ``_ItemFlingEffect``,
+  battle_lib.c:5482-5498) and Natural Gift (``Battler_NaturalGiftPower`` / ``_Type``, :5465-5480).
 * ``species_exp_rate[species]``: growth rate id (``generated/exp_rates.txt`` order: 0 medium
   fast, 1 erratic, 2 fluctuating, 3 medium slow, 4 fast, 5 slow); ``exp_table[rate, level]``
   is the experience for ``level`` 0..100 (``exp_tables.csv``, same rate order).
@@ -120,11 +125,13 @@ from tools.effect_map import (
     HOLD_EFFECT_FRIENDSHIP_UP,
     INVOKER_MOVES,
     KAIZO_EFFECTS,
+    KAIZO_FLAG_EFFECTS,
     KAIZO_THUNDER_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
     PINCH_STAT_HOLD_EFFECTS,
     RESIST_BERRY_HOLD_EFFECTS,
+    SCRIPT_FLAG_EFFECTS,
     SEMI_HIT_EFFECTS,
     SLEEP_TALK_EXCLUDED_MOVES,
     THUNDER_EFFECT,
@@ -189,8 +196,12 @@ def _decomp_commit() -> str:
 def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]], kaizo: bool = False) -> int:
     """The move's flag bits; SOUND and PUNCH come from ``move_lists.json`` by move id;
     NO_SLEEP_TALK and NO_METRONOME from the battle code's id lists (``tools.effect_map``) and,
-    for Move_IsMultiTurn, the move's own decomp effect. THUNDER is the weather-accuracy effect
-    152, and in Kaizo also ``KAIZO_THUNDER_EFFECTS`` (the patched overlay16 compares, G-50)."""
+    for Move_IsMultiTurn, the move's own decomp effect. The battle code's compares by effect id
+    (Move_IsMultiTurn, THUNDER, BLIZZARD) hold whatever the script; THUNDER is the weather-accuracy
+    effect 152, and in Kaizo also ``KAIZO_THUNDER_EFFECTS`` (the patched overlay16 compares, G-50).
+    The bits read off a script (CHARGE_FLAG_EFFECTS, SEMI_HIT_EFFECTS, SCRIPT_FLAG_EFFECTS) do not:
+    for Kaizo a modelled changed script (``KAIZO_EFFECTS``) takes ``KAIZO_FLAG_EFFECTS``' bits
+    instead (B13-3)."""
     bits = 0
     for flag in move["flags"]:
         bits |= DECOMP_FLAG_BITS.get(flag, 0)
@@ -198,23 +209,26 @@ def _move_flags(move: dict, move_id: int, lists: dict[str, list[int]], kaizo: bo
         bits |= MoveFlag.SOUND
     if move_id in lists["punch"]:
         bits |= MoveFlag.PUNCH
+    effect = move.get("effect")
     if (
         move_id in INVOKER_MOVES
         or move_id in SLEEP_TALK_EXCLUDED_MOVES
-        or move.get("effect") in MULTI_TURN_EFFECTS
+        or effect in MULTI_TURN_EFFECTS
     ):
         bits |= MoveFlag.NO_SLEEP_TALK
     if move_id in METRONOME_EXCLUDED_MOVES:
         bits |= MoveFlag.NO_METRONOME
-    if move.get("effect") == THUNDER_EFFECT or (
-        kaizo and move.get("effect") in KAIZO_THUNDER_EFFECTS
-    ):
+    if effect == THUNDER_EFFECT or (kaizo and effect in KAIZO_THUNDER_EFFECTS):
         bits |= MoveFlag.THUNDER
-    if move.get("effect") == BLIZZARD_EFFECT:
+    if effect == BLIZZARD_EFFECT:
         bits |= MoveFlag.BLIZZARD
-    # The charge-turn bits and the SYSCTL_HIT_DURING_* bits, by decomp effect (B10-12).
-    bits |= CHARGE_FLAG_EFFECTS.get(move.get("effect"), 0)
-    bits |= SEMI_HIT_EFFECTS.get(move.get("effect"), 0)
+    if kaizo and effect in KAIZO_EFFECTS:  # a modelled changed script: its own bits (B13-3)
+        return int(bits | KAIZO_FLAG_EFFECTS.get(effect, 0))
+    # The charge-turn bits and the SYSCTL_HIT_DURING_* bits, by decomp effect (B10-12); the
+    # script commands added to another family's effect (B13-1, B13-2).
+    bits |= CHARGE_FLAG_EFFECTS.get(effect, 0)
+    bits |= SEMI_HIT_EFFECTS.get(effect, 0)
+    bits |= SCRIPT_FLAG_EFFECTS.get(effect, 0)
     return int(bits)
 
 
@@ -360,10 +374,10 @@ def _item_type(item: dict, item_id: int) -> int:
 
 def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
     """``ids`` with every ``effect_map.DIVISOR_PARAM_MIN`` item whose hold param is below its
-    minimum made ``UNSUPPORTED``: a pinch berry's trigger divides maxHP by the param, halved by
-    Gluttony (battle_lib.c:4774-4778, :1289-1294), Sticky Barb divides maxHP and Shell Bell the
-    damage dealt by it (battle_lib.c:5330-5336, bcp.c:4736-4752), so such a param divides by
-    zero, which the decomp does not define (the ROM's division routine decides)."""
+    minimum made ``UNSUPPORTED``: Sticky Barb divides maxHP and Shell Bell the damage dealt by
+    the param through ``BattleSystem_Divide`` (battle_lib.c:5330-5336, bcp.c:4736-4752), so such
+    a param divides by zero there. The pinch berries' plain ``/`` is modelled for every param
+    (``order.pinch_limit``, ruling G-53)."""
     return [
         int(ItemId.UNSUPPORTED)
         if e in DIVISOR_PARAM_MIN and i["hold_param"] < DIVISOR_PARAM_MIN[ItemId(e)]
@@ -669,6 +683,12 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "item_party_param": _arr(_item_party_params(items), np.int16, "item party param"),
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
         "item_hold_param": _arr([i["hold_param"] for i in items], np.int16, "item hold param"),
+        "item_fling_power": _arr([i["fling_power"] for i in items], np.int16, "item fling power"),
+        "item_fling_effect": _arr([i["fling_effect"] for i in items], np.int8, "fling effect"),
+        "item_gift_power": _arr(
+            [i["natural_gift_power"] for i in items], np.int16, "natural gift power"
+        ),
+        "item_gift_type": _arr([i["natural_gift_type"] for i in items], np.int8, "gift type"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
     }
     manifest = {

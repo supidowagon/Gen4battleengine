@@ -8,7 +8,7 @@ import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import Status
-from nuzline.engine.outcome import empty_outcome, sample_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, sample_outcome
 from nuzline.engine.step import (
     END_OF_TURN_ORDER,
     PURSUIT_POWER_MUL,
@@ -107,7 +107,7 @@ def test_pursuit_on_a_switch_ignores_accuracy_spends_pp_once_and_ends_the_turn(t
     # subscript_pursuit.s has no accuracy check; BtlCmd_TryPursuit (battle_script.c:6884)
     # spends the PP and ends the pursuer's action, so the incoming Pokemon is not hit.
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
-    miss = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     go = step(tables, s, A(4 + 1, "Pursuit", s, names), miss)
     assert int(go.hp[0, 0]) < int(s.hp[0, 0])
     assert int(go.hp[0, 1]) == int(s.hp[0, 1])
@@ -229,7 +229,7 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
         tables,
         s,
         A(4 + 1, "Tackle", s, names),
-        hit_self._replace(roll=jnp.zeros((2, 5), jnp.int8)),
+        hit_self._replace(roll=jnp.zeros((2, MAX_HITS), jnp.int8)),
     )
     assert int(s.hp[1, 0]) - int(low.hp[1, 0]) == max(base * 85 // 100, 1)
 

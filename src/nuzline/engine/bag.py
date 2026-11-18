@@ -9,10 +9,10 @@ subscript ``BattleControllerPlayer_ItemCommand`` picks for it
 ``side`` and its active slot (docs/doubles-state-design.md section 5; the decomp's
 ``targetSlot`` is the user's own slot in singles, battle_system.c:443-454).
 
-Not modelled (``refused_bag_params``, refused by coverage and the AI): an item that sets
-Mist (``GUARD_SPEC``, :563-573) or Focus Energy (``CRIT_STAGES``, :617-626), whose
-mechanics belong to another stream, and one whose friendship amount can take a band's
-friendship past 255, where ``Pokemon_IncreaseValue`` wraps the party's u8 friendship
+Guard Spec sets Mist on the user's side (``BattleState.mist``, :563-573) and the crit-stages
+param sets Focus Energy (``BattleState.focus_energy``, :617-626), E1 ruling G-62. Not
+modelled (``refused_bag_params``, refused by coverage and the AI): an item whose friendship
+amount can take a band's friendship past 255, where ``Pokemon_IncreaseValue`` wraps the party's u8 friendship
 (pokemon.c:1859-1874) apart from the battler's clamped one (battle_lib.c:1032-1044) and a
 switch-in re-reads the party's (battle_lib.c ``BattleSystem_InitBattleMon``).
 """
@@ -22,6 +22,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.effects import MIST_TURNS
 from nuzline.engine.ids import (
     HP_RESTORED_ALL,
     HP_RESTORED_HALF,
@@ -93,16 +94,12 @@ AI_BRANCH_PARAMS = (
 def refused_bag_params(params, item: int) -> list[str]:
     """Why bag item ``item`` with party params ``params`` (its ``item_party_param`` row, any
     int sequence) is not modelled: the mechanics ``BattleSystem_UseBagItem`` would apply that
-    the engine does not build (module docstring). Empty when it is modelled, and for an item
+    the engine does not build: the friendship wrap (module docstring). Empty when it is modelled, and for an item
     the AI never uses (no branch of ``AI_BRANCH_PARAMS`` nor Full Restore's id), whose
     ``UseBagItem`` never runs."""
     if int(item) != ITEM_FULL_RESTORE and not any(int(params[p]) for p in AI_BRANCH_PARAMS):
         return []
     out = []
-    if int(params[ItemParam.GUARD_SPEC]):
-        out.append("sets Mist on its side (Guard Spec param, battle_system.c:563-573)")
-    if int(params[ItemParam.CRIT_STAGES]):
-        out.append("sets Focus Energy (crit-stages param, battle_system.c:617-626)")
     for give, amount, top in FRIENDSHIP_BANDS:
         gain = int(params[amount])
         if gain > 0 and int(params[ItemParam.HOLD_FRIENDSHIP_UP]):
@@ -129,7 +126,7 @@ def bag_item_branch(tables: Tables, state: BattleState, side, item) -> tuple:
     nonzero u8 ``HP_RESTORED`` below 1/4 HP or when the whole amount fits; each status cure,
     used when the battler has that status; confusion; then the stage params and Guard Spec,
     used from the battler's first turn on (``fakeOutTurnNumber - totalTurns >= 0``, :4156;
-    Guard Spec also without Mist on the enemy side, ``sideConditionsMask[1]``)."""
+    Guard Spec also without Mist on side 1, the AI's own, ``sideConditionsMask[1]``)."""
     p = _params(tables, item)
     mon = state.active[side]
     hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
@@ -157,7 +154,7 @@ def bag_item_branch(tables: Tables, state: BattleState, side, item) -> tuple:
     settled = state.fake_out_turn[side].astype(_I32) - state.turn.astype(_I32) >= 0
     for param, stat in STAGE_PARAMS:
         branch(p[param] != 0, settled, ItemAiCategory.STAT_BOOSTER, int(stat))
-    # Guard Spec: never used in a fight (refused_bag_params), kept for the branch order.
+    # Guard Spec: Mist on the AI's own side, side 1 (sideConditionsMask[1], :4181-4182).
     no_mist = state.mist[1] == 0
     branch(p[ItemParam.GUARD_SPEC] != 0, settled & no_mist, ItemAiCategory.GUARD_SPEC, 0)
     return out[0], out[1], out[2]
@@ -201,8 +198,12 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     AI battler's ``ITEM_HP_RECOVERY``; then, when any of those applied, the friendship band's
     amount (:716-755): +1 more for a Luxury Ball or an egg met on this map (neither for a
     trainer Pokemon, caught in a Poke Ball, pokemon.c:441-442, with no egg location), times
-    1.5 for a ``HOLD_EFFECT_FRIENDSHIP_UP`` bag item, clamped to 0-255. Mist and Focus Energy
-    (``refused_bag_params``) are not applied."""
+    1.5 for a ``HOLD_EFFECT_FRIENDSHIP_UP`` bag item, clamped to 0-255. Guard Spec (:563-573)
+    sets the user's side's Mist for ``MIST_TURNS`` when its Mist turns are 0, and the
+    crit-stages param (:617-626) sets the battler's Focus Energy when it is not set; each
+    counts as applied for the friendship band (``result = TRUE``). The crit-stages param, like
+    the stage params, needs ``selectedSlot == partySlot || targetSlot == partySlot``: the
+    user's own slot in singles (module docstring), so always true here (E1 ruling G-62)."""
     run = jnp.asarray(run)
     # The item's branch picks the subscript; in a fight the AI used it there, so the use
     # condition held (an item action the AI did not choose is a test's, not the game's).
@@ -228,11 +229,17 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     cure = run & (p[ItemParam.HEAL_ATTRACT] != 0) & (state.infatuated[side] > 0)
     state = _set(state, "infatuated", side, 0, cure)
     applied = applied | cure
+    mist = run & (p[ItemParam.GUARD_SPEC] != 0) & (state.mist[side] == 0)
+    state = _set(state, "mist", side, MIST_TURNS, mist)
+    applied = applied | mist
     for param, stat in STAGE_PARAMS:
         stage = state.stages[side, stat].astype(_I32)
         up = run & (p[param] != 0) & (stage < MAX_STAGE)
         state = _set(state, "stages", (side, stat), stage + 1, up)
         applied = applied | up
+    focus = run & (p[ItemParam.CRIT_STAGES] != 0) & (state.focus_energy[side] == 0)
+    state = _set(state, "focus_energy", side, 1, focus)
+    applied = applied | focus
     moves = state.moves[side, mon].astype(_I32)
     max_pp = tables.move_pp[moves].astype(_I32)
     gain = p[ItemParam.PP_RESTORED]
@@ -295,7 +302,7 @@ def refused_bag_items(tables: Tables, items) -> jnp.ndarray:
     used = items == ITEM_FULL_RESTORE
     for param in AI_BRANCH_PARAMS:
         used = used | (p[..., param] != 0)
-    out = (p[..., ItemParam.GUARD_SPEC] != 0) | (p[..., ItemParam.CRIT_STAGES] != 0)
+    out = jnp.zeros(items.shape, bool)
     for give, amount, top in FRIENDSHIP_BANDS:
         gain = p[..., amount]
         boosted = (gain > 0) & (p[..., ItemParam.HOLD_FRIENDSHIP_UP] != 0)

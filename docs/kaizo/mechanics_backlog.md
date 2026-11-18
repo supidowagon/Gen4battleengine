@@ -25,21 +25,21 @@ New groups: needed in this split and in no earlier one.
 
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
-| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 6 | 6 |
+| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 4 | 4 |
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 12 | 11 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 6 | 56 | 54 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 11 | 48 | 13 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 5 | 49 | 17 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 21 | 50 | 8 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 7 | 45 | 12 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 104 | 39 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 42 | 2 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 6 | 50 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 92 | 168 | 168 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 13 | 30 | 28 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 15 | 27 | 8 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 7 | 30 | 17 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 21 | 33 | 7 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 8 | 30 | 12 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 74 | 33 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 21 | 0 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 13 | 33 | 6 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 113 | 126 | 126 |
 
 ## Whole game
 
-168 distinct missing groups across all ten splits (387 battles,
+126 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -53,17 +53,17 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 1 | 4 |
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
-| Fantina Split | 0 | 17 | 14 | 10 | 2 | 8 | 3 | 54 |
-| Maylene Split | 0 | 4 | 3 | 3 | 2 | 0 | 1 | 13 |
+| Fantina Split | 0 | 11 | 6 | 0 | 2 | 8 | 1 | 28 |
+| Maylene Split | 0 | 2 | 1 | 3 | 2 | 0 | 0 | 8 |
 | Wake Split | 0 | 3 | 2 | 2 | 1 | 6 | 3 | 17 |
-| Byron Split | 0 | 5 | 3 | 0 | 0 | 0 | 0 | 8 |
+| Byron Split | 0 | 5 | 2 | 0 | 0 | 0 | 0 | 7 |
 | Candice Split | 0 | 5 | 3 | 0 | 0 | 4 | 0 | 12 |
-| Galactic Split | 0 | 10 | 9 | 3 | 1 | 16 | 0 | 39 |
-| Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
+| Galactic Split | 0 | 7 | 6 | 3 | 1 | 16 | 0 | 33 |
+| Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **1** | **47** | **37** | **18** | **7** | **47** | **11** | **168** |
+| **Whole game** | **1** | **35** | **22** | **8** | **7** | **47** | **6** | **126** |
 
 ### Groups needed in each split, by kind
 
@@ -71,17 +71,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 1 | 4 |
 | Gardenia Split | 1 | 0 | 1 | 0 | 0 | 10 | 0 | 12 |
-| Fantina Split | 1 | 17 | 15 | 10 | 2 | 8 | 3 | 56 |
-| Maylene Split | 1 | 14 | 13 | 9 | 4 | 3 | 4 | 48 |
-| Wake Split | 1 | 11 | 11 | 10 | 2 | 8 | 6 | 49 |
-| Byron Split | 1 | 18 | 12 | 8 | 3 | 2 | 6 | 50 |
-| Candice Split | 1 | 17 | 11 | 6 | 3 | 5 | 2 | 45 |
-| Galactic Split | 1 | 32 | 25 | 14 | 4 | 22 | 6 | 104 |
-| Volkner Split | 1 | 15 | 13 | 6 | 1 | 2 | 4 | 42 |
-| Elite Four Split | 1 | 19 | 15 | 2 | 3 | 3 | 7 | 50 |
-| **Whole game** | **1** | **47** | **37** | **18** | **7** | **47** | **11** | **168** |
+| Fantina Split | 1 | 11 | 7 | 0 | 2 | 8 | 1 | 30 |
+| Maylene Split | 1 | 9 | 6 | 3 | 4 | 3 | 1 | 27 |
+| Wake Split | 1 | 7 | 6 | 3 | 2 | 8 | 3 | 30 |
+| Byron Split | 1 | 15 | 6 | 2 | 3 | 2 | 4 | 33 |
+| Candice Split | 1 | 14 | 6 | 1 | 3 | 5 | 0 | 30 |
+| Galactic Split | 1 | 24 | 14 | 5 | 4 | 22 | 4 | 74 |
+| Volkner Split | 1 | 9 | 5 | 2 | 1 | 2 | 1 | 21 |
+| Elite Four Split | 1 | 14 | 8 | 0 | 3 | 3 | 4 | 33 |
+| **Whole game** | **1** | **35** | **22** | **8** | **7** | **47** | **6** | **126** |
 
 ### Battle conditions and other groups
 
@@ -135,12 +135,7 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | field condition: permanent Trick Room | Galactic Split |
 | battle conditions | field condition: permanent Gravity | Elite Four Split |
 | other | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | Roark Split |
-| other | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | Roark Split |
-| other | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | Roark Split |
-| other | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
-| other | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
 | other | ROM change: battle/skill/sub_seq.narc#238 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
-| other | ROM change: battle/skill/be_seq.narc#104 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Maylene Split |
 | other | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 | other | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 | other | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
@@ -170,35 +165,35 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 90 | 33 | 33 |
-| Gardenia Split | 28 | 410 (65) | 90 | 33 | 0 |
-| Fantina Split | 38 | 463 (69) | 90 | 33 | 0 |
-| Maylene Split | 47 | 480 (73) | 91 | 33 | 0 |
-| Wake Split | 54 | 482 (71) | 92 | 33 | 0 |
-| Byron Split | 65 | 486 (72) | 92 | 33 | 0 |
-| Candice Split | 74 | 486 (72) | 92 | 33 | 0 |
-| Galactic Split | 100 | 493 (73) | 95 | 35 | 2 |
-| Volkner Split | 84 | 487 (73) | 93 | 33 | 0 |
-| Elite Four Split | 100 | 493 (73) | 95 | 35 | 0 |
-| **Whole game** | | | 95 | 35 | 35 |
+| Roark Split | 16 | 358 (64) | 63 | 29 | 29 |
+| Gardenia Split | 28 | 410 (65) | 63 | 29 | 0 |
+| Fantina Split | 38 | 463 (69) | 63 | 29 | 0 |
+| Maylene Split | 47 | 480 (73) | 64 | 29 | 0 |
+| Wake Split | 54 | 482 (71) | 64 | 29 | 0 |
+| Byron Split | 65 | 486 (72) | 64 | 29 | 0 |
+| Candice Split | 74 | 486 (72) | 64 | 29 | 0 |
+| Galactic Split | 100 | 493 (73) | 64 | 29 | 0 |
+| Volkner Split | 84 | 487 (73) | 64 | 29 | 0 |
+| Elite Four Split | 100 | 493 (73) | 64 | 29 | 0 |
+| **Whole game** | | | 64 | 29 | 29 |
 
-Of your 95 groups, 60 are also needed by opposing trainers and 35 are player-only.
+Of your 64 groups, 35 are also needed by opposing trainers and 29 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 9 | 9 | 9 | 6 | 0 | 0 | 33 |
+| Roark Split | 0 | 7 | 7 | 9 | 6 | 0 | 0 | 29 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Wake Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Byron Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Candice Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Galactic Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
+| Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **10** | **10** | **9** | **6** | **0** | **0** | **35** |
+| **Whole game** | **0** | **7** | **7** | **9** | **6** | **0** | **0** | **29** |
 
 ### Player-only groups
 
@@ -210,20 +205,14 @@ Of your 95 groups, 60 are also needed by opposing trainers and 35 are player-onl
 | AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Magnet Rise (MAGNET_RISE in ApplyTypeChart) is not implemented: Magnet Rise | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Miracle Eye (lifts the Dark immunity) is not implemented: Miracle Eye | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Natural Gift (variable type (TrainerAI_MoveType)) is not implemented: Natural Gift | Roark Split |
 | AI move effects | AI reads your move: AI switching: move Perish Song (AI_PerishSongKO) is not implemented: Perish Song | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Weather Ball (variable type (TrainerAI_MoveType)) is not implemented: Weather Ball | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Judgment (variable type (TrainerAI_MoveType)) is not implemented: Judgment | Galactic Split |
 | move effects | move effect #174: Charge | Roark Split |
 | move effects | move effect #194: Grudge | Roark Split |
 | move effects | move effect #216: Miracle Eye | Roark Split |
-| move effects | move effect #222: Natural Gift | Roark Split |
 | move effects | move effect #223: Feint | Roark Split |
-| move effects | move effect #245: Punishment | Roark Split |
 | move effects | move effect #246: Last Resort | Roark Split |
 | move effects | move effect #258: Defog | Roark Split |
 | move effects | move effect #95: Sketch | Roark Split |
-| move effects | move effect #268: Judgment | Galactic Split |
 | held items | held item effect #102: Quick Powder | Roark Split |
 | held items | held item effect #107: Full Incense | Roark Split |
 | held items | held item effect #108: Destiny Knot | Roark Split |
@@ -260,7 +249,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 30 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 17 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
 
 ## Roark split
 
@@ -268,14 +257,12 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 3 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
+| 3 | move effect #83: Metronome; 20 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
-| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
-| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: trainer item 3, battle format 2, move effect 1
+Groups by kind: battle format 2, move effect 1, trainer item 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -286,7 +273,7 @@ Groups by kind: trainer item 3, battle format 2, move effect 1
 | 18 | battle format: a multi battle |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 5 | battle format: a double battle |
-| 4 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
+| 4 | move effect #83: Metronome; 20 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) |
@@ -298,10 +285,8 @@ Groups by kind: trainer item 3, battle format 2, move effect 1
 | 1 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
-| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
-| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
+Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -318,45 +303,25 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 37 | AI move effect #16 EVA_UP not transcribed (Basic_CheckHighStatStage_Evasion / Expert_StatusEvasionUp): Double Team |
 | 37 | battle format: a double battle |
-| 25 | AI move effect #141 UNUSED_141 not transcribed (no Basic or Expert label): Hurricane |
-| 25 | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 25 | held item effect #37: Ganlon Berry |
-| 25 | move effect #141: Hurricane |
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
-| 22 | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 22 | move effect #88: Fury Cutter, Triple Axel |
 | 19 | AI move effect #218 SPEED_DOWN_HIT not transcribed (Expert_HammerArm): Hammer Arm |
 | 19 | ability: Hydration |
 | 17 | AI move effect #173 NATURE_POWER not transcribed (no Basic or Expert label): Nature Power |
-| 16 | AI move effect #219 POWER_BASED_ON_LOW_SPEED not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_GyroBall): Gyro Ball |
+| 16 | AI move-id case of TrainerAI_CalcDamage: Gyro Ball |
 | 16 | ROM change: battle/skill/sub_seq.narc#238 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 16 | held item effect #40: Apicot Berry |
-| 16 | held item effect #46: Jaboca Berry |
-| 16 | move effect #219: Gyro Ball |
 | 15 | AI move effect #215 GRAVITY not transcribed (Basic_CheckGravityActive / Expert_Gravity): Gravity |
 | 15 | move effect #215: Gravity |
-| 15 | move effect #83: Metronome; 41 of 442 callable moves unmodelled |
+| 15 | move effect #83: Metronome; 20 of 442 callable moves unmodelled |
 | 13 | AI move effect #114 ALL_FAINT_3_TURNS not transcribed (Basic_CheckPerishSong): Perish Song |
 | 13 | AI move effect #71 LOWER_SP_ATK_HIT not transcribed (no Basic or Expert label): Mist Ball, Mystical Fire |
-| 12 | held item effect #106: Iron Ball |
-| 11 | AI move effect #209 HIGH_CRITICAL_POISON_HIT not transcribed (Expert_HighCritical): Cross Poison, Poison Tail |
-| 11 | move effect #209: Cross Poison, Poison Tail |
-| 10 | AI move effect #200 HIGH_CRITICAL_BURN_HIT not transcribed (Expert_HighCritical): Blaze Kick |
 | 10 | ability: Forecast |
-| 10 | move effect #200: Blaze Kick |
-| 9 | AI move effect #190 DECREASE_POWER_WITH_LESS_USER_HP not transcribed (Expert_WaterSpout): Water Spout |
 | 9 | AI move effect #239 SUPRESS_ABILITY not transcribed (Basic_CheckGastroAcid / Expert_GastroAcid): Gastro Acid |
 | 9 | AI move effect #57 TRANSFORM not transcribed (no Basic or Expert label): Transform |
 | 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
-| 9 | held item effect #10: Leppa Berry |
-| 9 | held item effect #114: Grip Claw |
-| 9 | move effect #190: Water Spout |
 | 9 | move effect #239: Gastro Acid |
 | 9 | move effect #57: Transform |
 | 8 | AI move effect #116 SURVIVE_WITH_1_HP not transcribed (Expert_Endure): Endure |
 | 8 | held item effect #36: Berserk Gene |
-| 8 | held item effect #43: Enigma Berry |
-| 8 | held item effect #47: Rowap Berry |
 | 8 | move effect #116: Endure |
 | 7 | AI move effect #109 CURSE: ghost curse: Curse |
 | 7 | AI move effect #86 DISABLE not transcribed (Basic_CheckCannotDisable / Expert_Disable): Disable |
@@ -365,12 +330,32 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 6 | AI move effect #259 TRICK_ROOM not transcribed (Basic_CheckTrickRoom / Expert_TrickRoom): Trick Room |
 | 6 | AI move effect #267 CHATTER not transcribed (no Basic or Expert label): Chatter |
 | 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it |
-| 6 | held item effect #44: Micle Berry |
 | 6 | move effect #233: Fling |
 | 6 | move effect #259: Trick Room |
 | 6 | move effect #267: Chatter |
+| 5 | held item effect #41: Lansat Berry |
+| 4 | AI move effect #241 USE_MOVE_FIRST not transcribed (Expert_MeFirst): Me First |
+| 4 | AI move effect #252 GIVE_GROUND_IMMUNITY not transcribed (Basic_CheckMagnetRise / Expert_MagnetRise): Magnet Rise |
+| 4 | AI move-id case of TrainerAI_MoveType where it assigns no type: Weather Ball |
+| 4 | held item effect #42: Starf Berry |
+| 4 | held item effect #92: Leek |
+| 4 | move effect #241: Me First |
+| 4 | move effect #252: Magnet Rise |
+| 3 | AI move effect #191 SWITCH_ABILITIES not transcribed (Expert_ChangeUserAbility): Skill Swap |
+| 3 | AI move effect #82 COPY_MOVE_FOR_BATTLE not transcribed (no Basic or Expert label): Mimic |
+| 3 | move effect #191: Skill Swap |
+| 3 | move effect #82: Mimic |
+| 2 | AI move effect #153 FLEE_FROM_WILD_BATTLE not transcribed (ScoreMinus10): Teleport |
+| 2 | AI move effect #165 TORMENT not transcribed (Basic_CheckTorment): Torment |
+| 2 | AI move effect #247 SET_ABILITY_TO_INSOMNIA not transcribed (Basic_CheckWorrySeed / Expert_WorrySeed): Worry Seed |
+| 2 | AI move effect #85 DO_NOTHING not transcribed (no Basic or Expert label): Thief |
+| 2 | ability: Flash Fire |
+| 2 | ability: Minus |
+| 2 | ability: Plus |
+| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it |
+| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it |
 
-Groups by kind: AI 48, move effect 37, battle format 36, held item effect 18, battle terrain 9, ability 7, ROM change 7, trainer item 3, field condition 2, form change 1
+Groups by kind: battle format 36, AI 36, move effect 22, battle terrain 9, held item effect 8, ability 7, ROM change 4, field condition 2, trainer item 1, form change 1
 
 ## Build order for the first two splits
 
@@ -381,17 +366,15 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 1 | battle format: a multi battle | 40 of 68 |
 | 2 | AI: AI_FLAG_TAG_STRATEGY | 49 of 68 |
 | 3 | battle format: a double battle | 53 of 68 |
-| 4 | move effect #83: Metronome; 41 of 442 callable moves unmodelled | 57 of 68 |
-| 5 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 58 of 68 |
-| 6 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 59 of 68 |
-| 7 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 60 of 68 |
-| 8 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 61 of 68 |
-| 9 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 62 of 68 |
-| 10 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 63 of 68 |
-| 11 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 64 of 68 |
-| 12 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 65 of 68 |
-| 13 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 66 of 68 |
-| 14 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 67 of 68 |
-| 15 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | 67 of 68 |
-| 16 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | 67 of 68 |
-| 17 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 68 of 68 |
+| 4 | move effect #83: Metronome; 20 of 442 callable moves unmodelled | 57 of 68 |
+| 5 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 58 of 68 |
+| 6 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 59 of 68 |
+| 7 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 60 of 68 |
+| 8 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 61 of 68 |
+| 9 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 62 of 68 |
+| 10 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 63 of 68 |
+| 11 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 64 of 68 |
+| 12 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 65 of 68 |
+| 13 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 66 of 68 |
+| 14 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 67 of 68 |
+| 15 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 68 of 68 |

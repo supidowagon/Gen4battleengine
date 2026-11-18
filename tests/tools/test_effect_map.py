@@ -9,8 +9,13 @@ import pytest
 from nuzline.engine.ids import EffectId, MoveFlag, Stat
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
+    CHARGE_FLAG_EFFECTS,
     DECOMP_EFFECT_NAMES,
     DECOMP_EFFECT_TO_ID,
+    KAIZO_EFFECTS,
+    KAIZO_FLAG_EFFECTS,
+    KAIZO_THUNDER_EFFECTS,
+    SCRIPT_FLAG_EFFECTS,
     SEMI_HIT_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
 )
@@ -219,6 +224,54 @@ def test_semi_invulnerable_flags(tables, names, kaizo_tables, kaizo_names):
     # Kaizo rewrites Dive and Bounce (effects 0 and 6): no charge.
     for move in ("Dive", "Bounce"):
         assert not int(kaizo_tables.move_flags[kaizo_names.move(move)]) & MoveFlag.CHARGE
+
+
+def test_script_flag_effects_match_every_script():
+    """B13-1, B13-2: every effect script that adds BTLVAR_CRITICAL_BOOSTS is HIGH_CRIT or carries
+    MoveFlag.CRIT_UP (CHARGE_FLAG_EFFECTS, SCRIPT_FLAG_EFFECTS), and every SetMultiHit 2 is
+    MULTI_HIT with 2 hits or MoveFlag.HIT_TWICE; each SCRIPT_FLAG_EFFECTS bit is in its script."""
+    for e, bits in SCRIPT_FLAG_EFFECTS.items():
+        text = _script(e)
+        assert ("OPCODE_ADD, BTLVAR_CRITICAL_BOOSTS, 1" in text) == bool(bits & MoveFlag.CRIT_UP)
+        assert ("SetMultiHit 2," in text) == bool(bits & MoveFlag.HIT_TWICE)
+        assert e in DECOMP_EFFECT_TO_ID
+    for path in sorted((DECOMP / "res/battle/scripts/effects").glob("effect_script_*.s")):
+        e, text = int(path.stem[-4:]), path.read_text(encoding="utf-8")
+        eid, params = DECOMP_EFFECT_TO_ID.get(e, (EffectId.UNSUPPORTED, (0, 0, 0)))
+        flags = SCRIPT_FLAG_EFFECTS.get(e, 0) | CHARGE_FLAG_EFFECTS.get(e, 0)
+        if "BTLVAR_CRITICAL_BOOSTS" in text and eid != EffectId.UNSUPPORTED:
+            assert eid == EffectId.HIGH_CRIT or flags & MoveFlag.CRIT_UP, e
+        if "SetMultiHit 2," in text and eid != EffectId.UNSUPPORTED:
+            assert (eid == EffectId.MULTI_HIT and params[0] == 2) or flags & MoveFlag.HIT_TWICE, e
+
+
+def test_triple_kick_and_beat_up_scripts():
+    """B13-5, B13-9: every SetMultiHit 3 script is TRIPLE_KICK with its per-hit power step
+    (effect_script_0104.s:5-7: + 10); Beat Up's script sets SYSCTL_IGNORE_IMMUNITIES and runs
+    BtlCmd_BeatUp with no CalcDamage (effect_script_0154.s:5-7). Kaizo's 104 and 88 are
+    TRIPLE_KICK with step 0 (the move's power, rom_diff.toml)."""
+    for path in sorted((DECOMP / "res/battle/scripts/effects").glob("effect_script_*.s")):
+        e, text = int(path.stem[-4:]), path.read_text(encoding="utf-8")
+        if "SetMultiHit 3," in text:
+            assert DECOMP_EFFECT_TO_ID[e] == (EffectId.TRIPLE_KICK, (10, 0, 0)), e
+            assert "SYSCTL_TRIPLE_KICK" in text and "BTLVAR_MOVE_POWER, 10" in text, e
+    text = _script(154)
+    assert "SYSCTL_IGNORE_IMMUNITIES" in text and "BeatUp" in text and "CalcDamage" not in text
+    assert DECOMP_EFFECT_TO_ID[154] == (EffectId.BEAT_UP, (0, 0, 0))
+    for e in (88, 104):
+        assert KAIZO_EFFECTS[e][1:] == (EffectId.TRIPLE_KICK, (0, 0, 0)), e
+        assert e not in KAIZO_FLAG_EFFECTS
+
+
+def test_kaizo_hurricane_flags_follow_its_notes():
+    """B13-3, B13-4: Kaizo effect 141 is effect 76's script (SECONDARY_CONFUSE, as vanilla 76) plus
+    SYSCTL_HIT_DURING_FLY; its two Thunder compares (MoveFlag.THUNDER) are E1's
+    KAIZO_THUNDER_EFFECTS (G-50); the vanilla 141 is the unused plain script (UNSUPPORTED in
+    vanilla)."""
+    assert KAIZO_EFFECTS[141][1:] == DECOMP_EFFECT_TO_ID[76]
+    assert KAIZO_FLAG_EFFECTS[141] == MoveFlag.HIT_AIR and 141 in KAIZO_THUNDER_EFFECTS
+    assert set(KAIZO_FLAG_EFFECTS) <= set(KAIZO_EFFECTS)
+    assert 141 not in DECOMP_EFFECT_TO_ID and "SYSCTL_HIT_DURING_FLY" in _script(152)
 
 
 def test_whirlpool_bind_matches_bind():
@@ -478,10 +531,11 @@ def test_batch2_berries_follow_their_item_data():
         assert f"msgTemp = BATTLE_STAT_{stat_names[stat]};" in case[: case.index("break;")]
 
 
-def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, kaizo_names):
+def test_pinch_berries_take_any_param(tables, names, kaizo_tables, kaizo_names):
     """A stat pinch berry or Custap Berry with a param below 2 divides maxHP by zero
-    (battle_lib.c:4778, :1294; Gluttony halves the param): UNSUPPORTED (build_tables'
-    _pinch_divisor_ok). Kaizo sets Ganlon's and Apicot's param to 0."""
+    (battle_lib.c:4778, :1294; Gluttony halves the param), which the ROM's ``_u32_div_f``
+    answers with the dividend (``order.pinch_limit``, G-53): Kaizo's Ganlon and Apicot (param 0)
+    stay PINCH_BERRY."""
     from nuzline.engine.ids import ItemId
 
     for berry in ("Liechi Berry", "Ganlon Berry", "Salac Berry", "Petaya Berry", "Apicot Berry"):
@@ -490,25 +544,23 @@ def test_pinch_berries_need_a_param_to_divide_by(tables, names, kaizo_tables, ka
     for berry in ("Ganlon Berry", "Apicot Berry"):
         i = kaizo_names.item(berry)
         assert int(kaizo_tables.item_hold_param[i]) == 0
-        assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, berry
-    i = kaizo_names.item("Liechi Berry")
-    assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY
+        assert int(kaizo_tables.item_effect[i]) == ItemId.PINCH_BERRY, berry
 
 
 def test_divisor_items_need_a_param_to_divide_by():
     """Sticky Barb (``Divide(maxHP, param)``, battle_lib.c:5330-5336) and Shell Bell
-    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0, and a pinch berry below 2, are
-    UNSUPPORTED (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN)."""
+    (``Divide(dealt, param)``, bcp.c:4736-4752) with param 0 are UNSUPPORTED
+    (build_tables._pinch_divisor_ok, effect_map.DIVISOR_PARAM_MIN); a pinch berry is not (G-53)."""
     from nuzline.engine.ids import ItemId
     from tools.build_tables import _pinch_divisor_ok
 
     ids = [ItemId.STICKY_BARB, ItemId.SHELL_BELL, ItemId.STICKY_BARB, ItemId.PINCH_BERRY]
-    items = [{"hold_param": p} for p in (0, 0, 8, 1)]
+    items = [{"hold_param": p} for p in (0, 0, 8, 0)]
     assert _pinch_divisor_ok(items, [int(i) for i in ids]) == [
         ItemId.UNSUPPORTED,
         ItemId.UNSUPPORTED,
         ItemId.STICKY_BARB,
-        ItemId.UNSUPPORTED,
+        ItemId.PINCH_BERRY,
     ]
 
 

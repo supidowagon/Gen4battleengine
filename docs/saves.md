@@ -21,12 +21,11 @@ uv run nuzline save export SAVE -o party.toml [--allow-corrupt]
 ## PKHeX oracle test
 
 `tests/saves/test_pkhex_oracle.py` compares the parser with PKHeX's reading of the same
-save. It is skipped unless `NUZLINE_ORACLE_DIR` is set. Never commit saves; keep the
-folder outside the repository.
+save. It is skipped unless `NUZLINE_ORACLE_DIR` is set.
 
 Build the folder from your own save:
 
-1. Copy the save (`.sav` or `.dsv`) into a new folder, e.g. `C:\oracle\platinum`.
+1. Copy the save (`.sav` or `.dsv`) into a new folder outside the repository.
 2. Open the save in PKHeX and export its Box Data Report as CSV
    (PKHeX's Box Data Report, under Tools > Data in recent versions). Put the `.csv` in the
    folder.
@@ -39,7 +38,7 @@ The folder must hold exactly one `.sav`/`.dsv` and one `.csv`, plus the `.pk4` f
 Run it:
 
 ```
-$env:NUZLINE_ORACLE_DIR = "C:\oracle\platinum"   # PowerShell
+$env:NUZLINE_ORACLE_DIR = "<oracle folder>"   # PowerShell
 uv run pytest tests/saves/test_pkhex_oracle.py -q
 ```
 

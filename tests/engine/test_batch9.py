@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.order import effective_speed
-from nuzline.engine.outcome import empty_outcome, live_hit_threshold
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
@@ -16,7 +16,7 @@ O = empty_outcome()
 
 
 def _roll(u: int):
-    return O._replace(hit=jnp.full((2, 5), u, jnp.int8))
+    return O._replace(hit=jnp.full((2, MAX_HITS), u, jnp.int8))
 
 
 def test_thunder_and_blizzard_weather_accuracy(tables, names):
@@ -46,7 +46,9 @@ def test_fire_fang_burns_and_flinches(tables, names):
     s = make_state(
         tables, [_mon(n, "Growlithe", ["Fire Fang"], 40)], [_mon(n, "Geodude", ["Tackle"], 20)]
     )
-    o = O._replace(secondary=jnp.ones((2, 5), jnp.int8), fang_flinch=jnp.ones((2,), jnp.int8))
+    o = O._replace(
+        secondary=jnp.ones((2, MAX_HITS), jnp.int8), fang_flinch=jnp.ones((2,), jnp.int8)
+    )
     out = assert_matches_reference(tables, s, (0, 0), o)
     assert int(out.status[1, 0]) == Status.BURN
 
@@ -278,17 +280,22 @@ def test_trapping_abilities(tables, names):
         return _set_ability(_set_ability(s, 1, foe_ability), 0, AbilityId.NONE)
 
     tag = pair("Bidoof", AbilityId.SHADOW_TAG)
-    assert bool(trapped(tag, 0))
-    assert not bool(trapped(_set_ability(tag, 0, AbilityId.SHADOW_TAG), 0))
-    assert not bool(trapped(tag._replace(hp=tag.hp.at[1, 0].set(0)), 0))  # a fainted trapper
+    assert bool(trapped(tables, tag, 0))
+    assert not bool(trapped(tables, _set_ability(tag, 0, AbilityId.SHADOW_TAG), 0))
+    assert not bool(
+        trapped(tables, tag._replace(hp=tag.hp.at[1, 0].set(0)), 0)
+    )  # a fainted trapper
     arena = pair("Bidoof", AbilityId.ARENA_TRAP)
-    assert bool(trapped(arena, 0))
-    assert not bool(trapped(_set_ability(arena, 0, AbilityId.LEVITATE), 0))
+    assert bool(trapped(tables, arena, 0))
+    assert not bool(trapped(tables, _set_ability(arena, 0, AbilityId.LEVITATE), 0))
     bird = pair("Pidgey", AbilityId.ARENA_TRAP)
-    assert not bool(trapped(bird, 0))
-    assert bool(trapped(bird._replace(gravity=jnp.int8(5)), 0))
-    assert bool(trapped(pair("Magnemite", AbilityId.MAGNET_PULL), 0))
-    assert not bool(trapped(pair("Bidoof", AbilityId.MAGNET_PULL), 0))
+    assert not bool(trapped(tables, bird, 0))
+    assert bool(trapped(tables, bird._replace(gravity=jnp.int8(5)), 0))
+    # E1 Batch D (G-56): BattlerIsGrounded's Iron Ball (:5505).
+    ball = bird._replace(item=bird.item.at[0, 0].set(n.item("Iron Ball")))
+    assert bool(trapped(tables, ball, 0))
+    assert bool(trapped(tables, pair("Magnemite", AbilityId.MAGNET_PULL), 0))
+    assert not bool(trapped(tables, pair("Bidoof", AbilityId.MAGNET_PULL), 0))
 
 
 def test_belly_drum_fails_at_plus_six_and_at_half_hp(tables, names):
