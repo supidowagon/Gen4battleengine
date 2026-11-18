@@ -61,6 +61,8 @@ from nuzline.engine.damage import (
     confusion_damage,
     damage_for_roll,
 )
+from nuzline.engine.format import foe as foe_of
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
@@ -339,7 +341,7 @@ def _hit_state(state: BattleState, record: dict) -> BattleState:
     active = np.asarray(record["active"], LAYOUT["active"][1])
     hp, status = np.asarray(state.hp).copy(), np.asarray(state.status).copy()
     counter, stages = np.asarray(state.status_counter).copy(), np.asarray(state.stages).copy()
-    for b in (0, 1):
+    for b in range(format_of(state).B):
         hp[b, active[b]] = record["hp"][b]
         status[b, active[b]], counter[b, active[b]] = decode_status(record["status"][b])
         stages[b] = _stage_row(record["stages"][b])
@@ -550,10 +552,12 @@ class _Turn:
     def _roared(self, side: int) -> bool:
         """The foe used Roar / Whirlwind this turn (a PP drop on one), so the side's active
         Pokemon may have been dragged out rather than switched."""
-        used = self._used_slots(1 - side)
+        used = self._used_slots(foe_of(side))
         if used.size == 0:
             return False
-        move = int(self.state.moves[1 - side, int(self.state.active[1 - side]), int(used[0])])
+        move = int(
+            self.state.moves[foe_of(side), int(self.state.active[foe_of(side)]), int(used[0])]
+        )
         return int(self.tables.move_effect[move]) == EffectId.ROAR
 
     def action_choices(self, side: int) -> list[int]:
@@ -630,11 +634,11 @@ class _Turn:
     def damage_outcome(self, actions: list[list[int]]) -> dict[str, np.ndarray]:
         """``empty_outcome`` with the hits, crits and rolls of the trace's records."""
         o = {name: np.asarray(v).copy() for name, v in empty_outcome()._asdict().items()}
-        for side in (0, 1):
+        for side in range(format_of(self.state).B):
             hits = [
                 e
                 for e in self.events
-                if e["kind"] == "hit" and e["attacker"] == side and e["defender"] == 1 - side
+                if e["kind"] == "hit" and e["attacker"] == side and e["defender"] == foe_of(side)
             ]
             self_hits = [
                 e
@@ -661,12 +665,12 @@ class _Turn:
                 if e["move"] != move:
                     raise self.fail(f"side {side} hit {i} is move {e['move']}, chose {move}")
                 hs = _hit_state(self.state, e)
-                other = actions[1 - side]
+                other = actions[foe_of(side)]
                 pursuit = (
                     int(self.tables.move_effect[move]) == EffectId.PURSUIT
                     and len(other) == 1
                     and MOVE_ACTIONS <= other[0] < FIRST_ITEM_ACTION
-                    and e["active"][1 - side] == int(self.state.active[1 - side])
+                    and e["active"][foe_of(side)] == int(self.state.active[foe_of(side)])
                 )
                 power_mul = 20 if pursuit else 10
                 crits = (0, 1) if e["crit"] is None else (int(e["crit"]),)
@@ -704,9 +708,11 @@ class _Turn:
             options.append(("speed_tie", (), [0, 1]))
         if any(_tied(tables, s) for s in self._end_of_turn_states(actions)):
             options.append(("end_speed_tie", (), [0, 1]))
-        connected = [bool(base["hit"][s, 0]) and self._acted(s) for s in (0, 1)]
+        connected = [
+            bool(base["hit"][s, 0]) and self._acted(s) for s in range(format_of(self.state).B)
+        ]
         fixed: list[tuple[str, tuple, int]] = []
-        for side in (0, 1):
+        for side in range(format_of(self.state).B):
             # This turn's speedRand bit orders the end of the turn (step.end_of_turn_order)
             # when the battler on the field then holds a Quick Claw; the next turn's fit of
             # its start qc_roll can still rewrite it (convert_bundle).
@@ -733,7 +739,7 @@ class _Turn:
             else:
                 options.append(("secondary", per_hit, [0, 1]))
             hit_record = any(
-                e["kind"] == "hit" and e["attacker"] == side and e["defender"] == 1 - side
+                e["kind"] == "hit" and e["attacker"] == side and e["defender"] == foe_of(side)
                 for e in self.events
             )
             if effect == EffectId.PRESENT and not hit_record:
@@ -759,7 +765,7 @@ class _Turn:
             # The contact abilities with a roll (effects._contact_ability) of the defender:
             # the target's start-of-turn active (Pursuit hits the outgoing one) or the
             # Pokemon it switches in.
-            target = 1 - side
+            target = foe_of(side)
             defenders = [int(state.active[target])]
             if MOVE_ACTIONS <= actions[target] < FIRST_ITEM_ACTION:
                 defenders.append(actions[target] - MOVE_ACTIONS)
@@ -797,7 +803,7 @@ class _Turn:
     def _roar_options(self, side: int, actions: tuple[int, int]) -> list[tuple[str, tuple, list]]:
         """The ``roar_level`` / ``roar_target`` values to replay for the side's Roar: its target
         is the foe's active Pokemon or the one the foe switches in (a switch goes first)."""
-        state, foe = self.state, 1 - side
+        state, foe = self.state, foe_of(side)
         target = int(state.active[foe])
         if MOVE_ACTIONS <= actions[foe] < FIRST_ITEM_ACTION:
             target = actions[foe] - MOVE_ACTIONS
@@ -833,7 +839,7 @@ class _Turn:
             return False
         if int(self.state.infatuated[side]) != 0:
             return True
-        foe = 1 - side
+        foe = foe_of(side)
         if actions[foe] >= MOVE_ACTIONS:
             return False
         move = int(used_move(self.tables, self.state, foe, actions[foe]))
@@ -843,7 +849,7 @@ class _Turn:
         """States whose speeds the end-of-turn order may compare: the start state, with
         the switches made, and with the next record's status and stages over that."""
         active = np.asarray(self.state.active).copy()
-        for side in (0, 1):
+        for side in range(format_of(self.state).B):
             if MOVE_ACTIONS <= actions[side] < FIRST_ITEM_ACTION:
                 active[side] = actions[side] - MOVE_ACTIONS
         switched = self.state._replace(active=jnp.asarray(active))
@@ -861,7 +867,7 @@ class _Turn:
         """The start ``qc_roll`` values to replay: for a side whose active Pokemon holds a
         Quick Claw both bits, the carried value first (so ties keep it); else 0."""
         out = []
-        for side in (0, 1):
+        for side in range(format_of(self.state).B):
             carried = int(self.state.qc_roll[side])
             if _holds_quick_claw(self.tables, self.state, side, int(self.state.active[side])):
                 out.append([carried, 1 - carried])
@@ -890,7 +896,10 @@ class _Turn:
         """Per chunk of ``candidate_list``: its start index, the chunk, the replayed states,
         ``needs_replacement`` after the step and the mismatched-field rows."""
         candidates = self.candidate_list()
-        slots = [jnp.asarray(int(self.after["active"][side]), _I32) for side in (0, 1)]
+        slots = [
+            jnp.asarray(int(self.after["active"][side]), _I32)
+            for side in range(format_of(self.state).B)
+        ]
         for start in range(0, len(candidates), _CHUNK):
             chunk = candidates[start : start + _CHUNK]
             padded = chunk + [chunk[0]] * (_CHUNK - len(chunk))
