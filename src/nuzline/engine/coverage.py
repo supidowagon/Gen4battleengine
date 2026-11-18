@@ -142,6 +142,7 @@ from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
     METRONOME_DRAW,
+    SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     UNTRACEABLE_ABILITIES,
@@ -356,7 +357,9 @@ def halved_defense_line(tables: Tables, move: int, foe_defense: int | None) -> s
 # BtlCmd_CalcGyroBallPower (battle_script.c:7127) divides by the user's monSpeedValues, which
 # CompareBattlerSpeed computes as Speed x the stage ratio (-6: 10/40), then / 4 for paralysis
 # (battle_lib.c:1225, :1259-1261): below 16 Speed that can reach 0, a division by zero the decomp
-# leaves to the ROM's division routine. A Gyro Ball user below it is refused (B13-14).
+# leaves to the ROM's division routine. A Gyro Ball user below it is refused (B13-14). A holder of
+# a sSpeedHalvingItemEffects item (Iron Ball, Macho Brace, the Power items: / 2 between the stage
+# and paralysis, battle_lib.c:1240-1246, G-56) reaches 0 below twice that.
 GYRO_SPEED_MIN = 16
 
 
@@ -366,7 +369,8 @@ def gyro_speed_line(tables: Tables, move: int, spec: PokemonSpec) -> str | None:
     if int(np.asarray(tables.move_effect)[move]) != EffectId.GYRO_BALL:
         return None
     speed = int(spec_stats(tables, spec)[Stat.SPE])
-    return f" with Speed {speed}" if speed < GYRO_SPEED_MIN else None
+    halved = int(np.asarray(tables.item_hold_effect)[spec.item]) in SPEED_HALVING_HOLD_EFFECTS
+    return f" with Speed {speed}" if speed < GYRO_SPEED_MIN * (1 + halved) else None
 
 
 def halving_moves(tables: Tables, foes: Sequence[PokemonSpec]) -> list[int]:

@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     PLATE_TYPES,
     damage_for_roll,
@@ -29,7 +30,6 @@ from nuzline.engine.outcome import (
     empty_outcome,
     live_hit_threshold,
 )
-from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, assert_matches_reference
 from tests.engine.test_enumerate import (
@@ -402,6 +402,30 @@ def test_triple_kick_later_hits_skip_the_overrides(kaizo_tables, kaizo_names):
     assert int(guard.hp[1, 0]) - int(out.hp[1, 0]) == per[0]
     out = assert_matches_reference(t, guard, (0, 0), _hits(100, 95, 95))
     assert int(guard.hp[1, 0]) - int(out.hp[1, 0]) == sum(per)
+
+
+def test_triple_kick_micle_boosts_the_first_check_only(kaizo_tables, kaizo_names):
+    """B13-6 with G-59: every Triple Kick check runs CheckMoveHitAccuracy, which reads and clears
+    the attacker's micleBerry (bcp.c:2967-2970): the first hit's roll is boosted x120/100, the
+    later hits' are not (the flag is gone); hit_threshold_pair's later column reads it cleared."""
+    from nuzline.engine.outcome import hit_threshold_pair
+
+    t, n = kaizo_tables, kaizo_names
+    s = _plain(_state(t, n, ("Hitmontop", "Triple Kick"), ("Snorlax", "Growl"), (40, 60)))
+    m = n.move("Triple Kick")
+    plain = int(live_hit_threshold(t, s, 0, m))
+    micled = s._replace(micle=s.micle.at[0].set(1))
+    boosted = int(live_hit_threshold(t, micled, 0, m))
+    assert boosted == plain * 120 // 100 > plain
+    acts = A("Triple Kick", "Growl", micled, n)
+    first, _, later = hit_threshold_pair(t, micled, acts)
+    assert int(first[0, 0]) == boosted and int(later[0, 0]) == plain
+    per = [int(damage_for_roll(t, micled, 0, m, False, 15, hit=k)) for k in range(3)]
+    out = assert_matches_reference(t, micled, (0, 0), _hits(boosted, plain + 1, 1))
+    assert int(out.micle[0]) == 0
+    assert int(micled.hp[1, 0]) - int(out.hp[1, 0]) == per[0]
+    out = assert_matches_reference(t, micled, (0, 0), _hits(boosted, plain, plain))
+    assert int(micled.hp[1, 0]) - int(out.hp[1, 0]) == sum(per)
 
 
 def test_triple_kick_stops_when_the_target_faints(tables, names):
@@ -816,6 +840,17 @@ def test_gyro_ball_zero_speed_is_refused(tables, names):
     assert gyro_speed_line(tables, m, slow) is not None
     assert gyro_speed_line(tables, m, fast) is None
     assert gyro_speed_line(tables, names.move("Tackle"), slow) is None
+    # An Iron Ball holder's Speed is halved before paralysis (battle_lib.c:1240-1246, G-56): it
+    # reaches 0 below twice the bound.
+    mid = next(
+        mon
+        for lv in range(5, 101)
+        if GYRO_SPEED_MIN
+        <= int(spec_stats(tables, mon := _mon(names, "Bronzor", ["Gyro Ball"], lv))[Stat.SPE])
+        < 2 * GYRO_SPEED_MIN
+    )
+    assert gyro_speed_line(tables, m, mid) is None
+    assert gyro_speed_line(tables, m, _mon(names, "Bronzor", ["Gyro Ball"], mid.level, "Iron Ball"))
 
 
 # B13-15: Trump Card (CalcTrumpCardPower, :7233-7245) and Punishment (:7354-7371).

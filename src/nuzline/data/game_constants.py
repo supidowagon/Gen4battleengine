@@ -560,14 +560,13 @@ CONSTANTS: tuple[Constant, ...] = (
     # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
     Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
-    # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
+    # HOLD_EFFECT_POWER_UP_SE (96).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
     *_table("nuzline.ai.commands.NATURAL_GIFT_BERRIES", "item", _E, _NATURAL_GIFT_BERRIES),
     *_table("nuzline.ai.commands.RECYCLE_DESIRABLE_ITEMS", "item", _E, _RECYCLE_DESIRABLE_ITEMS),
     *_table("nuzline.ai.commands.ASSURANCE_RECOIL_BERRIES", "item", _E, _ASSURANCE_RECOIL_BERRIES),
-    Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
     # TrainerAI_ShouldUseItem's by-id test (trainer_ai.c:4099).
@@ -827,6 +826,11 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
         "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
         "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
+    ),
+    "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
+        "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "
+        "table compared with each game's own item hold effects; tests/engine/test_e1_batch_d.py "
+        "reads it back from the decomp (E1 Batch D, G-56)"
     ),
     "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "

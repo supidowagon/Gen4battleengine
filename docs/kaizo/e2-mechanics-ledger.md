@@ -1946,7 +1946,9 @@ Rules left out because another mechanic is missing; each closes with the mechani
   as CalcMoveDamage's inPower (damage._pre_random in_power; the turn-start table reads the state).
   A user Speed that can reach 0 (below 16: -6 is 10/40, paralysis / 4, lib.c:1225, :1259-1261)
   divides by zero, left to the ROM's division routine: coverage.gyro_speed_line refuses it
-  (fight, pool and prep, GYRO_SPEED_MIN). Pure helper damage.gyro_ball_power.
+  (fight, pool and prep, GYRO_SPEED_MIN; twice it for a sSpeedHalvingItemEffects holder, Iron
+  Ball since E1 Batch D's G-56: / 2 between the stage and paralysis, battle_lib.c:1240-1246).
+  Pure helper damage.gyro_ball_power.
 - B13-15 Trump Card (235): sCurrentPPScaledPower[min(ppCur, 4)] (200, 80, 60, 50, 40) of
   moveSlot after BattleControllerPlayer_DecrementPP (bcp.c:3182; Pressure's cost included),
   moveSlot being the invoker's for a called move (common.h:8), passed as inPower from _use_move.

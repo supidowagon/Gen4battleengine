@@ -21,6 +21,7 @@ from nuzline.engine.hooks import intimidate
 from nuzline.engine.ids import AbilityId, MoveFlag, Stat, Status, Weather
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome, hit_threshold
+from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
@@ -257,19 +258,22 @@ def test_kaizo_effect_141_is_thunder_for_the_weather_accuracy(kaizo_tables, kaiz
     }
 
 
-def test_kaizo_hurricane_hit_rate_in_sun_and_rain(tables, names, kaizo_tables, kaizo_names):
-    """outcome._rate on the Kaizo tables: accuracy 70 -> 50 in sun (before the stage scaling),
-    never missing in rain (a threshold of 100 or more), 70 in clear weather."""
+def test_kaizo_hurricane_hit_rate_in_sun_and_rain(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """outcome._rate on a Kaizo state (Kaizo tables, Kaizo Roark's party on both sides): accuracy
+    70 at the neutral stage sum; in sun hitRate = 50 before the stage scaling (bcp.c:2915-2917),
+    so 50; in rain CheckMoveHitOverrides' Thunder branch clears the miss (bcp.c:3023-3027), a sure
+    hit: threshold exactly 100."""
     hurricane = kaizo_names.move("Hurricane")
     assert int(kaizo_tables.move_accuracy[hurricane]) == 70
-    s = roark_state(tables, names)
+    party = list(kaizo_roark_party)
+    s = make_state(kaizo_tables, party, party)
     s = s._replace(moves=s.moves.at[0, 0, 0].set(hurricane))
-    acts = jnp.array([0, names.move_slot(s, 1, "Leer")], jnp.int32)
+    acts = jnp.array([0, 0], jnp.int32)
     rate = {
         w: int(hit_threshold(kaizo_tables, _weather(s, w), acts)[0])
         for w in (Weather.NONE, Weather.SUN, Weather.RAIN)
     }
-    assert rate[Weather.NONE] == 70 and rate[Weather.SUN] == 50 and rate[Weather.RAIN] >= 100
+    assert rate == {Weather.NONE: 70, Weather.SUN: 50, Weather.RAIN: 100}
 
 
 # --- G-51 the intermediates' game ---------------------------------------------------------

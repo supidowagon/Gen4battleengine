@@ -138,6 +138,9 @@ from nuzline.engine.effects import (
     know_ability,
     life_orb_recoil,
     locked_onto,
+    metronome_update,
+    metronome_verify,
+    on_hit_berry,
     pivot_item,
     play_hit,
     pressure_holder,
@@ -1188,6 +1191,23 @@ def _use_move(
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
+    # bcp.c:2967-2970: the check clears the attacker's Micle Berry flag once it gets past its
+    # early returns (accuracy 0, SYSCTL_FIRST_OF_MULTI_TURN, SYSCTL_NONSTANDARD_ACC_CHECK of
+    # Future Sight and an OHKO move), G-59.
+    accuracy_run = (
+        can_act
+        & has_target
+        & ~charging
+        & ~never_misses
+        & (tables.move_effect[used] != EffectId.OHKO)
+    )
+    state = _set_side(state, "micle", side, 0, accuracy_run)
+    # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
+    # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
+    # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
+    # script and its damage (G-60).
+    repeated = (tables.move_effect[used] == EffectId.ROLLOUT) & (state.rollout_count[side] != 0)
+    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
     # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
     # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
@@ -1241,11 +1261,11 @@ def _use_move(
                 tables,
                 ohko_type,
                 state.types[target_side, target],
-                identified(state, side, target_side),
+                identified(tables, state, side, target_side),
             )
             != 0
         )
-        & ~levitated(state, side, target_side, ohko_type)
+        & ~levitated(tables, state, side, target_side, ohko_type)
         # subscript_missed.s:13 shows the miss of MOVE_STATUS_SEMI_INVULNERABLE first.
         & ~semi_miss
     )
@@ -1409,7 +1429,10 @@ def _use_move(
     state = state._replace(types=state.types.at[target_side, target].set(roost_types))
     move_type = move_type_of(tables, state, side, used)
     chart = effectiveness(
-        tables, move_type, state.types[target_side, target], identified(state, side, target_side)
+        tables,
+        move_type,
+        state.types[target_side, target],
+        identified(tables, state, side, target_side),
     )
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
     # move passed the no-target check, for a move with power that is not RANGE_USER /
@@ -1689,14 +1712,16 @@ def _use_move(
             later_roll
             <= live_hit_threshold(tables, state, side, used, target_moved, overrides=False)
         )
-        kick_miss = (
-            going
-            & (tables.move_effect[used] == EffectId.TRIPLE_KICK)
+        kick_check = (
+            (tables.move_effect[used] == EffectId.TRIPLE_KICK)
             & (hit_index > 0)
             & (hit_index < n_hits)
             & (state.hp[target_side, target] > 0)
-            & ~later_ok
         )
+        kick_miss = going & kick_check & ~later_ok
+        # That check also clears the attacker's Micle flag (bcp.c:2967-2970, G-59): a berry
+        # eaten since the first hit's check boosts this hit's roll only.
+        state = _set_side(state, "micle", side, 0, going & kick_check)
         going = going & ~kick_miss
         landed = (
             going
@@ -1845,9 +1870,25 @@ def _use_move(
         state = sticky_barb_transfer(
             tables, state, side, target_side, used, items & landed & barbed & ~info.sub_hit
         )
+        # The same TriggerHeldItemOnHit's berry cases (effects.on_hit_berry, G-54, G-55): the
+        # defender's physical / specialDamageTaken are this action's damage of the move's class.
+        state, recoiled = on_hit_berry(
+            tables,
+            state,
+            side,
+            target_side,
+            barbed & (category == PHYSICAL_CATEGORY),
+            barbed & (category == SPECIAL_CATEGORY),
+            info.super_effective & info.effective,
+            items & landed & ~info.sub_hit,
+        )
         hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
         state, thawed = thaw_target(tables, state, side, target_side, used_t, hit_dealt, items)
-        state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
+        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (bcp.c:3730): the attacker's item kept above, or
+        # the attacker's item after a Jaboca / Rowap recoil (its HP fell), G-54.
+        state = after_damage_items(
+            tables, state, side, items & ((item_used & info.pluck_flag) | recoiled)
+        )
         return (
             state,
             hits + landed.astype(_I32),
@@ -2011,6 +2052,19 @@ def _use_move(
     # (bcp.c:3934-3944): the newcomer, whose switch-in cleared them (battle_lib.c:2119, :2123).
     # U-turn and Baton Pass are not Protect-chain moves, so its chain stays 0.
     state = _set_last_move(state, side, move, resumed)
+    # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60: on the head's
+    # battler (a tail mode's newcomer had its count and move cleared by the switch). The move's
+    # MOVE_STATUS_NO_EFFECTS: CheckMoveFailure (bcp.c:3312-3331) did not reach USE_MOVE (a miss,
+    # Protect, a semi-invulnerable foe, a failure, an immunity: no AfterMoveEffects) once the
+    # move got past BeforeMove; a status-check disruption or no target sets none of those bits.
+    worked = items_full & ~no_effect
+    no_effects = succeeded & ~charging & ~worked
+    # SYSCTL_LAST_OF_MULTI_TURN: every charge move's strike runs subscript_charge_move_cleanup.s:7
+    # (the second turn, a Power Herb, SolarBeam in sun), and subscript_bide_end.s.
+    last_of_multi = can_act & ((charge_move & ~charging) | bide_ends)
+    state = metronome_verify(
+        tables, state, side, move, no_effects, repeated, last_of_multi, head_on & ready
+    )
     # UpdateMoveBuffers (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508), on every path of a
     # battler that acts: the battle's movePrev is moveTemp (``move``: the invoker, Nature Power,
     # Struggle, not the called move) when the attack message showed (``can_act``, as the Choice
@@ -2332,6 +2386,20 @@ def _pursuit_hit(
     bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[pursuer, mon] > 0)
     state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
     state = sticky_barb_transfer(tables, state, pursuer, 1 - pursuer, move, info.damaged)
+    # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
+    # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
+    # The Jaboca Berry's TriggerHeldItemOnPivotMove case (:48-49) then finds no berry: OnHit
+    # removed it, or failed on the same tests.
+    state, _ = on_hit_berry(
+        tables,
+        state,
+        pursuer,
+        1 - pursuer,
+        info.update_hp,
+        False,
+        info.super_effective & info.effective,
+        info.update_hp,  # the script's normal path (:30-49): not missed, no substitute
+    )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
     return life_orb_recoil(tables, state, pursuer, info.update_hp)
 
@@ -3363,6 +3431,9 @@ def _future_sight(
         move = state.future_move[d].astype(_I32)
         roll = outcome.future_hit[d].astype(_I32)
         missed_now = ~((roll > 0) & (roll <= future_threshold(tables, state, d)))
+        # The hit's ordinary accuracy check clears the attacker slot's Micle flag (G-59).
+        acc_run = fires & (tables.move_accuracy[move] != 0)
+        state = _set_side(state, "micle", attacker, 0, acc_run)
         no_guard = (state.ability[attacker, state.active[attacker]] == AbilityId.NO_GUARD) | (
             state.ability[d, mon] == AbilityId.NO_GUARD
         )
@@ -3577,7 +3648,7 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
-    state = _keep_quick_claw(tables, state, draw)
+    state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
     return sample_war(jax.random.fold_in(key, 1), state)
 
 
@@ -3589,7 +3660,10 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
     two tie values (1/2 each) where the tie decides it: those states differ in the weather,
     which the player sees before acting, so Stage B makes the root a chance node over the
-    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34)."""
+    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34). A host
+    state (NumPy leaves, as ``prep`` and the CLI build it) is read as JAX arrays first: the
+    war's settling writes with ``.at`` (``hooks.reveal_ability``)."""
+    state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []

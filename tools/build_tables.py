@@ -374,10 +374,10 @@ def _item_type(item: dict, item_id: int) -> int:
 
 def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
     """``ids`` with every ``effect_map.DIVISOR_PARAM_MIN`` item whose hold param is below its
-    minimum made ``UNSUPPORTED``: a pinch berry's trigger divides maxHP by the param, halved by
-    Gluttony (battle_lib.c:4774-4778, :1289-1294), Sticky Barb divides maxHP and Shell Bell the
-    damage dealt by it (battle_lib.c:5330-5336, bcp.c:4736-4752), so such a param divides by
-    zero, which the decomp does not define (the ROM's division routine decides)."""
+    minimum made ``UNSUPPORTED``: Sticky Barb divides maxHP and Shell Bell the damage dealt by
+    the param through ``BattleSystem_Divide`` (battle_lib.c:5330-5336, bcp.c:4736-4752), so such
+    a param divides by zero there. The pinch berries' plain ``/`` is modelled for every param
+    (``order.pinch_limit``, ruling G-53)."""
     return [
         int(ItemId.UNSUPPORTED)
         if e in DIVISOR_PARAM_MIN and i["hold_param"] < DIVISOR_PARAM_MIN[ItemId(e)]

@@ -1,5 +1,6 @@
 """The candidate pool and its coverage report (plan 4a Task 10)."""
 
+import numpy as np
 import pytest
 
 from nuzline.ai.policy import player_ability_refusal, player_move_refusal
@@ -168,14 +169,22 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
 def test_pool_lists_holdable_bag_items(tables, names):
     from nuzline.engine.coverage import Support
 
-    # Iron Ball and Mental Herb are unsupported (Razor Claw and Scope Lens were, until E2 batch 4).
-    bag = [(names.item(n), 1) for n in ("Iron Ball", "Mental Herb", "Oran Berry", "Honey")]
+    # Two held items still unsupported, picked from the coverage table at run time.
+    refused = _refused_items(tables, names, 2)
+    bag = [(names.item(n), 1) for n in (*refused, "Oran Berry", "Honey")]
     report = check_pool(tables, names, [], (), bag=bag)
-    assert sorted(report.missing) == [
-        "bag: Iron Ball (held item UNSUPPORTED)",
-        "bag: Mental Herb (held item UNSUPPORTED)",
-    ]
+    assert sorted(report.missing) == sorted(f"bag: {n} (held item UNSUPPORTED)" for n in refused)
     assert not any("Honey" in line for line in report.missing)
     assert report.level == Support.NONE
     only_oran = check_pool(tables, names, [], (), bag=[(names.item("Oran Berry"), 3)])
     assert only_oran.level == Support.EXACT and not only_oran.missing
+
+
+def _refused_items(tables, names, k: int) -> list[str]:
+    """The names of the first ``k`` held items the coverage table still maps to
+    ``ItemId.UNSUPPORTED`` (picked at run time, not hard-coded)."""
+    from nuzline.engine.ids import ItemId
+
+    effects = np.asarray(tables.item_effect)
+    ids = [i for i in range(1, len(effects)) if effects[i] == ItemId.UNSUPPORTED]
+    return [names.item_names[i] for i in ids[:k]]

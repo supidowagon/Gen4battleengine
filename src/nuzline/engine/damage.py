@@ -336,14 +336,27 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     return jnp.where(attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, ability)
 
 
-def levitated(state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
+def iron_ball(tables: Tables, state: BattleState, side, slot=None) -> jnp.ndarray:
+    """``bool``: ``side``'s active battler (or party ``slot``) holds an Iron Ball
+    (``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` through ``Battler_HeldItemEffect``; Klutz and Embargo
+    are unsupported), ruling G-56."""
+    slot = state.active[side] if slot is None else slot
+    return tables.item_effect[state.item[side, slot]] == ItemId.IRON_BALL
+
+
+def levitated(tables: Tables, state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
     """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_LEVITATED`` (battle_lib.c:
     2600-2603) for a Ground-type move against a Levitate holder as the attacker sees it
     (``Battler_IgnorableAbility``, whose ``Battler_Ability`` reads an ingrained holder's
-    Levitate as none: ``ignorable``; the Iron Ball and Gravity exceptions are unsupported). The
-    flag is part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
+    Levitate as none: ``ignorable``) that holds no Iron Ball (:2602, ``iron_ball``, G-56). The
+    Gravity exception of ``CalcEffectiveness`` (:2701) is not ``ApplyTypeChart``'s. The flag is
+    part of ``MOVE_STATUS_IMMUNE``: no damage (``_finish``)."""
     seen = ignorable(state, atk_side, def_side)
-    return (seen == AbilityId.LEVITATE) & (_i32(move_type) == Type.GROUND)
+    return (
+        (seen == AbilityId.LEVITATE)
+        & (_i32(move_type) == Type.GROUND)
+        & ~iron_ball(tables, state, def_side)
+    )
 
 
 # MoveIsOnDamagingTurn (battle_lib.c:7588-7604): these decomp battle effects
@@ -411,7 +424,7 @@ def chart_walk(tables: Tables, state: BattleState, atk_side, def_side, move_type
     Ingrain)."""
     d_types = _i32(state.types[def_side, state.active[def_side]])
     t1, t2 = d_types[0], d_types[1]
-    seen = identified(state, atk_side, def_side)
+    seen = identified(tables, state, atk_side, def_side)
     move_type = _i32(move_type)
     e1 = chart_entry(tables, move_type, t1, seen)
     e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, seen), 10)
@@ -457,17 +470,18 @@ CHART_IDENTIFIED = 1  # ``chart_entry`` flag: skip the Ghost immunities (Foresig
 CHART_GROUNDED = 2  # ``chart_entry`` flag: skip the Flying immunity (Ingrain)
 
 
-def identified(state: BattleState, atk_side, def_side) -> jnp.ndarray:
+def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.ndarray:
     """``int32`` flags of ``BattleSystem_ApplyTypeChart``'s walk for ``def_side``'s battler
     (``chart_entry``): ``CHART_IDENTIFIED`` when it stops at the 0xFE separator, skipping the
     Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
     attacker with Scrappy (``Battler_Ability``); ``CHART_GROUNDED`` when ``BasicTypeMulApplies``
-    (:2534-2537) skips the rows of an immune Flying defender for an ingrained one (Iron Ball's
-    and Gravity's clauses, :2534, :2545-2549, are unsupported). Only ``ApplyTypeChart`` walks
-    the chart this way (:2626, :2636)."""
+    (:2534-2537) skips the rows of an immune Flying defender for an ingrained one or one holding
+    an Iron Ball (``iron_ball``, G-56; Gravity's clause, :2545-2549, is unsupported). Only
+    ``ApplyTypeChart`` walks the chart this way (:2626, :2636)."""
     scrappy = state.ability[atk_side, state.active[atk_side]] == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
-    return seen | (state.ingrain[def_side] != 0).astype(_I32) * CHART_GROUNDED
+    rooted = (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side)
+    return seen | rooted.astype(_I32) * CHART_GROUNDED
 
 
 def trace_copy(
@@ -516,9 +530,9 @@ def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.nda
     return jnp.where(state.stealth_rock[side] != 0, rock, 0)
 
 
-def grounded(state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
+def grounded(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``bool``: subscript_hazards_check.s:6-11 lets the entry spikes reach ``side``'s party
-    ``slot``: Gravity grounds it (:6; Iron Ball, :7, is an unsupported item), else its own
+    ``slot``: Gravity (:6) or its Iron Ball (:7, ``CheckItemHoldEffect``, G-56) grounds it, else its own
     Levitate (``CheckAbility``, battle_script.c:3159-3172, through ``Battler_Ability``, which
     reads an ingrained holder's as none, battle_lib.c:3100-3103) or a Flying type
     (``BATTLEMON_TYPE_1`` / ``_2``) keeps it off (Magnet Rise, :11, is an unsupported move).
@@ -528,24 +542,25 @@ def grounded(state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     ingrained = state.ingrain[side] != 0 if ingrained is None else jnp.asarray(ingrained)
     levitate = (state.ability[side, slot] == AbilityId.LEVITATE) & ~ingrained
     airborne = levitate | jnp.any(state.types[side, slot] == Type.FLYING)
-    return (state.gravity != 0) | ~airborne
+    return (state.gravity != 0) | iron_ball(tables, state, side, slot) | ~airborne
 
 
-def spikes_loss(state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
+def spikes_loss(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``int32``: what Spikes takes from ``side``'s party ``slot`` as it switches in
     (``BtlCmd_CheckSpikes``, battle_script.c:5434-5436): ``Divide(maxHP, (5 - layers) * 2)``, 1/8,
     1/6, 1/4, for a grounded newcomer (``grounded``); 0 without layers. Not capped."""
     layers = _i32(state.spikes[side])
     divisor = jnp.maximum((5 - layers) * 2, 1)
     loss = jnp.maximum(_i32(state.max_hp[side, slot]) // divisor, 1)
-    return jnp.where((layers > 0) & grounded(state, side, slot, ingrained), loss, 0)
+    return jnp.where((layers > 0) & grounded(tables, state, side, slot, ingrained), loss, 0)
 
 
 def hazards_loss(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
     """``int32``: Spikes and Stealth Rock together on ``side``'s newcomer ``slot``
     (subscript_hazards_check.s:31, :41), 0 for a Magic Guard holder (:5); not capped (the
     newcomer survives when this is below its HP: Stealth Rock needs HP left, :41)."""
-    loss = spikes_loss(state, side, slot, ingrained) + stealth_rock_loss(tables, state, side, slot)
+    loss = spikes_loss(tables, state, side, slot, ingrained)
+    loss = loss + stealth_rock_loss(tables, state, side, slot)
     return jnp.where(state.ability[side, slot] == AbilityId.MAGIC_GUARD, 0, loss)
 
 
@@ -769,9 +784,9 @@ def fixed_damage(
     level = _i32(state.level[atk_side, state.active[atk_side]])
     kind = move_type_of(tables, state, atk_side, move)
     d_types = state.types[def_side, state.active[def_side]]
-    seen = identified(state, atk_side, def_side)
+    seen = identified(tables, state, atk_side, def_side)
     immune = effectiveness(tables, kind, d_types, seen) == 0
-    immune = immune | levitated(state, atk_side, def_side, kind)
+    immune = immune | levitated(tables, state, atk_side, def_side, kind)
     immune = immune | (
         jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind, def_side)
     )
@@ -1119,6 +1134,17 @@ def life_orb(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
     item = _i32(s.item[atk_side, s.active[atk_side]])
     orb = tables.item_effect[item] == ItemId.LIFE_ORB
     return jnp.where(orb, damage * (100 + _i32(tables.item_param[item, 0])) // 100, damage)
+
+
+def metronome_boost(tables: Tables, s: BattleState, atk_side, damage) -> jnp.ndarray:
+    """``int32``: ``damage`` through the attacker's Metronome item, right after Life Orb in
+    ``BattleScript_CalcMoveDamage`` (battle_script.c:1350-1352): ``damage * (10 +
+    metronomeTurns) / 10`` for ``HOLD_EFFECT_BOOST_REPEATED`` (its param is not read), G-60."""
+    atk_side = _i32(atk_side)
+    item = _i32(s.item[atk_side, s.active[atk_side]])
+    held = tables.item_effect[item] == ItemId.METRONOME_ITEM
+    turns = _i32(s.metronome_turns[atk_side])
+    return jnp.where(held, damage * (10 + turns) // 10, damage)
 
 
 def pinch_ability(move_type, ability) -> jnp.ndarray:
@@ -1544,7 +1570,7 @@ def _finish(
     # are neutral (x10/10 leaves damage unchanged), so their order is irrelevant.
     t1, t2 = d_types[0], d_types[1]
     # :2611-2615 the 0xFE batch break: Foresight, or the attacker's Scrappy.
-    seen = identified(s, atk_side, def_side)
+    seen = identified(tables, s, atk_side, def_side)
     e1 = chart_entry(tables, move_type, t1, seen)
     e2 = jnp.where(t2 != t1, chart_entry(tables, move_type, t2, seen), 10)
     t2_first = tables.type_chart_order[move_type, t2] < tables.type_chart_order[move_type, t1]
@@ -1577,7 +1603,7 @@ def _finish(
     # :2600-2603 Levitate: MOVE_STATUS_LEVITATED instead of the chart walk, part of
     # MOVE_STATUS_IMMUNE: no damage (its DID_NOT_HIT ends the move, bcp.c:3325; the AI's
     # estimate zeroes an immune hit, trainer_ai.c:3106).
-    damage = jnp.where(levitated(s, atk_side, def_side, move_type), 0, damage)
+    damage = jnp.where(levitated(tables, s, atk_side, def_side, move_type), 0, damage)
     # :2649-2654 Wonder Guard: MOVE_STATUS_WONDER_GUARD, part of MOVE_STATUS_IMMUNE (ruling G-18).
     # A battle hit of a charge move is its strike (``charge_strike``); the AI's estimate
     # (``variance_last``) runs after BattleContext_Init, where it is not (G-27).
@@ -1610,6 +1636,7 @@ def damage_table(
         tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
+    damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, rolls,
@@ -1673,6 +1700,7 @@ def damage_for_roll(
         in_power=in_power,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
+    damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     rolled = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard,

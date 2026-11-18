@@ -91,7 +91,7 @@ from nuzline.engine.ids import (
     Weather,
     sleepless,
 )
-from nuzline.engine.order import dislikes_berry, pinch_divisor, player_second
+from nuzline.engine.order import dislikes_berry, pinch_divisor, pinch_limit, player_second
 from nuzline.engine.state import STAGE_MAX, BattleState
 
 _I32 = jnp.int32
@@ -500,6 +500,52 @@ def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
     return change_stage(state, side, stat, 1, on), on
 
 
+def max_pp(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
+    """``int32[MOVES]``: ``MoveTable_CalcMaxPP`` (move_table.c:25-34) of each move slot of
+    ``side``'s party ``mon``: ``pp + pp * 20 * ppUps / 100`` with ``ppUps`` capped at 3, kept in
+    a ``u8``."""
+    base = tables.move_pp[state.moves[side, mon]].astype(_I32)
+    ups = jnp.minimum(state.pp_ups[side, mon].astype(_I32), 3)
+    return (base + base * 20 * ups // 100) & 0xFF
+
+
+def _leppa(tables: Tables, state: BattleState, side, mon, power, cond, pluck=False):
+    """``(state, triggered)``: a Leppa Berry (``HOLD_EFFECT_PP_RESTORE``) where ``cond``.
+
+    Held (``BattleSystem_TriggerHeldItem`` / ``_OnStatus``, battle_lib.c:4636-4653,
+    :5026-5043): the first slot holding a move at 0 PP regains ``power`` through
+    ``BattleMon_AddVal`` (capped at ``max_pp``, :1009-1019); none, no trigger.
+
+    Pluck (``PLUCK_EFFECT_PP_RESTORE``, :5609-5633): the eater's first slot with the largest
+    ``maxPP - ppCur`` above 0 regains ``power``, capped. When every move is full, ``slot`` is
+    uninitialized: the ROM keeps it at ``[sp, #8]`` of PluckBerry's frame
+    (rom:overlay16@0x02258E3C, read at @0x02258E4A), last written by the
+    ``push {r4, r5}`` of ``Battler_Ability`` (@0x02255A54) called from
+    ``Battler_IgnorableAbility``'s frame below ``BtlCmd_TryPluck`` (@0x02247B5C, r4 = 60,
+    ``ABILITY_STICKY_HOLD``), so ``slot`` is 60 and ``AddVal(BATTLEMON_CUR_PP_1 + 60)`` is
+    ``BATTLEMON_TRANSFORMED_PERSONALITY``, the switch's default (``GF_ASSERT``, whose
+    ``ErrorHandling_AssertFail`` does nothing outside a link, error_handling.c:11-16): no PP
+    changes, but ``subscript_held_item_pp_restore.s`` still runs (G-58)."""
+    pp = state.pp[side, mon].astype(_I32)
+    moves = state.moves[side, mon]
+    cap = max_pp(tables, state, side, mon)
+    slots = jnp.arange(pp.shape[0])
+    if pluck:
+        diff = jnp.where(moves != 0, cap - pp, 0)
+        best = jnp.max(diff)
+        k = jnp.argmax(diff)  # the first of the largest (``diff > maxDiff``)
+        hit = best > 0
+        triggered = jnp.asarray(cond)
+    else:
+        empty = (moves != 0) & (pp == 0)
+        k = jnp.argmax(empty)
+        hit = jnp.any(empty)
+        triggered = jnp.asarray(cond) & hit
+    add = triggered & hit & (slots == k)
+    new = jnp.where(add, jnp.minimum(pp + power, cap), pp)
+    return state._replace(pp=state.pp.at[side, mon].set(new.astype(state.pp.dtype))), triggered
+
+
 def _hp_restore(effect, power, max_hp) -> jnp.ndarray:
     """HP an HP berry restores: Oran Berry and Berry Juice (``HOLD_EFFECT_HP_RESTORE``) its
     param, Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP *
@@ -540,7 +586,7 @@ def held_item_check(
     (``_hp_restore``) at ``curHP <= maxHP / 2`` (``hp * 2 <= max_hp``) heals, capped
     (``subscript_held_item_hp_restore.s``); a status berry or White Herb cures
     (``_restore``); a stat pinch berry at ``curHP <= maxHP / pinch_divisor`` raises its stat
-    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``); a flavor berry heals
+    (``_raise_stat``, battle_lib.c:4773-4836; ``order.pinch_divisor``, ``order.pinch_limit``); a flavor berry heals
     like the HP berries and then confuses a holder that dislikes its flavor (``berry_confuse``,
     after the item is removed: the heal subscript's ``PLUCK_CHECK`` runs first,
     subscript_held_item_hp_restore.s:13; Gluttony does not touch it, battle_lib.c:4698-4771).
@@ -562,9 +608,20 @@ def held_item_check(
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
     state = state._replace(hp=state.hp.at[side, mon].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, mon, effect, live)
-    pinch = live & (hp <= max_hp // pinch_divisor(tables, state, side, mon, item))
+    limit = pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
+    pinch = live & (hp <= limit)
     state, raised = _raise_stat(tables, state, side, item, pinch)
-    on = healed | cured | raised
+    leppa = live & (effect == ItemId.LEPPA_BERRY)
+    state, restored = _leppa(tables, state, side, mon, power, leppa)
+    # Micle Berry (HOLD_EFFECT_PINCH_ACC_UP, :4897-4906 / :5110-5119): at the pinch, sets
+    # moveEffectsData.micleBerry (subscript_held_item_temp_acc_up.s:10), G-59.
+    micled = pinch & (effect == ItemId.MICLE_BERRY)
+    state = state._replace(
+        micle=state.micle.at[side].set(
+            jnp.where(micled, 1, state.micle[side]).astype(state.micle.dtype)
+        )
+    )
+    on = healed | cured | raised | restored | micled
     spent = on & ~jnp.asarray(keep)
     state = forget_item(state, side, mon, spent)  # RemoveItem's CopyToParty
     state = state._replace(
@@ -606,6 +663,12 @@ PLUCKABLE = (
     ItemId.LUM_BERRY,
     ItemId.PINCH_BERRY,
     ItemId.FLAVOR_BERRY,  # PLUCK_EFFECT_HP_RESTORE_SPICY .. _SOUR (:5678-5751), G-4
+    ItemId.LEPPA_BERRY,  # PLUCK_EFFECT_PP_RESTORE (:5609-5633), G-58
+    ItemId.MICLE_BERRY,  # PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830), G-59
+    # PLUCK_EFFECT_NONE berries of Batch D (G-54, G-55): eaten with no effect.
+    ItemId.JABOCA_BERRY,
+    ItemId.ROWAP_BERRY,
+    ItemId.ENIGMA_BERRY,
     # The resist berries, Custap Berry and the berries with no hold effect (Razz, Nanab,
     # ...): PLUCK_EFFECT_NONE berries, eaten with no effect (Item_IsBerry, :5833).
     ItemId.RESIST_BERRY,
@@ -656,6 +719,17 @@ def pluck_berry(
     state = state._replace(hp=state.hp.at[side, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
     state, raised = _raise_stat(tables, state, side, item, on)
+    state, restored = _leppa(
+        tables, state, side, user, power, on & (effect == ItemId.LEPPA_BERRY), pluck=True
+    )
+    # PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830): the eater's micleBerry, whatever its HP (G-59).
+    micled = on & (effect == ItemId.MICLE_BERRY)
+    state = state._replace(
+        micle=state.micle.at[side].set(
+            jnp.where(micled, 1, state.micle[side]).astype(state.micle.dtype)
+        )
+    )
+    raised = raised | restored | micled
     # subscript_pluck.s:7 names the berry (BTLSCR_DEFENDER), then RemoveItem BTLSCR_DEFENDER
     # (:10) clears the record again (forget_item).
     state = forget_item(state, foe, target, on)

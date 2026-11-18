@@ -59,7 +59,6 @@ LISTED = [
     "nuzline.ai.commands.NATURAL_GIFT_BERRIES",
     "nuzline.ai.commands.RECYCLE_DESIRABLE_ITEMS",
     "nuzline.ai.commands.ASSURANCE_RECOIL_BERRIES",
-    "nuzline.ai.switching.ITEM_IRON_BALL",
     "nuzline.engine.ids.ITEM_FULL_RESTORE",
     "nuzline.engine.ids.QUICK_CLAW_PARAM",
     # engine: saves/check.py's special routes (final review M12)

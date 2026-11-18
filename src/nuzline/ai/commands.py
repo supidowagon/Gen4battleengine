@@ -1457,7 +1457,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[a, state.active[a]].astype(_I32)
     d_types = state.types[d, state.active[d]]
-    identified, grounded, roosting = defender_chart_flags(state, d)
+    identified, grounded, roosting = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -1587,9 +1587,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Iron Ball, Miracle Eye and
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Miracle Eye and
     Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
-    Foresight, Ingrain and roosting flags are read (``switching.defender_chart_flags``)."""
+    Foresight, Ingrain / Iron Ball and roosting flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1604,7 +1604,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting = defender_chart_flags(state, 0)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,

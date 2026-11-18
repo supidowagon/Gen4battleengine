@@ -215,6 +215,7 @@ from nuzline.engine.effects import (
     can_have_status,
     defender_side,
     ingrain_anchors,
+    metronome_update,
     protect_blocks,
     psycho_shift_status,
 )
@@ -1070,6 +1071,16 @@ INPUT_NEUTRAL_ITEMS = (
     # B10-12: it skips its holder's charge and is used up; no damage input reads it (the
     # charge's own clauses are the move's: MoveFlag.CHARGE above).
     ItemId.POWER_HERB,
+    # E1 Batch D. PP (G-58), the accuracy flag (G-59), Bind's count (G-57): no damage input.
+    ItemId.LEPPA_BERRY,
+    ItemId.MICLE_BERRY,
+    ItemId.GRIP_CLAW,
+    # Its count changes only at its holder's own BeforeMove, which the turn-start table already
+    # applies (outcome_laws, effects.metronome_update), G-60.
+    ItemId.METRONOME_ITEM,
+    # A fixed input of the type chart and Levitate (never consumed; Knock Off is its own clause)
+    # and a speed factor of the order fixed at the turn's start (G-56).
+    ItemId.IRON_BALL,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -1086,6 +1097,10 @@ INPUT_CLAUSE_ITEMS = (
     ItemId.PINCH_BERRY,  # item clause (a stage raised in a pinch); pluck clause
     # Its heal is the holder's HP (HP clause); its confusion is no damage input (G-4, G-5).
     ItemId.FLAVOR_BERRY,
+    # The attacker's HP (G-54) and the holder's (G-55): HP clause.
+    ItemId.JABOCA_BERRY,
+    ItemId.ROWAP_BERRY,
+    ItemId.ENIGMA_BERRY,
 )
 _STATUS_CURES = (
     ItemId.CHERI_BERRY,
@@ -2052,17 +2067,29 @@ def outcome_laws(
     # A crash move's classes key on the damage before Wonder Guard's zero: a guarded Jump Kick
     # deals nothing but crashes for half the chart's damage (step._use_move, ruling G-19), a
     # refinement of the hit's own classes (it deals 0 at every roll).
+    # The Metronome item's count is the one the side's own BeforeMove leaves (UpdateMetronomeCount,
+    # bcp.c:3221, before every hit of the move; effects.metronome_update), G-60.
+    counted = [metronome_update(tables, state, side, chosen[side], True) for side in (0, 1)]
     damage = jnp.stack(
         [
-            hit_damage_table(tables, state, side, moves[side], effect[side] != _E.CRASH)
+            hit_damage_table(
+                tables,
+                counted[side],
+                side,
+                moves[side],
+                effect[side] != _E.CRASH,
+            )
             for side in (0, 1)
         ]
     )
     deals = jnp.all(damage > 0, axis=(1, 2))
     # The per-hit tables (B13-5, B13-10): Triple Kick's hits 2-3 at 2x and 3x the step, Beat Up's
-    # members; every other hit reads hit 0's table.
+    # members; every other hit reads hit 0's table. The Metronome item's count is the one above
+    # for every hit (G-60); Beat Up runs no CalcDamage, so no Metronome boost (B13-10).
     kicks = [
-        jnp.stack([hit_damage_table(tables, state, side, moves[side], hit=k) for side in (0, 1)])
+        jnp.stack(
+            [hit_damage_table(tables, counted[side], side, moves[side], hit=k) for side in (0, 1)]
+        )
         for k in range(1, TRIPLE_KICK_HITS)
     ]
     rolls_ = jnp.arange(ROLLS, dtype=_I32)
