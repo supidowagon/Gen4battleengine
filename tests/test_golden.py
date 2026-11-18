@@ -1,4 +1,5 @@
-"""Golden emulator traces replayed through ``apply_turn`` (docs/tracing.md).
+"""Golden emulator traces replayed through ``apply_turn`` (docs/tracing.md), run as
+``replay_turn`` (one row of the converter's candidate program).
 
 Each bundle skips until it has been recorded under ``tests/golden/``: that needs the
 user's ROM and save. A turn is ``step`` followed by the replacement of a fainted active
@@ -20,7 +21,6 @@ engine (``reference_mismatches``), which must agree with ``apply_turn`` on every
 import itertools
 from pathlib import Path
 
-import jax
 import numpy as np
 import pytest
 
@@ -34,15 +34,17 @@ from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_replace,
 from tools.trace_to_state import (
     COMPARED_FIELDS,
     ReplayTurn,
-    apply_turn,
     convert,
     learn_array,
+    replay_turn,
     trace_to_states,
 )
 
 GOLDEN = Path(__file__).resolve().parent / "golden"
 
-_apply = jax.jit(apply_turn)
+# ``apply_turn`` in the converter's candidate program (``replay_turn``): the same states,
+# and a test that converts a trace and replays it compiles one ``step`` program, not two.
+_apply = replay_turn
 
 
 def replay_mismatches(tables, turns: list[ReplayTurn]) -> list[str]:

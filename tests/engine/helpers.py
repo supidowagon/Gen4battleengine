@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from collections.abc import Sequence
 from dataclasses import replace as _replace_spec
 from functools import lru_cache, partial
@@ -38,6 +39,15 @@ SAMPLE_PARTY = ROOT / "tests" / "fixtures" / "sample_party.toml"
 _GENDERS = {"male": 0, "female": 1, "none": 2}  # BattleState.gender
 # The fixture moveset every opponent gets (plan ruling): raw opponent action 0 is Tackle.
 OPP_FIXTURE_MOVES = ("Tackle", "Rock Throw", "Stealth Rock", "Leer")
+
+
+def drop_programs() -> None:
+    """Drop JAX's in-memory programs and traces (``jax.clear_caches``), between two whole-engine
+    programs of one test: a compiled loop or turn program keeps gigabytes resident, and the
+    next one's compile would add its own peak on top. The persistent compile cache keeps a
+    later recompile of a dropped program cheap."""
+    jax.clear_caches()
+    gc.collect()
 
 
 @lru_cache(maxsize=1)

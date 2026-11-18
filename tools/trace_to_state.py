@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import functools
 import itertools
 import json
 import sys
@@ -119,6 +120,18 @@ MAX_LEARNS = 8
 _NO_LEARNS = np.full(MAX_LEARNS, -1, np.int32)  # learn_array(()) on the host
 _CHUNK = 16  # candidates replayed per jitted call (one compile)
 _I8, _I32 = jnp.int8, jnp.int32
+
+
+@functools.cache
+def _outcome_dtypes() -> tuple:
+    """Each ``Outcome`` field's engine dtype (``empty_outcome``'s: int8, ``call`` int16)."""
+    return tuple(f.dtype for f in empty_outcome())
+
+
+def _engine_outcome(fields) -> Outcome:
+    """An ``Outcome`` of ``fields`` (in ``Outcome._fields`` order), each in its engine dtype:
+    every replay passes the same dtypes, so it runs the one ``_replay_chunk`` program."""
+    return Outcome(*(jnp.asarray(f, d) for f, d in zip(fields, _outcome_dtypes(), strict=True)))
 
 
 class TraceError(ValueError):
@@ -222,7 +235,8 @@ def initial_state(
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import TERRAIN_EFFECTS, start_weather
 
-    opp = build_trainer_party(trainer, IntermediateData(get_game(game).intermediate_dir))
+    g = get_game(game)
+    opp = build_trainer_party(trainer, IntermediateData(g.intermediate_dir, g.id))
     terrain = battle_terrain(trainer, terrain)
     if terrain < 0:
         effect = np.asarray(tables.move_ai_effect)
@@ -413,15 +427,64 @@ def _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, choices)
 
 
 @jax.jit
-def _replay(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
-    """``_apply_turn`` for each candidate from ``state`` with that candidate's start
-    ``qc_roll`` (``qcs``), all with the learn answers ``choices``."""
-
+def _replay_chunk(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
     def one(q, a, o):
         s = state._replace(qc_roll=q)
         return _apply_turn(tables, s, a, o, player_slot, opp_slot, choices)
 
     return jax.vmap(one)(qcs, actions, outcomes)
+
+
+def _replay(tables, state, qcs, actions, outcomes, player_slot, opp_slot, choices):
+    """``_apply_turn`` for each candidate from ``state`` with that candidate's start
+    ``qc_roll`` (``qcs``), all with the learn answers ``choices``. The candidates go in
+    ``_CHUNK``-row calls of ``_replay_chunk`` (fewer rows padded with copies of the first,
+    dropped: a row's result does not depend on the others), so a one-candidate replay (a
+    learn fit, a Quick Claw redraw, ``replay_turn``) with the same dtypes runs the chunk's
+    program rather than a one-row ``step`` program (which keeps over 2 GB resident).
+    ``ValueError`` with no candidate."""
+    n = len(qcs)
+    if n == 0:
+        raise ValueError("_replay: no candidate to replay")
+    rows = (qcs, actions, outcomes)
+    if n % _CHUNK:
+        pad = np.concatenate([np.arange(n), np.zeros(_CHUNK - n % _CHUNK, np.int64)])
+        rows = jax.tree.map(lambda x: jnp.asarray(x)[pad], rows)
+    if len(rows[0]) == _CHUNK:
+        out = _replay_chunk(tables, state, *rows, player_slot, opp_slot, choices)
+        return out if n == _CHUNK else jax.tree.map(lambda x: x[:n], out)
+    parts = [
+        _replay_chunk(
+            tables,
+            state,
+            *jax.tree.map(lambda x, i=i: x[i : i + _CHUNK], rows),
+            player_slot,
+            opp_slot,
+            choices,
+        )
+        for i in range(0, len(rows[0]), _CHUNK)
+    ]
+    return jax.tree.map(lambda *xs: jnp.concatenate(xs)[:n], *parts)
+
+
+def replay_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_choices=()):
+    """``apply_turn``'s state, computed as one ``_replay`` row: ``qc_roll`` as int8, the
+    actions and slots as int32 and each ``Outcome`` field in its engine dtype, the dtypes the
+    converter's candidate calls pass, so a test that converts a trace and replays it runs
+    the converter's program instead of compiling a ``jit(apply_turn)`` beside it."""
+    if not isinstance(learn_choices, jnp.ndarray):
+        learn_choices = learn_array(learn_choices)
+    out = _replay(
+        tables,
+        state,
+        jnp.asarray(state.qc_roll, _I8)[None],
+        jnp.asarray(actions, _I32)[None],
+        jax.tree.map(lambda x: x[None], _engine_outcome(outcome)),
+        jnp.asarray(player_slot, _I32),
+        jnp.asarray(opp_slot, _I32),
+        learn_choices,
+    )
+    return jax.tree.map(lambda x: x[0], out[0])
 
 
 def _holds_quick_claw(tables: Tables, state: BattleState, side: int, mon: int) -> bool:
@@ -833,11 +896,8 @@ class _Turn:
             padded = chunk + [chunk[0]] * (_CHUNK - len(chunk))
             qcs = jnp.asarray([qc for qc, _, _ in padded], _I8)
             actions = jnp.asarray([pair for _, pair, _ in padded], _I32)
-            outcomes = Outcome(
-                *(
-                    jnp.asarray(np.stack([o[name] for _, _, o in padded]), _I8)
-                    for name in Outcome._fields
-                )
+            outcomes = _engine_outcome(
+                np.stack([o[name] for _, _, o in padded]) for name in Outcome._fields
             )
             result, need, _ = _replay(
                 self.tables, self.state, qcs, actions, outcomes, *slots, _NO_LEARNS
@@ -997,7 +1057,7 @@ def _accept(tables: Tables, turns: list[Turn], fits: list[_Turn], inference: _Tu
         if turns:
             turns[-1] = _redraw_quick_claw(tables, turns[-1], fits[-1].after, fit.qc)
     inference.chosen = fit.index
-    outcome = Outcome(*(jnp.asarray(fit.outcome[name], _I8) for name in Outcome._fields))
+    outcome = _engine_outcome(fit.outcome[name] for name in Outcome._fields)
     turns.append(
         Turn(
             state,
@@ -1036,7 +1096,7 @@ def _fit_learns(tables: Tables, inference: _Turn, fit: _Fit) -> _Fit:
     after = inference.after
     qcs = jnp.asarray([fit.qc], _I8)
     actions = jnp.asarray([fit.actions], _I32)
-    outcome = Outcome(*(jnp.asarray(fit.outcome[n][None], _I8) for n in Outcome._fields))
+    outcome = _engine_outcome(fit.outcome[n][None] for n in Outcome._fields)
     slots = (jnp.asarray(fit.player_slot, _I32), jnp.asarray(int(after["active"][1]), _I32))
 
     def run(choices):

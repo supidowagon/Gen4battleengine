@@ -60,6 +60,16 @@ class GameDataError(ValueError):
     """A game's tables are missing or belong to another game."""
 
 
+def game_of_intermediate(path: Path) -> str:
+    """The id of the game whose ``intermediate_dir`` is ``path`` (``ValueError`` for any other
+    directory)."""
+    resolved = Path(path).resolve()
+    for game in GAMES.values():
+        if game.intermediate_dir.resolve() == resolved:
+            return game.id
+    raise ValueError(f"{path} is no game's intermediate directory; pass the game id")
+
+
 def get_game(name: str) -> Game:
     """The game with id or alias ``name`` (case-insensitive)."""
     key = name.strip().lower()

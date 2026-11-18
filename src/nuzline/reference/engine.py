@@ -45,8 +45,12 @@ from nuzline.engine.ids import (
     FLAIL_FALLOFF,
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
+    HP_RESTORED_ALL,
+    HP_RESTORED_HALF,
+    HP_RESTORED_QUARTER,
     INVOKER_MOVES,
     ITEM_ABILITY_IDS,
+    ITEM_FULL_RESTORE,
     ITEM_GRISEOUS_ORB,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
@@ -61,7 +65,6 @@ from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     MOVE_U_TURN,
     NATURE_DISLIKED_FLAVOR,
-    POTION_HP_RESTORED,
     POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
@@ -74,6 +77,7 @@ from nuzline.engine.ids import (
     SECRET_POWER_EFFECTS,
     SEMI_HIT_FLAGS,
     SEMI_SET_FLAGS,
+    SLEEPLESS_ABILITIES,
     SNORE_PARAM,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -103,13 +107,14 @@ from nuzline.engine.ids import (
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
+    ItemAiCategory,
     ItemId,
+    ItemParam,
     MoveFlag,
     MoveTarget,
     SemiKind,
     Stat,
     Status,
-    TrainerItemId,
     Type,
     Weather,
 )
@@ -397,7 +402,7 @@ def _restore_ability(tables, s: RefState, side: int) -> None:
     battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the
     party (lib.c:124)."""
     mon = _active(s, side)
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)
 
 
@@ -980,6 +985,9 @@ def _calc_move_damage(
             power = power * 125 // 100
         else:
             power = power * 75 // 100
+    # lib.c:6913-6918 Iron Fist: a punching move (sPunchingMoves, MoveFlag.PUNCH) x12/10 (G-49).
+    if a_ability == AbilityId.IRON_FIST and _t(tables, "move_flags", move) & MoveFlag.PUNCH:
+        power = power * 12 // 10
     # lib.c:6921 NO_CLOUD_NINE gates the weather here and at lib.c:7046.
     weather = s.weather
     if not field_conditions or _weather_suppressed(tables, s):
@@ -2068,11 +2076,12 @@ def _arm_unburden(s: RefState, side: int) -> None:
 
 def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
     """BtlCmd_ChangeStatStage (script.c:2884-2902): a drop by another battler meets the target's
-    Clear Body, Keen Eye on accuracy or Hyper Cutter on Attack (ignorable, ``seen``)."""
+    Clear Body or White Smoke (:2884-2885, G-46), Keen Eye on accuracy or Hyper Cutter on Attack
+    (ignorable, ``seen``)."""
     if delta >= 0:
         return False
     return (
-        seen == AbilityId.CLEAR_BODY
+        seen in (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE)
         or (seen == AbilityId.KEEN_EYE and stat == Stat.ACC)
         or (seen == AbilityId.HYPER_CUTTER and stat == Stat.ATK)
     )
@@ -2098,7 +2107,11 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
     _arm_unburden(s, side)
-    forbidden = {AbilityId.INSOMNIA: Status.SLEEP, AbilityId.LIMBER: Status.PARALYSIS}
+    forbidden = {
+        AbilityId.INSOMNIA: Status.SLEEP,
+        AbilityId.VITAL_SPIRIT: Status.SLEEP,  # :4405, G-47
+        AbilityId.LIMBER: Status.PARALYSIS,
+    }
     if forbidden.get(mon.ability) == mon.status and mon.hp:
         mon.status = Status.NONE
         mon.status_counter = 0
@@ -2107,9 +2120,19 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
 
 
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
-    """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Shed Skin (lib.c:3567-3590) cures a
-    status on ``RandNext() % 10 < 3`` (``outcome.shed_skin``) while the holder has HP."""
+    """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Speed Boost (lib.c:3555-3564, G-48) raises
+    the Speed of a holder with HP below +6 that did not enter this turn (``fakeOutTurnNumber !=
+    totalTurns + 1``) by 1, an ability side effect whose message is built in C (no reveal);
+    Shed Skin (lib.c:3567-3590) cures a status on ``RandNext() % 10 < 3``
+    (``outcome.shed_skin``) while the holder has HP."""
     mon = _active(s, side)
+    if (
+        mon.ability == AbilityId.SPEED_BOOST
+        and mon.hp
+        and s.sides[side].stages[Stat.SPE] < STAGE_MAX
+        and s.sides[side].fake_out_turn != s.turn + 1
+    ):
+        _change_stage(s, side, Stat.SPE, 1)
     if (
         mon.ability == AbilityId.SHED_SKIN
         and mon.status != Status.NONE
@@ -2163,10 +2186,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
                 s.ai_ability_known[s.sides[0].active] = 1  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
-    # B10-4; White Smoke is unsupported), the holder as the attacker (:8): the foe side's Mist
-    # blocks it (script.c:2876-2882, B12-23). Its "cuts" message is built in C
+    # B10-4), the holder as the attacker (:8): the foe side's Mist blocks it
+    # (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
-    blockers = (AbilityId.CLEAR_BODY, AbilityId.HYPER_CUTTER)  # script.c:2884-2902 (B9-6)
+    # script.c:2884-2902 (B9-6; White Smoke, G-46).
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
     if (
         mon.hp
         and mon.ability == AbilityId.INTIMIDATE
@@ -2405,9 +2429,9 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     inflicting side). ``direct``: a status move (``SIDE_EFFECT_TYPE_DIRECT``), not a
     secondary effect (``_INDIRECT``)."""
     mon = _active(s, target)
-    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
-    # the other checks and its "stayed awake" message tags the ability.
-    if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) == AbilityId.INSOMNIA:
+    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia or Vital Spirit (:23-24,
+    # G-47) stops the sleep before the other checks and its "stayed awake" message tags it.
+    if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) in SLEEPLESS_ABILITIES:
         if target == 0:
             s.ai_ability_known[s.sides[0].active] = 1
         return
@@ -4310,7 +4334,8 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (
             effect == EffectId.TOXIC_SPIKES and s.sides[1 - side].toxic_spikes >= TOXIC_SPIKES_MAX
         )
-        # A direct sleep on a living foe not asleep, without Insomnia as the user sees it, in an
+        # A direct sleep on a living foe not asleep, without Insomnia or Vital Spirit as the user
+        # sees it, in an
         # uproar: subscript_fall_asleep.s:43-45 -> :_292 sets MOVE_STATUS_NO_MORE_WORK (:_330).
         # Psycho Shift giving sleep (subscript_give_target_own_status.s:5-6), B12-17.
         shift_sleep = (
@@ -4327,7 +4352,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
                 or shift_sleep
             )
             and foe.hp > 0
-            and _ignorable(s, side, 1 - side) != AbilityId.INSOMNIA
+            and _ignorable(s, side, 1 - side) not in SLEEPLESS_ABILITIES
             and foe.status != Status.SLEEP
             and not s.sides[1 - side].substitute_hp  # :40 CheckSubstitute fails it first (B10-4)
             and _uproar_on(s)
@@ -4523,17 +4548,135 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _switch_in_effects(turn, s, side)
 
 
-def _use_item(tables, s: RefState, side: int, item: int) -> None:
-    """``BattleControllerPlayer_ItemCommand`` (bcp.c:1905) -> ``subscript_use_potion.s``:
-    ``BattleSystem_UseBagItem`` (battle_system.c:435) restores the Potion's 20 HP to a
-    living active Pokemon that is not at full HP; ``BATTLE_SUBSCRIPT_UPDATE_HP`` caps
-    it at max HP."""
+def _item_branch(tables, s: RefState, side: int, item: int) -> tuple[int, int, bool]:
+    """``TrainerAI_ShouldUseItem``'s else-if chain for bag item ``item`` (trainer_ai.c:
+    4099-4189): ``(ItemAiCategory, usedItemCondition, used)`` of the first branch whose param
+    test holds (``NONE``, 0, False when none does): Full Restore by id, an HP item, each
+    status cure, confusion, then a stat stage param or Guard Spec, which are used only from
+    the battler's first turn on (Guard Spec also without Mist on side 1)."""
+    p = [_t(tables, "item_party_param", item, k) for k in range(len(ItemParam))]
+    sd = s.sides[side]
     mon = _active(s, side)
-    if _t(tables, "trainer_item_effect", item) != TrainerItemId.POTION:
+    hp, max_hp = mon.hp, mon.max_hp
+    if item == ITEM_FULL_RESTORE:
+        return ItemAiCategory.FULL_RESTORE, 0, 0 < hp < max_hp // 4
+    if p[ItemParam.HP_RESTORE]:
+        restored = p[ItemParam.HP_RESTORED] & 0xFF
+        heals = bool(restored and hp and (hp < max_hp // 4 or max_hp - hp > restored))
+        return ItemAiCategory.RECOVER_HP, 0, heals
+    for param, statuses, bit in (
+        (ItemParam.HEAL_SLEEP, (Status.SLEEP,), 5),
+        (ItemParam.HEAL_POISON, (Status.POISON, Status.TOXIC), 4),
+        (ItemParam.HEAL_BURN, (Status.BURN,), 3),
+        (ItemParam.HEAL_FREEZE, (Status.FREEZE,), 2),
+        (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,), 1),
+    ):
+        if p[param]:
+            return ItemAiCategory.RECOVER_STATUS, bit, mon.status in statuses
+    if p[ItemParam.HEAL_CONFUSION]:
+        return ItemAiCategory.RECOVER_STATUS, 0, bool(sd.confusion)
+    settled = sd.fake_out_turn - s.turn >= 0
+    for param, stat in (
+        (ItemParam.ATK_STAGES, Stat.ATK),
+        (ItemParam.DEF_STAGES, Stat.DEF),
+        (ItemParam.SPATK_STAGES, Stat.SPA),
+        (ItemParam.SPDEF_STAGES, Stat.SPD),
+        (ItemParam.SPEED_STAGES, Stat.SPE),
+        (ItemParam.ACC_STAGES, Stat.ACC),
+    ):
+        if p[param]:
+            return ItemAiCategory.STAT_BOOSTER, int(stat), settled
+    if p[ItemParam.GUARD_SPEC]:
+        return ItemAiCategory.GUARD_SPEC, 0, settled and not s.sides[1].mist
+    return ItemAiCategory.NONE, 0, False
+
+
+def _use_item(tables, s: RefState, side: int, item: int) -> None:
+    """``BattleControllerPlayer_ItemCommand`` (bcp.c:1905-1944): the subscript of the item's
+    AI category around ``BattleSystem_UseBagItem`` (battle_system.c:435-758; JAX:
+    ``engine.bag.use_bag_item``, E1 ruling G-43). Full Restore's subscript first cures the
+    status and confusion; the potion subscript then adds ``ITEM_HP_RECOVERY`` (capped); the
+    status subscript then clears confusion (condition bit 0) or the status. Mist and Focus
+    Energy are refused by coverage, so not applied."""
+    if not item:
         return
-    if mon.hp == 0 or mon.hp == mon.max_hp:
-        return
-    _gain_hp(s, side, POTION_HP_RESTORED)
+    p = [_t(tables, "item_party_param", item, k) for k in range(len(ItemParam))]
+    # The branch picks the subscript; a fight's item action is one the AI used there.
+    category, cond, _ = _item_branch(tables, s, side, item)
+    sd = s.sides[side]
+    mon = _active(s, side)
+
+    def clear_status():
+        mon.status, mon.status_counter = Status.NONE, 0
+
+    if category == ItemAiCategory.FULL_RESTORE:
+        clear_status()
+        sd.confusion = 0
+    applied = False
+    for param, statuses in (
+        (ItemParam.HEAL_SLEEP, (Status.SLEEP,)),
+        (ItemParam.HEAL_POISON, (Status.POISON, Status.TOXIC)),
+        (ItemParam.HEAL_BURN, (Status.BURN,)),
+        (ItemParam.HEAL_FREEZE, (Status.FREEZE,)),
+        (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,)),
+    ):
+        if p[param] and mon.status in statuses:
+            clear_status()
+            applied = True
+    if p[ItemParam.HEAL_CONFUSION] and sd.confusion:
+        sd.confusion, applied = 0, True
+    if p[ItemParam.HEAL_ATTRACT] and sd.infatuated:
+        sd.infatuated, applied = 0, True
+    for param, stat in (
+        (ItemParam.ATK_STAGES, Stat.ATK),
+        (ItemParam.DEF_STAGES, Stat.DEF),
+        (ItemParam.SPATK_STAGES, Stat.SPA),
+        (ItemParam.SPDEF_STAGES, Stat.SPD),
+        (ItemParam.SPEED_STAGES, Stat.SPE),
+        (ItemParam.ACC_STAGES, Stat.ACC),
+    ):
+        if p[param] and sd.stages[stat] < STAGE_MAX:
+            sd.stages[stat] += 1
+            applied = True
+    slots = ([0] if p[ItemParam.PP_RESTORE] else []) + (
+        list(range(len(mon.moves))) if p[ItemParam.PP_RESTORE_ALL] else []
+    )
+    for k in slots:  # move slot 0 (NULL), then every slot (:628-661)
+        top = _t(tables, "move_pp", mon.moves[k])  # a trainer Pokemon has no PP Ups
+        if mon.pp[k] != top:
+            mon.pp[k] = min(mon.pp[k] + p[ItemParam.PP_RESTORED], top)
+            applied = True
+    recovery = 0
+    if p[ItemParam.HP_RESTORE]:
+        revive = p[ItemParam.REVIVE]
+        if (mon.hp == 0 if revive else mon.hp != 0) and mon.hp != mon.max_hp:
+            code = p[ItemParam.HP_RESTORED] & 0xFF
+            amount = {
+                HP_RESTORED_ALL: mon.max_hp,
+                HP_RESTORED_HALF: max(mon.max_hp // 2, 1),
+                HP_RESTORED_QUARTER: max(mon.max_hp * 25 // 100, 1),
+            }.get(code, code)
+            recovery = 0 if revive else amount
+            applied = True
+    if applied:
+        gain = 0
+        for give, amount, low, top in (
+            (ItemParam.GIVE_FRIENDSHIP_LOW, ItemParam.FRIENDSHIP_LOW, 0, 100),
+            (ItemParam.GIVE_FRIENDSHIP_MED, ItemParam.FRIENDSHIP_MED, 100, 200),
+            (ItemParam.GIVE_FRIENDSHIP_HIGH, ItemParam.FRIENDSHIP_HIGH, 200, 256),
+        ):
+            if p[give] and low <= mon.friendship < top:
+                gain = p[amount]
+        if gain > 0 and p[ItemParam.HOLD_FRIENDSHIP_UP]:
+            gain = gain * 150 // 100
+        mon.friendship = min(max(mon.friendship + gain, 0), 255)
+    if category in (ItemAiCategory.FULL_RESTORE, ItemAiCategory.RECOVER_HP) and recovery:
+        _gain_hp(s, side, recovery)
+    if category == ItemAiCategory.RECOVER_STATUS:
+        if cond == 0:
+            sd.confusion = 0
+        else:
+            clear_status()
 
 
 # --------------------------------------------------------------------------- end of turn
@@ -4547,9 +4690,9 @@ def _speed_order(tables, s: RefState, o) -> list[int]:
 
 
 def _decomp_ability(tables, mon: RefPokemon) -> int:
-    """``Battler_Ability``: the decomp ability id at the Pokemon's personal row and
-    ability slot."""
-    row = _t(tables, "species_form_row", mon.species, mon.form)
+    """``Battler_Ability``: the decomp ability id at the Pokemon's ability row
+    (``ability_form``) and ability slot."""
+    row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     traced = _t(tables, "species_abilities", row, mon.ability_slot) == AbilityId.TRACE
     if traced and mon.ability != AbilityId.TRACE:
         return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]  # a traced ability
@@ -4591,7 +4734,7 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     if sun:
         hp_calc = -_divide(mon.max_hp, 8)
     if s.weather == Weather.HAIL and not hidden:  # the hail branch
-        if ability == WEATHER_ABILITY_IDS["Ice Body"]:
+        if mon.ability == AbilityId.ICE_BODY:  # script.c:5601-5604 (G-45)
             if mon.hp < mon.max_hp:
                 hp_calc = _divide(mon.max_hp, 16)
         elif Type.ICE not in mon.types and mon.ability != AbilityId.SNOW_CLOAK:
@@ -4601,18 +4744,14 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         hp_calc = _divide(mon.max_hp, 16)  # script.c:5614-5618 (B9-6)
     if s.weather == Weather.RAIN and mon.ability == AbilityId.DRY_SKIN and mon.hp < mon.max_hp:
         hp_calc = _divide(mon.max_hp, 8)
-    rain = (
-        s.weather == Weather.RAIN
-        and mon.ability in (AbilityId.DRY_SKIN, AbilityId.RAIN_DISH)
-        and hp_calc > 0
-    )
     magic_guard = ability == WEATHER_ABILITY_IDS["Magic Guard"]
     if hp_calc > 0:  # subscript_weather_continues.s _076
         _gain_hp(s, side, hp_calc)
     elif hp_calc < 0 and not magic_guard:
         _lose_hp(turn, s, side, -hp_calc)
-    # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip).
-    if side == 0 and ((sun and not magic_guard) or rain):
+    # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip); :_076 every
+    # heal, Ice Body's included (G-45).
+    if side == 0 and ((sun and not magic_guard) or hp_calc > 0):
         s.ai_ability_known[s.sides[0].active] = 1
 
 

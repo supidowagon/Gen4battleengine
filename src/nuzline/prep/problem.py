@@ -133,7 +133,7 @@ def _ability_refusal(tables: Tables, spec: PokemonSpec) -> str | None:
     """Why the engine or the AI refuses ``spec``'s ability, or None."""
     from nuzline.ai.policy import player_ability_refusal
 
-    row = personal_row(tables, spec.species, spec.form)
+    row = personal_row(tables, spec.species, spec.ability_from)
     ability = AbilityId(int(np.asarray(tables.species_abilities)[row, spec.ability_slot]))
     if IMPLEMENTED_ABILITIES.get(ability, Support.NONE) == Support.NONE:
         return "ability not implemented"
@@ -214,7 +214,7 @@ def usable_pool(
         bare = dataclasses.replace(spec, moves=(), item=0)  # the ability alone
         if (r := _ability_refusal(tables, spec) or rom([bare])) is not None:
             ability = names.ability_names[
-                names.species_abilities(spec.species, spec.form)[spec.ability_slot]
+                names.species_abilities(spec.species, spec.ability_from)[spec.ability_slot]
             ]
             why.append(f"{ability} ({r})")
         if (low := halved_by_line(tables, names, spec, foe_halving)) is not None:

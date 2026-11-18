@@ -209,6 +209,7 @@ def _freeze_case(tables, names, holder):
         s = s._replace(
             species=s.species.at[1, 0].set(psyduck),
             form=s.form.at[1, 0].set(0),
+            ability_form=s.ability_form.at[1, 0].set(0),
             ability_slot=s.ability_slot.at[1, 0].set(slot),
             types=s.types.at[1, 0].set(s.types[0, 0]),
         )

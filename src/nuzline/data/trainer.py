@@ -6,14 +6,16 @@
 from the LCRNG seeded per party member, and from the PID the nature, gender and
 ability slot. Listed moves overwrite all four default move slots.
 
-A party member's ability, gender ratio, base friendship and default moves are read from
-its form's personal row (``form_rows.json``, ``forms.json``; plan K2a Task 6). The decomp
-differs, so coverage refuses such a Pokemon (``engine.coverage``): ``TrainerData_BuildParty`` sets
-``MON_DATA_FORM`` only after ``Pokemon_InitWith`` has picked the ability and default moves
-from the base species (``src/pokemon.c:473-489``) and computed the stats
-(``src/pokemon.c:402``), and nothing recomputes them (``src/trainer_data.c:216-218``).
-Vanilla's only data-form trainer Pokemon (Devon's Wormadam-Sandy and -Trash, trainer
-491) has the same ability, gender ratio, friendship and level-24 default moves either way.
+A party member in a data form (G-41) is built from its base species: ``TrainerData_BuildParty``
+sets ``MON_DATA_FORM`` (src/trainer_data.c:216-218, :246-248, :272-274, :303-305) only
+after ``Pokemon_InitWith`` has read the base species' friendship (src/pokemon.c:435-436),
+ability (:473-485), gender ratio (``Pokemon_GetGenderOf``, :2707-2715) and level-up
+learnset (``BoxPokemon_SetDefaultMoves`` reads ``MON_DATA_FORM``, still 0, :3819-3829), and
+computed the stats from the base row (:402). Setting the form only stores it (:1608-1609);
+its types follow the form (``MON_DATA_TYPE_1/2``, :1219-1225). Vanilla never recomputes the
+stats (``PokemonSpec.stats_form`` 0); Kaizo's patched builder calls ``Pokemon_CalcStats``
+after the form (docs/kaizo/rom_diff.md, "TrainerData_BuildParty, decoded", step 11), which
+loads the form's row (pokemon.c:595) and keeps a full-HP Pokemon at full HP (:633-641).
 
 Kaizo (spec 5.4, 7.1; plan K2b Task 14) patched ``TrainerData_BuildParty``: its trainer
 struct gained a per-Pokemon override byte (``TrainerMon.ability_override``) and its PIDs
@@ -33,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from nuzline.data.forms import form_row
+from nuzline.data.games import KAIZO, game_of_intermediate
 from nuzline.data.spec import PokemonSpec
 
 MAX_IV = 31  # MAX_IVS_SINGLE_STAT
@@ -306,9 +309,16 @@ def load_trainers(dir: Path) -> list[Trainer]:
 class IntermediateData:
     """Thin loader of the extractor's species, form and learnset JSON. ``species`` is indexed
     by species id, ``personal`` and ``learnsets`` by personal row (the species, then the
-    data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row."""
+    data forms of ``forms.json``), and ``form_rows`` maps ``[species][form]`` to the row.
+    ``game`` is the id of the game the intermediates belong to (by default the game whose
+    ``Game.intermediate_dir`` is ``dir``, ``games.game_of_intermediate``). ``patched_builder``
+    is True for Kaizo's: its trainers are built by the patched ``TrainerData_BuildParty``,
+    which recalculates stats after the form (docs/kaizo/rom_diff.md, "TrainerData_BuildParty,
+    decoded", step 11). It keys on the game id, not on a file in ``dir``."""
 
-    def __init__(self, dir: Path):
+    def __init__(self, dir: Path, game: str | None = None):
+        self.game = game_of_intermediate(dir) if game is None else game
+        self.patched_builder = self.game == KAIZO
         self.species: list[dict] = _read(dir, "species")
         self.personal: list[dict] = self.species + _read(dir, "forms")
         self.form_rows: list[list[int]] = _read(dir, "form_rows")
@@ -391,10 +401,9 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
         raise ValueError(f"trainer {trainer.id} slot {missing[0]}: no nature/gender/ability data")
     party = []
     for mon in trainer.party:
-        # The game keeps base-form stats, ability and moves (src/trainer_data.c:216-218);
-        # coverage refuses a trainer Pokemon in a data form, so this spec is never simulated.
-        row = inter.row(mon.species, mon.form)
-        species = inter.personal[row]
+        inter.row(mon.species, mon.form)  # ValueError: no such form
+        # Pokemon_InitWith reads the base species (module docstring, G-41).
+        species = inter.personal[inter.row(mon.species)]
         pid = trainer_pid(
             mon.difficulty,
             mon.level,
@@ -407,12 +416,14 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
         ability_slot = 1 if species["abilities"][1] != 0 and pid & 1 else 0
         if mon.ability_slot is not None:
             ability_slot = mon.ability_slot
+        if species["abilities"][1] == 0:  # ABILITY_NONE in slot 2: slot 1 (pokemon.c:476-484)
+            ability_slot = 0
         nature = pid % 25 if mon.nature is None else mon.nature  # Pokemon_GetNatureOf
         gender = gender_of(species["gender_ratio"], pid) if mon.gender is None else mon.gender
         friendship = species["base_friendship"] if mon.friendship is None else mon.friendship
         moves = mon.moves
         if moves is None:
-            moves = default_moves(inter.learnsets[row], mon.level)
+            moves = default_moves(inter.learnsets[inter.row(mon.species)], mon.level)
         ivs = difficulty_to_ivs(mon.difficulty)
         party.append(
             PokemonSpec(
@@ -427,6 +438,9 @@ def build_trainer_party(trainer: Trainer, inter: IntermediateData) -> list[Pokem
                 gender=gender,
                 friendship=friendship,
                 form=mon.form,
+                ability_form=0,
+                # By game: vanilla's builder keeps the base row's stats, Kaizo's the form's.
+                stats_form=None if inter.patched_builder else 0,
             )
         )
     return party

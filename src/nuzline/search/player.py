@@ -175,7 +175,11 @@ def _player_run(
         return s, key, turns + counted, fallback + jnp.where(by_fallback, counted, 0), refused
 
     init = (state, key, jnp.int32(0), jnp.int32(0), refused0)
-    s, _, turns, fallback, refused = jax.lax.while_loop(cond, body, init)
+    # At ``max_turns`` 0 ``cond`` is false at the start: no turn in the program (playout._run).
+    if max_turns > 0:
+        s, _, turns, fallback, refused = jax.lax.while_loop(cond, body, init)
+    else:
+        s, _, turns, fallback, refused = init
     won = (s.over != 0) & (s.winner == WINNER_PLAYER)
     hp_left, pp_left = _resources_left(tables, s)
     result = PlayerResult(

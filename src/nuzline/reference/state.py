@@ -31,6 +31,7 @@ class RefPokemon:
     types: list[int]
     ability: int
     ability_slot: int
+    ability_form: int  # the form whose personal row ability_slot indexes (engine.state)
     item: int
     item_consumed: int
     knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)

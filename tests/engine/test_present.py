@@ -78,7 +78,7 @@ def _state(tables, names, *, opp="Tackle", order="player", lucky=False):
         opp_species="Cranidos",
         opp_moves=[opp],
     )
-    # Delibird's own abilities (Vital Spirit, Hustle) are unsupported: none.
+    # Delibird's own abilities (Vital Spirit, Hustle; Hustle is unsupported) are set to none.
     s = _ability(_ability(s, 1, AbilityId.STURDY), 0, AbilityId.NONE)
     spe = int(s.stats[0, 0, _SPE])
     foe = {"player": spe - 1, "opp": spe + 1, "tie": spe}[order]

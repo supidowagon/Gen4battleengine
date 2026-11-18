@@ -2,7 +2,7 @@
 
 Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.md.
 
-## RESUME (updated 2026-11-17: batch 11 in main; batch 12 tip 0855faf with the check; batch 13 next)
+## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
 
 - **Batch 13 (branch e2-batch13 from 9e08c7e, worktree _scratch/e2/b13wt; brief
   _scratch/e2/b13/BRIEF.md).** Secondary-effect hits done (agent A, B13-1..4): Twineedle
@@ -56,6 +56,36 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
   the other families of the batch.
 
+- **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
+  manager with all results; waiting for its merge. Running background work that will notify:
+  (1) batch 13 builder (Opus) in worktree _scratch/e2/b13wt, branch e2-batch13 from 9e08c7e; it
+  builds, tests, gets one review, fixes, reports once. Batch 13 must end up ON TOP of 2c8efd6
+  (merge 2c8efd6 into e2-batch13, rebuild tables, dup scan, unsupported tests, targeted set).
+  ci-day: streams have no pod tool; send the MANAGER one line (commit, pytest node ids or -k/-m,
+  memory guard) and it runs the job and returns result/time/peak. Only committed code runs there.
+  (2) raw_rolls phases seeds 2 and 5 (not a merge condition): a Sonnet agent runs them locally. Run them on the PC when it is quiet
+  (`_scratch/e2/rawrolls_phase.py 2 6 256`, then `5 6 256`; >=12 GB free at start, side lock),
+  via a Sonnet agent; send the manager one line with the result.
+  When batch 13 is at its tip: send the manager ONE message with the tip + results AND the
+  doubles plan as batches (deliverable, E1-owned files touched, rough size; 15-20 mechanic groups
+  per batch). Usage rules (main CLAUDE.md 7ebf2ac): clear at ~100k tokens; Sonnet for every
+  mechanical job (test runs, rebuilds, ledger/backlog edits); targeted merge runs go to ci-day via
+  a Sonnet agent that blocks for the result; never end a turn on a progress note.
+
+- **Main c4f0a60 merged (2026-11-17, 18a3f5e; E1 memory work, Batch A, Batch C).** Conflicts:
+  Mist (B12-23) and White Smoke (G-46) both kept in `_foe_stage`, `intimidate` and the reference
+  (battle_script.c:2876-2884); playout keeps E2's replacement-static `_play_jit` and main's
+  two-program `_turn_jit`. Items re-extracted (manifest 31), tables + backlog rebuilt (17 steps, 0
+  errors, 197 -> 168 groups); no duplicates; fold_in indices distinct. B12-31's slow check now
+  steps both ends of every class (Haze moved to Rock Throw at accuracy +1: the turn-start law was
+  one class there). Green: guards 68, test_cli 102 (+1 skip), differential, batch12 35, accuracy
+  classes 24, E1 Batch A+C 21, unsupported 54, B12-31 both tests, diff.py ok 300 37,
+  test_e1_roark_close 23 (clowns 252/254 now pass). Manager's diff seed on c4f0a60 (Metronome
+  last_move 118 vs 0) is B12-30: passes here; fixed test test_invokers
+  test_metronome_with_no_living_foe_still_succeeds. OWED: test_cli default_budget (8.03 GB, killed
+  at the cap); test_accuracy_classes_equal_raw_rolls (slow) whole killed twice by the machine's
+  free-RAM floor, so run in phases of 6 examples (_scratch/e2/rawrolls_phase.py SEED 6 256):
+  seeds 1, 3, 4 ok (6.7 GB, ~10 min each); seeds 2, 5 killed three times by the floor.
 - **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
   Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
   test_accuracy_classes_equal_raw_rolls (slow) killed at 8 GB alone; the rest of the file and
@@ -239,6 +269,12 @@ the `step` turn skeleton and `enumerate.py`'s branch structure stay as they are.
 ## Owed
 
 Rules left out because another mechanic is missing; each closes with the mechanic named.
+
+- **Test owed (sampler flag):** `leaves._run` with `replacement=True` has no test since 0855faf
+  replaced the leaves test with an engine test of the replacement flag.
+- **For E1 (bag, after the c4f0a60 merge):** `bag.refused_bag_params` still refuses Guard Spec
+  (Mist) and Dire Hit (Focus Energy) as "another stream's" mechanics; E2 models both (B12-23,
+  batch 12), so the refusal can be lifted on E1's side.
 
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
@@ -1786,14 +1822,16 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B13-3 Kaizo be_seq 141 (Hurricane, move 140: 120 power, 70 accuracy, 30 %) is effect 76's
   indirect TO_DEFENDER confusion plus SYSCTL_HIT_DURING_FLY (rom_diff.toml be_seq 141;
   effect_script_0076.s:5, as Thunder's _0152.s:6 for the Fly bit): KAIZO_EFFECTS 141 =
-  SECONDARY_CONFUSE, KAIZO_FLAG_EFFECTS 141 = MoveFlag.HIT_AIR | THUNDER (no DOUBLE_SEMI: no
+  SECONDARY_CONFUSE, KAIZO_FLAG_EFFECTS 141 = MoveFlag.HIT_AIR (no DOUBLE_SEMI: no
   BTLVAR_POWER_MULTI). build_tables' _move_flags gives a modelled Kaizo script its
   KAIZO_FLAG_EFFECTS bits in place of the vanilla effect-keyed ones. Member marked modelled.
 - B13-4 Kaizo's overlay16 adds effect 141 beside BATTLE_EFFECT_THUNDER in CheckMoveHitAccuracy's
   sun branch (hitRate = 50, bcp.c:2915-2917; rom 0x0224F068) and CheckMoveHitOverrides' rain
   branch (MOVE_STATUS_MISSED cleared, :3024-3027; rom 0x0224F386), both inside NO_CLOUD_NINE:
-  MoveFlag.THUNDER, read by outcome._rate and the reference (B9-1). Both code entries marked
-  modelled. Test: an Air Lock foe keeps 70 and the miss (Kaizo has no Cloud Nine species).
+  MoveFlag.THUNDER, read by outcome._rate and the reference (B9-1); since the 932af5a merge the
+  bit comes from E1's KAIZO_THUNDER_EFFECTS (G-50, the same rule), not KAIZO_FLAG_EFFECTS. Both
+  code entries marked modelled. Test: an Air Lock foe keeps 70 and the miss (Kaizo has no Cloud
+  Nine species).
 - B13-5 Triple Kick (vanilla 104, BATTLE_EFFECT_HIT_THREE_TIMES) is EffectId.TRIPLE_KICK (step,
   0, 0): ``SetMultiHit 3, SYSCTL_TRIPLE_KICK`` (effect_script_0104.s:5), three hits; the script
   reloads per hit (bcp.c:3789) and adds its step to BTLVAR_MOVE_POWER (:7), which

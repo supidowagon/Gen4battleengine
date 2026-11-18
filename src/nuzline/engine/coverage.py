@@ -48,7 +48,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Ruling R2), so a Kaizo trainer needs only every set flag implemented. The Kaizo layout's ability
   guess is one coin per guessing read, as the decomp draws it (E1 Ruling R1,
   docs/ai/kaizo_roark.md 8.4), so it needs no per-trainer check;
-* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3). Every
+* weather: ``Weather.NONE``, ``SANDSTORM``, ``SUN``, ``RAIN`` and ``HAIL`` (E2 batch 3), and deep
+  fog (``FOG``, E1 Batch C, ruling G-44: the accuracy x6/10 under ``NO_CLOUD_NINE``, bcp.c:
+  2934-2936, ``outcome._rate``; SolarBeam's ``FIELD_CONDITION_SOLAR_DOWN``; no countdown and no
+  turn-end HP, bcp.c:1213-1225; replaced by any weather move or ability). Every
   effect of each on the implemented set is modelled, all gated on Cloud Nine / Air Lock
   (``damage.weather_suppressed``): the damage modifiers (rain and sun on Fire / Water, the
   sandstorm Rock-type SpD boost, Solar Power), the accuracy abilities (Sand Veil, Snow Cloak),
@@ -60,8 +63,7 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   E2 batch 9, Kaizo's Hurricane and Weather Ball since batch 13) are modelled too; the rest
   belong to unsupported moves (SolarBeam, Moonlight) or abilities (Hydration, Forecast; Leaf Guard is modelled since
   the E1 Gardenia batch, G-14), so they are
-  refused with their holder. Deep fog
-  stays refused (``Weather.FOG``);
+  refused with their holder;
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
   (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
   is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).
@@ -78,14 +80,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
   (``battle_lib.c:4536``, ``battle_controller_player.c:3500``); the engine models neither.
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
-  (``Tables.species_form_row``), like Giratina-Origin holding the Orb;
-* trainer Pokemon in a data form (controller ruling, K2a Task 6): the opponent's party
-  member whose form has its own personal row (``species_form_row[species, form] !=
-  species``) is refused. ``TrainerData_BuildParty`` builds it from the base form and sets
-  the form afterwards (``src/trainer_data.c:216-218``), so it keeps the base form's stats,
-  ability and moves while its types follow the form (``src/pokemon.c:1224``); Kaizo patched
-  that function, so the exact rule is per game (K2b). Cosmetic and battle-only forms and
-  Arceus, which have no data row, pass;
+  (``Tables.species_form_row``), like Giratina-Origin holding the Orb. A trainer Pokemon in
+  a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
+  the base species' ability and default moves, the form's types, and the form's stats in
+  Kaizo or the base's in vanilla;
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
@@ -99,8 +97,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   (``Names.unclassified_rom_changes``) and ``not_reached`` ROM changes whose resolved
   condition (``Names.rom_change_conditions``, ``rom_change_refusals``) holds for the fight:
   a battle format or area, a move, ability or held item on either side, a trainer or a
-  trainer bag. A condition that does not hold refuses nothing. Area weather and fog stay
-  refused through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
+  trainer bag. A condition that does not hold refuses nothing. Area weather and fog are read
+  through ``start_weather`` like vanilla's; ``Trainer.optional`` refuses nothing;
 * battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
   (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
@@ -130,7 +128,7 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import POLICY
-from nuzline.data.games import KAIZO, VANILLA
+from nuzline.data.games import KAIZO
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
 from nuzline.data.trainer import (
@@ -140,6 +138,7 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
+from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
     METRONOME_DRAW,
@@ -151,7 +150,6 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     Stat,
-    TrainerItemId,
     Weather,
 )
 from nuzline.engine.levelup import (
@@ -194,9 +192,6 @@ IMPLEMENTED_ABILITIES: dict[AbilityId, Support] = {
 IMPLEMENTED_ITEMS: dict[ItemId, Support] = {
     i: Support.EXACT for i in ItemId if i != ItemId.UNSUPPORTED
 }
-IMPLEMENTED_TRAINER_ITEMS: dict[TrainerItemId, Support] = {
-    i: Support.EXACT for i in TrainerItemId if i != TrainerItemId.UNSUPPORTED
-}
 # generated/ai_flags.txt, in bit order (the FlagTable of src/battle/trainer_ai/script.s).
 AI_FLAG_NAMES = (
     "BASIC",
@@ -236,7 +231,7 @@ IMPLEMENTED_WEATHER: dict[Weather, Support] = {
     Weather.RAIN: Support.EXACT,
     Weather.SANDSTORM: Support.EXACT,
     Weather.HAIL: Support.EXACT,
-    Weather.FOG: Support.NONE,
+    Weather.FOG: Support.EXACT,  # E1 Batch C, G-44
 }
 # Trainer.format (trainers.json: TrainerHeader.battleType, then the field scripts).
 IMPLEMENTED_FORMATS: dict[str, Support] = {
@@ -621,7 +616,7 @@ def _party_abilities(tables: Tables, party: Sequence[PokemonSpec]) -> set[int]:
     """The ``AbilityId`` of every Pokemon of ``party`` (its personal row and ability slot)."""
     abilities = np.asarray(tables.species_abilities)
     return {
-        int(abilities[personal_row(tables, m.species, m.form), m.ability_slot])
+        int(abilities[personal_row(tables, m.species, m.ability_from), m.ability_slot])
         for m in party
         if m.species
     }
@@ -640,7 +635,7 @@ def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> lis
     ``fight`` are the fight's tables (``ai.layout.fight_tables``)."""
     from nuzline.ai.policy import ai_refusals  # ai imports the engine
 
-    species, form = np.asarray(state.species), np.asarray(state.form)
+    species, form = np.asarray(state.species), np.asarray(state.ability_form)
     row = np.asarray(fight.species_form_row)[species, form]
     own = np.asarray(fight.species_abilities)[row, np.asarray(state.ability_slot)]
     holders = list(zip(*np.nonzero((species > 0) & (own == AbilityId.TRACE)), strict=True))
@@ -723,7 +718,6 @@ def _check_party(
     names: Names,
     owner: str,
     party: Sequence[PokemonSpec],
-    trainer_side: bool = False,
 ) -> None:
     abilities = np.asarray(tables.species_abilities)
     item_effect = np.asarray(tables.item_effect)
@@ -734,9 +728,10 @@ def _check_party(
             if move:
                 support, name = move_effect_line(tables, names, move, row, mon.moves)
                 c.add(support, f"{where}: {name}", "move effect")
-        ability = AbilityId(int(abilities[row, mon.ability_slot]))
+        ability_row = personal_row(tables, mon.species, mon.ability_from)
+        ability = AbilityId(int(abilities[ability_row, mon.ability_slot]))
         ability_name = names.ability_names[
-            names.species_abilities(mon.species, mon.form)[mon.ability_slot]
+            names.species_abilities(mon.species, mon.ability_from)[mon.ability_slot]
         ]
         c.add(
             IMPLEMENTED_ABILITIES.get(ability, Support.NONE), f"{where}: {ability_name}", "ability"
@@ -745,20 +740,6 @@ def _check_party(
         item_name = names.item_names[mon.item] if mon.item else "no item"
         c.add(IMPLEMENTED_ITEMS.get(item, Support.NONE), f"{where}: {item_name}", "held item")
         _check_form(c, where, mon)
-        if trainer_side and row != mon.species:
-            c.add(Support.NONE, f"{where}: {_data_form_reason(names)}", "form")
-
-
-def _data_form_reason(names: Names) -> str:
-    """Why a trainer Pokemon in a data form is refused, true for ``names``' game: vanilla's
-    TrainerData_BuildParty builds it from the base form (src/trainer_data.c:216-218);
-    Kaizo's patched builder computes its stats after the form (docs/kaizo/rom_diff.md)."""
-    if names.game == VANILLA:
-        return "trainer Pokemon in a data form keeps its base form's stats, ability and moves"
-    return (
-        "trainer Pokemon in a data form: this game's party builder applies the form before "
-        "computing its stats, which the engine's trainer party build does not model"
-    )
 
 
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
@@ -788,7 +769,7 @@ def rom_change_refusals(
     holds when any of: the trainer's format is listed (an unknown format, ``"unknown"`` in
     the data or ``None``, matches any condition that lists one); the trainer's area condition has a listed area
     (``trick_room``/``gravity``, the ``tools/rom/diff.py`` area names); a move, a decomp
-    ability (``species_abilities_decomp`` at the spec's personal row and ability slot) or a
+    ability (``species_abilities_decomp`` at the spec's ability row and ability slot) or a
     held item is listed; the trainer is listed; or the condition covers trainer items and the
     bag holds one. ``spec_terms_only`` keeps just the moves, abilities and items: the pool
     asks it per candidate, the fight-level terms being the fight's own."""
@@ -802,7 +783,7 @@ def rom_change_refusals(
     items = {int(s.item) for s in specs}
     decomp = np.asarray(tables.species_abilities_decomp)
     abilities = {
-        int(decomp[personal_row(tables, s.species, s.form)][s.ability_slot]) for s in specs
+        int(decomp[personal_row(tables, s.species, s.ability_from)][s.ability_slot]) for s in specs
     }
     bag = any(trainer.items)
     unknown_format = trainer.format in (None, "unknown")
@@ -907,11 +888,17 @@ def _check_trainer(
     moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
-    effect = np.asarray(tables.trainer_item_effect)
+    # A bag item acts by its party params (engine.bag, E1 ruling G-43); the ones that set a
+    # mechanic the engine does not build are refused by name (bag.refused_bag_params).
+    params = np.asarray(tables.item_party_param)
     bag = [item for item in trainer.items if item]
-    for item in bag:
-        support = IMPLEMENTED_TRAINER_ITEMS.get(TrainerItemId(int(effect[item])), Support.NONE)
-        c.add(support, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
+    for item in sorted(set(bag)):
+        where = f"{display_name(trainer)}: {names.item_names[item]}"
+        reasons = refused_bag_params(params[item], item)
+        if not reasons:
+            c.add(Support.EXACT, where, "trainer item")
+        for reason in reasons:
+            c.add(Support.NONE, f"{where} {reason}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
         c.add(
@@ -1005,7 +992,7 @@ def check_opponent(
     ``ai_refusals``: those depend on the player's party, so a caller that needs them runs
     them per setup."""
     c = _Collector()
-    _check_party(c, tables, names, display_name(trainer), opp, trainer_side=True)
+    _check_party(c, tables, names, display_name(trainer), opp)
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]

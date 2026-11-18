@@ -14,6 +14,7 @@ from tools.effect_map import (
     DECOMP_EFFECT_TO_ID,
     KAIZO_EFFECTS,
     KAIZO_FLAG_EFFECTS,
+    KAIZO_THUNDER_EFFECTS,
     SCRIPT_FLAG_EFFECTS,
     SEMI_HIT_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
@@ -264,10 +265,11 @@ def test_triple_kick_and_beat_up_scripts():
 
 def test_kaizo_hurricane_flags_follow_its_notes():
     """B13-3, B13-4: Kaizo effect 141 is effect 76's script (SECONDARY_CONFUSE, as vanilla 76) plus
-    SYSCTL_HIT_DURING_FLY, with the two Thunder compares (MoveFlag.THUNDER); the vanilla 141 is
-    the unused plain script (UNSUPPORTED in vanilla)."""
+    SYSCTL_HIT_DURING_FLY; its two Thunder compares (MoveFlag.THUNDER) are E1's
+    KAIZO_THUNDER_EFFECTS (G-50); the vanilla 141 is the unused plain script (UNSUPPORTED in
+    vanilla)."""
     assert KAIZO_EFFECTS[141][1:] == DECOMP_EFFECT_TO_ID[76]
-    assert KAIZO_FLAG_EFFECTS[141] == MoveFlag.THUNDER | MoveFlag.HIT_AIR
+    assert KAIZO_FLAG_EFFECTS[141] == MoveFlag.HIT_AIR and 141 in KAIZO_THUNDER_EFFECTS
     assert set(KAIZO_FLAG_EFFECTS) <= set(KAIZO_EFFECTS)
     assert 141 not in DECOMP_EFFECT_TO_ID and "SYSCTL_HIT_DURING_FLY" in _script(152)
 

@@ -292,10 +292,11 @@ _ABILITY_DECOMP = jnp.array([ABILITY_DECOMP_IDS.get(a, -1) for a in AbilityId], 
 
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
-    ``tables.species_abilities_decomp`` at the Pokemon's personal row and ability slot; for
+    ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
+    ability slot; for
     a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
     copied ability's (``ids.ABILITY_DECOMP_IDS``)."""
-    row = _i32(tables.species_form_row[_i32(state.species), _i32(state.form)])
+    row = _i32(tables.species_form_row[_i32(state.species), _i32(state.ability_form)])
     slot = _i32(state.ability_slot)
     own = _i32(tables.species_abilities_decomp[row, slot])
     trace = ABILITY_DECOMP_IDS[AbilityId.TRACE]
@@ -1331,6 +1332,10 @@ def _pre_random(
     gendered = (a_ability == AbilityId.RIVALRY) & (a_gender != 2) & (d_gender != 2)
     power = jnp.where(gendered & (a_gender == d_gender), power * 125 // 100, power)
     power = jnp.where(gendered & (a_gender != d_gender), power * 75 // 100, power)
+    # :6913-6918 Iron Fist (attackerParams.ability): a move of sPunchingMoves (MoveFlag.PUNCH,
+    # the ROM's list) x12/10, after Rivalry (ruling G-49). The self-hit's move is Struggle.
+    punch = (tables.move_flags[move] & MoveFlag.PUNCH) != 0
+    power = jnp.where((a_ability == AbilityId.IRON_FIST) & punch, power * 12 // 10, power)
 
     # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
     # passes no field conditions).

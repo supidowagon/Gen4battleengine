@@ -304,6 +304,7 @@ from nuzline.engine.ids import (
     Status,
     Type,
     Weather,
+    sleepless,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome, crit_lands
@@ -401,7 +402,9 @@ def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
     seen = h.target_ignorable
     keen_eye = (seen == AbilityId.KEEN_EYE) & (stat == Stat.ACC)
     hyper_cutter = (seen == AbilityId.HYPER_CUTTER) & (stat == Stat.ATK)
-    blocked = (delta < 0) & ((seen == AbilityId.CLEAR_BODY) | keen_eye | hyper_cutter)
+    # White Smoke is Clear Body's twin (battle_script.c:2884-2885, ruling G-46).
+    clear_body = (seen == AbilityId.CLEAR_BODY) | (seen == AbilityId.WHITE_SMOKE)
+    blocked = (delta < 0) & (clear_body | keen_eye | hyper_cutter)
     blocked = blocked | mist_blocks_drop(state, h.target_side, delta)
     # Then the stage already at -6, then (indirect) Shield Dust, then the substitute's bit
     # (VOLATILE_CONDITION_SUBSTITUTE only, :2921-2923): a direct drop fails, an indirect one is
@@ -481,9 +484,10 @@ def _inflict(
     move's secondary effect (``_INDIRECT``)."""
     status = h.param[0]
     cond = cond & _alive(state, h.target_side, h.target)
-    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia stops the sleep before
-    # any other check, and its "stayed awake" message tags the ability.
-    blocked = cond & (status == Status.SLEEP) & (h.target_ignorable == AbilityId.INSOMNIA)
+    # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia or Vital Spirit (:23-24,
+    # G-47) stops the sleep before any other check, and its "stayed awake" message tags the
+    # ability.
+    blocked = cond & (status == Status.SLEEP) & sleepless(h.target_ignorable)
     # subscript_paralyze.s:5/_170: an ignorable Limber stops a paralysis before any other
     # check; "prevents paralysis" (TAG_NICKNAME_ABILITY) is printed for a direct effect only.
     limber = cond & (status == Status.PARALYSIS) & (h.target_ignorable == AbilityId.LIMBER)
@@ -496,8 +500,8 @@ def _inflict(
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
-    # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Limber;
-    # Immunity, Water Veil and Vital Spirit are unsupported): ``CheckIgnoreWeather`` then
+    # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Vital
+    # Spirit, Limber; Immunity and Water Veil are unsupported): ``CheckIgnoreWeather`` then
     # FIELD_CONDITION_SUNNY then an ignorable ABILITY_LEAF_GUARD (subscript_fall_asleep.s:23-25,
     # subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
     # subscript_paralyze.s:6-8; subscript_freeze.s has no such test). A direct effect prints the

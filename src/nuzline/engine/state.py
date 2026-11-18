@@ -13,8 +13,11 @@ Encodings:
   holds an ``ids.AbilityId`` (from ``tables.species_abilities``) and ``ability_slot``
   the species slot (0/1) it came from, so ``tables.species_abilities_decomp[row,
   ability_slot]`` is the decomp ability id, ``row = tables.species_form_row[species,
-  form]`` the personal row of the Pokemon's form (base stats, types and abilities are
-  read by row); ``status`` an ``ids.Status``.
+  ability_form]``; ``ability_form`` is the form whose personal row holds the ability
+  (``PokemonSpec.ability_from``: 0 for a trainer Pokemon, whose ability comes from the base
+  species, pokemon.c:473-485; ``form`` for the player's). ``species_form_row[species, form]``
+  is the personal row of the Pokemon's form (types are read by it); ``status`` an
+  ``ids.Status``.
 * ``stats[..., 0..4]`` are Atk, Def, SpA, SpD, Spe (``ids.Stat`` minus one); HP is
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
@@ -235,6 +238,7 @@ class BattleState(NamedTuple):
     types: jnp.ndarray  # int8[2,6,2]
     ability: jnp.ndarray  # int16, ids.AbilityId
     ability_slot: jnp.ndarray  # int8, species ability slot 0/1
+    ability_form: jnp.ndarray  # int8, the form whose personal row ability_slot indexes
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
     # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
@@ -527,6 +531,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "types": ((*_SLOT, 2), np.int8),
     "ability": (_SLOT, np.int16),
     "ability_slot": (_SLOT, np.int8),
+    "ability_form": (_SLOT, np.int8),
     "item": (_SLOT, np.int16),
     "item_consumed": (_SLOT, np.int16),
     "knocked_off": (_SLOT, np.int8),
@@ -672,8 +677,10 @@ if tuple(LAYOUT) != BattleState._fields:
 
 def spec_stats(tables: Tables, mon: PokemonSpec) -> np.ndarray:
     """``mon``'s six stats as ``make_state`` builds them: its stored ``stats``, else
-    ``calc_stats`` (ValueError: no such form, or ``stats`` not six values)."""
-    row = personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+    ``calc_stats`` of the ``stats_from`` form's base stats (``PokemonSpec`` docstring;
+    ValueError: no such form, or ``stats`` not six values)."""
+    personal_row(tables, mon.species, mon.form)  # ValueError: no such form
+    row = personal_row(tables, mon.species, mon.stats_from)
     if mon.stats is not None:
         if len(mon.stats) != 6:
             raise ValueError(f"species {mon.species}: stats needs 6 values, got {len(mon.stats)}")
@@ -725,8 +732,10 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["max_hp"][side, slot] = max_hp
     a["stats"][side, slot] = stats[Stat.ATK : Stat.SPE + 1]
     a["types"][side, slot] = np.asarray(tables.species_types[row])
-    a["ability"][side, slot] = int(tables.species_abilities[row, mon.ability_slot])
+    ability_row = personal_row(tables, species, mon.ability_from)
+    a["ability"][side, slot] = int(tables.species_abilities[ability_row, mon.ability_slot])
     a["ability_slot"][side, slot] = mon.ability_slot
+    a["ability_form"][side, slot] = mon.ability_from
     a["item"][side, slot] = mon.item
     a["moves"][side, slot] = mon.moves
     a["pp"][side, slot] = [move_pp[m] if m else 0 for m in mon.moves] if mon.pp is None else mon.pp

@@ -283,8 +283,14 @@ three structs has a row.
     and so do a switch-in (battle_lib.c:2121) and a faint (:2199).
   - `ability_slot`: the species ability slot (from the personality, resolved into
     `PokemonSpec.ability_slot`); `tables.species_abilities_decomp[row, ability_slot]`,
-    with `row = tables.species_form_row[species, form]`, is the decomp ability id, also
-    for abilities the engine does not implement (`ability` is then `UNSUPPORTED`).
+    with `row = tables.species_form_row[species, ability_form]`, is the decomp ability id,
+    also for abilities the engine does not implement (`ability` is then `UNSUPPORTED`).
+  - `ability_form` (G-41): the form whose personal row `ability_slot` indexes
+    (`PokemonSpec.ability_from`). A trainer Pokemon's `MON_DATA_ABILITY` is set from the
+    base species before the party builder sets the form (pokemon.c:473-485,
+    src/trainer_data.c:216-218), so it is 0 there; the player's is the form's row. It is
+    the party Pokemon's stored ability that `BattleSystem_InitBattleMon` re-reads
+    (battle_lib.c:124), so `step._restore_ability` reads it.
 - **Experience (K3d-exp, design §2.1).** One block between `ai_ability_known` and
   `deaths`. Experience changes the fight: the payout runs mid-turn and a level-up rewrites
   the level, stats, max HP, HP and moves of a live battler (design §0, §1.4).
@@ -381,7 +387,7 @@ three structs has a row.
 | `BattleMon.formNum` | `form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
-| `BattleMon.ability` | `ability`, `ability_slot` | mapped |
+| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
 | `BattleMon.weatherAbilityAnnounced` | — | later (M6) |
 | `BattleMon.intimidateAnnounced` | — | later (M6) |
 | `BattleMon.traceAnnounced` | — | later (M6) |

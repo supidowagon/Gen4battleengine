@@ -551,7 +551,7 @@ def main(out_path):
     game = cli._game(argparse.Namespace(game="kaizo"))
     tables, names = load_game(game)
     trainers = cli._load_trainers(game)
-    inter = IntermediateData(game.intermediate_dir)
+    inter = IntermediateData(game.intermediate_dir, game.id)
     d = game.intermediate_dir
     moves = json.loads((d / "moves.json").read_text(encoding="utf-8"))
     items = json.loads((d / "items.json").read_text(encoding="utf-8"))

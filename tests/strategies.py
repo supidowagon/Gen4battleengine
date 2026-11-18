@@ -374,7 +374,22 @@ BATTLE_ITEMS = (
     "Muscle Band",
     "Wise Glasses",
 )
-M1_BAG_ITEMS = ("", "Potion")  # the opponent's bag (ids.TrainerItemId)
+# The opponent's bag (engine.bag, E1 ruling G-43): HP (amounts and the all code), status,
+# confusion, stage, PP and friendship params and Full Restore's by-id branch. A Poke Ball's
+# dummy params set Mist and Focus Energy, which are not built, so none is drawn.
+M1_BAG_ITEMS = (
+    "",
+    "Potion",
+    "Max Potion",
+    "Full Restore",
+    "Full Heal",
+    "Awakening",
+    "Persim Berry",
+    "X Attack",
+    "X Accuracy",
+    "Ether",
+    "Elixir",
+)
 # Items that act on their holder's own damaging move (``legal_action_pair`` favours one).
 HITTER_ITEMS = (ItemId.KINGS_ROCK, ItemId.SHELL_BELL, ItemId.ZOOM_LENS, ItemId.WIDE_LENS)
 
@@ -1656,6 +1671,64 @@ def _share_with_sleep_talk(draw, tables: Tables, a: dict, names: Names) -> None:
             a["pp"][side, a["active"][side], k] = int(tables.move_pp[move])
 
 
+# E1 Batch C (G-45 .. G-49): the abilities ``_draw_batch_c`` puts on the active Pokemon, the
+# foe moves that meet White Smoke and Vital Spirit, and the punching moves of Iron Fist.
+BATCH_C_ABILITIES = (
+    AbilityId.ICE_BODY,
+    AbilityId.WHITE_SMOKE,
+    AbilityId.VITAL_SPIRIT,
+    AbilityId.SPEED_BOOST,
+    AbilityId.IRON_FIST,
+)
+BATCH_C_FOE_MOVES = {
+    AbilityId.WHITE_SMOKE: ("Growl", "Leer", "Sand-Attack", "Aurora Beam", "Tickle", "Charm"),
+    AbilityId.VITAL_SPIRIT: ("Hypnosis", "Spore", "Sing", "Yawn", "Tackle"),
+}
+PUNCH_MOVES = ("Mach Punch", "Fire Punch", "Ice Punch", "ThunderPunch", "Mega Punch", "Drain Punch")
+
+
+def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """Maybe (1 in 3) put a ``BATCH_C_ABILITIES`` ability on the active Pokemon, most of the time
+    with what makes it act: hail and lost HP for Ice Body; a foe stat-drop move for White Smoke
+    (an Intimidate foe on the bench a third of the time); a foe sleep move, or its own sleep, for
+    Vital Spirit; a Speed stage up to +6 for Speed Boost; a punching move for Iron Fist. Each
+    move is kept only when supported."""
+    if draw(st.integers(0, 2)) != 0:
+        return
+    rnd = draw(st.randoms(use_true_random=False))
+    ability = rnd.choice(BATCH_C_ABILITIES)
+    a["ability"][side, active] = ability
+    if rnd.random() >= 0.75:
+        return
+    foe = 1 - side
+    foe_mon = int(a["active"][foe])
+
+    def teach(who: int, mon: int, name: str) -> None:
+        move = names.move(name)
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, who, mon, move, rnd.randint(0, 3))
+
+    if ability == AbilityId.ICE_BODY:
+        if rnd.random() < 0.75:
+            a["weather"][...] = Weather.HAIL
+        a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) * rnd.randint(1, 16) // 16)
+    if ability in BATCH_C_FOE_MOVES:
+        teach(foe, foe_mon, rnd.choice(BATCH_C_FOE_MOVES[ability]))
+    if ability == AbilityId.WHITE_SMOKE and rnd.random() < 1 / 3:
+        bench = [
+            i for i in range(SLOTS) if i != foe_mon and a["species"][foe, i] and a["hp"][foe, i] > 0
+        ]
+        if bench:
+            a["ability"][foe, rnd.choice(bench)] = AbilityId.INTIMIDATE
+    if ability == AbilityId.VITAL_SPIRIT and rnd.random() < 1 / 3:
+        a["status"][side, active] = Status.SLEEP
+        a["status_counter"][side, active] = rnd.randint(1, 4)
+    if ability == AbilityId.SPEED_BOOST:
+        a["stages"][side, Stat.SPE] = rnd.choice((0, 0, 5, 6, -1))
+    if ability == AbilityId.IRON_FIST:
+        teach(side, active, rnd.choice(PUNCH_MOVES))
+
+
 def _draw_choice_lock(draw, a: dict, side: int, active: int) -> None:
     """``choice_lock``: none or one of the active Pokemon's moves, whatever its item (a lock
     without a Choice item is what a lost item would leave; ``UpdateMoveBuffers`` clears it)."""
@@ -1769,6 +1842,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
         _draw_guard_download(draw, tables, a, side, active, names)
+        _draw_batch_c(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
