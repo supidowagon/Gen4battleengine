@@ -521,7 +521,16 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
     if effect == EffectId.JUDGMENT:
         hold = _t(tables, "item_hold_effect", _active(s, side).item)
         return PLATE_TYPES.get(hold, _t(tables, "move_type", move))
+    # CalcNaturalGiftParams (script.c:8095-8096), B13-20: only with a gift power (else it fails).
+    if effect == EffectId.NATURAL_GIFT and _t(tables, "item_gift_power", _gift_item(s, side)):
+        return _t(tables, "item_gift_type", _gift_item(s, side))
     return _t(tables, "move_type", move)
+
+
+def _gift_item(s: RefState, side: int) -> int:
+    """The item Natural Gift reads: the held one, or after the script's RemoveItem
+    (effect_script_0222.s:8) the battler's recycleItem it went to (B13-20)."""
+    return _active(s, side).item or s.sides[side].recycle_item
 
 
 # BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
@@ -877,6 +886,8 @@ def _calc_move_damage(
         power = _gyro_power(tables, s, attacker)
     elif not in_power and effect == EffectId.TRUMP_CARD and move in atk.moves:
         power = TRUMP_CARD_POWER[min(max(atk.pp[atk.moves.index(move)] - 1, 0), 4)]
+    elif not in_power and effect == EffectId.NATURAL_GIFT:  # script.c:8088-8102, B13-20
+        power = _t(tables, "item_gift_power", _gift_item(s, attacker))
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
@@ -3961,6 +3972,20 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)) or lost_focus:
         _unlock(s.sides[side])  # subscript_missed.s
         return record
+    # Recycle (effect_script_0184.s): fails on a held item (:5) or an empty recycleItem
+    # (BtlCmd_TryRecycle, script.c:9000-9013, which clears it); else the item is held again (:7).
+    if effect == EffectId.RECYCLE:
+        if mon.item or not s.sides[side].recycle_item:
+            _unlock(s.sides[side])
+            return record
+        mon.item, s.sides[side].recycle_item = s.sides[side].recycle_item, 0
+    # Natural Gift (effect_script_0222.s): fails at naturalGiftPower 0 (script.c:8094-8099);
+    # else the script removes the berry (:8) before TryMove, B13-20.
+    if effect == EffectId.NATURAL_GIFT:
+        if not _t(tables, "item_gift_power", mon.item):
+            _unlock(s.sides[side])
+            return record
+        _remove_item(s, side)
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
     if counter:
         # BtlCmd_Counter / MirrorCoat / TryMetalBurst (script.c:4615-4705, :7153-7184): the

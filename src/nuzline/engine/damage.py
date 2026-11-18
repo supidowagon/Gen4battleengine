@@ -210,6 +210,28 @@ def judgment_type(tables, item, table_type) -> jnp.ndarray:
     return jnp.where(plate, rows[jnp.clip(index, 0, rows.shape[0] - 1)], _i32(table_type))
 
 
+def gift_item(state, side) -> jnp.ndarray:
+    """``int32``: the item whose Natural Gift power and type ``side``'s active Pokemon's
+    Natural Gift reads (BtlCmd_CalcNaturalGiftParams, battle_script.c:8088-8102, through
+    ``Battler_NaturalGiftPower`` / ``_Type``, battle_lib.c:5465-5480): the item it holds; once
+    the script's ``RemoveItem BTLSCR_ATTACKER`` (effect_script_0222.s:8) has run, before TryMove
+    and the hit, the item it put into ``recycleItem[battler]`` (battle_script.c:8977;
+    ``BattleState.recycle_item``), which nothing else writes before the hit (B13-20). Klutz and
+    Embargo, which hide a held item (``Battler_HeldItem``, :5352-5363), are an unsupported
+    ability and move."""
+    side = _i32(side)
+    held = _i32(state.item[side, state.active[side]])
+    return jnp.where(held != 0, held, _i32(state.recycle_item[side]))
+
+
+def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(power, type)``: ``item``'s ``naturalGiftPower`` and ``naturalGiftType``
+    (``Tables.item_gift_power`` / ``item_gift_type``); power 0 fails the move
+    (battle_script.c:8094-8099). Pure, for the trainer AI too."""
+    item = _i32(item)
+    return _i32(tables.item_gift_power[item]), _i32(tables.item_gift_type[item])
+
+
 GYRO_BALL_MAX = 150  # battle_script.c:7128-7129
 
 
@@ -711,7 +733,11 @@ def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     ball = weather_ball_params(tables, state, move)[2]
     out = jnp.where(effect == EffectId.WEATHER_BALL, ball, out)
     plate = judgment_type(tables, state.item[side, mon], base)
-    return jnp.where(effect == EffectId.JUDGMENT, plate, out)
+    out = jnp.where(effect == EffectId.JUDGMENT, plate, out)
+    # BtlCmd_CalcNaturalGiftParams (battle_script.c:8095-8096), B13-20: only with a gift power
+    # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
+    gift_power, gift_type = natural_gift_params(tables, gift_item(state, side))
+    return jnp.where((effect == EffectId.NATURAL_GIFT) & (gift_power > 0), gift_type, out)
 
 
 def fixed_damage(
@@ -1208,6 +1234,9 @@ def _pre_random(
         first = jnp.argmax(holding)
         pp_left = jnp.maximum(_i32(s.pp[atk_side, a_slot, first]) - 1, 0)
         power = jnp.where(effect == EffectId.TRUMP_CARD, trump_card_power(pp_left), power)
+        # BtlCmd_CalcNaturalGiftParams (:8088-8102): the item's naturalGiftPower (B13-20).
+        gift_power = natural_gift_params(tables, gift_item(s, atk_side))[0]
+        power = jnp.where(effect == EffectId.NATURAL_GIFT, gift_power, power)
         power = jnp.where(_i32(in_power) > 0, _i32(in_power), power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
     present = _i32(present)

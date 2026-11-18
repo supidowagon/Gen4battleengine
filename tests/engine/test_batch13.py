@@ -29,6 +29,7 @@ from nuzline.engine.outcome import (
     empty_outcome,
     live_hit_threshold,
 )
+from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, assert_matches_reference
 from tests.engine.test_enumerate import (
@@ -973,6 +974,162 @@ def test_assurance_law_exact_and_sampled(tables, names):
     s = _assurance(tables, names, ["Take Down"])
     s = s.with_stages(1, acc=-1)
     acts = A("Assurance", "Take Down", s, names)
+    assert_equals_bruteforce(tables, s, acts)
+    n_ = 20_000
+    check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
+
+
+# --- B13-19..B13-20: the held-item moves (Recycle, Natural Gift) ---------------------------
+
+
+def _held(s, side: int, item: int, slot: int = 0):
+    return s._replace(item=s.item.at[side, slot].set(item))
+
+
+def _record(s, side: int, item: int):
+    return s._replace(recycle_item=s.recycle_item.at[side].set(item))
+
+
+def test_held_item_move_tables_both_games(tables, names, kaizo_tables, kaizo_names):
+    """effect_script_0184.s (Recycle) and _0222.s (Natural Gift) map to their own ids in both
+    games (Kaizo keeps both scripts and Natural Gift's power 1)."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Recycle")]) == EffectId.RECYCLE
+        assert int(t.move_effect[n.move("Natural Gift")]) == EffectId.NATURAL_GIFT
+        assert int(t.move_power[n.move("Natural Gift")]) == 1
+
+
+def test_remove_item_writes_the_battlers_recycle_item(tables, names):
+    """BtlCmd_RemoveItem (battle_script.c:8977): an Oran Berry eaten after a hit goes to its
+    battler's recycleItem (and the slot's item_consumed); a switch keeps the record, which
+    belongs to the battler (nothing but RemoveItem and TryRecycle write it, B13-19)."""
+    oran = names.item("Oran Berry")
+    s = make_state(
+        tables,
+        [_mon(names, "Machop", ["Tackle"], 40)],
+        [
+            _mon(names, "Geodude", ["Defense Curl"], 20, "Oran Berry"),
+            _mon(names, "Onix", ["Harden"], 20),
+        ],
+    )
+    s = _plain(s).replace_hp(1, 0, 20)
+    out = assert_matches_reference(tables, s, A("Tackle", "Defense Curl", s, names), O)
+    assert int(out.item[1, 0]) == 0 and int(out.recycle_item[1]) == oran
+    assert int(out.item_consumed[1, 0]) == oran
+    switched = assert_matches_reference(tables, out, A("Tackle", MOVE_ACTIONS + 1, out, names), O)
+    assert int(switched.active[1]) == 1 and int(switched.recycle_item[1]) == oran
+
+
+def test_recycle_gives_back_the_record_and_clears_it(tables, names):
+    """effect_script_0184.s: with no held item and a record, the user holds the item again (:7)
+    and BtlCmd_TryRecycle clears the record (battle_script.c:9005-9007); the message names
+    msgItemTemp (BTLSCR_MSG_TEMP), so the AI learns nothing (B13-19)."""
+    sitrus = names.item("Sitrus Berry")
+    s = _plain(_state(tables, names, ("Snorlax", "Recycle"), ("Geodude", "Defense Curl")))
+    s = _record(s, 0, sitrus)
+    out = assert_matches_reference(tables, s, A("Recycle", "Defense Curl", s, names), O)
+    assert int(out.item[0, 0]) == sitrus and int(out.recycle_item[0]) == 0
+    assert int(out.ai_item_known[0]) == 0
+
+
+def test_recycled_berry_is_eaten_at_the_move_end(tables, names):
+    """The restored Sitrus Berry meets AfterMoveEffects' held-item check (a holder at half HP
+    or less eats it), whose RemoveItem writes the record again (B13-19)."""
+    sitrus = names.item("Sitrus Berry")
+    s = _plain(_state(tables, names, ("Snorlax", "Recycle"), ("Geodude", "Defense Curl")))
+    s = _record(s, 0, sitrus).replace_hp(0, 0, 20)
+    out = assert_matches_reference(tables, s, A("Recycle", "Defense Curl", s, names), O)
+    assert int(out.item[0, 0]) == 0 and int(out.recycle_item[0]) == sitrus
+    assert int(out.hp[0, 0]) == 20 + int(s.max_hp[0, 0]) // 4
+
+
+def test_recycle_fails_holding_an_item_or_without_a_record(tables, names):
+    """effect_script_0184.s:5 (a held item) and BtlCmd_TryRecycle's empty record
+    (battle_script.c:9005, :9010-9011): MOVE_STATUS_FAILED, nothing changes but the PP."""
+    oran, sitrus = names.item("Oran Berry"), names.item("Sitrus Berry")
+    base = _plain(_state(tables, names, ("Snorlax", "Recycle"), ("Geodude", "Defense Curl")))
+    for s in (_record(_held(base, 0, oran), 0, sitrus), base):
+        out = assert_matches_reference(tables, s, A("Recycle", "Defense Curl", s, names), O)
+        assert int(out.item[0, 0]) == int(s.item[0, 0])
+        assert int(out.recycle_item[0]) == int(s.recycle_item[0])
+        slot = names.move_slot(s, 0, "Recycle")
+        assert int(out.pp[0, 0, slot]) == int(s.pp[0, 0, slot]) - 1
+
+
+def test_natural_gift_takes_its_berrys_power_and_type_and_eats_it(tables, names):
+    """BtlCmd_CalcNaturalGiftParams (battle_script.c:8088-8102): an Oran Berry gives power 60
+    and Poison (res/items/data/oran_berry.json), so Natural Gift does nothing to a Steel foe;
+    RemoveItem (effect_script_0222.s:8) eats the berry before TryMove either way, into
+    recycleItem (B13-20)."""
+    oran = names.item("Oran Berry")
+    m = names.move("Natural Gift")
+    for foe, hurts in (("Machop", True), ("Steelix", False)):
+        s = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), (foe, "Tail Whip")))
+        s = _held(s, 0, oran)
+        assert int(move_type_of(tables, s, 0, m)) == Type.POISON
+        want = _dfr(tables, s, m)
+        out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), O)
+        assert int(out.item[0, 0]) == 0 and int(out.recycle_item[0]) == oran
+        assert int(out.item_consumed[0, 0]) == oran
+        assert _loss(s, out) == (want if hurts else 0), foe
+        # damage.gift_item: after the removal the record names the berry, so the type holds.
+        assert int(move_type_of(tables, out, 0, m)) == Type.POISON
+
+
+def test_natural_gift_misses_still_eat_the_berry(tables, names):
+    """The script's RemoveItem runs before TryMove's accuracy roll: a miss loses the berry."""
+    oran = names.item("Oran Berry")
+    s = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), ("Machop", "Tail Whip")))
+    s = _held(s, 0, oran)
+    miss = O._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))  # class 0 misses
+    out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), miss)
+    assert int(out.item[0, 0]) == 0 and int(out.recycle_item[0]) == oran
+    assert _loss(s, out) == 0
+
+
+def test_natural_gift_fails_without_a_gift_item(tables, names):
+    """naturalGiftPower 0 (no item; a Potion, not a berry) fails it (battle_script.c:8094-8099,
+    effect_script_0222.s:11-13): the item stays, no damage, no record."""
+    potion = names.item("Potion")
+    base = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), ("Machop", "Tail Whip")))
+    for s in (base, _held(base, 0, potion)):
+        out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), O)
+        assert int(out.item[0, 0]) == int(s.item[0, 0]) and _loss(s, out) == 0
+        assert int(out.recycle_item[0]) == 0
+
+
+def test_natural_gift_user_unburdened_after_its_berry(tables, names):
+    """An Unburden holder that loses its berry to Natural Gift is doubled afterwards
+    (order.effective_speed, battle_lib.c:1268-1272)."""
+    oran = names.item("Oran Berry")
+    s = _plain(_state(tables, names, ("Drifblim", "Natural Gift"), ("Machop", "Tail Whip")))
+    s = _ability(_held(s, 0, oran), 0, AbilityId.UNBURDEN)
+    s = s._replace(can_unburden=s.can_unburden.at[0].set(1))
+    out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), O)
+    assert int(effective_speed(tables, out, 0)) == 2 * int(effective_speed(tables, s, 0))
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_natural_gift_law_exact_and_sampled(tables, names):
+    """B13-20: Natural Gift's hit, crit and roll with its berry's power and type, the berry gone
+    before the foe's move; the enumeration equals the brute force and the sampler."""
+    s = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), ("Machop", "Karate Chop")))
+    s = _held(s, 0, names.item("Sitrus Berry")).replace_hp(0, 0, 60)
+    acts = A("Natural Gift", "Karate Chop", s, names)
+    assert_equals_bruteforce(tables, s, acts)
+    n_ = 20_000
+    check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_recycle_law_exact_and_sampled(tables, names):
+    """B13-19: a faster Recycle gives an Unburden holder its Salac Berry back (no longer doubled;
+    eaten at the move end in a pinch, Speed +1) before the foe's hit; the enumeration equals the
+    brute force and the sampler (the end-of-turn speeds: _end_speeds' toggled Unburden point)."""
+    s = _plain(_state(tables, names, ("Drifblim", "Recycle"), ("Machop", "Karate Chop"), (40, 30)))
+    s = _ability(_record(s, 0, names.item("Salac Berry")), 0, AbilityId.UNBURDEN)
+    s = s._replace(can_unburden=s.can_unburden.at[0].set(1)).replace_hp(0, 0, 30)
+    acts = A("Recycle", "Karate Chop", s, names)
     assert_equals_bruteforce(tables, s, acts)
     n_ = 20_000
     check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)

@@ -499,6 +499,10 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.TRUMP_CARD,
     EffectId.PUNISHMENT,
     EffectId.JUDGMENT,
+    # The held-item moves write their user's item and recycleItem, and Natural Gift HP
+    # (B13-19, B13-20); no accuracy item can be consumed, so none comes back.
+    EffectId.RECYCLE,
+    EffectId.NATURAL_GIFT,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

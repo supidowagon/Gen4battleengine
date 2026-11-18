@@ -1185,7 +1185,9 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2]``: the hold param of each side's active King's Rock / Razor Fang
     (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
     battle_controller_player.c:4633), else 0. The attacker's item cannot become one during the
-    turn (no implemented path gives a King's Rock)."""
+    turn (no implemented path gives a King's Rock: Recycle gives back only an item a RemoveItem
+    took, never a King's Rock while Fling is unsupported, and only to its user, whose move has
+    run)."""
     item = state.item[jnp.arange(2), state.active]
     holder = tables.item_effect[item] == ItemId.KINGS_ROCK
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)

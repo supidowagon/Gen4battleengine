@@ -61,7 +61,8 @@ class EffectId(IntEnum):
       ``FLAIL_FALLOFF`` (Water Spout, Eruption): power x curHP / maxHP (``damage.falloff_power``).
     * ``WEATHER_BALL``, ``GYRO_BALL``, ``ASSURANCE``, ``TRUMP_CARD``, ``PUNISHMENT``,
       ``JUDGMENT``: zeros; their power or type comes from the battle (``damage._pre_random``,
-      ``damage.move_type_of``), E2 batch 13.
+      ``damage.move_type_of``), E2 batch 13. ``NATURAL_GIFT``: zeros; the power and type of the
+      held item (``damage.gift_item``), which the script removes. ``RECYCLE``: zeros.
     * ``FANG_PARALYZE_FLINCH`` (Thunder Fang, ``BATTLE_EFFECT_FLINCH_PARALYZE_HIT``):
       ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
       paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
@@ -447,6 +448,17 @@ class EffectId(IntEnum):
     # (Battler_HeldItemEffect) HOLD_EFFECT_ARCEUS_* sets moveType to its type (:5-95);
     # ``damage.judgment_type``.
     JUDGMENT = 112
+    # E2 batch 13, the held-item moves (B13-19..).
+    # Recycle (184, effect_script_0184.s): zeros. Fails (MOVE_STATUS_FAILED) when the user holds
+    # an item (:5) or its battler's recycleItem is empty (BtlCmd_TryRecycle, battle_script.c:
+    # 9000-9013, which clears it); else the user holds that item again (:7, UpdateMonDataFromVar:
+    # CopyToParty, no AI reveal). ``BattleState.recycle_item``; ``step._use_move``.
+    RECYCLE = 113
+    # Natural Gift (222, effect_script_0222.s): zeros. BtlCmd_CalcNaturalGiftParams (battle_script.c:
+    # 8088-8102) sets movePower and moveType from the held item's naturalGiftPower / _Type
+    # (Battler_HeldItem: Klutz and Embargo, both unsupported, hide it), failing at power 0; the
+    # script then RemoveItem's the item (:8) before TryMove. ``damage.gift_item``.
+    NATURAL_GIFT = 114
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).

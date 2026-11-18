@@ -39,8 +39,19 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   accuracy/damage classes + enumerate 45, coverage / effect_map / variants / game_constants /
   backlog 162, unsupported-asserting files 139, test_cli not-slow 102 + 1 skipped (the two
   over-8 GB nodes not run), diff.py seeds 43, 44 ok 300; test_differential: see the commit.
+  Held-item moves (agent D, B13-19..B13-22): e1-model c09d8ac (Tables item_fling_power /
+  _fling_effect / item_gift_power / _gift_type from both extractors, MANIFEST_VERSION 31; new
+  per-battler BattleState.recycle_item = recycleItem, written at every RemoveItem; Kaizo
+  rom/ intermediates re-extracted, which also refreshed stale trainer terrains: backlog Roark 5 ->
+  4 groups); RECYCLE and NATURAL_GIFT modelled (both engines, laws: B13-21, no new draw);
+  Fling and Embargo left UNSUPPORTED (B13-22, Owed). Checks: test_batch13 new 9 + 2 slow laws
+  (170 s, 5.1 GB), accuracy/damage classes + coverage + effect_map 123, enumerate / variants /
+  game_constants / backlog / tables / state 142, unsupported-asserting files 33 + 95 + 43,
+  test_cli not-slow 102 + 1 skipped (the two over-8 GB nodes not run), test_differential +
+  test_e1_roark_close 24 (both green now: the clowns' terrain came with the re-extraction), diff.py
+  seeds 45, 46 ok 300.
   OWED: the AI scripts of these effects (77, 200, 209, Kaizo 141, 104, 88, 154, 190, 203, 217,
-  219, 231, 235, 245, 268; the batch's AI agent; damage.gyro_ball_power / judgment_type /
+  219, 231, 235, 245, 268, 184, 222; the batch's AI agent; damage.gyro_ball_power / judgment_type /
   weather_ball_params are pure for it); vanilla-only Fury Cutter #119 and the recharge #80
   (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
   the other families of the batch.
@@ -360,7 +371,12 @@ Rules left out because another mechanic is missing; each closes with the mechani
   battler (B5-10): read it, not `future_timer`.
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
-  can move items mid-turn: Trick, Thief, Fling.
+  can move items mid-turn: Trick, Thief, Fling (and Recycle, once Fling can put a King's Rock
+  into recycleItem).
+- **Batch 13, held-item moves left UNSUPPORTED (B13-22):** Fling #233 (the flung item's effect
+  on the target, its per-time item view, the law relevance of each fling effect, Recycle of a
+  flung item) and Embargo #232 (the Klutz / Embargo item suppression at every held-item read;
+  embargoTurns, its turn-end count, Baton Pass, the bag block). Both with Klutz.
 - Kaizo's Ganlon and Apicot Berries (param 0) are refused by the divisor guard
   (`effect_map.DIVISOR_PARAM_MIN`, B2-3). Finding: `curHP <= maxHP / itemPower`
   (battle_lib.c:4778, :1294) is a C `/` on ints, which the compiler emits as a call to the
@@ -1890,3 +1906,49 @@ Rules left out because another mechanic is missing; each closes with the mechani
   TRUMP_CARD, PUNISHMENT and ASSURANCE are NON_TABLE (action-start speeds, the PP after the
   decrement, the defender's stages, the turn's flag); all six are INPUT_NEUTRAL (they write the
   foe's HP only). No new draw, no new Outcome field.
+- B13-19 recycleItem is per battler (battle_context.h:307): BtlCmd_RemoveItem writes it
+  (battle_script.c:8977), BtlCmd_TryRecycle reads and clears it (:9005-9007), nothing else
+  writes it, so a switch keeps it and a newcomer recycles its predecessor's item. New
+  BattleState.recycle_item (e1-model commit c09d8ac; every RemoveItem: effects.consume_item,
+  hooks.held_item_check, hooks.pluck_berry, the reference's _remove_item); item_consumed stays the
+  per-slot observation record. Recycle (184, EffectId.RECYCLE): effect_script_0184.s:5 fails a
+  user holding an item, TryRecycle an empty record (MOVE_STATUS_FAILED); else the item is held
+  again (:7, UpdateMonDataFromVar: CopyToParty of a held item, no AI change; "found one {1}"
+  tags BTLSCR_MSG_TEMP: no reveal) at the script, and AfterMoveEffects' held-item check sees it
+  (a restored berry in a pinch is eaten at once). The script runs only past the PP and target
+  checks (MOVE_STATUS_NO_PP is a NO_EFFECTS status, bcp.c:3205-3216).
+- B13-20 Natural Gift (222, EffectId.NATURAL_GIFT): BtlCmd_CalcNaturalGiftParams
+  (battle_script.c:8088-8102) reads Battler_NaturalGiftPower / _Type (battle_lib.c:5465-5480:
+  Battler_HeldItem, whose Klutz and Embargo are unsupported) from ItemData.naturalGiftPower /
+  _Type (include/item.h:63-64; new Tables.item_gift_power / item_gift_type, 0x1F = none,
+  itemproc.c:242); power 0 (no item, a non-berry) fails it (effect_script_0222.s:11-13), and
+  moveType keeps 0 then. Otherwise CalcCrit, CalcDamage, then RemoveItem BTLSCR_ATTACKER (:8)
+  before TryMove: a miss, Protect or an immunity still eats the berry (into recycleItem and
+  item_consumed; Unburden then doubles). The hit's power and type come through
+  damage.gift_item: the held item, or once removed the battler's recycle_item (nothing writes
+  it between the script and the hit); a berry is no damage, crit or accuracy input of its
+  attacker, so the hit at its own time equals CalcDamage at the script's.
+- B13-21 Laws (both moves draw nothing new): NATURAL_GIFT is INPUT_NEUTRAL (it writes the foe's
+  HP and removes its own berry, which the item clauses over-approximate) and NON_TABLE;
+  RECYCLE is NON_TABLE and INPUT_CLAUSE with a recycle clause (a faster foe's Recycle: every
+  hit of the side may change, conservative). Recycle's restored item may meet its user's move
+  end item check: stage_free and para_free treat a Recycle like a Pluck (Salac, White Herb,
+  Lum, Cheri). _end_speeds' Unburden bit now toggles: a holder of an item unburdened, a holder
+  of none holding one again (stand-in: its battler's record, else item 1; no recyclable item
+  acts on speed but through Unburden's heldItem test). Accuracy guard: both write no accuracy
+  input (no accuracy item can be consumed, so none comes back). No new fold_in index.
+- B13-22 Left UNSUPPORTED (Owed): Fling (233) and Embargo (232). Fling's flung item acts on its
+  target through BattleSystem_FlingItem (battle_lib.c:5854-6156) and the 30 fling subscripts:
+  heals, cures, White Herb's reset at TryFling time (before the accuracy roll and CalcDamage,
+  :6029-6034), Light Ball / Poison Barb / orbs / King's Rock statuses and flinch on the defender
+  as INDIRECT effects, pinch-berry raises, the flavor confusion, SELF_TURN_FLAG_PLUCK_BERRY left
+  set when the subscript does not run; its CalcDamage / CalcCrit read the item still held but
+  ApplyTypeChart (Expert Belt) and the accuracy (Wide / Zoom Lens) no longer do. Each of those
+  needs its own law relevance (para / stage / confusion / flinch reads, the order speeds) and a
+  per-time item view in damage; and once a flung item is in recycleItem, Recycle can give back
+  Bright Powder, Focus Band, Quick Claw, King's Rock (the hit thresholds, focus_band and
+  flinch_item laws read the turn-start item). Embargo needs the Battler_HeldItem suppression
+  (battle_lib.c:5352-5363, Klutz's too) at every held-item read of both engines and the laws (no
+  single accessor exists: about 50 direct reads), the per-battler embargoTurns, its turn-end
+  count and subscript_embargo_end.s, Baton Pass keeping it, the bag block, and Fling's and
+  Natural Gift's Embargo branches.

@@ -102,6 +102,7 @@ from nuzline.engine.damage import (
     ignorable,
     levitated,
     move_type_of,
+    natural_gift_params,
     trump_card_power,
     weather_suppressed,
     wonder_guarded,
@@ -1099,6 +1100,29 @@ def _use_move(
     taken_mask = jnp.asarray(foe_taken, _I32)
     lost_focus = (taken_mask[3] != 0) | (taken_mask[4] != 0)
     failed = failed | ((effect_used == EffectId.FOCUS_PUNCH) & lost_focus)
+    # E2 batch 13, the held-item moves. Their scripts run once the move passed the PP and
+    # no-target checks (bcp.c:3205-3216: MOVE_STATUS_NO_PP is a NO_EFFECTS status, so no script).
+    script_on = can_act & has_target & ~no_pp
+    held_now = state.item[side, user]
+    # Recycle (effect_script_0184.s): MOVE_STATUS_FAILED when the user holds an item (:5) or its
+    # battler's recycleItem is empty (BtlCmd_TryRecycle, battle_script.c:9000-9013); else the
+    # record is cleared and the user holds the item again (:7, UpdateMonDataFromVar: a
+    # CopyToParty of a held item, no AI record change; the message names msgItemTemp, no
+    # reveal). The move end's held-item check (AfterMoveEffects) then sees it (B13-19).
+    recycle = effect_used == EffectId.RECYCLE
+    recycle_fails = (held_now != 0) | (state.recycle_item[side] == 0)
+    failed = failed | (recycle & recycle_fails)
+    recycled = script_on & recycle & ~recycle_fails
+    state = _set_mon(state, "item", side, user, state.recycle_item[side], recycled)
+    state = _set_side(state, "recycle_item", side, 0, recycled)
+    # Natural Gift (effect_script_0222.s): BtlCmd_CalcNaturalGiftParams fails at naturalGiftPower
+    # 0 (battle_script.c:8094-8099; no item included); else CalcCrit, CalcDamage, then
+    # RemoveItem BTLSCR_ATTACKER (:8) before TryMove: a miss or Protect still eats the berry.
+    # The hit reads its power and type through damage.gift_item (B13-20).
+    gift = effect_used == EffectId.NATURAL_GIFT
+    gift_fails = natural_gift_params(tables, held_now)[0] == 0
+    failed = failed | (gift & gift_fails)
+    state = consume_item(state, side, script_on & gift & ~gift_fails)
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing

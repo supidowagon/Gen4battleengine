@@ -513,6 +513,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     235: ("BATTLE_EFFECT_HIGHER_POWER_WHEN_LOW_PP", _E.TRUMP_CARD, (0, 0, 0)),
     # Punishment: effect_script_0245.s, CalcPunishmentPower (B13-15).
     245: ("BATTLE_EFFECT_INCREASE_POWER_WITH_MORE_STAT_UP", _E.PUNISHMENT, (0, 0, 0)),
+    # Recycle: effect_script_0184.s, the battler's recycleItem back (B13-19).
+    184: ("BATTLE_EFFECT_RECYCLE", _E.RECYCLE, (0, 0, 0)),
+    # Natural Gift: effect_script_0222.s, the held berry's power and type, eaten (B13-20).
+    222: ("BATTLE_EFFECT_NATURAL_GIFT", _E.NATURAL_GIFT, (0, 0, 0)),
     # Judgment: effect_script_0268.s, the held plate's type (B13-12).
     268: ("BATTLE_EFFECT_JUDGEMENT", _E.JUDGMENT, (0, 0, 0)),
 }

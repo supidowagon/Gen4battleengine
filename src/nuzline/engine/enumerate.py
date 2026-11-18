@@ -507,7 +507,8 @@ def _end_speeds(
     (``para_free``). Where ``tailwind_free`` (the side's own Tailwind can blow this turn,
     effects._side_layers), every point is also taken with Tailwind's x2 (battle_lib.c:1274-1276).
     Where ``unburden_free`` (an Unburden holder of the side can be on the field having lost its
-    item, E2 batch 9), every point is also taken with Unburden's x2 (:1268-1272)."""
+    item, E2 batch 9, or get one back through Recycle, B13-19), every point is also taken with
+    Unburden's state toggled (:1268-1272)."""
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
         state.active.dtype
@@ -563,7 +564,8 @@ def _end_speeds(
     )
 
     # Bit 0: Tailwind as on the field, or blowing (its own move this turn); bit 1: Unburden as on
-    # the field, or the holder unburdened (no item, canUnburden).
+    # the field, or toggled: a holder of an item unburdened (no item, canUnburden), a holder of
+    # none holding one again (Recycle, B13-19).
     n = stages.shape[0]
     winds = jnp.repeat(jnp.arange(4), n)
     mons, stages, paras, locks = (jnp.tile(x, 4) for x in (mons, stages, paras, locks))
@@ -581,6 +583,12 @@ def _end_speeds(
         incoming = mon != state.active[side]
         armed = (state.ability[side, mon] == AbilityId.UNBURDEN) & (state.item[side, mon] != 0)
         base = jnp.where(incoming, armed.astype(_I32), state.can_unburden[side].astype(_I32))
+        # The toggled item: none for a holder of one; for a holder of none, an item back
+        # (Recycle, B13-19: any item it can get back acts on no speed but through Unburden's
+        # heldItem test, so a nonzero stand-in, its battler's record or item 1, is exact).
+        held_now = state.item[side, mon]
+        restored = jnp.where(state.recycle_item[side] != 0, state.recycle_item[side], 1)
+        toggled = jnp.where(held_now != 0, 0, restored)
         s = state._replace(
             tailwind=state.tailwind.at[side].set(
                 jnp.where((wind & 1) != 0, TAILWIND_TURNS, state.tailwind[side]).astype(
@@ -591,7 +599,7 @@ def _end_speeds(
                 jnp.where(unburdened, 1, base).astype(state.can_unburden.dtype)
             ),
             item=state.item.at[side, mon].set(
-                jnp.where(unburdened, 0, state.item[side, mon]).astype(state.item.dtype)
+                jnp.where(unburdened, toggled, state.item[side, mon]).astype(state.item.dtype)
             ),
         )
         s = s._replace(
@@ -702,6 +710,10 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.TRUMP_CARD,
     _E.PUNISHMENT,
     _E.JUDGMENT,
+    # B13-20: Natural Gift writes the foe's HP and removes its user's own berry (a berry is no
+    # input of damage._pre_random / _finish; the item clauses read the turn-start holder, an
+    # over-approximation once it is gone).
+    _E.NATURAL_GIFT,
     _E.RECOIL,  # hurts the foe
     _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
     _E.LEVEL_DAMAGE,
@@ -869,6 +881,9 @@ INPUT_CLAUSE_EFFECTS = (
     _E.POWER_TRICK,
     # B12-17: the user's status onto the side: the status clause (``status_hit``).
     _E.PSYCHO_SHIFT,
+    # B13-19: the foe's Recycle gives it back an item (a berry it eats after the side's hit, a
+    # White Herb, ...): the recycle clause.
+    _E.RECYCLE,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1225,6 +1240,10 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.TRUMP_CARD,
     _E.PUNISHMENT,
     _E.ASSURANCE,
+    # B13-19, B13-20: Recycle deals no damage; Natural Gift's power and type are its berry's,
+    # which the script removes before the hit (damage.gift_item).
+    _E.RECYCLE,
+    _E.NATURAL_GIFT,
 )
 
 
@@ -1265,6 +1284,7 @@ def damage_inputs_can_change(
       foe on its defending stat;
     * **pluck**: the foe's earlier Pluck / Bug Bite eats the side's stat pinch berry of the
       foe's defending stat (``hooks.pluck_berry`` raises the eater's stage);
+    * **recycle**: the foe's earlier Recycle gives it back an item (B13-19; any, conservative);
     * **own move**: a later hit of a move other than ``MULTI_HIT``, ``TRIPLE_KICK`` and
       ``BEAT_UP`` (Twineedle's second hit, B13-1: its first can poison a Synchronize holder;
       Triple Kick's and Beat Up's own hits change no input but the HP and contact clauses',
@@ -1370,6 +1390,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
         | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
+        # B13-19: the foe's Recycle restores an item it then holds through the side's hits.
+        | (foe_effect == _E.RECYCLE)
         # B10-12: a charge move sets or (its second turn, or an unlock on its disruption) clears
         # its user's semi-invulnerable bit, which a DOUBLE_SEMI hit's power reads; Skull Bash's
         # charge raises the foe's Defense.
@@ -1768,6 +1790,10 @@ def outcome_laws(
     herb = _holds_item(tables, state, actions, (ItemId.WHITE_HERB,))
     pinch_held = _holds_item(tables, state, actions, (ItemId.PINCH_BERRY,))
     plucks = uses_move & (effect == _E.EAT_BERRY)
+    # B13-19: a Recycle gives its user back an item the move end's item check may use (a Salac
+    # Berry, a White Herb, a Lum or Cheri Berry): free like a held one.
+    recycles = uses_move & (effect == _E.RECYCLE)
+    plucks = plucks | recycles
     stage_free = (
         (uses_move & own_speed)
         | (foe_moves & foe_speed[::-1])

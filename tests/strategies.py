@@ -1985,6 +1985,8 @@ RARE_EFFECTS = (
     EffectId.TRUMP_CARD,
     EffectId.PUNISHMENT,
     EffectId.JUDGMENT,
+    EffectId.RECYCLE,  # B13-19
+    EffectId.NATURAL_GIFT,  # B13-20
 )
 
 
@@ -2135,6 +2137,9 @@ LAW_MOVES = (
     "Wake-Up Slap",
     "Trump Card",
     "Water Spout",
+    # B13-19, B13-20: Recycle's item back, Natural Gift's berry power, type and removal.
+    "Recycle",
+    "Natural Gift",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin
