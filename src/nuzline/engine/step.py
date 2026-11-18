@@ -3564,7 +3564,7 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
-    state = _keep_quick_claw(tables, state, draw)
+    state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
     return sample_war(jax.random.fold_in(key, 1), state)
 
 
@@ -3576,7 +3576,10 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
     two tie values (1/2 each) where the tie decides it: those states differ in the weather,
     which the player sees before acting, so Stage B makes the root a chance node over the
-    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34)."""
+    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34). A host
+    state (NumPy leaves, as ``prep`` and the CLI build it) is read as JAX arrays first: the
+    war's settling writes with ``.at`` (``hooks.reveal_ability``)."""
+    state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []
