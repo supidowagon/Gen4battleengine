@@ -457,8 +457,8 @@ class EffectId(IntEnum):
     RECYCLE = 113
     # Natural Gift (222, effect_script_0222.s): zeros. BtlCmd_CalcNaturalGiftParams (battle_script.c:
     # 8088-8102) sets movePower and moveType from the held item's naturalGiftPower / _Type
-    # (Battler_HeldItem: Klutz and Embargo, both unsupported, hide it), failing at power 0; the
-    # script then RemoveItem's the item (:8) before TryMove. ``damage.gift_item``.
+    # (Battler_HeldItem: Klutz and Embargo hide it, B13-29..31), failing at power 0; the script
+    # then RemoveItem's the item (:8) before TryMove. ``damage.gift_item`` (B13-37).
     NATURAL_GIFT = 114
     # Embargo (232, effect_script_0232.s): zeros. Fails behind a substitute (:5, :7-8); else a
     # direct ON_HIT subscript_embargo_start.s on the defender: fails (MOVE_STATUS_FAILED, :57)

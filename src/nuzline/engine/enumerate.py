@@ -2117,7 +2117,7 @@ def outcome_laws(
             [
                 jnp.stack(
                     [
-                        beat_up_damage(tables, state, side, moves[side], k, crit, rolls_)
+                        beat_up_damage(tables, state, side, 1 - side, moves[side], k, crit, rolls_)
                         for crit in (False, True)
                     ]
                 )

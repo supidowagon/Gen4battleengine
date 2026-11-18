@@ -210,18 +210,19 @@ def judgment_type(tables, item, table_type) -> jnp.ndarray:
     return jnp.where(plate, rows[jnp.clip(index, 0, rows.shape[0] - 1)], _i32(table_type))
 
 
-def gift_item(state, side) -> jnp.ndarray:
+def gift_item(state, side, gift=0) -> jnp.ndarray:
     """``int32``: the item whose Natural Gift power and type ``side``'s active Pokemon's
     Natural Gift reads (BtlCmd_CalcNaturalGiftParams, battle_script.c:8088-8102, through
-    ``Battler_NaturalGiftPower`` / ``_Type``, battle_lib.c:5465-5480): the item it holds; once
-    the script's ``RemoveItem BTLSCR_ATTACKER`` (effect_script_0222.s:8) has run, before TryMove
-    and the hit, the item it put into ``recycleItem[battler]`` (battle_script.c:8977;
-    ``BattleState.recycle_item``), which nothing else writes before the hit (B13-20). The held
-    item as ``Battler_HeldItem`` sees it (``state.held_item``: none under Klutz or Embargo, so the
-    move fails at power 0 and removes nothing, B13-29)."""
-    side = _i32(side)
-    held = _i32(state.item[side, state.active[side]])
-    return jnp.where(held != 0, held_item(state, side), _i32(state.recycle_item[side]))
+    ``Battler_NaturalGiftPower`` / ``_Type``, battle_lib.c:5465-5480, on ``Battler_HeldItem``):
+    the item it holds as ``Battler_HeldItem`` sees it (``state.held_item``: none under Klutz or
+    Embargo, so the move fails at power 0 and removes nothing, B13-29). ``gift`` (> 0) is the
+    item this action's own ``RemoveItem BTLSCR_ATTACKER`` (effect_script_0222.s:8) took, before
+    TryMove and the hit (``step._use_move`` passes it): CalcDamage ran on it before the removal
+    (:6-7). Never ``recycle_item`` itself: that record is per battler and outlives the action,
+    the turn and switches (battle_script.c:8977, :9005-9007), so a holder of nothing fails at
+    power 0 whatever an earlier berry left there (B13-20, B13-37)."""
+    gift = _i32(gift)
+    return jnp.where(gift != 0, gift, held_item(state, _i32(side)))
 
 
 def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -730,7 +731,7 @@ def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
     return kind, power * 40 // 63 + 30
 
 
-def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.ndarray:
     """``int32``: the type of ``move`` used by ``side``'s active Pokemon: the
     ``battleCtx->moveType`` its script sets (Hidden Power's IV type, battle_script.c:6028;
     Weather Ball's, ``weather_ball_params``; Judgment's plate type, ``judgment_type``), else
@@ -751,7 +752,8 @@ def move_type_of(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     out = jnp.where(effect == EffectId.JUDGMENT, plate, out)
     # BtlCmd_CalcNaturalGiftParams (battle_script.c:8095-8096), B13-20: only with a gift power
     # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
-    gift_power, gift_type = natural_gift_params(tables, gift_item(state, side))
+    # ``gift``: the action's removed berry (``gift_item``, B13-37).
+    gift_power, gift_type = natural_gift_params(tables, gift_item(state, side, gift))
     return jnp.where((effect == EffectId.NATURAL_GIFT) & (gift_power > 0), gift_type, out)
 
 
@@ -930,6 +932,8 @@ def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, it
     case = jnp.where(move == AI_JUDGMENT, judgment_type(tables, item, Type.NORMAL), Type.NORMAL)
     case = jnp.where(move == AI_NATURAL_GIFT, gift, case)
     case = jnp.where(move == AI_HIDDEN_POWER, hidden_power(ivs)[0], case)
+    # CalcMoveDamage: TYPE_NORMAL is the table's moveType, else ``inType & 0x3F``
+    # (battle_lib.c:6681-6685).
     return jnp.where(case == Type.NORMAL, table_type, case & 0x3F)
 
 
@@ -1189,8 +1193,11 @@ def beat_up_slots(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
     return order.astype(jnp.int32), jnp.sum(eligible.astype(jnp.int32))
 
 
-def beat_up_damage(tables: Tables, state: BattleState, atk_side, move, hit, crit, roll):
-    """``int32``: the damage of Beat Up's hit ``hit`` (0-based) by ``atk_side``: BtlCmd_BeatUp
+def beat_up_damage(
+    tables: Tables, state: BattleState, atk_side, def_side, move, hit, crit, roll
+) -> jnp.ndarray:
+    """``int32``: the damage of Beat Up's hit ``hit`` (0-based) by ``atk_side`` on ``def_side``'s
+    active Pokemon (DEFENDING_MON, battle_script.c:6209; B13-38): BtlCmd_BeatUp
     (battle_script.c:6203-6219) with the hit's party member (``beat_up_slots``): its species'
     base Attack x the move's power x (its level x 2 / 5 + 2) / the defender's species base
     Defense (DEFENDING_MON.species and formNum: the personal rows, ``species_form_row``) / 50 +
@@ -1201,7 +1208,7 @@ def beat_up_damage(tables: Tables, state: BattleState, atk_side, move, hit, crit
     SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
     or effectiveness (B13-10)."""
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side
+    def_side = _i32(def_side)
     order, _ = beat_up_slots(state, atk_side)
     slot = order[jnp.clip(_i32(hit), 0, order.shape[0] - 1)]
     # SpeciesData_GetFormValue(species, form, ...): the personal row of the species and form.
@@ -1237,6 +1244,7 @@ def _pre_random(
     ai_item=None,
     hit=0,
     in_power=0,
+    gift=0,
 ):
     """Damage after ``+ 2`` and the crit multiplier, before the random roll.
 
@@ -1256,7 +1264,8 @@ def _pre_random(
     ``in_power`` (> 0) is the power a move script set from state this function does not see at
     the hit (CalcMoveDamage's ``inPower``, battle_lib.c:6673-6677): Gyro Ball's speeds at the
     action start, Trump Card's PP of the action's move slot (``step._use_move``); 0 computes
-    them from ``s`` (the turn-start tables)."""
+    them from ``s`` (the turn-start tables). ``gift`` (> 0): the berry Natural Gift's script
+    removed this action (``gift_item``, B13-37)."""
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
@@ -1338,7 +1347,7 @@ def _pre_random(
         pp_left = jnp.maximum(_i32(s.pp[atk_side, a_slot, first]) - 1, 0)
         power = jnp.where(effect == EffectId.TRUMP_CARD, trump_card_power(pp_left), power)
         # BtlCmd_CalcNaturalGiftParams (:8088-8102): the item's naturalGiftPower (B13-20).
-        gift_power = natural_gift_params(tables, gift_item(s, atk_side))[0]
+        gift_power = natural_gift_params(tables, gift_item(s, atk_side, gift))[0]
         power = jnp.where(effect == EffectId.NATURAL_GIFT, gift_power, power)
         power = jnp.where(_i32(in_power) > 0, _i32(in_power), power)
     # BtlCmd_Present (battle_script.c:5795-5800) sets movePower before CalcDamage.
@@ -1358,7 +1367,7 @@ def _pre_random(
     move_type = (
         ai_case_type(tables, s, atk_side, move, ivs=ai_ivs, item=ai_item)
         if ai
-        else move_type_of(tables, s, atk_side, move)
+        else move_type_of(tables, s, atk_side, move, gift)
     )
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[atk_side, a_slot])
@@ -1632,7 +1641,8 @@ def damage_table(
     power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s. ``hit``: the hit
     of the move (0-based): Triple Kick's power, Beat Up's party member (B13-5, B13-10)."""
     # The defender is the other side's active Pokemon (this table's contract).
-    power_mul = script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, 10)
+    def_side = 1 - _i32(atk_side)
+    power_mul = script_power_mul(tables, state, atk_side, def_side, move, 10)
     damage, move_type, category, power = _pre_random(
         tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit
     )
@@ -1645,7 +1655,7 @@ def damage_table(
     )  # fmt: skip
     fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
-    beat_up = beat_up_damage(tables, state, atk_side, move, hit, crit, rolls)
+    beat_up = beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, rolls)
     table = jnp.where(tables.move_effect[_i32(move)] == EffectId.BEAT_UP, beat_up, table)
     return jnp.where(fixed, amount, table)
 
@@ -1679,6 +1689,7 @@ def damage_for_roll(
     wonder_guard=True,
     hit=0,
     in_power=0,
+    gift=0,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
@@ -1686,7 +1697,9 @@ def damage_for_roll(
     (``PRESENT_HEAL``) deals 0: effect_script_0122.s jumps past ``CalcCrit`` and
     ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
     power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
-    ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15)."""
+    ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
+    ``gift``: its Natural Gift berry removed this action (B13-37)."""
+    def_side = 1 - _i32(atk_side)  # the other side's active Pokemon (this function's contract)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1694,11 +1707,12 @@ def damage_for_roll(
         move,
         crit,
         # Reckless, the DOUBLE_POWER scripts; the defender is the other side's active Pokemon.
-        power_mul=script_power_mul(tables, state, atk_side, 1 - _i32(atk_side), move, power_mul),
+        power_mul=script_power_mul(tables, state, atk_side, def_side, move, power_mul),
         magnitude=magnitude,
         present=present,
         hit=hit,
         in_power=in_power,
+        gift=gift,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
@@ -1715,7 +1729,7 @@ def damage_for_roll(
     )
     beat_up = _i32(tables.move_effect[_i32(move)]) == EffectId.BEAT_UP
     rolled = jnp.where(
-        beat_up, beat_up_damage(tables, state, atk_side, move, hit, crit, roll), rolled
+        beat_up, beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, roll), rolled
     )
     return jnp.where(heal, 0, jnp.where(fixed, amount, rolled))
 

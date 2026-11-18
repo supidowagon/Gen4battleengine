@@ -1132,13 +1132,16 @@ def _use_move(
     # Natural Gift (effect_script_0222.s): BtlCmd_CalcNaturalGiftParams fails at naturalGiftPower
     # 0 (battle_script.c:8094-8099; no item included); else CalcCrit, CalcDamage, then
     # RemoveItem BTLSCR_ATTACKER (:8) before TryMove: a miss or Protect still eats the berry.
-    # The hit reads its power and type through damage.gift_item (B13-20).
+    # The hit reads its power and type through damage.gift_item, given the removed berry
+    # (``gift_removed``; 0 for every other action), B13-20, B13-37.
     gift = effect_used == EffectId.NATURAL_GIFT
     # Battler_NaturalGiftPower reads Battler_HeldItem (battle_lib.c:5465-5469: none under Klutz
     # or Embargo, B13-29); Recycle's test above reads BATTLEMON_HELD_ITEM itself.
     gift_fails = natural_gift_params(tables, held_item(state, side, user))[0] == 0
     failed = failed | (gift & gift_fails)
-    state = consume_item(state, side, script_on & gift & ~gift_fails)
+    gift_on = script_on & gift & ~gift_fails
+    gift_removed = jnp.where(gift_on, held_item(state, side, user).astype(jnp.int32), 0)
+    state = consume_item(state, side, gift_on)
     # Embargo (effect_script_0232.s:5, :7-8): CheckSubstitute on the defender, MOVE_STATUS_FAILED
     # before TryMove (its subscript's own failures come at the hit: effects._embargo), B13-31.
     failed = failed | (
@@ -1260,7 +1263,7 @@ def _use_move(
     # MOVE_STATUS_STURDY, no roll): subscript_missed.s:67-69 tags the defender's ability
     # ("{0} was protected by {1}!", BattleAI_SetAbility, battle_script.c:11798-11806), unless a
     # flag it tests first holds: protected (:18), Levitate (:34) or ineffective (:59).
-    ohko_type = move_type_of(tables, state, side, used)
+    ohko_type = move_type_of(tables, state, side, used, gift_removed)
     sturdy_shown = (
         can_act
         & has_target
@@ -1448,7 +1451,7 @@ def _use_move(
     roosted_foe = jnp.asarray(foe_roosting, bool) & (state.active[target_side] == target)
     roost_types = chart_types(state, target_side, target, roosted_foe).astype(state.types.dtype)
     state = state._replace(types=state.types.at[target_side, target].set(roost_types))
-    move_type = move_type_of(tables, state, side, used)
+    move_type = move_type_of(tables, state, side, used, gift_removed)
     chart = effectiveness(
         tables,
         move_type,
@@ -1772,6 +1775,7 @@ def _use_move(
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
             in_power=in_power,
+            gift=gift_removed,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -1906,7 +1910,9 @@ def _use_move(
             items & landed & ~info.sub_hit,
         )
         hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
-        state, thawed = thaw_target(tables, state, side, target_side, used_t, hit_dealt, items)
+        state, thawed = thaw_target(
+            tables, state, side, target_side, used_t, hit_dealt, items, gift_removed
+        )
         # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (bcp.c:3730): the attacker's item kept above, or
         # the attacker's item after a Jaboca / Rowap recoil (its HP fell), G-54.
         state = after_damage_items(

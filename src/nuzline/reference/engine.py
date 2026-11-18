@@ -287,6 +287,9 @@ class _Turn:
     # B13-15.
     gyro_power: int = 0
     move_slot: int = 0
+    # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
+    # hit's power and type read (_gift_item), B13-37; 0 otherwise.
+    gift: int = 0
 
 
 class _Pause(Exception):
@@ -535,9 +538,10 @@ def _hidden_power(ivs: list[int]) -> tuple[int, int]:
     return kind, power
 
 
-def _move_type(tables, s: RefState, side: int, move: int) -> int:
+def _move_type(tables, s: RefState, side: int, move: int, gift: int = 0) -> int:
     """The type of ``move`` as ``side``'s active Pokemon uses it (lib.c:6682; Hidden
-    Power's from its IVs, script.c:6028)."""
+    Power's from its IVs, script.c:6028). ``gift``: the berry Natural Gift's script removed this
+    action (``_gift_item``, B13-37)."""
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.HIDDEN_POWER:
         return _hidden_power(_active(s, side).ivs)[0]
@@ -548,17 +552,17 @@ def _move_type(tables, s: RefState, side: int, move: int) -> int:
         hold = _t(tables, "item_hold_effect", _held(s, _active(s, side)))
         return PLATE_TYPES.get(hold, _t(tables, "move_type", move))
     # CalcNaturalGiftParams (script.c:8095-8096), B13-20: only with a gift power (else it fails).
-    if effect == EffectId.NATURAL_GIFT and _t(tables, "item_gift_power", _gift_item(s, side)):
-        return _t(tables, "item_gift_type", _gift_item(s, side))
+    if effect == EffectId.NATURAL_GIFT and _t(tables, "item_gift_power", _gift_item(s, side, gift)):
+        return _t(tables, "item_gift_type", _gift_item(s, side, gift))
     return _t(tables, "move_type", move)
 
 
-def _gift_item(s: RefState, side: int) -> int:
-    """The item Natural Gift reads: the held one, or after the script's RemoveItem
-    (effect_script_0222.s:8) the battler's recycleItem it went to (B13-20). The held one through
-    Battler_HeldItem (none under Klutz or Embargo, B13-29)."""
-    mon = _active(s, side)
-    return _held(s, mon) if mon.item else s.sides[side].recycle_item
+def _gift_item(s: RefState, side: int, gift: int = 0) -> int:
+    """The item Natural Gift reads: the held one through Battler_HeldItem (lib.c:5465-5469; none
+    under Klutz or Embargo, B13-29), or ``gift``, the berry this action's own RemoveItem
+    (effect_script_0222.s:8) took (``turn.gift``). Never recycleItem itself: it outlives the
+    action (script.c:8977, :9005-9007), B13-20, B13-37."""
+    return gift if gift else _held(s, _active(s, side))
 
 
 # BtlCmd_CalcMagnitudePower (script.c:5820-5852), indexed by level - 4.
@@ -606,11 +610,12 @@ def _weather_ball_on(tables, s: RefState) -> bool:
     return s.weather != Weather.NONE and not _weather_suppressed(tables, s)
 
 
-def _gyro_power(tables, s: RefState, side: int) -> int:
+def _gyro_power(tables, s: RefState, side: int, defender: int) -> int:
     """``BtlCmd_CalcGyroBallPower`` (script.c:7123-7131) on monSpeedValues, the speeds of
-    CompareBattlerSpeed (lib.c:1372-1373); coverage refuses a zero user speed."""
+    CompareBattlerSpeed (lib.c:1372-1373), the user's and its ``defender``'s (B13-38); coverage
+    refuses a zero user speed."""
     user = max(_effective_speed(tables, s, side), 1)
-    return min(1 + 25 * _effective_speed(tables, s, 1 - side) // user, 150)
+    return min(1 + 25 * _effective_speed(tables, s, defender) // user, 150)
 
 
 def _rollout_multiplier(s: RefState, attacker: int) -> int:
@@ -883,6 +888,7 @@ def _calc_move_damage(
     side_conditions: bool = True,
     field_conditions: bool = True,
     hit: int = 0,
+    gift: int = 0,
 ) -> int:
     """``BattleSystem_CalcMoveDamage`` (lib.c:6601) times ``criticalMul``
     (``BattleScript_CalcMoveDamage``, script.c:1344). ``side_conditions`` /
@@ -934,12 +940,12 @@ def _calc_move_damage(
     elif not in_power and effect == EffectId.ASSURANCE and s.ts_assurance[defender]:
         power *= 2  # effect_script_0231.s:7-9 (the turn's flag is _hit's in_power)
     elif not in_power and effect == EffectId.GYRO_BALL:  # the turn-start table's speeds
-        power = _gyro_power(tables, s, attacker)
+        power = _gyro_power(tables, s, attacker, defender)
     elif not in_power and effect == EffectId.TRUMP_CARD and move in atk.moves:
         power = TRUMP_CARD_POWER[min(max(atk.pp[atk.moves.index(move)] - 1, 0), 4)]
     elif not in_power and effect == EffectId.NATURAL_GIFT:  # script.c:8088-8102, B13-20
-        power = _t(tables, "item_gift_power", _gift_item(s, attacker))
-    move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
+        power = _t(tables, "item_gift_power", _gift_item(s, attacker, gift))
+    move_type = _move_type(tables, s, attacker, move, gift)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
     if a_ability == AbilityId.TECHNICIAN and move != MOVE_STRUGGLE and power <= 60:
@@ -1152,7 +1158,7 @@ def _variance(damage: int, roll: int) -> int:
 
 
 def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: int, damage: int,
-                      flags: set[str] | None = None):  # fmt: skip
+                      flags: set[str] | None = None, gift: int = 0):  # fmt: skip
     """``BattleSystem_ApplyTypeChart`` (lib.c:2560): STAB, then every chart row for
     the move's type in table order, each matching defender type through
     ``ApplyTypeMultiplier`` (lib.c:7542). Struggle returns early (lib.c:2573). ``flags``
@@ -1161,7 +1167,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
         flags = set()
     if move == MOVE_STRUGGLE:
         return damage
-    move_type = _move_type(tables, s, attacker, move)
+    move_type = _move_type(tables, s, attacker, move, gift)
     atk_types = _active(s, attacker).types
     def_types = _active(s, defender).types
     if move_type in atk_types:  # lib.c:2592-2597
@@ -1231,15 +1237,15 @@ def _beat_up_slots(s: RefState, side: int) -> list[int]:
     ]
 
 
-def _beat_up_damage(tables, s: RefState, attacker: int, move: int, crit: bool, roll: int,
-                    hit: int) -> int:  # fmt: skip
+def _beat_up_damage(tables, s: RefState, attacker: int, defender: int, move: int, crit: bool,
+                    roll: int, hit: int) -> int:  # fmt: skip
     """BtlCmd_BeatUp's damage (script.c:6203-6219): the member's species base Attack x power x
     (level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2, x criticalMul, then the
     variance; no CalcDamage, no type chart (SYSCTL_IGNORE_IMMUNITIES), B13-10."""
     member = s.sides[attacker].party[_beat_up_slots(s, attacker)[hit]]
     # SpeciesData_GetFormValue: by species and form, the personal row.
     row = _t(tables, "species_form_row", member.species, member.form)
-    dfn = _active(s, 1 - attacker)
+    dfn = _active(s, defender)  # DEFENDING_MON (script.c:6209), B13-38
     d_row = _t(tables, "species_form_row", dfn.species, dfn.form)
     damage = _t(tables, "species_base_stats", row, Stat.ATK) * _t(tables, "move_power", move)
     damage = damage * (member.level * 2 // 5 + 2)
@@ -1252,7 +1258,7 @@ def _beat_up_damage(tables, s: RefState, attacker: int, move: int, crit: bool, r
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
-    in_power: int = 0,
+    in_power: int = 0, gift: int = 0,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
@@ -1268,7 +1274,7 @@ def _move_damage(
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
         return _fixed_damage(tables, s, attacker, move, wonder_guard)
     if _t(tables, "move_effect", move) == EffectId.BEAT_UP:
-        return _beat_up_damage(tables, s, attacker, move, crit, roll, hit)
+        return _beat_up_damage(tables, s, attacker, defender, move, crit, roll, hit)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
@@ -1305,6 +1311,7 @@ def _move_damage(
         present=present,
         hit=hit,
         in_power=in_power,
+        gift=gift,
     )
     # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
@@ -1314,10 +1321,10 @@ def _move_damage(
     if _item_effect(tables, atk, s) == ItemId.METRONOME_ITEM:
         damage = damage * (10 + s.sides[attacker].metronome_turns) // 10
     damage = _variance(damage, roll)
-    kind = _move_type(tables, s, attacker, move)
+    kind = _move_type(tables, s, attacker, move, gift)
     if wonder_guard and _wonder_guarded(tables, s, attacker, defender, move, kind):
         return 0  # lib.c:2649-2654: MOVE_STATUS_WONDER_GUARD, no damage (G-18)
-    return _apply_type_chart(tables, s, attacker, defender, move, damage)
+    return _apply_type_chart(tables, s, attacker, defender, move, damage, gift=gift)
 
 
 def ref_damage_table(tables, state: RefState, atk_side: int, move: int, crit: bool) -> list[int]:
@@ -2100,8 +2107,8 @@ def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> boo
         return False
     flags: set[str] = set()
     if effect != EffectId.BIDE and _t(tables, "move_power", move) != 0:
-        _apply_type_chart(tables, s, attacker, 1 - attacker, move, 0, flags)
-    move_type = _move_type(tables, s, attacker, move)
+        _apply_type_chart(tables, s, attacker, 1 - attacker, move, 0, flags, turn.gift)
+    move_type = _move_type(tables, s, attacker, move, turn.gift)
     return _resist_berry(turn, s, 1 - attacker, move_type, "super" in flags)
 
 
@@ -3345,7 +3352,7 @@ def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> 
     """``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (bcp.c:3708-3727), after the hit's item checks and
     Sticky Barb transfer: a living frozen defender hit for damage by a Fire-type move thaws."""
     mon = _active(s, 1 - side)
-    fire = _move_type(turn.tables, s, side, move) == Type.FIRE
+    fire = _move_type(turn.tables, s, side, move, turn.gift) == Type.FIRE
     if mon.status == Status.FREEZE and mon.hp and dealt > 0 and fire:
         mon.status = Status.NONE
         mon.status_counter = 0
@@ -3391,7 +3398,7 @@ def _super_effective(turn: _Turn, s: RefState, side: int, move: int) -> bool:
     if effect in _IGNORES_TYPE_CHECKS or _present_heals(tables, move, turn.outcome, side):
         return False
     flags: set[str] = set()
-    _apply_type_chart(tables, s, side, 1 - side, move, 0, flags)
+    _apply_type_chart(tables, s, side, 1 - side, move, 0, flags, turn.gift)
     return "super" in flags
 
 
@@ -3492,7 +3499,7 @@ def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
             _lose_hp(turn, s, side, _divide(mon.max_hp, _t(tables, "item_param", mon.item, 0)))
 
 
-def _script_power(turn: _Turn, s: RefState, side: int, move: int) -> int:
+def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int) -> int:
     """The movePower a script sets from the action (CalcMoveDamage's inPower): Gyro Ball's from
     the speeds at the action's start, Trump Card's from ppCur of moveSlot after the decrement,
     Assurance's x2 on the defender's flag (B13-14, B13-15, B13-17); else 0."""
@@ -3503,7 +3510,8 @@ def _script_power(turn: _Turn, s: RefState, side: int, move: int) -> int:
         return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.move_slot], 4)]
     if effect == EffectId.ASSURANCE:
         power = _t(turn.tables, "move_power", move)
-        return power * 2 if turn.assurance[1 - side] else power
+        # BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK (effect_script_0231.s:7), B13-38.
+        return power * 2 if turn.assurance[defender] else power
     return 0
 
 
@@ -3556,7 +3564,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             magnitude=o.magnitude[side],
             present=o.present[side],
             hit=hit,
-            in_power=_script_power(turn, s, side, move),
+            in_power=_script_power(turn, s, side, target, move),
+            gift=turn.gift,
         )
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
@@ -4003,8 +4012,9 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     mon = _active(s, side)
     # BranchActions' SortMonSpeedOrder (bcp.c:888) writes monSpeedValues before the action
     # (Gyro Ball, B13-14); moveSlot (Trump Card, B13-15).
-    turn.gyro_power = _gyro_power(tables, s, side) if _active(s, 1 - side).hp else 0
+    turn.gyro_power = _gyro_power(tables, s, side, 1 - side) if _active(s, 1 - side).hp else 0
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
+    turn.gift = 0
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
     # action's end (G-13).
     turn.sync_flag, turn.sync_mon = False, -1
@@ -4255,6 +4265,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         if not _t(tables, "item_gift_power", _held(s, mon)):  # Battler_HeldItem (B13-29)
             _unlock(s.sides[side])
             return record
+        turn.gift = _held(s, mon)
         _remove_item(s, side)
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
     if counter:

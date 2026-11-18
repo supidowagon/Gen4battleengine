@@ -2301,7 +2301,9 @@ def kings_rock_flinch(tables, state, side, target_side, move, cond) -> BattleSta
     )
 
 
-def thaw_target(tables: Tables, state: BattleState, side, target_side, move, dealt, cond) -> tuple:
+def thaw_target(
+    tables: Tables, state: BattleState, side, target_side, move, dealt, cond, gift=0
+) -> tuple:
     """``(state, thawed)``: ``AFTER_MOVE_EFFECT_THAW_DEFENDER`` (battle_controller_player.c:
     3708-3727), after the held-item checks and the Sticky Barb transfer of the hit
     (``step._use_move``): a frozen defender with HP left that took damage from a Fire-type
@@ -2311,7 +2313,7 @@ def thaw_target(tables: Tables, state: BattleState, side, target_side, move, dea
     thawed = (
         jnp.asarray(cond)
         & (state.status[target_side, target] == Status.FREEZE)
-        & (move_type_of(tables, state, side, move) == Type.FIRE)
+        & (move_type_of(tables, state, side, move, gift) == Type.FIRE)
         & (jnp.asarray(dealt) > 0)
         & _alive(state, target_side, target)
     )
@@ -2821,6 +2823,7 @@ def play_hit(
     pursuit_switch=False,
     foe_claw=False,
     in_power=0,
+    gift=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -2900,6 +2903,8 @@ def play_hit(
         hit=hit_index,
         # Gyro Ball's / Trump Card's power from the action (step._use_move, B13-14, B13-15).
         in_power=in_power,
+        # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
+        gift=gift,
     )
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an
@@ -2907,7 +2912,7 @@ def play_hit(
     # (Counter, Mirror Coat, Metal Burst: RANGE_SINGLE_TARGET_SPECIAL; Kaizo's Bide: single
     # target), so CheckTypeChart's RANGE_USER skip (bcp.c:2352) never applies.
     is_counter = tables.move_effect[move] == _E.COUNTER
-    counter_type = move_type_of(tables, state, side, move)
+    counter_type = move_type_of(tables, state, side, move, gift)
     immune = (
         effectiveness(
             tables,
@@ -2951,7 +2956,7 @@ def play_hit(
     taken = jnp.where(endured, target_hp - 1, damage)
     # Secret Power's secondary effect is the terrain's (order.move_effects).
     effect, param = move_effects(tables, state, move)
-    move_type = move_type_of(tables, state, side, move)
+    move_type = move_type_of(tables, state, side, move, gift)
     # MOVE_STATUS_SUPER_EFFECTIVE: BattleControllerPlayer_CheckTypeChart (bcp.c:2350-2358)
     # applies the chart to a move with power that is not RANGE_USER (Bide); its
     # ApplyTypeMultiplier (battle_lib.c:7549-7573) sets the flag when the x2 entries outnumber

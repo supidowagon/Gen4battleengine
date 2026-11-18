@@ -115,6 +115,14 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   charge-turn mismatch (B13-34, step.py; the reference was right). AI: switching's and the
   post-KO replacement's Natural Gift / Judgment / Weather Ball typed (B13-35); Gyro Ball's AI
   damage case still refused, its decomp model written down (B13-36, Owed).
+  REVIEW of f588250..fa50a0b done; fixes (B13-37..B13-40): Natural Gift reads only the held item
+  or the berry its own action removed, never a stale recycle_item (both engines); Beat Up,
+  Gyro Ball and Assurance take the defender as an argument; 6212174's unmarked E1 item-path
+  changes recorded for E1 (B13-39); Water Spout's prep cost measured (x4.36, Owed); Klutz / Embargo
+  "unsupported" wording updated. Green: batch13 not-slow 62 (in three runs, 6.8 GB),
+  test_differential 5, diff.py seed 50 ok 300, variants / game_constants / backlog 69, test_cli
+  not-slow 102 (the two over-8 GB nodes not run), unsupported nodes 26, enumerate +
+  damage_classes not-slow 21.
 - Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
   plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
   does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
@@ -492,6 +500,11 @@ Rules left out because another mechanic is missing; each closes with the mechani
   ``outcome.kings_rock_chance`` (turn-start item) and the focus_band / Bright Powder / Quick
   Claw reads time-dependent (the King's Rock Owed item above). Embargo and Klutz are done
   (B13-29..B13-31).
+- **Prep cost of Water Spout / Eruption (B13-40):** falloff_cuts adds up to power - 1 entry-HP
+  regions per holder (x4.36 on the product of per-member variants for one HP-44 holder in the
+  vanilla sample party; more for higher max HP). The cuts are exact; closing this needs a prep-side
+  reduction (for example, cuts only where a power band changes a damage or KO class against this
+  opponent), proven to keep the same lines.
 - Kaizo's Ganlon and Apicot Berries (param 0) are refused by the divisor guard
   (`effect_map.DIVISOR_PARAM_MIN`, B2-3). Finding: `curHP <= maxHP / itemPower`
   (battle_lib.c:4778, :1294) is a C `/` on ints, which the compiler emits as a call to the
@@ -1976,8 +1989,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
   131-135) sets movePower = power x 2 and moveType Water / Rock / Fire / Ice (rain / sand / sun /
   hail; fog sets none, so Normal); with Cloud Nine / Air Lock alive it sets nothing. Judgment
   (268, EffectId.JUDGMENT): effect_script_0268.s:5-95 sets moveType from the attacker's
-  Battler_HeldItemEffect HOLD_EFFECT_ARCEUS_* (any holder; Klutz and Embargo, battle_lib.c:
-  5352-5363, are an unsupported ability and move), read from each game's Tables.item_hold_effect
+  Battler_HeldItemEffect HOLD_EFFECT_ARCEUS_* (any holder; Klutz and Embargo hide the item,
+  battle_lib.c:5352-5363, both supported since B13-29..31), read from each game's Tables.item_hold_effect
   (damage.PLATE_TYPES; no item-table change, so no e1-model commit). The script runs before
   TryMove's accuracy, chart and absorbing-ability states (bcp.c:3212-3216), which read
   battleCtx->moveType (bcp.c:2358-2361, battle_lib.c:3490-3497, 2582-2597 STAB, 6680-6684 and
@@ -2038,14 +2051,14 @@ Rules left out because another mechanic is missing; each closes with the mechani
   checks (MOVE_STATUS_NO_PP is a NO_EFFECTS status, bcp.c:3205-3216).
 - B13-20 Natural Gift (222, EffectId.NATURAL_GIFT): BtlCmd_CalcNaturalGiftParams
   (battle_script.c:8088-8102) reads Battler_NaturalGiftPower / _Type (battle_lib.c:5465-5480:
-  Battler_HeldItem, whose Klutz and Embargo are unsupported) from ItemData.naturalGiftPower /
+  Battler_HeldItem, which Klutz and Embargo empty, B13-29..31) from ItemData.naturalGiftPower /
   _Type (include/item.h:63-64; new Tables.item_gift_power / item_gift_type, 0x1F = none,
   itemproc.c:242); power 0 (no item, a non-berry) fails it (effect_script_0222.s:11-13), and
   moveType keeps 0 then. Otherwise CalcCrit, CalcDamage, then RemoveItem BTLSCR_ATTACKER (:8)
   before TryMove: a miss, Protect or an immunity still eats the berry (into recycleItem and
   item_consumed; Unburden then doubles). The hit's power and type come through
-  damage.gift_item: the held item, or once removed the battler's recycle_item (nothing writes
-  it between the script and the hit); a berry is no damage, crit or accuracy input of its
+  damage.gift_item: the held item, or once removed the berry step._use_move passes in (never
+  recycle_item itself, which outlives the action: B13-37); a berry is no damage, crit or accuracy input of its
   attacker, so the hit at its own time equals CalcDamage at the script's.
 - B13-21 Laws (both moves draw nothing new): NATURAL_GIFT is INPUT_NEUTRAL (it writes the foe's
   HP and removes its own berry, which the item clauses over-approximate) and NON_TABLE;
@@ -2105,8 +2118,8 @@ Rules left out because another mechanic is missing; each closes with the mechani
   (:2588-2590). heldItem is the attacker's battleMons item (:1041-1050, :1560-1569,
   :2130-2139, :2210-2219), a benched member's own for IfPartyMemberDealsMoreDamage
   (:2156-2165, commands.estimate's item), the player's for IfBattlerDealsMoreDamage's last
-  move (:2228-2237). Klutz and embargoTurns gate both cases (:2886, :2898): an unsupported
-  ability and move (B13-22). Weather Ball takes the default case (table power and type,
+  move (:2228-2237). Klutz and embargoTurns gate both cases (:2886, :2898; B13-22), both
+  supported since B13-29..31. Weather Ball takes the default case (table power and type,
   :3074-3078).
   The other batch-13 moves need no case: TrainerAI_CalcAllDamage calls TrainerAI_CalcDamage
   once per move (:2799-2838) and its default (:3074-3078) passes power 0 and TYPE_NORMAL, so
@@ -2234,3 +2247,31 @@ Rules left out because another mechanic is missing; each closes with the mechani
   divides the player's value by itself: 26). The per-slot exact distribution runs one read
   pattern for every slot (_slot_move_distribution), so a compare reached past a random read in
   an earlier slot correlates the slots: refuse that state when the two powers differ.
+- B13-37 (review fix) Natural Gift reads only the held item: Battler_NaturalGiftPower / _Type
+  take Battler_HeldItem (battle_lib.c:5465-5480), and a power of 0 fails the move
+  (battle_script.c:8094-8099). recycleItem is per battler and outlives the action, the turn and
+  switches (:8977, :9005-9007), so it is never an input: damage.gift_item(state, side, gift) and
+  the reference's _gift_item take the berry this action's own RemoveItem (effect_script_0222.s:8)
+  removed as an explicit argument (step._use_move's gift_removed, threaded through move_type_of,
+  _pre_random, damage_for_roll, play_hit and thaw_target; the reference's _Turn.gift), and
+  otherwise read the held item. A Natural Gift user that holds nothing has the table type and power
+  0 in move_type_of, in the turn-start tables and in the enumeration (prep and playout included),
+  whatever its record says.
+- B13-38 (review fix, doubles convention 1) The defender is passed in: damage.beat_up_damage(...,
+  def_side, ...) (DEFENDING_MON, battle_script.c:6209), and in the reference _beat_up_damage(...,
+  defender, ...), _gyro_power(..., defender) (CalcGyroBallPower, :7123-7131) and
+  _script_power(..., defender, ...) (BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK,
+  effect_script_0231.s:7). The singles callers name the other side once, at the action or table
+  level (damage_table, damage_for_roll, enumerate, the reference's _use_move and _hit).
+- B13-39 (process, for E1) Commit 6212174 ("feat(e2): batch 13 Embargo") changed E1's item paths
+  without the "e1-model:" title: hooks.pluck_berry (a Klutz or embargoed eater eats the
+  berry with no effect, battle_lib.c:5839-5844, and the eaten / effect-on split that moves the
+  RemoveItem / recycle_item writes) and step's play_hit argument foe_custap, now gated on
+  ~target_moved (subscript_check_quick_claw.s:26-27). It is already merged over, so history is
+  kept; E1 should review those paths from this line.
+- B13-40 (review measure) prep.variants.falloff_cuts gives a Water Spout / Eruption holder one
+  entry-HP region per power band below the top (up to power - 1 = 149 cuts, capped by its max HP).
+  Measured on the vanilla sample party against Roark (member 0, max HP 44, Water Spout or Eruption
+  in slot 4): that member's regions 7 -> 44, its one-change variants 10 -> 47, the party's
+  one-change variants 47 -> 84 (x1.79), and the product of (1 + variants) per member 310464 ->
+  1354752 (x4.36); 0.34 GB. The cuts stay exact (Owed: the prep cost).

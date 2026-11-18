@@ -15,8 +15,10 @@ from nuzline.engine.damage import (
     damage_for_roll,
     iron_ball,
     falloff_power,
+    gift_item,
     gyro_ball_power,
     move_type_of,
+    natural_gift_params,
     punishment_power,
     trump_card_power,
     weather_ball_params,
@@ -1117,8 +1119,10 @@ def test_natural_gift_takes_its_berrys_power_and_type_and_eats_it(tables, names)
         assert int(out.item[0, 0]) == 0 and int(out.recycle_item[0]) == oran
         assert int(out.item_consumed[0, 0]) == oran
         assert _loss(s, out) == (want if hurts else 0), foe
-        # damage.gift_item: after the removal the record names the berry, so the type holds.
-        assert int(move_type_of(tables, out, 0, m)) == Type.POISON
+        # damage.gift_item: after the action nothing is held, so the type is the table's (the
+        # record is no input: B13-37); within the action the removed berry is passed in.
+        assert int(move_type_of(tables, out, 0, m)) == int(tables.move_type[m])
+        assert int(move_type_of(tables, out, 0, m, oran)) == Type.POISON
 
 
 def test_natural_gift_misses_still_eat_the_berry(tables, names):
@@ -1141,6 +1145,24 @@ def test_natural_gift_fails_without_a_gift_item(tables, names):
         out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), O)
         assert int(out.item[0, 0]) == int(s.item[0, 0]) and _loss(s, out) == 0
         assert int(out.recycle_item[0]) == 0
+
+
+def test_natural_gift_ignores_a_stale_recycle_record(tables, names):
+    """B13-37: Battler_NaturalGiftPower reads Battler_HeldItem (battle_lib.c:5465-5469), never
+    recycleItem, which outlives the action, the turn and switches (battle_script.c:8977,
+    :9005-9007). A user holding nothing with an Oran Berry left in its record: the move's type
+    is its table type and its power 0 (damage.gift_item), and the move fails (:8094-8099)
+    without touching the record."""
+    oran = names.item("Oran Berry")
+    m = names.move("Natural Gift")
+    s = _plain(_state(tables, names, ("Snorlax", "Natural Gift"), ("Machop", "Tail Whip")))
+    s = _record(s, 0, oran)
+    assert int(gift_item(s, 0)) == 0
+    assert int(natural_gift_params(tables, gift_item(s, 0))[0]) == 0
+    assert int(move_type_of(tables, s, 0, m)) == int(tables.move_type[m])
+    out = assert_matches_reference(tables, s, A("Natural Gift", "Tail Whip", s, names), O)
+    assert _loss(s, out) == 0
+    assert int(out.item[0, 0]) == 0 and int(out.recycle_item[0]) == oran
 
 
 def test_natural_gift_user_unburdened_after_its_berry(tables, names):
