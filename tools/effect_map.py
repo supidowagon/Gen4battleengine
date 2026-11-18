@@ -52,7 +52,9 @@ from nuzline.engine.ids import (
     COUNTER_ANY,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
+    FLAIL_FALLOFF,
     MINIMIZE_PARAM,
+    POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
@@ -491,6 +493,28 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Beat Up (effect_script_0154.s): SYSCTL_IGNORE_IMMUNITIES (:5), CalcCrit, BtlCmd_BeatUp
     # (battle_script.c:6173-6247): a hit per eligible party member (B13-9..B13-11).
     154: ("BATTLE_EFFECT_BEAT_UP", _E.BEAT_UP, (0, 0, 0)),
+    # E2 batch 13, single-hit variable power and type (B13-12..). Water Spout / Eruption:
+    # effect_script_0190.s, CalcHPFalloffPower (FLAIL kind FLAIL_FALLOFF), B13-13.
+    190: ("BATTLE_EFFECT_DECREASE_POWER_WITH_LESS_USER_HP", _E.FLAIL, (FLAIL_FALLOFF, 0, 0)),
+    # Weather Ball: effect_script_0203.s, CalcWeatherBallParams (B13-12).
+    203: ("BATTLE_EFFECT_CHANGE_TYPE_WITH_WEATHER", _E.WEATHER_BALL, (0, 0, 0)),
+    # Wake-Up Slap: effect_script_0217.s, SmellingSalt's script on MON_CONDITION_SLEEP with
+    # subscript_heal_target_sleep.s (B13-16).
+    217: (
+        "BATTLE_EFFECT_DOUBLE_POWER_HEAL_SLEEP",
+        _E.DOUBLE_POWER,
+        (POWER_IF_TARGET_ASLEEP, 1, 0),
+    ),
+    # Gyro Ball: effect_script_0219.s, CalcGyroBallPower (B13-14).
+    219: ("BATTLE_EFFECT_POWER_BASED_ON_LOW_SPEED", _E.GYRO_BALL, (0, 0, 0)),
+    # Assurance: effect_script_0231.s, x2 on BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK (B13-17).
+    231: ("BATTLE_EFFECT_DOUBLE_POWER_IF_TARGET_HIT", _E.ASSURANCE, (0, 0, 0)),
+    # Trump Card: effect_script_0235.s, CalcTrumpCardPower (B13-15).
+    235: ("BATTLE_EFFECT_HIGHER_POWER_WHEN_LOW_PP", _E.TRUMP_CARD, (0, 0, 0)),
+    # Punishment: effect_script_0245.s, CalcPunishmentPower (B13-15).
+    245: ("BATTLE_EFFECT_INCREASE_POWER_WITH_MORE_STAT_UP", _E.PUNISHMENT, (0, 0, 0)),
+    # Judgment: effect_script_0268.s, the held plate's type (B13-12).
+    268: ("BATTLE_EFFECT_JUDGEMENT", _E.JUDGMENT, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

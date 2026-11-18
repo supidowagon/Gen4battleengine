@@ -793,6 +793,11 @@ EXEMPT: dict[str, str] = {
         "(battle_lib.c:6514): each game's items carry their own hold effect (build_tables "
         "looks theirs up here), and a game's code changes are rom_diff.toml entries"
     ),
+    "nuzline.engine.damage.PLATE_TYPES": (
+        "keyed by decomp hold effect id, read off the vanilla effect_script_0268.s (Judgment, "
+        "B13-12; unchanged in Kaizo's be_seq): the engine reads each game's own item hold "
+        "effect (Tables.item_hold_effect); tests/engine/test_batch13.py reads it back"
+    ),
     "tools.effect_map.FLAVOR_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's flavor berries "
         "(battle_lib.c:4698-4771, ruling G-4): each game's items carry their own hold effect "

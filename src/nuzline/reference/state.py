@@ -177,6 +177,7 @@ class RefState:
     ts_power_mul: int
     ts_switched: list[int]
     ts_pick_mul: int
+    ts_assurance: list[int]  # turnFlags.assuranceDamageMask != 0 (B13-17)
 
 
 # BattleState field names by level.

@@ -42,6 +42,7 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
+    FLAIL_FALLOFF,
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
     INVOKER_MOVES,
@@ -61,6 +62,7 @@ from nuzline.engine.ids import (
     MOVE_U_TURN,
     NATURE_DISLIKED_FLAVOR,
     POTION_HP_RESTORED,
+    POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
@@ -263,6 +265,14 @@ class _Turn:
     # in singles (rulings G-12, G-13).
     sync_flag: bool = False
     sync_mon: int = -1
+    # turnFlags.assuranceDamageMask != 0 per battler (subscript_update_hp.s:18-19; cleared by
+    # SetupNextTurn and CleanupFaintedMon), B13-17.
+    assurance: list[bool] = field(default_factory=lambda: [False, False])
+    # The acting move's script inputs from its action: Gyro Ball's monSpeedValues power at the
+    # action's start (BranchActions' sort, bcp.c:888), and moveSlot (Trump Card's PP), B13-14,
+    # B13-15.
+    gyro_power: int = 0
+    move_slot: int = 0
 
 
 class _Pause(Exception):
@@ -492,8 +502,15 @@ def _hidden_power(ivs: list[int]) -> tuple[int, int]:
 def _move_type(tables, s: RefState, side: int, move: int) -> int:
     """The type of ``move`` as ``side``'s active Pokemon uses it (lib.c:6682; Hidden
     Power's from its IVs, script.c:6028)."""
-    if _t(tables, "move_effect", move) == EffectId.HIDDEN_POWER:
+    effect = _t(tables, "move_effect", move)
+    if effect == EffectId.HIDDEN_POWER:
         return _hidden_power(_active(s, side).ivs)[0]
+    # CalcWeatherBallParams (script.c:6843-6872) and effect_script_0268.s set moveType (B13-12).
+    if effect == EffectId.WEATHER_BALL and _weather_ball_on(tables, s):
+        return WEATHER_BALL_TYPES.get(s.weather, _t(tables, "move_type", move))
+    if effect == EffectId.JUDGMENT:
+        hold = _t(tables, "item_hold_effect", _active(s, side).item)
+        return PLATE_TYPES.get(hold, _t(tables, "move_type", move))
     return _t(tables, "move_type", move)
 
 
@@ -517,6 +534,36 @@ def _flail_power(cur: int, max_hp: int) -> int:
         if pixels <= bound:
             return power
     return FLAIL_BANDS[-1][1]
+
+
+# sCurrentPPScaledPower (script.c:7211-7217), by min(ppCur, 4).
+TRUMP_CARD_POWER = [200, 80, 60, 50, 40]
+# CalcWeatherBallParams (script.c:6843-6872): moveType per weather (fog: none).
+WEATHER_BALL_TYPES = {
+    Weather.RAIN: Type.WATER,
+    Weather.SANDSTORM: Type.ROCK,
+    Weather.SUN: Type.FIRE,
+    Weather.HAIL: Type.ICE,
+}
+# effect_script_0268.s:5-95: HOLD_EFFECT_ARCEUS_* -> moveType.
+PLATE_TYPES = {
+    126: Type.FIRE, 127: Type.WATER, 128: Type.ELECTRIC, 129: Type.GRASS, 130: Type.ICE,
+    131: Type.FIGHTING, 132: Type.POISON, 133: Type.GROUND, 134: Type.FLYING,
+    135: Type.PSYCHIC, 136: Type.BUG, 137: Type.ROCK, 138: Type.GHOST, 139: Type.DRAGON,
+    140: Type.DARK, 141: Type.STEEL,
+}  # fmt: skip
+
+
+def _weather_ball_on(tables, s: RefState) -> bool:
+    """CalcWeatherBallParams' test: NO_CLOUD_NINE and a FIELD_CONDITION_WEATHER bit."""
+    return s.weather != Weather.NONE and not _weather_suppressed(tables, s)
+
+
+def _gyro_power(tables, s: RefState, side: int) -> int:
+    """``BtlCmd_CalcGyroBallPower`` (script.c:7123-7131) on monSpeedValues, the speeds of
+    CompareBattlerSpeed (lib.c:1372-1373); coverage refuses a zero user speed."""
+    user = max(_effective_speed(tables, s, side), 1)
+    return min(1 + 25 * _effective_speed(tables, s, 1 - side) // user, 150)
 
 
 def _rollout_multiplier(s: RefState, attacker: int) -> int:
@@ -580,6 +627,8 @@ def _lose_hp(turn: _Turn, s: RefState, side: int, amount: int) -> int:
     mon.hp -= lost
     if lost > 0 and mon.hp == 0:
         turn.fainted.append((side, s.sides[side].active))
+    if amount > 0:  # hpCalcTemp < 0: turnFlags.assuranceDamageMask (B13-17)
+        turn.assurance[side] = True
     return lost
 
 
@@ -802,6 +851,22 @@ def _calc_move_damage(
         # (effect_script_0104.s:7; Kaizo's step is the move's power), B13-5.
         step = _t(tables, "move_param", move, 0) or _t(tables, "move_power", move)
         power = step * (hit + 1)
+    if (
+        not in_power
+        and effect == EffectId.FLAIL
+        and _t(tables, "move_param", move, 0) == (FLAIL_FALLOFF)
+    ):  # CalcHPFalloffPower (script.c:6645-6657), B13-13
+        power = max(_t(tables, "move_power", move) * atk.hp // atk.max_hp, 1)
+    elif not in_power and effect == EffectId.WEATHER_BALL and _weather_ball_on(tables, s):
+        power *= 2  # script.c:6848
+    elif not in_power and effect == EffectId.PUNISHMENT:  # script.c:7354-7371
+        power = min(60 + 20 * sum(max(x, 0) for x in s.sides[defender].stages), 200)
+    elif not in_power and effect == EffectId.ASSURANCE and s.ts_assurance[defender]:
+        power *= 2  # effect_script_0231.s:7-9 (the turn's flag is _hit's in_power)
+    elif not in_power and effect == EffectId.GYRO_BALL:  # the turn-start table's speeds
+        power = _gyro_power(tables, s, attacker)
+    elif not in_power and effect == EffectId.TRUMP_CARD and move in atk.moves:
+        power = TRUMP_CARD_POWER[min(max(atk.pp[atk.moves.index(move)] - 1, 0), 4)]
     move_type = _move_type(tables, s, attacker, move)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
@@ -978,6 +1043,8 @@ def _double_power(tables, s: RefState, attacker: int, defender: int, move: int) 
     if cond == POWER_IF_TARGET_PARALYZED:
         # effect_script_0171.s:5: CheckSubstitute jumps past the x2 (B10-4).
         return foe.status == Status.PARALYSIS and not s.sides[defender].substitute_hp
+    if cond == POWER_IF_TARGET_ASLEEP:  # effect_script_0217.s:5-6 (B13-16)
+        return foe.status == Status.SLEEP and not s.sides[defender].substitute_hp
     if cond == POWER_IF_USER_STATUSED:
         return _active(s, attacker).status in (
             Status.POISON,
@@ -1110,6 +1177,7 @@ def _beat_up_damage(tables, s: RefState, attacker: int, move: int, crit: bool, r
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
+    in_power: int = 0,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
@@ -1161,6 +1229,7 @@ def _move_damage(
         magnitude=magnitude,
         present=present,
         hit=hit,
+        in_power=in_power,
     )
     # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
@@ -1189,6 +1258,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.sides[side])
+    turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
     s.sides[side].fake_out_turn = turn.entry_turn
     _source_leaves(s, side, faint=True)
 
@@ -2774,7 +2844,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # against a defender paralyzed when the script ran: cured when it has HP left (:5-6).
         # :5 CheckSubstitute jumped past it (B10-4): the hit took the substitute.
         foe = _active(s, target)
-        if foe.hp and foe.status == Status.PARALYSIS and not turn.sub_hit:
+        # Wake-Up Slap: subscript_heal_target_sleep.s:5-6 (B13-16).
+        cured = Status.SLEEP if p0 == POWER_IF_TARGET_ASLEEP else Status.PARALYSIS
+        if foe.hp and foe.status == cured and not turn.sub_hit:
             foe.status, foe.status_counter = Status.NONE, 0
     elif effect == EffectId.SWAGGER and landed and target_alive and not _shielded(turn, s, target):
         # subscript_swagger.s / subscript_flatter.s (B12-2): fail behind a substitute (:5) or
@@ -2939,6 +3011,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # UPDATE_HP, capped at its max HP (:12-22). A substitute fails it (:5).
         user, foe = _active(s, side), _active(s, target)
         avg = (user.hp + foe.hp) // 2
+        for who, mine in ((side, user), (target, foe)):  # hpCalcTemp = avg - curHP (B13-17)
+            if mine.hp >= avg:
+                turn.assurance[who] = mine.hp > avg
         user.hp, foe.hp = min(avg, user.max_hp), min(avg, foe.max_hp)
     elif effect == EffectId.ROLLOUT and landed:
         # BtlCmd_CalcRolloutPower (script.c:5661): rolloutCount starts at 5 on a first use,
@@ -3182,6 +3257,21 @@ def _detrimental_item_check(turn: _Turn, s: RefState, side: int) -> None:
             _lose_hp(turn, s, side, _divide(mon.max_hp, _t(tables, "item_param", mon.item, 0)))
 
 
+def _script_power(turn: _Turn, s: RefState, side: int, move: int) -> int:
+    """The movePower a script sets from the action (CalcMoveDamage's inPower): Gyro Ball's from
+    the speeds at the action's start, Trump Card's from ppCur of moveSlot after the decrement,
+    Assurance's x2 on the defender's flag (B13-14, B13-15, B13-17); else 0."""
+    effect = _t(turn.tables, "move_effect", move)
+    if effect == EffectId.GYRO_BALL:
+        return turn.gyro_power
+    if effect == EffectId.TRUMP_CARD:
+        return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.move_slot], 4)]
+    if effect == EffectId.ASSURANCE:
+        power = _t(turn.tables, "move_power", move)
+        return power * 2 if turn.assurance[1 - side] else power
+    return 0
+
+
 def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: bool,
          target_moved: bool) -> tuple[int, bool]:  # fmt: skip
     """One hit: the move script (damage, ``BATTLE_SUBSCRIPT_UPDATE_HP``), then
@@ -3231,6 +3321,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             magnitude=o.magnitude[side],
             present=o.present[side],
             hit=hit,
+            in_power=_script_power(turn, s, side, move),
         )
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
@@ -3267,6 +3358,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # read by the Sticky Barb transfer and King's Rock.
         if update_hp and taken:
             turn.damaged = True
+        if update_hp and not taken:  # subscript_update_hp.s:18-19 with hpCalcTemp 0 (B13-17)
+            turn.assurance[target] = False
         if update_hp:  # the defender's turnFlags (bcp.c:3413-3434), by moveCur's class
             record = turn.taken[target]
             klass = _t(tables, "move_category", move)
@@ -3523,6 +3616,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
             if _resist_berry(turn, s, side, _t(tables, "move_type", move), False):
                 taken = _divide(taken, 2)
             _lose_hp(turn, s, side, taken)
+            turn.assurance[side] = taken > 0  # its UPDATE_HP's hpCalcTemp (B13-17)
             _unlock(sd)  # subscript_hurt_self_in_confusion.s
             turn.move_failed[side] = True
             return HURT_ITSELF
@@ -3654,6 +3748,10 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
+    # BranchActions' SortMonSpeedOrder (bcp.c:888) writes monSpeedValues before the action
+    # (Gyro Ball, B13-14); moveSlot (Trump Card, B13-15).
+    turn.gyro_power = _gyro_power(tables, s, side) if _active(s, 1 - side).hp else 0
+    turn.move_slot = min(action, MOVE_ACTIONS - 1)
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
     # action's end (G-13).
     turn.sync_flag, turn.sync_mon = False, -1
@@ -3984,6 +4082,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         )  # fmt: skip
         cap = _divide(_active(s, 1 - side).max_hp, 2)
         _lose_hp(turn, s, side, min(_divide(would, 2), cap))
+        turn.assurance[side] = min(_divide(would, 2), cap) > 0  # :19 UPDATE_HP (B13-17)
     if blocked:
         # Yawn is a direct CHECK_HP effect (effect_script_0187.s:5), whose subscript still runs
         # on MOVE_STATUS_GENERAL_MISS (battle_lib.c:1500-1503): subscript_yawn.s:5-9 test the
@@ -4357,6 +4456,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         taken = _divide(taken, 2)
     target_hp = _active(s, side).hp
     dealt = _lose_hp(turn, s, side, taken)
+    if damage > 0 and not taken and not target_sd.substitute_hp:  # hpCalcTemp 0 (B13-17)
+        turn.assurance[side] = False
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the living
     # pursuer down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
@@ -5300,6 +5401,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_power_mul = turn.power_mul
     s.ts_switched = [int(c == SWITCH) for c in turn.commands]
     s.ts_pick_mul = turn.pick_mul
+    s.ts_assurance = [int(f) for f in turn.assurance]
     for sd in s.sides:  # read by the order, next read at the next turn
         sd.qc_roll = 0
 
@@ -5310,7 +5412,7 @@ _SCRATCH_ZERO = {
     "ts_custap": [0, 0], "ts_claw": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0],
     "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
     "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
-    "ts_switched": [0, 0], "ts_pick_mul": 0,
+    "ts_switched": [0, 0], "ts_pick_mul": 0, "ts_assurance": [0, 0],
 }  # fmt: skip
 
 
@@ -5338,6 +5440,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.dragged = list(s.ts_dragged)
     turn.move_failed = [bool(f) for f in s.ts_move_failed]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
+    turn.assurance = [bool(f) for f in s.ts_assurance]
     turn.fainted = [
         (k, i)
         for k, sd in enumerate(s.sides)

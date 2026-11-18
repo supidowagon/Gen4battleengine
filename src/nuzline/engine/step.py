@@ -96,11 +96,13 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    gyro_ball_speeds_power,
     hits_semi,
     identified,
     ignorable,
     levitated,
     move_type_of,
+    trump_card_power,
     weather_suppressed,
     wonder_guarded,
 )
@@ -114,6 +116,7 @@ from nuzline.engine.effects import (
     LOCK_ON_TURNS,
     NO_DEFENDER,
     armored,
+    assurance_mark,
     big_root,
     can_have_status,
     captivate_fails,
@@ -866,6 +869,8 @@ def _use_move(
         confusion=state.confusion.at[side].set(confusion),
         hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
     )
+    # subscript_hurt_self_in_confusion.s's UPDATE_HP: hpCalcTemp = -the capped damage (B13-17).
+    state = assurance_mark(state, side, taken, self_hit)
     # subscript_move_followup_message.s:16 names the endured item (the user is the defender).
     state = reveal_item(state, side, user, self_hit & endured)
     state = consume_item(state, side, (self_hit & endured & sash) | resisted)
@@ -1454,6 +1459,7 @@ def _use_move(
     cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
     crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
     user_hp_now = state.hp[side, user].astype(_I32)
+    state = assurance_mark(state, side, crash_loss, crash)  # :19 UPDATE_HP (B13-17)
     state = _set_mon(state, "hp", side, user, jnp.maximum(user_hp_now - crash_loss, 0), crash)
     # A direct sleep (a STATUS_FOE sleep move) on a living target that is not asleep, has no
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
@@ -1610,6 +1616,21 @@ def _use_move(
     # Pursuit (its continuation without a switch).
     tail_items = resumed | (after_pursuit & ~pursuit_pause)
 
+    # The script powers read from the action, not the hit's state (CalcMoveDamage's inPower):
+    # Gyro Ball's monSpeedValues come from BranchActions' speed sort at the action's start
+    # (bcp.c:888, battle_lib.c:1372-1373), before the status checks (a Quick Feet user's wake-up
+    # or thaw) and the Custap Berry (Unburden), B13-14; Trump Card reads ppCur of moveSlot (the
+    # invoker's slot for a called move) after the PP decrement above (battle_script.c:7237),
+    # B13-15.
+    used_effect = tables.move_effect[used]
+    in_power = jnp.where(
+        used_effect == EffectId.GYRO_BALL,
+        gyro_ball_speeds_power(tables, state_in, side, target_side),
+        jnp.where(
+            used_effect == EffectId.TRUMP_CARD, trump_card_power(state.pp[side, user, slot]), 0
+        ),
+    )
+
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
@@ -1676,6 +1697,7 @@ def _use_move(
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
+            in_power=in_power,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2331,6 +2353,12 @@ def _faint_check(
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted, faint=True)
+        # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17.
+        after = after._replace(
+            ts_assurance=after.ts_assurance.at[side].set(
+                jnp.where(active_fainted, 0, after.ts_assurance[side]).astype(jnp.int8)
+            )
+        )
     return after
 
 
@@ -2590,6 +2618,8 @@ def _execute_actions(
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
         "ts_switched": is_switch(real),
         "ts_pick_mul": pick_mul,
+        # turnFlags.assuranceDamageMask (B13-17): the turn's, kept at a pause.
+        "ts_assurance": state.ts_assurance,
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -3618,6 +3648,9 @@ def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> Bat
     # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
+    # The hazards' assuranceDamageMask (effects.entry_hazards) is turnFlags too, which
+    # SetupNextTurn clears before any action reads it (B13-17): a turn scratch, 0 between turns.
+    out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
     return _keep_quick_claw(tables, out, out.qc_roll)

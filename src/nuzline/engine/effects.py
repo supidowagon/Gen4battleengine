@@ -280,6 +280,7 @@ from nuzline.engine.ids import (
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
     MOVE_STRUGGLE,
+    POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_MOVED,
     REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
@@ -711,6 +712,7 @@ def _curse(tables, state, h: _Hit) -> BattleState:
     state = _set(state, "curse", h.target_side, 1, hexed)
     hp = state.hp[h.side, h.user].astype(_I32)
     cost = divide(state.max_hp[h.side, h.user].astype(_I32), 2)
+    state = assurance_mark(state, h.side, cost, hexed)
     return _set(state, "hp", (h.side, h.user), jnp.maximum(hp - cost, 0), hexed)
 
 
@@ -761,6 +763,7 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
         0,
     )
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
+    state = assurance_mark(state, h.side, cost, cost > 0)
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
 
 
@@ -915,6 +918,22 @@ def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
     return state._replace(**{field: arr.at[index].set(new)})
 
 
+def assurance_mark(state: BattleState, side, lost, ran) -> BattleState:
+    """``turnFlags[battler].assuranceDamageMask`` after an HP update of ``side``'s battler that
+    ran (``ran``) and took ``lost`` HP (hpCalcTemp = -lost): subscript_update_hp.s:18-19 stores
+    hpCalcTemp unless it is above 0, so a loss sets the flag (``ts_assurance``), a zero update
+    clears it and a heal leaves it. The flag is per battler: a switch keeps it (only
+    BattleSystem_CleanupFaintedMon, battle_lib.c:2190-2193, and SetupNextTurn, :2231, clear it),
+    and only the actions read it (Assurance), so the action-phase updates mark it: the hits
+    (``play_hit``), recoil, Struggle, the contact abilities, the self-hit, the crash, Life Orb,
+    the hazards, Curse, Substitute, Belly Drum and Pain Split (B13-17)."""
+    lost = jnp.asarray(lost).astype(_I32)
+    ran = jnp.asarray(ran, jnp.bool_)
+    old = state.ts_assurance[side]
+    new = jnp.where(ran & (lost > 0), 1, jnp.where(ran & (lost == 0), 0, old))
+    return state._replace(ts_assurance=state.ts_assurance.at[side].set(new.astype(jnp.int8)))
+
+
 def unlock_move(state: BattleState, side, cond) -> BattleState:
     """``Battler_UnlockMoveChoice`` (battle_lib.c:1834-1841) on ``side`` where ``cond``: the move
     lock, Bide's turns and stored damage (hidden state, 0 outside a Bide) and the Rollout
@@ -955,13 +974,18 @@ def _cure_paralysis(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """SmellingSalt (effect_script_0171.s:12): against a defender paralyzed when the script ran,
     an ON_HIT indirect effect (``BattleSystem_TriggerSecondaryEffect``, battle_lib.c:1524-1529:
     not ``MOVE_STATUS_NO_EFFECTS``) runs subscript_heal_target_paralysis.s, which cures a
-    defender with HP left (:5-6). The hit leaves the status alone, so it is still paralysis."""
+    defender with HP left (:5-6). The hit leaves the status alone, so it is still paralysis.
+    Wake-Up Slap (effect_script_0217.s:9) is the same with MON_CONDITION_SLEEP and
+    subscript_heal_target_sleep.s (:5-6: the sleep bits off, any count), B13-16."""
+    cured = jnp.where(h.param[0] == POWER_IF_TARGET_ASLEEP, Status.SLEEP, Status.PARALYSIS).astype(
+        state.status.dtype
+    )
     cond = (
         (h.effect == _E.DOUBLE_POWER)
         & (h.param[1] == 1)
         & h.effective
         & _alive(state, h.target_side, h.target)
-        & (state.status[h.target_side, h.target] == Status.PARALYSIS)
+        & (state.status[h.target_side, h.target] == cured)
         # effect_script_0171.s:5: CheckSubstitute before the damage jumps to a plain hit (no x2,
         # no cure). The flag cannot be set before the move's own (only) hit, so this is the bit
         # at the script's start: up then exactly when this hit took the substitute.
@@ -1039,6 +1063,7 @@ def _substitute(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     state = _set(state, "trapped", h.side, 0, cond)
     state = _set(state, "trap_move", h.side, 0, cond)
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - quarter, 0)
+    state = assurance_mark(state, h.side, quarter, cond)
     return _set(state, "hp", (h.side, h.user), hp, cond)
 
 
@@ -1054,6 +1079,9 @@ def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     avg = (mine + theirs) // 2
     mine_new = jnp.minimum(avg, state.max_hp[h.side, h.user].astype(_I32))
     theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
+    # hpCalcTemp = avg - curHP for each (:11-13, :17-19): a loss or a zero update (B13-17).
+    state = assurance_mark(state, h.side, mine - avg, cond & (mine >= avg))
+    state = assurance_mark(state, h.target_side, theirs - avg, cond & (theirs >= avg))
     state = _set(state, "hp", (h.side, h.user), mine_new, cond)
     return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
 
@@ -1095,6 +1123,7 @@ def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     state = change_stage(state, h.side, Stat.ATK, STAGE_MAX * 2, cond)
     half = jnp.maximum(state.max_hp[h.side, h.user].astype(_I32) // 2, 1)
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - half, 0)
+    state = assurance_mark(state, h.side, half, cond)
     return _set(state, "hp", (h.side, h.user), hp, cond)
 
 
@@ -1991,6 +2020,7 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
     max_hp = state.max_hp[h.side, h.user].astype(_I32)
     cost = jnp.where(struggling & h.landed, jnp.maximum(max_hp // 4, 1), 0)
     hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
+    state = assurance_mark(state, h.side, cost, cost > 0)
     return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
 
 
@@ -2048,6 +2078,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cut = jnp.where(rough, jnp.maximum(max_hp // 8, 1), 0)
     cut = jnp.where(aftermath, jnp.maximum(max_hp // 4, 1), cut)
     hurt = jnp.maximum(hp - cut, 0)
+    state = assurance_mark(state, h.side, cut, cut > 0)
     state = state._replace(hp=state.hp.at[h.side, h.user].set(hurt.astype(state.hp.dtype)))
     # The status message and Rough Skin's message tag the holder's ability
     # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
@@ -2382,6 +2413,9 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     rock = jnp.where(
         (hp > 0) & ~guarded, jnp.minimum(stealth_rock_loss(tables, state, side, mon), hp), 0
     )
+    # subscript_hazards_check.s: each through UPDATE_HP (B13-17; replace() clears the flag of a
+    # turn-end replacement, SetupNextTurn).
+    state = assurance_mark(state, side, spikes + rock, (spikes + rock) > 0)
     return state._replace(hp=state.hp.at[side, mon].set((hp - rock).astype(state.hp.dtype)))
 
 
@@ -2505,6 +2539,7 @@ def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleSta
     magic_guard = decomp_abilities(tables, state)[side, mon] == WEATHER_ABILITY_IDS["Magic Guard"]
     on = jnp.asarray(cond) & holds(tables, state, side, ItemId.LIFE_ORB) & (hp > 0) & ~magic_guard
     loss = divide(state.max_hp[side, mon].astype(_I32), 10)
+    state = assurance_mark(state, side, loss, on)
     return _set(state, "hp", (side, mon), jnp.maximum(hp - loss, 0), on)
 
 
@@ -2599,6 +2634,7 @@ def play_hit(
     sub_hit=False,
     pursuit_switch=False,
     foe_claw=False,
+    in_power=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -2676,6 +2712,8 @@ def play_hit(
         outcome.present[side].astype(_I32),
         # Triple Kick's per-hit power, Beat Up's party member (B13-5, B13-10).
         hit=hit_index,
+        # Gyro Ball's / Trump Card's power from the action (step._use_move, B13-14, B13-15).
+        in_power=in_power,
     )
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an
@@ -2757,6 +2795,9 @@ def play_hit(
     state = state._replace(
         hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
     )
+    # UpdateHP's subscript_update_hp.s with hpCalcTemp = -battleCtx->damage after the endure
+    # cap (bcp.c:3437-3438): 0 for a 1-HP False Swipe or endure target (B13-17).
+    state = assurance_mark(state, target_side, taken, real)
     if pursuit_switch:
         state = _set(state, "substitute_hp", target_side, 0, sub_take & (to_sub == sub_hp))
     else:

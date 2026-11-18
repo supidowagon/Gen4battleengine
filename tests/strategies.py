@@ -1978,6 +1978,13 @@ RARE_EFFECTS = (
     EffectId.MIST,  # B12-23
     EffectId.TRIPLE_KICK,  # B13-5
     EffectId.BEAT_UP,  # B13-9
+    # B13-12..B13-17: the variable power / type hits.
+    EffectId.WEATHER_BALL,
+    EffectId.GYRO_BALL,
+    EffectId.ASSURANCE,
+    EffectId.TRUMP_CARD,
+    EffectId.PUNISHMENT,
+    EffectId.JUDGMENT,
 )
 
 
@@ -2120,6 +2127,14 @@ LAW_MOVES = (
     # B13-5..B13-10: Triple Kick's later accuracy rolls and per-hit power, Beat Up's members.
     "Triple Kick",
     "Beat Up",
+    # B13-12..B13-17: Weather Ball's type, Gyro Ball's speeds, Assurance's flag, Wake-Up Slap's
+    # wake-up, Trump Card's PP, Water Spout's HP.
+    "Weather Ball",
+    "Gyro Ball",
+    "Assurance",
+    "Wake-Up Slap",
+    "Trump Card",
+    "Water Spout",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

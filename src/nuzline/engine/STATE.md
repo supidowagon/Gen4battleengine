@@ -338,7 +338,9 @@ three structs has a row.
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
   `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
   `turnFlags` later actors read
-  (`ts_protect_ok`, `ts_taken`; `turnFlags.roosting` is the public `roosting`, kept at a pause
+  (`ts_protect_ok`, `ts_taken`, `ts_assurance`: `assuranceDamageMask`, which the action-phase
+  HP updates write in the state itself and Assurance reads, B13-17; `turnFlags.roosting` is the
+  public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
   read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
@@ -569,7 +571,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting` | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance` (`assuranceDamageMask != 0`, per battler, B13-17) | mapped |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |

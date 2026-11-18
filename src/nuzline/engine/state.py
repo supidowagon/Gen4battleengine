@@ -372,6 +372,7 @@ class BattleState(NamedTuple):
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
     ts_switched: jnp.ndarray  # int8[2], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
+    ts_assurance: jnp.ndarray  # int8[2], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[side, slot].set(hp))
@@ -653,6 +654,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_power_mul": (_FIELD, np.int8),
     "ts_switched": (_SIDE, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
+    "ts_assurance": (_SIDE, np.int8),
 }
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))

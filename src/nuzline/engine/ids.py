@@ -56,8 +56,12 @@ class EffectId(IntEnum):
     * ``SELF_DESTRUCT`` (Selfdestruct, Explosion; Kaizo's Memento): zeros; the move script
       sets the user's HP to 0 before the accuracy check, and a physical one hits the halved
       Defense (``damage.py``). Damp would stop it; Damp is ``AbilityId.UNSUPPORTED``.
-    * ``FLAIL`` (Flail, Reversal): zeros; the power comes from the user's HP pixels
-      (``damage.flail_power``); the trainer AI scores it at the table power.
+    * ``FLAIL`` (Flail, Reversal): ``(kind, 0, 0)``; the power comes from the user's HP pixels
+      (``damage.flail_power``); the trainer AI scores it at the table power. Kind
+      ``FLAIL_FALLOFF`` (Water Spout, Eruption): power x curHP / maxHP (``damage.falloff_power``).
+    * ``WEATHER_BALL``, ``GYRO_BALL``, ``ASSURANCE``, ``TRUMP_CARD``, ``PUNISHMENT``,
+      ``JUDGMENT``: zeros; their power or type comes from the battle (``damage._pre_random``,
+      ``damage.move_type_of``), E2 batch 13.
     * ``FANG_PARALYZE_FLINCH`` (Thunder Fang, ``BATTLE_EFFECT_FLINCH_PARALYZE_HIT``):
       ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
       paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
@@ -414,6 +418,35 @@ class EffectId(IntEnum):
     # SYSCTL_IGNORE_IMMUNITIES, bcp.c:2355). Accuracy once (SYSCTL_MULTI_HIT_MOVE, :6187).
     # ``effects.beat_up_damage``, B13-9..B13-11.
     BEAT_UP = 106
+    # E2 batch 13, single-hit variable power and type (B13-12..).
+    # Weather Ball (203, effect_script_0203.s; BtlCmd_CalcWeatherBallParams, battle_script.c:
+    # 6843-6872): zeros. Under NO_CLOUD_NINE and any FIELD_CONDITION_WEATHER bit (fog included,
+    # condition.h:131-135) movePower = power x 2 and moveType Water / Rock / Fire / Ice for rain /
+    # sand / sun / hail (fog keeps Normal); else nothing (the table power and type).
+    # ``damage.weather_ball_params``; the type is battleCtx->moveType, which the chart, STAB,
+    # the type items and the absorbing abilities read (``damage.move_type_of``).
+    WEATHER_BALL = 107
+    # Gyro Ball (219, BtlCmd_CalcGyroBallPower, battle_script.c:7123-7131): zeros. movePower =
+    # 1 + 25 x monSpeedValues[defender] / monSpeedValues[attacker], at most 150; the speeds are
+    # CompareBattlerSpeed's of BranchActions' SortMonSpeedOrder at the user's action start
+    # (bcp.c:888; battle_lib.c:1372-1373). ``damage.gyro_ball_power``.
+    GYRO_BALL = 108
+    # Assurance (231, effect_script_0231.s): zeros. movePower = the move's power, x 2 when the
+    # defender's turnFlags.assuranceDamageMask is set (:5-9): subscript_update_hp.s:18-19 writes
+    # each update's hpCalcTemp <= 0 there (``BattleState.ts_assurance``).
+    ASSURANCE = 109
+    # Trump Card (235, BtlCmd_CalcTrumpCardPower, battle_script.c:7233-7245): zeros. movePower
+    # = sCurrentPPScaledPower[min(ppCur, 4)] (200, 80, 60, 50, 40) of the user's moveSlot after
+    # the PP decrement (bcp.c:3182). ``damage.trump_card_power``.
+    TRUMP_CARD = 110
+    # Punishment (245, BtlCmd_CalcPunishmentPower, battle_script.c:7354-7371): zeros. movePower
+    # = 60 + 20 x the defender's stages above neutral (HP through evasion), at most 200.
+    # ``damage.punishment_power``.
+    PUNISHMENT = 111
+    # Judgment (268, effect_script_0268.s): zeros. The attacker's held item's hold effect
+    # (Battler_HeldItemEffect) HOLD_EFFECT_ARCEUS_* sets moveType to its type (:5-95);
+    # ``damage.judgment_type``.
+    JUDGMENT = 112
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -441,6 +474,13 @@ POWER_IF_TARGET_HALF_HP = 3  # effect_script_0221.s:5-8 (Brine)
 # BtlCmd_CalcPaybackPower (battle_script.c:7198-7209, Payback): x2 once the defender has acted
 # this turn (``target_moved`` in effects.play_hit), B9-12.
 POWER_IF_TARGET_MOVED = 4
+# Wake-Up Slap (effect_script_0217.s:5-8): SmellingSalt's script with MON_CONDITION_SLEEP and
+# subscript_heal_target_sleep.s (``cures``), B13-16.
+POWER_IF_TARGET_ASLEEP = 5
+# ``EffectId.FLAIL``'s kind (``move_param[m, 0]``): 0 is Flail's HP-pixel bands
+# (BtlCmd_CalcFlailPower); ``FLAIL_FALLOFF`` is Water Spout / Eruption (vanilla 190,
+# BtlCmd_CalcHPFalloffPower, battle_script.c:6645-6657): power x curHP / maxHP, at least 1.
+FLAIL_FALLOFF = 1
 
 
 # Effects whose script runs no CalcCrit / CalcDamage: no crit and no damage roll is read

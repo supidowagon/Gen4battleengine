@@ -489,9 +489,16 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,
-    # E2 batch 13: hits that write HP only (Triple Kick B13-5, Beat Up B13-9).
+    # E2 batch 13: hits that write HP only (Triple Kick B13-5, Beat Up B13-9; the variable
+    # power and type hits B13-12..B13-17, Assurance's flag besides).
     EffectId.TRIPLE_KICK,
     EffectId.BEAT_UP,
+    EffectId.WEATHER_BALL,
+    EffectId.GYRO_BALL,
+    EffectId.ASSURANCE,
+    EffectId.TRUMP_CARD,
+    EffectId.PUNISHMENT,
+    EffectId.JUDGMENT,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

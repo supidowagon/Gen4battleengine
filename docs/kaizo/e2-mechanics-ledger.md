@@ -29,9 +29,21 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_cli not-slow 102 + 1 skipped; diff.py seeds 41, 42 ok 300; test_differential: the known
   Figy Berry case only. test_cli_rank_deaths_and_protect killed at 8.12 GB (7.87 before:
   MAX_HITS 6 and the per-hit tables); test_observe not-slow goes past 8 GB at 22695c4 too.
-  OWED: the AI scripts of these
-  effects (77, 200, 209, Kaizo 141, 104, 88, 154; the batch's AI agent); vanilla-only Fury Cutter
-  #119 and the recharge #80 (Owed list); the other families of the batch.
+  Variable power / type family done (agent C, B13-12..B13-18): WEATHER_BALL, JUDGMENT (type via
+  move_type_of, plate from Tables.item_hold_effect), Water Spout / Eruption as FLAIL kind
+  FLAIL_FALLOFF (+ prep falloff_cuts), GYRO_BALL (action-start speeds as inPower; coverage
+  refuses a Gyro Ball user below Speed 16), TRUMP_CARD (PP after the decrement as inPower),
+  PUNISHMENT, Wake-Up Slap (DOUBLE_POWER POWER_IF_TARGET_ASLEEP + wake), ASSURANCE (new
+  per-battler turn scratch BattleState.ts_assurance, marked at every action-phase UPDATE_HP);
+  no new draw or Outcome field. Checks: test_batch13 not-slow 42 + 2 new slow law tests,
+  accuracy/damage classes + enumerate 45, coverage / effect_map / variants / game_constants /
+  backlog 162, unsupported-asserting files 139, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run), diff.py seeds 43, 44 ok 300; test_differential: see the commit.
+  OWED: the AI scripts of these effects (77, 200, 209, Kaizo 141, 104, 88, 154, 190, 203, 217,
+  219, 231, 235, 245, 268; the batch's AI agent; damage.gyro_ball_power / judgment_type /
+  weather_ball_params are pure for it); vanilla-only Fury Cutter #119 and the recharge #80
+  (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
+  the other families of the batch.
 
 - **Accuracy guard fixed (B12-31, engine change):** hit_thresholds now follows a faster foe's
   Haze, Psych Up and Acupressure; the other 12 batch 12 effects classified no-write. OWED:
@@ -1826,3 +1838,55 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - B13-11 Vanilla Fury Cutter (#119) and the recharge (#80, Hyper Beam's family and vanilla Rock
   Wrecker) are vanilla only (no Kaizo move uses either effect: Kaizo moves.json) and each needs
   new battler state: left UNSUPPORTED, in the Owed list.
+- B13-12 Weather Ball (203, EffectId.WEATHER_BALL): CalcWeatherBallParams (battle_script.c:
+  6843-6872) under NO_CLOUD_NINE and any FIELD_CONDITION_WEATHER bit (fog included, condition.h:
+  131-135) sets movePower = power x 2 and moveType Water / Rock / Fire / Ice (rain / sand / sun /
+  hail; fog sets none, so Normal); with Cloud Nine / Air Lock alive it sets nothing. Judgment
+  (268, EffectId.JUDGMENT): effect_script_0268.s:5-95 sets moveType from the attacker's
+  Battler_HeldItemEffect HOLD_EFFECT_ARCEUS_* (any holder; Klutz and Embargo, battle_lib.c:
+  5352-5363, are an unsupported ability and move), read from each game's Tables.item_hold_effect
+  (damage.PLATE_TYPES; no item-table change, so no e1-model commit). The script runs before
+  TryMove's accuracy, chart and absorbing-ability states (bcp.c:3212-3216), which read
+  battleCtx->moveType (bcp.c:2358-2361, battle_lib.c:3490-3497, 2582-2597 STAB, 6680-6684 and
+  6716-6722 the type items), so damage.move_type_of returns it, as for Hidden Power. Normalize
+  (lib.c:6679) is an unsupported ability. Pure helpers for the AI: damage.weather_ball_params,
+  damage.judgment_type.
+- B13-13 Water Spout / Eruption (vanilla 190; Kaizo Eruption is effect 253): FLAIL with kind
+  FLAIL_FALLOFF: BtlCmd_CalcHPFalloffPower (battle_script.c:6645-6657) power x curHP / maxHP,
+  1 when 0, read at the action's only hit (damage.falloff_power). prep.variants adds every power
+  band top (falloff_cuts) to the entry-HP regions, as Flail's bands (up to power - 1 cuts).
+- B13-14 Gyro Ball (219, EffectId.GYRO_BALL): 1 + 25 x monSpeedValues[defender] /
+  monSpeedValues[attacker], at most 150 (battle_script.c:7123-7131). monSpeedValues is written by
+  every CompareBattlerSpeed (battle_lib.c:1372-1373); BranchActions runs SortMonSpeedOrder before
+  each action (bcp.c:888, back after MoveEnd :3999), so the speeds are those at the user's
+  action start (before its status checks and Custap Berry: a waking Quick Feet user keeps its
+  x1.5, an Unburden user its held-berry Speed): step._use_move passes the power from its state_in
+  as CalcMoveDamage's inPower (damage._pre_random in_power; the turn-start table reads the state).
+  A user Speed that can reach 0 (below 16: -6 is 10/40, paralysis / 4, lib.c:1225, :1259-1261)
+  divides by zero, left to the ROM's division routine: coverage.gyro_speed_line refuses it
+  (fight, pool and prep, GYRO_SPEED_MIN). Pure helper damage.gyro_ball_power.
+- B13-15 Trump Card (235): sCurrentPPScaledPower[min(ppCur, 4)] (200, 80, 60, 50, 40) of
+  moveSlot after BattleControllerPlayer_DecrementPP (bcp.c:3182; Pressure's cost included),
+  moveSlot being the invoker's for a called move (common.h:8), passed as inPower from _use_move.
+  Punishment (245): 60 + 20 x the defender's stages above neutral over all 8, at most 200
+  (battle_script.c:7354-7371), read at the hit.
+- B13-16 Wake-Up Slap (217): DOUBLE_POWER (POWER_IF_TARGET_ASLEEP, cures 1): SmellingSalt's
+  script on MON_CONDITION_SLEEP (any count): CheckSubstitute first (:5), powerMul 20 and an ON_HIT
+  indirect subscript_heal_target_sleep.s (sleep bits off on a target with HP left, :5-6;
+  effects._cure_paralysis). An ON_HIT effect rolls no chance, so Kaizo's chance 100 is inert.
+- B13-17 Assurance (231, EffectId.ASSURANCE): movePower = the move's power, x 2 when the defender's
+  turnFlags.assuranceDamageMask is nonzero (effect_script_0231.s:5-9). subscript_update_hp.s:18-19
+  stores every update's hpCalcTemp unless above 0: a loss sets it, a zero update (a 1-HP False
+  Swipe or endure target, Pain Split at the average) clears it, a heal leaves it; the substitute
+  path (bcp.c:3359-3378) runs no UPDATE_HP. turnFlags is per battler: SetupNextTurn (lib.c:2231,
+  after the turn-end replacements) and CleanupFaintedMon (:2190-2193) clear it, a switch does
+  not. New per-battler field BattleState.ts_assurance (a turn scratch: kept at a pause, 0
+  between turns; replace() clears a replacement's hazard mark), marked by
+  effects.assurance_mark at the action-phase updates (hits, recoil, Struggle, contact
+  abilities, the self-hit, the crash, Life Orb, the hazards, Curse, Substitute, Belly Drum, Pain
+  Split); the residual updates come after every reader. Reference: _Turn.assurance, _lose_hp.
+- B13-18 Damage classes: WEATHER_BALL and JUDGMENT are TABLE_DAMAGE_EFFECTS (the weather, switch
+  and Knock Off clauses cover their inputs), Water Spout is FLAIL's (hp_sensitive); GYRO_BALL,
+  TRUMP_CARD, PUNISHMENT and ASSURANCE are NON_TABLE (action-start speeds, the PP after the
+  decrement, the defender's stages, the turn's flag); all six are INPUT_NEUTRAL (they write the
+  foe's HP only). No new draw, no new Outcome field.

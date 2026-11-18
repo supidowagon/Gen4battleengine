@@ -694,6 +694,14 @@ INPUT_NEUTRAL_EFFECTS = (
     # E2 batch 13: hits that write the foe's HP only (B13-5, B13-9).
     _E.TRIPLE_KICK,
     _E.BEAT_UP,
+    # B13-12..B13-17: single hits whose own power or type varies; they write the foe's HP only
+    # (the HP clause), and Assurance's flag, which no table damage reads.
+    _E.WEATHER_BALL,
+    _E.GYRO_BALL,
+    _E.ASSURANCE,
+    _E.TRUMP_CARD,
+    _E.PUNISHMENT,
+    _E.JUDGMENT,
     _E.RECOIL,  # hurts the foe
     _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
     _E.LEVEL_DAMAGE,
@@ -1120,6 +1128,12 @@ TABLE_DAMAGE_EFFECTS = (
     # k x step power, Beat Up's member), each its damage for the hit's (crit, roll).
     _E.TRIPLE_KICK,
     _E.BEAT_UP,
+    # B13-12: Weather Ball's power and type from the weather (the weather clause; a weather
+    # ability or Cloud Nine arrives with a switch, the switch clause), Judgment's type from the
+    # user's held item (Knock Off, the item clause, is the only mid-turn change of it). Water
+    # Spout / Eruption are FLAIL (its HP clause, hp_sensitive), B13-13.
+    _E.WEATHER_BALL,
+    _E.JUDGMENT,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENCORE,  # a status move: no damage (B10-9)
@@ -1204,6 +1218,13 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.REFRESH,
     _E.PSYCHO_SHIFT,
     _E.MIST,
+    # B13-14, B13-15, B13-17: a power from the speeds at the action's start, the PP after its
+    # decrement (the action's move slot), the defender's raised stages or its damage this turn,
+    # none of which the turn-start table can read.
+    _E.GYRO_BALL,
+    _E.TRUMP_CARD,
+    _E.PUNISHMENT,
+    _E.ASSURANCE,
 )
 
 

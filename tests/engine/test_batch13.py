@@ -9,8 +9,19 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from nuzline.engine.damage import damage_for_roll
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, SemiKind, Status, Weather
+from nuzline.engine.damage import (
+    PLATE_TYPES,
+    damage_for_roll,
+    falloff_power,
+    gyro_ball_power,
+    move_type_of,
+    punishment_power,
+    trump_card_power,
+    weather_ball_params,
+)
+from nuzline.engine.effects import assurance_mark
+from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, SemiKind, Status, Type, Weather
+from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
@@ -27,7 +38,7 @@ from tests.engine.test_enumerate import (
     from_bytes_like,
     sampled,
 )
-from tests.engine.test_pivot import _mon
+from tests.engine.test_pivot import _mon, _resume
 
 O = empty_outcome()
 
@@ -567,3 +578,401 @@ def test_beat_up_law_exact_and_sampled(kaizo_tables, kaizo_names):
     assert_equals_bruteforce(t, s, acts)
     n_ = 20_000
     check_frequencies(children(t, s, acts), sampled(t, s, acts, n_), n_)
+
+
+# --- B13-12..B13-17: single-hit variable power and type (agent C) ---------------------------
+
+DECOMP_SCRIPTS = "external/pokeplatinum/res/battle/scripts/effects"
+
+
+def _weather(s, weather):
+    return s._replace(
+        weather=jnp.asarray(weather, s.weather.dtype),
+        weather_timer=jnp.zeros_like(s.weather_timer),
+    )
+
+
+def _loss(s, out, side=1, slot=0):
+    return int(s.hp[side, slot]) - int(out.hp[side, slot])
+
+
+def _dfr(t, s, move, in_power=0, side=0):
+    return int(damage_for_roll(t, s, side, move, False, 15, in_power=in_power))
+
+
+def test_variable_power_tables_both_games(tables, names, kaizo_tables, kaizo_names):
+    """The family's effects and the ROM move data (Kaizo numbers: Weather Ball 50, Water Spout
+    150, Gyro Ball 1, Assurance 70, Trump Card 1, Punishment 1, Wake-Up Slap 60 at chance 100,
+    Judgment 120); Kaizo's Eruption is effect 253, not 190 (B13-12..B13-17)."""
+    from nuzline.engine.ids import FLAIL_FALLOFF, POWER_IF_TARGET_ASLEEP
+
+    want = {
+        "Weather Ball": (EffectId.WEATHER_BALL, [0, 0, 0], 50, 50),
+        "Water Spout": (EffectId.FLAIL, [FLAIL_FALLOFF, 0, 0], 150, 150),
+        "Gyro Ball": (EffectId.GYRO_BALL, [0, 0, 0], 1, 1),
+        "Assurance": (EffectId.ASSURANCE, [0, 0, 0], 50, 70),
+        "Trump Card": (EffectId.TRUMP_CARD, [0, 0, 0], 1, 1),
+        "Punishment": (EffectId.PUNISHMENT, [0, 0, 0], 1, 1),
+        "Wake-Up Slap": (EffectId.DOUBLE_POWER, [POWER_IF_TARGET_ASLEEP, 1, 0], 60, 60),
+        "Judgment": (EffectId.JUDGMENT, [0, 0, 0], 100, 120),
+    }
+    for move, (effect, params, vanilla, kaizo) in want.items():
+        for t, n, power in ((tables, names, vanilla), (kaizo_tables, kaizo_names, kaizo)):
+            m = n.move(move)
+            assert int(t.move_effect[m]) == effect, move
+            assert np.asarray(t.move_param)[m].tolist() == params, move
+            assert int(t.move_power[m]) == power, move
+    m = names.move("Eruption")
+    assert int(tables.move_effect[m]) == EffectId.FLAIL
+    assert int(kaizo_tables.move_effect[kaizo_names.move("Eruption")]) != EffectId.FLAIL
+
+
+def test_variable_power_scripts_read_back_from_the_decomp():
+    """B13-12..B13-17: each effect's script runs its power command before CalcCrit / CalcDamage,
+    and Judgment's script maps each HOLD_EFFECT_ARCEUS_* to the type PLATE_TYPES holds, the same
+    as sTypeBoostingItems' (tools.effect_map.TYPE_BOOST_HOLD_EFFECTS)."""
+    import re
+    from pathlib import Path
+
+    from tools.effect_map import TYPE_BOOST_HOLD_EFFECTS
+
+    root = Path(DECOMP_SCRIPTS)
+    if not root.is_dir():
+        pytest.skip("decomp not checked out")
+
+    def body(e):
+        return (root / f"effect_script_{e:04d}.s").read_text(encoding="utf-8")
+
+    for e, cmd in (
+        (190, "CalcHPFalloffPower"),
+        (203, "CalcWeatherBallParams"),
+        (219, "CalcGyroBallPower"),
+        (235, "CalcTrumpCardPower"),
+        (245, "CalcPunishmentPower"),
+    ):
+        text = body(e)
+        assert text.index(cmd) < text.index("CalcCrit") < text.index("CalcDamage"), e
+    assert "BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK" in body(231)
+    assert "OPCODE_MUL, BTLVAR_MOVE_POWER, 2" in body(231)
+    slap = body(217)
+    assert "CheckSubstitute" in slap and "MON_CONDITION_SLEEP" in slap
+    assert "MOVE_SUBSCRIPT_PTR_HEAL_TARGET_SLEEP" in slap
+    text = body(268)
+    jumps = dict(re.findall(r"HOLD_EFFECT_ARCEUS_(\w+), (_\d+)", text))
+    sets = dict(re.findall(r"(_\d+):\s+UpdateVar OPCODE_SET, BTLVAR_MOVE_TYPE, TYPE_(\w+)", text))
+    by_name = {name: h for h, (name, _) in TYPE_BOOST_HOLD_EFFECTS.items()}
+    assert len(jumps) == 16
+    for arceus, label in jumps.items():
+        hold = by_name[f"HOLD_EFFECT_ARCEUS_{arceus}"]
+        assert PLATE_TYPES[hold] == Type[sets[label]] == TYPE_BOOST_HOLD_EFFECTS[hold][1]
+    assert set(PLATE_TYPES) == {by_name[f"HOLD_EFFECT_ARCEUS_{a}"] for a in jumps}
+
+
+# B13-12: Weather Ball (CalcWeatherBallParams, battle_script.c:6843-6872) and Judgment.
+
+
+def test_weather_ball_type_and_power_per_weather(tables, names):
+    """x2 and Water / Rock / Fire / Ice in rain / sand / sun / hail; fog doubles the power and
+    keeps Normal (FIELD_CONDITION_WEATHER includes DEEP_FOG, condition.h:131-135); Cloud Nine
+    on the field (NO_CLOUD_NINE) leaves the table power and type."""
+    s = _plain(_state(tables, names, ("Castform", "Weather Ball"), ("Snorlax", "Tail Whip")))
+    m = names.move("Weather Ball")
+    for weather, kind, power in (
+        (Weather.NONE, Type.NORMAL, 50),
+        (Weather.RAIN, Type.WATER, 100),
+        (Weather.SANDSTORM, Type.ROCK, 100),
+        (Weather.SUN, Type.FIRE, 100),
+        (Weather.HAIL, Type.ICE, 100),
+        (Weather.FOG, Type.NORMAL, 100),
+    ):
+        w = _weather(s, weather)
+        _, got_power, got_type = weather_ball_params(tables, w, m)
+        assert (int(got_power), int(got_type)) == (power, kind), weather
+        assert int(move_type_of(tables, w, 0, m)) == kind
+        cloudy = _cloud_nine(tables, w, 1)
+        _, got_power, got_type = weather_ball_params(tables, cloudy, m)
+        assert (int(got_power), int(got_type)) == (50, Type.NORMAL), weather
+
+
+def test_weather_ball_type_reaches_the_chart_and_stab(tables, names):
+    """The script's moveType is what the chart (CheckTypeChart, bcp.c:2358-2361) and STAB
+    (ApplyTypeChart's inType, battle_lib.c:2582-2597) read: Normal Weather Ball does nothing to
+    Gengar, the rain's Water one hits it; a Water-type user gets x1.5 STAB on it in rain."""
+    s = _plain(_state(tables, names, ("Castform", "Weather Ball"), ("Gengar", "Tail Whip")))
+    acts = A("Weather Ball", "Tail Whip", s, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert _loss(s, out) == 0
+    rain = _weather(s, Weather.RAIN)
+    out = assert_matches_reference(tables, rain, acts, O)
+    assert _loss(rain, out) > 0
+    m = names.move("Weather Ball")
+    plain = rain._replace(types=rain.types.at[0, 0].set(jnp.asarray([Type.NORMAL] * 2, jnp.int8)))
+    water = rain._replace(types=rain.types.at[0, 0].set(jnp.asarray([Type.WATER] * 2, jnp.int8)))
+    assert _dfr(tables, water, m) == _dfr(tables, plain, m) * 15 // 10
+
+
+def test_judgment_takes_its_plate_type(tables, names, kaizo_tables, kaizo_names):
+    """effect_script_0268.s: a held HOLD_EFFECT_ARCEUS_* item (Flame Plate) makes Judgment Fire,
+    which hits Gengar; no item or a type item that is no plate (Charcoal) keeps Normal, which
+    does not. Any holder, not only Arceus (CheckItemHoldEffect on the attacker)."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        m = n.move("Judgment")
+        for user, item, kind in (
+            ("Arceus", "Flame Plate", Type.FIRE),
+            ("Snorlax", "Splash Plate", Type.WATER),
+            ("Arceus", "", Type.NORMAL),
+            ("Arceus", "Charcoal", Type.NORMAL),
+        ):
+            s = make_state(
+                t, [_mon(n, user, ["Judgment"], 40, item)], [_mon(n, "Gengar", ["Tail Whip"], 40)]
+            )
+            s = _plain(s)
+            assert int(move_type_of(t, s, 0, m)) == kind, (user, item)
+            out = assert_matches_reference(t, s, A("Judgment", "Tail Whip", s, n), O)
+            assert (_loss(s, out) > 0) == (kind != Type.NORMAL), (user, item)
+
+
+# B13-13: Water Spout / Eruption (CalcHPFalloffPower, battle_script.c:6645-6657).
+
+
+def test_water_spout_power_falls_with_the_users_hp(tables, names):
+    """power x curHP / maxHP, at least 1; read before the hit (its only one)."""
+    assert int(falloff_power(150, 100, 100)) == 150
+    assert int(falloff_power(150, 51, 100)) == 76
+    assert int(falloff_power(150, 1, 300)) == 1
+    s = _plain(_state(tables, names, ("Wailmer", "Water Spout"), ("Snorlax", "Tail Whip")))
+    m = names.move("Water Spout")
+    for hp in (int(s.max_hp[0, 0]), int(s.max_hp[0, 0]) // 2, 1):
+        h = s.replace_hp(0, 0, hp)
+        power = int(falloff_power(150, hp, int(s.max_hp[0, 0])))
+        out = assert_matches_reference(tables, h, A("Water Spout", "Tail Whip", h, names), O)
+        assert _loss(h, out) == _dfr(tables, h, m, power), hp
+
+
+def test_water_spout_hp_regions_cut_every_power():
+    """prep.variants.falloff_cuts: every HP of a region has its top's power (B13-13)."""
+    from nuzline.prep.variants import falloff_cuts
+
+    tops = sorted(set(falloff_cuts(100, 150)) | {100})
+    for hp in range(1, 101):
+        top = min(t for t in tops if t >= hp)
+        assert int(falloff_power(150, hp, 100)) == int(falloff_power(150, top, 100)), hp
+
+
+# B13-14: Gyro Ball (CalcGyroBallPower, battle_script.c:7123-7131).
+
+
+def test_gyro_ball_power_formula():
+    assert int(gyro_ball_power(50, 100)) == 51
+    assert int(gyro_ball_power(100, 50)) == 13
+    assert int(gyro_ball_power(10, 100)) == 150  # capped (:7128-7129)
+    assert int(gyro_ball_power(100, 3)) == 1
+
+
+def test_gyro_ball_reads_both_speeds(tables, names):
+    """monSpeedValues of both battlers (CompareBattlerSpeed: stages, paralysis, Choice Scarf);
+    a paralyzed user's quartered Speed raises the power."""
+    s = _plain(_state(tables, names, ("Bronzor", "Gyro Ball"), ("Snorlax", "Tail Whip")))
+    m = names.move("Gyro Ball")
+    for state in (s, s.with_status(0, 0, Status.PARALYSIS), s.with_stages(1, spe=2)):
+        power = int(
+            gyro_ball_power(effective_speed(tables, state, 0), effective_speed(tables, state, 1))
+        )
+        out = assert_matches_reference(tables, state, A("Gyro Ball", "Tail Whip", state, names), O)
+        assert _loss(state, out) == _dfr(tables, state, m, power)
+
+
+def test_gyro_ball_speeds_are_the_action_starts(tables, names):
+    """BranchActions' SortMonSpeedOrder (bcp.c:888) writes monSpeedValues before the user's
+    status checks: a sleeping Quick Feet user (x1.5 with any status, battle_lib.c:1257-1258)
+    that wakes this turn uses its sleeping Speed."""
+    s = _plain(_state(tables, names, ("Bronzor", "Gyro Ball"), ("Snorlax", "Tail Whip")))
+    s = _ability(s, 0, AbilityId.QUICK_FEET).with_status(0, 0, Status.SLEEP, counter=1)
+    m = names.move("Gyro Ball")
+    asleep = int(gyro_ball_power(effective_speed(tables, s, 0), effective_speed(tables, s, 1)))
+    awake = s.with_status(0, 0, Status.NONE)
+    woken = int(
+        gyro_ball_power(effective_speed(tables, awake, 0), effective_speed(tables, awake, 1))
+    )
+    assert asleep != woken
+    out = assert_matches_reference(tables, s, A("Gyro Ball", "Tail Whip", s, names), O)
+    assert int(out.status[0, 0]) == Status.NONE
+    assert _loss(s, out) == _dfr(tables, awake, m, asleep)
+
+
+def test_gyro_ball_zero_speed_is_refused(tables, names):
+    """coverage.gyro_speed_line: below GYRO_SPEED_MIN the -6 stage and paralysis bring the
+    divisor to 0 (B13-14)."""
+    from nuzline.engine.coverage import GYRO_SPEED_MIN, gyro_speed_line
+
+    slow = _mon(names, "Bronzor", ["Gyro Ball"], 5)
+    fast = _mon(names, "Bronzor", ["Gyro Ball"], 60)
+    m = names.move("Gyro Ball")
+    from nuzline.engine.ids import Stat
+    from nuzline.engine.state import spec_stats
+
+    assert int(spec_stats(tables, slow)[Stat.SPE]) < GYRO_SPEED_MIN
+    assert gyro_speed_line(tables, m, slow) is not None
+    assert gyro_speed_line(tables, m, fast) is None
+    assert gyro_speed_line(tables, names.move("Tackle"), slow) is None
+
+
+# B13-15: Trump Card (CalcTrumpCardPower, :7233-7245) and Punishment (:7354-7371).
+
+
+def test_trump_card_reads_the_pp_after_its_decrement(tables, names):
+    """ppCur of moveSlot after BattleControllerPlayer_DecrementPP (bcp.c:3182): 3 PP spends to 2
+    (60), 1 to 0 (200); a Pressure foe takes 2 (bcp.c:2236-2270)."""
+    assert [int(trump_card_power(p)) for p in range(7)] == [200, 80, 60, 50, 40, 40, 40]
+    s = _plain(_state(tables, names, ("Eevee", "Trump Card"), ("Snorlax", "Tail Whip")))
+    m = names.move("Trump Card")
+    for pp, pressure, power in ((3, False, 60), (1, False, 200), (3, True, 80), (9, False, 40)):
+        h = s.with_pp(0, 0, [pp, 0, 0, 0])
+        if pressure:
+            h = _ability(h, 1, AbilityId.PRESSURE)
+        out = assert_matches_reference(tables, h, A("Trump Card", "Tail Whip", h, names), O)
+        assert _loss(h, out) == _dfr(tables, h, m, power), (pp, pressure)
+
+
+def test_punishment_counts_the_targets_raised_stages(tables, names):
+    """60 + 20 x the stages above neutral (drops ignored), at most 200."""
+    assert int(punishment_power(jnp.asarray([0, 2, -1, 0, 0, 1, 0, 0]))) == 120
+    assert int(punishment_power(jnp.asarray([0, 6, 6, 0, 0, 0, 0, 0]))) == 200
+    s = _plain(_state(tables, names, ("Sneasel", "Punishment"), ("Snorlax", "Tail Whip")))
+    m = names.move("Punishment")
+    for stages, power in (({}, 60), ({"atk": 2, "spe": 1, "def_": -1}, 120), ({"eva": 6}, 180)):
+        h = s.with_stages(1, **stages)
+        out = assert_matches_reference(tables, h, A("Punishment", "Tail Whip", h, names), O)
+        assert _loss(h, out) == _dfr(tables, h, m, power), stages
+
+
+# B13-16: Wake-Up Slap (effect_script_0217.s, SmellingSalt's script on sleep).
+
+
+def test_wake_up_slap_doubles_and_wakes_a_sleeper(tables, names, kaizo_tables, kaizo_names):
+    """Against MON_CONDITION_SLEEP (any count) powerMul 20 and an ON_HIT
+    subscript_heal_target_sleep.s (wakes a target with HP left); behind a substitute
+    (CheckSubstitute, :5) a plain hit and no wake-up; Kaizo's effect chance 100 changes
+    nothing (an ON_HIT effect rolls no chance)."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = _plain(_state(t, n, ("Hitmonchan", "Wake-Up Slap"), ("Snorlax", "Tail Whip"), (30, 50)))
+        m = n.move("Wake-Up Slap")
+        plain = _dfr(t, s, m)
+        sleeper = s.with_status(1, 0, Status.SLEEP, counter=3)
+        out = assert_matches_reference(t, sleeper, A("Wake-Up Slap", "Tail Whip", sleeper, n), O)
+        assert _loss(sleeper, out) == _dfr(t, sleeper, m) == _dfr(t, s, m, 2 * int(t.move_power[m]))
+        assert _loss(sleeper, out) > plain
+        assert int(out.status[1, 0]) == Status.NONE and int(out.status_counter[1, 0]) == 0
+        subbed = sleeper._replace(substitute_hp=sleeper.substitute_hp.at[1].set(200))
+        out = assert_matches_reference(t, subbed, A("Wake-Up Slap", "Tail Whip", subbed, n), O)
+        assert 200 - int(out.substitute_hp[1]) == plain
+        assert int(out.status[1, 0]) == Status.SLEEP
+
+
+# B13-17: Assurance (effect_script_0231.s, turnFlags.assuranceDamageMask).
+
+
+def test_assurance_mark_follows_update_hp():
+    """subscript_update_hp.s:18-19: hpCalcTemp <= 0 is stored: a loss sets, a zero update
+    clears, a heal or no update keeps."""
+    from nuzline.engine.state import BattleState
+
+    s = BattleState(*[jnp.zeros(1)] * len(BattleState._fields))._replace(
+        ts_assurance=jnp.zeros(2, jnp.int8)
+    )
+    s = assurance_mark(s, 1, 5, True)
+    assert np.asarray(s.ts_assurance).tolist() == [0, 1]
+    assert np.asarray(assurance_mark(s, 1, 0, False).ts_assurance).tolist() == [0, 1]
+    assert np.asarray(assurance_mark(s, 1, -3, True).ts_assurance).tolist() == [0, 1]
+    assert np.asarray(assurance_mark(s, 1, 0, True).ts_assurance).tolist() == [0, 0]
+
+
+def _assurance(t, n, foe_moves, levels=(25, 70), foe_item="", bench=False):
+    foes = [_mon(n, "Snorlax", foe_moves, levels[1], foe_item)]
+    if bench:
+        foes.append(_mon(n, "Snorlax", ["Tail Whip"], levels[1]))
+    return _plain(make_state(t, [_mon(n, "Absol", ["Assurance"], levels[0])], foes))
+
+
+def test_assurance_doubles_after_the_targets_own_hp_loss(tables, names):
+    """A faster foe's Belly Drum (UPDATE_HP, subscript_belly_drum.s:8-12) or Substitute
+    (subscript_try_substitute.s:12-13) sets its flag: Assurance's movePower x2 (:7-9), the
+    substitute taking it; a Growl leaves it plain; Assurance first sees no flag."""
+    t, n = tables, names
+    m = n.move("Assurance")
+    s = _assurance(t, n, ["Tail Whip", "Belly Drum", "Substitute"])
+    plain, double = _dfr(t, s, m, 50), _dfr(t, s, m, 100)
+    out = assert_matches_reference(t, s, A("Assurance", "Tail Whip", s, n), O)
+    assert _loss(s, out) == plain
+    out = assert_matches_reference(t, s, A("Assurance", "Belly Drum", s, n), O)
+    assert _loss(s, out) == int(s.max_hp[1, 0]) // 2 + double
+    out = assert_matches_reference(t, s, A("Assurance", "Substitute", s, n), O)
+    quarter = int(s.max_hp[1, 0]) // 4
+    assert int(out.substitute_hp[1]) == max(quarter - double, 0)
+    slow = _assurance(t, n, ["Belly Drum"], levels=(45, 40))
+    out = assert_matches_reference(t, slow, A("Assurance", "Belly Drum", slow, n), O)
+    assert _loss(slow, out) == int(slow.max_hp[1, 0]) // 2 + _dfr(t, slow, m, 50)
+    for name in ("ts_assurance",):
+        assert not np.any(np.asarray(getattr(out, name)))  # 0 between turns
+
+
+def test_assurance_doubles_on_a_newcomer_hurt_by_the_hazards(tables, names):
+    """The hazards' UPDATE_HP (subscript_hazards_check.s) sets the switched-in battler's flag;
+    the switch keeps turnFlags (UpdateAfterSwitch clears no turnFlags)."""
+    t, n = tables, names
+    s = _assurance(t, n, ["Tail Whip"], bench=True)
+    s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
+    out = assert_matches_reference(t, s, (A("Assurance", "Tail Whip", s, n)[0], 4 + 1), O)
+    rock = int(s.max_hp[1, 1]) // 8
+    newcomer = s._replace(active=s.active.at[1].set(1))
+    assert _loss(s, out, slot=1) == rock + _dfr(t, newcomer, n.move("Assurance"), 100)
+
+
+def test_assurance_flag_survives_the_u_turn_pause(tables, names):
+    """A faster foe's U-turn with Life Orb (subscript_lose_hp_from_item.s: UPDATE_HP) sets its
+    battler's flag and the hit sets the user's (bcp.c:3437-3438), kept in the pause's scratch;
+    the newcomer behind it takes the x2 (the switch keeps the battler's turnFlags)."""
+    t, n = tables, names
+    s = _plain(
+        make_state(
+            t,
+            [_mon(n, "Snorlax", ["Assurance"], 40)],
+            [
+                _mon(n, "Scyther", ["U-turn"], 35, "Life Orb"),
+                _mon(n, "Snorlax", ["Tail Whip"], 40),
+            ],
+        )
+    )
+    paused = assert_matches_reference(t, s, A("Assurance", "U-turn", s, n), O)
+    assert int(paused.pivot_battler) == 2
+    assert np.asarray(paused.ts_assurance).tolist() == [1, 1]
+    after = _resume(t, paused, 1)
+    newcomer = paused._replace(active=paused.active.at[1].set(1))
+    assert _loss(paused, after, slot=1) == _dfr(t, newcomer, n.move("Assurance"), 100)
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_wake_up_slap_law_exact_and_sampled(tables, names):
+    """B13-16: a faster Wake-Up Slap wakes the sleeper, whose own move then draws its hit, crit
+    and roll this turn; the enumeration equals the brute force and the sampler."""
+    s = _plain(
+        _state(tables, names, ("Hitmonchan", "Wake-Up Slap"), ("Snorlax", "Tackle"), (30, 50))
+    )
+    s = s.with_status(1, 0, Status.SLEEP, counter=3)
+    acts = A("Wake-Up Slap", "Tackle", s, names)
+    assert_equals_bruteforce(tables, s, acts)
+    n_ = 20_000
+    check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
+
+
+@pytest.mark.slow  # the brute force's and the sampler's compiles
+def test_assurance_law_exact_and_sampled(tables, names):
+    """B13-17: a faster foe's Take Down sets its flag through its recoil only when it lands, so
+    Assurance's damage follows the foe's hit roll (a NON_TABLE_DAMAGE_EFFECTS move: its crit and
+    roll stay); the enumeration equals the brute force and the sampler."""
+    s = _assurance(tables, names, ["Take Down"])
+    s = s.with_stages(1, acc=-1)
+    acts = A("Assurance", "Take Down", s, names)
+    assert_equals_bruteforce(tables, s, acts)
+    n_ = 20_000
+    check_frequencies(children(tables, s, acts), sampled(tables, s, acts, n_), n_)
