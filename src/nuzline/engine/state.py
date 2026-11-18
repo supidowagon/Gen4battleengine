@@ -227,7 +227,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.format import SINGLES, Format, format_of, party
+from nuzline.engine.format import SINGLES, Format, format_of, party, side_of
 from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
@@ -751,6 +751,20 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
 def held_items(state: BattleState) -> jnp.ndarray:
     """``int32[B]``: ``held_item`` of each battler."""
     return jnp.stack([held_item(state, side) for side in range(format_of(state).B)])
+
+
+def field_index(state: BattleState, field: str, index):
+    """``index`` (a battler, or ``(battler, slot, ...)``) re-indexed to the leading axis of the
+    named field: the party of the battler for a ``[P, ...]`` field, its side for a ``[2]`` field,
+    the battler itself for a ``[B, ...]`` field (docs/doubles-state-design.md section 5.2). For
+    the generic field writers that take the field name as data."""
+    lead = _KEYS[field][0][:1]
+    parts = index if isinstance(index, tuple) else (index,)
+    if lead == ("P",):
+        parts = (party(format_of(state), parts[0]), *parts[1:])
+    elif lead == (SIDES,):
+        parts = (side_of(parts[0]), *parts[1:])
+    return parts if isinstance(index, tuple) else parts[0]
 
 
 if tuple(LAYOUT) != BattleState._fields:
