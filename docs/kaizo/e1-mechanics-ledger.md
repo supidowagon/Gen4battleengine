@@ -1045,17 +1045,25 @@ of them, :2107-2115).
   banned by id) at selection (CHECK_INVALID_GRAVITY, :2292-2295: `actions.usable_moves`, all banned
   -> Struggle; the AI's list too, trainer_ai.c:234), at the status check right after Imprison
   (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586-2595, `moveCur`: Sleep Talk itself, not its call;
-  `moveFailFlags.gravity`, a message only: no unlock) and for Metronome, Assist and Copycat calls
-  (`Move_CanBeMetronomed`, :7198-7201; Assist's list, battle_script.c:6430). Area Gravity (Kaizo,
+  `moveFailFlags.gravity`, a message only: no unlock), from Sleep Talk's set (CHECK_INVALID_GRAVITY in
+  `BtlCmd_TrySleepTalk`'s `~CHECK_INVALID_NO_PP` mask, battle_script.c:4927: `order.sleep_talk_slots`) and
+  for Metronome, Assist and Copycat calls (`Move_CanBeMetronomed`, :7198-7201; Assist's list,
+  battle_script.c:6430). Those sets are read when the call runs, so a faster foe's Gravity earlier in the
+  same turn shrinks them: `enumerate.call_laws` adds a Gravity variant (`CallLaws.can_gravity`, where
+  `order.gravity_possible`: Gravity down at the turn start, a Sleep Talk / Metronome / Assist user, a foe
+  move that can run Gravity) whose law is read under Gravity (`order.gravity_state`), its values offset by
+  `ids.CALL_GRAVITY` (`invoked_move` reads `call % CALL_GRAVITY`); `call_consistent` keeps a row of either
+  law only where the step's `gravity_at_move` event agrees, and `sample_outcome` redraws the call and the
+  called move's draws from the Gravity set where it landed. Copycat needs no variant (no draw; a banned
+  movePrev fails and reads nothing). Area Gravity (Kaizo,
   sub_seq 297: the animation then `subscript_gravity_start` byte for byte, run at battle start on a
   map with weather 12): the trainer's area condition starts the fight with Gravity at 5
   (`coverage.start_gravity`, `state.initial_arrays(gravity=)`; the loop is a no-op at battle start); the
-  coverage refusal is gone and rom_diff members 238 and 297 are `modelled`. Not covered: Trick
-  Room's twin (sub_seq 251) and, for the invokers, a Gravity that a faster foe sets earlier in the
-  same turn (their call law is read at the turn start). AI: `Basic_CheckGravityActive`
+  coverage refusal is gone and rom_diff members 238 and 297 are `modelled`. Trick Room's twin
+  (sub_seq 251) is not part of this group. AI: `Basic_CheckGravityActive`
   (script.s:1026-1029), `Expert_Gravity` (:4782-4803, dispatch :1759, rolls :4795 and :4799;
   `commands.FieldCondition.GRAVITY` over `state.gravity`). Tests: `test_e1_trial.py`,
-  `test_kaizo_policy.py`, `test_coverage.py`.
+  `test_invokers.py`, `test_kaizo_policy.py`, `test_coverage.py`.
 - G-68 Mimic (`EffectId.MIMIC`, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE 82), in both games; the party / battler
   split of the move and PP arrays. effect_script_0082.s:3 runs `subscript_mimic.s` on a hit that
   connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4523) fails

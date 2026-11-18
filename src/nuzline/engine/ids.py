@@ -1266,6 +1266,12 @@ METRONOME_HEAVY = 65536 % METRONOME_DRAW
 # ``u`` in 0..11 and the call is allowed slot ``u % count`` (12 is a multiple of every count
 # 1-4), so the draw stays exact for whatever set the move sees when it runs.
 SLEEP_TALK_VALUES = 12
+# An invoker call variant that assumes a faster foe's Gravity landed before the call (G-67):
+# ``Outcome.call`` ``v + CALL_GRAVITY`` with ``v`` the value drawn from the law under Gravity
+# (``order.gravity_state``). Above every Metronome rank (< METRONOME_DRAW) and every Sleep Talk
+# value, and a multiple of SLEEP_TALK_VALUES: the call reads ``call % CALL_GRAVITY``
+# (``order.invoked_move``), so ``step`` plays both encodings of ``v`` alike on the live set.
+CALL_GRAVITY = SLEEP_TALK_VALUES * (METRONOME_DRAW // SLEEP_TALK_VALUES + 1)
 # Fake Out (``generated/moves.txt`` line 253): ``subscript_flinch_mon.s:18`` shows Inner
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).

@@ -699,6 +699,7 @@ def _empty_events() -> dict:
             "disabled_at_move",
             "sealed_at_move",
             "encored_at_move",
+            "gravity_at_move",
             *EVENT_FLAGS,
         )
     }
@@ -829,6 +830,9 @@ def _use_move(
     # Likewise a battler of the other side imprisoning (the Sleep Talk set's other change within
     # the turn, ruling B7-13).
     sealed_at_move = ready & imprisoning_foe(state, side)
+    # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
+    # invokers' sets (G-67), the event their Gravity call variants split on.
+    gravity_at_move = ready & (state.gravity != 0)
     # The encored move replaced the chosen one when the action started (FightCommand above): the
     # event the takeover variants split on (enumerate.call_consistent, ruling B11-1).
     encored_at_move = ready & encored_now & (state.encore_move[side] != jnp.asarray(choice[0]))
@@ -2182,6 +2186,7 @@ def _use_move(
         "disabled_at_move": disabled_at_move,
         "sealed_at_move": sealed_at_move,
         "encored_at_move": encored_at_move,
+        "gravity_at_move": gravity_at_move,
     }
     foe = {
         "contact_ability": contact,

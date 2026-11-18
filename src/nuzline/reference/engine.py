@@ -40,6 +40,7 @@ from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
+    CALL_GRAVITY,
     CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
@@ -374,7 +375,10 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
     Choice holder's other moves), the ``call % count``-th of them. BtlCmd_Metronome
     (:4535-4562): the ``call % count``-th of ids 1..467 that the user does not know and
     Move_CanBeMetronomed allows (``NO_METRONOME``). BtlCmd_TryCopycat (:7328-7341): the battle's
-    movePrev unless it is MOVE_NONE or not Metronome-able."""
+    movePrev unless it is MOVE_NONE or not Metronome-able. Gravity bans its moves from every
+    set (CHECK_INVALID_GRAVITY, lib.c:2292-2295; Move_CanBeMetronomed, :7198-7201); a Gravity
+    variant's offset is dropped (``call % CALL_GRAVITY``, G-67)."""
+    call = call % CALL_GRAVITY
     effect = _t(tables, "move_effect", move)
     mon, sd = _active(s, side), s.sides[side]
     if effect == EffectId.SLEEP_TALK:
@@ -389,6 +393,7 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             and not (sd.taunt > 0 and _t(tables, "move_power", m) == 0)
             and not (locked and m != lock)
             and not _move_imprisoned(s, side, m)
+            and not _gravity_banned(s, m)  # CHECK_INVALID_GRAVITY (lib.c:2292-2295)
             and not (sd.encore_move and m != sd.encore_move)  # lib.c:2302-2304 (B10-9)
         ]
         return allowed[call % len(allowed)] if allowed else 0

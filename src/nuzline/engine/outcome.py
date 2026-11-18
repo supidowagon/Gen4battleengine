@@ -76,6 +76,8 @@ from nuzline.engine.order import (
     disabled_state,
     dislikes_berry,
     encored_state,
+    gravity_possible,
+    gravity_state,
     is_item,
     is_switch,
     metronome_weights,
@@ -1288,13 +1290,18 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
 def replacement_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
     """``bool``: ``side``'s move can be replaced within the turn by ``foe``'s action (ruling
     B11-1): a Sleep Talk user whose foe uses a move (a faster Disable or Imprison can change its
-    set: rulings B5-13, B7-13) or an ``order.takeover_possible`` side. ``foe`` is named by the
-    caller (doubles rule 1; B11-11). Over-approximate."""
+    set: rulings B5-13, B7-13), an ``order.takeover_possible`` side, or an
+    ``order.gravity_possible`` one (a faster Gravity changes its call set, G-67). ``foe`` is named
+    by the caller (doubles rule 1; B11-11). Over-approximate."""
     actions = jnp.asarray(actions, _I32)
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     chosen = selected_move(tables, state, side, actions[side])[0]
     talk = uses_move[side] & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & uses_move[foe]
-    return talk | takeover_possible(tables, state, actions, side, foe)
+    return (
+        talk
+        | takeover_possible(tables, state, actions, side, foe)
+        | gravity_possible(tables, state, actions, side, foe)
+    )
 
 
 def replacement_known(tables: Tables, state: BattleState) -> bool:
@@ -1332,14 +1339,17 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     events are played on A (``step.turn_events``, only where ``replacement_possible``) and a side
     whose event fired (``enumerate._split_events``, ``enumerate.taken_events``) takes outcome B's
     move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
-    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
-    or the encored move a faster Encore forced (``order.encored_state``). Exact: the event is
+    Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``),
+    the encored move a faster Encore forced (``order.encored_state``) or, for a Sleep Talk,
+    Metronome or Assist user, the set a faster Gravity left (``order.gravity_state``, its call
+    redrawn from that set's law, G-67). Exact: the event is
     fixed before that side's action starts, and the redrawn fields are read only after it.
     The events and outcome B are computed only where ``replacement_possible`` holds (a
     ``lax.cond``; A otherwise, which B left unchanged there). ``replacement`` (a Python bool,
     static under ``jit``): False leaves both out of the program, for a ``state`` whose
     ``replacement_known`` is False (where the predicate is always false)."""
-    from nuzline.engine.enumerate import _split_events, taken_events  # importers of this module
+    # importers of this module
+    from nuzline.engine.enumerate import _split_events, gravity_events, taken_events
     from nuzline.engine.step import turn_events
 
     state_in, actions_in = state, jnp.asarray(actions, _I32)
@@ -1473,15 +1483,24 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     def fired(outcome):
         events = turn_events(tables, state_in, actions_in, outcome)
         disabled, sealed = _split_events(state_in, events)
-        which = jnp.stack([disabled, sealed, taken_events(state_in, events)])
+        kinds = call_kind(tables, chosen)
+        listing = (kinds == CALL_SLEEP_TALK) | (kinds == CALL_METRONOME) | (kinds == CALL_ASSIST)
+        landed = gravity_events(state_in, events) & listing
+        which = jnp.stack([disabled, sealed, taken_events(state_in, events), landed])
         sides = jnp.arange(2)
         taken = which[2]
         # The moveTemp each side runs: the encored move where taken. The invokers' draws do not
-        # read the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists
-        # ignore Disable, Imprison and Encore), so one draw serves every alternative.
+        # read Disable, Imprison or Encore (Sleep Talk's value is uniform; Metronome's and
+        # Assist's lists ignore them), so one draw serves those alternatives; Gravity shrinks
+        # Metronome's and Assist's lists, so its alternative draws from the set it leaves.
         own = jnp.where(taken, state.last_move.astype(_I32), chosen)
         alt_key = jax.random.fold_in(key, 40)
-        alt_call = _draw_calls(alt_key, tables, state, own)
+        heavy = gravity_state(state)
+        alt_call = jnp.where(
+            landed,
+            _draw_calls(alt_key, tables, heavy, own),
+            _draw_calls(alt_key, tables, state, own),
+        )
         alt_moves = []
         for side in (0, 1):
             mine = sides == side
@@ -1489,11 +1508,18 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                 disabled_state(state, mine),
                 sealed_state(state, mine),
                 encored_state(tables, state, mine),
+                heavy,
             )
             options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
             alt_moves.append(
                 jnp.where(
-                    which[2, side], options[2], jnp.where(which[1, side], options[1], options[0])
+                    which[3, side],
+                    options[3],
+                    jnp.where(
+                        which[2, side],
+                        options[2],
+                        jnp.where(which[1, side], options[1], options[0]),
+                    ),
                 )
             )
         fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))

@@ -216,6 +216,7 @@ from nuzline.engine.effects import (
     psycho_shift_status,
 )
 from nuzline.engine.ids import (
+    CALL_GRAVITY,
     CHATTER_CHANCES,
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
@@ -256,6 +257,8 @@ from nuzline.engine.order import (
     dislikes_berry,
     effective_speed,
     encored_state,
+    gravity_possible,
+    gravity_state,
     invoked_move,
     is_item,
     is_switch,
@@ -1518,7 +1521,10 @@ def outcome_laws(
         # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals.
         talking = kinds == CALL_SLEEP_TALK
         disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
-        sealed = talking & (call >= CALL_SEALED)
+        sealed = talking & (call >= CALL_SEALED) & (call < CALL_GRAVITY)
+        # A variant that assumes a faster foe's Gravity lands first (CALL_GRAVITY, G-67) calls
+        # from the set Gravity leaves (Sleep Talk, Metronome, Assist).
+        grav = (call >= CALL_GRAVITY) & ~taken
         after_foe = copycat & (call == 1)
         disabled = disabled & ~taken
         sealed = sealed & ~taken
@@ -1531,7 +1537,11 @@ def outcome_laws(
                 jnp.where(
                     taken,
                     used_moves(tables, took_state, actions, call, after_foe, chosen),
-                    used_moves(tables, state, actions, call, after_foe, chosen),
+                    jnp.where(
+                        grav,
+                        used_moves(tables, gravity_state(state), actions, call, after_foe, chosen),
+                        used_moves(tables, state, actions, call, after_foe, chosen),
+                    ),
                 ),
             ),
         )
@@ -3116,6 +3126,13 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
     return disabled, sealed
 
 
+def gravity_events(state: BattleState, events) -> jnp.ndarray:
+    """``bool[2]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
+    of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
+    invoker call (G-67)."""
+    return (jnp.asarray(events["gravity_at_move"]) != 0) & (state.gravity == 0)
+
+
 def taken_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[2]``: the side's chosen move was replaced by an encored move when its action
     started (the ``encored_at_move`` event of ``step_events``) and it was not encored at the turn
@@ -3131,27 +3148,45 @@ def call_consistent(
     turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
     replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
     side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
-    ``CALL_SEALED``), whether a Disable or an Imprison changed its set before its action
-    (``_split_events`` of ``step_events`` on ``state``, ``actions``, ``outcome``) matches the
-    variant. Unsplit rows always keep."""
+    ``CALL_SEALED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison or a Gravity changed its
+    set before its action (``_split_events`` and ``gravity_events`` of ``step_events`` on
+    ``state``, ``actions``, ``outcome``) matches the variant. A Metronome or Assist side not
+    taken over keeps a row only where its call is a Gravity variant (``>= CALL_GRAVITY``)
+    exactly when a foe's Gravity landed before it (G-67). Unsplit Sleep Talk rows always keep."""
     actions = jnp.asarray(actions, _I32)
     taken = jnp.zeros((2,), bool) if taken is None else jnp.asarray(taken, bool)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    talk = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & ~taken
+    fight = (state.over == 0) & ~is_switch(actions) & ~is_item(actions) & ~taken
+    kinds = call_kind(tables, chosen)
+    talk = fight & (kinds == CALL_SLEEP_TALK)
+    listing = fight & ((kinds == CALL_METRONOME) | (kinds == CALL_ASSIST))
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
     disabled, sealed = _split_events(state, events)
-    seen = jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP))
-    want = jnp.where(
-        call >= CALL_SEALED, CALL_SEALED, jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP)
+    landed = gravity_events(state, events)
+    seen = jnp.where(
+        landed,
+        CALL_GRAVITY,
+        jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
     )
+    want = jnp.where(
+        call >= CALL_GRAVITY,
+        CALL_GRAVITY,
+        jnp.where(
+            call >= CALL_SEALED,
+            CALL_SEALED,
+            jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+        ),
+    )
+    listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
     view, view_actions = pivot_view(tables, state, actions)
     can_take = jnp.stack(
         [takeover_possible(tables, view, view_actions, side, 1 - side) for side in (0, 1)]
     )
     took = taken_events(state, events)
-    return jnp.all(~split | (seen == want)) & jnp.all(~can_take | (took == taken))
+    return (
+        jnp.all(~split | (seen == want)) & jnp.all(listed_ok) & jnp.all(~can_take | (took == taken))
+    )
 
 
 class CallLaws(NamedTuple):
@@ -3177,6 +3212,12 @@ class CallLaws(NamedTuple):
     taken_kind: jnp.ndarray
     taken_weight: jnp.ndarray
     taken_called: jnp.ndarray
+    # The Gravity variant (G-67): bool[2] a faster foe's Gravity can land before the side's
+    # Sleep Talk, Metronome or Assist call (``order.gravity_possible``), and the call law read
+    # with Gravity up (``order.gravity_state``): its weights and calls as above.
+    can_gravity: jnp.ndarray
+    gravity_weight: jnp.ndarray
+    gravity_called: jnp.ndarray
 
 
 def _side_call_law(
@@ -3257,9 +3298,12 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13). Drawn
       only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
       move that can put it to sleep (over-approximate);
-    * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
-      the set is fixed through the turn (the user's moves, Gravity read at the turn start: a Gravity
-      a faster foe sets earlier in the turn, and Heal Block, are owed);
+    * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536)
+      over the turn-start set; Assist likewise over its list (each entry 1);
+    * the Gravity variant (G-67): where a faster foe's Gravity can land before a Sleep Talk,
+      Metronome or Assist call (``order.gravity_possible``), the law read with Gravity up
+      (``order.gravity_state``: ``Move_CanBeMetronomed``, battle_lib.c:7198-7201, and Sleep
+      Talk's CHECK_INVALID_GRAVITY, :2292-2295, read Gravity when the call runs);
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move;
@@ -3302,7 +3346,12 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     taken_kinds = jnp.where(
         (taken_kinds == CALL_SLEEP_TALK) & ~sleeps & ~put_to_sleep, CALL_NONE, taken_kinds
     )
+    can_gravity = jnp.stack(
+        [gravity_possible(tables, state, actions, side, 1 - side) for side in (0, 1)]
+    ) & (kinds != CALL_NONE)
+    heavy = gravity_state(state)
     weights, called, alts, seals, t_weights, t_called = [], [], [], [], [], []
+    g_weights, g_called = [], []
     for side in (0, 1):
         foe = 1 - side
         weight, call = _side_call_law(
@@ -3326,6 +3375,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )
         t_weights.append(t_weight)
         t_called.append(t_call)
+        g_weight, g_call = _side_call_law(
+            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
+        )
+        g_weights.append(g_weight)
+        g_called.append(jnp.where(can_gravity[side], g_call, call))
     return CallLaws(
         kind=kinds.astype(_I32),
         weight=jnp.stack(weights),
@@ -3338,21 +3392,24 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         taken_kind=taken_kinds.astype(_I32),
         taken_weight=jnp.stack(t_weights),
         taken_called=jnp.stack(t_called),
+        can_gravity=can_gravity,
+        gravity_weight=jnp.stack(g_weights),
+        gravity_called=jnp.stack(g_called),
     )
 
 
-def _side_variants(kind, weight, called, alt, sealed, offsets) -> list[tuple[int, int, int]]:
+def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tuple[int, int, int]]:
     """``(value, numerator, denominator)`` per call variant of one side's law
-    (``call_variants``)."""
+    (``call_variants``); ``heavy`` is Sleep Talk's call from the set Gravity leaves."""
     if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
-        groups: dict[tuple[int, int, int], list[int]] = {}
+        groups: dict[tuple[int, int, int, int], list[int]] = {}
         for v in np.flatnonzero(weight):
-            key = (int(called[v]), int(alt[v]), int(sealed[v]))
+            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(heavy[v]))
             groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
         den = int(weight.sum())
         out = []
-        for (move, other, shut), (v, w) in groups.items():
-            if move == other == shut:
+        for (move, other, shut, grav), (v, w) in groups.items():
+            if move == other == shut == grav:
                 out.append((v, w, den))
             else:
                 # One variant per set the turn can leave, each kept only where the turn met
@@ -3382,7 +3439,10 @@ def call_variants(laws: CallLaws) -> list[Variant]:
     smallest, with the group's summed weight). A Sleep Talk group whose values call another move
     from the Disable-shrunk set (``CallLaws.alt``) is two variants of the same weight,
     ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more, ``CALL_SEALED``, where a
-    faster foe's Imprison can land (B7-13). Where a foe's Encore can replace the side's move
+    faster foe's Imprison can land (B7-13), and ``CALL_GRAVITY`` where a faster foe's Gravity can
+    (G-67, ``CallLaws.can_gravity``). A Metronome or Assist side whose foe's Gravity can land
+    first also has the Gravity variants: the law under Gravity, values ``+ CALL_GRAVITY``, of
+    total weight 1 beside the turn-start law's 1. Where a foe's Encore can replace the side's move
     (``CallLaws.can_take``), the side also has the takeover variants (``taken``): the encored
     move's own law, of total weight 1 beside the others' 1 (ruling B11-1). The rows of all these
     variants are kept only where the turn met the variant's assumption (``call_consistent``), so
@@ -3394,11 +3454,20 @@ def call_variants(laws: CallLaws) -> list[Variant]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
-        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side])
-        out = [(v, False, w, d) for v, w, d in _side_variants(int(laws.kind[side]), *law, offsets)]
+        kind = int(laws.kind[side])
+        gravity = bool(laws.can_gravity[side])
+        talk = kind == CALL_SLEEP_TALK
+        offsets += [CALL_GRAVITY] if gravity and talk else []
+        heavy = laws.gravity_called[side] if talk else laws.called[side]
+        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side], heavy)
+        out = [(v, False, w, d) for v, w, d in _side_variants(kind, *law, offsets)]
+        if gravity and kind in (CALL_METRONOME, CALL_ASSIST):
+            heavy = laws.gravity_called[side]
+            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy)
+            out += [(v + CALL_GRAVITY, False, w, d) for v, w, d in _side_variants(kind, *law, [])]
         if bool(laws.can_take[side]):
             took = laws.taken_called[side]
-            law = (laws.taken_weight[side], took, took, took)
+            law = (laws.taken_weight[side], took, took, took, took)
             kind = int(laws.taken_kind[side])
             out += [(v, True, w, d) for v, w, d in _side_variants(kind, *law, [])]
         per_side.append(out)
@@ -3445,7 +3514,7 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     parts, tags = [], []
     cl = _jit_call_laws(tables, state, actions)
     talks = np.asarray(cl.kind) == CALL_SLEEP_TALK
-    split = bool(np.any(np.asarray(cl.can_take)))
+    split = bool(np.any(np.asarray(cl.can_take)) or np.any(np.asarray(cl.can_gravity)))
     for v in call_variants(cl):
         laws = _jit_laws(tables, state, actions, jnp.asarray(v.call), jnp.asarray(v.taken))
         outcomes, probs = enumerate_outcomes(laws)

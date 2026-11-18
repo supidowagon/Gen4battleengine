@@ -50,7 +50,9 @@ from nuzline.engine.actions import (
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
 from nuzline.engine.ids import (
+    CALL_GRAVITY,
     CANNOT_ENCORE_MOVES,
+    GRAVITY_TURNS,
     INVOKER_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
@@ -162,8 +164,8 @@ def assist_candidates(tables: Tables, state: BattleState, side) -> tuple:
     6418-6436) for ``side``'s active battler: in party order, every move of every other party
     slot holding a Pokemon (fainted ones too: only SPECIES_NONE and eggs are skipped) that is
     not an invoker (Move_IsInvoker, ``ids.INVOKER_MOVES``) and that Move_CanBeMetronomed allows
-    (``MoveFlag.NO_METRONOME``, and ``actions.gravity_banned`` under Gravity: its Heal Block test
-    is owed with that move). A
+    (``MoveFlag.NO_METRONOME``, and ``actions.gravity_banned`` under Gravity; Heal Block, its other
+    test, comes from an unsupported move). A
     move two mates know is listed twice. The call is ``RandNext() % numMoves`` (:6439):
     ``Outcome.call``'s uniform value, ``invoked_move`` taking the ``call % count``-th entry."""
     moves = state.moves[side].astype(_I32)  # [SLOTS, 4]
@@ -194,13 +196,15 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling
     B7-13) and, under Encore, every move but the encored one (battle_lib.c:2302-2304, B10-9).
     Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``,
-    ``gravity_banned``, CHECK_INVALID_GRAVITY, :2292-2295) is read here (G-67)."""
+    ``gravity_banned``, CHECK_INVALID_GRAVITY, :2292-2295: the opMask ``~CHECK_INVALID_NO_PP``
+    keeps it) is read here (G-67)."""
     mon = state.active[side]
     moves = state.moves[side, mon].astype(_I32)
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
     ok = ok & (moves != state.disabled_move[side])
     ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
     ok = ok & ~move_imprisoned(state, side, moves)
+    ok = ok & ~gravity_banned(state, moves)
     encore = state.encore_move[side].astype(_I32)
     ok = ok & ((encore == 0) | (moves == encore))
     lock = state.choice_lock[side].astype(_I32)
@@ -211,7 +215,8 @@ def metronome_candidates(tables: Tables, state: BattleState, side) -> jnp.ndarra
     """``bool[N]`` over move ids: what ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call
     for ``side``'s active battler: ids 1..``METRONOME_DRAW``, none of the battler's own moves
     (:4544-4551), none of ``MoveFlag.NO_METRONOME`` (``Move_CanBeMetronomed``, battle_lib.c:
-    7204-7218; Gravity's test is ``actions.gravity_banned`` (:7198-7201), Heal Block's is owed)."""
+    7204-7218), nor a move Gravity bans when it is up (``actions.gravity_banned``, :7198-7201;
+    Heal Block, the other test there, comes from an unsupported move)."""
     ids = jnp.arange(tables.move_effect.shape[0], dtype=_I32)
     own = state.moves[side, state.active[side]].astype(_I32)
     ok = (ids >= 1) & (ids <= METRONOME_DRAW)
@@ -247,9 +252,10 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     candidate of rank ``call % count`` (``metronome_candidates``; ``Outcome.call`` draws it by
     ``metronome_weights``); Copycat: ``copycat_call`` of ``move_prev`` (default
     ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
-    Nature Power on the result is ``called_move``'s."""
+    Nature Power on the result is ``called_move``'s. A Gravity variant's ``CALL_GRAVITY`` offset
+    is dropped (``call % CALL_GRAVITY``)."""
     move = jnp.asarray(move, _I32)
-    call = jnp.asarray(call, _I32)
+    call = jnp.asarray(call, _I32) % CALL_GRAVITY
     kind = call_kind(tables, move)
     slots = sleep_talk_slots(tables, state, side)
     n_slots = jnp.sum(slots.astype(_I32))
@@ -317,6 +323,32 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     return state._replace(imprison=value.astype(state.imprison.dtype))
 
 
+def gravity_state(state: BattleState) -> BattleState:
+    """``state`` with Gravity up: a faster foe's Gravity this turn (effect_script_0215.s,
+    subscript_gravity_start.s), which then bans ``GRAVITY_MOVES`` from the invokers' calls
+    (``Move_CanBeMetronomed``, battle_lib.c:7198-7201; Sleep Talk's CHECK_INVALID_GRAVITY,
+    :2292-2295). Only the count is set: the call sets read nothing else of it (G-67)."""
+    return state._replace(gravity=jnp.asarray(GRAVITY_TURNS, state.gravity.dtype))
+
+
+def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
+    """``bool``: ``foe``'s Gravity can land before ``side``'s invoker call this turn and change
+    its set (G-67): Gravity is down at the turn start (effect_script_0215.s fails while it is
+    up, and nothing ends it within a turn), ``side`` uses Sleep Talk, Metronome or Assist (the
+    calls with a set; Copycat draws nothing, and under Gravity its one call either stays or
+    fails, reading nothing) and ``foe`` uses a move that can run Gravity (``can_call_effect``).
+    ``foe`` is named by the caller (doubles rule 1). Sound, not tight: the call laws drop the
+    rows where it did not happen (``enumerate.call_consistent``)."""
+    actions = jnp.asarray(actions, _I32)
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    chosen = selected_move(tables, state, side, actions[side])[0]
+    kind = call_kind(tables, chosen)
+    calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
+    foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
+    foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
+    return (state.gravity == 0) & uses_move[side] & calls & foe_can
+
+
 def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
     """``state`` with each battler of ``sides`` (``bool[2]``) encored into its last move
     (encoredMove = movePrevByBattler, encoredMoveSlot its slot: BtlCmd_TryEncore, battle_script.c:
@@ -329,6 +361,29 @@ def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
     return state._replace(encore_move=move, encore_slot=slot)
 
 
+def can_call_effect(tables: Tables, state: BattleState, side, move, wanted) -> jnp.ndarray:
+    """``bool``: ``side``'s move ``move`` can run a move of effect ``wanted`` before its foe's
+    action: the effect itself, or an invoker whose call can be one (``can_call_encore``'s rules).
+    Over-approximate."""
+    move = jnp.asarray(move, _I32)
+    effect = tables.move_effect
+    kind = call_kind(tables, move)
+    own = state.moves[side, state.active[side]].astype(_I32)
+    talk = jnp.any((own != 0) & (effect[own] == wanted))
+    ids = jnp.arange(effect.shape[0], dtype=_I32)
+    metronome = jnp.any(metronome_candidates(tables, state, side) & (effect[ids] == wanted))
+    listed, valid = assist_candidates(tables, state, side)
+    assist = jnp.any(valid & (effect[listed] == wanted))
+    copycat = effect[copycat_call(tables, state.move_prev, state)] == wanted
+    return (
+        (effect[move] == wanted)
+        | ((kind == CALL_SLEEP_TALK) & talk)
+        | ((kind == CALL_METRONOME) & metronome)
+        | ((kind == CALL_ASSIST) & assist)
+        | ((kind == CALL_COPYCAT) & copycat)
+    )
+
+
 def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
     """``bool``: ``side``'s move ``move`` can run Encore before its foe's action (ruling B11-1):
     Encore itself, or an invoker whose call can be Encore: Sleep Talk when the user knows it
@@ -337,25 +392,7 @@ def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarr
     a listed mate's move is (``assist_candidates``), Copycat when the battle's movePrev is Encore
     (``copycat_call``: its foe's move of this turn comes after the foe's action, too late to
     replace it). Over-approximate (Sleep Talk's sleep and set are the turn's)."""
-    move = jnp.asarray(move, _I32)
-    effect = tables.move_effect
-    kind = call_kind(tables, move)
-    own = state.moves[side, state.active[side]].astype(_I32)
-    talk = jnp.any((own != 0) & (effect[own] == EffectId.ENCORE))
-    ids = jnp.arange(effect.shape[0], dtype=_I32)
-    metronome = jnp.any(
-        metronome_candidates(tables, state, side) & (effect[ids] == EffectId.ENCORE)
-    )
-    listed, valid = assist_candidates(tables, state, side)
-    assist = jnp.any(valid & (effect[listed] == EffectId.ENCORE))
-    copycat = effect[copycat_call(tables, state.move_prev, state)] == EffectId.ENCORE
-    return (
-        (effect[move] == EffectId.ENCORE)
-        | ((kind == CALL_SLEEP_TALK) & talk)
-        | ((kind == CALL_METRONOME) & metronome)
-        | ((kind == CALL_ASSIST) & assist)
-        | ((kind == CALL_COPYCAT) & copycat)
-    )
+    return can_call_effect(tables, state, side, move, EffectId.ENCORE)
 
 
 def takeover_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
