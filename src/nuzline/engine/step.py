@@ -66,8 +66,7 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented: Wish's heal in the field pass (no supported move sets ``wish_timer``) and
-the Trick Room countdown of the turn end's side-condition pass
+Not implemented: the Trick Room countdown of the turn end's side-condition pass
 (battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
 """
 
@@ -118,8 +117,10 @@ from nuzline.engine.effects import (
     armored,
     big_root,
     can_have_status,
+    captivate_fails,
     change_stage,
     consume_item,
+    copy_stat_stages,
     defender_always,
     entry_hazards,
     focus_sash_damage,
@@ -142,6 +143,7 @@ from nuzline.engine.effects import (
     pressure_pp_cost,
     primary_effect_fails,
     protect_blocks,
+    psycho_shift_fails,
     recovers_at_full_hp,
     resist_berry,
     resist_berry_damage,
@@ -225,6 +227,7 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
+    crit_lands,
     future_threshold,
     live_hit_threshold,
     roar_bench,
@@ -943,9 +946,10 @@ def _use_move(
     # The invokers (E2 batch 5, B5-1..): Sleep Talk, Metronome and Copycat run the move their
     # script picks (order.invoked_move: BtlCmd_TrySleepTalk, _Metronome, _TryCopycat) through
     # GoToMoveScript (battle_script.c:2111-2134) as Nature Power does, read now, so a faster
-    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user (RANGE_USER),
-    # so they pass the no-target check; a call that finds no move, or a Sleep Talk whose user is
-    # not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
+    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user
+    # (RANGE_SINGLE_TARGET_SPECIAL, battle_lib.c:1665-1669), so they pass the no-target check
+    # (bcp.c:3190) even with no living foe and set SYSCTL_MOVE_SUCCEEDED, ruling B12-30; a
+    # call that finds no move, or a Sleep Talk whose user is not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
     # ("But it failed!", subscript_missed.s). A called move uses no PP; the status checks above,
     # the PP, priority, movePrevByBattler, movePrev and the Choice lock stay the invoker's
     # (moveTemp).
@@ -1251,6 +1255,24 @@ def _use_move(
     )
     state = know_ability(state, target_side, target, yawn_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
+    # The effect script runs before TryMove's accuracy roll and CheckMoveHitOverrides (bcp.c:
+    # 3211-3213, then :3256, :3264), so its own commands act on a move that then misses. Psych
+    # Up's CopyStatStages (effect_script_0143.s:5) copies on a semi-invulnerable miss (accuracy 0
+    # and no MOVE_FLAG_CAN_PROTECT, res/moves/psych_up/data.json, leave it no other miss), B12-6;
+    # Captivate's CheckIgnorableAbility (effect_script_0265.s:5) tags a blocking Oblivious on a
+    # miss or a Protect too (:48-53), B12-8. The paths of a move that connected are
+    # effects._psych_up and effects._captivate.
+    scripted = can_act & has_target & ~failed & ~charging & ~connected
+    state = copy_stat_stages(
+        state, side, target_side, scripted & semi_miss & (effect_used == EffectId.PSYCH_UP)
+    )
+    captivate_shown = (
+        scripted
+        & (effect_used == EffectId.CAPTIVATE)
+        & (state.hp[target_side, target] > 0)
+        & captivate_fails(tables, state, side, target_side)[1]
+    )
+    state = know_ability(state, target_side, target, captivate_shown)
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
     # chain reset of :5154-5158 is folded into protect_count (below), so its value here is
@@ -1447,7 +1469,9 @@ def _use_move(
     crash = can_act & has_target & (~connected | guarded)
     crash = crash & (tables.move_effect[used] == EffectId.CRASH)
     crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
-    crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
+    crash_crit = crit_lands(tables, state, side, used, outcome.crit[side, 0]) & ~armored(
+        state, side, target_side
+    )
     would = damage_for_roll(
         tables, state, side, used, crash_crit, outcome.roll[side, 0], wonder_guard=False
     )
@@ -1459,10 +1483,22 @@ def _use_move(
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
     # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no
     # AfterMoveEffects (effects._inflict blocks the sleep).
+    # Psycho Shift's sleep (subscript_give_target_own_status.s:5-6 calls the same subscript as a
+    # direct effect; CheckCanShareStatus passed: the defender has no status nor substitute), B12-17.
+    shift_sleep = (
+        (tables.move_effect[used] == EffectId.PSYCHO_SHIFT)
+        & (state.status[side, user] == Status.SLEEP)
+        & ~psycho_shift_fails(state, side, target_side)
+    )
     kept_awake = (
         connected
-        & (tables.move_effect[used] == EffectId.STATUS_FOE)
-        & (tables.move_param[used, 0] == Status.SLEEP)
+        & (
+            (
+                (tables.move_effect[used] == EffectId.STATUS_FOE)
+                & (tables.move_param[used, 0] == Status.SLEEP)
+            )
+            | shift_sleep
+        )
         & (state.hp[target_side, target] > 0)
         & ~sleepless(ignorable(state, side, target_side))  # :23-24 Vital Spirit too (G-47)
         & (state.status[target_side, target] != Status.SLEEP)
@@ -1690,7 +1726,9 @@ def _use_move(
         stop_now = lists | chases
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
-        crit = (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side) & ~unrolled
+        # The crit draw read with the odds at this hit (outcome.crit_lands, battle_lib.c:7105-7132).
+        crit = crit_lands(tables, state, side, used, outcome.crit[side, hit_index])
+        crit = crit & ~armored(state, side, target_side) & ~unrolled
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
@@ -2448,7 +2486,8 @@ def _execute_actions(
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
-        crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
+        crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
+        crit = crit & ~armored(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {
             "act_kind": ACT_MOVE,
@@ -3130,6 +3169,24 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
+def _wish(state: BattleState, side) -> BattleState:
+    """FIELD_COND_CHECK_STATE_WISH (bcp.c:1085-1111) for ``side``'s battler: ``wishTurns`` drops
+    when nonzero; at 0 the battler, if it has HP, regains ``Divide(maxHP, 2)``, its own max HP,
+    unless at full HP (subscript_wish_heal.s:9-11), B12-14."""
+    timer = state.wish_timer[side].astype(_I32)
+    on = timer != 0
+    left = jnp.where(on, timer - 1, timer)
+    state = state._replace(
+        wish_timer=state.wish_timer.at[side].set(left.astype(state.wish_timer.dtype))
+    )
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    heals = on & (left == 0) & (hp > 0) & (hp != max_hp)
+    healed = jnp.minimum(hp + divide(max_hp, 2), max_hp)
+    return _set_mon(state, "hp", side, mon, healed, heals)
+
+
 def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     """``BattleControllerPlayer_CheckFieldConditions`` (battle_controller_player.c:
     932-1254), between the actions and ``end_of_turn``; nothing runs once the battle is
@@ -3137,7 +3194,10 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
     1. ``FIELD_SIDE_TIMERS``, side 0 then side 1: a nonzero count drops by 1 and the
        condition ends at 0 (``--reflectTurns == 0``, :947-1083).
-    2. Wish (:1085-1111) is not implemented: no supported move sets ``wish_timer``.
+    2. Wish (:1085-1111, E2 batch 12, B12-14): each battler in ``sides`` (``monSpeedOrder``) with
+       a nonzero ``wish_timer`` counts it down, and at 0 a battler with HP regains
+       ``Divide(maxHP, 2)`` of its own (subscript_wish_heal.s: "HP is full!" at full HP, else
+       UPDATE_HP, capped; Heal Block is unsupported) (``_wish``).
     3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
        with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
        one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
@@ -3164,6 +3224,8 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
     state = _where(live, counted, state)
+    for position in (0, 1):
+        state = _where(live, _wish(state, sides[position]), state)
 
     before = state
     ability = decomp_abilities(tables, state)

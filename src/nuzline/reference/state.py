@@ -102,6 +102,9 @@ class RefSide:
     micle: int  # MoveEffectsData.micleBerry (E1 Batch D)
     metronome_turns: int  # MoveEffectsData.metronomeTurns
     metronome_move: int  # BattleContext.metronomeMove[battler]
+    focus_energy: int  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
+    power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
+    power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

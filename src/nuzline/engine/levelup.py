@@ -248,6 +248,13 @@ def pay_exp_leveled(
         hp=put("hp", jnp.where(leveled, new_hp, hp)),
         max_hp=put("max_hp", jnp.where(leveled, new[:, Stat.HP], old_max)),
         stats=put("stats", jnp.where(leveled[:, None], new[:, Stat.ATK :], after.stats[0])),
+        # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's Attack
+        # and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
+        power_trick_desync=after.power_trick_desync.at[0].set(
+            jnp.where(
+                leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
+            ).astype(after.power_trick_desync.dtype)
+        ),
         friendship=put("friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),

@@ -31,12 +31,12 @@ from nuzline.engine.enumerate import (
 )
 from nuzline.engine.ids import METRONOME_HEAVY, EffectId, MoveFlag, Status
 from nuzline.engine.order import MOVE_ACTIONS, action_order, metronome_weights
-from nuzline.engine.outcome import empty_outcome, outcome_to_py, sample_outcome
+from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, step_events, turn_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import unmodelled
+from tests.engine.helpers import sample_rows, unmodelled
 from tests.strategies import legal_action_pair, supported_state
 
 
@@ -115,6 +115,51 @@ def test_sleep_talk_skips_a_disabled_or_taunt_blocked_slot(tables, names):
     for u in range(3):
         _, ev = _both(t, s, (0, 0), _call(u))
         assert n.move_names[int(ev["called"][0])] == "Ember"
+
+
+def test_sleep_talk_with_no_living_foe_still_succeeds(tables, names):
+    """Ruling B12-30: Sleep Talk's defender is its user (RANGE_SINGLE_TARGET_SPECIAL,
+    battle_lib.c:1665-1669), so with the foe fainted to its own confusion self-hit first it
+    passes HasNoTarget (bcp.c:3190), uses its PP and sets SYSCTL_MOVE_SUCCEEDED (:3212):
+    movePrevByBattler is Sleep Talk (:3945-3946), awake (the script fails,
+    effect_script_0097.s:5) or asleep (the called Tackle finds no defender in GoToMoveScript,
+    battle_script.c:2121-2126)."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_mon(n, "Snorlax", ["Sleep Talk", "Tackle"])],
+        [_mon(n, "Geodude", ["Tackle"], level=50), _mon(n, "Geodude", ["Tackle"])],
+    )  # a second foe, so the battle goes on past the faint
+    s = s._replace(confusion=s.confusion.at[1].set(3), hp=s.hp.at[1, 0].set(1))
+    hurt = _call(0)._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
+    for asleep in (False, True):
+        start = s.with_status(0, 0, Status.SLEEP, 3) if asleep else s
+        out, ev = _both(t, start, (0, 0), hurt)
+        assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
+        assert int(out.last_move[0]) == n.move("Sleep Talk"), asleep
+        assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+        assert int(out.pp[0, 0, 1]) == int(s.pp[0, 0, 1])
+
+
+def test_metronome_with_no_living_foe_still_succeeds(tables, names):
+    """Ruling B12-30 for Metronome (RANGE_SINGLE_TARGET_SPECIAL as Sleep Talk; the case of the
+    manager's diff seed on main c4f0a60): with the foe fainted to its own confusion self-hit
+    first, Metronome passes HasNoTarget (bcp.c:3190), uses its PP and is movePrevByBattler
+    (:3212, :3945-3946); the called Pound finds no defender (battle_script.c:2121-2126)."""
+    t, n = tables, names
+    spec = _mon(n, "Clefairy", ["Metronome", "Tackle"])
+    s = make_state(
+        t,
+        [spec],
+        [_mon(n, "Geodude", ["Tackle"], level=50), _mon(n, "Geodude", ["Tackle"])],
+    )  # a second foe, so the battle goes on past the faint
+    s = s._replace(confusion=s.confusion.at[1].set(3), hp=s.hp.at[1, 0].set(1))
+    pound = metronome_calls(t, spec).index(n.move("Pound"))
+    hurt = _call(pound)._replace(confusion_hit=jnp.asarray([0, 1], jnp.int8))
+    out, _ = _both(t, s, (0, 0), hurt)
+    assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
+    assert int(out.last_move[0]) == n.move("Metronome")
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
 
 
 def test_copycat_copies_the_battles_last_move(tables, names):
@@ -343,7 +388,7 @@ def test_sampled_calls_match_the_enumeration(tables, names):
     expected = _children(t, s, acts, outcomes, probs)
     count = 4000
     keys = jax.random.split(jax.random.key(5), count)
-    sampled = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))(keys, t, s, acts)
+    sampled = sample_rows(keys, t, s, acts)
     got = Counter(_children(t, s, acts, sampled, np.ones(count)))
     assert set(got) <= set(expected)
     for key, p in expected.items():

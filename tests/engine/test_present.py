@@ -49,7 +49,7 @@ from nuzline.engine.observe import observe
 from nuzline.engine.outcome import PRESENT_HEAL, Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -172,7 +172,7 @@ def test_sampled_present_follows_the_law(tables, names):
     acts = A(PRESENT, "Tackle", s, names)
     n = 40000
     keys = jax.random.split(jax.random.key(3), n)
-    o = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))(keys, tables, s, acts)
+    o = sample_rows(keys, tables, s, acts)
     got = np.bincount(np.asarray(o.present)[:, 0], minlength=4) / n
     for k, w in enumerate((102, 76, 26, 52)):
         p = w / 256

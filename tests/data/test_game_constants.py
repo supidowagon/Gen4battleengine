@@ -40,6 +40,8 @@ LISTED = [
     "nuzline.engine.ids.WEATHER_ABILITY_IDS",
     "nuzline.engine.ids.ITEM_ABILITY_IDS",
     "nuzline.engine.ids.YAWN_ABILITY_IDS",
+    "nuzline.engine.ids.STAT_MOVE_ABILITY_IDS",
+    "nuzline.engine.ids.MOVE_HEAL_BELL",
     "nuzline.engine.ids.ABILITY_MULTITYPE",
     "nuzline.engine.ids.ABILITY_DECOMP_IDS",
     "nuzline.engine.ids.UNTRACEABLE_ABILITIES",

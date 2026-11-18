@@ -165,11 +165,14 @@ class EffectId(IntEnum):
     # False Swipe (BATTLE_EFFECT_LEAVE_WITH_1_HP, bcp.c:3381-3384): a hit that would KO leaves
     # the defender at 1 HP, before the Focus Sash (``effects.play_hit``).
     FALSE_SWIPE = 54
-    # Swagger (effect_script_0118.s, subscript_swagger.s): Attack +2 then confusion
-    # (``effects._swagger``).
+    # Swagger (effect_script_0118.s, subscript_swagger.s) and Flatter (effect_script_0166.s,
+    # subscript_flatter.s, E2 batch 12): ``(Stat, stages, 0)``: Attack +2 / Sp. Atk +1, then
+    # confusion (``effects._swagger``).
     SWAGGER = 55
-    # Dragon Dance (effect_script_0212.s, subscript_user_atk_and_speed_up_1_stage.s): Attack +1
-    # and Speed +1 on the user; both at +6 is MOVE_STATUS_NO_MORE_WORK (``effects._dragon_dance``).
+    # Dragon Dance (effect_script_0212.s, subscript_user_atk_and_speed_up_1_stage.s), Bulk Up,
+    # Calm Mind, Cosmic Power / Defend Order (Kaizo's Stockpile): ``(Stat, Stat, 0)``, the two
+    # stats +1 on the user in that order; both at +6 is MOVE_STATUS_NO_MORE_WORK
+    # (``effects._dragon_dance``).
     DRAGON_DANCE = 56
     # Roost (effect_script_0214.s, subscript_roost.s): heals Divide(maxHP, 2) through
     # subscript_recover_hp.s and sets turnFlags.roosting, which skips the defender's Flying rows
@@ -306,6 +309,77 @@ class EffectId(IntEnum):
     # Assist (180, BATTLE_EFFECT_USE_RANDOM_ALLY_MOVE): zeros. effect_script_0180.s: BtlCmd_TryAssist
     # (battle_script.c:6405-6444) then GoToMoveScript: an invoker (``order.CALL_ASSIST``), B10-11.
     ASSIST = 89
+    # E2 batch 12 (rulings B12-n), the stat family. Tickle (205, BATTLE_EFFECT_ATK_DEF_DOWN):
+    # ``(Stat, Stat, 0)``, a direct CHECK_HP | TO_DEFENDER subscript_target_atk_and_def_down_1_stage.s:
+    # both stats -1 through UPDATE_STAT_STAGE in that order, MOVE_STATUS_NO_MORE_WORK with both at
+    # -6 (:5-6), FAILED on a miss (:9) (``effects._tickle``).
+    TICKLE = 90
+    # Focus Energy (47, BATTLE_EFFECT_CRIT_UP_2): zeros. effect_script_0047.s fails with the user's
+    # VOLATILE_CONDITION_FOCUS_ENERGY set (:5, :10-11), else a direct TO_ATTACKER
+    # subscript_focus_energy.s sets it (:6): ``BattleState.focus_energy``, +2 crit stages
+    # (BattleSystem_CalcCriticalMulti, battle_lib.c:7123).
+    FOCUS_ENERGY = 91
+    # Haze (25, BATTLE_EFFECT_RESET_STAT_CHANGES): zeros. An indirect ON_HIT
+    # subscript_reset_all_stat_stages.s: BtlCmd_ResetAllStatChanges (battle_script.c:3534-3549)
+    # zeroes every battler's stages and clears its Focus Energy.
+    HAZE = 92
+    # Psych Up (143, BATTLE_EFFECT_COPY_STAT_CHANGES): zeros. effect_script_0143.s:
+    # BtlCmd_CopyStatStages (battle_script.c:6042-6053): the defender's stages, and its Focus
+    # Energy ORed in, onto the attacker; no failure.
+    PSYCH_UP = 93
+    # Power Swap (243), Guard Swap (244): ``(Stat, Stat, 0)``. An indirect ON_HIT
+    # subscript_exchange_{atk_and_spatk,def_and_spdef}_stages.s: the two stages swapped between
+    # the attacker and the defender (:5-12); no failure.
+    STAGE_SWAP = 94
+    # Captivate (265, BATTLE_EFFECT_SP_ATK_DOWN_2_OPPOSITE_GENDER): ``(Stat, stages, 0)``.
+    # effect_script_0265.s: an ignorable Oblivious (:5), a genderless attacker or defender
+    # (:6-7) or the same gender (:8-9) ends it with MOVE_STATUS_NO_MORE_WORK; else a direct
+    # TO_DEFENDER Sp. Atk -2 (:10) (``effects._captivate``).
+    CAPTIVATE = 95
+    # Acupressure (226, BATTLE_EFFECT_RANDOM_STAT_UP_2): zeros. effect_script_0226.s fails behind
+    # the defender's substitute (:5) or with no stage below +6 (BtlCmd_BoostRandomStatBy2,
+    # battle_script.c:8932-8956); else a direct TO_DEFENDER +2 on a stat drawn uniformly among
+    # those below +6 (``Outcome.acupressure``). In singles its defender is the user (RANGE_USER_OR_ALLY).
+    ACUPRESSURE = 96
+    # Power Trick (238, BATTLE_EFFECT_SWAP_ATK_DEF): zeros. An indirect ON_HIT
+    # subscript_user_swap_atk_and_def.s: the user's MOVE_EFFECT_POWER_TRICK toggled (:5) and its
+    # BattleMon Attack and Defense swapped (:6-9) (``BattleState.power_trick``,
+    # ``damage.battle_stats``).
+    POWER_TRICK = 97
+    # E2 batch 12, the healing family. Rest (37, BATTLE_EFFECT_REST): zeros. A direct ON_HIT
+    # subscript_rest.s: the user's own Insomnia or Vital Spirit (CheckAbility, tagging it), sleep,
+    # an uproar without Soundproof or full HP end it with MOVE_STATUS_NO_MORE_WORK; else its status
+    # becomes sleep for ``REST_TURNS`` and it regains its max HP through UPDATE_HP (``effects._rest``).
+    REST = 98
+    # Morning Sun, Synthesis, Moonlight (132, BATTLE_EFFECT_HEAL_HALF_MORE_IN_SUN): zeros.
+    # BtlCmd_WeatherHPRecovery (battle_script.c:5966-5979): maxHP / 2 with no weather (or a weather
+    # lock), Divide(maxHP * 20, 30) in sun, else Divide(maxHP, 4); then subscript_present_heal.s ->
+    # subscript_recover_hp.s ("HP is full!" at full HP) (``effects._weather_heal``).
+    WEATHER_HEAL = 99
+    # Wish (179, BATTLE_EFFECT_HEAL_IN_3_TURNS): zeros. BtlCmd_TryWish (battle_script.c:6373-6385)
+    # fails with the user's battler's wishTurns set, else sets it to 2 (``BattleState.wish_timer``);
+    # the field pass counts it down and heals that battler's Pokemon then (``step._wish``).
+    WISH = 100
+    # Heal Bell, Aromatherapy (102, BATTLE_EFFECT_CURE_PARTY_STATUS): zeros. An indirect ON_HIT
+    # subscript_heal_bell.s: BtlCmd_TryPartyStatusRefresh (battle_script.c:5030-5078) and the party
+    # (BtlIOCmd_RefreshPartyStatus, battle_io_command.c:634-656); Heal Bell spares a Soundproof
+    # holder (``effects._heal_bell``).
+    HEAL_BELL = 101
+    # Refresh (193, BATTLE_EFFECT_HEAL_STATUS): zeros. A direct ON_HIT subscript_recover_psn_prz_brn.s:
+    # the user's poison, toxic, burn or paralysis cured (:5-7), else MOVE_STATUS_FAILED (:15-16).
+    REFRESH = 102
+    # Psycho Shift (234, BATTLE_EFFECT_TRANSFER_STATUS): zeros. effect_script_0234.s:
+    # BtlCmd_CheckCanShareStatus (battle_script.c:7542-7553) fails unless the defender has no
+    # status nor substitute and the user has one; else a direct TO_DEFENDER
+    # subscript_give_target_own_status.s gives the user's status through its status subscript, and
+    # the user's is cleared when the defender then has one (``effects._psycho_shift``).
+    PSYCHO_SHIFT = 103
+    # Mist (46, BATTLE_EFFECT_PREVENT_STAT_REDUCTION): zeros. effect_script_0046.s: a direct
+    # ON_HIT subscript_mist.s -> BtlCmd_TryMist (battle_script.c:4300-4317): fails
+    # (MOVE_STATUS_FAILED) with SIDE_CONDITION_MIST on the user's side, else mistTurns =
+    # NUM_SCREEN_TURNS (5) on it (``effects._mist``). BtlCmd_ChangeStatStage
+    # (:2875-2882) blocks every drop by another battler while mistTurns is set (B12-23).
+    MIST = 104
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -1227,6 +1301,39 @@ YAWN_ABILITY_IDS = {
     "Vital Spirit": 72,
     "Leaf Guard": 102,
 }
+
+# E2 batch 12's decomp abilities: Captivate's Oblivious (effect_script_0265.s:5,
+# CheckIgnorableAbility, B12-8); Rest's Insomnia, Vital Spirit and Soundproof
+# (subscript_rest.s:7-10) and Heal Bell's Soundproof (battle_script.c:5038, battle_io_command.c:
+# 651), B12-12.
+STAT_MOVE_ABILITY_IDS = {
+    "Oblivious": 12,
+    "Insomnia": 15,
+    "Soundproof": 43,
+    "Vital Spirit": 72,
+}
+# MOVE_HEAL_BELL (BtlCmd_TryPartyStatusRefresh's and BtlIOCmd_RefreshPartyStatus's compare,
+# battle_script.c:5035, battle_io_command.c:651), B12-12.
+MOVE_HEAL_BELL = 215
+# subscript_rest.s:32: MON_CONDITION_SLEEP_0 | MON_CONDITION_SLEEP_1, a sleep count of 3.
+REST_TURNS = 3
+# BtlCmd_TryWish (battle_script.c:6381): wishTurns = 2.
+WISH_TURNS = 2
+# subscript_recover_psn_prz_brn.s:5: MON_CONDITION_FACADE_BOOST, what Refresh cures (B12-16).
+REFRESH_STATUSES = (Status.POISON, Status.TOXIC, Status.BURN, Status.PARALYSIS)
+# BattleMon.gender's GENDER_NONE (include/constants/pokemon.h; ``BattleState.gender``).
+GENDER_NONE = 2
+# BtlCmd_BoostRandomStatBy2 (battle_script.c:8943-8947): BATTLE_STAT_ATTACK .. BATTLE_STAT_EVASION
+# in the decomp's order (Speed before Sp. Atk and Sp. Def), as ``Stat`` (B12-9).
+ACUPRESSURE_STATS = (
+    Stat.ATK,
+    Stat.DEF,
+    Stat.SPE,
+    Stat.SPA,
+    Stat.SPD,
+    Stat.ACC,
+    Stat.EVA,
+)
 
 ITEM_ABILITY_IDS = {
     "Immunity": 17,
