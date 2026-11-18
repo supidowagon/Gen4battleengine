@@ -610,28 +610,28 @@ def test_loose_joint_equals_per_slot(kaizo_tables, kaizo_roark_party):
     np.testing.assert_allclose(np.asarray(_distribution(t, s, KAIZO)), joint, atol=1e-6)
 
 
-def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """Task 5 review m3: on a state the real ``KAIZO`` layout refuses, the exact and the loose
-    distributions are both NaN (both read ``policy._refused``).
-    - Real: Kaizo Roark's Shuckle [Toxic, Accelerock, Curse, Sand Tomb] made Ghost-type, so
-      its Curse takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700), not transcribed.
-    - Synthetic: no Kaizo Roark state is refused for an Expert label since K3c Task 6, so the
-      guard is opened by a layout that lacks Expert_Recovery (RESTORE_HALF_HP, script.s:1652):
-      Corsola [Recover, Water Pulse, Light Screen, Accelerock] is refused under it and
-      accepted under ``KAIZO``."""
-    t, n, party = kaizo_tables, kaizo_names, kaizo_roark_party
-    shuckle = make_state(t, [party[2]], [party[4], party[0]])
-    assert policy.ai_refusals(t, shuckle, n) == []
-    ghost = shuckle._replace(types=shuckle.types.at[1, 0, 1].set(7))  # TYPE_GHOST
-    assert any("Basic_CheckCurse_GhostType" in r for r in policy.ai_refusals(t, ghost, n))
-    corsola = make_state(t, [party[2]], [party[3], party[0]])
-    assert policy.ai_refusals(t, corsola, n) == []
-    no_recovery = KAIZO._replace(expert_transcribed=KAIZO.expert_transcribed - {32})
-    assert any("Expert_Recovery" in r for r in policy.ai_refusals(t, corsola, n, no_recovery))
-    for s, layout in ((ghost, KAIZO), (corsola, no_recovery)):
-        assert np.isnan(np.asarray(_distribution(t, s, layout))).all()
-        assert np.isnan(policy.ai_action_distribution_loose(t, s, layout)).all()
-    assert not np.isnan(np.asarray(_distribution(t, corsola, KAIZO))).any()
+def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_roark_party):
+    """Task 5 review m3: on a state the fight's layout refuses, the exact and the loose
+    distributions are both NaN (both read ``policy._refused``). The refusal is one that stays
+    in the complete engine: a fight's layout holds its own moves' effects only (E1 Ruling R7,
+    ``ai.layout.fight_tables``), so Kaizo Roark's Bonsly given a move whose effect is
+    transcribed but outside Roark's layout is refused under it; with Rock Throw it is
+    accepted."""
+    t, party = kaizo_tables, kaizo_roark_party
+    accepted = _kaizo_state(t, party, (ROCK_THROW, LEER, 0, 0))
+    assert policy.ai_refusals(t, accepted, layout=KAIZO) == []
+    effects = np.asarray(t.move_ai_effect)
+    outside = next(
+        m
+        for m in range(1, len(effects))
+        if int(effects[m]) in KAIZO_TRANSCRIBED and int(effects[m]) not in KAIZO.transcribed
+    )
+    refused = _kaizo_state(t, party, (outside, LEER, 0, 0))
+    reasons = policy.ai_refusals(t, refused, layout=KAIZO)
+    assert any("is transcribed but not in this fight's layout" in r for r in reasons), reasons
+    assert np.isnan(np.asarray(_distribution(t, refused, KAIZO))).all()
+    assert np.isnan(policy.ai_action_distribution_loose(t, refused, KAIZO)).all()
+    assert not np.isnan(np.asarray(_distribution(t, accepted, KAIZO))).any()
 
 
 def test_two_guesses_in_one_slot(kaizo_tables, kaizo_roark_party):

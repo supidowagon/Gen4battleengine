@@ -904,7 +904,9 @@ def test_read_builders_registered():
         "_move_reads",
         "_present_reads",
         "_protect_reads",
+        "_chatter_reads",
         "_tri_attack_reads",
+        "_endure_reads",
         "_roar_reads",
     ]
 

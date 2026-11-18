@@ -506,6 +506,18 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Embargo writes the defender's embargoTurns, no stage (B13-31); the Wide Lens it hides is
     # hit_thresholds' second half (outcome._threshold_grid).
     EffectId.EMBARGO,
+    # Endure (effect_script_0116.s:5) runs subscript_protect (:5-7): BtlCmd_TryProtection
+    # (battle_script.c:5149-5190) sets turnFlags.enduring and protectSuccessTurns, no stage.
+    EffectId.ENDURE,
+    # Magnet Rise (effect_script_0252.s:5-12) sets MOVE_EFFECT_MAGNET_RISE and
+    # magnetRiseTurns on its user, no stage.
+    EffectId.MAGNET_RISE,
+    # Mimic (effect_script_0082.s:5) runs subscript_mimic (:5-11): BtlCmd_TryMimic
+    # (battle_script.c:4476-4523) writes a move slot, no stage.
+    EffectId.MIMIC,
+    # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
+    # defender through subscript_confuse: a volatile status, no stage.
+    EffectId.CHATTER,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,
