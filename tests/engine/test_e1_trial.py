@@ -813,6 +813,32 @@ def test_mimic_fight_holds_the_foes_possible_moves(tables, names):
     assert earthquake not in [int(m) for m in np.asarray(t.ai_moves)]
 
 
+@pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
+def test_a_copier_fight_holds_every_move_the_foe_may_have(request, names, game):
+    """The largest pool: six Pokemon with four distinct moves, one of them Mimic, against a foe
+    that may have every move id. ``AI_MOVES_ROWS`` holds it, so no fight is refused for its
+    size (G-68)."""
+    import types
+
+    from nuzline.ai.layout import fight_effects, fight_tables
+    from nuzline.data.tables import AI_MOVES_ROWS
+
+    t0 = request.getfixturevalue(game)
+    n_moves = int(t0.move_power.shape[0])
+    assert 6 * 4 + n_moves - 1 <= AI_MOVES_ROWS
+    trainer = types.SimpleNamespace(ai_flags=0b10111, format="single")
+    mimic = names.move("Mimic")
+    own = [m for m in range(1, n_moves) if m != mimic][:23]
+    party = [
+        types.SimpleNamespace(moves=[mimic, *own[:3]]),
+        *(types.SimpleNamespace(moves=own[3 + 4 * k : 7 + 4 * k]) for k in range(5)),
+    ]
+    t = fight_tables(t0, trainer, party, foe_moves=lambda: list(range(1, n_moves)))
+    held = [int(m) for m in np.asarray(t.ai_moves) if m > 0]
+    assert sorted(held) == list(range(1, n_moves))
+    assert int(t0.move_ai_effect[n_moves - 1]) in fight_effects(t, t.ai_moves)
+
+
 # --- Transform (G-69) ------------------------------------------------------------------------
 
 

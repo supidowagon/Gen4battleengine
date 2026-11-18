@@ -63,7 +63,10 @@ AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer
 # Tables.ai_moves: the move ids of the fight's opponent party (6 Pokemon x 4 moves, 0 for
 # none), then, when one of them copies moves (Mimic, Transform: ai.layout.COPIER_EFFECTS), the
 # distinct moves the foe's party may have for them to copy (G-68); all -1 until a fight sets them.
-AI_MOVES_ROWS = 256
+# Sized for the largest pool: the party's 24 slots plus every other move id (both games' move
+# tables have 468 rows, id 0 none: tests/engine/test_e1_trial.py checks it), so no fight
+# overflows it.
+AI_MOVES_ROWS = 512
 AI_MOVES_UNSET = np.full(AI_MOVES_ROWS, -1, np.int16)
 # Tables.battle_type: BattleSystem.battleType (include/constants/battle.h:20-47) as
 # Encounter_NewVsTrainer sets it from the trainers of the fight (encounter.c:724-740).

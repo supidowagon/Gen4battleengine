@@ -392,7 +392,8 @@ def fight_tables(tables: Tables, trainer, party, flags: int | None = None, foe_m
     ``engine.coverage``). ``foe_moves``: the moves the player's side may have (a sequence of move
     ids, or a callable returning one, called only when it is needed); when the AI's party has a
     Transform or Mimic user (``copies_moves``) they join ``ai_moves`` (distinct, after the AI's
-    own), so the layout holds the effects and read bounds of what it can copy (G-68)."""
+    own), so the layout holds the effects and read bounds of what it can copy (G-68).
+    ``AI_MOVES_ROWS`` holds the party's slots and every move id, so any pool fits."""
     moves = [m for spec in party for m in spec.moves]
     if copies_moves(tables, moves):
         pool = foe_moves() if callable(foe_moves) else foe_moves
