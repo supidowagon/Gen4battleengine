@@ -404,6 +404,10 @@ class EffectId(IntEnum):
     # subscript_transform_into_target.s on a defender with HP: ``BtlCmd_Transform``
     # (battle_script.c:5330-5373) copies the defender's BattleMon (``effects._transform``, G-69).
     TRANSFORM = 109
+    # Chatter (267, BATTLE_EFFECT_CHATTER): zeros. effect_script_0267.s is a plain hit with an ON_HIT
+    # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
+    # subscript_confuse.s (``effects._chatter``, G-70).
+    CHATTER = 110
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1299,6 +1303,13 @@ PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 # (generated/moves.txt lines 119, 166, 167, 103, 449), G-68.
 MOVE_MIMIC = 102
 MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
+# Chatter's confusion (battle_script.c:8397-8436): the attacker must be a Chatot that is not
+# Transformed and the defender have HP; ``effectChance`` is 0 / 10 / 30 for the Chatot cry parameter
+# 0 / 1 / 2 (:8413-8426, sound_chatot.c:193-213) and the confusion comes on ``RandNext() % 100 <=
+# chance`` (:8428-8430), G-70. Species ids: generated/species.txt line 442.
+SPECIES_CHATOT = 441
+MOVE_CHATTER = 448
+CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
 MIMIC_PP_CAP = 5
 # sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,

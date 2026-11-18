@@ -284,6 +284,7 @@ from nuzline.engine.ids import (
     REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
     REST_TURNS,
+    SPECIES_CHATOT,
     SPIKES_MAX,
     STAT_MOVE_ABILITY_IDS,
     TAILWIND_TURNS,
@@ -1766,6 +1767,29 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
 
 
+def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Chatter (effect_script_0267.s:3-5): a plain hit whose ON_HIT indirect ``subscript_chatter.s``
+    runs on a hit that did not fail (MOVE_STATUS_NO_EFFECTS clear, battle_lib.c:1524-1529):
+    ``CheckChatterActivation`` (battle_script.c:8397-8436) skips unless the attacker's species is
+    Chatot and it is not Transformed, and the defender has HP (:8403-8405); then ``RandNext() %
+    100 <= effectChance`` (:8428-8430, ``Outcome.chatter``: 0 / 10 / 30 of the Chatot cry, 0 for
+    every enemy) confuses by ``subscript_confuse.s``, the engine's ``_confuse_foe`` conditions (not
+    confused :20, no Substitute :23, no Safeguard :26). No Shield Dust (the PROBABILISTIC gate's,
+    :1580-1582, G-70)."""
+    chatot = (state.species[h.side, h.user] == SPECIES_CHATOT) & (state.transformed[h.side] == 0)
+    cond = (
+        (h.effect == _E.CHATTER)
+        & h.effective
+        & chatot
+        & _alive(state, h.target_side, h.target)
+        & (outcome.chatter[h.side] != 0)
+        & (state.confusion[h.target_side] == 0)
+        & ~h.shielded
+        & (state.safeguard[h.target_side] == 0)
+    )
+    return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
+
+
 def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Ingrain (effect_script_0181.s:5-6): the user's ``MOVE_EFFECT_INGRAIN``. Its script fails a
     user that has it already (:5, :19-20: MOVE_STATUS_FAILED, ``step._use_move``'s ``failed``)."""
@@ -3155,6 +3179,7 @@ def play_hit(
         _gravity,
         _mimic,
         _transform,
+        _chatter,
         _ingrain,
         _mean_look,
         _imprison,

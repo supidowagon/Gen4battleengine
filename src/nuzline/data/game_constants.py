@@ -800,6 +800,9 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.MIMIC_FORBIDDEN": _CODE_MOVE_IDS,
     # BATTLE_EFFECT_TRANSFORM and _COPY_MOVE_FOR_BATTLE (G-68, G-69): the AI's copier moves.
     "nuzline.ai.layout.COPIER_EFFECTS": _KEYED_BY_EFFECT,
+    # Chatter's effectChance per Chatot cry parameter (battle_script.c:8413-8426), G-70: engine
+    # semantics of the effect script, not a game id.
+    "nuzline.engine.ids.CHATTER_CHANCES": _KEYED_BY_EFFECT,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

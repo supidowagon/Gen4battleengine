@@ -69,6 +69,7 @@ INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 # (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
 # (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
 M1_SPECIES = (
+    "Chatot",  # E1 trial batch (G-70): Chatter's only confuser
     "Monferno",
     "Prinplup",
     "Grotle",
@@ -1303,6 +1304,7 @@ BATCH12_MOVES = (
     "Magnet Rise",  # E1 trial batch (G-66)
     "Mimic",  # E1 trial batch (G-68)
     "Transform",  # E1 trial batch (G-69)
+    "Chatter",  # E1 trial batch (G-70)
 )
 
 
@@ -2056,6 +2058,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
     # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
     a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
+    # E1 trial batch (G-70): the player's Chatot cry parameter (an enemy's is always 0).
+    a["chatot_cry"][0] = draw(st.integers(0, 2))
     a["turn"][...] = turn
     draw_seen_moves(draw, a)
     flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
@@ -2241,6 +2245,7 @@ RARE_EFFECTS = (
     EffectId.MIST,  # B12-23
     EffectId.MIMIC,  # G-68
     EffectId.TRANSFORM,  # G-69
+    EffectId.CHATTER,  # G-70
 )
 
 
@@ -2313,6 +2318,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         focus_band=_flag(hits),
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
+        chatter=_flag(sides),
     )
 
 

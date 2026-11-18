@@ -266,6 +266,10 @@ three structs has a row.
   reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
   `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
   recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
+- **chatotCries -> `chatot_cry`** (E1 trial batch, G-70): `BattleSystem.chatotCries[battler]` as
+  Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
+  like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
+  chatot_cry.c:13-25), the player's is the save's (`make_state(chatot_cry=...)`, side 0).
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots

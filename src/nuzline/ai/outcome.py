@@ -652,6 +652,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         215,  # GRAVITY: Basic_CheckGravityActive (:254); Expert_Gravity (:1759), :4795, :4799
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
+        267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

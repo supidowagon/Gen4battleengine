@@ -85,6 +85,7 @@ from nuzline.engine.ids import (
     SEMI_SET_FLAGS,
     SLEEPLESS_ABILITIES,
     SNORE_PARAM,
+    SPECIES_CHATOT,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -3031,6 +3032,21 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.sides[side].magnet_rise = 1
         s.sides[side].magnet_rise_turns = MAGNET_RISE_TURNS
+    elif effect == EffectId.CHATTER and effective:
+        # subscript_chatter.s: CheckChatterActivation (script.c:8397-8436) needs a Chatot that is
+        # not Transformed and a defender with HP, then RandNext() % 100 <= effectChance (the
+        # chatter roll); subscript_confuse.s fails on a confused or Substitute-covered target or
+        # Safeguard (:20, :23, :26). No Shield Dust. G-70.
+        if (
+            _active(s, side).species == SPECIES_CHATOT
+            and not s.sides[side].transformed
+            and target_alive
+            and o.chatter[side]
+            and not s.sides[target].confusion
+            and not _shielded(turn, s, target)
+            and not s.sides[target].safeguard
+        ):
+            s.sides[target].confusion = o.duration[side]
     elif effect == EffectId.MIMIC and landed:
         _mimic(tables, s, side, target)
     elif effect == EffectId.TRANSFORM and landed:

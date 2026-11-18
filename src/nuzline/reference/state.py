@@ -118,6 +118,7 @@ class RefSide:
     shadow_ability_slot: int
     shadow_ability_form: int
     truant: int  # MoveEffectsData.truant (G-69)
+    chatot_cry: int  # BattleSystem.chatotCries as Chatter's parameter 0 / 1 / 2 (G-70)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

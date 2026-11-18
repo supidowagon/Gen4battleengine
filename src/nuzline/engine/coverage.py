@@ -144,6 +144,8 @@ from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
     METRONOME_DRAW,
+    MOVE_CHATTER,
+    SPECIES_CHATOT,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     UNTRACEABLE_ABILITIES,
@@ -1032,11 +1034,15 @@ def check_coverage(
     opp: list[PokemonSpec],
     start_condition: int,
     leads: tuple[int, int] = (0, 0),
+    chatot_cry: int | None = None,
 ) -> CoverageReport:
     """The support level of one fight: the player's party against ``trainer`` with
     party ``opp``, starting in weather ``start_condition`` (a ``Weather``; the
     trainer's own ``start_condition`` is checked too) with the active party slots
     ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on.
+    ``chatot_cry``: the player's Chatot cry parameter 0-2 (``make_state``), None when it is not
+    known: a player Chatot that knows or can learn Chatter is then refused, since its confusion
+    chance is the save's (battle_script.c:8407-8426; data, not a mechanic: an enemy's is 0), G-70.
 
     Experience (K3d-exp design §4): each player Pokemon's ``learnable_moves`` (its
     ``reachable_learn_moves`` but the prompt-only ones the learn options mask, ruling D10) go
@@ -1053,6 +1059,15 @@ def check_coverage(
     _check_party(c, tables, names, "Player", player)
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
+    if chatot_cry is None:
+        for slot, mon in enumerate(player):
+            if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
+                c.add(
+                    Support.NONE,
+                    f"Player {names.species_names[mon.species].upper()} (slot {slot}): Chatter's "
+                    "confusion chance needs the save's Chatot cry",
+                    "chatter",
+                )
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
@@ -1089,6 +1104,7 @@ def check_coverage(
         opp_items=trainer.items,
         leads=leads,
         terrain=trainer.terrain,
+        chatot_cry=chatot_cry or 0,
     )
     # The trainer's flag set (E1 Ruling R2). A set with a flag the AI does not transcribe is
     # refused by its flag lines (_check_ai_flags); its other AI lines are listed under the
@@ -1116,10 +1132,11 @@ def require_coverage(
     opp: list[PokemonSpec],
     start_condition: int,
     leads: tuple[int, int] = (0, 0),
+    chatot_cry: int | None = None,
 ) -> CoverageReport:
     """``check_coverage``, raising ``UnsupportedMechanics`` (every missing item in its
     message) when anything is missing."""
-    report = check_coverage(tables, names, player, trainer, opp, start_condition, leads)
+    report = check_coverage(tables, names, player, trainer, opp, start_condition, leads, chatot_cry)
     if report.missing:
         raise UnsupportedMechanics(report)
     return report

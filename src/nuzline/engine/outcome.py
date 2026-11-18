@@ -53,6 +53,7 @@ from nuzline.engine.damage import (
     weather_suppressed,
 )
 from nuzline.engine.ids import (
+    CHATTER_CHANCES,
     FOCUS_BAND_PARAM,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
@@ -156,6 +157,9 @@ class Outcome(NamedTuple):
     # its confusion check first reads the pending counter (``ids.CONFUSION_PENDING``; one check
     # per side per turn), ruling G-5.
     berry_confusion: jnp.ndarray
+    # int8[2], 1 = Chatter's roll passes (``RandNext() % 100 <= effectChance``, battle_script.c:
+    # 8428-8430; the chance is ``ids.CHATTER_CHANCES`` of the user's ``chatot_cry``), G-70.
+    chatter: jnp.ndarray
 
 
 def empty_outcome() -> Outcome:
@@ -192,6 +196,7 @@ def empty_outcome() -> Outcome:
         focus_band=hits,
         future_band=sides,
         berry_confusion=sides + 2,
+        chatter=sides,
     )
 
 
@@ -1451,6 +1456,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         # fold_in key (G-5).
         berry_confusion=jax.random.randint(jax.random.fold_in(key, 31), per_side, 0, 4, dtype=_I32)
         + 2,
+        # Chatter's confusion (battle_script.c:8428-8430): RandNext() % 100 <= the user's chance,
+        # uniform by the % n convention (G-70).
+        chatter=jax.random.randint(jax.random.fold_in(key, 42), per_side, 0, 100, dtype=_I32)
+        <= jnp.asarray(CHATTER_CHANCES, _I32)[jnp.clip(state.chatot_cry.astype(_I32), 0, 2)],
     )
     outcome = _cast(outcome)
 

@@ -231,7 +231,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.ids import GRAVITY_TURNS, Stat, Weather
+from nuzline.engine.ids import CHATTER_CHANCES, GRAVITY_TURNS, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -356,6 +356,9 @@ class BattleState(NamedTuple):
     # (``order.truant_loafs``): set to ``(totalTurns + 1) & 1`` at an entry (battle_lib.c:2119,
     # :2197), to ``totalTurns & 1`` by Transform (battle_script.c:5359), G-69.
     truant: jnp.ndarray
+    # int8, BattleSystem.chatotCries[battler] as Chatter's parameter 0 / 1 / 2 (G-70): a battle
+    # constant like ``terrain``, set by ``initial_arrays``; the opponent's is always 0.
+    chatot_cry: jnp.ndarray
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -688,6 +691,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "shadow_ability_slot": (_SIDE, np.int8),
     "shadow_ability_form": (_SIDE, np.int8),
     "truant": (_SIDE, np.int8),
+    "chatot_cry": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -857,6 +861,7 @@ def initial_arrays(
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
+    chatot_cry: int = 0,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
@@ -907,6 +912,12 @@ def initial_arrays(
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
     a["gravity"][...] = gravity
+    # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
+    # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
+    # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).
+    if not 0 <= chatot_cry < len(CHATTER_CHANCES):
+        raise ValueError(f"chatot_cry {chatot_cry} is not a Chatter parameter 0-2")
+    a["chatot_cry"][0] = chatot_cry
     return a
 
 
@@ -919,11 +930,14 @@ def make_state(
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
+    chatot_cry: int = 0,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.battle_start``)."""
     from nuzline.engine.hooks import battle_start  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain, gravity)
+    a = initial_arrays(
+        tables, player, opp, start_condition, opp_items, leads, terrain, gravity, chatot_cry
+    )
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

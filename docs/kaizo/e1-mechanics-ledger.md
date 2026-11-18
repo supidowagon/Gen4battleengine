@@ -1110,3 +1110,35 @@ of them, :2107-2115).
   count (`effects.metronome_update`, G-60) ran after the second turn's MOVE_LOCKED cleanup in `step._use_move`, so a locked
   Fly user counted; `BattleSystem_UpdateMetronomeCount` runs at the end of BeforeMove (bcp.c:3221), before the move's script,
   and still sees the lock (the reference already did): the call now precedes the cleanup.
+- G-70 Chatter (`EffectId.CHATTER`, BATTLE_EFFECT_CHATTER 267), in both games. effect_script_0267.s:3-5 is a
+  plain hit (CalcCrit, CalcDamage) with an indirect `ON_HIT | TO_DEFENDER` `subscript_chatter.s`, which runs on a
+  hit that did not fail (`MOVE_STATUS_NO_EFFECTS` clear, battle_lib.c:1524-1529). `CheckChatterActivation`
+  (battle_script.c:8397-8436) jumps (no effect) unless the attacker's `BattleMon.species` is Chatot, the defender's
+  `curHP != 0` and the attacker is not Transformed (:8403-8405); then `chatter =
+  Sound_GetChatterActivationParameter(BattleSystem_GetChatotCry(battler))` (:8407; recorded battles read a stored
+  value, never ours) gives `effectChance` 0 / 10 / 30 for chatter 0 / 1 / 2 (:8413-8426) and `RandNext() % 100 >
+  effectChance` jumps (:8428-8430): the confusion comes on `rand % 100 <= chance`, 1 %, 11 % or 31 %
+  (`Outcome.chatter`, law `[99 - chance, chance + 1]` of 100, `enumerate._chatter`). The confusion is
+  `subscript_confuse.s`, Confuse Ray's: `effects._chatter` (target alive, not confused :20, no Substitute :23, no
+  Safeguard :26; the counter is `Outcome.duration`, drawn only when the roll passes: `enumerate._chatter_reads`);
+  no Shield Dust (the PROBABILISTIC gate's, battle_lib.c:1580-1582). Kaizo's move row changed (power 120, pp 5,
+  RANGE_ALL_ADJACENT, effect_chance 50 against vanilla 60 / pp 20 / 0): the chance is never read (the ON_HIT
+  branch reads no `effectChance`, battle_lib.c:1524-1529), so `tools/build_tables.py` writes
+  `move_effect_chance = 0` for effect 267 in both games, else the engine's `secondary_chance` would roll a phantom
+  50 %. The cry parameter is per battler, a battle constant (`BattleState.chatot_cry`, like `terrain`):
+  `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads `chatotCries[battler]`; `FieldBattleDTO` creates
+  every cry with `ChatotCry_New` (`valid = FALSE`, field_battle_data_transfer.c:97, chatot_cry.c:13-25) and only
+  `BATTLER_PLAYER_1` gets the save's (:260, :319, :385), and an invalid cry gives 0 (sound_chatot.c:193-200): an
+  enemy Chatot always confuses 1 % of the time (every Kaizo Chatter user is an enemy Chatot). The player's is the
+  save's (`SaveData_GetChatotCry`, chatot_cry.c:27-30; `BOOL valid; s8 audioData[1000]`): 0 if not valid, else
+  `audioData[15]` in [-128, -30) -> 1, [30, 128) -> 2, else 0 (sound_chatot.c:193-213);
+  `initial_arrays` / `make_state` take it as `chatot_cry` (side 0; 0 by default). Data order (pipeline.md): the
+  ROM has no cry (save data), the calc repo states the 1 % no-recording case (pkcalc.json:8696), the sheet has
+  nothing. So coverage (`check_coverage(chatot_cry=...)`, None = unknown) refuses a player Chatot that knows or can
+  learn Chatter: "Chatter's confusion chance needs the save's Chatot cry" (data, not a mechanic); an enemy Chatter is
+  never refused. Not built: the save reader for the SAVE_TABLE_ENTRY_CHATOT page (save_table.c:71, the normal
+  block): its offset is the sum of the sizes of the 22 pages before it (SYSTEM .. SEAL_CASE, each `sizeof` rounded
+  as `s += 4 - s % 4; s += 4`), of which `saves/layout.py` knows the first four; no save is read for it yet. AI:
+  `BATTLE_EFFECT_CHATTER` has no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof`
+  `:131` by move id (`commands.SOUND_MOVES`, already transcribed): `KAIZO_TRANSCRIBED`; the damage estimate is
+  the table power and type. Tests: `tests/engine/test_chatter.py`.

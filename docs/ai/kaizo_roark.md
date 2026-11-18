@@ -887,6 +887,10 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   recorded ability is the decomp id (`BattleState.ai_ability_known`, `battlerAbilities`): a reveal
   before the Transform stays the old ability, an unrevealed one is guessed from the copied species.
 
+- CHATTER (267, G-70): no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof` (`:131`,
+  by move id, already transcribed: `commands.SOUND_MOVES`). The AI scores it as a plain hit by the table power
+  and type; the confusion roll and the per-battler Chatot cry are engine state (`chatot_cry`, `Outcome.chatter`).
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

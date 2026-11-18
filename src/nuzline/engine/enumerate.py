@@ -135,6 +135,10 @@ of the turn:
   holding one (``step._use_move``). Its "move" path is the move's; the self-hit's are
   ``roll[s, 0]``'s confusion paths. ``future_band[d]``: ``future_hit[d]``'s gate and a living
   holder in side ``d``'s party.
+* ``chatter[s]`` (G-70): ``s``'s move is Chatter, its user is a Chatot that is not Transformed and its
+  first hit lands: ``RandNext() % 100 <= chance`` (``chatter_chance``, 0 / 10 / 30 by its Chatot
+  cry). The confusion counter ``duration[s]`` is then read only when it is 1
+  (``_chatter_reads``), and the foe's self-hit reads through it need it too (``inflicted``).
 * ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
   at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
@@ -212,6 +216,7 @@ from nuzline.engine.effects import (
     psycho_shift_status,
 )
 from nuzline.engine.ids import (
+    CHATTER_CHANCES,
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
@@ -219,6 +224,7 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
+    SPECIES_CHATOT,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -351,6 +357,8 @@ class Reads(NamedTuple):
     # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
     # Wonder Guard message, subscript_missed.s:107, or the plain miss).
     present_guard: jnp.ndarray
+    # G-70: it uses Chatter as a Chatot (not Transformed): its confusion needs the chatter roll.
+    chatter: jnp.ndarray
 
 
 class OutcomeLaws(NamedTuple):
@@ -387,6 +395,7 @@ class OutcomeLaws(NamedTuple):
     # of the 420 draws its own value then).
     acupressure_count: jnp.ndarray  # int32[2]
     acupressure_loose: jnp.ndarray  # bool[2]
+    chatter_chance: jnp.ndarray  # int32[2]: ids.CHATTER_CHANCES of each side's Chatot cry (G-70)
 
 
 class SamplingOnly(Exception):
@@ -641,6 +650,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "focus_band": b["focus_band"]
         | ((confusable & b["own_band"])[:, None] & (b["hit_index"] == 0)),
         "berry_confusion": b["pending"] | berry_by_foe,
+        "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
@@ -1583,8 +1593,13 @@ def outcome_laws(
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,))
     holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
+    # Chatter (G-70): a Chatot that is not Transformed confuses (effects._chatter; over-approximate:
+    # the roll may fail, the target may be confused already or behind a Substitute).
+    chatot = (state.species[sides, mons] == SPECIES_CHATOT) & (state.transformed == 0)
+    chatter_user = uses_move & (effect == _E.CHATTER) & chatot
     duration = uses_move & (
-        _any_of(
+        chatter_user
+        | _any_of(
             effect,
             (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER),
         )
@@ -1634,7 +1649,7 @@ def outcome_laws(
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((2,), bool)
-    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER))
+    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER)) | chatter_user
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
     foe_calm = state.infatuated[::-1] == 0
@@ -1672,6 +1687,7 @@ def outcome_laws(
         "confused_blocked": confused_blocked,
         "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
         "tri_attack": lands[:, 0] & (effect == _E.TRI_ATTACK),
+        "chatter": lands[:, 0] & chatter_user,
         "flinch_item": lands & (damaging & kings_move & (kings_rock > 0))[:, None],
         "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
@@ -1973,6 +1989,7 @@ def outcome_laws(
             # party (the battler on the field at the turn's end), G-1.
             future_band=live & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
+            chatter=m["chatter"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2066,6 +2083,7 @@ def outcome_laws(
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
         present=off if loose else uses_move & (effect == _E.PRESENT),
+        chatter=off if loose else chatter_user,
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
@@ -2163,6 +2181,9 @@ def outcome_laws(
         future_loose=future_loose,
         acupressure_count=acu_count,
         acupressure_loose=acu_loose,
+        chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
+            jnp.clip(state.chatot_cry.astype(_I32), 0, 2)
+        ],
     )
 
 
@@ -2325,6 +2346,13 @@ def _acupressure(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(n)), [1] * n, n
 
 
+def _chatter(laws: OutcomeLaws, side: int) -> _Law:
+    # battle_script.c:8428-8430: RandNext() % 100 <= effectChance, uniform by the % n convention:
+    # 1 with weight chance + 1 of 100 (G-70).
+    chance = min(max(int(laws.chatter_chance[side]), 0), 99)
+    return [0, 1], [99 - chance, chance + 1], 100
+
+
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
     # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
     # RandNext() % 100 < param, uniform by the % n convention.
@@ -2351,6 +2379,7 @@ _LAWS = {
     "duration": _duration,
     "thaw": _thaw,
     "flinch_item": _flinch_item,
+    "chatter": _chatter,
     "quick_claw": _quick_claw,
     "end_speed_tie": _coin,
     "magnitude": _magnitude,
@@ -2559,6 +2588,9 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     def inflicted(s: int) -> list[Condition]:
         """``s`` (moving first) inflicts its status or confusion on the foe."""
         conds = move_conds(s)
+        if bool(reads.chatter[s]):  # a Chatter confusion needs its roll (G-70)
+            roll = rel_elem("chatter", (s,))
+            conds = [*conds, Condition((roll,), _proc) if roll else NEVER]
         return conds + [procs(s)] if bool(reads.proc_gated[s]) else conds
 
     t = branch.tie
@@ -2590,6 +2622,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "present",
             "protect",
             "tri_attack",
+            "chatter",
             "roar_level",
             "roar_target",
             "acupressure",
@@ -2672,6 +2705,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "present",
             "protect",
             "tri_attack",
+            "chatter",
             "roar_level",
             "roar_target",
             "acupressure",
@@ -2754,6 +2788,7 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         "fang_flinch",
         "present",
         "tri_attack",
+        "chatter",
         "roar_level",
         "roar_target",
     ):
@@ -2773,6 +2808,18 @@ def _tri_value(status: int) -> Callable[[np.ndarray], np.ndarray]:
         return v == value
 
     return test
+
+
+@register_reads
+def _chatter_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (chatter, duration) joint factor (G-70): ``effects._chatter`` reads the confusion counter
+    only when the chatter roll passes, so ``duration[s]``'s "move" path also needs
+    ``chatter[s] == 1``."""
+    for s in (0, 1):
+        elem, roll = ("duration", (s,)), ("chatter", (s,))
+        if not bool(laws.reads.chatter[s]) or elem not in plan:
+            continue
+        plan.restrict(elem, "move", Condition((roll,), _proc) if roll in plan else NEVER)
 
 
 @register_reads
