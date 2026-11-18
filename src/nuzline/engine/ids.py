@@ -639,7 +639,7 @@ class AbilityId(IntEnum):
     DOWNLOAD = 81
     # E1 Batch C, rulings G-45..G-49: Ice Body (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:
     # 5597-5602; step._weather_effect), White Smoke (BtlCmd_ChangeStatStage's Clear Body branch,
-    # :2884-2885; effects._foe_stage, hooks.intimidate), Vital Spirit (every Insomnia site:
+    # :2883-2884; effects._foe_stage, hooks.intimidate), Vital Spirit (every Insomnia site:
     # subscript_fall_asleep.s:8, :24, subscript_yawn.s:6, subscript_rest.s:8,
     # BattleSystem_RecoverStatusByAbility battle_lib.c:4404-4405, :4471-4472), Speed Boost
     # (BattleSystem_TriggerTurnEndAbility, battle_lib.c:3555-3564; step._turn_end_ability) and

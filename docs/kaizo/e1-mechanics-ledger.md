@@ -721,7 +721,7 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   strategy (:6864, :6873) read it by decomp id (`policy.py`). Tests: `test_e1_batch_c.py`,
   `tests/engine/test_field_pass.py`.
 - G-46 White Smoke (`AbilityId.WHITE_SMOKE`, decomp 73). `BtlCmd_ChangeStatStage` tests it in
-  Clear Body's branch (battle_script.c:2884-2885: a drop by another battler, after Mist,
+  Clear Body's branch (battle_script.c:2883-2884: a drop by another battler, after Mist,
   `Battler_IgnorableAbility`), so it is Clear Body's twin everywhere: a move's drop
   (`effects._foe_stage`, reference `_drop_blocked`) and Intimidate (`hooks.intimidate`, the
   reference switch-in). Its messages are built in C (`SetupNicknameAbilityNicknameAbilityMsg`,

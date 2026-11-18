@@ -2076,7 +2076,7 @@ def _arm_unburden(s: RefState, side: int) -> None:
 
 def _drop_blocked(seen: int, stat: int, delta: int) -> bool:
     """BtlCmd_ChangeStatStage (script.c:2884-2902): a drop by another battler meets the target's
-    Clear Body or White Smoke (:2884-2885, G-46), Keen Eye on accuracy or Hyper Cutter on Attack
+    Clear Body or White Smoke (:2883-2884, G-46), Keen Eye on accuracy or Hyper Cutter on Attack
     (ignorable, ``seen``)."""
     if delta >= 0:
         return False

@@ -127,7 +127,7 @@ def _torkoal(tables, names):
 
 
 def test_white_smoke_blocks_a_foes_drop_and_intimidate(tables, names):
-    """battle_script.c:2884-2885: White Smoke is Clear Body's twin (a drop by another battler,
+    """battle_script.c:2883-2884: White Smoke is Clear Body's twin (a drop by another battler,
     Battler_IgnorableAbility); its message is built in C, so the AI learns nothing."""
     s = _torkoal(tables, names)
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), O)

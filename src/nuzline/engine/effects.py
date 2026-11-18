@@ -402,7 +402,7 @@ def _foe_stage(state: BattleState, h: _Hit, cond) -> BattleState:
     seen = h.target_ignorable
     keen_eye = (seen == AbilityId.KEEN_EYE) & (stat == Stat.ACC)
     hyper_cutter = (seen == AbilityId.HYPER_CUTTER) & (stat == Stat.ATK)
-    # White Smoke is Clear Body's twin (battle_script.c:2884-2885, ruling G-46).
+    # White Smoke is Clear Body's twin (battle_script.c:2883-2884, ruling G-46).
     clear_body = (seen == AbilityId.CLEAR_BODY) | (seen == AbilityId.WHITE_SMOKE)
     blocked = (delta < 0) & (clear_body | keen_eye | hyper_cutter)
     blocked = blocked | mist_blocks_drop(state, h.target_side, delta)
