@@ -3035,14 +3035,17 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.CHATTER and effective:
         # subscript_chatter.s: CheckChatterActivation (script.c:8397-8436) needs a Chatot that is
         # not Transformed and a defender with HP, then RandNext() % 100 <= effectChance (the
-        # chatter roll); subscript_confuse.s fails on a confused or Substitute-covered target or
-        # Safeguard (:20, :23, :26). No Shield Dust. G-70.
+        # chatter roll); the effect is SIDE_EFFECT_TYPE_INDIRECT (effect_script_0267.s:5,
+        # lib.c:1520-1522), so subscript_confuse.s:14-15 stops it on the defender's Shield Dust as
+        # the attacker sees it (Mold Breaker ignores it); then a confused or Substitute-covered
+        # target or Safeguard (:24, :23, :26). G-70.
         if (
             _active(s, side).species == SPECIES_CHATOT
             and not s.sides[side].transformed
             and target_alive
             and o.chatter[side]
             and not s.sides[target].confusion
+            and seen != AbilityId.SHIELD_DUST
             and not _shielded(turn, s, target)
             and not s.sides[target].safeguard
         ):

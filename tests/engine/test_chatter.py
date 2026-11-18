@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from nuzline.engine.enumerate import _LAWS, outcome_laws
-from nuzline.engine.ids import CHATTER_CHANCES, SPECIES_CHATOT, EffectId
+from nuzline.engine.ids import CHATTER_CHANCES, SPECIES_CHATOT, AbilityId, EffectId
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, assert_matches_reference, drop_programs
@@ -108,6 +108,22 @@ def test_chatter_confusion_stops_on_a_confused_target_a_substitute_or_safeguard(
     assert int(assert_matches_reference(tables, safe, acts, roll).confusion[1]) == 0
     plain = assert_matches_reference(tables, s, acts, roll)
     assert int(plain.confusion[1]) in (4, 5)
+
+
+def test_shield_dust_stops_chatter_unless_the_attacker_has_mold_breaker(tables, names):
+    """Chatter's confusion is ``SIDE_EFFECT_TYPE_INDIRECT`` (effect_script_0267.s:5,
+    battle_lib.c:1520-1522): subscript_confuse.s:14-15 stops it on the defender's Shield Dust as
+    the attacker sees it (``CheckIgnorableAbility``), so a Mold Breaker Chatot pierces it. The
+    activation roll is drawn either way (subscript_chatter.s:5 runs first)."""
+    s = _chat(tables, names)
+    dust = s._replace(ability=s.ability.at[1, 0].set(AbilityId.SHIELD_DUST))
+    acts = A("Chatter", "Leer", dust, names)
+    roll = _roll(chatter=(1, 1), duration=(5, 5))
+    assert int(assert_matches_reference(tables, dust, acts, roll).confusion[1]) == 0
+    laws = outcome_laws(tables, dust, jnp.asarray(acts))
+    assert bool(laws.reads.chatter[0])  # the roll is still drawn
+    breaker = dust._replace(ability=dust.ability.at[0, 0].set(AbilityId.MOLD_BREAKER))
+    assert int(assert_matches_reference(tables, breaker, acts, roll).confusion[1]) in (4, 5)
 
 
 @pytest.mark.parametrize(("cry", "enemy"), [(2, False), (0, True), (1, False)])

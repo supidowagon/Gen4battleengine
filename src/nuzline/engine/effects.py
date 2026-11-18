@@ -1773,9 +1773,11 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``CheckChatterActivation`` (battle_script.c:8397-8436) skips unless the attacker's species is
     Chatot and it is not Transformed, and the defender has HP (:8403-8405); then ``RandNext() %
     100 <= effectChance`` (:8428-8430, ``Outcome.chatter``: 0 / 10 / 30 of the Chatot cry, 0 for
-    every enemy) confuses by ``subscript_confuse.s``, the engine's ``_confuse_foe`` conditions (not
-    confused :20, no Substitute :23, no Safeguard :26). No Shield Dust (the PROBABILISTIC gate's,
-    :1580-1582, G-70)."""
+    every enemy) confuses by ``subscript_confuse.s``: the effect is ``SIDE_EFFECT_TYPE_INDIRECT``
+    (effect_script_0267.s:5, battle_lib.c:1520-1522), so the defender's Shield Dust as the
+    attacker sees it stops it (subscript_confuse.s:14-15, ``CheckIgnorableAbility``: a Mold
+    Breaker attacker ignores it), after the roll is drawn; then not confused :24, no Substitute
+    :23, no Safeguard :26 (G-70)."""
     chatot = (state.species[h.side, h.user] == SPECIES_CHATOT) & (state.transformed[h.side] == 0)
     cond = (
         (h.effect == _E.CHATTER)
@@ -1784,6 +1786,7 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & _alive(state, h.target_side, h.target)
         & (outcome.chatter[h.side] != 0)
         & (state.confusion[h.target_side] == 0)
+        & ~_shield_dust(h)
         & ~h.shielded
         & (state.safeguard[h.target_side] == 0)
     )

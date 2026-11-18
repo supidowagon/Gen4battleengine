@@ -1143,9 +1143,11 @@ of them, :2107-2115).
   value, never ours) gives `effectChance` 0 / 10 / 30 for chatter 0 / 1 / 2 (:8413-8426) and `RandNext() % 100 >
   effectChance` jumps (:8428-8430): the confusion comes on `rand % 100 <= chance`, 1 %, 11 % or 31 %
   (`Outcome.chatter`, law `[99 - chance, chance + 1]` of 100, `enumerate._chatter`). The confusion is
-  `subscript_confuse.s`, Confuse Ray's: `effects._chatter` (target alive, not confused :20, no Substitute :23, no
-  Safeguard :26; the counter is `Outcome.duration`, drawn only when the roll passes: `enumerate._chatter_reads`);
-  no Shield Dust (the PROBABILISTIC gate's, battle_lib.c:1580-1582). Kaizo's move row changed (power 120, pp 5,
+  `subscript_confuse.s` with `SIDE_EFFECT_TYPE_INDIRECT` (effect_script_0267.s:5, battle_lib.c:1520-1522):
+  `effects._chatter` (target alive; the defender's Shield Dust as the attacker sees it stops it, :14-15
+  `CheckIgnorableAbility`, so Mold Breaker pierces it, after the activation roll is drawn; not confused :24, no
+  Substitute :23, no Safeguard :26; the counter is `Outcome.duration`, drawn only when the roll passes:
+  `enumerate._chatter_reads`). Kaizo's move row changed (power 120, pp 5,
   RANGE_ALL_ADJACENT, effect_chance 50 against vanilla 60 / pp 20 / 0): the chance is never read (the ON_HIT
   branch reads no `effectChance`, battle_lib.c:1524-1529), so `tools/build_tables.py` writes
   `move_effect_chance = 0` for effect 267 in both games, else the engine's `secondary_chance` would roll a phantom
