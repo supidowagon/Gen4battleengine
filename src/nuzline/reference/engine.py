@@ -4002,17 +4002,18 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
     return 1 + int(defender != side and _active(s, defender).ability == AbilityId.PRESSURE)
 
 
-def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggling: bool,
-           locked: bool, target_moved: bool) -> int | None:  # fmt: skip
+def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
+           struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
-    for ``side``'s active Pokemon. Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
+    for ``side``'s active Pokemon; ``target`` is the battler whose speed the action's sort
+    compared (monSpeedValues, Gyro Ball). Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
     writes to the foe's ``moveHit`` (``ref_step`` applies it after the faint check), or
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
     # BranchActions' SortMonSpeedOrder (bcp.c:888) writes monSpeedValues before the action
     # (Gyro Ball, B13-14); moveSlot (Trump Card, B13-15).
-    turn.gyro_power = _gyro_power(tables, s, side, 1 - side) if _active(s, 1 - side).hp else 0
+    turn.gyro_power = _gyro_power(tables, s, side, target) if _active(s, target).hp else 0
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
     turn.gift = 0
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
@@ -4583,8 +4584,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
         # subscript_embargo_start.s:6-11, :57 (MOVE_STATUS_FAILED), B13-31.
         full = full or (
-            effect == EffectId.EMBARGO
-            and _embargo_fails(tables, s, turn, 1 - side, target_moved)
+            effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, 1 - side, target_moved)
         )
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, 1 - side)[0])
         full = full or (
@@ -5732,7 +5732,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             rollout0 = s.sides[side].rollout_count
             try:
                 record = _fight(
-                    turn, s, side, action_slot, move, struggling, locked,
+                    turn, s, side, 1 - side, action_slot, move, struggling, locked,
                     target_moved=position == 1,
                 )  # fmt: skip
             finally:

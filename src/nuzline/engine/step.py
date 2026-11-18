@@ -118,7 +118,6 @@ from nuzline.engine.effects import (
     LOCK_ON_TURNS,
     NO_DEFENDER,
     armored,
-    assurance_mark,
     big_root,
     can_have_status,
     captivate_fails,
@@ -132,6 +131,7 @@ from nuzline.engine.effects import (
     ghost_user,
     hit_count,
     holds,
+    hp_update,
     imprison_fails,
     ingrain_anchors,
     kings_rock_flinch,
@@ -871,13 +871,10 @@ def _use_move(
     resisted = self_hit & resist_berry(tables, state, side, tables.move_type[move], False)
     taken = jnp.where(endured, user_hp - 1, raw)
     hurt = resist_berry_damage(state, side, taken, resisted, hurt)
-    user_hp = user_hp - jnp.where(self_hit, hurt, 0)
-    state = state._replace(
-        confusion=state.confusion.at[side].set(confusion),
-        hp=state.hp.at[side, user].set(user_hp.astype(state.hp.dtype)),
-    )
-    # subscript_hurt_self_in_confusion.s's UPDATE_HP: hpCalcTemp = -the capped damage (B13-17).
-    state = assurance_mark(state, side, taken, self_hit)
+    state = state._replace(confusion=state.confusion.at[side].set(confusion))
+    # subscript_hurt_self_in_confusion.s's UPDATE_HP: hpCalcTemp = -the capped damage (B13-17);
+    # ``hurt`` has its sign.
+    state = hp_update(state, side, user, -hurt, self_hit)
     # subscript_move_followup_message.s:16 names the endured item (the user is the defender).
     state = reveal_item(state, side, user, self_hit & endured)
     state = consume_item(state, side, (self_hit & endured & sash) | resisted)
@@ -1144,9 +1141,7 @@ def _use_move(
     state = consume_item(state, side, gift_on)
     # Embargo (effect_script_0232.s:5, :7-8): CheckSubstitute on the defender, MOVE_STATUS_FAILED
     # before TryMove (its subscript's own failures come at the hit: effects._embargo), B13-31.
-    failed = failed | (
-        (effect_used == EffectId.EMBARGO) & (state.substitute_hp[target_side] != 0)
-    )
+    failed = failed | ((effect_used == EffectId.EMBARGO) & (state.substitute_hp[target_side] != 0))
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
     # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
@@ -1531,9 +1526,7 @@ def _use_move(
     )
     cap = divide(state.max_hp[target_side, target].astype(_I32), 2)
     crash_loss = jnp.where(would > 0, jnp.minimum(divide(would, 2), cap), 0)
-    user_hp_now = state.hp[side, user].astype(_I32)
-    state = assurance_mark(state, side, crash_loss, crash)  # :19 UPDATE_HP (B13-17)
-    state = _set_mon(state, "hp", side, user, jnp.maximum(user_hp_now - crash_loss, 0), crash)
+    state = hp_update(state, side, user, -crash_loss, crash)  # :19 UPDATE_HP (B13-17)
     # A direct sleep (a STATUS_FOE sleep move) on a living target that is not asleep, has no
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
     # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no
@@ -1865,9 +1858,7 @@ def _use_move(
         att_landed = sync_landed(state, hit_state, side)
         sync_flag = sync_flag ^ def_landed ^ att_landed
         sync_sem = jnp.where(att_landed, side, jnp.where(def_landed, target_side, sync_sem))
-        attacker_rock = (
-            tables.item_effect[held_item(hit_state, side)] == ItemId.KINGS_ROCK
-        )
+        attacker_rock = tables.item_effect[held_item(hit_state, side)] == ItemId.KINGS_ROCK
         rock_test = (
             attacker_rock
             & (outcome.flinch_item[side, hit_index] != 0)

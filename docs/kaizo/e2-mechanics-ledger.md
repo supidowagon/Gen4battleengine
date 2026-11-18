@@ -5,11 +5,12 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
 
 ## 1. Current state
 
-- Batch 13 (branch e2-batch13, tip 0d30135; rulings B13-1..B13-40) was sent to the manager for
-  merge, together with the doubles plan D1-D12. It is merged into this branch. Do not commit to
-  e2-batch13 and do not touch its worktree or tables (pod runs read them).
-- The doubles plan follows docs/doubles-state-design.md. It awaits the manager's
-  acknowledgement; no doubles work starts before it.
+- Batch 13 (branch e2-batch13, tip 0d30135; rulings B13-1..B13-40) passed the merge check (MERGE
+  WITH NOTES); its pod runs and the merge are the manager's. Do not commit to e2-batch13 and do
+  not touch its worktree (_scratch/e2/b13wt) or its tables.
+- Branch e2-d1 (from 0d30135 plus ledger commits) holds the merge-check notes (B13-41..B13-45)
+  and Owed 13. Next: send the manager the D1 file list (E1-owned files marked), then D1.
+- The doubles plan follows docs/doubles-state-design.md; the manager acknowledged it.
 - Batch 14 (the other Metronome moves) is parked behind doubles. Moved to E1: AI blocks #16,
   #57, #114, #173, #215, #267, #109, #116, #252, #82, plus Plus and Minus; mechanics #57,
   #215, #267, #116, #252, #82 and sub_seq #238.
@@ -91,13 +92,8 @@ Each is open; close it with its ruling.
 11. raw_rolls seed 5 (`test_accuracy_classes_equal_raw_rolls`, slow): run
     `drive_rawrolls.ps1 5` under the side lock (`<project>/_scratch/e2/`, phases of 6 examples
     via rawrolls_phase.py; at least 12 GB free at start). Seeds 1-4 are done.
-12. E1's Fantina list: the AI move-effect transcriptions not moved to E1. Still open in the
-    backlog and not on E1's list: #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259
-    (and #233 with Fling). Confirm with the manager which of these the Fantina list gives E2.
-13. The scratch differential runner (`diff.py N SEED`: N random fights per seed, JAX vs the
-    reference, 300 per seed) and `replay.py` were lost in the 18 Nov cleanup. Before D1, rebuild
-    it as a committed tool (tools/, from tests/test_differential.py's generator) so D1 can check
-    singles byte-identity over many seeds.
+12. The AI move-effect blocks #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259 are
+    E2's (manager, 18 Nov; #233 goes with Fling). They go in the next singles batch, after D1.
 
 ### Closes with its mechanic
 
@@ -1869,3 +1865,24 @@ docs/doubles-state-design.md.
   that member's regions 7 -> 44, its one-change variants 10 -> 47, the party's one-change
   variants 47 -> 84 (x1.79), the product of (1 + variants) per member 310464 -> 1354752
   (x4.36). The cuts stay exact (Owed: the prep cost).
+- B13-41 (merge note 1) Weather Ball's AI-type refusal (policy ~3811, switching.weather_ball_refused,
+  replacement ~140) on the Kaizo splits' opponent teams: 4 battles carry Weather Ball. It fires in
+  2: Byron split, Galactic Terra #3's Castform under fog (every state); Galactic split, Galactic
+  Erripaus's Bronzong (clear start: until a weather is set). Byron split Worker Conrad's Blastoise
+  and Volkner split Sailor Jack's Tropius start in permanent sun: typed, unless the player brings
+  Cloud Nine / Air Lock. Player-side Weather Ball (moveHit) not counted.
+- B13-42 (merge note 2) Every JAX action-phase HP update goes through effects.hp_update (HP within
+  [0, maxHP] plus the assuranceDamageMask, subscript_update_hp.s:18-19), as the reference's
+  _lose_hp: the hits, recoil, Struggle, the contact abilities, the self-hit, the crash, Life Orb,
+  Jaboca / Rowap and the Enigma heal, the hazards (one update each), Curse, Substitute, Belly Drum,
+  Pain Split. assurance_mark is gone.
+- B13-43 (merge note 3) test_triple_kick_later_classes_equal_raw_rolls: 36 s and 50 s per case,
+  peak 5.05 GB: marked slow.
+- B13-44 (merge note 4, doubles convention 1) reference._fight takes the action's target battler;
+  Gyro Ball's monSpeedValues read it (the turn skeleton passes 1 - side, as step.py's target_side).
+- B13-45 (merge note 5) damage._pre_random's Gyro Ball / Trump Card fallback (in_power 0) feeds
+  the heuristics' damage tables only: engine hits pass in_power, the trainer AI takes
+  ai_case_power, the replacement AI skips both (table power 1, battle_lib.c:8053;
+  res/moves/{gyro_ball,trump_card}/data.json).
+- Owed 13 closed: tools/differential.py (`uv run python -m tools.differential N SEED|A-B ...`),
+  the generator and field check of tests/test_differential.py; a seed replays its turns.

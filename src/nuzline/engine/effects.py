@@ -716,10 +716,8 @@ def _curse(tables, state, h: _Hit) -> BattleState:
     # Divide(maxHP, 2) through UPDATE_HP (:9-15; it can faint).
     hexed = (h.effect == _E.CURSE) & h.landed & ghost & ~curse_fails(state, h.target_side)
     state = _set(state, "curse", h.target_side, 1, hexed)
-    hp = state.hp[h.side, h.user].astype(_I32)
     cost = divide(state.max_hp[h.side, h.user].astype(_I32), 2)
-    state = assurance_mark(state, h.side, cost, hexed)
-    return _set(state, "hp", (h.side, h.user), jnp.maximum(hp - cost, 0), hexed)
+    return hp_update(state, h.side, h.user, -cost, hexed)
 
 
 def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
@@ -768,9 +766,7 @@ def _recoil(tables, state, h: _Hit) -> BattleState:
         third,
         0,
     )
-    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
-    state = assurance_mark(state, h.side, cost, cost > 0)
-    return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
+    return hp_update(state, h.side, h.user, -cost, cost > 0)
 
 
 def ghost_user(state: BattleState, side) -> jnp.ndarray:
@@ -924,20 +920,23 @@ def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
     return state._replace(**{field: arr.at[index].set(new)})
 
 
-def assurance_mark(state: BattleState, side, lost, ran) -> BattleState:
-    """``turnFlags[battler].assuranceDamageMask`` after an HP update of ``side``'s battler that
-    ran (``ran``) and took ``lost`` HP (hpCalcTemp = -lost): subscript_update_hp.s:18-19 stores
+def hp_update(state: BattleState, side, slot, delta, cond) -> BattleState:
+    """``BATTLE_SUBSCRIPT_UPDATE_HP`` with hpCalcTemp = ``delta`` (negative: a loss) on
+    ``side``'s party ``slot`` where ``cond``: its HP becomes ``curHP + delta`` within [0, maxHP],
+    then ``turnFlags[battler].assuranceDamageMask``: subscript_update_hp.s:18-19 stores
     hpCalcTemp unless it is above 0, so a loss sets the flag (``ts_assurance``), a zero update
     clears it and a heal leaves it. The flag is per battler: a switch keeps it (only
     BattleSystem_CleanupFaintedMon, battle_lib.c:2190-2193, and SetupNextTurn, :2231, clear it),
-    and only the actions read it (Assurance), so the action-phase updates mark it: the hits
-    (``play_hit``), recoil, Struggle, the contact abilities, the self-hit, the crash, Life Orb,
-    the hazards, Curse, Substitute, Belly Drum and Pain Split (B13-17)."""
-    lost = jnp.asarray(lost).astype(_I32)
-    ran = jnp.asarray(ran, jnp.bool_)
+    and only the actions read it (Assurance). Every action-phase HP loss goes through here
+    (B13-17)."""
+    delta = jnp.asarray(delta).astype(_I32)
+    cond = jnp.asarray(cond, jnp.bool_)
+    hp = state.hp[side, slot].astype(_I32)
+    new_hp = jnp.clip(hp + delta, 0, state.max_hp[side, slot].astype(_I32))
+    state = _set(state, "hp", (side, slot), new_hp, cond)
     old = state.ts_assurance[side]
-    new = jnp.where(ran & (lost > 0), 1, jnp.where(ran & (lost == 0), 0, old))
-    return state._replace(ts_assurance=state.ts_assurance.at[side].set(new.astype(jnp.int8)))
+    mark = jnp.where(cond & (delta < 0), 1, jnp.where(cond & (delta == 0), 0, old))
+    return state._replace(ts_assurance=state.ts_assurance.at[side].set(mark.astype(jnp.int8)))
 
 
 def unlock_move(state: BattleState, side, cond) -> BattleState:
@@ -1068,9 +1067,7 @@ def _substitute(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     state = _set(state, "substitute_hp", h.side, quarter, cond)
     state = _set(state, "trapped", h.side, 0, cond)
     state = _set(state, "trap_move", h.side, 0, cond)
-    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - quarter, 0)
-    state = assurance_mark(state, h.side, quarter, cond)
-    return _set(state, "hp", (h.side, h.user), hp, cond)
+    return hp_update(state, h.side, h.user, -quarter, cond)
 
 
 def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1083,13 +1080,9 @@ def _pain_split(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     mine = state.hp[h.side, h.user].astype(_I32)
     theirs = state.hp[h.target_side, h.target].astype(_I32)
     avg = (mine + theirs) // 2
-    mine_new = jnp.minimum(avg, state.max_hp[h.side, h.user].astype(_I32))
-    theirs_new = jnp.minimum(avg, state.max_hp[h.target_side, h.target].astype(_I32))
-    # hpCalcTemp = avg - curHP for each (:11-13, :17-19): a loss or a zero update (B13-17).
-    state = assurance_mark(state, h.side, mine - avg, cond & (mine >= avg))
-    state = assurance_mark(state, h.target_side, theirs - avg, cond & (theirs >= avg))
-    state = _set(state, "hp", (h.side, h.user), mine_new, cond)
-    return _set(state, "hp", (h.target_side, h.target), theirs_new, cond)
+    # hpCalcTemp = avg - curHP for each (:11-13, :17-19).
+    state = hp_update(state, h.side, h.user, avg - mine, cond)
+    return hp_update(state, h.target_side, h.target, avg - theirs, cond)
 
 
 def _encore(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1128,9 +1121,7 @@ def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.BELLY_DRUM) & h.landed & ~belly_drum_fails(state, h.side)
     state = change_stage(state, h.side, Stat.ATK, STAGE_MAX * 2, cond)
     half = jnp.maximum(state.max_hp[h.side, h.user].astype(_I32) // 2, 1)
-    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - half, 0)
-    state = assurance_mark(state, h.side, half, cond)
-    return _set(state, "hp", (h.side, h.user), hp, cond)
+    return hp_update(state, h.side, h.user, -half, cond)
 
 
 def _dragon_dance(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1536,10 +1527,7 @@ def primary_effect_fails(
         # effect_script_0265.s:5-9 (MOVE_STATUS_NO_MORE_WORK).
         | ((effect == _E.CAPTIVATE) & captivate_fails(tables, state, side, target_side)[0])
         # subscript_embargo_start.s:5-11, :57 (MOVE_STATUS_FAILED), B13-31.
-        | (
-            (effect == _E.EMBARGO)
-            & embargo_fails(tables, state, target_side, foe_claw, foe_custap)
-        )
+        | ((effect == _E.EMBARGO) & embargo_fails(tables, state, target_side, foe_claw, foe_custap))
         # effect_script_0226.s:5, BtlCmd_BoostRandomStatBy2's jump (MOVE_STATUS_FAILED), on its
         # defender (RANGE_USER_OR_ALLY: defender_side, the user in singles).
         | (
@@ -2075,9 +2063,7 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
     hit."""
     max_hp = state.max_hp[h.side, h.user].astype(_I32)
     cost = jnp.where(struggling & h.landed, jnp.maximum(max_hp // 4, 1), 0)
-    hp = jnp.maximum(state.hp[h.side, h.user].astype(_I32) - cost, 0)
-    state = assurance_mark(state, h.side, cost, cost > 0)
-    return state._replace(hp=state.hp.at[h.side, h.user].set(hp.astype(state.hp.dtype)))
+    return hp_update(state, h.side, h.user, -cost, cost > 0)
 
 
 def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2130,12 +2116,9 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.ability[h.side, h.user] != AbilityId.MAGIC_GUARD)
     )
     max_hp = state.max_hp[h.side, h.user].astype(_I32)
-    hp = state.hp[h.side, h.user].astype(_I32)
     cut = jnp.where(rough, jnp.maximum(max_hp // 8, 1), 0)
     cut = jnp.where(aftermath, jnp.maximum(max_hp // 4, 1), cut)
-    hurt = jnp.maximum(hp - cut, 0)
-    state = assurance_mark(state, h.side, cut, cut > 0)
-    state = state._replace(hp=state.hp.at[h.side, h.user].set(hurt.astype(state.hp.dtype)))
+    state = hp_update(state, h.side, h.user, -cut, cut > 0)
     # The status message and Rough Skin's message tag the holder's ability
     # (``hooks.REVEALS_ON``). hooks imports this module, so the import is local.
     from nuzline.engine.hooks import CONTACT_DAMAGE, CONTACT_STATUS, reveal_ability
@@ -2395,15 +2378,12 @@ def on_hit_berry(
         & ~magic_guard
     )
     loss = divide(state.max_hp[side, user].astype(_I32), jnp.maximum(power, 1))
-    state = _set(state, "hp", (side, user), jnp.maximum(a_hp - loss, 0), recoil)
-    # BATTLE_SUBSCRIPT_UPDATE_HP with hpCalcTemp < 0: the attacker's assuranceDamageMask
-    # (subscript_update_hp.s:18-19, B13-17); the Enigma heal (> 0) leaves the holder's.
-    state = assurance_mark(state, side, loss, recoil)
+    state = hp_update(state, side, user, -loss, recoil)
     d_hp = state.hp[foe, target].astype(_I32)
     d_max = state.max_hp[foe, target].astype(_I32)
     heal = cond & (effect == ItemId.ENIGMA_BERRY) & (d_hp > 0) & jnp.asarray(super_effective)
     gain = divide(d_max, jnp.maximum(power, 1))
-    state = _set(state, "hp", (foe, target), jnp.minimum(d_hp + gain, d_max), heal)
+    state = hp_update(state, foe, target, gain, heal)
     return consume_item(state, foe, recoil | heal), recoil
 
 
@@ -2538,8 +2518,8 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     )
     # subscript_hazards_check.s: each through UPDATE_HP (B13-17; replace() clears the flag of a
     # turn-end replacement, SetupNextTurn).
-    state = assurance_mark(state, side, spikes + rock, (spikes + rock) > 0)
-    return state._replace(hp=state.hp.at[side, mon].set((hp - rock).astype(state.hp.dtype)))
+    state = hp_update(state, side, mon, -spikes, spikes > 0)
+    return hp_update(state, side, mon, -rock, rock > 0)
 
 
 class MoveHit(NamedTuple):
@@ -2664,8 +2644,7 @@ def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleSta
     magic_guard = decomp_abilities(tables, state)[side, mon] == WEATHER_ABILITY_IDS["Magic Guard"]
     on = jnp.asarray(cond) & holds(tables, state, side, ItemId.LIFE_ORB) & (hp > 0) & ~magic_guard
     loss = divide(state.max_hp[side, mon].astype(_I32), 10)
-    state = assurance_mark(state, side, loss, on)
-    return _set(state, "hp", (side, mon), jnp.maximum(hp - loss, 0), on)
+    return hp_update(state, side, mon, -loss, on)
 
 
 METRONOME_MAX_TURNS = 10  # BattleSystem_UpdateMetronomeCount's cap (battle_lib.c:6168)
@@ -2983,12 +2962,10 @@ def play_hit(
     )
     dealt = jnp.where(landed & hits_foe & ~sub_take, capped, 0)
     dealt = resist_berry_damage(state, target_side, taken, resisted, dealt)
-    state = state._replace(
-        hp=state.hp.at[target_side, target].set((target_hp - dealt).astype(state.hp.dtype))
-    )
     # UpdateHP's subscript_update_hp.s with hpCalcTemp = -battleCtx->damage after the endure
-    # cap (bcp.c:3437-3438): 0 for a 1-HP False Swipe or endure target (B13-17).
-    state = assurance_mark(state, target_side, taken, real)
+    # cap (bcp.c:3437-3438) and a resist berry's halving: 0 for a 1-HP False Swipe or endure
+    # target (B13-17); ``dealt`` has its sign.
+    state = hp_update(state, target_side, target, -dealt, real)
     if pursuit_switch:
         state = _set(state, "substitute_hp", target_side, 0, sub_take & (to_sub == sub_hp))
     else:

@@ -1264,7 +1264,9 @@ def _pre_random(
     ``in_power`` (> 0) is the power a move script set from state this function does not see at
     the hit (CalcMoveDamage's ``inPower``, battle_lib.c:6673-6677): Gyro Ball's speeds at the
     action start, Trump Card's PP of the action's move slot (``step._use_move``); 0 computes
-    them from ``s`` (the turn-start tables). ``gift`` (> 0): the berry Natural Gift's script
+    them from ``s``. That fallback feeds the heuristics' damage tables only: every engine hit
+    passes ``in_power``, the trainer AI takes ``ai_case_power``, and the replacement AI skips
+    both moves (table power 1, battle_lib.c:8053). ``gift`` (> 0): the berry Natural Gift's script
     removed this action (``gift_item``, B13-37)."""
     atk_side = _i32(atk_side)
     if self_hit:
