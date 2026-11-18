@@ -271,6 +271,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190); the block is
     # CheckMoveHitOverrides (battle_controller_player.c:3001-3014; engine/step.py).
     111: ("BATTLE_EFFECT_PROTECT", _E.PROTECT, (0, 0, 0)),
+    # effect_script_0116.s (Endure): the same direct TO_ATTACKER subscript_protect.s as Protect
+    # (effect_script_0111.s:3); BtlCmd_TryProtection sets turnFlags.enduring (battle_script.c:5174-5177).
+    116: ("BATTLE_EFFECT_SURVIVE_WITH_1_HP", _E.ENDURE, (0, 0, 0)),
     # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
     # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
     # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;

@@ -380,6 +380,13 @@ class EffectId(IntEnum):
     # NUM_SCREEN_TURNS (5) on it (``effects._mist``). BtlCmd_ChangeStatStage
     # (:2875-2882) blocks every drop by another battler while mistTurns is set (B12-23).
     MIST = 104
+    # Endure (116, BATTLE_EFFECT_SURVIVE_WITH_1_HP): zeros. effect_script_0116.s:3 is the same direct
+    # TO_ATTACKER ``MOVE_SUBSCRIPT_PTR_PROTECT`` as Protect (effect_script_0111.s:3), so
+    # ``BtlCmd_TryProtection`` (battle_script.c:5149-5190) and its chain and roll are shared; a
+    # success sets ``turnFlags.enduring`` (:5174-5177, not ``protecting``). ``enduring`` is read at
+    # one site, ``BattleControllerPlayer_UpdateHP`` (battle_controller_player.c:3386-3404;
+    # ``effects.play_hit``, G-65).
+    ENDURE = 105
 
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
@@ -774,8 +781,9 @@ class ItemId(IntEnum):
     * ``LIGHT_CLAY`` (``HOLD_EFFECT_EXTEND_SCREENS``): Reflect / Light Screen last
       ``5 + param`` turns (``effects._screen``, battle_script.c:4229, :4272).
     * ``FOCUS_BAND`` (``HOLD_EFFECT_MAYBE_ENDURE``, param ``FOCUS_BAND_PARAM``): a roll
-      ``RandNext() % 100 < param`` at each damage that reaches ``UpdateHP`` or
-      ``CheckHoldOnWith1HP`` (bcp.c:3386-3389, battle_script.c:9109-9112;
+      ``RandNext() % 100 < param`` at each damage that reaches ``UpdateHP`` (not while the
+      defender is enduring, G-65) or ``CheckHoldOnWith1HP`` (bcp.c:3386-3389,
+      battle_script.c:9109-9112;
       ``Outcome.focus_band`` / ``future_band``, ruling G-1).
     * ``FLAVOR_BERRY`` (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``: Figy, Wiki, Mago, Aguav,
       Iapapa): ``item_param[i, 1]`` is its ``Flavor``; it heals ``Divide(maxHP, param)`` at

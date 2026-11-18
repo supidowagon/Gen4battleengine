@@ -852,6 +852,11 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   Curse user and `opponent_move_refusals` has no "ghost curse" kind. The engine side was
   modelled in E2 batch 8 (B8-5).
 
+- SURVIVE_WITH_1_HP (116, Endure): no Basic entry; `Expert_Endure` (`:3633-3649`, dispatch
+  `:1704`): the AI below 4 % HP **-1**; below 35 % **+1** unless the 70 roll (`:3645`) jumps; at
+  35 % or more the fall-through reaches `Expert_Endure_ScoreMinus1`, **-1**. The engine move is
+  G-65.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

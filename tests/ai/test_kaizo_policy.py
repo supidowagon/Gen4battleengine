@@ -1349,8 +1349,7 @@ def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
     for move in range(1, n_moves):
         r = refused(jnp.int32(move))
         by_move = any(
-            bool(np.asarray(f)[0, 1])
-            for f in (r.move, r.expert, r.calc_damage, r.move_type)
+            bool(np.asarray(f)[0, 1]) for f in (r.move, r.expert, r.calc_damage, r.move_type)
         )
         kinds = policy.opponent_move_refusals(t, move, KAIZO)
         assert bool(kinds) == by_move, (move, kinds)
@@ -3462,7 +3461,9 @@ def test_accuracy_down(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.parametrize("move", ["Minimize", "Double Team"])  # EVA_UP_2_MINIMIZE (108), EVA_UP (16)
+@pytest.mark.parametrize(
+    "move", ["Minimize", "Double Team"]
+)  # EVA_UP_2_MINIMIZE (108), EVA_UP (16)
 @pytest.mark.parametrize(
     ("evasion", "simple", "jumps", "basic", "expert"),
     [
@@ -4390,3 +4391,32 @@ def test_nature_power(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, haras
     assert _delta(t, s, 0x2, 0x3)[0] == 0
     assert _delta(t, s, 0x3, 0x7)[0] == 0
     assert _delta(t, s, 0x5, 0x405, tuple((0, line) for line in jumps))[0] == harass
+
+
+# --- E1 trial batch: Endure (G-65) ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("own_hp", "jumps", "expert"),
+    [
+        # Expert_Endure (script.s:3633-3649): below 4 % -1; below 35 % +1 unless the :3645 roll
+        # jumps; 35 % or more falls through into Expert_Endure_ScoreMinus1 (:3640), -1.
+        (100, (), -1),
+        (35, (), -1),
+        (34, (), 1),
+        (34, (3645,), 0),
+        (20, (), 1),
+        (20, (3645,), 0),
+        (4, (), 1),
+        (3, (), -1),
+        (1, (3645,), -1),
+    ],
+)
+def test_endure(kaizo_tables, kaizo_names, kaizo_roark_party, own_hp, jumps, expert):
+    """SURVIVE_WITH_1_HP (116): no Basic entry (:134-285), Expert_Main :1704."""
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Endure", "Accelerock", "", "")), 1, own_hp
+    )
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert

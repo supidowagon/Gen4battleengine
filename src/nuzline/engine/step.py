@@ -612,6 +612,7 @@ def _empty_events() -> dict:
             "move_cur",
             "dragged",
             "roosted",
+            "endure_ok",
             "phys_taken",
             "spec_taken",
             "last_taken",
@@ -677,6 +678,7 @@ def _use_move(
     entry_poisoned=False,
     entry_status=None,
     pursuit_sync=None,
+    foe_enduring=False,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -688,7 +690,9 @@ def _use_move(
     Protect succeeded earlier this turn (the decomp's ``turnFlags.protecting``, a per-turn
     flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193). ``custap``
     (``bool[2]``): each side's ``moveEffectsData.custapBerry`` from the turn order
-    (``order.custap_flags``). ``foe_roosting``: the foe's Roost succeeded earlier this turn
+    (``order.custap_flags``). ``foe_enduring``: the foe's Endure succeeded earlier this turn
+    (``turnFlags.enduring``, cleared with ``protecting``): ``effects.play_hit``'s UpdateHP read
+    (G-65). ``foe_roosting``: the foe's Roost succeeded earlier this turn
     (``turnFlags.roosting``, cleared at the turn end, battle_lib.c:2231): the type chart of the
     move skips its Flying rows (``damage.chart_types``). ``foe_taken``: the
     physical, special and last damage the user took this turn and each one's attacker as
@@ -1280,12 +1284,18 @@ def _use_move(
     # (outcome.protect; n = 0 never fails) and the user is not the last battler to act
     # (waitingBattlers != 1, bcp.c:881-886: in singles, it acts first): turnFlags.protecting
     # and the count up to PROTECT_CHAIN_MAX; else the count drops to 0 ("But it failed!").
+    # Endure (effect_script_0116.s:3, G-65) is the same script, roll and chain: a success sets
+    # turnFlags.enduring instead of protecting (battle_script.c:5174-5177).
     count = state.protect_count[side].astype(_I32)
-    tried = connected & (tables.move_effect[used] == EffectId.PROTECT)
-    protect_ok = tried & ~target_moved & ((count == 0) | (outcome.protect[side] != 0))
-    protect_failed = tried & ~protect_ok
+    tried_protect = connected & (tables.move_effect[used] == EffectId.PROTECT)
+    tried_endure = connected & (tables.move_effect[used] == EffectId.ENDURE)
+    tried = tried_protect | tried_endure
+    tried_ok = tried & ~target_moved & ((count == 0) | (outcome.protect[side] != 0))
+    protect_ok = tried_protect & tried_ok
+    endure_ok = tried_endure & tried_ok
+    protect_failed = tried & ~tried_ok
     count = jnp.where(
-        protect_ok, jnp.minimum(count + 1, PROTECT_CHAIN_MAX), jnp.where(protect_failed, 0, count)
+        tried_ok, jnp.minimum(count + 1, PROTECT_CHAIN_MAX), jnp.where(protect_failed, 0, count)
     )
     # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = moveCur (Nature Power's called move)
     # when the attack message was shown (the move got past the status checks: can_act), else
@@ -1675,6 +1685,7 @@ def _use_move(
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
+            foe_enduring=foe_enduring,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2015,6 +2026,7 @@ def _use_move(
         "missed": can_act & has_target & ~hit & ~failed & ~blocked,
         "protected": can_act & has_target & blocked & ~failed,
         "protect_ok": protect_ok,
+        "endure_ok": endure_ok,
         "protect_failed": protect_failed,
         "no_target": can_act & ~has_target,
         "hits": hits,
@@ -2135,6 +2147,7 @@ def _act(
     foe=None,
     claw=(False, False),
     pursuit_sync=None,
+    foe_enduring=False,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s action: ``(state, own, foe, ctl)`` with the events of ``_use_move``. A
     switch shows the party slot (``ACT_SWITCH``), an item its item id (``ACT_ITEM``).
@@ -2186,6 +2199,7 @@ def _act(
         entry_poisoned,
         landed,  # the newcomer's BattleMon.status before the list's faint check (G-24)
         pursuit_sync,
+        foe_enduring,
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
@@ -2303,6 +2317,7 @@ def _pursuit_hit(
         power_mul=PURSUIT_POWER_MUL,
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
         pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
+        # subscript_pursuit.s ends in BtlCmd_CheckHoldOnWith1HP, which ignores Endure (G-65).
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
@@ -2455,7 +2470,11 @@ def _execute_actions(
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
     read = _empty_events()
-    for name, field in (("protect_ok", "ts_protect_ok"), ("roosted", "roosting")):
+    for name, field in (
+        ("protect_ok", "ts_protect_ok"),
+        ("endure_ok", "ts_endure_ok"),
+        ("roosted", "roosting"),
+    ):
         read[name] = jnp.where(paused, getattr(state, field).astype(_I32), 0)
     for k, name in enumerate(_TAKEN):
         read[name] = jnp.where(paused, state.ts_taken[:, k].astype(_I32), 0)
@@ -2522,6 +2541,7 @@ def _execute_actions(
         base = jnp.where(resumed, base, _alive_mask(state))
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
         foe_protecting = read["protect_ok"][1 - side] != 0
+        foe_enduring = read["endure_ok"][1 - side] != 0  # turnFlags.enduring (G-65)
         foe_roosting = read["roosted"][1 - side] != 0  # turnFlags.roosting
         # The side's turnFlags damage taken and its attackers (Counter, Metal Burst).
         taken = jnp.stack([read[n][side] for n in _TAKEN])
@@ -2543,6 +2563,7 @@ def _execute_actions(
             pursuer,
             claw=claw,
             pursuit_sync=pursuit_sync,
+            foe_enduring=foe_enduring,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
         ran = (state.over == 0) & ((state.hp[side, state.active[side]] > 0) | ~start)
@@ -2624,6 +2645,7 @@ def _execute_actions(
         "ts_claw": claw & to_come,
         "ts_pursued": pursued,
         "ts_protect_ok": read["protect_ok"],
+        "ts_endure_ok": read["endure_ok"],
         "ts_taken": jnp.stack([read[n] for n in _TAKEN], axis=1),
         "ts_dragged": read["dragged"],
         "ts_move_failed": read["move_failed"],

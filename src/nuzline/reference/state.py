@@ -172,6 +172,7 @@ class RefState:
     ts_claw: list[int]
     ts_pursued: int
     ts_protect_ok: list[int]
+    ts_endure_ok: list[int]
     ts_taken: list[list[int]]
     ts_dragged: list[int]
     ts_move_failed: list[int]

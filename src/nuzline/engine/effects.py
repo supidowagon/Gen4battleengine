@@ -2710,6 +2710,7 @@ def play_hit(
     sub_hit=False,
     pursuit_switch=False,
     foe_claw=False,
+    foe_enduring=False,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-4, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -2731,8 +2732,8 @@ def play_hit(
 
     Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
     damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
-    defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
-    unsupported), or a Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
+    defender holds a Focus Sash at full HP (bcp.c:3391-3393), or a Focus Band
+    (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
     (bcp.c:3387-3389: drawn on every such hit, lethal or not, ``Outcome.focus_band[side,
     hit_index]``, ruling G-1); while it is set, a hit that would KO leaves 1 HP
     (``focus_sash_damage``) and the followup message names the item (``reveal_item``) and
@@ -2741,6 +2742,13 @@ def play_hit(
     takes 0); a holder below full HP at the first hit is never protected. Bide stores the
     capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
     OHKO moves (``MOVE_STATUS_ONE_HIT_KO``, bcp.c:3342), none of which is supported.
+
+    Endure (G-65, ``foe_enduring``: the defender's ``turnFlags.enduring``, set by an earlier
+    Endure this turn, battle_script.c:5174-5177): inside ``if (enduring == 0)`` (bcp.c:3386-3394)
+    the Focus Band roll is not drawn and the Focus Sash is not armed; then ``enduring ||
+    focusItemActivated`` with ``curHP + damage <= 0`` leaves 1 HP (:3396-3404) with
+    ``MOVE_STATUS_ENDURED`` (a message only) when ``enduring``, else ``MOVE_STATUS_ENDURED_ITEM``
+    (the item is named and a Sash removed). An earlier hit's ``focus_armed`` still applies (an OR).
 
     Substitute (bcp.c:3359-3378, B10-4): a defender behind one takes the damage on it instead:
     min(damage, its HP) (``hitDamage``: drain and recoil read it, and shellBellDamageDealt), the
@@ -2828,12 +2836,16 @@ def play_hit(
     full = target_hp == state.max_hp[target_side, target].astype(_I32)
     # Focus Band (bcp.c:3386-3389, ruling G-1): RandNext() % 100 < param on every UpdateHP that
     # reaches the endure checks, lethal or not (Outcome.focus_band).
+    # Endure (G-65): ``if (enduring == 0)`` wraps both the Band roll and the Sash test.
+    enduring = jnp.asarray(foe_enduring, bool)
     band = holds(tables, state, target_side, ItemId.FOCUS_BAND)
-    rolled = band & (outcome.focus_band[side, hit_index] != 0)
-    armed = jnp.asarray(focus_armed) | (real & sash & full) | (real & rolled)
-    capped, endured = focus_sash_damage(state, target_side, damage, armed & real)
+    rolled = band & (outcome.focus_band[side, hit_index] != 0) & ~enduring
+    armed = jnp.asarray(focus_armed) | (real & sash & full & ~enduring) | (real & rolled)
+    # :3396-3404: ``enduring || focusItemActivated``; only the item path is named and consumed.
+    capped, endured_any = focus_sash_damage(state, target_side, damage, (armed | enduring) & real)
+    endured = endured_any & ~enduring
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
-    taken = jnp.where(endured, target_hp - 1, damage)
+    taken = jnp.where(endured_any, target_hp - 1, damage)
     # Secret Power's secondary effect is the terrain's (order.move_effects).
     effect, param = move_effects(tables, state, move)
     move_type = move_type_of(tables, state, side, move)

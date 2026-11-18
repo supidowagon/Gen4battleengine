@@ -15,8 +15,8 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   subscript_future_sight_damage.s:28). The `&&` tests the item first and then draws, before
   any HP test, so the roll is drawn whenever a holder reaches the site, lethal or not. At
   UpdateHP that is every nonzero damage not taken by a substitute (:3346, the substitute
-  returns at :3359-3378), after False Swipe's cap (:3381-3384), while `enduring` is 0 (Endure,
-  the move, is unsupported, so always). The band has no full-HP test (unlike the sash at
+  returns at :3359-3378), after False Swipe's cap (:3381-3384), while `enduring` is 0 (the
+  defender has not used Endure this turn; G-65). The band has no full-HP test (unlike the sash at
   :3391), it sets the same `focusItemActivated` / `endure`, and it is never removed
   (subscript_move_followup_message.s:17 removes only `HOLD_EFFECT_ENDURE`); the "hung on"
   message tags the defender's item (`BattleMessage_ItemTag`, battle_script.c:11736-11744), so
@@ -960,3 +960,22 @@ of them, :2107-2115).
   scoring side is `Basic_CheckPerishSong` (script.s:720-723, -10 against a perishing player),
   ALL_FAINT_3_TURNS (114) transcribed with no Expert entry. Tests: `test_switching.py`,
   `test_kaizo_policy.py`.
+- G-65 Endure (`EffectId.ENDURE`, BATTLE_EFFECT_SURVIVE_WITH_1_HP 116). effect_script_0116.s:3 is
+  Protect's script (effect_script_0111.s:3): `BtlCmd_TryProtection` (battle_script.c:5149-5190), so
+  the chain reset (:5154-5158, Endure counts), the roll (:5167-5168) and the last-actor test
+  (:5160-5165) are shared and Endure and Protect continue each other's chain; a success sets
+  `turnFlags.enduring` (:5174-5177) instead of `protecting`. `enduring` is read at one site,
+  `BattleControllerPlayer_UpdateHP` (battle_controller_player.c:3386-3404), for a damaging hit not
+  taken by a substitute, after False Swipe's cap: `if (enduring == 0)` wraps both the Focus Band roll
+  (:3387-3389, not drawn) and the Focus Sash test (:3391-3393, not armed); then
+  `enduring || focusItemActivated` with `curHP + damage <= 0` leaves 1 HP (:3396-3404), as
+  `MOVE_STATUS_ENDURED` (a message only; no item is named or removed) when enduring, else
+  `MOVE_STATUS_ENDURED_ITEM`. An earlier hit's `focusItemActivated` still applies (an OR), so an
+  enduring hit after it is `ENDURED` too. `BtlCmd_CheckHoldOnWith1HP` (:9098-9124: the confusion
+  self-hit, Pursuit's pre-switch hit, Future Sight) and every non-UpdateHP damage (poison, weather,
+  recoil, Curse) ignore Endure. Built as the `endure_ok` event and `ts_endure_ok` paused-turn field
+  (beside `protect_ok`), read as `foe_enduring` by `effects.play_hit`; the reference `_Turn.enduring`.
+  Pursuit's hit does not pass it (subscript_pursuit.s:35 is CheckHoldOnWith1HP). AI: `Expert_Endure`
+  (script.s:3633-3649, dispatch :1704): below 4 % HP -1; below 35 % +1 unless the 70 roll (:3645)
+  jumps; else -1 (the fall-through at :3638 reaches :3640); no Basic entry. Tests:
+  `test_e1_trial.py`, `test_kaizo_policy.py`.

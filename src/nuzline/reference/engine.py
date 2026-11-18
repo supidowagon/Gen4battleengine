@@ -217,6 +217,8 @@ class _Turn:
     sub_hit: bool = False
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
+    # turnFlags.enduring (Endure, G-65): TryProtection succeeded for effect 116, same lifetime.
+    enduring: list[bool] = field(default_factory=lambda: [False, False])
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
     # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
     roosting: list[bool] = field(default_factory=lambda: [False, False])
@@ -415,6 +417,8 @@ def _armored(s: RefState, attacker: int, defender: int) -> bool:
 def _iron_ball(tables, mon: RefPokemon) -> bool:
     """``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` (``Battler_HeldItemEffect``), G-56."""
     return _item_effect(tables, mon) == ItemId.IRON_BALL
+
+
 # sCriticalStageRates (lib.c:7097-7103): 1 in N at stage 0..4.
 _CRIT_RATES = (16, 8, 4, 3, 2)
 
@@ -1895,16 +1899,19 @@ def _held_item_hp(turn: _Turn, s: RefState, side: int) -> None:
     _held_item(turn, s, side)
 
 
-def _focus_sash(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> int:
+def _focus_sash(
+    turn: _Turn, s: RefState, side: int, damage: int, armed: bool, enduring: bool = False
+) -> int:
     """The HP ``side``'s active Pokemon loses to ``damage``: ``armed`` (a Focus Sash
-    activation) and ``curHP + damage <= 0`` leave 1 HP (bcp.c:3396-3404,
-    ``BtlCmd_CheckHoldOnWith1HP`` script.c:9119-9122), and
+    activation) or ``enduring`` (Endure, UpdateHP only) and ``curHP + damage <= 0`` leave 1 HP
+    (bcp.c:3396-3404, ``BtlCmd_CheckHoldOnWith1HP`` script.c:9119-9122), and
     ``subscript_move_followup_message.s:12-19`` removes the item while it still is a
-    Focus Sash."""
+    Focus Sash (``MOVE_STATUS_ENDURED_ITEM``; an enduring hit is ``MOVE_STATUS_ENDURED``: no
+    item is touched)."""
     mon = _active(s, side)
-    if not (armed and damage > 0 and mon.hp - damage <= 0):
+    if not ((armed or enduring) and damage > 0 and mon.hp - damage <= 0):
         return damage
-    if _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
+    if not enduring and _item_effect(turn.tables, mon) == ItemId.FOCUS_SASH:
         mon.item_consumed = mon.item
         mon.item = 0
         _forget_item(s, side)
@@ -1923,11 +1930,14 @@ def _band_rolls(turn: _Turn, s: RefState, side: int, roll: int) -> bool:
     return _item_effect(turn.tables, _active(s, side)) == ItemId.FOCUS_BAND and bool(roll)
 
 
-def _hung_on(turn: _Turn, s: RefState, side: int, damage: int, armed: bool) -> None:
+def _hung_on(
+    turn: _Turn, s: RefState, side: int, damage: int, armed: bool, enduring: bool = False
+) -> None:
     """subscript_move_followup_message.s:12-16 (future_sight_damage.s:39-44): an endured hit's
-    message names the item of ``side``'s battler (``_reveal_item``) before a sash goes."""
+    message names the item of ``side``'s battler (``_reveal_item``) before a sash goes; an
+    enduring hit (``MOVE_STATUS_ENDURED``, Endure) names none."""
     mon = _active(s, side)
-    if armed and damage > 0 and mon.hp - damage <= 0:
+    if armed and not enduring and damage > 0 and mon.hp - damage <= 0:
         _reveal_item(s, side)
 
 
@@ -3421,17 +3431,20 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     if landed and hits_foe and not sub_dealt:
         # BattleControllerPlayer_UpdateHP (bcp.c:3346-3404) runs for a non-zero damage:
         # a Focus Sash at full HP sets focusItemActivated, which lasts the whole action.
-        if damage > 0 and _sash_at_full_hp(turn, s, target):
+        # Endure (G-65): both tests sit inside ``if (enduring == 0)`` (bcp.c:3386-3394).
+        enduring = turn.enduring[target]
+        if damage > 0 and not enduring and _sash_at_full_hp(turn, s, target):
             turn.focus_armed = True
         # bcp.c:3387-3389 (G-1): a Focus Band's roll on every such UpdateHP, lethal or not.
-        if damage > 0 and _band_rolls(turn, s, target, o.focus_band[side][hit]):
+        if damage > 0 and not enduring and _band_rolls(turn, s, target, o.focus_band[side][hit]):
             turn.focus_armed = True
         # bcp.c:3381-3384, before the endure checks: False Swipe leaves 1 HP.
         swipe = _t(tables, "move_effect", move) == EffectId.FALSE_SWIPE
         if swipe and damage > 0 and damage >= target_mon.hp:
             damage = target_mon.hp - 1
-        _hung_on(turn, s, target, damage, turn.focus_armed)
-        taken = _focus_sash(turn, s, target, damage, turn.focus_armed)  # battleCtx->damage
+        _hung_on(turn, s, target, damage, turn.focus_armed, enduring)
+        # battleCtx->damage, after bcp.c:3396-3404's ``enduring || focusItemActivated``
+        taken = _focus_sash(turn, s, target, damage, turn.focus_armed, enduring)
         if update_hp:  # shellBellDamageDealt (bcp.c:3427-3431): capped at the target's HP
             turn.shell_dealt += min(taken, target_mon.hp)
         # physical / specialDamageTaken (bcp.c:3411-3424): nonzero damage after the caps,
@@ -4228,13 +4241,18 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
     # effect_script_0111.s (Protect, Detect) -> subscript_protect.s -> BtlCmd_TryProtection
     # (script.c:5149-5190). The moveProtect reset (:5154-5158) is folded into protect_count
     # at the end of each action (ref_step). The roll comes first, then the last-to-act test
-    # (waitingBattlers, bcp.c:881-886: the battler acting second is the last).
-    if effect == EffectId.PROTECT:
+    # (waitingBattlers, bcp.c:881-886: the battler acting second is the last). Endure
+    # (effect_script_0116.s:3, G-65) is the same script: a success sets turnFlags.enduring
+    # (:5174-5177) instead of protecting.
+    if effect in (EffectId.PROTECT, EffectId.ENDURE):
         sd = s.sides[side]
         n = sd.protect_count
         passes = n == 0 or o.protect[side] != 0  # PROTECT_SUCCESS_RATE[n] >= RandNext()
         if passes and not target_moved:
-            turn.protecting[side] = True
+            if effect == EffectId.ENDURE:
+                turn.enduring[side] = True
+            else:
+                turn.protecting[side] = True
             sd.protect_count = min(n + 1, len(PROTECT_SUCCESS_RATE) - 1)
         else:
             sd.protect_count = 0
@@ -5624,6 +5642,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_claw = [int(f) for f in turn.claw]
     s.ts_pursued = turn.pursued
     s.ts_protect_ok = [int(f) for f in turn.protecting]
+    s.ts_endure_ok = [int(f) for f in turn.enduring]
     _set_roosting(s, _roosting(s, turn))
     s.ts_taken = [list(row) for row in turn.taken]
     s.ts_dragged = list(turn.dragged)
@@ -5646,7 +5665,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_acted": [0, 0], "ts_order": [0, 0], "ts_actions": [0, 0],
     "ts_move": [0, 0], "ts_struggling": [0, 0], "ts_locked": [0, 0], "ts_item": [0, 0],
-    "ts_custap": [0, 0], "ts_claw": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0],
+    "ts_custap": [0, 0], "ts_claw": [0, 0], "ts_pursued": 0, "ts_protect_ok": [0, 0], "ts_endure_ok": [0, 0],
     "ts_taken": [[0] * 6, [0] * 6], "ts_dragged": [0, 0], "ts_move_failed": [0, 0],
     "ts_used": 0, "ts_damaged": 0, "ts_dealt": 0, "ts_alive": [0, 0], "ts_power_mul": 0,
     "ts_switched": [0, 0], "ts_pick_mul": 0,
@@ -5672,6 +5691,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.claw = [bool(f) for f in s.ts_claw]
     turn.pursued = s.ts_pursued
     turn.protecting = [bool(f) for f in s.ts_protect_ok]
+    turn.enduring = [bool(f) for f in s.ts_endure_ok]
     turn.roosting = [bool(sd.roosting) for sd in s.sides]
     turn.taken = [list(row) for row in s.ts_taken]
     turn.dragged = list(s.ts_dragged)

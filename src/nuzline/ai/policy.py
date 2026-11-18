@@ -3036,6 +3036,21 @@ def _expert_rest(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | t | ctx.live))
 
 
+def _expert_endure(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Endure`` (script.s:3633-3649): the attacker below 4 % HP -1 (:3637); below 35 %
+    +1 unless the 70 roll jumps (:3638, :3645); at 35 % or more the fall-through reaches
+    ``Expert_Endure_ScoreMinus1`` (:3640, no ``GoTo`` after :3638), -1."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 4))
+    ctx, plus1 = _split(c.if_hp_percent_less_than(ctx, _A, 35))
+    # Expert_Endure_ScoreMinus1 (:3640), then GoTo Expert_Endure_End (:3642)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1 | ctx.live), -1))
+    # Expert_Endure_TryScorePlus1 (:3644)
+    ctx, end = _split(c.if_random_less_than(_at(ctx, plus1), 70, 3645))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _expert_heal_bell(ctx: AiContext, mask) -> AiContext:
     """``Expert_HealBell`` (script.s:3398-3406): -5 unless the AI or a party member with HP has
     a status, B12-18."""
@@ -3299,6 +3314,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
+    (BattleEffect.SURVIVE_WITH_1_HP, _expert_endure),  # :1704
     (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.HEAL_HALF_MORE_IN_SUN, _expert_synthesis),  # :1707 (B12-18)
@@ -3700,9 +3716,7 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
 
 
-def opponent_move_refusals(
-    tables: Tables, move: int, layout: AiLayout
-) -> list[str]:
+def opponent_move_refusals(tables: Tables, move: int, layout: AiLayout) -> list[str]:
     """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
     whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
     ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"not in the fight's

@@ -124,7 +124,7 @@ class Outcome(NamedTuple):
     shed_skin: jnp.ndarray  # int8[2], Shed Skin's RandNext() % 10 < 3
     fang_flinch: jnp.ndarray  # int8[2], Thunder Fang's flinch roll (secondary is its paralysis)
     present: jnp.ndarray  # int8[2], Present: 0/1/2 = power 40/80/120, PRESENT_HEAL = the heal
-    protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect roll passes (PROTECT_RATES)
+    protect: jnp.ndarray  # int8[2], 1 = the Protect / Detect / Endure roll passes (PROTECT_RATES)
     infatuation: jnp.ndarray  # int8[2], 1 = immobilized by love (RandNext() & 1 == 0)
     tri_attack: jnp.ndarray  # int8[2], Tri Attack's status 0/1/2 (ids.TRI_ATTACK_STATUSES)
     roar_level: jnp.ndarray  # int8[2], 1 = Roar's level check passes (BattleSystem_CanWhirlwind)
@@ -1399,7 +1399,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         present=present_kind(
             jax.random.randint(jax.random.fold_in(key, 17), per_side, 0, 256, dtype=_I32)
         ),
-        # BtlCmd_TryProtection (battle_script.c:5167): RandNext() <= the rate of the user's
+        # BtlCmd_TryProtection (battle_script.c:5167; Protect, Detect and Endure share it, G-65):
+        # RandNext() <= the rate of the user's
         # turn-start chain (the chain cannot change before its own action; the reset of a
         # chain broken by another move is folded into protect_count, step._use_move).
         protect=jax.random.randint(jax.random.fold_in(key, 18), per_side, 0, 65536, dtype=_I32)

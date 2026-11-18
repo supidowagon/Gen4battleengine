@@ -700,8 +700,10 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PRESENT,
     # Changes the user's protect_count and the turn's protecting flag: no damage input. A
     # success removes the later hit altogether (step._use_move: it does not connect), so
-    # whatever (crit, roll) class the hit would have drawn, the state is the same.
+    # whatever (crit, roll) class the hit would have drawn, the state is the same. Endure
+    # (G-65) shares the roll and the chain; its flag changes the foe's HP only through the cap.
     _E.PROTECT,
+    _E.ENDURE,
     # Sets the foe's infatuated, read only by its attract check, which comes before its move
     # and removes the hit altogether (step._use_move), like a flinch: no damage input.
     _E.ATTRACT,
@@ -1153,6 +1155,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.AQUA_RING,
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
+    _E.ENDURE,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
     _E.ROAR,  # a status move: no damage
@@ -1663,7 +1666,7 @@ def outcome_laws(
         "flinch_item": lands & (damaging & kings_move & (kings_rock > 0))[:, None],
         "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
-        "protect": uses_move & (effect == _E.PROTECT) & (state.protect_count > 0),
+        "protect": uses_move & _any_of(effect, (_E.PROTECT, _E.ENDURE)) & (state.protect_count > 0),
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
@@ -2048,6 +2051,7 @@ def outcome_laws(
         fang=fang,
         present=off if loose else uses_move & (effect == _E.PRESENT),
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
+        # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
         protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
         roar=off if loose else roar,

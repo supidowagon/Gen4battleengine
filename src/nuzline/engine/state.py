@@ -381,6 +381,7 @@ class BattleState(NamedTuple):
     ts_claw: jnp.ndarray  # int8[2], moveEffectsData.quickClaw from the turn order (B10-6)
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
     ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
+    ts_endure_ok: jnp.ndarray  # int8[2], turnFlags.enduring (Endure, G-65)
     ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
     ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
     ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
@@ -670,6 +671,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_claw": (_SIDE, np.int8),
     "ts_pursued": (_FIELD, np.int8),
     "ts_protect_ok": (_SIDE, np.int8),
+    "ts_endure_ok": (_SIDE, np.int8),
     "ts_taken": ((SIDES, 6), np.int16),
     "ts_dragged": (_SIDE, np.int8),
     "ts_move_failed": (_SIDE, np.int8),
