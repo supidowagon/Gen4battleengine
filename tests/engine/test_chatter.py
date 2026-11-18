@@ -36,13 +36,17 @@ def _roll(**fields):
 
 
 def test_chatter_is_mapped_and_its_table_chance_is_unread(tables, names, kaizo_tables, kaizo_names):
+    """The tables keep the ROM's chance (vanilla 0, Kaizo 50); the battle reads none for the
+    ON_HIT-only script (``outcome.read_chance``, battle_lib.c:1524-1529, G-70)."""
+    from nuzline.engine.outcome import read_chance
     from tools.effect_map import DECOMP_EFFECT_TO_ID
 
     assert DECOMP_EFFECT_TO_ID[267] == (EffectId.CHATTER, (0, 0, 0))
-    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+    for t, n, rom in ((tables, names, 0), (kaizo_tables, kaizo_names, 50)):
         m = n.move("Chatter")
         assert int(t.move_effect[m]) == EffectId.CHATTER
-        assert int(t.move_effect_chance[m]) == 0  # Kaizo's 50 is never read (G-70)
+        assert int(t.move_effect_chance[m]) == rom
+        assert int(read_chance(t, m)) == 0
         assert int(t.move_effect[m]) == int(t.move_effect[448])
     assert SPECIES_CHATOT == names.species("Chatot")
 

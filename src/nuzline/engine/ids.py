@@ -415,6 +415,14 @@ MAGNET_RISE_TURNS = 5
 # FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
 # (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
 GRAVITY_TURNS = 5
+# The effects whose script sets only ``MOVE_SIDE_EFFECT_ON_HIT`` in its indirect flags and rolls
+# nothing through ``effectChance``: BattleSystem_TriggerSecondaryEffect's ON_HIT branch
+# (battle_lib.c:1524-1529) runs the subscript with no ``RandNext() % 100 < effectChance`` (only
+# the PROBABILISTIC branch, :1549-1567, the bare-flags one, :1568-1585, and
+# BtlCmd_CheckEffectActivation, battle_script.c:8366-8381, read it). Chatter
+# (effect_script_0267.s:5) draws its own roll (CheckChatterActivation, :8397-8436), so its move
+# row's effect_chance (Kaizo 50) is never read: ``outcome.read_chance`` is 0 for these (G-70).
+ON_HIT_EFFECTS = (EffectId.CHATTER,)
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
 COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3

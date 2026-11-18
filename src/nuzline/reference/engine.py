@@ -73,6 +73,7 @@ from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     MOVE_U_TURN,
     NATURE_DISLIKED_FLAVOR,
+    ON_HIT_EFFECTS,
     POWER_IF_TARGET_HALF_HP,
     POWER_IF_TARGET_MOVED,
     POWER_IF_TARGET_PARALYZED,
@@ -2849,7 +2850,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             effect = EffectId.PLAIN
         else:
             effect, (p0, p1, _) = SECRET_POWER_EFFECTS[row]
-    chance = _t(tables, "move_effect_chance", move)
+    # The chance the battle reads: none for an ON_HIT-only script (ids.ON_HIT_EFFECTS,
+    # lib.c:1524-1529).
+    on_hit = _t(tables, "move_effect", move) in ON_HIT_EFFECTS
+    chance = 0 if on_hit else _t(tables, "move_effect_chance", move)
     certain = chance == 0
     proc = certain or o.secondary[side][hit] != 0
     target_alive = _active(s, target).hp > 0

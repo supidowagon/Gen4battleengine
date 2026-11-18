@@ -1157,9 +1157,10 @@ of them, :2107-2115).
   Substitute :23, no Safeguard :26; the counter is `Outcome.duration`, drawn only when the roll passes:
   `enumerate._chatter_reads`). Kaizo's move row changed (power 120, pp 5,
   RANGE_ALL_ADJACENT, effect_chance 50 against vanilla 60 / pp 20 / 0): the chance is never read (the ON_HIT
-  branch reads no `effectChance`, battle_lib.c:1524-1529), so `tools/build_tables.py` writes
-  `move_effect_chance = 0` for effect 267 in both games, else the engine's `secondary_chance` would roll a phantom
-  50 %. The cry parameter is per battler, a battle constant (`BattleState.chatot_cry`, like `terrain`):
+  branch reads no `effectChance`, battle_lib.c:1524-1529; only the PROBABILISTIC and bare-flags branches,
+  :1549-1585, and `BtlCmd_CheckEffectActivation`, battle_script.c:8366-8381, do), so the tables keep the ROM's
+  row and the engine reads it through `outcome.read_chance`, 0 for an `ids.ON_HIT_EFFECTS` script (Chatter),
+  else the engine's `secondary_chance` would roll a phantom 50 %. The cry parameter is per battler, a battle constant (`BattleState.chatot_cry`, like `terrain`):
   `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads `chatotCries[battler]`; `FieldBattleDTO` creates
   every cry with `ChatotCry_New` (`valid = FALSE`, field_battle_data_transfer.c:97, chatot_cry.c:13-25) and only
   `BATTLER_PLAYER_1` gets the save's (:260, :319, :385), and an invalid cry gives 0 (sound_chatot.c:193-200): an

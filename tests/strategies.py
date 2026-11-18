@@ -50,7 +50,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
     BAG_SLOTS,
     MAX_DEATH_BUDGET,
@@ -2158,7 +2158,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         # acts on (Serene Grace: a secondary effect; Reckless: a recoil move; Technician: power
         # 60 or less), is used one draw in two, like the items' moves below.
         kinds = np.asarray(tables.move_type)[moves]
-        chance = np.asarray(tables.move_effect_chance)[moves]
+        chance = np.asarray(read_chance(tables, jnp.asarray(moves)))
         abilities = np.asarray(state.ability)[np.arange(2), np.asarray(state.active)]
         aimed = {
             AbilityId.DRY_SKIN: (Type.WATER, Type.FIRE),

@@ -286,6 +286,7 @@ from nuzline.engine.outcome import (
     future_thresholds,
     hit_thresholds,
     pivot_view,
+    read_chance,
     roar_inputs,
     roar_levels,
     secondary_chance,
@@ -1549,7 +1550,7 @@ def outcome_laws(
     foe_moves = uses_move[::-1]  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = moves[::-1]
-    chance = tables.move_effect_chance[moves].astype(_I32)
+    chance = read_chance(tables, moves)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
     # No crit, no roll for a script without CalcCrit / CalcDamage (ids.UNROLLED_EFFECTS:
     # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)

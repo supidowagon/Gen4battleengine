@@ -43,6 +43,7 @@ from nuzline.engine.outcome import (
     hit_threshold,
     hit_thresholds,
     outcome_to_py,
+    read_chance,
 )
 from nuzline.engine.state import BattleState, make_state
 from nuzline.engine.step import step, step_events
@@ -431,7 +432,7 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
     # Serene Grace doubles effectChance (battle_lib.c:1552-1556, :1571-1575; battle_script.c:
     # 8369-8373), then RandNext() % 100 < chance.
     grace = int(state.ability[side, int(state.active[side])]) == AbilityId.SERENE_GRACE
-    chance = int(tables.move_effect_chance[move]) * (2 if grace else 1)
+    chance = int(read_chance(tables, move)) * (2 if grace else 1)
     if name == "secondary":
         return coin(Fraction(1) if chance == 0 else Fraction(min(chance, 100), 100))
     if name == "fang_flinch":  # the second CheckEffectActivation (battle_script.c:8377)

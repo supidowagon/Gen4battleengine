@@ -64,7 +64,7 @@ from nuzline.engine.damage import (
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
-from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, read_chance
 from nuzline.engine.state import LAYOUT, MOVES, SLOTS, BattleState, make_state
 from nuzline.engine.step import needs_replacement, replace, step
 from nuzline.saves.save import SaveFile
@@ -726,7 +726,7 @@ class _Turn:
                 continue
             move = int(used_move(tables, state, side, actions[side]))
             effect = int(tables.move_effect[move])
-            chance = int(tables.move_effect_chance[move])
+            chance = int(read_chance(tables, move))
             per_hit = (side, slice(None))
             if chance == 0:
                 fixed.append(("secondary", per_hit, 1))  # applies on every hit

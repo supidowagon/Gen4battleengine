@@ -308,7 +308,7 @@ from nuzline.engine.ids import (
     sleepless,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
-from nuzline.engine.outcome import Outcome, crit_lands
+from nuzline.engine.outcome import Outcome, crit_lands, read_chance
 from nuzline.engine.state import MOVES, STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
@@ -3124,7 +3124,7 @@ def play_hit(
         > 0
     ) & ~ground_immune(tables, state, side, target_side, move_type)
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
-    chance = tables.move_effect_chance[move]
+    chance = read_chance(tables, move)
     h = _Hit(
         side=side,
         target_side=target_side,

@@ -55,6 +55,7 @@ from nuzline.engine.damage import (
 from nuzline.engine.ids import (
     CHATTER_CHANCES,
     FOCUS_BAND_PARAM,
+    ON_HIT_EFFECTS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     AbilityId,
@@ -978,12 +979,22 @@ def armored(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return jnp.stack(out)
 
 
+def read_chance(tables: Tables, moves) -> jnp.ndarray:
+    """``int32`` per move of ``moves``: the ``effectChance`` the battle reads,
+    ``tables.move_effect_chance`` (the ROM's move row), 0 for an ``ids.ON_HIT_EFFECTS`` move,
+    whose script never reads it (battle_lib.c:1524-1529)."""
+    moves = jnp.asarray(moves, _I32)
+    on_hit = jnp.isin(tables.move_effect[moves], jnp.asarray(ON_HIT_EFFECTS, _I32))
+    return jnp.where(on_hit, 0, tables.move_effect_chance[moves].astype(_I32))
+
+
 def secondary_chance(tables: Tables, state: BattleState, moves) -> jnp.ndarray:
     """``int32[2]``: each side's ``effectChance`` (``tables.move_effect_chance``), doubled for
     a Serene Grace attacker (``Battler_Ability``): ``BattleSystem_TriggerSecondaryEffect``
     (battle_lib.c:1552-1556, :1571-1575) and ``BtlCmd_CheckEffectActivation`` (battle_script.c:
-    8369-8373); 0 (an ``ON_HIT`` effect) stays 0. A roll ``RandNext() % 100 < chance``."""
-    chance = tables.move_effect_chance[moves].astype(_I32)
+    8369-8373); 0 (an ``ON_HIT`` effect, ``read_chance``) stays 0. A roll
+    ``RandNext() % 100 < chance``."""
+    chance = read_chance(tables, moves)
     grace = state.ability[jnp.arange(2), state.active] == AbilityId.SERENE_GRACE
     return jnp.where(grace, chance * 2, chance)
 

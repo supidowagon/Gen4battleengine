@@ -74,8 +74,8 @@ Encodings:
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
   name abilities the engine does not implement.
-* ``move_effect_chance`` of Chatter (decomp effect 267) is 0 in both games: its confusion is an
-  ON_HIT effect with its own roll, so the table's chance (Kaizo 50) is never read (G-70).
+* ``move_effect_chance`` is the move row's as stored (the ROM's); the engine reads it through
+  ``outcome.read_chance``, 0 for an ON_HIT-only script such as Chatter's (G-70).
 * ``gravity_rearm`` (int8 scalar): 1 in Kaizo, where the patched sub_seq 238 sets Gravity again
   when its counter runs out (Gravity never ends), 0 in vanilla (E1 trial batch, G-67).
 * ``ai_policy`` (int8 scalar): the game's trainer-AI policy, the index of
@@ -655,14 +655,7 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "move_priority": _arr([m["priority"] for m in moves], np.int8, "priority"),
         "move_target": _arr([MOVE_TARGETS.index(m["target"]) for m in moves], np.int8, "target"),
         "move_effect": _arr([e for e, _ in effects], np.int16, "effect"),
-        # Chatter's chance (Kaizo 50, vanilla 0) is never read: its confusion is an ON_HIT indirect
-        # effect with its own roll (battle_lib.c:1524-1529, G-70), so the engine's ``secondary_chance``
-        # must not roll a phantom one.
-        "move_effect_chance": _arr(
-            [0 if m["effect"] == 267 else m["effect_chance"] for m in moves],
-            np.int8,
-            "chance",
-        ),
+        "move_effect_chance": _arr([m["effect_chance"] for m in moves], np.int8, "chance"),
         "move_ai_effect": _arr([m["ai_effect"] for m in moves], np.int16, "ai effect"),
         "move_param": _arr([p for _, p in effects], np.int16, "move param"),
         "move_flags": _arr(
