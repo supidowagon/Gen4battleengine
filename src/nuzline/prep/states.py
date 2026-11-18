@@ -19,6 +19,7 @@ import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for j
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_UNKNOWN
+from nuzline.engine.format import SINGLES
 from nuzline.engine.hooks import battle_start
 from nuzline.engine.ids import Weather
 from nuzline.engine.state import LAYOUT, BattleState, initial_arrays, protected_mask
@@ -56,7 +57,7 @@ def make_states(
     rows = []
     for i, team in enumerate(teams):
         a = initial_arrays(
-            tables, list(team), list(opp), start_condition, opp_items, terrain=terrain
+            SINGLES, tables, [list(team), list(opp)], start_condition, opp_items, terrain=terrain
         )
         a["faint_budget"][...] = budget
         a["protected"][...] = protected_mask(

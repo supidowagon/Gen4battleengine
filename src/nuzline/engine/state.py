@@ -1,7 +1,7 @@
 """The battle state pytree and its construction from two parties.
 
-``BattleState`` is unbatched: side axis 0 is the player, 1 the opponent; slot axis
-is party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
+``BattleState`` is unbatched: the party axis (0 the player, 1 the opponent) and the battler axis
+(singles: the same two) lead the arrays, then the slot axis in party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
 ``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
 ruling D1). The field list is ticked off against the decomp's battle structs in
 ``STATE.md``.
@@ -227,6 +227,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
+from nuzline.engine.format import SINGLES, Format, format_of, party
 from nuzline.engine.ids import AbilityId, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
@@ -246,7 +247,7 @@ _STAGE_KEYWORDS = {
 
 
 class BattleState(NamedTuple):
-    # per side x slot [2,6]
+    # per party x slot [P,6]
     species: jnp.ndarray  # int16
     form: jnp.ndarray  # int8
     level: jnp.ndarray  # int8
@@ -269,7 +270,7 @@ class BattleState(NamedTuple):
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
     friendship: jnp.ndarray  # int16
     ivs: jnp.ndarray  # int8[2,6,6], ids.Stat order
-    # per side, active Pokemon [2]
+    # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
     stages: jnp.ndarray  # int8[2,8], index ids.Stat, 0 = neutral
     confusion: jnp.ndarray  # int8, turns left
@@ -328,7 +329,7 @@ class BattleState(NamedTuple):
     power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
-    # per side [2]
+    # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
     stealth_rock: jnp.ndarray  # int8
@@ -409,7 +410,7 @@ class BattleState(NamedTuple):
     ts_assurance: jnp.ndarray  # int8[2], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
-        return self._replace(hp=self.hp.at[side, slot].set(hp))
+        return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
 
     def with_stages(self, side: int, **stages: int) -> BattleState:
         """Set (not add) the active Pokemon's stages; keywords atk, def_, spa, spd,
@@ -424,12 +425,14 @@ class BattleState(NamedTuple):
         return self._replace(stages=new)
 
     def with_pp(self, side: int, slot: int, pp_list: Sequence[int]) -> BattleState:
-        return self._replace(pp=self.pp.at[side, slot].set(jnp.asarray(pp_list, jnp.int8)))
+        row = party(format_of(self), side)
+        return self._replace(pp=self.pp.at[row, slot].set(jnp.asarray(pp_list, jnp.int8)))
 
     def with_status(self, side: int, slot: int, status: int, counter: int = 0) -> BattleState:
+        row = party(format_of(self), side)
         return self._replace(
-            status=self.status.at[side, slot].set(status),
-            status_counter=self.status_counter.at[side, slot].set(counter),
+            status=self.status.at[row, slot].set(status),
+            status_counter=self.status_counter.at[row, slot].set(counter),
         )
 
     def with_budget(self, k: int = 0, protected: Sequence[int] = ()) -> BattleState:
@@ -547,87 +550,90 @@ BATON_PASSED_FIELDS = (
 )
 
 
-# Shape and storage dtype of every field, in BattleState order.
-_SLOT, _SIDE, _FIELD = (SIDES, SLOTS), (SIDES,), ()
-LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
-    "species": (_SLOT, np.int16),
-    "form": (_SLOT, np.int8),
-    "level": (_SLOT, np.int8),
-    "hp": (_SLOT, np.int16),
-    "max_hp": (_SLOT, np.int16),
-    "stats": ((*_SLOT, 5), np.int16),
-    "types": ((*_SLOT, 2), np.int8),
-    "ability": (_SLOT, np.int16),
-    "ability_slot": (_SLOT, np.int8),
-    "ability_form": (_SLOT, np.int8),
-    "item": (_SLOT, np.int16),
-    "item_consumed": (_SLOT, np.int16),
-    "knocked_off": (_SLOT, np.int8),
-    "moves": ((*_SLOT, MOVES), np.int16),
-    "pp": ((*_SLOT, MOVES), np.int8),
-    "pp_ups": ((*_SLOT, MOVES), np.int8),
-    "status": (_SLOT, np.int8),
-    "status_counter": (_SLOT, np.int8),
-    "gender": (_SLOT, np.int8),
-    "friendship": (_SLOT, np.int16),
-    "ivs": ((*_SLOT, 6), np.int8),
-    "active": (_SIDE, np.int8),
-    "stages": ((SIDES, 8), np.int8),
-    "confusion": (_SIDE, np.int8),
-    "leech_seed": (_SIDE, np.int8),
-    "substitute_hp": (_SIDE, np.int16),
-    "taunt": (_SIDE, np.int8),
-    "trapped": (_SIDE, np.int8),
-    "trap_move": (_SIDE, np.int16),
-    "flinched": (_SIDE, np.int8),
-    "choice_lock": (_SIDE, np.int16),
-    "last_move": (_SIDE, np.int16),
-    "protect_count": (_SIDE, np.int8),
-    "rollout_count": (_SIDE, np.int8),
-    "charge_turn": (_SIDE, np.int8),
-    "recharge": (_SIDE, np.int8),
-    "pursuit_target": (_SIDE, np.int8),
-    "water_sport": (_SIDE, np.int8),
-    "fake_out_turn": (_SIDE, np.int16),
-    "move_hit": (_SIDE, np.int16),
-    "foresight": (_SIDE, np.int8),
-    "disabled_move": (_SIDE, np.int16),
-    "disable_turns": (_SIDE, np.int8),
-    "encore_move": (_SIDE, np.int16),
-    "encore_slot": (_SIDE, np.int8),
-    "encore_turns": (_SIDE, np.int8),
-    "locked_move": (_SIDE, np.int16),
-    "bide_turns": (_SIDE, np.int8),
-    "bide_damage": (_SIDE, np.int16),
-    "curled": (_SIDE, np.int8),
-    "mud_sport": (_SIDE, np.int8),
-    "aqua_ring": (_SIDE, np.int8),
-    "infatuated": (_SIDE, np.int8),
-    "destiny_bond": (_SIDE, np.int8),
-    "uproar": (_SIDE, np.int8),
-    "curse": (_SIDE, np.int8),
-    "perish_song": (_SIDE, np.int8),
-    "perish_song_turns": (_SIDE, np.int8),
-    "yawn": (_SIDE, np.int8),
-    "lock_on": (_SIDE, np.int8),
-    "lock_on_target": (_SIDE, np.int8),
-    "ingrain": (_SIDE, np.int8),
-    "mean_look": (_SIDE, np.int8),
-    "mean_look_target": (_SIDE, np.int8),
-    "imprison": (_SIDE, np.int8),
-    "imprisoned": (_SIDE, np.int8),
-    "roosting": (_SIDE, np.int8),
-    "can_unburden": (_SIDE, np.int8),
-    "recycle_item": (_SIDE, np.int16),
-    "minimized": (_SIDE, np.int8),
-    "semi_invulnerable": (_SIDE, np.int8),
-    "micle": (_SIDE, np.int8),
-    "metronome_turns": (_SIDE, np.int8),
-    "metronome_move": (_SIDE, np.int16),
-    "focus_energy": (_SIDE, np.int8),
-    "power_trick": (_SIDE, np.int8),
-    "power_trick_desync": (_SIDE, np.int8),
-    "embargo": (_SIDE, np.int8),
+# Shape key and storage dtype of every field, in BattleState order: per party slot [P, 6]
+# (``_MON``), per battler [B], per side [2], per party [P], or a scalar (docs/kaizo/
+# e2-mechanics-ledger.md "D1: change plan", field decisions).
+# A shape key names its leading axes: "P" parties, "B" battlers; ``layout(fmt)`` fills them in.
+_MON, _BATTLER, _PARTY, _SIDE, _FIELD = ("P", SLOTS), ("B",), ("P",), (SIDES,), ()
+_KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
+    "species": (_MON, np.int16),
+    "form": (_MON, np.int8),
+    "level": (_MON, np.int8),
+    "hp": (_MON, np.int16),
+    "max_hp": (_MON, np.int16),
+    "stats": ((*_MON, 5), np.int16),
+    "types": ((*_MON, 2), np.int8),
+    "ability": (_MON, np.int16),
+    "ability_slot": (_MON, np.int8),
+    "ability_form": (_MON, np.int8),
+    "item": (_MON, np.int16),
+    "item_consumed": (_MON, np.int16),
+    "knocked_off": (_MON, np.int8),
+    "moves": ((*_MON, MOVES), np.int16),
+    "pp": ((*_MON, MOVES), np.int8),
+    "pp_ups": ((*_MON, MOVES), np.int8),
+    "status": (_MON, np.int8),
+    "status_counter": (_MON, np.int8),
+    "gender": (_MON, np.int8),
+    "friendship": (_MON, np.int16),
+    "ivs": ((*_MON, 6), np.int8),
+    "active": (_BATTLER, np.int8),
+    "stages": ((*_BATTLER, 8), np.int8),
+    "confusion": (_BATTLER, np.int8),
+    "leech_seed": (_BATTLER, np.int8),
+    "substitute_hp": (_BATTLER, np.int16),
+    "taunt": (_BATTLER, np.int8),
+    "trapped": (_BATTLER, np.int8),
+    "trap_move": (_BATTLER, np.int16),
+    "flinched": (_BATTLER, np.int8),
+    "choice_lock": (_BATTLER, np.int16),
+    "last_move": (_BATTLER, np.int16),
+    "protect_count": (_BATTLER, np.int8),
+    "rollout_count": (_BATTLER, np.int8),
+    "charge_turn": (_BATTLER, np.int8),
+    "recharge": (_BATTLER, np.int8),
+    "pursuit_target": (_BATTLER, np.int8),
+    "water_sport": (_BATTLER, np.int8),
+    "fake_out_turn": (_BATTLER, np.int16),
+    "move_hit": (_BATTLER, np.int16),
+    "foresight": (_BATTLER, np.int8),
+    "disabled_move": (_BATTLER, np.int16),
+    "disable_turns": (_BATTLER, np.int8),
+    "encore_move": (_BATTLER, np.int16),
+    "encore_slot": (_BATTLER, np.int8),
+    "encore_turns": (_BATTLER, np.int8),
+    "locked_move": (_BATTLER, np.int16),
+    "bide_turns": (_BATTLER, np.int8),
+    "bide_damage": (_BATTLER, np.int16),
+    "curled": (_BATTLER, np.int8),
+    "mud_sport": (_BATTLER, np.int8),
+    "aqua_ring": (_BATTLER, np.int8),
+    "infatuated": (_BATTLER, np.int8),
+    "destiny_bond": (_BATTLER, np.int8),
+    "uproar": (_BATTLER, np.int8),
+    "curse": (_BATTLER, np.int8),
+    "perish_song": (_BATTLER, np.int8),
+    "perish_song_turns": (_BATTLER, np.int8),
+    "yawn": (_BATTLER, np.int8),
+    "lock_on": (_BATTLER, np.int8),
+    "lock_on_target": (_BATTLER, np.int8),
+    "ingrain": (_BATTLER, np.int8),
+    "mean_look": (_BATTLER, np.int8),
+    "mean_look_target": (_BATTLER, np.int8),
+    "imprison": (_BATTLER, np.int8),
+    "imprisoned": (_BATTLER, np.int8),
+    "roosting": (_BATTLER, np.int8),
+    "can_unburden": (_BATTLER, np.int8),
+    "recycle_item": (_BATTLER, np.int16),
+    "minimized": (_BATTLER, np.int8),
+    "semi_invulnerable": (_BATTLER, np.int8),
+    "micle": (_BATTLER, np.int8),
+    "metronome_turns": (_BATTLER, np.int8),
+    "metronome_move": (_BATTLER, np.int16),
+    "focus_energy": (_BATTLER, np.int8),
+    "power_trick": (_BATTLER, np.int8),
+    "power_trick_desync": (_BATTLER, np.int8),
+    "embargo": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -637,22 +643,22 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "mist": (_SIDE, np.int8),
     "lucky_chant": (_SIDE, np.int8),
     "tailwind": (_SIDE, np.int8),
-    "wish_timer": (_SIDE, np.int8),
-    "wish_hp": (_SIDE, np.int16),
-    "future_timer": (_SIDE, np.int8),
-    "future_damage": (_SIDE, np.int16),
-    "future_move": (_SIDE, np.int16),
-    "future_attacker": (_SIDE, np.int8),
+    "wish_timer": (_BATTLER, np.int8),
+    "wish_hp": (_BATTLER, np.int16),
+    "future_timer": (_BATTLER, np.int8),
+    "future_damage": (_BATTLER, np.int16),
+    "future_move": (_BATTLER, np.int16),
+    "future_attacker": (_BATTLER, np.int8),
     "future_sight": (_SIDE, np.int8),
-    "trainer_items": ((SIDES, BAG_SLOTS), np.int16),
-    "trainer_item_count": (_SIDE, np.int8),
-    "qc_roll": (_SIDE, np.int8),
+    "trainer_items": ((*_PARTY, BAG_SLOTS), np.int16),
+    "trainer_item_count": (_PARTY, np.int8),
+    "qc_roll": (_BATTLER, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
     "war_swaps": (_FIELD, np.int16),
-    "entry_pending": (_SIDE, np.int8),
+    "entry_pending": (_BATTLER, np.int8),
     "move_prev": (_FIELD, np.int16),
     "terrain": (_FIELD, np.int8),
     "turn": (_FIELD, np.int16),
@@ -663,8 +669,8 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ai_item_known": ((SLOTS,), np.int16),
     "ai_ability_known": ((SLOTS,), np.int8),
     "exp": ((SLOTS,), np.int32),
-    "evs": ((*_SLOT, 6), np.int16),
-    "nature": (_SLOT, np.int8),
+    "evs": ((*_MON, 6), np.int16),
+    "nature": (_MON, np.int8),
     "exp_mask": (_FIELD, np.int8),
     "exp_boost": ((SLOTS,), np.int16),
     "pokerus": ((SLOTS,), np.int8),
@@ -679,29 +685,42 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "replace_mul": (_FIELD, np.int8),
     "pivot_battler": (_FIELD, np.int8),
     "ts_cursor": (_FIELD, np.int8),
-    "ts_acted": (_SIDE, np.int8),
-    "ts_order": (_SIDE, np.int8),
-    "ts_actions": (_SIDE, np.int8),
-    "ts_move": (_SIDE, np.int16),
-    "ts_struggling": (_SIDE, np.int8),
-    "ts_locked": (_SIDE, np.int8),
-    "ts_item": (_SIDE, np.int16),
-    "ts_custap": (_SIDE, np.int8),
-    "ts_claw": (_SIDE, np.int8),
+    "ts_acted": (_BATTLER, np.int8),
+    "ts_order": (_BATTLER, np.int8),
+    "ts_actions": (_BATTLER, np.int8),
+    "ts_move": (_BATTLER, np.int16),
+    "ts_struggling": (_BATTLER, np.int8),
+    "ts_locked": (_BATTLER, np.int8),
+    "ts_item": (_BATTLER, np.int16),
+    "ts_custap": (_BATTLER, np.int8),
+    "ts_claw": (_BATTLER, np.int8),
     "ts_pursued": (_FIELD, np.int8),
-    "ts_protect_ok": (_SIDE, np.int8),
-    "ts_taken": ((SIDES, 6), np.int16),
-    "ts_dragged": (_SIDE, np.int8),
-    "ts_move_failed": (_SIDE, np.int8),
+    "ts_protect_ok": (_BATTLER, np.int8),
+    "ts_taken": ((*_BATTLER, 6), np.int16),
+    "ts_dragged": (_BATTLER, np.int8),
+    "ts_move_failed": (_BATTLER, np.int8),
     "ts_used": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
-    "ts_alive": (_SIDE, np.int8),
+    "ts_alive": (_PARTY, np.int8),
     "ts_power_mul": (_FIELD, np.int8),
-    "ts_switched": (_SIDE, np.int8),
+    "ts_switched": (_BATTLER, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
-    "ts_assurance": (_SIDE, np.int8),
+    "ts_assurance": (_BATTLER, np.int8),
 }
+
+
+def layout(fmt: Format) -> dict[str, tuple[tuple[int, ...], type]]:
+    """Shape and storage dtype of every field of a ``fmt`` fight, in ``BattleState`` order."""
+    dims = {"P": fmt.P, "B": fmt.B}
+    return {
+        name: (tuple(dims.get(d, d) for d in shape), dtype)  # type: ignore[arg-type]
+        for name, (shape, dtype) in _KEYS.items()
+    }
+
+
+LAYOUT = layout(SINGLES)  # the singles shapes: what every caller outside the format work reads
+
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
 
@@ -720,17 +739,20 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     is what a plain switch gives it (``VOLATILE_FIELDS``); a Baton Pass newcomer is read after
     the pass, as the active battler."""
     side = jnp.asarray(side, jnp.int32)
+    row = party(format_of(state), side)
     active = state.active[side]
     slot = active if slot is None else jnp.asarray(slot, jnp.int32)
-    hidden = (state.ability[side, slot] == AbilityId.KLUTZ) | (
+    hidden = (state.ability[row, slot] == AbilityId.KLUTZ) | (
         (state.embargo[side] != 0) & (slot == active)
     )
-    return jnp.where(hidden, 0, state.item[side, slot].astype(jnp.int32))
+    return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))
 
 
 def held_items(state: BattleState) -> jnp.ndarray:
-    """``int32[2]``: ``held_item`` of each side's active battler."""
-    return jnp.stack([held_item(state, side) for side in range(state.active.shape[0])])
+    """``int32[B]``: ``held_item`` of each battler."""
+    return jnp.stack([held_item(state, side) for side in range(format_of(state).B)])
+
+
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
@@ -777,6 +799,7 @@ def spec_exp(tables: Tables, mon: PokemonSpec) -> int:
 
 
 def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, mon: PokemonSpec):
+    """Write ``mon`` into party ``side``'s slot ``slot`` (the leading axis of every ``[P, 6]`` field)."""
     species = mon.species
     row = personal_row(tables, species, mon.form)  # ValueError: no such form
     stats = spec_stats(tables, mon)
@@ -816,17 +839,19 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
 
 
 def initial_arrays(
+    fmt: Format,
     tables: Tables,
-    player: list[PokemonSpec],
-    opp: list[PokemonSpec],
+    parties: Sequence[list[PokemonSpec]],
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
-    leads: tuple[int, int] = (0, 0),
+    leads: Sequence[int] | None = None,
     terrain: int = TERRAIN_UNKNOWN,
 ) -> dict[str, np.ndarray]:
-    """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
-    (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
-    (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
+    """Every ``layout(fmt)`` field of the turn-0 state, before the switch-in hooks, as numpy
+    (``make_state`` is this plus ``hooks.battle_start`` for singles): ``parties`` holds the
+    ``fmt.P`` parties (party 0 the player's, 1 the opponent's), stats via ``calc_stats``, empty
+    slots all zero (``species = 0, hp = 0``), battler ``b``'s lead in party slot ``leads[b]``
+    (default: the battlers of one party take slots 0, 1, ... in battler order),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
     ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
@@ -848,16 +873,24 @@ def initial_arrays(
     (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
     :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
     battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
-    a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
-    for side, party in enumerate((player, opp)):
-        if not 1 <= len(party) <= SLOTS:
-            raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(party)}")
-        for slot, mon in enumerate(party):
+    if len(parties) != fmt.P:
+        raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
+    if leads is None:
+        leads = tuple(
+            sum(1 for c in range(b) if fmt.party_of[c] == fmt.party_of[b]) for b in range(fmt.B)
+        )
+    a = {name: np.zeros(shape, dtype) for name, (shape, dtype) in layout(fmt).items()}
+    for side, members in enumerate(parties):
+        if not 1 <= len(members) <= SLOTS:
+            raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(members)}")
+        for slot, mon in enumerate(members):
             _fill_slot(a, tables, side, slot, mon)
-        lead = leads[side]
-        if not 0 <= lead < len(party):
-            raise ValueError(f"side {side}: lead slot {lead} is not in a party of {len(party)}")
-        a["active"][side] = lead
+        for b in (b for b in range(fmt.B) if fmt.party_of[b] == side):
+            if not 0 <= leads[b] < len(members):
+                raise ValueError(
+                    f"side {side}: lead slot {leads[b]} is not in a party of {len(members)}"
+                )
+            a["active"][b] = leads[b]
     a["exp_mask"][...] = 1 << leads[0]
     bag = [item for item in opp_items if item]
     if len(bag) > BAG_SLOTS:
@@ -881,9 +914,9 @@ def make_state(
     terrain: int = TERRAIN_UNKNOWN,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
-    effects (``hooks.battle_start``)."""
+    effects (``hooks.battle_start``). Singles: ``initial_arrays`` with ``SINGLES``."""
     from nuzline.engine.hooks import battle_start  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
+    a = initial_arrays(SINGLES, tables, [player, opp], start_condition, opp_items, leads, terrain)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

@@ -12,6 +12,7 @@ import numpy as np
 from nuzline.data.trainer import IntermediateData, build_trainer_party, default_moves
 from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.bag import bag_item_category, refused_bag_params
+from nuzline.engine.format import SINGLES
 from nuzline.engine.ids import AbilityId, ItemAiCategory, ItemParam, Stat, Status
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import initial_arrays
@@ -24,7 +25,7 @@ from tests.engine.helpers import INTERMEDIATE, _inter, assert_matches_reference,
 
 def _slot(tables, opp, slot):
     """The opponent's party slot ``slot`` as ``initial_arrays`` builds it."""
-    a = initial_arrays(tables, list(opp), opp)
+    a = initial_arrays(SINGLES, tables, [list(opp), opp])
     return {k: np.asarray(v)[1, slot] for k, v in a.items() if k in _MON}
 
 
