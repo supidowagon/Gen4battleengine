@@ -22,7 +22,6 @@ from nuzline.engine.hooks import max_pp
 from nuzline.engine.ids import (
     GRIP_CLAW_TURNS,
     SPEED_HALVING_HOLD_EFFECTS,
-    AbilityId,
     ItemId,
     Stat,
 )
@@ -105,11 +104,13 @@ def test_jaboca_hurts_a_physical_attacker_and_is_used(tables, names):
 
 def test_jaboca_spares_magic_guard_and_can_faint_the_attacker(tables, names):
     """battle_lib.c:5402-5403: a Magic Guard attacker takes nothing and the berry stays; the
-    recoil's UPDATE_HP can faint a living attacker."""
+    recoil's UPDATE_HP can faint a living attacker. The check reads ``Battler_Ability`` (the
+    decomp id from the species row), so the attacker is a Magic Guard Clefairy."""
+    guard = _foe_holds(tables, names, "Jaboca Berry", player_species="Clefairy",
+                       player_ability="Magic Guard", player_moves=["Pound"])  # fmt: skip
+    out = assert_matches_reference(tables, guard, A("Pound", "Leer", guard, names), O)
+    assert int(out.hp[0, 0]) == int(guard.hp[0, 0]) and int(out.item[1, 0]) != 0
     s = _foe_holds(tables, names, "Jaboca Berry")
-    guard = s._replace(ability=s.ability.at[0, 0].set(AbilityId.MAGIC_GUARD))
-    out = assert_matches_reference(tables, guard, A("Scratch", "Leer", guard, names), O)
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.item[1, 0]) != 0
     low = _hp(s, 0, 0, 1)
     out = assert_matches_reference(tables, low, A("Scratch", "Leer", low, names), O)
     assert int(out.hp[0, 0]) == 0 and int(out.item[1, 0]) == 0
