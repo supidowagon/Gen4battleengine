@@ -1127,22 +1127,35 @@ def crit_lands(tables: Tables, state: BattleState, side, move, value) -> jnp.nda
     return (value > 0) & ((value - 1) % odds == 0)
 
 
-def armored(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
+def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``bool[2]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
     (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
-    it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``)."""
+    it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``).
+
+    A foe that uses Transform this turn (``moves``: the move each action runs, as
+    ``crit_odds``') may hold the side's own ability at the side's CalcCrit: ``BtlCmd_Transform``
+    copies the BattleMon up to ``ability`` (battle_script.c:5342-5345, battle_mon.h:84). It is
+    armored then only when the side's own ability is an armor too (over-approximate: the
+    Transform may move later or fail, so either ability can be the one read)."""
     actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    xform = uses & (tables.move_effect[jnp.asarray(moves, _I32)] == EffectId.TRANSFORM)
     out = []
     for side in (0, 1):
         target, switches, target_mon = _target_mon(state, actions, side)
-        mold = state.ability[side, state.active[side]] == AbilityId.MOLD_BREAKER
+        own_ability = state.ability[side, state.active[side]]
+        mold = own_ability == AbilityId.MOLD_BREAKER
         # A newcomer holds its entry ability, the traced copy included (ruling B3-19).
         own = jnp.where(
             switches,
             entry_ability(tables, state, target, target_mon, side),
             state.ability[target, target_mon],
         )
-        out.append(~mold & ((own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)))
+        armor = (own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)
+        copied = (own_ability == AbilityId.SHELL_ARMOR) | (own_ability == AbilityId.BATTLE_ARMOR)
+        out.append(~mold & armor & (~xform[1 - side] | copied))
     return jnp.stack(out)
 
 
@@ -1441,7 +1454,7 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
-    no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
+    no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions, moves))[:, None]
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
     # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can

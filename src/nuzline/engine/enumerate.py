@@ -830,6 +830,12 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.WISH,
     _E.HEAL_BELL,
     _E.REFRESH,
+    # E1 trial batch. Mimic (BtlCmd_TryMimic, battle_script.c:4476-4523) writes only its user's
+    # moves, ppCur, mimickedMoveSlot and lastResortCount: none is an input of the side's hit,
+    # whose move is chosen already (G-68). Chatter (effect_script_0267.s:5-7) is a plain hit
+    # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
+    _E.MIMIC,
+    _E.CHATTER,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -911,6 +917,12 @@ INPUT_CLAUSE_EFFECTS = (
     # B13-31: the foe's Embargo hides the side's held item from its later hits' damage reads
     # (Battler_HeldItem, battle_lib.c:5358): the embargo clause.
     _E.EMBARGO,
+    # E1 trial batch (G-69): BtlCmd_Transform (battle_script.c:5330-5373) copies the defender's
+    # BattleMon up to ``ability`` (battle_mon.h:57-84) onto its user: species (weight), Attack to
+    # Sp. Def, the stat stages, both types and the ability, and reruns its switch-in checks
+    # (:5350-5358: a copied Intimidate or weather ability acts). Every input of the side's later
+    # hit against it, and of its own stats the side's hit meets, can change: the transform clause.
+    _E.TRANSFORM,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1205,6 +1217,9 @@ TABLE_DAMAGE_EFFECTS = (
     # Spout / Eruption are FLAIL (its HP clause, hp_sensitive), B13-13.
     _E.WEATHER_BALL,
     _E.JUDGMENT,
+    # G-70: CalcCrit, CalcDamage (effect_script_0267.s:6-7) at its table power; the confusion is
+    # an ON_HIT subscript after the damage.
+    _E.CHATTER,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENCORE,  # a status move: no damage (B10-9)
@@ -1304,6 +1319,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.RECYCLE,
     _E.NATURAL_GIFT,
     _E.EMBARGO,  # B13-31: a status move, no damage
+    _E.MIMIC,  # G-68, G-69: status moves, no damage
+    _E.TRANSFORM,
 )
 
 
@@ -1329,7 +1346,8 @@ def damage_inputs_can_change(
       it matters (a burn on a physical non-Guts move, any status under Guts, Thunder Fang's
       paralysis and Tri Attack's statuses included), the foe's screen for this category, a
       sport for this move type, or the foe's own types (Camouflage: the type chart and the
-      Rock Sp. Def boost read them); or the side's active Pokemon itself (the foe's Roar
+      Rock Sp. Def boost read them), or its stats, stages, types and ability (Transform, G-69);
+      or the side's active Pokemon itself (the foe's Roar
       drags it out; no hit of a dragged battler follows in Gen 4, its action ends, so this
       roar clause is conservative); a charge move (its user's semi-invulnerable bit, which a
       ``MoveFlag.DOUBLE_SEMI`` hit's power reads; Skull Bash's Defense +1), B10-12;
@@ -1443,6 +1461,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.INGRAIN)
         | (foe_effect == _E.MAGNET_RISE)
         | (foe_effect == _E.GRAVITY)
+        # G-69: the foe's Transform copies the side's stats, stages, types and ability onto it.
+        | (foe_effect == _E.TRANSFORM)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1484,7 +1504,10 @@ def damage_inputs_can_change(
     # B12-3, B12-7, B12-8: Tickle and the stage swaps change move_param 0 and 1, Captivate 0;
     # Haze, Psych Up and Acupressure any stage.
     two_stat = uses_move & _any_of(effect, (_E.TICKLE, _E.STAGE_SWAP))
-    any_stage = jnp.any(uses_move & _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE)))
+    # Transform copies every stage (statBoosts, battle_mon.h:75), G-69.
+    any_stage = jnp.any(
+        uses_move & _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE, _E.TRANSFORM))
+    )
     stat_move = stat_move | two_stat | (uses_move & (effect == _E.CAPTIVATE))
     any_switch = jnp.any(live & is_switch(actions))
 
@@ -1673,6 +1696,12 @@ def outcome_laws(
     holders = _holds(
         tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
     )
+    # G-69: a side whose Transform lands before the foe's contact hit holds the foe's ability then
+    # (BtlCmd_Transform copies ``ability``, battle_script.c:5342-5345, battle_mon.h:84), but not its
+    # gender (a separate field, battle_mon.h after ``ability``; ``transformedGender`` is the
+    # sprite's, :5338). Over-approximate: the Transform may move later or fail.
+    xform = uses_move & (effect == _E.TRANSFORM)
+    holders = holders | (xform & holders[::-1])
     # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
     gender = state.gender.astype(_I32)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.gender.shape[1] - 1)
@@ -1691,9 +1720,12 @@ def outcome_laws(
         _entry_abilities(tables, state, actions) == AbilityId.CUTE_CHARM
     )
     charm_later = switch & entering & lovers(gender[sides, incoming], attacker_gender)
-    charm = (charm_now | charm_later) & calm
+    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender.
+    foe_charm = (state.ability[sides, mons] == AbilityId.CUTE_CHARM)[::-1]
+    charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
+    charm = (charm_now | charm_later | charm_copied) & calm
     if loose:
-        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,))
+        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
     # Chatter (G-70): a Chatot that is not Transformed confuses (effects._chatter; over-approximate:
@@ -2009,7 +2041,12 @@ def outcome_laws(
     living_now = (state.species != 0) & (state.hp > 0)
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)
     tracer = _holds(tables, state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer))
+    # G-69: a Transform copies its target's Speed, Speed stage and ability (BtlCmd_Transform,
+    # battle_script.c:5342-5345; battle_mon.h:57-84): the two end speeds are then often equal, by
+    # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
+    # kept (over-approximate).
+    xform_used = uses_move & (effect == _E.TRANSFORM)
+    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).
@@ -2018,8 +2055,10 @@ def outcome_laws(
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)
+    # A Transform user copies its target's Shed Skin (G-69).
+    shed_holder = _holds(tables, state, actions, (AbilityId.SHED_SKIN,))
     shed_skin = live & (
-        _holds(tables, state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party) | tracer
+        shed_holder | (dragged & shed_party) | tracer | (xform_used & shed_holder[::-1])
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
@@ -2250,7 +2289,11 @@ def outcome_laws(
         if loose
         else uses_move
         & (effect == _E.PRESENT)
-        & jnp.any(state.ability[::-1] == AbilityId.WONDER_GUARD, axis=1),
+        & (
+            jnp.any(state.ability[::-1] == AbilityId.WONDER_GUARD, axis=1)
+            # A foe whose Transform copies the side's own Wonder Guard (G-69).
+            | (xform[::-1] & (state.ability[sides, mons] == AbilityId.WONDER_GUARD))
+        ),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -2307,7 +2350,7 @@ def outcome_laws(
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
-        no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions),
+        no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions, moves),
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
         relevant=relevant,

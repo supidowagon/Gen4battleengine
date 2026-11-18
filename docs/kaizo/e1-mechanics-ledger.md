@@ -1205,3 +1205,18 @@ of them, :2107-2115).
   turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1235, ends it before the hit
   :1758-1783). The reference engine's live check (`_hit_rate`, `_transform`) already read both; no change.
   Tests: `test_accuracy_classes.py` (registry, `test_gravity_and_transform_are_seen_by_hit_thresholds`).
+- Trial outcome laws: Transform, Mimic and Chatter in the damage registries and the laws (branch
+  `claude/e1-trial-on-b13`). `BtlCmd_Transform` (battle_script.c:5330-5373) copies the BattleMon up to
+  `ability` (battle_mon.h:57-84: stats, `statBoosts`, types, ability; not the gender), so a faster foe's
+  Transform changes reads the turn-start laws took as fixed. Built in `enumerate`: the transform clause of
+  `damage_inputs_can_change` (`INPUT_CLAUSE_EFFECTS`; stats, stages, types, ability, a rerun Intimidate)
+  and the White Herb's any-stage term; `contact_proc` for a copied Static / Poison Point / Flame Body or
+  Cute Charm (the user's own gender kept); `present_guard` for a copied Wonder Guard; `end_speed_tie`
+  whenever a Transform is used (the copied Spe, stage and speed ability); `shed_skin` for a copied Shed
+  Skin. `outcome.armored` (laws `no_crit`, `sample_outcome`) drops a Battle Armor / Shell Armor the
+  Transform replaces with the side's own ability (battle_lib.c:7135-7136). Mimic (`BtlCmd_TryMimic`,
+  :4476-4523) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
+  non-table. Chatter (effect_script_0267.s:5-7: CalcCrit, CalcDamage, then the ON_HIT confusion):
+  input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
+  reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
+  `test_damage_classes.py` (Chatter's exact case, Transform's compression case).
