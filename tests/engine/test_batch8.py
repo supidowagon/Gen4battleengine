@@ -6,13 +6,14 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
 
 O = empty_outcome()
-MISS = O._replace(hit=jnp.full((2, 5), 100, jnp.int8))  # a roll class above any rate below 100
+# A roll class above any rate below 100.
+MISS = O._replace(hit=jnp.full((2, MAX_HITS), 100, jnp.int8))
 
 
 def test_lock_on_makes_the_next_move_hit_and_runs_out(tables, names):

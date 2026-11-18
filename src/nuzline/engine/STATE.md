@@ -84,8 +84,11 @@ three structs has a row.
   `MOVE_EFFECT_MAGNET_RISE` bit) and `magnet_rise_turns` (`MoveEffectsData.magnetRiseTurns`) (E1
   trial batch, G-66: set by effect_script_0252.s, counted down after Taunt, kept by Baton Pass; the
   bit stays when Gravity zeroes the turns). Mimic -> `mimic_slots`, `shadow_moves`, `shadow_pp` (E1
-  trial batch, G-68: the BattleMon / party split of the move and PP arrays, below). The rest (Charge, Grudge, Gastro Acid, Miracle Eye,
-  Heal Block, Embargo) are later (M6).
+  trial batch, G-68: the BattleMon / party split of the move and PP arrays, below). Embargo ->
+  `embargo` (E2 batch 13, B13-29: embargoTurns with its bit, set to 5 by
+  subscript_embargo_start.s:13-14, counted down at the turn end, battle_controller_player.c:1671-1677,
+  kept by Baton Pass, moves.h:46-48, battle_lib.c:2112; `state.held_item` reads it). The rest
+  (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -254,7 +257,10 @@ three structs has a row.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
-- **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
+- **recycleItem -> `recycle_item`** (per battler, as the decomp keeps it: `BtlCmd_RemoveItem`
+  writes it, `BtlCmd_TryRecycle` reads and clears it, battle_script.c:8977, :9005-9007; a switch
+  keeps it, B13-19); `item_consumed` is the engine's per-party-slot record of the same removals,
+  read by the observation only.
 - **Transform** (G-69): `VOLATILE_CONDITION_TRANSFORM` is `transformed`. `BtlCmd_Transform` copies
   the defender's BattleMon up to and including `ability` into the user's (species, the five stats
   as the BattleMon holds them, the moves, the IVs, the stat stages, both types, the form, the
@@ -370,7 +376,9 @@ three structs has a row.
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
   `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
   `turnFlags` later actors read
-  (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`; `turnFlags.roosting` is the public `roosting`, kept at a pause
+  (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`,
+  `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
+  itself and Assurance reads, B13-17; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
   read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
@@ -469,7 +477,7 @@ three structs has a row.
 | `MoveEffectsData.lastResortCount` | — | later (M6) |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
-| `MoveEffectsData.embargoTurns` | — | later (M6) |
+| `MoveEffectsData.embargoTurns` | `embargo` | mapped |
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
@@ -601,7 +609,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting` | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
@@ -676,7 +684,7 @@ three structs has a row.
 | `BattleContext.magnitude` | — | later (M6) |
 | `BattleContext.fieldWeatherChecked` | — | not needed because `make_state` applies the start weather directly |
 | `BattleContext.hpTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.recycleItem` | `item_consumed` | mapped |
+| `BattleContext.recycleItem` | `recycle_item`, `item_consumed` | mapped |
 | `BattleContext.partyOrder` | — | not needed because BattleState keeps party slots in a fixed order and switching only changes `active` |
 | `BattleContext.expJinglePlayed` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleContext.linkBattleTimeout` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

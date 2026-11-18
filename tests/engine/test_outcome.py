@@ -9,6 +9,7 @@ import pytest
 from nuzline.engine.ids import AbilityId, Weather
 from nuzline.engine.outcome import (
     INT16_FIELDS,
+    MAX_HITS,
     Outcome,
     crit_odds,
     empty_outcome,
@@ -26,10 +27,13 @@ def test_empty_outcome_is_all_hits_no_crits_max_roll():
     o = empty_outcome()
     assert o.speed_tie.shape == () and int(o.speed_tie) == 0
     for name in ("hit", "crit", "roll", "secondary", "contact_proc"):
-        assert getattr(o, name).shape == (2, 5)
-    assert o.hit.tolist() == [[1] * 5] * 2 and o.crit.tolist() == [[0] * 5] * 2
-    assert o.roll.tolist() == [[15] * 5] * 2
-    assert o.secondary.tolist() == [[0] * 5] * 2 and o.contact_proc.tolist() == [[0] * 5] * 2
+        assert getattr(o, name).shape == (2, MAX_HITS)
+    assert o.hit.tolist() == [[1] * MAX_HITS] * 2 and o.crit.tolist() == [[0] * MAX_HITS] * 2
+    assert o.roll.tolist() == [[15] * MAX_HITS] * 2
+    assert (
+        o.secondary.tolist() == [[0] * MAX_HITS] * 2
+        and o.contact_proc.tolist() == [[0] * MAX_HITS] * 2
+    )
     # Every field int8 but INT16_FIELDS (the invokers' call, E2 batch 5; Acupressure's draw, B12-9).
     assert all(getattr(o, f).dtype == jnp.int8 for f in Outcome._fields if f not in INT16_FIELDS)
     assert o.call.dtype == jnp.int16 and o.call.tolist() == [0, 0]
@@ -85,7 +89,7 @@ def freq(x, value=1):
 def test_sample_shapes_and_dtypes(samples):
     for f in Outcome._fields:
         assert getattr(samples, f).dtype == (jnp.int16 if f in INT16_FIELDS else jnp.int8), f
-    assert samples.hit.shape == (N, 2, 5) and samples.n_hits.shape == (N, 2)
+    assert samples.hit.shape == (N, 2, MAX_HITS) and samples.n_hits.shape == (N, 2)
 
 
 @pytest.mark.parametrize(
@@ -156,7 +160,11 @@ def test_existing_draws_unchanged(tables, names):
     assert names.move_names[int(s.moves[0, int(s.active[0]), EMBER])] == "Ember"
     o = sample_outcome(jax.random.key(0), tables, s, acts(EMBER, 1))
     for name, want in EXISTING_DRAWS.items():
-        assert getattr(o, name).tolist() == want, name
+        got = np.asarray(getattr(o, name))
+        # B13-9: the sixth hit's column is a draw of its own (outcome.SIXTH_HIT_FOLD); hits 0-4
+        # keep their samples.
+        got = got[:, : len(want[0])] if got.ndim == 2 else got
+        assert got.tolist() == want, name
 
 
 def test_quick_claw_draw_has_its_own_key(tables, names):

@@ -70,7 +70,7 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import BattleState, held_item
 
 _I32 = jnp.int32
 
@@ -508,13 +508,14 @@ def effective_speed(
     ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
     # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),
-    # read through BattleSystem_GetItemData on the held item (no Klutz / Embargo), G-56.
+    # read through BattleSystem_GetItemData on the raw heldItem (no Klutz / Embargo: "not
+    # ignored by any negation effect", :1241), G-56, B13-29.
     hold = tables.item_hold_effect[state.item[side, mon]].astype(_I32)
     halved = jnp.isin(hold, jnp.asarray(SPEED_HALVING_HOLD_EFFECTS, _I32))
     speed = jnp.where(halved, speed // 2, speed)
-    # :1248 Choice Scarf (Battler_HeldItemEffect), after the speed-halving items and before
-    # paralysis.
-    scarf = tables.item_effect[state.item[side, mon]] == ItemId.CHOICE_SCARF
+    # :1248 Choice Scarf (Battler_HeldItemEffect, :1215: ``held_item``, B13-29), after the
+    # speed-halving items and before paralysis.
+    scarf = tables.item_effect[held_item(state, side, mon)] == ItemId.CHOICE_SCARF
     speed = jnp.where(scarf, speed * 15 // 10, speed)
     # :1257-1261 Quick Feet (Battler_Ability) with any status (MON_CONDITION_ANY): x15/10,
     # and then no paralysis quartering; else paralysis quarters it.
@@ -537,7 +538,8 @@ def effective_speed(
 
 
 def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
-    return tables.item_effect[state.item[side, state.active[side]]] == item
+    """Battler_HeldItemEffect (battle_lib.c:1215, :1217: ``held_item``, B13-29) is ``item``."""
+    return tables.item_effect[held_item(state, side)] == item
 
 
 def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.ndarray:
@@ -580,7 +582,7 @@ def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     out = []
     for side in (0, 1):
         mon = state.active[side]
-        item = state.item[side, mon]
+        item = held_item(state, side, mon)  # battler1ItemEffect / _ItemParam (:1215-1218)
         hp = state.hp[side, mon].astype(_I32)
         max_hp = state.max_hp[side, mon].astype(_I32)
         low = hp <= pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))

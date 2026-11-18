@@ -383,3 +383,43 @@ def test_the_players_magnet_rise_removes_the_ground_keep_draw(tables, names):
     # The bit alone (Gravity zeroed the turns) does not: ApplyTypeChart reads the turns.
     bit = s._replace(magnet_rise=s.magnet_rise.at[0].set(1))
     assert K.KEEP in switch_sites(tables, bit).tolist()
+
+
+def test_party_variable_types_follow_move_calc_variable_type(tables, names):
+    """B13-35: Move_CalcVariableType (battle_lib.c:8097-8203) of a bench member: Natural Gift
+    the naturalGiftType of its party item (:8102-8104; a non-berry's is no type id,
+    typeless), Judgment its plate's type (:8106-8160), Weather Ball the weather's type
+    (:8177-8195); the voluntary-switch rule no longer refuses them, but refuses Weather Ball
+    where its case assigns no type."""
+    from nuzline.ai.replacement import post_ko_switch_in
+    from nuzline.ai.switching import party_move_types
+    from nuzline.engine.damage import AI_TYPELESS, judgment_type
+    from nuzline.engine.ids import Type, Weather
+
+    s = _trace_f(tables, names)
+    gift, judge, ball = (names.move(m) for m in ("Natural Gift", "Judgment", "Weather Ball"))
+    berry, plate, rock = (names.item(i) for i in ("Cheri Berry", "Flame Plate", "Hard Stone"))
+    s = s._replace(
+        moves=s.moves.at[1, 0, 3].set(gift).at[1, 1, 3].set(judge).at[1, 0, 2].set(ball),
+        item=s.item.at[1, 0].set(berry).at[1, 1].set(plate),
+    )
+    types = np.asarray(party_move_types(tables, s))
+    assert types[0, 3] == int(tables.item_gift_type[berry]) != Type.NORMAL
+    assert types[1, 3] == int(judgment_type(tables, plate, Type.NORMAL)) == Type.FIRE
+    assert types[0, 2] == int(tables.move_type[ball])  # no weather: refused below
+    refusals = switching_refusals(tables, s)
+    assert any("Weather Ball" in r for r in refusals), refusals
+    assert not any("Natural Gift" in r or "Judgment" in r for r in refusals), refusals
+    rock_gift = s._replace(item=s.item.at[1, 0].set(rock))
+    assert int(party_move_types(tables, rock_gift)[0, 3]) == AI_TYPELESS
+    rain = s._replace(
+        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
+        weather_timer=jnp.asarray(5, s.weather_timer.dtype),
+    )
+    assert int(party_move_types(tables, rain)[0, 2]) == Type.WATER
+    assert switching_refusals(tables, rain) == []
+    # The post-KO replacement types its candidates the same way (battle_lib.c:7998, :8051).
+    fainted = s._replace(hp=s.hp.at[1, CRANIDOS].set(0))
+    with pytest.raises(Exception, match="Weather Ball"):
+        post_ko_switch_in(tables, fainted)
+    post_ko_switch_in(tables, rain._replace(hp=rain.hp.at[1, CRANIDOS].set(0)))

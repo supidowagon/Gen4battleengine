@@ -25,6 +25,7 @@ from nuzline.engine.enumerate import (
 )
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat
 from nuzline.engine.outcome import (
+    MAX_HITS,
     Outcome,
     empty_outcome,
     hit_class,
@@ -160,7 +161,7 @@ def test_nature_power_call_is_seen_by_hit_thresholds(tables, names):
     s = s._replace(terrain=jnp.asarray(marsh, s.terrain.dtype))
     acts = A("Scratch", "Nature Power", s, names)
     assert hit_law(tables, s, acts, 0) == {1: 75, 76: 25}
-    o = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    o = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, s, acts, o._replace(hit=o.hit.at[0, 0].set(76)))
     assert int(out.stages[0, Stat.ACC]) == -1 and int(out.hp[1, 0]) == int(s.hp[1, 0])
 
@@ -488,6 +489,23 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,
+    # E2 batch 13: hits that write HP only (Triple Kick B13-5, Beat Up B13-9; the variable
+    # power and type hits B13-12..B13-17, Assurance's flag besides).
+    EffectId.TRIPLE_KICK,
+    EffectId.BEAT_UP,
+    EffectId.WEATHER_BALL,
+    EffectId.GYRO_BALL,
+    EffectId.ASSURANCE,
+    EffectId.TRUMP_CARD,
+    EffectId.PUNISHMENT,
+    EffectId.JUDGMENT,
+    # The held-item moves write their user's item and recycleItem, and Natural Gift HP
+    # (B13-19, B13-20); no accuracy item can be consumed, so none comes back.
+    EffectId.RECYCLE,
+    EffectId.NATURAL_GIFT,
+    # Embargo writes the defender's embargoTurns, no stage (B13-31); the Wide Lens it hides is
+    # hit_thresholds' second half (outcome._threshold_grid).
+    EffectId.EMBARGO,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

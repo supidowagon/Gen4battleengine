@@ -22,6 +22,7 @@ from nuzline.engine.coverage import (
     Support,
     _Collector,
     exp_refusals,
+    gyro_speed_line,
     halved_by_line,
     halved_defense_line,
     halving_moves,
@@ -150,11 +151,14 @@ def check_pool(
     foe_defense = low_defense(tables, opp)
     foe_halving = halving_moves(tables, opp)
 
-    def check_move(label: str, move: int, kind: str, row: int) -> None:
+    def check_move(label: str, move: int, kind: str, row: int, spec: PokemonSpec) -> None:
         support, name = move_effect_line(tables, names, move, row)
         c.add(support, f"{label}: {name}", f"{kind}, move effect")
         if (low := halved_defense_line(tables, move, foe_defense)) is not None:
             c.add(Support.NONE, f"{label}: {name}{low}", f"{kind}, move effect")
+        # Gyro Ball's zero speed divisor (coverage.gyro_speed_line, B13-14).
+        if (slow := gyro_speed_line(tables, move, spec)) is not None:
+            c.add(Support.NONE, f"{label}: {name}{slow}", f"{kind}, move effect")
         if support != Support.NONE and (reason := player_move_refusal(move)) is not None:
             refuse(f"{label}: {name} ({kind}, {reason})")
 
@@ -203,14 +207,14 @@ def check_pool(
             c.add(Support.NONE, f"{cand.label}: {line}", "battle terrain")
         for move in spec.moves:
             if move:
-                check_move(cand.label, move, "current", row)
+                check_move(cand.label, move, "current", row, spec)
         for move in cand.relearner:
-            check_move(cand.label, move, "relearner", row)
+            check_move(cand.label, move, "relearner", row, spec)
         for item_id, move in cand.tms:
-            check_move(cand.label, move, names.item_names[item_id], row)
+            check_move(cand.label, move, names.item_names[item_id], row, spec)
         for move in learnable:
             if move not in spec.moves:  # a known move is graded above
-                check_move(cand.label, move, "level-up in battle", row)
+                check_move(cand.label, move, "level-up in battle", row, spec)
     hold_effect = np.asarray(tables.item_hold_effect)
     for item_id in sorted({item for item, _ in bag}):
         if int(hold_effect[item_id]) != 0:

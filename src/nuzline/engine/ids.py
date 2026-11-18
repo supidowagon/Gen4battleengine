@@ -40,6 +40,13 @@ class EffectId(IntEnum):
     * ``MULTI_HIT``: ``(hits, 0, 0)``: ``hits == 0`` is the 2-5 law (``Outcome.n_hits``,
       ``BATTLE_EFFECT_MULTI_HIT``), else exactly that many hits (``BATTLE_EFFECT_HIT_TWICE``:
       Double Kick, Kaizo's DoubleSlap, ``SetMultiHit 2``).
+      A move of another family with ``MoveFlag.HIT_TWICE`` also hits twice (Twineedle:
+      ``SECONDARY_STATUS`` poison, a roll per hit; E2 batch 13, B13-1).
+    * ``TRIPLE_KICK``: ``(step, 0, 0)``: three hits, hit k at power k x step (vanilla 10), or
+      k x the move's power for step 0 (Kaizo); each later hit rolls its own accuracy check
+      and the first miss ends the move. ``BEAT_UP``: zeros; one hit per eligible party member
+      (``effects.beat_up_slots``), damage from its species and level (``effects.beat_up_damage``).
+      E2 batch 13.
     * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
       ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
       move's effect chance; ``CURSE`` (a non-Ghost user; a Ghost-type one is ``_curse``, B8-5):
@@ -49,8 +56,14 @@ class EffectId(IntEnum):
     * ``SELF_DESTRUCT`` (Selfdestruct, Explosion; Kaizo's Memento): zeros; the move script
       sets the user's HP to 0 before the accuracy check, and a physical one hits the halved
       Defense (``damage.py``). Damp would stop it; Damp is ``AbilityId.UNSUPPORTED``.
-    * ``FLAIL`` (Flail, Reversal): zeros; the power comes from the user's HP pixels
-      (``damage.flail_power``); the trainer AI scores it at the table power.
+    * ``FLAIL`` (Flail, Reversal): ``(kind, 0, 0)``; the power comes from the user's HP pixels
+      (``damage.flail_power``); the trainer AI scores it at the table power. Kind
+      ``FLAIL_FALLOFF`` (Water Spout, Eruption): power x curHP / maxHP (``damage.falloff_power``).
+    * ``WEATHER_BALL``, ``GYRO_BALL``, ``ASSURANCE``, ``TRUMP_CARD``, ``PUNISHMENT``,
+      ``JUDGMENT``: zeros; their power or type comes from the battle (``damage._pre_random``,
+      ``damage.move_type_of``), E2 batch 13. ``NATURAL_GIFT``: zeros; the power and type of the
+      held item (``damage.gift_item``), which the script removes. ``RECYCLE``, ``EMBARGO``:
+      zeros.
     * ``FANG_PARALYZE_FLINCH`` (Thunder Fang, ``BATTLE_EFFECT_FLINCH_PARALYZE_HIT``):
       ``(Status.PARALYSIS, 0, 0)``; two independent rolls at the move's chance, the
       paralysis (``Outcome.secondary``) then the flinch (``Outcome.fang_flinch``)
@@ -380,34 +393,108 @@ class EffectId(IntEnum):
     # NUM_SCREEN_TURNS (5) on it (``effects._mist``). BtlCmd_ChangeStatStage
     # (:2875-2882) blocks every drop by another battler while mistTurns is set (B12-23).
     MIST = 104
+    # E2 batch 13, the multi-hit power family.
+    # Triple Kick (vanilla 104, BATTLE_EFFECT_HIT_THREE_TIMES; Kaizo be_seq 104: Triple Kick, Rock
+    # Wrecker; Kaizo be_seq 88, byte-identical to its 104: Triple Axel, Fury Cutter):
+    # ``(step, 0, 0)``. ``SetMultiHit 3, SYSCTL_TRIPLE_KICK`` (effect_script_0104.s:5): three
+    # hits; the script reloads per hit (bcp.c:3789) and adds to BTLVAR_MOVE_POWER, which
+    # BattleContext_Init zeroes once per action (battle_lib.c:1979) and BattleSystem_SetupLoop
+    # keeps (:3357-3362), before CalcCrit and CalcDamage: hit k (1-3) has power k x step, step
+    # the vanilla script's constant 10 (``UpdateVar OPCODE_ADD, BTLVAR_MOVE_POWER, 10``, :7), or
+    # 0 for the Kaizo scripts' ``GetCurrentMoveData MOVEATTRIBUTE_POWER`` (the move's own
+    # power; rom_diff.toml be_seq 88, 104). SYSCTL_TRIPLE_KICK lacks SYSCTL_SKIP_ACCURACY_CHECK
+    # but has _SKIP_ACCURACY_OVERRIDES (include/constants/battle/system_control.h:81-86): every
+    # later hit rolls CheckMoveHitAccuracy again (bcp.c:3255-3259) without
+    # CheckMoveHitOverrides (:3264-3268: no No Guard, Lock-On, Thunder / Blizzard weather), and
+    # a later miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (bcp.c:3320-3323), which ends the loop
+    # (:3782). ``Outcome.hit[side, k]`` is hit k's roll (``outcome.hit_thresholds``,
+    # ``overrides=False``), B13-5..B13-8.
+    TRIPLE_KICK = 105
+    # Beat Up (154, BATTLE_EFFECT_BEAT_UP): zeros. effect_script_0154.s: SYSCTL_IGNORE_IMMUNITIES
+    # (:5), CalcCrit, then BtlCmd_BeatUp (battle_script.c:6173-6247) for its damage, no
+    # CalcDamage: one hit per party slot, in party order, that is the user's or has HP, a
+    # species, no egg and no status (BeatUpEligibleMon, :6157-6164); hit damage = the member's
+    # species base Attack x power x (its level x 2 / 5 + 2) / the defender's species base
+    # Defense / 50 + 2, x criticalMul, Helping Hand, then the variance (:6206-6218); no stage,
+    # item, ability, status, screen, weather, STAB or type chart (CheckTypeChart skips it under
+    # SYSCTL_IGNORE_IMMUNITIES, bcp.c:2355). Accuracy once (SYSCTL_MULTI_HIT_MOVE, :6187).
+    # ``effects.beat_up_damage``, B13-9..B13-11.
+    BEAT_UP = 106
+    # E2 batch 13, single-hit variable power and type (B13-12..).
+    # Weather Ball (203, effect_script_0203.s; BtlCmd_CalcWeatherBallParams, battle_script.c:
+    # 6843-6872): zeros. Under NO_CLOUD_NINE and any FIELD_CONDITION_WEATHER bit (fog included,
+    # condition.h:131-135) movePower = power x 2 and moveType Water / Rock / Fire / Ice for rain /
+    # sand / sun / hail (fog keeps Normal); else nothing (the table power and type).
+    # ``damage.weather_ball_params``; the type is battleCtx->moveType, which the chart, STAB,
+    # the type items and the absorbing abilities read (``damage.move_type_of``).
+    WEATHER_BALL = 107
+    # Gyro Ball (219, BtlCmd_CalcGyroBallPower, battle_script.c:7123-7131): zeros. movePower =
+    # 1 + 25 x monSpeedValues[defender] / monSpeedValues[attacker], at most 150; the speeds are
+    # CompareBattlerSpeed's of BranchActions' SortMonSpeedOrder at the user's action start
+    # (bcp.c:888; battle_lib.c:1372-1373). ``damage.gyro_ball_power``.
+    GYRO_BALL = 108
+    # Assurance (231, effect_script_0231.s): zeros. movePower = the move's power, x 2 when the
+    # defender's turnFlags.assuranceDamageMask is set (:5-9): subscript_update_hp.s:18-19 writes
+    # each update's hpCalcTemp <= 0 there (``BattleState.ts_assurance``).
+    ASSURANCE = 109
+    # Trump Card (235, BtlCmd_CalcTrumpCardPower, battle_script.c:7233-7245): zeros. movePower
+    # = sCurrentPPScaledPower[min(ppCur, 4)] (200, 80, 60, 50, 40) of the user's moveSlot after
+    # the PP decrement (bcp.c:3182). ``damage.trump_card_power``.
+    TRUMP_CARD = 110
+    # Punishment (245, BtlCmd_CalcPunishmentPower, battle_script.c:7354-7371): zeros. movePower
+    # = 60 + 20 x the defender's stages above neutral (HP through evasion), at most 200.
+    # ``damage.punishment_power``.
+    PUNISHMENT = 111
+    # Judgment (268, effect_script_0268.s): zeros. The attacker's held item's hold effect
+    # (Battler_HeldItemEffect) HOLD_EFFECT_ARCEUS_* sets moveType to its type (:5-95);
+    # ``damage.judgment_type``.
+    JUDGMENT = 112
+    # E2 batch 13, the held-item moves (B13-19..).
+    # Recycle (184, effect_script_0184.s): zeros. Fails (MOVE_STATUS_FAILED) when the user holds
+    # an item (:5) or its battler's recycleItem is empty (BtlCmd_TryRecycle, battle_script.c:
+    # 9000-9013, which clears it); else the user holds that item again (:7, UpdateMonDataFromVar:
+    # CopyToParty, no AI reveal). ``BattleState.recycle_item``; ``step._use_move``.
+    RECYCLE = 113
+    # Natural Gift (222, effect_script_0222.s): zeros. BtlCmd_CalcNaturalGiftParams (battle_script.c:
+    # 8088-8102) sets movePower and moveType from the held item's naturalGiftPower / _Type
+    # (Battler_HeldItem: Klutz and Embargo hide it, B13-29..31), failing at power 0; the script
+    # then RemoveItem's the item (:8) before TryMove. ``damage.gift_item`` (B13-37).
+    NATURAL_GIFT = 114
+    # Embargo (232, effect_script_0232.s): zeros. Fails behind a substitute (:5, :7-8); else a
+    # direct ON_HIT subscript_embargo_start.s on the defender: fails (MOVE_STATUS_FAILED, :57)
+    # on a miss, a substitute, Multitype, an embargo already up, a held Griseous Orb or the
+    # defender's quickClaw / custapBerry flag (:5-11); else embargoTurns = 5 and its
+    # MOVE_EFFECT_EMBARGO bit (:13-14): ``BattleState.embargo``, read by ``state.held_item``
+    # (B13-31).
+    EMBARGO = 115
     # Endure (116, BATTLE_EFFECT_SURVIVE_WITH_1_HP): zeros. effect_script_0116.s:3 is the same direct
     # TO_ATTACKER ``MOVE_SUBSCRIPT_PTR_PROTECT`` as Protect (effect_script_0111.s:3), so
     # ``BtlCmd_TryProtection`` (battle_script.c:5149-5190) and its chain and roll are shared; a
     # success sets ``turnFlags.enduring`` (:5174-5177, not ``protecting``). ``enduring`` is read at
     # one site, ``BattleControllerPlayer_UpdateHP`` (battle_controller_player.c:3386-3404;
     # ``effects.play_hit``, G-65).
-    ENDURE = 105
+    ENDURE = 116
     # Magnet Rise (252, BATTLE_EFFECT_GIVE_GROUND_IMMUNITY): zeros. effect_script_0252.s fails
     # (MOVE_STATUS_FAILED) for a user with ``magnetRiseTurns``, Levitate (``Battler_Ability``) or
     # Ingrain, else sets ``MOVE_EFFECT_MAGNET_RISE`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``
     # (``effects._magnet_rise``, G-66).
-    MAGNET_RISE = 106
+    MAGNET_RISE = 117
     # Gravity (215, BATTLE_EFFECT_GRAVITY): zeros. effect_script_0215.s fails (MOVE_STATUS_FAILED)
     # with ``FIELD_CONDITION_GRAVITY`` up, else the indirect subscript_gravity_start.s: Gravity for
     # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
-    GRAVITY = 107
+    GRAVITY = 118
     # Mimic (82, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE): zeros. effect_script_0082.s runs
     # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
     # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
-    MIMIC = 108
+    MIMIC = 119
     # Transform (57, BATTLE_EFFECT_TRANSFORM): zeros. effect_script_0057.s runs
     # subscript_transform_into_target.s on a defender with HP: ``BtlCmd_Transform``
     # (battle_script.c:5330-5373) copies the defender's BattleMon (``effects._transform``, G-69).
-    TRANSFORM = 109
+    TRANSFORM = 120
     # Chatter (267, BATTLE_EFFECT_CHATTER): zeros. effect_script_0267.s is a plain hit with an ON_HIT
     # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
     # subscript_confuse.s (``effects._chatter``, G-70).
-    CHATTER = 110
+    CHATTER = 121
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -449,6 +536,13 @@ POWER_IF_TARGET_HALF_HP = 3  # effect_script_0221.s:5-8 (Brine)
 # BtlCmd_CalcPaybackPower (battle_script.c:7198-7209, Payback): x2 once the defender has acted
 # this turn (``target_moved`` in effects.play_hit), B9-12.
 POWER_IF_TARGET_MOVED = 4
+# Wake-Up Slap (effect_script_0217.s:5-8): SmellingSalt's script with MON_CONDITION_SLEEP and
+# subscript_heal_target_sleep.s (``cures``), B13-16.
+POWER_IF_TARGET_ASLEEP = 5
+# ``EffectId.FLAIL``'s kind (``move_param[m, 0]``): 0 is Flail's HP-pixel bands
+# (BtlCmd_CalcFlailPower); ``FLAIL_FALLOFF`` is Water Spout / Eruption (vanilla 190,
+# BtlCmd_CalcHPFalloffPower, battle_script.c:6645-6657): power x curHP / maxHP, at least 1.
+FLAIL_FALLOFF = 1
 
 
 # Effects whose script runs no CalcCrit / CalcDamage: no crit and no damage roll is read
@@ -595,7 +689,7 @@ class AbilityId(IntEnum):
     DOWNLOAD = 81
     # E1 Batch C, rulings G-45..G-49: Ice Body (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:
     # 5597-5602; step._weather_effect), White Smoke (BtlCmd_ChangeStatStage's Clear Body branch,
-    # :2884-2885; effects._foe_stage, hooks.intimidate), Vital Spirit (every Insomnia site:
+    # :2883-2884; effects._foe_stage, hooks.intimidate), Vital Spirit (every Insomnia site:
     # subscript_fall_asleep.s:8, :24, subscript_yawn.s:6, subscript_rest.s:8,
     # BattleSystem_RecoverStatusByAbility battle_lib.c:4404-4405, :4471-4472), Speed Boost
     # (BattleSystem_TriggerTurnEndAbility, battle_lib.c:3555-3564; step._turn_end_ability) and
@@ -605,10 +699,15 @@ class AbilityId(IntEnum):
     VITAL_SPIRIT = 84
     SPEED_BOOST = 85
     IRON_FIST = 86
+    # E2 batch 13 (B13-29): Klutz. Battler_HeldItem returns ITEM_NONE for it (battle_lib.c:
+    # 5354-5356): every gated held-item read (``state.held_item``). Its other reads are Fling's
+    # (:5840, an unsupported move) and the AI scripts of Fling, Trick and Skill Swap
+    # (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported moves).
+    KLUTZ = 87
     # E1 trial batch, ruling G-63: Plus and Minus (BattleSystem_CalcMoveDamage,
     # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
-    PLUS = 87
-    MINUS = 88
+    PLUS = 88
+    MINUS = 89
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -703,6 +802,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.VITAL_SPIRIT: 72,
     AbilityId.SPEED_BOOST: 3,
     AbilityId.IRON_FIST: 89,
+    AbilityId.KLUTZ: 103,
     AbilityId.PLUS: 57,
     AbilityId.MINUS: 58,
 }
@@ -1156,8 +1256,16 @@ class MoveFlag(IntFlag):
     # BTLVAR_POWER_MULTI 20 against a defender with the bit the move hits (effect_script_0146.s,
     # _0149.s: AIRBORNE; _0126.s, _0147.s: UNDERGROUND; _0257.s, _0261.s: UNDERWATER; line 8-9).
     DOUBLE_SEMI = 1048576
-    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16).
+    # BTLVAR_CRITICAL_BOOSTS + 1 on the attack (effect_script_0039.s:17, _0075.s:16; E2 batch
+    # 13, B13-2: Blaze Kick _0200.s:5, Poison Tail / Cross Poison _0209.s:5, whose effect is
+    # their secondary status).
     CRIT_UP = 2097152
+    # E2 batch 13 (B13-1): ``SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE`` in a script whose effect is
+    # another family's (Twineedle, effect_script_0077.s:6: effect 2's poison hit, twice):
+    # ``effects.hit_count`` gives two hits, each running the family's effect with its own
+    # secondary roll (bcp.c:3544-3554, the script reloaded per hit :3789). ``MULTI_HIT``
+    # (Double Kick's effect_script_0044.s, a plain hit twice) keeps its count in its param.
+    HIT_TWICE = 4194304
 
 
 class SemiKind(IntEnum):

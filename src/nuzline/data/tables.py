@@ -23,7 +23,9 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 32
+MANIFEST_VERSION = (
+    33  # 33: the E1 trial's gravity_rearm with E2 batch 13's fling / Natural Gift columns
+)
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -116,6 +118,12 @@ class Tables(NamedTuple):
     item_party_param: jnp.ndarray
     item_hold_effect: jnp.ndarray  # int16[I], the decomp hold effect id (0 = none)
     item_hold_param: jnp.ndarray  # int16[I], the decomp hold param (ItemData.effectParam)
+    # ItemData.flingPower, .flingEffect (FLING_EFFECT_*), .naturalGiftPower and .naturalGiftType
+    # (0x1F = none) as stored, whether or not the engine supports the item (E2 batch 13).
+    item_fling_power: jnp.ndarray  # int16[I]
+    item_fling_effect: jnp.ndarray  # int8[I]
+    item_gift_power: jnp.ndarray  # int16[I]
+    item_gift_type: jnp.ndarray  # int8[I]
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)
     # int8[]: 1 where subscript_gravity_end re-arms Gravity at 0 (Kaizo, sub_seq 238: Gravity
     # never ends), 0 where it only prints (vanilla); E1 trial batch, G-67.

@@ -23,6 +23,7 @@ from nuzline.engine.coverage import (
     IMPLEMENTED_ITEMS,
     Support,
     exp_refusals,
+    gyro_speed_line,
     halved_by_line,
     halved_defense_line,
     halving_moves,
@@ -115,6 +116,8 @@ def _move_refusal(
 
     if (low := halved_defense_line(tables, move, foe_defense)) is not None:
         return f"{low.strip()}: zero damage divisor at -6 Defense, not implemented"
+    if (slow := gyro_speed_line(tables, move, spec)) is not None:  # B13-14
+        return f"{slow.strip()}: zero speed divisor at -6 and paralysis, not implemented"
     effect = EffectId(int(np.asarray(tables.move_effect)[move]))
     if IMPLEMENTED_EFFECTS.get(effect, Support.NONE) == Support.NONE:
         return "move effect not implemented"

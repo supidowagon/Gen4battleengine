@@ -51,7 +51,7 @@ from nuzline.engine.enumerate import (
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Status
 from nuzline.engine.observe import observe
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import Outcome, empty_outcome, sample_outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import _source_leaves, replace, step, step_events
 from nuzline.prep.pool import Candidate, check_pool
@@ -270,7 +270,7 @@ def test_attract_fails(tables, names, case):
     }.get(case, (MALE, FEMALE))
     opp = "Protect" if case == "protect" else "Tackle"
     s = _state(tables, names, genders=genders, opp=opp, infatuated=(0, int(case == "already")))
-    o = _o(hit=np.zeros((2, 5)) if case == "miss" else np.ones((2, 5)))
+    o = _o(hit=np.zeros((2, MAX_HITS)) if case == "miss" else np.ones((2, MAX_HITS)))
     out = assert_matches_reference(tables, s, A("Attract", opp, s, names), o)
     assert _inf(out) == [0, int(case == "already")]
 
@@ -334,7 +334,7 @@ def test_earlier_checks_come_first(tables, names, before):
     extra = {
         "confusion_hit": {"confusion_hit": [1, 0]},
         "full_para": {"full_para": [1, 0]},
-        "flinch": {"secondary": np.ones((2, 5))},
+        "flinch": {"secondary": np.ones((2, MAX_HITS))},
         "sleep": {},
     }[before]
     acts = A("Scratch", opp, s, names)
@@ -403,9 +403,11 @@ def _charm(tables, names, **kw):
 def test_cute_charm_infatuates_a_contact_attacker(tables, names):
     s = _charm(tables, names)
     acts = A("Scratch", "Tackle", s, names)
-    hit = assert_matches_reference(tables, s, acts, _o(contact_proc=[[0] * 5, [1] + [0] * 4]))
+    hit = assert_matches_reference(
+        tables, s, acts, _o(contact_proc=[[0] * MAX_HITS, [1] + [0] * (MAX_HITS - 1)])
+    )
     assert _inf(hit) == [1, 0]
-    ev = _events(tables, s, acts, _o(contact_proc=[[0] * 5, [1] + [0] * 4]))
+    ev = _events(tables, s, acts, _o(contact_proc=[[0] * MAX_HITS, [1] + [0] * (MAX_HITS - 1)]))
     assert ev["contact_ability"].tolist() == [0, 1]
     miss = assert_matches_reference(tables, s, acts, _o())
     assert _inf(miss) == [0, 0]
@@ -422,7 +424,7 @@ def test_cute_charm_does_not_trigger(tables, names, case):
     if case == "defender_faints":
         s = s.replace_hp(1, 0, 1)
     move = "Ember" if case == "non_contact" else "Scratch"
-    o = _o(contact_proc=np.ones((2, 5)))
+    o = _o(contact_proc=np.ones((2, MAX_HITS)))
     out = assert_matches_reference(tables, s, A(move, "Tackle", s, names), o)
     assert _inf(out)[0] == int(case == "already")
     if case != "already":
@@ -433,7 +435,7 @@ def test_cute_charm_on_a_multi_hit_move(tables, names):
     s = _charm(tables, names)
     acts = A("Double Kick", "Tackle", s, names)
     for procs in ([1, 0], [0, 1], [1, 1]):
-        o = _o(contact_proc=[[0] * 5, procs + [0] * 3])
+        o = _o(contact_proc=[[0] * MAX_HITS, procs + [0] * (MAX_HITS - 2)])
         out = assert_matches_reference(tables, s, acts, o)
         assert _inf(out) == [1, 0]
 
@@ -441,7 +443,7 @@ def test_cute_charm_on_a_multi_hit_move(tables, names):
 def test_cute_charm_holder_on_the_player_is_revealed(tables, names):
     s = _charm(tables, names, abilities=(AbilityId.CUTE_CHARM, AbilityId.NONE), order="opp")
     s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(0))
-    o = _o(contact_proc=[[1] + [0] * 4, [0] * 5])
+    o = _o(contact_proc=[[1] + [0] * (MAX_HITS - 1), [0] * MAX_HITS])
     out = assert_matches_reference(tables, s, A("Scratch", "Tackle", s, names), o)
     assert _inf(out) == [0, 1] and int(out.ai_ability_known[0]) != 0
     none = assert_matches_reference(tables, s, A("Scratch", "Tackle", s, names), _o())
@@ -452,7 +454,7 @@ def test_pursuit_into_a_switching_cute_charm_holder(tables, names):
     # Pursuit hits the outgoing holder (contact): the pursuer falls in love, then the holder
     # leaves and UpdateAfterSwitch clears the bit it was the source of.
     s = _charm(tables, names, opp="Pursuit", abilities=(AbilityId.CUTE_CHARM, AbilityId.NONE))
-    o = _o(contact_proc=[[1] + [0] * 4, [0] * 5])
+    o = _o(contact_proc=[[1] + [0] * (MAX_HITS - 1), [0] * MAX_HITS])
     out = assert_matches_reference(tables, s, A(SWITCH, "Pursuit", s, names), o)
     assert _inf(out) == [0, 0] and int(out.active[0]) == 1
 
@@ -509,7 +511,7 @@ def test_reference_agreement_over_draws(tables, names):
         )
         acts = A(mine, opp, s, names)
         for i0, i1, proc, tie in itertools.product((0, 1), (0, 1), (0, 1), (0, 1)):
-            o = _o((i0, i1), contact_proc=np.full((2, 5), proc), speed_tie=tie)
+            o = _o((i0, i1), contact_proc=np.full((2, MAX_HITS), proc), speed_tie=tie)
             assert_matches_reference(tables, s, acts, o)
 
 
@@ -568,7 +570,7 @@ def test_cute_charm_of_a_switch_in_after_the_source_left(tables, names):
     acts = A("Scratch", SWITCH, s, names)
     laws = laws_of(tables, s, acts)
     assert bool(np.asarray(laws.relevant.contact_proc)[1, 0])
-    o = _o((1, 0), contact_proc=[[0] * 5, [1] + [0] * 4])
+    o = _o((1, 0), contact_proc=[[0] * MAX_HITS, [1] + [0] * (MAX_HITS - 1)])
     out = assert_matches_reference(tables, s, acts, o)
     assert _inf(out) == [1, 0] and int(out.active[1]) == 1
     assert_equals_bruteforce(tables, s, acts)
@@ -655,7 +657,7 @@ def test_cute_charm_then_the_infatuated_attacker_bruteforce(tables, names):
         assert_equals_bruteforce(tables, s, acts)
         laws = laws_of(tables, s, acts)
         assert not np.asarray(laws.relevant.infatuation).any()
-        proc = [[0] * 5, [0] * 5]
+        proc = [[0] * MAX_HITS, [0] * MAX_HITS]
         proc[1 - side][0] = 1
         t2 = step(tables, s, acts, _o(contact_proc=proc))
         assert _inf(t2)[side] == 1

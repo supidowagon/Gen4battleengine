@@ -1461,6 +1461,7 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
 SUBSTITUTE_FOE_MOVES = (
     "Tackle",
     "Double Kick",
+    "Twineedle",  # hit 2's poison after hit 1 broke the substitute (B13-1)
     "Thunder Wave",
     "Growl",
     "Toxic",
@@ -1840,6 +1841,23 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
             a["ability"][side, rnd.choice(bench)] = partner
 
 
+def _draw_klutz(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """B13-29: maybe (1 in 6) give the active Pokemon Klutz (its item, from the item draws, is
+    then hidden from every gated read), sometimes a bench member too. B13-31: maybe (1 in 6) an
+    Embargo count 1-5 on the active battler, and maybe (1 in 6) Embargo taught to it."""
+    if draw(st.integers(0, 5)) == 0:
+        a["embargo"][side] = draw(st.integers(1, 5))
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Embargo")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+    if draw(st.integers(0, 5)) != 0:
+        return
+    a["ability"][side, active] = AbilityId.KLUTZ
+    if draw(st.integers(0, 3)) == 0:
+        a["ability"][side, (active + 1) % SLOTS] = AbilityId.KLUTZ
+
+
 # E1 Batch D (G-53 .. G-60): the Fantina split's held items ``_draw_batch_d`` gives the active
 # Pokemon, with what makes each act.
 BATCH_D_ITEMS = (
@@ -2032,6 +2050,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_guard_download(draw, tables, a, side, active, names)
         _draw_batch_c(draw, tables, a, side, active, names)
         _draw_batch_d(draw, tables, a, side, active, names)
+        _draw_klutz(draw, tables, a, side, active, names)
         _draw_standoff(draw, a, side)
         _draw_choice_lock(draw, a, side, active)
     # B7-13: an Imprison user sharing a move with a Sleep Talk user, so a faster Imprison (or one
@@ -2246,6 +2265,18 @@ RARE_EFFECTS = (
     EffectId.MIMIC,  # G-68
     EffectId.TRANSFORM,  # G-69
     EffectId.CHATTER,  # G-70
+    EffectId.TRIPLE_KICK,  # B13-5
+    EffectId.BEAT_UP,  # B13-9
+    # B13-12..B13-17: the variable power / type hits.
+    EffectId.WEATHER_BALL,
+    EffectId.GYRO_BALL,
+    EffectId.ASSURANCE,
+    EffectId.TRUMP_CARD,
+    EffectId.PUNISHMENT,
+    EffectId.JUDGMENT,
+    EffectId.RECYCLE,  # B13-19
+    EffectId.NATURAL_GIFT,  # B13-20
+    EffectId.EMBARGO,  # B13-31
 )
 
 
@@ -2383,6 +2414,24 @@ LAW_MOVES = (
     "Uproar",
     "Future Sight",
     "Doom Desire",
+    # E2 batch 13: Twineedle's two hits with a poison roll each (B13-1), Blaze Kick's crit stage
+    # with its burn roll (B13-2).
+    "Twineedle",
+    "Blaze Kick",
+    # B13-5..B13-10: Triple Kick's later accuracy rolls and per-hit power, Beat Up's members.
+    "Triple Kick",
+    "Beat Up",
+    # B13-12..B13-17: Weather Ball's type, Gyro Ball's speeds, Assurance's flag, Wake-Up Slap's
+    # wake-up, Trump Card's PP, Water Spout's HP.
+    "Weather Ball",
+    "Gyro Ball",
+    "Assurance",
+    "Wake-Up Slap",
+    "Trump Card",
+    "Water Spout",
+    # B13-19, B13-20: Recycle's item back, Natural Gift's berry power, type and removal.
+    "Recycle",
+    "Natural Gift",
 )
 # Abilities the outcome relevance reads (contact procs, Steadfast, Simple's and Swift
 # Swim's Speed) or the hit odds read (Compoundeyes, Sand Veil, Snow Cloak), and Rough Skin

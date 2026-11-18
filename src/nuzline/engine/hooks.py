@@ -36,8 +36,9 @@ Sitrus Berry (``HOLD_EFFECT_HP_PCT_RESTORE``) ``BattleSystem_Divide(maxHP * item
 ``subscript_held_item_hp_restore.s`` heals through ``BATTLE_SUBSCRIPT_UPDATE_HP``
 (capped at max HP) and ``BATTLE_SUBSCRIPT_PLUCK_CHECK`` removes the item
 (``BtlCmd_RemoveItem``, battle_script.c:8972, which keeps it in ``recycleItem``:
-``item_consumed`` here). Klutz and Embargo are unsupported; Gluttony halves only the pinch
-berries' param (``order.pinch_divisor``).
+``item_consumed`` here). The triggers read ``Battler_HeldItemEffect`` / ``_HeldItemPower``
+(battle_lib.c:4581-4582, :4927-4928, :4971-4972): ``state.held_item``, none under Klutz or
+Embargo (B13-29); Gluttony halves only the pinch berries' param (``order.pinch_divisor``).
 
 What the AI learns (``REVEALS_ON``, ``reveal_ability``): the AI knows the player's
 ability (``BattleState.ai_ability_known``) once ``BattleAI_SetAbility``
@@ -93,7 +94,7 @@ from nuzline.engine.ids import (
     sleepless,
 )
 from nuzline.engine.order import dislikes_berry, pinch_divisor, pinch_limit, player_second
-from nuzline.engine.state import STAGE_MAX, BattleState
+from nuzline.engine.state import STAGE_MAX, BattleState, held_item
 
 _I32 = jnp.int32
 
@@ -600,7 +601,8 @@ def held_item_check(
     clears that flag."""
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
-    item = state.item[side, mon]
+    raw = state.item[side, mon]
+    item = held_item(state, side, mon)  # Battler_HeldItemEffect / _HeldItemPower (B13-29)
     effect = tables.item_effect[item]
     power = tables.item_param[item, 0].astype(_I32)
     hp = state.hp[side, mon].astype(_I32)
@@ -628,9 +630,13 @@ def held_item_check(
     spent = on & ~jnp.asarray(keep)
     state = forget_item(state, side, mon, spent)  # RemoveItem's CopyToParty
     state = state._replace(
-        item=state.item.at[side, mon].set(jnp.where(spent, 0, item).astype(state.item.dtype)),
+        item=state.item.at[side, mon].set(jnp.where(spent, 0, raw).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[side, mon].set(
             jnp.where(spent, item, state.item_consumed[side, mon]).astype(state.item_consumed.dtype)
+        ),
+        # RemoveItem's recycleItem[battler] (battle_script.c:8977, B13-19).
+        recycle_item=state.recycle_item.at[side].set(
+            jnp.where(spent, item, state.recycle_item[side]).astype(state.recycle_item.dtype)
         ),
     )
     disliked = healed & dislikes_berry(tables, state, side, mon, item)
@@ -700,8 +706,10 @@ def pluck_berry(
     (:5833). ``SELF_TURN_FLAG_PLUCK_BERRY`` is set for every eaten berry
     (:5848) and cleared by the restore subscript's ``PLUCK_CHECK``, so it is left set
     (``pluck_flag``) when the berry did nothing for the eater (``nextSeq == 0``). The
-    eater's own item is never touched here. Sticky Hold, Klutz and Embargo are
-    unsupported."""
+    eater's own item is never touched here. Sticky Hold is unsupported. The berry is read raw
+    (``Battler_ItemPluckEffect``, ``Battler_HeldItemPower(..., ITEM_POWER_CHECK_NONE)``, :5479,
+    :5544, ``Item_IsBerry`` of ``heldItem``, :5833): the defender's Klutz and Embargo do not stop
+    it (B13-29)."""
     side = jnp.asarray(side, _I32)
     foe = jnp.asarray(foe, _I32)
     user, target = state.active[side], state.active[foe]
@@ -711,7 +719,11 @@ def pluck_berry(
     hp = state.hp[side, user].astype(_I32)
     max_hp = state.max_hp[side, user].astype(_I32)
     blocked = jnp.asarray(foe_custap) & (item != 0)
-    on = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
+    eaten = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
+    # :5839-5844: an eater with Klutz (Battler_Ability) or MOVE_EFFECT_EMBARGO gets scriptTemp 0:
+    # the berry is eaten with no effect and the pluck flag stays set (B13-31).
+    numb = (state.ability[side, user] == AbilityId.KLUTZ) | (state.embargo[side] != 0)
+    on = eaten & ~numb
     heal = _hp_restore(effect, power, max_hp)
     healed = on & (heal > 0) & (hp != max_hp)
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
@@ -731,16 +743,21 @@ def pluck_berry(
     raised = raised | restored | micled
     # subscript_pluck.s:7 names the berry (BTLSCR_DEFENDER), then RemoveItem BTLSCR_DEFENDER
     # (:10) clears the record again (forget_item).
-    state = forget_item(state, foe, target, on)
+    state = forget_item(state, foe, target, eaten)
     state = state._replace(
-        item=state.item.at[foe, target].set(jnp.where(on, 0, item).astype(state.item.dtype)),
+        item=state.item.at[foe, target].set(jnp.where(eaten, 0, item).astype(state.item.dtype)),
         item_consumed=state.item_consumed.at[foe, target].set(
-            jnp.where(on, item, state.item_consumed[foe, target]).astype(state.item_consumed.dtype)
+            jnp.where(eaten, item, state.item_consumed[foe, target]).astype(
+                state.item_consumed.dtype
+            )
+        ),
+        recycle_item=state.recycle_item.at[foe].set(
+            jnp.where(eaten, item, state.recycle_item[foe]).astype(state.recycle_item.dtype)
         ),
     )
     disliked = healed & dislikes_berry(tables, state, side, user, item)
     state = berry_confuse(tables, state, side, user, disliked)
-    return state, on & ~healed & ~cured & ~raised
+    return state, eaten & ~healed & ~cured & ~raised
 
 
 def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:

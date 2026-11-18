@@ -769,7 +769,11 @@ def _slot_read_pieces(t):
     # every transcribed effect a Kaizo move carries (Kaizo's Return and Frustration have
     # effect 0, so 121 and 123 have no move here)
     carried = {int(e) for e in effect[1:]}
-    assert set(first) == KAIZO_ALL.transcribed & carried
+    # less the effects whose only Kaizo moves take a refused id case (_move_pool's skip: Gyro
+    # Ball's 219, Weather Ball's 203, B13-26..27)
+    skip = set(commands.CALC_DAMAGE_MOVES) | set(commands.MOVE_TYPE_MOVES)
+    plain = {int(effect[m]) for m in range(1, len(effect)) if m not in skip}
+    assert set(first) == KAIZO_ALL.transcribed & carried & plain
     # the two id cases that draw (trainer_ai.c:3014-3016, :3028-3048), damaging in Kaizo
     assert set(AI_DRAWN_MOVES) == {PSYWAVE_ID, MAGNITUDE}
     assert int(t.move_power[MAGNITUDE]) > 1 and int(t.move_power[PSYWAVE_ID]) > 1

@@ -417,6 +417,17 @@ SITE_N: dict[int, int] = {
     6113: 128,  # Expert_MagnetRise_CheckOpponentTyping (+1 when it does NOT jump)
     4795: 128,  # Expert_Gravity (goes to TryScorePlus1 when it jumps)
     4799: 64,  # Expert_Gravity_TryScorePlus1 (+1 when it does NOT jump)
+    # E2 batch 13 (B13-23).
+    4526: 50,  # Expert_Recycle (+1 when it does NOT jump)
+    5204: 128,  # Expert_Assurance (jumps to _TryScorePlus1)
+    5212: 128,  # Expert_Assurance_TryScorePlus1
+    5333: 30,  # Expert_TrumpCard (the Pressure +1)
+    5347: 100,  # Expert_TrumpCard_ScorePlus1
+    5225: 128,  # Expert_Embargo (+1 when it does NOT jump), B13-32
+    5935: 128,  # Expert_Punishment_TryScorePlus4
+    5939: 128,  # Expert_Punishment_TryScorePlus3
+    5943: 128,  # Expert_Punishment_TryScorePlus2
+    5947: 128,  # Expert_Punishment_TryScorePlus1
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -653,6 +664,29 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
         267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
+        # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
+        # (:1623-1811) or other flag entry names these: their moves take the generic paths.
+        77,  # POISON_MULTI_HIT (Twineedle)
+        104,  # HIT_THREE_TIMES (Triple Kick; Kaizo Rock Wrecker)
+        141,  # UNUSED_141 (Kaizo Hurricane, be_seq 141)
+        154,  # BEAT_UP
+        203,  # CHANGE_TYPE_WITH_WEATHER (Weather Ball; its AI type, B13-26)
+        268,  # JUDGEMENT (its AI damage and type cases, B13-25..26)
+        # Expert_Main entries only (CheckHP's attacker table :7853 names 190, Risky's :6556
+        # names 219, Expert_LuckyChant :5504-5505 names 200 and 209 as the player's moves).
+        190,  # DECREASE_POWER_WITH_LESS_USER_HP: Expert_WaterSpout (:1742), no roll
+        200,  # HIGH_CRITICAL_BURN_HIT: Expert_HighCritical (:1748), :2836, :2839
+        209,  # HIGH_CRITICAL_POISON_HIT: Expert_HighCritical (:1754), :2836, :2839
+        217,  # DOUBLE_POWER_HEAL_SLEEP: Expert_WakeUpSlap (:1761), no roll
+        231,  # DOUBLE_POWER_IF_TARGET_HIT: Expert_Assurance (:1774), :5204, :5212
+        # Basic and Expert entries.
+        184,  # RECYCLE: Basic_CheckCanRecycle (:238); Expert_Recycle (:1737), :4526
+        219,  # POWER_BASED_ON_LOW_SPEED: NonStandard (:256); Expert_GyroBall (:1763), no roll
+        222,  # NATURAL_GIFT: Basic_CheckNaturalGift (:258); no Expert entry
+        235,  # HIGHER_POWER_WHEN_LOW_PP: NonStandard (:265); Expert_TrumpCard (:1778), :5333,
+        # :5347
+        245,  # INCREASE_POWER_WITH_MORE_STAT_UP: NonStandard (:274); Expert_Punishment (:1788)
+        232,  # PREVENT_ITEM_USE: Basic_CheckEmbargo (:262); Expert_Embargo (:1775), :5225 (B13-32)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -783,6 +817,17 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     116: ("Expert_Endure", 1704),
     252: ("Expert_MagnetRise", 1795),
     215: ("Expert_Gravity", 1759),
+    # E2 batch 13 (B13-23).
+    184: ("Expert_Recycle", 1737),
+    190: ("Expert_WaterSpout", 1742),
+    200: ("Expert_HighCritical", 1748),
+    209: ("Expert_HighCritical", 1754),
+    217: ("Expert_WakeUpSlap", 1761),
+    219: ("Expert_GyroBall", 1763),
+    232: ("Expert_Embargo", 1775),  # B13-32
+    231: ("Expert_Assurance", 1774),
+    235: ("Expert_TrumpCard", 1778),
+    245: ("Expert_Punishment", 1788),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -900,6 +945,17 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         116,  # SURVIVE_WITH_1_HP: Expert_Endure
         252,  # GIVE_GROUND_IMMUNITY: Expert_MagnetRise
         215,  # GRAVITY: Expert_Gravity
+        # E2 batch 13 (B13-23).
+        184,  # RECYCLE: Expert_Recycle
+        190,  # DECREASE_POWER_WITH_LESS_USER_HP: Expert_WaterSpout
+        200,  # HIGH_CRITICAL_BURN_HIT: Expert_HighCritical
+        209,  # HIGH_CRITICAL_POISON_HIT: Expert_HighCritical
+        217,  # DOUBLE_POWER_HEAL_SLEEP: Expert_WakeUpSlap
+        219,  # POWER_BASED_ON_LOW_SPEED: Expert_GyroBall (no score change)
+        231,  # DOUBLE_POWER_IF_TARGET_HIT: Expert_Assurance
+        232,  # PREVENT_ITEM_USE: Expert_Embargo (B13-32)
+        235,  # HIGHER_POWER_WHEN_LOW_PP: Expert_TrumpCard
+        245,  # INCREASE_POWER_WITH_MORE_STAT_UP: Expert_Punishment
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

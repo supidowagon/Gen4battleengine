@@ -21,7 +21,7 @@ import pytest
 from nuzline.engine.damage import confusion_damage, damage_table
 from nuzline.engine.ids import RESIST_ANY_NORMAL, ItemId, Type
 from nuzline.engine.observe import OBS_FIELDS, observe
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import SLOTS
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
@@ -248,7 +248,7 @@ def test_the_berry_is_seen(tables, names):
 )
 def test_resist_berries_match_reference(tables, names, crit, item, player, move):
     s = _holder(tables, names, item, hp=30, player_species=player, player_moves=[move])
-    o = empty_outcome()._replace(crit=jnp.full((2, 5), crit, jnp.int8))
+    o = empty_outcome()._replace(crit=jnp.full((2, MAX_HITS), crit, jnp.int8))
     # The foe hits back with Tackle: the player's lead holds the same berry.
     s = _item(s, 0, item, names)
     assert_matches_reference(tables, s, A(move, "Tackle", s, names), o)

@@ -10,7 +10,7 @@ import numpy as np
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.actions import MOVE_ACTIONS, decision_actions
 from nuzline.engine.ids import Stat
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import TURN_SCRATCH, make_state
 from tests.engine.helpers import assert_matches_reference
 
@@ -124,7 +124,7 @@ def test_the_newcomers_kings_rock_flinches(tables, names):
         [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Geodude", ["Tackle"], 30, "King’s Rock")],
         [_mon(n, "Bulbasaur", ["Tackle"], 40)],
     )
-    o = O._replace(flinch_item=jnp.ones((2, 5), jnp.int8))
+    o = O._replace(flinch_item=jnp.ones((2, MAX_HITS), jnp.int8))
     paused = assert_matches_reference(tables, s, (0, 0), o)
     after = _resume(tables, paused, 1, o)
     assert int(after.hp[0, 1]) == int(s.hp[0, 1])  # the foe flinched

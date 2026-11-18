@@ -25,7 +25,7 @@ from nuzline.engine.damage import ai_damage_for_roll, damage_table, divide
 from nuzline.engine.effects import apply_move_effect
 from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.ids import AbilityId, Status, Type
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
@@ -146,7 +146,7 @@ def test_limber_blocks_a_secondary_paralysis_silently(tables, names):
     # subscript_paralyze.s:_170 ends an INDIRECT effect with no message.
     s = roark_state(tables, names, opp_moves=("ThunderShock",))
     s = _ability(s, 0, 0, AbilityId.LIMBER)
-    o = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    o = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     out = _jit_step(tables, s, A("Leer", "ThunderShock", s, names), o)
     assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
 
@@ -312,7 +312,7 @@ def test_k3b_abilities_match_reference(tables, names):
         assert_matches_reference(tables, tw, A("Leer", "Thunder Wave", tw, names), empty_outcome())
     shock = roark_state(tables, names, opp_moves=("ThunderShock",))
     shock = _ability(shock, 0, 0, AbilityId.LIMBER)
-    o = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+    o = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
     assert_matches_reference(tables, shock, A("Leer", "ThunderShock", shock, names), o)
     static = roark_state(tables, names)
     static = _ability(_ability(static, 0, 0, AbilityId.STATIC), 1, 0, AbilityId.LIMBER)
@@ -324,7 +324,7 @@ def test_k3b_abilities_match_reference(tables, names):
     adapt = _ability(roark_state(tables, names, opp_species="Bidoof"), 0, 0, AbilityId.ADAPTABILITY)
     for move in ("Ember", "Scratch"):
         for roll in (0, 15):
-            o = empty_outcome()._replace(roll=jnp.full((2, 5), roll, jnp.int8))
+            o = empty_outcome()._replace(roll=jnp.full((2, MAX_HITS), roll, jnp.int8))
             assert_matches_reference(tables, adapt, A(move, "Leer", adapt, names), o)
     rock = roark_state(tables, names, player_species="Prinplup")
     rock = _ability(rock, 1, 0, AbilityId.SOLID_ROCK)
@@ -335,5 +335,5 @@ def test_k3b_abilities_match_reference(tables, names):
     for st in (rock, mixed, breaker):
         for move in ("Bubble", "Pound"):
             for roll in (0, 15):
-                o = empty_outcome()._replace(roll=jnp.full((2, 5), roll, jnp.int8))
+                o = empty_outcome()._replace(roll=jnp.full((2, MAX_HITS), roll, jnp.int8))
                 assert_matches_reference(tables, st, A(move, "Leer", st, names), o)

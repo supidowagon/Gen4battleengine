@@ -4,6 +4,129 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
 
+- **Batch 13 (branch e2-batch13 from 9e08c7e, worktree _scratch/e2/b13wt; brief
+  _scratch/e2/b13/BRIEF.md).** Secondary-effect hits done (agent A, B13-1..4): Twineedle
+  (SECONDARY_STATUS + MoveFlag.HIT_TWICE), Blaze Kick / Poison Tail / Cross Poison
+  (SECONDARY_STATUS + CRIT_UP), Kaizo Hurricane (be_seq 141 and both overlay16 compares
+  modelled: SECONDARY_CONFUSE + THUNDER | HIT_AIR); no new EffectId, state or Outcome field, no
+  new draw. Tests tests/engine/test_batch13.py (3 law tests slow: 140 s, 5.9 GB). Checks green:
+  test_batch13 16, effect_map / variants / game_constants / backlog 94, coverage +
+  damage_classes 73 (+11 slow), accuracy_classes + enumerate 40 (+6 slow property tests),
+  unsupported tests 37, test_cli not-slow 102 + 1 skipped + deaths_and_protect (7.87 GB), diff.py
+  seeds 39, 40 ok 300. FOUND, not ours (fails on base 9e08c7e too, replay
+  _scratch/e2/b13/a_fail.pkl): test_differential's draw: an asleep Groudon at 1 HP behind a
+  1-HP substitute holding a Figy Berry, Thunder Wave vs Ralts' Sky Uppercut: the reference eats
+  the berry, JAX keeps it. test_cli_rank_default_budget_keeps_the_header killed at 8.23 GB
+  (8.67-9.09 before). Multi-hit power family done (agent B, B13-5..B13-11): TRIPLE_KICK (vanilla
+  104 step 10; Kaizo be_seq 104 Triple Kick / Rock Wrecker and 88 Triple Axel / Fury Cutter, both
+  members modelled, step = the move's power), each later hit's own accuracy roll
+  (Outcome.hit[s, 1..2], thresholds without the overrides), BEAT_UP (both games); MAX_HITS 5 -> 6
+  (the sixth column of every per-hit draw from fold_in 42, hits 0-4 keep their samples);
+  OutcomeLaws.damage per hit, hit_later_thresholds / _possible. Commit 1f0f34a. Checks:
+  test_batch13 not-slow 29 green, its 5 slow law tests green (Triple Kick 124 s / 5.7 GB, Beat
+  Up 176 s / 4.5 GB), effect_map + damage_classes 54, accuracy_classes + enumerate 40, outcome
+  20, variants / game_constants / backlog / coverage 136, unsupported + kaizo_tables 42,
+  test_cli not-slow 102 + 1 skipped; diff.py seeds 41, 42 ok 300; test_differential: the known
+  Figy Berry case only. test_cli_rank_deaths_and_protect killed at 8.12 GB (7.87 before:
+  MAX_HITS 6 and the per-hit tables); test_observe not-slow goes past 8 GB at 22695c4 too.
+  Variable power / type family done (agent C, B13-12..B13-18): WEATHER_BALL, JUDGMENT (type via
+  move_type_of, plate from Tables.item_hold_effect), Water Spout / Eruption as FLAIL kind
+  FLAIL_FALLOFF (+ prep falloff_cuts), GYRO_BALL (action-start speeds as inPower; coverage
+  refuses a Gyro Ball user below Speed 16), TRUMP_CARD (PP after the decrement as inPower),
+  PUNISHMENT, Wake-Up Slap (DOUBLE_POWER POWER_IF_TARGET_ASLEEP + wake), ASSURANCE (new
+  per-battler turn scratch BattleState.ts_assurance, marked at every action-phase UPDATE_HP);
+  no new draw or Outcome field. Checks: test_batch13 not-slow 42 + 2 new slow law tests,
+  accuracy/damage classes + enumerate 45, coverage / effect_map / variants / game_constants /
+  backlog 162, unsupported-asserting files 139, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run), diff.py seeds 43, 44 ok 300; test_differential: see the commit.
+  Held-item moves (agent D, B13-19..B13-22): e1-model c09d8ac (Tables item_fling_power /
+  _fling_effect / item_gift_power / _gift_type from both extractors, MANIFEST_VERSION 31; new
+  per-battler BattleState.recycle_item = recycleItem, written at every RemoveItem; Kaizo
+  rom/ intermediates re-extracted, which also refreshed stale trainer terrains: backlog Roark 5 ->
+  4 groups); RECYCLE and NATURAL_GIFT modelled (both engines, laws: B13-21, no new draw);
+  Fling and Embargo left UNSUPPORTED (B13-22, Owed). Checks: test_batch13 new 9 + 2 slow laws
+  (170 s, 5.1 GB), accuracy/damage classes + coverage + effect_map 123, enumerate / variants /
+  game_constants / backlog / tables / state 142, unsupported-asserting files 33 + 95 + 43,
+  test_cli not-slow 102 + 1 skipped (the two over-8 GB nodes not run), test_differential +
+  test_e1_roark_close 24 (both green now: the clowns' terrain came with the re-extraction), diff.py
+  seeds 45, 46 ok 300.
+  Trainer AI (agent E, B13-23..B13-28): every effect above transcribed for the Kaizo / ALLIN
+  policy (Basic Recycle / Natural Gift / NonStandard x3; Expert Recycle, WaterSpout,
+  HighCritical x2, WakeUpSlap, GyroBall, Assurance, TrumpCard, Punishment; 77, 104, 141, 154,
+  203, 268 have no script entry); AI damage cases Natural Gift and Judgment and
+  TrainerAI_MoveType's Natural Gift / Judgment / Weather Ball modelled; Weather Ball refused
+  only where its MoveType case assigns no type (the ROM returns an unwritten register);
+  read_bounds regenerated (ALLIN_READS 18); backlog rebuilt (17 steps, 0 errors).
+  Checks (agent E): ai_damage_cases 37, batch13 policy basic / expert / refusals 42,
+  batch13 exact == loose 0x11F (307 s, 5.0 GB: marked slow; 0x17 and 0x10F not run),
+  read_bounds / game_constants / backlog / variants / layout / ai_damage 89, kaizo_outcome 28,
+  allin + kaizo_commands 71 (7.3 GB), kaizo_policy structural 10, switching / policy / e1 /
+  power-move engine files 196 + the int64 fix, unsupported nodes 18, test_cli not-slow 102 + 1
+  skipped (the two over-8 GB nodes not run). Full test_kaizo_policy not-slow not run.
+  OWED: Gyro Ball's AI damage case (monSpeedValues, B13-27) and switching's Natural Gift /
+  Judgment / Weather Ball (B13-28); vanilla-only Fury Cutter #119 and the recharge #80
+  (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
+  the other families of the batch.
+  MERGED main 932af5a (be946ac): both sides' item columns kept (item_party_param + fling /
+  Natural Gift), both had called their schema 31, so MANIFEST_VERSION 32; Kaizo 141's THUNDER
+  bit now from E1's KAIZO_THUNDER_EFFECTS (G-50), KAIZO_FLAG_EFFECTS 141 = HIT_AIR only. Items
+  re-extracted (decomp, Kaizo ROM), tables + backlog rebuilt (17 steps, 0 errors). Scans: no
+  duplicate names, enum values (EffectId 105-114 batch 13 only), state / Outcome / Tables
+  fields, test names or rom_diff rows; fold_in 14-26, 28-31, 32/33, 34/35, 36, 40, 41, 42
+  distinct. Check notes (58ee134): the two no-living-foe invoker tests assert the foe acts first;
+  White Smoke cited :2883-2884. Green: effect_map / tables / kaizo_tables / state + the two
+  invoker tests 101 (4.8 GB), unsupported nodes + variants / game_constants / backlog 97,
+  accuracy / damage classes + enumerate + coverage not-slow 109 (7.1 GB), batch13 + invokers
+  not-slow 68 (7.8 GB), batch12 not-slow 35, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run).
+  MERGED main aaf2ef7 (1638c33, E1 Batch D): the resolution checked against the decomp; Micle
+  with Triple Kick: every hit's check clears the flag (bcp.c:2967-2970), the later column reads
+  only a berry eaten since (outcome later_micle); the Metronome item counts once per action
+  (bcp.c:3221, the loop goes to TRY_MOVE), every Triple Kick hit reads that count, Beat Up none
+  (no CalcDamage); Jaboca / Rowap recoil marks ts_assurance; every new RemoveItem path writes
+  recycle_item in both engines; Iron Ball halves Gyro Ball's speeds through effective_speed and
+  gyro_speed_line now refuses a halving-item holder below Speed 32 (B13-14). MANIFEST_VERSION 32
+  (main changed no column). Tables + backlog rebuilt (17 steps, 0 errors), read_bounds
+  unchanged. Scans: no duplicate VOLATILE_FIELDS, LAYOUT, RefSide, EffectId / ItemId / MoveFlag
+  values or names, BattleState / Outcome / Tables fields, game_constants rows (ITEM_IRON_BALL
+  dropped, as main did); fold_in 14-26, 28-31, 32/33, 34/35, 36, 40, 41, 42 distinct. Green:
+  unsupported nodes 29, variants / game_constants / backlog 68, state / tables / layout /
+  read_bounds 73, e1_batch_d not-slow 19, batch13 not-slow 52 (6.6 GB), test_cli not-slow 102 +
+  1 skipped (the two over-8 GB nodes not run), test_differential not-slow 1 (the Figy Berry
+  case no longer fails).
+  Held items, part 2 (agent F, B13-29..B13-32): e1-model 863e9cb gated accessor
+  state.held_item (Battler_HeldItem: Klutz, Embargo) with every gated read routed, new state
+  field embargo; Klutz supported (B13-29, B13-30); EMBARGO modelled with its AI (B13-31,
+  B13-32), Pluck's Klutz / Embargo eater gate (B13-30, B13-31); commits 863e9cb (e1-model),
+  6212174, + STATE.md row fix. Fling left UNSUPPORTED (B13-33, Owed). No new fold_in.
+  Checks: test_batch13 + batch12 not-slow 94, embargo law (slow) 1 (5.6 GB), accuracy_classes
+  24, damage_classes 5, enumerate 16, coverage / effect_map / variants / game_constants /
+  backlog 157, unsupported nodes 25, state 24, read_bounds / plan_tree 26, layout 11, kaizo
+  policy batch13 + embargo 18, e1 batch a / c / d 5 / 16 / 19, gardenia 96 (in two runs: 7.8 GB
+  for its last 17 together), roark_close 23, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run), diff.py seed 48 ok 300. FOUND, not ours: test_differential and
+  seed 49 fail on metronome_turns with a Metronome-item holder locked in a charge move's second
+  turn (Dive, Shadow Force): JAX counts, the reference does not; the first case reproduces on
+  base 183158a (repro _scratch/e2/b13/repro_base.py), no Klutz / Embargo in either.
+  test_kaizo_outcome not run (killed three times by the machine RAM floor, no failure seen).
+  Agent G: MERGED main f588250 (E1 Batch E: Guard Spec's Mist and Dire Hit's Focus Energy reuse
+  BattleState.mist / focus_energy, G-62; E1 mem2) at 2f73331; conflict: reference _iron_ball
+  keeps the gated signature; backlog regenerated (Roark 4 groups). FIXED the Metronome-item
+  charge-turn mismatch (B13-34, step.py; the reference was right). AI: switching's and the
+  post-KO replacement's Natural Gift / Judgment / Weather Ball typed (B13-35); Gyro Ball's AI
+  damage case still refused, its decomp model written down (B13-36, Owed).
+  REVIEW of f588250..fa50a0b done; fixes (B13-37..B13-40): Natural Gift reads only the held item
+  or the berry its own action removed, never a stale recycle_item (both engines); Beat Up,
+  Gyro Ball and Assurance take the defender as an argument; 6212174's unmarked E1 item-path
+  changes recorded for E1 (B13-39); Water Spout's prep cost measured (x4.36, Owed); Klutz / Embargo
+  "unsupported" wording updated. Green: batch13 not-slow 62 (in three runs, 6.8 GB),
+  test_differential 5, diff.py seed 50 ok 300, variants / game_constants / backlog 69, test_cli
+  not-slow 102 (the two over-8 GB nodes not run), unsupported nodes 26, enumerate +
+  damage_classes not-slow 21.
+- Manager 2026-11-17: E1 takes AI blocks #16, #57, #114, #173, #215, #267, #109, #116, #252, #82
+  plus Plus/Minus, and mechanics #57, #215, #267, #116, #252, #82 plus sub_seq #238 (batch 13
+  does not model it: Hurricane is be_seq 141); dropped from parked batch 14.
+
 - **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
   manager with all results; waiting for its merge. Running background work that will notify:
   (1) batch 13 builder (Opus) in worktree _scratch/e2/b13wt, branch e2-batch13 from 9e08c7e; it
@@ -133,7 +256,7 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_cli_rank_deaths_and_protect 11.96 GB, test_cli_rank_default_budget_keeps_the_header 8.67,
   test_rank_lead_and_opponent_active 8.16 (likely the same expand CHUNK padding). Reported.
 - **Owed from batch 10:** Gravity grounding a Fly user (Gravity refused by coverage), Transform
-  vs a vanished target, Kaizo Hurricane (effect 141, no fight reaches it).
+  vs a vanished target. (Kaizo Hurricane: done in batch 13, B13-3, B13-4.)
 - **Batch 11 status (2026-11-16).** Committed: e760d9e the takeover mechanism, the Sleep Talk
   sampler fix, Encore into the invokers, B11-9, review items (c) (d) (B11-1..3, 7-9); 926874a
   Encore's AI, both Encore refusals lifted (backlog 230 -> 228), coverage tests on real data
@@ -227,7 +350,20 @@ Rules left out because another mechanic is missing; each closes with the mechani
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
   Magnet Rise, Nature Power, Chatter, Gyro Ball and others; the backlog rows name them) and the
-  Kaizo scripts be_seq#141 (Hurricane), be_seq#88 and sub_seq#238.
+  Kaizo script sub_seq#238 (be_seq#141, Hurricane: engine done in batch 13, B13-3, B13-4;
+  be_seq#88 and #104, the Triple Kick family: engine done in batch 13, B13-5..B13-8; their AI
+  scripts done in batch 13, B13-23..B13-24, with HIGH_CRITICAL_POISON_HIT and Gyro Ball's).
+- **Batch 13 AI (B13-27, B13-28):** Gyro Ball's TrainerAI_CalcDamage case (monSpeedValues: a
+  per-battler record of the last CompareBattlerSpeed and the AI's compare order across
+  slots); the voluntary-switch rule's Natural Gift, Judgment and Weather Ball
+  (switching._MOVES: TrainerAI_MoveType per caller, Move_CalcVariableType for the bench): the
+  switching half done (B13-35); Gyro Ball's left, its model written down (B13-36).
+- **Batch 13, vanilla only (no Kaizo move uses either: Kaizo's Fury Cutter is be_seq 88 and its
+  Rock Wrecker / Hyper Beam family left effect 80):** Fury Cutter #119 (CalcFuryCutterPower,
+  effect_script_0119.s:5: a per-battler furyCutterCount that doubles the power per use and
+  resets on a miss or another move: a new state field and its resets) and the recharge #80
+  (effect_script_0080.s:5, MOVE_SUBSCRIPT_PTR_RECHARGE_TURN: VOLATILE_CONDITION_RECHARGING, the
+  forced recharge turn in CheckStatusDisruption and the action choice). Both stay UNSUPPORTED.
 
 - Batch 9 left (Gardenia-split entries not done, by why): SolarBeam #151 (a charge turn: the
   two-turn lock and SYSCTL_FIRST_OF_MULTI_TURN's skips); Jump Kick / Hi Jump Kick #45
@@ -347,7 +483,28 @@ Rules left out because another mechanic is missing; each closes with the mechani
   battler (B5-10): read it, not `future_timer`.
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s): Safeguard.
 - `outcome.kings_rock_chance` reads the turn-start item (outcome.py), which breaks once a move
-  can move items mid-turn: Trick, Thief, Fling.
+  can move items mid-turn: Trick, Thief, Fling (and Recycle, once Fling can put a King's Rock
+  into recycleItem).
+- **Batch 13, Fling #233 left UNSUPPORTED (B13-22, B13-33):** BattleSystem_FlingItem
+  (battle_lib.c:5854-6156) gives the target one of 30 fling effects through the INDIRECT
+  ON_HIT flingScript: the HP and flavor berries' heals (and confusion), the status and PP
+  cures, White Herb's reset (at TryFling time, before the accuracy roll and CalcDamage,
+  :6029-6034), Mental Herb's infatuation cure, King's Rock / Razor Fang's flinch, Light Ball /
+  Poison Barb / the orbs' statuses, the pinch berries' raises, Starf's random +2, Lansat's
+  crit stage, Micle's flag, each skipped on a target under Embargo (:6145) and with the pluck
+  flag semantics; Fling's power is Battler_ItemFlingPower (embargo only, no Klutz, :5491-5498)
+  and its effect Battler_ItemFlingEffect; CalcDamage / CalcCrit read the item still held,
+  ApplyTypeChart (Expert Belt) and the accuracy (Wide / Zoom Lens) the flung one gone. Each
+  effect needs its law relevance (status, stage, confusion, flinch, crit-stage, Micle reads,
+  the order speeds), a per-time item view in damage, and Recycle of a flung item makes
+  ``outcome.kings_rock_chance`` (turn-start item) and the focus_band / Bright Powder / Quick
+  Claw reads time-dependent (the King's Rock Owed item above). Embargo and Klutz are done
+  (B13-29..B13-31).
+- **Prep cost of Water Spout / Eruption (B13-40):** falloff_cuts adds up to power - 1 entry-HP
+  regions per holder (x4.36 on the product of per-member variants for one HP-44 holder in the
+  vanilla sample party; more for higher max HP). The cuts are exact; closing this needs a prep-side
+  reduction (for example, cuts only where a power band changes a damage or KO class against this
+  opponent), proven to keep the same lines.
 - Kaizo's Ganlon and Apicot Berries (param 0) are refused by the divisor guard
   (`effect_map.DIVISOR_PARAM_MIN`, B2-3). Finding: `curHP <= maxHP / itemPower`
   (battle_lib.c:4778, :1294) is a C `/` on ints, which the compiler emits as a call to the
@@ -1729,3 +1886,392 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Guards: test_accuracy_classes test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds
   (_FOLLOWED), test_haze_psych_up_acupressure_are_seen_by_hit_thresholds and (slow)
   test_haze_psych_up_acupressure_classes_match_the_live_check.
+- B13-1 Twineedle (effect 77, BATTLE_EFFECT_POISON_MULTI_HIT) is effect 2's indirect TO_DEFENDER
+  poison plus SetMultiHit 2, SYSCTL_MULTI_HIT_MOVE (effect_script_0077.s:5-6): SECONDARY_STATUS
+  poison with the new MoveFlag.HIT_TWICE (tools/effect_map.py SCRIPT_FLAG_EFFECTS;
+  effects.hit_count, enumerate's per-hit masks, the reference's hit loop). LoopMultiHit reloads
+  the script per hit (bcp.c:3789), so the flag is set again and MULTI_HIT_TRIGGER_SECONDARY rolls
+  it per hit (bcp.c:3544-3554, battle_lib.c:1570-1586): outcome.secondary[side, hit], each roll
+  Serene Grace-doubled (:1571-1575). Accuracy once (SYSCTL_MULTI_HIT_MOVE), crit and roll per
+  hit. A defender fainted by hit 1 ends the loop (faintedMon, bcp.c:3780-3782) and its roll gives
+  nothing (curHP, battle_lib.c:1580). A substitute broken by hit 1 leaves
+  SELF_TURN_FLAG_SUBSTITUTE_HIT set (bcp.c:3371; BattleSystem_SetupLoop clears no turn flags,
+  battle_lib.c:3357-3362), so hit 2 hurts the Pokemon but its poison is stopped
+  (Battler_SubstituteWasHit, battle_lib.c:1582, :6259-6268; CheckSubstitute,
+  battle_script.c:9181). Shield Dust and the Poison / Steel immunity act per hit
+  (subscript_poison.s). Vanilla 25 power 20 %, Kaizo 50 / 30 % (ROM; be_seq 77 unchanged). A
+  chance-0 Twineedle would pack PLAIN with HIT_TWICE: two plain hits (Ruling 21).
+- B13-2 Blaze Kick (200, HIGH_CRITICAL_BURN_HIT), Poison Tail and Cross Poison (209,
+  HIGH_CRITICAL_POISON_HIT): BTLVAR_CRITICAL_BOOSTS + 1 (effect_script_0200.s:5, _0209.s:5) then
+  effect 4's burn / effect 2's poison (:6): SECONDARY_STATUS with MoveFlag.CRIT_UP (as Razor
+  Wind's, B10-12), read by outcome.side_crit_odds (criticalBoosts into
+  BattleSystem_CalcCriticalMulti, battle_script.c:2158-2163; sCriticalStageRates stage 1 = 1 in 8,
+  battle_lib.c:7097-7130). The crit and the secondary are independent draws (CalcCrit's
+  RandNext, then MULTI/ONE_HIT_TRIGGER_SECONDARY's); the stage is static, so no
+  CRIT_ODDS_EFFECTS entry (nothing here writes another battler's crit inputs). Guard:
+  tests/tools/test_effect_map.py test_script_flag_effects_match_every_script (every script with
+  CRITICAL_BOOSTS or SetMultiHit 2 is classified).
+- B13-3 Kaizo be_seq 141 (Hurricane, move 140: 120 power, 70 accuracy, 30 %) is effect 76's
+  indirect TO_DEFENDER confusion plus SYSCTL_HIT_DURING_FLY (rom_diff.toml be_seq 141;
+  effect_script_0076.s:5, as Thunder's _0152.s:6 for the Fly bit): KAIZO_EFFECTS 141 =
+  SECONDARY_CONFUSE, KAIZO_FLAG_EFFECTS 141 = MoveFlag.HIT_AIR (no DOUBLE_SEMI: no
+  BTLVAR_POWER_MULTI). build_tables' _move_flags gives a modelled Kaizo script its
+  KAIZO_FLAG_EFFECTS bits in place of the vanilla effect-keyed ones. Member marked modelled.
+- B13-4 Kaizo's overlay16 adds effect 141 beside BATTLE_EFFECT_THUNDER in CheckMoveHitAccuracy's
+  sun branch (hitRate = 50, bcp.c:2915-2917; rom 0x0224F068) and CheckMoveHitOverrides' rain
+  branch (MOVE_STATUS_MISSED cleared, :3024-3027; rom 0x0224F386), both inside NO_CLOUD_NINE:
+  MoveFlag.THUNDER, read by outcome._rate and the reference (B9-1); since the 932af5a merge the
+  bit comes from E1's KAIZO_THUNDER_EFFECTS (G-50, the same rule), not KAIZO_FLAG_EFFECTS. Both
+  code entries marked modelled. Test: an Air Lock foe keeps 70 and the miss (Kaizo has no Cloud
+  Nine species).
+- B13-5 Triple Kick (vanilla 104, BATTLE_EFFECT_HIT_THREE_TIMES) is EffectId.TRIPLE_KICK (step,
+  0, 0): ``SetMultiHit 3, SYSCTL_TRIPLE_KICK`` (effect_script_0104.s:5), three hits; the script
+  reloads per hit (bcp.c:3789) and adds its step to BTLVAR_MOVE_POWER (:7), which
+  BattleContext_Init zeroes once per action (battle_lib.c:1979) and BattleSystem_SetupLoop keeps
+  (:3357-3362): hit k has power k x step, CalcMoveDamage's inPower (:6673-6677) before
+  powerMul and Technician's <= 60 (:6688-6702). Vanilla step 10 (the script's constant); Kaizo's
+  be_seq 104 adds GetCurrentMoveData MOVEATTRIBUTE_POWER (step 0 = the move's own power) and
+  be_seq 88 is byte-identical to it (rom_diff.toml): Triple Kick 30 and Rock Wrecker 30 (hits
+  30/60/90), Triple Axel 20 and Fury Cutter 20 (20/40/60). damage.triple_kick_power,
+  effects.hit_count (3), the reference's _calc_move_damage. Members 88 and 104 marked modelled
+  (KAIZO_EFFECTS; no KAIZO_FLAG_EFFECTS bits).
+- B13-6 SYSCTL_TRIPLE_KICK lacks SYSCTL_SKIP_ACCURACY_CHECK but has _SKIP_ACCURACY_OVERRIDES
+  (system_control.h:81-86): every later hit's TryMove rolls CheckMoveHitAccuracy again with that
+  moment's state (bcp.c:3255-3259) and skips CheckMoveHitOverrides (:3264-3268: no No Guard,
+  Lock-On or Thunder / Blizzard weather sure hit; Protect and the semi-invulnerable test cannot
+  change mid-move). A later miss is MOVE_STATUS_MULTI_HIT_DISRUPTED (CheckMoveFailure,
+  :3320-3323): no damage, no miss message, AfterMoveMessage and AfterMoveEffects run as after a
+  hit (the engine's item pass repeats, finding what the last one found), then LoopMultiHit ends
+  (:3782). Outcome.hit[s, k > 0] is hit k's roll as its class over the same threshold grid
+  without the overrides (outcome.hit_threshold_pair, one pass; _rate's ``overrides``); the grid
+  covers what a hit can change before the next check (a disliked flavor berry's confusion for
+  Tangled Feet, ruling G-5; a White Herb). step's loop carries ``disrupted``; enumerate reads
+  hit[s, k] once hit[s, k - 1] can have landed and gates hit k's own reads on it
+  (OutcomeLaws.hit_later_thresholds / _possible; Protect restricts them too). The disrupted
+  hit's own CalcCrit (run before TryMove) can still print "A critical hit!" (MULTI_HIT_CRITICAL,
+  bcp.c:3538-3541; subscript_critical_hit.s:5): not observed (step._hit_events' coarsening;
+  Anger Point, which it would trigger, is unsupported). The Micle Berry flag (cleared by the
+  first check, bcp.c:2967-2970) is an unsupported item.
+- B13-7 Damage classes per hit: OutcomeLaws.damage is [side, hit, crit, roll]; hit k of a
+  TRIPLE_KICK move has its k x step table, a BEAT_UP hit its member's (damage.beat_up_damage),
+  every other hit hit 0's. Both are TABLE_DAMAGE_EFFECTS and INPUT_NEUTRAL_EFFECTS (they write the
+  foe's HP only), and damage_inputs_can_change's own-move clause treats their later hits as
+  MULTI_HIT's (their inputs change only through the HP, contact and item clauses).
+- B13-8 Test guards: test_triple_kick_later_classes_equal_raw_rolls (each later class steps like
+  the raw rolls it stands for, after a faster Sand-Attack), test_triple_kick_law_exact_and_sampled
+  (slow: a No Guard user against the brute force and the sampler; -1 accuracy against the
+  sampler), test_effect_map test_triple_kick_and_beat_up_scripts (every SetMultiHit 3 script).
+- B13-9 Beat Up (154, both games) is EffectId.BEAT_UP: BtlCmd_BeatUp (battle_script.c:6173-6247)
+  walks the party in slot order (BattleSystem_GetPartyPokemon: the party array, not the display
+  order) and hits once per slot BeatUpEligibleMon passes (:6157-6164): the user's own slot
+  whatever its HP or status, or one with HP, a species, no egg and MON_CONDITION_NONE
+  (damage.beat_up_slots). Nothing changes a benched Pokemon's HP or status mid-move, so the
+  start's list holds (effects.hit_count). Accuracy once (multiHitAccuracyCheck =
+  SYSCTL_MULTI_HIT_MOVE, :6187); the loop ends with the list or on a faint (bcp.c:3780-3782).
+  A full party gives six hits: outcome.MAX_HITS 5 -> 6. Every per-hit draw's sixth column comes
+  from fold_in(key, 42) (outcome.SIXTH_HIT_FOLD, split per field), so hits 0-4 keep their
+  samples (test_outcome's recorded draws); the 2-5 law's reads stay at 5.
+- B13-10 Beat Up's damage (:6206-6218): the member's species base Attack x the move's power x
+  (its level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2 (both by personal row:
+  SpeciesData_GetFormValue), x criticalMul (CalcCrit per hit with the user's crit stage;
+  Sniper x3, battle_lib.c:7139-7144), Helping Hand (doubles), then the variance (:7081-7092).
+  No CalcDamage: no stage, item (no Life Orb boost, battle_script.c:1346; its recoil still
+  follows SYSCTL_MOVE_HIT, bcp.c:4758-4765), ability, status, screen or weather; and
+  SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips CheckTypeChart (bcp.c:2355): no STAB,
+  effectiveness, Wonder Guard or noEffect, and subscript_type_resist_berry.s:5 skips the resist
+  berry (effects.IGNORES_TYPE_CHECKS). The member's "{0}'s attack!" message per hit and
+  SYSCTL_MULTI_HIT_SKIP_MESSAGE (no "Hit N times!") are text only.
+- B13-11 Vanilla Fury Cutter (#119) and the recharge (#80, Hyper Beam's family and vanilla Rock
+  Wrecker) are vanilla only (no Kaizo move uses either effect: Kaizo moves.json) and each needs
+  new battler state: left UNSUPPORTED, in the Owed list.
+- B13-12 Weather Ball (203, EffectId.WEATHER_BALL): CalcWeatherBallParams (battle_script.c:
+  6843-6872) under NO_CLOUD_NINE and any FIELD_CONDITION_WEATHER bit (fog included, condition.h:
+  131-135) sets movePower = power x 2 and moveType Water / Rock / Fire / Ice (rain / sand / sun /
+  hail; fog sets none, so Normal); with Cloud Nine / Air Lock alive it sets nothing. Judgment
+  (268, EffectId.JUDGMENT): effect_script_0268.s:5-95 sets moveType from the attacker's
+  Battler_HeldItemEffect HOLD_EFFECT_ARCEUS_* (any holder; Klutz and Embargo hide the item,
+  battle_lib.c:5352-5363, both supported since B13-29..31), read from each game's Tables.item_hold_effect
+  (damage.PLATE_TYPES; no item-table change, so no e1-model commit). The script runs before
+  TryMove's accuracy, chart and absorbing-ability states (bcp.c:3212-3216), which read
+  battleCtx->moveType (bcp.c:2358-2361, battle_lib.c:3490-3497, 2582-2597 STAB, 6680-6684 and
+  6716-6722 the type items), so damage.move_type_of returns it, as for Hidden Power. Normalize
+  (lib.c:6679) is an unsupported ability. Pure helpers for the AI: damage.weather_ball_params,
+  damage.judgment_type.
+- B13-13 Water Spout / Eruption (vanilla 190; Kaizo Eruption is effect 253): FLAIL with kind
+  FLAIL_FALLOFF: BtlCmd_CalcHPFalloffPower (battle_script.c:6645-6657) power x curHP / maxHP,
+  1 when 0, read at the action's only hit (damage.falloff_power). prep.variants adds every power
+  band top (falloff_cuts) to the entry-HP regions, as Flail's bands (up to power - 1 cuts).
+- B13-14 Gyro Ball (219, EffectId.GYRO_BALL): 1 + 25 x monSpeedValues[defender] /
+  monSpeedValues[attacker], at most 150 (battle_script.c:7123-7131). monSpeedValues is written by
+  every CompareBattlerSpeed (battle_lib.c:1372-1373); BranchActions runs SortMonSpeedOrder before
+  each action (bcp.c:888, back after MoveEnd :3999), so the speeds are those at the user's
+  action start (before its status checks and Custap Berry: a waking Quick Feet user keeps its
+  x1.5, an Unburden user its held-berry Speed): step._use_move passes the power from its state_in
+  as CalcMoveDamage's inPower (damage._pre_random in_power; the turn-start table reads the state).
+  A user Speed that can reach 0 (below 16: -6 is 10/40, paralysis / 4, lib.c:1225, :1259-1261)
+  divides by zero, left to the ROM's division routine: coverage.gyro_speed_line refuses it
+  (fight, pool and prep, GYRO_SPEED_MIN; twice it for a sSpeedHalvingItemEffects holder, Iron
+  Ball since E1 Batch D's G-56: / 2 between the stage and paralysis, battle_lib.c:1240-1246).
+  Pure helper damage.gyro_ball_power.
+- B13-15 Trump Card (235): sCurrentPPScaledPower[min(ppCur, 4)] (200, 80, 60, 50, 40) of
+  moveSlot after BattleControllerPlayer_DecrementPP (bcp.c:3182; Pressure's cost included),
+  moveSlot being the invoker's for a called move (common.h:8), passed as inPower from _use_move.
+  Punishment (245): 60 + 20 x the defender's stages above neutral over all 8, at most 200
+  (battle_script.c:7354-7371), read at the hit.
+- B13-16 Wake-Up Slap (217): DOUBLE_POWER (POWER_IF_TARGET_ASLEEP, cures 1): SmellingSalt's
+  script on MON_CONDITION_SLEEP (any count): CheckSubstitute first (:5), powerMul 20 and an ON_HIT
+  indirect subscript_heal_target_sleep.s (sleep bits off on a target with HP left, :5-6;
+  effects._cure_paralysis). An ON_HIT effect rolls no chance, so Kaizo's chance 100 is inert.
+- B13-17 Assurance (231, EffectId.ASSURANCE): movePower = the move's power, x 2 when the defender's
+  turnFlags.assuranceDamageMask is nonzero (effect_script_0231.s:5-9). subscript_update_hp.s:18-19
+  stores every update's hpCalcTemp unless above 0: a loss sets it, a zero update (a 1-HP False
+  Swipe or endure target, Pain Split at the average) clears it, a heal leaves it; the substitute
+  path (bcp.c:3359-3378) runs no UPDATE_HP. turnFlags is per battler: SetupNextTurn (lib.c:2231,
+  after the turn-end replacements) and CleanupFaintedMon (:2190-2193) clear it, a switch does
+  not. New per-battler field BattleState.ts_assurance (a turn scratch: kept at a pause, 0
+  between turns; replace() clears a replacement's hazard mark), marked by
+  effects.assurance_mark at the action-phase updates (hits, recoil, Struggle, contact
+  abilities, the self-hit, the crash, Life Orb, the hazards, Curse, Substitute, Belly Drum, Pain
+  Split); the residual updates come after every reader. Reference: _Turn.assurance, _lose_hp.
+- B13-18 Damage classes: WEATHER_BALL and JUDGMENT are TABLE_DAMAGE_EFFECTS (the weather, switch
+  and Knock Off clauses cover their inputs), Water Spout is FLAIL's (hp_sensitive); GYRO_BALL,
+  TRUMP_CARD, PUNISHMENT and ASSURANCE are NON_TABLE (action-start speeds, the PP after the
+  decrement, the defender's stages, the turn's flag); all six are INPUT_NEUTRAL (they write the
+  foe's HP only). No new draw, no new Outcome field.
+- B13-19 recycleItem is per battler (battle_context.h:307): BtlCmd_RemoveItem writes it
+  (battle_script.c:8977), BtlCmd_TryRecycle reads and clears it (:9005-9007), nothing else
+  writes it, so a switch keeps it and a newcomer recycles its predecessor's item. New
+  BattleState.recycle_item (e1-model commit c09d8ac; every RemoveItem: effects.consume_item,
+  hooks.held_item_check, hooks.pluck_berry, the reference's _remove_item); item_consumed stays the
+  per-slot observation record. Recycle (184, EffectId.RECYCLE): effect_script_0184.s:5 fails a
+  user holding an item, TryRecycle an empty record (MOVE_STATUS_FAILED); else the item is held
+  again (:7, UpdateMonDataFromVar: CopyToParty of a held item, no AI change; "found one {1}"
+  tags BTLSCR_MSG_TEMP: no reveal) at the script, and AfterMoveEffects' held-item check sees it
+  (a restored berry in a pinch is eaten at once). The script runs only past the PP and target
+  checks (MOVE_STATUS_NO_PP is a NO_EFFECTS status, bcp.c:3205-3216).
+- B13-20 Natural Gift (222, EffectId.NATURAL_GIFT): BtlCmd_CalcNaturalGiftParams
+  (battle_script.c:8088-8102) reads Battler_NaturalGiftPower / _Type (battle_lib.c:5465-5480:
+  Battler_HeldItem, which Klutz and Embargo empty, B13-29..31) from ItemData.naturalGiftPower /
+  _Type (include/item.h:63-64; new Tables.item_gift_power / item_gift_type, 0x1F = none,
+  itemproc.c:242); power 0 (no item, a non-berry) fails it (effect_script_0222.s:11-13), and
+  moveType keeps 0 then. Otherwise CalcCrit, CalcDamage, then RemoveItem BTLSCR_ATTACKER (:8)
+  before TryMove: a miss, Protect or an immunity still eats the berry (into recycleItem and
+  item_consumed; Unburden then doubles). The hit's power and type come through
+  damage.gift_item: the held item, or once removed the berry step._use_move passes in (never
+  recycle_item itself, which outlives the action: B13-37); a berry is no damage, crit or accuracy input of its
+  attacker, so the hit at its own time equals CalcDamage at the script's.
+- B13-21 Laws (both moves draw nothing new): NATURAL_GIFT is INPUT_NEUTRAL (it writes the foe's
+  HP and removes its own berry, which the item clauses over-approximate) and NON_TABLE;
+  RECYCLE is NON_TABLE and INPUT_CLAUSE with a recycle clause (a faster foe's Recycle: every
+  hit of the side may change, conservative). Recycle's restored item may meet its user's move
+  end item check: stage_free and para_free treat a Recycle like a Pluck (Salac, White Herb,
+  Lum, Cheri). _end_speeds' Unburden bit now toggles: a holder of an item unburdened, a holder
+  of none holding one again (stand-in: its battler's record, else item 1; no recyclable item
+  acts on speed but through Unburden's heldItem test). Accuracy guard: both write no accuracy
+  input (no accuracy item can be consumed, so none comes back). No new fold_in index.
+- B13-22 Left UNSUPPORTED (Owed): Fling (233) and Embargo (232). Fling's flung item acts on its
+  target through BattleSystem_FlingItem (battle_lib.c:5854-6156) and the 30 fling subscripts:
+  heals, cures, White Herb's reset at TryFling time (before the accuracy roll and CalcDamage,
+  :6029-6034), Light Ball / Poison Barb / orbs / King's Rock statuses and flinch on the defender
+  as INDIRECT effects, pinch-berry raises, the flavor confusion, SELF_TURN_FLAG_PLUCK_BERRY left
+  set when the subscript does not run; its CalcDamage / CalcCrit read the item still held but
+  ApplyTypeChart (Expert Belt) and the accuracy (Wide / Zoom Lens) no longer do. Each of those
+  needs its own law relevance (para / stage / confusion / flinch reads, the order speeds) and a
+  per-time item view in damage; and once a flung item is in recycleItem, Recycle can give back
+  Bright Powder, Focus Band, Quick Claw, King's Rock (the hit thresholds, focus_band and
+  flinch_item laws read the turn-start item). Embargo needs the Battler_HeldItem suppression
+  (battle_lib.c:5352-5363, Klutz's too) at every held-item read of both engines and the laws (no
+  single accessor exists: about 50 direct reads), the per-battler embargoTurns, its turn-end
+  count and subscript_embargo_end.s, Baton Pass keeping it, the bag block, and Fling's and
+  Natural Gift's Embargo branches.
+- B13-23 Trainer AI of batch 13 (outcome.KAIZO_TRANSCRIBED, by the Kaizo battle effect the
+  scripts read): Basic_CheckCanRecycle (script.s:238 -> :911-915, LoadRecycleItem
+  trainer_ai.c:2510-2518 = BattleState.recycle_item), Basic_CheckNaturalGift (:258 ->
+  :1053-1059; Basic_NaturalGiftBerries :1061-1126 = item ids 149-212), NonStandard for Gyro
+  Ball, Trump Card, Punishment (:256, :265, :274 -> :572-585); Expert_Recycle (:1737 ->
+  :4517-4534, roll :4526), Expert_WaterSpout (:1742 -> :4610-4632), Expert_HighCritical for
+  Blaze Kick and Poison Tail / Cross Poison (:1748, :1754 -> :2827-2843), Expert_WakeUpSlap
+  (:1761 -> :4829-4847), Expert_GyroBall (:1763 -> :4869-4871, PopOrEnd only),
+  Expert_Assurance (:1774 -> :5189-5216, rolls :5204, :5212; its RecoilBerries table holds item
+  ids 211-212 compared with LoadHeldItemEffect's hold effect, trainer_ai.c:1901-1913, ids at
+  most 146: never true, transcribed as written), Expert_TrumpCard (:1778 -> :5308-5359,
+  LoadCurrentMovePP :2024-2028; Kaizo's Trump Card has 1 PP), Expert_Punishment (:1788 ->
+  :5900-5951, SumPositiveStatStages :2243-2257; each TryScorePlusN adds and falls into the
+  next, unlike the decomp's comment). New commands in ai.commands: load_recycle_item,
+  load_current_move_pp, sum_positive_stat_stages, load_held_item_effect. read_bounds.py
+  regenerated (tools/ai_read_bounds.py); ALLIN_READS stays 18.
+- B13-24 No flag script names Twineedle (77), Triple Kick / Rock Wrecker (104), Kaizo Hurricane
+  (141, BATTLE_EFFECT_UNUSED_141), Beat Up (154), Weather Ball (203) or Judgment (268): grep of
+  every BATTLE_EFFECT_* name in script.s (Basic_ScoreMoveEffect :133-286, Expert_Main
+  :1623-1811, the IfMoveEffectKnown / table entries) finds none; they take the generic paths.
+  The other mentions are tables the code already reads whole: Expert_Encore's list (:3254
+  Recycle, :3268 Natural Gift), Risky_RiskyEffects (:6556 Gyro Ball), CheckHP's attacker
+  table (:7853 Water Spout), and Expert_LuckyChant's IfMoveEffectKnown of 200 / 209 (:5504-5505,
+  the player's moves; Lucky Chant's label is not transcribed). Kaizo's 88 (Triple Axel, Fury
+  Cutter) keeps vanilla's RANDOM_DAMAGE_1_TO_150_LEVEL paths (E1 batch 14) and 253 (Eruption)
+  Expert_RecoilMove (E2 batch 10): the AI reads the effect id, not the patched be_seq.
+- B13-25 TrainerAI_CalcDamage's Natural Gift and Judgment cases (trainer_ai.c:2885-2971) are
+  modelled (damage.ai_case_power / ai_case_type): Natural Gift's power is the heldItem
+  argument's naturalGiftPower, its type the item's naturalGiftType when that power is not 0,
+  else TYPE_NORMAL; Judgment's power 0 and its plate type, else TYPE_NORMAL; CalcMoveDamage
+  reads 0 as the table power / type (battle_lib.c:6673-6684), ApplyTypeChart likewise
+  (:2588-2590). heldItem is the attacker's battleMons item (:1041-1050, :1560-1569,
+  :2130-2139, :2210-2219), a benched member's own for IfPartyMemberDealsMoreDamage
+  (:2156-2165, commands.estimate's item), the player's for IfBattlerDealsMoreDamage's last
+  move (:2228-2237). Klutz and embargoTurns gate both cases (:2886, :2898; B13-22), both
+  supported since B13-29..31. Weather Ball takes the default case (table power and type,
+  :3074-3078).
+  The other batch-13 moves need no case: TrainerAI_CalcAllDamage calls TrainerAI_CalcDamage
+  once per move (:2799-2838) and its default (:3074-3078) passes power 0 and TYPE_NORMAL, so
+  Twineedle and Triple Kick are one hit at the table power, Beat Up, Trump Card, Punishment,
+  Assurance and Wake-Up Slap their table power, and Water Spout is in sNoDamageCalcMoveEffects
+  (:31-45: no estimate); the existing AI path already does exactly that.
+- B13-26 TrainerAI_MoveType (trainer_ai.c:3127-3245): Natural Gift is Battler_NaturalGiftType
+  (battle_lib.c:5477-5481) of the battler's item, whatever its power (no item: 0, the table
+  type; a non-berry: 0x1F, which matches no chart row or attacker type in ApplyTypeChart's u8
+  moveType, :2564-2640: damage.AI_TYPELESS = TYPE_MYSTERY, whose chart row is neutral);
+  Judgment the plate type of Battler_HeldItemEffect, else TYPE_NORMAL (the table type);
+  Weather Ball Water / Rock / Fire / Ice under NO_CLOUD_NINE in rain / sand / sun / hail
+  (:3209-3227). Elsewhere (no weather, fog alone, Cloud Nine / Air Lock) the case assigns
+  nothing: the ROM's function (overlay14 0x0222327C) returns r5 unwritten on that path, the
+  caller's r5 (the BattleContext pointer in AICmd_CalcMaxEffectiveness, 0x02221064; the
+  BattleSystem pointer in AICmd_IfMoveEffectivenessEquals, 0x0222111A), a heap address whose
+  low byte becomes the type: not knowable, so policy._refused refuses an AI Weather Ball in
+  those states only (commands.MOVE_TYPE_MOVES = Weather Ball; damage.ai_weather_ball_typed).
+  The backlog names it "move-id case of TrainerAI_MoveType where it assigns no type".
+- B13-27 Gyro Ball's TrainerAI_CalcDamage case (trainer_ai.c:2995-3003) stays refused
+  (commands.CALC_DAMAGE_MOVES): it reads monSpeedValues, written by every
+  CompareBattlerSpeed (battle_lib.c:1372-1373): the action-order sorts of the last turn
+  (battle_controller_player.c:780, :888, :3992), and the AI's own IfSpeedCompareEqualTo
+  (trainer_ai.c:1109, :1121) and :2081 compares earlier in the same decision, in flag-major,
+  slot-minor order. Modelling it needs a per-battler speed record written at each sort (new
+  state) and the compare order across the slots the per-slot scoring factors apart (Owed).
+  Gyro Ball's scripts are transcribed (B13-23), so only this case refuses it.
+- B13-28 Owed (AI): the voluntary-switch rule still refuses Natural Gift, Judgment and Weather
+  Ball on both sides (switching._MOVES): AI_HasSuperEffectiveMove / AI_CannotDamageWonderGuard
+  / AI_OnlyIneffectiveMoves type the AI's moves with TrainerAI_MoveType (now modelled but
+  Weather Ball's unassigned case, whose r5 differs per caller), the bench's with
+  Move_CalcVariableType (battle_lib.c:8097, its Natural Gift, Judgment and
+  Weather Ball cases), the player's moveHit with
+  TrainerAI_MoveType (trainer_ai.c:3767). And Gyro Ball's AI damage (B13-27).
+- B13-29 Battler_HeldItem's gate (battle_lib.c:5352-5363): ITEM_NONE under Klutz
+  (Battler_Ability, :5354) or a nonzero embargoTurns (:5358), else heldItem: e1-model
+  ``state.held_item`` (Embargo the active battler's; new per-battler field ``embargo``,
+  embargoTurns with its MOVE_EFFECT_EMBARGO bit, volatile, kept by Baton Pass, moves.h:46-48,
+  battle_lib.c:2112). Gated (every Battler_HeldItemEffect / _HeldItemPower(ALL or 0) /
+  _NaturalGift* read, :5438-5481): CalcMoveDamage's items (:6662-6668, the AI estimate too),
+  ApplyTypeChart's Expert Belt (:2578), CompareBattlerSpeed's Choice Scarf, Quick Claw, Custap,
+  Lagging Tail (:1215-1218), the crit items (:7117), the accuracy items (bcp.c:2949-2957), the
+  item triggers (:4581, Leftovers :4927, detrimental :5310, on hit :5381, pivot :7340-7342),
+  CheckItemHoldEffect / GetItemHoldEffect / GetItemEffectParam (battle_script.c:7912-7976: Big
+  Root, resist berries, Grip Claw, Power Herb, Judgment), Light Clay (:4229), weather rocks,
+  Life Orb / Metronome (:1346-1352), the Choice lock and its move ban (:6943, battle_lib.c:2257),
+  Focus Band / Sash (:9106), King's Rock (bcp.c:4633), Shell Bell / Life Orb recoil
+  (bcp.c:4719-4720), Iron Ball's grounding (:5505, the AI chart's trainer_ai.c:3333-3791),
+  Natural Gift (:5465-5481), TrainerAI_MoveType (trainer_ai.c:3137). Raw heldItem: the
+  speed-halving items (:1240-1246), Unburden (:1268-1272, :4434, :161-166), Knock Off
+  (battle_script.c:6614-6627), Pluck (:8122-8127, battle_lib.c:5479, :5544, :5833), RemoveItem
+  (:8978), Recycle (effect_script_0184.s:5), Trace's Griseous Orb (:3723), Sticky Barb's empty
+  attacker (:5389, :7379), the exp payout's party items, the AI's LoadHeldItem /
+  IfHeldItemEqualTo / LoadHeldItemEffect (trainer_ai.c:1891-1931); TrainerAI_CalcDamage's
+  Natural Gift / Judgment cases test their ability / embargoTurns arguments (:2886, :2898): the
+  active's gated item, a Klutz party member's none (its embargo FALSE, :2163). The laws read the
+  gated items at the turn start (hit thresholds, crit odds, King's Rock chance); the possibility
+  flags keep raw items (over-approximate). step.qc_kept keeps the raw item (over-keeping only
+  splits states). Behaviour-neutral without Klutz or Embargo.
+- B13-30 Klutz (AbilityId.KLUTZ, decomp 103) is supported: its battle reads are the gate
+  (:5354) and BattleSystem_PluckBerry's eater test (:5839-5844, with MOVE_EFFECT_EMBARGO: the
+  berry is eaten with no effect, scriptTemp 0, the pluck flag left set; hooks.pluck_berry, in
+  the Embargo commit, B13-31); its AI reads are in Fling's, Trick's and Skill Swap's scripts
+  (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported moves).
+  INPUT_NEUTRAL (it holds from the turn start; nothing changes it mid-turn).
+- B13-31 Embargo (232, EffectId.EMBARGO): effect_script_0232.s:5 fails (MOVE_STATUS_FAILED,
+  before TryMove) behind a substitute; else a direct ON_HIT TO_DEFENDER
+  subscript_embargo_start.s (run without MOVE_STATUS_NO_EFFECTS, battle_lib.c:1484-1489) fails
+  (:57) on a substitute, Multitype (raw ability), embargoTurns != 0, a raw Griseous Orb, the
+  defender's quickClaw (until it moved) or custapBerry flag (:6-11; the custapBerry flag clears
+  when its holder's move starts, subscript_check_quick_claw.s:26-27: play_hit's foe_custap now
+  reads it so, which also matches the reference's Pluck / Knock Off), skipping AfterMoveEffects
+  (primary_effect_fails); else embargoTurns = 5 (:14). MON_COND_CHECK_STATE_EMBARGO
+  (bcp.c:1671-1677) counts it down after Taunt and before Yawn and the item checks (a count
+  reaching 0 lets ITEM_CONDITION / _DETRIMENTAL act that turn; Leftovers, :1369, came first). A
+  switch clears it, Baton Pass keeps it (B13-29). Trainer bag items ignore it (the bag UI's
+  embargoRemainingTurns, battle_display.c:3847, is the player's; TrainerAI_ShouldUseItem and
+  BattleSystem_UseBagItem never read it). Laws: INPUT_CLAUSE (the embargo clause: a holder of
+  a gated item), NON_TABLE; CRIT_ODDS_EFFECTS write (embargo on every battler); the hit grid's
+  second half is a Wide Lens holder's threshold with the lens hidden (possible when the foe's
+  Embargo can go first; a hidden Zoom Lens / Micle Berry is the first half); Future Sight's
+  roll is kept whole while an Embargo is used or up (its turn-end count can end before the
+  hit); the turn end's speed tie is enumerated whenever a foe's Embargo can hide a Choice
+  Scarf. No new fold_in index, no Outcome field.
+- B13-32 Trainer AI of Embargo: Basic_CheckEmbargo (script.s:262 -> :1184-1197: the defender's
+  MOVE_EFFECT_EMBARGO -10; a defender recycle item in a Frontier battle -10, never in the
+  story) and Expert_Embargo (:1775 -> :5223-5229, +1 unless the 128 roll at :5225 jumps);
+  commands.MoveEffectMask.EMBARGO (moves.h:34), BATTLE_TYPE_FRONTIER (battle.h:33);
+  read_bounds regenerated.
+- B13-33 Fling (233) stays UNSUPPORTED (Owed list): its 30 fling effects on the target
+  (battle_lib.c:5854-6156) each need their own law relevance and a per-time item view; its AI
+  entries (Basic_CheckFling, Expert_Fling) are not transcribed while the move is refused.
+- B13-34 The Metronome item's count (BattleSystem_UpdateMetronomeCount, battle_lib.c:6160-6178)
+  is updated at the end of BeforeMove (bcp.c:3221), before the move's script (:3214): a charge
+  move's strike turn is still VOLATILE_CONDITION_MOVE_LOCKED there (subscript_charge_move_cleanup.s:6
+  clears it inside the script), so it does not count; a Recycle, Natural Gift or Power Herb
+  changes the held item only after it. The reference was right; step.py ran the update after
+  the script's cleanup (fixed: it now follows _set_last_move). E1 owns the item (G-60).
+- B13-35 The voluntary-switch rule and the post-KO replacement type a party member's move with
+  Move_CalcVariableType (battle_lib.c:8097-8203; trainer_ai.c:3324, :3443, :3502, :3782;
+  battle_lib.c:7998, :8051): Natural Gift the naturalGiftType of the member's party item
+  (MON_DATA_HELD_ITEM, no Klutz / Embargo gate, whatever its power; 0 is the table type through
+  CalcEffectiveness, :2692-2696; a non-berry's 0x1F no type), Judgment its HOLD_EFFECT_ARCEUS_*
+  type (else TYPE_NORMAL), Weather Ball the weather's type under NO_CLOUD_NINE and rain, sand,
+  sun or hail; elsewhere the case leaves ``type`` unassigned, an uninitialized register:
+  refused there (switching.weather_ball_refused: an AI party Weather Ball or a Weather Ball
+  moveHit, typed by TrainerAI_MoveType at :3767; replacement: a candidate's). The AI's active
+  and the player's moveHit go through TrainerAI_MoveType (damage.ai_move_type, B13-26). The
+  three moves leave switching._MOVES and PLAYER_MOVE_REFUSALS.
+- B13-36 Gyro Ball's TrainerAI_CalcDamage case (trainer_ai.c:2995-3003) stays refused (Owed);
+  its model from the decomp: monSpeedValues is written only by CompareBattlerSpeed
+  (battle_lib.c:1372-1373), after its both-alive short-circuit (:1204-1210 returns first), with
+  values that are a function of the state at the call (no Quick Claw term). Writers:
+  SortMonSpeedOrder (battle_lib.c:3364-3381) at TrainerMessage and ShowBattleMon (bcp.c:251,
+  :263, battle start after the switch-in effects), BranchActions (bcp.c:888: before every action
+  and once after the last, so the value an AI decision reads first is the one of the last
+  BranchActions of the previous turn with both actives alive; replacements and the turn end
+  write none), CalcTurnOrder (:780) and the Trick Room re-sort (:3991-3992), each followed by a
+  BranchActions on the same state; and within the decision IfSpeedCompareEqualTo
+  (trainer_ai.c:1109, :1121) and LoadBattlerSpeedRank (:2081), which write the current speeds
+  (ShouldSwitch and ShouldUseItem make none). So it needs a per-battler state field (both
+  engines, the differential) and an AI context bit "a compare ran" carried flag-major,
+  slot-minor (_run_flags), choosing the stale or the current estimate at FlagMoveDamageScore,
+  the kill checks and IfPartyMemberDealsMoreDamage (IfBattlerDealsMoreDamage's Copycat case
+  divides the player's value by itself: 26). The per-slot exact distribution runs one read
+  pattern for every slot (_slot_move_distribution), so a compare reached past a random read in
+  an earlier slot correlates the slots: refuse that state when the two powers differ.
+- B13-37 (review fix) Natural Gift reads only the held item: Battler_NaturalGiftPower / _Type
+  take Battler_HeldItem (battle_lib.c:5465-5480), and a power of 0 fails the move
+  (battle_script.c:8094-8099). recycleItem is per battler and outlives the action, the turn and
+  switches (:8977, :9005-9007), so it is never an input: damage.gift_item(state, side, gift) and
+  the reference's _gift_item take the berry this action's own RemoveItem (effect_script_0222.s:8)
+  removed as an explicit argument (step._use_move's gift_removed, threaded through move_type_of,
+  _pre_random, damage_for_roll, play_hit and thaw_target; the reference's _Turn.gift), and
+  otherwise read the held item. A Natural Gift user that holds nothing has the table type and power
+  0 in move_type_of, in the turn-start tables and in the enumeration (prep and playout included),
+  whatever its record says.
+- B13-38 (review fix, doubles convention 1) The defender is passed in: damage.beat_up_damage(...,
+  def_side, ...) (DEFENDING_MON, battle_script.c:6209), and in the reference _beat_up_damage(...,
+  defender, ...), _gyro_power(..., defender) (CalcGyroBallPower, :7123-7131) and
+  _script_power(..., defender, ...) (BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK,
+  effect_script_0231.s:7). The singles callers name the other side once, at the action or table
+  level (damage_table, damage_for_roll, enumerate, the reference's _use_move and _hit).
+- B13-39 (process, for E1) Commit 6212174 ("feat(e2): batch 13 Embargo") changed E1's item paths
+  without the "e1-model:" title: hooks.pluck_berry (a Klutz or embargoed eater eats the
+  berry with no effect, battle_lib.c:5839-5844, and the eaten / effect-on split that moves the
+  RemoveItem / recycle_item writes) and step's play_hit argument foe_custap, now gated on
+  ~target_moved (subscript_check_quick_claw.s:26-27). It is already merged over, so history is
+  kept; E1 should review those paths from this line.
+- B13-40 (review measure) prep.variants.falloff_cuts gives a Water Spout / Eruption holder one
+  entry-HP region per power band below the top (up to power - 1 = 149 cuts, capped by its max HP).
+  Measured on the vanilla sample party against Roark (member 0, max HP 44, Water Spout or Eruption
+  in slot 4): that member's regions 7 -> 44, its one-change variants 10 -> 47, the party's
+  one-change variants 47 -> 84 (x1.79), and the product of (1 + variants) per member 310464 ->
+  1354752 (x4.36); 0.34 GB. The cuts stay exact (Owed: the prep cost).

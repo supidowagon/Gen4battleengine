@@ -29,8 +29,10 @@ comparison after it still runs (battle_lib.c:8080), on the ``score`` left over f
 1, which this module does not track. Wonder Guard's ``MOVE_STATUS_IMMUNE`` bit zeroes a stage-2
 score (``switching.wonder_guard_bit``, ruling G-23). The type-chart modifiers (Levitate,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball, Miracle Eye, Natural Gift, Judgment and Weather Ball; Hidden Power takes each
-candidate's own IV type, ``switching.party_move_types``; the player's Foresight, Ingrain and
+Ball, Miracle Eye; Hidden Power, Natural Gift, Judgment and Weather Ball take each
+candidate's ``Move_CalcVariableType``, ``switching.party_move_types``, B13-35; a candidate's
+Weather Ball where that case assigns no type is refused here
+(``damage.ai_weather_ball_typed``); the player's Foresight, Ingrain and
 roosting flags are read through ``apply_type_chart``: a replacement is where the AI reads
 roosting, battle_lib.c:2540) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
@@ -54,7 +56,12 @@ from nuzline.ai.switching import (
     wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
-from nuzline.engine.damage import calc_move_damage, iron_ball
+from nuzline.engine.damage import (
+    AI_WEATHER_BALL,
+    ai_weather_ball_typed,
+    calc_move_damage,
+    iron_ball,
+)
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 __all__ = ["REFUSED_SLOT", "post_ko_switch_in"]
@@ -131,6 +138,10 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
 
     stage_2 = ~jnp.any(eligible)
     stale = stage_2 & jnp.any(candidate) & ~scored[first, 0]
+    # Move_CalcVariableType of the candidates' moves (battle_lib.c:7998, :8051): an unassigned
+    # Weather Ball type is refused (B13-35).
+    ball = candidate[:, None] & (moves == AI_WEATHER_BALL)
+    stale = stale | (jnp.any(ball) & ~ai_weather_ball_typed(tables, state))
     pick = jnp.where(
         jnp.any(eligible), pick_1, jnp.where(jnp.max(score_2) > 0, pick_2, first)
     )  # 3: battle_display.c:4548-4556
@@ -155,6 +166,7 @@ def post_ko_switch_in(tables: Tables, state: BattleState, power_mul=10) -> jnp.n
         raise UnsupportedAi(
             "replacement: stage 2 of BattleAI_PostKOSwitchIn compares the stale stage-1 "
             "score after the first candidate's empty or power-1 move slot 0 "
-            "(battle_lib.c:8080); not implemented"
+            "(battle_lib.c:8080), or Weather Ball's type case assigns nothing in this "
+            "weather (battle_lib.c:8177-8195); not implemented"
         )
     return jnp.where(stale, REFUSED_SLOT, pick).astype(_I32)

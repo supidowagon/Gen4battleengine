@@ -342,6 +342,34 @@ def test_item_hold_param_matches_decomp(tables, names):
         assert int(tables.item_hold_param[names.item(item)]) == param, item
 
 
+def test_item_fling_and_natural_gift_match_decomp(tables, names, kaizo_tables, kaizo_names):
+    # E2 batch 13: ItemData.flingPower / flingEffect / naturalGiftPower / naturalGiftType as
+    # stored (res/items/data/*.json; include/constants/items.h:86-116 FLING_EFFECT_*; a null
+    # Natural Gift type is 0x1F, tools/dataproc/src/itemproc.c:242).
+    for item, power, effect, gift, gift_type in (
+        ("Oran Berry", 10, 7, 60, 3),  # FLING_EFFECT_HP_RESTORE, TYPE_POISON
+        ("King’s Rock", 30, 26, 0, 0x1F),  # FLING_EFFECT_FLINCH
+        ("White Herb", 10, 24, 0, 0x1F),  # FLING_EFFECT_STATDOWN_RESTORE
+        ("Iron Ball", 130, 0, 0, 0x1F),
+        ("Potion", 30, 0, 0, 0x1F),
+    ):
+        i = names.item(item)
+        got = (
+            int(tables.item_fling_power[i]),
+            int(tables.item_fling_effect[i]),
+            int(tables.item_gift_power[i]),
+            int(tables.item_gift_type[i]),
+        )
+        assert got == (power, effect, gift, gift_type), item
+    # The Kaizo ROM's own item data (data/intermediate_kaizo/rom/items.json): Town Map flings
+    # for 120 with FLING_EFFECT_FLINCH.
+    i = kaizo_names.item("Town Map")
+    assert (int(kaizo_tables.item_fling_power[i]), int(kaizo_tables.item_fling_effect[i])) == (
+        120,
+        26,
+    )
+
+
 def test_kaizo_power_items_are_macho_braces(kaizo_tables, kaizo_names):
     # data/intermediate_kaizo/items.json: Kaizo gives the six Power items Macho Brace's hold
     # effect (HOLD_EFFECT_EVS_UP_SPEED_DOWN, generated/item_hold_effects.txt:51) and param 0,

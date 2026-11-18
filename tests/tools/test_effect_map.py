@@ -9,8 +9,13 @@ import pytest
 from nuzline.engine.ids import EffectId, MoveFlag, Stat
 from tools.effect_map import (
     CERTAIN_SECONDARY_EFFECTS,
+    CHARGE_FLAG_EFFECTS,
     DECOMP_EFFECT_NAMES,
     DECOMP_EFFECT_TO_ID,
+    KAIZO_EFFECTS,
+    KAIZO_FLAG_EFFECTS,
+    KAIZO_THUNDER_EFFECTS,
+    SCRIPT_FLAG_EFFECTS,
     SEMI_HIT_EFFECTS,
     TYPE_CHART_STATUS_MOVES,
 )
@@ -219,6 +224,54 @@ def test_semi_invulnerable_flags(tables, names, kaizo_tables, kaizo_names):
     # Kaizo rewrites Dive and Bounce (effects 0 and 6): no charge.
     for move in ("Dive", "Bounce"):
         assert not int(kaizo_tables.move_flags[kaizo_names.move(move)]) & MoveFlag.CHARGE
+
+
+def test_script_flag_effects_match_every_script():
+    """B13-1, B13-2: every effect script that adds BTLVAR_CRITICAL_BOOSTS is HIGH_CRIT or carries
+    MoveFlag.CRIT_UP (CHARGE_FLAG_EFFECTS, SCRIPT_FLAG_EFFECTS), and every SetMultiHit 2 is
+    MULTI_HIT with 2 hits or MoveFlag.HIT_TWICE; each SCRIPT_FLAG_EFFECTS bit is in its script."""
+    for e, bits in SCRIPT_FLAG_EFFECTS.items():
+        text = _script(e)
+        assert ("OPCODE_ADD, BTLVAR_CRITICAL_BOOSTS, 1" in text) == bool(bits & MoveFlag.CRIT_UP)
+        assert ("SetMultiHit 2," in text) == bool(bits & MoveFlag.HIT_TWICE)
+        assert e in DECOMP_EFFECT_TO_ID
+    for path in sorted((DECOMP / "res/battle/scripts/effects").glob("effect_script_*.s")):
+        e, text = int(path.stem[-4:]), path.read_text(encoding="utf-8")
+        eid, params = DECOMP_EFFECT_TO_ID.get(e, (EffectId.UNSUPPORTED, (0, 0, 0)))
+        flags = SCRIPT_FLAG_EFFECTS.get(e, 0) | CHARGE_FLAG_EFFECTS.get(e, 0)
+        if "BTLVAR_CRITICAL_BOOSTS" in text and eid != EffectId.UNSUPPORTED:
+            assert eid == EffectId.HIGH_CRIT or flags & MoveFlag.CRIT_UP, e
+        if "SetMultiHit 2," in text and eid != EffectId.UNSUPPORTED:
+            assert (eid == EffectId.MULTI_HIT and params[0] == 2) or flags & MoveFlag.HIT_TWICE, e
+
+
+def test_triple_kick_and_beat_up_scripts():
+    """B13-5, B13-9: every SetMultiHit 3 script is TRIPLE_KICK with its per-hit power step
+    (effect_script_0104.s:5-7: + 10); Beat Up's script sets SYSCTL_IGNORE_IMMUNITIES and runs
+    BtlCmd_BeatUp with no CalcDamage (effect_script_0154.s:5-7). Kaizo's 104 and 88 are
+    TRIPLE_KICK with step 0 (the move's power, rom_diff.toml)."""
+    for path in sorted((DECOMP / "res/battle/scripts/effects").glob("effect_script_*.s")):
+        e, text = int(path.stem[-4:]), path.read_text(encoding="utf-8")
+        if "SetMultiHit 3," in text:
+            assert DECOMP_EFFECT_TO_ID[e] == (EffectId.TRIPLE_KICK, (10, 0, 0)), e
+            assert "SYSCTL_TRIPLE_KICK" in text and "BTLVAR_MOVE_POWER, 10" in text, e
+    text = _script(154)
+    assert "SYSCTL_IGNORE_IMMUNITIES" in text and "BeatUp" in text and "CalcDamage" not in text
+    assert DECOMP_EFFECT_TO_ID[154] == (EffectId.BEAT_UP, (0, 0, 0))
+    for e in (88, 104):
+        assert KAIZO_EFFECTS[e][1:] == (EffectId.TRIPLE_KICK, (0, 0, 0)), e
+        assert e not in KAIZO_FLAG_EFFECTS
+
+
+def test_kaizo_hurricane_flags_follow_its_notes():
+    """B13-3, B13-4: Kaizo effect 141 is effect 76's script (SECONDARY_CONFUSE, as vanilla 76) plus
+    SYSCTL_HIT_DURING_FLY; its two Thunder compares (MoveFlag.THUNDER) are E1's
+    KAIZO_THUNDER_EFFECTS (G-50); the vanilla 141 is the unused plain script (UNSUPPORTED in
+    vanilla)."""
+    assert KAIZO_EFFECTS[141][1:] == DECOMP_EFFECT_TO_ID[76]
+    assert KAIZO_FLAG_EFFECTS[141] == MoveFlag.HIT_AIR and 141 in KAIZO_THUNDER_EFFECTS
+    assert set(KAIZO_FLAG_EFFECTS) <= set(KAIZO_EFFECTS)
+    assert 141 not in DECOMP_EFFECT_TO_ID and "SYSCTL_HIT_DURING_FLY" in _script(152)
 
 
 def test_whirlpool_bind_matches_bind():

@@ -275,6 +275,7 @@ _COND_TEXT = {
     "semi_invulnerable": "semi-invulnerable",
     "focus_energy": "getting pumped",
     "power_trick": "Power Trick",
+    "embargo": "under Embargo",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

@@ -15,11 +15,11 @@ import pytest
 
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import damage_table
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.step import step
 from tests.engine.helpers import A, assert_matches_reference, roark_state
 
-PROC = empty_outcome()._replace(secondary=jnp.ones((2, 5), jnp.int8))
+PROC = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
 DURATION_3 = PROC._replace(duration=jnp.array([3, 3], jnp.int8))
 
 
@@ -45,7 +45,7 @@ def test_confusion_confuses_on_proc(tables, names, venonat):
     assert int(confuse(tables, names, venonat, DURATION_3).confusion[1]) == 3
     # No proc: Confusion deals its damage only.
     out = confuse(
-        tables, names, venonat, DURATION_3._replace(secondary=jnp.zeros((2, 5), jnp.int8))
+        tables, names, venonat, DURATION_3._replace(secondary=jnp.zeros((2, MAX_HITS), jnp.int8))
     )
     assert int(out.confusion[1]) == 0 and int(out.hp[1, 0]) < int(venonat.hp[1, 0])
     # An already confused target keeps its counter (4 drops to 3 as Geodude moves).

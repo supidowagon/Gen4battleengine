@@ -80,7 +80,7 @@ from nuzline.engine.damage import (
     ai_move_type,
     decomp_abilities,
 )
-from nuzline.engine.ids import Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
@@ -88,7 +88,7 @@ from nuzline.engine.order import (
     battler_slower,
     compare_speed,
 )
-from nuzline.engine.state import MOVES, BattleState, record_seen_move
+from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
 
 _I32 = jnp.int32
 
@@ -212,6 +212,7 @@ class MoveEffectMask(IntEnum):
     AQUA_RING = 1 << 24  # :37; BattleState.aqua_ring
     IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
+    EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
 
 
@@ -225,9 +226,12 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.AQUA_RING: "aqua_ring",
     MoveEffectMask.IMPRISONED: "imprisoned",
     MoveEffectMask.POWER_TRICK: "power_trick",
+    MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
+# include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
+BATTLE_TYPE_FRONTIER = 1 << 7
 
 
 class Gender(IntEnum):
@@ -418,6 +422,24 @@ class BattleEffect(IntEnum):
     DIG = 256
     BOUNCE = 263
     SHADOW_FORCE = 272
+    # E2 batch 13 (B13-23..): the variable-power and secondary hits, Recycle.
+    POISON_MULTI_HIT = 77  # Twineedle: no script entry
+    HIT_THREE_TIMES = 104  # Triple Kick (Kaizo: Rock Wrecker too): no script entry
+    UNUSED_141 = 141  # Kaizo Hurricane (be_seq 141): no script entry
+    BEAT_UP = 154  # no script entry
+    RECYCLE = 184  # Basic_CheckCanRecycle (script.s:238), Expert_Recycle (:1737)
+    DECREASE_POWER_WITH_LESS_USER_HP = 190  # Water Spout: Expert_WaterSpout (:1742)
+    HIGH_CRITICAL_BURN_HIT = 200  # Blaze Kick: Expert_HighCritical (:1748)
+    CHANGE_TYPE_WITH_WEATHER = 203  # Weather Ball: no script entry
+    HIGH_CRITICAL_POISON_HIT = 209  # Poison Tail, Cross Poison: Expert_HighCritical (:1754)
+    DOUBLE_POWER_HEAL_SLEEP = 217  # Wake-Up Slap: Expert_WakeUpSlap (:1761)
+    POWER_BASED_ON_LOW_SPEED = 219  # Gyro Ball: NonStandard (:256), Expert_GyroBall (:1763)
+    NATURAL_GIFT = 222  # Basic_CheckNaturalGift (:258)
+    DOUBLE_POWER_IF_TARGET_HIT = 231  # Assurance: Expert_Assurance (:1774)
+    PREVENT_ITEM_USE = 232  # Embargo: Basic_CheckEmbargo (:262), Expert_Embargo (:1775), B13-32
+    HIGHER_POWER_WHEN_LOW_PP = 235  # Trump Card: NonStandard (:265), Expert_TrumpCard (:1778)
+    INCREASE_POWER_WITH_MORE_STAT_UP = 245  # Punishment: NonStandard (:274), Expert (:1788)
+    JUDGEMENT = 268  # Judgment: no script entry
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -939,15 +961,21 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
-# refused: Natural Gift and Judgment (item data), Gyro Ball (monSpeedValues, the last speed
-# compare's, battle_lib.c:1372). Return, Frustration, Low Kick, Grass Knot, Hidden Power and
-# the fixed-damage cases are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch
-# 13), and Psywave and Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39,
-# ``_calc_read``). Decomp move ids.
-CALC_DAMAGE_MOVES = (363, 449, 360)
-# TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3222): the type the AI gives
-# these moves is not their table type. Decomp move ids.
-MOVE_TYPE_MOVES = (363, 449, 311)  # Hidden Power's is modelled (damage.ai_move_type)
+# refused: Gyro Ball (:2995-3003), whose power reads monSpeedValues, the speeds of the last
+# CompareBattlerSpeed of any caller (battle_lib.c:1372-1373: the action order's sorts,
+# battle_controller_player.c:780, :888, :3992, and the AI's own compares, trainer_ai.c:1109,
+# :1121, :2081, in the scripts' order across every move slot), which no state field holds
+# (B13-27). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
+# are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13), Psywave and
+# Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39, ``_calc_read``), Natural
+# Gift and Judgment by the held item (ai_case_power, ai_case_type; B13-25). Decomp move ids.
+CALC_DAMAGE_MOVES = (360,)
+# TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3227) refused in some state: Weather
+# Ball outside rain, sand, sun and hail or under Cloud Nine / Air Lock, where the case assigns
+# no result (engine.damage.ai_weather_ball_typed; policy._refused). Hidden Power's, Natural
+# Gift's, Judgment's and Weather Ball's assigned types are modelled (damage.ai_move_type;
+# B13-26). Decomp move ids.
+MOVE_TYPE_MOVES = (311,)
 # Expert_Copycat_EncouragedMoves (script.s:5582-5630): the player's last moves Copycat is
 # encouraged to copy. Decomp move ids (MOVE_* of generated/moves.txt, line N is id N-1), in
 # script order; the same numbers in Kaizo, whose names differ (data/game_constants.py).
@@ -1019,6 +1047,9 @@ ABILITY_IDS = {
     "Hyper Cutter": 52,
     "Speed Boost": 3,
     "No Guard": 99,
+    # E2 batch 13: Expert_TrumpCard (script.s:5331-5332), Expert_Assurance (:5200-5201).
+    "Pressure": 46,
+    "Rough Skin": 24,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1113,6 +1144,15 @@ MIRROR_COAT_SPECIAL_TYPES = tuple(
     TYPE_IDS[n] for n in ("Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark")
 )
 ITEM_EXPERT_BELT = 268  # HOLD_EFFECT_POWER_UP_SE
+# E2 batch 13. Basic_NaturalGiftBerries (script.s:1061-1126): ITEM_CHERI_BERRY (149) through
+# ITEM_ROWAP_BERRY (212), every id between, in id order (generated/items.txt, id = line - 1).
+NATURAL_GIFT_BERRIES = tuple(range(149, 213))
+# Expert_Recycle_DesirableItems (script.s:4536-4540): Chesto, Lum, Starf Berry.
+RECYCLE_DESIRABLE_ITEMS = (150, 157, 207)
+# Expert_Assurance_RecoilBerries (script.s:5218-5221): Jaboca and Rowap Berry, compared with a
+# hold effect (LoadHeldItemEffect, :5202), whose ids stop at 146 (generated/
+# item_hold_effects.txt): the jump never happens (decomp quirk), transcribed as written.
+ASSURANCE_RECOIL_BERRIES = (211, 212)
 # ITEM_POWER_HERB: line 272 of generated/items.txt (id = line - 1), the item
 # Expert_ChargeTurnNoInvuln / _WithInvuln / Expert_ShadowForce test (script.s:3956, :4009, :4020).
 ITEM_POWER_HERB = 271
@@ -1282,19 +1322,22 @@ def estimate(
     ivs=None,
     damaging_test: bool = True,
     cases=None,
+    item=None,
 ) -> CalcEstimate:
     """``TrainerAI_CalcDamage`` of ``move`` by ``atk_side``'s active Pokemon at variance
     ``85 + roll``, for every class of the move's draw (``CalcEstimate``; trainer_ai.c:
     3014-3016, :3028-3048). ``damaging_test``: as ``TrainerAI_CalcAllDamage`` (:2810-2838) and
     the kill checks (:1539-1557), a move that is not damaging (``is_damaging``) is not
     estimated, 0 and no draw; ``IfBattlerDealsMoreDamage`` estimates the battler's move without
-    it (:2228-2237). ``def_side`` / ``ivs``: ``ai_damage_for_roll``'s. ``cases``: the
+    it (:2228-2237). ``def_side`` / ``ivs`` / ``item``: ``ai_damage_for_roll``'s. ``cases``: the
     ``drawn_cases`` of the same attacker, defender and roll (computed here when not given)."""
     move = jnp.asarray(move, _I32)
     if cases is None:
         cases = drawn_cases(tables, state, roll, atk_side=atk_side, def_side=def_side, ivs=ivs)
     kind = calc_draw_kind(move)
-    once = ai_damage_for_roll(tables, state, atk_side, move, roll, def_side=def_side, ivs=ivs)
+    once = ai_damage_for_roll(
+        tables, state, atk_side, move, roll, def_side=def_side, ivs=ivs, item=item
+    )
     value = jnp.where(kind == CALC_NONE, jnp.broadcast_to(once, (CALC_DRAW_CLASSES,)), cases[kind])
     if damaging_test:
         damaging = is_damaging(tables, move)
@@ -1455,8 +1498,11 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     member other than the active one has a move whose ``TrainerAI_CalcAllDamage`` beats the
     active's best. The party member's moves are calculated **as the AI's active battler**
     (``AI_CONTEXT.attacker``: its stats, level, types, ability and item in
-    ``CalcMoveDamage``), with only the member's IVs passed (Hidden Power's case; the item
-    and ability parameters only reach Natural Gift and Judgment, refused). Only
+    ``CalcMoveDamage``), with the member's IVs (Hidden Power's case) and held item (Natural
+    Gift's and Judgment's cases, :2156-2165) passed; its ability parameter reaches only the
+    cases' Klutz tests (:2886, :2898), with ``embargoTurns`` FALSE (:2163): a Klutz member's item
+    is passed as none, and the active's as ``state.held_item`` (its ``Battler_Ability`` and
+    ``embargoTurns``, :2133-2138), B13-25, B13-29. Only
     ``USE_MAX_DAMAGE`` (variance 100) is transcribed (asserted).
 
     Psywave's and Magnitude's cases draw for every such move estimated (:2130 the active's,
@@ -1471,14 +1517,15 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
 
     cases = drawn_cases(tables, state, SIM_ROLL_MAX)  # IVs reach Hidden Power's case only
 
-    def estimates(moves, ivs):
+    def estimates(moves, ivs, item):
         as_active = state._replace(ivs=state.ivs.at[a, active].set(ivs))
-        return jax.vmap(lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases))(
-            moves.astype(_I32)
-        )
+        return jax.vmap(
+            lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases, item=item)
+        )(moves.astype(_I32))
 
-    mine = estimates(state.moves[a, active], state.ivs[a, active])  # [4, C]
-    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a])  # [SLOTS, 4, C]
+    mine = estimates(state.moves[a, active], state.ivs[a, active], held_item(state, a))
+    member_items = jnp.where(state.ability[a] == AbilityId.KLUTZ, 0, state.item[a])
+    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a], member_items)  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
     alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
     # A member that is not estimated draws nothing (:2145-2148).
@@ -1955,6 +2002,35 @@ def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
     either side (unlike ``IfHeldItemEqualTo``)."""
     state, side = ctx.state, _side(battler)
     return ctx._replace(calc_temp=state.item[side, state.active[side]].astype(_I32))
+
+
+def load_held_item_effect(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadHeldItemEffect`` (trainer_ai.c:1901-1913): the hold effect
+    (``Tables.item_hold_effect``) of the attacker's true ``heldItem``, or of
+    ``battlerHeldItems`` (``_held_item``'s) for another battler."""
+    item = _held_item(ctx, battler)
+    return ctx._replace(calc_temp=ctx.tables.item_hold_effect[item].astype(_I32))
+
+
+def load_recycle_item(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadRecycleItem`` (trainer_ai.c:2510-2518): ``battleCtx->recycleItem[battler]``
+    (``BattleState.recycle_item``, B13-19)."""
+    return ctx._replace(calc_temp=ctx.state.recycle_item[_side(battler)].astype(_I32))
+
+
+def load_current_move_pp(ctx: AiContext) -> AiContext:
+    """``LoadCurrentMovePP`` (trainer_ai.c:2024-2028): the attacker's
+    ``ppCur[AI_CONTEXT.moveSlot]``."""
+    state, a = ctx.state, _side(Battler.ATTACKER)
+    return ctx._replace(calc_temp=state.pp[a, state.active[a], ctx.slot].astype(_I32))
+
+
+def sum_positive_stat_stages(ctx: AiContext, battler: Battler) -> AiContext:
+    """``SumPositiveStatStages`` (trainer_ai.c:2243-2257): the sum of ``statBoosts[stat] - 6``
+    over the stages above 6, ``BATTLE_STAT_HP`` through accuracy and evasion (the HP entry
+    never moves)."""
+    stages = ctx.state.stages[_side(battler)].astype(_I32)  # engine units, 0 = neutral
+    return ctx._replace(calc_temp=jnp.sum(jnp.maximum(stages, 0)))
 
 
 def if_not_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:

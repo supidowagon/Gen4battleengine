@@ -352,13 +352,14 @@ def test_kaizo_names_keep_the_learnable_scan(tables, vanilla_manifest, names):
 
 
 def test_make_state_takes_the_new_spec_fields(tables, names):
-    """``egg_location`` and ``pp_ups`` are coverage inputs only: the state ignores them."""
+    """``egg_location`` is a coverage input only: the state ignores it; ``pp_ups`` is also
+    ``BattleState.pp_ups`` (the Leppa Berry's cap, E1 Batch D G-58) and nothing else."""
     party = sample_party(names)
     plain = make_state(tables, party, roark_party(names))
     marked = [replace(m, egg_location=7, pp_ups=(1, 1, 1, 1)) for m in party]
     other = make_state(tables, marked, roark_party(names))
-    for a, b in zip(plain, other, strict=True):
-        assert bool(jnp.all(a == b))
+    for field, a, b in zip(plain._fields, plain, other, strict=True):
+        assert bool(jnp.all(a == b)) != (field == "pp_ups"), field
 
 
 def test_knock_off_meets_the_exp_item_line(tables, names):

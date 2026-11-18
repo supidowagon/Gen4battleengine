@@ -34,7 +34,7 @@ from nuzline.engine import levelup, stats
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.levelup import pay_exp
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import EXP_REFUSED_WINDOW_C, replace, step
 from nuzline.reference import engine as ref_engine
@@ -44,7 +44,7 @@ from tests.engine.helpers import A, assert_matches_reference
 
 _pay = jax.jit(pay_exp)
 _SPE = Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
-MISS = empty_outcome()._replace(hit=jnp.zeros((2, 5), jnp.int8))
+MISS = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
 
 
 def _mon(names, species: str, level: int, *, moves=("Tackle",), **kw) -> PokemonSpec:

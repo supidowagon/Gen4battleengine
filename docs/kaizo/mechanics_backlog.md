@@ -58,7 +58,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Fantina Split | 0 | 7 | 8 | 0 | 0 | 8 | 2 | 25 |
 | Maylene Split | 0 | 4 | 3 | 3 | 2 | 0 | 1 | 13 |
 | Wake Split | 0 | 3 | 2 | 2 | 1 | 6 | 3 | 17 |
-| Byron Split | 0 | 5 | 3 | 0 | 0 | 0 | 0 | 8 |
+| Byron Split | 0 | 5 | 2 | 0 | 0 | 0 | 0 | 7 |
 | Candice Split | 0 | 5 | 3 | 0 | 0 | 4 | 0 | 12 |
 | Galactic Split | 0 | 10 | 9 | 3 | 1 | 16 | 0 | 39 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
@@ -191,7 +191,7 @@ Of your 75 groups, 42 are also needed by opposing trainers and 33 are player-onl
 | Wake Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Byron Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Candice Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Galactic Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
+| Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | **Whole game** | **0** | **8** | **10** | **9** | **6** | **0** | **0** | **33** |
@@ -211,13 +211,10 @@ Of your 75 groups, 42 are also needed by opposing trainers and 33 are player-onl
 | move effects | move effect #174: Charge | Roark Split |
 | move effects | move effect #194: Grudge | Roark Split |
 | move effects | move effect #216: Miracle Eye | Roark Split |
-| move effects | move effect #222: Natural Gift | Roark Split |
 | move effects | move effect #223: Feint | Roark Split |
-| move effects | move effect #245: Punishment | Roark Split |
 | move effects | move effect #246: Last Resort | Roark Split |
 | move effects | move effect #258: Defog | Roark Split |
 | move effects | move effect #95: Sketch | Roark Split |
-| move effects | move effect #268: Judgment | Galactic Split |
 | held items | held item effect #102: Quick Powder | Roark Split |
 | held items | held item effect #107: Full Incense | Roark Split |
 | held items | held item effect #108: Destiny Knot | Roark Split |
@@ -307,27 +304,16 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 37 | battle format: a double battle |
-| 25 | AI move effect #141 UNUSED_141 not transcribed (no Basic or Expert label): Hurricane |
-| 25 | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 25 | move effect #141: Hurricane |
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
-| 22 | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 22 | move effect #88: Fury Cutter, Triple Axel |
 | 19 | AI move effect #218 SPEED_DOWN_HIT not transcribed (Expert_HammerArm): Hammer Arm |
 | 19 | ability: Hydration |
 | 16 | AI move effect #219 POWER_BASED_ON_LOW_SPEED not transcribed (Basic_CheckNonStandardDamageOrChargeTurn / Expert_GyroBall): Gyro Ball |
 | 16 | move effect #219: Gyro Ball |
 | 15 | move effect #83: Metronome; 38 of 442 callable moves unmodelled |
 | 13 | AI move effect #71 LOWER_SP_ATK_HIT not transcribed (no Basic or Expert label): Mist Ball, Mystical Fire |
-| 11 | AI move effect #209 HIGH_CRITICAL_POISON_HIT not transcribed (Expert_HighCritical): Cross Poison, Poison Tail |
-| 11 | move effect #209: Cross Poison, Poison Tail |
-| 10 | AI move effect #200 HIGH_CRITICAL_BURN_HIT not transcribed (Expert_HighCritical): Blaze Kick |
 | 10 | ability: Forecast |
-| 10 | move effect #200: Blaze Kick |
-| 9 | AI move effect #190 DECREASE_POWER_WITH_LESS_USER_HP not transcribed (Expert_WaterSpout): Water Spout |
 | 9 | AI move effect #239 SUPRESS_ABILITY not transcribed (Basic_CheckGastroAcid / Expert_GastroAcid): Gastro Acid |
 | 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
-| 9 | move effect #190: Water Spout |
 | 9 | move effect #239: Gastro Acid |
 | 8 | held item effect #36: Berserk Gene |
 | 7 | AI move effect #86 DISABLE not transcribed (Basic_CheckCannotDisable / Expert_Disable): Disable |
@@ -338,9 +324,6 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 6 | move effect #233: Fling |
 | 6 | move effect #259: Trick Room |
 | 5 | held item effect #41: Lansat Berry |
-| 4 | AI move effect #104 HIT_THREE_TIMES not transcribed (no Basic or Expert label): Rock Wrecker, Triple Kick |
-| 4 | AI move effect #203 CHANGE_TYPE_WITH_WEATHER not transcribed (no Basic or Expert label): Weather Ball |
-| 4 | AI move effect #217 DOUBLE_POWER_HEAL_SLEEP not transcribed (Expert_WakeUpSlap): Wake-Up Slap |
 | 4 | AI move effect #241 USE_MOVE_FIRST not transcribed (Expert_MeFirst): Me First |
 | 4 | ROM change: battle/skill/be_seq.narc#104 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 4 | held item effect #42: Starf Berry |

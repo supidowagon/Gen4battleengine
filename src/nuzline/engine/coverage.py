@@ -60,8 +60,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Solar Power), the status orbs' Leaf Guard test, the weather moves with their rocks and the
   switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
   decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
-  E2 batch 9) are modelled too; the rest belong to unsupported moves (SolarBeam, Weather Ball,
-  Moonlight, Kaizo's Hurricane) or abilities (Hydration, Forecast; Leaf Guard is modelled since
+  E2 batch 9, Kaizo's Hurricane and Weather Ball since batch 13) are modelled too; the rest
+  belong to unsupported moves (SolarBeam, Moonlight) or abilities (Hydration, Forecast; Leaf Guard is modelled since
   the E1 Gardenia batch, G-14), so they are
   refused with their holder;
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
@@ -146,6 +146,7 @@ from nuzline.engine.ids import (
     METRONOME_DRAW,
     MOVE_CHATTER,
     SPECIES_CHATOT,
+    SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
     UNTRACEABLE_ABILITIES,
@@ -362,6 +363,25 @@ def halved_defense_line(tables: Tables, move: int, foe_defense: int | None) -> s
     if foe_defense is None or not halves_defense(tables, move):
         return None
     return f" against Defense {foe_defense}"
+
+
+# BtlCmd_CalcGyroBallPower (battle_script.c:7127) divides by the user's monSpeedValues, which
+# CompareBattlerSpeed computes as Speed x the stage ratio (-6: 10/40), then / 4 for paralysis
+# (battle_lib.c:1225, :1259-1261): below 16 Speed that can reach 0, a division by zero the decomp
+# leaves to the ROM's division routine. A Gyro Ball user below it is refused (B13-14). A holder of
+# a sSpeedHalvingItemEffects item (Iron Ball, Macho Brace, the Power items: / 2 between the stage
+# and paralysis, battle_lib.c:1240-1246, G-56) reaches 0 below twice that.
+GYRO_SPEED_MIN = 16
+
+
+def gyro_speed_line(tables: Tables, move: int, spec: PokemonSpec) -> str | None:
+    """`` with Speed N`` when ``move`` is Gyro Ball's (``EffectId.GYRO_BALL``) and ``spec``'s
+    Speed ``N`` is below ``GYRO_SPEED_MIN``: refused, its power can divide by 0. Else None."""
+    if int(np.asarray(tables.move_effect)[move]) != EffectId.GYRO_BALL:
+        return None
+    speed = int(spec_stats(tables, spec)[Stat.SPE])
+    halved = int(np.asarray(tables.item_hold_effect)[spec.item]) in SPEED_HALVING_HOLD_EFFECTS
+    return f" with Speed {speed}" if speed < GYRO_SPEED_MIN * (1 + halved) else None
 
 
 def halving_moves(tables: Tables, foes: Sequence[PokemonSpec]) -> list[int]:
@@ -1096,6 +1116,9 @@ def check_coverage(
                 if move and (low := halved_defense_line(tables, move, foe_defense)):
                     where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
                     c.add(Support.NONE, f"{where}: {names.move_names[move]}{low}", "move effect")
+                if move and (slow := gyro_speed_line(tables, move, mon)):
+                    where = f"{owner} {names.species_names[mon.species]} (slot {slot})"
+                    c.add(Support.NONE, f"{where}: {names.move_names[move]}{slow}", "move effect")
     state = make_state(
         tables,
         player,
