@@ -2,7 +2,7 @@
 
 Design: `docs/design.md`. Pipeline: `docs/process.md`.
 
-- **Battle rules come from the decomp only** (`external/pokeplatinum`). Never state or build a rule from memory; cite file and line.
+- **Battle rules come from the decomp only** (`external/pokeplatinum`). Never state or build a rule from memory; cite file and line. For every rule read both the C (`src/battle`) and the battle scripts (`res/battle/scripts`): checks such as Shield Dust sit in scripts.
 - **Game data comes from the ROM, then the calc repo, then the docs sheet** (`docs/kaizo/pipeline.md`). Fill a blank from the next source and keep the citation; nothing is "unknown" until all three are silent. Every real battle belongs to a split.
 - **Doubles-ready code:** new engine and AI code follows section 5 of `docs/doubles-state-design.md`.
 - **Build for the complete engine:** no tests, guards or special cases that only matter while coverage is partial. Model the missing mechanic instead.
