@@ -377,7 +377,7 @@ def test_a_dragged_in_quick_claw_holder_keeps_its_draw(tables, names):
 def test_the_ai_forgets_a_dragged_in_player_pokemon(tables, names):
     s = _state(tables, names, mine="Tackle", opp="Roar")
     s = s._replace(
-        ai_seen_moves=s.ai_seen_moves.at[1].set(1),
+        ai_seen_moves=s.ai_seen_moves.at[1].set(jnp.asarray([10, 20, 30, 40], jnp.int16)),
         ai_ability_known=s.ai_ability_known.at[1].set(1),
     )
     out = assert_matches_reference(tables, s, A("Tackle", "Roar", s, names), _o())

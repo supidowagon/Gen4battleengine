@@ -69,7 +69,7 @@ def test_trace_copies_the_foe_replacement_at_a_double_ko(tables, names):
     out2 = replace(t, out, 1, 1)
     _same(out2, from_ref(ref_replace(r, to_ref(out), 1, 1)))
     assert int(out2.ability[0, 1]) == int(out2.ability[1, 1]) == AbilityId.THICK_FAT
-    assert int(out2.ai_ability_known[1]) == 1  # the tracer's write (battle_script.c:3403)
+    assert int(out2.ai_ability_known[1]) != 0  # the tracer's write (battle_script.c:3403)
 
 
 def test_a_loafing_truant_does_not_pursue(tables, names):

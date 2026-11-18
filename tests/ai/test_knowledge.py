@@ -30,16 +30,17 @@ from nuzline.engine.outcome import MAX_HITS, empty_outcome, outcome_to_py
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.ai.fixtures import trace_c
+from tests.ai.fixtures import know_ability, trace_c
 from tests.engine.helpers import A, roark_state
 
 SWITCH_TO_1 = 4 + 1
+_step = jax.jit(step)  # one compiled turn program, not an op-by-op run of every test
 
 
 def _both(tables, s, acts, o=None):
     """``step`` and ``ref_step`` agree on every field; returns the JAX result."""
     o = empty_outcome() if o is None else o
-    out = step(tables, s, jnp.asarray(acts, jnp.int32), o)
+    out = _step(tables, s, jnp.asarray(acts, jnp.int32), o)
     ref = from_ref(
         ref_step(to_numpy(tables), to_ref(s), tuple(int(a) for a in acts), outcome_to_py(o))
     )
@@ -63,7 +64,7 @@ def test_used_move_waits_in_last_move_until_the_ai_fights(tables, names):
     assert int(used.last_move[0]) == names.move("Scratch")
     assert _seen(used) == [0, 0, 0, 0]  # TrainerAI_RecordLastMove has not run yet
     fought = _both(tables, used, A("Leer", "Tackle", used, names))
-    assert _seen(fought) == [1, 0, 0, 0]  # Scratch, committed at the AI's FIGHT decision
+    assert _seen(fought) == [names.move("Scratch"), 0, 0, 0]  # committed at the AI's FIGHT decision
     assert int(fought.last_move[0]) == names.move("Leer")  # pending again
 
 
@@ -78,7 +79,7 @@ def test_move_replaced_while_the_ai_heals_is_never_recorded(tables, names):
     assert _seen(t2) == [0, 0, 0, 0]  # no FIGHT decision, nothing recorded
     assert int(t2.last_move[0]) == names.move("Leer")
     t3 = _both(tables, t2, A("Leer", "Tackle", t2, names))
-    assert _seen(t3) == [0, 1, 0, 0]  # Leer only: Scratch was lost
+    assert _seen(t3) == [names.move("Leer"), 0, 0, 0]  # Leer only: Scratch was lost
 
 
 def test_ai_switch_records_nothing(tables, names):
@@ -113,7 +114,7 @@ def test_disrupted_turn_overwrites_an_earlier_move(tables, names):
     full_para = empty_outcome()._replace(full_para=jnp.asarray([1, 0], jnp.int8))
     # The AI fights this turn, so the pending Leer is committed first.
     out = _both(tables, para, A("Scratch", "Leer", s, names), full_para)
-    assert _seen(out) == [0, 1, 0, 0]
+    assert _seen(out) == [names.move("Leer"), 0, 0, 0]
     assert int(out.last_move[0]) == 0
 
 
@@ -134,8 +135,8 @@ def test_opponent_moves_are_not_recorded(tables, names):
     t1 = _both(tables, s, A("Leer", "Leer", s, names))
     assert int(t1.last_move[1]) == names.move("Leer")  # the opponent's movePrevByBattler
     out = _both(tables, t1, A("Scratch", "Leer", t1, names))
-    assert np.asarray(out.ai_seen_moves).sum() == 1  # the player's Leer only
-    assert int(out.ai_seen_moves[0, names.move_slot(s, 0, "Leer")]) == 1
+    assert np.count_nonzero(np.asarray(out.ai_seen_moves)) == 1  # the player's Leer only
+    assert int(out.ai_seen_moves[0, 0]) == names.move("Leer")
 
 
 def test_forced_struggle_skips_the_record(tables, names):
@@ -148,12 +149,18 @@ def test_forced_struggle_skips_the_record(tables, names):
 
 
 @pytest.mark.slow
-def test_player_struggle_is_written_but_not_recorded(tables, names):
+def test_player_struggle_is_recorded_like_any_move(tables, names):
+    """``battlerMoves`` holds move ids: Struggle takes an entry (trainer_ai.c:2705-2716, G-68)."""
     s = roark_state(tables, names)
     s = s._replace(pp=s.pp.at[0, 0].set(0))
     struggled = _both(tables, s, A(0, "Leer", s, names))
     assert int(struggled.last_move[0]) == MOVE_STRUGGLE
-    assert _seen(_both(tables, struggled, A(0, "Leer", struggled, names))) == [0] * 4
+    assert _seen(_both(tables, struggled, A(0, "Leer", struggled, names))) == [
+        MOVE_STRUGGLE,
+        0,
+        0,
+        0,
+    ]
 
 
 def test_pursuit_before_a_switch_is_written(tables, names):
@@ -167,7 +174,7 @@ def test_player_switch_in_resets_last_move(tables, names):
     s = s._replace(last_move=s.last_move.at[0].set(names.move("Scratch")))
     out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
     # Committed for the Pokemon that was active when the AI decided, then reset.
-    assert np.asarray(out.ai_seen_moves[0]).tolist() == [1, 0, 0, 0]
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [names.move("Scratch"), 0, 0, 0]
     assert int(out.last_move[0]) == 0
 
 
@@ -178,7 +185,7 @@ def test_scores_include_the_pending_move(tables, names):
     base = trace_c(tables, names)  # Cranidos vs Starly
     u_turn = names.move("U-turn")
     knows = base._replace(moves=base.moves.at[0, 0, 3].set(u_turn))
-    seen = knows._replace(ai_seen_moves=knows.ai_seen_moves.at[0, 3].set(1))
+    seen = knows._replace(ai_seen_moves=knows.ai_seen_moves.at[0, 0].set(u_turn))
     pending = knows._replace(last_move=knows.last_move.at[0].set(u_turn))
     outs, _ = enumerate_ai_outcomes(tables, base)
     for i in range(int(outs.tiebreak.shape[0])):
@@ -189,15 +196,16 @@ def test_scores_include_the_pending_move(tables, names):
 
 def test_switch_in_clears_the_newcomers_knowledge(tables, names):
     s = roark_state(tables, names)
+    row = jnp.asarray([11, 12, 13, 14], jnp.int16)
     s = s._replace(
-        ai_seen_moves=s.ai_seen_moves.at[:2].set(1),
+        ai_seen_moves=s.ai_seen_moves.at[:2].set(row),
         ai_ability_known=s.ai_ability_known.at[:2].set(1),
     )
     out = _both(tables, s, A(SWITCH_TO_1, "Leer", s, names))
     assert np.asarray(out.ai_seen_moves[1]).tolist() == [0, 0, 0, 0]
     assert int(out.ai_ability_known[1]) == 0
-    assert np.asarray(out.ai_seen_moves[0]).tolist() == [1, 1, 1, 1]  # the one that left
-    assert int(out.ai_ability_known[0]) == 1
+    assert np.asarray(out.ai_seen_moves[0]).tolist() == [11, 12, 13, 14]  # the one that left
+    assert int(out.ai_ability_known[0]) != 0
 
 
 @pytest.mark.slow
@@ -207,7 +215,7 @@ def test_scores_ignore_an_unseen_move(tables, names):
     base = trace_c(tables, names)  # Cranidos vs Starly
     u_turn = names.move("U-turn")
     knows = base._replace(moves=base.moves.at[0, 0, 3].set(u_turn))
-    seen = knows._replace(ai_seen_moves=knows.ai_seen_moves.at[0, 3].set(1))
+    seen = knows._replace(ai_seen_moves=knows.ai_seen_moves.at[0, 0].set(u_turn))
     outs, _ = enumerate_ai_outcomes(tables, base)
     n = int(outs.tiebreak.shape[0])
     differs = False
@@ -231,7 +239,7 @@ def test_ability_guess_is_chance_until_revealed(tables, names):
         for g in (0, 1)
     }
     assert guessed == {names.ability("Rivalry"), names.ability("Intimidate")}
-    revealed = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    revealed = know_ability(tables, s)
     for g in (0, 1):
         o = o0._replace(ability_guess=jnp.int8(g))
         assert int(resolve_player_ability(tables, revealed, o)) == names.ability("Rivalry")
@@ -259,7 +267,7 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
     """subscript_mold_breaker.s: ``PrintMessage ..., TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP,
     BTLSCR_MSG_BATTLER_TEMP`` tags the announcing battler's ability."""
     s = roark_state(tables, names, player_species="Cranidos")
-    assert int(s.ai_ability_known[0]) == 1
+    assert int(s.ai_ability_known[0]) != 0
     assert int(s.ai_ability_known[1]) == 0
 
 
@@ -271,7 +279,7 @@ def test_poison_point_reveals_when_it_poisons(tables, names):
     acts = A("Growth", "Tackle", s, names)
     poisoned = _both(tables, s, acts, contact)
     assert int(poisoned.status[1, 0]) == Status.POISON
-    assert int(poisoned.ai_ability_known[0]) == 1
+    assert int(poisoned.ai_ability_known[0]) != 0
     not_triggered = _both(tables, s, acts)
     assert int(not_triggered.ai_ability_known[0]) == 0
     # A target that is already poisoned gets no message (subscript_poison.s, _322).

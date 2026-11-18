@@ -135,6 +135,8 @@ EXACT_CASES = [
     ("Double Hit", "Leer", "opp", ("strong", "sash_two_hits"), [[True, True]]),
     # A high-crit move: crit odds 1 in 8, so the class weights are not those of Tackle.
     ("Slash", "Leer", "player", (), [[True]]),
+    # Chatter (G-70) is a plain table hit; its confusion comes after the damage.
+    ("Chatter", "Leer", "player", (), [[True]]),
     # Inputs that change before the hit: compression off for that hit.
     ("Tackle", "Growl", "opp", (), [[False]]),
     ("Tackle", "Growl", "player", (), [[True]]),
@@ -219,6 +221,9 @@ def _forced(laws):
         # Iron Defense raises the Defense it hits; Reflect halves it.
         ("Slash", "Iron Defense", "opp", ()),
         ("Slash", "Reflect", "opp", ()),
+        # Transform (G-69) gives the foe the player's Defense, stages and Bug / Poison types:
+        # Slash is no longer resisted by Rock.
+        ("Slash", "Transform", "opp", ()),
         # Ember's burn halves it (on 10 % of the rows).
         ("Slash", "Ember", "opp", ("lucky_chant_opp",)),
         # Flame Body burns the attacker on the first hit: the second hit is halved.

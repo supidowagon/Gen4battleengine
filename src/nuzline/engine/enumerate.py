@@ -140,6 +140,10 @@ of the turn:
   holding one (``step._use_move``). Its "move" path is the move's; the self-hit's are
   ``roll[s, 0]``'s confusion paths. ``future_band[d]``: ``future_hit[d]``'s gate and a living
   holder in side ``d``'s party.
+* ``chatter[s]`` (G-70): ``s``'s move is Chatter, its user is a Chatot that is not Transformed and its
+  first hit lands: ``RandNext() % 100 <= chance`` (``chatter_chance``, 0 / 10 / 30 by its Chatot
+  cry). The confusion counter ``duration[s]`` is then read only when it is 1
+  (``_chatter_reads``), and the foe's self-hit reads through it need it too (``inflicted``).
 * ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
   at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
@@ -220,6 +224,8 @@ from nuzline.engine.effects import (
     psycho_shift_status,
 )
 from nuzline.engine.ids import (
+    CALL_GRAVITY,
+    CHATTER_CHANCES,
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
     METRONOME_DRAW,
@@ -227,6 +233,7 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
+    SPECIES_CHATOT,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -258,6 +265,8 @@ from nuzline.engine.order import (
     dislikes_berry,
     effective_speed,
     encored_state,
+    gravity_possible,
+    gravity_state,
     invoked_move,
     is_item,
     is_switch,
@@ -285,6 +294,7 @@ from nuzline.engine.outcome import (
     future_thresholds,
     hit_threshold_pair,
     pivot_view,
+    read_chance,
     roar_inputs,
     roar_levels,
     secondary_chance,
@@ -339,6 +349,7 @@ class Reads(NamedTuple):
     tri_attack: jnp.ndarray  # its move runs Tri Attack: its status draw needs the proc
     protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
+    endure_sure: jnp.ndarray  # it uses Endure and reaches TryProtection whatever the rolls
     roar: jnp.ndarray  # it uses Roar: its slot pick needs the level check to pass
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
@@ -359,6 +370,8 @@ class Reads(NamedTuple):
     # path's SYSCTL_IGNORE_IMMUNITIES before the accuracy check, so a miss reads it too (the
     # Wonder Guard message, subscript_missed.s:107, or the plain miss).
     present_guard: jnp.ndarray
+    # G-70: it uses Chatter as a Chatot (not Transformed): its confusion needs the chatter roll.
+    chatter: jnp.ndarray
 
 
 class OutcomeLaws(NamedTuple):
@@ -400,6 +413,7 @@ class OutcomeLaws(NamedTuple):
     # of the 420 draws its own value then).
     acupressure_count: jnp.ndarray  # int32[2]
     acupressure_loose: jnp.ndarray  # bool[2]
+    chatter_chance: jnp.ndarray  # int32[2]: ids.CHATTER_CHANCES of each side's Chatot cry (G-70)
 
 
 class SamplingOnly(Exception):
@@ -662,6 +676,7 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "focus_band": b["focus_band"]
         | ((confusable & b["own_band"])[:, None] & (b["hit_index"] == 0)),
         "berry_confusion": b["pending"] | berry_by_foe,
+        "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
@@ -736,8 +751,10 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PRESENT,
     # Changes the user's protect_count and the turn's protecting flag: no damage input. A
     # success removes the later hit altogether (step._use_move: it does not connect), so
-    # whatever (crit, roll) class the hit would have drawn, the state is the same.
+    # whatever (crit, roll) class the hit would have drawn, the state is the same. Endure
+    # (G-65) shares the roll and the chain; its flag changes the foe's HP only through the cap.
     _E.PROTECT,
+    _E.ENDURE,
     # Sets the foe's infatuated, read only by its attract check, which comes before its move
     # and removes the hit altogether (step._use_move), like a flinch: no damage input.
     _E.ATTRACT,
@@ -813,6 +830,12 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.WISH,
     _E.HEAL_BELL,
     _E.REFRESH,
+    # E1 trial batch. Mimic (BtlCmd_TryMimic, battle_script.c:4476-4523) writes only its user's
+    # moves, ppCur, mimickedMoveSlot and lastResortCount: none is an input of the side's hit,
+    # whose move is chosen already (G-68). Chatter (effect_script_0267.s:5-7) is a plain hit
+    # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
+    _E.MIMIC,
+    _E.CHATTER,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -865,6 +888,11 @@ INPUT_CLAUSE_EFFECTS = (
     # The ingrained foe's chart and Levitate (damage.identified, damage.ignorable): the ingrain
     # clause.
     _E.INGRAIN,
+    # Magnet Rise (G-66): the foe's Ground-immunity bits (damage.magnet_risen), the same clause.
+    _E.MAGNET_RISE,
+    # Gravity (G-67) lifts the Flying and Levitate immunities of the foe the side's later Ground
+    # hit meets (damage.identified, damage.ignorable) and zeroes Magnet Rise's turns: the same clause.
+    _E.GRAVITY,
     # E2 batch 6: the foe's U-turn / Baton Pass switches it out mid-turn (step's pause), so the
     # side's later hit meets the newcomer (its stats, types, ability, item; a Baton Pass keeps
     # the stages): the pivot clause.
@@ -889,6 +917,12 @@ INPUT_CLAUSE_EFFECTS = (
     # B13-31: the foe's Embargo hides the side's held item from its later hits' damage reads
     # (Battler_HeldItem, battle_lib.c:5358): the embargo clause.
     _E.EMBARGO,
+    # E1 trial batch (G-69): BtlCmd_Transform (battle_script.c:5330-5373) copies the defender's
+    # BattleMon up to ``ability`` (battle_mon.h:57-84) onto its user: species (weight), Attack to
+    # Sp. Def, the stat stages, both types and the ability, and reruns its switch-in checks
+    # (:5350-5358: a copied Intimidate or weather ability acts). Every input of the side's later
+    # hit against it, and of its own stats the side's hit meets, can change: the transform clause.
+    _E.TRANSFORM,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -986,6 +1020,10 @@ INPUT_NEUTRAL_ABILITIES = (
     # B13-29: Klutz hides its holder's item from every gated read (state.held_item) from the
     # start of the turn; nothing changes it mid-turn.
     AbilityId.KLUTZ,
+    # E1 trial batch (G-63): a fixed Sp. Atk factor of the hit's own side's active battlers
+    # (the ally's ability and HP), whose inputs have their clauses.
+    AbilityId.PLUS,
+    AbilityId.MINUS,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -1179,6 +1217,9 @@ TABLE_DAMAGE_EFFECTS = (
     # Spout / Eruption are FLAIL (its HP clause, hp_sensitive), B13-13.
     _E.WEATHER_BALL,
     _E.JUDGMENT,
+    # G-70: CalcCrit, CalcDamage (effect_script_0267.s:6-7) at its table power; the confusion is
+    # an ON_HIT subscript after the damage.
+    _E.CHATTER,
 )
 NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENCORE,  # a status move: no damage (B10-9)
@@ -1202,8 +1243,11 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.RECOVER,
     _E.CURSE,
     _E.AQUA_RING,
+    _E.MAGNET_RISE,  # a status move: no damage
+    _E.GRAVITY,  # a status move: no damage
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
+    _E.ENDURE,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
     _E.ROAR,  # a status move: no damage
@@ -1275,6 +1319,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.RECYCLE,
     _E.NATURAL_GIFT,
     _E.EMBARGO,  # B13-31: a status move, no damage
+    _E.MIMIC,  # G-68, G-69: status moves, no damage
+    _E.TRANSFORM,
 )
 
 
@@ -1300,7 +1346,8 @@ def damage_inputs_can_change(
       it matters (a burn on a physical non-Guts move, any status under Guts, Thunder Fang's
       paralysis and Tri Attack's statuses included), the foe's screen for this category, a
       sport for this move type, or the foe's own types (Camouflage: the type chart and the
-      Rock Sp. Def boost read them); or the side's active Pokemon itself (the foe's Roar
+      Rock Sp. Def boost read them), or its stats, stages, types and ability (Transform, G-69);
+      or the side's active Pokemon itself (the foe's Roar
       drags it out; no hit of a dragged battler follows in Gen 4, its action ends, so this
       roar clause is conservative); a charge move (its user's semi-invulnerable bit, which a
       ``MoveFlag.DOUBLE_SEMI`` hit's power reads; Skull Bash's Defense +1), B10-12;
@@ -1412,6 +1459,10 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.POWER_TRICK) & physical)
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
+        | (foe_effect == _E.MAGNET_RISE)
+        | (foe_effect == _E.GRAVITY)
+        # G-69: the foe's Transform copies the side's stats, stages, types and ability onto it.
+        | (foe_effect == _E.TRANSFORM)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1453,7 +1504,10 @@ def damage_inputs_can_change(
     # B12-3, B12-7, B12-8: Tickle and the stage swaps change move_param 0 and 1, Captivate 0;
     # Haze, Psych Up and Acupressure any stage.
     two_stat = uses_move & _any_of(effect, (_E.TICKLE, _E.STAGE_SWAP))
-    any_stage = jnp.any(uses_move & _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE)))
+    # Transform copies every stage (statBoosts, battle_mon.h:75), G-69.
+    any_stage = jnp.any(
+        uses_move & _any_of(effect, (_E.HAZE, _E.PSYCH_UP, _E.ACUPRESSURE, _E.TRANSFORM))
+    )
     stat_move = stat_move | two_stat | (uses_move & (effect == _E.CAPTIVATE))
     any_switch = jnp.any(live & is_switch(actions))
 
@@ -1571,7 +1625,10 @@ def outcome_laws(
         # foe's Imprison (CALL_SEALED, ruling B7-13) from the set without the moves it seals.
         talking = kinds == CALL_SLEEP_TALK
         disabled = talking & (call >= CALL_DISABLED) & (call < CALL_SEALED)
-        sealed = talking & (call >= CALL_SEALED)
+        sealed = talking & (call >= CALL_SEALED) & (call < CALL_GRAVITY)
+        # A variant that assumes a faster foe's Gravity lands first (CALL_GRAVITY, G-67) calls
+        # from the set Gravity leaves (Sleep Talk, Metronome, Assist).
+        grav = (call >= CALL_GRAVITY) & ~taken
         after_foe = copycat & (call == 1)
         disabled = disabled & ~taken
         sealed = sealed & ~taken
@@ -1584,7 +1641,11 @@ def outcome_laws(
                 jnp.where(
                     taken,
                     used_moves(tables, took_state, actions, call, after_foe, chosen),
-                    used_moves(tables, state, actions, call, after_foe, chosen),
+                    jnp.where(
+                        grav,
+                        used_moves(tables, gravity_state(state), actions, call, after_foe, chosen),
+                        used_moves(tables, state, actions, call, after_foe, chosen),
+                    ),
                 ),
             ),
         )
@@ -1592,7 +1653,7 @@ def outcome_laws(
     foe_moves = uses_move[::-1]  # the other side uses a move
     effect, params = move_effects(tables, state, moves)  # Secret Power's terrain effect
     foe_move = moves[::-1]
-    chance = tables.move_effect_chance[moves].astype(_I32)
+    chance = read_chance(tables, moves)
     damaging = (tables.move_category[moves] != STATUS) & (tables.move_power[moves] != 0)
     # No crit, no roll for a script without CalcCrit / CalcDamage (ids.UNROLLED_EFFECTS:
     # Night Shade, Bide's unleash, Super Fang, the OHKO moves; damage.fixed_damage)
@@ -1635,6 +1696,12 @@ def outcome_laws(
     holders = _holds(
         tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
     )
+    # G-69: a side whose Transform lands before the foe's contact hit holds the foe's ability then
+    # (BtlCmd_Transform copies ``ability``, battle_script.c:5342-5345, battle_mon.h:84), but not its
+    # gender (a separate field, battle_mon.h after ``ability``; ``transformedGender`` is the
+    # sprite's, :5338). Over-approximate: the Transform may move later or fail.
+    xform = uses_move & (effect == _E.TRANSFORM)
+    holders = holders | (xform & holders[::-1])
     # BtlCmd_TryAttract (effects._attractable): different genders, neither genderless.
     gender = state.gender.astype(_I32)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.gender.shape[1] - 1)
@@ -1653,13 +1720,21 @@ def outcome_laws(
         _entry_abilities(tables, state, actions) == AbilityId.CUTE_CHARM
     )
     charm_later = switch & entering & lovers(gender[sides, incoming], attacker_gender)
-    charm = (charm_now | charm_later) & calm
+    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender.
+    foe_charm = (state.ability[sides, mons] == AbilityId.CUTE_CHARM)[::-1]
+    charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
+    charm = (charm_now | charm_later | charm_copied) & calm
     if loose:
-        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,))
+        charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
     contact_proc = (lands & (damaging & contact & holders[::-1])[:, None])[::-1]
+    # Chatter (G-70): a Chatot that is not Transformed confuses (effects._chatter; over-approximate:
+    # the roll may fail, the target may be confused already or behind a Substitute).
+    chatot = (state.species[sides, mons] == SPECIES_CHATOT) & (state.transformed == 0)
+    chatter_user = uses_move & (effect == _E.CHATTER) & chatot
     duration = uses_move & (
-        _any_of(
+        chatter_user
+        | _any_of(
             effect,
             (_E.TAUNT, _E.TRAP, _E.DISABLE, _E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER),
         )
@@ -1709,7 +1784,7 @@ def outcome_laws(
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((2,), bool)
-    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER))
+    confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER)) | chatter_user
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
     foe_calm = state.infatuated[::-1] == 0
@@ -1747,10 +1822,11 @@ def outcome_laws(
         "confused_blocked": confused_blocked,
         "fang_flinch": lands[:, 0] & (effect == _E.FANG_PARALYZE_FLINCH) & (chance != 0),
         "tri_attack": lands[:, 0] & (effect == _E.TRI_ATTACK),
+        "chatter": lands[:, 0] & chatter_user,
         "flinch_item": lands & (damaging & kings_move & (kings_rock > 0))[:, None],
         "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
-        "protect": uses_move & (effect == _E.PROTECT) & (state.protect_count > 0),
+        "protect": uses_move & _any_of(effect, (_E.PROTECT, _E.ENDURE)) & (state.protect_count > 0),
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
         "confused_own": uses_move & (state.confusion >= 2),
@@ -1875,7 +1951,14 @@ def outcome_laws(
     # stops Roar before TryWhirlwind draws (B7-16): anchored at the turn start and still so when
     # Roar runs, i.e. the target side neither switches nor uses a move that can add a bit of its
     # moveEffectsMask (Aqua Ring, the sports, Imprison, Camouflage, or an invoker's call).
-    setters = (_E.AQUA_RING, _E.MUD_SPORT, _E.WATER_SPORT, _E.IMPRISON, _E.CAMOUFLAGE)
+    setters = (
+        _E.AQUA_RING,
+        _E.MAGNET_RISE,
+        _E.MUD_SPORT,
+        _E.WATER_SPORT,
+        _E.IMPRISON,
+        _E.CAMOUFLAGE,
+    )
     target_steady = ~switch & ~(uses_move & (_any_of(effect, setters) | (kinds != CALL_NONE)))
     anchored = jnp.stack([ingrain_anchors(tables, state, 1 - side) for side in (0, 1)])
     roar = roar & ~(anchored & target_steady[::-1])
@@ -1950,8 +2033,7 @@ def outcome_laws(
     scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
     embargo_speed = jnp.any(scarf & (uses_move & (effect == _E.EMBARGO))[::-1])
     end_speed_tie = live & (
-        jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :]))
-        | embargo_speed
+        jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed
     )
     # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
@@ -1959,7 +2041,12 @@ def outcome_laws(
     living_now = (state.species != 0) & (state.hp > 0)
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)
     tracer = _holds(tables, state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer))
+    # G-69: a Transform copies its target's Speed, Speed stage and ability (BtlCmd_Transform,
+    # battle_script.c:5342-5345; battle_mon.h:57-84): the two end speeds are then often equal, by
+    # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
+    # kept (over-approximate).
+    xform_used = uses_move & (effect == _E.TRANSFORM)
+    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).
@@ -1968,8 +2055,10 @@ def outcome_laws(
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)
+    # A Transform user copies its target's Shed Skin (G-69).
+    shed_holder = _holds(tables, state, actions, (AbilityId.SHED_SKIN,))
     shed_skin = live & (
-        _holds(tables, state, actions, (AbilityId.SHED_SKIN,)) | (dragged & shed_party) | tracer
+        shed_holder | (dragged & shed_party) | tracer | (xform_used & shed_holder[::-1])
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
@@ -2051,6 +2140,7 @@ def outcome_laws(
             # party (the battler on the field at the turn's end), G-1.
             future_band=live & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
+            chatter=m["chatter"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2173,9 +2263,12 @@ def outcome_laws(
         flinch_sure=off if loose else flinch_sure,
         fang=fang,
         present=off if loose else uses_move & (effect == _E.PRESENT),
+        chatter=off if loose else chatter_user,
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
+        # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
         protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
+        endure_sure=off if loose else reach & (effect == _E.ENDURE),
         roar=off if loose else roar,
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
@@ -2196,7 +2289,11 @@ def outcome_laws(
         if loose
         else uses_move
         & (effect == _E.PRESENT)
-        & jnp.any(state.ability[::-1] == AbilityId.WONDER_GUARD, axis=1),
+        & (
+            jnp.any(state.ability[::-1] == AbilityId.WONDER_GUARD, axis=1)
+            # A foe whose Transform copies the side's own Wonder Guard (G-69).
+            | (xform[::-1] & (state.ability[sides, mons] == AbilityId.WONDER_GUARD))
+        ),
     )
     kind = jnp.where(
         effect == _E.TAUNT,
@@ -2253,7 +2350,7 @@ def outcome_laws(
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
-        no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions),
+        no_crit=(state.lucky_chant[::-1] != 0) | armored(tables, state, actions, moves),
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
         relevant=relevant,
@@ -2273,6 +2370,9 @@ def outcome_laws(
         future_loose=future_loose,
         acupressure_count=acu_count,
         acupressure_loose=acu_loose,
+        chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
+            jnp.clip(state.chatot_cry.astype(_I32), 0, 2)
+        ],
     )
 
 
@@ -2440,6 +2540,13 @@ def _acupressure(laws: OutcomeLaws, side: int) -> _Law:
     return list(range(n)), [1] * n, n
 
 
+def _chatter(laws: OutcomeLaws, side: int) -> _Law:
+    # battle_script.c:8428-8430: RandNext() % 100 <= effectChance, uniform by the % n convention:
+    # 1 with weight chance + 1 of 100 (G-70).
+    chance = min(max(int(laws.chatter_chance[side]), 0), 99)
+    return [0, 1], [99 - chance, chance + 1], 100
+
+
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
     # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4639):
     # RandNext() % 100 < param, uniform by the % n convention.
@@ -2466,6 +2573,7 @@ _LAWS = {
     "duration": _duration,
     "thaw": _thaw,
     "flinch_item": _flinch_item,
+    "chatter": _chatter,
     "quick_claw": _quick_claw,
     "end_speed_tie": _coin,
     "magnitude": _magnitude,
@@ -2674,6 +2782,9 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
     def inflicted(s: int) -> list[Condition]:
         """``s`` (moving first) inflicts its status or confusion on the foe."""
         conds = move_conds(s)
+        if bool(reads.chatter[s]):  # a Chatter confusion needs its roll (G-70)
+            roll = rel_elem("chatter", (s,))
+            conds = [*conds, Condition((roll,), _proc) if roll else NEVER]
         return conds + [procs(s)] if bool(reads.proc_gated[s]) else conds
 
     t = branch.tie
@@ -2713,6 +2824,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "present",
             "protect",
             "tri_attack",
+            "chatter",
             "roar_level",
             "roar_target",
             "acupressure",
@@ -2795,6 +2907,7 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
             "present",
             "protect",
             "tri_attack",
+            "chatter",
             "roar_level",
             "roar_target",
             "acupressure",
@@ -2879,6 +2992,7 @@ def _protect_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
         "fang_flinch",
         "present",
         "tri_attack",
+        "chatter",
         "roar_level",
         "roar_target",
     ):
@@ -2898,6 +3012,18 @@ def _tri_value(status: int) -> Callable[[np.ndarray], np.ndarray]:
         return v == value
 
     return test
+
+
+@register_reads
+def _chatter_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (chatter, duration) joint factor (G-70): ``effects._chatter`` reads the confusion counter
+    only when the chatter roll passes, so ``duration[s]``'s "move" path also needs
+    ``chatter[s] == 1``."""
+    for s in (0, 1):
+        elem, roll = ("duration", (s,)), ("chatter", (s,))
+        if not bool(laws.reads.chatter[s]) or elem not in plan:
+            continue
+        plan.restrict(elem, "move", Condition((roll,), _proc) if roll in plan else NEVER)
 
 
 @register_reads
@@ -2927,6 +3053,24 @@ def _passes(v: np.ndarray) -> np.ndarray:
     # 1: the level check passed. SKIPPED (not drawn: no check) fails nothing, but the builder
     # adds this condition only where roar_level is drawn whenever the pick is reached.
     return v == 1
+
+
+@register_reads
+def _endure_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (protect, focus_band) joint factor (G-65, G-1): the first mover's Endure that
+    certainly reaches ``BtlCmd_TryProtection`` (``Reads.endure_sure``) sets
+    ``turnFlags.enduring`` when its roll passes (always at ``protect_count`` 0), and
+    ``if (DEFENDER_TURN_FLAGS.enduring == 0)`` (bcp.c:3386-3393) then skips the Focus Band roll on
+    every hit of the second mover's move (``effects.play_hit``'s ``~enduring``). So
+    ``focus_band[q, i]``'s "move" path also needs the Endure to fail; the self-hit's path (the
+    user's own band) is not gated."""
+    first, q = branch.first, 1 - branch.first
+    if not bool(laws.reads.endure_sure[first]):
+        return
+    elem = ("protect", (first,))
+    cond = Condition((elem,), _not_protected) if elem in plan else NEVER
+    for i in range(MAX_HITS):
+        plan.restrict(("focus_band", (q, i)), "move", cond, required=False)
 
 
 @register_reads
@@ -3197,6 +3341,13 @@ def _split_events(state: BattleState, events) -> tuple[jnp.ndarray, jnp.ndarray]
     return disabled, sealed
 
 
+def gravity_events(state: BattleState, events) -> jnp.ndarray:
+    """``bool[2]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
+    of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
+    invoker call (G-67)."""
+    return (jnp.asarray(events["gravity_at_move"]) != 0) & (state.gravity == 0)
+
+
 def taken_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[2]``: the side's chosen move was replaced by an encored move when its action
     started (the ``encored_at_move`` event of ``step_events``) and it was not encored at the turn
@@ -3212,27 +3363,45 @@ def call_consistent(
     turn: a side that ``order.takeover_possible`` allows keeps a row only where its encored move
     replaced the chosen one (``taken_events``) exactly when the tag says so. For each Sleep Talk
     side not taken over whose call is a split variant (``CALL_KEEP`` / ``CALL_DISABLED`` /
-    ``CALL_SEALED``), whether a Disable or an Imprison changed its set before its action
-    (``_split_events`` of ``step_events`` on ``state``, ``actions``, ``outcome``) matches the
-    variant. Unsplit rows always keep."""
+    ``CALL_SEALED`` / ``CALL_GRAVITY``), whether a Disable, an Imprison or a Gravity changed its
+    set before its action (``_split_events`` and ``gravity_events`` of ``step_events`` on
+    ``state``, ``actions``, ``outcome``) matches the variant. A Metronome or Assist side not
+    taken over keeps a row only where its call is a Gravity variant (``>= CALL_GRAVITY``)
+    exactly when a foe's Gravity landed before it (G-67). Unsplit Sleep Talk rows always keep."""
     actions = jnp.asarray(actions, _I32)
     taken = jnp.zeros((2,), bool) if taken is None else jnp.asarray(taken, bool)
     chosen = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
-    talk = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    talk = talk & (call_kind(tables, chosen) == CALL_SLEEP_TALK) & ~taken
+    fight = (state.over == 0) & ~is_switch(actions) & ~is_item(actions) & ~taken
+    kinds = call_kind(tables, chosen)
+    talk = fight & (kinds == CALL_SLEEP_TALK)
+    listing = fight & ((kinds == CALL_METRONOME) | (kinds == CALL_ASSIST))
     call = jnp.asarray(outcome.call, _I32)
     split = talk & (call >= CALL_KEEP)
     disabled, sealed = _split_events(state, events)
-    seen = jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP))
-    want = jnp.where(
-        call >= CALL_SEALED, CALL_SEALED, jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP)
+    landed = gravity_events(state, events)
+    seen = jnp.where(
+        landed,
+        CALL_GRAVITY,
+        jnp.where(sealed, CALL_SEALED, jnp.where(disabled, CALL_DISABLED, CALL_KEEP)),
     )
+    want = jnp.where(
+        call >= CALL_GRAVITY,
+        CALL_GRAVITY,
+        jnp.where(
+            call >= CALL_SEALED,
+            CALL_SEALED,
+            jnp.where(call >= CALL_DISABLED, CALL_DISABLED, CALL_KEEP),
+        ),
+    )
+    listed_ok = ~listing | ((call >= CALL_GRAVITY) == landed)
     view, view_actions = pivot_view(tables, state, actions)
     can_take = jnp.stack(
         [takeover_possible(tables, view, view_actions, side, 1 - side) for side in (0, 1)]
     )
     took = taken_events(state, events)
-    return jnp.all(~split | (seen == want)) & jnp.all(~can_take | (took == taken))
+    return (
+        jnp.all(~split | (seen == want)) & jnp.all(listed_ok) & jnp.all(~can_take | (took == taken))
+    )
 
 
 class CallLaws(NamedTuple):
@@ -3258,6 +3427,12 @@ class CallLaws(NamedTuple):
     taken_kind: jnp.ndarray
     taken_weight: jnp.ndarray
     taken_called: jnp.ndarray
+    # The Gravity variant (G-67): bool[2] a faster foe's Gravity can land before the side's
+    # Sleep Talk, Metronome or Assist call (``order.gravity_possible``), and the call law read
+    # with Gravity up (``order.gravity_state``): its weights and calls as above.
+    can_gravity: jnp.ndarray
+    gravity_weight: jnp.ndarray
+    gravity_called: jnp.ndarray
 
 
 def _side_call_law(
@@ -3294,8 +3469,8 @@ def _side_call_law(
     )
     copy_called = jnp.where(
         values == 0,
-        copycat_call(tables, state.move_prev),
-        jnp.where(values == 1, copycat_call(tables, foe_chosen), 0),
+        copycat_call(tables, state.move_prev, state),
+        jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
@@ -3338,8 +3513,12 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       foe uses a move; ``sealed`` from the set a faster foe's Imprison can leave (B7-13). Drawn
       only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
       move that can put it to sleep (over-approximate);
-    * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
-      the set is fixed through the turn (the user's moves; Gravity and Heal Block are owed);
+    * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536)
+      over the turn-start set; Assist likewise over its list (each entry 1);
+    * the Gravity variant (G-67): where a faster foe's Gravity can land before a Sleep Talk,
+      Metronome or Assist call (``order.gravity_possible``), the law read with Gravity up
+      (``order.gravity_state``: ``Move_CanBeMetronomed``, battle_lib.c:7198-7201, and Sleep
+      Talk's CHECK_INVALID_GRAVITY, :2292-2295, read Gravity when the call runs);
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move;
@@ -3382,7 +3561,12 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
     taken_kinds = jnp.where(
         (taken_kinds == CALL_SLEEP_TALK) & ~sleeps & ~put_to_sleep, CALL_NONE, taken_kinds
     )
+    can_gravity = jnp.stack(
+        [gravity_possible(tables, state, actions, side, 1 - side) for side in (0, 1)]
+    ) & (kinds != CALL_NONE)
+    heavy = gravity_state(state)
     weights, called, alts, seals, t_weights, t_called = [], [], [], [], [], []
+    g_weights, g_called = [], []
     for side in (0, 1):
         foe = 1 - side
         weight, call = _side_call_law(
@@ -3406,6 +3590,11 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         )
         t_weights.append(t_weight)
         t_called.append(t_call)
+        g_weight, g_call = _side_call_law(
+            tables, heavy, side, chosen[side], kinds[side], chosen[foe], uses_move[foe]
+        )
+        g_weights.append(g_weight)
+        g_called.append(jnp.where(can_gravity[side], g_call, call))
     return CallLaws(
         kind=kinds.astype(_I32),
         weight=jnp.stack(weights),
@@ -3418,21 +3607,24 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
         taken_kind=taken_kinds.astype(_I32),
         taken_weight=jnp.stack(t_weights),
         taken_called=jnp.stack(t_called),
+        can_gravity=can_gravity,
+        gravity_weight=jnp.stack(g_weights),
+        gravity_called=jnp.stack(g_called),
     )
 
 
-def _side_variants(kind, weight, called, alt, sealed, offsets) -> list[tuple[int, int, int]]:
+def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tuple[int, int, int]]:
     """``(value, numerator, denominator)`` per call variant of one side's law
-    (``call_variants``)."""
+    (``call_variants``); ``heavy`` is Sleep Talk's call from the set Gravity leaves."""
     if kind in (CALL_SLEEP_TALK, CALL_METRONOME, CALL_ASSIST):
-        groups: dict[tuple[int, int, int], list[int]] = {}
+        groups: dict[tuple[int, int, int, int], list[int]] = {}
         for v in np.flatnonzero(weight):
-            key = (int(called[v]), int(alt[v]), int(sealed[v]))
+            key = (int(called[v]), int(alt[v]), int(sealed[v]), int(heavy[v]))
             groups.setdefault(key, [int(v), 0])[1] += int(weight[v])
         den = int(weight.sum())
         out = []
-        for (move, other, shut), (v, w) in groups.items():
-            if move == other == shut:
+        for (move, other, shut, grav), (v, w) in groups.items():
+            if move == other == shut == grav:
                 out.append((v, w, den))
             else:
                 # One variant per set the turn can leave, each kept only where the turn met
@@ -3462,7 +3654,10 @@ def call_variants(laws: CallLaws) -> list[Variant]:
     smallest, with the group's summed weight). A Sleep Talk group whose values call another move
     from the Disable-shrunk set (``CallLaws.alt``) is two variants of the same weight,
     ``CALL_KEEP`` and ``CALL_DISABLED`` (ruling B5-13), and one more, ``CALL_SEALED``, where a
-    faster foe's Imprison can land (B7-13). Where a foe's Encore can replace the side's move
+    faster foe's Imprison can land (B7-13), and ``CALL_GRAVITY`` where a faster foe's Gravity can
+    (G-67, ``CallLaws.can_gravity``). A Metronome or Assist side whose foe's Gravity can land
+    first also has the Gravity variants: the law under Gravity, values ``+ CALL_GRAVITY``, of
+    total weight 1 beside the turn-start law's 1. Where a foe's Encore can replace the side's move
     (``CallLaws.can_take``), the side also has the takeover variants (``taken``): the encored
     move's own law, of total weight 1 beside the others' 1 (ruling B11-1). The rows of all these
     variants are kept only where the turn met the variant's assumption (``call_consistent``), so
@@ -3474,11 +3669,20 @@ def call_variants(laws: CallLaws) -> list[Variant]:
         offsets = [CALL_KEEP]
         offsets += [CALL_DISABLED] if bool(laws.can_disable[side]) else []
         offsets += [CALL_SEALED] if bool(laws.can_seal[side]) else []
-        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side])
-        out = [(v, False, w, d) for v, w, d in _side_variants(int(laws.kind[side]), *law, offsets)]
+        kind = int(laws.kind[side])
+        gravity = bool(laws.can_gravity[side])
+        talk = kind == CALL_SLEEP_TALK
+        offsets += [CALL_GRAVITY] if gravity and talk else []
+        heavy = laws.gravity_called[side] if talk else laws.called[side]
+        law = (laws.weight[side], laws.called[side], laws.alt[side], laws.sealed[side], heavy)
+        out = [(v, False, w, d) for v, w, d in _side_variants(kind, *law, offsets)]
+        if gravity and kind in (CALL_METRONOME, CALL_ASSIST):
+            heavy = laws.gravity_called[side]
+            law = (laws.gravity_weight[side], heavy, heavy, heavy, heavy)
+            out += [(v + CALL_GRAVITY, False, w, d) for v, w, d in _side_variants(kind, *law, [])]
         if bool(laws.can_take[side]):
             took = laws.taken_called[side]
-            law = (laws.taken_weight[side], took, took, took)
+            law = (laws.taken_weight[side], took, took, took, took)
             kind = int(laws.taken_kind[side])
             out += [(v, True, w, d) for v, w, d in _side_variants(kind, *law, [])]
         per_side.append(out)
@@ -3525,7 +3729,7 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     parts, tags = [], []
     cl = _jit_call_laws(tables, state, actions)
     talks = np.asarray(cl.kind) == CALL_SLEEP_TALK
-    split = bool(np.any(np.asarray(cl.can_take)))
+    split = bool(np.any(np.asarray(cl.can_take)) or np.any(np.asarray(cl.can_gravity)))
     for v in call_variants(cl):
         laws = _jit_laws(tables, state, actions, jnp.asarray(v.call), jnp.asarray(v.taken))
         outcomes, probs = enumerate_outcomes(laws)

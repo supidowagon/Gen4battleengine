@@ -63,6 +63,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.ai.switching import (
     INEFFECTIVE,
+    MAGNET_RISE,
     SUPER_EFFECTIVE,
     apply_type_chart,
     defender_chart_flags,
@@ -87,7 +88,7 @@ from nuzline.engine.order import (
     battler_slower,
     compare_speed,
 )
-from nuzline.engine.state import MOVES, BattleState, held_item
+from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
 
 _I32 = jnp.int32
 
@@ -172,6 +173,7 @@ class FieldCondition(IntEnum):
     include/constants/battle/condition.h:123-125, :144)."""
 
     TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
+    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; BattleState.gravity (G-67)
 
 
 class VolatileCondition(IntEnum):
@@ -211,6 +213,7 @@ class MoveEffectMask(IntEnum):
     IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
+    MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -224,6 +227,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.IMPRISONED: "imprisoned",
     MoveEffectMask.POWER_TRICK: "power_trick",
     MoveEffectMask.EMBARGO: "embargo",
+    MoveEffectMask.MAGNET_RISE: "magnet_rise",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -276,10 +280,15 @@ class BattleEffect(IntEnum):
     DEF_UP = 11
     SP_ATK_UP = 13
     SP_DEF_UP = 14  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2699)
+    EVA_UP = 16  # Double Team (Basic_CheckHighStatStage_Evasion :143; Expert_StatusEvasionUp :1639)
     ATK_DOWN = 18
     DEF_DOWN = 19
     SPEED_DOWN = 20
     EVA_DOWN = 24
+    ALL_FAINT_3_TURNS = 114  # Perish Song (Basic_CheckPerishSong :199)
+    SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
+    GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
+    GRAVITY = 215  # Gravity (Basic_CheckGravityActive :254; Expert_Gravity :1759)
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -1086,6 +1095,9 @@ MOVE_IDS = {
     # Expert_Substitute (script.s:2994).
     "Focus Punch": 264,
     "Shadow Force": 467,
+    # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
+    "Earthquake": 89,
+    "Earth Power": 414,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -1240,7 +1252,9 @@ class AiContext(NamedTuple):
     live: jnp.ndarray  # bool: the decomp's script cursor is on the current path
     jump: jnp.ndarray  # bool: the last jump command's condition
     calc_temp: jnp.ndarray  # int32, calcTemp
-    seen_moves: jnp.ndarray  # int32[4]: the player's active's moves the AI has seen, else 0
+    seen_moves: (
+        jnp.ndarray
+    )  # int32[4]: the player's active's move ids the AI has seen (battlerMoves)
     player_ability: jnp.ndarray  # int32: LoadBattlerAbility DEFENDER (decomp id)
     # int32[4, len(SITE_LINES)]: the flat layout's script_rolls index of each line; an
     # unused int32[] in a per-slot layout, whose reads go by order (per_slot)
@@ -1462,7 +1476,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[a, state.active[a]].astype(_I32)
     d_types = state.types[d, state.active[d]]
-    identified, grounded, roosting = defender_chart_flags(tables, state, d)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -1473,6 +1487,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
             ai_move_type(tables, state, a, m),
             grounded,
             roosting,
+            magnet,
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1595,9 +1610,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Miracle Eye and
-    Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
-    Foresight, Ingrain / Iron Ball and roosting flags are read (``switching.defender_chart_flags``)."""
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock and Miracle Eye change
+    this value and are refused (``policy.ai_refusals``); the player's Foresight, Ingrain /
+    Iron Ball, roosting and Magnet Rise flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1612,7 +1627,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
@@ -1622,8 +1637,12 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
         grounded,
         roosting,
+        magnet,
     )
-    immune = ((flags & INEFFECTIVE) != 0) | wonder_guard_bit(tables, state, 1, 0, move, flags)
+    # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, Wonder Guard's or Magnet Rise's bit.
+    immune = ((flags & (INEFFECTIVE | MAGNET_RISE)) != 0) | wonder_guard_bit(
+        tables, state, 1, 0, move, flags
+    )
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 
@@ -1636,18 +1655,20 @@ def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
-    """``(true, known, base)`` of the player's active Pokemon: its true ability, the current
-    one (``battleMons[battler].ability``, trainer_ai.c:1184-1186; ``damage.decomp_abilities``:
-    the form's, or a copy the engine models, such as Trace's, which the AI also learns,
-    ``BattleAI_SetAbility``,
-    battle_script.c:3401-3403, :12106-12109),
-    whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
-    Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
-    abilities ``int32[2]`` (``defender_ability``)."""
+    """``(value, known, base)`` of the player's active Pokemon: the ability
+    ``LoadBattlerAbility DEFENDER`` returns without a guess, whether it does, and the base
+    species' two abilities ``int32[2]`` (``defender_ability``). It returns the id the AI recorded
+    (``battlerAbilities``, ``BattleAI_SetAbility``, battle_script.c:3401-3403, :12106-12109; a
+    pre-Transform reveal stays the old ability after a Transform, G-69), else the battler's current
+    ability when it is Shadow Tag, Magnet Pull or Arena Trap (trainer_ai.c:1181-1188;
+    ``damage.decomp_abilities``: the form's, or a copy the engine models, Trace's or Transform's).
+    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
-    true = decomp_abilities(tables, state)[0, d]
-    known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
+    current = decomp_abilities(tables, state)[0, d]
+    recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
+    true = jnp.where(recorded > 0, recorded, current)
+    known = (recorded != 0) | jnp.isin(current, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
 
@@ -1707,10 +1728,7 @@ def new_context(
     before scoring, so the scores already know the move the player used last turn;
     ``step`` commits it to ``ai_seen_moves`` when the AI fights."""
     d = state.active[0]
-    moves = state.moves[0, d].astype(_I32)
-    pending = state.last_move[0].astype(_I32)
-    known = (state.ai_seen_moves[d] > 0) | ((moves == pending) & (pending != 0))
-    seen = jnp.where(known, moves, 0).astype(_I32)
+    seen = record_seen_move(state.ai_seen_moves[d], state.last_move[0]).astype(_I32)
     scores = jnp.where(usable_moves(tables, state, 1), 100, 0).astype(_I32)
     false = jnp.asarray(False)
     slotted = jnp.ndim(outcome.script_rolls) == 2
@@ -2332,10 +2350,15 @@ def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value:
 
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
-    Only ``FieldCondition.TRICK_ROOM`` is supported (static; refused otherwise): Trick
-    Room is on while ``BattleState.trick_room`` is nonzero."""
-    assert int(mask) == FieldCondition.TRICK_ROOM, f"unsupported field mask {int(mask):#x}"
-    return _jump(ctx, ctx.state.trick_room != 0)
+    ``FieldCondition.TRICK_ROOM`` and ``FieldCondition.GRAVITY`` are supported (static; refused
+    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while
+    ``BattleState.gravity`` is."""
+    assert int(mask) in (
+        FieldCondition.TRICK_ROOM,
+        FieldCondition.GRAVITY,
+    ), f"unsupported field mask {int(mask):#x}"
+    field = ctx.state.gravity if int(mask) == FieldCondition.GRAVITY else ctx.state.trick_room
+    return _jump(ctx, field != 0)
 
 
 def load_current_weather(ctx: AiContext) -> AiContext:

@@ -28,7 +28,9 @@ Events, per side (``[side]``; 0 = player):
   move refused by Taunt (``ACT_TAUNTED``, the move: "can't use MOVE after the taunt",
   step.py:352-353), by Disable (``ACT_DISABLED``, the move: "MOVE is disabled!",
   ``subscript_move_is_disabled.s``; no PP spent), or by a foe's Imprison (``ACT_IMPRISONED``, the
-  move: "can't use the sealed MOVE!", ``subscript_move_is_imprisoned.s``; no PP spent). A move that never ran (the battler fainted first, slept, froze,
+  move: "can't use the sealed MOVE!", ``subscript_move_is_imprisoned.s``; no PP spent), or by
+  Gravity (``ACT_GRAVITY``, the move: "can't use MOVE because of gravity!",
+  ``subscript_move_fail_gravity.s``). A move that never ran (the battler fainted first, slept, froze,
   flinched, was fully paralyzed or hurt itself) is not shown (``ACT_NONE``, id 0).
 * ``order``: the side that acted first when both showed a message at their turn
   (``action_order``, order.py:67-85), else -1; ``pursuit``: Pursuit hit the switching
@@ -123,6 +125,7 @@ from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
     ACT_DISABLED,
+    ACT_GRAVITY,
     ACT_IMPRISONED,
     ACT_ITEM,
     ACT_MOVE,
@@ -136,6 +139,7 @@ from nuzline.engine.step import (
 
 __all__ = [
     "ACT_DISABLED",
+    "ACT_GRAVITY",
     "ACT_IMPRISONED",
     "ACT_ITEM",
     "ACT_MOVE",

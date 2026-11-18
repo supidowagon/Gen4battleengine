@@ -340,11 +340,21 @@ def test_trick_room_refused(tables, names):
     assert report.level == Support.NONE
 
 
-def test_gravity_refused(tables, names):
-    report = check_opponent(
-        tables, names, with_area(roark_trainer(), gravity=True), roark_party(names), 0
-    )
-    assert "Battle start: permanent Gravity (field condition UNSUPPORTED)" in report.missing
+def test_area_gravity_is_modelled(tables, names):
+    """E1 trial batch (G-67): a Gravity area is no longer refused; the fight starts with Gravity
+    up for ``GRAVITY_TURNS`` (``start_gravity``), which Kaizo's tables re-arm for ever."""
+    from nuzline.engine.coverage import start_gravity
+    from nuzline.engine.ids import GRAVITY_TURNS
+    from nuzline.engine.state import make_state
+
+    trainer = with_area(roark_trainer(), gravity=True)
+    report = check_opponent(tables, names, trainer, roark_party(names), 0)
+    assert not any("Gravity" in line for line in report.missing)
+    assert start_gravity(trainer) == GRAVITY_TURNS and start_gravity(roark_trainer()) == 0
+    party = roark_party(names)
+    state = make_state(tables, party, party, gravity=start_gravity(trainer))
+    assert int(state.gravity) == GRAVITY_TURNS
+    assert int(make_state(tables, party, party).gravity) == 0
 
 
 def test_gauntlet_refused_rules_not_recorded(tables, names):

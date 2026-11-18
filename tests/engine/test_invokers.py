@@ -27,10 +27,18 @@ from nuzline.engine.enumerate import (
     call_variants,
     enumerate_outcomes,
     enumerate_turn,
+    gravity_events,
     outcome_laws,
 )
-from nuzline.engine.ids import METRONOME_HEAVY, EffectId, MoveFlag, Status
-from nuzline.engine.order import MOVE_ACTIONS, action_order, metronome_weights
+from nuzline.engine.ids import CALL_GRAVITY, METRONOME_HEAVY, EffectId, MoveFlag, Status
+from nuzline.engine.order import (
+    MOVE_ACTIONS,
+    action_order,
+    assist_candidates,
+    gravity_state,
+    metronome_candidates,
+    metronome_weights,
+)
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, step_events, turn_events
@@ -252,10 +260,13 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
     """The children of a turn by brute force over the raw draws, independent of ``call_laws``,
     ``call_variants`` and ``branch_ok``: for each raw ``speed_tie`` value, the order ``step``
     plays (``action_order``) fixes Copycat's movePrev (its foe used a move before it, or the
-    turn-start one); each Sleep Talk value weighs 1/12, played under both set assumptions
-    (``CALL_KEEP``, ``CALL_DISABLED``, ``CALL_SEALED``) with each row kept where the turn's own
-    ``disabled_at_move`` / ``sealed_at_move`` events agree; the loose laws with every branch allowed, cut to the rows
-    of that ``speed_tie``. Metronome is left to the hand cases."""
+    turn-start one); each Sleep Talk value weighs 1/12, played under every set assumption
+    (``CALL_KEEP``, ``CALL_DISABLED``, ``CALL_SEALED``, ``CALL_GRAVITY``) with each row kept where
+    the turn's own ``disabled_at_move`` / ``sealed_at_move`` / ``gravity_at_move`` events agree;
+    each Assist list position weighs 1 / its list's length, for the turn-start list and (``+
+    CALL_GRAVITY``) the list Gravity leaves, each row kept where a foe's Gravity landed first
+    exactly for the latter (G-67); the loose laws with every branch allowed, cut to the rows of
+    that ``speed_tie``. Metronome is left to the hand cases."""
     effect = np.asarray(tables.move_effect)
     acts = np.asarray(actions)
     kinds = []
@@ -271,8 +282,14 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
         per_side = []
         for sd in (0, 1):
             if kinds[sd] == EffectId.SLEEP_TALK:
-                offsets = (CALL_KEEP, CALL_DISABLED, CALL_SEALED)
+                offsets = (CALL_KEEP, CALL_DISABLED, CALL_SEALED, CALL_GRAVITY)
                 per_side.append([(u + off, Fraction(1, 12)) for u in range(12) for off in offsets])
+            elif kinds[sd] == EffectId.ASSIST:
+                rows = []
+                for hyp, off in ((state, 0), (gravity_state(state), CALL_GRAVITY)):
+                    n_listed = int(np.sum(np.asarray(assist_candidates(tables, hyp, sd)[1])))
+                    rows += [(v + off, Fraction(1, n_listed)) for v in range(n_listed)]
+                per_side.append(rows)
             elif kinds[sd] == EffectId.COPYCAT:
                 foe = 1 - sd
                 first = int(order[0]) == foe and int(acts[foe]) < MOVE_ACTIONS
@@ -290,11 +307,26 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
                 events = _turn_events(tables, state, jnp.asarray(actions, jnp.int32), o)
                 disabled, sealed = _split_events(state, events)
                 disabled, sealed = np.asarray(disabled), np.asarray(sealed)
+                landed = np.asarray(gravity_events(state, events))
                 for sd, call in ((0, a), (1, b)):
                     if kinds[sd] == EffectId.SLEEP_TALK:
-                        want = 2 if call >= CALL_SEALED else 1 if call >= CALL_DISABLED else 0
-                        seen = np.where(sealed[:, sd], 2, np.where(disabled[:, sd], 1, 0))
+                        want = (
+                            3
+                            if call >= CALL_GRAVITY
+                            else 2
+                            if call >= CALL_SEALED
+                            else 1
+                            if call >= CALL_DISABLED
+                            else 0
+                        )
+                        seen = np.where(
+                            landed[:, sd],
+                            3,
+                            np.where(sealed[:, sd], 2, np.where(disabled[:, sd], 1, 0)),
+                        )
                         keep &= seen == want
+                    elif kinds[sd] == EffectId.ASSIST:
+                        keep &= landed[:, sd] == (call >= CALL_GRAVITY)
                 if not keep.any():
                     continue
                 rows = jax.tree.map(lambda f, keep=keep: np.asarray(f)[keep], o)
@@ -329,6 +361,9 @@ def _children(tables, state, actions, outcomes, probs):
         "sleep_talk",
         "sleep_talk_disable",
         "sleep_talk_imprison",
+        "sleep_talk_gravity",
+        "assist_gravity",
+        "assist_gravity_slow",
         "copycat_tie",
         "copycat_fast",
         "copycat_switch",
@@ -337,7 +372,10 @@ def _children(tables, state, actions, outcomes, probs):
 def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
     """``enumerate_turn`` against the raw brute force (``_raw_brute``): the same merged children.
     ``sleep_talk_disable``: a faster Disable can shrink the Sleep Talk set (ruling B5-13);
-    ``copycat_switch``: the foe switches first, so Copycat copies the turn-start movePrev."""
+    ``copycat_switch``: the foe switches first, so Copycat copies the turn-start movePrev;
+    ``*_gravity``: a faster foe's Gravity bans Splash and Jump Kick from the Sleep Talk set and
+    the Assist list before the call (``Move_CanBeMetronomed``, battle_lib.c:7198-7201;
+    CHECK_INVALID_GRAVITY, :2292-2295; G-67), a slower one does not."""
     t, n = tables, names
     if case == "sleep_talk":
         s = make_state(
@@ -352,6 +390,23 @@ def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
             [_mon(n, "Gastly", ["Disable"], level=40)],
         ).with_status(0, 0, Status.SLEEP, 2)
         s = s._replace(last_move=s.last_move.at[0].set(n.move("Tackle")))
+    elif case == "sleep_talk_gravity":
+        s = make_state(
+            t,
+            [_mon(n, "Snorlax", ["Sleep Talk", "Splash", "Tackle", "Jump Kick"])],
+            [_mon(n, "Gastly", ["Gravity"], level=40)],
+        ).with_status(0, 0, Status.SLEEP, 2)
+    elif case in ("assist_gravity", "assist_gravity_slow"):
+        level = 40 if case == "assist_gravity" else 5
+        s = make_state(
+            t,
+            [
+                _mon(n, "Snorlax", ["Assist"]),
+                _mon(n, "Geodude", ["Splash", "Ember"]),
+                _mon(n, "Bulbasaur", ["Jump Kick", "Water Gun"]),
+            ],
+            [_mon(n, "Gastly", ["Gravity"], level=level)],
+        )
     elif case == "sleep_talk_imprison":
         # B7-13: a faster foe's Imprison seals the shared Tackle before the Sleep Talk.
         s = make_state(
@@ -375,9 +430,46 @@ def test_enumeration_equals_the_raw_call_brute_force(tables, names, case):
         assert np.any(np.asarray(outcomes.call)[:, 0] >= CALL_DISABLED)
     if case == "sleep_talk_imprison":  # the sealed set is played: no Tackle from it
         assert np.any(np.asarray(outcomes.call)[:, 0] >= CALL_SEALED)
+    calls = np.asarray(outcomes.call)[:, 0]
+    if case == "sleep_talk_gravity":  # the Gravity set is played, the turn-start one dropped
+        assert np.any(calls >= CALL_GRAVITY)
+        assert not np.any((calls >= CALL_KEEP) & (calls < CALL_DISABLED))
+    if case == "assist_gravity":  # only the list Gravity leaves is played
+        assert np.all(calls >= CALL_GRAVITY)
+    if case == "assist_gravity_slow":  # the foe's Gravity comes after: the turn-start list
+        assert np.all(calls < CALL_GRAVITY)
     assert set(exact) == set(brute)
     for key, p in brute.items():
         assert abs(exact[key] - p) < 1e-12
+
+
+def test_metronome_after_a_faster_gravity_calls_from_the_set_it_leaves(tables, names):
+    """G-67: ``Move_CanBeMetronomed`` (battle_lib.c:7198-7201) reads Gravity when Metronome
+    runs, so a faster foe's Gravity this turn leaves Metronome the set without ``GRAVITY_MOVES``:
+    the Gravity variant's law is ``metronome_weights`` under Gravity (total weight 1 beside the
+    turn-start law's), and its value ``v + CALL_GRAVITY`` plays that set's ``v``-th candidate,
+    as the reference engine does; a turn whose Gravity did not land first drops it."""
+    t, n = tables, names
+    s = make_state(
+        t, [_mon(n, "Clefairy", ["Metronome"])], [_mon(n, "Gastly", ["Gravity"], level=40)]
+    )
+    acts = jnp.zeros(2, jnp.int32)
+    cl = call_laws(t, s, acts)
+    heavy = gravity_state(s)
+    assert bool(cl.can_gravity[0]) and not bool(cl.can_gravity[1])
+    want = np.asarray(metronome_weights(t, heavy, 0))
+    got = np.asarray(cl.gravity_weight[0])
+    assert got[got > 0].tolist() == want[want > 0].tolist()
+    assert int(np.sum(want > 0)) < int(np.sum(np.asarray(metronome_weights(t, s, 0)) > 0))
+    sides = [v for v in call_variants(cl) if v.call[0] >= CALL_GRAVITY]
+    assert math.isclose(sum(Fraction(v.num, v.den) for v in sides), 1)
+    cands = np.flatnonzero(np.asarray(metronome_candidates(t, heavy, 0)))
+    fly = n.move("Fly")
+    assert fly not in cands and bool(metronome_candidates(t, s, 0)[fly])
+    rank = int(np.searchsorted(cands, n.move("Tackle")))
+    _, events = _both(t, s, np.zeros(2, np.int32), _call(rank + CALL_GRAVITY))
+    assert int(events["called"][0]) == n.move("Tackle")
+    assert bool(gravity_events(s, events)[0])
 
 
 def test_sampled_calls_match_the_enumeration(tables, names):

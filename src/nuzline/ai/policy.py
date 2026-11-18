@@ -27,8 +27,7 @@ factored per slot (``_slot_move_distribution``; docs/ai/kaizo_roark.md 8);
 ``ai_action_distribution_loose`` is its test oracle, with every decomp draw its own.
 
 Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
-(``layout.transcribed``), Curse by a Ghost type (its Ghost labels are not transcribed),
-or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
+(``layout.transcribed``), or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
 (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``; none for Kaizo
 Roark since K3c Task 6), an opponent move the AI's damage estimate or move type takes
 by a move-id case it does not model, a vanilla moveset with more script-roll sites than
@@ -725,14 +724,15 @@ _basic_check_toxic_spikes = _hazard_layers(
 
 
 def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
-    """``Basic_CheckCurse`` (script.s:679-698)."""
-    # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
-    # (:700), which is not transcribed: _refused refuses Curse on a Ghost type, so the
-    # jumps below are never taken.
+    """``Basic_CheckCurse`` (script.s:679-698) and ``Basic_CheckCurse_GhostType`` (:700-705)."""
+    # Basic_CheckCurse (:679). A Ghost-type attacker (type 1 :681-682, type 2 :683-684) jumps
+    # to Basic_CheckCurse_GhostType (:700), run below on the jumped paths.
     ctx = _at(ctx, mask)
+    ghost = None
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
-        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ctx, j = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = j if ghost is None else ghost | j
     ctx = c.load_battler_ability(ctx, _A)
     ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
     for stat in (Stat.ATK, Stat.DEF):
@@ -746,7 +746,14 @@ def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.DEF, 12))
     ctx = _score(ctx, t, -8)
     ctx = c.pop_or_end(ctx)
-    return ctx
+    # Basic_CheckCurse_GhostType (:700): the player already cursed (:702), or Magic Guard
+    # (:703-704, the player's ability, guessed or known), -10.
+    ctx, t = _split(c.if_volatile_status(_at(ctx, ghost), _D, c.VolatileCondition.CURSE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
 
 
 def _clear_body(ctx: AiContext, mask) -> AiContext:
@@ -1102,6 +1109,33 @@ def _expert_baton_pass(ctx: AiContext, mask) -> AiContext:
 def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyIngrained`` (script.s:906-909): the attacker ingrained, -10."""
     ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.INGRAIN))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_gravity_active(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckGravityActive`` (script.s:1026-1029): Gravity already up, -10."""
+    ctx, t = _split(c.if_field_conditions_mask(_at(ctx, mask), c.FieldCondition.GRAVITY))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_magnet_rise(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMagnetRise`` (script.s:1461-1474): the attacker already under the effect
+    (the mask bit, :1463), with Levitate (:1466-1467) or of a Flying type (:1470-1473), -10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.MAGNET_RISE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    ctx = _score(ctx, t, -10)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Flying"]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_perish_song(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckPerishSong`` (script.s:720-723): the player already perishing, -10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.PERISH_SONG))
     return c.pop_or_end(_score(ctx, t, -10))
 
 
@@ -2887,12 +2921,13 @@ _expert_imprison = _first_turn_try("Expert_Imprison", (100, 4638), 2)
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
-    # (:3467-3470 -> :3495); _refused refuses Curse on a Ghost type (Basic_CheckCurse
-    # _GhostType, script.s:700, is not transcribed), so those jumps are never taken.
+    # (:3467-3470 -> :3495), run below on the jumped paths.
     ctx = _at(ctx, mask)
+    ghost = None
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
-        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ctx, j = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = j if ghost is None else ghost | j
     ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 9))  # -> Expert_Curse_End
     ctx, high = _split(c.if_move_known(ctx, _A, _MOVE["Gyro Ball"]))
     ctx, t = _split(c.if_move_known(ctx, _A, _MOVE["Trick Room"]))
@@ -2919,7 +2954,9 @@ def _expert_curse(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 6))
     ctx, _ = _split(c.if_random_less_than(ctx, 128, 3491))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
-    return ctx
+    # Expert_Curse_GhostCheckHP (:3495): above 80 % HP -> Expert_Curse_End (:3499), else -1.
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, ghost), _A, 80))
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
 
 
 def _expert_brick_break(ctx: AiContext, mask) -> AiContext:
@@ -3187,6 +3224,72 @@ def _expert_rest(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | t | ctx.live))
 
 
+def _expert_endure(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Endure`` (script.s:3633-3649): the attacker below 4 % HP -1 (:3637); below 35 %
+    +1 unless the 70 roll jumps (:3638, :3645); at 35 % or more the fall-through reaches
+    ``Expert_Endure_ScoreMinus1`` (:3640, no ``GoTo`` after :3638), -1."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_hp_percent_less_than(ctx, _A, 4))
+    ctx, plus1 = _split(c.if_hp_percent_less_than(ctx, _A, 35))
+    # Expert_Endure_ScoreMinus1 (:3640), then GoTo Expert_Endure_End (:3642)
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1 | ctx.live), -1))
+    # Expert_Endure_TryScorePlus1 (:3644)
+    ctx, end = _split(c.if_random_less_than(_at(ctx, plus1), 70, 3645))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
+def _expert_gravity(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Gravity`` (script.s:4782-4803): a defender with Levitate (:4788), the Magnet Rise
+    bit (:4789) or a Flying type (:4790-4793) goes to ``Expert_Gravity_TryScorePlus1`` (:4798);
+    else the attacker below 60 % HP ends (:4794) and the 128 roll (:4795) either goes there or
+    ends. TryScorePlus1: +1 unless the 64 roll (:4799) jumps."""
+    ctx = _at(ctx, mask)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, plus = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.MAGNET_RISE))
+    plus = plus | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Flying"]))
+        plus = plus | t
+    ctx, end = _split(c.if_hp_percent_less_than(ctx, _A, 60))  # -> Expert_Gravity_End
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 4795))
+    plus = plus | t
+    end = end | ctx.live  # GoTo Expert_Gravity_End (:4796)
+    # Expert_Gravity_TryScorePlus1 (:4798)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus), 64, 4799))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
+def _expert_magnet_rise(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MagnetRise`` (script.s:6090-6119): the attacker below 50 % HP ends (:6099); a
+    defender known to have Earthquake, Earth Power or Fissure +1 (:6100-6106); a Ground-type
+    defender +1 (:6109-6115), else +1 unless the 128 roll (:6113) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_hp_percent_less_than(ctx, _A, 50))  # -> Expert_MagnetRise_End
+    known = jnp.zeros_like(ctx.live)
+    for name in ("Earthquake", "Earth Power", "Fissure"):
+        ctx, t = _split(c.if_move_known(ctx, _D, _MOVE[name]))
+        known = known | t
+    ctx, typing = _split(c.go_to(ctx))  # :6103
+    # Expert_MagnetRise_InitialScorePlus1 (:6106)
+    ctx = c.add_to_move_score(_at(ctx, known), 1)
+    typing = typing | ctx.live
+    # Expert_MagnetRise_CheckOpponentTyping (:6108)
+    ctx = _at(ctx, typing)
+    ground = jnp.zeros_like(ctx.live)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ground"]))
+        ground = ground | t
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 6113))
+    # Expert_MagnetRise_ScorePlus1 (:6115)
+    ctx = c.add_to_move_score(_at(ctx, ground | ctx.live), 1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _expert_heal_bell(ctx: AiContext, mask) -> AiContext:
     """``Expert_HealBell`` (script.s:3398-3406): -5 unless the AI or a party member with HP has
     a status, B12-18."""
@@ -3301,6 +3404,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_UP, _basic_check_high_atk),  # :137
     (BattleEffect.DEF_UP, _basic_check_high_def),  # :138
     (BattleEffect.SP_ATK_UP, _basic_check_high_spa),  # :140
+    (BattleEffect.EVA_UP, _basic_check_high_evasion),  # :143
     (BattleEffect.ATK_DOWN, _basic_check_low_attack),  # :144
     (BattleEffect.DEF_DOWN, _basic_check_defense),  # :145
     (BattleEffect.SPEED_DOWN, _basic_check_low_speed),  # :146
@@ -3342,6 +3446,7 @@ _BASIC_LABELS = (
     (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
+    (BattleEffect.ALL_FAINT_3_TURNS, _basic_check_perish_song),  # :199
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
     (BattleEffect.POWER_BASED_ON_FRIENDSHIP, _basic_check_non_standard_damage),  # :203
@@ -3379,6 +3484,7 @@ _BASIC_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
+    (BattleEffect.GRAVITY, _basic_check_gravity_active),  # :254
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _basic_check_non_standard_damage),  # :256
     (BattleEffect.NATURAL_GIFT, _basic_check_natural_gift),  # :258 (B13-23)
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
@@ -3393,6 +3499,7 @@ _BASIC_LABELS = (
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _basic_check_non_standard_damage),  # :274
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
+    (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -3406,6 +3513,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
+    (BattleEffect.EVA_UP, _expert_status_evasion_up),  # :1639
     (BattleEffect.BYPASS_ACCURACY, _expert_bypass_accuracy),  # :1640
     (BattleEffect.ATK_DOWN, _expert_status_attack_down),  # :1641
     (BattleEffect.DEF_DOWN, _expert_status_defense_down),  # :1642
@@ -3453,6 +3561,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
+    (BattleEffect.SURVIVE_WITH_1_HP, _expert_endure),  # :1704
     (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
     (BattleEffect.HEAL_HALF_MORE_IN_SUN, _expert_synthesis),  # :1707 (B12-18)
@@ -3491,6 +3600,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
+    (BattleEffect.GRAVITY, _expert_gravity),  # :1759
     (BattleEffect.DOUBLE_POWER_HEAL_SLEEP, _expert_wake_up_slap),  # :1761 (B13-23)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
@@ -3510,6 +3620,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _expert_punishment),  # :1788
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
     (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
@@ -3735,8 +3846,9 @@ def _flag_scripts(layout: AiLayout) -> tuple:
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 # Wonder Guard is modelled since the E1 Gardenia batch (switching.wonder_guard_bit, G-23).
 _DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
-# Ingrain and Roost are read since E1 prep batch P2 (switching.defender_chart_flags).
-_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Magnet Rise")}
+# Ingrain and Roost are read since E1 prep batch P2, Magnet Rise since the E1 trial batch
+# (switching.defender_chart_flags).
+_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye",)}
 
 
 def player_move_refusal(move: int) -> str | None:
@@ -3764,7 +3876,6 @@ def player_ability_refusal(ability: int) -> str | None:
 
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
-    ghost_curse: jnp.ndarray  # bool[SLOTS, MOVES]: Curse by a Ghost type (its labels are not)
     expert: jnp.ndarray  # bool[SLOTS, MOVES]: its effect's Expert label is not transcribed
     calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
     move_type: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_MoveType id case
@@ -3789,16 +3900,10 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     else:  # by battle effect (outcome.KAIZO_TRANSCRIBED)
         transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
     move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
-    # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700, which
-    # reads IfVolatileStatus) and Expert_Curse_GhostCheckHP (:3467-3470 -> :3495), which are
-    # not transcribed.
-    ghost = jnp.any(state.types[1] == _TYPE["Ghost"], axis=-1)  # [SLOTS]
-    ghost_curse = present[1][:, None] & (effects == BattleEffect.CURSE) & ghost[:, None]
-    ghost_curse = ghost_curse & ~move & (moves[1] != 0)
     # A transcribed effect whose Expert_Main entry (script.s:1628-1808) goes to a label not
     # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
     pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
-    expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
+    expert = present[1][:, None] & (moves[1] != 0) & ~move
     if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
         if layout.runtime_flags:  # the battler's own EXPERT bit
@@ -3846,7 +3951,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     bag = (bag_items != 0) & refused_bag_items(tables, bag_items)
     scoring = (
         jnp.any(move)
-        | jnp.any(ghost_curse)
         | jnp.any(expert)
         | jnp.any(calc_damage)
         | jnp.any(move_type)
@@ -3859,7 +3963,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     return _Refused(
         move,
-        ghost_curse,
         expert,
         calc_damage,
         move_type,
@@ -3875,15 +3978,12 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
 
 
-def opponent_move_refusals(
-    tables: Tables, move: int, layout: AiLayout, ghost: bool = False
-) -> list[str]:
+def opponent_move_refusals(tables: Tables, move: int, layout: AiLayout) -> list[str]:
     """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
     whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
     ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"not in the fight's
     layout"`` (transcribed, but not one of the fight's own move effects, E1 Ruling R7),
-    ``"ghost curse"`` (Curse
-    by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
+    ``"expert label"`` (its Expert_Main label is not transcribed
     yet, when the layout runs EXPERT), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
     TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
     tests/ai/test_kaizo_policy.py test_opponent_move_refusals_are_refused."""
@@ -3895,8 +3995,6 @@ def opponent_move_refusals(
         outside = layout.per_slot_sites and effect in KAIZO_TRANSCRIBED
         return ["not in the fight's layout" if outside else "not transcribed"]
     out = []
-    if ghost and effect == BattleEffect.CURSE:
-        out.append("ghost curse")
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
     if (
         layout.per_slot_sites
@@ -3978,13 +4076,6 @@ def _scoring_refusals(
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
             f"{_move_name(move, names)} are not transcribed (docs/ai/roark.md 5)"
-        )
-    for s, k in zip(*np.nonzero(np.asarray(r.ghost_curse)), strict=True):
-        out.append(
-            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} by a "
-            "Ghost type goes to Basic_CheckCurse_GhostType (script.s:700) and "
-            "Expert_Curse_GhostCheckHP (script.s:3495), which are not transcribed "
-            "(docs/ai/kaizo_roark.md 5.1)"
         )
     effects = np.asarray(tables.move_ai_effect)
     for s, k in zip(*np.nonzero(np.asarray(r.expert)), strict=True):

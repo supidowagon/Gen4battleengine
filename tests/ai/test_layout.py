@@ -16,7 +16,7 @@ from nuzline.ai.outcome import no_calc_draws
 from nuzline.ai.policy import ai_policy, ai_refusals
 from nuzline.ai.switching import REFUSED_ACTION
 from nuzline.engine.state import make_state
-from tests.ai.fixtures import GEODUDE, outcome, trace_a, versus
+from tests.ai.fixtures import GEODUDE, know_ability, outcome, trace_a, versus
 from tests.conftest import K3C_EFFECTS
 
 SELFDESTRUCT, HEAD_SMASH, CRUNCH = 120, 457, 242
@@ -143,12 +143,14 @@ def _dry_skin_state(tables, names):
     croagunk = names.species("Croagunk")
     dry_skin = 1
     assert names.species_abilities(croagunk)[dry_skin] == names.ability("Dry Skin") == 87
-    return s._replace(
-        moves=s.moves.at[1, GEODUDE, 0].set(WATER_GUN),
-        pp=s.pp.at[1, GEODUDE, 0].set(25),
-        ability_slot=s.ability_slot.at[0, 0].set(dry_skin),
-        ability=s.ability.at[0, 0].set(tables.species_abilities[croagunk, dry_skin]),
-        ai_ability_known=s.ai_ability_known.at[0].set(1),
+    return know_ability(
+        tables,
+        s._replace(
+            moves=s.moves.at[1, GEODUDE, 0].set(WATER_GUN),
+            pp=s.pp.at[1, GEODUDE, 0].set(25),
+            ability_slot=s.ability_slot.at[0, 0].set(dry_skin),
+            ability=s.ability.at[0, 0].set(tables.species_abilities[croagunk, dry_skin]),
+        ),
     )
 
 

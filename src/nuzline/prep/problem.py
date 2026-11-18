@@ -374,6 +374,8 @@ class PrepProblem:
     # (decomp ability id, Status) of STATUS_BLOCKING_ABILITIES in the problem's game
     # (``build_problem`` looks the names up in its ``Names``); None: the shipped tables'.
     blocking_abilities: tuple[tuple[int, int], ...] | None = None
+    # The player's Chatter parameter from the save's Chatot cry (``SaveFile.chatot_cry``, G-70).
+    chatot_cry: int = 0
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -469,5 +471,6 @@ def build_problem(
             if m.location not in index
         ),
         blocking_abilities=blocking_abilities(names),
+        chatot_cry=save.chatot_cry,
     )
     return problem, warnings

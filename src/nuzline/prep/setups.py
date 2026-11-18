@@ -13,6 +13,7 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
+from nuzline.engine.coverage import start_gravity
 from nuzline.engine.state import BattleState
 from nuzline.prep.problem import PrepProblem
 from nuzline.prep.states import make_states
@@ -172,7 +173,12 @@ def _member_changes(
         )
     if entry_hp and member.hp is None:
         kill = ai_kill_damage(
-            tables, spec, problem.opp, problem.start_condition, problem.trainer.items
+            tables,
+            spec,
+            problem.opp,
+            problem.start_condition,
+            problem.trainer.items,
+            gravity=start_gravity(problem.trainer),
         )
         out.extend(
             dataclasses.replace(member, hp=top)
@@ -242,6 +248,8 @@ def setup_states(tables: Tables, problem: PrepProblem, setups: Sequence[Setup]) 
         budget=problem.deaths,
         protected=[protected_slots(problem, s) for s in setups],
         terrain=problem.trainer.terrain,
+        gravity=start_gravity(problem.trainer),
+        chatot_cry=problem.chatot_cry,
     )
 
 

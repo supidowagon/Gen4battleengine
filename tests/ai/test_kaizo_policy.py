@@ -44,6 +44,7 @@ from nuzline.engine.order import (
     effective_speed,
 )
 from nuzline.engine.state import MOVES, make_state
+from tests.ai.fixtures import know_ability
 from tests.ai.test_kaizo_outcome import (
     KAIZO,
     KAIZO_ALL,
@@ -505,7 +506,7 @@ def test_selfdestruct_damp_guess(tables, names, kaizo_tables, kaizo_roark_party)
     # and Accelerock take Basic_CheckWaterAbsorption (:74 -> :86), not Water: no change.
     assert _two_flag_scores(t2, s, 1, jump) == [100, 100, 100, 99]
     # The ability is known (ai_ability_known): Wooper's true slot 0, Damp, whatever the guess.
-    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    known = know_ability(t2, s)
     assert _two_flag_scores(t2, known, 1, jump) == [100, 90, 100, 99]
 
 
@@ -729,21 +730,31 @@ def test_curse_simple(kaizo_tables, kaizo_roark_party, atk, def_, expected):
     assert _two_flag_scores(t, s) == [expected, 0, 0, 0]
 
 
-def test_ghost_curse_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """A Ghost-type Curse user takes Basic_CheckCurse_GhostType (:681-684 -> :700) and
-    Expert_Curse_GhostCheckHP (:3467-3470 -> :3495), which are not transcribed: refused by
-    their names (Task 5 review m1), and only for that move."""
+@pytest.mark.parametrize(
+    ("case", "basic", "expert"),
+    [
+        # Basic_CheckCurse_GhostType (script.s:700-705) / Expert_Curse_GhostCheckHP (:3495-3500)
+        ("plain", 0, 0),  # not cursed, no Magic Guard; above 80 % HP the check ends
+        ("hurt", 0, -1),  # AI at 50 % HP: -1
+        ("cursed", -10, 0),  # :702 the player already cursed
+        ("magic guard", -10, 0),  # :704 the player's Magic Guard
+    ],
+)
+def test_ghost_curse(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, expert):
+    """A Ghost-type Curse user takes the Ghost branches (:681-684, :3467-3470)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, SHUCKLE, _SHUCKLE_MOVES, bench=(BONSLY,))
+    s = s._replace(types=s.types.at[1, 0, 1].set(7))  # TYPE_GHOST
+    if case == "hurt":
+        s = _hp(s, 1, 50)
+    if case == "cursed":
+        s = s._replace(curse=s.curse.at[0].set(1))
+    if case == "magic guard":
+        mg = c.ABILITY_IDS["Magic Guard"]
+        t = _with_abilities(t, int(s.species[0, 0]), [mg, mg])
     assert policy.ai_refusals(t, s, n) == []
-    ghost = s._replace(types=s.types.at[1, 0, 1].set(7))  # TYPE_GHOST
-    reasons = [r for r in policy.ai_refusals(t, ghost, n) if "opponent slot" in r]
-    line = (
-        "ai scoring: opponent slot 0: move Curse by a Ghost type goes to "
-        "Basic_CheckCurse_GhostType (script.s:700) and Expert_Curse_GhostCheckHP "
-        "(script.s:3495), which are not transcribed (docs/ai/kaizo_roark.md 5.1)"
-    )
-    assert reasons == [line]
+    assert _delta(t, s, 0x2, 0x3)[2] == basic
+    assert _delta(t, s, 0x3, 0x7)[2] == expert
 
 
 # --- EVAL_ATTACK (script.s:6353-6415) -----------------------------------------------------
@@ -1342,8 +1353,7 @@ def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
     for move in range(1, n_moves):
         r = refused(jnp.int32(move))
         by_move = any(
-            bool(np.asarray(f)[0, 1])
-            for f in (r.move, r.ghost_curse, r.expert, r.calc_damage, r.move_type)
+            bool(np.asarray(f)[0, 1]) for f in (r.move, r.expert, r.calc_damage, r.move_type)
         )
         kinds = policy.opponent_move_refusals(t, move, KAIZO)
         assert bool(kinds) == by_move, (move, kinds)
@@ -2979,7 +2989,7 @@ def test_basic_ohko(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
     elif case == "sturdy":  # Kaizo has no Sturdy species: a synthetic row for Gible
         sturdy = c.ABILITY_IDS["Sturdy"]
         t = _with_abilities(t, int(s.species[0, 0]), [sturdy, sturdy])
-        s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+        s = know_ability(t, s)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
 
 
@@ -3456,21 +3466,39 @@ def test_accuracy_down(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic
 
 
 @pytest.mark.parametrize(
-    ("evasion", "jumps", "basic", "expert"),
+    "move", ["Minimize", "Double Team"]
+)  # EVA_UP_2_MINIMIZE (108), EVA_UP (16)
+@pytest.mark.parametrize(
+    ("evasion", "simple", "jumps", "basic", "expert"),
     [
         # Basic_CheckHighStatStage_Evasion (script.s:407-418) / Expert_StatusEvasionUp
         # (:2184-2253): at full HP +3 unless :2204 jumps, then the HP ranges end it
-        (0, (), 0, 3),
-        (0, (2204,), 0, 0),
-        (6, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
+        (0, False, (), 0, 3),
+        (0, False, (2204,), 0, 0),
+        (6, False, (), -10, 2),  # +6: Basic -10; Expert +3, then -1 unless :2209 jumps
+        (3, True, (), -10, None),  # Simple: above +2 is already the top (:412-413)
     ],
 )
-def test_minimize(kaizo_tables, kaizo_names, kaizo_roark_party, evasion, jumps, basic, expert):
+def test_evasion_up(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, evasion, simple, jumps, basic, expert
+):
     t, n = kaizo_tables, kaizo_names
-    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Minimize", "Accelerock", "", ""))
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
     s = s._replace(stages=s.stages.at[1, Stat.EVA].set(evasion))
+    if simple:  # a species whose ability slot 0 is Simple (the AI reads the species')
+        abilities = np.asarray(t.species_abilities_decomp)
+        rows = np.asarray(t.species_form_row)[:, 0]
+        species = next(
+            sp
+            for sp in range(1, rows.shape[0])
+            if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
+        )
+        s = s._replace(
+            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
+        )
     assert _delta(t, s, 0x2, 0x3)[0] == basic
-    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+    if expert is not None:
+        assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
 @pytest.mark.parametrize(
@@ -3826,7 +3854,7 @@ def _seen_protect(t, n, s):
     protect = n.move_names.index("Protect")
     assert int(t.move_ai_effect[protect]) == BattleEffect.PROTECT
     return s._replace(
-        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1)
+        moves=s.moves.at[0, 0, 3].set(protect), ai_seen_moves=s.ai_seen_moves.at[0, 0].set(protect)
     )
 
 
@@ -4338,6 +4366,213 @@ def test_batch12_healing_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roa
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E1 trial batch: Perish Song (G-64) ------------------------------------------------------
+
+
+@pytest.mark.parametrize(("perishing", "basic"), [(False, 0), (True, -10)])
+def test_perish_song(kaizo_tables, kaizo_names, kaizo_roark_party, perishing, basic):
+    """Basic_CheckPerishSong (script.s:720-723): -10 when the player already has the effect;
+    no Expert entry for ALL_FAINT_3_TURNS (:1628-1808)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Perish Song", "Accelerock", "", ""))
+    s = s._replace(perish_song=s.perish_song.at[0].set(int(perishing)))
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+
+
+# --- E1 trial batch: Nature Power -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("jumps", "harass"), [((), 2), ((8030,), 0)])
+def test_nature_power(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, harass):
+    """NATURE_POWER (173) has no Basic_ScoreMoveEffect or Expert_Main entry: the AI scores the
+    slot's own status move (power 0). Its only mention is Harrassment_Effects (script.s:8058):
+    +2 unless the :8030 roll jumps."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Nature Power", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+    assert _delta(t, s, 0x5, 0x405, tuple((0, line) for line in jumps))[0] == harass
+
+
+# --- E1 trial batch: Endure (G-65) ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("own_hp", "jumps", "expert"),
+    [
+        # Expert_Endure (script.s:3633-3649): below 4 % -1; below 35 % +1 unless the :3645 roll
+        # jumps; 35 % or more falls through into Expert_Endure_ScoreMinus1 (:3640), -1.
+        (100, (), -1),
+        (35, (), -1),
+        (34, (), 1),
+        (34, (3645,), 0),
+        (20, (), 1),
+        (20, (3645,), 0),
+        (4, (), 1),
+        (3, (), -1),
+        (1, (3645,), -1),
+    ],
+)
+def test_endure(kaizo_tables, kaizo_names, kaizo_roark_party, own_hp, jumps, expert):
+    """SURVIVE_WITH_1_HP (116): no Basic entry (:134-285), Expert_Main :1704."""
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Endure", "Accelerock", "", "")), 1, own_hp
+    )
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+# --- E1 trial batch: Magnet Rise (G-66) -------------------------------------------------------
+
+
+def _levitate_species(t):
+    """A species whose ability slot 0 is Levitate (the AI reads the species')."""
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    return next(
+        sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == c.ABILITY_IDS["Levitate"]
+    )
+
+
+@pytest.mark.parametrize("case", ["plain", "bit", "levitate", "flying"])
+def test_magnet_rise_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
+    """Basic_CheckMagnetRise (script.s:1461-1474): the attacker with the bit (:1463), Levitate
+    (:1467) or a Flying type (:1470-1473) scores -10."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magnet Rise", "Accelerock", "", ""))
+    if case == "bit":
+        s = s._replace(magnet_rise=s.magnet_rise.at[1].set(1))
+    if case == "levitate":
+        s = s._replace(
+            species=s.species.at[1, 0].set(_levitate_species(t)),
+            ability_slot=s.ability_slot.at[1, 0].set(0),
+        )
+    if case == "flying":
+        s = s._replace(types=s.types.at[1, 0, 1].set(2))  # TYPE_FLYING
+    assert _delta(t, s, 0x2, 0x3)[0] == (0 if case == "plain" else -10)
+
+
+@pytest.mark.parametrize(
+    ("own_hp", "ground", "known", "jumps", "expert"),
+    [
+        # Expert_MagnetRise (script.s:6090-6119): below 50 % HP ends; a known Earthquake / Earth
+        # Power / Fissure +1; a Ground-type player +1, else +1 unless the :6113 roll jumps.
+        (40, True, True, (), 0),
+        (49, False, True, (), 0),
+        (100, True, True, (), 2),
+        (100, True, False, (), 1),
+        (100, False, True, (), 2),
+        (100, False, True, (6113,), 1),
+        (100, False, False, (), 1),
+        (100, False, False, (6113,), 0),
+        (50, False, False, (), 1),
+    ],
+)
+def test_magnet_rise_expert(
+    kaizo_tables, kaizo_names, kaizo_roark_party, own_hp, ground, known, jumps, expert
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magnet Rise", "Accelerock", "", "")),
+        1,
+        own_hp,
+    )
+    if not ground:  # Roark's Gible is Dragon / Ground
+        s = s._replace(types=s.types.at[0, 0].set(jnp.zeros(2, s.types.dtype)))  # Normal
+    if known:
+        s = s._replace(
+            moves=s.moves.at[0, 0, 3].set(n.move("Earthquake")),
+            ai_seen_moves=s.ai_seen_moves.at[0, 0].set(n.move("Earthquake")),
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+def test_the_players_magnet_rise_is_immune_to_the_ai_ground_move(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """MOVE_STATUS_MAGNET_RISE (battle_lib.c:2605-2609, moves.h:87): IfMoveEffectivenessEquals
+    reads IMMUNE, the damage estimate is 0, and the walk is skipped (only STAB stays)."""
+    from nuzline.ai.switching import MAGNET_RISE, apply_type_chart, type_chart_flags
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Earthquake", "Accelerock", "", ""))
+    s = s._replace(types=s.types.at[0, 0].set(jnp.asarray([10, 10], s.types.dtype)))  # Fire
+    quake, rock = n.move("Earthquake"), n.move("Accelerock")
+    assert int(c.effectiveness_class(t, s, quake)) == TypeMulti.DOUBLE  # Ground vs Fire
+    floating = s._replace(magnet_rise_turns=s.magnet_rise_turns.at[0].set(3))
+    assert int(c.effectiveness_class(t, floating, quake)) == TypeMulti.IMMUNE
+    assert int(c.effectiveness_class(t, floating, rock)) == int(c.effectiveness_class(t, s, rock))
+    # The value keeps STAB only (Bonsly is Rock, Earthquake Ground: no STAB): 40 stays 40.
+    assert int(apply_type_chart(t, floating, 1, quake, 40)) == 40
+    assert int(apply_type_chart(t, s, 1, quake, 40)) == 80
+    flags = int(
+        type_chart_flags(t, quake, floating.types[0, 0], 0, False, None, False, False, True)
+    )
+    assert flags == MAGNET_RISE
+    # Ingrain or an Iron Ball (the player's) lifts it for the AI as for the battle.
+    for lifted in (
+        floating._replace(ingrain=floating.ingrain.at[0].set(1)),
+        floating._replace(item=floating.item.at[0, 0].set(n.item("Iron Ball"))),
+    ):
+        assert int(c.effectiveness_class(t, lifted, quake)) == TypeMulti.DOUBLE
+    # The damage estimate (TrainerAI_CalcDamage, trainer_ai.c:3106) is zero.
+    from nuzline.engine.damage import ai_damage_for_roll
+
+    assert int(ai_damage_for_roll(t, floating, 1, quake, 100)) == 0
+    assert int(ai_damage_for_roll(t, s, 1, quake, 100)) > 0
+
+
+# --- E1 trial batch: Gravity (G-67) -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("up", [False, True])
+def test_gravity_basic(kaizo_tables, kaizo_names, kaizo_roark_party, up):
+    """Basic_CheckGravityActive (script.s:1026-1029): Gravity already up, -10."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gravity", "Accelerock", "", ""))
+    s = s._replace(gravity=jnp.asarray(3 if up else 0, s.gravity.dtype))
+    assert _delta(t, s, 0x2, 0x3)[0] == (-10 if up else 0)
+
+
+@pytest.mark.parametrize(
+    ("case", "own_hp", "jumps", "expert"),
+    [
+        # Expert_Gravity (script.s:4782-4803): a Levitate / Magnet Rise / Flying player goes to
+        # Expert_Gravity_TryScorePlus1 whatever the HP (+1 unless the :4799 roll jumps); else
+        # below 60 % HP ends, and the :4795 roll jumps to TryScorePlus1 or the script ends.
+        ("flying", 100, (), 1),
+        ("flying", 100, (4799,), 0),
+        ("flying", 30, (), 1),
+        ("magnet", 100, (), 1),
+        ("magnet", 100, (4799,), 0),
+        ("levitate", 100, (), 1),
+        ("levitate", 100, (4799,), 0),
+        ("ground", 50, (), 0),
+        ("ground", 50, (4795,), 0),
+        ("ground", 80, (), 0),
+        ("ground", 80, (4795,), 1),
+        ("ground", 80, (4795, 4799), 0),
+    ],
+)
+def test_gravity_expert(kaizo_tables, kaizo_names, kaizo_roark_party, case, own_hp, jumps, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gravity", "Accelerock", "", "")), 1, own_hp
+    )
+    if case == "flying":
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray([2, 2], s.types.dtype)))
+    if case == "magnet":
+        s = s._replace(magnet_rise=s.magnet_rise.at[0].set(1))
+    if case == "levitate":
+        lev = c.ABILITY_IDS["Levitate"]
+        t = _with_abilities(t, int(s.species[0, 0]), [lev, lev])
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
 # --- E2 batch 13 (B13-23..27): the variable-power and secondary hits, Recycle --------------

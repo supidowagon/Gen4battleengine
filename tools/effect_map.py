@@ -273,6 +273,25 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190); the block is
     # CheckMoveHitOverrides (battle_controller_player.c:3001-3014; engine/step.py).
     111: ("BATTLE_EFFECT_PROTECT", _E.PROTECT, (0, 0, 0)),
+    # effect_script_0116.s (Endure): the same direct TO_ATTACKER subscript_protect.s as Protect
+    # (effect_script_0111.s:3); BtlCmd_TryProtection sets turnFlags.enduring (battle_script.c:5174-5177).
+    116: ("BATTLE_EFFECT_SURVIVE_WITH_1_HP", _E.ENDURE, (0, 0, 0)),
+    # effect_script_0252.s (Magnet Rise): fails on magnetRiseTurns, Levitate or Ingrain, else sets
+    # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns = 5 on the user.
+    252: ("BATTLE_EFFECT_GIVE_GROUND_IMMUNITY", _E.MAGNET_RISE, (0, 0, 0)),
+    # effect_script_0215.s (Gravity): fails with FIELD_CONDITION_GRAVITY up, else the indirect
+    # subscript_gravity_start.s (FIELD_CONDITION_GRAVITY_INIT and the grounding loop).
+    215: ("BATTLE_EFFECT_GRAVITY", _E.GRAVITY, (0, 0, 0)),
+    # effect_script_0082.s (Mimic): a direct ON_HIT subscript_mimic.s -> BtlCmd_TryMimic
+    # (battle_script.c:4476-4523), engine/effects.py ``_mimic`` (G-68).
+    82: ("BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE", _E.MIMIC, (0, 0, 0)),
+    # effect_script_0057.s (Transform): CHECK_HP | TO_DEFENDER subscript_transform_into_target.s
+    # -> BtlCmd_Transform (battle_script.c:5330-5373), engine/effects.py ``_transform`` (G-69).
+    57: ("BATTLE_EFFECT_TRANSFORM", _E.TRANSFORM, (0, 0, 0)),
+    # effect_script_0267.s (Chatter): CalcCrit / CalcDamage with the indirect ON_HIT
+    # subscript_chatter.s (engine/effects.py ``_chatter``, G-70); the move's effect_chance is never
+    # read (the ON_HIT branch of BattleSystem_TriggerSecondaryEffect, battle_lib.c:1524-1529).
+    267: ("BATTLE_EFFECT_CHATTER", _E.CHATTER, (0, 0, 0)),
     # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
     # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
     # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;
@@ -743,6 +762,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Vital Spirit": AbilityId.VITAL_SPIRIT,
     "Speed Boost": AbilityId.SPEED_BOOST,
     "Iron Fist": AbilityId.IRON_FIST,
+    "Plus": AbilityId.PLUS,
+    "Minus": AbilityId.MINUS,
     "Klutz": AbilityId.KLUTZ,
 }
 

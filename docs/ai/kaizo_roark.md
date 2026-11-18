@@ -305,10 +305,9 @@ effect appears once in the table, so the order of the entries does not matter):
   **-10** (`:364`). Then `A`'s true ability: with Simple, Speed above decomp 8 (engine +3
   or more) is **-10** (`:367`); without, Speed at decomp 12 (engine +6) is **-10** (`:371`).
 - **CURSE** (`:196`) -> `Basic_CheckCurse` (`:679-698`): a Ghost-type `A` (true type 1 or 2)
-  jumps to `Basic_CheckCurse_GhostType` (`:700`), which is not transcribed (nor is
-  `Expert_Curse_GhostCheckHP`, 5.3): the AI refuses a Ghost-type Curse user
-  (`policy._refused`, a line naming both labels). Kaizo Roark's Curse user, Shuckle, is
-  Bug/Rock.
+  jumps to `Basic_CheckCurse_GhostType` (`:700-705`): the player already cursed, or with
+  Magic Guard (its ability, guessed or known), is **-10** (transcribed in the E1 trial batch,
+  5.25; the Ghost Curse refusal is gone). Kaizo Roark's Curse user, Shuckle, is Bug/Rock.
   With Simple, Attack or Defense above decomp 8 (engine +3 or more) is **-10**
   (`:690-691`). Without, Attack at 12 is **-10** (`:696`), else Defense at 12 is **-8**
   (`:697`).
@@ -401,8 +400,8 @@ Room reverses, `:1432-1439`; equal speed is never SLOWER, Ruling 3).
 - **SPEED_UP_2** (`:1665`) -> `Expert_StatusSpeedUp` (`:2066-2079`): not slower is **-3**;
   slower is the 70 roll (`:2075`), **+3**.
 - **CURSE** (`:1700`) -> `Expert_Curse` (`:3452-3500`):
-  1. A Ghost-type `A` goes to `Expert_Curse_GhostCheckHP` (`:3467-3470` -> `:3495`): refused
-     with `Basic_CheckCurse_GhostType` (5.1).
+  1. A Ghost-type `A` goes to `Expert_Curse_GhostCheckHP` (`:3467-3470` -> `:3495`): above
+     80 % HP it ends, else **-1** (`:3496-3497`); no roll (E1 trial batch, 5.25).
   2. `A`'s Defense above decomp 9 (+4 or more) ends it (`:3471`). (The decomp's comment says
      "+3 or higher"; the code tests > 9.)
   3. `A` knows Gyro Ball (360) or Trick Room (433) (`IfMoveKnown ATTACKER`, `:3472-3473`):
@@ -530,8 +529,10 @@ Me, Assist, Uproar, Secret Power's terrain, ...); the AI side no longer adds a l
 The stat raises Kaizo moves carry: ATK_UP, DEF_UP, SP_ATK_UP, ATK_UP_2, DEF_UP_2, SP_ATK_UP_2
 and SP_DEF_UP_2 (SPEED_UP_2 was Roark's). No Kaizo move has SPEED_UP, SP_DEF_UP, ACC_UP,
 ACC_UP_2 or DEF_UP_DOUBLE_ROLLOUT_POWER, so their paths (the accuracy labels among them) are
-not transcribed. The evasion raises (EVA_UP, EVA_UP_2, EVA_UP_2_MINIMIZE) wait for a per-fight
-read bound: `Expert_StatusEvasionUp` alone can make 7 random reads on one path (8.3).
+not transcribed. The evasion raises waited for a per-fight read bound (`Expert_StatusEvasionUp`
+alone can make 7 random reads on one path, 8.3): Minimize (EVA_UP_2_MINIMIZE) came in prep P1
+(5.21) and EVA_UP (Double Team) in the E1 trial batch. EVA_UP_2 (56) has no Kaizo move and
+stays untranscribed.
 
 - BASIC: `Basic_CheckHighStatStage_<stat>` (`script.s:343-392`; dispatch `:137-141`,
   `:164-168`): -10 when the attacker is already at the top, above +2 under Simple
@@ -769,6 +770,9 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
 - ACC_DOWN (23) and EVA_UP_2_MINIMIZE (108): `Basic_CheckLowStatStage_Accuracy` /
   `Basic_CheckHighStatStage_Evasion`; `Expert_StatusAccuracyDown` (`:2431-2498`) and
   `Expert_StatusEvasionUp` (`:2184-2253`), the player below 40 % (a per-effect HP cut).
+  EVA_UP (16, Double Team, E1 trial batch) shares both labels (`:143`, `:1639`) and the
+  40 % cut; it is also in the SetupFirstTurn and CheckHP tables, so its read bounds add the
+  CheckHP reads that Minimize's lack.
 - PREVENT_ESCAPE (106): `Basic_CheckMeanLook` (`:674-677`); `Expert_BindingMove`
   (`:2808-2825`).
 - REMOVE_HELD_ITEM (188): `Basic_CheckCanRemoveItem` (`:898-904`); `Expert_KnockOff`
@@ -831,6 +835,61 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   does not jump. One read per path for a table effect, none for any other (`read_bounds`
   column 10). `policy._harrassment`; `layout.KAIZO_FLAG_BITS` and coverage's
   `IMPLEMENTED_AI_FLAGS["kaizo"]` carry bit 10.
+
+### 5.25 E1 trial batch: Perish Song (G-64), Nature Power, Ghost Curse, Endure, Magnet Rise, Gravity
+
+- ALL_FAINT_3_TURNS (114): `Basic_CheckPerishSong` (`:720-723`), the player already perishing
+  -10; no Expert entry. Switching step 3, `AI_PerishSongKO` (`trainer_ai.c:3263-3272`): the AI's
+  active with the effect at `perishSongTurns == 0` switches before any draw
+  (`switching._Layout.perish`; the pick is `BattleAI_PostKOSwitchIn`'s).
+
+- NATURE_POWER (173): no Basic or Expert entry, only `Harrassment_Effects` (`:8058`). It is
+  scored as its own status move (power 0): the called move is chosen after the AI picks.
+
+- Ghost Curse (CURSE, 109): `Basic_CheckCurse_GhostType` (`:700-705`) and
+  `Expert_Curse_GhostCheckHP` (`:3495-3500`) are transcribed on the Ghost-type jumps
+  (`policy._basic_check_curse`, `_expert_curse`); `policy._refused` no longer refuses a Ghost
+  Curse user and `opponent_move_refusals` has no "ghost curse" kind. The engine side was
+  modelled in E2 batch 8 (B8-5).
+
+- SURVIVE_WITH_1_HP (116, Endure): no Basic entry; `Expert_Endure` (`:3633-3649`, dispatch
+  `:1704`): the AI below 4 % HP **-1**; below 35 % **+1** unless the 70 roll (`:3645`) jumps; at
+  35 % or more the fall-through reaches `Expert_Endure_ScoreMinus1`, **-1**. The engine move is
+  G-65.
+
+- GIVE_GROUND_IMMUNITY (252, Magnet Rise, G-66): `Basic_CheckMagnetRise` (`:1461-1474`), -10 for
+  the attacker with the bit, Levitate or a Flying type; `Expert_MagnetRise` (`:6090-6119`, dispatch
+  `:1795`): the AI below 50 % HP ends; a player known to have Earthquake, Earth Power or Fissure
+  **+1**; a Ground-type player **+1**, else **+1** unless the 128 roll (`:6113`) jumps. The
+  player's Magnet Rise now reaches the AI's chart (`switching.defender_chart_flags`): a Ground move
+  gets `MOVE_STATUS_MAGNET_RISE` (immune) and no walk.
+
+- GRAVITY (215, G-67): `Basic_CheckGravityActive` (`:1026-1029`), -10 with Gravity up
+  (`commands.FieldCondition.GRAVITY` = the three counter bits, read as `state.gravity != 0`);
+  `Expert_Gravity` (`:4782-4803`, dispatch `:1759`): a Levitate (guessed or known), Magnet Rise
+  (the bit) or Flying player goes to `TryScorePlus1` (`:4798`, **+1** unless the 64 roll `:4799`
+  jumps); otherwise the AI below 60 % HP ends and the 128 roll (`:4795`) either goes there (jump)
+  or ends. The AI's own move list under Gravity follows `actions.usable_moves` (the banned moves
+  are invalid, `trainer_ai.c:234`).
+
+### 5.26 E1 trial batch: Mimic (G-68), Transform (G-69), Chatter (G-70)
+
+- COPY_MOVE_FOR_BATTLE (82, Mimic, G-68): no Basic or Expert entry and no other `script.s` mention;
+  the generic paths score a status move of power 0. The AI's own copied move is scored by the
+  copied move's effect label (`layout.fight_effects`): a fight with a Mimic or Transform user
+  holds the effects of the foe's possible moves (`layout.fight_tables(foe_moves=...)`).
+- The seen-move record is move ids now (`BattleState.ai_seen_moves`, int16[6, 4], first-free order,
+  `TrainerAI_RecordLastMove` `trainer_ai.c:2705-2716`; `state.record_seen_move`): a player that
+  Mimics shows Mimic and then the copy, and its own Struggle is recorded like any move.
+
+- TRANSFORM (57, G-69): no Basic or Expert entry and no script.s mention; `trainer_ai.c` never tests
+  `VOLATILE_CONDITION_TRANSFORM`, so the transformed BattleMon is read like any other. The AI's
+  recorded ability is the decomp id (`BattleState.ai_ability_known`, `battlerAbilities`): a reveal
+  before the Transform stays the old ability, an unrevealed one is guessed from the copied species.
+
+- CHATTER (267, G-70): no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof` (`:131`,
+  by move id, already transcribed: `commands.SOUND_MOVES`). The AI scores it as a plain hit by the table power
+  and type; the confusion roll and the per-battler Chatot cry are engine state (`chatot_cry`, `Outcome.chatter`).
 
 ## 6. Where the AI reads the true battle state
 

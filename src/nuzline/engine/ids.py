@@ -49,7 +49,7 @@ class EffectId(IntEnum):
       E2 batch 13.
     * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
       ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
-      move's effect chance; ``CURSE`` (a non-Ghost user; coverage refuses a Ghost-type one):
+      move's effect chance; ``CURSE`` (a non-Ghost user; a Ghost-type one is ``_curse``, B8-5):
       Spe -1, Atk +1, Def +1 on the user.
     * ``RECOVER``: zeros; heals ``maxHP / 2``, fails at full HP. ``FAKE_OUT``: zeros; fails
       unless it is the user's first turn out, else flinches at the move's chance.
@@ -467,7 +467,49 @@ class EffectId(IntEnum):
     # MOVE_EFFECT_EMBARGO bit (:13-14): ``BattleState.embargo``, read by ``state.held_item``
     # (B13-31).
     EMBARGO = 115
+    # Endure (116, BATTLE_EFFECT_SURVIVE_WITH_1_HP): zeros. effect_script_0116.s:3 is the same direct
+    # TO_ATTACKER ``MOVE_SUBSCRIPT_PTR_PROTECT`` as Protect (effect_script_0111.s:3), so
+    # ``BtlCmd_TryProtection`` (battle_script.c:5149-5190) and its chain and roll are shared; a
+    # success sets ``turnFlags.enduring`` (:5174-5177, not ``protecting``). ``enduring`` is read at
+    # one site, ``BattleControllerPlayer_UpdateHP`` (battle_controller_player.c:3386-3404;
+    # ``effects.play_hit``, G-65).
+    ENDURE = 116
+    # Magnet Rise (252, BATTLE_EFFECT_GIVE_GROUND_IMMUNITY): zeros. effect_script_0252.s fails
+    # (MOVE_STATUS_FAILED) for a user with ``magnetRiseTurns``, Levitate (``Battler_Ability``) or
+    # Ingrain, else sets ``MOVE_EFFECT_MAGNET_RISE`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``
+    # (``effects._magnet_rise``, G-66).
+    MAGNET_RISE = 117
+    # Gravity (215, BATTLE_EFFECT_GRAVITY): zeros. effect_script_0215.s fails (MOVE_STATUS_FAILED)
+    # with ``FIELD_CONDITION_GRAVITY`` up, else the indirect subscript_gravity_start.s: Gravity for
+    # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
+    GRAVITY = 118
+    # Mimic (82, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE): zeros. effect_script_0082.s runs
+    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
+    # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
+    MIMIC = 119
+    # Transform (57, BATTLE_EFFECT_TRANSFORM): zeros. effect_script_0057.s runs
+    # subscript_transform_into_target.s on a defender with HP: ``BtlCmd_Transform``
+    # (battle_script.c:5330-5373) copies the defender's BattleMon (``effects._transform``, G-69).
+    TRANSFORM = 120
+    # Chatter (267, BATTLE_EFFECT_CHATTER): zeros. effect_script_0267.s is a plain hit with an ON_HIT
+    # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
+    # subscript_confuse.s (``effects._chatter``, G-70).
+    CHATTER = 121
 
+
+# effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
+MAGNET_RISE_TURNS = 5
+# FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
+# (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
+GRAVITY_TURNS = 5
+# The effects whose script sets only ``MOVE_SIDE_EFFECT_ON_HIT`` in its indirect flags and rolls
+# nothing through ``effectChance``: BattleSystem_TriggerSecondaryEffect's ON_HIT branch
+# (battle_lib.c:1524-1529) runs the subscript with no ``RandNext() % 100 < effectChance`` (only
+# the PROBABILISTIC branch, :1549-1567, the bare-flags one, :1568-1585, and
+# BtlCmd_CheckEffectActivation, battle_script.c:8366-8381, read it). Chatter
+# (effect_script_0267.s:5) draws its own roll (CheckChatterActivation, :8397-8436), so its move
+# row's effect_chance (Kaizo 50) is never read: ``outcome.read_chance`` is 0 for these (G-70).
+ON_HIT_EFFECTS = (EffectId.CHATTER,)
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
 COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3
@@ -662,6 +704,10 @@ class AbilityId(IntEnum):
     # (:5840, an unsupported move) and the AI scripts of Fling, Trick and Skill Swap
     # (trainer_ai/script.s:1245, :1273, :4270, :4293, :4322, :7204; unsupported moves).
     KLUTZ = 87
+    # E1 trial batch, ruling G-63: Plus and Minus (BattleSystem_CalcMoveDamage,
+    # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
+    PLUS = 88
+    MINUS = 89
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -757,6 +803,8 @@ ABILITY_DECOMP_IDS = {
     AbilityId.SPEED_BOOST: 3,
     AbilityId.IRON_FIST: 89,
     AbilityId.KLUTZ: 103,
+    AbilityId.PLUS: 57,
+    AbilityId.MINUS: 58,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -868,8 +916,9 @@ class ItemId(IntEnum):
     * ``LIGHT_CLAY`` (``HOLD_EFFECT_EXTEND_SCREENS``): Reflect / Light Screen last
       ``5 + param`` turns (``effects._screen``, battle_script.c:4229, :4272).
     * ``FOCUS_BAND`` (``HOLD_EFFECT_MAYBE_ENDURE``, param ``FOCUS_BAND_PARAM``): a roll
-      ``RandNext() % 100 < param`` at each damage that reaches ``UpdateHP`` or
-      ``CheckHoldOnWith1HP`` (bcp.c:3386-3389, battle_script.c:9109-9112;
+      ``RandNext() % 100 < param`` at each damage that reaches ``UpdateHP`` (not while the
+      defender is enduring, G-65) or ``CheckHoldOnWith1HP`` (bcp.c:3386-3389,
+      battle_script.c:9109-9112;
       ``Outcome.focus_band`` / ``future_band``, ruling G-1).
     * ``FLAVOR_BERRY`` (``HOLD_EFFECT_HP_RESTORE_SPICY`` .. ``_SOUR``: Figy, Wiki, Mago, Aguav,
       Iapapa): ``item_param[i, 1]`` is its ``Flavor``; it heals ``Divide(maxHP, param)`` at
@@ -1333,6 +1382,12 @@ METRONOME_HEAVY = 65536 % METRONOME_DRAW
 # ``u`` in 0..11 and the call is allowed slot ``u % count`` (12 is a multiple of every count
 # 1-4), so the draw stays exact for whatever set the move sees when it runs.
 SLEEP_TALK_VALUES = 12
+# An invoker call variant that assumes a faster foe's Gravity landed before the call (G-67):
+# ``Outcome.call`` ``v + CALL_GRAVITY`` with ``v`` the value drawn from the law under Gravity
+# (``order.gravity_state``). Above every Metronome rank (< METRONOME_DRAW) and every Sleep Talk
+# value, and a multiple of SLEEP_TALK_VALUES: the call reads ``call % CALL_GRAVITY``
+# (``order.invoked_move``), so ``step`` plays both encodings of ``v`` alike on the live set.
+CALL_GRAVITY = SLEEP_TALK_VALUES * (METRONOME_DRAW // SLEEP_TALK_VALUES + 1)
 # Fake Out (``generated/moves.txt`` line 253): ``subscript_flinch_mon.s:18`` shows Inner
 # Focus's message, which names the ability, only for ``BTLVAR_CURRENT_MOVE == MOVE_FAKE_OUT``
 # (or a direct flinch effect, which no supported move has).
@@ -1365,6 +1420,26 @@ MOVE_IMPRISON = 286
 # FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
 MOVE_SOLAR_BEAM = 76
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
+# ``Move_CanBeMimicked`` (battle_lib.c:7182-7192): the entries of ``sCannotMetronomeMoves`` before
+# ``FORBIDDEN_BY_MIMIC_DELIM`` (:7152-7158): Metronome, Struggle, Sketch, Mimic, Chatter
+# (generated/moves.txt lines 119, 166, 167, 103, 449), G-68.
+MOVE_MIMIC = 102
+MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
+# Chatter's confusion (battle_script.c:8397-8436): the attacker must be a Chatot that is not
+# Transformed and the defender have HP; ``effectChance`` is 0 / 10 / 30 for the Chatot cry parameter
+# 0 / 1 / 2 (:8413-8426, sound_chatot.c:193-213) and the confusion comes on ``RandNext() % 100 <=
+# chance`` (:8428-8430), G-70. Species ids: generated/species.txt line 442.
+SPECIES_CHATOT = 441
+MOVE_CHATTER = 448
+CHATTER_CHANCES = (0, 10, 30)
+# ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
+MIMIC_PP_CAP = 5
+# sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
+# 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``
+# (:3394-3407) bans them at selection (CHECK_INVALID_GRAVITY, :2292), at the status check
+# (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586-2595) and for Metronome, Assist and Copycat
+# (``Move_CanBeMetronomed``, :7198-7201), G-67.
+GRAVITY_MOVES = (19, 340, 26, 136, 150, 393)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``
 # (battle_script.c:8001-8004) fails for a Multitype user, read through

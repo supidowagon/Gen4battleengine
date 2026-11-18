@@ -103,7 +103,7 @@ def test_yawn_meets_insomnia(tables, names):
     s = make_state(tables, [_mon(n, "Murkrow", ["Growl"], 30)], [_mon(n, "Slakoth", ["Yawn"], 30)])
     s = s._replace(ai_ability_known=jnp.zeros_like(s.ai_ability_known))
     out = assert_matches_reference(tables, s, (0, 0), O)
-    assert int(out.yawn[0]) == 0 and int(out.ai_ability_known[0]) == 1
+    assert int(out.yawn[0]) == 0 and int(out.ai_ability_known[0]) != 0
 
 
 def test_ghost_curse_halves_the_user_and_hurts_the_foe_each_turn(tables, names):

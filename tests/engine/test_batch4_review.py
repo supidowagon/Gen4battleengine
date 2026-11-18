@@ -73,7 +73,7 @@ def test_immunity_and_leaf_guard_stop_toxic_spikes_and_reveal(tables, names):
             assert int(out.active[0]) == 1
             want = Status.NONE if blocked else (Status.TOXIC if layers == 2 else Status.POISON)
             assert int(out.status[0, 1]) == want, (species, weather, layers)
-            assert int(out.ai_ability_known[1]) == int(blocked), (species, weather, layers)
+            assert bool(out.ai_ability_known[1]) == bool(blocked), (species, weather, layers)
 
 
 def test_pursuit_on_a_switching_destiny_bond_holder_takes_the_pursuer(tables, names):
@@ -105,7 +105,7 @@ def test_sturdy_blocks_an_ohko_move_and_reveals(tables, names):
     )
     out = _both(t, s, (0, 0))
     assert int(out.hp[0, 0]) == int(s.hp[0, 0])
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     # Rock Head (slot 0) does not block: the OHKO hits (empty_outcome's roll 1 passes).
     s = make_state(
         t, [_mon(n, "Geodude", ["Tackle"], slot=0)], [_mon(n, "Nidoking", ["Horn Drill"], level=40)]

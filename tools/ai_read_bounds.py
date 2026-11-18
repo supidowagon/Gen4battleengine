@@ -24,7 +24,12 @@ Branches whose outcome is fixed by the move are decided, so the bound follows th
   when it equals the first, battle_lib.c:2635);
 * ``IfMoveEqualTo`` (:834) never jumps when the named move's battle effect in the Kaizo move
   table (``Tables.move_ai_effect``, the effect the scripts read) is not the current one;
-* ``IfTargetIsPartner`` never jumps in singles.
+* ``IfTargetIsPartner`` never jumps in singles;
+* ``IfHPPercentLessThan`` / ``GreaterThan`` / ``EqualTo`` / ``NotEqualTo`` (trainer_ai.c:588-646)
+  compare a battler's ``curHP * 100 / maxHP``, which no AI command changes, so the path keeps
+  each battler argument's percent range (0-100) and a compare the range already fixes is
+  decided (Expert_StatusEvasionUp's :2204 needs 90 % or more, its :2215 50 % or less: never
+  both on one path).
 
 Every other branch is taken both ways, so the table is an upper bound: a path never makes more
 reads than its row says (a layout bound that is never exceeded is never a refusal).
@@ -124,7 +129,7 @@ def flag_reads(
     lines = script.lines
 
     @cache
-    def most(i: int, calc: tuple) -> int:
+    def most(i: int, calc: tuple, hp: tuple = ()) -> int:
         while True:
             if i >= len(lines):
                 raise RuntimeError(f"flag {bit}: fell off the end of script.s")
@@ -152,29 +157,76 @@ def flag_reads(
                 reads = int(drawn == 2 and damaging)
             target = args[-1] if args and args[-1] in script.labels else None
             if cmd == "GoTo":
-                return reads + most(script.labels[target], calc)
+                return reads + most(script.labels[target], calc, hp)
             taken = _decided(script, cmd, args, calc, effect, damaging, can_quad)
+            hp_jump = hp_stay = hp
+            if cmd in _HP_COMPARES and target is not None:
+                taken, hp_jump, hp_stay = _hp_branch(cmd, args, hp)
             nxt = _next_calc(cmd, calc, effect, damaging, drawn)
             if calc[0] == "compared" and calc[2] and cmd.startswith("IfLoaded") and taken is None:
                 reads += 1  # FlagMoveDamageScore's pending read: its result is read here
                 nxt = (calc[0], calc[1], False)
             if target is None or not cmd.startswith("If"):
                 if reads:
-                    return reads + most(i + 1, nxt)
+                    return reads + most(i + 1, nxt, hp)
                 calc = nxt
                 i += 1
                 continue
             if taken is True:
-                return reads + most(script.labels[target], nxt)
+                return reads + most(script.labels[target], nxt, hp_jump)
             if taken is False:
                 if reads:
-                    return reads + most(i + 1, nxt)
-                calc = nxt
+                    return reads + most(i + 1, nxt, hp_stay)
+                calc, hp = nxt, hp_stay
                 i += 1
                 continue
-            return reads + max(most(script.labels[target], nxt), most(i + 1, nxt))
+            return reads + max(most(script.labels[target], nxt, hp_jump), most(i + 1, nxt, hp_stay))
 
     return most(script.labels[FLAG_LABELS[bit]] + 1, ("unknown",))
+
+
+_HP_COMPARES = {
+    "IfHPPercentLessThan",
+    "IfHPPercentGreaterThan",
+    "IfHPPercentEqualTo",
+    "IfHPPercentNotEqualTo",
+}
+
+
+def _hp_branch(cmd: str, args, hp: tuple) -> tuple[bool | None, tuple, tuple]:
+    """An HP-percent compare on the path's ranges ``hp`` (sorted ``(battler, lo, hi)``; a
+    battler not in it has 0-100): whether it jumps (None when both ways are open) and the
+    ranges after the jump and after falling through (trainer_ai.c:588-646)."""
+    battler, value = args[0], args[1]
+    if not value.isdigit():
+        return None, hp, hp
+    v = int(value)
+    ranges = {b: (lo, hi) for b, lo, hi in hp}
+    lo, hi = ranges.get(battler, (0, 100))
+
+    def narrowed(*keep):
+        # keep: the percents the branch allows, as (lo, hi) pieces; the range is their hull.
+        pieces = [(max(lo, a), min(hi, b)) for a, b in keep]
+        pieces = [(a, b) for a, b in pieces if a <= b]
+        if not pieces:
+            return None
+        out = dict(ranges)
+        out[battler] = (min(a for a, _ in pieces), max(b for _, b in pieces))
+        return tuple(sorted((b, a, c) for b, (a, c) in out.items()))
+
+    if cmd == "IfHPPercentLessThan":
+        jump, stay = narrowed((0, v - 1)), narrowed((v, 100))
+    elif cmd == "IfHPPercentGreaterThan":
+        jump, stay = narrowed((v + 1, 100)), narrowed((0, v))
+    elif cmd == "IfHPPercentEqualTo":
+        jump, stay = narrowed((v, v)), narrowed((0, v - 1), (v + 1, 100))
+    else:
+        jump, stay = narrowed((0, v - 1), (v + 1, 100)), narrowed((v, v))
+    if jump is None:
+        return False, hp, stay
+    if stay is None:
+        return True, jump, hp
+    return None, jump, stay
 
 
 def _next_calc(cmd: str, calc: tuple, effect: int, damaging: bool, drawn: int = 0) -> tuple:

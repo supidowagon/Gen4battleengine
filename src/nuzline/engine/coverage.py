@@ -25,9 +25,9 @@ The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, 
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
 * move effects: every ``ids.EffectId`` but ``UNSUPPORTED`` (a Ghost-type user's Curse is
-  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
-  facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
-  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
+  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct,
+  Explosion) facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN``
+  (``halved_defense_line``: the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
   here, and in the pool and prep both ways: a player candidate's move against the
   opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
   ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
@@ -89,7 +89,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
   battles and walking partners) is refused (``Trainer.format``);
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
-  (``Trainer.area_condition``; the engine has neither field effect), a gauntlet (a chain
+  (``Trainer.area_condition``; Gravity is modelled since the E1 trial batch, G-67; the engine has
+  no Trick Room field effect), a gauntlet (a chain
   of fights, ``Trainer.gauntlet``), a start condition the extraction left to the user
   (``"unknown"``, never read as a weather), a party member with no nature, gender or
   ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
@@ -141,7 +142,10 @@ from nuzline.data.trainer import (
 from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
+    GRAVITY_TURNS,
     METRONOME_DRAW,
+    MOVE_CHATTER,
+    SPECIES_CHATOT,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -274,6 +278,13 @@ class UnsupportedMechanics(ValueError):
         super().__init__(
             f"{len(report.missing)} unsupported mechanic(s): " + "; ".join(report.missing)
         )
+
+
+def start_gravity(trainer: Trainer) -> int:
+    """The Gravity turns a trainer's fight starts with: ``ids.GRAVITY_TURNS`` for the Kaizo area
+    condition Gravity (sub_seq 297 runs ``subscript_gravity_start`` at battle start; the Kaizo
+    tables re-arm it for ever, ``Tables.gravity_rearm``), else 0 (G-67)."""
+    return GRAVITY_TURNS if trainer.area_condition.gravity else 0
 
 
 def start_weather(trainer: Trainer) -> Weather:
@@ -433,10 +444,6 @@ ITEM_MOVING_EFFECTS = (
 # BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
 # effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
 FRIENDSHIP_POWER_EFFECTS = (121, 123)
-# BATTLE_EFFECT_TRANSFORM (57), _COPY_MOVE_FOR_BATTLE (82, Mimic) and _SWAP_ATK_DEF (238, Power
-# Trick): BattleSystem_ReloadPokemon (battle_lib.c:169-194) skips a Transformed battler's moves
-# and exp and a Mimicked slot, and overwrites a Power Trick's swapped Attack and Defense.
-RELOAD_STATE_EFFECTS = (57, 82, 238)
 # The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
 # Share, Soothe Bell, Lucky Egg and the six Power items.
 EXP_ITEM_HOLD_EFFECTS = (
@@ -536,7 +543,7 @@ def learnable_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec
     ``forced_learn_moves``), which the player never takes in the engine. A masked move is
     then a legal game choice the search skips: plan values stay achievable lower bounds,
     like ruling D2, except the mid-turn-prompt case (``STATE.md``, Experience). Moves refused for any other reason (the AI, terrain, a ROM change, a
-    halved Defense, a Ghost's Curse) are not masked and stay graded (refused)."""
+    halved Defense) are not masked and stay graded (refused)."""
     forced = forced_learn_moves(tables, spec, opp)
     return [
         m
@@ -572,8 +579,8 @@ def exp_refusals(
       (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
       location is the battle map (pokemon.c:2668-2670), which the engine does not know
       (Kaizo changed ``MapHeader_GetMapLabelTextID``, docs/kaizo/rom_diff.md:269).
-    * §4.5: it can level and could use Transform, Mimic or Power Trick
-      (``RELOAD_STATE_EFFECTS``; ``BattleSystem_ReloadPokemon``, battle_lib.c:173-191).
+    * §4.5 (gone: ``BattleSystem_ReloadPokemon``, battle_lib.c:169-194, is modelled for Power
+      Trick, B12-10, Mimic, G-68, and Transform, G-69).
     * §4.6: an empty move slot with PP Ups: a move learned there inherits them
       (``BoxPokemon_SetMoveSlot``, pokemon.c:3929-3930), which the engine does not model."""
     out = []
@@ -598,12 +605,6 @@ def exp_refusals(
         out.append(
             f"egg location {spec.egg_location} may add 1 friendship per level-up, which "
             f"{names.move_names[readers[0]]} reads"
-        )
-    own = [*spec.moves, *learnable]
-    if levels_up and (reload := _effect_moves(tables, own, RELOAD_STATE_EFFECTS)):
-        out.append(
-            f"a level-up reloads the battler, which {names.move_names[reload[0]]} "
-            "changes (battle_lib.c:173-191)"
         )
     junk = [
         i for i, (m, ups) in enumerate(zip(spec.moves, spec.pp_ups, strict=True)) if not m and ups
@@ -682,7 +683,9 @@ def trace_copy_line(
         _party_abilities(tables, [spec]) | _party_abilities(tables, opp)
     ):
         return None
-    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    fight, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, [spec], opp)
+    )
     if error is not None:  # refused for the fight by check_opponent
         return None
     state = make_state(fight, [spec], list(opp), opp_items=trainer.items, terrain=trainer.terrain)
@@ -693,8 +696,8 @@ def trace_copy_line(
 def metronome_calls(tables: Tables, mon: PokemonSpec) -> list[int]:
     """The moves ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call for ``mon``: ids
     1-467 it does not know that ``Move_CanBeMetronomed`` allows (``MoveFlag.NO_METRONOME``;
-    ``order.metronome_candidates``). Gravity and Heal Block, its other tests, are owed with
-    Gravity and an unsupported move."""
+    ``order.metronome_candidates``). Gravity's test is state (``actions.gravity_banned``): this
+    is the superset; Heal Block, its other test, is owed with that move."""
     flags = np.asarray(tables.move_flags)
     return [
         m
@@ -942,8 +945,6 @@ def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
     permanent = "permanent " if area.permanent else ""
     if area.trick_room:
         c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
-    if area.gravity:
-        c.add(Support.NONE, f"Battle start: {permanent}Gravity", "field condition")
     if unknown_start(trainer):
         c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
     if trainer.gauntlet is not None:
@@ -1003,23 +1004,41 @@ def check_opponent(
     if not unknown_start(trainer):
         weathers.append(start_weather(trainer))
     _check_weather(c, weathers)
-    _, error = _fight_ai_tables(tables, names, trainer, opp)
+    _, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, player, opp, extra_moves)
+    )
     if error is not None:
         c.add(Support.NONE, f"{display_name(trainer)}: {error}", "trainer AI")
     return c.report
 
 
-def _fight_ai_tables(tables, names, trainer, opp):
+def foe_moves(
+    tables: Tables,
+    player: Sequence[PokemonSpec],
+    opp: Sequence[PokemonSpec],
+    extra: Sequence[int] = (),
+) -> list[int]:
+    """The moves the player's side may have in a fight against ``opp``: each ``player`` spec's
+    moves and its ``learnable_moves``, then ``extra``; distinct. The AI's Mimic and Transform
+    copy one of them, scored by its effect's label (``ai.layout.fight_tables``, G-68)."""
+    out: list[int] = []
+    for spec in player:
+        out += [*spec.moves, *learnable_moves(tables, spec, opp)]
+    return list(dict.fromkeys(m for m in (*out, *extra) if m))
+
+
+def _fight_ai_tables(tables, names, trainer, opp, foe=()):
     """``(tables, error)``: the fight's tables (``ai.layout.fight_tables``) under the trainer's
     transcribed flags (a set with others is refused by its flag lines, ``_check_ai_flags``),
     and the reason its AI layout cannot be built, or None: a read bound past ``WIDTH_CAP``
-    (E1 Ruling R6)."""
+    (E1 Ruling R6). ``foe``: the player's possible moves (``foe_moves``; a callable is called only
+    when the AI copies moves)."""
     from nuzline.ai.layout import KAIZO_FLAG_BITS, fight_tables, layout_of
 
     flags = int(trainer.ai_flags)
     if POLICY.get(names.game) == "kaizo":
         flags &= sum(1 << bit for bit in KAIZO_FLAG_BITS)
-    fight = fight_tables(tables, trainer, opp, flags)
+    fight = fight_tables(tables, trainer, opp, flags, foe)
     try:
         layout_of(fight)
     except ValueError as err:
@@ -1035,11 +1054,15 @@ def check_coverage(
     opp: list[PokemonSpec],
     start_condition: int,
     leads: tuple[int, int] = (0, 0),
+    chatot_cry: int | None = None,
 ) -> CoverageReport:
     """The support level of one fight: the player's party against ``trainer`` with
     party ``opp``, starting in weather ``start_condition`` (a ``Weather``; the
     trainer's own ``start_condition`` is checked too) with the active party slots
     ``leads`` (``make_state``), whose turn-0 state the AI's refusals are run on.
+    ``chatot_cry``: the player's Chatot cry parameter 0-2 (``make_state``), None when it is not
+    known: a player Chatot that knows or can learn Chatter is then refused, since its confusion
+    chance is the save's (battle_script.c:8407-8426; data, not a mechanic: an enemy's is 0), G-70.
 
     Experience (K3d-exp design §4): each player Pokemon's ``learnable_moves`` (its
     ``reachable_learn_moves`` but the prompt-only ones the learn options mask, ruling D10) go
@@ -1056,6 +1079,15 @@ def check_coverage(
     _check_party(c, tables, names, "Player", player)
     learnable = [learnable_moves(tables, mon, opp) for mon in player]
     extra = sorted({m for moves in learnable for m in moves})
+    if chatot_cry is None:
+        for slot, mon in enumerate(player):
+            if mon.species == SPECIES_CHATOT and MOVE_CHATTER in (*mon.moves, *learnable[slot]):
+                c.add(
+                    Support.NONE,
+                    f"Player {names.species_names[mon.species].upper()} (slot {slot}): Chatter's "
+                    "confusion chance needs the save's Chatot cry",
+                    "chatter",
+                )
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
@@ -1095,11 +1127,14 @@ def check_coverage(
         opp_items=trainer.items,
         leads=leads,
         terrain=trainer.terrain,
+        chatot_cry=chatot_cry or 0,
     )
     # The trainer's flag set (E1 Ruling R2). A set with a flag the AI does not transcribe is
     # refused by its flag lines (_check_ai_flags); its other AI lines are listed under the
     # flags it has that the AI does transcribe.
-    fight, error = _fight_ai_tables(tables, names, trainer, opp)
+    fight, error = _fight_ai_tables(
+        tables, names, trainer, opp, lambda: foe_moves(tables, player, opp, extra)
+    )
     if error is not None:  # listed by check_opponent
         return c.report
     refusals = ai_refusals(fight, state, names)
@@ -1120,10 +1155,11 @@ def require_coverage(
     opp: list[PokemonSpec],
     start_condition: int,
     leads: tuple[int, int] = (0, 0),
+    chatot_cry: int | None = None,
 ) -> CoverageReport:
     """``check_coverage``, raising ``UnsupportedMechanics`` (every missing item in its
     message) when anything is missing."""
-    report = check_coverage(tables, names, player, trainer, opp, start_condition, leads)
+    report = check_coverage(tables, names, player, trainer, opp, start_condition, leads, chatot_cry)
     if report.missing:
         raise UnsupportedMechanics(report)
     return report

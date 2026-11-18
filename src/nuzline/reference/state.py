@@ -106,6 +106,20 @@ class RefSide:
     focus_energy: int  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
+    magnet_rise: int  # MOVE_EFFECT_MAGNET_RISE (G-66)
+    magnet_rise_turns: int  # MoveEffectsData.magnetRiseTurns (G-66)
+    mimic_slots: int  # MoveEffectsData.mimickedMoveSlot bitmask (G-68)
+    shadow_moves: list[int]  # the party's move of each flagged slot (G-68)
+    shadow_pp: list[int]  # the party's PP of each flagged slot (G-68)
+    transformed: int  # VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
+    shadow_species: int  # the party Pokemon's own while transformed (G-69)
+    shadow_form: int
+    shadow_stats: list[int]
+    shadow_ivs: list[int]
+    shadow_ability_slot: int
+    shadow_ability_form: int
+    truant: int  # MoveEffectsData.truant (G-69)
+    chatot_cry: int  # BattleSystem.chatotCries as Chatter's parameter 0 / 1 / 2 (G-70)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
     spikes: int
     toxic_spikes: int
@@ -174,6 +188,7 @@ class RefState:
     ts_claw: list[int]
     ts_pursued: int
     ts_protect_ok: list[int]
+    ts_endure_ok: list[int]
     ts_taken: list[list[int]]
     ts_dragged: list[int]
     ts_move_failed: list[int]

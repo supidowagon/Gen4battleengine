@@ -324,3 +324,66 @@ def test_dsv_with_the_desmume_footer(tmp_path, tables, names):
         _write(tmp_path, image + _DESMUME_FOOTER, "game.dsv"), tables=tables, names=names
     )
     assert save.tid == 77 and save.player_starter == 393
+
+
+@pytest.mark.parametrize(
+    ("cry", "want"),
+    [
+        (None, 0),
+        ((0, 100), 0),
+        ((1, -128), 1),
+        ((1, -31), 1),
+        ((1, -30), 0),
+        ((1, 29), 0),
+        ((1, 30), 2),
+        ((1, 127), 2),
+    ],
+)
+def test_the_chatot_cry_parameter(tmp_path, tables, names, cry, want):
+    """``Sound_GetChatterActivationParameter`` (sound_chatot.c:193-213) of the Chatot cry page
+    (SAVE_TABLE_ENTRY_CHATOT, layout.CHATOT_CRY): 0 unless ``valid``, else audioData[15] as s8:
+    [-128, -30) -> 1, [30, 128) -> 2, else 0 (G-70)."""
+    save = _load(tmp_path, build_image(chatot_cry=cry), tables, names)
+    assert save.chatot_cry == want
+
+
+def test_the_normal_pages_add_up_to_the_block():
+    """The page table (gSaveTable, save_table.c:49-86; SaveTableEntry_BodySize, savedata.c:
+    813-823) puts the pages ``load_save`` reads where the layout says and sums to the block."""
+    from nuzline.saves import layout as L
+
+    total = sum(L.page_body_size(size) for _, size in L.NORMAL_PAGES)
+    assert total + L.FOOTER_SIZE == L.NORMAL_SIZE
+    assert L.page_offset("PARTY") == L.PARTY_COUNT - 4
+    assert (L.page_offset("BAG"), L.page_offset("VARS_FLAGS")) == (L.BAG, L.VARS)
+    assert L.CHATOT_CRY == 0x64EC
+
+
+@pytest.mark.parametrize("key", ["kaizo_save", "kaizo_save_pre_roark", "kaizo_save_probe"])
+def test_the_page_checksums_of_real_saves_sit_at_the_layout_offsets(key):
+    """The pages with a CRC16 in their last 4 bytes (SaveData_SetChecksum, savedata.c:1349-1362:
+    ``halfTable[size / 2]`` over ``BodySize - 4`` bytes) hold it at the offsets the page table
+    gives, in the real saves (skipped when absent): the table, and so the Chatot cry page before
+    them, matches the game's."""
+    from nuzline.saves import layout as L
+    from nuzline.saves.crypto import crc16_ccitt
+    from nuzline.saves.save import _block
+    from tests.conftest import _configured_save
+
+    path = _configured_save(key, "NUZLINE_" + key.upper())
+    image = read_image(path.read_bytes())
+    _, copy, _ = select_copies(image)
+    normal = _block(image, copy, "normal")
+    for page in (
+        "TV_BROADCAST",
+        "RANKINGS",
+        "WIFI_HISTORY",
+        "MYSTERY_GIFT",
+        "LINK_CONTEST_RECORDS",
+        "UNLOCKED_EASY_CHAT_WORDS",
+        "EMAIL",
+    ):
+        start = L.page_offset(page)
+        size = L.page_body_size(dict(L.NORMAL_PAGES)[page]) - 4
+        stored = int.from_bytes(normal[start + size // 2 * 2 :][:2], "little")
+        assert stored == crc16_ccitt(normal[start : start + size]), page

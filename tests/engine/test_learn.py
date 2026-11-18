@@ -238,23 +238,35 @@ def test_an_hm_cannot_be_forgotten(tables, names):
 
 
 @pytest.mark.parametrize(
-    ("field", "move"),
-    [("disabled_move", "Tackle"), ("locked_move", "Growl"), ("choice_lock", "Leech Seed")],
+    ("field", "move", "masked"),
+    [
+        # The decomp ends Disable and Encore once the move is not known (bcp.c:1565-1576,
+        # :1591-1602), at a turn's end the engine runs before the resolve: masked.
+        ("disabled_move", "Tackle", True),
+        ("encore_move", "Vine Whip", True),
+        # Read by id (bcp.c:1885-1888; battle_lib.c:2307-2310): offered.
+        ("locked_move", "Growl", False),
+        ("choice_lock", "Leech Seed", False),
+    ],
 )
-def test_the_active_learner_keeps_its_held_moves(tables, names, field, move):
+def test_the_active_learner_keeps_its_disabled_and_encored_moves(
+    tables, names, field, move, masked
+):
     s = _prompt(tables, names)
     s = s._replace(**{field: getattr(s, field).at[0].set(names.move(move))})
-    want = [m != move for m in ("Tackle", "Growl", "Leech Seed", "Vine Whip")]
+    want = [not (masked and m == move) for m in ("Tackle", "Growl", "Leech Seed", "Vine Whip")]
     assert _options(tables, s) == [*want, True]
     # On the bench (slot 1 active) the battler's volatiles are not the learner's.
     bench = s._replace(active=s.active.at[0].set(1))
     assert _options(tables, bench) == [True] * 5
 
 
-def test_a_seen_slot_and_the_pinned_slot_are_masked(tables, names):
+def test_a_seen_slot_is_open_and_the_pinned_slot_is_masked(tables, names):
+    # ai_seen_moves holds move ids: replacing a seen move keeps its id in the AI's list, as
+    # TrainerAI_RecordLastMove's (trainer_ai.c:2705-2716) does, so the search may take it.
     s = _prompt(tables, names)
-    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 1].set(1))
-    assert _options(tables, seen) == [True, False, True, True, True]
+    seen = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(int(s.moves[0, 0, 1])))
+    assert _options(tables, seen) == [True] * 5
     pinned = s._replace(learn_pin=jnp.int8(4))
     assert _options(tables, pinned) == [True, True, True, False, True]
     assert _options(tables, pinned._replace(active=s.active.at[0].set(1))) == [True] * 5

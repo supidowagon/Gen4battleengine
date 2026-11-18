@@ -152,6 +152,24 @@ Encodings:
   :10022-10027, :10173-10177) and leaves the bit, so the swap is ``power_trick XOR
   power_trick_desync``; Power Trick toggles both (unchanged), any switch clears it (a Baton Pass
   newcomer is swapped by the bit alone, battle_lib.c:2137-2141), B12-10.
+* E1 trial batch (G-68, Mimic). The decomp keeps the party ``Pokemon`` and the active
+  ``BattleMon`` apart; the engine's per-slot ``moves`` / ``pp`` are both. Where the battler's
+  differ from the party's, ``mimic_slots`` (``MoveEffectsData.mimickedMoveSlot``) flags the move
+  slots and ``shadow_moves`` / ``shadow_pp`` hold the party's value of each (battle_script.c:
+  4502-4516). Every ``BattleMon_CopyToParty`` skips a flagged slot (its ``BtlIOCmd_UpdatePartyMon``,
+  battle_io_command.c:581-587), a
+  level-up's learn writes the party only (:10168-10176) and ``ReloadPokemon`` reloads the other
+  slots (:183-191), and the next ``InitBattleMon`` brings the party's back (``step._restore_moves``
+  on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
+  ``battlerMoves`` as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
+  move can change under Mimic, so the record cannot be flags.
+* E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
+  species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
+  target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the ``shadow_*`` fields hold
+  the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
+  They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
+  fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
+  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities`` as the decomp ability id.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -227,7 +245,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.ids import AbilityId, Stat, Weather
+from nuzline.engine.ids import CHATTER_CHANCES, GRAVITY_TURNS, AbilityId, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -327,6 +345,35 @@ class BattleState(NamedTuple):
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
+    magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
+    magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
+    # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
+    # active slot are the BattleMon's, and these hold the party's values of the slots the battler
+    # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
+    # k holds a Mimic copy), ``shadow_moves`` / ``shadow_pp`` the party's move and PP of each such
+    # slot (0 elsewhere).
+    mimic_slots: jnp.ndarray  # int8, MoveEffectsData.mimickedMoveSlot bitmask (G-68)
+    shadow_moves: jnp.ndarray  # int16[2,4], the party's move of each masked slot (G-68)
+    shadow_pp: jnp.ndarray  # int8[2,4], the party's PP of each masked slot (G-68)
+    # Transform (G-69): ``transformed`` is VOLATILE_CONDITION_TRANSFORM; while it is set the active
+    # slot's species, form, stats, ivs, ability slot / form, types, ability, moves and PP are the
+    # copied target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the
+    # ``shadow_*`` hold the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot,
+    # ``mimic_slots`` all four). Restored by ``step._restore_transform`` / ``_restore_moves``.
+    transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
+    shadow_species: jnp.ndarray  # int16, the party Pokemon's species while transformed (G-69)
+    shadow_form: jnp.ndarray  # int8 (G-69)
+    shadow_stats: jnp.ndarray  # int16[2,5], the party's Atk, Def, SpA, SpD, Spe (G-69)
+    shadow_ivs: jnp.ndarray  # int8[2,6] (G-69)
+    shadow_ability_slot: jnp.ndarray  # int8 (G-69)
+    shadow_ability_form: jnp.ndarray  # int8 (G-69)
+    # int8, MoveEffectsData.truant: the parity Truant compares with ``totalTurns & 1``
+    # (``order.truant_loafs``): set to ``(totalTurns + 1) & 1`` at an entry (battle_lib.c:2119,
+    # :2197), to ``totalTurns & 1`` by Transform (battle_script.c:5359), G-69.
+    truant: jnp.ndarray
+    # int8, BattleSystem.chatotCries[battler] as Chatter's parameter 0 / 1 / 2 (G-70): a battle
+    # constant like ``terrain``, set by ``initial_arrays``; the opponent's is always 0.
+    chatot_cry: jnp.ndarray
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
@@ -362,9 +409,11 @@ class BattleState(NamedTuple):
     winner: jnp.ndarray  # int8
     player_faints: jnp.ndarray  # int8
     # AI knowledge of the player
-    ai_seen_moves: jnp.ndarray  # int8[6,4], player slot x move slot
+    # int16[6,4], battlerMoves of the player's slot: move ids in first-free order (G-68)
+    ai_seen_moves: jnp.ndarray
     ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
-    ai_ability_known: jnp.ndarray  # int8[6]
+    # int16[6], battlerAbilities: the decomp ability id a message named, 0 = none (G-69)
+    ai_ability_known: jnp.ndarray
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
     evs: jnp.ndarray  # int16[2,6,6], ids.Stat order
@@ -396,6 +445,7 @@ class BattleState(NamedTuple):
     ts_claw: jnp.ndarray  # int8[2], moveEffectsData.quickClaw from the turn order (B10-6)
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
     ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
+    ts_endure_ok: jnp.ndarray  # int8[2], turnFlags.enduring (Endure, G-65)
     ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
     ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
     ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
@@ -439,6 +489,19 @@ class BattleState(NamedTuple):
         return self._replace(
             faint_budget=jnp.asarray(k, jnp.int8), protected=jnp.asarray(mask, jnp.int8)
         )
+
+
+def record_seen_move(row, move):
+    """``TrainerAI_RecordLastMove``'s list update (trainer_ai.c:2705-2716) on one battler's
+    ``battlerMoves`` ``row`` (``ai_seen_moves[slot]``, move ids in first-free order): ``move``
+    goes into the first empty entry unless the list already holds it or is full; MOVE_NONE
+    matches the first empty entry and records nothing (G-68)."""
+    row = jnp.asarray(row)
+    move = jnp.asarray(move, row.dtype)
+    free = row == 0
+    add = ~jnp.any(row == move) & jnp.any(free) & (move != 0)
+    first = jnp.arange(row.shape[0]) == jnp.argmax(free)
+    return jnp.where(add & first, move, row)
 
 
 def protected_mask(species, hp, k: int, protected: Sequence[int]) -> np.ndarray:
@@ -516,13 +579,19 @@ VOLATILE_FIELDS = (
     "focus_energy",
     "power_trick",
     "power_trick_desync",
+    "magnet_rise",
+    "magnet_rise_turns",
     "embargo",
 )
+# ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
+# faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
+# enters (``step._restore_moves``, as ``_restore_ability``), which clears them.
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
 # confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``), Focus Energy (B12-4)),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10); the rest from unsupported moves), the
+# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66); the rest from
+# unsupported moves), and magnetRiseTurns (:2112), the
 # substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
 # Rulings B6-3, B7-n.
@@ -543,6 +612,8 @@ BATON_PASSED_FIELDS = (
     "curse",
     "focus_energy",
     "power_trick",
+    "magnet_rise",
+    "magnet_rise_turns",
     "embargo",
 )
 
@@ -627,6 +698,20 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "focus_energy": (_SIDE, np.int8),
     "power_trick": (_SIDE, np.int8),
     "power_trick_desync": (_SIDE, np.int8),
+    "magnet_rise": (_SIDE, np.int8),
+    "magnet_rise_turns": (_SIDE, np.int8),
+    "mimic_slots": (_SIDE, np.int8),
+    "shadow_moves": ((SIDES, MOVES), np.int16),
+    "shadow_pp": ((SIDES, MOVES), np.int8),
+    "transformed": (_SIDE, np.int8),
+    "shadow_species": (_SIDE, np.int16),
+    "shadow_form": (_SIDE, np.int8),
+    "shadow_stats": ((SIDES, 5), np.int16),
+    "shadow_ivs": ((SIDES, 6), np.int8),
+    "shadow_ability_slot": (_SIDE, np.int8),
+    "shadow_ability_form": (_SIDE, np.int8),
+    "truant": (_SIDE, np.int8),
+    "chatot_cry": (_SIDE, np.int8),
     "embargo": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
@@ -659,9 +744,9 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "over": (_FIELD, np.int8),
     "winner": (_FIELD, np.int8),
     "player_faints": (_FIELD, np.int8),
-    "ai_seen_moves": ((SLOTS, MOVES), np.int8),
+    "ai_seen_moves": ((SLOTS, MOVES), np.int16),
     "ai_item_known": ((SLOTS,), np.int16),
-    "ai_ability_known": ((SLOTS,), np.int8),
+    "ai_ability_known": ((SLOTS,), np.int16),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_SLOT, 6), np.int16),
     "nature": (_SLOT, np.int8),
@@ -690,6 +775,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "ts_claw": (_SIDE, np.int8),
     "ts_pursued": (_FIELD, np.int8),
     "ts_protect_ok": (_SIDE, np.int8),
+    "ts_endure_ok": (_SIDE, np.int8),
     "ts_taken": ((SIDES, 6), np.int16),
     "ts_dragged": (_SIDE, np.int8),
     "ts_move_failed": (_SIDE, np.int8),
@@ -731,6 +817,8 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
 def held_items(state: BattleState) -> jnp.ndarray:
     """``int32[2]``: ``held_item`` of each side's active battler."""
     return jnp.stack([held_item(state, side) for side in range(state.active.shape[0])])
+
+
 if tuple(LAYOUT) != BattleState._fields:
     raise RuntimeError("LAYOUT must list every BattleState field, in order")
 
@@ -823,13 +911,17 @@ def initial_arrays(
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
+    gravity: int = 0,
+    chatot_cry: int = 0,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
-    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default) and ``gravity``
+    (``ids.GRAVITY_TURNS`` for a trainer whose area condition is Gravity, Kaizo's sub_seq 297, 0
+    otherwise; the grounding loop it runs at battle start is a no-op, G-67). The leads'
     switch-in effects then run (``hooks.battle_start``: each switch-in state over both
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
@@ -868,6 +960,15 @@ def initial_arrays(
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain
+    if not 0 <= gravity <= GRAVITY_TURNS:
+        raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
+    a["gravity"][...] = gravity
+    # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
+    # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
+    # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).
+    if not 0 <= chatot_cry < len(CHATTER_CHANCES):
+        raise ValueError(f"chatot_cry {chatot_cry} is not a Chatter parameter 0-2")
+    a["chatot_cry"][0] = chatot_cry
     return a
 
 
@@ -879,11 +980,15 @@ def make_state(
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
+    gravity: int = 0,
+    chatot_cry: int = 0,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.battle_start``)."""
     from nuzline.engine.hooks import battle_start  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
+    a = initial_arrays(
+        tables, player, opp, start_condition, opp_items, leads, terrain, gravity, chatot_cry
+    )
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

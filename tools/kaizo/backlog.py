@@ -589,11 +589,10 @@ def main(out_path):
         effect = tables.move_ai_effect
         out = set()
         for mon in party:
-            ghost = 7 in [int(x) for x in tables.species_types[mon.species]]  # TYPE_GHOST
             for move in mon.moves:
                 e = int(effect[move]) if move else 0
                 name = effect_names[e] if move else ""
-                for kind in opponent_move_refusals(tables, move, layout, ghost):
+                for kind in opponent_move_refusals(tables, move, layout):
                     if kind == "not transcribed":
                         labels = " / ".join(ai_labels.get(name, ())) or "no Basic or Expert label"
                         k = ("AI", f"move effect #{e} {name} not transcribed ({labels})")

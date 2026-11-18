@@ -46,7 +46,7 @@ def test_defender_reads_its_current_ability_when_known(monkeypatch, kaizo_tables
     """Known: the current ability. Unknown: the guess from the species' two abilities, never
     the changed one (Gible: Sand Veil / Rough Skin)."""
     t = kaizo_tables
-    s = state._replace(ai_ability_known=state.ai_ability_known.at[0].set(known))
+    s = state._replace(ai_ability_known=state.ai_ability_known.at[0].set(known and LEVITATE))
     _changed(monkeypatch, 0, LEVITATE)
     got = {int(c.defender_ability(t, s, g)) for g in (0, 1)}
     if known:
