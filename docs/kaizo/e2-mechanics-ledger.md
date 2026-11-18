@@ -73,8 +73,11 @@ Field decisions (engine/state.py and reference/state.py):
 - 1 + battler pointers: lock_on_target, mean_look_target, future_attacker, pivot_battler,
   ts_pursued, ts_taken's attacker columns (already so); pursuit_target becomes 1 + battler, 0 =
   none (only ever cleared today, so values stay 0). `infatuated` stays 0/1 in D1: it is an E1
-  volatile and the pointer is a value change; it goes to D5 on E1's list (D 5.3).
+  volatile and the pointer is a value change; it goes to D5 on E1's list (D 5.3; ruling D1-1).
 - ts_order [B] holds battler indices (no none value, not a pointer).
+
+Ownership (confirmed by the manager): E1 owns src/nuzline/ai/outcome.py (group B, item 5);
+src/nuzline/engine/outcome.py is E2's (group A, item 9).
 
 Group A, E2, after main is merged into e2-d1, one commit per line, in this order:
 
@@ -1997,3 +2000,5 @@ docs/doubles-state-design.md.
   res/moves/{gyro_ball,trump_card}/data.json).
 - Owed 13 closed: tools/differential.py (`uv run python -m tools.differential N SEED|A-B ...`),
   the generator and field check of tests/test_differential.py; a seed replays its turns.
+- D1-1 (manager, accepted) `infatuated` stays 0/1 in D1: singles stays byte-identical. Its
+  1 + battler form (docs/doubles-state-design.md 5.3) is D5's, on E1's list.
