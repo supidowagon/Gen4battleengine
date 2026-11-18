@@ -159,9 +159,7 @@ def test_playout_from_a_pending_state(tables, names):
     # The playout program's runs first, then playout_from_action's after a drop: one
     # whole-engine program alive at a time (both together passed 15 GB).
     third = replacement_pass(tables, s, 3)[0]
-    pending, settled, want = (
-        jax.device_get(playout(tables, x, key)) for x in (s, resolved, third)
-    )
+    pending, settled, want = (jax.device_get(playout(tables, x, key)) for x in (s, resolved, third))
     assert_same(pending, settled)
     drop_programs()
     assert_same(playout_from_action(tables, s, MOVE_ACTIONS + 3, key), want)
