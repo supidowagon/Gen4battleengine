@@ -55,6 +55,18 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   weather_ball_params are pure for it); vanilla-only Fury Cutter #119 and the recharge #80
   (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
   the other families of the batch.
+  MERGED main 932af5a (be946ac): both sides' item columns kept (item_party_param + fling /
+  Natural Gift), both had called their schema 31, so MANIFEST_VERSION 32; Kaizo 141's THUNDER
+  bit now from E1's KAIZO_THUNDER_EFFECTS (G-50), KAIZO_FLAG_EFFECTS 141 = HIT_AIR only. Items
+  re-extracted (decomp, Kaizo ROM), tables + backlog rebuilt (17 steps, 0 errors). Scans: no
+  duplicate names, enum values (EffectId 105-114 batch 13 only), state / Outcome / Tables
+  fields, test names or rom_diff rows; fold_in 14-26, 28-31, 32/33, 34/35, 36, 40, 41, 42
+  distinct. Check notes (58ee134): the two no-living-foe invoker tests assert the foe acts first;
+  White Smoke cited :2883-2884. Green: effect_map / tables / kaizo_tables / state + the two
+  invoker tests 101 (4.8 GB), unsupported nodes + variants / game_constants / backlog 97,
+  accuracy / damage classes + enumerate + coverage not-slow 109 (7.1 GB), batch13 + invokers
+  not-slow 68 (7.8 GB), batch12 not-slow 35, test_cli not-slow 102 + 1 skipped (the two
+  over-8 GB nodes not run).
 
 - **Restart here (2026-11-17, context cleared).** Batch 12 merged tip 2c8efd6 was sent to the
   manager with all results; waiting for its merge. Running background work that will notify:
