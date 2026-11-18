@@ -4,9 +4,13 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
 
 ## RESUME (updated 2026-11-17 before a clear: batch 12 merged tip 2c8efd6 SENT; batch 13 building)
 
-- **PAUSED by the user (2026-11-17).** Wait for the manager's "resume". Batch 13 builder told to
-  commit at its next step and record its state in b13wt's ledger RESUME (branch e2-batch13); read
-  that first on resume. raw_rolls seeds 2 and 5 still owed: the local
+- **Cleared 2026-11-17 evening; pause LIFTED.** Running (their notifications wake this session;
+  SendMessage by id to steer): batch 13 builder agent a588f3a6a881df34a (Opus; worktree
+  _scratch/e2/b13wt, branch e2-batch13; its own RESUME there) building, merging main 932af5a,
+  fixing the check notes, one review; raw-roll runner agent ab880260abd9bd767 (Sonnet; driver
+  log _scratch/e2/drive_rawrolls.log). On batch 13's report: send the manager ONE message with tip +
+  results + doubles plan (batches of 15-20 groups); pod runs on ci-day go via the manager (one
+  line: commit, ids, guard). Never end a turn on "still waiting". raw_rolls seeds 2 and 5 still owed: the local
   run never started a test (`No module named 'tests'`: run rawrolls_phase.py with PYTHONPATH set to
   the worktree root, or from inside the worktree).
 - **Restart here (2026-11-17, context cleared).** Batch 12 is IN MAIN (main = 932af5a, from
