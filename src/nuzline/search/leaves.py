@@ -40,6 +40,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState/PlayoutResult
 from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.data.tables import Tables
+from nuzline.engine.outcome import replacement_known
 from nuzline.engine.state import BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
@@ -160,22 +161,24 @@ def allocate(weights: np.ndarray, budget: int, floor: int = 1) -> np.ndarray:
 
 
 def _leaf_program(
-    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout, replacement: bool
 ) -> PlayoutResult:
-    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout))(states, keys)
-
-
-def _root_program(
-    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout
-) -> PlayoutResult:
-    """``_leaf_program`` from roots: each playout draws its root's hidden values first
-    (``playout.root_state``)."""
-    return jax.vmap(lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns, layout))(
+    return jax.vmap(lambda s, k: playout(tables, s, k, max_turns, layout, replacement))(
         states, keys
     )
 
 
-def _forced_turn(tables: Tables, state: BattleState, pair, key):
+def _root_program(
+    tables: Tables, states: BattleState, keys, max_turns: int, layout: AiLayout, replacement: bool
+) -> PlayoutResult:
+    """``_leaf_program`` from roots: each playout draws its root's hidden values first
+    (``playout.root_state``)."""
+    return jax.vmap(
+        lambda s, k: playout(tables, root_state(tables, s, k), k, max_turns, layout, replacement)
+    )(states, keys)
+
+
+def _forced_turn(tables: Tables, state: BattleState, pair, key, replacement: bool = True):
     """The forced first turn: ``playout_from_action``'s key rule (playout._run) -- the
     turn's draws come from the second split of ``k_turn``. Returns the state after
     ``finish_turn`` (opponent's and the player's replacements), whether that was refused, and the key for the rest."""
@@ -183,17 +186,28 @@ def _forced_turn(tables: Tables, state: BattleState, pair, key):
     actions = pair.astype(_I32)
     power_mul, ai_switched = turn_muls(tables, state, actions)
     stepped, paused_refused = step_through(
-        tables, state, actions, jax.random.split(k_turn)[1], jax.random.fold_in(k_turn, 1)
+        tables,
+        state,
+        actions,
+        jax.random.split(k_turn)[1],
+        jax.random.fold_in(k_turn, 1),
+        replacement=replacement,
     )
     after, refused = finish_turn(tables, stepped, ai_switched, power_mul)
     return after, refused | paused_refused, key
 
 
 def _forced_one(
-    tables: Tables, state: BattleState, pair, key, max_turns: int, layout: AiLayout
+    tables: Tables,
+    state: BattleState,
+    pair,
+    key,
+    max_turns: int,
+    layout: AiLayout,
+    replacement: bool,
 ) -> PlayoutResult:
-    after, refused, key = _forced_turn(tables, state, pair, key)
-    rest = playout(tables, after, key, max_turns - 1, layout)
+    after, refused, key = _forced_turn(tables, state, pair, key, replacement)
+    rest = playout(tables, after, key, max_turns - 1, layout, replacement)
     return PlayoutResult(
         won=jnp.where(refused, REFUSED_WON, rest.won).astype(jnp.int8),
         player_faints=rest.player_faints,
@@ -207,9 +221,15 @@ def _forced_one(
 
 
 def _forced_program(
-    tables: Tables, states: BattleState, pairs, keys, max_turns: int, layout: AiLayout
+    tables: Tables,
+    states: BattleState,
+    pairs,
+    keys,
+    max_turns: int,
+    layout: AiLayout,
+    replacement: bool,
 ):
-    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns, layout))(
+    return jax.vmap(lambda s, p, k: _forced_one(tables, s, p, k, max_turns, layout, replacement))(
         states, pairs, keys
     )
 
@@ -223,7 +243,10 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
     size = -(-LEAF_CHUNK // devices) * devices
     sharding = NamedSharding(Mesh(jax.devices(), ("d",)), PartitionSpec("d"))
     layout = layout_of(tables)  # concrete here; the programs take it as static
-    program = partial(fn, max_turns=max_turns, layout=layout)
+    # sample_outcome's static flag over every row (outcome.replacement_known): a fight where no
+    # Pokemon knows or can learn a replacing move compiles without the mid-turn redraw.
+    replacement = replacement_known(tables, rows[0])
+    program = partial(fn, max_turns=max_turns, layout=layout, replacement=replacement)
     won, refused, faints, deaths_of, ended = [], [], [], [], []
     hp_left, pp_left = [], []
     for start in range(0, n, LEAF_CHUNK):
@@ -236,7 +259,7 @@ def _run(fn, name: str, max_turns: int, tables: Tables, rows: tuple, row_of, key
             program,
             args,
             name=name,
-            static={"max_turns": max_turns, "layout": layout.key},
+            static={"max_turns": max_turns, "layout": layout.key, "replacement": replacement},
             version=code_version(),
         )
         out = jax.device_get(exported(*args))

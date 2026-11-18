@@ -199,6 +199,10 @@ _NONZERO_SIDE = (
     # E2 batch 10: "{0} got an encore!" (subscript_encore_start.s) until "{0}'s encore ended!";
     # the count is hidden (B10-9).
     "encore_move",
+    # E2 batch 12: "{0} is getting pumped!" (subscript_focus_energy.s:7) and "{0} switched its
+    # Attack and Defense!" (subscript_user_swap_atk_and_def.s:10).
+    "focus_energy",
+    "power_trick",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

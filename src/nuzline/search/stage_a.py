@@ -42,6 +42,7 @@ from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, usable_moves
+from nuzline.engine.outcome import replacement_known
 from nuzline.engine.state import MAX_DEATH_BUDGET, BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
@@ -149,15 +150,21 @@ for _cls in (Tables, BattleState, PlayoutResult):
 
 
 def _playouts(
-    tables: Tables, state: BattleState, actions, keys, max_turns: int, layout: AiLayout
+    tables: Tables,
+    state: BattleState,
+    actions,
+    keys,
+    max_turns: int,
+    layout: AiLayout,
+    replacement: bool = True,
 ) -> PlayoutResult:
     """``PlayoutResult`` of shape ``[A, n]``: every action against every key. Run
     through ``cached_export`` (traced once per shape, sharding, AI layout and source
-    version)."""
+    version). ``replacement``: ``sample_outcome``'s static flag (``outcome.replacement_known``)."""
 
     def one(action, k):
         root = root_state(tables, state, k)
-        return playout_from_action(tables, root, action, k, max_turns, layout)
+        return playout_from_action(tables, root, action, k, max_turns, layout, replacement)
 
     def per_action(action):
         return jax.vmap(lambda k: one(action, k))(keys)
@@ -205,11 +212,12 @@ def rank_actions(
     padded[: legal.size] = legal
     args = (tables, state, jnp.asarray(padded), sharded_keys)
     layout = layout_of(tables)
+    replacement = replacement_known(tables, state)
     playouts = cached_export(
-        partial(_playouts, max_turns=max_turns, layout=layout),
+        partial(_playouts, max_turns=max_turns, layout=layout, replacement=replacement),
         args,
         name="playouts",
-        static={"max_turns": max_turns, "layout": layout.key},
+        static={"max_turns": max_turns, "layout": layout.key, "replacement": replacement},
         version=code_version(),
     )
     out = jax.device_get(playouts(*args))

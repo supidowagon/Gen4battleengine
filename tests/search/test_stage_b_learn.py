@@ -47,6 +47,8 @@ _jit_turn = jax.jit(expand._turn)
 def _turn(tables, before, actions, outcome):
     """``expand._turn`` with no takeover variant (``taken`` all False, B11-1)."""
     return _jit_turn(tables, before, actions, outcome, jnp.zeros(2, bool))
+
+
 _learn = jax.jit(expand._learn)
 _advance = jax.jit(advance_learns)
 _options = jax.jit(learn_options)

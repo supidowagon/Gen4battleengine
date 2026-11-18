@@ -40,6 +40,8 @@ LISTED = [
     "nuzline.engine.ids.WEATHER_ABILITY_IDS",
     "nuzline.engine.ids.ITEM_ABILITY_IDS",
     "nuzline.engine.ids.YAWN_ABILITY_IDS",
+    "nuzline.engine.ids.STAT_MOVE_ABILITY_IDS",
+    "nuzline.engine.ids.MOVE_HEAL_BELL",
     "nuzline.engine.ids.ABILITY_MULTITYPE",
     "nuzline.engine.ids.ABILITY_DECOMP_IDS",
     "nuzline.engine.ids.UNTRACEABLE_ABILITIES",
@@ -54,7 +56,6 @@ LISTED = [
     "nuzline.engine.coverage.ITEM_GRISEOUS_ORB",
     # engine, asserted by name and hold effect / hold param
     "nuzline.ai.commands.ITEM_EXPERT_BELT",
-    "nuzline.ai.switching.ITEM_IRON_BALL",
     "nuzline.engine.ids.ITEM_FULL_RESTORE",
     "nuzline.engine.ids.QUICK_CLAW_PARAM",
     # engine: saves/check.py's special routes (final review M12)

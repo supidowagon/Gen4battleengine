@@ -17,7 +17,7 @@ defending side (its contact ability: Static, Poison Point, Flame Body, Cute Char
 (``sample_outcome``).
 
 ``sample_outcome`` reproduces each decomp roll (citations per field below). The
-crit odds are read from the state at the start of the turn. Rolls whose effect
+crit draw is read with the odds at the hit (``crit_lands``). Rolls whose effect
 depends on state that can change mid-turn (status, the defender's ability) are drawn
 unconditionally and gated by ``step``, which keeps their probabilities exact.
 
@@ -66,6 +66,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_METRONOME,
+    CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
     action_order,
@@ -105,7 +106,7 @@ _CRIT_ODDS = jnp.array([16, 8, 4, 3, 2], _I32)
 class Outcome(NamedTuple):
     speed_tie: jnp.ndarray  # int8[], 0 = player first on equal speed
     hit: jnp.ndarray  # int8[2,5], index 0: the accuracy roll's class (module docstring)
-    crit: jnp.ndarray  # int8[2,5]
+    crit: jnp.ndarray  # int8[2,5], the crit draw's class (CRIT_DRAWS): 0 never, 1 always crits
     roll: jnp.ndarray  # int8[2,5], 0-15 (85-100 %)
     secondary: jnp.ndarray  # int8[2,5], the attacker's own secondary effect
     contact_proc: jnp.ndarray  # int8[2,5], the defender's contact ability
@@ -137,6 +138,10 @@ class Outcome(NamedTuple):
     # int8[2], by the battler a Yawn puts to sleep at this turn's end: subscript_fall_asleep.s's
     # ``Random 3, 2`` (2-5 turns), a draw of its own (bcp.c:1684-1697).
     yawn_sleep: jnp.ndarray
+    # int16[2], Acupressure's RandNext() (BtlCmd_BoostRandomStatBy2, battle_script.c:8950) as a
+    # value in [0, ACUPRESSURE_DRAWS): the stat is rank ``value % validStats`` among the stats
+    # below +6 at the move (``effects.acupressure_stat``), B12-9.
+    acupressure: jnp.ndarray
     # int8[2,5], 1 = a Focus Band roll passes (``RandNext() % 100 < FOCUS_BAND_PARAM``,
     # bcp.c:3387, battle_script.c:9110): ``[s, i]`` the defender's roll at hit ``i`` of ``s``'s
     # move (``BattleControllerPlayer_UpdateHP``; Pursuit's ``CheckHoldOnWith1HP`` at ``[pursuer,
@@ -183,6 +188,7 @@ def empty_outcome() -> Outcome:
         call=jnp.zeros((2,), jnp.int16),
         future_hit=sides + 1,
         yawn_sleep=sides + 2,
+        acupressure=jnp.zeros((2,), jnp.int16),
         focus_band=hits,
         future_band=sides,
         berry_confusion=sides + 2,
@@ -221,6 +227,7 @@ def _rate(
     weather=None,
     target_confused=None,
     total=None,
+    micle=None,
 ) -> jnp.ndarray:
     """``hitRate`` of ``side``'s ``move`` against side ``target``'s ``target_mon`` with the
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
@@ -232,7 +239,9 @@ def _rate(
     target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
     traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
     clamped stage sum to use instead of the one ``acc`` and ``eva_stage`` give (0-12,
-    ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed."""
+    ``future_thresholds``' grid); with it the weather is taken as given, unsuppressed.
+    ``micle``: the attacker's ``moveEffectsData.micleBerry`` at the check (default
+    ``state.micle[side]``), x120/100 after the held items (bcp.c:2967-2970, G-59)."""
     weather = state.weather if weather is None else weather
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
     fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
@@ -293,7 +302,7 @@ def _rate(
     tangled = (d_ability == AbilityId.TANGLED_FEET) & jnp.asarray(target_confused, bool)
     rate = jnp.where(tangled, rate * 50 // 100, rate)
     # The held items (:2949-2965), after Hustle (an unsupported ability) and Tangled Feet and
-    # before the Micle Berry flag (an unsupported item) and Gravity: the defender's
+    # before the Micle Berry flag and Gravity: the defender's
     # HOLD_EFFECT_ACC_REDUCE (BrightPowder, Lax Incense) * (100 - param) / 100, then the
     # attacker's HOLD_EFFECT_ACCURACY_UP (Wide Lens) and, against a target that has moved,
     # HOLD_EFFECT_ACCURACY_UP_SLOWER (Zoom Lens), each * (100 + param) / 100
@@ -309,6 +318,9 @@ def _rate(
         (a_effect == ItemId.ZOOM_LENS) & jnp.asarray(target_moved, bool)
     )
     rate = jnp.where(lens, rate * (100 + a_power) // 100, rate)
+    # bcp.c:2967-2970: the Micle Berry's flag, after the items and before Gravity (G-59).
+    micle = state.micle[side] != 0 if micle is None else jnp.asarray(micle, bool)
+    rate = jnp.where(micle, rate * 120 // 100, rate)
     rate = jnp.where(state.gravity != 0, rate * 10 // 6, rate)
     # CheckMoveHitOverrides (bcp.c:3016-3021), after the roll: the attacker's or the target's
     # No Guard (Battler_Ability, the target's own: not ignorable) clears MOVE_STATUS_MISSED.
@@ -428,7 +440,8 @@ def future_thresholds(
     the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
     (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
-    the turn end's countdown)."""
+    the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
+    roll kept whole where it can change (G-59)."""
     actions = jnp.asarray(actions, _I32)
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
@@ -494,7 +507,7 @@ def future_thresholds(
             )
             return _rate(
                 tables, s, a, move, d, dm, jnp.asarray(False), 0, 0, True,
-                weathers[w], c == 1, t,
+                weathers[w], c == 1, t, (am == state.active[a]) & (state.micle[a] != 0),
             )  # fmt: skip
 
         thresholds.append(jax.vmap(rate)(a_mon, d_mon, total, wi, conf, lk))
@@ -510,7 +523,19 @@ def future_thresholds(
         reset = jax.vmap(actual)(a_mon, d_mon, jnp.zeros_like(a_mon, bool))
         stage_ok = free | (total == kept) | (total == reset)
         possible.append(on_field[a][a_mon] & on_field[d][d_mon] & stage_ok & (foe == d) & lock_ok)
-    loose = jnp.broadcast_to(tracer, (2,))
+    # The Micle Berry's flag (G-59) at the hit: the grid reads the active battler's flag of now
+    # (a newcomer has none). It can differ at the turn's end when the attacker's side has a flag
+    # set (its own accuracy check clears it) or a Micle Berry on the field (its pinch sets it):
+    # then that defender's roll is kept whole (``loose``), rare and sound.
+    micle_field = jnp.stack(
+        [
+            (state.micle[x] != 0)
+            | jnp.any(on_field[x] & (tables.item_effect[state.item[x]] == ItemId.MICLE_BERRY))
+            for x in (0, 1)
+        ]
+    )
+    attackers = jnp.clip(state.future_attacker.astype(_I32) - 1, 0, 1)
+    loose = jnp.broadcast_to(tracer, (2,)) | micle_field[attackers]
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible), loose
 
 
@@ -525,6 +550,7 @@ def _hit_threshold(
     weather=None,
     target_confused=None,
     move=None,
+    micle=None,
 ):
     """The turn-start threshold of ``side``'s move, or with these stages (and, for Zoom Lens,
     a target that has moved; the weather and the target's confusion at the check) instead.
@@ -555,6 +581,7 @@ def _hit_threshold(
         target_moved,
         weather,
         target_confused,
+        micle=micle,
     )
     # A switch or an item use runs no move, so it has no roll.
     no_move = is_switch(actions[side]) | is_item(actions[side])
@@ -589,15 +616,15 @@ def _can_go_first(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     return jnp.stack([(firsts[0] == side) | (firsts[1] == side) for side in (0, 1)])
 
 
-def _stage_variants(start, delta, changes, herb) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """``(int32[4], bool[4])``: the stage ``start``; ``start + delta`` (clamped to +-6, as
-    ``effects.change_stage``) where ``changes``; 0 where a White Herb can restore a
-    lowered stage (``hooks.held_item_check``); and ``delta`` where the herb restored a
-    lowered start before the change."""
+def _stage_variants(start, changed, from_zero, changes, herb) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[4], bool[4])``: the stage ``start``; ``changed``, the stage after the foe's
+    move (``hit_thresholds``), where ``changes``; 0 where a White Herb can restore a lowered
+    stage (``hooks.held_item_check``); and ``from_zero``, the move's stage when the herb
+    restored a lowered start before it."""
     start = start.astype(_I32)
-    changed = jnp.clip(start + delta, STAGE_MIN, STAGE_MAX)
+    changed, from_zero = changed.astype(_I32), from_zero.astype(_I32)
     lowered = (start < 0) | (changes & (changed < 0))
-    stages = jnp.stack([start, changed, jnp.zeros((), _I32), jnp.clip(delta, STAGE_MIN, STAGE_MAX)])
+    stages = jnp.stack([start, changed, jnp.zeros((), _I32), from_zero])
     return stages, jnp.stack(
         [jnp.asarray(True), changes, herb & lowered, herb & changes & (start < 0)]
     )
@@ -619,6 +646,11 @@ def hit_thresholds(
       ``Stat.ACC`` (Sand-Attack, Mud-Slap; effects.py ``_foe_stage``);
     * the target's evasion stage: a ``STAT_SELF`` / ``SECONDARY_STAT_SELF`` move on
       ``Stat.EVA`` (Double Team; ``_stat_self``);
+    * Haze (``effects._haze``, BtlCmd_ResetAllStatChanges battle_script.c:3534-3549): both
+      stages to 0; Psych Up (``effects.copy_stat_stages``, BtlCmd_CopyStatStages :6042-6053):
+      the target's evasion becomes the side's own; Acupressure (``effects._acupressure``,
+      BtlCmd_BoostRandomStatBy2 :8932-8956, evasion among the drawn stats): the target's
+      evasion +2 (B12-31);
     * a White Herb on either battler, which resets a lowered stage to 0;
     * the order: a Zoom Lens (``HOLD_EFFECT_ACCURACY_UP_SLOWER``) raises the rate against a
       target that has moved, i.e. when the side acts second (the second half of the grid,
@@ -632,6 +664,9 @@ def hit_thresholds(
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
       move's after-effects, its switch-in, or a Pluck of the side's berry: ``hooks``,
       ruling G-5; over-approximate: whenever it or the side holds such a berry).
+
+    * the attacker's Micle Berry flag (G-59): its berry can trigger before the check (the
+      second half of the grid, Zoom Lens's, possible for a holder: one item holds one of them).
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s, which change no stage (a future multi-hit stat effect must add
@@ -679,16 +714,47 @@ def hit_thresholds(
     )
     zoom = uses_move & (held == ItemId.ZOOM_LENS) & target_may_have_moved
     weather_move = changes & (effect == EffectId.WEATHER)
+    # The Micle Berry's flag set before the side's check (G-59): only the side's own berry can
+    # set it then (hooks.held_item_check at a pinch an earlier hit brings; a Pluck sets the
+    # eater's, after the eater's own check). Over-approximate: the side's active holds one.
+    # Only the side's own check clears it.
+    micle_free = uses_move & (held == ItemId.MICLE_BERRY)
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in (0, 1):
         foe = 1 - side
         foe_switches = is_switch(actions[foe])
         foe_fresh = fresh_switch(state, actions, foe)
-        acc0 = state.stages[side, Stat.ACC]
-        eva0 = jnp.where(foe_fresh, 0, state.stages[foe, Stat.EVA])
-        accs, acc_ok = _stage_variants(acc0, delta[foe], on_foe_acc[foe], herb[side])
-        evas, eva_ok = _stage_variants(eva0, delta[foe], on_own_eva[foe], herb[foe] & ~foe_fresh)
+        acc0 = state.stages[side, Stat.ACC].astype(_I32)
+        eva0 = jnp.where(foe_fresh, 0, state.stages[foe, Stat.EVA]).astype(_I32)
+        # The foe's move's one stage write each (B12-31): a stat move's delta, Haze's 0,
+        # Psych Up's copy of the side's own evasion (the side has not moved: its turn-start
+        # stage), Acupressure's +2 (its defender is its user in singles).
+        haze, psych = effect[foe] == EffectId.HAZE, effect[foe] == EffectId.PSYCH_UP
+        acup = effect[foe] == EffectId.ACUPRESSURE
+        acc_delta = jnp.clip(delta[foe], STAGE_MIN, STAGE_MAX).astype(_I32)
+        accs, acc_ok = _stage_variants(
+            acc0,
+            jnp.where(haze, 0, jnp.clip(acc0 + delta[foe], STAGE_MIN, STAGE_MAX)),
+            jnp.where(haze, 0, acc_delta),
+            on_foe_acc[foe] | (changes[foe] & haze),
+            herb[side],
+        )
+        eva_delta = jnp.where(acup, 2, delta[foe]).astype(_I32)
+        copied = state.stages[side, Stat.EVA].astype(_I32)
+        eva_changed = jnp.where(
+            haze, 0, jnp.where(psych, copied, jnp.clip(eva0 + eva_delta, STAGE_MIN, STAGE_MAX))
+        )
+        eva_from_zero = jnp.where(
+            haze, 0, jnp.where(psych, copied, jnp.clip(eva_delta, STAGE_MIN, STAGE_MAX))
+        )
+        evas, eva_ok = _stage_variants(
+            eva0,
+            eva_changed,
+            eva_from_zero,
+            on_own_eva[foe] | (changes[foe] & (haze | psych | acup)),
+            herb[foe] & ~foe_fresh,
+        )
         _, _, target_mon = _target_mon(state, actions, side)
         weather0 = jnp.where(
             foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
@@ -714,17 +780,23 @@ def hit_thresholds(
         conf_grid = jnp.tile(jnp.repeat(confuseds, n_stage), 4)
         weather_grid = jnp.tile(jnp.repeat(weathers, 2 * n_stage), 2)
         moved_grid = jnp.repeat(jnp.array([False, True]), 4 * n_stage)
+        # The Micle flag (G-59) shares the "moved" half with Zoom Lens: one held item holds one
+        # of them, and the target having moved changes nothing but Zoom Lens. The first half
+        # reads the flag as at the start; the second half, the target moved, also the flag a
+        # Micle holder's berry can set before the check.
+        holder = held[side] == ItemId.MICLE_BERRY
+        micle_grid = (state.micle[side] != 0) | (moved_grid & holder)
         thresholds.append(
             jax.vmap(
-                lambda a, e, m, w, c, side=side: _hit_threshold(
-                    tables, state, actions, side, a, e, m, w, c, moves[side]
+                lambda a, e, m, w, c, k, side=side: _hit_threshold(
+                    tables, state, actions, side, a, e, m, w, c, moves[side], k
                 )
-            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid)
+            )(acc_grid, eva_grid, moved_grid, weather_grid, conf_grid, micle_grid)
         )
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
-        possible.append(jnp.concatenate([grid_ok, grid_ok & zoom[side]]))
+        possible.append(jnp.concatenate([grid_ok, grid_ok & (zoom[side] | micle_free[side])]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
 
@@ -741,33 +813,143 @@ def hit_class(u, thresholds, possible) -> jnp.ndarray:
     return jnp.where(misses_all, 0, low)
 
 
-def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
-    """``int32[2]``: each side's move crits 1 in N (``BattleSystem_CalcCriticalMulti``,
-    battle_lib.c:7105). ``HIGH_CRIT`` (+1) and the attacker's Super Luck (+1, :7126) raise
-    the stage, and so do the crit items (``ItemId.CRIT_ITEM``); Focus Energy is not implemented. Lucky
-    Chant on the defending side and the target's Battle Armor / Shell Armor (``armored``)
-    are applied by ``sample_outcome``. Nature Power's are its called move's
-    (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
-    actions = jnp.asarray(actions, _I32)
-    if moves is None:
-        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
-    stage = (tables.move_effect[moves] == EffectId.HIGH_CRIT).astype(_I32)
+def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarray:
+    """``int32``: ``side``'s ``move`` crits 1 in N with ``state`` as it is when the move runs
+    (``BattleSystem_CalcCriticalMulti``, battle_lib.c:7105-7133, reads the attacker's held item,
+    species, statusVolatile and ability at its ``CalcCrit``): ``HIGH_CRIT`` (+1, the script's
+    criticalStage), Focus Energy (+2, :7123), the crit items (``ItemId.CRIT_ITEM``: +1, or +2 on
+    their species, :7124-7128), Super Luck (+1, :7126), capped at 4 (:7130)."""
+    stage = (tables.move_effect[move] == EffectId.HIGH_CRIT).astype(_I32)
     # Razor Wind, Sky Attack: BTLVAR_CRITICAL_BOOSTS + 1 before CalcCrit (effect_script_0039.s:17,
     # _0075.s:16; MoveFlag.CRIT_UP), B10-12.
-    stage = stage + ((tables.move_flags[moves].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
+    stage = stage + ((tables.move_flags[move].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
+    mon = state.active[side]
     # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
-    super_luck = state.ability[jnp.arange(2), state.active] == AbilityId.SUPER_LUCK
-    stage = stage + super_luck.astype(_I32)
-    # :7123-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
+    stage = stage + (state.ability[side, mon] == AbilityId.SUPER_LUCK).astype(_I32)
+    # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
+    stage = stage + 2 * (state.focus_energy[side] != 0).astype(_I32)
+    # :7124-7128: + 1 for HOLD_EFFECT_CRITRATE_UP (Scope Lens, Razor Claw), + 2 for Lucky Punch on
     # Chansey and Stick on Farfetch'd (Battler_HeldItem; ids.ItemId.CRIT_ITEM).
-    item = state.item[jnp.arange(2), state.active]
-    species = state.species[jnp.arange(2), state.active].astype(_I32)
+    item = state.item[side, mon]
+    species = state.species[side, mon].astype(_I32)
     needs = tables.item_param[item, 1].astype(_I32)
     held = tables.item_effect[item] == ItemId.CRIT_ITEM
     stage = (
         stage + jnp.where(held & (needs == 0), 1, 0) + jnp.where(held & (needs == species), 2, 0)
     )
     return _CRIT_ODDS[jnp.minimum(stage, 4)]
+
+
+def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
+    """``int32[2]``: each side's move crits 1 in N with ``state`` (``side_crit_odds``), the
+    turn-start odds. Lucky Chant on the defending side and the target's Battle Armor / Shell
+    Armor (``armored``) are applied by ``sample_outcome``. Nature Power's are its called move's
+    (``CalcCrit`` runs in the called move's script); ``moves`` as ``hit_thresholds``'."""
+    actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    return jnp.stack([side_crit_odds(tables, state, side, moves[side]) for side in (0, 1)])
+
+
+# The crit draw ``RandNext() % sCriticalStageRates[stage]`` (battle_lib.c:7132) is taken when the
+# move runs, with the odds of that moment (B12-4 review). ``Outcome.crit`` holds one draw r in
+# [0, CRIT_DRAWS) = lcm(16, 8, 4, 3, 2), which serves every rate (uniform by the % n convention),
+# as r + 1 reduced to its class over the odds the hit can meet (``crit_class``); 0 never crits.
+# The hit crits when ``(value - 1) % odds == 0`` with the odds at the hit (``crit_lands``): a
+# hand-built 1 always crits.
+CRIT_DRAWS = 48
+
+
+def _clear_focus_energy(state: BattleState) -> BattleState:
+    """Haze's write to the crit inputs: BtlCmd_ResetAllStatChanges clears every battler's
+    VOLATILE_CONDITION_FOCUS_ENERGY (battle_script.c:3534-3549; ``effects._haze``)."""
+    return state._replace(focus_energy=jnp.zeros_like(state.focus_energy))
+
+
+def _remove_held_item(state: BattleState) -> BattleState:
+    """Knock Off's write to the crit inputs: BtlCmd_TryKnockOff sets the defender's heldItem to
+    ITEM_NONE (battle_script.c:6608-6632; ``effects._knock_off``), here every battler's own."""
+    battlers = jnp.arange(state.active.shape[0])
+    return state._replace(item=state.item.at[battlers, state.active].set(0))
+
+
+# The move effects that can change another battler's crit inputs before its CalcCrit
+# (BattleSystem_CalcCriticalMulti, battle_lib.c:7105-7132, reads the attacker's Focus Energy,
+# held item, species and ability), each with its write to those inputs. Every battler's odds are
+# read with every subset of these writes applied (``crit_variants``): a new effect that sets or
+# clears another battler's Focus Energy, or changes its held item, species or ability, joins
+# them with its write (tests/engine/test_batch12.py derives them from the effect handlers).
+CRIT_ODDS_EFFECTS = {
+    EffectId.HAZE: _clear_focus_energy,
+    EffectId.KNOCK_OFF: _remove_held_item,
+}
+# The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
+# is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
+CRIT_VARIANTS = 2 ** len(CRIT_ODDS_EFFECTS)
+
+
+def crit_variants(
+    tables: Tables, state: BattleState, actions, moves=None, before=None
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32[B, CRIT_VARIANTS], bool[B, CRIT_VARIANTS])``: the crit odds each battler's move
+    can have at its CalcCrit this turn, and which can occur. Variant v has the writes of the
+    ``CRIT_ODDS_EFFECTS`` entries in v applied; it can occur when, for each of them, a battler
+    that can act before this one's hit (``before[b, o]``: battler ``o`` may act before ``b``'s
+    hit; default every other battler) uses that effect and the write alone changes ``b``'s odds.
+    Over-approximate: that battler may move later, miss, or aim elsewhere."""
+    actions = jnp.asarray(actions, _I32)
+    if moves is None:
+        moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in (0, 1)])
+    n = state.active.shape[0]
+    if before is None:
+        before = ~jnp.eye(n, dtype=bool)
+    before = jnp.asarray(before, bool)
+    writes = tuple(CRIT_ODDS_EFFECTS.values())
+    odds, singles = [], []
+    for v in range(CRIT_VARIANTS):
+        s = state
+        for e, write in enumerate(writes):
+            if v >> e & 1:
+                s = write(s)
+        odds.append(crit_odds(tables, s, actions, moves))
+    base = odds[0]
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    effect = tables.move_effect[moves]
+    for e, eff in enumerate(CRIT_ODDS_EFFECTS):
+        used = uses_move & (effect == eff)  # [B], by the user
+        reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
+        singles.append(reached & (odds[1 << e] != base))
+    possible = []
+    for v in range(CRIT_VARIANTS):
+        ok = jnp.ones(base.shape, bool)
+        for e in range(len(writes)):
+            if v >> e & 1:
+                ok = ok & singles[e]
+        possible.append(ok)
+    return jnp.stack(odds, axis=1), jnp.stack(possible, axis=1)
+
+
+def crit_class(value, odds, possible) -> jnp.ndarray:
+    """The ``Outcome.crit`` value of draw ``value`` (r in [0, CRIT_DRAWS)) among the ``possible``
+    entries of ``odds`` (last axis; ``value`` broadcasts against the others): the smallest
+    r' + 1 that crits or not alike at each of them, or 0 when r crits at none of them."""
+    r = jnp.asarray(value, _I32)[..., None]
+    odds = jnp.maximum(jnp.asarray(odds, _I32), 1)
+    possible = jnp.asarray(possible, bool)
+    key = (r % odds == 0) & possible  # [..., V]
+    rs = jnp.arange(CRIT_DRAWS, dtype=_I32)
+    keys = ((rs[:, None] % odds[..., None, :]) == 0) & possible[..., None, :]  # [..., R, V]
+    same = jnp.all(keys == key[..., None, :], axis=-1)
+    return jnp.where(jnp.any(key, axis=-1), jnp.argmax(same, axis=-1) + 1, 0).astype(_I32)
+
+
+def crit_lands(tables: Tables, state: BattleState, side, move, value) -> jnp.ndarray:
+    """``bool``: ``Outcome.crit`` value ``value`` crits ``side``'s ``move`` at its CalcCrit with
+    ``state`` (``side_crit_odds`` of that moment, battle_lib.c:7132): ``(value - 1) % odds == 0``;
+    0 never. Lucky Chant and Battle Armor / Shell Armor are the caller's."""
+    value = jnp.asarray(value, _I32)
+    odds = side_crit_odds(tables, state, side, move)
+    return (value > 0) & ((value - 1) % odds == 0)
 
 
 def armored(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -1032,7 +1214,7 @@ MOVE_FIELDS = ("hit", "crit", "secondary", "fang_flinch", "duration", "future_hi
 def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict:
     """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
     (``moves``, ``int32[2]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
-    13 and fold_ins 16, 28)."""
+    13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw)."""
     k = jax.random.split(key, 14)
     per_hit, per_side = (2, MAX_HITS), (2,)
 
@@ -1048,7 +1230,16 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
     # Battle Armor / Shell Armor (:7135-7136).
     no_crit = ((state.lucky_chant[::-1] != 0) | armored(tables, state, actions))[:, None]
-    crit = (draw(1, per_hit, crit_odds(tables, state, actions, moves)[:, None]) == 0) & ~no_crit
+    # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
+    # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
+    # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can
+    # meet (crit_class), from a fold_in key (every other field keeps its samples).
+    odds, odds_ok = crit_variants(tables, state, actions, moves)
+    moving = jnp.any(odds_ok & (odds != odds[:, :1]), axis=1)[:, None]
+    fixed = (draw(1, per_hit, odds[:, :1]) == 0).astype(_I32)
+    r = jax.random.randint(jax.random.fold_in(key, 41), per_hit, 0, CRIT_DRAWS, dtype=_I32)
+    crit = jnp.where(moving, crit_class(r, odds[:, None, :], odds_ok[:, None, :]), fixed)
+    crit = jnp.where(no_crit, 0, crit)
     # BtlCmd_CheckEffectActivation (battle_script.c:8377): RandNext() % 100 < chance (Serene
     # Grace doubled); chance 0 means the effect applies on every hit (ids.EffectId).
     chance = secondary_chance(tables, state, moves)[:, None]
@@ -1100,7 +1291,33 @@ def replacement_possible(tables: Tables, state: BattleState, actions, side, foe)
     return talk | takeover_possible(tables, state, actions, side, foe)
 
 
-def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
+def replacement_known(tables: Tables, state: BattleState) -> bool:
+    """Host side, on a concrete ``state`` (any leading batch axes): whether some Pokemon of
+    either party knows, or can still learn by level-up (``tables.learnset_*`` at or above its
+    level: ``levelup.advance_learns`` in a playout), a move that can make
+    ``replacement_possible`` true: Encore (``order.takeover_possible``'s foe move) or an invoker
+    (``order.call_kind`` other than CALL_NONE: Sleep Talk, ``replacement_possible``'s own talk
+    and a ``can_call_encore`` caller; Metronome, Assist and Copycat, ``can_call_encore``'s
+    other callers). False means ``replacement_possible`` is false at ``state`` and at every
+    state a turn or a playout reaches from it, so ``sample_outcome``'s static ``replacement``
+    may be False there. A move that changes a battler's set mid-battle (Mimic, Sketch,
+    Transform: unsupported, ``coverage.RELOAD_STATE_EFFECTS``) joins Encore when supported.
+    The guard: tests/engine/test_batch11.py, on generated states."""
+    species = np.asarray(state.species).astype(np.int64)
+    learnt = np.asarray(tables.learnset_move)[species]
+    reachable = np.asarray(tables.learnset_level)[species] >= np.asarray(state.level)[..., None]
+    known = np.concatenate(
+        [np.asarray(state.moves).ravel(), np.where(reachable, learnt, 0).ravel()]
+    )
+    known = np.unique(known[known != 0]).astype(np.int32)
+    if known.size == 0:
+        return False
+    effect = np.asarray(tables.move_effect)[known]
+    kinds = np.asarray(call_kind(tables, jnp.asarray(known)))
+    return bool(np.any((effect == EffectId.ENCORE) | (kinds != CALL_NONE)))
+
+
+def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement=True) -> Outcome:
     """Draw every field from its Gen 4 probability for this state and these actions (a paused
     state: ``pivot_view``'s).
 
@@ -1111,7 +1328,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     move-dependent fields (``MOVE_FIELDS``), redrawn for the move it then runs: from the Sleep
     Talk set a faster Disable or Imprison left (``order.disabled_state``, ``order.sealed_state``)
     or the encored move a faster Encore forced (``order.encored_state``). Exact: the event is
-    fixed before that side's action starts, and the redrawn fields are read only after it."""
+    fixed before that side's action starts, and the redrawn fields are read only after it.
+    The events and outcome B are computed only where ``replacement_possible`` holds (a
+    ``lax.cond``; A otherwise, which B left unchanged there). ``replacement`` (a Python bool,
+    static under ``jit``): False leaves both out of the program, for a ``state`` whose
+    ``replacement_known`` is False (where the predicate is always false)."""
     from nuzline.engine.enumerate import _split_events, taken_events  # importers of this module
     from nuzline.engine.step import turn_events
 
@@ -1212,6 +1433,12 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
         # Yawn's sleep at the turn end: subscript_fall_asleep.s ``Random 3, 2`` (BtlCmd_Random,
         # battle_script.c:3200-3210: rand % 4 + 2). From a fold_in key.
         yawn_sleep=jax.random.randint(jax.random.fold_in(key, 26), per_side, 0, 4, dtype=_I32) + 2,
+        # BtlCmd_BoostRandomStatBy2 (battle_script.c:8950): RandNext() % validStats, the count
+        # read at the move (1-7): one draw in [0, 420) (lcm(1..7)) serves every count, uniform
+        # by the % n convention (B12-9).
+        acupressure=jax.random.randint(
+            jax.random.fold_in(key, 36), per_side, 0, ACUPRESSURE_DRAWS, dtype=_I32
+        ),
         # Focus Band (bcp.c:3387, battle_script.c:9110): RandNext() % 100 < param, uniform by the
         # % n convention, per hit and for the Future Sight hit. From fold_in keys (G-1).
         focus_band=jax.random.randint(jax.random.fold_in(key, 29), per_hit, 0, 100, dtype=_I32)
@@ -1225,60 +1452,68 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions) -> Outcome:
     )
     outcome = _cast(outcome)
 
+    if not replacement:
+        return outcome
+
     # B11-1: which replacement each side's action met (the events on A), then outcome B: one
     # alternative per side, the one that fired (at most one in singles: the foe runs one move
     # before it), its move from a hypothetical state where only that side's set changed (Copycat
     # reads the foe's turn-start moveTemp). A side whose event did not fire keeps A's fields.
-    def fired(_):
+    def fired(outcome):
         events = turn_events(tables, state_in, actions_in, outcome)
         disabled, sealed = _split_events(state_in, events)
-        return jnp.stack([disabled, sealed, taken_events(state_in, events)])
+        which = jnp.stack([disabled, sealed, taken_events(state_in, events)])
+        sides = jnp.arange(2)
+        taken = which[2]
+        # The moveTemp each side runs: the encored move where taken. The invokers' draws do not
+        # read the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists
+        # ignore Disable, Imprison and Encore), so one draw serves every alternative.
+        own = jnp.where(taken, state.last_move.astype(_I32), chosen)
+        alt_key = jax.random.fold_in(key, 40)
+        alt_call = _draw_calls(alt_key, tables, state, own)
+        alt_moves = []
+        for side in (0, 1):
+            mine = sides == side
+            hyps = (
+                disabled_state(state, mine),
+                sealed_state(state, mine),
+                encored_state(tables, state, mine),
+            )
+            options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
+            alt_moves.append(
+                jnp.where(
+                    which[2, side], options[2], jnp.where(which[1, side], options[1], options[0])
+                )
+            )
+        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
+        fields["call"] = alt_call
+        replaced = jnp.any(which, axis=0)
+        for name, value in fields.items():
+            old = getattr(outcome, name)
+            mask = replaced.reshape((2,) + (1,) * (old.ndim - 1))
+            outcome = outcome._replace(
+                **{name: jnp.where(mask, jnp.asarray(value).astype(old.dtype), old)}
+            )
+        return outcome
 
-    which = jax.lax.cond(
-        jnp.any(
-            jnp.stack([replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)])
-        ),
-        fired,
-        lambda _: jnp.zeros((3, 2), bool),
-        None,
+    possible = jnp.stack(
+        [replacement_possible(tables, state, actions, sd, 1 - sd) for sd in (0, 1)]
     )
-    sides = jnp.arange(2)
-    taken = which[2]
-    # The moveTemp each side runs: the encored move where taken. The invokers' draws do not read
-    # the set changes (Sleep Talk's value is uniform; Metronome's and Assist's lists ignore
-    # Disable, Imprison and Encore), so one draw serves every alternative.
-    own = jnp.where(taken, state.last_move.astype(_I32), chosen)
-    alt_key = jax.random.fold_in(key, 40)
-    alt_call = _draw_calls(alt_key, tables, state, own)
-    alt_moves = []
-    for side in (0, 1):
-        mine = sides == side
-        hyps = (
-            disabled_state(state, mine),
-            sealed_state(state, mine),
-            encored_state(tables, state, mine),
-        )
-        options = [used_moves(tables, h, actions, alt_call, after_foe, own)[side] for h in hyps]
-        alt_moves.append(
-            jnp.where(which[2, side], options[2], jnp.where(which[1, side], options[1], options[0]))
-        )
-    fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
-    fields["call"] = alt_call
-    replaced = jnp.any(which, axis=0)
-    for name, value in fields.items():
-        old = getattr(outcome, name)
-        mask = replaced.reshape((2,) + (1,) * (old.ndim - 1))
-        outcome = outcome._replace(
-            **{name: jnp.where(mask, jnp.asarray(value).astype(old.dtype), old)}
-        )
-    return outcome
+    return jax.lax.cond(jnp.any(possible), fired, lambda o: o, outcome)
+
+
+# The Outcome fields stored as int16 (the rest are int8).
+INT16_FIELDS = ("call", "acupressure")
+# Acupressure's draw values: lcm(1..7), every count of stats below +6 dividing it (B12-9).
+ACUPRESSURE_DRAWS = 420
 
 
 def _cast(outcome: Outcome) -> Outcome:
-    """``outcome`` with every field at its stored dtype (``call`` int16, the rest int8)."""
+    """``outcome`` with every field at its stored dtype (``INT16_FIELDS`` int16, the rest
+    int8)."""
     return Outcome(
         *(
-            jnp.asarray(f).astype(jnp.int16 if name == "call" else _I8)
+            jnp.asarray(f).astype(jnp.int16 if name in INT16_FIELDS else _I8)
             for name, f in zip(Outcome._fields, outcome, strict=True)
         )
     )

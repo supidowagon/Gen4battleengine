@@ -9,6 +9,7 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -31,16 +32,22 @@ from nuzline.engine.order import (
     selected_move,
     takeover_possible,
 )
-from nuzline.engine.outcome import empty_outcome, pivot_view, replacement_possible, sample_outcome
+from nuzline.engine.outcome import (
+    empty_outcome,
+    pivot_view,
+    replacement_known,
+    replacement_possible,
+    sample_outcome,
+)
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step, turn_events
-from tests.engine.helpers import assert_matches_reference
+from tests.engine.helpers import assert_matches_reference, sample_rows
 from tests.engine.test_pivot import _mon
 from tests.strategies import _teach, any_outcome, legal_action_pair, supported_state
 
 CHUNK = 256  # one compiled program per kind for every batch in this file (small: under 8 GB)
 _steps = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_samples = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
+_samples = sample_rows
 
 
 def _stepped(tables, state, actions, outcomes):
@@ -378,3 +385,101 @@ def test_the_replacement_predicates_cover_every_event(tables, names, data):
     fired, uncovered = _covers(tables, s, acts, data.draw(any_outcome()))
     _FIRED[0] += int(np.sum(np.asarray(fired)))
     assert not np.any(np.asarray(uncovered)), (np.asarray(acts), np.asarray(fired))
+
+
+_possible = jax.jit(
+    lambda t, s, a: jnp.any(
+        jnp.stack([replacement_possible(t, s, a, side, 1 - side) for side in (0, 1)])
+    )
+)
+
+
+@settings(
+    max_examples=300,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(data=st.data())
+def test_replacement_known_holds_wherever_a_replacement_is_possible(tables, names, data):
+    """The sampler's static flag (``outcome.replacement_known``, B11-1's cost cut): wherever
+    ``replacement_possible`` holds for a side on a generated state (three in four steered at a
+    replacement, ``_steer``), the flag is True, so a False flag never drops a possible
+    redraw."""
+    s = data.draw(supported_state(tables, names))
+    steered = _steer(data, tables, names, s)
+    if steered is None:
+        acts = jnp.asarray(data.draw(legal_action_pair(tables, s)), jnp.int32)
+    else:
+        s, acts = steered
+    if bool(_possible(tables, s, acts)):
+        assert replacement_known(tables, s), np.asarray(s.moves)
+
+
+def test_replacement_known_counts_a_move_learnt_at_a_later_level(tables, names):
+    """``outcome.replacement_known``'s level-up half: Glameow learns Assist (an invoker) at level
+    29 (its ``tables.learnset_*`` row), so a level-28 Glameow that does not know it learns it at
+    its next level in a playout (``levelup.advance_learns``): the flag is True. At level 30 that
+    entry is behind it, and neither party knows or can still learn Encore or an invoker (Bidoof's
+    learnset has none): False."""
+    n = names
+    glameow = n.species("Glameow")
+    learnt = zip(
+        np.asarray(tables.learnset_move[glameow]).tolist(),
+        np.asarray(tables.learnset_level[glameow]).tolist(),
+        strict=True,
+    )
+    assert [level for move, level in learnt if move == n.move("Assist")] == [29]
+
+    def state(level):
+        return make_state(
+            tables, [_mon(n, "Glameow", ["Scratch"], level)], [_mon(n, "Bidoof", ["Tackle"], 30)]
+        )
+
+    assert replacement_known(tables, state(28))
+    assert not replacement_known(tables, state(30))
+
+
+_sample_flag = jax.jit(sample_outcome, static_argnames=("replacement",))
+
+
+def _through(tables, state, actions, first_key, key, replacement):
+    from nuzline.search.playout import step_through
+
+    return step_through(tables, state, actions, first_key, key, -1, replacement)
+
+
+_through_flag = jax.jit(_through, static_argnames=("replacement",))
+
+
+def _same(a, b):
+    for got, want in zip(jax.tree.leaves(a), jax.tree.leaves(b), strict=True):
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+
+@pytest.mark.slow  # 444 s, 7.28 GB: four step_through / sample_outcome compiles
+def test_replacement_flag_true_matches_false_where_none_can_fire(tables, names):
+    """The sampler's static flag on its True path (``outcome.replacement_known``; B11-1's
+    redraw compiled in, as the leaf playouts and Stage A run it): Monferno knows Assist (an
+    invoker), so the flag is True; with no party mate Assist calls nothing, and neither side
+    knows or can learn Encore or Sleep Talk, so no replacement can fire and the redraw (a
+    ``lax.cond`` that leaves outcome A where ``replacement_possible`` is false) changes nothing.
+    Over three turns (Assist, Ember, Assist against Tackle), ``sample_outcome`` and
+    ``playout.step_through`` give identical outputs with the flag True and False, key for key."""
+    from tests.engine.helpers import roark_state
+
+    s = roark_state(tables, names, player_count=1, opp_count=1, player_moves=["Assist"])
+    assert replacement_known(tables, s)
+    keys = jax.random.split(jax.random.PRNGKey(5), 3 * 4 * 2).reshape(3, 4, 2, -1)
+    for turn, move in enumerate(("Assist", "Ember", "Assist")):
+        if int(s.over):
+            break
+        acts = jnp.asarray(
+            [names.move_slot(s, 0, move), names.move_slot(s, 1, "Tackle")], jnp.int32
+        )
+        for first_key, key in keys[turn]:
+            on = _sample_flag(first_key, tables, s, acts, replacement=True)
+            _same(on, _sample_flag(first_key, tables, s, acts, replacement=False))
+            on = _through_flag(tables, s, acts, first_key, key, replacement=True)
+            _same(on, _through_flag(tables, s, acts, first_key, key, replacement=False))
+        s, refused = on
+        assert not bool(refused)

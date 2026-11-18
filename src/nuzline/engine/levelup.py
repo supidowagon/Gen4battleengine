@@ -248,6 +248,13 @@ def pay_exp_leveled(
         hp=put("hp", jnp.where(leveled, new_hp, hp)),
         max_hp=put("max_hp", jnp.where(leveled, new[:, Stat.HP], old_max)),
         stats=put("stats", jnp.where(leveled[:, None], new[:, Stat.ATK :], after.stats[0])),
+        # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's Attack
+        # and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
+        power_trick_desync=after.power_trick_desync.at[0].set(
+            jnp.where(
+                leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
+            ).astype(after.power_trick_desync.dtype)
+        ),
         friendship=put("friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),
@@ -415,6 +422,10 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     out = state._replace(
         moves=state.moves.at[0, slot, k].set(jnp.where(replaced, move, state.moves[0, slot, k])),
         pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+        # SEQ_GET_EXP_LEARNED_MOVE sets the slot's PP Ups to 0 (battle_script.c:10169-10170, E1 Batch D).
+        pp_ups=state.pp_ups.at[0, slot, k].set(
+            jnp.where(replaced, 0, state.pp_ups[0, slot, k]).astype(state.pp_ups.dtype)
+        ),
         learn_cursor=state.learn_cursor.at[slot].set((cursor + 1).astype(cursor.dtype)),
     )
     return advance_learns(tables, out)

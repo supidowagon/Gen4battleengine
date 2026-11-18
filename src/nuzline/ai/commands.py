@@ -128,6 +128,7 @@ class SideCondition(IntEnum):
     LIGHT_SCREEN = 1 << 1  # BattleState.light_screen
     SPIKES = 1 << 2  # :90; BattleState.spikes (layers, LoadSpikesLayers)
     SAFEGUARD = 1 << 3  # BattleState.safeguard
+    MIST = 1 << 6  # :94; BattleState.mist (turns left), B12-23
     STEALTH_ROCK = 1 << 7  # BattleState.stealth_rock
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
     TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
@@ -138,6 +139,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.REFLECT: "reflect",
     SideCondition.LIGHT_SCREEN: "light_screen",
     SideCondition.SAFEGUARD: "safeguard",
+    SideCondition.MIST: "mist",
     SideCondition.STEALTH_ROCK: "stealth_rock",
     SideCondition.TAILWIND: "tailwind",
     SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
@@ -160,6 +162,9 @@ class MonCondition(IntEnum):
     # MON_CONDITION_FACADE_BOOST (include/constants/battle/condition.h:29): toxic, poison,
     # burn, paralysis
     FACADE_BOOST = (1 << 7) | (1 << 3) | (1 << 4) | (1 << 6)
+    # MON_CONDITION_ANY_POISON (condition.h:24): poison, toxic and the toxic counter, which is
+    # set only with the toxic bit, so the group is poison or toxic (E2 batch 12, B12-18).
+    ANY_POISON = (1 << 3) | (1 << 7) | (0xF << 8)
 
 
 class FieldCondition(IntEnum):
@@ -179,6 +184,7 @@ class VolatileCondition(IntEnum):
     CURSE = 1 << 28  # :60; BattleState.curse
     SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
+    FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
 
 
 _VOLATILE_FIELDS = {
@@ -187,6 +193,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.CURSE: "curse",
     VolatileCondition.SUBSTITUTE: "substitute_hp",
     VolatileCondition.MEAN_LOOK: "mean_look",
+    VolatileCondition.FOCUS_ENERGY: "focus_energy",
 }
 
 
@@ -202,6 +209,7 @@ class MoveEffectMask(IntEnum):
     IMPRISON = 1 << 13  # :21; BattleState.imprison (the Imprison user)
     AQUA_RING = 1 << 24  # :37; BattleState.aqua_ring
     IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
+    POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -213,6 +221,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.IMPRISON: "imprison",
     MoveEffectMask.AQUA_RING: "aqua_ring",
     MoveEffectMask.IMPRISONED: "imprisoned",
+    MoveEffectMask.POWER_TRICK: "power_trick",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 
@@ -355,6 +364,26 @@ class BattleEffect(IntEnum):
     GROUND_TRAP_USER_CONTINUOUS_HEAL = 181  # Ingrain
     PASS_STATS_AND_STATUS = 127  # Baton Pass
     BOOST_ALLY_POWER_BY_50_PERCENT = 176  # Helping Hand
+    # E2 batch 12, the stat family (B12-11).
+    RESET_STAT_CHANGES = 25  # Haze
+    CRIT_UP_2 = 47  # Focus Energy
+    PREVENT_STAT_REDUCTION = 46  # Mist (B12-23)
+    COPY_STAT_CHANGES = 143  # Psych Up
+    SP_ATK_UP_CAUSE_CONFUSION = 166  # Flatter
+    ATK_DEF_DOWN = 205  # Tickle
+    DEF_SPD_UP = 206  # Cosmic Power, Defend Order; Kaizo's Stockpile
+    RANDOM_STAT_UP_2 = 226  # Acupressure
+    SWAP_ATK_DEF = 238  # Power Trick
+    SWAP_ATK_SP_ATK_STAT_CHANGES = 243  # Power Swap
+    SWAP_DEF_SP_DEF_STAT_CHANGES = 244  # Guard Swap
+    SP_ATK_DOWN_2_OPPOSITE_GENDER = 265  # Captivate
+    # E2 batch 12, the healing family (B12-18).
+    REST = 37  # Rest
+    CURE_PARTY_STATUS = 102  # Heal Bell, Aromatherapy
+    HEAL_HALF_MORE_IN_SUN = 132  # Morning Sun, Synthesis, Moonlight
+    HEAL_IN_3_TURNS = 179  # Wish
+    HEAL_STATUS = 193  # Refresh
+    TRANSFER_STATUS = 234  # Psycho Shift
     DOUBLE_POWER_IF_HIT = 185  # Avalanche, Revenge (Expert_MetalBurst, script.s:5049)
     PRIORITY_NEG_1_BYPASS_ACCURACY = 78  # Vital Throw (Expert_MetalBurst, script.s:5051)
     SET_SUBSTITUTE = 79  # Substitute
@@ -1390,7 +1419,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[a, state.active[a]].astype(_I32)
     d_types = state.types[d, state.active[d]]
-    identified, grounded, roosting = defender_chart_flags(state, d)
+    identified, grounded, roosting = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -1519,9 +1548,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Iron Ball, Miracle Eye and
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Miracle Eye and
     Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
-    Foresight, Ingrain and roosting flags are read (``switching.defender_chart_flags``)."""
+    Foresight, Ingrain / Iron Ball and roosting flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1536,7 +1565,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting = defender_chart_flags(state, 0)
+    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
@@ -1917,6 +1946,11 @@ def if_not_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext
     return ctx._replace(jump=~ctx.jump)
 
 
+def if_loaded_less_than(ctx: AiContext, value: int) -> AiContext:
+    """``IfLoadedLessThan`` (trainer_ai.c:762-772): ``calcTemp < value`` (B12-11)."""
+    return _jump(ctx, ctx.calc_temp < value)
+
+
 def if_loaded_greater_than(ctx: AiContext, value: int) -> AiContext:
     """``IfLoadedGreaterThan`` (trainer_ai.c:774-784): ``calcTemp > value``."""
     return _jump(ctx, ctx.calc_temp > value)
@@ -1958,6 +1992,13 @@ def if_current_move_effect_equal_to(ctx: AiContext, effect: BattleEffect) -> AiC
 def _stage(ctx: AiContext, battler: Battler, stat: Stat) -> jnp.ndarray:
     """The battler's true stat stage in decomp units (engine + 6)."""
     return ctx.state.stages[_side(battler), stat].astype(_I32) + STAGE_NEUTRAL
+
+
+def diff_stat_stages(ctx: AiContext, battler: Battler, stat: Stat) -> AiContext:
+    """``DiffStatStages`` (trainer_ai.c:2259-2268): ``calcTemp = statBoosts[battler][stat] -
+    statBoosts[attacker][stat]`` (the decomp's +6 offset cancels), B12-11."""
+    diff = _stage(ctx, battler, stat) - _stage(ctx, Battler.ATTACKER, stat)
+    return ctx._replace(calc_temp=diff)
 
 
 def if_stat_stage_equal_to(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:
@@ -2144,6 +2185,7 @@ def if_hp_percent_not_equal_to(ctx: AiContext, battler: Battler, percent: int) -
 
 
 # The engine status of each MonCondition group (one status at a time, ids.Status).
+TOXIC_COUNTER = 0xF << 8  # MON_CONDITION_TOXIC_COUNTER (condition.h:15-18, the group :23)
 _CONDITION_GROUPS = (
     (MonCondition.SLEEP, Status.SLEEP),
     (MonCondition.POISON, Status.POISON),
@@ -2159,6 +2201,10 @@ def _condition_statuses(mask: int) -> tuple[int, ...]:
     union of whole ``MonCondition`` groups: a part of the sleep bits or a toxic counter
     bit is not a function of the engine's status alone, and is refused at trace time."""
     mask = int(mask)
+    # The whole toxic counter with the toxic bit (MON_CONDITION_ANY_POISON) adds nothing: the
+    # counter is nonzero only on a badly poisoned Pokemon.
+    if mask & TOXIC_COUNTER == TOXIC_COUNTER and mask & MonCondition.TOXIC:
+        mask &= ~TOXIC_COUNTER
     assert not mask & ~MonCondition.ANY, f"unsupported status mask {mask:#x}"
     statuses = []
     for group, status in _CONDITION_GROUPS:
@@ -2176,6 +2222,19 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     side = _side(battler)
     status = ctx.state.status[side, ctx.state.active[side]].astype(_I32)
     return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
+
+
+def if_party_member_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
+    """``IfPartyMemberStatus`` (trainer_ai.c:1348-1379): in singles, a party member other than
+    the battler's selected slot, with HP and a species, whose party status meets ``mask``
+    (``_condition_statuses``), B12-18."""
+    side = _side(battler)
+    state = ctx.state
+    statuses = jnp.asarray(_condition_statuses(mask), _I32)
+    status = state.status[side].astype(_I32)
+    slots = jnp.arange(status.shape[0])
+    member = (slots != state.active[side]) & (state.hp[side] != 0) & (state.species[side] != 0)
+    return _jump(ctx, jnp.any(member & jnp.isin(status, statuses)))
 
 
 def if_not_volatile_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:

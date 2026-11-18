@@ -66,8 +66,7 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented: Wish's heal in the field pass (no supported move sets ``wish_timer``) and
-the Trick Room countdown of the turn end's side-condition pass
+Not implemented: the Trick Room countdown of the turn end's side-condition pass
 (battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
 """
 
@@ -118,8 +117,10 @@ from nuzline.engine.effects import (
     armored,
     big_root,
     can_have_status,
+    captivate_fails,
     change_stage,
     consume_item,
+    copy_stat_stages,
     defender_always,
     entry_hazards,
     focus_sash_damage,
@@ -133,12 +134,16 @@ from nuzline.engine.effects import (
     know_ability,
     life_orb_recoil,
     locked_onto,
+    metronome_update,
+    metronome_verify,
+    on_hit_berry,
     pivot_item,
     play_hit,
     pressure_holder,
     pressure_pp_cost,
     primary_effect_fails,
     protect_blocks,
+    psycho_shift_fails,
     recovers_at_full_hp,
     resist_berry,
     resist_berry_damage,
@@ -222,6 +227,7 @@ from nuzline.engine.order import (
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
+    crit_lands,
     future_threshold,
     live_hit_threshold,
     roar_bench,
@@ -940,9 +946,10 @@ def _use_move(
     # The invokers (E2 batch 5, B5-1..): Sleep Talk, Metronome and Copycat run the move their
     # script picks (order.invoked_move: BtlCmd_TrySleepTalk, _Metronome, _TryCopycat) through
     # GoToMoveScript (battle_script.c:2111-2134) as Nature Power does, read now, so a faster
-    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user (RANGE_USER),
-    # so they pass the no-target check; a call that finds no move, or a Sleep Talk whose user is
-    # not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
+    # foe's move this turn counts (Copycat's movePrev). Their own defender is the user
+    # (RANGE_SINGLE_TARGET_SPECIAL, battle_lib.c:1665-1669), so they pass the no-target check
+    # (bcp.c:3190) even with no living foe and set SYSCTL_MOVE_SUCCEEDED, ruling B12-30; a
+    # call that finds no move, or a Sleep Talk whose user is not asleep now (effect_script_0097.s:5: one that woke this turn), is MOVE_STATUS_FAILED
     # ("But it failed!", subscript_missed.s). A called move uses no PP; the status checks above,
     # the PP, priority, movePrevByBattler, movePrev and the Choice lock stay the invoker's
     # (moveTemp).
@@ -1155,6 +1162,23 @@ def _use_move(
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
+    # bcp.c:2967-2970: the check clears the attacker's Micle Berry flag once it gets past its
+    # early returns (accuracy 0, SYSCTL_FIRST_OF_MULTI_TURN, SYSCTL_NONSTANDARD_ACC_CHECK of
+    # Future Sight and an OHKO move), G-59.
+    accuracy_run = (
+        can_act
+        & has_target
+        & ~charging
+        & ~never_misses
+        & (tables.move_effect[used] != EffectId.OHKO)
+    )
+    state = _set_side(state, "micle", side, 0, accuracy_run)
+    # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
+    # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
+    # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
+    # script and its damage (G-60).
+    repeated = (tables.move_effect[used] == EffectId.ROLLOUT) & (state.rollout_count[side] != 0)
+    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
     # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
     # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
@@ -1208,11 +1232,11 @@ def _use_move(
                 tables,
                 ohko_type,
                 state.types[target_side, target],
-                identified(state, side, target_side),
+                identified(tables, state, side, target_side),
             )
             != 0
         )
-        & ~levitated(state, side, target_side, ohko_type)
+        & ~levitated(tables, state, side, target_side, ohko_type)
         # subscript_missed.s:13 shows the miss of MOVE_STATUS_SEMI_INVULNERABLE first.
         & ~semi_miss
     )
@@ -1231,6 +1255,24 @@ def _use_move(
     )
     state = know_ability(state, target_side, target, yawn_shown)
     connected = can_act & has_target & hit & ~failed & ~blocked & ~charging
+    # The effect script runs before TryMove's accuracy roll and CheckMoveHitOverrides (bcp.c:
+    # 3211-3213, then :3256, :3264), so its own commands act on a move that then misses. Psych
+    # Up's CopyStatStages (effect_script_0143.s:5) copies on a semi-invulnerable miss (accuracy 0
+    # and no MOVE_FLAG_CAN_PROTECT, res/moves/psych_up/data.json, leave it no other miss), B12-6;
+    # Captivate's CheckIgnorableAbility (effect_script_0265.s:5) tags a blocking Oblivious on a
+    # miss or a Protect too (:48-53), B12-8. The paths of a move that connected are
+    # effects._psych_up and effects._captivate.
+    scripted = can_act & has_target & ~failed & ~charging & ~connected
+    state = copy_stat_stages(
+        state, side, target_side, scripted & semi_miss & (effect_used == EffectId.PSYCH_UP)
+    )
+    captivate_shown = (
+        scripted
+        & (effect_used == EffectId.CAPTIVATE)
+        & (state.hp[target_side, target] > 0)
+        & captivate_fails(tables, state, side, target_side)[1]
+    )
+    state = know_ability(state, target_side, target, captivate_shown)
     # Protect / Detect (effect_script_0111.s, a direct TO_ATTACKER effect: the user has HP)
     # -> subscript_protect.s -> BtlCmd_TryProtection (battle_script.c:5149-5190). The
     # chain reset of :5154-5158 is folded into protect_count (below), so its value here is
@@ -1358,7 +1400,10 @@ def _use_move(
     state = state._replace(types=state.types.at[target_side, target].set(roost_types))
     move_type = move_type_of(tables, state, side, used)
     chart = effectiveness(
-        tables, move_type, state.types[target_side, target], identified(state, side, target_side)
+        tables,
+        move_type,
+        state.types[target_side, target],
+        identified(tables, state, side, target_side),
     )
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, run hit, miss or Protect alike once the
     # move passed the no-target check, for a move with power that is not RANGE_USER /
@@ -1424,7 +1469,9 @@ def _use_move(
     crash = can_act & has_target & (~connected | guarded)
     crash = crash & (tables.move_effect[used] == EffectId.CRASH)
     crash = crash & (state.ability[side, user] != AbilityId.MAGIC_GUARD)
-    crash_crit = (outcome.crit[side, 0] != 0) & ~armored(state, side, target_side)
+    crash_crit = crit_lands(tables, state, side, used, outcome.crit[side, 0]) & ~armored(
+        state, side, target_side
+    )
     would = damage_for_roll(
         tables, state, side, used, crash_crit, outcome.roll[side, 0], wonder_guard=False
     )
@@ -1436,10 +1483,22 @@ def _use_move(
     # Insomnia as the attacker sees it and meets FIELD_CONDITION_UPROAR: subscript_fall_asleep.s
     # :43-45 -> :_292 prints "...kept awake" and sets MOVE_STATUS_NO_MORE_WORK (:_330): no
     # AfterMoveEffects (effects._inflict blocks the sleep).
+    # Psycho Shift's sleep (subscript_give_target_own_status.s:5-6 calls the same subscript as a
+    # direct effect; CheckCanShareStatus passed: the defender has no status nor substitute), B12-17.
+    shift_sleep = (
+        (tables.move_effect[used] == EffectId.PSYCHO_SHIFT)
+        & (state.status[side, user] == Status.SLEEP)
+        & ~psycho_shift_fails(state, side, target_side)
+    )
     kept_awake = (
         connected
-        & (tables.move_effect[used] == EffectId.STATUS_FOE)
-        & (tables.move_param[used, 0] == Status.SLEEP)
+        & (
+            (
+                (tables.move_effect[used] == EffectId.STATUS_FOE)
+                & (tables.move_param[used, 0] == Status.SLEEP)
+            )
+            | shift_sleep
+        )
         & (state.hp[target_side, target] > 0)
         & ~sleepless(ignorable(state, side, target_side))  # :23-24 Vital Spirit too (G-47)
         & (state.status[target_side, target] != Status.SLEEP)
@@ -1667,7 +1726,9 @@ def _use_move(
         stop_now = lists | chases
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
-        crit = (outcome.crit[side, hit_index] != 0) & ~armored(state, side, target_side) & ~unrolled
+        # The crit draw read with the odds at this hit (outcome.crit_lands, battle_lib.c:7105-7132).
+        crit = crit_lands(tables, state, side, used, outcome.crit[side, hit_index])
+        crit = crit & ~armored(state, side, target_side) & ~unrolled
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
@@ -1735,9 +1796,25 @@ def _use_move(
         state = sticky_barb_transfer(
             tables, state, side, target_side, used, items & landed & barbed & ~info.sub_hit
         )
+        # The same TriggerHeldItemOnHit's berry cases (effects.on_hit_berry, G-54, G-55): the
+        # defender's physical / specialDamageTaken are this action's damage of the move's class.
+        state, recoiled = on_hit_berry(
+            tables,
+            state,
+            side,
+            target_side,
+            barbed & (category == PHYSICAL_CATEGORY),
+            barbed & (category == SPECIAL_CATEGORY),
+            info.super_effective & info.effective,
+            items & landed & ~info.sub_hit,
+        )
         hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
         state, thawed = thaw_target(tables, state, side, target_side, used_t, hit_dealt, items)
-        state = after_damage_items(tables, state, side, items & item_used & info.pluck_flag)
+        # AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (bcp.c:3730): the attacker's item kept above, or
+        # the attacker's item after a Jaboca / Rowap recoil (its HP fell), G-54.
+        state = after_damage_items(
+            tables, state, side, items & ((item_used & info.pluck_flag) | recoiled)
+        )
         return (
             state,
             hits + landed.astype(_I32),
@@ -1899,6 +1976,19 @@ def _use_move(
     # (bcp.c:3934-3944): the newcomer, whose switch-in cleared them (battle_lib.c:2119, :2123).
     # U-turn and Baton Pass are not Protect-chain moves, so its chain stays 0.
     state = _set_last_move(state, side, move, resumed)
+    # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60: on the head's
+    # battler (a tail mode's newcomer had its count and move cleared by the switch). The move's
+    # MOVE_STATUS_NO_EFFECTS: CheckMoveFailure (bcp.c:3312-3331) did not reach USE_MOVE (a miss,
+    # Protect, a semi-invulnerable foe, a failure, an immunity: no AfterMoveEffects) once the
+    # move got past BeforeMove; a status-check disruption or no target sets none of those bits.
+    worked = items_full & ~no_effect
+    no_effects = succeeded & ~charging & ~worked
+    # SYSCTL_LAST_OF_MULTI_TURN: every charge move's strike runs subscript_charge_move_cleanup.s:7
+    # (the second turn, a Power Herb, SolarBeam in sun), and subscript_bide_end.s.
+    last_of_multi = can_act & ((charge_move & ~charging) | bide_ends)
+    state = metronome_verify(
+        tables, state, side, move, no_effects, repeated, last_of_multi, head_on & ready
+    )
     # UpdateMoveBuffers (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508), on every path of a
     # battler that acts: the battle's movePrev is moveTemp (``move``: the invoker, Nature Power,
     # Struggle, not the called move) when the attack message showed (``can_act``, as the Choice
@@ -2220,6 +2310,20 @@ def _pursuit_hit(
     bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[pursuer, mon] > 0)
     state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
     state = sticky_barb_transfer(tables, state, pursuer, 1 - pursuer, move, info.damaged)
+    # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
+    # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
+    # The Jaboca Berry's TriggerHeldItemOnPivotMove case (:48-49) then finds no berry: OnHit
+    # removed it, or failed on the same tests.
+    state, _ = on_hit_berry(
+        tables,
+        state,
+        pursuer,
+        1 - pursuer,
+        info.update_hp,
+        False,
+        info.super_effective & info.effective,
+        info.update_hp,  # the script's normal path (:30-49): not missed, no substitute
+    )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
     return life_orb_recoil(tables, state, pursuer, info.update_hp)
 
@@ -2382,7 +2486,8 @@ def _execute_actions(
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
-        crit = (outcome.crit[pursuer, 0] != 0) & ~armored(pre, pursuer, side)
+        crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
+        crit = crit & ~armored(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
         pursuer_events = {
             "act_kind": ACT_MOVE,
@@ -3064,6 +3169,24 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
+def _wish(state: BattleState, side) -> BattleState:
+    """FIELD_COND_CHECK_STATE_WISH (bcp.c:1085-1111) for ``side``'s battler: ``wishTurns`` drops
+    when nonzero; at 0 the battler, if it has HP, regains ``Divide(maxHP, 2)``, its own max HP,
+    unless at full HP (subscript_wish_heal.s:9-11), B12-14."""
+    timer = state.wish_timer[side].astype(_I32)
+    on = timer != 0
+    left = jnp.where(on, timer - 1, timer)
+    state = state._replace(
+        wish_timer=state.wish_timer.at[side].set(left.astype(state.wish_timer.dtype))
+    )
+    mon = state.active[side]
+    hp = state.hp[side, mon].astype(_I32)
+    max_hp = state.max_hp[side, mon].astype(_I32)
+    heals = on & (left == 0) & (hp > 0) & (hp != max_hp)
+    healed = jnp.minimum(hp + divide(max_hp, 2), max_hp)
+    return _set_mon(state, "hp", side, mon, healed, heals)
+
+
 def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     """``BattleControllerPlayer_CheckFieldConditions`` (battle_controller_player.c:
     932-1254), between the actions and ``end_of_turn``; nothing runs once the battle is
@@ -3071,7 +3194,10 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
 
     1. ``FIELD_SIDE_TIMERS``, side 0 then side 1: a nonzero count drops by 1 and the
        condition ends at 0 (``--reflectTurns == 0``, :947-1083).
-    2. Wish (:1085-1111) is not implemented: no supported move sets ``wish_timer``.
+    2. Wish (:1085-1111, E2 batch 12, B12-14): each battler in ``sides`` (``monSpeedOrder``) with
+       a nonzero ``wish_timer`` counts it down, and at 0 a battler with HP regains
+       ``Divide(maxHP, 2)`` of its own (subscript_wish_heal.s: "HP is full!" at full HP, else
+       UPDATE_HP, capped; Heal Block is unsupported) (``_wish``).
     3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
        with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
        one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
@@ -3098,6 +3224,8 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
     state = _where(live, counted, state)
+    for position in (0, 1):
+        state = _where(live, _wish(state, sides[position]), state)
 
     before = state
     ability = decomp_abilities(tables, state)
@@ -3219,6 +3347,9 @@ def _future_sight(
         move = state.future_move[d].astype(_I32)
         roll = outcome.future_hit[d].astype(_I32)
         missed_now = ~((roll > 0) & (roll <= future_threshold(tables, state, d)))
+        # The hit's ordinary accuracy check clears the attacker slot's Micle flag (G-59).
+        acc_run = fires & (tables.move_accuracy[move] != 0)
+        state = _set_side(state, "micle", attacker, 0, acc_run)
         no_guard = (state.ability[attacker, state.active[attacker]] == AbilityId.NO_GUARD) | (
             state.ability[d, mon] == AbilityId.NO_GUARD
         )
@@ -3433,7 +3564,7 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     battle-start sort left open (``BattleState.war_swaps``) is settled on that ``speedRand``
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (2,), 0, QUICK_CLAW_MODULUS) == 0
-    state = _keep_quick_claw(tables, state, draw)
+    state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
     return sample_war(jax.random.fold_in(key, 1), state)
 
 
@@ -3445,7 +3576,10 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     war left open (``resolve_war``, ruling G-26) is settled per combination, split into its
     two tie values (1/2 each) where the tie decides it: those states differ in the weather,
     which the player sees before acting, so Stage B makes the root a chance node over the
-    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34)."""
+    visible outcomes, each its own belief node (``search.stage_b``, ruling G-34). A host
+    state (NumPy leaves, as ``prep`` and the CLI build it) is read as JAX arrays first: the
+    war's settling writes with ``.at`` (``hooks.reveal_ability``)."""
+    state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
     out = []

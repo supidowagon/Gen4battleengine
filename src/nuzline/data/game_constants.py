@@ -326,6 +326,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.ids.MOVE_PROTECT", "move", 182, "Protect", _E),
     Constant("nuzline.engine.ids.MOVE_DETECT", "move", 197, "Detect", _E),
     Constant("nuzline.engine.ids.MOVE_ENDURE", "move", 203, "Endure", _E),
+    # MOVE_HEAL_BELL (generated/moves.txt line 216): BtlCmd_TryPartyStatusRefresh's compare
+    # (battle_script.c:5035), E2 batch 12.
+    Constant("nuzline.engine.ids.MOVE_HEAL_BELL", "move", 215, "Heal Bell", _E),
     # MOVE_IMPRISON (generated/moves.txt line 287): DecrementPP's Pressure count for it
     # (battle_controller_player.c:2239-2240), ruling G-8.
     Constant("nuzline.engine.ids.MOVE_IMPRISON", "move", 286, "Imprison", _E),
@@ -479,6 +482,20 @@ CONSTANTS: tuple[Constant, ...] = (
             "Leaf Guard": 102,
         },
     ),
+    # E2 batch 12's decomp abilities: Captivate's Oblivious (effect_script_0265.s:5), Rest's
+    # Insomnia, Vital Spirit, Soundproof (subscript_rest.s:7-10), Heal Bell's Soundproof
+    # (battle_script.c:5038).
+    *_table(
+        "nuzline.engine.ids.STAT_MOVE_ABILITY_IDS",
+        "ability",
+        _E,
+        {
+            "Oblivious": 12,
+            "Insomnia": 15,
+            "Soundproof": 43,
+            "Vital Spirit": 72,
+        },
+    ),
     # The status orbs' decomp abilities (subscript_badly_poison.s:14, subscript_burn.s:6, :9).
     *_table(
         "nuzline.engine.ids.ITEM_ABILITY_IDS",
@@ -529,11 +546,10 @@ CONSTANTS: tuple[Constant, ...] = (
     # saves/pkm.py: the Luxury Ball friendship bonus (PokemonSpec.friend_bonus).
     Constant("nuzline.saves.pkm.ITEM_LUXURY_BALL", "item", 11, "Luxury Ball", _E),
     # Hold effects (generated/item_hold_effects.txt, line N is id N-1):
-    # HOLD_EFFECT_POWER_UP_SE (96) and HOLD_EFFECT_SPEED_DOWN_GROUNDED (106).
+    # HOLD_EFFECT_POWER_UP_SE (96).
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
-    Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
     # TrainerAI_ShouldUseItem's by-id test (trainer_ai.c:4099).
@@ -787,6 +803,11 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
         "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
         "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
+    ),
+    "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
+        "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "
+        "table compared with each game's own item hold effects; tests/engine/test_e1_batch_d.py "
+        "reads it back from the decomp (E1 Batch D, G-56)"
     ),
     "tools.effect_map.PINCH_STAT_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off BattleSystem_TriggerHeldItem's stat pinch "

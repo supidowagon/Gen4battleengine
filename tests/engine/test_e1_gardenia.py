@@ -1081,12 +1081,12 @@ def test_trace_standoff_copies_the_next_newcomer_before_the_holders_move(tables,
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
     view, _ = pivot_view(tables, s, acts)
     assert int(view.ability[0, 0]) == AbilityId.SUPER_LUCK
-    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 8
-    assert int(outcome_laws(tables, s, A("Tackle", "Tackle", s, n)).crit_odds[0]) == 16
+    assert int(outcome_laws(tables, s, acts).crit_variants[0, 0]) == 8
+    assert int(outcome_laws(tables, s, A("Tackle", "Tackle", s, n)).crit_variants[0, 0]) == 16
     s = _standoff(tables, names, ("Pursuit",))
     acts = A("Pursuit", SWITCH_TO_1, s, n)
     assert int(pivot_view(tables, s, acts)[0].ability[0, 0]) == AbilityId.TRACE
-    assert int(outcome_laws(tables, s, acts).crit_odds[0]) == 16
+    assert int(outcome_laws(tables, s, acts).crit_variants[0, 0]) == 16
     out = assert_matches_reference(tables, s, acts, O)
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
 
@@ -1107,7 +1107,7 @@ def test_trace_standoff_copies_a_u_turn_newcomer(tables, names):
     assert int(paused.pivot_battler) == 2
     acts = np.asarray(paused.ts_actions).astype(int).tolist()
     acts[1] = MOVE_ACTIONS + 1
-    assert int(outcome_laws(tables, paused, jnp.asarray(acts)).crit_odds[0]) == 8
+    assert int(outcome_laws(tables, paused, jnp.asarray(acts)).crit_variants[0, 0]) == 8
     out = assert_matches_reference(tables, paused, tuple(acts), O)
     assert int(out.ability[0, 0]) == AbilityId.SUPER_LUCK
 
@@ -1158,6 +1158,26 @@ def test_weather_war_tie_and_quick_claw_are_root_draws(tables, names):
     belief = {(int(b.qc_roll[0]), int(b.weather)): p for b, p in root_belief(tables, claw)}
     assert belief == pytest.approx({(1, Weather.RAIN): 0.2, (0, Weather.SUN): 0.8})
 
+
+def test_root_draws_take_a_host_state(tables, names):
+    """A NumPy-backed state (``prep``'s and the CLI's, ``to_numpy`` of a state) at the root
+    chance node: ``root_belief`` and ``sample_root`` settle its weather war as they do a JAX
+    state's (the tie's ``reveal_ability`` writes with ``.at``)."""
+    import jax
+    import numpy as np
+
+    from nuzline.engine.step import root_belief, sample_root
+
+    tie = _war(tables, names, (50, 50))
+    host = jax.tree.map(np.asarray, tie)
+    assert isinstance(host.ai_ability_known, np.ndarray)
+    def outcomes(state):
+        belief = root_belief(tables, state)
+        return sorted((int(b.weather), int(b.ai_ability_known[0]), p) for b, p in belief)
+
+    assert outcomes(host) == outcomes(tie) and len(outcomes(tie)) == 2
+    key = jax.random.PRNGKey(3)
+    assert int(sample_root(key, tables, host).weather) == int(sample_root(key, tables, tie).weather)
 
 def _double_ko(tables, names, levels):
     """Geodude leads, both down; the player's bench Groudon (Drought, level ``levels[0]``) and
