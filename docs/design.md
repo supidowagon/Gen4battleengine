@@ -1,10 +1,8 @@
 # Platinum Nuzlocke Line Finder — Design Spec
 
-Status: draft v3 (second review pass folded in) · Date: 2026-10-28
-
 ## 1. Purpose
 
-A tool that finds **high-EV lines for single-player nuzlocke battles in vanilla Pokémon Platinum (US)**. Given the player's save file and a chosen trainer fight, it recommends:
+A tool that finds **high-EV lines for single-player nuzlocke battles in Pokémon Platinum (US) and Platinum Kaizo**. Given the player's save file and a chosen trainer fight, it recommends:
 
 1. **Pre-battle setup**: which Pokémon to bring from the box, the lead, held items, prestatus, predamage, and optionally movesets.
 2. **In-battle play**: a ranked list of actions each turn, plus an exportable plan tree ("if X happens, do Y").
@@ -15,8 +13,9 @@ Speed comes from a battle engine written in **pure JAX** so that huge batches of
 
 ## 2. Scope
 
-### In scope (v1)
-- Vanilla Platinum US mechanics, single battles only.
+### In scope
+- Platinum US mechanics, with two data sets: vanilla and Kaizo (§9).
+- Every trainer battle format: singles, doubles, two-trainer doubles and multi (milestone 5; state design `docs/doubles-state-design.md`).
 - Nuzlocke rules: **Set mode** (no free switch after a KO), **level caps**, and the player uses **held items only** (no bag items in battle).
 - Full knowledge of the opponent: team, moves, items and AI behavior. (The *AI's* knowledge of the player is partial and is itself modeled; see §4.2, *Trainer AI*.)
 - Platinum trainer AI, including its switching, item use, internal random draws and move/ability knowledge, modeled from the decomp.
@@ -25,10 +24,9 @@ Speed comes from a battle engine written in **pure JAX** so that huge batches of
 - Levels and EVs are taken from the save as-is. "Level up to the cap" and **evolution** (by level or by a stone in the bag) are optional prep variables (§4.4); EV training is not searched.
 - **Level caps** come from a per-trainer config table shipped with defaults from the common nuzlocke rulesets; the user can override any entry.
 - **HP tracking from observations**: during play the tool carries the set of exact HP values consistent with what the player can see (HP bar, messages) rather than asking for numbers it cannot know.
-- Local web UI from an early milestone.
+- Local web UI (milestone 7).
 
-### Out of scope for v1 (but don't design it out)
-- Double battles. The state layout keeps a slot dimension for two active slots per side, but targeting logic is not pre-built — that is the real cost of doubles and is deferred.
+### Out of scope (do not design it out)
 - Chaining battles (gauntlets with carry-over). The engine already emits the end-of-battle party state.
 - Other generations. See §9.
 - Exact cartridge RNG reproduction or RNG manipulation.
@@ -83,9 +81,7 @@ Four layers, each usable and testable on its own:
 - Learnsets, TM/HM compatibility, tutor compatibility, relearner moves.
 - **Trainers**: party (species, level, moves, held items, and the per-Pokémon difficulty value that sets IVs; the generated PID sets nature, gender and ability), AI flags, trainer bag items, and **battle start conditions** (weather or fog inherited from the overworld). Examples: hail on Routes 216/217 and at Lake Acuity, rain on Routes 212/215, sandstorm on Route 228, fog on parts of Route 210 and Mt. Coronet. Fog has no move equivalent and reduces accuracy, so it must be a field state the engine understands.
 
-Pipeline: `tools/extract_decomp.py` (species, moves, learnsets, trainers, AI scripts and start conditions from the decomp's `res/` tree) and `tools/extract_showdown.py` (cross-check, and the fallback for anything the decomp does not hold in parseable form) → `tools/build_tables.py` → `data/gen4_platinum/*.npz`. Conflicts between the sources are written to a report, and the decomp wins. Making the decomp the sole bulk source where possible removes a whole class of source conflicts; milestone 1 checks how much of the `res/` tree is usable.
-
-Exact decomp file paths are to be located during milestone 1. The completeness of the battle and AI code in the decomp is checked first (see §10).
+Pipeline: `tools/extract_decomp.py` (species, moves, learnsets, trainers, AI scripts and start conditions from the decomp's `res/` tree) → `tools/build_tables.py` → `data/gen4_platinum/*.npz`. The decomp wins every conflict. Decomp paths and completeness: `docs/decomp_paths.md`. Kaizo: `docs/kaizo/pipeline.md` and `docs/rom_pipeline.md`.
 
 **Save parser** (`saves/`): reads Gen 4 save blocks, validates checksums, **selects the newer of the two save slots by save counter**, and decrypts and unshuffles Pokémon data (PID-based block order plus PRNG XOR). It outputs party, PC boxes, bag and badges as plain Python objects. Supports raw `.sav` and DeSmuME `.dsv` (footer stripped).
 
@@ -135,7 +131,7 @@ Sampling and exact enumeration both use the same `step`, so there is only one so
 
 **Damage** follows the Gen 4 formula with the decomp's exact integer truncation order: physical/special split, 2× crits (3× with Sniper), 16 damage rolls, STAB, type effectiveness, and item/ability/weather modifiers in their exact positions. The engine exposes `damage_table(state, attacker, move) -> int32[16]` (and the crit variant) as a reusable primitive; prep search and the HP tracker both consume it.
 
-**Trainer AI** (`ai/`): a pure JAX function `ai_policy(state, ai_outcome) -> opponent action`, together with `enumerate_ai_outcomes(state) -> (ai_outcomes, probs)` and a sampler. It reproduces the decomp's AI script scoring for the trainer's AI flags, its switching logic and its item-use rules. Two things the first draft missed are now explicit:
+**Trainer AI** (`ai/`): a pure JAX function `ai_policy(state, ai_outcome) -> opponent action`, together with `enumerate_ai_outcomes(state) -> (ai_outcomes, probs)` and a sampler. It reproduces the decomp's AI script scoring for the trainer's AI flags, its switching logic and its item-use rules. Two parts are explicit:
 
 - **The AI has its own random draws beyond tie-breaks**: the simulated damage roll in its KO check, the ability guess when the player's ability has not been revealed, and the "if random less than N" branches in the scripts. These are enumerated as chance variables (`ai_outcome`) exactly like battle outcomes, so the AI's action distribution is exact. If enumeration of a script turns out too wide, the registry marks that trainer's AI as sampling-only and Stage B says so.
 - **The AI has partial knowledge of the player**: it scores only the player moves it has seen, and it guesses unrevealed abilities (and items, if the decomp does so). This knowledge is state (see above) and evolves during the battle. "Full knowledge" in §2 refers to the *player's* knowledge of the opponent.
@@ -210,7 +206,6 @@ Fidelity is the product: a wrong mechanic silently corrupts every recommendation
 ## 6. Performance
 
 - Benchmark: battles per second (full playouts) and `step`s per second at batch sizes 1k–1M, tracked over time. Compile time is a first-class metric.
-- **Milestone 0 spike** (before the engine exists): a throwaway masked step with ~100 fake effects at batch 10k on CPU, measuring steps/s and compile time, to confirm the one-big-step design before committing to it.
 - Keep the graph small with data-driven effects and per-fight specialization.
 - Small integer dtypes save memory bandwidth on GPU; they are not expected to help on CPU, and damage intermediates are always `int32`.
 - No Python control flow inside `jit`, fixed loop bounds with masking, and a hard turn cap. A player faint is a death, not the end of the battle: playouts end at a whiteout, the last opponent faint or the turn cap, with no early stop.
@@ -218,7 +213,7 @@ Fidelity is the product: a wrong mechanic silently corrupts every recommendation
 - **Persistent compilation cache.** JAX's persistent cache is enabled so per-fight specializations survive restarts; cache keys include the table version.
 - Develop on CPU (native Windows); GPU runs via WSL2 or cloud, since JAX CUDA wheels are Linux-only.
 
-## 7. Repository layout (proposed)
+## 7. Repository layout (`web/` is milestone 7)
 
 ```
 pyproject.toml            # uv-managed, Python 3.12
@@ -245,39 +240,32 @@ Tooling: `uv`, `pytest`, `hypothesis`, `ruff`, and `jax[cpu]` for development.
 
 ## 8. Milestones
 
-0. **Performance spike:** the masked-step benchmark from §6. Go/no-go on the single-step design and a first compile-time number.
-1. **Roark end to end:** data tables for everything in Roark's fight and a sample player team, extracted from the decomp's `res/` tree where possible; `engine/STATE.md` transcribed from the decomp structs; JAX engine + reference engine + Roark's AI (with AI outcomes and knowledge state); coverage registry; the emulator Lua trace script and a first Roark golden trace; differential, damage-array and decomp-derived tests passing; simple Stage A per-turn ranking from a hand-entered party.
-2. **Battle search Stage B:** exact chance nodes (battle + AI), expectimax over information sets, plan tree export with observable-event labels, `nuzline solve` (design: `docs/superpowers/specs/2026-10-30-stage-b-solver-design.md`).
-3. **Save parser:** party, boxes and bag from `.sav`/`.dsv`, with computed stats; wired into the CLI. Independent of Stage B; may be built in parallel. Design: `docs/superpowers/specs/2026-10-31-save-parser-design.md`; plan: `docs/superpowers/plans/2026-10-31-save-parser.md`; usage and the PKHeX oracle test: `docs/saves.md`.
-4. **Prep search:** team/lead/items/prestatus/derived HP brackets, validated against exhaustive search on Roark; then level-to-cap and the moveset toggle; anytime and checkpointing. Design: `docs/superpowers/specs/2026-10-31-prep-search-design.md`.
-4a. **Line quality (agreed by the user 2026-11-12, after Kaizo K3, before the multi-battler milestone and the splits).** The search today is exact for about two player decisions from the start of the fight. Below that, positions are valued by playouts in which the player follows `playout_policy`, a one-turn greedy heuristic. So the output is the best setup and opening, not a line for a whole fight; Roark has run to 40 turns. Three milestones, in this order:
-   1. **Solve from here.** Accept a mid-battle state (HP, faints, status, stages, field, PP, revealed knowledge) and return the best next action with the same exact-depth search and playouts. Repeated each turn, this is turn-by-turn guidance for a whole fight.
-   2. **A stronger playout player.** Replace the greedy one-ply heuristic with a better hand-written policy, for example multi-turn lookahead, crits, end-of-turn damage, setup and status, so that leaf values approach best play. **L1 (2026-11-12)** built the first step: a line-shaped player (one answer and a small rule per opposing Pokemon) behind a pluggable `Player` interface, a search over lines, `nuzline line odds|find`, and a player scoreboard (`python -m benchmarks.players`) that every later player is measured against on the same seeds. On Kaizo Roark with the user's six-member party (measured before mid-fight level-ups) the found line wins 60.2 % with at most one death against the user's own line's 59.2 % and the greedy player's 2.9 % (48.1 / 46.3 / 1.5 % in an earlier five-member measurement) (spec `docs/superpowers/specs/2026-11-12-l1-line-player-design.md`, numbers in `benchmarks/README.md`). Wiring it into `prep` and Stage B leaves is left to the solve-from-here milestone.
-   3. **A learned player.** Moved to milestone 6 by the user on 2026-11-13: the engine is completed first.
+Built: 0 performance spike (`benchmarks/README.md`); 1 Roark end to end; 2 Stage B (`docs/superpowers/specs/2026-10-30-stage-b-solver-design.md`); 3 save parser (`docs/saves.md`); 4 prep search (`docs/superpowers/specs/2026-10-31-prep-search-design.md`); 4a.2 step 1, the line player L1 (`docs/superpowers/specs/2026-11-12-l1-line-player-design.md`, `nuzline line odds|find`, scoreboard `python -m benchmarks.players`, numbers in `benchmarks/README.md`).
 
-   Status 2026-11-13: the first step of 4a.2 (the line player, L1) is merged; 4a.1 is not built. Exp and level-ups (Kaizo K3d) are on main.
-5. **Engine completion (the current work; user decision 2026-11-13: finish the whole engine before any training).** Every trainer in Platinum Kaizo, split by split: Roark split first, then each later split in order through the Elite Four and Champion, doubles included; tag and partner fights are their own milestone at the end. How it is run:
-   - **Backlog-driven order.** `tools/kaizo/backlog.py` writes `docs/kaizo/mechanics_backlog.md` from the opponent-side coverage check: what each split's trainers need, grouped by move-effect and hold-effect number, with a greedy build order. Work the groups that unlock the most fights first. The AI ability-guess check blocks nearly every fight and is its own stream.
-   - **Batches by family.** One task covers a family of mechanics that share an implementation, not one move. Each rule is cited from the decomp and built in both engines; the two-engine differential test is the main test. One review per batch, the fast tier per batch, the full suite and one final review when a split closes.
-   - **Build for the complete engine.** Do not add tests, guards or special cases that only matter while coverage is partial; model the missing mechanic instead.
-   - **A real-game recording per gym** (`docs/tracing_kaizo.md`), replayed through both engines as a golden trace, as was done for Roark.
+4a. **Line quality.** The search is exact for about two player decisions from the start of the fight; below that, positions are valued by playouts with `playout_policy`, a one-turn greedy heuristic. In this order:
+   1. **Solve from here** (not built). Accept a mid-battle state (HP, faints, status, stages, field, PP, revealed knowledge) and return the best next action with the same exact-depth search and playouts. Wire the L1 line player into `prep` and the Stage B leaves here.
+   2. **A stronger playout player.** Replace the greedy one-ply heuristic with a better hand-written policy (multi-turn lookahead, crits, end-of-turn damage, setup and status) so that leaf values approach best play. Measure every new player on the scoreboard on the same seeds.
+   3. **A learned player:** milestone 6.
+5. **Engine completion (the current work).** Finish the whole engine before any training. Every trainer in Platinum Kaizo, split by split: Roark split first, then each later split in order through the Elite Four and Champion, doubles included; tag and partner fights are their own milestone at the end.
+   - **Backlog-driven order.** `tools/kaizo/backlog.py` writes `docs/kaizo/mechanics_backlog.md` from the opponent-side coverage check: what each split's trainers need, grouped by move-effect and hold-effect number, with a greedy build order. Build the groups that unlock the most fights first.
+   - **Batches by family** (CLAUDE.md, Batches). One task covers a family of mechanics that share an implementation. Each rule is cited from the decomp and built in both engines; the two-engine differential test is the main test.
+   - **A real-game recording per gym** (`docs/tracing_kaizo.md`), replayed through both engines as a golden trace.
    - Start-condition fights (hail, rain, sandstorm, fog) are explicit entries on the backlog.
-6. **The trained player (after milestone 5, when the user says to start).** The engine exists to train a player that works lines out for itself. Proof of concept, parked on branch `claude/training-t1-c74e08` (spec `docs/superpowers/specs/2026-11-13-t1-training-poc-design.md` there): PPO from random weights on the Kaizo Roark fight, about 53 minutes on a CPU, tied the found line at one death or fewer (60.4 % against 59.0 %) and won 96.2 % against 84.7 % overall; those numbers predate level-ups and are re-measured when training restarts. Next steps then: random teams and setups from the user's box (team selection, TMs, held items), then split by split. A GPU is rented only when CPU training stops being enough, with the user's approval for each spend. The exact search remains as a checking tool.
-7. **Web UI:** the §4.5 UI, built once around the finished engine's output (moved last by the user on 2026-10-30: the UI is a viewer, nothing in building or testing needs it; the CLI is the interface until then).
+6. **The trained player (after milestone 5, when the user says to start).** The engine exists to train a player that works lines out for itself. Proof of concept: branch `claude/training-t1-c74e08` (spec `docs/superpowers/specs/2026-11-13-t1-training-poc-design.md` on that branch), PPO on the Kaizo Roark fight; re-measure it when training restarts. Then: random teams and setups from the user's box (team selection, TMs, held items), then split by split. Rent a GPU only when CPU training stops being enough, with the user's approval for each spend. The exact search stays as a checking tool.
+7. **Web UI:** the §4.5 UI, built last around the finished engine's output. The CLI is the interface until then.
 
 ## 9. Extensibility to other generations
 
 - The **data schema** is generation-neutral; each generation gets its own table directory.
 - **Mechanics** are generation-specific modules selected by a static config passed to `jit` (`static_argnums`), so each generation compiles only its own rules.
 - No generic multi-generation abstractions until a second generation is actually being added.
-- **A second game of the same generation** (Platinum Kaizo) is a second data set selected by `--game`, not a new mechanics module: design `docs/superpowers/specs/2026-11-03-kaizo-data-design.md`; plans `docs/superpowers/plans/2026-11-03-k1-rom-pipeline.md` (K1, ROM reading), `docs/superpowers/plans/2026-11-03-k2a-vanilla-schema.md` (K2a, shared schema) and `docs/superpowers/plans/2026-11-03-k2b-kaizo-tables.md` (K2b, the Kaizo tables; build guide `docs/kaizo/pipeline.md`).
+- **A second game of the same generation** (Platinum Kaizo) is a second data set selected by `--game`, not a new mechanics module: design `docs/superpowers/specs/2026-11-03-kaizo-data-design.md`; build guide `docs/kaizo/pipeline.md`.
 
 ## 10. Risks and open items
 
-- **Decomp completeness:** how much of `pokeplatinum`'s battle and AI code is decompiled and named. *Check first in milestone 1.* If parts are missing, fall back to Showdown plus documented research (e.g. Smogon and Bulbapedia mechanics write-ups) and mark those mechanics as lower confidence.
-- **AI fidelity:** the trainer AI is the largest correctness risk and the hardest to verify. Its random draws and knowledge model are now explicit, which makes the tests precise but also enlarges the surface. Golden traces from real play are the best check.
+- **AI fidelity:** the trainer AI is the largest correctness risk and the hardest to verify. Golden traces from real play are the best check.
 - **AI outcome width:** some AI scripts may roll often enough that exact enumeration is impractical. Mitigation: merge draws that lead to the same scored action; otherwise mark sampling-only.
-- **Compile time** of a large unified `step`. Mitigated by data-driven effects and per-fight specialization; measured from milestone 0.
+- **Compile time** of a large unified `step`. Mitigated by data-driven effects and per-fight specialization; tracked in `benchmarks/README.md`.
 - **Chance-node blow-up** in Stage B. Mitigated by merging outcomes, the sampling-only class and adapting depth.
 - **Prep search size.** Mitigated by pruning, successive halving and anytime budgets; the funnel and screening policy are validated against exhaustive search on Roark.
 - **Simultaneous-faint ordering** is settled: both out at one faint check is a draw played as a loss (`include/constants/battle.h:78`; battle_controller_player.c:4015-4016, 4181-4262); with both actives down `ReplaceFainted` (:4070-4155) opens both menus, the player enters first (`GoToIfAnySwitches`, battle_script.c:2537) and `TurnEnd` (:1844-1848) repeats until nobody needs a replacement. **AI item knowledge** is an open question to settle from the decomp in milestone 1.

@@ -23,7 +23,7 @@ from nuzline.search.playout import (
     replacement_policy,
     send_replacements,
 )
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import drop_programs, roark_state
 from tests.search.fixtures import at_replacement
 from tests.strategies import supported_state
 
@@ -156,9 +156,13 @@ def test_playout_from_a_pending_state(tables, names):
     chosen = int(replacement_policy(tables, s))
     resolved = replacement_pass(tables, s, chosen)[0]
     assert int(resolved.active[0]) == chosen
-    assert_same(playout(tables, s, key), playout(tables, resolved, key))
-    forced = playout_from_action(tables, s, MOVE_ACTIONS + 3, key)
-    assert_same(forced, playout(tables, replacement_pass(tables, s, 3)[0], key))
+    # The playout program's runs first, then playout_from_action's after a drop: one
+    # whole-engine program alive at a time (both together passed 15 GB).
+    third = replacement_pass(tables, s, 3)[0]
+    pending, settled, want = (jax.device_get(playout(tables, x, key)) for x in (s, resolved, third))
+    assert_same(pending, settled)
+    drop_programs()
+    assert_same(playout_from_action(tables, s, MOVE_ACTIONS + 3, key), want)
 
 
 def test_pending_state_with_both_down_resolves_in_a_playout(tables, names):
@@ -172,7 +176,11 @@ def test_pending_state_with_both_down_resolves_in_a_playout(tables, names):
 def test_result_records_deaths_and_end(tables, names):
     s = roark_state(tables, names)
     key = jax.random.PRNGKey(1)
-    r = playout(tables, s, key)
+    # The playout, its turn-by-turn replay and the one-turn playout are each a whole-engine
+    # program: each is dropped before the next (``drop_programs``; alive together they
+    # passed 16 GB).
+    r = jax.device_get(playout(tables, s, key))
+    drop_programs()
     state = s
     for _ in range(int(r.turns)):
         key, k_policy, k_turn = jax.random.split(key, 3)
@@ -181,6 +189,7 @@ def test_result_records_deaths_and_end(tables, names):
         assert not bool(refused)
     assert np.array_equal(r.deaths, state.deaths)
     assert int(r.ended) == 1 and int(state.over) == 1
+    drop_programs()
     cut = playout(tables, s, key, max_turns=1)
     assert int(cut.turns) == 1 and int(cut.ended) == 0 and int(cut.refused) == 0
 
@@ -202,6 +211,7 @@ def test_refusal_reason_replays_a_pending_state(tables, names):
     s = _both_down(tables, names)
     key = jax.random.PRNGKey(5)
     assert not int(playout(tables, s, key).refused)
+    drop_programs()  # the replay's programs after the loop's (together they passed 12 GB)
     assert playout_module.refusal_reason(tables, s, MOVE_ACTIONS + 1, key) is None
     assert playout_module.replacement_refusal(tables, s, True, 10) is not None
     assert playout_module.replacement_refusal(tables, s, False, 10) is None

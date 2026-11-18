@@ -4866,8 +4866,10 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
     AI category around ``BattleSystem_UseBagItem`` (battle_system.c:435-758; JAX:
     ``engine.bag.use_bag_item``, E1 ruling G-43). Full Restore's subscript first cures the
     status and confusion; the potion subscript then adds ``ITEM_HP_RECOVERY`` (capped); the
-    status subscript then clears confusion (condition bit 0) or the status. Mist and Focus
-    Energy are refused by coverage, so not applied."""
+    status subscript then clears confusion (condition bit 0) or the status. Guard Spec sets
+    the side's Mist for 5 turns when it has none (:563-573), the crit-stages param Focus
+    Energy when not set (:617-626; the user's own slot in singles), each counting as applied
+    for the friendship band (E1 ruling G-62)."""
     if not item:
         return
     p = [_t(tables, "item_party_param", item, k) for k in range(len(ItemParam))]
@@ -4897,6 +4899,8 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
         sd.confusion, applied = 0, True
     if p[ItemParam.HEAL_ATTRACT] and sd.infatuated:
         sd.infatuated, applied = 0, True
+    if p[ItemParam.GUARD_SPEC] and not sd.mist:
+        sd.mist, applied = 5, True  # battle_system.c:569
     for param, stat in (
         (ItemParam.ATK_STAGES, Stat.ATK),
         (ItemParam.DEF_STAGES, Stat.DEF),
@@ -4908,6 +4912,8 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
         if p[param] and sd.stages[stat] < STAGE_MAX:
             sd.stages[stat] += 1
             applied = True
+    if p[ItemParam.CRIT_STAGES] and not sd.focus_energy:
+        sd.focus_energy, applied = 1, True
     slots = ([0] if p[ItemParam.PP_RESTORE] else []) + (
         list(range(len(mon.moves))) if p[ItemParam.PP_RESTORE_ALL] else []
     )

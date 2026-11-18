@@ -23,7 +23,7 @@ Background: `docs/kaizo/pipeline.md`, `docs/kaizo/rom_diff.md`, `docs/tracing.md
 
 - Never commit ROM bytes, disassembly listings, saves or raw traces. Notes hold names,
   addresses, decoded meanings and decomp citations only.
-- Never copy or commit the save `G:\Farry\Downloads\Platinum Kaizo Base.dsv`; read it by
+- Never copy or commit the save `<pre-Roark Kaizo save>`; read it by
   path through `kaizo_save_pre_roark` / `NUZLINE_KAIZO_SAVE_PRE_ROARK`.
 - Never touch a folder named `backup` (any case, any depth).
 - Vanilla output is unchanged: the vanilla suite passes and vanilla coverage text is

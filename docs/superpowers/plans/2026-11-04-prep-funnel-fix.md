@@ -27,7 +27,7 @@ The merged stage tops up only rung k's set, not the ladder rungs (which are scre
 
 **Tech stack:** Python 3.12, JAX (CPU devices), pytest, ruff (line length 100), uv.
 
-**Worktree:** `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine/.claude/worktrees/m4-prep-search`, branch `claude/m4-prep-search`. All paths below are relative to it.
+**Worktree:** `<repo>/.claude/worktrees/m4-prep-search`, branch `claude/m4-prep-search`. All paths below are relative to it.
 
 ---
 
@@ -56,7 +56,7 @@ The merged stage tops up only rung k's set, not the ladder rungs (which are scre
   - Default-suite test files stay under about 60 s on one device.
   - Match the surrounding docstring density.
 - The commit attribution trailer on every commit is `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- Stored exhaustive values: `C:/Users/Farry/AppData/Local/Temp/claude/G--Farry-Claude-Workspace-Pokemon-Platinum-Game-Engine/85796cb6-f7cf-40cf-b587-639d7f9398fa/scratchpad/exhaustive_values.ckpt.json` (below: `$VALUES`).
+- Stored exhaustive values: `<scratchpad>/` (below: `$VALUES`).
   - Shape: `funnel.rungs["0"|"1"].{phase1, phase2, pick}`, each value `[estimate, ci_low, ci_high, e_deaths]`, keyed by the str index into `restricted_setups + pruned_setups` (3555 setups, 0 pruned).
   - Rung 0: phase 2 has 2335 setups, best #891 `[0.99900, 0.99624, 1.0, 0.0010]`, old pick #3357 `[0.98903, 0.98231, 0.99575, 0.0199]`.
   - Rung 1: phase 2 has 2930 setups, best #23 `[1.0, 0.99283, 1.0, 0.0180]`, old pick #2961 `[1.0, 0.99803, 1.0, 0.0050]`.
@@ -839,7 +839,7 @@ def recheck_verdict(rung: Mapping, pick: int, value: Value, pruned: Collection[i
 
 - [ ] **Step 1: Run the recheck** (about 10 funnels × 200-300 s, so roughly 35-50 min on 20 devices; run it in the background):
   ```
-  uv run python -m benchmarks.exhaustive_roark --save "$NUZLINE_USER_SAVE" --devices 20 --recheck "C:/Users/Farry/AppData/Local/Temp/claude/G--Farry-Claude-Workspace-Pokemon-Platinum-Game-Engine/85796cb6-f7cf-40cf-b587-639d7f9398fa/scratchpad/exhaustive_values.ckpt.json" --seeds 0,1,2,3,4
+  uv run python -m benchmarks.exhaustive_roark --save "$NUZLINE_USER_SAVE" --devices 20 --recheck "<scratchpad>/" --seeds 0,1,2,3,4
   ```
   If the scratchpad file is gone, use the committed original `benchmarks/results/exhaustive_roark_20261102_184141.ckpt.json` (read-only).
 - [ ] **Step 2: Check the results against the acceptance criteria.**

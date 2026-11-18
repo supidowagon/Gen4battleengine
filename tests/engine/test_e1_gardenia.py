@@ -1171,6 +1171,7 @@ def test_root_draws_take_a_host_state(tables, names):
     tie = _war(tables, names, (50, 50))
     host = jax.tree.map(np.asarray, tie)
     assert isinstance(host.ai_ability_known, np.ndarray)
+
     def outcomes(state):
         belief = root_belief(tables, state)
         return sorted((int(b.weather), int(b.ai_ability_known[0]), p) for b, p in belief)
@@ -1178,6 +1179,7 @@ def test_root_draws_take_a_host_state(tables, names):
     assert outcomes(host) == outcomes(tie) and len(outcomes(tie)) == 2
     key = jax.random.PRNGKey(3)
     assert int(sample_root(key, tables, host).weather) == int(sample_root(key, tables, tie).weather)
+
 
 def _double_ko(tables, names, levels):
     """Geodude leads, both down; the player's bench Groudon (Drought, level ``levels[0]``) and

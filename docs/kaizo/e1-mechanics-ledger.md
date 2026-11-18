@@ -676,7 +676,8 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   id, HP_RESTORE, a status or confusion cure, a stage param or Guard Spec,
   `bag.AI_BRANCH_PARAMS`; Dire Hit, Ether, HP Up, Rare Candy and EV berries are never used and
   never refused): an item whose params set Mist (Guard Spec,
-  :563-573) or Focus Energy (crit stages, :617-626), and one whose friendship amount can pass
+  :563-573) or Focus Energy (crit stages, :617-626; both modelled since G-62), and one whose
+  friendship amount can pass
   255 within its band, where `Pokemon_IncreaseValue` wraps the party's u8 friendship
   (pokemon.c:1859-1874) apart from the battler's clamped value (battle_lib.c:1032-1044). So
   School Kid Christine (345, Poke Ball x4) stays refused, now for Mist and Focus Energy
@@ -933,3 +934,23 @@ of them, :2107-2115).
   fails them: `SYSCTL_MOVE_SUCCEEDED` is set and `movePrevByBattler` keeps the invoker even when the
   foe fainted earlier in the turn (its call then finds no target, battle_script.c:2124-2126).
   `step._use_move`'s `succeeded` had it; the reference's no-target check now passes them too.
+
+## Batch E
+
+- G-62 Guard Spec and the crit-stages param are modelled, lifting their G-43 refusal
+  (`bag.refused_bag_params` now names only the friendship wrap). `BattleSystem_UseBagItem`
+  (battle_system.c:563-573): Guard Spec reads the user side's `mistTurns`; when 0 it sets
+  `SIDE_CONDITION_MIST` and 5 turns (:569) and counts as applied: `BattleState.mist[side]`,
+  E2's Mist timer (B12-23; mask and turns are one field there). The crit-stages param
+  (:617-626, gated like the stage params by `selectedSlot == partySlot || targetSlot ==
+  partySlot`, the user's own slot in singles, :443-454) sets `VOLATILE_CONDITION_FOCUS_ENERGY`
+  when clear and counts as applied: `BattleState.focus_energy[side]` (B12-4), +2 crit stages
+  on its hits. Order: Guard Spec after infatuation, before the stage params; crit after
+  them, before PP. The subscript of the GUARD_SPEC category, subscript_use_guard_spec.s, runs
+  `UseBagItem` and a message only. AI: `TrainerAI_ShouldUseItem`'s Guard Spec branch
+  (trainer_ai.c:4181-4182) reads `sideConditionsMask[1]`, the AI's own side, which is the side
+  the item sets: a used Guard Spec blocks its own reuse while the Mist lasts. Dire Hit (crit
+  stages only) still has no AI branch, so a trainer never uses it (Kaizo's reads 0 everywhere);
+  a Poke Ball (every param 3) and Kaizo's Guard Spec. (every param reads 128, as a
+  `partyUse` FALSE item's dummy) stay refused for the friendship wrap.
+  `engine.bag.use_bag_item`, reference `_use_item`. Tests: `tests/engine/test_e1_batch_e.py`.

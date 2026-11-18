@@ -1,6 +1,6 @@
 # Stage B integration map (facts from the code, 2026-10-30, HEAD 6e817e1)
 
-All paths are relative to the repo root `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine`.
+All paths are relative to the repo root `<repo>`.
 `src/nuzline/...` is abbreviated as `nuzline/...` in places. Line numbers are from HEAD.
 No repo file was edited. Benchmark scripts used for the measurements are in the scratchpad
 (`.../scratchpad/stageb/bench_step.py`, `bench_host.py`, `probe.py`).

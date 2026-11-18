@@ -99,7 +99,7 @@ player guide is `docs/tracing_kaizo.md`.
    state just before talking to him, so that a failed take can be retried.
 3. Edit the config block at the top of `tools/trace_battle.lua`:
    - `TRACE_PATH`: where the raw trace goes, for example
-     `G:/.../traces/roark_01.jsonl`. DeSmuME's Lua window takes no arguments, so this
+     `<project folder>/traces/roark_01.jsonl`. DeSmuME's Lua window takes no arguments, so this
      global is set in the file.
    - `BATTLE_SYSTEM`: leave it `nil` on the first run. The script then finds the battle
      structures by itself once a battle starts ("Locating the battle structures").
