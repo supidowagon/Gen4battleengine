@@ -48,6 +48,8 @@ from nuzline.engine.actions import (
     usable_moves,
 )
 from nuzline.engine.damage import apply_stage, simple_stage, weather_suppressed
+from nuzline.engine.format import foe as _foe
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     INVOKER_MOVES,
@@ -92,10 +94,13 @@ def selected_move(
     allows action 0. A locked battler picks no command and uses ``moveLockedInto``
     (``FightCommand``, battle_controller_player.c:1885-1888), never Struggling. Meaningless
     for a switch or item action (callers mask it)."""
+    fmt = format_of(state)
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
     mon = state.active[side]
     struggling = ~jnp.any(usable_moves(tables, state, side))
-    move = jnp.where(struggling, MOVE_STRUGGLE, state.moves[side, mon, slot].astype(_I32))
+    move = jnp.where(
+        struggling, MOVE_STRUGGLE, state.moves[party(fmt, side), mon, slot].astype(_I32)
+    )
     locked = locked_slot(state, side) >= 0
     return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
 
@@ -164,9 +169,10 @@ def assist_candidates(tables: Tables, state: BattleState, side) -> tuple:
     (``MoveFlag.NO_METRONOME``; its Gravity and Heal Block tests are owed with those moves). A
     move two mates know is listed twice. The call is ``RandNext() % numMoves`` (:6439):
     ``Outcome.call``'s uniform value, ``invoked_move`` taking the ``call % count``-th entry."""
-    moves = state.moves[side].astype(_I32)  # [SLOTS, 4]
+    fmt = format_of(state)
+    moves = state.moves[party(fmt, side)].astype(_I32)  # [SLOTS, 4]
     slots = jnp.arange(moves.shape[0])[:, None]
-    mate = (slots != state.active[side]) & (state.species[side][:, None] != 0)
+    mate = (slots != state.active[side]) & (state.species[party(fmt, side)][:, None] != 0)
     invoker = jnp.isin(moves, jnp.asarray(INVOKER_MOVES, _I32))
     allowed = (tables.move_flags[moves] & MoveFlag.NO_METRONOME) == 0
     valid = mate & ~invoker & allowed
@@ -191,8 +197,9 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     B7-13) and, under Encore, every move but the encored one (battle_lib.c:2302-2304, B10-9).
     Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``) is
     owed with Gravity (ledger)."""
+    fmt = format_of(state)
     mon = state.active[side]
-    moves = state.moves[side, mon].astype(_I32)
+    moves = state.moves[party(fmt, side), mon].astype(_I32)
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
     ok = ok & (moves != state.disabled_move[side])
     ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
@@ -208,8 +215,9 @@ def metronome_candidates(tables: Tables, state: BattleState, side) -> jnp.ndarra
     for ``side``'s active battler: ids 1..``METRONOME_DRAW``, none of the battler's own moves
     (:4544-4551), none of ``MoveFlag.NO_METRONOME`` (``Move_CanBeMetronomed``, battle_lib.c:
     7204-7218; its Gravity and Heal Block tests are owed with Gravity / unsupported)."""
+    fmt = format_of(state)
     ids = jnp.arange(tables.move_effect.shape[0], dtype=_I32)
-    own = state.moves[side, state.active[side]].astype(_I32)
+    own = state.moves[party(fmt, side), state.active[side]].astype(_I32)
     ok = (ids >= 1) & (ids <= METRONOME_DRAW)
     ok = ok & ((tables.move_flags[ids] & MoveFlag.NO_METRONOME) == 0)
     return ok & ~jnp.any(ids[:, None] == own[None, :], axis=1)
@@ -242,13 +250,16 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     ``metronome_weights``); Copycat: ``copycat_call`` of ``move_prev`` (default
     ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
     Nature Power on the result is ``called_move``'s."""
+    fmt = format_of(state)
     move = jnp.asarray(move, _I32)
     call = jnp.asarray(call, _I32)
     kind = call_kind(tables, move)
     slots = sleep_talk_slots(tables, state, side)
     n_slots = jnp.sum(slots.astype(_I32))
     slot = _nth(slots, call % jnp.maximum(n_slots, 1))
-    talk = jnp.where(n_slots > 0, state.moves[side, state.active[side], slot].astype(_I32), 0)
+    talk = jnp.where(
+        n_slots > 0, state.moves[party(fmt, side), state.active[side], slot].astype(_I32), 0
+    )
     cands = metronome_candidates(tables, state, side)
     n_cands = jnp.sum(cands.astype(_I32))
     metronome = jnp.where(n_cands > 0, _nth(cands, call % jnp.maximum(n_cands, 1)), 0)
@@ -274,9 +285,10 @@ def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
     failure (MOVE_STATUS_FAILED): it is encored already, its last move is none, not in its slots,
     one Move_CanBeEncored refuses (the battle effect of a ``CANNOT_ENCORE_MOVES`` move,
     battle_lib.c:7221-7231) or out of PP."""
+    fmt = format_of(state)
     mon = state.active[target_side]
     last = state.last_move[target_side].astype(_I32)
-    moves = state.moves[target_side, mon].astype(_I32)
+    moves = state.moves[party(fmt, target_side), mon].astype(_I32)
     held = (moves == last) & (last != 0)
     slot = jnp.argmax(held).astype(_I32)
     banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
@@ -286,7 +298,7 @@ def encore_slot_of(tables: Tables, state: BattleState, target_side) -> tuple:
         | (last == 0)
         | ~jnp.any(held)
         | refused
-        | (state.pp[target_side, mon, slot] == 0)
+        | (state.pp[party(fmt, target_side), mon, slot] == 0)
     )
     return fails, slot
 
@@ -306,7 +318,8 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
     6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
     b on side b in singles)."""
-    foe_of = jnp.asarray(sides)[::-1]
+    fmt = format_of(state)
+    foe_of = jnp.asarray(sides)[_foe(jnp.arange(fmt.B))]
     value = jnp.where(foe_of, 1, state.imprison)
     return state._replace(imprison=value.astype(state.imprison.dtype))
 
@@ -316,8 +329,9 @@ def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
     (encoredMove = movePrevByBattler, encoredMoveSlot its slot: BtlCmd_TryEncore, battle_script.c:
     4740-4741), the hypothetical state of a takeover variant (``takeover_possible``; ruling B11-1).
     The count is left as it is: nothing before the turn's end reads it."""
+    fmt = format_of(state)
     sides = jnp.asarray(sides, bool)
-    slots = jnp.stack([encore_slot_of(tables, state, side)[1] for side in (0, 1)])
+    slots = jnp.stack([encore_slot_of(tables, state, side)[1] for side in range(fmt.B)])
     move = jnp.where(sides, state.last_move, state.encore_move).astype(state.encore_move.dtype)
     slot = jnp.where(sides, slots, state.encore_slot).astype(state.encore_slot.dtype)
     return state._replace(encore_move=move, encore_slot=slot)
@@ -331,10 +345,11 @@ def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarr
     a listed mate's move is (``assist_candidates``), Copycat when the battle's movePrev is Encore
     (``copycat_call``: its foe's move of this turn comes after the foe's action, too late to
     replace it). Over-approximate (Sleep Talk's sleep and set are the turn's)."""
+    fmt = format_of(state)
     move = jnp.asarray(move, _I32)
     effect = tables.move_effect
     kind = call_kind(tables, move)
-    own = state.moves[side, state.active[side]].astype(_I32)
+    own = state.moves[party(fmt, side), state.active[side]].astype(_I32)
     talk = jnp.any((own != 0) & (effect[own] == EffectId.ENCORE))
     ids = jnp.arange(effect.shape[0], dtype=_I32)
     metronome = jnp.any(
@@ -425,17 +440,18 @@ def used_moves(
     else the turn-start ``state.move_prev``. ``chosen`` (``int32[2]``, default each action's
     ``selected_move``) overrides the moveTemp of each side: a takeover variant's encored move
     (ruling B11-1), with ``state`` its ``encored_state``."""
+    fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     if chosen is None:
         chosen = jnp.stack(
-            [selected_move(tables, state, side, actions[side])[0] for side in (0, 1)]
+            [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
         )
     chosen = jnp.asarray(chosen, _I32)
     after_foe = jnp.asarray(after_foe, bool)
     call = jnp.asarray(call, _I32)
     out = []
-    for side in (0, 1):
-        prev = jnp.where(after_foe[side], chosen[1 - side], state.move_prev.astype(_I32))
+    for side in range(fmt.B):
+        prev = jnp.where(after_foe[side], chosen[_foe(side)], state.move_prev.astype(_I32))
         invoked = invoked_move(tables, state, side, chosen[side], call[side], prev)
         out.append(
             jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
@@ -450,14 +466,15 @@ def effective_speed(
     (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
     lock (``NO_CLOUD_NINE``) and ``weather`` (default ``state.weather``) the weather, for a
     lock or a weather that can change before the speed is read (``enumerate._end_speeds``)."""
+    fmt = format_of(state)
     if suppressed is None:
         suppressed = weather_suppressed(tables, state)
     weather = state.weather if weather is None else weather
     mon = state.active[side]
-    ability = state.ability[side, mon]
+    ability = state.ability[party(fmt, side), mon]
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
-    speed = apply_stage(state.stats[side, mon, Stat.SPE - 1].astype(_I32), stage)
+    speed = apply_stage(state.stats[party(fmt, side), mon, Stat.SPE - 1].astype(_I32), stage)
     # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability), inside NO_CLOUD_NINE.
     swim = (
         ((ability == AbilityId.SWIFT_SWIM) & (weather == Weather.RAIN))
@@ -467,7 +484,7 @@ def effective_speed(
     # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),
     # read through BattleSystem_GetItemData on the raw heldItem (no Klutz / Embargo: "not
     # ignored by any negation effect", :1241), G-56, B13-29.
-    hold = tables.item_hold_effect[state.item[side, mon]].astype(_I32)
+    hold = tables.item_hold_effect[state.item[party(fmt, side), mon]].astype(_I32)
     halved = jnp.isin(hold, jnp.asarray(SPEED_HALVING_HOLD_EFFECTS, _I32))
     speed = jnp.where(halved, speed // 2, speed)
     # :1248 Choice Scarf (Battler_HeldItemEffect, :1215: ``held_item``, B13-29), after the
@@ -476,7 +493,7 @@ def effective_speed(
     speed = jnp.where(scarf, speed * 15 // 10, speed)
     # :1257-1261 Quick Feet (Battler_Ability) with any status (MON_CONDITION_ANY): x15/10,
     # and then no paralysis quartering; else paralysis quarters it.
-    status = state.status[side, mon]
+    status = state.status[party(fmt, side), mon]
     quick_feet = (ability == AbilityId.QUICK_FEET) & (status != Status.NONE)
     speed = jnp.where(
         quick_feet,
@@ -488,10 +505,10 @@ def effective_speed(
     unburdened = (
         (ability == AbilityId.UNBURDEN)
         & (state.can_unburden[side] != 0)
-        & (state.item[side, mon] == 0)
+        & (state.item[party(fmt, side), mon] == 0)
     )
     speed = jnp.where(unburdened, speed * 2, speed)
-    return jnp.where(state.tailwind[side] != 0, speed * 2, speed)
+    return jnp.where(state.tailwind[side_of(side)] != 0, speed * 2, speed)
 
 
 def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
@@ -504,8 +521,9 @@ def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.nd
     party ``mon``, halved (``itemPower /= 2``) when the holder's own ability is Gluttony
     (``Battler_Ability``: battle_lib.c:4774-4776, :1289-1291). The berry triggers at
     ``curHP <= maxHP / divisor`` (``pinch_limit``)."""
+    fmt = format_of(state)
     power = tables.item_param[item, 0].astype(_I32)
-    gluttony = state.ability[side, mon] == AbilityId.GLUTTONY
+    gluttony = state.ability[party(fmt, side), mon] == AbilityId.GLUTTONY
     return jnp.where(gluttony, power // 2, power)
 
 
@@ -526,7 +544,10 @@ def dislikes_berry(tables: Tables, state: BattleState, side, mon, item) -> jnp.n
     (``item_param[item, 1]``) ``side``'s party ``mon`` dislikes:
     ``Pokemon_GetFlavorAffinityOf(personality, flavor) == -1`` (battle_lib.c:4703 etc., :5683
     etc.; src/pokemon.c:4123-4127, ``ids.NATURE_DISLIKED_FLAVOR`` by its nature), ruling G-4."""
-    disliked = jnp.asarray(NATURE_DISLIKED_FLAVOR, _I32)[state.nature[side, mon].astype(_I32)]
+    fmt = format_of(state)
+    disliked = jnp.asarray(NATURE_DISLIKED_FLAVOR, _I32)[
+        state.nature[party(fmt, side), mon].astype(_I32)
+    ]
     flavor = tables.item_param[item, 1].astype(_I32)
     return (tables.item_effect[item] == ItemId.FLAVOR_BERRY) & (disliked == flavor)
 
@@ -536,12 +557,13 @@ def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     (``HOLD_EFFECT_PINCH_PRIORITY``) at ``curHP <= pinch_limit(maxHP, pinch_divisor)``: the decomp's
     ``battlerNQuickClaw`` flag (battle_lib.c:1288-1300, :1354-1366), whatever
     ``ignoreQuickClaw``."""
+    fmt = format_of(state)
     out = []
-    for side in (0, 1):
+    for side in range(fmt.B):
         mon = state.active[side]
         item = held_item(state, side, mon)  # battler1ItemEffect / _ItemParam (:1215-1218)
-        hp = state.hp[side, mon].astype(_I32)
-        max_hp = state.max_hp[side, mon].astype(_I32)
+        hp = state.hp[party(fmt, side), mon].astype(_I32)
+        max_hp = state.max_hp[party(fmt, side), mon].astype(_I32)
         low = hp <= pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
         out.append((tables.item_effect[item] == ItemId.CUSTAP_BERRY) & low)
     return jnp.stack(out)
@@ -580,9 +602,10 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
     """``bool[2]``: each side's active battler holds a Quick Claw and its ``speedRand``
     draw ``qc`` (``int[2]``, 1 = ``speedRand % 5 == 0``) activates it (lib.c:1278-1286)."""
+    fmt = format_of(state)
     qc = jnp.asarray(qc)
     return jnp.stack(
-        [_holds(tables, state, side, ItemId.QUICK_CLAW) & (qc[side] != 0) for side in (0, 1)]
+        [_holds(tables, state, side, ItemId.QUICK_CLAW) & (qc[side] != 0) for side in range(fmt.B)]
     )
 
 
@@ -604,10 +627,11 @@ def compare_speed(tables: Tables, state: BattleState, battler1: int, tie_roll, q
     (:1205-1211) is not part of this function, as it was not of ``player_second``; the
     trainer AI compares at its decision, with both actives alive. A Custap Berry in its pinch
     (``custap_active``) sets the same flag as an activated Quick Claw (:1288-1300)."""
-    other = 1 - battler1
+    fmt = format_of(state)
+    other = _foe(battler1)
     speed = (effective_speed(tables, state, 0), effective_speed(tables, state, 1))
     claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
-    lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in (0, 1))
+    lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in range(fmt.B))
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]
     lag1, lag2 = lag[battler1], lag[other]
@@ -646,10 +670,13 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``. Quick Claw
     reads ``state.qc_roll``, the draw of the turn before (module docstring), never the
     outcome."""
+    fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
-    moves = jnp.stack([selected_move(tables, state, side, actions[side])[0] for side in (0, 1)])
+    moves = jnp.stack(
+        [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
+    )
     both_moves = ~early[0] & ~early[1]
     priority = jnp.where(both_moves, tables.move_priority[moves].astype(_I32), 0)
     second = player_second(tables, state, outcome.speed_tie, state.qc_roll)
@@ -659,7 +686,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
     player_second_ = jnp.where(same_kind, player_second_, early[1] & ~early[0])
     first = player_second_.astype(jnp.int8)
-    return jnp.stack([first, 1 - first]).astype(jnp.int8)
+    return jnp.stack([first, _foe(first)]).astype(jnp.int8)
 
 
 def truant_loafs(state: BattleState, side) -> jnp.ndarray:
@@ -669,6 +696,7 @@ def truant_loafs(state: BattleState, side) -> jnp.ndarray:
     (battle_lib.c:2119, :2197), i.e. ``fake_out_turn & 1``, and 0 for a lead (the zeroed
     context, as ``fake_out_turn``); Transform's write (battle_script.c:5359) is unsupported.
     So a Truant battler loafs on every other turn from its entry, whatever it did."""
+    fmt = format_of(state)
     mon = state.active[side]
     parity = (state.fake_out_turn[side].astype(_I32) & 1) != (state.turn.astype(_I32) & 1)
-    return (state.ability[side, mon] == AbilityId.TRUANT) & parity
+    return (state.ability[party(fmt, side), mon] == AbilityId.TRUANT) & parity
