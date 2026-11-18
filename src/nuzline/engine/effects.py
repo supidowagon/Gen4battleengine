@@ -84,8 +84,8 @@ many are real). Decomp sources:
   a direct TO_ATTACKER effect: Spe -1, then Atk +1, then Def +1, each its own
   ``BtlCmd_ChangeStatStage`` (a capped stage prints "won't go higher/lower" and the next one
   still runs; none sets ``MOVE_STATUS_FAILED``). Its defender is the user
-  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s``: refused by
-  coverage.
+  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s`` (``_curse``, ``curse_fails``;
+  E2 batch 8, B8-5).
 * Selfdestruct, Explosion (``SELF_DESTRUCT``): ``effect_script_0007.s`` sets the user's HP
   to 0 before ``TryMove`` (``step._use_move``: before the accuracy check and the type chart;
   not when the move has no target), then a plain hit on the halved Defense (``damage.py``).

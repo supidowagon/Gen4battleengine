@@ -726,21 +726,31 @@ def test_curse_simple(kaizo_tables, kaizo_roark_party, atk, def_, expected):
     assert _two_flag_scores(t, s) == [expected, 0, 0, 0]
 
 
-def test_ghost_curse_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """A Ghost-type Curse user takes Basic_CheckCurse_GhostType (:681-684 -> :700) and
-    Expert_Curse_GhostCheckHP (:3467-3470 -> :3495), which are not transcribed: refused by
-    their names (Task 5 review m1), and only for that move."""
+@pytest.mark.parametrize(
+    ("case", "basic", "expert"),
+    [
+        # Basic_CheckCurse_GhostType (script.s:700-705) / Expert_Curse_GhostCheckHP (:3495-3500)
+        ("plain", 0, 0),  # not cursed, no Magic Guard; above 80 % HP the check ends
+        ("hurt", 0, -1),  # AI at 50 % HP: -1
+        ("cursed", -10, 0),  # :702 the player already cursed
+        ("magic guard", -10, 0),  # :704 the player's Magic Guard
+    ],
+)
+def test_ghost_curse(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, expert):
+    """A Ghost-type Curse user takes the Ghost branches (:681-684, :3467-3470)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, SHUCKLE, _SHUCKLE_MOVES, bench=(BONSLY,))
+    s = s._replace(types=s.types.at[1, 0, 1].set(7))  # TYPE_GHOST
+    if case == "hurt":
+        s = _hp(s, 1, 50)
+    if case == "cursed":
+        s = s._replace(curse=s.curse.at[0].set(1))
+    if case == "magic guard":
+        mg = c.ABILITY_IDS["Magic Guard"]
+        t = _with_abilities(t, int(s.species[0, 0]), [mg, mg])
     assert policy.ai_refusals(t, s, n) == []
-    ghost = s._replace(types=s.types.at[1, 0, 1].set(7))  # TYPE_GHOST
-    reasons = [r for r in policy.ai_refusals(t, ghost, n) if "opponent slot" in r]
-    line = (
-        "ai scoring: opponent slot 0: move Curse by a Ghost type goes to "
-        "Basic_CheckCurse_GhostType (script.s:700) and Expert_Curse_GhostCheckHP "
-        "(script.s:3495), which are not transcribed (docs/ai/kaizo_roark.md 5.1)"
-    )
-    assert reasons == [line]
+    assert _delta(t, s, 0x2, 0x3)[2] == basic
+    assert _delta(t, s, 0x3, 0x7)[2] == expert
 
 
 # --- EVAL_ATTACK (script.s:6353-6415) -----------------------------------------------------
@@ -1340,7 +1350,7 @@ def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
         r = refused(jnp.int32(move))
         by_move = any(
             bool(np.asarray(f)[0, 1])
-            for f in (r.move, r.ghost_curse, r.expert, r.calc_damage, r.move_type)
+            for f in (r.move, r.expert, r.calc_damage, r.move_type)
         )
         kinds = policy.opponent_move_refusals(t, move, KAIZO)
         assert bool(kinds) == by_move, (move, kinds)

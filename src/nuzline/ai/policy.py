@@ -27,8 +27,7 @@ factored per slot (``_slot_move_distribution``; docs/ai/kaizo_roark.md 8);
 ``ai_action_distribution_loose`` is its test oracle, with every decomp draw its own.
 
 Refusals (``ai_refusals``): an opponent move whose script paths are not transcribed
-(``layout.transcribed``), Curse by a Ghost type (its Ghost labels are not transcribed),
-or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
+(``layout.transcribed``), or, in a per-slot layout, a move whose effect's Expert_Main label is not transcribed
 (``outcome.KAIZO_EXPERT_LABELS`` less ``layout.expert_transcribed``; none for Kaizo
 Roark since K3c Task 6), an opponent move the AI's damage estimate or move type takes
 by a move-id case it does not model, a vanilla moveset with more script-roll sites than
@@ -725,14 +724,15 @@ _basic_check_toxic_spikes = _hazard_layers(
 
 
 def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
-    """``Basic_CheckCurse`` (script.s:679-698)."""
-    # Basic_CheckCurse (:679). A Ghost-type attacker jumps to Basic_CheckCurse_GhostType
-    # (:700), which is not transcribed: _refused refuses Curse on a Ghost type, so the
-    # jumps below are never taken.
+    """``Basic_CheckCurse`` (script.s:679-698) and ``Basic_CheckCurse_GhostType`` (:700-705)."""
+    # Basic_CheckCurse (:679). A Ghost-type attacker (type 1 :681-682, type 2 :683-684) jumps
+    # to Basic_CheckCurse_GhostType (:700), run below on the jumped paths.
     ctx = _at(ctx, mask)
+    ghost = None
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
-        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ctx, j = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = j if ghost is None else ghost | j
     ctx = c.load_battler_ability(ctx, _A)
     ctx, no_simple = _split(c.if_loaded_not_equal_to(ctx, _ABILITY["Simple"]))
     for stat in (Stat.ATK, Stat.DEF):
@@ -746,7 +746,14 @@ def _basic_check_curse(ctx: AiContext, mask) -> AiContext:
     ctx, t = _split(c.if_stat_stage_equal_to(ctx, _A, Stat.DEF, 12))
     ctx = _score(ctx, t, -8)
     ctx = c.pop_or_end(ctx)
-    return ctx
+    # Basic_CheckCurse_GhostType (:700): the player already cursed (:702), or Magic Guard
+    # (:703-704, the player's ability, guessed or known), -10.
+    ctx, t = _split(c.if_volatile_status(_at(ctx, ghost), _D, c.VolatileCondition.CURSE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
 
 
 def _clear_body(ctx: AiContext, mask) -> AiContext:
@@ -2726,12 +2733,13 @@ _expert_imprison = _first_turn_try("Expert_Imprison", (100, 4638), 2)
 def _expert_curse(ctx: AiContext, mask) -> AiContext:
     """``Expert_Curse`` (script.s:3452-3500)."""
     # Expert_Curse (:3452). A Ghost-type attacker jumps to Expert_Curse_GhostCheckHP
-    # (:3467-3470 -> :3495); _refused refuses Curse on a Ghost type (Basic_CheckCurse
-    # _GhostType, script.s:700, is not transcribed), so those jumps are never taken.
+    # (:3467-3470 -> :3495), run below on the jumped paths.
     ctx = _at(ctx, mask)
+    ghost = None
     for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
         ctx = c.load_type_from(ctx, target)
-        ctx, _ = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ctx, j = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = j if ghost is None else ghost | j
     ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 9))  # -> Expert_Curse_End
     ctx, high = _split(c.if_move_known(ctx, _A, _MOVE["Gyro Ball"]))
     ctx, t = _split(c.if_move_known(ctx, _A, _MOVE["Trick Room"]))
@@ -2758,7 +2766,9 @@ def _expert_curse(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_stat_stage_greater_than(ctx, _A, Stat.DEF, 6))
     ctx, _ = _split(c.if_random_less_than(ctx, 128, 3491))
     ctx = c.pop_or_end(c.add_to_move_score(ctx, 1))
-    return ctx
+    # Expert_Curse_GhostCheckHP (:3495): above 80 % HP -> Expert_Curse_End (:3499), else -1.
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, ghost), _A, 80))
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
 
 
 def _expert_brick_break(ctx: AiContext, mask) -> AiContext:
@@ -3590,7 +3600,6 @@ def player_ability_refusal(ability: int) -> str | None:
 
 class _Refused(NamedTuple):
     move: jnp.ndarray  # bool[SLOTS, MOVES]: opponent move without transcribed script paths
-    ghost_curse: jnp.ndarray  # bool[SLOTS, MOVES]: Curse by a Ghost type (its labels are not)
     expert: jnp.ndarray  # bool[SLOTS, MOVES]: its effect's Expert label is not transcribed
     calc_damage: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_CalcDamage id case
     move_type: jnp.ndarray  # bool[SLOTS, MOVES]: a TrainerAI_MoveType id case
@@ -3615,16 +3624,10 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     else:  # by battle effect (outcome.KAIZO_TRANSCRIBED)
         transcribed = jnp.isin(effects, jnp.array(sorted(layout.transcribed), _I32))
     move = present[1][:, None] & ~(transcribed | (moves[1] == 0))
-    # Curse by a Ghost type takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700, which
-    # reads IfVolatileStatus) and Expert_Curse_GhostCheckHP (:3467-3470 -> :3495), which are
-    # not transcribed.
-    ghost = jnp.any(state.types[1] == _TYPE["Ghost"], axis=-1)  # [SLOTS]
-    ghost_curse = present[1][:, None] & (effects == BattleEffect.CURSE) & ghost[:, None]
-    ghost_curse = ghost_curse & ~move & (moves[1] != 0)
     # A transcribed effect whose Expert_Main entry (script.s:1628-1808) goes to a label not
     # transcribed yet (outcome.KAIZO_EXPERT_LABELS, layout.expert_transcribed): refused.
     pending = sorted(set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed)
-    expert = present[1][:, None] & (moves[1] != 0) & ~move & ~ghost_curse
+    expert = present[1][:, None] & (moves[1] != 0) & ~move
     if layout.per_slot_sites and pending and layout.runs(EXPERT):
         expert = expert & jnp.isin(effects, jnp.array(pending, _I32))
         if layout.runtime_flags:  # the battler's own EXPERT bit
@@ -3670,7 +3673,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     bag = (bag_items != 0) & refused_bag_items(tables, bag_items)
     scoring = (
         jnp.any(move)
-        | jnp.any(ghost_curse)
         | jnp.any(expert)
         | jnp.any(calc_damage)
         | jnp.any(move_type)
@@ -3683,7 +3685,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     )
     return _Refused(
         move,
-        ghost_curse,
         expert,
         calc_damage,
         move_type,
@@ -3700,14 +3701,13 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
 
 
 def opponent_move_refusals(
-    tables: Tables, move: int, layout: AiLayout, ghost: bool = False
+    tables: Tables, move: int, layout: AiLayout
 ) -> list[str]:
     """The per-move refusals of ``_refused`` for an opponent move (decomp id) under ``layout``,
     whatever the player's party (``tools/kaizo/backlog.py`` lists them per fight), as kinds:
     ``"not transcribed"`` (its script paths, ``layout.transcribed``), ``"not in the fight's
     layout"`` (transcribed, but not one of the fight's own move effects, E1 Ruling R7),
-    ``"ghost curse"`` (Curse
-    by a Ghost type, ``ghost``), ``"expert label"`` (its Expert_Main label is not transcribed
+    ``"expert label"`` (its Expert_Main label is not transcribed
     yet, when the layout runs EXPERT), ``"calc damage"`` and ``"move type"`` (TrainerAI_CalcDamage and
     TrainerAI_MoveType move-id cases). Pinned against ``_refused`` by
     tests/ai/test_kaizo_policy.py test_opponent_move_refusals_are_refused."""
@@ -3719,8 +3719,6 @@ def opponent_move_refusals(
         outside = layout.per_slot_sites and effect in KAIZO_TRANSCRIBED
         return ["not in the fight's layout" if outside else "not transcribed"]
     out = []
-    if ghost and effect == BattleEffect.CURSE:
-        out.append("ghost curse")
     pending = set(KAIZO_EXPERT_LABELS) - layout.expert_transcribed
     if (
         layout.per_slot_sites
@@ -3802,13 +3800,6 @@ def _scoring_refusals(
         out.append(
             f"ai scoring: opponent slot {s}: the script paths of move "
             f"{_move_name(move, names)} are not transcribed (docs/ai/roark.md 5)"
-        )
-    for s, k in zip(*np.nonzero(np.asarray(r.ghost_curse)), strict=True):
-        out.append(
-            f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} by a "
-            "Ghost type goes to Basic_CheckCurse_GhostType (script.s:700) and "
-            "Expert_Curse_GhostCheckHP (script.s:3495), which are not transcribed "
-            "(docs/ai/kaizo_roark.md 5.1)"
         )
     effects = np.asarray(tables.move_ai_effect)
     for s, k in zip(*np.nonzero(np.asarray(r.expert)), strict=True):

@@ -305,10 +305,9 @@ effect appears once in the table, so the order of the entries does not matter):
   **-10** (`:364`). Then `A`'s true ability: with Simple, Speed above decomp 8 (engine +3
   or more) is **-10** (`:367`); without, Speed at decomp 12 (engine +6) is **-10** (`:371`).
 - **CURSE** (`:196`) -> `Basic_CheckCurse` (`:679-698`): a Ghost-type `A` (true type 1 or 2)
-  jumps to `Basic_CheckCurse_GhostType` (`:700`), which is not transcribed (nor is
-  `Expert_Curse_GhostCheckHP`, 5.3): the AI refuses a Ghost-type Curse user
-  (`policy._refused`, a line naming both labels). Kaizo Roark's Curse user, Shuckle, is
-  Bug/Rock.
+  jumps to `Basic_CheckCurse_GhostType` (`:700-705`): the player already cursed, or with
+  Magic Guard (its ability, guessed or known), is **-10** (transcribed in the E1 trial batch,
+  5.25; the Ghost Curse refusal is gone). Kaizo Roark's Curse user, Shuckle, is Bug/Rock.
   With Simple, Attack or Defense above decomp 8 (engine +3 or more) is **-10**
   (`:690-691`). Without, Attack at 12 is **-10** (`:696`), else Defense at 12 is **-8**
   (`:697`).
@@ -401,8 +400,8 @@ Room reverses, `:1432-1439`; equal speed is never SLOWER, Ruling 3).
 - **SPEED_UP_2** (`:1665`) -> `Expert_StatusSpeedUp` (`:2066-2079`): not slower is **-3**;
   slower is the 70 roll (`:2075`), **+3**.
 - **CURSE** (`:1700`) -> `Expert_Curse` (`:3452-3500`):
-  1. A Ghost-type `A` goes to `Expert_Curse_GhostCheckHP` (`:3467-3470` -> `:3495`): refused
-     with `Basic_CheckCurse_GhostType` (5.1).
+  1. A Ghost-type `A` goes to `Expert_Curse_GhostCheckHP` (`:3467-3470` -> `:3495`): above
+     80 % HP it ends, else **-1** (`:3496-3497`); no roll (E1 trial batch, 5.25).
   2. `A`'s Defense above decomp 9 (+4 or more) ends it (`:3471`). (The decomp's comment says
      "+3 or higher"; the code tests > 9.)
   3. `A` knows Gyro Ball (360) or Trick Room (433) (`IfMoveKnown ATTACKER`, `:3472-3473`):
@@ -846,6 +845,12 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
 
 - NATURE_POWER (173): no Basic or Expert entry, only `Harrassment_Effects` (`:8058`). It is
   scored as its own status move (power 0): the called move is chosen after the AI picks.
+
+- Ghost Curse (CURSE, 109): `Basic_CheckCurse_GhostType` (`:700-705`) and
+  `Expert_Curse_GhostCheckHP` (`:3495-3500`) are transcribed on the Ghost-type jumps
+  (`policy._basic_check_curse`, `_expert_curse`); `policy._refused` no longer refuses a Ghost
+  Curse user and `opponent_move_refusals` has no "ghost curse" kind. The engine side was
+  modelled in E2 batch 8 (B8-5).
 
 ## 6. Where the AI reads the true battle state
 

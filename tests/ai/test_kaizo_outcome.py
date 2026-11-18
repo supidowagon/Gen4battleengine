@@ -175,6 +175,11 @@ def kaizo_states(draw, t, party) -> BattleState:
     pool = _move_pool(t)
     moves = [draw(st.sampled_from(pool))] + [draw(st.sampled_from((0, *pool))) for _ in range(3)]
     s = _kaizo_state(t, party, moves)
+    # A Ghost-type Curse user takes Basic_CheckCurse_GhostType / Expert_Curse_GhostCheckHP
+    # (script.s:700, :3495; E1 trial batch): type 2 Ghost (TYPE_GHOST 7).
+    curse = commands.BattleEffect.CURSE
+    if any(int(t.move_ai_effect[m]) == curse for m in moves) and draw(st.booleans()):
+        s = s._replace(types=s.types.at[1, 0, 1].set(7))
     species = draw(st.sampled_from(_two_ability_species(t)))
     s = _with_player(t, s, species, draw(st.integers(0, 1)), draw(st.booleans()))
     hp = draw(st.integers(20, 400))

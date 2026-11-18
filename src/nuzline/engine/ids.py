@@ -42,7 +42,7 @@ class EffectId(IntEnum):
       Double Kick, Kaizo's DoubleSlap, ``SetMultiHit 2``).
     * Multi-stat effects: the stat list is the effect's own, so the params stay zeros.
       ``RAISE_ALL_STATS_HIT`` (AncientPower): Atk, Def, Spe, SpA, SpD +1 on the user at the
-      move's effect chance; ``CURSE`` (a non-Ghost user; coverage refuses a Ghost-type one):
+      move's effect chance; ``CURSE`` (a non-Ghost user; a Ghost-type one is ``_curse``, B8-5):
       Spe -1, Atk +1, Def +1 on the user.
     * ``RECOVER``: zeros; heals ``maxHP / 2``, fails at full HP. ``FAKE_OUT``: zeros; fails
       unless it is the user's first turn out, else flinches at the move's chance.

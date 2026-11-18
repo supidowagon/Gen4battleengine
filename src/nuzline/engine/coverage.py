@@ -25,9 +25,9 @@ The registries list exactly what plan 1a (Tasks 8a-8e: move effects, abilities, 
 items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 
 * move effects: every ``ids.EffectId`` but ``UNSUPPORTED`` (a Ghost-type user's Curse is
-  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct, Explosion)
-  facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN`` (``halved_defense_line``:
-  the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
+  modelled since E2 batch 8, B8-5), except a physical ``SELF_DESTRUCT`` move (Selfdestruct,
+  Explosion) facing a Pokemon whose Defense is below ``HALVED_DEFENSE_MIN``
+  (``halved_defense_line``: the halved Defense at -6 makes the damage divisor 0), refused per move on both sides
   here, and in the pool and prep both ways: a player candidate's move against the
   opponent's lowest Defense, and an opponent's move against a candidate's own Defense.
   ``effect_script_0007.s``'s Damp branch is never met: Damp is an unsupported ability, so
@@ -516,7 +516,7 @@ def learnable_moves(tables: Tables, spec: PokemonSpec, opp: Sequence[PokemonSpec
     ``forced_learn_moves``), which the player never takes in the engine. A masked move is
     then a legal game choice the search skips: plan values stay achievable lower bounds,
     like ruling D2, except the mid-turn-prompt case (``STATE.md``, Experience). Moves refused for any other reason (the AI, terrain, a ROM change, a
-    halved Defense, a Ghost's Curse) are not masked and stay graded (refused)."""
+    halved Defense) are not masked and stay graded (refused)."""
     forced = forced_learn_moves(tables, spec, opp)
     return [
         m
