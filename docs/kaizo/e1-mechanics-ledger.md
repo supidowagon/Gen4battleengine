@@ -933,3 +933,16 @@ of them, :2107-2115).
   fails them: `SYSCTL_MOVE_SUCCEEDED` is set and `movePrevByBattler` keeps the invoker even when the
   foe fainted earlier in the turn (its call then finds no target, battle_script.c:2124-2126).
   `step._use_move`'s `succeeded` had it; the reference's no-target check now passes them too.
+- G-63 Plus and Minus (`AbilityId.PLUS` / `MINUS`, decomp 57 / 58). `BattleSystem_CalcMoveDamage`
+  (battle_lib.c:6802-6809, after the Marvel Scale defense line :6797-6800 and before the Mud Sport
+  / Water Sport lines :6811 on; attacker ability `attackerParams.ability`, :6653): a Plus attacker
+  with `BattleSystem_CountAbility(.., COUNT_ALIVE_BATTLERS_OUR_SIDE, attacker, ABILITY_MINUS)`
+  nonzero (and Minus with Plus) gets `spAttackStat * 150 / 100`. The count (battle_lib.c:2886-2893)
+  is every battler of the attacker's side, the attacker included, with `curHP != 0` and
+  `Battler_Ability == ability`; only battlers on the field, never the bench. In singles the
+  attacker is its side's only battler and has one ability, so the count is 0 and the boost never
+  applies; a doubles Plus with a living Minus ally (or the reverse) gets x1.5, Plus with Plus does
+  not. Built as `damage.side_ability_count` over `damage.side_active_slots` (the one function a
+  doubles layout extends; reference `_side_ability_count`), read in `damage._pre_random` and the
+  reference `_calc_move_damage` at the decomp's position. The AI scripts never read either ability.
+  Tests: `test_e1_trial.py`.

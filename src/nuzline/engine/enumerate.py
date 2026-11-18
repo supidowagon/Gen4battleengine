@@ -941,6 +941,10 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.WHITE_SMOKE,
     AbilityId.VITAL_SPIRIT,
     AbilityId.IRON_FIST,
+    # E1 trial batch (G-63): a fixed Sp. Atk factor of the hit's own side's active battlers
+    # (the ally's ability and HP), whose inputs have their clauses.
+    AbilityId.PLUS,
+    AbilityId.MINUS,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause

@@ -448,6 +448,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Vital Spirit": 72,
             "Speed Boost": 3,
             "Iron Fist": 89,
+            "Plus": 57,
+            "Minus": 58,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

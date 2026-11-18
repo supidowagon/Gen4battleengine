@@ -673,6 +673,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Vital Spirit": AbilityId.VITAL_SPIRIT,
     "Speed Boost": AbilityId.SPEED_BOOST,
     "Iron Fist": AbilityId.IRON_FIST,
+    "Plus": AbilityId.PLUS,
+    "Minus": AbilityId.MINUS,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

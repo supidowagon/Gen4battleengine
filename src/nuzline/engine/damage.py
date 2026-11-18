@@ -914,6 +914,25 @@ def pinch_ability(move_type, ability) -> jnp.ndarray:
     )
 
 
+def side_active_slots(s: BattleState, side) -> tuple:
+    """The party slots of ``side``'s battlers on the field (the decomp's battleMons of the
+    side; the bench never counts). The state layout holds one active battler per side
+    (``active[side]``), so a doubles layout extends only this function."""
+    return (_i32(s.active[side]),)
+
+
+def side_ability_count(s: BattleState, side, ability) -> jnp.ndarray:
+    """``COUNT_ALIVE_BATTLERS_OUR_SIDE`` (battle_lib.c:2886-2893): the number of battlers of
+    ``side`` on the field, the asking battler included, with ``curHP != 0`` and
+    ``Battler_Ability == ability`` (``state.ability`` is the effective ability)."""
+    count = jnp.int32(0)
+    for slot in side_active_slots(s, side):
+        count += ((_i32(s.ability[side, slot]) == ability) & (_i32(s.hp[side, slot]) > 0)).astype(
+            _I32
+        )
+    return count
+
+
 def _pre_random(
     tables: Tables,
     s: BattleState,
@@ -1054,6 +1073,12 @@ def _pre_random(
     attack = jnp.where(
         (a_ability == AbilityId.GUTS) & (a_status != Status.NONE), attack * 150 // 100, attack
     )
+
+    # :6802-6809 Plus / Minus (attackerParams.ability): spAttackStat x150/100 when a living
+    # battler of the attacker's side (COUNT_ALIVE_BATTLERS_OUR_SIDE) has the other ability.
+    plus = (a_ability == AbilityId.PLUS) & (side_ability_count(s, atk_side, AbilityId.MINUS) > 0)
+    minus = (a_ability == AbilityId.MINUS) & (side_ability_count(s, atk_side, AbilityId.PLUS) > 0)
+    sp_attack = jnp.where(plus | minus, sp_attack * 150 // 100, sp_attack)
 
     # :6811 Mud Sport / :6815 Water Sport: any active battler's sport halves the power.
     power = jnp.where((move_type == Type.ELECTRIC) & jnp.any(s.mud_sport != 0), power // 2, power)

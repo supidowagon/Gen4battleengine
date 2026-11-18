@@ -1699,6 +1699,10 @@ BATCH_C_FOE_MOVES = {
     AbilityId.WHITE_SMOKE: ("Growl", "Leer", "Sand-Attack", "Aurora Beam", "Tickle", "Charm"),
     AbilityId.VITAL_SPIRIT: ("Hypnosis", "Spore", "Sing", "Yawn", "Tackle"),
 }
+# E1 trial batch (G-63): Plus / Minus act through a living ally on the side's field, so in
+# singles never; ``_draw_batch_c`` gives them a special move and the partner ability on the bench.
+PLUS_MINUS = (AbilityId.PLUS, AbilityId.MINUS)
+SPECIAL_MOVES = ("Water Gun", "Ember", "Thundershock", "Psybeam", "Surf", "Flamethrower")
 PUNCH_MOVES = ("Mach Punch", "Fire Punch", "Ice Punch", "ThunderPunch", "Mega Punch", "Drain Punch")
 
 
@@ -1711,7 +1715,7 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
     if draw(st.integers(0, 2)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
-    ability = rnd.choice(BATCH_C_ABILITIES)
+    ability = rnd.choice(BATCH_C_ABILITIES + PLUS_MINUS)
     a["ability"][side, active] = ability
     if rnd.random() >= 0.75:
         return
@@ -1742,6 +1746,12 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["stages"][side, Stat.SPE] = rnd.choice((0, 0, 5, 6, -1))
     if ability == AbilityId.IRON_FIST:
         teach(side, active, rnd.choice(PUNCH_MOVES))
+    if ability in PLUS_MINUS:
+        teach(side, active, rnd.choice(SPECIAL_MOVES))
+        partner = AbilityId.MINUS if ability == AbilityId.PLUS else AbilityId.PLUS
+        bench = [i for i in range(SLOTS) if i != active and a["species"][side, i]]
+        if bench:
+            a["ability"][side, rnd.choice(bench)] = partner
 
 
 # E1 Batch D (G-53 .. G-60): the Fantina split's held items ``_draw_batch_d`` gives the active

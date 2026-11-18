@@ -288,6 +288,17 @@ def _active(s: RefState, side: int) -> RefPokemon:
     return s.sides[side].party[s.sides[side].active]
 
 
+def _side_active(s: RefState, side: int) -> list[RefPokemon]:
+    """The battlers of ``side`` on the field (never the bench); one per side in singles."""
+    return [_active(s, side)]
+
+
+def _side_ability_count(s: RefState, side: int, ability: int) -> int:
+    """``COUNT_ALIVE_BATTLERS_OUR_SIDE`` (lib.c:2886-2893): the battlers of ``side`` on the
+    field with ``curHP != 0`` and ``Battler_Ability == ability``."""
+    return sum(1 for mon in _side_active(s, side) if mon.hp and mon.ability == ability)
+
+
 def _reveal_item(s: RefState, side: int) -> None:
     """A message names ``side``'s active Pokemon's held item through an item tag of the
     attacker, defender or ``msgBattlerTemp`` (``BattleMessage_ItemTag``, script.c:11726-11745):
@@ -888,6 +899,12 @@ def _calc_move_damage(
     # lib.c:6793 Guts.
     if a_ability == AbilityId.GUTS and atk.status != Status.NONE:
         attack = attack * 150 // 100
+    # lib.c:6802-6809 Plus / Minus: spAttackStat x150/100 when a living battler of the
+    # attacker's side (COUNT_ALIVE_BATTLERS_OUR_SIDE) has the other ability.
+    if (a_ability == AbilityId.PLUS and _side_ability_count(s, attacker, AbilityId.MINUS)) or (
+        a_ability == AbilityId.MINUS and _side_ability_count(s, attacker, AbilityId.PLUS)
+    ):
+        sp_attack = sp_attack * 150 // 100
     # lib.c:6811 Mud Sport, :6815 Water Sport (any battler on the field).
     if move_type == Type.ELECTRIC and (s.sides[0].mud_sport or s.sides[1].mud_sport):
         power //= 2

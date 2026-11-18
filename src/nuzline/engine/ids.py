@@ -563,6 +563,10 @@ class AbilityId(IntEnum):
     VITAL_SPIRIT = 84
     SPEED_BOOST = 85
     IRON_FIST = 86
+    # E1 trial batch, ruling G-63: Plus and Minus (BattleSystem_CalcMoveDamage,
+    # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
+    PLUS = 87
+    MINUS = 88
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -657,6 +661,8 @@ ABILITY_DECOMP_IDS = {
     AbilityId.VITAL_SPIRIT: 72,
     AbilityId.SPEED_BOOST: 3,
     AbilityId.IRON_FIST: 89,
+    AbilityId.PLUS: 57,
+    AbilityId.MINUS: 58,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
