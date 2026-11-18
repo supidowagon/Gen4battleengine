@@ -4420,3 +4420,104 @@ def test_endure(kaizo_tables, kaizo_names, kaizo_roark_party, own_hp, jumps, exp
     )
     assert _delta(t, s, 0x2, 0x3)[0] == 0
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+# --- E1 trial batch: Magnet Rise (G-66) -------------------------------------------------------
+
+
+def _levitate_species(t):
+    """A species whose ability slot 0 is Levitate (the AI reads the species')."""
+    abilities = np.asarray(t.species_abilities_decomp)
+    rows = np.asarray(t.species_form_row)[:, 0]
+    return next(
+        sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == c.ABILITY_IDS["Levitate"]
+    )
+
+
+@pytest.mark.parametrize("case", ["plain", "bit", "levitate", "flying"])
+def test_magnet_rise_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
+    """Basic_CheckMagnetRise (script.s:1461-1474): the attacker with the bit (:1463), Levitate
+    (:1467) or a Flying type (:1470-1473) scores -10."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magnet Rise", "Accelerock", "", ""))
+    if case == "bit":
+        s = s._replace(magnet_rise=s.magnet_rise.at[1].set(1))
+    if case == "levitate":
+        s = s._replace(
+            species=s.species.at[1, 0].set(_levitate_species(t)),
+            ability_slot=s.ability_slot.at[1, 0].set(0),
+        )
+    if case == "flying":
+        s = s._replace(types=s.types.at[1, 0, 1].set(2))  # TYPE_FLYING
+    assert _delta(t, s, 0x2, 0x3)[0] == (0 if case == "plain" else -10)
+
+
+@pytest.mark.parametrize(
+    ("own_hp", "ground", "known", "jumps", "expert"),
+    [
+        # Expert_MagnetRise (script.s:6090-6119): below 50 % HP ends; a known Earthquake / Earth
+        # Power / Fissure +1; a Ground-type player +1, else +1 unless the :6113 roll jumps.
+        (40, True, True, (), 0),
+        (49, False, True, (), 0),
+        (100, True, True, (), 2),
+        (100, True, False, (), 1),
+        (100, False, True, (), 2),
+        (100, False, True, (6113,), 1),
+        (100, False, False, (), 1),
+        (100, False, False, (6113,), 0),
+        (50, False, False, (), 1),
+    ],
+)
+def test_magnet_rise_expert(
+    kaizo_tables, kaizo_names, kaizo_roark_party, own_hp, ground, known, jumps, expert
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magnet Rise", "Accelerock", "", "")),
+        1,
+        own_hp,
+    )
+    if not ground:  # Roark's Gible is Dragon / Ground
+        s = s._replace(types=s.types.at[0, 0].set(jnp.zeros(2, s.types.dtype)))  # Normal
+    if known:
+        s = s._replace(
+            moves=s.moves.at[0, 0, 3].set(n.move("Earthquake")),
+            ai_seen_moves=s.ai_seen_moves.at[0, 3].set(1),
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
+
+
+def test_the_players_magnet_rise_is_immune_to_the_ai_ground_move(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """MOVE_STATUS_MAGNET_RISE (battle_lib.c:2605-2609, moves.h:87): IfMoveEffectivenessEquals
+    reads IMMUNE, the damage estimate is 0, and the walk is skipped (only STAB stays)."""
+    from nuzline.ai.switching import MAGNET_RISE, apply_type_chart, type_chart_flags
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Earthquake", "Accelerock", "", ""))
+    s = s._replace(types=s.types.at[0, 0].set(jnp.asarray([10, 10], s.types.dtype)))  # Fire
+    quake, rock = n.move("Earthquake"), n.move("Accelerock")
+    assert int(c.effectiveness_class(t, s, quake)) == TypeMulti.DOUBLE  # Ground vs Fire
+    floating = s._replace(magnet_rise_turns=s.magnet_rise_turns.at[0].set(3))
+    assert int(c.effectiveness_class(t, floating, quake)) == TypeMulti.IMMUNE
+    assert int(c.effectiveness_class(t, floating, rock)) == int(c.effectiveness_class(t, s, rock))
+    # The value keeps STAB only (Bonsly is Rock, Earthquake Ground: no STAB): 40 stays 40.
+    assert int(apply_type_chart(t, floating, 1, quake, 40)) == 40
+    assert int(apply_type_chart(t, s, 1, quake, 40)) == 80
+    flags = int(
+        type_chart_flags(t, quake, floating.types[0, 0], 0, False, None, False, False, True)
+    )
+    assert flags == MAGNET_RISE
+    # Ingrain or an Iron Ball (the player's) lifts it for the AI as for the battle.
+    for lifted in (
+        floating._replace(ingrain=floating.ingrain.at[0].set(1)),
+        floating._replace(item=floating.item.at[0, 0].set(n.item("Iron Ball"))),
+    ):
+        assert int(c.effectiveness_class(t, lifted, quake)) == TypeMulti.DOUBLE
+    # The damage estimate (TrainerAI_CalcDamage, trainer_ai.c:3106) is zero.
+    from nuzline.engine.damage import ai_damage_for_roll
+
+    assert int(ai_damage_for_roll(t, floating, 1, quake, 100)) == 0
+    assert int(ai_damage_for_roll(t, s, 1, quake, 100)) > 0

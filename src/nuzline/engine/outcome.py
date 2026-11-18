@@ -1139,7 +1139,8 @@ def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> 
     for side, foe in ((0, 1), (1, 0)):
         slot = jnp.clip(actions[foe] - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
         ingrained = jnp.where(paused, state.ingrain[foe] != 0, False)
-        loss = hazards_loss(tables, state, foe, slot, ingrained)
+        magnet = jnp.where(paused, state.magnet_rise[foe] != 0, False)  # Baton Pass keeps it too
+        loss = hazards_loss(tables, state, foe, slot, ingrained, magnet)
         alive = state.hp[foe, slot].astype(_I32) - loss > 0
         stays = ~jnp.where(paused, sides[side] == pivot, is_switch(actions[side]))
         pursued = ~paused & pursuit_fires(tables, state, foe, actions, choices)

@@ -8,12 +8,16 @@ import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.actions import trapped
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, side_ability_count
-from nuzline.engine.ids import AbilityId, EffectId
+from nuzline.engine.ids import MAGNET_RISE_TURNS, AbilityId, EffectId
+from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
 from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
 
 
@@ -214,4 +218,150 @@ def test_endure_enumeration_equals_bruteforce(tables, names, opp, order, count, 
 
     s = _endure(tables, names, opp=opp, order=order, count=count, opp_count=count, item=item)
     width, brute = assert_equals_bruteforce(tables, s, A("Endure", opp, s, names))
+    assert width <= brute
+
+
+# --- Magnet Rise (G-66) --------------------------------------------------------------------
+
+MAGNET_MOVES = ("Magnet Rise", "Protect", "Scratch", "Swords Dance")
+
+
+def _magnet(tables, names, *, turns=0, bit=None, opp="Earthquake", **kw):
+    """Monferno (Magnet Rise first) against Geodude (``opp`` first); ``turns`` / ``bit`` are
+    the player's ``magnet_rise_turns`` / ``magnet_rise`` (the bit defaults to ``turns > 0``)."""
+    s = _state(tables, names, mine=MAGNET_MOVES, opp=opp, **kw)
+    bit = turns > 0 if bit is None else bit
+    return s._replace(
+        magnet_rise=s.magnet_rise.at[0].set(int(bit)),
+        magnet_rise_turns=s.magnet_rise_turns.at[0].set(turns),
+    )
+
+
+def test_magnet_rise_is_mapped(tables, names, kaizo_tables, kaizo_names):
+    from tools.effect_map import DECOMP_EFFECT_TO_ID
+
+    assert DECOMP_EFFECT_TO_ID[252] == (EffectId.MAGNET_RISE, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Magnet Rise")]) == EffectId.MAGNET_RISE
+    assert MAGNET_RISE_TURNS == 5
+
+
+def test_magnet_rise_sets_the_bit_and_five_turns_then_counts_down(tables, names):
+    s = _magnet(tables, names, opp="Leer")
+    acts = A("Magnet Rise", "Leer", s, names)
+    out = assert_matches_reference(tables, s, acts, _o())
+    # Set to 5 by the move, then the turn's MON_COND_CHECK_STATE_MAGNET_RISE counts it once.
+    assert int(out.magnet_rise[0]) == 1 and int(out.magnet_rise_turns[0]) == MAGNET_RISE_TURNS - 1
+    assert int(out.magnet_rise[1]) == 0 and int(out.magnet_rise_turns[1]) == 0
+    ev = _events(tables, s, acts, _o())
+    assert ev["move_failed"].tolist() == [0, 0]
+    # Counted from 5 to 0 over five turn ends: the bit clears with the last one.
+    left = out
+    for turns in (3, 2, 1):
+        left = assert_matches_reference(tables, left, A("Swords Dance", "Leer", left, names), _o())
+        assert (int(left.magnet_rise[0]), int(left.magnet_rise_turns[0])) == (1, turns)
+    left = assert_matches_reference(tables, left, A("Swords Dance", "Leer", left, names), _o())
+    assert (int(left.magnet_rise[0]), int(left.magnet_rise_turns[0])) == (0, 0)
+
+
+def test_magnet_rise_fails_with_turns_levitate_or_ingrain(tables, names):
+    cases = {
+        "turns": _magnet(tables, names, turns=3, opp="Leer"),
+        "levitate": _ability_player(_magnet(tables, names, opp="Leer"), AbilityId.LEVITATE),
+    }
+    ingrained = _magnet(tables, names, opp="Leer")
+    cases["ingrain"] = ingrained._replace(ingrain=ingrained.ingrain.at[0].set(1))
+    # The turns, not the bit, decide: a stale bit without turns does not fail it.
+    stale = _magnet(tables, names, turns=0, bit=True, opp="Leer")
+    out = assert_matches_reference(tables, stale, A("Magnet Rise", "Leer", stale, names), _o())
+    assert int(out.magnet_rise_turns[0]) == MAGNET_RISE_TURNS - 1
+    for name, s in cases.items():
+        out = assert_matches_reference(tables, s, A("Magnet Rise", "Leer", s, names), _o())
+        # The script failed: nothing was set (a success would leave 4 turns and the bit).
+        assert int(out.magnet_rise_turns[0]) == max(int(s.magnet_rise_turns[0]) - 1, 0), name
+        assert int(out.magnet_rise[0]) == int(s.magnet_rise[0]) * int(
+            out.magnet_rise_turns[0] > 0
+        ), name
+
+
+def _ability_player(s, ability):
+    return s._replace(ability=s.ability.at[0, int(s.active[0])].set(ability))
+
+
+def test_magnet_rise_blocks_ground_moves(tables, names):
+    """battle_lib.c:2605-2609: MOVE_STATUS_MAGNET_RISE, part of MOVE_STATUS_IMMUNE; Iron Ball,
+    Ingrain lift it, Mold Breaker does not."""
+    acts = lambda s: A("Swords Dance", "Earthquake", s, names)
+    hit = _magnet(tables, names, opp="Earthquake")  # no turns: a normal hit
+    base = assert_matches_reference(tables, hit, acts(hit), _o())
+    assert _hp(base, 0) < _hp(hit, 0)
+    safe = _magnet(tables, names, turns=3, opp="Earthquake")
+    out = assert_matches_reference(tables, safe, acts(safe), _o())
+    assert _hp(out, 0) == _hp(safe, 0)  # the hit is an immunity
+    # Mold Breaker does not lift it.
+    mb = safe._replace(ability=safe.ability.at[1, int(safe.active[1])].set(AbilityId.MOLD_BREAKER))
+    assert _hp(assert_matches_reference(tables, mb, acts(mb), _o()), 0) == _hp(mb, 0)
+    # An Iron Ball and Ingrain (after Magnet Rise) lift it.
+    iron = safe._replace(item=safe.item.at[0, 0].set(names.item("Iron Ball")))
+    assert _hp(assert_matches_reference(tables, iron, acts(iron), _o()), 0) < _hp(iron, 0)
+    rooted = safe._replace(ingrain=safe.ingrain.at[0].set(1))
+    assert _hp(assert_matches_reference(tables, rooted, acts(rooted), _o()), 0) < _hp(rooted, 0)
+    # Other types are untouched.
+    tackle = _magnet(tables, names, turns=3, opp="Tackle")
+    out = assert_matches_reference(tables, tackle, A("Swords Dance", "Tackle", tackle, names), _o())
+    assert _hp(out, 0) < _hp(tackle, 0)
+
+
+def test_a_switch_clears_magnet_rise_and_baton_pass_keeps_it(tables, names):
+    n = names
+    s = _magnet(tables, names, turns=3, opp="Leer")
+    out = assert_matches_reference(tables, s, A(4 + 1, "Leer", s, names), _o())
+    assert (int(out.magnet_rise[0]), int(out.magnet_rise_turns[0])) == (0, 0)
+    # Baton Pass hands the bit and the turns over (moves.h:42-44, battle_lib.c:2112); the
+    # resumed turn's end counts the newcomer's turns once.
+    s = make_state(
+        tables,
+        [_mon(n, "Ninjask", ["Baton Pass"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Leer"], 20)],
+    )
+    s = s._replace(
+        magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(4)
+    )
+    paused = assert_matches_reference(tables, s, (0, 0), empty_outcome())
+    after = _resume(tables, paused, 1)
+    assert (int(after.magnet_rise[0]), int(after.magnet_rise_turns[0])) == (1, 3)
+    # Spikes miss a Baton-Passed newcomer with the bit (subscript_hazards_check.s:11), and hit
+    # one without it.
+    spiked = s._replace(spikes=s.spikes.at[0].set(1))
+    kept = _resume(tables, assert_matches_reference(tables, spiked, (0, 0), empty_outcome()), 1)
+    assert int(kept.hp[0, 1]) == int(spiked.hp[0, 1])
+    bare = spiked._replace(magnet_rise=spiked.magnet_rise.at[0].set(0))
+    hurt = _resume(tables, assert_matches_reference(tables, bare, (0, 0), empty_outcome()), 1)
+    assert int(hurt.hp[0, 1]) < int(bare.hp[0, 1])
+
+
+def test_arena_trap_reads_the_turns_of_magnet_rise(tables, names):
+    s = _magnet(tables, names, opp="Leer")
+    s = s._replace(ability=s.ability.at[1, int(s.active[1])].set(AbilityId.ARENA_TRAP))
+    s = _ability_player(s, AbilityId.NONE)
+    assert bool(trapped(tables, s, 0))
+    floating = s._replace(magnet_rise_turns=s.magnet_rise_turns.at[0].set(2))
+    assert not bool(trapped(tables, floating, 0))
+    # The bit alone (turns zeroed, as by Gravity) does not free it: BattlerIsGrounded reads the
+    # turns (battle_lib.c:5503).
+    bit_only = s._replace(magnet_rise=s.magnet_rise.at[0].set(1))
+    assert bool(trapped(tables, bit_only, 0))
+
+
+@pytest.mark.parametrize(
+    ("order", "turns"),
+    [("player", 3), ("opp", 3), ("player", 0)],
+)
+def test_magnet_rise_enumeration_equals_bruteforce(tables, names, order, turns):
+    from tests.engine.helpers import drop_programs
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    drop_programs()
+    s = _magnet(tables, names, turns=turns, opp="Earthquake", order=order)
+    width, brute = assert_equals_bruteforce(tables, s, A("Magnet Rise", "Earthquake", s, names))
     assert width <= brute

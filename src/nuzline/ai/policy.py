@@ -1078,6 +1078,21 @@ def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_magnet_rise(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMagnetRise`` (script.s:1461-1474): the attacker already under the effect
+    (the mask bit, :1463), with Levitate (:1466-1467) or of a Flying type (:1470-1473), -10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.MAGNET_RISE))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _A)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    ctx = _score(ctx, t, -10)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Flying"]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_check_perish_song(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckPerishSong`` (script.s:720-723): the player already perishing, -10."""
     ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.PERISH_SONG))
@@ -3051,6 +3066,33 @@ def _expert_endure(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | ctx.live))
 
 
+def _expert_magnet_rise(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MagnetRise`` (script.s:6090-6119): the attacker below 50 % HP ends (:6099); a
+    defender known to have Earthquake, Earth Power or Fissure +1 (:6100-6106); a Ground-type
+    defender +1 (:6109-6115), else +1 unless the 128 roll (:6113) jumps."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_hp_percent_less_than(ctx, _A, 50))  # -> Expert_MagnetRise_End
+    known = jnp.zeros_like(ctx.live)
+    for name in ("Earthquake", "Earth Power", "Fissure"):
+        ctx, t = _split(c.if_move_known(ctx, _D, _MOVE[name]))
+        known = known | t
+    ctx, typing = _split(c.go_to(ctx))  # :6103
+    # Expert_MagnetRise_InitialScorePlus1 (:6106)
+    ctx = c.add_to_move_score(_at(ctx, known), 1)
+    typing = typing | ctx.live
+    # Expert_MagnetRise_CheckOpponentTyping (:6108)
+    ctx = _at(ctx, typing)
+    ground = jnp.zeros_like(ctx.live)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ground"]))
+        ground = ground | t
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 6113))
+    # Expert_MagnetRise_ScorePlus1 (:6115)
+    ctx = c.add_to_move_score(_at(ctx, ground | ctx.live), 1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _expert_heal_bell(ctx: AiContext, mask) -> AiContext:
     """``Expert_HealBell`` (script.s:3398-3406): -5 unless the AI or a party member with HP has
     a status, B12-18."""
@@ -3253,6 +3295,7 @@ _BASIC_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
+    (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -3362,6 +3405,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
     (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
@@ -3587,8 +3631,9 @@ def _flag_scripts(layout: AiLayout) -> tuple:
 _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 # Wonder Guard is modelled since the E1 Gardenia batch (switching.wonder_guard_bit, G-23).
 _DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
-# Ingrain and Roost are read since E1 prep batch P2 (switching.defender_chart_flags).
-_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye", "Magnet Rise")}
+# Ingrain and Roost are read since E1 prep batch P2, Magnet Rise since the E1 trial batch
+# (switching.defender_chart_flags).
+_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye",)}
 
 
 def player_move_refusal(move: int) -> str | None:

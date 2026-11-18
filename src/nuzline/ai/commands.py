@@ -63,6 +63,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.ai.switching import (
     INEFFECTIVE,
+    MAGNET_RISE,
     SUPER_EFFECTIVE,
     apply_type_chart,
     defender_chart_flags,
@@ -210,6 +211,7 @@ class MoveEffectMask(IntEnum):
     AQUA_RING = 1 << 24  # :37; BattleState.aqua_ring
     IMPRISONED = 1 << 30  # :38; BattleState.imprisoned
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
+    MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -222,6 +224,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.AQUA_RING: "aqua_ring",
     MoveEffectMask.IMPRISONED: "imprisoned",
     MoveEffectMask.POWER_TRICK: "power_trick",
+    MoveEffectMask.MAGNET_RISE: "magnet_rise",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 
@@ -279,6 +282,7 @@ class BattleEffect(IntEnum):
     EVA_DOWN = 24
     ALL_FAINT_3_TURNS = 114  # Perish Song (Basic_CheckPerishSong :199)
     SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
+    GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -1058,6 +1062,9 @@ MOVE_IDS = {
     # Expert_Substitute (script.s:2994).
     "Focus Punch": 264,
     "Shadow Force": 467,
+    # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
+    "Earthquake": 89,
+    "Earth Power": 414,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -1422,7 +1429,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[a, state.active[a]].astype(_I32)
     d_types = state.types[d, state.active[d]]
-    identified, grounded, roosting = defender_chart_flags(tables, state, d)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -1433,6 +1440,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
             ai_move_type(tables, state, a, m),
             grounded,
             roosting,
+            magnet,
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1551,9 +1559,9 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock, Miracle Eye and
-    Magnet Rise change this value and are refused (``policy.ai_refusals``); the player's
-    Foresight, Ingrain / Iron Ball and roosting flags are read (``switching.defender_chart_flags``)."""
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock and Miracle Eye change
+    this value and are refused (``policy.ai_refusals``); the player's Foresight, Ingrain /
+    Iron Ball, roosting and Magnet Rise flags are read (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1568,7 +1576,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
@@ -1578,8 +1586,12 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
         grounded,
         roosting,
+        magnet,
     )
-    immune = ((flags & INEFFECTIVE) != 0) | wonder_guard_bit(tables, state, 1, 0, move, flags)
+    # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, Wonder Guard's or Magnet Rise's bit.
+    immune = ((flags & (INEFFECTIVE | MAGNET_RISE)) != 0) | wonder_guard_bit(
+        tables, state, 1, 0, move, flags
+    )
     # Struggle: ApplyTypeChart returns 40 unchanged and sets no bit (battle_lib.c:2573).
     return jnp.where(immune, TypeMulti.IMMUNE, mapped).astype(_I32)
 

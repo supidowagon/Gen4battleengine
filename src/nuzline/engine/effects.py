@@ -250,10 +250,10 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    ground_immune,
     grounded,
     identified,
     ignorable,
-    levitated,
     move_type_of,
     spikes_loss,
     stealth_rock_loss,
@@ -267,6 +267,7 @@ from nuzline.engine.ids import (
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
+    MAGNET_RISE_TURNS,
     MINIMIZE_PARAM,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
@@ -1578,6 +1579,29 @@ def _aqua_ring(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "aqua_ring", h.side, 1, cond)
 
 
+def magnet_rise_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: effect_script_0252.s:5-7 fails (:16, MOVE_STATUS_FAILED) a user with
+    ``magnetRiseTurns`` (the turns, not the mask bit), with Levitate (``CheckAbility
+    CHECK_HAVE``, through ``Battler_Ability``: none for an ingrained holder and under Gravity,
+    battle_lib.c:3095-3103) or with ``MOVE_EFFECT_INGRAIN`` (G-66)."""
+    mon = state.active[side]
+    levitate = (
+        (state.ability[side, mon] == AbilityId.LEVITATE)
+        & (state.ingrain[side] == 0)
+        & (state.gravity == 0)
+    )
+    return (state.magnet_rise_turns[side] != 0) | levitate | (state.ingrain[side] != 0)
+
+
+def _magnet_rise(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Magnet Rise (effect_script_0252.s:8-9): ``MOVE_EFFECT_MAGNET_RISE`` on the user's
+    ``moveEffectsMask`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``, set by the script itself
+    (its ON_HIT subscript is a message). A failing user is ``step._use_move``'s ``failed``."""
+    cond = (h.effect == _E.MAGNET_RISE) & h.landed & ~magnet_rise_fails(state, h.side)
+    state = _set(state, "magnet_rise", h.side, 1, cond)
+    return _set(state, "magnet_rise_turns", h.side, MAGNET_RISE_TURNS, cond)
+
+
 def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Ingrain (effect_script_0181.s:5-6): the user's ``MOVE_EFFECT_INGRAIN``. Its script fails a
     user that has it already (:5, :19-20: MOVE_STATUS_FAILED, ``step._use_move``'s ``failed``)."""
@@ -1657,6 +1681,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "mud_sport",
     "water_sport",
     "aqua_ring",
+    "magnet_rise",  # G-66
     "minimized",
     "semi_invulnerable",  # B10-12
     "power_trick",  # B12-10
@@ -2809,7 +2834,7 @@ def play_hit(
             identified(tables, state, side, target_side),
         )
         == 0
-    ) | levitated(tables, state, side, target_side, counter_type)
+    ) | ground_immune(tables, state, side, target_side, counter_type)
     # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
     immune = immune | wonder_guarded(tables, state, side, move, counter_type, target_side)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
@@ -2905,7 +2930,7 @@ def play_hit(
             identified(tables, state, side, target_side),
         )
         > 0
-    ) & ~levitated(tables, state, side, target_side, move_type)
+    ) & ~ground_immune(tables, state, side, target_side, move_type)
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
     chance = tables.move_effect_chance[move]
     h = _Hit(
@@ -2961,6 +2986,7 @@ def play_hit(
         _water_sport,
         _mud_sport,
         _aqua_ring,
+        _magnet_rise,
         _ingrain,
         _mean_look,
         _imprison,

@@ -979,3 +979,25 @@ of them, :2107-2115).
   (script.s:3633-3649, dispatch :1704): below 4 % HP -1; below 35 % +1 unless the 70 roll (:3645)
   jumps; else -1 (the fall-through at :3638 reaches :3640); no Basic entry. Tests:
   `test_e1_trial.py`, `test_kaizo_policy.py`.
+- G-66 Magnet Rise (`EffectId.MAGNET_RISE`, BATTLE_EFFECT_GIVE_GROUND_IMMUNITY 252). The move
+  (effect_script_0252.s) fails (:16, MOVE_STATUS_FAILED) for a user with `magnetRiseTurns` (:5, the
+  turns, not the bit), Levitate (:6, `Battler_Ability`) or `MOVE_EFFECT_INGRAIN` (:7), else sets
+  `MOVE_EFFECT_MAGNET_RISE` (:8) and `magnetRiseTurns = 5` (:9). `BattleSystem_ApplyTypeChart`
+  (battle_lib.c:2605-2609, after the Levitate test) gives a Ground move against a defender with
+  turns, no Ingrain and no Iron Ball `MOVE_STATUS_MAGNET_RISE` (moves.h:77, part of
+  `MOVE_STATUS_IMMUNE`, :87): the walk is skipped (only STAB stays in the value); Mold Breaker does
+  not lift it; `CalcEffectiveness` has no such test. Hazards read the mask BIT
+  (subscript_hazards_check.s:11, after Gravity :6 and Iron Ball :7); Arena Trap and
+  `BattlerIsGrounded` the TURNS (battle_lib.c:3215-3218, :5500-5507). `MON_COND_CHECK_STATE_MAGNET_RISE`
+  (bcp.c:1647-1656, after TAUNT) counts the turns down and `subscript_magnet_rise_end.s` clears the
+  bit at 0; turns zeroed by Gravity never reach it (the bit stays). A switch clears both
+  (battle_lib.c:2100-2104); Baton Pass keeps the bit (`MOVE_EFFECT_BATON_PASSED`, moves.h:42-44)
+  and the turns (:2112). Built as `BattleState.magnet_rise` / `magnet_rise_turns`,
+  `damage.magnet_risen` / `ground_immune` at every `ApplyTypeChart` immunity site (five in the
+  engine, six in the reference), `damage.grounded`'s `magnet` argument, `actions.trapped`, the
+  countdown folded into `step._taunt_check` (reference `_taunt_check`), and in the AI
+  `switching.defender_chart_flags`' `magnet` with the `MAGNET_RISE` bit counted as immune by
+  `commands.effectiveness_class` and `replacement._stage_2_score`. AI scoring:
+  `Basic_CheckMagnetRise` (script.s:1461-1474, -10 with the bit, Levitate or a Flying type) and
+  `Expert_MagnetRise` (:6090-6119, dispatch :1795, roll :6113); the Magnet Rise refusals are gone.
+  Tests: `test_e1_trial.py`, `test_kaizo_policy.py`, `test_switching.py`.

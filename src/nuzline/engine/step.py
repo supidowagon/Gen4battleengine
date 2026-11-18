@@ -97,10 +97,10 @@ from nuzline.engine.damage import (
     decomp_abilities,
     divide,
     effectiveness,
+    ground_immune,
     hits_semi,
     identified,
     ignorable,
-    levitated,
     move_type_of,
     weather_suppressed,
     wonder_guarded,
@@ -134,6 +134,7 @@ from nuzline.engine.effects import (
     know_ability,
     life_orb_recoil,
     locked_onto,
+    magnet_rise_fails,
     metronome_update,
     metronome_verify,
     on_hit_berry,
@@ -1081,6 +1082,8 @@ def _use_move(
     effect_used = tables.move_effect[used]
     failed = failed | ((effect_used == EffectId.INGRAIN) & (state.ingrain[side] != 0))
     failed = failed | ((effect_used == EffectId.AQUA_RING) & (state.aqua_ring[side] != 0))
+    # Magnet Rise (effect_script_0252.s:5-7, :16): the turns, Levitate or Ingrain (G-66).
+    failed = failed | ((effect_used == EffectId.MAGNET_RISE) & magnet_rise_fails(state, side))
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
@@ -1240,7 +1243,7 @@ def _use_move(
             )
             != 0
         )
-        & ~levitated(tables, state, side, target_side, ohko_type)
+        & ~ground_immune(tables, state, side, target_side, ohko_type)
         # subscript_missed.s:13 shows the miss of MOVE_STATUS_SEMI_INVULNERABLE first.
         & ~semi_miss
     )
@@ -2927,9 +2930,20 @@ def _uproar_then_disable(tables: Tables, state: BattleState, side, failed) -> Ba
 
 
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
-    """The Taunt counter drops by 1 (no HP condition in the decomp)."""
+    """The Taunt counter drops by 1 (no HP condition in the decomp), then
+    ``MON_COND_CHECK_STATE_MAGNET_RISE`` (bcp.c:1647-1656, between TAUNT and HEAL_BLOCK): a
+    nonzero ``magnetRiseTurns`` drops by 1 and ``subscript_magnet_rise_end.s`` clears the mask
+    bit at 0. Turns that Gravity zeroed never reach it: the bit stays (G-66)."""
     taunt = state.taunt[side] - (state.taunt[side] > 0).astype(state.taunt.dtype)
-    return state._replace(taunt=state.taunt.at[side].set(taunt))
+    turns = state.magnet_rise_turns[side]
+    left = turns - (turns > 0).astype(turns.dtype)
+    ended = (turns > 0) & (left == 0)
+    bit = jnp.where(ended, 0, state.magnet_rise[side]).astype(state.magnet_rise.dtype)
+    return state._replace(
+        taunt=state.taunt.at[side].set(taunt),
+        magnet_rise_turns=state.magnet_rise_turns.at[side].set(left),
+        magnet_rise=state.magnet_rise.at[side].set(bit),
+    )
 
 
 def _taunt_then_yawn(tables: Tables, state: BattleState, side, outcome: Outcome) -> BattleState:
@@ -3094,8 +3108,8 @@ END_OF_TURN_ORDER = (
     # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
     # only check that reads the turn's moveFailFlags)
     ("uproar_disable", _uproar_then_disable),
-    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then (Magnet Rise, Heal Block
-    # and Embargo, unsupported, between) _YAWN, :1684 (``_taunt_then_yawn``: neither changes
+    # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then MAGNET_RISE (:1647, in
+    # ``_taunt_check``) and (Heal Block and Embargo, unsupported, between) _YAWN, :1684 (``_taunt_then_yawn``: neither changes
     # HP; the Yawn reads the turn's ``Outcome``)
     ("taunt_yawn", _taunt_then_yawn),
     # MON_COND_CHECK_STATE_ITEM_CONDITION, battle_controller_player.c:1699: the same berry

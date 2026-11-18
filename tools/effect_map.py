@@ -274,6 +274,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0116.s (Endure): the same direct TO_ATTACKER subscript_protect.s as Protect
     # (effect_script_0111.s:3); BtlCmd_TryProtection sets turnFlags.enduring (battle_script.c:5174-5177).
     116: ("BATTLE_EFFECT_SURVIVE_WITH_1_HP", _E.ENDURE, (0, 0, 0)),
+    # effect_script_0252.s (Magnet Rise): fails on magnetRiseTurns, Levitate or Ingrain, else sets
+    # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns = 5 on the user.
+    252: ("BATTLE_EFFECT_GIVE_GROUND_IMMUNITY", _E.MAGNET_RISE, (0, 0, 0)),
     # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
     # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
     # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;

@@ -105,6 +105,8 @@ class RefSide:
     focus_energy: int  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
+    magnet_rise: int  # MOVE_EFFECT_MAGNET_RISE (G-66)
+    magnet_rise_turns: int  # MoveEffectsData.magnetRiseTurns (G-66)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

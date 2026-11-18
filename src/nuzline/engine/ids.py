@@ -387,7 +387,15 @@ class EffectId(IntEnum):
     # one site, ``BattleControllerPlayer_UpdateHP`` (battle_controller_player.c:3386-3404;
     # ``effects.play_hit``, G-65).
     ENDURE = 105
+    # Magnet Rise (252, BATTLE_EFFECT_GIVE_GROUND_IMMUNITY): zeros. effect_script_0252.s fails
+    # (MOVE_STATUS_FAILED) for a user with ``magnetRiseTurns``, Levitate (``Battler_Ability``) or
+    # Ingrain, else sets ``MOVE_EFFECT_MAGNET_RISE`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``
+    # (``effects._magnet_rise``, G-66).
+    MAGNET_RISE = 106
 
+
+# effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
+MAGNET_RISE_TURNS = 5
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
 COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3

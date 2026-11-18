@@ -101,9 +101,10 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost and Ingrain
-# (_SWITCH_REFUSED): moves whose decomp handling the switch check does not model. Roost and
-# Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags).
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain, Perish Song and
+# Magnet Rise (_SWITCH_REFUSED): moves whose decomp handling the switch check does not model.
+# Roost and Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags); Perish
+# Song (step 3, AI_PerishSongKO, G-64) and Magnet Rise (G-66) since the E1 trial batch.
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -116,7 +117,9 @@ _SWITCH_MOVES = {
     "Judgment": 449,
 }
 _SWITCH_REFUSED = {
-    k: v for k, v in _SWITCH_MOVES.items() if k not in ("Hidden Power", "Roost", "Ingrain")
+    k: v
+    for k, v in _SWITCH_MOVES.items()
+    if k not in ("Hidden Power", "Roost", "Ingrain", "Perish Song", "Magnet Rise")
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
@@ -153,6 +156,9 @@ _AI_MOVE_IDS = {
     "Baton Pass": 226,
     "Protect": 182,
     "Detect": 197,
+    # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
+    "Earthquake": 89,
+    "Earth Power": 414,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
@@ -203,7 +209,7 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
             "nuzline.ai.policy._STATE_MOVE_IDS",
             "move",
             scope,
-            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Magnet Rise")},
+            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye",)},
         ),
     )
 

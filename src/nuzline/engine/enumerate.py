@@ -831,6 +831,8 @@ INPUT_CLAUSE_EFFECTS = (
     # The ingrained foe's chart and Levitate (damage.identified, damage.ignorable): the ingrain
     # clause.
     _E.INGRAIN,
+    # Magnet Rise (G-66): the foe's Ground-immunity bits (damage.magnet_risen), the same clause.
+    _E.MAGNET_RISE,
     # E2 batch 6: the foe's U-turn / Baton Pass switches it out mid-turn (step's pause), so the
     # side's later hit meets the newcomer (its stats, types, ability, item; a Baton Pass keeps
     # the stages): the pivot clause.
@@ -1153,6 +1155,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.RECOVER,
     _E.CURSE,
     _E.AQUA_RING,
+    _E.MAGNET_RISE,  # a status move: no damage
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
     _E.ENDURE,  # a status move: no damage
@@ -1345,6 +1348,7 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.POWER_TRICK) & physical)
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
+        | (foe_effect == _E.MAGNET_RISE)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1787,7 +1791,14 @@ def outcome_laws(
     # stops Roar before TryWhirlwind draws (B7-16): anchored at the turn start and still so when
     # Roar runs, i.e. the target side neither switches nor uses a move that can add a bit of its
     # moveEffectsMask (Aqua Ring, the sports, Imprison, Camouflage, or an invoker's call).
-    setters = (_E.AQUA_RING, _E.MUD_SPORT, _E.WATER_SPORT, _E.IMPRISON, _E.CAMOUFLAGE)
+    setters = (
+        _E.AQUA_RING,
+        _E.MAGNET_RISE,
+        _E.MUD_SPORT,
+        _E.WATER_SPORT,
+        _E.IMPRISON,
+        _E.CAMOUFLAGE,
+    )
     target_steady = ~switch & ~(uses_move & (_any_of(effect, setters) | (kinds != CALL_NONE)))
     anchored = jnp.stack([ingrain_anchors(tables, state, 1 - side) for side in (0, 1)])
     roar = roar & ~(anchored & target_steady[::-1])

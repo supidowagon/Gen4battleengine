@@ -414,6 +414,7 @@ SITE_N: dict[int, int] = {
     8030: 128,  # Harrassment_Main (+2 when it does NOT jump)
     # E1 trial batch.
     3645: 70,  # Expert_Endure_TryScorePlus1 (+1 when it does NOT jump)
+    6113: 128,  # Expert_MagnetRise_CheckOpponentTyping (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -645,6 +646,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         114,  # ALL_FAINT_3_TURNS: Basic_CheckPerishSong (:199); no Expert entry
         173,  # NATURE_POWER: no Basic or Expert entry; Harrassment_Effects :8058
         116,  # SURVIVE_WITH_1_HP: no Basic entry; Expert_Endure (:1704), :3645
+        252,  # GIVE_GROUND_IMMUNITY: Basic_CheckMagnetRise (:280); Expert_MagnetRise (:1795), :6113
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -773,6 +775,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     234: ("Expert_PsychoShift", 1777),
     16: ("Expert_StatusEvasionUp", 1639),
     116: ("Expert_Endure", 1704),
+    252: ("Expert_MagnetRise", 1795),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -888,6 +891,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         234,  # TRANSFER_STATUS: Expert_PsychoShift
         16,  # EVA_UP: Expert_StatusEvasionUp
         116,  # SURVIVE_WITH_1_HP: Expert_Endure
+        252,  # GIVE_GROUND_IMMUNITY: Expert_MagnetRise
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

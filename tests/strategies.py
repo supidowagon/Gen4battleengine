@@ -1299,6 +1299,7 @@ BATCH12_MOVES = (
     "Refresh",
     "Psycho Shift",
     "Mist",  # B12-23
+    "Magnet Rise",  # E1 trial batch (G-66)
 )
 
 
@@ -1314,6 +1315,11 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
     a["power_trick"][side] = int(rnd.random() < 0.2)
     # A level-up's reload undid the swap (B12-10).
     a["power_trick_desync"][side] = int(rnd.random() < 0.1)
+    # E1 trial batch (G-66): Magnet Rise under way (1-5 turns), or a bit left without turns (a
+    # Gravity that zeroed them).
+    turns = rnd.choice((0, 0, 0, 1, 2, 5))
+    a["magnet_rise_turns"][side] = turns
+    a["magnet_rise"][side] = int(turns > 0 or rnd.random() < 0.1)
     if draw(st.integers(0, 1)) != 0:
         return
     move = rnd.choice(BATCH12_MOVES)
@@ -2262,6 +2268,7 @@ LAW_MOVES = (
     "Thunder Fang",
     "Present",
     "Protect",
+    "Endure",  # E1 trial batch (G-65)
     "Attract",
     "Tri Attack",
     "Nature Power",

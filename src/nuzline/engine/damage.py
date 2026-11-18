@@ -209,6 +209,29 @@ def levitated(tables: Tables, state: BattleState, atk_side, def_side, move_type)
     )
 
 
+def magnet_risen(tables: Tables, state: BattleState, def_side, move_type) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_ApplyTypeChart`` sets ``MOVE_STATUS_MAGNET_RISE`` (battle_lib.c:
+    2605-2609, moves.h:77) for a Ground-type move against a defender with ``magnetRiseTurns``,
+    no ``MOVE_EFFECT_INGRAIN`` and no Iron Ball (``HOLD_EFFECT_SPEED_DOWN_GROUNDED``). Mold Breaker
+    does not lift it; ``CalcEffectiveness`` has no such test. Part of ``MOVE_STATUS_IMMUNE``
+    (moves.h:87), so the chart walk is skipped and the hit deals nothing (G-66)."""
+    return (
+        (state.magnet_rise_turns[def_side] != 0)
+        & (state.ingrain[def_side] == 0)
+        & (_i32(move_type) == Type.GROUND)
+        & ~iron_ball(tables, state, def_side)
+    )
+
+
+def ground_immune(tables: Tables, state: BattleState, atk_side, def_side, move_type) -> jnp.ndarray:
+    """``bool``: ``ApplyTypeChart``'s ground immunity of ``def_side``'s battler to ``move_type``,
+    the two bits of ``MOVE_STATUS_IMMUNE`` it adds before the walk: ``MOVE_STATUS_LEVITATED``
+    (``levitated``) or ``MOVE_STATUS_MAGNET_RISE`` (``magnet_risen``)."""
+    return levitated(tables, state, atk_side, def_side, move_type) | magnet_risen(
+        tables, state, def_side, move_type
+    )
+
+
 # MoveIsOnDamagingTurn (battle_lib.c:7588-7604): these decomp battle effects
 # (generated/move_battle_effects.txt, line - 1) are on their damaging turn only under
 # SYSCTL_LAST_OF_MULTI_TURN: BIDE, CHARGE_TURN_HIGH_CRIT, CHARGE_TURN_HIGH_CRIT_FLINCH,
@@ -380,36 +403,45 @@ def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.nda
     return jnp.where(state.stealth_rock[side] != 0, rock, 0)
 
 
-def grounded(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
+def grounded(
+    tables: Tables, state: BattleState, side, slot, ingrained=None, magnet=None
+) -> jnp.ndarray:
     """``bool``: subscript_hazards_check.s:6-11 lets the entry spikes reach ``side``'s party
     ``slot``: Gravity (:6) or its Iron Ball (:7, ``CheckItemHoldEffect``, G-56) grounds it, else its own
     Levitate (``CheckAbility``, battle_script.c:3159-3172, through ``Battler_Ability``, which
-    reads an ingrained holder's as none, battle_lib.c:3100-3103) or a Flying type
-    (``BATTLEMON_TYPE_1`` / ``_2``) keeps it off (Magnet Rise, :11, is an unsupported move).
+    reads an ingrained holder's as none, battle_lib.c:3100-3103), a Flying type
+    (``BATTLEMON_TYPE_1`` / ``_2``) or ``MOVE_EFFECT_MAGNET_RISE`` (the mask bit, :11; G-66) keeps
+    it off. ``magnet``: the newcomer's Magnet Rise bit at the check, like ``ingrained`` (a Baton
+    Pass keeps it).
     ``ingrained``: the newcomer's ``MOVE_EFFECT_INGRAIN`` at the check, by default the side's
     battler's (``ingrain``: after the switch, where only a Baton Pass keeps it, battle_lib.c:2079;
     ruling B7-14); a switch action's newcomer, read before it switches, has none."""
     ingrained = state.ingrain[side] != 0 if ingrained is None else jnp.asarray(ingrained)
+    magnet = state.magnet_rise[side] != 0 if magnet is None else jnp.asarray(magnet)
     levitate = (state.ability[side, slot] == AbilityId.LEVITATE) & ~ingrained
-    airborne = levitate | jnp.any(state.types[side, slot] == Type.FLYING)
+    airborne = levitate | jnp.any(state.types[side, slot] == Type.FLYING) | magnet
     return (state.gravity != 0) | iron_ball(tables, state, side, slot) | ~airborne
 
 
-def spikes_loss(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
+def spikes_loss(
+    tables: Tables, state: BattleState, side, slot, ingrained=None, magnet=None
+) -> jnp.ndarray:
     """``int32``: what Spikes takes from ``side``'s party ``slot`` as it switches in
     (``BtlCmd_CheckSpikes``, battle_script.c:5434-5436): ``Divide(maxHP, (5 - layers) * 2)``, 1/8,
     1/6, 1/4, for a grounded newcomer (``grounded``); 0 without layers. Not capped."""
     layers = _i32(state.spikes[side])
     divisor = jnp.maximum((5 - layers) * 2, 1)
     loss = jnp.maximum(_i32(state.max_hp[side, slot]) // divisor, 1)
-    return jnp.where((layers > 0) & grounded(tables, state, side, slot, ingrained), loss, 0)
+    return jnp.where((layers > 0) & grounded(tables, state, side, slot, ingrained, magnet), loss, 0)
 
 
-def hazards_loss(tables: Tables, state: BattleState, side, slot, ingrained=None) -> jnp.ndarray:
+def hazards_loss(
+    tables: Tables, state: BattleState, side, slot, ingrained=None, magnet=None
+) -> jnp.ndarray:
     """``int32``: Spikes and Stealth Rock together on ``side``'s newcomer ``slot``
     (subscript_hazards_check.s:31, :41), 0 for a Magic Guard holder (:5); not capped (the
     newcomer survives when this is below its HP: Stealth Rock needs HP left, :41)."""
-    loss = spikes_loss(tables, state, side, slot, ingrained)
+    loss = spikes_loss(tables, state, side, slot, ingrained, magnet)
     loss = loss + stealth_rock_loss(tables, state, side, slot)
     return jnp.where(state.ability[side, slot] == AbilityId.MAGIC_GUARD, 0, loss)
 
@@ -441,8 +473,8 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
     battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
     ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
     first."""
-    # A switch action's newcomer: no Ingrain (only Baton Pass keeps it).
-    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot, False) > 0
+    # A switch action's newcomer: no Ingrain, no Magnet Rise (only Baton Pass keeps them).
+    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot, False, False) > 0
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
     return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
 
@@ -613,7 +645,7 @@ def fixed_damage(
     d_types = state.types[def_side, state.active[def_side]]
     seen = identified(tables, state, atk_side, def_side)
     immune = effectiveness(tables, kind, d_types, seen) == 0
-    immune = immune | levitated(tables, state, atk_side, def_side, kind)
+    immune = immune | ground_immune(tables, state, atk_side, def_side, kind)
     immune = immune | (
         jnp.asarray(wonder_guard) & wonder_guarded(tables, state, atk_side, move, kind, def_side)
     )
@@ -1283,7 +1315,7 @@ def _finish(
     # :2600-2603 Levitate: MOVE_STATUS_LEVITATED instead of the chart walk, part of
     # MOVE_STATUS_IMMUNE: no damage (its DID_NOT_HIT ends the move, bcp.c:3325; the AI's
     # estimate zeroes an immune hit, trainer_ai.c:3106).
-    damage = jnp.where(levitated(tables, s, atk_side, def_side, move_type), 0, damage)
+    damage = jnp.where(ground_immune(tables, s, atk_side, def_side, move_type), 0, damage)
     # :2649-2654 Wonder Guard: MOVE_STATUS_WONDER_GUARD, part of MOVE_STATUS_IMMUNE (ruling G-18).
     # A battle hit of a charge move is its strike (``charge_strike``); the AI's estimate
     # (``variance_last``) runs after BattleContext_Init, where it is not (G-27).

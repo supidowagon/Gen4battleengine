@@ -313,6 +313,8 @@ class BattleState(NamedTuple):
     focus_energy: jnp.ndarray  # int8, VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
     power_trick: jnp.ndarray  # int8, MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
+    magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
+    magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -501,12 +503,15 @@ VOLATILE_FIELDS = (
     "focus_energy",
     "power_trick",
     "power_trick_desync",
+    "magnet_rise",
+    "magnet_rise_turns",
 )
 # Baton Pass keeps these of ``VOLATILE_FIELDS`` (and the stat stages): BattleSystem_UpdateAfterSwitch
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
 # confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``), Focus Energy (B12-4)),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10); the rest from unsupported moves), the
+# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66); the rest from
+# unsupported moves), and magnetRiseTurns (:2112), the
 # substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
 # Rulings B6-3, B7-n.
@@ -527,6 +532,8 @@ BATON_PASSED_FIELDS = (
     "curse",
     "focus_energy",
     "power_trick",
+    "magnet_rise",
+    "magnet_rise_turns",
 )
 
 
@@ -609,6 +616,8 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "focus_energy": (_SIDE, np.int8),
     "power_trick": (_SIDE, np.int8),
     "power_trick_desync": (_SIDE, np.int8),
+    "magnet_rise": (_SIDE, np.int8),
+    "magnet_rise_turns": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

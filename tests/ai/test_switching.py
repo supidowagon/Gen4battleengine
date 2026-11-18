@@ -363,3 +363,23 @@ def test_perish_song_ko_pick_is_post_ko_switch_in_not_the_first_slot(tables, nam
     s = s._replace(moves=s.moves.at[1, 0].set(jnp.asarray([tackle, 0, 0, 0], s.moves.dtype)))
     assert int(replacement.post_ko_switch_in(tables, s)) == 1
     assert _actions(tables, s) == [5] * (SWITCH_SITES + 1)
+
+
+def test_the_players_magnet_rise_removes_the_ground_keep_draw(tables, names):
+    """A Ground move that is super effective against the player leaves ``AI_HasSuperEffectiveMove``'s
+    keep draw (:3588); ApplyTypeChart gives it MOVE_STATUS_MAGNET_RISE instead (no SE bit, G-66),
+    unless the player is ingrained or holds an Iron Ball."""
+    s = roark_state(tables, names)
+    fire = names.type("Fire")
+    s = s._replace(
+        types=s.types.at[0, 0].set(jnp.asarray([fire, fire], jnp.int8)),
+        moves=s.moves.at[1, int(s.active[1]), 1].set(names.move("Earthquake")),
+    )
+    assert K.KEEP in switch_sites(tables, s).tolist()
+    floating = s._replace(magnet_rise_turns=s.magnet_rise_turns.at[0].set(3))
+    assert K.KEEP not in switch_sites(tables, floating).tolist()
+    rooted = floating._replace(ingrain=floating.ingrain.at[0].set(1))
+    assert K.KEEP in switch_sites(tables, rooted).tolist()
+    # The bit alone (Gravity zeroed the turns) does not: ApplyTypeChart reads the turns.
+    bit = s._replace(magnet_rise=s.magnet_rise.at[0].set(1))
+    assert K.KEEP in switch_sites(tables, bit).tolist()

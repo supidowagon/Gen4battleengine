@@ -52,6 +52,7 @@ from nuzline.engine.ids import (
     ITEM_ABILITY_IDS,
     ITEM_FULL_RESTORE,
     ITEM_GRISEOUS_ORB,
+    MAGNET_RISE_TURNS,
     METRONOME_DRAW,
     MINIMIZE_PARAM,
     MOVE_BATON_PASS,
@@ -451,6 +452,26 @@ def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int
     )
 
 
+def _magnet_risen(tables, s: RefState, defender: int, move_type: int) -> bool:
+    """``ApplyTypeChart``'s ``MOVE_STATUS_MAGNET_RISE`` (lib.c:2605-2609, moves.h:77): a Ground
+    move against a defender with ``magnetRiseTurns``, no Ingrain and no Iron Ball; Mold Breaker
+    does not lift it. Part of ``MOVE_STATUS_IMMUNE`` (G-66)."""
+    sd = s.sides[defender]
+    return (
+        move_type == Type.GROUND
+        and sd.magnet_rise_turns != 0
+        and not sd.ingrain
+        and not _iron_ball(tables, _active(s, defender))
+    )
+
+
+def _ground_immune(tables, s: RefState, attacker: int, defender: int, move_type: int) -> bool:
+    """The two bits ``ApplyTypeChart`` adds before the chart walk: LEVITATED or MAGNET_RISE."""
+    return _levitated(tables, s, attacker, defender, move_type) or _magnet_risen(
+        tables, s, defender, move_type
+    )
+
+
 # MoveIsOnDamagingTurn (lib.c:7588-7604): decomp battle effects on their damaging turn only under
 # SYSCTL_LAST_OF_MULTI_TURN. Only subscript_charge_move_cleanup.s:7 (every charge move's strike,
 # before TryMove's chart) and subscript_bide_end.s:12 (Bide: RANGE_USER, no chart) set it, so in
@@ -585,7 +606,7 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
     kind = _move_type(tables, s, attacker, move)
     if _matchup_x40(tables, kind, foe.types, _identified(tables, s, attacker, 1 - attacker)) == 0:
         return 0
-    if _levitated(tables, s, attacker, 1 - attacker, kind):
+    if _ground_immune(tables, s, attacker, 1 - attacker, kind):
         return 0
     if wonder_guard and _wonder_guarded(tables, s, attacker, 1 - attacker, move, kind):
         return 0  # power 1: MOVE_STATUS_WONDER_GUARD stops it (G-18)
@@ -1102,7 +1123,7 @@ def _apply_type_chart(tables, s: RefState, attacker: int, defender: int, move: i
     if "not_very" in flags and update and atk.ability == AbilityId.TINTED_LENS:
         damage *= 2
     # lib.c:2600-2603: Levitate takes the move instead of the chart (MOVE_STATUS_LEVITATED).
-    if _levitated(tables, s, attacker, defender, move_type):
+    if _ground_immune(tables, s, attacker, defender, move_type):
         return 0
     return damage
 
@@ -1222,6 +1243,7 @@ BATON_PASSED = (
     "confusion", "leech_seed", "substitute_hp", "water_sport", "mud_sport", "aqua_ring",
     "ingrain", "mean_look", "mean_look_target", "lock_on", "lock_on_target",
     "perish_song", "perish_song_turns", "curse", "focus_energy", "power_trick",
+    "magnet_rise", "magnet_rise_turns",
 )  # fmt: skip
 
 
@@ -1282,6 +1304,8 @@ def _reset_battler(sd: RefSide, baton: bool = False) -> None:
         "focus_energy",  # VOLATILE_CONDITION_FOCUS_ENERGY (B12-4)
         "power_trick",  # MOVE_EFFECT_POWER_TRICK (B12-10)
         "power_trick_desync",  # a Baton Pass newcomer is swapped by the bit (lib.c:2137-2141)
+        "magnet_rise",  # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns (G-66)
+        "magnet_rise_turns",
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -2013,7 +2037,8 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
     # CheckAbility reads Battler_Ability: an ingrained Levitate is none (lib.c:3100-3103); a
     # Baton Pass newcomer keeps the Ingrain (lib.c:2079).
     levitate = mon.ability == AbilityId.LEVITATE and not s.sides[side].ingrain
-    airborne = levitate or Type.FLYING in mon.types
+    # :11 the mask bit of Magnet Rise keeps it off the ground too (a Baton Pass newcomer, G-66).
+    airborne = levitate or Type.FLYING in mon.types or bool(sd.magnet_rise)
     # :7 an Iron Ball grounds it too (CheckItemHoldEffect), G-56.
     if s.gravity or _iron_ball(tables, mon) or not airborne:
         if sd.toxic_spikes:
@@ -2795,6 +2820,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
+        # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
+        s.sides[side].magnet_rise = 1
+        s.sides[side].magnet_rise_turns = MAGNET_RISE_TURNS
     elif effect == EffectId.YAWN and landed and _active(s, target).hp:
         # subscript_yawn.s: an ability that blocks it is tagged; else unless it fails the count 2.
         fails, by_ability = _yawn_blocks(tables, s, side, target)
@@ -3392,7 +3421,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         kind = _move_type(tables, s, side, move)
         immune = _matchup_x40(
             tables, kind, target_mon.types, _identified(tables, s, side, target)
-        ) == 0 or _levitated(tables, s, side, target, kind)
+        ) == 0 or _ground_immune(tables, s, side, target, kind)
         # Wonder Guard flags them too (power 1; ruling G-18).
         immune = immune or _wonder_guarded(tables, s, side, target, move, kind)
         damage = 0 if immune else turn.counter_damage
@@ -3483,7 +3512,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             kind = _move_type(tables, s, side, move)
             passes = _matchup_x40(
                 tables, kind, target_mon.types, _identified(tables, s, side, target)
-            ) > 0 and not _levitated(tables, s, side, target, kind)
+            ) > 0 and not _ground_immune(tables, s, side, target, kind)
     else:
         passes = damage > 0
     effective = landed and passes
@@ -4167,7 +4196,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int, struggli
         foe = _active(s, 1 - side)
         if _matchup_x40(
             tables, kind, foe.types, _identified(tables, s, side, 1 - side)
-        ) != 0 and not (_levitated(tables, s, side, 1 - side, kind)):
+        ) != 0 and not (_ground_immune(tables, s, side, 1 - side, kind)):
             s.ai_ability_known[s.sides[0].active] = 1
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, hit, miss or Protect alike): Wonder
     # Guard's MOVE_STATUS_WONDER_GUARD (G-18). subscript_missed.s:107-110 tags the defender's
@@ -5248,6 +5277,12 @@ def _taunt_check(turn: _Turn, s: RefState, side: int) -> None:
     sd = s.sides[side]
     if sd.taunt:
         sd.taunt -= 1
+    # MON_COND_CHECK_STATE_MAGNET_RISE (bcp.c:1647-1656), then subscript_magnet_rise_end.s: the
+    # bit goes when the turns run out; turns Gravity zeroed never reach it (G-66).
+    if sd.magnet_rise_turns:
+        sd.magnet_rise_turns -= 1
+        if not sd.magnet_rise_turns:
+            sd.magnet_rise = 0
 
 
 # --------------------------------------------------------------------------- the turn
@@ -5305,6 +5340,12 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)
         return bool(sd.imprison) or not shared
+    if effect == EffectId.MAGNET_RISE:  # effect_script_0252.s:5-7 (G-66)
+        # Battler_Ability reads Levitate as none for an ingrained holder and under Gravity.
+        levitate = (
+            _active(s, side).ability == AbilityId.LEVITATE and not sd.ingrain and not s.gravity
+        )
+        return bool(sd.magnet_rise_turns) or levitate or bool(sd.ingrain)
     flags = {
         EffectId.INGRAIN: sd.ingrain,
         EffectId.AQUA_RING: sd.aqua_ring,

@@ -857,6 +857,13 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   35 % or more the fall-through reaches `Expert_Endure_ScoreMinus1`, **-1**. The engine move is
   G-65.
 
+- GIVE_GROUND_IMMUNITY (252, Magnet Rise, G-66): `Basic_CheckMagnetRise` (`:1461-1474`), -10 for
+  the attacker with the bit, Levitate or a Flying type; `Expert_MagnetRise` (`:6090-6119`, dispatch
+  `:1795`): the AI below 50 % HP ends; a player known to have Earthquake, Earth Power or Fissure
+  **+1**; a Ground-type player **+1**, else **+1** unless the 128 roll (`:6113`) jumps. The
+  player's Magnet Rise now reaches the AI's chart (`switching.defender_chart_flags`): a Ground move
+  gets `MOVE_STATUS_MAGNET_RISE` (immune) and no walk.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

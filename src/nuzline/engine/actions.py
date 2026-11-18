@@ -131,7 +131,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (battle_controller_player.c:572): ``VOLATILE_CONDITION_TRAPPED`` (the Bind of ``trapped`` and
     ``mean_look``, condition.h:77-78) or ``MOVE_EFFECT_INGRAIN``; a living foe's Shadow Tag unless
     the battler has it too, a living foe's Magnet Pull on a Steel battler, a living foe's Arena Trap
-    on a grounded battler (``BattlerIsGrounded``, :5500-5507: no Levitate, no Magnet Rise, not
+    on a grounded battler (``BattlerIsGrounded``, :5500-5507: no Levitate, no Magnet Rise turns, not
     Flying, or Iron Ball, or Gravity), all by ``Battler_Ability`` over the other side's living
     battlers (``CountAbilityTheirSide``, :5509-5512; E2 batch 9, B9-11). Shed Shell
     (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
@@ -140,8 +140,15 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     types = state.types[side, mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
     iron = tables.item_effect[state.item[side, mon]] == ItemId.IRON_BALL
+    # BattlerIsGrounded reads the turns of Magnet Rise (:5503), not the mask bit (G-66).
     grounded = (
-        ((own != AbilityId.LEVITATE) & ~jnp.any(types == Type.FLYING)) | iron | (state.gravity != 0)
+        (
+            (own != AbilityId.LEVITATE)
+            & (state.magnet_rise_turns[side] == 0)
+            & ~jnp.any(types == Type.FLYING)
+        )
+        | iron
+        | (state.gravity != 0)
     )
     steel = jnp.any(types == Type.STEEL)
     trapped_by = jnp.asarray(False)
