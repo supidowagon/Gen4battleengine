@@ -224,19 +224,27 @@ def test_future_sight_is_not_endured(tables, names):
         ("Tackle", "player", 1, None),
         ("Tackle", "opp", 1, None),
         ("Tackle", "player", 1, "Focus Band"),
+        ("Tackle", "player", 0, "Focus Band"),
         ("Double Kick", "player", 1, None),
     ],
 )
 def test_endure_enumeration_equals_bruteforce(tables, names, opp, order, count, item):
     """Endure shares Protect's roll (``Outcome.protect``) and its reach: the gated enumeration
-    equals the brute-force one (the Band roll is a superset read the enduring path ignores)."""
+    equals the brute-force one. The Band roll is read only where the Endure failed
+    (``enumerate._endure_reads``): never at count 0, where Endure always holds."""
     from tests.engine.test_enumerate import assert_equals_bruteforce
 
     drop_programs()  # the whole-engine programs of the tests above stay resident otherwise
 
     s = _endure(tables, names, opp=opp, order=order, count=count, opp_count=count, item=item)
-    width, brute = assert_equals_bruteforce(tables, s, A("Endure", opp, s, names))
+    acts = A("Endure", opp, s, names)
+    width, brute = assert_equals_bruteforce(tables, s, acts)
     assert width <= brute
+    if item and count == 0:
+        from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
+
+        outcomes, _ = enumerate_outcomes(outcome_laws(tables, s, jnp.asarray(acts)))
+        assert len(set(np.asarray(outcomes.focus_band)[:, 1, 0].tolist())) == 1
 
 
 # --- Magnet Rise (G-66) --------------------------------------------------------------------

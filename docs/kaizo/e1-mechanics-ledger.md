@@ -1109,8 +1109,9 @@ of them, :2107-2115).
   checks run again after the move (AFTER_MOVE_EFFECT_TRIGGER_SWITCH_IN_EFFECTS, bcp.c:3672-3676 ->
   `BattleSystem_TriggerEffectOnSwitch`, battle_lib.c:3650-4170): the copied ability acts as on a switch-in
   (Trace, a weather ability, Intimidate, Download, the reveals), through the engine's own hooks
-  (`step._use_move` calls `hooks.switch_in_effects` for the user); an ability the engine refuses stays
-  refused (Slow Start). While Transformed the party never sees moves or PP (battle_io_command.c:581-587);
+  (`step._use_move` calls `hooks.switch_in_effects` for the user). A copied ability is always one of the
+  fight's own Pokemon's, which coverage grades already, so an ability the engine does not model (Slow Start)
+  refuses the fight through the Pokemon that has it, never through Transform. While Transformed the party never sees moves or PP (battle_io_command.c:581-587);
   the engine's per-slot arrays are both, so the Mimic shadow grows to the whole copied set
   (`transformed`, `shadow_species`, `shadow_form`, `shadow_stats`, `shadow_ivs`, `shadow_ability_slot`,
   `shadow_ability_form`, with `shadow_moves` / `shadow_pp` of all four slots and `mimic_slots` = 0b1111;

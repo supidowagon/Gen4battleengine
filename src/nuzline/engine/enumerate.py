@@ -341,6 +341,7 @@ class Reads(NamedTuple):
     tri_attack: jnp.ndarray  # its move runs Tri Attack: its status draw needs the proc
     protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
+    endure_sure: jnp.ndarray  # it uses Endure and reaches TryProtection whatever the rolls
     roar: jnp.ndarray  # it uses Roar: its slot pick needs the level check to pass
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
     confused_by_foe: jnp.ndarray  # bool[2, 2]: it moves after a foe move that confuses
@@ -2099,6 +2100,7 @@ def outcome_laws(
         # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
         protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
+        endure_sure=off if loose else reach & (effect == _E.ENDURE),
         roar=off if loose else roar,
         confused_own=base["confused_own"],
         confused_by_foe=jnp.stack([m["confused_by_foe"] for m in branches]),
@@ -2860,6 +2862,24 @@ def _passes(v: np.ndarray) -> np.ndarray:
     # 1: the level check passed. SKIPPED (not drawn: no check) fails nothing, but the builder
     # adds this condition only where roar_level is drawn whenever the pick is reached.
     return v == 1
+
+
+@register_reads
+def _endure_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
+    """The (protect, focus_band) joint factor (G-65, G-1): the first mover's Endure that
+    certainly reaches ``BtlCmd_TryProtection`` (``Reads.endure_sure``) sets
+    ``turnFlags.enduring`` when its roll passes (always at ``protect_count`` 0), and
+    ``if (DEFENDER_TURN_FLAGS.enduring == 0)`` (bcp.c:3386-3393) then skips the Focus Band roll on
+    every hit of the second mover's move (``effects.play_hit``'s ``~enduring``). So
+    ``focus_band[q, i]``'s "move" path also needs the Endure to fail; the self-hit's path (the
+    user's own band) is not gated."""
+    first, q = branch.first, 1 - branch.first
+    if not bool(laws.reads.endure_sure[first]):
+        return
+    elem = ("protect", (first,))
+    cond = Condition((elem,), _not_protected) if elem in plan else NEVER
+    for i in range(MAX_HITS):
+        plan.restrict(("focus_band", (q, i)), "move", cond, required=False)
 
 
 @register_reads
