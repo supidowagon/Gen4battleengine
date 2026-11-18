@@ -508,6 +508,31 @@ def _max_hp(tables: Tables, species, ivs, evs, level, nature) -> int:
     return int(stats[Stat.HP])
 
 
+def recalc_stats(tables: Tables, a: dict, side: int, slot: int) -> None:
+    """Slot ``slot`` of ``side``'s max HP and stats recomputed (``calc_stats`` of its species and
+    form row, IVs, EVs, level and nature) after a draw changed one of those. In the game the
+    stored max HP is ``Pokemon_CalcStats``'s (src/pokemon.c:597-603, rerun on every level gain)
+    with EVs that only grow since, so the next level's max is never below it and the level-up's
+    ``hp += newMax - oldMax`` never takes a living Pokemon to 0 (:633-645); a stale max HP above
+    the formula's lets it, and ``pay_exp``'s telescoped HP then leaves the per-level rule (and a
+    negative HP is alive to the reference, fainted to JAX). HP stays full if it was, else is
+    capped at the new max (a fainted Pokemon stays at 0)."""
+    species = int(a["species"][side, slot])
+    row = int(tables.species_form_row[species, int(a["form"][side, slot])])
+    new = calc_stats(
+        np.asarray(tables.species_base_stats[row]),
+        a["ivs"][side, slot],
+        a["evs"][side, slot],
+        int(a["level"][side, slot]),
+        np.asarray(tables.nature_mods[int(a["nature"][side, slot])]),
+        species,
+    )
+    hp, old_max = int(a["hp"][side, slot]), int(a["max_hp"][side, slot])
+    a["hp"][side, slot] = new[Stat.HP] if hp == old_max else min(hp, int(new[Stat.HP]))
+    a["max_hp"][side, slot] = new[Stat.HP]
+    a["stats"][side, slot] = new[Stat.ATK :]
+
+
 def possible_genders(ratio: int) -> tuple[int, ...]:
     """Genders (0 male, 1 female, 2 genderless) a species with this decomp ratio can have."""
     if ratio == GENDERLESS:
@@ -632,26 +657,14 @@ def _draw_battle_item(draw, tables: Tables, a: dict, side: int, active: int, nam
 def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """Maybe (1 in 4) make the active Pokemon a ``SPECIES_ITEMS`` species holding its item
     (the species items only work for their species), an orb's holder with a move its orb
-    boosts in slot 0 (full PP). Its stats and max HP are the new species' (``calc_stats`` with
-    its IVs, EVs, level and nature: an exp payout's level-up recomputes them from the species,
-    so a stale max HP could fall), its HP capped at the new max."""
+    boosts in slot 0 (full PP). Its stats and max HP are the new species' (``recalc_stats``)."""
     if draw(st.integers(0, 3)) != 0:
         return
     species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
     sid = names.species(species)
     a["species"][side, active] = sid
     a["item"][side, active] = names.item(item)
-    stats = calc_stats(
-        np.asarray(tables.species_base_stats[sid]),
-        a["ivs"][side, active],
-        a["evs"][side, active],
-        int(a["level"][side, active]),
-        np.asarray(tables.nature_mods[int(a["nature"][side, active])]),
-        sid,
-    )
-    a["max_hp"][side, active] = stats[Stat.HP]
-    a["stats"][side, active] = stats[Stat.ATK :]
-    a["hp"][side, active] = min(int(a["hp"][side, active]), int(stats[Stat.HP]))
+    recalc_stats(tables, a, side, active)
     if moves:
         _teach(tables, a, side, active, names.move(draw(st.sampled_from(moves))), 0)
 
@@ -774,6 +787,7 @@ def _draw_gardenia_item(
         if rnd.random() < 0.5:
             disliking = [k for k, f in enumerate(NATURE_DISLIKED_FLAVOR) if f == flavor]
             a["nature"][side, active] = rnd.choice(disliking)
+            recalc_stats(tables, a, side, active)
         if rnd.random() < 0.3:
             foe = 1 - side
             foe_mon = int(a["active"][foe])
@@ -1144,8 +1158,9 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
     """Maybe (1 in 3) give the active Pokemon a batch-10 move with what makes it act: Volt
     Tackle / Flare Blitz (recoil and status; a frozen user for Flare Blitz's thaw, Rock Head or
     Reckless), Jump Kick / Hi Jump Kick (a crash on a miss: a Protect or a Ghost foe, Magic
-    Guard, a foe at low max HP for the cap), Endeavor / Pain Split (B10-5; a low user), Knock Off
-    (B10-6; an item on the foe, a knocked-off user with no item for the barb). One draw in two,
+    Guard, a low-level foe: a small max HP for the cap), Endeavor / Pain Split (B10-5; a low
+    user), Knock Off (B10-6; an item on the foe, a knocked-off user with no item for the barb).
+    One draw in two,
     and ``legal_action_pair`` uses it one draw in two (``RARE_EFFECTS``):
     under uniform draws the differential met these moves too rarely (batch 11 review)."""
     if draw(st.integers(0, 1)) != 0:
@@ -1236,9 +1251,9 @@ def _draw_batch10(draw, tables: Tables, a: dict, side: int, active: int, names: 
             give(rnd.choice(("Protect", "Detect")), foe, foe_mon)
         elif roll < 0.5:
             a["types"][foe, foe_mon] = (Type.GHOST, Type.GHOST)
-        if rnd.random() < 0.3:  # a small foe: the crash's cap
-            a["max_hp"][foe, foe_mon] = rnd.randint(10, 40)
-            a["hp"][foe, foe_mon] = min(int(a["hp"][foe, foe_mon]), int(a["max_hp"][foe, foe_mon]))
+        if rnd.random() < 0.3:  # a low-level foe: a small max HP, the crash's cap
+            a["level"][foe, foe_mon] = rnd.randint(1, 8)
+            recalc_stats(tables, a, foe, foe_mon)
     if rnd.random() < 0.3:  # a low user: the recoil or crash can faint it
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 8)
     if charge and rnd.random() < 0.4 and a["status"][side, active] != Status.SLEEP:
@@ -1453,6 +1468,7 @@ def _draw_batch4(draw, tables: Tables, a: dict, side: int, active: int, names: N
                 a["ability"][side, active] = AbilityId.NO_GUARD
             elif choice == 1:
                 a["level"][foe, foe_mon] = int(a["level"][side, active]) + 1
+                recalc_stats(tables, a, foe, foe_mon)
             else:
                 a["ability"][foe, foe_mon] = AbilityId.STURDY
     if draw(st.integers(0, 2)) == 0:
