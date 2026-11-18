@@ -37,6 +37,7 @@ from tests.engine.helpers import (
     _lead,
     _roark,
     _roark_party,
+    drop_programs,
     roark_real_state,
     roark_state,
 )
@@ -85,9 +86,10 @@ def _short_party_trace_f(tables, names):
     )
 
 
-def _replay(tables, state, key, max_turns=100):
+def _replay(tables, state, key, max_turns=100, opponent=True):
     """``playout(tables, state, key)`` turn by turn (the same key splits):
-    ``[(state before, the opponent's action, state after)]``."""
+    ``[(state before, the opponent's action, state after)]``; without ``opponent`` the
+    action is ``None`` (the AI's own program is not compiled)."""
     out = []
     for _ in range(max_turns):
         if int(state.over) != 0:
@@ -96,8 +98,10 @@ def _replay(tables, state, key, max_turns=100):
         action = playout_module._policy_jit(tables, state, k_policy)[0]
         played, refused = playout_module._turn_jit(tables, state, action, k_turn)
         assert not bool(refused)
-        k_ai = jax.random.split(k_turn)[0]  # as _play splits it
-        opp = int(ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state)))
+        opp = None
+        if opponent:
+            k_ai = jax.random.split(k_turn)[0]  # as _play splits it
+            opp = int(ai_policy(tables, state, sample_ai_outcome(k_ai, tables, state)))
         out.append((state, opp, played))
         state = played
     return out
@@ -182,14 +186,17 @@ def test_playout_from_action_plays_that_action_first(tables, names):
     )
     leer = names.move_slot(s, 0, "Leer")
     switch = MOVE_ACTIONS + 1
-    for seed in range(3):
-        key = jax.random.PRNGKey(seed)
+    keys = [jax.random.PRNGKey(seed) for seed in range(3)]
+    for key in keys:
         # The playout goes on past the faint with the bench: only what the first action
         # fixes is asserted, not the result.
         lost = playout_from_action(tables, s, jnp.int32(leer), key, 1)
         assert (int(lost.deaths[0]), int(lost.player_faints)) == (1, 1)
         kept = playout_from_action(tables, s, jnp.int32(switch), key, 1)
         assert (int(kept.deaths[0]), int(kept.player_faints), int(kept.refused)) == (0, 0, 0)
+    # The 100-turn program after the one-turn one is dropped (together they passed 11 GB).
+    drop_programs()
+    for key in keys:
         lost = playout_from_action(tables, s, jnp.int32(leer), key, 100)
         assert int(lost.deaths[0]) == 1  # a death is permanent
         kept = playout_from_action(tables, s, jnp.int32(switch), key, 100)
@@ -268,6 +275,7 @@ def test_refusal_reason_names_the_refused_mechanic(tables, names):
 def test_refusal_reason_is_none_for_a_playout_that_is_not_refused(tables, names):
     s = roark_state(tables, names)
     assert int(playout_from_action(tables, s, 0, jax.random.PRNGKey(11)).refused) == 0
+    drop_programs()  # the replay's programs after the loop's (together they passed 11 GB)
     assert refusal_reason(tables, s, 0, jax.random.PRNGKey(11)) is None
 
 
@@ -291,6 +299,7 @@ def test_a_refused_distribution_refuses_the_playout_before_the_player_chooses(
     key = jax.random.PRNGKey(12)
     r = playout_module._run(tables, s, key, 100, jnp.int32(-1))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
+    drop_programs()  # each unjitted call compiles its own loop (together they passed 12 GB)
     # A fixed first action does not depend on it: turn 1 is played, turn 2 is refused.
     r = playout_module._run(tables, s, key, 100, jnp.int32(0))
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 1)
@@ -433,14 +442,19 @@ def _left(tables, state):
 
 
 def test_hp_and_pp_left(tables, names):
+    # Three whole-engine phases, each program dropped before the next (``drop_programs``):
+    # the eight playouts, their turn-by-turn replays, then the 64-wide batch. Alive
+    # together they passed 16 GB.
     state = roark_real_state(tables, names)
-    for i in range(8):
-        key = jax.random.PRNGKey(100 + i)
-        out = playout(tables, state, key)
-        final = _replay(tables, state, key)[-1][2]
+    keys = [jax.random.PRNGKey(100 + i) for i in range(8)]
+    outs = [jax.device_get(playout(tables, state, key)) for key in keys]
+    drop_programs()
+    for key, out in zip(keys, outs):
+        final = _replay(tables, state, key, opponent=False)[-1][2]
         hp, pp = _left(tables, final)
         assert abs(float(out.hp_left) - hp) < 1e-6 and abs(float(out.pp_left) - pp) < 1e-6
         assert 0.0 <= float(out.hp_left) <= 1.0 and 0.0 < float(out.pp_left) <= 1.0
+    drop_programs()
     # A refused playout has no result: 0 and 0.
     root = switch_refusal_root(tables, names)
     keys = jax.random.split(jax.random.PRNGKey(5), 64)

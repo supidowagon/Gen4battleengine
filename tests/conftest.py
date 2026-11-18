@@ -76,6 +76,8 @@ def _resident_bytes() -> int:
 # Above this resident size, JAX's in-memory programs are dropped after the current test
 # ($NUZLINE_CLEAR_ABOVE_GB overrides it). Each clear is recorded and summarised at the end.
 _CLEAR_ABOVE = int(float(os.environ.get("NUZLINE_CLEAR_ABOVE_GB", "6")) * 2**30)
+_CLEAR_GROWTH = 2 * 2**30
+_LAST_AFTER = [0]  # the resident size the last clear left
 _CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
 _GROWTH: list[tuple[int, str, int, int]] = []  # (growth over a test, test, after, peak)
 _PEAKS: list[tuple[int, str]] = []  # (sampled peak resident size during a test, test)
@@ -105,12 +107,13 @@ class _PeakSampler:
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
     """Drop JAX's in-memory compiled programs after each test module, and after any test that
-    leaves the process above 6 GB resident. One process running the whole suite otherwise
+    leaves the process above max(6 GB, the last clear's resident + 2 GB). One process running the whole suite otherwise
     keeps every module's executables and reached 38 GB of commit (29 GB for tests/engine
     alone; 6 GB peak with this). The trainer-AI modules compile a program per layout (flag
     set, read bound and a fight's effects, E1 Rulings R2, R6, R7) and one of them alone passed
     20 GB (E1 batch 8); clearing after every test there made them re-trace every program, so
-    the clear follows memory instead. The persistent compile cache keeps recompiles cheap."""
+    the clear follows memory instead, and only once the caches grew again since the last
+    clear. The persistent compile cache keeps recompiles cheap."""
     start = _resident_bytes()
     sampler = _PeakSampler()
     yield
@@ -123,10 +126,16 @@ def pytest_runtest_protocol(item, nextitem):
     _PEAKS.append((peak, item.nodeid))
     _PEAKS.sort(reverse=True)
     del _PEAKS[5:]
-    if "jax" in sys.modules and (next_module or before > _CLEAR_ABOVE):
+    # A memory-driven clear also needs the caches to have grown by _CLEAR_GROWTH since the
+    # last clear: memory a clear cannot free (a module's arrays, the allocator's own) would
+    # otherwise keep the process above the threshold and clear after every later test, each
+    # next test re-tracing its programs for nothing.
+    grown = before > _CLEAR_ABOVE and before > _LAST_AFTER[0] + _CLEAR_GROWTH
+    if "jax" in sys.modules and (next_module or grown):
         sys.modules["jax"].clear_caches()
         gc.collect()
-        _CLEARS.append((item.nodeid, before, _resident_bytes(), not next_module))
+        _LAST_AFTER[0] = _resident_bytes()
+        _CLEARS.append((item.nodeid, before, _LAST_AFTER[0], not next_module))
 
 
 def pytest_terminal_summary(terminalreporter):
@@ -152,7 +161,8 @@ def pytest_terminal_summary(terminalreporter):
     afters = [c[2] / gb for c in memory] or [0.0]
     terminalreporter.write_line(
         f"jax cache clears: {len(_CLEARS)} ({len(memory)} memory-driven above "
-        f"{_CLEAR_ABOVE / gb:.1f} GB; resident after them {min(afters):.2f}-{max(afters):.2f} GB)"
+        f"{_CLEAR_ABOVE / gb:.1f} GB; resident after them {min(afters):.2f}-{max(afters):.2f} GB; "
+        f"{sum(c[2] > _CLEAR_ABOVE for c in memory)} left it above)"
     )
     for nodeid, before, after, _ in memory[:5]:
         terminalreporter.write_line(f"  {nodeid}: {before / gb:.2f} -> {after / gb:.2f} GB")
