@@ -670,9 +670,9 @@ def truant_loafs(state: BattleState, side) -> jnp.ndarray:
     """``bool``: ``Battler_CheckTruant`` (battle_lib.c:3304-3313): ``side``'s battler has Truant
     (``Battler_Ability``) and ``moveEffectsData.truant != (totalTurns & 1)``. ``truant`` is
     ``(totalTurns + 1) & 1`` from the switch-in or faint that brought the battler in
-    (battle_lib.c:2119, :2197), i.e. ``fake_out_turn & 1``, and 0 for a lead (the zeroed
-    context, as ``fake_out_turn``); Transform's write (battle_script.c:5359) is unsupported.
-    So a Truant battler loafs on every other turn from its entry, whatever it did."""
+    (battle_lib.c:2119, :2197; ``step._entered``), 0 for a lead (the zeroed context), and
+    ``totalTurns & 1`` after a Transform (battle_script.c:5359, G-69). So a Truant battler loafs on
+    every other turn from its entry or its Transform, whatever it did."""
     mon = state.active[side]
-    parity = (state.fake_out_turn[side].astype(_I32) & 1) != (state.turn.astype(_I32) & 1)
+    parity = state.truant[side].astype(_I32) != (state.turn.astype(_I32) & 1)
     return (state.ability[side, mon] == AbilityId.TRUANT) & parity

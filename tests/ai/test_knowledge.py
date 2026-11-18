@@ -30,7 +30,7 @@ from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.ai.fixtures import trace_c
+from tests.ai.fixtures import know_ability, trace_c
 from tests.engine.helpers import A, roark_state
 
 SWITCH_TO_1 = 4 + 1
@@ -205,7 +205,7 @@ def test_switch_in_clears_the_newcomers_knowledge(tables, names):
     assert np.asarray(out.ai_seen_moves[1]).tolist() == [0, 0, 0, 0]
     assert int(out.ai_ability_known[1]) == 0
     assert np.asarray(out.ai_seen_moves[0]).tolist() == [11, 12, 13, 14]  # the one that left
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 @pytest.mark.slow
@@ -239,7 +239,7 @@ def test_ability_guess_is_chance_until_revealed(tables, names):
         for g in (0, 1)
     }
     assert guessed == {names.ability("Rivalry"), names.ability("Intimidate")}
-    revealed = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    revealed = know_ability(tables, s)
     for g in (0, 1):
         o = o0._replace(ability_guess=jnp.int8(g))
         assert int(resolve_player_ability(tables, revealed, o)) == names.ability("Rivalry")
@@ -267,7 +267,7 @@ def test_mold_breaker_reveals_on_switch_in(tables, names):
     """subscript_mold_breaker.s: ``PrintMessage ..., TAG_NICKNAME_ABILITY, BTLSCR_MSG_TEMP,
     BTLSCR_MSG_BATTLER_TEMP`` tags the announcing battler's ability."""
     s = roark_state(tables, names, player_species="Cranidos")
-    assert int(s.ai_ability_known[0]) == 1
+    assert int(s.ai_ability_known[0]) != 0
     assert int(s.ai_ability_known[1]) == 0
 
 
@@ -279,7 +279,7 @@ def test_poison_point_reveals_when_it_poisons(tables, names):
     acts = A("Growth", "Tackle", s, names)
     poisoned = _both(tables, s, acts, contact)
     assert int(poisoned.status[1, 0]) == Status.POISON
-    assert int(poisoned.ai_ability_known[0]) == 1
+    assert int(poisoned.ai_ability_known[0]) != 0
     not_triggered = _both(tables, s, acts)
     assert int(not_triggered.ai_ability_known[0]) == 0
     # A target that is already poisoned gets no message (subscript_poison.s, _322).

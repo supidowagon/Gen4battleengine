@@ -422,10 +422,6 @@ ITEM_MOVING_EFFECTS = (
 # BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
 # effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
 FRIENDSHIP_POWER_EFFECTS = (121, 123)
-# BATTLE_EFFECT_TRANSFORM (57) and _SWAP_ATK_DEF (238, Power Trick): BattleSystem_ReloadPokemon
-# (battle_lib.c:169-194) skips a Transformed battler's moves and exp, and overwrites a Power Trick's
-# swapped Attack and Defense. Mimic (82) left with G-68: the party shadow (``mimic_slots``).
-RELOAD_STATE_EFFECTS = (57, 238)
 # The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
 # Share, Soothe Bell, Lucky Egg and the six Power items.
 EXP_ITEM_HOLD_EFFECTS = (
@@ -561,8 +557,8 @@ def exp_refusals(
       (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
       location is the battle map (pokemon.c:2668-2670), which the engine does not know
       (Kaizo changed ``MapHeader_GetMapLabelTextID``, docs/kaizo/rom_diff.md:269).
-    * §4.5: it can level and could use Transform, Mimic or Power Trick
-      (``RELOAD_STATE_EFFECTS``; ``BattleSystem_ReloadPokemon``, battle_lib.c:173-191).
+    * §4.5 (gone: ``BattleSystem_ReloadPokemon``, battle_lib.c:169-194, is modelled for Power
+      Trick, B12-10, Mimic, G-68, and Transform, G-69).
     * §4.6: an empty move slot with PP Ups: a move learned there inherits them
       (``BoxPokemon_SetMoveSlot``, pokemon.c:3929-3930), which the engine does not model."""
     out = []
@@ -587,12 +583,6 @@ def exp_refusals(
         out.append(
             f"egg location {spec.egg_location} may add 1 friendship per level-up, which "
             f"{names.move_names[readers[0]]} reads"
-        )
-    own = [*spec.moves, *learnable]
-    if levels_up and (reload := _effect_moves(tables, own, RELOAD_STATE_EFFECTS)):
-        out.append(
-            f"a level-up reloads the battler, which {names.move_names[reload[0]]} "
-            "changes (battle_lib.c:173-191)"
         )
     junk = [
         i for i, (m, ups) in enumerate(zip(spec.moves, spec.pp_ups, strict=True)) if not m and ups

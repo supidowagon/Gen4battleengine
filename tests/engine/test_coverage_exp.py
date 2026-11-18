@@ -19,7 +19,6 @@ from nuzline.engine.coverage import (
     EXP_ITEM_HOLD_EFFECTS,
     FRIENDSHIP_POWER_EFFECTS,
     ITEM_MOVING_EFFECTS,
-    RELOAD_STATE_EFFECTS,
     check_coverage,
     forced_learn_moves,
     learnable_moves,
@@ -221,7 +220,6 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
         assert all(int(effect[names.move(m)]) == eid for m in moves), moves
     assert set(ITEM_MOVING_EFFECTS) == {105, 177, 188, 233}
     assert set(FRIENDSHIP_POWER_EFFECTS) == {121, 123}
-    assert set(RELOAD_STATE_EFFECTS) == {57, 82, 238}
     hold = np.asarray(tables.item_hold_effect)
     for item in ("Lucky Egg", "Exp. Share", "Soothe Bell", "Macho Brace", "Power Weight"):
         assert int(hold[names.item(item)]) in EXP_ITEM_HOLD_EFFECTS, item
@@ -231,9 +229,9 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
 def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
     """Every move of §4.2, §4.4 and §4.5, in both games and whatever its engine support, meets
     its family's ``exp_refusals`` line: an item-moving move with an exp-item holder (§4.2), a
-    friendship-power move with a nonzero egg location that can level (§4.4), a reload move the
-    Pokemon could use while it can level (§4.5). So implementing one of these moves keeps its
-    payout exact by refusal, not by its being unsupported."""
+    friendship-power move with a nonzero egg location that can level (§4.4). (§4.5, the reload
+    moves Transform, Mimic and Power Trick, is modelled: G-68, G-69, B12-10.) So implementing one
+    of these moves keeps its payout exact by refusal, not by its being unsupported."""
     from nuzline.engine.coverage import exp_refusals
 
     tables = request.getfixturevalue(game)
@@ -244,7 +242,6 @@ def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
     families = (
         (ITEM_MOVING_EFFECTS, holder, False, "can move held items in battle"),
         (FRIENDSHIP_POWER_EFFECTS, egg, True, "friendship per level-up"),
-        (RELOAD_STATE_EFFECTS, base, True, "a level-up reloads the battler"),
     )
     met = 0
     for eids, spec, levels, phrase in families:
@@ -311,18 +308,13 @@ def test_an_egg_location_with_a_friendship_reader_is_refused(tables, names):
 
 
 @pytest.mark.parametrize("move", ["Transform", "Mimic", "Power Trick"])
-def test_a_reload_state_move_is_refused_when_a_level_up_is_reachable(tables, names, move):
-    """§4.5: ``BattleSystem_ReloadPokemon`` (battle_lib.c:173-191)."""
+def test_a_reload_state_move_is_not_refused_when_a_level_up_is_reachable(tables, names, move):
+    """§4.5 is modelled: ``BattleSystem_ReloadPokemon`` (battle_lib.c:169-194) reloads the stats
+    and not a Transformed battler's moves or a Mimicked slot (``step._restore_moves``,
+    ``levelup``; G-68, G-69; Power Trick's desync, B12-10)."""
     party = sample_party(names)
     party[0] = replace(party[0], moves=(names.move(move), *party[0].moves[1:]))
-    lines = _lines(_missing(tables, names, party, roark_party(names)), "experience")
-    assert lines == [
-        (
-            f"Player MONFERNO (slot 0): a level-up reloads the battler, which {move} changes "
-            "(battle_lib.c:173-191) (experience UNSUPPORTED)"
-        )
-    ]
-    assert _lines(_missing(tables, names, party, _fainted(names)), "experience") == []
+    assert _lines(_missing(tables, names, party, roark_party(names)), "experience") == []
 
 
 def test_junk_pp_ups_in_an_empty_slot_are_refused(tables, names):

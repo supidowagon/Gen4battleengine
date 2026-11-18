@@ -77,6 +77,7 @@ from nuzline.engine.damage import (
     ability_weather,
     apply_stage,
     decomp_abilities,
+    decomp_ability_id,
     divide,
     trace_copy,
 )
@@ -248,13 +249,14 @@ def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleSt
 
 
 def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> BattleState:
-    """``ai_ability_known[slot] = 1`` where ``cond``, ``side`` is the player (the AI only
-    tracks the player's Pokemon) and party ``slot``'s ability reveals itself at
-    ``phase`` (``REVEALS_ON``)."""
+    """``ai_ability_known[slot]`` = the decomp id of party ``slot``'s ability where ``cond``,
+    ``side`` is the player (the AI only tracks the player's Pokemon) and the ability reveals itself
+    at ``phase`` (``REVEALS_ON``): ``BattleAI_SetAbility`` records the id the message names (G-69)."""
     abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if phase in p], state.ability.dtype)
     side = jnp.asarray(side, _I32)
     on = cond & (side == 0) & jnp.isin(state.ability[side, slot], abilities)
-    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    record = decomp_ability_id(state.ability[side, slot])
+    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 
@@ -263,7 +265,8 @@ def _know(state: BattleState, side, slot, cond) -> BattleState:
     wrote or tagged the battler's ability (``BattleAI_SetAbility``, battle_script.c:3074,
     :3403, :11806), whatever the ability."""
     on = jnp.asarray(cond) & (jnp.asarray(side, _I32) == 0)
-    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    record = decomp_ability_id(state.ability[jnp.asarray(side, _I32), slot])
+    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 

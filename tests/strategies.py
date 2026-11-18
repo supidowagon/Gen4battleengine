@@ -1302,6 +1302,7 @@ BATCH12_MOVES = (
     "Mist",  # B12-23
     "Magnet Rise",  # E1 trial batch (G-66)
     "Mimic",  # E1 trial batch (G-68)
+    "Transform",  # E1 trial batch (G-69)
 )
 
 
@@ -1336,6 +1337,48 @@ def _draw_mimic(draw, a: dict, side: int, active: int) -> None:
         a["mimic_slots"][side] = 1 << k
         a["shadow_moves"][side, k] = MOVE_MIMIC
         a["shadow_pp"][side, k] = rnd.randint(0, 10)
+
+
+def _draw_transform(draw, a: dict, side: int, active: int) -> None:
+    """E1 trial batch (G-69): maybe (1 in 8) the active battler is Transformed into the foe's
+    active: its slot holds the copy (species, form, stats, IVs, types, ability, moves at PP
+    ``min(5, PP)``, stages) and the shadow the party Pokemon's own, every move slot flagged."""
+    rnd = draw(st.randoms(use_true_random=False))
+    for name in ("shadow_species", "shadow_form", "shadow_ability_slot", "shadow_ability_form"):
+        a[name][side] = 0
+    a["transformed"][side] = 0
+    a["shadow_stats"][side] = 0
+    a["shadow_ivs"][side] = 0
+    foe = 1 - side
+    target = int(a["active"][foe])
+    # A battler cannot Transform while it holds a lock on a move it then no longer has.
+    locks = (
+        "locked_move",
+        "choice_lock",
+        "encore_move",
+        "disabled_move",
+        "charge_turn",
+        "bide_turns",
+    )
+    if rnd.random() >= 1 / 8 or a["transformed"][foe] or any(a[name][side] for name in locks):
+        return
+    own = (side, active)
+    a["transformed"][side] = 1
+    a["shadow_species"][side] = a["species"][own]
+    a["shadow_form"][side] = a["form"][own]
+    a["shadow_stats"][side] = a["stats"][own]
+    a["shadow_ivs"][side] = a["ivs"][own]
+    a["shadow_ability_slot"][side] = a["ability_slot"][own]
+    a["shadow_ability_form"][side] = a["ability_form"][own]
+    a["shadow_moves"][side] = a["moves"][own]
+    a["shadow_pp"][side] = a["pp"][own]
+    a["mimic_slots"][side] = 15
+    for name in ("species", "form", "ivs", "types", "ability", "ability_slot", "ability_form"):
+        a[name][own] = a[name][foe, target]
+    a["stats"][own] = a["stats"][foe, target]
+    a["moves"][own] = a["moves"][foe, target]
+    a["pp"][own] = np.minimum(a["pp"][foe, target], 5)
+    a["stages"][side] = a["stages"][foe]
 
 
 def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1980,6 +2023,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_batch12(draw, tables, a, side, active, names)
         _draw_mimic(draw, a, side, active)
+        _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
@@ -2196,6 +2240,7 @@ RARE_EFFECTS = (
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
     EffectId.MIMIC,  # G-68
+    EffectId.TRANSFORM,  # G-69
 )
 
 

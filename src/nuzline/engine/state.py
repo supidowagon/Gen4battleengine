@@ -156,6 +156,13 @@ Encodings:
   on leaving, ``moveEffectsData`` is cleared, :2100-2104). ``ai_seen_moves`` holds
   ``battlerMoves`` as move ids (``TrainerAI_RecordLastMove``, trainer_ai.c:2705-2716): a slot's
   move can change under Mimic, so the record cannot be flags.
+* E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
+  species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
+  target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the ``shadow_*`` fields hold
+  the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
+  They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
+  fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
+  ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities`` as the decomp ability id.
 * ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
   start, never decremented.
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
@@ -333,6 +340,22 @@ class BattleState(NamedTuple):
     mimic_slots: jnp.ndarray  # int8, MoveEffectsData.mimickedMoveSlot bitmask (G-68)
     shadow_moves: jnp.ndarray  # int16[2,4], the party's move of each masked slot (G-68)
     shadow_pp: jnp.ndarray  # int8[2,4], the party's PP of each masked slot (G-68)
+    # Transform (G-69): ``transformed`` is VOLATILE_CONDITION_TRANSFORM; while it is set the active
+    # slot's species, form, stats, ivs, ability slot / form, types, ability, moves and PP are the
+    # copied target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the
+    # ``shadow_*`` hold the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot,
+    # ``mimic_slots`` all four). Restored by ``step._restore_transform`` / ``_restore_moves``.
+    transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
+    shadow_species: jnp.ndarray  # int16, the party Pokemon's species while transformed (G-69)
+    shadow_form: jnp.ndarray  # int8 (G-69)
+    shadow_stats: jnp.ndarray  # int16[2,5], the party's Atk, Def, SpA, SpD, Spe (G-69)
+    shadow_ivs: jnp.ndarray  # int8[2,6] (G-69)
+    shadow_ability_slot: jnp.ndarray  # int8 (G-69)
+    shadow_ability_form: jnp.ndarray  # int8 (G-69)
+    # int8, MoveEffectsData.truant: the parity Truant compares with ``totalTurns & 1``
+    # (``order.truant_loafs``): set to ``(totalTurns + 1) & 1`` at an entry (battle_lib.c:2119,
+    # :2197), to ``totalTurns & 1`` by Transform (battle_script.c:5359), G-69.
+    truant: jnp.ndarray
     # per side [2]
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -370,7 +393,8 @@ class BattleState(NamedTuple):
     # int16[6,4], battlerMoves of the player's slot: move ids in first-free order (G-68)
     ai_seen_moves: jnp.ndarray
     ai_item_known: jnp.ndarray  # int16[6], battlerHeldItems: the item id a message named, 0 none
-    ai_ability_known: jnp.ndarray  # int8[6]
+    # int16[6], battlerAbilities: the decomp ability id a message named, 0 = none (G-69)
+    ai_ability_known: jnp.ndarray
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
     evs: jnp.ndarray  # int16[2,6,6], ids.Stat order
@@ -656,6 +680,14 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "mimic_slots": (_SIDE, np.int8),
     "shadow_moves": ((SIDES, MOVES), np.int16),
     "shadow_pp": ((SIDES, MOVES), np.int8),
+    "transformed": (_SIDE, np.int8),
+    "shadow_species": (_SIDE, np.int16),
+    "shadow_form": (_SIDE, np.int8),
+    "shadow_stats": ((SIDES, 5), np.int16),
+    "shadow_ivs": ((SIDES, 6), np.int8),
+    "shadow_ability_slot": (_SIDE, np.int8),
+    "shadow_ability_form": (_SIDE, np.int8),
+    "truant": (_SIDE, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -689,7 +721,7 @@ LAYOUT: dict[str, tuple[tuple[int, ...], type]] = {
     "player_faints": (_FIELD, np.int8),
     "ai_seen_moves": ((SLOTS, MOVES), np.int16),
     "ai_item_known": ((SLOTS,), np.int16),
-    "ai_ability_known": ((SLOTS,), np.int8),
+    "ai_ability_known": ((SLOTS,), np.int16),
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_SLOT, 6), np.int16),
     "nature": (_SLOT, np.int8),

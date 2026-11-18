@@ -246,8 +246,10 @@ from nuzline.engine.damage import (
     PHYSICAL,
     PRESENT_HEAL,
     STATUS,
+    battle_stats,
     damage_for_roll,
     decomp_abilities,
+    decomp_ability_id,
     divide,
     effectiveness,
     ground_immune,
@@ -306,7 +308,7 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
 from nuzline.engine.outcome import Outcome, crit_lands
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState
+from nuzline.engine.state import MOVES, STAGE_MAX, STAGE_MIN, BattleState
 
 _I32 = jnp.int32
 _E = EffectId
@@ -1643,8 +1645,7 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     exists), takes the move with ``min(5, its table PP)`` (:4502-4513) and its bit joins
     ``mimickedMoveSlot`` (:4515): the party Pokemon never sees the copy, so the slot's move and
     its PP after Mimic's own use go to ``shadow_moves`` / ``shadow_pp`` (``step._restore_moves``
-    gives them back). The Transform gate (:4482, VOLATILE_CONDITION_TRANSFORM) joins with
-    Transform (G-69)."""
+    gives them back). A Transformed user fails (:4482, G-69)."""
     side, user = h.side, h.user
     last = state.last_move[h.target_side].astype(_I32)
     moves = state.moves[side, user].astype(_I32)
@@ -1654,6 +1655,7 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         (h.effect == _E.MIMIC)
         & h.landed
         & ~jnp.any(last == jnp.asarray(MIMIC_FORBIDDEN, _I32))
+        & (state.transformed[side] == 0)  # :4482, VOLATILE_CONDITION_TRANSFORM
         & (last != 0)
         & (state.substitute_hp[h.target_side] == 0)
         & ~jnp.any(moves == last)
@@ -1671,6 +1673,96 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         shadow_moves=put(state.shadow_moves, (side, j), moves[j]),
         shadow_pp=put(state.shadow_pp, (side, j), live_pp),
         mimic_slots=put(state.mimic_slots, side, state.mimic_slots[side].astype(_I32) | (1 << j)),
+    )
+
+
+def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Transform (effect_script_0057.s:3, a direct ``CHECK_HP | TO_DEFENDER``
+    ``subscript_transform_into_target.s``, no CAN_PROTECT): it fails (:23-24, MOVE_STATUS_FAILED)
+    on a semi-invulnerable or already Transformed defender (:5-6; a Substitute is not tested).
+    ``BtlCmd_Transform`` (battle_script.c:5330-5373) then copies the defender's BattleMon up to and
+    including ``ability`` (battle_mon.h:57-84): species, Attack, Defense, Speed, Sp. Atk, Sp. Def
+    (the BattleMon values: ``damage.battle_stats``, a Power-Tricked defender's swapped ones; the
+    user's own swap is then off, ``power_trick_desync``), the four moves, the IVs, all eight stat
+    stages, both types, the form and the ability; each move's PP is ``min(5, table PP)``
+    (:5364-5370). Not copied: HP, max HP, level, status, the volatile state, held item, gender
+    (:5337-5338 write ``transformedPID`` / ``transformedGender``, cosmetic). Disable ends
+    (:5335-5336), ``mimickedMoveSlot`` clears (:5339: a mimicked slot is not restored by Transform,
+    its party value stays in the shadow), ``truant = totalTurns & 1`` (:5359). The party Pokemon's
+    own values go to the ``shadow_*`` (once: a Transformed user transforming again keeps them).
+    The switch-in checks run again after the move (``step._use_move``, :5350-5362)."""
+    side, user, foe, target = h.side, h.user, h.target_side, h.target
+    cond = (
+        (h.effect == _E.TRANSFORM)
+        & h.landed
+        & (state.hp[foe, target] > 0)
+        & (state.semi_invulnerable[foe] == 0)
+        & (state.transformed[foe] == 0)
+    )
+    fresh = state.transformed[side] == 0
+    masked = ((state.mimic_slots[side].astype(_I32) >> jnp.arange(MOVES)) & 1) == 1
+    keep = masked | ~fresh  # party values saved already: Mimic's, or a first Transform's
+    # The AI's record of the user's own ability settles to its id now: the copy changes what a
+    # "known, unnamed" record (-1) would read (``decomp_ability_id``), G-69.
+    record = state.ai_ability_known[user].astype(_I32)
+    own_id = decomp_abilities(tables, state)[side, user]
+    settled = jnp.where(cond & (side == 0) & (record < 0), own_id, record)
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    foe_moves = state.moves[foe, target]
+    copy_pp = jnp.minimum(tables.move_pp[foe_moves].astype(_I32), MIMIC_PP_CAP)
+    own = (side, user)
+    return state._replace(
+        shadow_moves=put(
+            state.shadow_moves, side, jnp.where(keep, state.shadow_moves[side], state.moves[own])
+        ),
+        shadow_pp=put(state.shadow_pp, side, jnp.where(keep, state.shadow_pp[side], state.pp[own])),
+        shadow_species=put(
+            state.shadow_species,
+            side,
+            jnp.where(fresh, state.species[own], state.shadow_species[side]),
+        ),
+        shadow_form=put(
+            state.shadow_form, side, jnp.where(fresh, state.form[own], state.shadow_form[side])
+        ),
+        shadow_stats=put(
+            state.shadow_stats, side, jnp.where(fresh, state.stats[own], state.shadow_stats[side])
+        ),
+        shadow_ivs=put(
+            state.shadow_ivs, side, jnp.where(fresh, state.ivs[own], state.shadow_ivs[side])
+        ),
+        shadow_ability_slot=put(
+            state.shadow_ability_slot,
+            side,
+            jnp.where(fresh, state.ability_slot[own], state.shadow_ability_slot[side]),
+        ),
+        shadow_ability_form=put(
+            state.shadow_ability_form,
+            side,
+            jnp.where(fresh, state.ability_form[own], state.shadow_ability_form[side]),
+        ),
+        species=put(state.species, own, state.species[foe, target]),
+        form=put(state.form, own, state.form[foe, target]),
+        stats=put(state.stats, own, battle_stats(state, foe, target)),
+        ivs=put(state.ivs, own, state.ivs[foe, target]),
+        types=put(state.types, own, state.types[foe, target]),
+        ability=put(state.ability, own, state.ability[foe, target]),
+        ability_slot=put(state.ability_slot, own, state.ability_slot[foe, target]),
+        ability_form=put(state.ability_form, own, state.ability_form[foe, target]),
+        moves=put(state.moves, own, foe_moves),
+        pp=put(state.pp, own, copy_pp),
+        stages=put(state.stages, side, state.stages[foe]),
+        disabled_move=put(state.disabled_move, side, 0),
+        disable_turns=put(state.disable_turns, side, 0),
+        mimic_slots=put(state.mimic_slots, side, (1 << MOVES) - 1),
+        transformed=put(state.transformed, side, 1),
+        power_trick_desync=put(state.power_trick_desync, side, state.power_trick[side]),
+        truant=put(state.truant, side, state.turn.astype(_I32) & 1),
+        ai_ability_known=state.ai_ability_known.at[user].set(
+            settled.astype(state.ai_ability_known.dtype)
+        ),
     )
 
 
@@ -1857,7 +1949,8 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
     battle_script.c:11806): the AI knows it, for the player's side."""
     on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
-    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    record = decomp_ability_id(state.ability[jnp.asarray(side, _I32), slot])
+    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 
@@ -2502,7 +2595,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
     stopped = down & (layers > 0) & ~poison_type & blocks
-    known = jnp.where(stopped & (side == 0), 1, state.ai_ability_known[mon])
+    known = jnp.where(stopped & (side == 0), ability, state.ai_ability_known[mon])
     state = state._replace(
         ai_ability_known=state.ai_ability_known.at[mon].set(
             known.astype(state.ai_ability_known.dtype)
@@ -3061,6 +3154,7 @@ def play_hit(
         _magnet_rise,
         _gravity,
         _mimic,
+        _transform,
         _ingrain,
         _mean_look,
         _imprison,

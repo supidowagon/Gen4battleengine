@@ -110,6 +110,14 @@ class RefSide:
     mimic_slots: int  # MoveEffectsData.mimickedMoveSlot bitmask (G-68)
     shadow_moves: list[int]  # the party's move of each flagged slot (G-68)
     shadow_pp: list[int]  # the party's PP of each flagged slot (G-68)
+    transformed: int  # VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
+    shadow_species: int  # the party Pokemon's own while transformed (G-69)
+    shadow_form: int
+    shadow_stats: list[int]
+    shadow_ivs: list[int]
+    shadow_ability_slot: int
+    shadow_ability_form: int
+    truant: int  # MoveEffectsData.truant (G-69)
     spikes: int
     toxic_spikes: int
     stealth_rock: int

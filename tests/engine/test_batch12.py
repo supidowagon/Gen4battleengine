@@ -355,7 +355,7 @@ def test_captivate_tags_oblivious_before_the_accuracy_roll(tables, names):
     for hit in (1, 0):  # outcome.hit's class 0 misses (outcome.py)
         o = O._replace(hit=O.hit.at[1, 0].set(hit))
         out = assert_matches_reference(tables, s, (0, 0), o)
-        assert int(out.ai_ability_known[0]) == 1, hit
+        assert int(out.ai_ability_known[0]) != 0, hit
         assert _st(out, 0, "SPA") == 0
 
 

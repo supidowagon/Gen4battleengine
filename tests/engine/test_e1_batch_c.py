@@ -108,7 +108,7 @@ def test_ice_body_heals_in_hail_and_shows_its_ability(tables, names):
     subscript_weather_continues.s:_076 tags the healed battler (the AI learns it)."""
     s = _snorunt(tables, names, 30)
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), O)
-    assert int(out.hp[0, 0]) == 32 and int(out.ai_ability_known[0]) == 1
+    assert int(out.hp[0, 0]) == 32 and int(out.ai_ability_known[0]) != 0
     full = _snorunt(tables, names, 40)
     out = assert_matches_reference(tables, full, A("Leer", "Leer", full, names), O)
     assert int(out.hp[0, 0]) == 40 and int(out.ai_ability_known[0]) == 0
@@ -162,7 +162,7 @@ def test_vital_spirit_stops_sleep_and_shows_its_ability(tables, names):
     "stayed awake" with TAG_NICKNAME_ABILITY: the AI learns it."""
     s = _mankey(tables, names, ["Hypnosis"])
     out = assert_matches_reference(tables, s, A("Leer", "Hypnosis", s, names), O)
-    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
     bare = _ability(s, 0, 0, AbilityId.NONE)
     out = assert_matches_reference(tables, bare, A("Leer", "Hypnosis", bare, names), O)
     assert int(out.status[0, 0]) == Status.SLEEP
@@ -177,7 +177,7 @@ def test_vital_spirit_wakes_its_sleeping_holder(tables, names):
         status_counter=s.status_counter.at[0, 0].set(3),
     )
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), O)
-    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
 
 
 # --- G-48 Speed Boost ---------------------------------------------------------------------

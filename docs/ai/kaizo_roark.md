@@ -882,6 +882,11 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   `TrainerAI_RecordLastMove` `trainer_ai.c:2705-2716`; `state.record_seen_move`): a player that
   Mimics shows Mimic and then the copy, and its own Struggle is recorded like any move.
 
+- TRANSFORM (57, G-69): no Basic or Expert entry and no script.s mention; `trainer_ai.c` never tests
+  `VOLATILE_CONDITION_TRANSFORM`, so the transformed BattleMon is read like any other. The AI's
+  recorded ability is the decomp id (`BattleState.ai_ability_known`, `battlerAbilities`): a reveal
+  before the Transform stays the old ability, an unrevealed one is guessed from the copied species.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

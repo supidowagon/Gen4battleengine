@@ -158,7 +158,8 @@ three structs has a row.
   `search.playout.replacement_pass` once the opposing newcomer is in (G-22); the row stays
   `later (M6)` for Skill Swap and Role Play. `MoveEffectsData.truant` is
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
-  :2195-2197; 0 for a lead), so it is `fake_out_turn`'s parity (`order.truant_loafs`).
+  :2195-2197; 0 for a lead) and `totalTurns & 1` after a Transform (battle_script.c:5359): the
+  field `truant` (`order.truant_loafs`; E1 trial batch, G-69).
 - **moveProtect -> `protect_count`** (K3b2 Task 6; docs/kaizo/k3b2-rules.md §2(a),
   §12): `BattleContext.moveProtect`, the move whose attack message the battler last
   showed (`UpdateMoveBuffers`, `src/battle/battle_controller_player.c:3936-3942`),
@@ -254,6 +255,17 @@ three structs has a row.
   player Pokemon has HP left; a double KO of both last Pokemon is a draw, played as a
   loss), 2 player won. A player faint alone only records a death.
 - **recycleItem -> `item_consumed`**: the last item consumed, per party slot.
+- **Transform** (G-69): `VOLATILE_CONDITION_TRANSFORM` is `transformed`. `BtlCmd_Transform` copies
+  the defender's BattleMon up to and including `ability` into the user's (species, the five stats
+  as the BattleMon holds them, the moves, the IVs, the stat stages, both types, the form, the
+  ability; battle_script.c:5342-5348), each slot's PP `min(5, table PP)` (:5364-5370); the party
+  Pokemon's own species, form, stats, IVs, ability slot / form, moves and PP wait in the `shadow_*`
+  fields (`shadow_moves` / `shadow_pp` with `mimic_slots` all four) until the battler leaves
+  (`step._restore_transform`, `_restore_moves`) or the player's battle ends; a fainted one keeps the
+  copy until its replacement enters (the exp payout reads its copied species, :2216). A level-up
+  reloads the battler's own stats, level and HP, not its moves (battle_lib.c:169-194):
+  `levelup.party_identity`. `ai_ability_known` is `battlerAbilities`: the decomp id the AI
+  recorded, 0 none, -1 known but not named by the engine (settled to its id by a Transform).
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
@@ -370,14 +382,14 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `BattleMon.species` | `species` | mapped |
+| `BattleMon.species` | `species`, `shadow_species` | mapped |
 | `BattleMon.attack` | `stats`, `power_trick`, `power_trick_desync` | mapped |
 | `BattleMon.defense` | `stats`, `power_trick`, `power_trick_desync` | mapped |
-| `BattleMon.speed` | `stats` | mapped |
+| `BattleMon.speed` | `stats`, `shadow_stats` | mapped |
 | `BattleMon.spAttack` | `stats` | mapped |
 | `BattleMon.spDefense` | `stats` | mapped |
 | `BattleMon.moves` | `moves`, `shadow_moves`, `mimic_slots` | mapped |
-| `BattleMon.hpIV` | `ivs` | mapped |
+| `BattleMon.hpIV` | `ivs`, `shadow_ivs` | mapped |
 | `BattleMon.attackIV` | `ivs` | mapped |
 | `BattleMon.defenseIV` | `ivs` | mapped |
 | `BattleMon.speedIV` | `ivs` | mapped |
@@ -389,7 +401,7 @@ three structs has a row.
 | `BattleMon.weight` | — | not needed because it is constant per species in Gen 4; read from `tables.species_weight` |
 | `BattleMon.type1` | `types` | mapped |
 | `BattleMon.type2` | `types` | mapped |
-| `BattleMon.formNum` | `form` | mapped |
+| `BattleMon.formNum` | `form`, `shadow_form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
@@ -416,7 +428,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `transformed` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -444,7 +456,7 @@ three structs has a row.
 | `MoveEffectsData.stockpileCount` | — | later (M6) |
 | `MoveEffectsData.stockpileDefBoosts` | — | later (M6) |
 | `MoveEffectsData.stockpileSpDefBoosts` | — | later (M6) |
-| `MoveEffectsData.truant` | `fake_out_turn` | mapped |
+| `MoveEffectsData.truant` | `truant`, `fake_out_turn` | mapped |
 | `MoveEffectsData.flashFire` | — | later (M6) |
 | `MoveEffectsData.lockOnTarget` | `lock_on_target` | mapped |
 | `MoveEffectsData.mimickedMoveSlot` | `mimic_slots` | mapped |
@@ -466,14 +478,14 @@ three structs has a row.
 | `MoveEffectsData.slowStartTurnNumber` | — | later (M6) |
 | `MoveEffectsData.meFirstTurnNumber` | — | later (M6) |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
-| `MoveEffectsData.transformedPID` | — | later (M6) |
+| `MoveEffectsData.transformedPID` | — | not needed because it is cosmetic (the transformed sprite and name, messages): Transform copies no personality for any battle rule |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
 | `MoveEffectsData.encoredMove` | `encore_move` | mapped |
 | `MoveEffectsData.encoredMoveSlot` | `encore_slot` | mapped |
 | `MoveEffectsData.lastResortMoves` | — | later (M6) |
 | `MoveEffectsData.choiceLockedMove` | `choice_lock` | mapped |
-| `MoveEffectsData.transformedGender` | — | later (M6) |
+| `MoveEffectsData.transformedGender` | — | not needed because it is cosmetic (sprites and messages): Attract, Captivate and Rivalry keep the user's own `gender` (battle_script.c:5337-5338) |
 | `MoveEffectsData.itemHPRecovery` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 
 ## SideConditions (`include/battle/battle_context.h`)

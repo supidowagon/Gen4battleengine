@@ -140,6 +140,16 @@ def _i32(x) -> jnp.ndarray:
 _ABILITY_DECOMP = jnp.array([ABILITY_DECOMP_IDS.get(a, -1) for a in AbilityId], jnp.int32)
 
 
+def decomp_ability_id(ability) -> jnp.ndarray:
+    """``int32``: what ``BattleAI_SetAbility`` records (battle_script.c:12106-12109) in
+    ``BattleState.ai_ability_known`` for the engine ability ``ability`` (an ``AbilityId``): its
+    decomp id, or -1 for one the engine does not name (a species ability the tables carry only as a
+    decomp id): known, and read as the battler's current ability until a Transform settles it
+    (``effects._transform``), G-69."""
+    dec = _ABILITY_DECOMP[_i32(ability)]
+    return jnp.where(dec > 0, dec, -1)
+
+
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
     ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
@@ -907,6 +917,7 @@ def _item_modifiers(
         | (
             (a_effect == ItemId.GRISEOUS_ORB)
             & (dragon | (move_type == Type.GHOST))
+            & (s.transformed[atk_side] == 0)  # :6770, VOLATILE_CONDITION_TRANSFORM
             & (a_species == SPECIES_GIRATINA)
         )
     )

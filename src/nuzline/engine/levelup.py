@@ -187,13 +187,13 @@ def pay_exp_leveled(
     fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
     paying = jnp.any(fainted)
     j = jnp.argmax(fainted)
-    foe_species = after.species[1, j].astype(_I32)
+    foe_species = after.species[1, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
     foe_row = tables.species_form_row[foe_species, after.form[1, j]]
     exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[1, j].astype(_I32)
     exp_e = exp_e // 7
 
     slots = jnp.arange(SLOTS)
-    species = after.species[0]
+    species, party_form, party_ivs = party_identity(after)
     hp = after.hp[0].astype(_I32)
     level = after.level[0].astype(_I32)
     alive = (species != 0) & (hp > 0)
@@ -229,10 +229,10 @@ def pay_exp_leveled(
     bonus = after.friend_bonus.astype(_I32)
     friendship = jnp.where(leveled, _friendship(f0, new_level - level, bonus, soothe), f0)
 
-    row = tables.species_form_row[species, after.form[0]]
+    row = tables.species_form_row[species, party_form]
     mods = tables.nature_mods[after.nature[0]]
     base = tables.species_base_stats[row]
-    new = calc_stats_jnp(base, after.ivs[0], evs, new_level, mods, species)
+    new = calc_stats_jnp(base, party_ivs, evs, new_level, mods, species)
     old_max = after.max_hp[0].astype(_I32)
     new_hp = jnp.where(species == SPECIES_SHEDINJA, 1, hp + new[:, Stat.HP] - old_max)
 
@@ -254,6 +254,15 @@ def pay_exp_leveled(
             jnp.where(
                 leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
             ).astype(after.power_trick_desync.dtype)
+        ),
+        # A Transformed active Pokemon: the reload gives the battler its own new stats (:169-174)
+        # and the party's shadow too.
+        shadow_stats=after.shadow_stats.at[0].set(
+            jnp.where(
+                (after.transformed[0] != 0) & leveled[after.active[0]],
+                new[after.active[0], Stat.ATK :],
+                after.shadow_stats[0],
+            ).astype(after.shadow_stats.dtype)
         ),
         friendship=put("friendship", friendship),
         evs=put("evs", evs),
@@ -289,7 +298,21 @@ def _learner(state: BattleState) -> jnp.ndarray:
 def _row(tables: Tables, state: BattleState, slot) -> jnp.ndarray:
     """The learnset's personal row, by species and form (``Pokemon_LoadLevelUpMovesOf``,
     src/pokemon.c:3943)."""
-    return tables.species_form_row[state.species[0, slot], state.form[0, slot]]
+    species, form, _ = party_identity(state)
+    return tables.species_form_row[species[slot], form[slot]]
+
+
+def party_identity(state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(species[6], form[6], ivs[6, 6])`` of the player's party Pokemon: the active slot's own
+    (``shadow_*``) while it is Transformed, else the slots' fields. The exp table, the stats, the
+    learnset and the Shedinja rule belong to the party Pokemon (``Pokemon_CalcStats``, the
+    ``ReloadPokemon`` of battle_lib.c:169-194 copies its own stats back), G-69."""
+    slots = jnp.arange(SLOTS)
+    swapped = (state.transformed[0] != 0) & (slots == state.active[0])
+    species = jnp.where(swapped, state.shadow_species[0], state.species[0])
+    form = jnp.where(swapped, state.shadow_form[0], state.form[0])
+    ivs = jnp.where(swapped[:, None], state.shadow_ivs[0][None, :], state.ivs[0])
+    return species, form, ivs
 
 
 def _masked(state: BattleState, slot) -> jnp.ndarray:

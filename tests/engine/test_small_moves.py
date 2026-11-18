@@ -116,7 +116,7 @@ def test_fake_out_flinch_follows_the_flinch_rules(tables, names):
     s = s._replace(ai_ability_known=jnp.zeros_like(s.ai_ability_known))
     out = assert_matches_reference(tables, s, A("Leer", "Fake Out", s, names), PROC)
     assert int(out.stages[1, Stat.DEF]) == -1  # Zubat moved
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     # A Headbutt flinch blocked by Inner Focus names nothing (only Fake Out does).
     h = roark_state(tables, names, player_species="Zubat", player_moves=["Leer"],
                     opp_moves=["Headbutt"], opp_faster=True)  # fmt: skip

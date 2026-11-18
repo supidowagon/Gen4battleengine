@@ -400,6 +400,10 @@ class EffectId(IntEnum):
     # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
     # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
     MIMIC = 108
+    # Transform (57, BATTLE_EFFECT_TRANSFORM): zeros. effect_script_0057.s runs
+    # subscript_transform_into_target.s on a defender with HP: ``BtlCmd_Transform``
+    # (battle_script.c:5330-5373) copies the defender's BattleMon (``effects._transform``, G-69).
+    TRANSFORM = 109
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

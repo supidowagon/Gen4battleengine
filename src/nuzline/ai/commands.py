@@ -1608,18 +1608,20 @@ def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
-    """``(true, known, base)`` of the player's active Pokemon: its true ability, the current
-    one (``battleMons[battler].ability``, trainer_ai.c:1184-1186; ``damage.decomp_abilities``:
-    the form's, or a copy the engine models, such as Trace's, which the AI also learns,
-    ``BattleAI_SetAbility``,
-    battle_script.c:3401-3403, :12106-12109),
-    whether ``LoadBattlerAbility DEFENDER`` returns it without a guess (learned, or Shadow
-    Tag, Magnet Pull or Arena Trap, trainer_ai.c:1181-1188), and the base species' two
-    abilities ``int32[2]`` (``defender_ability``)."""
+    """``(value, known, base)`` of the player's active Pokemon: the ability
+    ``LoadBattlerAbility DEFENDER`` returns without a guess, whether it does, and the base
+    species' two abilities ``int32[2]`` (``defender_ability``). It returns the id the AI recorded
+    (``battlerAbilities``, ``BattleAI_SetAbility``, battle_script.c:3401-3403, :12106-12109; a
+    pre-Transform reveal stays the old ability after a Transform, G-69), else the battler's current
+    ability when it is Shadow Tag, Magnet Pull or Arena Trap (trainer_ai.c:1181-1188;
+    ``damage.decomp_abilities``: the form's, or a copy the engine models, Trace's or Transform's).
+    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
-    true = decomp_abilities(tables, state)[0, d]
-    known = (state.ai_ability_known[d] > 0) | jnp.isin(true, _TRAPPING)
+    current = decomp_abilities(tables, state)[0, d]
+    recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
+    true = jnp.where(recorded > 0, recorded, current)
+    known = (recorded != 0) | jnp.isin(current, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
 

@@ -44,6 +44,7 @@ from nuzline.engine.order import (
     effective_speed,
 )
 from nuzline.engine.state import MOVES, make_state
+from tests.ai.fixtures import know_ability
 from tests.ai.test_kaizo_outcome import (
     KAIZO,
     KAIZO_ALL,
@@ -502,7 +503,7 @@ def test_selfdestruct_damp_guess(tables, names, kaizo_tables, kaizo_roark_party)
     # and Accelerock take Basic_CheckWaterAbsorption (:74 -> :86), not Water: no change.
     assert _two_flag_scores(t2, s, 1, jump) == [100, 100, 100, 99]
     # The ability is known (ai_ability_known): Wooper's true slot 0, Damp, whatever the guess.
-    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    known = know_ability(t2, s)
     assert _two_flag_scores(t2, known, 1, jump) == [100, 90, 100, 99]
 
 
@@ -2985,7 +2986,7 @@ def test_basic_ohko(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
     elif case == "sturdy":  # Kaizo has no Sturdy species: a synthetic row for Gible
         sturdy = c.ABILITY_IDS["Sturdy"]
         t = _with_abilities(t, int(s.species[0, 0]), [sturdy, sturdy])
-        s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+        s = know_ability(t, s)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
 
 

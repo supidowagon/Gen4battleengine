@@ -577,7 +577,7 @@ def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(
     if sun:
         s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
     out = assert_matches_reference(tables, s, (0, 0), O)
-    assert int(out.ai_ability_known[0]) == int(revealed) and int(out.yawn[0]) == 0
+    assert bool(out.ai_ability_known[0]) == bool(revealed) and int(out.yawn[0]) == 0
 
 
 def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):

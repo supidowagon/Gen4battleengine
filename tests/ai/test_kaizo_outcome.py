@@ -71,7 +71,7 @@ from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
-from tests.ai.fixtures import GEODUDE, outcome, versus
+from tests.ai.fixtures import GEODUDE, know_ability, outcome, versus
 from tests.conftest import K3C_EFFECTS
 
 # Kaizo move ids (data/gen4_platinum_kaizo names).
@@ -118,7 +118,9 @@ def _with_player(t, s: BattleState, species: int, slot: int = 0, known: bool = F
         types=s.types.at[0, 0].set(t.species_types[species]),
         ability_slot=s.ability_slot.at[0, 0].set(slot),
         ability=s.ability.at[0, 0].set(t.species_abilities[species, slot]),
-        ai_ability_known=s.ai_ability_known.at[0].set(int(known)),
+        ai_ability_known=s.ai_ability_known.at[0].set(
+            int(t.species_abilities_decomp[species, slot]) if known else 0
+        ),
     )
 
 
@@ -396,7 +398,7 @@ def test_kaizo_width_under_cap(kaizo_tables, kaizo_roark_party):
     stops = KAIZO.switch_sites + 1  # 61: the six-party switch stops (K3c Task 7, G-33)
     for j in range(len(party)):
         s = make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
-        known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+        known = know_ability(t, s)
         for state in (s, known):
             paths = _loose_paths(t, state)
             width = policy.ai_width(t, state)
@@ -805,7 +807,8 @@ def _check_fight_reads(t, party, every: int, moves, rng, species, n: int = 4):
     for _ in range(n):
         s = _kaizo_state(t, party, moves)
         s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
-        s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0)))
+        if rng.integers(4) == 0:
+            s = know_ability(t, s)
         if rng.integers(2):
             s = s._replace(
                 types=s.types.at[0, 0].set(jnp.asarray(rng.integers(0, 17, 2), s.types.dtype))
@@ -976,7 +979,7 @@ def test_a_read_past_the_bound_is_refused(kaizo_tables, kaizo_names, kaizo_roark
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, narrow)
     with pytest.raises(policy.UnsupportedAi, match="more than 2 random reads"):
         policy.ai_scores(t, s, o, narrow)
-    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    known = know_ability(t, s)
     assert not np.isnan(np.asarray(_distribution(t, known, narrow))).any()
 
 

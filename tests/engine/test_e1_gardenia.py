@@ -406,7 +406,7 @@ def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
     n = names
     lead = make_state(tables, [_mon(n, "Absol", ["Tackle"])], [_mon(n, "Geodude", ["Tackle"])])
     assert int(lead.ability[0, 0]) == AbilityId.PRESSURE
-    assert int(lead.ai_ability_known[0]) == 1
+    assert int(lead.ai_ability_known[0]) != 0
     s = make_state(
         tables,
         [_mon(n, "Geodude", ["Tackle"]), _mon(n, "Absol", ["Tackle"])],
@@ -414,7 +414,7 @@ def test_pressure_switch_in_reveals_it_to_the_ai(tables, names):
     )
     assert int(s.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, (SWITCH_TO_1, 0), O)
-    assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) == 1
+    assert int(out.active[0]) == 1 and int(out.ai_ability_known[1]) != 0
 
 
 # --- Status guards: Synchronize and Leaf Guard (G-12 .. G-17) -----------------------------
@@ -494,7 +494,7 @@ def test_synchronize_passes_a_status_moves_status_back(tables, names, move, held
     out = assert_matches_reference(tables, s, acts, O)
     assert int(out.status[0, 0]) == held
     assert int(out.status[1, 0]) == passed
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     out = assert_matches_reference(tables, _ability(s, 0, AbilityId.INNER_FOCUS), acts, O)
     assert int(out.status[0, 0]) == held and int(out.status[1, 0]) == Status.NONE
     assert int(out.ai_ability_known[0]) == 0
@@ -517,7 +517,7 @@ def test_synchronize_passes_a_contact_abilitys_status(tables, names, ability, st
     out = assert_matches_reference(tables, s, A("Tackle", "Growl", s, names), o)
     assert int(out.status[0, 0]) == status
     assert int(out.status[1, 0]) == status
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 def test_synchronize_after_kings_rock_passes_nothing(tables, names):
@@ -618,7 +618,7 @@ def test_synchronize_after_u_turn_into_toxic_spikes(tables, names):
         out = assert_matches_reference(tables, paused, tuple(acts), O)
         assert int(out.active[0]) == 1 and int(out.status[0, 1]) == own
         assert int(out.status[1, 0]) == Status.POISON
-        assert int(out.ai_ability_known[1]) == 1
+        assert int(out.ai_ability_known[1]) != 0
 
 
 @pytest.mark.parametrize(
@@ -647,7 +647,7 @@ def test_leaf_guard_in_sun_blocks_a_status_move(tables, names, move, status):
     acts = A("Growl", move, s, n)
     sunny = _weather(s, Weather.SUN)
     out = assert_matches_reference(tables, sunny, acts, O)
-    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
     out = assert_matches_reference(tables, s, acts, O)
     assert int(out.status[0, 0]) == status and int(out.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, _ability(sunny, 1, AbilityId.MOLD_BREAKER), acts, O)
@@ -757,7 +757,7 @@ def test_wonder_guard_blocks_what_is_not_super_effective(tables, names, move, gu
     if guarded:
         assert after == hp and int(out.status[0, 0]) == Status.NONE
         assert int(out.stages[0, Stat.SPE]) == 0  # Bubble's Speed drop never ran
-        assert int(out.ai_ability_known[0]) == 1
+        assert int(out.ai_ability_known[0]) != 0
     else:
         assert int(out.ai_ability_known[0]) == 0
         if move == "Thunder Wave":
@@ -778,7 +778,7 @@ def test_wonder_guard_mold_breaker_and_the_miss(tables, names):
     assert int(out.hp[0, 0]) < int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
     missed = O._replace(hit=O.hit.at[1, 0].set(0))
     out = assert_matches_reference(tables, s, acts, missed)
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) != 0
 
 
 def test_wonder_guard_jump_kick_crashes_on_the_charts_damage(tables, names):
@@ -824,7 +824,7 @@ def test_wonder_guard_shedinja_reveals_and_falls_to_a_super_effective_hit(tables
     assert int(s.ability[0, 0]) == AbilityId.WONDER_GUARD
     for move in ("Water Gun", "Tackle"):
         out = assert_matches_reference(tables, s, A("Growl", move, s, n), O)
-        assert int(out.hp[0, 0]) == 1 and int(out.ai_ability_known[0]) == 1
+        assert int(out.hp[0, 0]) == 1 and int(out.ai_ability_known[0]) != 0
     out = assert_matches_reference(tables, s, A("Growl", "Ember", s, n), O)
     assert int(out.hp[0, 0]) == 0
 
@@ -987,7 +987,7 @@ def test_wonder_guard_pursuit_on_a_switching_holder(tables, names):
     s = _ability(s, 0, AbilityId.WONDER_GUARD)
     out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Pursuit", s, n), O)
     assert int(out.active[0]) == 1
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) != 0
 
 
 # --- the follow-ups (G-24 .. G-26) ---------------------------------------------------------
@@ -1010,7 +1010,7 @@ def test_synchronize_u_turn_user_fainted_by_pursuit_passes_its_status(tables, na
     out = assert_matches_reference(tables, s, acts, _proc(O, "contact_proc", 1))
     assert int(out.hp[0, 0]) == 0 and int(out.status[0, 0]) == Status.NONE
     assert int(out.status[1, 0]) == Status.PARALYSIS
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     # Without the Static paralysis nothing passes.
     out = assert_matches_reference(tables, s, acts, O)
     assert int(out.hp[0, 0]) == 0 and int(out.status[1, 0]) == Status.NONE
@@ -1128,10 +1128,10 @@ def test_weather_war_at_the_battle_start_leaves_the_slower_leads_weather(tables,
     weather stays. A slower player's Drought runs its script last (the AI learns it)."""
     fast = _war(tables, names, (50, 40))
     assert int(fast.weather) == Weather.RAIN and int(fast.war_swaps) == 0
-    assert int(fast.ai_ability_known[0]) == 1  # its own script ran first
+    assert int(fast.ai_ability_known[0]) != 0  # its own script ran first
     slow = _war(tables, names, (40, 50))
     assert int(slow.weather) == Weather.SUN and int(slow.weather_timer) == 0
-    assert int(slow.war_swaps) == 0 and int(slow.ai_ability_known[0]) == 1
+    assert int(slow.war_swaps) == 0 and int(slow.ai_ability_known[0]) != 0
 
 
 def test_weather_war_tie_and_quick_claw_are_root_draws(tables, names):
@@ -1171,6 +1171,7 @@ def test_root_draws_take_a_host_state(tables, names):
     tie = _war(tables, names, (50, 50))
     host = jax.tree.map(np.asarray, tie)
     assert isinstance(host.ai_ability_known, np.ndarray)
+
     def outcomes(state):
         belief = root_belief(tables, state)
         return sorted((int(b.weather), int(b.ai_ability_known[0]), p) for b, p in belief)
@@ -1178,6 +1179,7 @@ def test_root_draws_take_a_host_state(tables, names):
     assert outcomes(host) == outcomes(tie) and len(outcomes(tie)) == 2
     key = jax.random.PRNGKey(3)
     assert int(sample_root(key, tables, host).weather) == int(sample_root(key, tables, tie).weather)
+
 
 def _double_ko(tables, names, levels):
     """Geodude leads, both down; the player's bench Groudon (Drought, level ``levels[0]``) and
@@ -1244,7 +1246,7 @@ def test_wonder_guard_tests_a_charge_moves_strike_not_its_charge(tables, names):
     assert int(one.ai_ability_known[0]) == 0 and int(one.hp[0, 0]) == int(s.hp[0, 0])
     two = assert_matches_reference(tables, one, acts, O)
     assert int(two.locked_move[1]) == 0 and int(two.semi_invulnerable[1]) == 0
-    assert int(two.hp[0, 0]) == int(s.hp[0, 0]) and int(two.ai_ability_known[0]) == 1
+    assert int(two.hp[0, 0]) == int(s.hp[0, 0]) and int(two.ai_ability_known[0]) != 0
     dig = n.move("Dig")
     assert int(damage_table(tables, s, 1, dig, False)[15]) == 0
     assert int(damage_table(tables, s, 1, dig, False, wonder_guard=False)[15]) > 0
@@ -1252,7 +1254,7 @@ def test_wonder_guard_tests_a_charge_moves_strike_not_its_charge(tables, names):
     herb = _item(s, 1, 0, "Power Herb", n)
     out = assert_matches_reference(tables, herb, acts, O)
     assert int(out.item[1, 0]) == 0 and int(out.locked_move[1]) == 0
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) != 0
     # Without Wonder Guard the same strike lands.
     plain = _ability(one, 0, AbilityId.NONE)
     out = assert_matches_reference(tables, plain, acts, O)
@@ -1312,12 +1314,12 @@ def test_present_heal_skips_wonder_guard(tables, names):
     out = assert_matches_reference(tables, s, acts, _present(O, 1, PRESENT_HEAL))
     assert int(out.hp[0, 0]) > int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, acts, _present(O, 1, 2))
-    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) == 1
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.ai_ability_known[0]) != 0
     missed = O._replace(hit=O.hit.at[1, 0].set(0))
     out = assert_matches_reference(tables, s, acts, _present(missed, 1, PRESENT_HEAL))
     assert int(out.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, acts, _present(missed, 1, 0))
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 def test_present_heal_runs_the_after_move_items(tables, names):
@@ -1371,7 +1373,7 @@ def test_synchronize_pass_to_a_fainted_statused_receiver_fails(tables, names):
     assert int(out.ai_ability_known[0]) == 0
     out = assert_matches_reference(tables, s, acts, o)
     assert int(out.hp[1, 0]) == 0 and int(out.status[0, 0]) == Status.PARALYSIS
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 def test_synchronize_flag_toggles_twice_in_one_hit(tables, names):
@@ -1411,7 +1413,7 @@ def test_synchronize_runs_after_every_hit_of_a_multi_hit_move(tables, names):
         out = assert_matches_reference(tables, s, A("Double Kick", "Growl", s, n), o)
         assert int(out.status[0, 0]) == Status.PARALYSIS, hit
         assert int(out.status[1, 0]) == Status.PARALYSIS, hit
-        assert int(out.ai_ability_known[0]) == 1
+        assert int(out.ai_ability_known[0]) != 0
 
 
 def test_pressure_with_a_fainted_foe(tables, names):

@@ -21,8 +21,12 @@ from nuzline.engine.ids import (
     MOVE_MIMIC,
     AbilityId,
     EffectId,
+    MoveFlag,
     SemiKind,
+    Stat,
+    Status,
     Type,
+    Weather,
 )
 from nuzline.engine.order import copycat_call, metronome_candidates
 from nuzline.engine.outcome import empty_outcome
@@ -799,3 +803,234 @@ def test_mimic_fight_holds_the_foes_possible_moves(tables, names):
     assert int(tables.move_ai_effect[earthquake]) in fight_effects(t, t.ai_moves)
     t = fight_tables(tables, trainer, [plain], foe_moves=[earthquake])
     assert earthquake not in [int(m) for m in np.asarray(t.ai_moves)]
+
+
+# --- Transform (G-69) ------------------------------------------------------------------------
+
+
+def _ditto(tables, names, *, foe="Geodude", foe_moves=("Tackle", "Rock Throw"), **kw):
+    """Ditto (Transform, Tackle) against ``foe`` with ``foe_moves``: the player acts first."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ditto", ["Transform", "Tackle"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, foe, list(foe_moves), 30), _mon(n, "Bulbasaur", ["Leer"], 20)],
+        **kw,
+    )
+    spe = int(s.stats[0, 0, 4])
+    return s._replace(stats=s.stats.at[1, 0, 4].set(max(spe - 1, 1)))
+
+
+def _transformed(tables, names, **kw):
+    s = _ditto(tables, names, **kw)
+    return assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
+
+
+def test_transform_is_mapped_and_kaizo_has_priority_one(tables, names, kaizo_tables, kaizo_names):
+    from tools.effect_map import DECOMP_EFFECT_TO_ID
+
+    assert DECOMP_EFFECT_TO_ID[57] == (EffectId.TRANSFORM, (0, 0, 0))
+    for t, n, priority in ((tables, names, 0), (kaizo_tables, kaizo_names, 1)):
+        m = n.move("Transform")
+        assert int(t.move_effect[m]) == EffectId.TRANSFORM and int(t.move_accuracy[m]) == 0
+        assert int(t.move_priority[m]) == priority
+        assert not int(t.move_flags[m]) & MoveFlag.PROTECT
+
+
+def test_transform_copies_the_battle_mon_but_not_hp_level_item_status_gender(tables, names):
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
+    s = _ditto(tables, names, foe_moves=("Leer", "Rock Throw"))
+    s = s._replace(
+        item=s.item.at[0, 0].set(names.item("Metal Powder")),
+        status=s.status.at[0, 0].set(Status.POISON),
+        gender=s.gender.at[0, 0].set(2),
+        stages=s.stages.at[1].set(jnp.asarray([0, 2, 0, -1, 0, 1, 0, 0], s.stages.dtype)),
+        substitute_hp=s.substitute_hp.at[0].set(12),
+    )
+    out = assert_matches_reference(tables, s, A("Transform", "Leer", s, names), _o())
+    f = names.species("Geodude")
+    assert int(out.species[0, 0]) == f and int(out.form[0, 0]) == int(s.form[1, 0])
+    assert out.stats[0, 0].tolist() == s.stats[1, 0].tolist()
+    assert out.types[0, 0].tolist() == s.types[1, 0].tolist()
+    assert out.ivs[0, 0].tolist() == s.ivs[1, 0].tolist()
+    assert out.stages[0].tolist() == s.stages[1].tolist()
+    assert int(out.ability[0, 0]) == int(s.ability[1, 0])
+    assert out.moves[0, 0].tolist() == s.moves[1, 0].tolist()
+    expect = [min(5, int(tables.move_pp[m])) for m in s.moves[1, 0].tolist()]
+    assert out.pp[0, 0].tolist() == expect
+    # Kept: HP, level, item, status, gender and the user's own Substitute.
+    tick = max(int(s.max_hp[0, 0]) // 8, 1)  # the poison at the turn's end, not the copy
+    assert int(out.hp[0, 0]) == int(s.hp[0, 0]) - tick and int(out.level[0, 0]) == 30
+    assert int(out.item[0, 0]) == names.item("Metal Powder")
+    assert int(out.status[0, 0]) == Status.POISON and int(out.gender[0, 0]) == 2
+    assert int(out.substitute_hp[0]) == 12 and int(out.transformed[0]) == 1
+    # The party Pokemon's own values wait in the shadow.
+    assert int(out.shadow_species[0]) == names.species("Ditto")
+    assert out.shadow_stats[0].tolist() == s.stats[0, 0].tolist()
+    assert out.shadow_moves[0].tolist() == s.moves[0, 0].tolist()
+    assert int(out.mimic_slots[0]) == 0b1111
+
+
+def test_transform_fails_into_a_flyer_in_the_air_or_a_transformed_target(tables, names):
+    s = _ditto(tables, names)
+    air = s._replace(semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE))
+    out = assert_matches_reference(tables, air, A("Transform", "Tackle", air, names), _o())
+    assert int(out.transformed[0]) == 0 and int(out.species[0, 0]) == names.species("Ditto")
+    done = s._replace(transformed=s.transformed.at[1].set(1))
+    out = assert_matches_reference(tables, done, A("Transform", "Tackle", done, names), _o())
+    assert int(out.transformed[0]) == 0
+
+
+def test_transform_passes_a_substitute_and_protect_does_not_stop_it(tables, names):
+    s = _ditto(tables, names, foe_moves=("Protect", "Tackle"))
+    s = s._replace(substitute_hp=s.substitute_hp.at[1].set(30))
+    s = s._replace(stats=s.stats.at[1, 0, 4].set(int(s.stats[0, 0, 4]) + 1))  # the foe first
+    out = assert_matches_reference(tables, s, A("Transform", "Protect", s, names), _o())
+    assert int(out.transformed[0]) == 1 and int(out.species[0, 0]) == names.species("Geodude")
+
+
+def test_transform_runs_the_copied_abilitys_switch_in_checks(tables, names):
+    """Intimidate copied: the foe's Attack drops right after the move; Drizzle copied: rain."""
+    s = _ditto(tables, names)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.INTIMIDATE))
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
+    assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
+    s = _ditto(tables, names)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.DRIZZLE))
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
+    assert int(out.weather) == Weather.RAIN
+
+
+def test_a_transformed_ditto_loses_metal_powder(tables, names):
+    out = _transformed(tables, names)
+    bare = out._replace(item=out.item.at[0, 0].set(0))
+    powder = out._replace(item=out.item.at[0, 0].set(names.item("Metal Powder")))
+    move = names.move("Tackle")
+    assert _both(tables, bare, move) == _both(tables, powder, move)
+
+
+def test_transform_copied_pp_never_reaches_the_party_and_the_copy_ends_when_it_leaves(
+    tables, names
+):
+    s = _ditto(tables, names)
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
+    used = assert_matches_reference(tables, out, (0, 0), _o())  # the copy's first move
+    assert int(used.pp[0, 0, 0]) == int(out.pp[0, 0, 0]) - 1
+    assert used.shadow_pp[0].tolist() == out.shadow_pp[0].tolist()
+    left = assert_matches_reference(tables, used, A(4 + 1, "Tackle", used, names), _o())
+    assert int(left.species[0, 0]) == names.species("Ditto") and int(left.transformed[0]) == 0
+    assert left.moves[0, 0].tolist() == s.moves[0, 0].tolist()
+    assert left.stats[0, 0].tolist() == s.stats[0, 0].tolist()
+    assert left.types[0, 0].tolist() == s.types[0, 0].tolist()
+    assert int(left.ability[0, 0]) == int(s.ability[0, 0])
+    # Transform's own use (10 -> 9) is what the party keeps.
+    assert left.pp[0, 0].tolist()[:2] == [9, int(s.pp[0, 0, 1])]
+    assert int(left.shadow_species[0]) == 0 and left.shadow_stats[0].tolist() == [0] * 5
+
+
+def test_transform_faint_keeps_the_copy_until_the_replacement_and_the_end_restores_the_party(
+    tables, names
+):
+    s = _ditto(tables, names)
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
+    dying = out._replace(hp=out.hp.at[0, 0].set(1))
+    fell = assert_matches_reference(tables, dying, (0, 0), _o())
+    assert int(fell.hp[0, 0]) == 0 and int(fell.transformed[0]) == 1
+    sent = replace(tables, fell, 0, 1)
+    _same_as_reference(sent, from_ref(ref_replace(to_numpy(tables), to_ref(fell), 0, 1)))
+    assert int(sent.species[0, 0]) == names.species("Ditto") and int(sent.transformed[0]) == 0
+    # The battle's end: the player's Ditto is itself again in the carried party.
+    last = out._replace(hp=out.hp.at[1].set(jnp.asarray([1, 0, 0, 0, 0, 0], out.hp.dtype)))
+    last = last._replace(species=last.species.at[1, 1:].set(0))
+    end = assert_matches_reference(tables, last, A(0, "Tackle", last, names), _o())
+    assert int(end.over) == 1 and int(end.species[0, 0]) == names.species("Ditto")
+    assert end.moves[0, 0].tolist() == s.moves[0, 0].tolist() and int(end.transformed[0]) == 0
+
+
+def test_transform_exp_payout_reads_the_copied_species_of_a_transformed_foe(tables, names):
+    from tests.engine.test_levelup import _ko
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Bulbasaur", ["Tackle"], 20)],
+        [_mon(n, "Ditto", ["Transform"], 30), _mon(n, "Geodude", ["Tackle"], 12)],
+    )
+    bonsly = n.species("Bonsly")
+    copy = s._replace(
+        species=s.species.at[1, 0].set(bonsly),
+        transformed=s.transformed.at[1].set(1),
+        shadow_species=s.shadow_species.at[1].set(n.species("Ditto")),
+    )
+    plain = s._replace(species=s.species.at[1, 0].set(bonsly))
+    assert int(_ko(tables, copy).exp[0]) == int(_ko(tables, plain).exp[0])
+    assert int(_ko(tables, copy).exp[0]) != int(_ko(tables, s).exp[0])
+
+
+def test_a_level_up_while_transformed_gives_its_own_stats(tables, names):
+    from tests.engine.test_levelup import _ko, _with
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ditto", ["Transform", "Tackle"], 4), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Bonsly", ["Tackle"], 15)],
+    )
+    s = _with(s, exp={0: int(s.exp[0])})
+    t = s._replace(
+        species=s.species.at[0, 0].set(n.species("Geodude")),
+        stats=s.stats.at[0, 0].set(s.stats[0, 1]),
+        transformed=s.transformed.at[0].set(1),
+        shadow_species=s.shadow_species.at[0].set(n.species("Ditto")),
+        shadow_stats=s.shadow_stats.at[0].set(s.stats[0, 0]),
+        shadow_ivs=s.shadow_ivs.at[0].set(s.ivs[0, 0]),
+        mimic_slots=s.mimic_slots.at[0].set(0b1111),
+    )
+    out = _ko(tables, t)
+    assert int(out.level[0, 0]) > 4
+    assert int(out.species[0, 0]) == n.species("Geodude")  # still the copy
+    own = _ko(tables, s)  # the same level-up on the untransformed Ditto
+    assert out.shadow_stats[0].tolist() == own.stats[0, 0].tolist()
+    assert out.stats[0, 0].tolist() == own.stats[0, 0].tolist()  # the reload: its own stats
+    assert int(out.hp[0, 0]) == int(own.hp[0, 0]) and int(out.max_hp[0, 0]) == int(own.max_hp[0, 0])
+
+
+def test_mimic_then_transform_keeps_the_mimicked_slot_for_the_party(tables, names):
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ditto", ["Mimic", "Transform"], 30), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Geodude", ["Tackle", "Rock Throw"], 30)],
+    )
+    s = _mimicked(s, n)
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, n), _o())
+    assert int(out.mimic_slots[0]) == 0b1111
+    assert int(out.shadow_moves[0, 0]) == n.move("Mimic")  # Mimic's shadow is kept, not the copy
+    assert int(out.shadow_moves[0, 1]) == n.move("Transform")
+    left = assert_matches_reference(tables, out, A(4 + 1, "Tackle", out, n), _o())
+    assert left.moves[0, 0].tolist()[:2] == [n.move("Mimic"), n.move("Transform")]
+    assert int(left.pp[0, 0, 0]) == 9
+
+
+def test_a_transformed_player_is_guessed_from_the_copied_species(tables, names):
+    """``LoadBattlerAbility DEFENDER``: the recorded id wins (a pre-Transform reveal stays the old
+    ability), else the BattleMon SPECIES' abilities (the copied species after a Transform)."""
+    from nuzline.ai.commands import defender_ability
+
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Ditto", ["Transform"], 30)],
+        [_mon(n, "Geodude", ["Tackle"], 30)],
+    )
+    base = np.asarray(tables.species_abilities_decomp)
+    shinx, geodude = n.species("Shinx"), n.species("Geodude")
+    two = [int(a) for a in base[shinx] if a]
+    assert len(two) == 2
+    copy = s._replace(species=s.species.at[0, 0].set(shinx))
+    for guess in (0, 1):  # unknown: the coin picks one of the copied species' two abilities
+        assert int(defender_ability(tables, copy, guess)) == two[guess]
+    revealed = copy._replace(ai_ability_known=copy.ai_ability_known.at[0].set(two[0]))
+    for guess in (0, 1):  # recorded: it stays whatever the copy
+        assert int(defender_ability(tables, revealed, guess)) == two[0]
+    assert geodude != shinx

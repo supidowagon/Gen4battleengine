@@ -144,3 +144,12 @@ TRACED = [
     ("F switch to Onix", trace_f, outcome(switch_stop=2), [104, 99, 100, 0], 5),
     ("F no switch", trace_f, outcome(), [104, 99, 100, 0], 0),
 ]
+
+
+def know_ability(tables, s, slot: int = 0):
+    """``s`` where the AI has recorded the player's party ``slot`` ability as the one it holds
+    (``BattleAI_SetAbility``, ``ai_ability_known`` as the decomp id, G-69)."""
+    from nuzline.engine.damage import decomp_abilities
+
+    record = int(decomp_abilities(tables, s)[0, slot])
+    return s._replace(ai_ability_known=s.ai_ability_known.at[slot].set(record))

@@ -410,7 +410,10 @@ def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
     after ``step`` has counted the turn; ``state`` module docstring)."""
     value = jnp.where(cond, entry_turn, state.fake_out_turn[side])
     fake_out_turn = state.fake_out_turn.at[side].set(value.astype(state.fake_out_turn.dtype))
-    return state._replace(fake_out_turn=fake_out_turn)
+    # ``moveEffectsData.truant = (totalTurns + 1) & 1`` at the same two sites (:2119, :2197).
+    parity = jnp.where(cond, jnp.asarray(entry_turn, _I32) & 1, state.truant[side])
+    truant = state.truant.at[side].set(parity.astype(state.truant.dtype))
+    return state._replace(fake_out_turn=fake_out_turn, truant=truant)
 
 
 def _holds_choice(tables: Tables, state: BattleState, side) -> jnp.ndarray:
@@ -492,6 +495,40 @@ def _forget(state: BattleState, side, slot) -> BattleState:
     )
 
 
+def _restore_transform(state: BattleState, side, cond) -> BattleState:
+    """``side``'s active battler leaves the field where ``cond``: a Transformed one gets its own
+    species, form, stats, IVs and ability slot / form back from the ``shadow_*`` and the shadow
+    clears (``BattleSystem_InitBattleMon`` loads every field from the party Pokemon, battle_lib.c:
+    60-125; the volatile bit goes with ``statusVolatile``, :2100-2104). Run before
+    ``_restore_types`` / ``_restore_ability`` / ``_restore_moves``, which read the restored
+    species, form, ability slot and mask; a fainted battler keeps the copy until its replacement
+    enters (the exp payout reads its copied species, battle_script.c:2216), G-69."""
+    mon = state.active[side]
+    on = jnp.asarray(cond) & (state.transformed[side] != 0)
+
+    def back(arr, shadow):
+        return arr.at[side, mon].set(jnp.where(on, shadow[side], arr[side, mon]).astype(arr.dtype))
+
+    def clear(arr):
+        return arr.at[side].set(jnp.where(on, 0, arr[side]).astype(arr.dtype))
+
+    return state._replace(
+        species=back(state.species, state.shadow_species),
+        form=back(state.form, state.shadow_form),
+        stats=back(state.stats, state.shadow_stats),
+        ivs=back(state.ivs, state.shadow_ivs),
+        ability_slot=back(state.ability_slot, state.shadow_ability_slot),
+        ability_form=back(state.ability_form, state.shadow_ability_form),
+        transformed=clear(state.transformed),
+        shadow_species=clear(state.shadow_species),
+        shadow_form=clear(state.shadow_form),
+        shadow_stats=clear(state.shadow_stats),
+        shadow_ivs=clear(state.shadow_ivs),
+        shadow_ability_slot=clear(state.shadow_ability_slot),
+        shadow_ability_form=clear(state.shadow_ability_form),
+    )
+
+
 def _restore_moves(state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: the move slots Mimic changed
     (``mimic_slots``) get the party's move and PP back from ``shadow_moves`` / ``shadow_pp``, and
@@ -562,6 +599,7 @@ def _switch_in(
     forgets the newcomer (``_forget``; ``BattleSystem_UpdateAfterSwitch``, battle_lib.c:2094).
     Then the send-out updates the participation mask (``_flag_exp``). ``baton``: a Baton Pass
     switch (``_reset_battler``)."""
+    state = _restore_transform(state, side, True)
     state = _restore_types(tables, state, side, True)
     state = _restore_ability(tables, state, side, True)
     state = _restore_moves(state, side, True)
@@ -1195,6 +1233,9 @@ def _use_move(
     # subscript_charge_move_cleanup.s:7, ends in subscript_no_target.s).
     state = consume_item(state, side, herb)
     state = change_stage(state, side, Stat.DEF, 1, herb & def_up)
+    # BattleSystem_UpdateMetronomeCount (bcp.c:3221) runs at the end of BeforeMove, before the move's
+    # script, so it still sees the second turn's MOVE_LOCKED (the cleanup below is the script's).
+    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # The second turn's script clears the semi-invulnerable bit (effect_script_0155.s:24 and the
     # others) and subscript_charge_move_cleanup.s:6 VOLATILE_CONDITION_MOVE_LOCKED before TryMove.
     cleanup = can_act & has_target & second_turn
@@ -1230,7 +1271,6 @@ def _use_move(
     # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
     # script and its damage (G-60).
     repeated = (tables.move_effect[used] == EffectId.ROLLOUT) & (state.rollout_count[side] != 0)
-    state = metronome_update(tables, state, side, move, head_on & succeeded)
     # CheckMoveHitOverrides (bcp.c:3016-3040): past Protect and the Lock-On / No Guard return
     # (either battler's No Guard, Battler_Ability; a Lock-On onto the defender; an OHKO move's
     # own bypass below, B10-15), a move whose defender is the foe, not RANGE_OPPONENT_SIDE, misses
@@ -1690,6 +1730,17 @@ def _use_move(
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
     state = _where(entering, switch_in_effects(tables, state, fx_side), state)
+    # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
+    # runs the transformed battler's copied ability again once the copy is made (the effect runs in
+    # the hits below), G-69.
+    transform_ok = (
+        connected
+        & head_on
+        & (tables.move_effect[used] == EffectId.TRANSFORM)
+        & (state.hp[target_side, target] > 0)
+        & (state.semi_invulnerable[target_side] == 0)
+        & (state.transformed[target_side] == 0)
+    )
     # U-turn's Pursuit (:54): the foe has not moved and can Pursuit now (``_pursuer_ready``).
     if pursuit is None:
         pursuit = (jnp.int32(0), jnp.int32(0), jnp.bool_(True))
@@ -1957,6 +2008,7 @@ def _use_move(
             state.pivot_battler.dtype
         ),
     )
+    state = _where(transform_ok, switch_in_effects(tables, state, side), state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
     still = state.active[target_side] == target
@@ -2451,6 +2503,9 @@ def _faint_check(
     # The battle's end: the player's party is what the next battle carries, and it never saw a
     # Mimic copy (``_restore_moves``). The opponent's active keeps its battler until the payout
     # has read it (the copied species of a Transform, G-69).
+    after = _restore_transform(after, 0, ended)
+    after = _restore_types(tables, after, 0, ended)
+    after = _restore_ability(tables, after, 0, ended)
     after = _restore_moves(after, 0, ended)
     for side in (0, 1):
         active_fainted = fainted[side, after.active[side]]

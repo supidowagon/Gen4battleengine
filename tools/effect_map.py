@@ -283,6 +283,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # effect_script_0082.s (Mimic): a direct ON_HIT subscript_mimic.s -> BtlCmd_TryMimic
     # (battle_script.c:4476-4523), engine/effects.py ``_mimic`` (G-68).
     82: ("BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE", _E.MIMIC, (0, 0, 0)),
+    # effect_script_0057.s (Transform): CHECK_HP | TO_DEFENDER subscript_transform_into_target.s
+    # -> BtlCmd_Transform (battle_script.c:5330-5373), engine/effects.py ``_transform`` (G-69).
+    57: ("BATTLE_EFFECT_TRANSFORM", _E.TRANSFORM, (0, 0, 0)),
     # effect_script_0120.s (Attract): a direct TO_DEFENDER effect running
     # subscript_infatuate.s -> BtlCmd_TryAttract (battle_script.c:5727-5742); the status
     # check is CHECK_STATUS_STATE_ATTRACT (battle_controller_player.c:2669-2692;

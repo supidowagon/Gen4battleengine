@@ -1061,3 +1061,52 @@ of them, :2107-2115).
   foe's possible moves to its layout (`layout.fight_tables(foe_moves=...)`). Coverage no longer refuses a
   Mimic user that levels up (82 left `RELOAD_STATE_EFFECTS`). Tests: `test_e1_trial.py`,
   `test_knowledge.py`, `test_learn.py`.
+- G-69 Transform (`EffectId.TRANSFORM`, BATTLE_EFFECT_TRANSFORM 57), in both games (Kaizo's move has
+  priority 1, vanilla 0; no CAN_PROTECT in either). effect_script_0057.s:3 is a direct `CHECK_HP | TO_DEFENDER`
+  `subscript_transform_into_target.s`: it runs on a defender with HP, also after a general miss
+  (battle_lib.c:1492-1504), and fails (:23-24, MOVE_STATUS_FAILED) on a semi-invulnerable (:5) or already
+  Transformed (:6) defender; a Substitute is not tested. `BtlCmd_Transform` (battle_script.c:5330-5373)
+  sets `VOLATILE_CONDITION_TRANSFORM`, ends Disable (:5335-5336), clears `mimickedMoveSlot` (:5339: the
+  mimicked slot is NOT restored, the copy overwrites it) and Last Resort's count, and copies every byte of
+  the defender's BattleMon up to and including `ability` (:5342-5348; battle_mon.h:57-84): species, the
+  five stats as the BattleMon holds them (a Power-Tricked defender's swapped ones), the four moves, the IVs,
+  all eight stat stages, both types, the form and the ability; not HP, max HP, level, friendship, PP Ups,
+  status, volatiles, `moveEffectsMask`, the item, the gender (`transformedPID` / `transformedGender` are
+  sprites and messages only, :5337-5338) or exp. It clears the switch-in announce flags (:5350-5362) and
+  sets `truant = totalTurns & 1`, then each slot's PP is `min(5, table PP)` (:5364-5370). The switch-in
+  checks run again after the move (AFTER_MOVE_EFFECT_TRIGGER_SWITCH_IN_EFFECTS, bcp.c:3672-3676 ->
+  `BattleSystem_TriggerEffectOnSwitch`, battle_lib.c:3650-4170): the copied ability acts as on a switch-in
+  (Trace, a weather ability, Intimidate, Download, the reveals), through the engine's own hooks
+  (`step._use_move` calls `hooks.switch_in_effects` for the user); an ability the engine refuses stays
+  refused (Slow Start). While Transformed the party never sees moves or PP (battle_io_command.c:581-587);
+  the engine's per-slot arrays are both, so the Mimic shadow grows to the whole copied set
+  (`transformed`, `shadow_species`, `shadow_form`, `shadow_stats`, `shadow_ivs`, `shadow_ability_slot`,
+  `shadow_ability_form`, with `shadow_moves` / `shadow_pp` of all four slots and `mimic_slots` = 0b1111;
+  the party's ability is derived from the restored species, form and ability slot, as Trace's
+  `_restore_ability` does): `effects._transform` writes the copy and the shadow once (a second Transform
+  keeps the first's), `step._restore_transform` (before `_restore_types` / `_restore_ability` /
+  `_restore_moves`) restores it on a switch, a drag, a replacement and, for the player, at the battle's end
+  (which now also restores the player's Camouflage types and Trace ability); a fainted battler keeps the
+  copy until its replacement enters, because the exp payout reads the copied species and its yield
+  (battle_script.c:2216) and EVs. A level-up's `ReloadPokemon` reloads the user's OWN stats, level and HP
+  but not its moves, PP, PP Ups or exp (battle_lib.c:169-194): `levelup.party_identity` reads the party
+  species, form and IVs (the exp table, `Pokemon_CalcStats`, the learnset, the Shedinja rule) and the new
+  stats go to the battler and to `shadow_stats`; a learned move goes to the party's shadow. Species-keyed
+  rules read the copied species by themselves (Metal Powder's Ditto, Light Ball, Thick Club, the weight);
+  the Griseous Orb boost excludes a Transformed user (:6770, `damage.py`); Mimic (:4482) and Chatter's
+  confusion (:8404) fail / skip while Transformed. `MoveEffectsData.truant` was `fake_out_turn`'s parity
+  and is now a field (`BattleState.truant`: `(totalTurns + 1) & 1` at an entry or faint, `totalTurns & 1` by
+  Transform; `order.truant_loafs`). AI: `BATTLE_EFFECT_TRANSFORM` has no Basic or Expert entry and no script.s
+  mention (`KAIZO_TRANSCRIBED`); `trainer_ai.c` never tests the volatile bit, so the AI reads the
+  transformed BattleMon like any other; an AI Transform user's copied moves are scored by their labels
+  (`layout.fight_tables`, G-68). `ai_ability_known` is `battlerAbilities`: the decomp id a message
+  named (`BattleAI_SetAbility`, battle_script.c:12106-12109; hooks / effects record
+  `damage.decomp_ability_id`), 0 none, -1 an ability the engine does not name (a species ability the
+  tables carry only as a decomp id: read as the current one, settled to its id when its holder Transforms); `LoadBattlerAbility DEFENDER` (trainer_ai.c:1170-1205) returns it
+  when set, else Shadow Tag / Magnet Pull / Arena Trap of the BattleMon, else a coin between the BattleMon
+  SPECIES' two abilities (the copied species after a Transform): a pre-Transform reveal stays the old
+  ability. Coverage no longer refuses a Transform, Mimic or Power Trick user that levels up
+  (`RELOAD_STATE_EFFECTS` and its refusal are gone). Tests: `test_e1_trial.py`, `test_knowledge.py`. Found by the differential test with Transform's draws: the Metronome item's
+  count (`effects.metronome_update`, G-60) ran after the second turn's MOVE_LOCKED cleanup in `step._use_move`, so a locked
+  Fly user counted; `BattleSystem_UpdateMetronomeCount` runs at the end of BeforeMove (bcp.c:3221), before the move's script,
+  and still sees the lock (the reference already did): the call now precedes the cleanup.
