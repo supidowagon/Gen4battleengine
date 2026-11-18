@@ -4365,3 +4365,18 @@ def test_perish_song(kaizo_tables, kaizo_names, kaizo_roark_party, perishing, ba
     s = s._replace(perish_song=s.perish_song.at[0].set(int(perishing)))
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     assert _delta(t, s, 0x3, 0x7)[0] == 0
+
+
+# --- E1 trial batch: Nature Power -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("jumps", "harass"), [((), 2), ((8030,), 0)])
+def test_nature_power(kaizo_tables, kaizo_names, kaizo_roark_party, jumps, harass):
+    """NATURE_POWER (173) has no Basic_ScoreMoveEffect or Expert_Main entry: the AI scores the
+    slot's own status move (power 0). Its only mention is Harrassment_Effects (script.s:8058):
+    +2 unless the :8030 roll jumps."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Nature Power", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+    assert _delta(t, s, 0x5, 0x405, tuple((0, line) for line in jumps))[0] == harass

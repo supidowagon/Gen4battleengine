@@ -844,6 +844,9 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   active with the effect at `perishSongTurns == 0` switches before any draw
   (`switching._Layout.perish`; the pick is `BattleAI_PostKOSwitchIn`'s).
 
+- NATURE_POWER (173): no Basic or Expert entry, only `Harrassment_Effects` (`:8058`). It is
+  scored as its own status move (power 0): the called move is chosen after the AI picks.
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the
