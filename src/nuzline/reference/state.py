@@ -3,21 +3,25 @@ lists, grouped the way the decomp groups them.
 
 * ``RefPokemon``: one party slot (the decomp's party ``Pokemon`` plus the parts of
   ``BattleMon`` that belong to the Pokemon: HP, stats, status, PP, held item).
-* ``RefSide``: a side's party, its active slot and the active battler's volatile
-  state (``BattleMon.statBoosts``, ``statusVolatile``, ``moveEffectsData``), plus
-  the side's ``SideConditions``.
-* ``RefState``: two sides and the field (``FieldConditions``, ``totalTurns``, the
-  battle result, the AI's knowledge), and the player party's experience fields and
-  ``sideGetExpMask`` (``exp_mask``).
+* ``RefParty``: a party's ``RefPokemon`` list (``mons``), its trainer bag and the HP bitmask of
+  the last faint check (``[P]`` fields).
+* ``RefBattler``: a battler's active slot and its volatile state (``BattleMon.statBoosts``,
+  ``statusVolatile``, ``moveEffectsData``) and per-battler turn state (``[B]`` fields).
+* ``RefSideConds``: a side's ``SideConditions`` (``[2]`` fields).
+* ``RefState``: ``parties[P]``, ``battlers[B]``, ``sides[2]`` and the field
+  (``FieldConditions``, ``totalTurns``, the battle result, the AI's knowledge), and the player
+  party's experience fields and ``sideGetExpMask`` (``exp_mask``).
 
 Every encoding is ``BattleState``'s (``nuzline.engine.state``): stages 0 = neutral,
-``stats`` is Atk, Def, SpA, SpD, Spe, ids from ``nuzline.engine.ids``. Side 0 is the
-player.
+``stats`` is Atk, Def, SpA, SpD, Spe, ids from ``nuzline.engine.ids``. Party 0 is the
+player's; battler ``b`` has side ``b & 1`` and party ``party(fmt, b)`` (``engine.format``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+
+from nuzline.engine.format import FORMATS, Format
 
 
 @dataclass
@@ -48,8 +52,15 @@ class RefPokemon:
 
 
 @dataclass
-class RefSide:
-    party: list[RefPokemon]
+class RefParty:
+    mons: list[RefPokemon]
+    trainer_items: list[int]
+    trainer_item_count: int
+    ts_alive: int
+
+
+@dataclass
+class RefBattler:
     active: int
     stages: list[int]  # index ids.Stat, 0 = neutral
     confusion: int
@@ -107,6 +118,33 @@ class RefSide:
     power_trick: int  # MOVE_EFFECT_POWER_TRICK (B12-10)
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
+    wish_timer: int
+    wish_hp: int
+    future_timer: int
+    future_damage: int
+    future_move: int
+    future_attacker: int  # 1 + battler, 0 = none
+    qc_roll: int
+    entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
+    ts_acted: int
+    ts_order: int
+    ts_actions: int
+    ts_move: int
+    ts_struggling: int
+    ts_locked: int
+    ts_item: int
+    ts_custap: int
+    ts_claw: int
+    ts_protect_ok: int
+    ts_taken: list[int]
+    ts_dragged: int
+    ts_move_failed: int
+    ts_switched: int
+    ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
+
+
+@dataclass
+class RefSideConds:
     spikes: int
     toxic_spikes: int
     stealth_rock: int
@@ -116,27 +154,19 @@ class RefSide:
     mist: int
     lucky_chant: int
     tailwind: int
-    wish_timer: int
-    wish_hp: int
-    future_timer: int
-    future_damage: int
-    future_move: int
-    future_attacker: int  # 1 + battler, 0 = none
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
-    trainer_items: list[int]
-    trainer_item_count: int
-    qc_roll: int
 
 
 @dataclass
 class RefState:
-    sides: list[RefSide]
+    parties: list[RefParty]
+    battlers: list[RefBattler]
+    sides: list[RefSideConds]
     weather: int
     weather_timer: int
     trick_room: int
     gravity: int
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
-    entry_pending: list[int]  # a list newcomer's switch-in states wait (engine.state docstring)
     move_prev: int
     terrain: int
     turn: int
@@ -163,31 +193,28 @@ class RefState:
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int
-    ts_acted: list[int]
-    ts_order: list[int]
-    ts_actions: list[int]
-    ts_move: list[int]
-    ts_struggling: list[int]
-    ts_locked: list[int]
-    ts_item: list[int]
-    ts_custap: list[int]
-    ts_claw: list[int]
     ts_pursued: int
-    ts_protect_ok: list[int]
-    ts_taken: list[list[int]]
-    ts_dragged: list[int]
-    ts_move_failed: list[int]
     ts_used: int
     ts_damaged: int
     ts_dealt: int
-    ts_alive: list[int]
     ts_power_mul: int
-    ts_switched: list[int]
     ts_pick_mul: int
-    ts_assurance: list[int]  # turnFlags.assuranceDamageMask != 0 (B13-17)
 
 
 # BattleState field names by level.
 MON_FIELDS = tuple(f.name for f in fields(RefPokemon))
-SIDE_FIELDS = tuple(f.name for f in fields(RefSide) if f.name != "party")
-FIELD_FIELDS = tuple(f.name for f in fields(RefState) if f.name != "sides")
+PARTY_FIELDS = tuple(f.name for f in fields(RefParty) if f.name != "mons")
+BATTLER_FIELDS = tuple(f.name for f in fields(RefBattler))
+SIDE_FIELDS = tuple(f.name for f in fields(RefSideConds))
+FIELD_FIELDS = tuple(
+    f.name for f in fields(RefState) if f.name not in ("parties", "battlers", "sides")
+)
+
+
+def format_of_ref(ref: RefState) -> Format:
+    """The ``Format`` of ``ref``: ``B`` is its battler count, ``P`` its party count."""
+    b, p = len(ref.battlers), len(ref.parties)
+    for fmt in FORMATS:
+        if (fmt.B, fmt.P) == (b, p):
+            return fmt
+    raise ValueError(f"no battle format has {b} battlers and {p} parties")

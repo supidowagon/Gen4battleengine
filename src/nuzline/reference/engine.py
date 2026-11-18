@@ -120,7 +120,8 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.reference.state import RefPokemon, RefSide, RefState
+from nuzline.reference.state import RefBattler as RefSide
+from nuzline.reference.state import RefPokemon, RefState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot, 4-9 switch to party slot action - 4
 FIRST_ITEM_ACTION = 10  # opponent actions 10-13 use bag slot action - 10

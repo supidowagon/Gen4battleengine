@@ -7,16 +7,22 @@ import numpy as np
 
 from nuzline.engine.state import LAYOUT, BattleState
 from nuzline.reference.state import (
+    BATTLER_FIELDS,
     FIELD_FIELDS,
     MON_FIELDS,
+    PARTY_FIELDS,
     SIDE_FIELDS,
     RefPokemon,
-    RefSide,
     RefState,
 )
+from nuzline.reference.state import (
+    RefBattler as RefSide,
+)
 
-if set(MON_FIELDS + SIDE_FIELDS + FIELD_FIELDS) != set(BattleState._fields):
-    raise RuntimeError("RefPokemon, RefSide and RefState must hold every BattleState field")
+if set(MON_FIELDS + PARTY_FIELDS + BATTLER_FIELDS + SIDE_FIELDS + FIELD_FIELDS) != set(
+    BattleState._fields
+):
+    raise RuntimeError("the Ref* classes must hold every BattleState field")
 
 
 def to_ref(state: BattleState) -> RefState:
