@@ -159,8 +159,22 @@ Group A status and decisions (commits 1-5):
 - `LAYOUT` stays `layout(SINGLES)` for outside callers.
 - `initial_arrays` takes `(fmt, tables, parties, ...)`; prep/states.py and
   tests/engine/test_e1_batch_a.py got call-site edits.
-- Commits 3-4 are bridged by `RefBattler as RefSide` aliases; remove them once the plan's later
-  steps no longer need them.
+- Done: 6 order.py 92c1c0b; 7 damage.py 87f6da4; 8 effects.py + actions.py 4db7d93; 9 outcome.py
+  446e6a9; 10 step.py fb7adc2; 11 enumerate.py 31be426; 12 coverage.py 19290b3; 13
+  tools/trace_to_state.py 01494eb; 14 no edit left (the smoke test's `out.parties[1].mons[0]`
+  came with 84da8d1; strategies.py has no constructor call to change). Snap compare 0-19
+  identical after each.
+- `def_side` is required only on the internal `_pre_random` / `_finish`; the public damage entry
+  points pass `foe(atk_side)`. `ai_case_power` and `ai_damage_for_roll` keep an optional `def_side`
+  defaulting to `foe(atk_side)`, so ai/commands.py (E1) is unchanged.
+- Helpers: `state.field_index(state, field, index)`; `format.foes(x)` replaces `x[::-1]` on a
+  battler axis.
+- The `RefSide` aliases are removed. tests/engine/test_screens.py and
+  tests/test_damage_oracle.py pass `def_side` to `_pre_random`.
+- Open: party-to-battler reductions rewritten by reading are not exercised under singles; the D3
+  and D6 doubles tests cover them.
+- Rule: tests run on the pod (send the manager the tip and the test-file list during a batch and
+  for the final tip); locally one process, one file, more than 6 GB free.
 
 ### D2-D12
 
@@ -221,9 +235,6 @@ Each is open; close it with its ruling.
     via rawrolls_phase.py; at least 12 GB free at start). Seeds 1-4 are done.
 12. The AI move-effect blocks #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259 are
     E2's (manager, 18 Nov; #233 goes with Fling). They go in the next singles batch, after D1.
-13. tests/engine/test_accuracy_classes.py: one process 45.8 GB, about 1150 s (likely
-    `test_accuracy_classes_equal_raw_rolls`). Bring it under 60 s / 4 GB or mark it slow in the next
-    E2 batch.
 
 ### Closes with its mechanic
 
