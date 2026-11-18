@@ -46,6 +46,7 @@ import jax.numpy as jnp
 
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.ai.switching import (
+    MAGNET_RISE,
     SUPER_EFFECTIVE,
     apply_type_chart,
     calc_effectiveness_flags,
@@ -88,16 +89,19 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     each result stored in the ``u8`` score. A chart immunity leaves 0 through
     ``ApplyTypeMultiplier`` (:7547); the ``MOVE_STATUS_IMMUNE`` check (:8070) adds Wonder
     Guard's bit (``wonder_guard_bit``, the fainted battler's Mold Breaker against ``D``'s Wonder
-    Guard; ruling G-23) and the refused Levitate and Magnet Rise. ``CalcMoveDamage`` takes type 0, the table's (:8058);
+    Guard; ruling G-23) and Magnet Rise's (``MAGNET_RISE``; the walk is skipped, so only STAB
+    is left in the value, G-66) and the refused Levitate. ``CalcMoveDamage`` takes type 0, the
+    table's (:8058);
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
     score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
-    identified, grounded, roosting = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting
+        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
     )
-    return jnp.where(wonder_guard_bit(tables, state, 1, 0, move, flags), 0, score)
+    immune = wonder_guard_bit(tables, state, 1, 0, move, flags) | ((flags & MAGNET_RISE) != 0)
+    return jnp.where(immune, 0, score)
 
 
 def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -145,6 +149,12 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
 
 
 _post_ko_jit = jax.jit(_post_ko)
+
+
+def post_ko_pick(tables: Tables, state: BattleState, power_mul=10) -> tuple:
+    """``(slot, stale)``, both traceable: ``post_ko_switch_in``'s pick and whether it is
+    one of the refused stale-score states (``switching.switch_action``'s Perish Song step)."""
+    return _post_ko(tables, state, power_mul)
 
 
 def post_ko_switch_in(tables: Tables, state: BattleState, power_mul=10) -> jnp.ndarray:

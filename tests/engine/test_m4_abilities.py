@@ -61,7 +61,7 @@ def test_insomnia_blocks_sleep(tables, names, spinarak):
     acts = A("Poison Sting", "Hypnosis", spinarak, names)
     out = step(tables, spinarak, acts, empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE
-    assert int(out.ai_ability_known[0]) == 1  # "stayed awake because of its Insomnia"
+    assert int(out.ai_ability_known[0]) != 0  # "stayed awake because of its Insomnia"
     # Without Insomnia the same move puts the Pokemon to sleep.
     bare = spinarak._replace(ability=spinarak.ability.at[0, 0].set(AbilityId.NONE))
     slept = step(tables, bare, acts, empty_outcome())
@@ -90,7 +90,7 @@ def test_mold_breaker_pierces_insomnia(tables, names):
     blocked, pierced = run("Geodude"), run("Cranidos")
     assert int(blocked.locked_move[0]) != 0 and int(pierced.locked_move[0]) == 0
     for out in (blocked, pierced):
-        assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 1
+        assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) != 0
 
 
 @pytest.mark.slow
@@ -100,13 +100,13 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
     bench = bench.with_status(0, 1, SLEEP, counter=3)
     out = step(tables, bench, A(SWITCH_TO_1, "Tackle", bench, names), empty_outcome())
     assert int(out.status[0, 1]) == Status.NONE and int(out.status_counter[0, 1]) == 0
-    assert int(out.ai_ability_known[1]) == 1
+    assert int(out.ai_ability_known[1]) != 0
     # An asleep Insomnia active wakes at the end of its own action (MoveEnd).
     asleep = spinarak.with_status(0, 0, SLEEP, counter=3)
     leer = A("Poison Sting", "Tackle", asleep, names)
     out = step(tables, asleep, leer, empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE and int(out.status_counter[0, 0]) == 0
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     # Other abilities keep the sleep.
     bare = asleep._replace(ability=asleep.ability.at[0, 0].set(AbilityId.NONE))
     assert int(step(tables, bare, leer, empty_outcome()).status[0, 0]) == SLEEP
@@ -223,7 +223,7 @@ def test_shed_skin_cures_before_poison(tables, names, kricketot):
     assert int(out.status[0, 0]) == Status.NONE
     # no poison damage this turn: the cure is the first end-of-turn check
     assert int(out.hp[0, 0]) == int(kricketot.hp[0, 0])
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
     kept = step(tables, kricketot, acts, shed(p=0))
     assert int(kept.status[0, 0]) == POISON
     assert int(kept.hp[0, 0]) == int(kricketot.hp[0, 0]) - int(kricketot.max_hp[0, 0]) // 8

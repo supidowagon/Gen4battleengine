@@ -14,8 +14,12 @@ __all__ = [
     "BOX_MONS",
     "BOX_MON_SIZE",
     "BOX_SLOTS",
+    "CHATOT_CRY",
+    "CHATOT_CRY_SIZE",
+    "CHATOT_PARAM_SAMPLE",
     "COPY_OFFSETS",
     "FOOTER_SIZE",
+    "NORMAL_PAGES",
     "NORMAL_SIZE",
     "PARTY_COUNT",
     "PARTY_MAX",
@@ -31,6 +35,8 @@ __all__ = [
     "TRAINER_NAME_LEN",
     "VARS",
     "VAR_PLAYER_STARTER_INDEX",
+    "page_body_size",
+    "page_offset",
 ]
 
 # --- container -------------------------------------------------------------------------
@@ -90,6 +96,83 @@ VARS = 0xDAC
 # lines such as MAP_LOCAL_VARS_END = VAR_MAP_LOCAL_0x1F do not advance); the next line,
 # VAR_UNUSED_0x4031, confirms it. Holds the starter's species id, 0 before the choice.
 VAR_PLAYER_STARTER_INDEX = 48
+
+# --- the normal block's pages (gSaveTable, src/savedata/save_table.c:49-86) -------------
+# Each page's ``sizeFunc`` result in table order (SavePageInfo_Init, src/savedata.c:826-850:
+# ``location`` accumulates ``SaveTableEntry_BodySize``, :813-823). Every size function returns
+# ``sizeof`` of its struct (PalPad, RecordMixedRNG and Journal times their entry count;
+# Ribbons RIBBONS_SAVE_SIZE, include/ribbon_save_data.h:6; Email sizeof(UnkStruct_02030CEC)),
+# taken under the game's ABI: 4-byte alignment of s64 (SystemData's own offsets,
+# padding_49 / unused_50, include/system_data.h), enums as int (meson.build:24 ``-enum int``).
+# WiFiList's DWC types are not in the decomp; its own field name ``unk_1C0`` puts its third
+# member at 0x1C0, after which 32 x 0x38 (UnkStruct_0202B370_sub1, the ``unk_36`` field + 2):
+# 0x8C0. The pages sum to NORMAL_SIZE (with the footer) exactly, and the per-page CRC16 the game
+# keeps in the last 4 bytes of some pages (SaveData_SetChecksum, src/savedata.c:1349-1362: TV
+# broadcast, rankings, Wi-Fi history, mystery gift, contest records, easy-chat words, email)
+# matches at these offsets in real saves (tests/saves/test_save.py).
+NORMAL_PAGES: tuple[tuple[str, int], ...] = (
+    ("SYSTEM", 0x5C),
+    ("PLAYER", 0x2C),
+    ("PARTY", 0x590),
+    ("BAG", 0x774),
+    ("VARS_FLAGS", 0x3AC),
+    ("POKETCH", 0x118),
+    ("FIELD_PLAYER_STATE", 0xA0),
+    ("POKEDEX", 0x324),
+    ("DAYCARE", 0x1E0),
+    ("PAL_PAD", 0x880),
+    ("MISC", 0x78C),
+    ("FIELD_OVERWORLD_STATE", 0x1400),
+    ("UNDERGROUND", 0x9B4),
+    ("REGULATION_BATTLES", 0x20),
+    ("IMAGE_CLIPS", 0x834),
+    ("MAILBOX", 0x460),
+    ("POFFINS", 0x320),
+    ("RECORD_MIXED_RNG", 0x108),
+    ("JOURNAL", 0x460),
+    ("TRAINER_CASE", 0x620),
+    ("GAME_RECORDS", 0x1BC),
+    ("SEAL_CASE", 0x170),
+    ("CHATOT", 0x3EC),
+    ("FRONTIER", 0x1628),
+    ("RIBBONS", 0xE),
+    ("ENCOUNTERS", 0x154),
+    ("GLOBAL_TRADE", 0xF8),
+    ("TV_BROADCAST", 0xBC8),
+    ("RANKINGS", 0xEA0),
+    ("WIFI_LIST", 0x8C0),
+    ("WIFI_HISTORY", 0xFF8),
+    ("MYSTERY_GIFT", 0x1328),
+    ("PAL_PARK_TRANSFER", 0x688),
+    ("LINK_CONTEST_RECORDS", 0x28),
+    ("UNLOCKED_EASY_CHAT_WORDS", 0x8),
+    ("EMAIL", 0x40),
+    ("WIFI_PLAZA_QUESTIONS", 0x8),
+)
+
+
+def page_body_size(size: int) -> int:
+    """``SaveTableEntry_BodySize`` (src/savedata.c:813-823): ``s += 4 - s % 4; s += 4``."""
+    size += 4 - size % 4
+    return size + 4
+
+
+def page_offset(name: str) -> int:
+    """The offset of page ``name`` (``NORMAL_PAGES``) in the normal block."""
+    offset = 0
+    for page, size in NORMAL_PAGES:
+        if page == name:
+            return offset
+        offset += page_body_size(size)
+    raise KeyError(name)
+
+
+# ChatotCry (include/struct_defs/chatot_cry.h:6-9): BOOL valid, then s8 audioData[1000]
+# (CHATOT_CRY_SIZE). SaveData_GetChatotCry (src/chatot_cry.c:27-30) is the page itself.
+CHATOT_CRY = page_offset("CHATOT")  # 0x64EC
+CHATOT_CRY_SIZE = 1000
+# Sound_GetChatterActivationParameter (src/sound_chatot.c:193-213) reads audioData[15].
+CHATOT_PARAM_SAMPLE = 15
 
 # --- boxes block (PCBoxes, include/pc_boxes.h:17) ----------------------------------------
 BOX_MONS = 4  # after u32 currentBoxID

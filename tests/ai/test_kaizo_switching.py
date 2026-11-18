@@ -295,8 +295,9 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     bench = [j for j in range(SLOTS) if j != a and species[1, j] > 0 and hp[1, j] > 0]
     if not bench:
         return reads
-    # :3941-3959. Perish Song, AI_OnlyIneffectiveMoves, the absorbing abilities on the bench and
-    # Natural Cure are refused (the caller assumes no refusal), so these return FALSE (Wonder
+    # :3941-3959. AI_PerishSongKO (step 3: these states never set Perish Song; its switch is
+    # tested in test_switching.py, G-64), AI_OnlyIneffectiveMoves, the absorbing abilities on the
+    # bench and Natural Cure are refused (the caller assumes no refusal), so these return FALSE (Wonder
     # Guard's check is below); AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
     # active has a super-effective move (flag TRUE: no draw inside, :3586-3587).
     a_moves = [int(m) for m in np.asarray(s.moves[1, a])]

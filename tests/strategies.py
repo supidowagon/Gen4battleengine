@@ -37,6 +37,7 @@ from nuzline.engine.coverage import halved_defense_line, low_defense
 from nuzline.engine.damage import STATUS as STATUS_CATEGORY
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
+    MOVE_MIMIC,
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
     SEMI_SET_FLAGS,
@@ -49,7 +50,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.outcome import MAX_HITS, Outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
     BAG_SLOTS,
     MAX_DEATH_BUDGET,
@@ -68,6 +69,7 @@ INTERMEDIATE = Path(__file__).resolve().parents[1] / "data" / "intermediate"
 # (Carvanha), Flame Body (Magby), Limber (Glameow), Adaptability (Eevee) and Solid Rock
 # (Camerupt): their other slot is empty or unimplemented, so these are always drawn.
 M1_SPECIES = (
+    "Chatot",  # E1 trial batch (G-70): Chatter's only confuser
     "Monferno",
     "Prinplup",
     "Grotle",
@@ -1299,7 +1301,86 @@ BATCH12_MOVES = (
     "Refresh",
     "Psycho Shift",
     "Mist",  # B12-23
+    "Magnet Rise",  # E1 trial batch (G-66)
+    "Mimic",  # E1 trial batch (G-68)
+    "Transform",  # E1 trial batch (G-69)
+    "Chatter",  # E1 trial batch (G-70)
 )
+
+
+def draw_seen_moves(draw, a: dict) -> None:
+    """``a["ai_seen_moves"]``: per player slot the move ids the AI has seen (``battlerMoves``,
+    first-free order, G-68): a drawn subset of the slot's moves in a drawn order, and sometimes a
+    move the slot no longer has (a Mimic copy, a replaced move)."""
+    seen = a["ai_seen_moves"]
+    seen[...] = 0
+    stale = int(a["moves"][1, 0, 0])
+    for slot in range(seen.shape[0]):
+        pool = [int(m) for m in a["moves"][0, slot] if m] + ([stale] if stale else [])
+        ids = (
+            draw(st.lists(st.sampled_from(pool), unique=True, max_size=seen.shape[1]))
+            if pool
+            else []
+        )
+        seen[slot, : len(ids)] = ids
+
+
+def _draw_mimic(draw, a: dict, side: int, active: int) -> None:
+    """E1 trial batch (G-68): maybe (1 in 6) a Mimic copy on the active battler: one of its move
+    slots is flagged in ``mimic_slots`` with the party's Mimic and PP in the shadow (the slot's own
+    move is the copy)."""
+    rnd = draw(st.randoms(use_true_random=False))
+    a["mimic_slots"][side] = 0
+    a["shadow_moves"][side] = 0
+    a["shadow_pp"][side] = 0
+    slots = [k for k in range(4) if a["moves"][side, active, k] not in (0, MOVE_MIMIC)]
+    if slots and rnd.random() < 1 / 6:
+        k = rnd.choice(slots)
+        a["mimic_slots"][side] = 1 << k
+        a["shadow_moves"][side, k] = MOVE_MIMIC
+        a["shadow_pp"][side, k] = rnd.randint(0, 10)
+
+
+def _draw_transform(draw, a: dict, side: int, active: int) -> None:
+    """E1 trial batch (G-69): maybe (1 in 8) the active battler is Transformed into the foe's
+    active: its slot holds the copy (species, form, stats, IVs, types, ability, moves at PP
+    ``min(5, PP)``, stages) and the shadow the party Pokemon's own, every move slot flagged."""
+    rnd = draw(st.randoms(use_true_random=False))
+    for name in ("shadow_species", "shadow_form", "shadow_ability_slot", "shadow_ability_form"):
+        a[name][side] = 0
+    a["transformed"][side] = 0
+    a["shadow_stats"][side] = 0
+    a["shadow_ivs"][side] = 0
+    foe = 1 - side
+    target = int(a["active"][foe])
+    # A battler cannot Transform while it holds a lock on a move it then no longer has.
+    locks = (
+        "locked_move",
+        "choice_lock",
+        "encore_move",
+        "disabled_move",
+        "charge_turn",
+        "bide_turns",
+    )
+    if rnd.random() >= 1 / 8 or a["transformed"][foe] or any(a[name][side] for name in locks):
+        return
+    own = (side, active)
+    a["transformed"][side] = 1
+    a["shadow_species"][side] = a["species"][own]
+    a["shadow_form"][side] = a["form"][own]
+    a["shadow_stats"][side] = a["stats"][own]
+    a["shadow_ivs"][side] = a["ivs"][own]
+    a["shadow_ability_slot"][side] = a["ability_slot"][own]
+    a["shadow_ability_form"][side] = a["ability_form"][own]
+    a["shadow_moves"][side] = a["moves"][own]
+    a["shadow_pp"][side] = a["pp"][own]
+    a["mimic_slots"][side] = 15
+    for name in ("species", "form", "ivs", "types", "ability", "ability_slot", "ability_form"):
+        a[name][own] = a[name][foe, target]
+    a["stats"][own] = a["stats"][foe, target]
+    a["moves"][own] = a["moves"][foe, target]
+    a["pp"][own] = np.minimum(a["pp"][foe, target], 5)
+    a["stages"][side] = a["stages"][foe]
 
 
 def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1314,6 +1395,11 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
     a["power_trick"][side] = int(rnd.random() < 0.2)
     # A level-up's reload undid the swap (B12-10).
     a["power_trick_desync"][side] = int(rnd.random() < 0.1)
+    # E1 trial batch (G-66): Magnet Rise under way (1-5 turns), or a bit left without turns (a
+    # Gravity that zeroed them).
+    turns = rnd.choice((0, 0, 0, 1, 2, 5))
+    a["magnet_rise_turns"][side] = turns
+    a["magnet_rise"][side] = int(turns > 0 or rnd.random() < 0.1)
     if draw(st.integers(0, 1)) != 0:
         return
     move = rnd.choice(BATCH12_MOVES)
@@ -1700,6 +1786,10 @@ BATCH_C_FOE_MOVES = {
     AbilityId.WHITE_SMOKE: ("Growl", "Leer", "Sand-Attack", "Aurora Beam", "Tickle", "Charm"),
     AbilityId.VITAL_SPIRIT: ("Hypnosis", "Spore", "Sing", "Yawn", "Tackle"),
 }
+# E1 trial batch (G-63): Plus / Minus act through a living ally on the side's field, so in
+# singles never; ``_draw_batch_c`` gives them a special move and the partner ability on the bench.
+PLUS_MINUS = (AbilityId.PLUS, AbilityId.MINUS)
+SPECIAL_MOVES = ("Water Gun", "Ember", "Thundershock", "Psybeam", "Surf", "Flamethrower")
 PUNCH_MOVES = ("Mach Punch", "Fire Punch", "Ice Punch", "ThunderPunch", "Mega Punch", "Drain Punch")
 
 
@@ -1712,7 +1802,7 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
     if draw(st.integers(0, 2)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
-    ability = rnd.choice(BATCH_C_ABILITIES)
+    ability = rnd.choice(BATCH_C_ABILITIES + PLUS_MINUS)
     a["ability"][side, active] = ability
     if rnd.random() >= 0.75:
         return
@@ -1743,6 +1833,12 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["stages"][side, Stat.SPE] = rnd.choice((0, 0, 5, 6, -1))
     if ability == AbilityId.IRON_FIST:
         teach(side, active, rnd.choice(PUNCH_MOVES))
+    if ability in PLUS_MINUS:
+        teach(side, active, rnd.choice(SPECIAL_MOVES))
+        partner = AbilityId.MINUS if ability == AbilityId.PLUS else AbilityId.PLUS
+        bench = [i for i in range(SLOTS) if i != active and a["species"][side, i]]
+        if bench:
+            a["ability"][side, rnd.choice(bench)] = partner
 
 
 def _draw_klutz(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1946,6 +2042,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_batch12(draw, tables, a, side, active, names)
+        _draw_mimic(draw, a, side, active)
+        _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
         _draw_pressure(draw, tables, a, side, active, names)
         _draw_status_guard(draw, tables, a, side, active, names)
@@ -1977,10 +2075,14 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["weather_timer"][...] = draw(st.integers(0, 8)) if timed else 0
     _draw_terrain(draw, tables, a)
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
+    # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
+    a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
+    # E1 trial batch (G-70): the player's Chatot cry parameter (an enemy's is always 0).
+    a["chatot_cry"][0] = draw(st.integers(0, 2))
     a["turn"][...] = turn
-    for name in ("ai_seen_moves", "ai_ability_known"):
-        flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))
-        a[name][...] = np.reshape(flags, a[name].shape)
+    draw_seen_moves(draw, a)
+    flags = draw(st.lists(st.integers(0, 1), min_size=SLOTS, max_size=SLOTS))
+    a["ai_ability_known"][...] = np.reshape(flags, a["ai_ability_known"].shape)
     # The AI's record of each player item (batch 7): none, or the item a message named, which
     # the Pokemon still holds (every removal clears the record, effects.forget_item).
     known = draw(st.lists(st.booleans(), min_size=SLOTS, max_size=SLOTS))
@@ -2075,7 +2177,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
         # acts on (Serene Grace: a secondary effect; Reckless: a recoil move; Technician: power
         # 60 or less), is used one draw in two, like the items' moves below.
         kinds = np.asarray(tables.move_type)[moves]
-        chance = np.asarray(tables.move_effect_chance)[moves]
+        chance = np.asarray(read_chance(tables, jnp.asarray(moves)))
         abilities = np.asarray(state.ability)[np.arange(2), np.asarray(state.active)]
         aimed = {
             AbilityId.DRY_SKIN: (Type.WATER, Type.FIRE),
@@ -2160,6 +2262,9 @@ RARE_EFFECTS = (
     EffectId.REFRESH,
     EffectId.PSYCHO_SHIFT,
     EffectId.MIST,  # B12-23
+    EffectId.MIMIC,  # G-68
+    EffectId.TRANSFORM,  # G-69
+    EffectId.CHATTER,  # G-70
     EffectId.TRIPLE_KICK,  # B13-5
     EffectId.BEAT_UP,  # B13-9
     # B13-12..B13-17: the variable power / type hits.
@@ -2244,6 +2349,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         focus_band=_flag(hits),
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
+        chatter=_flag(sides),
     )
 
 
@@ -2283,6 +2389,7 @@ LAW_MOVES = (
     "Thunder Fang",
     "Present",
     "Protect",
+    "Endure",  # E1 trial batch (G-65)
     "Attract",
     "Tri Attack",
     "Nature Power",

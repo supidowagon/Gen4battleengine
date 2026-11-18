@@ -25,6 +25,7 @@ from nuzline.engine.actions import NUM_OPP_ACTIONS
 from tests.ai.fixtures import (
     CRANIDOS,
     TRACED,
+    know_ability,
     outcome,
     trace_a,
     trace_b,
@@ -340,7 +341,7 @@ def test_ai_reads_the_form_row_ability(tables, names):
     assert int(commands.attacker_ability(tables, s)) == levitate
     # The defender's true ability follows the row too, once the AI knows it.
     swapped = make_state(tables, [origin], [sample_spec])
-    swapped = swapped._replace(ai_ability_known=swapped.ai_ability_known.at[0].set(1))
+    swapped = know_ability(tables, swapped)
     assert int(commands.defender_ability(tables, swapped, 0)) == levitate
 
 
@@ -361,6 +362,6 @@ def test_ai_guesses_an_unknown_ability_from_the_base_species(tables, names):
     assert (pressure, levitate) == (46, 26)
     for guess in (0, 1):
         assert int(commands.defender_ability(tables, s, guess)) == pressure
-    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    known = know_ability(tables, s)
     for guess in (0, 1):
         assert int(commands.defender_ability(tables, known, guess)) == levitate

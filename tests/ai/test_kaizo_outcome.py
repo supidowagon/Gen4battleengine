@@ -71,7 +71,7 @@ from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import Stat
 from nuzline.engine.state import MOVES, BattleState, make_state
 from nuzline.search.rows import take
-from tests.ai.fixtures import GEODUDE, outcome, versus
+from tests.ai.fixtures import GEODUDE, know_ability, outcome, versus
 from tests.conftest import K3C_EFFECTS
 
 # Kaizo move ids (data/gen4_platinum_kaizo names).
@@ -118,7 +118,9 @@ def _with_player(t, s: BattleState, species: int, slot: int = 0, known: bool = F
         types=s.types.at[0, 0].set(t.species_types[species]),
         ability_slot=s.ability_slot.at[0, 0].set(slot),
         ability=s.ability.at[0, 0].set(t.species_abilities[species, slot]),
-        ai_ability_known=s.ai_ability_known.at[0].set(int(known)),
+        ai_ability_known=s.ai_ability_known.at[0].set(
+            int(t.species_abilities_decomp[species, slot]) if known else 0
+        ),
     )
 
 
@@ -175,6 +177,11 @@ def kaizo_states(draw, t, party) -> BattleState:
     pool = _move_pool(t)
     moves = [draw(st.sampled_from(pool))] + [draw(st.sampled_from((0, *pool))) for _ in range(3)]
     s = _kaizo_state(t, party, moves)
+    # A Ghost-type Curse user takes Basic_CheckCurse_GhostType / Expert_Curse_GhostCheckHP
+    # (script.s:700, :3495; E1 trial batch): type 2 Ghost (TYPE_GHOST 7).
+    curse = commands.BattleEffect.CURSE
+    if any(int(t.move_ai_effect[m]) == curse for m in moves) and draw(st.booleans()):
+        s = s._replace(types=s.types.at[1, 0, 1].set(7))
     species = draw(st.sampled_from(_two_ability_species(t)))
     s = _with_player(t, s, species, draw(st.integers(0, 1)), draw(st.booleans()))
     hp = draw(st.integers(20, 400))
@@ -186,7 +193,7 @@ def kaizo_states(draw, t, party) -> BattleState:
         turn=jnp.asarray(draw(st.integers(0, 3)), s.turn.dtype),
         fake_out_turn=s.fake_out_turn.at[1].set(draw(st.integers(0, 3))),
         moves=s.moves.at[0, 0, 3].set(U_TURN),
-        ai_seen_moves=s.ai_seen_moves.at[0, 3].set(int(draw(st.booleans()))),
+        ai_seen_moves=s.ai_seen_moves.at[0, 0].set(U_TURN if draw(st.booleans()) else 0),
     )
     empty_pp = draw(st.lists(st.booleans(), min_size=3, max_size=3))
     for k, empty in enumerate(empty_pp, start=1):
@@ -391,7 +398,7 @@ def test_kaizo_width_under_cap(kaizo_tables, kaizo_roark_party):
     stops = KAIZO.switch_sites + 1  # 61: the six-party switch stops (K3c Task 7, G-33)
     for j in range(len(party)):
         s = make_state(t, [party[2]], [party[j], *(m for k, m in enumerate(party) if k != j)])
-        known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+        known = know_ability(t, s)
         for state in (s, known):
             paths = _loose_paths(t, state)
             width = policy.ai_width(t, state)
@@ -603,28 +610,28 @@ def test_loose_joint_equals_per_slot(kaizo_tables, kaizo_roark_party):
     np.testing.assert_allclose(np.asarray(_distribution(t, s, KAIZO)), joint, atol=1e-6)
 
 
-def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_names, kaizo_roark_party):
-    """Task 5 review m3: on a state the real ``KAIZO`` layout refuses, the exact and the loose
-    distributions are both NaN (both read ``policy._refused``).
-    - Real: Kaizo Roark's Shuckle [Toxic, Accelerock, Curse, Sand Tomb] made Ghost-type, so
-      its Curse takes Basic_CheckCurse_GhostType (script.s:681-684 -> :700), not transcribed.
-    - Synthetic: no Kaizo Roark state is refused for an Expert label since K3c Task 6, so the
-      guard is opened by a layout that lacks Expert_Recovery (RESTORE_HALF_HP, script.s:1652):
-      Corsola [Recover, Water Pulse, Light Screen, Accelerock] is refused under it and
-      accepted under ``KAIZO``."""
-    t, n, party = kaizo_tables, kaizo_names, kaizo_roark_party
-    shuckle = make_state(t, [party[2]], [party[4], party[0]])
-    assert policy.ai_refusals(t, shuckle, n) == []
-    ghost = shuckle._replace(types=shuckle.types.at[1, 0, 1].set(7))  # TYPE_GHOST
-    assert any("Basic_CheckCurse_GhostType" in r for r in policy.ai_refusals(t, ghost, n))
-    corsola = make_state(t, [party[2]], [party[3], party[0]])
-    assert policy.ai_refusals(t, corsola, n) == []
-    no_recovery = KAIZO._replace(expert_transcribed=KAIZO.expert_transcribed - {32})
-    assert any("Expert_Recovery" in r for r in policy.ai_refusals(t, corsola, n, no_recovery))
-    for s, layout in ((ghost, KAIZO), (corsola, no_recovery)):
-        assert np.isnan(np.asarray(_distribution(t, s, layout))).all()
-        assert np.isnan(policy.ai_action_distribution_loose(t, s, layout)).all()
-    assert not np.isnan(np.asarray(_distribution(t, corsola, KAIZO))).any()
+def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_roark_party):
+    """Task 5 review m3: on a state the fight's layout refuses, the exact and the loose
+    distributions are both NaN (both read ``policy._refused``). The refusal is one that stays
+    in the complete engine: a fight's layout holds its own moves' effects only (E1 Ruling R7,
+    ``ai.layout.fight_tables``), so Kaizo Roark's Bonsly given a move whose effect is
+    transcribed but outside Roark's layout is refused under it; with Rock Throw it is
+    accepted."""
+    t, party = kaizo_tables, kaizo_roark_party
+    accepted = _kaizo_state(t, party, (ROCK_THROW, LEER, 0, 0))
+    assert policy.ai_refusals(t, accepted, layout=KAIZO) == []
+    effects = np.asarray(t.move_ai_effect)
+    outside = next(
+        m
+        for m in range(1, len(effects))
+        if int(effects[m]) in KAIZO_TRANSCRIBED and int(effects[m]) not in KAIZO.transcribed
+    )
+    refused = _kaizo_state(t, party, (outside, LEER, 0, 0))
+    reasons = policy.ai_refusals(t, refused, layout=KAIZO)
+    assert any("is transcribed but not in this fight's layout" in r for r in reasons), reasons
+    assert np.isnan(np.asarray(_distribution(t, refused, KAIZO))).all()
+    assert np.isnan(policy.ai_action_distribution_loose(t, refused, KAIZO)).all()
+    assert not np.isnan(np.asarray(_distribution(t, accepted, KAIZO))).any()
 
 
 def test_two_guesses_in_one_slot(kaizo_tables, kaizo_roark_party):
@@ -804,7 +811,8 @@ def _check_fight_reads(t, party, every: int, moves, rng, species, n: int = 4):
     for _ in range(n):
         s = _kaizo_state(t, party, moves)
         s = _with_player(t, s, int(rng.choice(species)), int(rng.integers(2)))
-        s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(int(rng.integers(4) == 0)))
+        if rng.integers(4) == 0:
+            s = know_ability(t, s)
         if rng.integers(2):
             s = s._replace(
                 types=s.types.at[0, 0].set(jnp.asarray(rng.integers(0, 17, 2), s.types.dtype))
@@ -975,7 +983,7 @@ def test_a_read_past_the_bound_is_refused(kaizo_tables, kaizo_names, kaizo_roark
     o = sample_ai_outcome(jax.random.PRNGKey(0), t, s, narrow)
     with pytest.raises(policy.UnsupportedAi, match="more than 2 random reads"):
         policy.ai_scores(t, s, o, narrow)
-    known = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(1))
+    known = know_ability(t, s)
     assert not np.isnan(np.asarray(_distribution(t, known, narrow))).any()
 
 

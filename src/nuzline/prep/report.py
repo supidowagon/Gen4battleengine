@@ -16,6 +16,7 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.tables import Names, Tables
+from nuzline.engine.coverage import start_gravity
 from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
 from nuzline.jaxcache import code_version
@@ -90,7 +91,14 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) 
             names.species_abilities(spec.species, spec.ability_from)[spec.ability_slot]
         ]
         return f"at most 1/3: {name} active"
-    kill = ai_kill_damage(tables, spec, problem.opp, problem.start_condition, problem.trainer.items)
+    kill = ai_kill_damage(
+        tables,
+        spec,
+        problem.opp,
+        problem.start_condition,
+        problem.trainer.items,
+        gravity=start_gravity(problem.trainer),
+    )
     if hp in kill:
         return f"at most {hp}: the trainer AI sees a kill"
     return "a region of the trainer AI's HP checks"
@@ -278,6 +286,8 @@ def _root(problem: PrepProblem, setup: Setup, tables: Tables) -> BattleState:
         problem.start_condition,
         problem.trainer.items,
         terrain=problem.trainer.terrain,
+        gravity=start_gravity(problem.trainer),
+        chatot_cry=problem.chatot_cry,
     )
 
 

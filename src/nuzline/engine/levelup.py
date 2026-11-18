@@ -38,10 +38,19 @@ slot that holds a move, between a mid-turn payout and the resolve, are exact und
   selection (bcp.c:525-527) and re-reads ``moves[moveSlot]`` when the move runs
   (bcp.c:1885-1895; the PP slot by ``Battler_SlotForMove``, bcp.c:2272-2283), so only a
   prompt that replaces the selected slot differs: ``learn_pin`` masks that option;
-* the end-of-turn Disable check reads only whether ``disabledMove`` is still known
-  (bcp.c:1565-1586): masked with the disabled move (ruling D2);
+* the end-of-turn Disable and Encore checks end each once ``disabledMove`` / ``encoredMove``
+  is no longer known (bcp.c:1565-1576, :1591-1602), while the engine runs them before the
+  resolve: masked with the disabled and the encored move (ruling D2);
+* the locked move and the Choice lock are read by move id: ``FightCommand`` runs
+  ``moveLockedInto`` (bcp.c:1885-1888) and spends no PP for it (``ppDecremented``,
+  bcp.c:335; no slot, :2272-2294), as ``order.selected_move`` and ``actions.locked_slot``
+  do, and ``CHECK_INVALID_CHOICE_ITEM`` clears a lock the battler no longer knows
+  (battle_lib.c:2307-2310), which ``actions.choice_locked`` reads as no lock: replacing
+  either move is exact and offered;
 * a newcomer the hazards faint inside the opponent's replacement loop: refused
   (``exp_refused``, window (c)).
+
+The converter refuses a recorded answer the masks drop (``tools.trace_to_state._learn_refusal``).
 
 Prompts still pending when the battle ends stay in the state (ruling D8).
 """
@@ -187,13 +196,13 @@ def pay_exp_leveled(
     fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
     paying = jnp.any(fainted)
     j = jnp.argmax(fainted)
-    foe_species = after.species[1, j].astype(_I32)
+    foe_species = after.species[1, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
     foe_row = tables.species_form_row[foe_species, after.form[1, j]]
     exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[1, j].astype(_I32)
     exp_e = exp_e // 7
 
     slots = jnp.arange(SLOTS)
-    species = after.species[0]
+    species, party_form, party_ivs = party_identity(after)
     hp = after.hp[0].astype(_I32)
     level = after.level[0].astype(_I32)
     alive = (species != 0) & (hp > 0)
@@ -229,10 +238,10 @@ def pay_exp_leveled(
     bonus = after.friend_bonus.astype(_I32)
     friendship = jnp.where(leveled, _friendship(f0, new_level - level, bonus, soothe), f0)
 
-    row = tables.species_form_row[species, after.form[0]]
+    row = tables.species_form_row[species, party_form]
     mods = tables.nature_mods[after.nature[0]]
     base = tables.species_base_stats[row]
-    new = calc_stats_jnp(base, after.ivs[0], evs, new_level, mods, species)
+    new = calc_stats_jnp(base, party_ivs, evs, new_level, mods, species)
     old_max = after.max_hp[0].astype(_I32)
     new_hp = jnp.where(species == SPECIES_SHEDINJA, 1, hp + new[:, Stat.HP] - old_max)
 
@@ -254,6 +263,15 @@ def pay_exp_leveled(
             jnp.where(
                 leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
             ).astype(after.power_trick_desync.dtype)
+        ),
+        # A Transformed active Pokemon: the reload gives the battler its own new stats (:169-174)
+        # and the party's shadow too.
+        shadow_stats=after.shadow_stats.at[0].set(
+            jnp.where(
+                (after.transformed[0] != 0) & leveled[after.active[0]],
+                new[after.active[0], Stat.ATK :],
+                after.shadow_stats[0],
+            ).astype(after.shadow_stats.dtype)
         ),
         friendship=put("friendship", friendship),
         evs=put("evs", evs),
@@ -289,7 +307,57 @@ def _learner(state: BattleState) -> jnp.ndarray:
 def _row(tables: Tables, state: BattleState, slot) -> jnp.ndarray:
     """The learnset's personal row, by species and form (``Pokemon_LoadLevelUpMovesOf``,
     src/pokemon.c:3943)."""
-    return tables.species_form_row[state.species[0, slot], state.form[0, slot]]
+    species, form, _ = party_identity(state)
+    return tables.species_form_row[species[slot], form[slot]]
+
+
+def party_identity(state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """``(species[6], form[6], ivs[6, 6])`` of the player's party Pokemon: the active slot's own
+    (``shadow_*``) while it is Transformed, else the slots' fields. The exp table, the stats, the
+    learnset and the Shedinja rule belong to the party Pokemon (``Pokemon_CalcStats``, the
+    ``ReloadPokemon`` of battle_lib.c:169-194 copies its own stats back), G-69."""
+    slots = jnp.arange(SLOTS)
+    swapped = (state.transformed[0] != 0) & (slots == state.active[0])
+    species = jnp.where(swapped, state.shadow_species[0], state.species[0])
+    form = jnp.where(swapped, state.shadow_form[0], state.form[0])
+    ivs = jnp.where(swapped[:, None], state.shadow_ivs[0][None, :], state.ivs[0])
+    return species, form, ivs
+
+
+def _masked(state: BattleState, slot) -> jnp.ndarray:
+    """``bool[4]``: the move slots of player party ``slot`` whose battler value is not the party's:
+    ``mimic_slots`` of the active Pokemon (G-68). The learn reads and writes the party Pokemon
+    (``Pokemon_SetMoveSlot``, battle_script.c:10168-10176; ``BoxPokemon_AddMove``, pokemon.c:3852),
+    and ``BattleSystem_ReloadPokemon`` reloads the unflagged slots from it (battle_lib.c:183-191)."""
+    bits = (state.mimic_slots[0].astype(_I32) >> jnp.arange(MOVES)) & 1
+    return (bits == 1) & (jnp.asarray(slot) == state.active[0])
+
+
+def _party_moves(state: BattleState, slot) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(moves, pp)`` of player party ``slot`` as the party Pokemon holds them: the shadow of a
+    flagged slot (``_masked``), else the slot's own."""
+    masked = _masked(state, slot)
+    moves = jnp.where(masked, state.shadow_moves[0], state.moves[0, slot])
+    pp = jnp.where(masked, state.shadow_pp[0], state.pp[0, slot])
+    return moves, pp
+
+
+def _put_party(state: BattleState, slot, k, move, pp, apply) -> BattleState:
+    """Party ``slot``'s move slot ``k`` becomes ``move`` with ``pp`` where ``apply``: into the
+    shadow when the battler's slot is flagged (``_masked``), else into the slot (the battler reload
+    then shows it)."""
+    shadowed = _masked(state, slot)[k]
+    live, shadow = apply & ~shadowed, apply & shadowed
+
+    def put(arr, index, value, cond):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    return state._replace(
+        moves=put(state.moves, (0, slot, k), move, live),
+        pp=put(state.pp, (0, slot, k), pp, live),
+        shadow_moves=put(state.shadow_moves, (0, k), move, shadow),
+        shadow_pp=put(state.shadow_pp, (0, k), pp, shadow),
+    )
 
 
 def _advance_once(tables: Tables, state: BattleState) -> tuple[BattleState, jnp.ndarray]:
@@ -316,7 +384,7 @@ def _advance_once(tables: Tables, state: BattleState) -> tuple[BattleState, jnp.
     found = jnp.any(hit)
     at = jnp.argmax(hit)
     move = tables.learnset_move[row, at]
-    moves = state.moves[0, slot]
+    moves, _ = _party_moves(state, slot)
     stop = (moves == 0) | (moves == move)
     k = jnp.argmax(stop)
     learned = found & jnp.any(stop) & (moves[k] == 0)
@@ -324,10 +392,8 @@ def _advance_once(tables: Tables, state: BattleState) -> tuple[BattleState, jnp.
     done = level >= state.level[0, slot].astype(_I32)
     new_level = jnp.where(found, level, jnp.where(done, 0, level + 1))
     new_cursor = jnp.where(found, jnp.where(prompt, at, at + 1), 0)
-    pp = jnp.where(learned, tables.move_pp[move], state.pp[0, slot, k])
-    out = state._replace(
-        moves=state.moves.at[0, slot, k].set(jnp.where(learned, move, moves[k])),
-        pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+    out = _put_party(state, slot, k, move, tables.move_pp[move], learned)
+    out = out._replace(
         learn_level=state.learn_level.at[slot].set(new_level.astype(state.learn_level.dtype)),
         learn_cursor=state.learn_cursor.at[slot].set(new_cursor.astype(state.learn_cursor.dtype)),
     )
@@ -367,19 +433,24 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
 
     * its move is not an HM (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:
       1724-1735; ``Item_IsHMMove``, src/item.c:306-315): a game rule;
-    * the AI has not seen it (``ai_seen_moves``; ruling D2);
-    * for the player's active learner: it is not the disabled, locked or choice-locked move
-      (ruling D2), and not the slot the player selected this turn (``learn_pin``, window (a),
-      ruling U1);
+    * for the player's active learner: it is not the disabled or the encored move (ruling D2:
+      the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
+      bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
+      (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
       D10). Coverage refuses an unsupported move only where it could be learned without a
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
       battle_script.c:10007-10027); as a prompt the player may always give it up.
 
-    The D2, pin and D10 masks drop legal game choices, so plan values at learn nodes are
-    achievable lower bounds, except the mid-turn-prompt case (``STATE.md``, Experience)."""
+    A slot the AI has seen is open: ``ai_seen_moves`` holds move ids, so the replaced move's id
+    stays in it as in the decomp's list (``TrainerAI_RecordLastMove``,
+    src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68) and the AI does not know the new move.
+    The locked and the choice-locked move are offered: both are read by id (module
+    docstring). The D2, pin and D10 masks drop legal game choices, so plan values at learn
+    nodes are achievable lower bounds, except the mid-turn-prompt case (``STATE.md``,
+    Experience)."""
     slot = _learner(state)
-    moves = state.moves[0, slot]
+    moves, _ = _party_moves(state, slot)
     width = tables.learnset_level.shape[1]
     row = _row(tables, state, slot)
     cursor = state.learn_cursor[slot].astype(_I32)
@@ -387,11 +458,11 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     real = (cursor < width) & (tables.learnset_level[row, col] > 0)
     offered = jnp.where(real, tables.learnset_move[row, col], 0)
     supported = (tables.move_effect[offered] != EffectId.UNSUPPORTED) | ~needs_learn(state)
-    ok = (tables.move_is_hm[moves] == 0) & (state.ai_seen_moves[slot] == 0) & supported
+    ok = (tables.move_is_hm[moves] == 0) & supported
+    live = state.moves[0, slot]
     held = (
-        (moves == state.disabled_move[0])
-        | (moves == state.locked_move[0])
-        | (moves == state.choice_lock[0])
+        (live == state.disabled_move[0])
+        | (live == state.encore_move[0])
         | (jnp.arange(MOVES) + 1 == state.learn_pin)
     )
     ok = ok & ~((slot == state.active[0]) & held)
@@ -406,22 +477,20 @@ def learn(tables: Tables, state: BattleState, option) -> BattleState:
     same level from the next entry (``SEQ_GET_EXP_LEARNED_MOVE_WAIT`` and
     ``SEQ_GET_EXP_GIVE_UP_LEARNING_WAIT`` -> ``SEQ_GET_EXP_CHECK_LEARN_MOVE``,
     bs.c:10132-10135, :10183-10187). Every option is applied as given: ``learn_options`` is
-    the search's mask, not a game rule here (the converter fits all non-HM options). This
-    is not exact for every option: replacing a slot the AI has seen leaves
-    ``ai_seen_moves[slot, k]`` set, while the decomp's AI keeps the old move's id in its
-    list (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716) and
-    does not know the new move; the converter therefore refuses a recorded answer that
-    ``learn_options`` masks (``tools.trace_to_state._learn_refusal``)."""
+    the search's mask, not a game rule here (the converter fits all non-HM options and
+    refuses a fitted answer the mask drops, ``tools.trace_to_state._learn_refusal``). Replacing
+    a slot the AI has seen keeps the old move's id in ``ai_seen_moves``, as the decomp's list does
+    (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68), and the
+    AI does not know the new move. A flagged Mimic slot of the active learner (``_masked``)
+    takes the move into the party's shadow."""
     slot = _learner(state)
     cursor = state.learn_cursor[slot]
     move = tables.learnset_move[_row(tables, state, slot), cursor]
     option = jnp.asarray(option, _I32)
     replaced = option < MOVES
     k = jnp.minimum(option, MOVES - 1)
-    pp = jnp.where(replaced, tables.move_pp[move], state.pp[0, slot, k])
-    out = state._replace(
-        moves=state.moves.at[0, slot, k].set(jnp.where(replaced, move, state.moves[0, slot, k])),
-        pp=state.pp.at[0, slot, k].set(pp.astype(state.pp.dtype)),
+    out = _put_party(state, slot, k, move, tables.move_pp[move], replaced)
+    out = out._replace(
         # SEQ_GET_EXP_LEARNED_MOVE sets the slot's PP Ups to 0 (battle_script.c:10169-10170, E1 Batch D).
         pp_ups=state.pp_ups.at[0, slot, k].set(
             jnp.where(replaced, 0, state.pp_ups[0, slot, k]).astype(state.pp_ups.dtype)

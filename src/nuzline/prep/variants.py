@@ -18,6 +18,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
+from nuzline.engine.coverage import start_gravity
 from nuzline.engine.damage import FLAIL_BOUNDS
 from nuzline.engine.ids import (
     FLAIL_FALLOFF,
@@ -109,6 +110,8 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     # Expert_KnockOff (REMOVE_HELD_ITEM, 188) below 30 % (:4574)
     23: (("less", 40),),
     108: (("less", 40),),
+    # E1 trial batch: EVA_UP (16, Double Team) shares Expert_StatusEvasionUp (:2247).
+    16: (("less", 40),),
     188: (("less", 30),),
     # E2 batch 12 (B12-18): Expert_Refresh (HEAL_STATUS, 193) tests the player below 50 %
     # (script.s:4646), Expert_PsychoShift (TRANSFER_STATUS, 234) below 30 % (:5302).
@@ -312,6 +315,7 @@ def ai_kill_damage(
     opp: Sequence[PokemonSpec],
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
+    gravity: int = 0,
 ) -> tuple[int, ...]:
     """The AI's kill-check damages against ``spec`` (ruling 5 b): for each opponent slot ``j``
     and each damaging move of it, ``ai_damage`` at ``SIM_ROLL_MAX`` on the turn-0 matchup
@@ -319,7 +323,9 @@ def ai_kill_damage(
     trainer_ai.c:1560-1567, E1 ruling G-39); distinct, ascending, zeros dropped."""
     out: set[int] = set()
     for j, mon in enumerate(opp):
-        state = make_state(tables, [spec], list(opp), start_condition, opp_items, leads=(0, j))
+        state = make_state(
+            tables, [spec], list(opp), start_condition, opp_items, leads=(0, j), gravity=gravity
+        )
         for move in mon.moves:
             if move and bool(is_damaging(tables, move)):
                 est = estimate(tables, state, move, SIM_ROLL_MAX)
@@ -547,7 +553,12 @@ def single_changes(
                 add(dataclasses.replace(base, item=item))
     if entry_hp:
         kill = ai_kill_damage(
-            tables, spec, problem.opp, problem.start_condition, problem.trainer.items
+            tables,
+            spec,
+            problem.opp,
+            problem.start_condition,
+            problem.trainer.items,
+            gravity=start_gravity(problem.trainer),
         )
         for top in hp_regions(tables, spec, max_hp_of(tables, spec), kill)[1:]:
             add(dataclasses.replace(base, hp=top))

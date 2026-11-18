@@ -75,6 +75,11 @@ Field decisions (engine/state.py and reference/state.py):
   none (only ever cleared today, so values stay 0). `infatuated` stays 0/1 in D1: it is an E1
   volatile and the pointer is a value change; it goes to D5 on E1's list (D 5.3; ruling D1-1).
 - ts_order [B] holds battler indices (no none value, not a pointer).
+- E1 trial fields (merge of main 235f2f8): [B] magnet_rise, magnet_rise_turns, mimic_slots,
+  shadow_moves [B, 4], shadow_pp [B, 4], transformed, shadow_species, shadow_form, shadow_stats
+  [B, 5], shadow_ivs [B, 6], shadow_ability_slot, shadow_ability_form, truant, ts_endure_ok (on
+  RefBattler); [P] chatot_cry (on RefParty, ruling D1-2). Taken as the trial made them:
+  ai_seen_moves and ai_ability_known int16 (party 0 only), `Tables.gravity_rearm`.
 
 Ownership (confirmed by the manager): E1 owns src/nuzline/ai/outcome.py (group B, item 5);
 src/nuzline/engine/outcome.py is E2's (group A, item 9).
@@ -2052,3 +2057,18 @@ docs/doubles-state-design.md.
   the generator and field check of tests/test_differential.py; a seed replays its turns.
 - D1-1 (manager, accepted) `infatuated` stays 0/1 in D1: singles stays byte-identical. Its
   1 + battler form (docs/doubles-state-design.md 5.3) is D5's, on E1's list.
+- D1-2 `chatot_cry` is per party [P]: party 0 holds the save's cry, every other party 0.
+  `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads `chatotCries[battler]` in 2vs2 and
+  for the enemy of a tag battle, `[battler & 1]` in plain doubles; only `BATTLER_PLAYER_1` is
+  filled from the save (field_battle_data_transfer.c:260, :319, :385), every other entry is
+  `ChatotCry_New` (:97), parameter 0. So in every format (encounter.c:730-740) the cry is the
+  sending trainer's. Readers index `chatot_cry[party(fmt, b)]`; singles [P] = [2], byte-identical.
+- D1-3 The battle-end restore (`step._faint_check`, `reference._faint_check`) runs
+  `_restore_transform`, `_restore_types`, `_restore_ability`, `_restore_moves` for every battler
+  whose `fmt.party_of` is 0 (the player's party is what the next battle carries); the
+  opponent's battlers keep their copies for the payout. Singles: battler 0 only, as the trial.
+- D1-4 Plus / Minus (`damage.side_ability_count`, `reference._side_active`) count every living
+  battler on the field of the asker's side, the asker included: a loop over all B battlers with
+  the other side masked out (`COUNT_ALIVE_BATTLERS_OUR_SIDE`, battle_lib.c:2886-2893).
+  `damage.side_active_slots` is removed (its only caller was this count). Singles: the foe is
+  masked out, the same count.

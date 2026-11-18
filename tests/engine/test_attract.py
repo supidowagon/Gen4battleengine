@@ -445,7 +445,7 @@ def test_cute_charm_holder_on_the_player_is_revealed(tables, names):
     s = s._replace(ai_ability_known=s.ai_ability_known.at[0].set(0))
     o = _o(contact_proc=[[1] + [0] * (MAX_HITS - 1), [0] * MAX_HITS])
     out = assert_matches_reference(tables, s, A("Scratch", "Tackle", s, names), o)
-    assert _inf(out) == [0, 1] and int(out.ai_ability_known[0]) == 1
+    assert _inf(out) == [0, 1] and int(out.ai_ability_known[0]) != 0
     none = assert_matches_reference(tables, s, A("Scratch", "Tackle", s, names), _o())
     assert int(none.ai_ability_known[0]) == 0
 

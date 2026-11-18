@@ -147,6 +147,7 @@ def build_image(
     counters=((1, 1, 1), None),
     party_count=None,
     vars=None,
+    chatot_cry=None,
 ) -> bytes:
     """A 0x80000 Platinum image with valid footers.
 
@@ -154,7 +155,8 @@ def build_image(
     ``bag``: ``{pocket name: [(item, quantity), ...]}``. ``counters[i]`` is
     ``(save counter, normal block counter, boxes block counter)`` for copy ``i``, or
     ``None`` for an erased (0xFF) copy. ``party_count`` overrides ``currentCount``.
-    ``vars``: ``{index into VarsFlags.vars: u16 value}``.
+    ``vars``: ``{index into VarsFlags.vars: u16 value}``. ``chatot_cry``: ``(valid, audioData[15])``
+    of the Chatot cry page.
     """
     normal = bytearray(L.NORMAL_SIZE - L.FOOTER_SIZE)
     codes = list(trainer_name_codes) + [0xFFFF] * (L.TRAINER_NAME_LEN - len(trainer_name_codes))
@@ -179,6 +181,10 @@ def build_image(
         o += 4 * size
     for index, value in (vars or {}).items():
         normal[L.VARS + 2 * index : L.VARS + 2 * index + 2] = value.to_bytes(2, "little")
+    if chatot_cry is not None:
+        valid, sample = chatot_cry
+        normal[L.CHATOT_CRY : L.CHATOT_CRY + 4] = valid.to_bytes(4, "little")
+        normal[L.CHATOT_CRY + 4 + L.CHATOT_PARAM_SAMPLE] = sample & 0xFF
 
     box_body = bytearray(L.BOXES_SIZE - L.FOOTER_SIZE)
     for (b, s), rec in (boxes or {}).items():

@@ -22,6 +22,7 @@ __all__ = [
     "SaveError",
     "SaveFile",
     "SaveTrainer",
+    "chatot_parameter",
     "default_tables_and_names",
     "load_save",
     "read_image",
@@ -76,6 +77,9 @@ class SaveFile:
     sha256: str  # of the file as read
     player_starter: int  # VAR_PLAYER_STARTER: the starter's species id, 0 before the choice
     trainer: SaveTrainer  # the OT test's inputs (SaveMon.to_spec's exp_boost)
+    # The player's Chatter parameter 0-2 from the save's Chatot cry (``chatot_parameter``):
+    # BATTLER_PLAYER_1's cry (field_battle_data_transfer.c:260), ``make_state``'s chatot_cry.
+    chatot_cry: int = 0
 
 
 def read_image(data: bytes) -> bytes:
@@ -282,6 +286,23 @@ def _bag(normal: bytes) -> dict[str, list[tuple[int, int]]]:
     return bag
 
 
+def chatot_parameter(normal: bytes) -> int:
+    """``Sound_GetChatterActivationParameter`` (src/sound_chatot.c:193-213) of the normal
+    block's Chatot cry page (``layout.CHATOT_CRY``): 0 for a cry that is not valid
+    (``ChatotCry_IsValid``), else ``audioData[15]`` as s8: [-128, -30) -> 1, [30, 128) -> 2,
+    else 0."""
+    if _u32(normal, L.CHATOT_CRY) == 0:
+        return 0
+    sample = int.from_bytes(
+        normal[L.CHATOT_CRY + 4 + L.CHATOT_PARAM_SAMPLE :][:1], "little", signed=True
+    )
+    if sample < -30:
+        return 1
+    if sample >= 30:
+        return 2
+    return 0
+
+
 def _boxes(box_block: bytes, tables, charmap) -> tuple[tuple[SaveMon | None, ...], ...]:
     boxes = []
     for b in range(L.BOX_COUNT):
@@ -341,6 +362,7 @@ def load_save(
         save_counter=_u32(normal, L.NORMAL_SIZE - L.FOOTER_SIZE),
         sha256=hashlib.sha256(data).hexdigest(),
         player_starter=_u16(normal, L.VARS + 2 * L.VAR_PLAYER_STARTER_INDEX),
+        chatot_cry=chatot_parameter(normal),
         trainer=SaveTrainer(
             id=trainer_id,
             gender=normal[L.TRAINER_GENDER],

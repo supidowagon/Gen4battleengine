@@ -23,7 +23,9 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 32  # 32: E1 item_party_param + E2 batch 13 fling / Natural Gift columns
+MANIFEST_VERSION = (
+    33  # 33: the E1 trial's gravity_rearm with E2 batch 13's fling / Natural Gift columns
+)
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -59,8 +61,12 @@ def _read_manifest(dir: Path) -> dict:
 
 AI_FLAGS_UNSET = np.int32(-1)  # Tables.ai_flags before a fight sets its trainer's
 # Tables.ai_moves: the move ids of the fight's opponent party (6 Pokemon x 4 moves, 0 for
-# none); all -1 until a fight sets them.
-AI_MOVES_ROWS = 24
+# none), then, when one of them copies moves (Mimic, Transform: ai.layout.COPIER_EFFECTS), the
+# distinct moves the foe's party may have for them to copy (G-68); all -1 until a fight sets them.
+# Sized for the largest pool: the party's 24 slots plus every other move id (both games' move
+# tables have 468 rows, id 0 none: tests/engine/test_e1_trial.py checks it), so no fight
+# overflows it.
+AI_MOVES_ROWS = 512
 AI_MOVES_UNSET = np.full(AI_MOVES_ROWS, -1, np.int16)
 # Tables.battle_type: BattleSystem.battleType (include/constants/battle.h:20-47) as
 # Encounter_NewVsTrainer sets it from the trainers of the fight (encounter.c:724-740).
@@ -122,11 +128,15 @@ class Tables(NamedTuple):
     item_gift_power: jnp.ndarray  # int16[I]
     item_gift_type: jnp.ndarray  # int8[I]
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)
+    # int8[]: 1 where subscript_gravity_end re-arms Gravity at 0 (Kaizo, sub_seq 238: Gravity
+    # never ends), 0 where it only prints (vanilla); E1 trial batch, G-67.
+    gravity_rearm: jnp.ndarray
     # int32[]: the fight's trainer AI flags (TrainerHeader.aiMask, trainer_ai.c:249), which the
     # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:
     # ai.layout.layout_of refuses it for a per-flag-set policy (E1 Ruling R2).
     ai_flags: jnp.ndarray = AI_FLAGS_UNSET
-    # int16[24]: the move ids of the fight's opponent party, from which ai.layout.layout_of
+    # int16[AI_MOVES_ROWS]: the move ids of the fight's opponent party (and the moves its
+    # copiers can copy, ai.layout.fight_tables), from which ai.layout.layout_of
     # derives the AI's read bound and transcribed effects for the fight (E1 Rulings R6, R7);
     # the fight's entry point sets them with ai_flags (ai.layout.fight_tables); not in
     # tables.npz.

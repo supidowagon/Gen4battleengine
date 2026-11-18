@@ -84,8 +84,8 @@ many are real). Decomp sources:
   a direct TO_ATTACKER effect: Spe -1, then Atk +1, then Def +1, each its own
   ``BtlCmd_ChangeStatStage`` (a capped stage prints "won't go higher/lower" and the next one
   still runs; none sets ``MOVE_STATUS_FAILED``). Its defender is the user
-  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s``: refused by
-  coverage.
+  (``targets_user``). A Ghost-type user takes ``subscript_curse_ghost.s`` (``_curse``, ``curse_fails``;
+  E2 batch 8, B8-5).
 * Selfdestruct, Explosion (``SELF_DESTRUCT``): ``effect_script_0007.s`` sets the user's HP
   to 0 before ``TryMove`` (``step._use_move``: before the accuracy check and the type chart;
   not when the move has no target), then a plain hit on the halved Defense (``damage.py``).
@@ -254,15 +254,17 @@ from nuzline.engine.damage import (
     PHYSICAL,
     PRESENT_HEAL,
     STATUS,
+    battle_stats,
     beat_up_slots,
     damage_for_roll,
     decomp_abilities,
+    decomp_ability_id,
     divide,
     effectiveness,
+    ground_immune,
     grounded,
     identified,
     ignorable,
-    levitated,
     move_type_of,
     spikes_loss,
     stealth_rock_loss,
@@ -275,20 +277,26 @@ from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
     GENDER_NONE,
+    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
+    MAGNET_RISE_TURNS,
+    MIMIC_FORBIDDEN,
+    MIMIC_PP_CAP,
     MINIMIZE_PARAM,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
+    MOVE_MIMIC,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_ASLEEP,
     POWER_IF_TARGET_MOVED,
     REFRESH_STATUSES,
     RESIST_ANY_NORMAL,
     REST_TURNS,
+    SPECIES_CHATOT,
     SPIKES_MAX,
     STAT_MOVE_ABILITY_IDS,
     TAILWIND_TURNS,
@@ -304,6 +312,7 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     MoveTarget,
+    SemiKind,
     Stat,
     Status,
     Type,
@@ -311,8 +320,15 @@ from nuzline.engine.ids import (
     sleepless,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
-from nuzline.engine.outcome import Outcome, crit_lands
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, field_index, held_item
+from nuzline.engine.outcome import Outcome, crit_lands, read_chance
+from nuzline.engine.state import (
+    MOVES,
+    STAGE_MAX,
+    STAGE_MIN,
+    BattleState,
+    field_index,
+    held_item,
+)
 
 _I32 = jnp.int32
 _E = EffectId
@@ -1680,6 +1696,221 @@ def _aqua_ring(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "aqua_ring", h.side, 1, cond)
 
 
+def magnet_rise_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: effect_script_0252.s:5-7 fails (:16, MOVE_STATUS_FAILED) a user with
+    ``magnetRiseTurns`` (the turns, not the mask bit), with Levitate (``CheckAbility
+    CHECK_HAVE``, through ``Battler_Ability``: none for an ingrained holder and under Gravity,
+    battle_lib.c:3095-3103) or with ``MOVE_EFFECT_INGRAIN`` (G-66)."""
+    fmt = format_of(state)
+    mon = state.active[side]
+    levitate = (
+        (state.ability[party(fmt, side), mon] == AbilityId.LEVITATE)
+        & (state.ingrain[side] == 0)
+        & (state.gravity == 0)
+    )
+    return (state.magnet_rise_turns[side] != 0) | levitate | (state.ingrain[side] != 0)
+
+
+def _magnet_rise(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Magnet Rise (effect_script_0252.s:8-9): ``MOVE_EFFECT_MAGNET_RISE`` on the user's
+    ``moveEffectsMask`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``, set by the script itself
+    (its ON_HIT subscript is a message). A failing user is ``step._use_move``'s ``failed``."""
+    cond = (h.effect == _E.MAGNET_RISE) & h.landed & ~magnet_rise_fails(state, h.side)
+    state = _set(state, "magnet_rise", h.side, 1, cond)
+    return _set(state, "magnet_rise_turns", h.side, MAGNET_RISE_TURNS, cond)
+
+
+def gravity_ground(state: BattleState, cond=True) -> BattleState:
+    """The grounding loop of ``subscript_gravity_start.s`` (:13-85, per battler in speed order; the
+    order changes nothing here), for every battler with HP: ``magnetRiseTurns`` goes to 0 (the
+    ``MOVE_EFFECT_MAGNET_RISE`` bit stays), else a Fly / Bounce user (``MOVE_EFFECT_AIRBORNE``) is
+    unlocked (``Battler_UnlockMoveChoice`` and ToggleVanish); the other branches (Gastro Acid,
+    Ingrain, Levitate, a Flying type) only print. ``cond``: where the loop runs. G-67."""
+    fmt = format_of(state)
+    for side in range(fmt.B):
+        alive = (state.hp[party(fmt, side), state.active[side]] > 0) & jnp.asarray(cond)
+        floating = alive & (state.magnet_rise_turns[side] != 0)
+        state = _set(state, "magnet_rise_turns", side, 0, floating)
+        airborne = alive & ~floating & (state.semi_invulnerable[side] == SemiKind.AIRBORNE)
+        state = unlock_move(state, side, airborne)
+    return state
+
+
+def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Gravity (effect_script_0215.s, the indirect subscript_gravity_start.s): the field
+    condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
+    the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
+    cond = (h.effect == _E.GRAVITY) & h.landed & (state.gravity == 0)
+    state = state._replace(
+        gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
+    )
+    return gravity_ground(state, cond)
+
+
+def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
+    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
+    battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
+    (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
+    user's first Mimic slot (:4494-4499; one exists: Metronome and Assist, :6430, never call
+    Mimic, sCannotMetronomeMoves, battle_lib.c:7152-7158, and Sleep Talk calls a known move),
+    takes the move with ``min(5, its table PP)`` (:4502-4513) and its bit joins
+    ``mimickedMoveSlot`` (:4515): the party Pokemon never sees the copy, so the slot's move and
+    its PP after Mimic's own use go to ``shadow_moves`` / ``shadow_pp`` (``step._restore_moves``
+    gives them back). A Transformed user fails (:4482, G-69)."""
+    fmt = format_of(state)
+    side, user = h.side, h.user
+    own = party(fmt, side)
+    last = state.last_move[h.target_side].astype(_I32)
+    moves = state.moves[own, user].astype(_I32)
+    mimics = moves == MOVE_MIMIC
+    j = jnp.argmax(mimics)
+    cond = (
+        (h.effect == _E.MIMIC)
+        & h.landed
+        & ~jnp.any(last == jnp.asarray(MIMIC_FORBIDDEN, _I32))
+        & (state.transformed[side] == 0)  # :4482, VOLATILE_CONDITION_TRANSFORM
+        & (last != 0)
+        & (state.substitute_hp[h.target_side] == 0)
+        & ~jnp.any(moves == last)
+    )
+    copy_pp = jnp.minimum(tables.move_pp[last].astype(_I32), MIMIC_PP_CAP)
+    live_pp = state.pp[own, user, j]
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    return state._replace(
+        moves=put(state.moves, (own, user, j), last),
+        pp=put(state.pp, (own, user, j), copy_pp),
+        shadow_moves=put(state.shadow_moves, (side, j), moves[j]),
+        shadow_pp=put(state.shadow_pp, (side, j), live_pp),
+        mimic_slots=put(state.mimic_slots, side, state.mimic_slots[side].astype(_I32) | (1 << j)),
+    )
+
+
+def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Transform (effect_script_0057.s:3, a direct ``CHECK_HP | TO_DEFENDER``
+    ``subscript_transform_into_target.s``, no CAN_PROTECT): it fails (:23-24, MOVE_STATUS_FAILED)
+    on a semi-invulnerable or already Transformed defender (:5-6; a Substitute is not tested).
+    ``BtlCmd_Transform`` (battle_script.c:5330-5373) then copies the defender's BattleMon up to and
+    including ``ability`` (battle_mon.h:57-84): species, Attack, Defense, Speed, Sp. Atk, Sp. Def
+    (the BattleMon values: ``damage.battle_stats``, a Power-Tricked defender's swapped ones; the
+    user's own swap is then off, ``power_trick_desync``), the four moves, the IVs, all eight stat
+    stages, both types, the form and the ability; each move's PP is ``min(5, table PP)``
+    (:5364-5370). Not copied: HP, max HP, level, status, the volatile state, held item, gender
+    (:5337-5338 write ``transformedPID`` / ``transformedGender``, cosmetic). Disable ends
+    (:5335-5336), ``mimickedMoveSlot`` clears (:5339: a mimicked slot is not restored by Transform,
+    its party value stays in the shadow), ``truant = totalTurns & 1`` (:5359). The party Pokemon's
+    own values go to the ``shadow_*`` (once: a Transformed user transforming again keeps them).
+    The switch-in checks run again after the move (``step._use_move``, :5350-5362)."""
+    fmt = format_of(state)
+    side, user, foe, target = h.side, h.user, h.target_side, h.target
+    pf = party(fmt, foe)
+    cond = (
+        (h.effect == _E.TRANSFORM)
+        & h.landed
+        & (state.hp[pf, target] > 0)
+        & (state.semi_invulnerable[foe] == 0)
+        & (state.transformed[foe] == 0)
+    )
+    fresh = state.transformed[side] == 0
+    masked = ((state.mimic_slots[side].astype(_I32) >> jnp.arange(MOVES)) & 1) == 1
+    keep = masked | ~fresh  # party values saved already: Mimic's, or a first Transform's
+    # The AI's record of the user's own ability settles to its id now: the copy changes what a
+    # "known, unnamed" record (-1) would read (``decomp_ability_id``), G-69.
+    record = state.ai_ability_known[user].astype(_I32)
+    own_id = decomp_abilities(tables, state)[party(fmt, side), user]
+    settled = jnp.where(cond & (side == 0) & (record < 0), own_id, record)
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    foe_moves = state.moves[pf, target]
+    copy_pp = jnp.minimum(tables.move_pp[foe_moves].astype(_I32), MIMIC_PP_CAP)
+    own = (party(fmt, side), user)
+    return state._replace(
+        shadow_moves=put(
+            state.shadow_moves, side, jnp.where(keep, state.shadow_moves[side], state.moves[own])
+        ),
+        shadow_pp=put(state.shadow_pp, side, jnp.where(keep, state.shadow_pp[side], state.pp[own])),
+        shadow_species=put(
+            state.shadow_species,
+            side,
+            jnp.where(fresh, state.species[own], state.shadow_species[side]),
+        ),
+        shadow_form=put(
+            state.shadow_form, side, jnp.where(fresh, state.form[own], state.shadow_form[side])
+        ),
+        shadow_stats=put(
+            state.shadow_stats, side, jnp.where(fresh, state.stats[own], state.shadow_stats[side])
+        ),
+        shadow_ivs=put(
+            state.shadow_ivs, side, jnp.where(fresh, state.ivs[own], state.shadow_ivs[side])
+        ),
+        shadow_ability_slot=put(
+            state.shadow_ability_slot,
+            side,
+            jnp.where(fresh, state.ability_slot[own], state.shadow_ability_slot[side]),
+        ),
+        shadow_ability_form=put(
+            state.shadow_ability_form,
+            side,
+            jnp.where(fresh, state.ability_form[own], state.shadow_ability_form[side]),
+        ),
+        species=put(state.species, own, state.species[pf, target]),
+        form=put(state.form, own, state.form[pf, target]),
+        stats=put(state.stats, own, battle_stats(state, foe, target)),
+        ivs=put(state.ivs, own, state.ivs[pf, target]),
+        types=put(state.types, own, state.types[pf, target]),
+        ability=put(state.ability, own, state.ability[pf, target]),
+        ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
+        ability_form=put(state.ability_form, own, state.ability_form[pf, target]),
+        moves=put(state.moves, own, foe_moves),
+        pp=put(state.pp, own, copy_pp),
+        stages=put(state.stages, side, state.stages[foe]),
+        disabled_move=put(state.disabled_move, side, 0),
+        disable_turns=put(state.disable_turns, side, 0),
+        mimic_slots=put(state.mimic_slots, side, (1 << MOVES) - 1),
+        transformed=put(state.transformed, side, 1),
+        power_trick_desync=put(state.power_trick_desync, side, state.power_trick[side]),
+        truant=put(state.truant, side, state.turn.astype(_I32) & 1),
+        ai_ability_known=state.ai_ability_known.at[user].set(
+            settled.astype(state.ai_ability_known.dtype)
+        ),
+    )
+
+
+def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Chatter (effect_script_0267.s:3-5): a plain hit whose ON_HIT indirect ``subscript_chatter.s``
+    runs on a hit that did not fail (MOVE_STATUS_NO_EFFECTS clear, battle_lib.c:1524-1529):
+    ``CheckChatterActivation`` (battle_script.c:8397-8436) skips unless the attacker's species is
+    Chatot and it is not Transformed, and the defender has HP (:8403-8405); then ``RandNext() %
+    100 <= effectChance`` (:8428-8430, ``Outcome.chatter``: 0 / 10 / 30 of the Chatot cry, 0 for
+    every enemy) confuses by ``subscript_confuse.s``: the effect is ``SIDE_EFFECT_TYPE_INDIRECT``
+    (effect_script_0267.s:5, battle_lib.c:1520-1522), so the defender's Shield Dust as the
+    attacker sees it stops it (subscript_confuse.s:14-15, ``CheckIgnorableAbility``: a Mold
+    Breaker attacker ignores it), after the roll is drawn; then not confused :24, no Substitute
+    :23, no Safeguard :26 (G-70)."""
+    fmt = format_of(state)
+    chatot = (state.species[party(fmt, h.side), h.user] == SPECIES_CHATOT) & (
+        state.transformed[h.side] == 0
+    )
+    cond = (
+        (h.effect == _E.CHATTER)
+        & h.effective
+        & chatot
+        & _alive(state, h.target_side, h.target)
+        & (outcome.chatter[h.side] != 0)
+        & (state.confusion[h.target_side] == 0)
+        & ~_shield_dust(h)
+        & ~h.shielded
+        & (state.safeguard[side_of(h.target_side)] == 0)
+    )
+    return _set(state, "confusion", h.target_side, outcome.duration[h.side], cond)
+
+
 def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Ingrain (effect_script_0181.s:5-6): the user's ``MOVE_EFFECT_INGRAIN``. Its script fails a
     user that has it already (:5, :19-20: MOVE_STATUS_FAILED, ``step._use_move``'s ``failed``)."""
@@ -1765,6 +1996,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "mud_sport",
     "water_sport",
     "aqua_ring",
+    "magnet_rise",  # G-66
     "minimized",
     "semi_invulnerable",  # B10-12
     "power_trick",  # B12-10
@@ -1870,7 +2102,10 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
     battle_script.c:11806): the AI knows it, for the player's side."""
     on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
-    known = jnp.where(on, 1, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
+    record = decomp_ability_id(
+        state.ability[party(format_of(state), jnp.asarray(side, _I32)), slot]
+    )
+    known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 
@@ -2587,7 +2822,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
         sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     )
     stopped = down & (layers > 0) & ~poison_type & blocks
-    known = jnp.where(stopped & (side == 0), 1, state.ai_ability_known[mon])
+    known = jnp.where(stopped & (side == 0), ability, state.ai_ability_known[mon])
     state = state._replace(
         ai_ability_known=state.ai_ability_known.at[mon].set(
             known.astype(state.ai_ability_known.dtype)
@@ -2906,6 +3141,7 @@ def play_hit(
     sub_hit=False,
     pursuit_switch=False,
     foe_claw=False,
+    foe_enduring=False,
     in_power=0,
     gift=0,
 ) -> tuple[BattleState, MoveHit]:
@@ -2929,8 +3165,8 @@ def play_hit(
 
     Focus Sash (``HOLD_EFFECT_ENDURE``): ``BattleControllerPlayer_UpdateHP`` runs for every
     damaging hit (``battleCtx->damage != 0``) and sets ``focusItemActivated`` when the
-    defender holds a Focus Sash at full HP (bcp.c:3391-3393; Endure, the move, is
-    unsupported), or a Focus Band (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
+    defender holds a Focus Sash at full HP (bcp.c:3391-3393), or a Focus Band
+    (``HOLD_EFFECT_MAYBE_ENDURE``) whose roll passes
     (bcp.c:3387-3389: drawn on every such hit, lethal or not, ``Outcome.focus_band[side,
     hit_index]``, ruling G-1); while it is set, a hit that would KO leaves 1 HP
     (``focus_sash_damage``) and the followup message names the item (``reveal_item``) and
@@ -2939,6 +3175,13 @@ def play_hit(
     takes 0); a holder below full HP at the first hit is never protected. Bide stores the
     capped damage (bcp.c:3407), drain and the contact ability see it. Sturdy only blocks
     OHKO moves (``MOVE_STATUS_ONE_HIT_KO``, bcp.c:3342), none of which is supported.
+
+    Endure (G-65, ``foe_enduring``: the defender's ``turnFlags.enduring``, set by an earlier
+    Endure this turn, battle_script.c:5174-5177): inside ``if (enduring == 0)`` (bcp.c:3386-3394)
+    the Focus Band roll is not drawn and the Focus Sash is not armed; then ``enduring ||
+    focusItemActivated`` with ``curHP + damage <= 0`` leaves 1 HP (:3396-3404) with
+    ``MOVE_STATUS_ENDURED`` (a message only) when ``enduring``, else ``MOVE_STATUS_ENDURED_ITEM``
+    (the item is named and a Sash removed). An earlier hit's ``focus_armed`` still applies (an OR).
 
     Substitute (bcp.c:3359-3378, B10-4): a defender behind one takes the damage on it instead:
     min(damage, its HP) (``hitDamage``: drain and recoil read it, and shellBellDamageDealt), the
@@ -3006,7 +3249,7 @@ def play_hit(
             identified(tables, state, side, target_side),
         )
         == 0
-    ) | levitated(tables, state, side, target_side, counter_type)
+    ) | ground_immune(tables, state, side, target_side, counter_type)
     # Wonder Guard flags them too (power 1; MOVE_STATUS_WONDER_GUARD, ruling G-18).
     immune = immune | wonder_guarded(tables, state, side, move, counter_type, target_side)
     damage = jnp.where(is_counter, jnp.where(immune, 0, jnp.asarray(counter_damage, _I32)), damage)
@@ -3033,12 +3276,16 @@ def play_hit(
     full = target_hp == state.max_hp[party(fmt, target_side), target].astype(_I32)
     # Focus Band (bcp.c:3386-3389, ruling G-1): RandNext() % 100 < param on every UpdateHP that
     # reaches the endure checks, lethal or not (Outcome.focus_band).
+    # Endure (G-65): ``if (enduring == 0)`` wraps both the Band roll and the Sash test.
+    enduring = jnp.asarray(foe_enduring, bool)
     band = holds(tables, state, target_side, ItemId.FOCUS_BAND)
-    rolled = band & (outcome.focus_band[side, hit_index] != 0)
-    armed = jnp.asarray(focus_armed) | (real & sash & full) | (real & rolled)
-    capped, endured = focus_sash_damage(state, target_side, damage, armed & real)
+    rolled = band & (outcome.focus_band[side, hit_index] != 0) & ~enduring
+    armed = jnp.asarray(focus_armed) | (real & sash & full & ~enduring) | (real & rolled)
+    # :3396-3404: ``enduring || focusItemActivated``; only the item path is named and consumed.
+    capped, endured_any = focus_sash_damage(state, target_side, damage, (armed | enduring) & real)
+    endured = endured_any & ~enduring
     # battleCtx->damage after the endure cap: what subscript_update_hp.s receives.
-    taken = jnp.where(endured, target_hp - 1, damage)
+    taken = jnp.where(endured_any, target_hp - 1, damage)
     # Secret Power's secondary effect is the terrain's (order.move_effects).
     effect, param = move_effects(tables, state, move)
     move_type = move_type_of(tables, state, side, move, gift)
@@ -3099,9 +3346,9 @@ def play_hit(
             identified(tables, state, side, target_side),
         )
         > 0
-    ) & ~levitated(tables, state, side, target_side, move_type)
+    ) & ~ground_immune(tables, state, side, target_side, move_type)
     passes = jnp.where(is_status, (effect != _E.STATUS_FOE) | type_ok, damage > 0)
-    chance = tables.move_effect_chance[move]
+    chance = read_chance(tables, move)
     h = _Hit(
         side=side,
         target_side=target_side,
@@ -3155,6 +3402,11 @@ def play_hit(
         _water_sport,
         _mud_sport,
         _aqua_ring,
+        _magnet_rise,
+        _gravity,
+        _mimic,
+        _transform,
+        _chatter,
         _ingrain,
         _mean_look,
         _imprison,

@@ -23,7 +23,7 @@ from nuzline.engine.enumerate import (
     hit_class_law,
     outcome_laws,
 )
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.outcome import (
     MAX_HITS,
     Outcome,
@@ -506,13 +506,37 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Embargo writes the defender's embargoTurns, no stage (B13-31); the Wide Lens it hides is
     # hit_thresholds' second half (outcome._threshold_grid).
     EffectId.EMBARGO,
+    # Endure (effect_script_0116.s:5) runs subscript_protect (:5-7): BtlCmd_TryProtection
+    # (battle_script.c:5149-5190) sets turnFlags.enduring and protectSuccessTurns, no stage.
+    EffectId.ENDURE,
+    # Magnet Rise (effect_script_0252.s:5-12) sets MOVE_EFFECT_MAGNET_RISE and
+    # magnetRiseTurns on its user, no stage.
+    EffectId.MAGNET_RISE,
+    # Mimic (effect_script_0082.s:5) runs subscript_mimic (:5-11): BtlCmd_TryMimic
+    # (battle_script.c:4476-4523) writes a move slot, no stage.
+    EffectId.MIMIC,
+    # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
+    # defender through subscript_confuse: a volatile status, no stage.
+    EffectId.CHATTER,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,
 # battle_script.c:3534-3549), Psych Up copies the side's stages onto its user
 # (BtlCmd_CopyStatStages, :6042-6053), Acupressure can draw evasion (BtlCmd_BoostRandomStatBy2,
 # :8932-8956): test_haze_psych_up_acupressure_are_seen_by_hit_thresholds.
-_FOLLOWED = frozenset({EffectId.HAZE, EffectId.PSYCH_UP, EffectId.ACUPRESSURE})
+# Gravity (effects._gravity) sets FIELD_CONDITION_GRAVITY, whose x10/6 the check applies
+# (battle_controller_player.c:2972-2974); Transform (BtlCmd_Transform, battle_script.c:5330-5373) copies the
+# defender's statBoosts and ability (battle_mon.h:75, :84) and reruns its switch-in checks:
+# test_gravity_and_transform_are_seen_by_hit_thresholds.
+_FOLLOWED = frozenset(
+    {
+        EffectId.HAZE,
+        EffectId.PSYCH_UP,
+        EffectId.ACUPRESSURE,
+        EffectId.GRAVITY,
+        EffectId.TRANSFORM,
+    }
+)
 # Effects whose params name stats: they must name no accuracy or evasion.
 _PARAM_STATS = {EffectId.TICKLE: (0, 1), EffectId.STAGE_SWAP: (0, 1), EffectId.CAPTIVATE: (0,)}
 # (effect, stat) pairs hit_thresholds follows: they change a later foe move's threshold.
@@ -629,6 +653,53 @@ def test_haze_psych_up_acupressure_classes_match_the_live_check(tables, names):
                     tables, s, acts, outcome._replace(hit=outcome.hit.at[0, 0].set(roll))
                 )
                 assert stages_ok(out)
+                hits.append(bool(out.hp[1, 0] < s.hp[1, 0]))
+            assert hits == [lo <= live] * 2, (lo, hi - 1, hits)
+            hit_weight += law[lo] if hits[0] else 0
+        assert hit_weight == live
+
+
+def _gravity_transform_cases(tables, names):
+    """(state, actions, law, live) per case: a faster foe's Gravity or Transform before the
+    slower player move; ``live`` is the move's hit rate at its own check. Before the fix each law
+    held only the turn-start rate, one class whose rolls past it miss."""
+    # Gravity: Rock Throw 90 becomes 90 * 10 / 6 = 150, past 100 (bcp.c:2972-2974).
+    grav = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Gravity"], opp_faster=True
+    )
+    # Transform copies the player's evasion +1 (statBoosts, battle_mon.h:75): Scratch 75.
+    stage = roark_state(tables, names, opp_moves=["Transform"], opp_faster=True)
+    stage = stage._replace(stages=stage.stages.at[0, Stat.EVA].set(1))
+    # Transform copies the player's Sand Veil (battle_mon.h:84) in sand: Scratch x80/100
+    # (bcp.c:2927-2929) against the transformed Geodude.
+    veil = roark_state(tables, names, opp_moves=["Transform"], opp_faster=True)
+    veil = veil._replace(
+        ability=veil.ability.at[0, int(veil.active[0])].set(AbilityId.SAND_VEIL),
+        weather=jnp.asarray(Weather.SANDSTORM, veil.weather.dtype),
+    )
+    return [
+        (grav, A("Rock Throw", "Gravity", grav, names), {1: 90, 91: 10}, 100),
+        (stage, A("Scratch", "Transform", stage, names), {1: 75, 76: 25}, 75),
+        (veil, A("Scratch", "Transform", veil, names), {1: 80, 81: 20}, 80),
+    ]
+
+
+def test_gravity_and_transform_are_seen_by_hit_thresholds(tables, names):
+    """A faster foe's Gravity (x10/6 at the check, battle_controller_player.c:2972-2974) or
+    Transform (the side's stages and ability copied, BtlCmd_Transform battle_script.c:5330-5373)
+    changes the slower move's threshold: hit_thresholds holds the new one, and each class is
+    decided alike by the live check at both its ends, in both engines."""
+    for s, acts, law, live in _gravity_transform_cases(tables, names):
+        assert hit_law(tables, s, acts, 0) == law
+        bounds = sorted(law)
+        hit_weight = 0
+        for lo, hi in zip(bounds, [*bounds[1:], 101], strict=True):
+            hits = []
+            for roll in (lo, hi - 1):
+                o = empty_outcome()
+                out = assert_matches_reference(
+                    tables, s, acts, o._replace(hit=o.hit.at[0, 0].set(roll))
+                )
                 hits.append(bool(out.hp[1, 0] < s.hp[1, 0]))
             assert hits == [lo <= live] * 2, (lo, hi - 1, hits)
             hit_weight += law[lo] if hits[0] else 0

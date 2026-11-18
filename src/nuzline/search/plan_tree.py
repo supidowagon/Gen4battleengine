@@ -41,6 +41,7 @@ from nuzline.engine.ids import Status
 from nuzline.engine.levelup import GIVE_UP
 from nuzline.engine.observe import (
     ACT_DISABLED,
+    ACT_GRAVITY,
     ACT_IMPRISONED,
     ACT_ITEM,
     ACT_MOVE,
@@ -146,6 +147,8 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
         head = f"{who}'s {names.move_names[act]} is disabled"
     elif kind == ACT_IMPRISONED:
         head = f"{who} can't use the sealed {names.move_names[act]}"
+    elif kind == ACT_GRAVITY:
+        head = f"{who} can't use {names.move_names[act]} because of gravity"
     elif kind == ACT_SWITCH:
         slot_name = _species(names, f, side, act)
         head = f"{trainer} sent out {slot_name}" if side else f"you switched to {slot_name}"

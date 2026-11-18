@@ -101,11 +101,13 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain and the
-# variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the switch check does not
-# model. Roost and Ingrain are read since E1 prep batch P2 (switching.defender_chart_flags);
-# Weather Ball, Natural Gift and Judgment are typed since E2 batch 13 (B13-35:
-# switching.party_move_types; Weather Ball refused only where its case assigns no type).
+# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain, Perish Song,
+# Magnet Rise and the variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the
+# switch check does not model. Roost and Ingrain are read since E1 prep batch P2
+# (switching.defender_chart_flags); Perish Song (step 3, AI_PerishSongKO, G-64) and Magnet
+# Rise (G-66) since the E1 trial batch; Weather Ball, Natural Gift and Judgment are typed
+# since E2 batch 13 (B13-35: switching.party_move_types; Weather Ball refused only where its
+# case assigns no type).
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
@@ -120,7 +122,17 @@ _SWITCH_MOVES = {
 _SWITCH_REFUSED = {
     k: v
     for k, v in _SWITCH_MOVES.items()
-    if k not in ("Hidden Power", "Roost", "Ingrain", "Weather Ball", "Natural Gift", "Judgment")
+    if k
+    not in (
+        "Hidden Power",
+        "Roost",
+        "Ingrain",
+        "Perish Song",
+        "Magnet Rise",
+        "Weather Ball",
+        "Natural Gift",
+        "Judgment",
+    )
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
@@ -157,6 +169,9 @@ _AI_MOVE_IDS = {
     "Baton Pass": 226,
     "Protect": 182,
     "Detect": 197,
+    # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
+    "Earthquake": 89,
+    "Earth Power": 414,
     **{k: v for k, v in _SOUND_MOVES.items() if k != "Roar"},
 }
 # ai/commands.py CALC_DAMAGE_MOVES: TrainerAI_CalcDamage's id cases the AI damage does not
@@ -219,7 +234,7 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
             "nuzline.ai.policy._STATE_MOVE_IDS",
             "move",
             scope,
-            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye", "Magnet Rise")},
+            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye",)},
         ),
     )
 
@@ -467,6 +482,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Speed Boost": 3,
             "Iron Fist": 89,
             "Klutz": 103,
+            "Plus": 57,
+            "Minus": 58,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -807,6 +824,17 @@ EXEMPT: dict[str, str] = {
     # B10-11).
     "nuzline.engine.ids.CANNOT_ENCORE_MOVES": _CODE_MOVE_IDS,
     "nuzline.engine.ids.INVOKER_MOVES": _CODE_MOVE_IDS,
+    # sMovesAffectedByGravity (battle_lib.c:3385-3392), E1 trial batch (G-67): Kaizo's id 150 is
+    # "Hidden Power Water", not Splash; the ban is by id in both games.
+    "nuzline.engine.ids.GRAVITY_MOVES": _CODE_MOVE_IDS,
+    # Move_CanBeMimicked's sCannotMetronomeMoves prefix (battle_lib.c:7152-7158, :7182-7192), by id
+    # in both games (E1 trial batch, G-68).
+    "nuzline.engine.ids.MIMIC_FORBIDDEN": _CODE_MOVE_IDS,
+    # BATTLE_EFFECT_TRANSFORM and _COPY_MOVE_FOR_BATTLE (G-68, G-69): the AI's copier moves.
+    "nuzline.ai.layout.COPIER_EFFECTS": _KEYED_BY_EFFECT,
+    # Chatter's effectChance per Chatot cry parameter (battle_script.c:8413-8426), G-70: engine
+    # semantics of the effect script, not a game id.
+    "nuzline.engine.ids.CHATTER_CHANCES": _KEYED_BY_EFFECT,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

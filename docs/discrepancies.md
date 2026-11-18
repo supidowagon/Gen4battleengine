@@ -202,20 +202,6 @@ catch this. Found while reading the decomp for K3b2 (`docs/kaizo/k3b2-rules.md` 
   and Bind require the battler to be alive; its Taunt counter and Leech Seed were
   already cleared when it fainted), so running it first or second changes nothing.
 
-- **A player's Struggle is not recorded as a seen move.** Both engines follow the
-  decomp's timing: `last_move` is `movePrevByBattler`, written at `UpdateMoveBuffers`
-  (`src/battle/battle_controller_player.c:3945-3949`; a pre-switch Pursuit at
-  `src/battle/battle_script.c:6930`), and `step` commits it to `ai_seen_moves` at the
-  start of a turn on which the AI fights, as `TrainerAI_RecordLastMove`
-  (`src/battle/trainer_ai/trainer_ai.c:2705-2717`, called at `:295`) does; the AI's
-  scores read the pending move too (`ai.commands.new_context`). `ai_seen_moves` holds
-  the AI's list as slots of the player's active Pokemon, and Struggle (`MOVE_STRUGGLE`,
-  165) is in no slot, so it is never recorded. The decomp adds it to `battlerMoves` like
-  any move. Roark's scripts never ask for Struggle (`IfMoveNotKnown DEFENDER,
-  MOVE_U_TURN` is the only read), so the one observable difference is a full list: with
-  Struggle taking one of its four entries, the decomp cannot record the player's fourth
-  distinct move, while the engines can. That needs a player Pokemon that Struggles (no
-  PP left, or Taunted with only status moves) and later uses all four of its moves.
 - **A locked battler's move is fixed at the start of the turn.** `FightCommand`
   (`src/battle/battle_controller_player.c:1885-1888`) re-reads `Battler_CanPickCommand` when
   the battler acts, and `ppDecremented` is set at command selection (`:335`). The engines

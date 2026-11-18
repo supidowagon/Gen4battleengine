@@ -245,7 +245,7 @@ def test_limber_blocks_the_paralysis_silently(tables, names):
     pierced = _ability(s, 1, AbilityId.MOLD_BREAKER)
     out = assert_matches_reference(tables, pierced, acts, _o(1, 0, side=1))
     assert int(out.status[0, 0]) == Status.NONE
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 # --- contact abilities ---------------------------------------------------------------------

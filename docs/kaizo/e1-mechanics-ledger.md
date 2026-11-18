@@ -15,8 +15,8 @@ names the decomp sites, what the engine does, and where. E2's rulings are in
   subscript_future_sight_damage.s:28). The `&&` tests the item first and then draws, before
   any HP test, so the roll is drawn whenever a holder reaches the site, lethal or not. At
   UpdateHP that is every nonzero damage not taken by a substitute (:3346, the substitute
-  returns at :3359-3378), after False Swipe's cap (:3381-3384), while `enduring` is 0 (Endure,
-  the move, is unsupported, so always). The band has no full-HP test (unlike the sash at
+  returns at :3359-3378), after False Swipe's cap (:3381-3384), while `enduring` is 0 (the
+  defender has not used Endure this turn; G-65). The band has no full-HP test (unlike the sash at
   :3391), it sets the same `focusItemActivated` / `endure`, and it is never removed
   (subscript_move_followup_message.s:17 removes only `HOLD_EFFECT_ENDURE`); the "hung on"
   message tags the defender's item (`BattleMessage_ItemTag`, battle_script.c:11736-11744), so
@@ -954,3 +954,269 @@ of them, :2107-2115).
   a Poke Ball (every param 3) and Kaizo's Guard Spec. (every param reads 128, as a
   `partyUse` FALSE item's dummy) stay refused for the friendship wrap.
   `engine.bag.use_bag_item`, reference `_use_item`. Tests: `tests/engine/test_e1_batch_e.py`.
+
+## Trial batch
+
+- G-63 Plus and Minus (`AbilityId.PLUS` / `MINUS`, decomp 57 / 58). `BattleSystem_CalcMoveDamage`
+  (battle_lib.c:6802-6809, after the Marvel Scale defense line :6797-6800 and before the Mud Sport
+  / Water Sport lines :6811 on; attacker ability `attackerParams.ability`, :6653): a Plus attacker
+  with `BattleSystem_CountAbility(.., COUNT_ALIVE_BATTLERS_OUR_SIDE, attacker, ABILITY_MINUS)`
+  nonzero (and Minus with Plus) gets `spAttackStat * 150 / 100`. The count (battle_lib.c:2886-2893)
+  is every battler of the attacker's side, the attacker included, with `curHP != 0` and
+  `Battler_Ability == ability`; only battlers on the field, never the bench. In singles the
+  attacker is its side's only battler and has one ability, so the count is 0 and the boost never
+  applies; a doubles Plus with a living Minus ally (or the reverse) gets x1.5, Plus with Plus does
+  not. Built as `damage.side_ability_count` over `damage.side_active_slots` (the one function a
+  doubles layout extends; reference `_side_ability_count`), read in `damage._pre_random` and the
+  reference `_calc_move_damage` at the decomp's position. The AI scripts never read either ability.
+  Tests: `test_e1_trial.py`.
+- G-64 Perish Song, the AI's switching step 3. `TrainerAI_ShouldSwitch` (trainer_ai.c:3894-3987), after
+  the trap gate (:3906-3913) and the bench test (:3941), runs `AI_PerishSongKO` (:3263-3272) before
+  the Wonder Guard step (:3945) and without a draw: the AI's active battler has
+  `MOVE_EFFECT_PERISH_SONG` and `perishSongTurns == 0` -> `aiSwitchedPartySlot = 6`, TRUE. The
+  comment above it (:3253-3262, "does nothing") is wrong; the code is followed. Reachability:
+  `BtlCmd_TryPerishSong` sets 3 (battle_script.c:5480-5481), the turn-end pass shows and decrements
+  3 -> 2 -> 1 -> 0 and faints at 0 (battle_controller_player.c:1799-1809), so at the selection of
+  the turn on whose end it faints the AI sees 0. `TrainerAI_PickCommand` (:4001-4026) then sends
+  `BattleAI_PostKOSwitchIn`'s pick (battle_lib.c:7923), else the first living slot that is not the
+  active (:4014-4022). Built as `switching._Layout.perish`: no switch site exists then
+  (`exists & ~perish`), and `switch_action` returns the `replacement` pick for every stop; the
+  scoring side is `Basic_CheckPerishSong` (script.s:720-723, -10 against a perishing player),
+  ALL_FAINT_3_TURNS (114) transcribed with no Expert entry. Tests: `test_switching.py`,
+  `test_kaizo_policy.py`.
+- G-65 Endure (`EffectId.ENDURE`, BATTLE_EFFECT_SURVIVE_WITH_1_HP 116). effect_script_0116.s:3 is
+  Protect's script (effect_script_0111.s:3): `BtlCmd_TryProtection` (battle_script.c:5149-5190), so
+  the chain reset (:5154-5158, Endure counts), the roll (:5167-5168) and the last-actor test
+  (:5160-5165) are shared and Endure and Protect continue each other's chain; a success sets
+  `turnFlags.enduring` (:5174-5177) instead of `protecting`. `enduring` is read at one site,
+  `BattleControllerPlayer_UpdateHP` (battle_controller_player.c:3386-3404), for a damaging hit not
+  taken by a substitute, after False Swipe's cap: `if (enduring == 0)` wraps both the Focus Band roll
+  (:3387-3389, not drawn) and the Focus Sash test (:3391-3393, not armed); then
+  `enduring || focusItemActivated` with `curHP + damage <= 0` leaves 1 HP (:3396-3404), as
+  `MOVE_STATUS_ENDURED` (a message only; no item is named or removed) when enduring, else
+  `MOVE_STATUS_ENDURED_ITEM`. An earlier hit's `focusItemActivated` still applies (an OR), so an
+  enduring hit after it is `ENDURED` too. `BtlCmd_CheckHoldOnWith1HP` (:9098-9124: the confusion
+  self-hit, Pursuit's pre-switch hit, Future Sight) and every non-UpdateHP damage (poison, weather,
+  recoil, Curse) ignore Endure. Built as the `endure_ok` event and `ts_endure_ok` paused-turn field
+  (beside `protect_ok`), read as `foe_enduring` by `effects.play_hit`; the reference `_Turn.enduring`.
+  Pursuit's hit does not pass it (subscript_pursuit.s:35 is CheckHoldOnWith1HP). AI: `Expert_Endure`
+  (script.s:3633-3649, dispatch :1704): below 4 % HP -1; below 35 % +1 unless the 70 roll (:3645)
+  jumps; else -1 (the fall-through at :3638 reaches :3640); no Basic entry. Tests:
+  `test_e1_trial.py`, `test_kaizo_policy.py`.
+- G-66 Magnet Rise (`EffectId.MAGNET_RISE`, BATTLE_EFFECT_GIVE_GROUND_IMMUNITY 252). The move
+  (effect_script_0252.s) fails (:16, MOVE_STATUS_FAILED) for a user with `magnetRiseTurns` (:5, the
+  turns, not the bit), Levitate (:6, `Battler_Ability`) or `MOVE_EFFECT_INGRAIN` (:7), else sets
+  `MOVE_EFFECT_MAGNET_RISE` (:8) and `magnetRiseTurns = 5` (:9). `BattleSystem_ApplyTypeChart`
+  (battle_lib.c:2605-2609, after the Levitate test) gives a Ground move against a defender with
+  turns, no Ingrain and no Iron Ball `MOVE_STATUS_MAGNET_RISE` (moves.h:77, part of
+  `MOVE_STATUS_IMMUNE`, :87): the walk is skipped (only STAB stays in the value); Mold Breaker does
+  not lift it; `CalcEffectiveness` has no such test. Hazards read the mask BIT
+  (subscript_hazards_check.s:11, after Gravity :6 and Iron Ball :7); Arena Trap and
+  `BattlerIsGrounded` the TURNS (battle_lib.c:3215-3218, :5500-5507). `MON_COND_CHECK_STATE_MAGNET_RISE`
+  (bcp.c:1647-1656, after TAUNT) counts the turns down and `subscript_magnet_rise_end.s` clears the
+  bit at 0; turns zeroed by Gravity never reach it (the bit stays). A switch clears both
+  (battle_lib.c:2100-2104); Baton Pass keeps the bit (`MOVE_EFFECT_BATON_PASSED`, moves.h:42-44)
+  and the turns (:2112). Built as `BattleState.magnet_rise` / `magnet_rise_turns`,
+  `damage.magnet_risen` / `ground_immune` at every `ApplyTypeChart` immunity site (five in the
+  engine, six in the reference), `damage.grounded`'s `magnet` argument, `actions.trapped`, the
+  countdown folded into `step._taunt_check` (reference `_taunt_check`), and in the AI
+  `switching.defender_chart_flags`' `magnet` with the `MAGNET_RISE` bit counted as immune by
+  `commands.effectiveness_class` and `replacement._stage_2_score`. AI scoring:
+  `Basic_CheckMagnetRise` (script.s:1461-1474, -10 with the bit, Levitate or a Flying type) and
+  `Expert_MagnetRise` (:6090-6119, dispatch :1795, roll :6113); the Magnet Rise refusals are gone.
+  Tests: `test_e1_trial.py`, `test_kaizo_policy.py`, `test_switching.py`.
+- G-67 Gravity (`EffectId.GRAVITY`, BATTLE_EFFECT_GRAVITY 215), in both games. The move
+  (effect_script_0215.s) fails with `FIELD_CONDITION_GRAVITY` up (:3, :9-10), else the indirect
+  `subscript_gravity_start.s`: `FIELD_CONDITION_GRAVITY_INIT` (5 turns, condition.h:143), then per
+  battler with HP (:13-85): `magnetRiseTurns != 0` -> 0 (the `MOVE_EFFECT_MAGNET_RISE` bit stays),
+  else `MOVE_EFFECT_AIRBORNE` (a Fly / Bounce charge turn) -> `Battler_UnlockMoveChoice`
+  (battle_lib.c:1834-1841) and ToggleVanish; the Gastro Acid, Ingrain, Levitate and Flying branches
+  only print (`effects.gravity_ground`). The countdown (`FIELD_COND_CHECK_STATE_GRAVITY`,
+  battle_controller_player.c:1227-1238) runs `subscript_gravity_end` at 0: vanilla prints; Kaizo's
+  replacement (sub_seq 238, data/kaizo/rom_diff.toml) sets the counter to 5 again and runs the
+  grounding loop without messages, so Gravity never ends there (`Tables.gravity_rearm`, 1 in Kaizo,
+  built by tools/build_tables.py). Accuracy x10/6 (bcp.c:2972-2974) and the hazards / Arena Trap
+  grounding were already in. New: `BasicTypeMulApplies` (battle_lib.c:2545-2549) and
+  `NoImmunityOverrides` (:2766-2770) skip the Ground-on-Flying immunity (`damage.identified`'s
+  `CHART_GROUNDED`; the AI's `chart_multipliers` already read `state.gravity`); `Battler_Ability`
+  reads Levitate as none (:3095-3098: `damage.ignorable`, `effects.magnet_rise_fails`, the reference
+  `_ignorable`). `Move_FailsInHighGravity` (:3394-3407) bans Fly, Bounce, Jump Kick, Hi Jump Kick,
+  Splash and Magnet Rise (`ids.GRAVITY_MOVES`, decomp ids; Kaizo's id 150 is "Hidden Power Water",
+  banned by id) at selection (CHECK_INVALID_GRAVITY, :2292-2295: `actions.usable_moves`, all banned
+  -> Struggle; the AI's list too, trainer_ai.c:234), at the status check right after Imprison
+  (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586-2595, `moveCur`: Sleep Talk itself, not its call;
+  `moveFailFlags.gravity`, a message only: no unlock), from Sleep Talk's set (CHECK_INVALID_GRAVITY in
+  `BtlCmd_TrySleepTalk`'s `~CHECK_INVALID_NO_PP` mask, battle_script.c:4927: `order.sleep_talk_slots`) and
+  for Metronome, Assist and Copycat calls (`Move_CanBeMetronomed`, :7198-7201; Assist's list,
+  battle_script.c:6430). Those sets are read when the call runs, so a faster foe's Gravity earlier in the
+  same turn shrinks them: `enumerate.call_laws` adds a Gravity variant (`CallLaws.can_gravity`, where
+  `order.gravity_possible`: Gravity down at the turn start, a Sleep Talk / Metronome / Assist user, a foe
+  move that can run Gravity) whose law is read under Gravity (`order.gravity_state`), its values offset by
+  `ids.CALL_GRAVITY` (`invoked_move` reads `call % CALL_GRAVITY`); `call_consistent` keeps a row of either
+  law only where the step's `gravity_at_move` event agrees, and `sample_outcome` redraws the call and the
+  called move's draws from the Gravity set where it landed. Copycat needs no variant (no draw; a banned
+  movePrev fails and reads nothing). Area Gravity (Kaizo,
+  sub_seq 297: the animation then `subscript_gravity_start` byte for byte, run at battle start on a
+  map with weather 12): the trainer's area condition starts the fight with Gravity at 5
+  (`coverage.start_gravity`, `state.initial_arrays(gravity=)`; the loop is a no-op at battle start); the
+  coverage refusal is gone and rom_diff members 238 and 297 are `modelled`. Trick Room's twin
+  (sub_seq 251) is not part of this group. AI: `Basic_CheckGravityActive`
+  (script.s:1026-1029), `Expert_Gravity` (:4782-4803, dispatch :1759, rolls :4795 and :4799;
+  `commands.FieldCondition.GRAVITY` over `state.gravity`). Tests: `test_e1_trial.py`,
+  `test_invokers.py`, `test_kaizo_policy.py`, `test_coverage.py`.
+- G-68 Mimic (`EffectId.MIMIC`, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE 82), in both games; the party / battler
+  split of the move and PP arrays. effect_script_0082.s:3 runs `subscript_mimic.s` on a hit that
+  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4523) fails
+  (subscript_mimic.s:16, MOVE_STATUS_FAILED) when `movePrevByBattler[defender]` is MOVE_NONE or not
+  Mimic-able (`Move_CanBeMimicked`, battle_lib.c:7152-7158, :7182-7192: Metronome, Struggle, Sketch,
+  Mimic, Chatter, `ids.MIMIC_FORBIDDEN`), the user is Transformed (:4482, G-69), the defender has a
+  Substitute (:4483) or the user already knows the move (:4490-4492, :4519-4521). Success: slot `j`
+  is the user's first Mimic slot (:4494-4499; `j` always exists, the script runs only from the user's
+  own slot, as itself or through Sleep Talk: Metronome, Copycat and Assist cannot call it,
+  `Move_CanBeMetronomed` :7196-7218), `moves[j]` = the move, `ppCur[j]` = min(5, its table PP) (:4502-
+  4513), `mimickedMoveSlot |= 1 << j` (:4515). The decomp keeps the party Pokemon and the BattleMon
+  apart and Mimic writes the BattleMon only: PP use and every `BattleMon_CopyToParty` skip flagged
+  slots (battle_lib.c:1819-1825; battle_io_command.c:574-587), so the party keeps Mimic with its PP
+  after Mimic's own use; a level-up's learn writes the party (battle_script.c:10168-10176) and
+  `BattleSystem_ReloadPokemon` reloads only unflagged slots (battle_lib.c:183-191); leaving the field
+  clears `moveEffectsData` (:2100-2104; Baton Pass keeps no `mimickedMoveSlot`, :2107-2114) and the next
+  `InitBattleMon` loads moves and PP from the party (:80-85). The engine's per-slot `moves` / `pp` are
+  both, so a per-battler shadow (`mimic_slots`, `shadow_moves`, `shadow_pp`) holds the party's value of each
+  flagged slot: `effects._mimic` writes it, `step._restore_moves` (beside `_restore_types` /
+  `_restore_ability`) puts it back on a switch, a drag, the replacement of a fainted battler and, for
+  the player's party, at the battle's end (`_faint_check`); `levelup` learns into the shadow of a flagged
+  slot. The AI record `ai_seen_moves` is move ids in first-free order (`TrainerAI_RecordLastMove`,
+  trainer_ai.c:2705-2716; `state.record_seen_move`), so a Mimic copy, a replaced slot and the player's
+  Struggle are recorded as the decomp does (docs/discrepancies.md's Struggle entry is gone). The
+  AI side: no Basic or Expert entry and no other script.s mention (`KAIZO_TRANSCRIBED`); an AI Mimic's copy
+  is scored by the copied move's label, so a fight with a Mimic or Transform user adds the effects of the
+  foe's possible moves to its layout (`layout.fight_tables(foe_moves=...)`). Coverage no longer refuses a
+  Mimic user that levels up (82 left `RELOAD_STATE_EFFECTS`). Tests: `test_e1_trial.py`,
+  `test_knowledge.py`, `test_learn.py`.
+- G-69 Transform (`EffectId.TRANSFORM`, BATTLE_EFFECT_TRANSFORM 57), in both games (Kaizo's move has
+  priority 1, vanilla 0; no CAN_PROTECT in either). effect_script_0057.s:3 is a direct `CHECK_HP | TO_DEFENDER`
+  `subscript_transform_into_target.s`: it runs on a defender with HP, also after a general miss
+  (battle_lib.c:1492-1504), and fails (:23-24, MOVE_STATUS_FAILED) on a semi-invulnerable (:5) or already
+  Transformed (:6) defender; a Substitute is not tested. `BtlCmd_Transform` (battle_script.c:5330-5373)
+  sets `VOLATILE_CONDITION_TRANSFORM`, ends Disable (:5335-5336), clears `mimickedMoveSlot` (:5339: the
+  mimicked slot is NOT restored, the copy overwrites it) and Last Resort's count, and copies every byte of
+  the defender's BattleMon up to and including `ability` (:5342-5348; battle_mon.h:57-84): species, the
+  five stats as the BattleMon holds them (a Power-Tricked defender's swapped ones), the four moves, the IVs,
+  all eight stat stages, both types, the form and the ability; not HP, max HP, level, friendship, PP Ups,
+  status, volatiles, `moveEffectsMask`, the item, the gender (`transformedPID` / `transformedGender` are
+  sprites and messages only, :5337-5338) or exp. It clears the switch-in announce flags (:5350-5362) and
+  sets `truant = totalTurns & 1`, then each slot's PP is `min(5, table PP)` (:5364-5370). The switch-in
+  checks run again after the move (AFTER_MOVE_EFFECT_TRIGGER_SWITCH_IN_EFFECTS, bcp.c:3672-3676 ->
+  `BattleSystem_TriggerEffectOnSwitch`, battle_lib.c:3650-4170): the copied ability acts as on a switch-in
+  (Trace, a weather ability, Intimidate, Download, the reveals), through the engine's own hooks
+  (`step._use_move` calls `hooks.switch_in_effects` for the user). A copied ability is always one of the
+  fight's own Pokemon's, which coverage grades already, so an ability the engine does not model (Slow Start)
+  refuses the fight through the Pokemon that has it, never through Transform. While Transformed the party never sees moves or PP (battle_io_command.c:581-587);
+  the engine's per-slot arrays are both, so the Mimic shadow grows to the whole copied set
+  (`transformed`, `shadow_species`, `shadow_form`, `shadow_stats`, `shadow_ivs`, `shadow_ability_slot`,
+  `shadow_ability_form`, with `shadow_moves` / `shadow_pp` of all four slots and `mimic_slots` = 0b1111;
+  the party's ability is derived from the restored species, form and ability slot, as Trace's
+  `_restore_ability` does): `effects._transform` writes the copy and the shadow once (a second Transform
+  keeps the first's), `step._restore_transform` (before `_restore_types` / `_restore_ability` /
+  `_restore_moves`) restores it on a switch, a drag, a replacement and, for the player, at the battle's end
+  (which now also restores the player's Camouflage types and Trace ability); a fainted battler keeps the
+  copy until its replacement enters, because the exp payout reads the copied species and its yield
+  (battle_script.c:2216) and EVs. A level-up's `ReloadPokemon` reloads the user's OWN stats, level and HP
+  but not its moves, PP, PP Ups or exp (battle_lib.c:169-194): `levelup.party_identity` reads the party
+  species, form and IVs (the exp table, `Pokemon_CalcStats`, the learnset, the Shedinja rule) and the new
+  stats go to the battler and to `shadow_stats`; a learned move goes to the party's shadow. Species-keyed
+  rules read the copied species by themselves (Metal Powder's Ditto, Light Ball, Thick Club, the weight);
+  the Griseous Orb boost excludes a Transformed user (:6770, `damage.py`); Mimic (:4482) and Chatter's
+  confusion (:8404) fail / skip while Transformed. `MoveEffectsData.truant` was `fake_out_turn`'s parity
+  and is now a field (`BattleState.truant`: `(totalTurns + 1) & 1` at an entry or faint, `totalTurns & 1` by
+  Transform; `order.truant_loafs`). AI: `BATTLE_EFFECT_TRANSFORM` has no Basic or Expert entry and no script.s
+  mention (`KAIZO_TRANSCRIBED`); `trainer_ai.c` never tests the volatile bit, so the AI reads the
+  transformed BattleMon like any other; an AI Transform user's copied moves are scored by their labels
+  (`layout.fight_tables`, G-68). `ai_ability_known` is `battlerAbilities`: the decomp id a message
+  named (`BattleAI_SetAbility`, battle_script.c:12106-12109; hooks / effects record
+  `damage.decomp_ability_id`), 0 none, -1 an ability the engine does not name (a species ability the
+  tables carry only as a decomp id: read as the current one, settled to its id when its holder Transforms); `LoadBattlerAbility DEFENDER` (trainer_ai.c:1170-1205) returns it
+  when set, else Shadow Tag / Magnet Pull / Arena Trap of the BattleMon, else a coin between the BattleMon
+  SPECIES' two abilities (the copied species after a Transform): a pre-Transform reveal stays the old
+  ability. Coverage no longer refuses a Transform, Mimic or Power Trick user that levels up
+  (`RELOAD_STATE_EFFECTS` and its refusal are gone). Tests: `test_e1_trial.py`, `test_knowledge.py`. Found by the differential test with Transform's draws: the Metronome item's
+  count (`effects.metronome_update`, G-60) ran after the second turn's MOVE_LOCKED cleanup in `step._use_move`, so a locked
+  Fly user counted; `BattleSystem_UpdateMetronomeCount` runs at the end of BeforeMove (bcp.c:3221), before the move's script,
+  and still sees the lock (the reference already did): the call now precedes the cleanup.
+- G-70 Chatter (`EffectId.CHATTER`, BATTLE_EFFECT_CHATTER 267), in both games. effect_script_0267.s:3-5 is a
+  plain hit (CalcCrit, CalcDamage) with an indirect `ON_HIT | TO_DEFENDER` `subscript_chatter.s`, which runs on a
+  hit that did not fail (`MOVE_STATUS_NO_EFFECTS` clear, battle_lib.c:1524-1529). `CheckChatterActivation`
+  (battle_script.c:8397-8436) jumps (no effect) unless the attacker's `BattleMon.species` is Chatot, the defender's
+  `curHP != 0` and the attacker is not Transformed (:8403-8405); then `chatter =
+  Sound_GetChatterActivationParameter(BattleSystem_GetChatotCry(battler))` (:8407; recorded battles read a stored
+  value, never ours) gives `effectChance` 0 / 10 / 30 for chatter 0 / 1 / 2 (:8413-8426) and `RandNext() % 100 >
+  effectChance` jumps (:8428-8430): the confusion comes on `rand % 100 <= chance`, 1 %, 11 % or 31 %
+  (`Outcome.chatter`, law `[99 - chance, chance + 1]` of 100, `enumerate._chatter`). The confusion is
+  `subscript_confuse.s` with `SIDE_EFFECT_TYPE_INDIRECT` (effect_script_0267.s:5, battle_lib.c:1520-1522):
+  `effects._chatter` (target alive; the defender's Shield Dust as the attacker sees it stops it, :14-15
+  `CheckIgnorableAbility`, so Mold Breaker pierces it, after the activation roll is drawn; not confused :24, no
+  Substitute :23, no Safeguard :26; the counter is `Outcome.duration`, drawn only when the roll passes:
+  `enumerate._chatter_reads`). Kaizo's move row changed (power 120, pp 5,
+  RANGE_ALL_ADJACENT, effect_chance 50 against vanilla 60 / pp 20 / 0): the chance is never read (the ON_HIT
+  branch reads no `effectChance`, battle_lib.c:1524-1529; only the PROBABILISTIC and bare-flags branches,
+  :1549-1585, and `BtlCmd_CheckEffectActivation`, battle_script.c:8366-8381, do), so the tables keep the ROM's
+  row and the engine reads it through `outcome.read_chance`, 0 for an `ids.ON_HIT_EFFECTS` script (Chatter),
+  else the engine's `secondary_chance` would roll a phantom 50 %. The cry parameter is per battler, a battle constant (`BattleState.chatot_cry`, like `terrain`):
+  `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads `chatotCries[battler]`; `FieldBattleDTO` creates
+  every cry with `ChatotCry_New` (`valid = FALSE`, field_battle_data_transfer.c:97, chatot_cry.c:13-25) and only
+  `BATTLER_PLAYER_1` gets the save's (:260, :319, :385), and an invalid cry gives 0 (sound_chatot.c:193-200): an
+  enemy Chatot always confuses 1 % of the time (every Kaizo Chatter user is an enemy Chatot). The player's is the
+  save's (`SaveData_GetChatotCry`, chatot_cry.c:27-30; `BOOL valid; s8 audioData[1000]`): 0 if not valid, else
+  `audioData[15]` in [-128, -30) -> 1, [30, 128) -> 2, else 0 (sound_chatot.c:193-213);
+  `initial_arrays` / `make_state` take it as `chatot_cry` (side 0; 0 by default). Data order (pipeline.md): the
+  ROM has no cry (save data), the calc repo states the 1 % no-recording case (pkcalc.json:8696), the sheet has
+  nothing; the save does: `saves.load_save` reads the SAVE_TABLE_ENTRY_CHATOT page (save_table.c:71) at
+  `layout.CHATOT_CRY` = 0x64EC of the normal block, the sum of the 22 pages before it (`layout.NORMAL_PAGES`,
+  each `sizeof` rounded as `s += 4 - s % 4; s += 4`, savedata.c:813-823; the 37 pages sum to the block, and
+  the per-page CRC16s of the pages after it, savedata.c:1349-1362, match in the real saves), and
+  `SaveFile.chatot_cry` is its parameter (`saves.chatot_parameter`). The cli, `nuzline line` and the prep
+  problem (`PrepProblem.chatot_cry`) pass it to coverage and `make_state`; a party file gives it as a
+  top-level `chatot_cry` (`data.party.load_chatot_cry`), and without one (unknown: None) coverage refuses a
+  player Chatot that knows or can learn Chatter: "Chatter's confusion chance needs the save's Chatot cry"
+  (data, not a mechanic); an enemy Chatter is never refused. AI:
+  `BATTLE_EFFECT_CHATTER` has no Basic or Expert entry; its only script.s mention is `Basic_CheckSoundproof`
+  `:131` by move id (`commands.SOUND_MOVES`, already transcribed): `KAIZO_TRANSCRIBED`; the damage estimate is
+  the table power and type. Tests: `tests/engine/test_chatter.py`.
+- Batch 13 merge check (B13-39, branch `claude/e1-trial-on-b13`). Chatter's roll moves to fold_in 43:
+  42 is batch 13's `outcome.SIXTH_HIT_FOLD`. The reference `_magnet_risen` reads the Iron Ball through
+  the gated accessor (`_iron_ball(tables, s, mon)`): ApplyTypeChart's `defenderItemEffect` is
+  `Battler_HeldItemEffect` (battle_lib.c:2579, :2605-2608). Checked and unchanged: every other trial
+  item read goes through `held_item` / `holds` / `iron_ball` (Focus Band and Focus Sash under Endure:
+  bcp.c:3348-3349, :3386-3404, and the Sash removal's CheckItemHoldEffect, battle_script.c:7919-7922);
+  per-hit arrays use `MAX_HITS` (6); the Metronome item count runs once, before the move script
+  (B13-34); Pluck and the Custap gate are batch 13's (battle_lib.c:5839-5844,
+  subscript_check_quick_claw.s:26-27).
+- Trial accuracy classes: Gravity and Transform in `outcome.hit_thresholds` (branch `claude/e1-trial-on-b13`).
+  A faster foe's move can change the slower move's threshold before its check: Gravity sets
+  FIELD_CONDITION_GRAVITY, read as `hitRate * 10 / 6` (battle_controller_player.c:2972-2974); Transform
+  (`BtlCmd_Transform`, battle_script.c:5330-5373) copies the BattleMon up to `ability`, so `statBoosts`
+  (battle_mon.h:75) and `ability` (:84): the target's evasion becomes the side's own (as Psych Up's), and
+  the target holds the side's ability (Sand Veil / Snow Cloak :2927-2933, Tangled Feet :2944-2947, Simple /
+  Unaware :2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags (:5350-5358) rerun
+  its switch-in checks, so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
+  `_threshold_grid`: the eva copy joins Psych Up's, and the second weather variant is now the foe's field
+  move (weather move, Gravity, or Transform with its copied ability and weather); one move has one effect.
+  `future_thresholds` keeps the Future Sight roll whole (`loose`) when a Gravity or Transform is used this
+  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1235, ends it before the hit
+  :1758-1783). The reference engine's live check (`_hit_rate`, `_transform`) already read both; no change.
+  Tests: `test_accuracy_classes.py` (registry, `test_gravity_and_transform_are_seen_by_hit_thresholds`).
+- Trial outcome laws: Transform, Mimic and Chatter in the damage registries and the laws (branch
+  `claude/e1-trial-on-b13`). `BtlCmd_Transform` (battle_script.c:5330-5373) copies the BattleMon up to
+  `ability` (battle_mon.h:57-84: stats, `statBoosts`, types, ability; not the gender), so a faster foe's
+  Transform changes reads the turn-start laws took as fixed. Built in `enumerate`: the transform clause of
+  `damage_inputs_can_change` (`INPUT_CLAUSE_EFFECTS`; stats, stages, types, ability, a rerun Intimidate)
+  and the White Herb's any-stage term; `contact_proc` for a copied Static / Poison Point / Flame Body or
+  Cute Charm (the user's own gender kept); `present_guard` for a copied Wonder Guard; `end_speed_tie`
+  whenever a Transform is used (the copied Spe, stage and speed ability); `shed_skin` for a copied Shed
+  Skin. `outcome.armored` (laws `no_crit`, `sample_outcome`) drops a Battle Armor / Shell Armor the
+  Transform replaces with the side's own ability (battle_lib.c:7135-7136). Mimic (`BtlCmd_TryMimic`,
+  :4476-4523) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
+  non-table. Chatter (effect_script_0267.s:5-7: CalcCrit, CalcDamage, then the ON_HIT confusion):
+  input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
+  reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
+  `test_damage_classes.py` (Chatter's exact case, Transform's compression case).

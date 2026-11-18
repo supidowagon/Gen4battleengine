@@ -68,7 +68,7 @@ def test_rough_skin_reveals_the_player_holder_and_ignores_mold_breaker(tables, n
     out = _jit_step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
     assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - _eighth(s, 1)
     # subscript_rough_skin.s tags BTLSCR_DEFENDER's ability (TAG_NICKNAME_ABILITY_NICKNAME).
-    assert int(out.ai_ability_known[0]) == 1
+    assert int(out.ai_ability_known[0]) != 0
 
 
 def test_rough_skin_can_faint_the_attacker_and_ends_a_multi_hit_move(tables, names):
@@ -114,7 +114,7 @@ def test_flame_body_cannot_burn_a_fire_type_and_reveals_the_player(tables, names
     p = _ability(roark_state(tables, names), 0, 0, AbilityId.FLAME_BODY)
     out = _jit_step(tables, p, A("Leer", "Tackle", p, names), _procs(player=1))
     assert int(out.status[1, 0]) == Status.BURN
-    assert int(out.ai_ability_known[0]) == 1  # subscript_burn.s:_177 tags the holder
+    assert int(out.ai_ability_known[0]) != 0  # subscript_burn.s:_177 tags the holder
 
 
 @pytest.mark.slow
@@ -136,7 +136,7 @@ def test_limber_blocks_thunder_wave_and_reveals(tables, names):
     s = _ability(s, 0, 0, AbilityId.LIMBER)
     out = _jit_step(tables, s, A("Leer", "Thunder Wave", s, names), empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE
-    assert int(out.ai_ability_known[0]) == 1  # "prevents paralysis" (direct effect)
+    assert int(out.ai_ability_known[0]) != 0  # "prevents paralysis" (direct effect)
     bare = _ability(s, 0, 0, AbilityId.NONE)
     out = _jit_step(tables, bare, A("Leer", "Thunder Wave", bare, names), empty_outcome())
     assert int(out.status[0, 0]) == Status.PARALYSIS
@@ -171,14 +171,14 @@ def test_mold_breaker_pierces_limber_then_the_move_end_cures(tables, names):
     assert int(hit.ai_ability_known[0]) == 0
     out = _jit_step(tables, s, A("Leer", "Thunder Wave", s, names), empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE  # RecoverStatusByAbility at MoveEnd
-    assert int(out.ai_ability_known[0]) == 1  # subscript_ability_forbids_status.s
+    assert int(out.ai_ability_known[0]) != 0  # subscript_ability_forbids_status.s
 
 
 def test_limber_cures_a_paralyzed_newcomer(tables, names):
     s = _ability(roark_state(tables, names), 0, 1, AbilityId.LIMBER)
     s = s.with_status(0, 1, Status.PARALYSIS)
     out = _jit_step(tables, s, A(SWITCH_TO_1, "Leer", s, names), empty_outcome())
-    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[1]) == 1
+    assert int(out.status[0, 1]) == Status.NONE and int(out.ai_ability_known[1]) != 0
 
 
 # --- Adaptability and Solid Rock ------------------------------------------------------

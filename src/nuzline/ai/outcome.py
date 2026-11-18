@@ -412,6 +412,11 @@ SITE_N: dict[int, int] = {
     4058: 80,  # Expert_ChargeTurnWithInvuln_TryScorePlus1 (+1 when it does NOT jump)
     # E1 Roark close batch: AI_FLAG_HARRASSMENT (G-37).
     8030: 128,  # Harrassment_Main (+2 when it does NOT jump)
+    # E1 trial batch.
+    3645: 70,  # Expert_Endure_TryScorePlus1 (+1 when it does NOT jump)
+    6113: 128,  # Expert_MagnetRise_CheckOpponentTyping (+1 when it does NOT jump)
+    4795: 128,  # Expert_Gravity (goes to TryScorePlus1 when it jumps)
+    4799: 64,  # Expert_Gravity_TryScorePlus1 (+1 when it does NOT jump)
     # E2 batch 13 (B13-23).
     4526: 50,  # Expert_Recycle (+1 when it does NOT jump)
     5204: 128,  # Expert_Assurance (jumps to _TryScorePlus1)
@@ -507,8 +512,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         274,  # FLINCH_FREEZE_HIT
         276,  # RAISE_SP_ATK_HIT
         # E1 batch 4: the stat raises (Basic_CheckHighStatStage_*, script.s:343-392;
-        # Expert_Status*Up, :1978-2155) of the Kaizo moves, but evasion
-        # (docs/ai/kaizo_roark.md 5.10).
+        # Expert_Status*Up, :1978-2155) of the Kaizo moves; evasion came in
+        # prep P1 (Minimize, 108) and the E1 trial batch (EVA_UP, 16; docs/ai/kaizo_roark.md 5.10).
         10,  # ATK_UP: Expert_StatusAttackUp (:1633), :1989, :1995, :2001
         11,  # DEF_UP: Expert_StatusDefenseUp (:1634), :2023, :2029, :2034, :2043, :2046
         13,  # SP_ATK_UP: Expert_StatusSpAttackUp (:1636), :2092, :2098, :2104
@@ -649,6 +654,16 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         179,  # HEAL_IN_3_TURNS: no Basic_ScoreMoveEffect or Expert_Main entry
         193,  # HEAL_STATUS: Basic_CheckCanRefreshStatus (:243); Expert_Refresh (:1745)
         234,  # TRANSFER_STATUS: Basic_CheckCanPsychoShift (:264); Expert_PsychoShift, :5301
+        # E1 trial batch (EVA_UP shares both labels with EVA_UP_2_MINIMIZE, 108).
+        16,  # EVA_UP: Basic_CheckHighStatStage_Evasion (:143); Expert_StatusEvasionUp (:1639)
+        114,  # ALL_FAINT_3_TURNS: Basic_CheckPerishSong (:199); no Expert entry
+        173,  # NATURE_POWER: no Basic or Expert entry; Harrassment_Effects :8058
+        116,  # SURVIVE_WITH_1_HP: no Basic entry; Expert_Endure (:1704), :3645
+        252,  # GIVE_GROUND_IMMUNITY: Basic_CheckMagnetRise (:280); Expert_MagnetRise (:1795), :6113
+        215,  # GRAVITY: Basic_CheckGravityActive (:254); Expert_Gravity (:1759), :4795, :4799
+        82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
+        57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
+        267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
         # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
         # (:1623-1811) or other flag entry names these: their moves take the generic paths.
         77,  # POISON_MULTI_HIT (Twineedle)
@@ -798,6 +813,10 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     132: ("Expert_Synthesis", 1707),
     193: ("Expert_Refresh", 1745),
     234: ("Expert_PsychoShift", 1777),
+    16: ("Expert_StatusEvasionUp", 1639),
+    116: ("Expert_Endure", 1704),
+    252: ("Expert_MagnetRise", 1795),
+    215: ("Expert_Gravity", 1759),
     # E2 batch 13 (B13-23).
     184: ("Expert_Recycle", 1737),
     190: ("Expert_WaterSpout", 1742),
@@ -922,6 +941,10 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         132,  # HEAL_HALF_MORE_IN_SUN: Expert_Synthesis
         193,  # HEAL_STATUS: Expert_Refresh
         234,  # TRANSFER_STATUS: Expert_PsychoShift
+        16,  # EVA_UP: Expert_StatusEvasionUp
+        116,  # SURVIVE_WITH_1_HP: Expert_Endure
+        252,  # GIVE_GROUND_IMMUNITY: Expert_MagnetRise
+        215,  # GRAVITY: Expert_Gravity
         # E2 batch 13 (B13-23).
         184,  # RECYCLE: Expert_Recycle
         190,  # DECREASE_POWER_WITH_LESS_USER_HP: Expert_WaterSpout

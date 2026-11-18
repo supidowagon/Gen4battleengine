@@ -271,14 +271,10 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
-def test_manifest_version_is_32(
+def test_committed_manifest_is_the_code_version(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
-    assert (
-        json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"]
-        == MANIFEST_VERSION
-        == 32
-    )
+    assert json.loads((TABLES / "manifest.json").read_text("utf-8"))["version"] == MANIFEST_VERSION
 
 
 @pytest.mark.parametrize("manifest", ['{"version": 7}', "{}"])

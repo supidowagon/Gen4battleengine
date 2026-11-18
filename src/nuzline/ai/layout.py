@@ -326,12 +326,25 @@ def fight_slot_reads(rows, flags: int) -> int:
     return max(1, int(rows[:, columns].sum(axis=1).max()))
 
 
+# BATTLE_EFFECT_TRANSFORM and BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE (Mimic): the AI's copy of a foe's
+# move is scored by the copied move's effect label, so a fight with one adds the effects of the
+# moves the foe may have (``fight_tables``; E1 trial batch, G-68, G-69).
+COPIER_EFFECTS = (57, 82)
+
+
+def copies_moves(tables: Tables, moves) -> bool:
+    """``moves`` (move ids, 0 or less for none) include a move with a ``COPIER_EFFECTS`` effect."""
+    effect = np.asarray(tables.move_ai_effect)
+    return any(
+        int(effect[int(m)]) in COPIER_EFFECTS for m in np.asarray(moves).ravel() if int(m) > 0
+    )
+
+
 def fight_effects(tables: Tables, moves) -> frozenset[int]:
     """The battle effects (``Tables.move_ai_effect``) of ``moves`` (move ids, 0 or less for
-    none): a fight's own (E1 Ruling R7). It assumes the AI's moves are its party's: when
-    Transform or Mimic (effects 57, 82) are modelled, a move they copy is scored by its effect's
-    label, so the layout must add the effects those can copy (until then coverage refuses
-    them)."""
+    none): a fight's own (E1 Ruling R7). ``moves`` are the AI party's and, when it has a
+    Transform or Mimic user (``COPIER_EFFECTS``), the foe's possible moves: what they copy is
+    scored by its effect's label (``fight_tables``)."""
     effect = np.asarray(tables.move_ai_effect)
     return frozenset(int(effect[int(m)]) for m in np.asarray(moves).ravel() if int(m) > 0)
 
@@ -371,15 +384,21 @@ def layout_of(tables: Tables) -> AiLayout:
     return fight_layout(tables, flags, moves)
 
 
-def fight_tables(tables: Tables, trainer, party, flags: int | None = None) -> Tables:
+def fight_tables(tables: Tables, trainer, party, flags: int | None = None, foe_moves=()) -> Tables:
     """``tables`` for a fight against ``trainer`` (a ``data.trainer.Trainer``) with its
     ``party`` (``PokemonSpec``s): its AI flags (``Tables.ai_flags``; ``flags`` overrides
     them) and its moves (``Tables.ai_moves``), so ``layout_of`` gives the fight's layout
     (E1 Rulings R2, R6, R7). The fight's entry points call it once (``cli``,
-    ``engine.coverage``)."""
+    ``engine.coverage``). ``foe_moves``: the moves the player's side may have (a sequence of move
+    ids, or a callable returning one, called only when it is needed); when the AI's party has a
+    Transform or Mimic user (``copies_moves``) they join ``ai_moves`` (distinct, after the AI's
+    own), so the layout holds the effects and read bounds of what it can copy (G-68).
+    ``AI_MOVES_ROWS`` holds the party's slots and every move id, so any pool fits."""
     moves = [m for spec in party for m in spec.moves]
-    if len(moves) > AI_MOVES_ROWS:
-        raise ValueError(f"{len(moves)} opponent moves: more than {AI_MOVES_ROWS}")
+    if copies_moves(tables, moves):
+        pool = foe_moves() if callable(foe_moves) else foe_moves
+        moves += [int(m) for m in dict.fromkeys(pool) if m and m not in moves]
+    assert len(moves) <= AI_MOVES_ROWS, (len(moves), AI_MOVES_ROWS)
     padded = np.zeros(AI_MOVES_ROWS, np.int16)
     padded[: len(moves)] = moves
     return tables._replace(
