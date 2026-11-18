@@ -89,7 +89,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
   battles and walking partners) is refused (``Trainer.format``);
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
-  (``Trainer.area_condition``; the engine has neither field effect), a gauntlet (a chain
+  (``Trainer.area_condition``; Gravity is modelled since the E1 trial batch, G-67; the engine has
+  no Trick Room field effect), a gauntlet (a chain
   of fights, ``Trainer.gauntlet``), a start condition the extraction left to the user
   (``"unknown"``, never read as a weather), a party member with no nature, gender or
   ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
@@ -141,6 +142,7 @@ from nuzline.data.trainer import (
 from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.ids import (
+    GRAVITY_TURNS,
     METRONOME_DRAW,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -273,6 +275,13 @@ class UnsupportedMechanics(ValueError):
         super().__init__(
             f"{len(report.missing)} unsupported mechanic(s): " + "; ".join(report.missing)
         )
+
+
+def start_gravity(trainer: Trainer) -> int:
+    """The Gravity turns a trainer's fight starts with: ``ids.GRAVITY_TURNS`` for the Kaizo area
+    condition Gravity (sub_seq 297 runs ``subscript_gravity_start`` at battle start; the Kaizo
+    tables re-arm it for ever, ``Tables.gravity_rearm``), else 0 (G-67)."""
+    return GRAVITY_TURNS if trainer.area_condition.gravity else 0
 
 
 def start_weather(trainer: Trainer) -> Weather:
@@ -673,8 +682,8 @@ def trace_copy_line(
 def metronome_calls(tables: Tables, mon: PokemonSpec) -> list[int]:
     """The moves ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call for ``mon``: ids
     1-467 it does not know that ``Move_CanBeMetronomed`` allows (``MoveFlag.NO_METRONOME``;
-    ``order.metronome_candidates``). Gravity and Heal Block, its other tests, are owed with
-    Gravity and an unsupported move."""
+    ``order.metronome_candidates``). Gravity's test is state (``actions.gravity_banned``): this
+    is the superset; Heal Block, its other test, is owed with that move."""
     flags = np.asarray(tables.move_flags)
     return [
         m
@@ -922,8 +931,6 @@ def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
     permanent = "permanent " if area.permanent else ""
     if area.trick_room:
         c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
-    if area.gravity:
-        c.add(Support.NONE, f"Battle start: {permanent}Gravity", "field condition")
     if unknown_start(trainer):
         c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
     if trainer.gauntlet is not None:

@@ -43,6 +43,7 @@ from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
     choice_locked,
+    gravity_banned,
     locked_slot,
     move_imprisoned,
     usable_moves,
@@ -161,14 +162,17 @@ def assist_candidates(tables: Tables, state: BattleState, side) -> tuple:
     6418-6436) for ``side``'s active battler: in party order, every move of every other party
     slot holding a Pokemon (fainted ones too: only SPECIES_NONE and eggs are skipped) that is
     not an invoker (Move_IsInvoker, ``ids.INVOKER_MOVES``) and that Move_CanBeMetronomed allows
-    (``MoveFlag.NO_METRONOME``; its Gravity and Heal Block tests are owed with those moves). A
+    (``MoveFlag.NO_METRONOME``, and ``actions.gravity_banned`` under Gravity: its Heal Block test
+    is owed with that move). A
     move two mates know is listed twice. The call is ``RandNext() % numMoves`` (:6439):
     ``Outcome.call``'s uniform value, ``invoked_move`` taking the ``call % count``-th entry."""
     moves = state.moves[side].astype(_I32)  # [SLOTS, 4]
     slots = jnp.arange(moves.shape[0])[:, None]
     mate = (slots != state.active[side]) & (state.species[side][:, None] != 0)
     invoker = jnp.isin(moves, jnp.asarray(INVOKER_MOVES, _I32))
-    allowed = (tables.move_flags[moves] & MoveFlag.NO_METRONOME) == 0
+    allowed = ((tables.move_flags[moves] & MoveFlag.NO_METRONOME) == 0) & ~gravity_banned(
+        state, moves
+    )
     valid = mate & ~invoker & allowed
     return moves.reshape(-1), valid.reshape(-1)
 
@@ -189,8 +193,8 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     it does not know is cleared there and restricts nothing) and a move a foe's Imprison seals
     (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling
     B7-13) and, under Encore, every move but the encored one (battle_lib.c:2302-2304, B10-9).
-    Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``) is
-    owed with Gravity (ledger)."""
+    Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``,
+    ``gravity_banned``, CHECK_INVALID_GRAVITY, :2292-2295) is read here (G-67)."""
     mon = state.active[side]
     moves = state.moves[side, mon].astype(_I32)
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
@@ -207,11 +211,11 @@ def metronome_candidates(tables: Tables, state: BattleState, side) -> jnp.ndarra
     """``bool[N]`` over move ids: what ``BtlCmd_Metronome`` (battle_script.c:4535-4562) can call
     for ``side``'s active battler: ids 1..``METRONOME_DRAW``, none of the battler's own moves
     (:4544-4551), none of ``MoveFlag.NO_METRONOME`` (``Move_CanBeMetronomed``, battle_lib.c:
-    7204-7218; its Gravity and Heal Block tests are owed with Gravity / unsupported)."""
+    7204-7218; Gravity's test is ``actions.gravity_banned`` (:7198-7201), Heal Block's is owed)."""
     ids = jnp.arange(tables.move_effect.shape[0], dtype=_I32)
     own = state.moves[side, state.active[side]].astype(_I32)
     ok = (ids >= 1) & (ids <= METRONOME_DRAW)
-    ok = ok & ((tables.move_flags[ids] & MoveFlag.NO_METRONOME) == 0)
+    ok = ok & ((tables.move_flags[ids] & MoveFlag.NO_METRONOME) == 0) & ~gravity_banned(state, ids)
     return ok & ~jnp.any(ids[:, None] == own[None, :], axis=1)
 
 
@@ -224,13 +228,15 @@ def metronome_weights(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     return jnp.where(metronome_candidates(tables, state, side), weight, 0).astype(_I32)
 
 
-def copycat_call(tables: Tables, move_prev) -> jnp.ndarray:
+def copycat_call(tables: Tables, move_prev, state: BattleState | None = None) -> jnp.ndarray:
     """``int32``: the move ``BtlCmd_TryCopycat`` (battle_script.c:7328-7341) calls with the
     battle's ``movePrev`` ``move_prev``, 0 when it fails: MOVE_NONE, an invoker or a move
     ``Move_CanBeMetronomed`` refuses (every invoker is in sCannotMetronomeMoves, so
     ``MoveFlag.NO_METRONOME`` covers both)."""
     move_prev = jnp.asarray(move_prev, _I32)
     ok = (move_prev != 0) & ((tables.move_flags[move_prev] & MoveFlag.NO_METRONOME) == 0)
+    if state is not None:  # Move_CanBeMetronomed's Gravity test (battle_lib.c:7198-7201), G-67
+        ok = ok & ~gravity_banned(state, move_prev)
     return jnp.where(ok, move_prev, 0).astype(_I32)
 
 
@@ -253,7 +259,7 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     n_cands = jnp.sum(cands.astype(_I32))
     metronome = jnp.where(n_cands > 0, _nth(cands, call % jnp.maximum(n_cands, 1)), 0)
     prev = state.move_prev if move_prev is None else move_prev
-    copycat = copycat_call(tables, prev)
+    copycat = copycat_call(tables, prev, state)
     listed, valid = assist_candidates(tables, state, side)
     n_listed = jnp.sum(valid.astype(_I32))
     assist = jnp.where(n_listed > 0, listed[_nth(valid, call % jnp.maximum(n_listed, 1))], 0)
@@ -342,7 +348,7 @@ def can_call_encore(tables: Tables, state: BattleState, side, move) -> jnp.ndarr
     )
     listed, valid = assist_candidates(tables, state, side)
     assist = jnp.any(valid & (effect[listed] == EffectId.ENCORE))
-    copycat = effect[copycat_call(tables, state.move_prev)] == EffectId.ENCORE
+    copycat = effect[copycat_call(tables, state.move_prev, state)] == EffectId.ENCORE
     return (
         (effect[move] == EffectId.ENCORE)
         | ((kind == CALL_SLEEP_TALK) & talk)

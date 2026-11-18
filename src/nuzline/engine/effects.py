@@ -264,6 +264,7 @@ from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
     GENDER_NONE,
+    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
@@ -293,6 +294,7 @@ from nuzline.engine.ids import (
     ItemId,
     MoveFlag,
     MoveTarget,
+    SemiKind,
     Stat,
     Status,
     Type,
@@ -1600,6 +1602,32 @@ def _magnet_rise(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.MAGNET_RISE) & h.landed & ~magnet_rise_fails(state, h.side)
     state = _set(state, "magnet_rise", h.side, 1, cond)
     return _set(state, "magnet_rise_turns", h.side, MAGNET_RISE_TURNS, cond)
+
+
+def gravity_ground(state: BattleState, cond=True) -> BattleState:
+    """The grounding loop of ``subscript_gravity_start.s`` (:13-85, per battler in speed order; the
+    order changes nothing here), for every battler with HP: ``magnetRiseTurns`` goes to 0 (the
+    ``MOVE_EFFECT_MAGNET_RISE`` bit stays), else a Fly / Bounce user (``MOVE_EFFECT_AIRBORNE``) is
+    unlocked (``Battler_UnlockMoveChoice`` and ToggleVanish); the other branches (Gastro Acid,
+    Ingrain, Levitate, a Flying type) only print. ``cond``: where the loop runs. G-67."""
+    for side in range(state.active.shape[0]):
+        alive = (state.hp[side, state.active[side]] > 0) & jnp.asarray(cond)
+        floating = alive & (state.magnet_rise_turns[side] != 0)
+        state = _set(state, "magnet_rise_turns", side, 0, floating)
+        airborne = alive & ~floating & (state.semi_invulnerable[side] == SemiKind.AIRBORNE)
+        state = unlock_move(state, side, airborne)
+    return state
+
+
+def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Gravity (effect_script_0215.s, the indirect subscript_gravity_start.s): the field
+    condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
+    the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
+    cond = (h.effect == _E.GRAVITY) & h.landed & (state.gravity == 0)
+    state = state._replace(
+        gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
+    )
+    return gravity_ground(state, cond)
 
 
 def _ingrain(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2987,6 +3015,7 @@ def play_hit(
         _mud_sport,
         _aqua_ring,
         _magnet_rise,
+        _gravity,
         _ingrain,
         _mean_look,
         _imprison,

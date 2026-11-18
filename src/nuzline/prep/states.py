@@ -43,11 +43,13 @@ def make_states(
     budget: int = 0,
     protected: Sequence[Sequence[int]] | None = None,
     terrain: int = TERRAIN_UNKNOWN,
+    gravity: int = 0,
 ) -> BattleState:
     """The turn-0 states of ``teams`` (each a player party, lead in slot 0) against
     ``opp``, as a numpy batch with leading axis ``len(teams)``. Row ``i`` equals
     ``make_state(tables, list(teams[i]), list(opp), start_condition, opp_items,
-    leads=(0, 0), terrain=terrain).with_budget(budget, protected[i])`` byte for byte.
+    leads=(0, 0), terrain=terrain, gravity=gravity).with_budget(budget, protected[i])`` byte
+    for byte.
     ``ValueError`` as ``make_state`` / ``with_budget`` for a bad party, a bad budget or a protected slot
     that is empty or fainted."""
     n = len(teams)
@@ -56,7 +58,13 @@ def make_states(
     rows = []
     for i, team in enumerate(teams):
         a = initial_arrays(
-            tables, list(team), list(opp), start_condition, opp_items, terrain=terrain
+            tables,
+            list(team),
+            list(opp),
+            start_condition,
+            opp_items,
+            terrain=terrain,
+            gravity=gravity,
         )
         a["faint_budget"][...] = budget
         a["protected"][...] = protected_mask(

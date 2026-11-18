@@ -392,10 +392,17 @@ class EffectId(IntEnum):
     # Ingrain, else sets ``MOVE_EFFECT_MAGNET_RISE`` and ``magnetRiseTurns = MAGNET_RISE_TURNS``
     # (``effects._magnet_rise``, G-66).
     MAGNET_RISE = 106
+    # Gravity (215, BATTLE_EFFECT_GRAVITY): zeros. effect_script_0215.s fails (MOVE_STATUS_FAILED)
+    # with ``FIELD_CONDITION_GRAVITY`` up, else the indirect subscript_gravity_start.s: Gravity for
+    # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
+    GRAVITY = 107
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
 MAGNET_RISE_TURNS = 5
+# FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
+# (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
+GRAVITY_TURNS = 5
 
 # ``EffectId.COUNTER``'s source (``move_param[m, 0]``).
 COUNTER_PHYSICAL, COUNTER_SPECIAL, COUNTER_ANY = 1, 2, 3
@@ -1279,6 +1286,12 @@ MOVE_IMPRISON = 286
 # FIELD_CONDITION_SOLAR_DOWN (battle_lib.c:7058-7060), B10-13.
 MOVE_SOLAR_BEAM = 76
 PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
+# sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
+# 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``
+# (:3394-3407) bans them at selection (CHECK_INVALID_GRAVITY, :2292), at the status check
+# (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586-2595) and for Metronome, Assist and Copycat
+# (``Move_CanBeMetronomed``, :7198-7201), G-67.
+GRAVITY_MOVES = (19, 340, 26, 136, 150, 393)
 
 # ABILITY_MULTITYPE (``generated/abilities.txt`` line 122): ``BtlCmd_TryCamouflage``
 # (battle_script.c:8001-8004) fails for a Multitype user, read through

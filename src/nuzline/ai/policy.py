@@ -1078,6 +1078,12 @@ def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_gravity_active(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckGravityActive`` (script.s:1026-1029): Gravity already up, -10."""
+    ctx, t = _split(c.if_field_conditions_mask(_at(ctx, mask), c.FieldCondition.GRAVITY))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_magnet_rise(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckMagnetRise`` (script.s:1461-1474): the attacker already under the effect
     (the mask bit, :1463), with Levitate (:1466-1467) or of a Flying type (:1470-1473), -10."""
@@ -3066,6 +3072,30 @@ def _expert_endure(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | ctx.live))
 
 
+def _expert_gravity(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Gravity`` (script.s:4782-4803): a defender with Levitate (:4788), the Magnet Rise
+    bit (:4789) or a Flying type (:4790-4793) goes to ``Expert_Gravity_TryScorePlus1`` (:4798);
+    else the attacker below 60 % HP ends (:4794) and the 128 roll (:4795) either goes there or
+    ends. TryScorePlus1: +1 unless the 64 roll (:4799) jumps."""
+    ctx = _at(ctx, mask)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, plus = _split(c.if_loaded_equal_to(ctx, _ABILITY["Levitate"]))
+    ctx, t = _split(c.if_move_effect(ctx, _D, c.MoveEffectMask.MAGNET_RISE))
+    plus = plus | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Flying"]))
+        plus = plus | t
+    ctx, end = _split(c.if_hp_percent_less_than(ctx, _A, 60))  # -> Expert_Gravity_End
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 4795))
+    plus = plus | t
+    end = end | ctx.live  # GoTo Expert_Gravity_End (:4796)
+    # Expert_Gravity_TryScorePlus1 (:4798)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, plus), 64, 4799))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
+
+
 def _expert_magnet_rise(ctx: AiContext, mask) -> AiContext:
     """``Expert_MagnetRise`` (script.s:6090-6119): the attacker below 50 % HP ends (:6099); a
     defender known to have Earthquake, Earth Power or Fissure +1 (:6100-6106); a Ground-type
@@ -3286,6 +3316,7 @@ _BASIC_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
+    (BattleEffect.GRAVITY, _basic_check_gravity_active),  # :254
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
@@ -3392,6 +3423,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SP_ATK_SP_DEF_UP, _expert_status_spd_up),  # :1756
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
+    (BattleEffect.GRAVITY, _expert_gravity),  # :1759
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768

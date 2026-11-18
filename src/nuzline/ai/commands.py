@@ -173,6 +173,7 @@ class FieldCondition(IntEnum):
     include/constants/battle/condition.h:123-125, :144)."""
 
     TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
+    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; BattleState.gravity (G-67)
 
 
 class VolatileCondition(IntEnum):
@@ -283,6 +284,7 @@ class BattleEffect(IntEnum):
     ALL_FAINT_3_TURNS = 114  # Perish Song (Basic_CheckPerishSong :199)
     SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
     GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
+    GRAVITY = 215  # Gravity (Basic_CheckGravityActive :254; Expert_Gravity :1759)
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -2271,10 +2273,15 @@ def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value:
 
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
-    Only ``FieldCondition.TRICK_ROOM`` is supported (static; refused otherwise): Trick
-    Room is on while ``BattleState.trick_room`` is nonzero."""
-    assert int(mask) == FieldCondition.TRICK_ROOM, f"unsupported field mask {int(mask):#x}"
-    return _jump(ctx, ctx.state.trick_room != 0)
+    ``FieldCondition.TRICK_ROOM`` and ``FieldCondition.GRAVITY`` are supported (static; refused
+    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while
+    ``BattleState.gravity`` is."""
+    assert int(mask) in (
+        FieldCondition.TRICK_ROOM,
+        FieldCondition.GRAVITY,
+    ), f"unsupported field mask {int(mask):#x}"
+    field = ctx.state.gravity if int(mask) == FieldCondition.GRAVITY else ctx.state.trick_room
+    return _jump(ctx, field != 0)
 
 
 def load_current_weather(ctx: AiContext) -> AiContext:

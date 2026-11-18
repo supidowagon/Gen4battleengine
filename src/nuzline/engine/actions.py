@@ -19,8 +19,9 @@ checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 cannot pick a move whose power is 0) and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
 :2307-2315: a holder of a Choice item whose ``choice_lock`` is a move it knows can pick
 only that move; a lock it does not know is cleared there, which the engine reads as no
-lock) and Imprison (``CHECK_INVALID_IMPRISONED``, :2287-2290: ``move_imprisoned``). Torment,
-Gravity, Heal Block and Encore come with their mechanics. The
+lock), Imprison (``CHECK_INVALID_IMPRISONED``, :2287-2290: ``move_imprisoned``) and Gravity
+(``CHECK_INVALID_GRAVITY``, :2292-2295: ``gravity_banned``, G-67). Torment, Heal Block and
+Encore come with their mechanics. The
 trainer AI scores the same mask (``TrainerAI_Init``, trainer_ai.c:234,
 ``CHECK_INVALID_ALL``). When every slot is invalid the decomp sets ``struggling`` instead
 of letting the player pick a move (battle_controller_player.c:433); here action 0 stays legal and means Struggle
@@ -44,7 +45,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.ids import CHOICE_ITEMS, AbilityId, ItemId, Type
+from nuzline.engine.ids import CHOICE_ITEMS, GRAVITY_MOVES, AbilityId, ItemId, Type
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
@@ -95,6 +96,15 @@ def imprisoning_foe(state: BattleState, side) -> jnp.ndarray:
     return out
 
 
+def gravity_banned(state: BattleState, moves) -> jnp.ndarray:
+    """``bool`` per move id of ``moves``: ``Move_FailsInHighGravity`` (battle_lib.c:3394-3407):
+    Gravity is up and the move is one of ``GRAVITY_MOVES`` (Fly, Bounce, Jump Kick, Hi Jump Kick,
+    Splash, Magnet Rise). Selection (CHECK_INVALID_GRAVITY, :2292), the status check
+    (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586) and the invokers' calls read it."""
+    moves = jnp.asarray(moves, jnp.int32)
+    return (state.gravity != 0) & jnp.isin(moves, jnp.asarray(GRAVITY_MOVES, jnp.int32))
+
+
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[4]``: the active Pokemon's move slots that pass the checks above (a
     move, PP left, not the disabled move, not power 0 while taunted, the Choice-locked move
@@ -107,6 +117,8 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
     usable = usable & ~move_imprisoned(state, side, moves)  # CHECK_INVALID_IMPRISONED, :2287
+    # CHECK_INVALID_GRAVITY (battle_lib.c:2292-2295): Move_FailsInHighGravity (G-67).
+    usable = usable & ~gravity_banned(state, moves)
     # Encore (B10-9): every move but the encored one is invalid (battle_lib.c:2302-2304, any
     # opMask); with one valid move left the selection is skipped and the encored slot taken
     # (bcp.c:443-446): the only legal FIGHT action. None valid: Struggle (bcp.c:432-441 first).

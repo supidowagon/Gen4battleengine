@@ -1001,3 +1001,34 @@ of them, :2107-2115).
   `Basic_CheckMagnetRise` (script.s:1461-1474, -10 with the bit, Levitate or a Flying type) and
   `Expert_MagnetRise` (:6090-6119, dispatch :1795, roll :6113); the Magnet Rise refusals are gone.
   Tests: `test_e1_trial.py`, `test_kaizo_policy.py`, `test_switching.py`.
+- G-67 Gravity (`EffectId.GRAVITY`, BATTLE_EFFECT_GRAVITY 215), in both games. The move
+  (effect_script_0215.s) fails with `FIELD_CONDITION_GRAVITY` up (:3, :9-10), else the indirect
+  `subscript_gravity_start.s`: `FIELD_CONDITION_GRAVITY_INIT` (5 turns, condition.h:143), then per
+  battler with HP (:13-85): `magnetRiseTurns != 0` -> 0 (the `MOVE_EFFECT_MAGNET_RISE` bit stays),
+  else `MOVE_EFFECT_AIRBORNE` (a Fly / Bounce charge turn) -> `Battler_UnlockMoveChoice`
+  (battle_lib.c:1834-1841) and ToggleVanish; the Gastro Acid, Ingrain, Levitate and Flying branches
+  only print (`effects.gravity_ground`). The countdown (`FIELD_COND_CHECK_STATE_GRAVITY`,
+  battle_controller_player.c:1227-1238) runs `subscript_gravity_end` at 0: vanilla prints; Kaizo's
+  replacement (sub_seq 238, data/kaizo/rom_diff.toml) sets the counter to 5 again and runs the
+  grounding loop without messages, so Gravity never ends there (`Tables.gravity_rearm`, 1 in Kaizo,
+  built by tools/build_tables.py). Accuracy x10/6 (bcp.c:2972-2974) and the hazards / Arena Trap
+  grounding were already in. New: `BasicTypeMulApplies` (battle_lib.c:2545-2549) and
+  `NoImmunityOverrides` (:2766-2770) skip the Ground-on-Flying immunity (`damage.identified`'s
+  `CHART_GROUNDED`; the AI's `chart_multipliers` already read `state.gravity`); `Battler_Ability`
+  reads Levitate as none (:3095-3098: `damage.ignorable`, `effects.magnet_rise_fails`, the reference
+  `_ignorable`). `Move_FailsInHighGravity` (:3394-3407) bans Fly, Bounce, Jump Kick, Hi Jump Kick,
+  Splash and Magnet Rise (`ids.GRAVITY_MOVES`, decomp ids; Kaizo's id 150 is "Hidden Power Water",
+  banned by id) at selection (CHECK_INVALID_GRAVITY, :2292-2295: `actions.usable_moves`, all banned
+  -> Struggle; the AI's list too, trainer_ai.c:234), at the status check right after Imprison
+  (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586-2595, `moveCur`: Sleep Talk itself, not its call;
+  `moveFailFlags.gravity`, a message only: no unlock) and for Metronome, Assist and Copycat calls
+  (`Move_CanBeMetronomed`, :7198-7201; Assist's list, battle_script.c:6430). Area Gravity (Kaizo,
+  sub_seq 297: the animation then `subscript_gravity_start` byte for byte, run at battle start on a
+  map with weather 12): the trainer's area condition starts the fight with Gravity at 5
+  (`coverage.start_gravity`, `state.initial_arrays(gravity=)`; the loop is a no-op at battle start); the
+  coverage refusal is gone and rom_diff members 238 and 297 are `modelled`. Not covered: Trick
+  Room's twin (sub_seq 251) and, for the invokers, a Gravity that a faster foe sets earlier in the
+  same turn (their call law is read at the turn start). AI: `Basic_CheckGravityActive`
+  (script.s:1026-1029), `Expert_Gravity` (:4782-4803, dispatch :1759, rolls :4795 and :4799;
+  `commands.FieldCondition.GRAVITY` over `state.gravity`). Tests: `test_e1_trial.py`,
+  `test_kaizo_policy.py`, `test_coverage.py`.

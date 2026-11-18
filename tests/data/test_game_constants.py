@@ -94,6 +94,7 @@ LISTED = [
     "nuzline.engine.ids.ItemParam",
     "nuzline.engine.ids.ItemAiCategory",
     "nuzline.engine.ids.AbilityId",
+    "nuzline.engine.ids.GRAVITY_MOVES",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     # EXEMPT: decomp AI-script encodings
     "nuzline.ai.commands.Battler",
     "nuzline.ai.commands.LoadType",

@@ -4,19 +4,30 @@ battle_controller_player.c:3386-3404), each case checked against the reference e
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
-from nuzline.engine.actions import trapped
+from nuzline.engine.actions import gravity_banned, legal_actions, trapped, usable_moves
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, side_ability_count
-from nuzline.engine.ids import MAGNET_RISE_TURNS, AbilityId, EffectId
+from nuzline.engine.ids import (
+    GRAVITY_MOVES,
+    GRAVITY_TURNS,
+    MAGNET_RISE_TURNS,
+    AbilityId,
+    EffectId,
+    SemiKind,
+    Type,
+)
+from nuzline.engine.order import copycat_call, metronome_candidates
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
+from nuzline.engine.step import ACT_GRAVITY
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, drop_programs, roark_state
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
 
@@ -94,6 +105,7 @@ def test_endure_is_mapped(tables, names, kaizo_tables, kaizo_names):
 
 
 def test_endure_leaves_one_hp_against_a_lethal_hit(tables, names):
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
     s = _endure(tables, names, hp=1)
     out = assert_matches_reference(tables, s, A("Endure", "Tackle", s, names), _o())
     assert _hp(out, 0) == 1 and int(out.protect_count[0]) == 1
@@ -211,7 +223,6 @@ def test_future_sight_is_not_endured(tables, names):
 def test_endure_enumeration_equals_bruteforce(tables, names, opp, order, count, item):
     """Endure shares Protect's roll (``Outcome.protect``) and its reach: the gated enumeration
     equals the brute-force one (the Band roll is a superset read the enduring path ignores)."""
-    from tests.engine.helpers import drop_programs
     from tests.engine.test_enumerate import assert_equals_bruteforce
 
     drop_programs()  # the whole-engine programs of the tests above stay resident otherwise
@@ -247,6 +258,7 @@ def test_magnet_rise_is_mapped(tables, names, kaizo_tables, kaizo_names):
 
 
 def test_magnet_rise_sets_the_bit_and_five_turns_then_counts_down(tables, names):
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
     s = _magnet(tables, names, opp="Leer")
     acts = A("Magnet Rise", "Leer", s, names)
     out = assert_matches_reference(tables, s, acts, _o())
@@ -358,10 +370,183 @@ def test_arena_trap_reads_the_turns_of_magnet_rise(tables, names):
     [("player", 3), ("opp", 3), ("player", 0)],
 )
 def test_magnet_rise_enumeration_equals_bruteforce(tables, names, order, turns):
-    from tests.engine.helpers import drop_programs
     from tests.engine.test_enumerate import assert_equals_bruteforce
 
     drop_programs()
     s = _magnet(tables, names, turns=turns, opp="Earthquake", order=order)
     width, brute = assert_equals_bruteforce(tables, s, A("Magnet Rise", "Earthquake", s, names))
     assert width <= brute
+
+
+# --- Gravity (G-67) ------------------------------------------------------------------------
+
+GRAVITY_PLAYER = ("Gravity", "Magnet Rise", "Fly", "Scratch")
+PLAIN = ("Scratch", "Leer", "Growl", "Tackle")
+
+
+def _gravity(tables, names, *, turns=0, mine=GRAVITY_PLAYER, opp="Leer", **kw):
+    """Monferno (``mine``) against Geodude (``opp`` first); ``turns`` is the field's Gravity."""
+    s = _state(tables, names, mine=mine, opp=opp, **kw)
+    return s._replace(gravity=jnp.asarray(turns, s.gravity.dtype))
+
+
+def test_gravity_is_mapped_and_pinned(tables, names, kaizo_tables, kaizo_names):
+    from tools.effect_map import DECOMP_EFFECT_TO_ID
+
+    assert DECOMP_EFFECT_TO_ID[215] == (EffectId.GRAVITY, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Gravity")]) == EffectId.GRAVITY
+        assert [n.move(m) for m in ("Fly", "Bounce", "Jump Kick", "Hi Jump Kick")] == list(
+            GRAVITY_MOVES[:4]
+        )
+        assert n.move("Magnet Rise") == GRAVITY_MOVES[5]
+    # id 150 (the table's Splash) is "Hidden Power Water" in Kaizo: the ban is by id.
+    assert names.move("Splash") == GRAVITY_MOVES[4]
+    assert kaizo_names.move_names[GRAVITY_MOVES[4]] == "Hidden Power Water"
+    # sub_seq 238: Kaizo's subscript_gravity_end re-arms Gravity, vanilla's only prints.
+    assert (int(tables.gravity_rearm), int(kaizo_tables.gravity_rearm)) == (0, 1)
+    assert int(kaizo_tables.move_priority[kaizo_names.move("Gravity")]) == 1
+    assert int(tables.move_priority[names.move("Gravity")]) == 0
+
+
+def test_gravity_starts_for_five_turns_and_fails_when_up(tables, names):
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
+    s = _gravity(tables, names)
+    out = assert_matches_reference(tables, s, A("Gravity", "Leer", s, names), _o())
+    # Set to 5 by the move, then the turn's field-condition pass counts it once.
+    assert int(out.gravity) == GRAVITY_TURNS - 1
+    up = _gravity(tables, names, turns=3)
+    out = assert_matches_reference(tables, up, A("Gravity", "Leer", up, names), _o())
+    assert int(out.gravity) == 2  # failed: only the countdown ran (not reset to 4)
+
+
+def test_gravity_lifts_the_flying_and_levitate_immunities(tables, names):
+    """battle_lib.c:2545-2549 (BasicTypeMulApplies) and :3095-3098 (Battler_Ability)."""
+    flying = Type.FLYING
+    base = _gravity(tables, names, opp="Earthquake", mine=("Splash", "Scratch", "Fly", "Gravity"))
+    base = base._replace(types=base.types.at[0, 0].set(jnp.asarray([flying, flying], jnp.int8)))
+    acts = A("Splash", "Earthquake", base, names)
+    safe = assert_matches_reference(tables, base, acts, _o())
+    assert _hp(safe, 0) == _hp(base, 0)  # the Ground hit is an immunity
+    up = base._replace(gravity=jnp.asarray(3, base.gravity.dtype))
+    # (Splash is banned under Gravity: the player uses a legal move instead.)
+    hit = assert_matches_reference(tables, up, A("Scratch", "Earthquake", up, names), _o())
+    assert _hp(hit, 0) < _hp(up, 0)
+    # A Levitate holder: immune without Gravity, hit with it.
+    lev = _ability_player(
+        _gravity(tables, names, opp="Earthquake", mine=("Splash", "Scratch", "Fly", "Gravity")),
+        AbilityId.LEVITATE,
+    )
+    assert _hp(assert_matches_reference(tables, lev, acts, _o()), 0) == _hp(lev, 0)
+    lev_up = lev._replace(gravity=jnp.asarray(3, lev.gravity.dtype))
+    out = assert_matches_reference(tables, lev_up, A("Scratch", "Earthquake", lev_up, names), _o())
+    assert _hp(out, 0) < _hp(lev_up, 0)
+
+
+def test_spikes_hit_a_flying_newcomer_under_gravity(tables, names):
+    s = _gravity(tables, names, turns=3, opp="Leer", mine=PLAIN)
+    flying = jnp.asarray([Type.FLYING, Type.FLYING], jnp.int8)
+    s = s._replace(types=s.types.at[0, 1].set(flying), spikes=s.spikes.at[0].set(1))
+    out = assert_matches_reference(tables, s, A(4 + 1, "Leer", s, names), _o())
+    assert int(out.hp[0, 1]) < int(s.hp[0, 1])
+    calm = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    out = assert_matches_reference(tables, calm, A(4 + 1, "Leer", calm, names), _o())
+    assert int(out.hp[0, 1]) == int(calm.hp[0, 1])  # a Flying type is off the ground
+
+
+def test_gravity_grounds_a_magnet_rise_user_and_unlocks_a_fly_user(tables, names):
+    """subscript_gravity_start.s:13-72: the turns go to 0 and the bit stays; a Fly user's lock and
+    semi-invulnerable bit are cleared (``Battler_UnlockMoveChoice``)."""
+    s = _gravity(tables, names, opp="Gravity", order="opp")
+    s = s._replace(
+        magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(4)
+    )
+    out = assert_matches_reference(tables, s, A("Scratch", "Gravity", s, names), _o())
+    assert int(out.gravity) == GRAVITY_TURNS - 1
+    assert (int(out.magnet_rise[0]), int(out.magnet_rise_turns[0])) == (1, 0)
+    fly = names.move("Fly")
+    f = _gravity(tables, names, opp="Gravity", order="opp")
+    f = f._replace(
+        semi_invulnerable=f.semi_invulnerable.at[0].set(SemiKind.AIRBORNE),
+        locked_move=f.locked_move.at[0].set(fly),
+    )
+    out = assert_matches_reference(tables, f, A("Fly", "Gravity", f, names), _o())
+    assert int(out.semi_invulnerable[0]) == 0 and int(out.locked_move[0]) == 0
+    assert int(out.hp[1, 0]) == int(f.hp[1, 0])  # the banned Fly did not strike
+
+
+def test_the_gravity_move_ban(tables, names):
+    banned = ("Fly", "Splash", "Jump Kick", "Hi Jump Kick")
+    s = _gravity(tables, names, turns=3, mine=banned)
+    assert not bool(jnp.any(usable_moves(tables, s, 0)))  # all invalid: Struggle (bcp.c:433)
+    assert bool(legal_actions(tables, s, 0)[0])  # action 0 is Struggle
+    free = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    assert bool(jnp.all(usable_moves(tables, free, 0)))
+    assert bool(jnp.all(gravity_banned(s, jnp.asarray(GRAVITY_MOVES))))
+    assert not bool(jnp.any(gravity_banned(free, jnp.asarray(GRAVITY_MOVES))))
+    # A move chosen before a faster foe's Gravity fails at the status check (a message only).
+    c = _gravity(tables, names, opp="Gravity", order="opp")
+    acts = A("Magnet Rise", "Gravity", c, names)
+    out = assert_matches_reference(tables, c, acts, _o())
+    assert int(out.magnet_rise[0]) == 0 and int(out.magnet_rise_turns[0]) == 0
+    ev = _events(tables, c, acts, _o())
+    assert int(ev["act_kind"][0]) == ACT_GRAVITY and int(ev["act_id"][0]) == names.move(
+        "Magnet Rise"
+    )
+    assert ev["move_failed"].tolist() == [1, 0]
+
+
+def test_metronome_and_copycat_never_call_a_banned_move(tables, names):
+    s = _gravity(tables, names, turns=3, mine=PLAIN)
+    calm = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    for move in GRAVITY_MOVES:
+        assert not bool(metronome_candidates(tables, s, 0)[move]), move
+        assert int(copycat_call(tables, move, s)) == 0, move
+    assert int(copycat_call(tables, names.move("Tackle"), s)) == names.move("Tackle")
+    # Not every banned move is Metronome-able without Gravity, but the ones that are come back.
+    back = [m for m in GRAVITY_MOVES if bool(metronome_candidates(tables, calm, 0)[m])]
+    assert back, "no Gravity move is a Metronome candidate without Gravity"
+
+
+def test_vanilla_gravity_ends_after_five_turn_ends(tables, names):
+    s = _gravity(tables, names, turns=GRAVITY_TURNS, mine=PLAIN)
+    for left in (4, 3, 2, 1, 0, 0):
+        s = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), _o())
+        assert int(s.gravity) == left
+
+
+def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
+    """sub_seq 238: at 0 the counter is set to 5 again and the grounding loop runs."""
+    drop_programs()  # the programs of the earlier tests stay resident otherwise
+    from tests.engine.test_enumerate import _kaizo_spec
+
+    t, n = kaizo_tables, kaizo_names
+    s = make_state(
+        t,
+        [_kaizo_spec(n, "Wormadam", "Leer", 20)],
+        [_kaizo_spec(n, "Skitty", "Growl", 20)],
+        gravity=GRAVITY_TURNS,
+    )
+    assert int(s.gravity) == GRAVITY_TURNS  # sub_seq 297: the fight starts with Gravity up
+    s = s._replace(
+        magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(9)
+    )
+    seen = []
+    for _turn in range(6):
+        s = assert_matches_reference(t, s, A("Leer", "Growl", s, n), _o())
+        seen.append(int(s.gravity))
+    assert seen == [4, 3, 2, 1, GRAVITY_TURNS, 4]
+    assert int(s.magnet_rise_turns[0]) == 0  # zeroed by the first start at 0 or the loop
+
+
+def test_gravity_move_ids_match_the_decomp():
+    """``ids.GRAVITY_MOVES`` is ``sMovesAffectedByGravity`` (battle_lib.c:3385-3392) by decomp id."""
+    import re
+    from pathlib import Path
+
+    decomp = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+    moves = (decomp / "generated" / "moves.txt").read_text().split()
+    lib = (decomp / "src" / "battle" / "battle_lib.c").read_text(encoding="utf-8")
+    table = lib[lib.index("sMovesAffectedByGravity[] = {") :]
+    listed = re.findall(r"(MOVE_\w+),", table[: table.index("};")])
+    assert [moves.index(m) for m in listed] == list(GRAVITY_MOVES)

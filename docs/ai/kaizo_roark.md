@@ -864,6 +864,14 @@ On E2's state (`ai_item_known`, `ingrain`, `mean_look`, `imprison` / `imprisoned
   player's Magnet Rise now reaches the AI's chart (`switching.defender_chart_flags`): a Ground move
   gets `MOVE_STATUS_MAGNET_RISE` (immune) and no walk.
 
+- GRAVITY (215, G-67): `Basic_CheckGravityActive` (`:1026-1029`), -10 with Gravity up
+  (`commands.FieldCondition.GRAVITY` = the three counter bits, read as `state.gravity != 0`);
+  `Expert_Gravity` (`:4782-4803`, dispatch `:1759`): a Levitate (guessed or known), Magnet Rise
+  (the bit) or Flying player goes to `TryScorePlus1` (`:4798`, **+1** unless the 64 roll `:4799`
+  jumps); otherwise the AI below 60 % HP ends and the 128 roll (`:4795`) either goes there (jump)
+  or ends. The AI's own move list under Gravity follows `actions.usable_moves` (the banned moves
+  are invalid, `trainer_ai.c:234`).
+
 ## 6. Where the AI reads the true battle state
 
 roark.md 6 holds: the damage estimate, the kill check and the effectiveness class read the

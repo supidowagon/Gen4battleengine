@@ -618,9 +618,8 @@ note = "decoded: the Superpower script (user Atk and Def -1 after the hit, MOVE_
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 238
-status = "not_reached"
-note = "decoded: subscript_gravity_end (prints Gravity returned to normal!) -> FIELD_CONDITIONS |= FIELD_CONDITION_GRAVITY_INIT (5 more turns) then subscript_gravity_start's grounding loop without its messages (per battler by speed: Magnet Rise turns := 0; a Fly/Bounce user is unlocked and made visible), so Gravity, once started, never ends; res/battle/scripts/subscripts/subscript_gravity_end.s:6; res/battle/scripts/subscripts/subscript_gravity_start.s:9; it runs when the gravity counter reaches 0 (src/battle/battle_controller_player.c:1232); Gravity starts only from effect 215 (MOVE_SUBSCRIPT_PTR_GRAVITY_START, Kaizo move 356 Gravity), sub_seq 297 (map weather 12) or a Kaizo start condition (area gravity)"
-when = { area_condition = ["gravity"], move_effect = [215], map_weather = [12] }
+status = "modelled"
+note = "decoded: subscript_gravity_end (prints Gravity returned to normal!) -> FIELD_CONDITIONS |= FIELD_CONDITION_GRAVITY_INIT (5 more turns) then subscript_gravity_start's grounding loop without its messages (per battler by speed: Magnet Rise turns := 0; a Fly/Bounce user is unlocked and made visible), so Gravity, once started, never ends; res/battle/scripts/subscripts/subscript_gravity_end.s:6; res/battle/scripts/subscripts/subscript_gravity_start.s:9; it runs when the gravity counter reaches 0 (src/battle/battle_controller_player.c:1232); Gravity starts only from effect 215 (MOVE_SUBSCRIPT_PTR_GRAVITY_START, Kaizo move 356 Gravity), sub_seq 297 (map weather 12) or a Kaizo start condition (area gravity); modelled by the E1 trial batch (G-67): Tables.gravity_rearm (tools/build_tables.py), step.field_conditions and the reference engine's countdown"
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"
@@ -632,6 +631,5 @@ when = { area_condition = ["trick_room"], move_effect = [259], map_weather = [18
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 297
-status = "not_reached"
-note = "decoded: a new member (vanilla has 297, 0-296): PlayMoveAnimation of MOVE_GRAVITY (356) then, byte for byte, subscript_gravity_start (sub_seq 156: Gravity intensified!, FIELD_CONDITION_GRAVITY_INIT, the grounding loop with its messages); res/battle/scripts/subscripts/subscript_gravity_start.s:6; rom:sub_seq.narc[297]; its only reference is the patched field-weather switch (BattleSystem_TriggerEffectOnSwitch case 12, whose constant 297 sits in the pool at overlay16 0x0225675C; no battle script calls it), so a fight on a map with weather 12 starts with Gravity; K2b's start conditions fail the build for a trainer on such a map, and none is on one"
-when = { map_weather = [12] }
+status = "modelled"
+note = "decoded: a new member (vanilla has 297, 0-296): PlayMoveAnimation of MOVE_GRAVITY (356) then, byte for byte, subscript_gravity_start (sub_seq 156: Gravity intensified!, FIELD_CONDITION_GRAVITY_INIT, the grounding loop with its messages); res/battle/scripts/subscripts/subscript_gravity_start.s:6; rom:sub_seq.narc[297]; its only reference is the patched field-weather switch (BattleSystem_TriggerEffectOnSwitch case 12, whose constant 297 sits in the pool at overlay16 0x0225675C; no battle script calls it), so a fight on a map with weather 12 starts with Gravity; K2b's start conditions fail the build for a trainer on such a map, and none is on one; modelled by the E1 trial batch (G-67): Trainer.area_condition.gravity starts the fight with Gravity at 5 (coverage.start_gravity, state.initial_arrays)"

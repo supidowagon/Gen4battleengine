@@ -833,6 +833,9 @@ INPUT_CLAUSE_EFFECTS = (
     _E.INGRAIN,
     # Magnet Rise (G-66): the foe's Ground-immunity bits (damage.magnet_risen), the same clause.
     _E.MAGNET_RISE,
+    # Gravity (G-67) lifts the Flying and Levitate immunities of the foe the side's later Ground
+    # hit meets (damage.identified, damage.ignorable) and zeroes Magnet Rise's turns: the same clause.
+    _E.GRAVITY,
     # E2 batch 6: the foe's U-turn / Baton Pass switches it out mid-turn (step's pause), so the
     # side's later hit meets the newcomer (its stats, types, ability, item; a Baton Pass keeps
     # the stages): the pivot clause.
@@ -1156,6 +1159,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.CURSE,
     _E.AQUA_RING,
     _E.MAGNET_RISE,  # a status move: no damage
+    _E.GRAVITY,  # a status move: no damage
     _E.PRESENT,  # its power is drawn (40/80/120, Outcome.present); the table has power 1
     _E.PROTECT,  # a status move: no damage
     _E.ENDURE,  # a status move: no damage
@@ -1349,6 +1353,7 @@ def damage_inputs_can_change(
         | (foe_effect == _E.ROOST)
         | (foe_effect == _E.INGRAIN)
         | (foe_effect == _E.MAGNET_RISE)
+        | (foe_effect == _E.GRAVITY)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -3161,8 +3166,8 @@ def _side_call_law(
     )
     copy_called = jnp.where(
         values == 0,
-        copycat_call(tables, state.move_prev),
-        jnp.where(values == 1, copycat_call(tables, foe_chosen), 0),
+        copycat_call(tables, state.move_prev, state),
+        jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
@@ -3206,7 +3211,8 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       only when it can be read: the user sleeps at the start, or its foe uses an invoker or a
       move that can put it to sleep (over-approximate);
     * Metronome: each candidate rank weighs ``order.metronome_weights`` (141 or 140 of 65536):
-      the set is fixed through the turn (the user's moves; Gravity and Heal Block are owed);
+      the set is fixed through the turn (the user's moves, Gravity read at the turn start: a Gravity
+      a faster foe sets earlier in the turn, and Heal Block, are owed);
     * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move;

@@ -74,6 +74,8 @@ Encodings:
 * ``species_abilities_decomp[species, slot]``: the decomp's own ability ids (0 =
   ``ABILITY_NONE``), next to ``species_abilities``' engine ids, so the trainer AI can
   name abilities the engine does not implement.
+* ``gravity_rearm`` (int8 scalar): 1 in Kaizo, where the patched sub_seq 238 sets Gravity again
+  when its counter runs out (Gravity never ends), 0 in vanilla (E1 trial batch, G-67).
 * ``ai_policy`` (int8 scalar): the game's trainer-AI policy, the index of
   ``game_constants.POLICY[game]`` in ``game_constants.AI_POLICIES`` (0 vanilla, 1 kaizo;
   ``nuzline.ai.layout.layout_of`` reads it). A game without a policy is a ``BuildError``.
@@ -670,6 +672,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "item_hold_effect": _arr([i["hold_effect"] for i in items], np.int16, "item hold effect"),
         "item_hold_param": _arr([i["hold_param"] for i in items], np.int16, "item hold param"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
+        # sub_seq 238 (subscript_gravity_end) is replaced in Kaizo only (G-67).
+        "gravity_rearm": _arr(int(kaizo), np.int8, "gravity rearm"),
     }
     manifest = {
         "version": MANIFEST_VERSION,

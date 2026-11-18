@@ -792,6 +792,9 @@ EXEMPT: dict[str, str] = {
     # B10-11).
     "nuzline.engine.ids.CANNOT_ENCORE_MOVES": _CODE_MOVE_IDS,
     "nuzline.engine.ids.INVOKER_MOVES": _CODE_MOVE_IDS,
+    # sMovesAffectedByGravity (battle_lib.c:3385-3392), E1 trial batch (G-67): Kaizo's id 150 is
+    # "Hidden Power Water", not Splash; the ban is by id in both games.
+    "nuzline.engine.ids.GRAVITY_MOVES": _CODE_MOVE_IDS,
     "tools.effect_map.RESIST_BERRY_HOLD_EFFECTS": (
         "keyed by decomp hold effect id, read off the vanilla subscript_type_resist_berry.s: "
         "each game's items carry their own hold effect (build_tables looks theirs up here), "

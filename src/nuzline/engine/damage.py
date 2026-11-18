@@ -178,10 +178,13 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     attacker = _i32(state.ability[atk_side, state.active[atk_side]])
     ability = _i32(state.ability[def_side, slot])
     if active:
-        # Battler_Ability (battle_lib.c:3100-3103): an ingrained battler's Levitate is
-        # ABILITY_NONE. Only the active battler's: a party slot being read is a switch action's
-        # newcomer (the laws), which carries no Ingrain (only Baton Pass keeps it).
-        rooted = (state.ingrain[def_side] != 0) & (ability == AbilityId.LEVITATE)
+        # Battler_Ability (battle_lib.c:3095-3103): Levitate is ABILITY_NONE under Gravity (:3095-
+        # 3098, G-67) and for an ingrained battler (:3100-3103). Only the active battler's: a
+        # party slot being read is a switch action's newcomer (the laws), which carries no Ingrain
+        # (only Baton Pass keeps it).
+        rooted = ((state.ingrain[def_side] != 0) | (state.gravity != 0)) & (
+            ability == AbilityId.LEVITATE
+        )
         ability = jnp.where(rooted, AbilityId.NONE, ability)
     return jnp.where(attacker == AbilityId.MOLD_BREAKER, AbilityId.NONE, ability)
 
@@ -349,11 +352,13 @@ def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.nd
     Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
     attacker with Scrappy (``Battler_Ability``); ``CHART_GROUNDED`` when ``BasicTypeMulApplies``
     (:2534-2537) skips the rows of an immune Flying defender for an ingrained one or one holding
-    an Iron Ball (``iron_ball``, G-56; Gravity's clause, :2545-2549, is unsupported). Only
+    an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67). Only
     ``ApplyTypeChart`` walks the chart this way (:2626, :2636)."""
     scrappy = state.ability[atk_side, state.active[atk_side]] == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
-    rooted = (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side)
+    rooted = (
+        (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | (state.gravity != 0)
+    )
     return seen | rooted.astype(_I32) * CHART_GROUNDED
 
 

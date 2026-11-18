@@ -214,7 +214,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.ids import Stat, Weather
+from nuzline.engine.ids import GRAVITY_TURNS, Stat, Weather
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -786,13 +786,16 @@ def initial_arrays(
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
+    gravity: int = 0,
 ) -> dict[str, np.ndarray]:
     """Every ``LAYOUT`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start``): stats via ``calc_stats``, empty slots all zero
     (``species = 0, hp = 0``), the leads in party slots ``leads`` (player, opponent),
     no volatiles, hazards or screens, and
     ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
-    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default) and ``gravity``
+    (``ids.GRAVITY_TURNS`` for a trainer whose area condition is Gravity, Kaizo's sub_seq 297, 0
+    otherwise; the grounding loop it runs at battle start is a no-op, G-67). The leads'
     switch-in effects then run (``hooks.battle_start``: each switch-in state over both
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
@@ -831,6 +834,9 @@ def initial_arrays(
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain
+    if not 0 <= gravity <= GRAVITY_TURNS:
+        raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
+    a["gravity"][...] = gravity
     return a
 
 
@@ -842,11 +848,12 @@ def make_state(
     opp_items: Sequence[int] = (),
     leads: tuple[int, int] = (0, 0),
     terrain: int = TERRAIN_UNKNOWN,
+    gravity: int = 0,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.battle_start``)."""
     from nuzline.engine.hooks import battle_start  # hooks imports this module
 
-    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain)
+    a = initial_arrays(tables, player, opp, start_condition, opp_items, leads, terrain, gravity)
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

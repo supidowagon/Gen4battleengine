@@ -23,7 +23,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
-MANIFEST_VERSION = 31
+MANIFEST_VERSION = 32
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:
@@ -116,6 +116,9 @@ class Tables(NamedTuple):
     item_hold_effect: jnp.ndarray  # int16[I], the decomp hold effect id (0 = none)
     item_hold_param: jnp.ndarray  # int16[I], the decomp hold param (ItemData.effectParam)
     ai_policy: jnp.ndarray  # int8[], the trainer-AI policy (game_constants.AI_POLICIES index)
+    # int8[]: 1 where subscript_gravity_end re-arms Gravity at 0 (Kaizo, sub_seq 238: Gravity
+    # never ends), 0 where it only prints (vanilla); E1 trial batch, G-67.
+    gravity_rearm: jnp.ndarray
     # int32[]: the fight's trainer AI flags (TrainerHeader.aiMask, trainer_ai.c:249), which the
     # fight's entry point sets (Trainer.ai_flags); not in tables.npz. AI_FLAGS_UNSET until then:
     # ai.layout.layout_of refuses it for a per-flag-set policy (E1 Ruling R2).

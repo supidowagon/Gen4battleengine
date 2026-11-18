@@ -4521,3 +4521,51 @@ def test_the_players_magnet_rise_is_immune_to_the_ai_ground_move(
 
     assert int(ai_damage_for_roll(t, floating, 1, quake, 100)) == 0
     assert int(ai_damage_for_roll(t, s, 1, quake, 100)) > 0
+
+
+# --- E1 trial batch: Gravity (G-67) -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("up", [False, True])
+def test_gravity_basic(kaizo_tables, kaizo_names, kaizo_roark_party, up):
+    """Basic_CheckGravityActive (script.s:1026-1029): Gravity already up, -10."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gravity", "Accelerock", "", ""))
+    s = s._replace(gravity=jnp.asarray(3 if up else 0, s.gravity.dtype))
+    assert _delta(t, s, 0x2, 0x3)[0] == (-10 if up else 0)
+
+
+@pytest.mark.parametrize(
+    ("case", "own_hp", "jumps", "expert"),
+    [
+        # Expert_Gravity (script.s:4782-4803): a Levitate / Magnet Rise / Flying player goes to
+        # Expert_Gravity_TryScorePlus1 whatever the HP (+1 unless the :4799 roll jumps); else
+        # below 60 % HP ends, and the :4795 roll jumps to TryScorePlus1 or the script ends.
+        ("flying", 100, (), 1),
+        ("flying", 100, (4799,), 0),
+        ("flying", 30, (), 1),
+        ("magnet", 100, (), 1),
+        ("magnet", 100, (4799,), 0),
+        ("levitate", 100, (), 1),
+        ("levitate", 100, (4799,), 0),
+        ("ground", 50, (), 0),
+        ("ground", 50, (4795,), 0),
+        ("ground", 80, (), 0),
+        ("ground", 80, (4795,), 1),
+        ("ground", 80, (4795, 4799), 0),
+    ],
+)
+def test_gravity_expert(kaizo_tables, kaizo_names, kaizo_roark_party, case, own_hp, jumps, expert):
+    t, n = kaizo_tables, kaizo_names
+    s = _hp(
+        _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gravity", "Accelerock", "", "")), 1, own_hp
+    )
+    if case == "flying":
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray([2, 2], s.types.dtype)))
+    if case == "magnet":
+        s = s._replace(magnet_rise=s.magnet_rise.at[0].set(1))
+    if case == "levitate":
+        lev = c.ABILITY_IDS["Levitate"]
+        t = _with_abilities(t, int(s.species[0, 0]), [lev, lev])
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert

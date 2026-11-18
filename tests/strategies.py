@@ -1974,6 +1974,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["weather_timer"][...] = draw(st.integers(0, 8)) if timed else 0
     _draw_terrain(draw, tables, a)
     a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
+    # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
+    a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
     a["turn"][...] = turn
     for name in ("ai_seen_moves", "ai_ability_known"):
         flags = draw(st.lists(st.integers(0, 1), min_size=a[name].size, max_size=a[name].size))

@@ -80,6 +80,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
+    gravity_banned,
     imprisoning_foe,
     locked_slot,
     move_imprisoned,
@@ -126,6 +127,7 @@ from nuzline.engine.effects import (
     focus_sash_damage,
     forget_item,
     ghost_user,
+    gravity_ground,
     hit_count,
     holds,
     imprison_fails,
@@ -184,6 +186,7 @@ from nuzline.engine.ids import (
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
+    GRAVITY_TURNS,
     ITEM_ABILITY_IDS,
     MOVE_BATON_PASS,
     MOVE_SLEEP_TALK,
@@ -273,6 +276,7 @@ PROTECT_CHAIN_MAX = 3
 # drops them. ``act_kind`` values:
 ACT_NONE, ACT_MOVE, ACT_SWITCH, ACT_ITEM, ACT_TAUNTED, ACT_DISABLED = 0, 1, 2, 3, 4, 5
 ACT_IMPRISONED = 6  # "{0} can't use the sealed {1}!" (subscript_move_is_imprisoned.s), E2 batch 7
+ACT_GRAVITY = 7  # "{0} can't use {1} because of gravity!" (subscript_move_fail_gravity.s), G-67
 # Per-side event flags, in the observation's order (engine/observe.py documents each).
 EVENT_FLAGS = (
     "missed",
@@ -837,6 +841,12 @@ def _use_move(
     imprisoned = go & move_imprisoned(state, side, move)
     state = _unlock(state, side, imprisoned)
     go = go & ~imprisoned
+    # CHECK_STATUS_STATE_GRAVITY (:2586-2595), right after Imprison (enum CheckStatusState): a
+    # move chosen before Gravity went up (a faster foe's this turn) that Move_FailsInHighGravity
+    # bans: moveFailFlags.gravity and subscript_move_fail_gravity.s, a message only (no unlock,
+    # unlike Imprison's). It tests moveCur: Sleep Talk itself, not the move it calls (G-67).
+    gravity_ban = go & gravity_banned(state, move)
+    go = go & ~gravity_ban
     # CHECK_STATUS_STATE_CONFUSION (:2614): the counter drops first; at 0 the battler snaps
     # out and moves, otherwise RandNext() & 1 (outcome.confusion_hit) makes it hit itself
     # (:2633, damage.confusion_damage) instead of moving. subscript_hurt_self_in_confusion.s
@@ -1084,6 +1094,8 @@ def _use_move(
     failed = failed | ((effect_used == EffectId.AQUA_RING) & (state.aqua_ring[side] != 0))
     # Magnet Rise (effect_script_0252.s:5-7, :16): the turns, Levitate or Ingrain (G-66).
     failed = failed | ((effect_used == EffectId.MAGNET_RISE) & magnet_rise_fails(state, side))
+    # Gravity (effect_script_0215.s:3, :9-10): MOVE_STATUS_FAILED with Gravity already up (G-67).
+    failed = failed | ((effect_used == EffectId.GRAVITY) & (state.gravity != 0))
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
@@ -1539,7 +1551,15 @@ def _use_move(
         & (chart == 0)
     )
     move_failed = (
-        flinched | disabled | taunted | imprisoned | self_hit | full_para | immobilized | no_effect
+        flinched
+        | disabled
+        | taunted
+        | imprisoned
+        | gravity_ban
+        | self_hit
+        | full_para
+        | immobilized
+        | no_effect
     )
     # A weather move that failed (effects.weather_fails, on the field before its script):
     # MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
@@ -2019,10 +2039,18 @@ def _use_move(
             jnp.where(
                 taunted,
                 ACT_TAUNTED,
-                jnp.where(disabled, ACT_DISABLED, jnp.where(imprisoned, ACT_IMPRISONED, ACT_NONE)),
+                jnp.where(
+                    disabled,
+                    ACT_DISABLED,
+                    jnp.where(
+                        imprisoned,
+                        ACT_IMPRISONED,
+                        jnp.where(gravity_ban, ACT_GRAVITY, ACT_NONE),
+                    ),
+                ),
             ),
         ),
-        "act_id": jnp.where(can_act | taunted | disabled | imprisoned, move, 0),
+        "act_id": jnp.where(can_act | taunted | disabled | imprisoned | gravity_ban, move, 0),
         "shown": ready,
         # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
         # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
@@ -3273,8 +3301,15 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
     state = pay_exp(tables, before, state)
 
-    gravity = _count_down(state.gravity)
-    return state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
+    # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
+    # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the
+    # counter to GRAVITY_TURNS again and runs the grounding loop (``gravity_ground``): Gravity
+    # never ends (G-67).
+    counted = _count_down(state.gravity)
+    rearm = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0) & (state.over == 0)
+    gravity = jnp.where(rearm, GRAVITY_TURNS, counted)
+    state = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
+    return gravity_ground(state, rearm)
 
 
 def end_of_turn(

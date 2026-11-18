@@ -44,6 +44,8 @@ from nuzline.engine.ids import (
     CONFUSION_PENDING,
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
+    GRAVITY_MOVES,
+    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     HP_RESTORED_ALL,
     HP_RESTORED_HALF,
@@ -340,6 +342,25 @@ def _called_move(tables, s: RefState, move: int) -> int:
     return 0 if row is None else TERRAIN_MOVES[row]
 
 
+def _gravity_ground(s: RefState) -> None:
+    """The grounding loop of ``subscript_gravity_start.s`` (:13-85) for every battler with HP:
+    ``magnetRiseTurns`` goes to 0 (the bit stays), else a Fly / Bounce user is unlocked
+    (``Battler_UnlockMoveChoice``; ToggleVanish); the other branches only print (G-67)."""
+    for side, sd in enumerate(s.sides):
+        if not _active(s, side).hp:
+            continue
+        if sd.magnet_rise_turns:
+            sd.magnet_rise_turns = 0
+        elif sd.semi_invulnerable == SemiKind.AIRBORNE:
+            _unlock(sd)
+
+
+def _gravity_banned(s: RefState, move: int) -> bool:
+    """``Move_FailsInHighGravity`` (lib.c:3394-3407): Gravity is up and ``move`` is one of
+    ``GRAVITY_MOVES`` (G-67)."""
+    return bool(s.gravity) and move in GRAVITY_MOVES
+
+
 def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
     """The move an invoker's script calls (``order.invoked_move``), 0 when it finds none; any
     other move itself. BtlCmd_TrySleepTalk (script.c:4907-4937): the allowed slots (not
@@ -370,12 +391,18 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
         allowed = [
             m
             for m in range(1, METRONOME_DRAW + 1)
-            if m not in mon.moves and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+            if m not in mon.moves
+            and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+            and not _gravity_banned(s, m)  # Move_CanBeMetronomed (lib.c:7198-7201)
         ]
         return allowed[call % len(allowed)] if allowed else 0
     if effect == EffectId.COPYCAT:
         prev = s.move_prev
-        ok = prev != 0 and not _t(tables, "move_flags", prev) & MoveFlag.NO_METRONOME
+        ok = (
+            prev != 0
+            and not _t(tables, "move_flags", prev) & MoveFlag.NO_METRONOME
+            and not _gravity_banned(s, prev)
+        )
         return prev if ok else 0
     if effect == EffectId.ASSIST:
         # BtlCmd_TryAssist (script.c:6405-6444, B10-11): every move of every other party slot
@@ -385,7 +412,9 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             for k, mate in enumerate(sd.party)
             if k != sd.active and mate.species
             for m in mate.moves
-            if m not in INVOKER_MOVES and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+            if m not in INVOKER_MOVES
+            and not _t(tables, "move_flags", m) & MoveFlag.NO_METRONOME
+            and not _gravity_banned(s, m)
         ]
         return listed[call % len(listed)] if listed else 0
     return move
@@ -518,9 +547,9 @@ def _identified(tables, s: RefState, attacker: int, defender: int) -> int:
     """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
     (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
     skips an immune Flying row for an ingrained defender or one holding an Iron Ball
-    (lib.c:2534-2537, G-56)."""
+    (lib.c:2534-2537, G-56) or under Gravity (:2545-2549, G-67)."""
     seen = bool(s.sides[defender].foresight) or _active(s, attacker).ability == AbilityId.SCRAPPY
-    rooted = s.sides[defender].ingrain or _iron_ball(tables, _active(s, defender))
+    rooted = s.sides[defender].ingrain or _iron_ball(tables, _active(s, defender)) or s.gravity
     return int(seen) | (2 if rooted else 0)
 
 
@@ -671,8 +700,9 @@ def _ignorable(s: RefState, attacker: int, defender: int) -> int:
     if _active(s, attacker).ability == AbilityId.MOLD_BREAKER:
         return AbilityId.NONE
     ability = _active(s, defender).ability
-    # Battler_Ability (lib.c:3100-3103): an ingrained battler's Levitate is ABILITY_NONE.
-    if s.sides[defender].ingrain and ability == AbilityId.LEVITATE:
+    # Battler_Ability (lib.c:3095-3103): Levitate is ABILITY_NONE under Gravity and for an
+    # ingrained battler (G-67).
+    if (s.sides[defender].ingrain or s.gravity) and ability == AbilityId.LEVITATE:
         return AbilityId.NONE
     return ability
 
@@ -2820,6 +2850,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.sides[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.sides[side].aqua_ring = 1
+    elif effect == EffectId.GRAVITY and landed and not s.gravity:
+        # effect_script_0215.s (the failure is ``_script_fails``), subscript_gravity_start.s:9.
+        s.gravity = GRAVITY_TURNS
+        _gravity_ground(s)
     elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.sides[side].magnet_rise = 1
@@ -3712,6 +3746,11 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     if _move_imprisoned(s, side, move):
         turn.move_failed[side] = True
         _unlock(sd)  # subscript_move_is_imprisoned.s
+        return DISRUPTED
+    # CHECK_STATUS_STATE_GRAVITY (bcp.c:2586-2595): moveCur is banned by Gravity (a move chosen
+    # before it went up): moveFailFlags.gravity, subscript_move_fail_gravity.s, a message only (G-67).
+    if _gravity_banned(s, move):
+        turn.move_failed[side] = True
         return DISRUPTED
     # CHECK_STATUS_STATE_CONFUSION (bcp.c:2614): the counter drops; while it stays
     # above 0, RandNext() & 1 makes the battler hurt itself (CALC_SELF_HIT, a Normal
@@ -4903,9 +4942,14 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
         _pay_exp(turn, s)  # the loop head's AnyExpPayout, :938-944
         if s.over:
             return
-    # GRAVITY (:1227-1238).
+    # GRAVITY (:1227-1238): one turn off; at 0 vanilla's subscript_gravity_end only prints,
+    # Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets it again and runs the grounding loop
+    # (G-67).
     if s.gravity:
         s.gravity -= 1
+        if not s.gravity and _t(turn.tables, "gravity_rearm"):
+            s.gravity = GRAVITY_TURNS
+            _gravity_ground(s)
 
 
 def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -5308,6 +5352,7 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
         and not (taunted and _t(tables, "move_power", m) == 0)
         and not (choice_locked and m != choice)
         and not _move_imprisoned(s, side, m)  # CHECK_INVALID_IMPRISONED (lib.c:2287)
+        and not _gravity_banned(s, m)  # CHECK_INVALID_GRAVITY (lib.c:2292, G-67)
         and not (encore and m != encore)  # Encore (lib.c:2302-2304), B10-9
         for m, pp in zip(mon.moves, mon.pp)
     ]
@@ -5340,6 +5385,8 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in (0, 1) if b != side for m in own)
         return bool(sd.imprison) or not shared
+    if effect == EffectId.GRAVITY:  # effect_script_0215.s:3, :9-10 (G-67)
+        return bool(s.gravity)
     if effect == EffectId.MAGNET_RISE:  # effect_script_0252.s:5-7 (G-66)
         # Battler_Ability reads Levitate as none for an ingrained holder and under Gravity.
         levitate = (
