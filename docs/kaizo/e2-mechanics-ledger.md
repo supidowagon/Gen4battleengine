@@ -190,17 +190,25 @@ Group A status and decisions (commits 1-5):
   party: `_alive_mask`, `decomp_abilities`) in the touched files; speed_tie-branch `[2]` axes stay.
 - Rule: tests run on the pod (send the manager the tip and the test-file list during a batch and
   for the final tip); locally one process, one file, more than 6 GB free.
+- Group A review 1 = FIX (fixed in 5c32327). Review 2 of 5c32327 = MERGE.
 
 ### D2-D12
 
 - D2: targets, the action space and redirection.
 - D3: the four-actor turn.
+  - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
+    TWO_TRAINERS/MULTI a side is out only when all its parties are empty.
 - D4: spread moves and the doubles modifiers.
 - D5: ally mechanics.
 - D6-D7: outcomes and enumeration at B=4.
+  - Owed: `action_order` is int8[2] (order.py ~669) while `ts_order` is declared [B] (state.py ~689;
+    comment at ~390 still says int8[2]); step.py ~2762/~2768 use jnp.arange(2) against order: resize
+    together at B=4.
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
 - D10: the multi format, with partner teams from the calc repo.
 - D11: search, prep, the line player and the CLI with two actives.
+  - Owed (D11 or tool note): tools/trace_to_state.py calls empty_outcome() without a format (B=2
+    traces only); search/playout.py ~484 battler clip to 1 is outside D1 scope (search/ is D11).
 - D12: a golden trace of a recorded Gardenia multi fight.
 - Later: two-trainer battles.
 

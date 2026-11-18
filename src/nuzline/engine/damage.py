@@ -1314,8 +1314,10 @@ def _pre_random(
     Rollout or Present case: they keep the move's table power. ``def_side`` (required) is the
     defender's battler: the engine's callers pass ``foe(atk_side)``, ``ai`` callers
     ``AI_CONTEXT.defender`` (``ai_case_power``'s ``def_side``, default ``foe(atk_side)``); a
-    ``self_hit`` ignores it (the attacker). ``ai_ivs`` is the IVs the AI passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
-    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and ``ai_draw`` the class of
+    ``self_hit`` ignores it (the attacker). ``ai_ivs`` is the IVs the AI passes, default the
+    attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
+    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and
+    ``ai_draw`` the class of
     its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
     ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``).
     ``in_power`` (> 0) is the power a move script set from state this function does not see at
