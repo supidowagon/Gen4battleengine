@@ -9,6 +9,7 @@ import pytest
 
 from nuzline.ai import commands as c
 from nuzline.engine import damage
+from nuzline.engine.ids import Weather
 from tests.ai.test_kaizo_outcome import _with_player
 from tests.ai.test_kaizo_policy import BONSLY, _ids, _state
 
@@ -126,3 +127,121 @@ def test_return_power_zero_takes_the_table_power(kaizo_tables, kaizo_names, kaiz
     low = int(damage.ai_damage_for_roll(t, _with_friendship(s, 2), 1, ret, 15))
     mid = int(damage.ai_damage_for_roll(t, _with_friendship(s, 100), 1, ret, 15))
     assert int(t.move_power[ret]) > 40 and low > mid > 0
+
+
+# --- E2 batch 13 (B13-25..26): Natural Gift's and Judgment's cases, TrainerAI_MoveType ------
+
+
+def _holding(t, n, kaizo_roark_party, move: str, item: str | None):
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "", "", ""))
+    return s._replace(item=s.item.at[1, 0].set(n.item_names.index(item) if item else 0))
+
+
+@pytest.mark.parametrize(
+    ("item", "power", "type_name"),
+    [
+        ("Cheri Berry", 60, "Fire"),  # naturalGiftPower / _Type (trainer_ai.c:2885-2895)
+        ("Chilan Berry", 60, None),  # Normal gift type: TYPE_NORMAL, the table's
+        ("Leftovers", 0, None),  # power 0: the table's power, TYPE_NORMAL
+        (None, 0, None),
+    ],
+)
+def test_natural_gift_case(kaizo_tables, kaizo_names, kaizo_roark_party, item, power, type_name):
+    t, n = kaizo_tables, kaizo_names
+    s = _holding(t, n, kaizo_roark_party, "Natural Gift", item)
+    move = n.move_names.index("Natural Gift")
+    expected = c.TYPE_IDS[type_name] if type_name else int(t.move_type[move])
+    assert int(damage.ai_case_power(t, s, 1, move)) == power
+    assert int(damage.ai_case_type(t, s, 1, move)) == expected
+    # The heldItem argument, not the attacker's own (IfPartyMemberDealsMoreDamage, :2156-2165).
+    bare = s._replace(item=s.item.at[1, 0].set(0))
+    held = s.item[1, 0]
+    assert int(damage.ai_case_power(t, bare, 1, move, item=held)) == power
+    assert int(damage.ai_damage_for_roll(t, bare, 1, move, 15, item=held)) == int(
+        damage.ai_damage_for_roll(t, s, 1, move, 15)
+    )
+
+
+def test_natural_gift_damage_is_the_berry_hit(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """The Cheri Berry case is CalcMoveDamage at power 60 and type Fire (trainer_ai.c:
+    3074-3097): the same as a Fire move of power 60 and Natural Gift's class."""
+    t, n = kaizo_tables, kaizo_names
+    s = _holding(t, n, kaizo_roark_party, "Natural Gift", "Cheri Berry")
+    move = n.move_names.index("Natural Gift")
+    fire = c.TYPE_IDS["Fire"]
+    t2 = t._replace(
+        move_power=t.move_power.at[move].set(60), move_type=t.move_type.at[move].set(fire)
+    )
+    plain = s._replace(item=s.item.at[1, 0].set(0))
+    got = int(damage.ai_damage_for_roll(t, s, 1, move, 15))
+    assert got == int(damage.ai_damage_for_roll(t2, plain, 1, move, 15)) and got > 0
+
+
+@pytest.mark.parametrize(("item", "type_name"), [("Flame Plate", "Fire"), (None, None)])
+def test_judgment_case(kaizo_tables, kaizo_names, kaizo_roark_party, item, type_name):
+    """Judgment's case (trainer_ai.c:2897-2971): power 0 (the table's), the plate's type, else
+    TYPE_NORMAL; TrainerAI_MoveType's (:3135-3206) the same from the battler's item."""
+    t, n = kaizo_tables, kaizo_names
+    s = _holding(t, n, kaizo_roark_party, "Judgment", item)
+    move = n.move_names.index("Judgment")
+    expected = c.TYPE_IDS[type_name] if type_name else int(t.move_type[move])
+    assert int(damage.ai_case_power(t, s, 1, move)) == 0
+    assert int(damage.ai_case_type(t, s, 1, move)) == expected
+    assert int(damage.ai_move_type(t, s, 1, move)) == expected
+
+
+@pytest.mark.parametrize(
+    ("item", "type_name"),
+    [("Cheri Berry", "Fire"), ("Leftovers", "???"), (None, None), ("Chilan Berry", None)],
+)
+def test_natural_gift_move_type(kaizo_tables, kaizo_names, kaizo_roark_party, item, type_name):
+    """TrainerAI_MoveType's Natural Gift (trainer_ai.c:3132-3134): Battler_NaturalGiftType of
+    the held item whatever its power; a non-berry's 0x1F matches no type (AI_TYPELESS)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _holding(t, n, kaizo_roark_party, "Natural Gift", item)
+    move = n.move_names.index("Natural Gift")
+    if type_name == "???":
+        expected = int(damage.AI_TYPELESS)
+    else:
+        expected = c.TYPE_IDS[type_name] if type_name else int(t.move_type[move])
+    assert int(damage.ai_move_type(t, s, 1, move)) == expected
+
+
+@pytest.mark.parametrize(
+    ("weather", "type_name", "typed"),
+    [
+        (Weather.RAIN, "Water", True),
+        (Weather.SANDSTORM, "Rock", True),
+        (Weather.SUN, "Fire", True),
+        (Weather.HAIL, "Ice", True),
+        (Weather.FOG, None, False),
+        (Weather.NONE, None, False),
+    ],
+)
+def test_weather_ball_move_type(
+    kaizo_tables, kaizo_names, kaizo_roark_party, weather, type_name, typed
+):
+    """TrainerAI_MoveType's Weather Ball (trainer_ai.c:3209-3227): the weather's type, assigned
+    only in rain, sand, sun and hail without Cloud Nine; its AI damage takes the default case
+    (table power and type, :3074-3078) whatever the weather."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Weather Ball", "", "", ""))
+    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    move = n.move_names.index("Weather Ball")
+    assert bool(damage.ai_weather_ball_typed(t, s)) == typed
+    if typed:
+        assert int(damage.ai_move_type(t, s, 1, move)) == c.TYPE_IDS[type_name]
+    assert int(damage.ai_case_power(t, s, 1, move)) == 0
+    assert int(damage.ai_case_type(t, s, 1, move)) == int(t.move_type[move])
+
+
+def test_party_member_natural_gift_reads_its_item(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """IfPartyMemberDealsMoreDamage passes each member's held item (trainer_ai.c:2156-2165):
+    a benched Natural Gift holding Cheri Berry is estimated with it, as the active."""
+    t, n = kaizo_tables, kaizo_names
+    s = _holding(t, n, kaizo_roark_party, "Natural Gift", "Cheri Berry")
+    move = n.move_names.index("Natural Gift")
+    est = c.estimate(t, s, move, 15)
+    bare = s._replace(item=s.item.at[1, 0].set(0))
+    assert int(c.estimate(t, bare, move, 15, item=s.item[1, 0]).value[0]) == int(est.value[0])
+    assert int(c.estimate(t, bare, move, 15).value[0]) != int(est.value[0])

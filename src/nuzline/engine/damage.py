@@ -821,10 +821,19 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
-# decomp move ids (line - 1 of generated/moves.txt). The others (Natural Gift, Judgment, Gyro
-# Ball) are refused (ai.commands.CALC_DAMAGE_MOVES).
+# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003, monSpeedValues:
+# the last CompareBattlerSpeed's speeds, battle_lib.c:1372-1373) is refused
+# (ai.commands.CALC_DAMAGE_MOVES; B13-27).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
+# E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
+# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3209-3227), B13-25..26.
+AI_NATURAL_GIFT, AI_JUDGMENT, AI_WEATHER_BALL = 363, 449, 311
+# TYPE_MYSTERY: no sTypeMatchupMultipliers row and no species type (Tables.type_chart row 9 is
+# neutral). A TrainerAI_MoveType result that is no type id (a non-berry's naturalGiftType,
+# 0x1F, itemproc.c:242) matches no chart row and no attacker type in ApplyTypeChart
+# (battle_lib.c:2588-2640, its u8 moveType), as TYPE_MYSTERY does (B13-26).
+AI_TYPELESS = Type.MYSTERY
 AI_DRAGON_RAGE, AI_SONIC_BOOM, AI_SEISMIC_TOSS, AI_NIGHT_SHADE = 82, 49, 69, 101
 # The two cases that draw: MOVE_PSYWAVE's damage ``level * (RandNext() % 11 + 5) / 10``
 # (trainer_ai.c:3014-3016) and MOVE_MAGNITUDE's power, ``RandNext() % 100`` bucketed
@@ -842,7 +851,7 @@ _WEIGHT_POWERS = jnp.array([20, 40, 60, 80, 100, 120], jnp.int32)
 
 
 def ai_case_power(
-    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0
+    tables: Tables, s: BattleState, atk_side, move, *, def_side=None, ivs=None, draw=0, item=None
 ) -> jnp.ndarray:
     """``int32``: the power ``TrainerAI_CalcDamage`` passes for ``move`` (0 = the table's,
     ``BattleSystem_CalcMoveDamage``, battle_lib.c:6673-6677): Return
@@ -855,10 +864,17 @@ def ai_case_power(
     A computed 0 is the table's power too. ``def_side`` is ``AI_CONTEXT.defender``'s side
     (default the other side) and ``ivs`` the ``ivs`` argument (default the attacker's own):
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2187-2240) passes the player as attacker,
-    the player again as defender and the AI attacker's IVs."""
+    the player again as defender and the AI attacker's IVs. Natural Gift (:2885-2895) the
+    ``naturalGiftPower`` of ``item``, the ``heldItem`` argument (default the attacker's own
+    ``battleMons`` item; ``IfPartyMemberDealsMoreDamage`` passes the member's, :2156-2165);
+    Judgment's case leaves 0 (:2897-2899). Klutz and Embargo (``ability != ABILITY_KLUTZ &&
+    embargoTurns == 0``, :2886, :2898) are an unsupported ability and move (B13-22), so a
+    supported fight always takes the item branch."""
     atk_side = _i32(atk_side)
     def_side = 1 - atk_side if def_side is None else _i32(def_side)
     move = _i32(move)
+    item = s.item[atk_side, s.active[atk_side]] if item is None else item
+    gift = natural_gift_params(tables, item)[0]
     friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
     weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
@@ -872,10 +888,47 @@ def ai_case_power(
             (move == AI_LOW_KICK) | (move == AI_GRASS_KNOT),
             move == AI_HIDDEN_POWER,
             move == AI_MAGNITUDE,
+            move == AI_NATURAL_GIFT,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude],
+        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude, gift],
         0,
     )
+
+
+def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, item=None):
+    """``int32``: the type ``TrainerAI_CalcDamage`` passes to ``BattleSystem_CalcMoveDamage``
+    and ``BattleSystem_ApplyTypeChart`` (trainer_ai.c:3074-3097), resolved as they read it: 0
+    (``TYPE_NORMAL``) means the move's table type (battle_lib.c:6680-6684, :2588-2590). Hidden
+    Power its IV type (:2973-2993, ``ivs``); Natural Gift the ``naturalGiftType`` of ``item``
+    when its ``naturalGiftPower`` is not 0, else ``TYPE_NORMAL`` (:2885-2895); Judgment the
+    type of ``item``'s ``HOLD_EFFECT_ARCEUS_*``, else ``TYPE_NORMAL`` (:2897-2971,
+    ``judgment_type``); every other move ``TYPE_NORMAL``. ``item`` as ``ai_case_power``'s.
+    Weather Ball takes the default case: its table power and type, whatever the weather."""
+    atk_side = _i32(atk_side)
+    move = _i32(move)
+    ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
+    item = s.item[atk_side, s.active[atk_side]] if item is None else item
+    table_type = _i32(tables.move_type[move])
+    gift_power, gift_type = natural_gift_params(tables, item)
+    gift = jnp.where(gift_power != 0, gift_type, Type.NORMAL)
+    case = jnp.where(move == AI_JUDGMENT, judgment_type(tables, item, Type.NORMAL), Type.NORMAL)
+    case = jnp.where(move == AI_NATURAL_GIFT, gift, case)
+    case = jnp.where(move == AI_HIDDEN_POWER, hidden_power(ivs)[0], case)
+    return jnp.where(case == Type.NORMAL, table_type, case & 0x3F)
+
+
+def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
+    """``bool``: ``TrainerAI_MoveType``'s Weather Ball case assigns its result
+    (trainer_ai.c:3209-3227): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
+    weather, fog alone, or Cloud Nine / Air Lock on the field) the case assigns nothing and the
+    function returns an uninitialized register: the ROM's TrainerAI_MoveType (overlay14
+    0x0222327C-0x022233E6) returns r5, which it never wrote on that path and which holds the
+    caller's r5 (the BattleContext pointer in AICmd_CalcMaxEffectiveness at 0x02221064, the
+    BattleSystem pointer in AICmd_IfMoveEffectivenessEquals at 0x0222111A), a heap address
+    whose low byte ApplyTypeChart reads as the type (battle_lib.c:2564, u8 moveType). The
+    policy refuses that state (``ai.commands.MOVE_TYPE_MOVES``, B13-26)."""
+    weather = _i32(s.weather)
+    return (weather != Weather.NONE) & (weather != Weather.FOG) & ~weather_suppressed(tables, s)
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
@@ -883,15 +936,33 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
-    :6681-6684). Natural Gift, Judgment and Weather Ball are refused
-    (``ai.commands.MOVE_TYPE_MOVES``). It reads ``ivs``, by default ``side``'s own;
+    :6681-6684); Natural Gift, Judgment and Weather Ball by their cases (:3132-3227, below;
+    Weather Ball's unassigned result is refused, ``ai_weather_ball_typed``). It reads ``ivs``, by default ``side``'s own;
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2206-2237) types the player's move with the AI
     attacker's IVs (``TrainerAI_CalcDamage``'s Hidden Power case, :2973-2993)."""
     side = _i32(side)
     move = _i32(move)
     ivs = s.ivs[side, s.active[side]] if ivs is None else ivs
     iv_type = hidden_power(ivs)[0]
-    return jnp.where(move == AI_HIDDEN_POWER, iv_type, _i32(tables.move_type[move]))
+    table_type = _i32(tables.move_type[move])
+    # E2 batch 13 (B13-26). Natural Gift: Battler_NaturalGiftType (battle_lib.c:5477-5481) of
+    # the battler's held item, whatever its power (no item: 0, the table type; a non-berry:
+    # 0x1F, typeless, AI_TYPELESS). Judgment: Battler_HeldItemEffect's plate type, else
+    # TYPE_NORMAL. Klutz and Embargo (Battler_HeldItem, :5352-5363) are unsupported (B13-22).
+    item = _i32(s.item[side, s.active[side]])
+    gift = _i32(tables.item_gift_type[item])
+    gift = jnp.where(gift == Type.NORMAL, table_type, gift)
+    gift = jnp.where((gift < 0) | (gift > Type.DARK), AI_TYPELESS, gift)
+    plate = judgment_type(tables, item, table_type)
+    # Weather Ball: the weather's type where the case assigns one (ai_weather_ball_typed),
+    # else refused; the table type stands in.
+    ball = weather_ball_params(tables, s, move)[2]
+    # Nested where, not jnp.select: select's argmax carries an int64 axes param under vmap
+    # (tests/ai/test_switching.py test_jit_without_64bit).
+    out = jnp.where(move == AI_WEATHER_BALL, ball, table_type)
+    out = jnp.where(move == AI_JUDGMENT, plate, out)
+    out = jnp.where(move == AI_NATURAL_GIFT, gift, out)
+    return jnp.where(move == AI_HIDDEN_POWER, iv_type, out)
 
 
 def ai_case_fixed(s: BattleState, atk_side, move, draw=0) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -1136,6 +1207,7 @@ def _pre_random(
     def_side=None,
     ai_ivs=None,
     ai_draw=0,
+    ai_item=None,
     hit=0,
     in_power=0,
 ):
@@ -1150,7 +1222,8 @@ def _pre_random(
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
     Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
     is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``), and ``ai_draw`` the class of
+    passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
+    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and ``ai_draw`` the class of
     its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
     ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``).
     ``in_power`` (> 0) is the power a move script set from state this function does not see at
@@ -1198,7 +1271,9 @@ def _pre_random(
         | (effect == EffectId.FLAIL)
     )
     if ai:
-        case = ai_case_power(tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw)
+        case = ai_case_power(
+            tables, s, atk_side, move, def_side=def_side, ivs=ai_ivs, draw=ai_draw, item=ai_item
+        )
         power = jnp.where(case > 0, case, base_power)
     else:
         power = jnp.where(has_variable, variable, base_power)
@@ -1251,10 +1326,10 @@ def _pre_random(
     technician = technician & (move != MOVE_STRUGGLE)
     power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
-    # the AI passes type 0 (the table's) for every case it models (trainer_ai.c:2881) but
-    # Hidden Power's IV type (:2973-2993; ai_move_type).
+    # the AI passes its case's type (trainer_ai.c:3074-3097; ai_case_type): Hidden Power's IV
+    # type, Natural Gift's and Judgment's item types, else 0 (the table's).
     move_type = (
-        ai_move_type(tables, s, atk_side, move, ivs=ai_ivs)
+        ai_case_type(tables, s, atk_side, move, ivs=ai_ivs, item=ai_item)
         if ai
         else move_type_of(tables, s, atk_side, move)
     )
@@ -1627,7 +1702,16 @@ def calc_move_damage(
 
 
 def ai_damage_for_roll(
-    tables: Tables, state: BattleState, atk_side, move, roll, *, def_side=None, ivs=None, draw=0
+    tables: Tables,
+    state: BattleState,
+    atk_side,
+    move,
+    roll,
+    *,
+    def_side=None,
+    ivs=None,
+    draw=0,
+    item=None,
 ) -> jnp.ndarray:
     """``int32``: ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109) for a move with no
     special calculation: ``BattleSystem_CalcMoveDamage`` with ``criticalMul`` 1 (screens,
@@ -1638,9 +1722,19 @@ def ai_damage_for_roll(
     (default the attacker's own): ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2229-2237) has
     the player attack itself with the AI attacker's IVs. ``draw`` is the class of the
     ``RandNext`` draw of Psywave's or Magnitude's case (``ai_case_fixed``, ``ai_case_power``;
-    ignored for any other move)."""
+    ignored for any other move). ``item`` is the ``heldItem`` argument (default the attacker's
+    own; ``ai_case_power``)."""
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, False, ai=True, def_side=def_side, ai_ivs=ivs, ai_draw=draw
+        tables,
+        state,
+        atk_side,
+        move,
+        False,
+        ai=True,
+        def_side=def_side,
+        ai_ivs=ivs,
+        ai_draw=draw,
+        ai_item=item,
     )
     computed = _finish(
         tables,

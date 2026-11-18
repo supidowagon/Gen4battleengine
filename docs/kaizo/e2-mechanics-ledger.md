@@ -50,9 +50,21 @@ Closed batches, designs and retired RESUME bullets: e2-mechanics-ledger-archive.
   test_cli not-slow 102 + 1 skipped (the two over-8 GB nodes not run), test_differential +
   test_e1_roark_close 24 (both green now: the clowns' terrain came with the re-extraction), diff.py
   seeds 45, 46 ok 300.
-  OWED: the AI scripts of these effects (77, 200, 209, Kaizo 141, 104, 88, 154, 190, 203, 217,
-  219, 231, 235, 245, 268, 184, 222; the batch's AI agent; damage.gyro_ball_power / judgment_type /
-  weather_ball_params are pure for it); vanilla-only Fury Cutter #119 and the recharge #80
+  Trainer AI (agent E, B13-23..B13-28): every effect above transcribed for the Kaizo / ALLIN
+  policy (Basic Recycle / Natural Gift / NonStandard x3; Expert Recycle, WaterSpout,
+  HighCritical x2, WakeUpSlap, GyroBall, Assurance, TrumpCard, Punishment; 77, 104, 141, 154,
+  203, 268 have no script entry); AI damage cases Natural Gift and Judgment and
+  TrainerAI_MoveType's Natural Gift / Judgment / Weather Ball modelled; Weather Ball refused
+  only where its MoveType case assigns no type (the ROM returns an unwritten register);
+  read_bounds regenerated (ALLIN_READS 18); backlog rebuilt (17 steps, 0 errors).
+  Checks (agent E): ai_damage_cases 37, batch13 policy basic / expert / refusals 42,
+  batch13 exact == loose 0x11F (307 s, 5.0 GB: marked slow; 0x17 and 0x10F not run),
+  read_bounds / game_constants / backlog / variants / layout / ai_damage 89, kaizo_outcome 28,
+  allin + kaizo_commands 71 (7.3 GB), kaizo_policy structural 10, switching / policy / e1 /
+  power-move engine files 196 + the int64 fix, unsupported nodes 18, test_cli not-slow 102 + 1
+  skipped (the two over-8 GB nodes not run). Full test_kaizo_policy not-slow not run.
+  OWED: Gyro Ball's AI damage case (monSpeedValues, B13-27) and switching's Natural Gift /
+  Judgment / Weather Ball (B13-28); vanilla-only Fury Cutter #119 and the recharge #80
   (Owed list); a Trump Card called by an invoker (moveSlot = the invoker's) has no hand test;
   the other families of the batch.
   MERGED main 932af5a (be946ac): both sides' item columns kept (item_party_param + fling /
@@ -293,7 +305,11 @@ Rules left out because another mechanic is missing; each closes with the mechani
   Magnet Rise, Nature Power, Chatter, Gyro Ball and others; the backlog rows name them) and the
   Kaizo script sub_seq#238 (be_seq#141, Hurricane: engine done in batch 13, B13-3, B13-4;
   be_seq#88 and #104, the Triple Kick family: engine done in batch 13, B13-5..B13-8; their AI
-  scripts with the batch's AI agent).
+  scripts done in batch 13, B13-23..B13-24, with HIGH_CRITICAL_POISON_HIT and Gyro Ball's).
+- **Batch 13 AI (B13-27, B13-28):** Gyro Ball's TrainerAI_CalcDamage case (monSpeedValues: a
+  per-battler record of the last CompareBattlerSpeed and the AI's compare order across
+  slots); the voluntary-switch rule's Natural Gift, Judgment and Weather Ball
+  (switching._MOVES: TrainerAI_MoveType per caller, Move_CalcVariableType for the bench).
 - **Batch 13, vanilla only (no Kaizo move uses either: Kaizo's Fury Cutter is be_seq 88 and its
   Rock Wrecker / Hyper Beam family left effect 80):** Fury Cutter #119 (CalcFuryCutterPower,
   effect_script_0119.s:5: a per-battler furyCutterCount that doubles the power per use and
@@ -2002,3 +2018,73 @@ Rules left out because another mechanic is missing; each closes with the mechani
   single accessor exists: about 50 direct reads), the per-battler embargoTurns, its turn-end
   count and subscript_embargo_end.s, Baton Pass keeping it, the bag block, and Fling's and
   Natural Gift's Embargo branches.
+- B13-23 Trainer AI of batch 13 (outcome.KAIZO_TRANSCRIBED, by the Kaizo battle effect the
+  scripts read): Basic_CheckCanRecycle (script.s:238 -> :911-915, LoadRecycleItem
+  trainer_ai.c:2510-2518 = BattleState.recycle_item), Basic_CheckNaturalGift (:258 ->
+  :1053-1059; Basic_NaturalGiftBerries :1061-1126 = item ids 149-212), NonStandard for Gyro
+  Ball, Trump Card, Punishment (:256, :265, :274 -> :572-585); Expert_Recycle (:1737 ->
+  :4517-4534, roll :4526), Expert_WaterSpout (:1742 -> :4610-4632), Expert_HighCritical for
+  Blaze Kick and Poison Tail / Cross Poison (:1748, :1754 -> :2827-2843), Expert_WakeUpSlap
+  (:1761 -> :4829-4847), Expert_GyroBall (:1763 -> :4869-4871, PopOrEnd only),
+  Expert_Assurance (:1774 -> :5189-5216, rolls :5204, :5212; its RecoilBerries table holds item
+  ids 211-212 compared with LoadHeldItemEffect's hold effect, trainer_ai.c:1901-1913, ids at
+  most 146: never true, transcribed as written), Expert_TrumpCard (:1778 -> :5308-5359,
+  LoadCurrentMovePP :2024-2028; Kaizo's Trump Card has 1 PP), Expert_Punishment (:1788 ->
+  :5900-5951, SumPositiveStatStages :2243-2257; each TryScorePlusN adds and falls into the
+  next, unlike the decomp's comment). New commands in ai.commands: load_recycle_item,
+  load_current_move_pp, sum_positive_stat_stages, load_held_item_effect. read_bounds.py
+  regenerated (tools/ai_read_bounds.py); ALLIN_READS stays 18.
+- B13-24 No flag script names Twineedle (77), Triple Kick / Rock Wrecker (104), Kaizo Hurricane
+  (141, BATTLE_EFFECT_UNUSED_141), Beat Up (154), Weather Ball (203) or Judgment (268): grep of
+  every BATTLE_EFFECT_* name in script.s (Basic_ScoreMoveEffect :133-286, Expert_Main
+  :1623-1811, the IfMoveEffectKnown / table entries) finds none; they take the generic paths.
+  The other mentions are tables the code already reads whole: Expert_Encore's list (:3254
+  Recycle, :3268 Natural Gift), Risky_RiskyEffects (:6556 Gyro Ball), CheckHP's attacker
+  table (:7853 Water Spout), and Expert_LuckyChant's IfMoveEffectKnown of 200 / 209 (:5504-5505,
+  the player's moves; Lucky Chant's label is not transcribed). Kaizo's 88 (Triple Axel, Fury
+  Cutter) keeps vanilla's RANDOM_DAMAGE_1_TO_150_LEVEL paths (E1 batch 14) and 253 (Eruption)
+  Expert_RecoilMove (E2 batch 10): the AI reads the effect id, not the patched be_seq.
+- B13-25 TrainerAI_CalcDamage's Natural Gift and Judgment cases (trainer_ai.c:2885-2971) are
+  modelled (damage.ai_case_power / ai_case_type): Natural Gift's power is the heldItem
+  argument's naturalGiftPower, its type the item's naturalGiftType when that power is not 0,
+  else TYPE_NORMAL; Judgment's power 0 and its plate type, else TYPE_NORMAL; CalcMoveDamage
+  reads 0 as the table power / type (battle_lib.c:6673-6684), ApplyTypeChart likewise
+  (:2588-2590). heldItem is the attacker's battleMons item (:1041-1050, :1560-1569,
+  :2130-2139, :2210-2219), a benched member's own for IfPartyMemberDealsMoreDamage
+  (:2156-2165, commands.estimate's item), the player's for IfBattlerDealsMoreDamage's last
+  move (:2228-2237). Klutz and embargoTurns gate both cases (:2886, :2898): an unsupported
+  ability and move (B13-22). Weather Ball takes the default case (table power and type,
+  :3074-3078).
+  The other batch-13 moves need no case: TrainerAI_CalcAllDamage calls TrainerAI_CalcDamage
+  once per move (:2799-2838) and its default (:3074-3078) passes power 0 and TYPE_NORMAL, so
+  Twineedle and Triple Kick are one hit at the table power, Beat Up, Trump Card, Punishment,
+  Assurance and Wake-Up Slap their table power, and Water Spout is in sNoDamageCalcMoveEffects
+  (:31-45: no estimate); the existing AI path already does exactly that.
+- B13-26 TrainerAI_MoveType (trainer_ai.c:3127-3245): Natural Gift is Battler_NaturalGiftType
+  (battle_lib.c:5477-5481) of the battler's item, whatever its power (no item: 0, the table
+  type; a non-berry: 0x1F, which matches no chart row or attacker type in ApplyTypeChart's u8
+  moveType, :2564-2640: damage.AI_TYPELESS = TYPE_MYSTERY, whose chart row is neutral);
+  Judgment the plate type of Battler_HeldItemEffect, else TYPE_NORMAL (the table type);
+  Weather Ball Water / Rock / Fire / Ice under NO_CLOUD_NINE in rain / sand / sun / hail
+  (:3209-3227). Elsewhere (no weather, fog alone, Cloud Nine / Air Lock) the case assigns
+  nothing: the ROM's function (overlay14 0x0222327C) returns r5 unwritten on that path, the
+  caller's r5 (the BattleContext pointer in AICmd_CalcMaxEffectiveness, 0x02221064; the
+  BattleSystem pointer in AICmd_IfMoveEffectivenessEquals, 0x0222111A), a heap address whose
+  low byte becomes the type: not knowable, so policy._refused refuses an AI Weather Ball in
+  those states only (commands.MOVE_TYPE_MOVES = Weather Ball; damage.ai_weather_ball_typed).
+  The backlog names it "move-id case of TrainerAI_MoveType where it assigns no type".
+- B13-27 Gyro Ball's TrainerAI_CalcDamage case (trainer_ai.c:2995-3003) stays refused
+  (commands.CALC_DAMAGE_MOVES): it reads monSpeedValues, written by every
+  CompareBattlerSpeed (battle_lib.c:1372-1373): the action-order sorts of the last turn
+  (battle_controller_player.c:780, :888, :3992), and the AI's own IfSpeedCompareEqualTo
+  (trainer_ai.c:1109, :1121) and :2081 compares earlier in the same decision, in flag-major,
+  slot-minor order. Modelling it needs a per-battler speed record written at each sort (new
+  state) and the compare order across the slots the per-slot scoring factors apart (Owed).
+  Gyro Ball's scripts are transcribed (B13-23), so only this case refuses it.
+- B13-28 Owed (AI): the voluntary-switch rule still refuses Natural Gift, Judgment and Weather
+  Ball on both sides (switching._MOVES): AI_HasSuperEffectiveMove / AI_CannotDamageWonderGuard
+  / AI_OnlyIneffectiveMoves type the AI's moves with TrainerAI_MoveType (now modelled but
+  Weather Ball's unassigned case, whose r5 differs per caller), the bench's with
+  Move_CalcVariableType (battle_lib.c:8097, its Natural Gift, Judgment and
+  Weather Ball cases), the player's moveHit with
+  TrainerAI_MoveType (trainer_ai.c:3767). And Gyro Ball's AI damage (B13-27).

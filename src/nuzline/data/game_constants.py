@@ -159,15 +159,27 @@ _AI_MOVE_IDS = {
 # model, refused (trainer_ai.c:2885-3071; MOVE_* of generated/moves.txt, line N is id N-1).
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
 # Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
-# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES).
-_CALC_DAMAGE_MOVES = {
-    "Natural Gift": 363,
-    "Judgment": 449,
-    "Gyro Ball": 360,
-}
-# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3222).
-# Hidden Power's is modelled (engine.damage.ai_move_type, E1 batch 14).
-_MOVE_TYPE_MOVES = {"Natural Gift": 363, "Judgment": 449, "Weather Ball": 311}
+# Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES),
+# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25).
+_CALC_DAMAGE_MOVES = {"Gyro Ball": 360}
+# ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3227)
+# refused in some state: Weather Ball where its case assigns no type (B13-26). Hidden Power's
+# (E1 batch 14), Natural Gift's and Judgment's (B13-26) are modelled (engine.damage.ai_move_type).
+_MOVE_TYPE_MOVES = {"Weather Ball": 311}
+# E2 batch 13 (B13-23): the item tables of Basic_CheckNaturalGift (script.s:1061-1126),
+# Expert_Recycle (:4536-4540) and Expert_Assurance (:5218-5221); generated/items.txt.
+_BERRIES = (
+    "Cheri", "Chesto", "Pecha", "Rawst", "Aspear", "Leppa", "Oran", "Persim", "Lum", "Sitrus",
+    "Figy", "Wiki", "Mago", "Aguav", "Iapapa", "Razz", "Bluk", "Nanab", "Wepear", "Pinap",
+    "Pomeg", "Kelpsy", "Qualot", "Hondew", "Grepa", "Tamato", "Cornn", "Magost", "Rabuta",
+    "Nomel", "Spelon", "Pamtre", "Watmel", "Durin", "Belue", "Occa", "Passho", "Wacan", "Rindo",
+    "Yache", "Chople", "Kebia", "Shuca", "Coba", "Payapa", "Tanga", "Charti", "Kasib", "Haban",
+    "Colbur", "Babiri", "Chilan", "Liechi", "Ganlon", "Salac", "Petaya", "Apicot", "Lansat",
+    "Starf", "Enigma", "Micle", "Custap", "Jaboca", "Rowap",
+)  # fmt: skip
+_NATURAL_GIFT_BERRIES = {f"{name} Berry": 149 + i for i, name in enumerate(_BERRIES)}
+_RECYCLE_DESIRABLE_ITEMS = {"Chesto Berry": 150, "Lum Berry": 157, "Starf Berry": 207}
+_ASSURANCE_RECOIL_BERRIES = {"Jaboca Berry": 211, "Rowap Berry": 212}
 # ai/commands.py COPYCAT_ENCOURAGED_MOVES: Expert_Copycat_EncouragedMoves (script.s:5582-5630).
 _COPYCAT_ENCOURAGED_MOVES = {
     "Sleep Powder": 79, "Lovely Kiss": 142, "Spore": 147, "Hypnosis": 95, "Sing": 47,
@@ -253,6 +265,8 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hyper Cutter": 52,
             "Speed Boost": 3,
             "No Guard": 99,
+            "Pressure": 46,
+            "Rough Skin": 24,
             "Swift Swim": 33,
             "Rain Dish": 44,
             "Ice Body": 115,
@@ -550,6 +564,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.ai.commands.ITEM_EXPERT_BELT", "item", 268, "Expert Belt", _E, 96),
     # IfHeldItemEqualTo's items (Basic_CheckMetalBurst, Expert_ChargeTurnNoInvuln).
     Constant("nuzline.ai.commands.ITEM_SHINY_STONE", "item", 107, "Shiny Stone", _E),
+    *_table("nuzline.ai.commands.NATURAL_GIFT_BERRIES", "item", _E, _NATURAL_GIFT_BERRIES),
+    *_table("nuzline.ai.commands.RECYCLE_DESIRABLE_ITEMS", "item", _E, _RECYCLE_DESIRABLE_ITEMS),
+    *_table("nuzline.ai.commands.ASSURANCE_RECOIL_BERRIES", "item", _E, _ASSURANCE_RECOIL_BERRIES),
     Constant("nuzline.ai.switching.ITEM_IRON_BALL", "item", 278, "Iron Ball", _E, 106),
     # HOLD_EFFECT_CHARGE_SKIP (99): Expert_ChargeTurn*'s IfHeldItemEqualTo (script.s:3956, B10-12).
     Constant("nuzline.ai.commands.ITEM_POWER_HERB", "item", 271, "Power Herb", _E, 99),
