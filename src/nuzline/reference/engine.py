@@ -5853,8 +5853,8 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
         or last in mon.moves
     ):
         return
-    if MOVE_MIMIC not in mon.moves:  # the script runs from the user's own Mimic slot
-        return
+    # The user's own Mimic slot: Metronome and Assist never call Mimic (sCannotMetronomeMoves,
+    # lib.c:7152-7158; script.c:6430) and Sleep Talk calls a known move.
     j = mon.moves.index(MOVE_MIMIC)
     sd.shadow_moves[j], sd.shadow_pp[j] = mon.moves[j], mon.pp[j]
     mon.moves[j] = last

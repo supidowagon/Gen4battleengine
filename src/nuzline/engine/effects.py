@@ -1697,8 +1697,9 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
     battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
     (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
-    user's first Mimic slot (:4494-4499; the script runs only from the user's own slot, so one
-    exists), takes the move with ``min(5, its table PP)`` (:4502-4513) and its bit joins
+    user's first Mimic slot (:4494-4499; one exists: Metronome and Assist, :6430, never call
+    Mimic, sCannotMetronomeMoves, battle_lib.c:7152-7158, and Sleep Talk calls a known move),
+    takes the move with ``min(5, its table PP)`` (:4502-4513) and its bit joins
     ``mimickedMoveSlot`` (:4515): the party Pokemon never sees the copy, so the slot's move and
     its PP after Mimic's own use go to ``shadow_moves`` / ``shadow_pp`` (``step._restore_moves``
     gives them back). A Transformed user fails (:4482, G-69)."""
@@ -1715,7 +1716,6 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (last != 0)
         & (state.substitute_hp[h.target_side] == 0)
         & ~jnp.any(moves == last)
-        & jnp.any(mimics)
     )
     copy_pp = jnp.minimum(tables.move_pp[last].astype(_I32), MIMIC_PP_CAP)
     live_pp = state.pp[side, user, j]
