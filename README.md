@@ -1,6 +1,6 @@
 # nuzline
 
-A tool that finds high-EV lines for single-player nuzlocke battles in vanilla Pokemon Platinum (US). Given the player's save file and a chosen trainer fight, it recommends pre-battle setup (box picks, lead, held items, prestatus, predamage) and ranked in-battle actions each turn, maximizing the probability of winning with zero faints. See `docs/design.md`.
+A tool that finds high-EV lines for single-player nuzlocke battles in Pokemon Platinum (US) and Platinum Kaizo (`--game kaizo`). Given the player's save file and a chosen trainer fight, it recommends pre-battle setup (box picks, lead, held items, prestatus, predamage) and ranked in-battle actions each turn, maximizing the probability of winning with zero faints. See `docs/design.md`.
 
 ## Commands
 
@@ -34,7 +34,7 @@ uv run nuzline prep --save path/to/platinum.sav --trainer roark --resume roark.c
 
 `--save` is required. `--cap N` is the level cap (default: `config/level_caps.toml`, which lists only Roark; any other trainer needs `--cap`). `--protect` and `--exclude` (repeatable) name a Pokemon by species, nickname, `party:N` or `box:B:S` (slots 0-based, boxes 1-based, as in `save show`); a species both in the party and a box is ambiguous and must be named that way, a bare number is refused. `--reserve ITEM ...` keeps bag items out of the search, `--prestatus poison|burn|paralysis` (repeatable) allows a status inflicted beforehand, `--no-entry-hp` always enters at full HP, `--weight KIND=W` (candy, heart_scale, tm, hm, held) sets the resource cost weights of the tie-break. Search size: `--max-depth` (0 = screen only), `--finalists`, `--screen-n`, `--max-team N` (the largest team brought, 1-6), `--seed`, `--devices`; the search screens every (team, lead) of the pool at once, so a pool whose team space is over 25,000 setups (about 13 Pokemon at teams of 6) is refused with a message: leave Pokemon out with `--exclude`, lower `--max-team`, or raise the limit with `--max-setups N` (hours and many GB of memory); `--tree FILE.json` writes the plan tree and `--show-depth` sets the plan levels printed.
 
-The output has the `Setup:` card, the `Prep steps:` (Rare Candies, Heart Scale relearns, TMs, items, deposits and withdrawals, in order), the `Cost:` line (every resource spent), the `Odds ladder` for 0-3 deaths (the requested rung is planned by Stage B, the others are labelled "screen"), the Stage B `Plan:` and a `Search:` summary. Progress lines (`[prep] ...`) go to stderr. A run record is written to `runs/prep_<time>.json` (with the save's `save_sha256`) and a checkpoint to `runs/prep_<time>.ckpt.json` after every unit of work. `--budget SECONDS` stops starting new work after that time and prints the best answer so far ("screen only, no plan" when no solve finished), as does Ctrl-C; the exit code is 0. `--resume FILE` continues from a checkpoint and gives the same answer as an uninterrupted run; it needs the same save, trainer, settings, seed and program version (otherwise one line says what differs, exit 1) and cannot be combined with `--checkpoint`. If a run crashes (an intermittent Windows access violation has been seen in long runs, see `benchmarks/README.md`), continue it with `--resume runs/prep_<time>.ckpt.json` (its path is the `[prep] checkpoint:` line printed to stderr at the start) rather than starting over. Exit codes: 0 ok, 1 error, 2 the opponent is unsupported or every setup is refused.
+The output has the `Setup:` card, the `Prep steps:` (Rare Candies, Heart Scale relearns, TMs, items, deposits and withdrawals, in order), the `Cost:` line (every resource spent), the `Odds ladder` for 0-3 deaths (the requested rung is planned by Stage B, the others are labelled "screen"), the Stage B `Plan:` and a `Search:` summary. Progress lines (`[prep] ...`) go to stderr. A run record is written to `runs/prep_<time>.json` (with the save's `save_sha256`) and a checkpoint to `runs/prep_<time>.ckpt.json` after every unit of work. `--budget SECONDS` stops starting new work after that time and prints the best answer so far ("screen only, no plan" when no solve finished), as does Ctrl-C; the exit code is 0. `--resume FILE` continues from a checkpoint and gives the same answer as an uninterrupted run; it needs the same save, trainer, settings, seed and program version (otherwise one line says what differs, exit 1) and cannot be combined with `--checkpoint`. If a run crashes, continue it with `--resume runs/prep_<time>.ckpt.json` (the path is the `[prep] checkpoint:` line printed to stderr at the start); do not start over. Exit codes: 0 ok, 1 error, 2 the opponent is unsupported or every setup is refused.
 
 Score a line (one answer per opposing Pokemon, written in a line file), or search for one (spec: `docs/superpowers/specs/2026-11-12-l1-line-player-design.md` §3, §6):
 
@@ -80,4 +80,10 @@ save; keep it outside the repository.
 NUZLINE_USER_SAVE=path/to/platinum.dsv uv run pytest tests/test_user_save.py -v
 ```
 
-Slow tests (minutes each: the full-pool exhaustive check of the prep funnel on Roark) are skipped unless `NUZLINE_SLOW_TESTS=1` is set; the default suite stays under about a minute per file on one device, except `tests/test_cli.py` (one end-to-end `nuzline prep` run at depth 1, about 2 minutes for the file) and `tests/prep/test_exhaustive.py` (about 300 s on one device: dozens of depth-1 solves).
+## Test tiers
+
+```
+uv run pytest -m "not slow"
+```
+
+runs the fast tier. Tests marked `slow` (brute-force, loose, save- or ROM-bound) are left out of it. `test_funnel_matches_exhaustive_ci_full` in `tests/prep/test_exhaustive.py` also needs `NUZLINE_SLOW_TESTS=1`. Tier limits and cadence: `CLAUDE.md`.

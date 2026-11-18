@@ -18,7 +18,7 @@
 - Tests that need a local input (ROM, patch, linker map, decomp) skip when it is absent, like `tests/tools/test_extract_decomp.py` (decomp) and `tests/conftest.py` (tables).
 - New files only, plus `pyproject.toml`, `uv.lock`, `.gitignore`. Do not edit `tools/extract_decomp.py`, `tools/build_tables.py`, `tools/effect_map.py` or anything in `src/` (they change in K2a, after milestone 4 merges).
 - The decomp (`external/pokeplatinum`, commit `579d2d5c65e736a1a4268fb7acbfd70712177c6c`, the manifest's `decomp_commit`) is authoritative for layouts: cite `file:line` in docstrings as `tools/extract_decomp.py` does.
-- **Worktree setup (before Task 1):** `external/` is git-ignored, so a fresh K1 worktree cut from main has no decomp and every round-trip test would skip quietly. Give it one: from the worktree root in PowerShell, `New-Item -ItemType Junction -Path external\pokeplatinum -Target "G:\Farry\Claude Workspace\Pokemon Platinum Game Engine\external\pokeplatinum"` (the main checkout's copy, as the `strange-feistel` worktree has), or run `bash tools/clone_decomp.sh`. Check: `git -C external/pokeplatinum rev-parse HEAD` prints the pinned commit.
+- **Worktree setup (before Task 1):** `external/` is git-ignored, so a fresh K1 worktree cut from main has no decomp and every round-trip test would skip quietly. Give it one: from the worktree root in PowerShell, `New-Item -ItemType Junction -Path external\pokeplatinum -Target "<repo>\external\pokeplatinum"` (the main checkout's copy, as the `strange-feistel` worktree has), or run `bash tools/clone_decomp.sh`. Check: `git -C external/pokeplatinum rev-parse HEAD` prints the pinned commit.
 - Fail loudly: any byte a reader cannot account for raises with the file, NARC member and offset; nothing is skipped or defaulted silently.
 - Never touch a folder named `backup`. ruff `line-length = 100`.
 
@@ -44,7 +44,7 @@
 
 ## Review Focus
 
-1. **A Windows path with backslashes in `data/local.toml`** (`vanilla_rom = "G:\Farry\..."`) is a TOML escape error: expect a `RomInputError` that names the file and says to use single quotes, not a raw `TOMLDecodeError`. Test in Task 1.
+1. **A Windows path with backslashes in `data/local.toml`** (`vanilla_rom = "D:\roms\..."`) is a TOML escape error: expect a `RomInputError` that names the file and says to use single quotes, not a raw `TOMLDecodeError`. Test in Task 1.
 2. **A wrong vanilla dump** (rev 0, `ce81046e…`, or a trimmed ROM): expect `RomInputError` naming the path, the expected and the actual SHA-1 before any patching. Test in Task 1 (`read_checked`) and Task 3 (`kaizo_rom`).
 3. **An interrupted or foreign cache file** under `.cache/rom/` (truncated write, sidecar from another run): expect it to be re-verified and rebuilt, never used. Test in Task 3 (`test_cache_hit_and_corrupt_cache_rebuilt`, `test_foreign_sidecar_rebuilt`).
 4. **A Kaizo NARC whose member size differs from the vanilla struct** (a changed layout, e.g. the trainer struct §5.4): expect the reader to raise naming the NARC, the member and both sizes, not to misparse. Fixed-size members: Task 9 (`pl_personal`, 44) and Task 10 (`pl_waza_tbl`, 16). Trainer parties: Task 11, where the real rule is `round_up_4(party_size × entry_size)` with zero padding (measured on vanilla), so a padded member is accepted and a short or over-long one raises.
@@ -83,7 +83,7 @@ def test_missing_vanilla_names_key_and_env(tmp_path):
     with pytest.raises(RomInputError, match="vanilla_rom.*NUZLINE_VANILLA_ROM"):
         load_inputs(tmp_path / "absent.toml", environ={})
 def test_backslash_basic_string_explained(tmp_path):      # Review Focus 1
-    cfg = tmp_path / "local.toml"; cfg.write_text('vanilla_rom = "G:\\Farry\\v.nds"\n')
+    cfg = tmp_path / "local.toml"; cfg.write_text('vanilla_rom = "D:\\roms\\v.nds"\n')
     with pytest.raises(RomInputError, match="single-quoted"):
         load_inputs(cfg, environ={})
 def test_unknown_key_raises(tmp_path):
@@ -280,7 +280,7 @@ def test_rom_package_imports_without_ndspy():   # subprocess: sys.modules["ndspy
      `cd ~ && git clone https://github.com/pret/pokeplatinum && cd pokeplatinum && git -c advice.detachedHead=false checkout 579d2d5c65e736a1a4268fb7acbfd70712177c6c && make`
      `make` is `release check` (`Makefile:96-106`): it downloads metroskrew and meson 1.12.0, builds `build/pokeplatinum.us.nds`, and its "ROM Checksum" test must pass (SHA-1 `0862ec35…755c`, `INSTALL.md:334`).
   3. `ls build/*.xMAP`. Expected `build/main.nef.xMAP`. If absent, follow Ruling 3's fallback.
-  4. Copy the map and `platinum.us/main.lsf` into the K1 worktree. In WSL, with `WT` set to the worktree's Windows path exactly as `git rev-parse --show-toplevel` prints it there (for example `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine/.claude/worktrees/k1-rom-pipeline`):
+  4. Copy the map and `platinum.us/main.lsf` into the K1 worktree. In WSL, with `WT` set to the worktree's Windows path exactly as `git rev-parse --show-toplevel` prints it there (for example `<repo>/.claude/worktrees/k1-rom-pipeline`):
      ```bash
      DEST="$(wslpath -a "$WT")/.cache/decomp/579d2d5c65e736a1a4268fb7acbfd70712177c6c"
      mkdir -p "$DEST" && cp build/main.nef.xMAP platinum.us/main.lsf "$DEST/" && ls -l "$DEST"

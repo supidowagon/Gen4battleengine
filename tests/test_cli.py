@@ -621,6 +621,9 @@ def test_all_zero_footer_names_the_budget():
     assert all_zero_footer(2) == "all lines 0 %: no line within 2 deaths found at this depth"
 
 
+# Slow: rank compiles or loads the whole-engine playout program (8-10 GB resident, minutes
+# cold), past the fast tier's 60 s and 4 GB; so does the test below.
+@pytest.mark.slow
 def test_cli_rank_deaths_and_protect(capsys):
     args = ["rank", "--party", SAMPLE, "--trainer", "roark", "--deaths", "1"]
     assert main([*args, "--protect", "Prinplup", "--n", "50", "--devices", "1"]) == 0
@@ -633,6 +636,7 @@ def test_cli_rank_deaths_and_protect(capsys):
     assert "deaths under the leader:" in out
 
 
+@pytest.mark.slow
 def test_cli_rank_default_budget_keeps_the_header(capsys):
     # The playout program of the test above (same party, --n and --devices; the budget is a
     # state value): a second rank program on top of it passed 9 GB in the fast tier.
@@ -689,6 +693,7 @@ def test_cli_bad_budget_flags(capsys, tmp_path, command, flags, party, named):
     assert named[0] in err and named[1] in err
 
 
+@pytest.mark.slow  # the whole-engine rank program alone is ~9.5 GB (E1 memory job, 17 Nov)
 def test_cli_user_save_rank(capsys):
     save = os.environ.get("NUZLINE_USER_SAVE")
     if not save:

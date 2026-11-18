@@ -1,7 +1,7 @@
 # Facts for `engine/observe.py` (Stage B information sets)
 
 Source spec: `docs/superpowers/specs/2026-10-30-stage-b-solver-design.md` §2 (lines 91-113).
-All paths below are relative to the repo root `G:/Farry/Claude Workspace/Pokemon Platinum Game Engine`.
+All paths below are relative to the repo root `<repo>`.
 Decomp paths are under `external/pokeplatinum/` (present, pinned clone). `bcp.c` =
 `external/pokeplatinum/src/battle/battle_controller_player.c`.
 

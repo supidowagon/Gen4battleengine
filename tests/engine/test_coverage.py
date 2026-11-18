@@ -16,6 +16,7 @@ from nuzline.data.trainer import (
     build_trainer_party,
     load_trainers,
 )
+from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
     IMPLEMENTED_AI_FLAGS,
@@ -141,14 +142,17 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
 
 
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
-    # E1 ruling G-43: a bag item the AI can use that sets Mist (Guard Spec.) or Focus Energy
-    # (a Poke Ball's dummy params) is refused by name; Super Potion acts by its params.
-    items = [names.item(n) for n in ("Super Potion", "Guard Spec.", "Poké Ball")]
+    # E1 rulings G-43, G-62: Super Potion and Guard Spec. act by their params; a bag item
+    # still refused (bag.refused_bag_params, picked from the item table) is refused by name.
+    params = np.asarray(tables.item_party_param)
+    refused = next(i for i in range(1, len(params)) if refused_bag_params(params[i], i))
+    reason = refused_bag_params(params[refused], refused)[0]
+    items = [names.item(n) for n in ("Super Potion", "Guard Spec.")] + [refused]
     trainer = replace(roark_trainer(), items=tuple(items))
     r = check_coverage(tables, names, sample_party(names), trainer, roark_party(names), 0)
-    assert not any("Super Potion" in m and "trainer item" in m for m in r.missing)
-    assert any("Guard Spec." in m and "Mist" in m for m in r.missing)
-    assert any("Poké Ball" in m and "Focus Energy" in m for m in r.missing)
+    for name in ("Super Potion", "Guard Spec."):
+        assert not any(f"{name} " in m and "trainer item" in m for m in r.missing)
+    assert any(names.item_names[refused] in m and reason in m for m in r.missing)
     assert any("mixed items" in m for m in r.missing)
 
 

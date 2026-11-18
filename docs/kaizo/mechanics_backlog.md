@@ -25,7 +25,7 @@ New groups: needed in this split and in no earlier one.
 
 | Split | Rows | Battles | Singles | Doubles | Two-trainer | Multi (no known partner) | Runnable battles | Distinct missing groups | New groups |
 |---|---|---|---|---|---|---|---|---|---|
-| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 6 | 6 |
+| Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 20 | 4 | 4 |
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 12 | 11 |
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 9 | 46 | 44 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 13 | 42 | 13 |
@@ -35,11 +35,11 @@ New groups: needed in this split and in no earlier one.
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 4 | 95 | 39 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 0 | 38 | 2 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 6 | 48 | 6 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 98 | 158 | 158 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 98 | 156 | 156 |
 
 ## Whole game
 
-158 distinct missing groups across all ten splits (387 battles,
+156 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -53,7 +53,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 1 | 4 |
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
 | Fantina Split | 0 | 17 | 14 | 0 | 2 | 8 | 3 | 44 |
 | Maylene Split | 0 | 4 | 3 | 3 | 2 | 0 | 1 | 13 |
@@ -63,7 +63,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Galactic Split | 0 | 10 | 9 | 3 | 1 | 16 | 0 | 39 |
 | Volkner Split | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 2 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 1 | 1 | 6 |
-| **Whole game** | **1** | **47** | **37** | **8** | **7** | **47** | **11** | **158** |
+| **Whole game** | **1** | **47** | **37** | **8** | **7** | **47** | **9** | **156** |
 
 ### Groups needed in each split, by kind
 
@@ -71,7 +71,7 @@ Every group the split's battles need, whether or not an earlier split needs it t
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 3 | 6 |
+| Roark Split | 0 | 0 | 1 | 0 | 0 | 2 | 1 | 4 |
 | Gardenia Split | 1 | 0 | 1 | 0 | 0 | 10 | 0 | 12 |
 | Fantina Split | 1 | 17 | 15 | 0 | 2 | 8 | 3 | 46 |
 | Maylene Split | 1 | 14 | 13 | 3 | 4 | 3 | 4 | 42 |
@@ -81,7 +81,7 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Galactic Split | 1 | 32 | 25 | 5 | 4 | 22 | 6 | 95 |
 | Volkner Split | 1 | 15 | 13 | 2 | 1 | 2 | 4 | 38 |
 | Elite Four Split | 1 | 19 | 15 | 0 | 3 | 3 | 7 | 48 |
-| **Whole game** | **1** | **47** | **37** | **8** | **7** | **47** | **11** | **158** |
+| **Whole game** | **1** | **47** | **37** | **8** | **7** | **47** | **9** | **156** |
 
 ### Battle conditions and other groups
 
@@ -135,8 +135,6 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | field condition: permanent Trick Room | Galactic Split |
 | battle conditions | field condition: permanent Gravity | Elite Four Split |
 | other | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | Roark Split |
-| other | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | Roark Split |
-| other | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | Roark Split |
 | other | ROM change: battle/skill/be_seq.narc#141 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
 | other | ROM change: battle/skill/be_seq.narc#88 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
 | other | ROM change: battle/skill/sub_seq.narc#238 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Fantina Split |
@@ -272,10 +270,8 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
-| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
-| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: trainer item 3, battle format 2, move effect 1
+Groups by kind: battle format 2, move effect 1, trainer item 1
 
 ## Roark and Gardenia splits (up to the second gym)
 
@@ -298,10 +294,8 @@ Groups by kind: trainer item 3, battle format 2, move effect 1
 | 1 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
-| 1 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) |
-| 1 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) |
 
-Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
+Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 
 ## All ten splits (top 60)
 
@@ -370,7 +364,7 @@ Groups by kind: battle format 12, trainer item 3, AI 1, move effect 1
 | 4 | held item effect #42: Starf Berry |
 | 4 | held item effect #92: Leek |
 
-Groups by kind: AI 48, move effect 37, battle format 36, battle terrain 9, held item effect 8, ability 7, ROM change 7, trainer item 3, field condition 2, form change 1
+Groups by kind: AI 48, move effect 37, battle format 36, battle terrain 9, held item effect 8, ability 7, ROM change 7, field condition 2, trainer item 1, form change 1
 
 ## Build order for the first two splits
 
@@ -382,16 +376,14 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 2 | AI: AI_FLAG_TAG_STRATEGY | 49 of 68 |
 | 3 | battle format: a double battle | 53 of 68 |
 | 4 | move effect #83: Metronome; 41 of 442 callable moves unmodelled | 57 of 68 |
-| 5 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 58 of 68 |
-| 6 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 59 of 68 |
-| 7 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 60 of 68 |
-| 8 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 61 of 68 |
-| 9 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 62 of 68 |
-| 10 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 63 of 68 |
-| 11 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 64 of 68 |
-| 12 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 65 of 68 |
-| 13 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 66 of 68 |
-| 14 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 67 of 68 |
-| 15 | trainer item: Poké Ball sets Mist on its side (Guard Spec param, battle_system.c:563-573) | 67 of 68 |
-| 16 | trainer item: Poké Ball sets Focus Energy (crit-stages param, battle_system.c:617-626) | 67 of 68 |
-| 17 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 68 of 68 |
+| 5 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 58 of 68 |
+| 6 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 59 of 68 |
+| 7 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 60 of 68 |
+| 8 | battle format: gauntlet Route 204 North (position 3; rules not recorded) | 61 of 68 |
+| 9 | battle format: gauntlet Route 204 North (position 2; rules not recorded) | 62 of 68 |
+| 10 | battle format: gauntlet Route 204 North (position 1; rules not recorded) | 63 of 68 |
+| 11 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) | 64 of 68 |
+| 12 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) | 65 of 68 |
+| 13 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) | 66 of 68 |
+| 14 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) | 67 of 68 |
+| 15 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) | 68 of 68 |

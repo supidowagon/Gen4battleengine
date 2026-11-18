@@ -222,7 +222,7 @@ Rules left out because another mechanic is missing; each closes with the mechani
   replaced the leaves test with an engine test of the replacement flag.
 - **For E1 (bag, after the c4f0a60 merge):** `bag.refused_bag_params` still refuses Guard Spec
   (Mist) and Dire Hit (Focus Energy) as "another stream's" mechanics; E2 models both (B12-23,
-  batch 12), so the refusal can be lifted on E1's side.
+  batch 12), so the refusal can be lifted on E1's side. Done: E1 ruling G-62.
 
 - **From E1's Fantina list (manager, 2026-11-16; not before batch 13):** 23 AI move-effect
   transcriptions (EVA_UP/Double Team, HIGH_CRITICAL_POISON_HIT, Transform, Perish Song, Gravity,
