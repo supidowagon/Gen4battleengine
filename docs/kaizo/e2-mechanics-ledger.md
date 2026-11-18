@@ -149,6 +149,19 @@ the differential and the guards on the spot. Opus writes format.py, the referenc
 3-5) and the snap script, decides any field not listed above from the decomp, and fixes any
 compare failure.
 
+Group A status and decisions (commits 1-5):
+
+- Done: 1 format.py 1129e71; 2 state.py 7cb3ad2; 3 reference/state.py f466510; 4
+  reference/convert.py 1397931; 5 reference/engine.py 84da8d1.
+- `ts_alive` lives on RefParty ([P]).
+- `entry_pending` and the `ts_*` [2] per-battler turn fields live on RefBattler.
+- `fake_out_turn` is per battler.
+- `LAYOUT` stays `layout(SINGLES)` for outside callers.
+- `initial_arrays` takes `(fmt, tables, parties, ...)`; prep/states.py and
+  tests/engine/test_e1_batch_a.py got call-site edits.
+- Commits 3-4 are bridged by `RefBattler as RefSide` aliases; remove them once the plan's later
+  steps no longer need them.
+
 ### D2-D12
 
 - D2: targets, the action space and redirection.
@@ -208,6 +221,9 @@ Each is open; close it with its ruling.
     via rawrolls_phase.py; at least 12 GB free at start). Seeds 1-4 are done.
 12. The AI move-effect blocks #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259 are
     E2's (manager, 18 Nov; #233 goes with Fling). They go in the next singles batch, after D1.
+13. tests/engine/test_accuracy_classes.py: one process 45.8 GB, about 1150 s (likely
+    `test_accuracy_classes_equal_raw_rolls`). Bring it under 60 s / 4 GB or mark it slow in the next
+    E2 batch.
 
 ### Closes with its mechanic
 
