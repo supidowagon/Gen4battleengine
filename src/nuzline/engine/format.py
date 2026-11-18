@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import jax.numpy as jnp
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,12 @@ def foe(b):
     """The default defender of battler ``b``: the battler across from it, until D2's resolver
     chooses the target as data."""
     return b ^ 1
+
+
+def foes(x):
+    """``x`` with its leading (battler) axis read through ``foe``: row ``b`` of the result is row
+    ``foe(b)`` of ``x`` (singles: the reversed pair)."""
+    return x[foe(np.arange(x.shape[0]))]
 
 
 def party(fmt: Format, b):
