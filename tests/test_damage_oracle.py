@@ -49,6 +49,7 @@ from nuzline.engine.damage import (
     fixed_damage,
     hidden_power,
     hp_power,
+    ignorable,
     trump_card_power,
     weight_power,
 )
@@ -202,7 +203,19 @@ def _smogon_departs(
     weight = int(tables.species_weight[m["def_species"]])
     if int(tables.move_effect[move]) == EffectId.WEIGHT_POWER and weight in _WEIGHT_BOUNDS:
         return True
-    # 6. The type chart rounding at low damage (_chart_rounding_departs).
+    # 6. A defender's Dry Skin or Water Absorb takes a Water move with power, its Volt Absorb an
+    #    Electric move, unless the attacker's Mold Breaker hides it (BattleSystem_TriggerImmunity-
+    #    Ability, battle_lib.c:3500-3512, :3538-3544): TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES
+    #    (battle_controller_player.c:3281-3286, :2789-2798) ends the move with
+    #    MOVE_STATUS_NO_MORE_WORK before BattleSystem_CalcMoveDamage, which has no Water or
+    #    Electric case for them (its one Dry Skin factor is Fire's, :6845-6848). ``damage_table``
+    #    is that calculation; the absorb is ``step._use_move``'s. @smogon/calc returns 0.
+    seen = int(ignorable(s, 0, 1))
+    water = seen in (AbilityId.DRY_SKIN, AbilityId.WATER_ABSORB) and m["type"] == Type.WATER
+    volt = seen == AbilityId.VOLT_ABSORB and m["type"] == Type.ELECTRIC
+    if water or volt:
+        return True
+    # 7. The type chart rounding at low damage (_chart_rounding_departs).
     return _chart_rounding_departs(tables, names, s, move, m["crit"])
 
 
