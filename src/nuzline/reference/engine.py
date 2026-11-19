@@ -5548,7 +5548,8 @@ def _decomp_ability(tables, mon: RefPokemon) -> int:
     (``ability_form``) and ability slot."""
     row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     written = _t(tables, "species_abilities", row, mon.ability_slot) != mon.ability
-    if written and mon.species:  # an empty slot (SPECIES_NONE) has nothing written  # a script wrote it: Trace's copy, Worry Seed's Insomnia
+    # A script wrote it (Trace's copy, Worry Seed's Insomnia); an empty slot has nothing written.
+    if written and mon.species:
         return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
     return _t(tables, "species_abilities_decomp", row, mon.ability_slot)
 
