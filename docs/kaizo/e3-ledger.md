@@ -1285,3 +1285,15 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_the_natural_run_is_the_injected_schedule_of_the_first_compare`, the slow `test_gyro_ball_exact_equals_loose` and
   `test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant`, and `test_batch13_refusals_lifted`, a fullset
   test run on the pod); tests/strategies.py draws `speed_rec`.
+- E3-B2-16 Pay Day (#34, move 6 in both games; sheet e034_pay_day.md): AI only. The mechanic is already modelled:
+  `tools/effect_map.py:149` maps effect 34 to PLAIN (effect_script_0034.s:5-7: a CHECK_SUBSTITUTE hit that sets
+  subscript_pay_day.s, which only adds `5 * level` to BTLVAR_PAY_DAY_COUNT when the attacker is not on the enemy side, :5-8;
+  prize money, no battle state), so there is no engine, table, state or draw change and no manifest bump. AI: grep of
+  the decomp finds INCREASE_PRIZE_MONEY and MOVE_PAY_DAY only in generated/move_battle_effects.txt and
+  res/moves/pay_day/data.json: no Basic_ScoreMoveEffect (:133-286), Expert_Main (:1623-1811) or other flag entry and no
+  table of script.s names them, and effect 34 is in neither sNoDamageCalcMoveEffects nor sAltPowerMoveEffects
+  (trainer_ai.c:31-61), so the move is a generic 40-power hit for every flag. 34 joins `outcome.KAIZO_TRANSCRIBED` (the
+  label-less group); no label, no command, no roll. Read bounds (`tools/ai_read_bounds.py`) and the backlog regenerated: the
+  row "AI move effect #34 INCREASE_PRIZE_MONEY" closes. Hit chance, damage, crit, held items: as any plain hit.
+  Doubles (section 5): nothing stored or indexed. Owed lines closed: none. Owed lines added: none. Not built: none.
+  Tests: tests/ai/test_kaizo_policy.py (`test_pay_day_has_no_ai_entry_and_scores_as_a_plain_hit`).

@@ -6575,3 +6575,34 @@ def test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant(
         s = _record(s, _cur(t, s))
         dists.append(np.asarray(policy.ai_action_distribution(t, s, layout_for(t, 0x27, s)))[:4])
     np.testing.assert_allclose(dists[0][[1, 0, 2, 3]], dists[1], atol=1e-6)
+
+
+# --- #34 Pay Day (E3-B2-16) -------------------------------------------------------------------
+
+
+def test_pay_day_has_no_ai_entry_and_scores_as_a_plain_hit(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """Pay Day is BATTLE_EFFECT_INCREASE_PRIZE_MONEY (34), named by no Basic_ScoreMoveEffect or
+    Expert_Main entry and by no table of script.s (grep: the name appears nowhere in the AI
+    script): a label-less transcribed effect, a generic 40-power hit that is not in
+    sNoDamageCalcMoveEffects, so nothing is refused (E3-B2-16)."""
+    from nuzline.ai.layout import ALLIN
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+
+    t, n = kaizo_tables, kaizo_names
+    assert 34 in KAIZO_TRANSCRIBED and 34 not in KAIZO_EXPERT_LABELS
+    assert 34 not in c.ENCORE_ENCOURAGED_EFFECTS and 34 not in c.ALT_POWER_EFFECTS
+    assert 6 not in c.COPYCAT_ENCOURAGED_MOVES  # the move id of Pay Day
+    assert all(34 not in table for table in c.CHECK_HP_TABLES.values())
+    assert int(t.move_ai_effect[n.move("Pay Day")]) == 34
+    assert policy.opponent_move_refusals(t, n.move("Pay Day"), ALLIN) == []
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if script.exists():
+        text = script.read_text(encoding="utf-8")
+        assert "INCREASE_PRIZE_MONEY" not in text and "MOVE_PAY_DAY" not in text
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Pay Day", "Accelerock", "", ""))
+    assert bool(c.is_damaging(t, n.move("Pay Day")))
+    layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
+    assert policy.ai_refusals(t, s, n, layout) == []
+    _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)

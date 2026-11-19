@@ -761,6 +761,9 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Risky :6539 (E3-B2-2)
         239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
         # (:1782), :5481, :5484 (E3-2-6)
+        # E3-B2-16. Named by no script.s table, Basic_ScoreMoveEffect (:133-286) or Expert_Main
+        # (:1623-1811) entry (grep): its move takes the generic paths.
+        34,  # INCREASE_PRIZE_MONEY (Pay Day)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

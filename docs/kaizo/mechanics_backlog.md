@@ -35,12 +35,12 @@ New groups: needed in this split and in no earlier one.
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 14 | 7 | 5 |
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 24 | 26 | 16 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 5 | 0 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 24 | 5 | 2 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 201 | 55 | 55 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 25 | 4 | 1 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 202 | 54 | 54 |
 
 ## Whole game
 
-55 distinct missing groups across all ten splits (387 battles,
+54 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -63,8 +63,8 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Candice Split | 0 | 1 | 0 | 0 | 0 | 4 | 0 | 5 |
 | Galactic Split | 0 | 1 | 0 | 0 | 0 | 15 | 0 | 16 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Elite Four Split | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 2 |
-| **Whole game** | **1** | **6** | **0** | **0** | **0** | **45** | **3** | **55** |
+| Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| **Whole game** | **1** | **5** | **0** | **0** | **0** | **45** | **3** | **54** |
 
 ### Groups needed in each split, by kind
 
@@ -81,8 +81,8 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Candice Split | 1 | 1 | 0 | 0 | 0 | 5 | 0 | 7 |
 | Galactic Split | 1 | 2 | 0 | 0 | 0 | 21 | 2 | 26 |
 | Volkner Split | 1 | 1 | 0 | 0 | 0 | 2 | 1 | 5 |
-| Elite Four Split | 1 | 1 | 0 | 0 | 0 | 1 | 2 | 5 |
-| **Whole game** | **1** | **6** | **0** | **0** | **0** | **45** | **3** | **55** |
+| Elite Four Split | 1 | 0 | 0 | 0 | 0 | 1 | 2 | 4 |
+| **Whole game** | **1** | **5** | **0** | **0** | **0** | **45** | **3** | **54** |
 
 ### Battle conditions and other groups
 
@@ -291,7 +291,6 @@ Groups by kind: battle format 12, AI 1
 | 1 | AI move effect #113 FORESIGHT not transcribed (Basic_CheckForesight / Expert_Foresight): Odor Sleuth |
 | 1 | AI move effect #213 CAMOUFLAGE not transcribed (Basic_CheckCamouflage): Camouflage |
 | 1 | AI move effect #251 RESTORE_HP_EVERY_TURN not transcribed (Basic_CheckAquaRing / Expert_AquaRing): Aqua Ring |
-| 1 | AI move effect #34 INCREASE_PRIZE_MONEY not transcribed (no Basic or Expert label): Pay Day |
 | 1 | AI move effect #94 NEXT_ATTACK_ALWAYS_HITS not transcribed (Basic_CheckLockOn / Expert_LockOn): Lock-On |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
@@ -333,7 +332,7 @@ Groups by kind: battle format 12, AI 1
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_MOUNTAIN, TERRAIN_CAVE), and Nature Power would read it |
 | 1 | form change a Transform user facing Sky Forme Shaymin: its freeze writes Land's ability into the user's party Pokemon (F-26; your Transform user assumed): Champion Cynthia |
 
-Groups by kind: battle format 36, battle terrain 9, AI 7, ROM change 2, form change 1
+Groups by kind: battle format 36, battle terrain 9, AI 6, ROM change 2, form change 1
 
 ## Build order for the first two splits
 
