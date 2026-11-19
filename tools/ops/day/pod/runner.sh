@@ -4,7 +4,8 @@
 # than MAXP live units across every run on the pod (/work/*/out/run/*).
 # Backstop: memory.current >= KILL_GB kills this run's newest live unit (its process group) and
 # puts it back at the front of the queue, at most twice per unit; a third kill records rc 98
-# and lists the unit in overkilled.txt.
+# and lists the unit in overkilled.txt. Each kill line names the largest live unit and its RSS
+# at the time of the kill.
 # A unit whose process group is gone without an .rc is a crash: rc 97, listed in crashed.txt.
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of setup.sh): GATE_GB (default 88), MAXP (10), SPACING s between starts (15), KILL_GB (118).
@@ -18,6 +19,13 @@ podlive() {  # live units of every run on the pod
   local n=0 f
   for f in /work/*/out/run/*; do [ -f "$f" ] && okpg "$(cat "$f" 2>/dev/null)" && n=$((n + 1)); done
   echo "$n"
+}
+largest() {  # this run's live unit with the largest RSS (summed over its process group)
+  local r g m best=none bm=-1
+  for r in run/*; do [ -f "$r" ] || continue; g=$(cat "$r" 2>/dev/null); okpg "$g" || continue
+    m=$(ps -eo pgid=,rss= | awk -v g="$g" '$1 == g {s += $2} END {print int(s / 1024)}')
+    [ "$m" -gt "$bm" ] && { bm=$m; best="$(basename "$r") ${m} MB"; }; done
+  echo "$best"
 }
 [ -f pending.txt ] || cp queue.txt pending.txt
 [ -f ALL.start ] || date +%s > ALL.start
@@ -37,15 +45,16 @@ while :; do
   if [ "$mem" -ge "$KILL_GB" ] && [ "$nrun" -gt 0 ]; then
     v=$(ls -t run | head -1); pg=$(cat "run/$v")
     if okpg "$pg"; then
+      big=$(largest)   # measured before the kill
       kill -TERM -- "-$pg" 2>/dev/null; sleep 5; okpg "$pg" && kill -KILL -- "-$pg" 2>/dev/null; sleep 1
       nk=$(grep -c "^$v " killed.txt 2>/dev/null || true); echo "$v $mem" >> killed.txt
       if [ "${nk:-0}" -ge 2 ]; then   # third kill: no more requeues; rc 98, a failure in agg.sh
         echo 98 > "$v.rc"; date +%s > "$v.end"; echo "$v" >> overkilled.txt; rm -f "run/$v"
-        echo "$(date +%s) KILLED $v at ${mem}GB, third kill: rc 98, not requeued"
+        echo "$(date +%s) KILLED $v at ${mem}GB, third kill: rc 98, not requeued; largest live unit then: $big"
       else
         { grep "^$v " queue.txt; cat pending.txt; } > p.new; mv p.new pending.txt
         rm -f "run/$v" "$v.rc" "$v.start" "$v.end" "$v.log" "$v.time"
-        echo "$(date +%s) KILLED $v at ${mem}GB, requeued"
+        echo "$(date +%s) KILLED $v at ${mem}GB, requeued; largest live unit then: $big"
       fi
     fi
     sleep 30; continue

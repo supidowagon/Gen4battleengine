@@ -4,8 +4,9 @@
 # the decomp, syncs the env, collects every entry of files.txt, cuts units (one test file per
 # unit, at most <ids per chunk> ids each; an id already queued by an earlier line is skipped)
 # and starts bin/runner.sh detached. Writes its PID to setup.pid and the runner's to runner.pid
-# (status.sh counts a run as active only while one of them is alive); on any failure the log
-# ends with a SETUP_FAILED line. Collection runs at most 4 jobs at once, each started only
+# (status.sh counts a run as active only while one of them is alive). A failure after the trap
+# below is set ends the log with SETUP_FAILED; one before it (receive, unpack, meta.env, a kill)
+# leaves none, so status.sh's setup=gone with runner=none is the failure test. Collection runs at most 4 jobs at once, each started only
 # while container memory is under GATE_GB (default 88, the runner's gate).
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A]"; A = no -m filter.
 set -euxo pipefail
@@ -15,8 +16,13 @@ echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
 echo "SETUP_START $(date +%s)"
 # The decomp worktree is shared by every run on the pod: one setup at a time creates it.
-( flock 9
-  [ -d "/work/_decomp/$DECOMP" ] || { git -C /work/_decomp/repo fetch -q origin || true; git -C /work/_decomp/repo worktree add -q --detach "/work/_decomp/$DECOMP" "$DECOMP"; }
+( flock -w 600 9 || { echo "ERROR: decomp lock /work/_decomp/.lock still held after 600 s"; exit 1; }
+  if [ ! -d "/work/_decomp/$DECOMP" ]; then
+    timeout 300 git -C /work/_decomp/repo fetch -q origin \
+      || echo "WARNING: decomp fetch failed or passed 300 s (rc $?); trying the local clone"
+    git -C /work/_decomp/repo worktree add -q --detach "/work/_decomp/$DECOMP" "$DECOMP" \
+      || { echo "ERROR: decomp commit $DECOMP not in the local clone"; exit 1; }
+  fi
 ) 9> /work/_decomp/.lock
 R="$D/repo"; rm -rf "$R"; mkdir "$R"; tar --no-same-owner -xf code.tar -C "$R"
 ( cd "$R" && git init -q && git add -A && git -c user.name=ci -c user.email=ci@localhost commit -qm "snapshot $COMMIT" )
@@ -33,7 +39,7 @@ collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$m
   uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
 export -f collect_one; export D R MARK GATE_GB="${GATE_GB:-88}"
-xargs -d '\n' -P 4-I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
+xargs -d '\n' -P 4 -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
 import sys, pathlib, collections
 D = pathlib.Path(sys.argv[1]); q = []; summ = []; n = 0; seen = set()

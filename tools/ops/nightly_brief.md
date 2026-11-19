@@ -2,9 +2,9 @@
 
 Approval: run the nightly on Runpod, uploading only the source at the tip and the built game tables (`docs/process.md` section 5). On its own pod at most $6 per run; on `ci-day-big` its hours count against the $15 day limit. Nothing else is approved.
 
-Project: `<repo>`. Run the fast tier (`-m "not slow"`) on the tip of local `main`. The tip must equal `origin/main`; if not, stop and report. If the tip equals the last nightly's tip (the `COMMIT` in `meta.env` of the newest `<scratch>/rent/out/nightly-*` folder that holds `results/agg.txt`), do not run: report "no merge since the last nightly". Steps, scripts and the never-upload list: `tools/ops/day/DAYBOX.md`. Test list: `tools/ops/day/nightly_files.txt` (whole files, slowest first, one test file per process, cut into chunks; the last line queues the rest). Run name: `nightly-<yyyymmdd>-<short tip>`.
+Project: `<repo>`. Run the fast tier (`-m "not slow"`) on the tip of local `main`. The tip must equal `origin/main`; if not, stop and report. Skip rule: among the `<scratch>/rent/out/nightly-*` folders whose `meta.env` `COMMIT` equals the tip, take the newest by the `yyyymmdd` in the folder name (a folder without a date in its name is older than any dated one). Do not run, and report "no merge since the last nightly", only when that folder's `results/agg.txt` ends with `RESULT: PASS`, or with `RESULT: FAIL (...)` whose only reason is `<n> failed/errors`. Any other reason (`run not finished`, crashed units, units killed three times, collection failures, bad rc, incomplete files), a failed setup, no `results/agg.txt`, or no such folder: run. Steps, scripts and the never-upload list: `tools/ops/day/DAYBOX.md`. Test list: `tools/ops/day/nightly_files.txt` (whole files, slowest first, one test file per process, cut into chunks; the last line queues the rest). Run name: `nightly-<yyyymmdd>-<short tip>`.
 
-You handle the whole run in one flow: launch, poll, report each failure as it appears, collect, delete the pod this run created, final report.
+You are the one agent for this run (`docs/process.md` section 5, "Pod runs"): launch, poll, report each failure as it appears, collect, delete the pod this run created, final report.
 
 ## Hard rules
 
@@ -17,9 +17,9 @@ You handle the whole run in one flow: launch, poll, report each failure as it ap
 ## Run
 
 1. Build or reuse the tables for the tip, pick or create the pod, `pack.sh <tip> <tables> nightly-<yyyymmdd>-<short tip> tools/ops/day/nightly_files.txt`, read the listing, send the exec-pod body, confirm with `status.sh` that units are running. Note the pod id, whether this run created it, creation time, hourly rate and (for `ci-nightly`) the deletion deadline.
-2. Poll `status.sh` until it prints `DONE=y`, or until the deadline. Report each new `BAD u_NNN` with its FAILED/ERROR lines as it appears. `runner=gone` without `DONE=y` or a `SETUP_FAILED` line is a failure of the run: collect what exists and report it.
+2. Poll `status.sh` until it prints `DONE=y`, or until the deadline. Report each new `BAD u_NNN` with its FAILED/ERROR lines as it appears. A failure of the run: `runner=gone` without `DONE=y`, `setup=gone` with `runner=none` (setup died before the runner; there may be no `SETUP_FAILED` line), or a `SETUP_FAILED` line. Collect what exists and report it. `runner=starting` means setup is still alive: keep polling.
 3. `agg.sh`, `fetch.sh` and `collect.sh`.
-4. Delete `ci-nightly` if this run created it. If the run was on `ci-day-big` and `status.sh` prints `other active runs: none`, delete `ci-day-big` (DAYBOX.md "Delete"), clear `_scratch/rent/POD_ID` and report its hours and cost; if another run is active, leave it up. Confirm every delete with `list-pods`.
+4. Delete `ci-nightly` if this run created it. If the run was on `ci-day-big` and `status.sh` prints `other active runs: none`, delete `ci-day-big` (DAYBOX.md "Delete"), clear `<scratch>/rent/POD_ID` and report its hours and cost; if another run is active, leave it up. Confirm every delete with `list-pods`.
 5. Locally, one process at a time and only above the free-RAM floor in `CLAUDE.md` ("Where tests run"), run in the main checkout with `-m "not slow"` the tests that skipped on the pod for missing inputs (mainly `tests/tools/rom`, `tests/kaizo/test_extract_*`, `tests/saves`, `tests/test_user_save.py`).
 
 ## Report (short)
