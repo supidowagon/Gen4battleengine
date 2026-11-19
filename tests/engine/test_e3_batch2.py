@@ -1617,3 +1617,222 @@ def test_a_charged_ingrain_user_no_longer_anchors_against_roar(tables, names):
     rooted = s._replace(ingrain=s.ingrain.at[0].set(1))
     assert bool(ingrain_anchors(t, rooted, 0))
     assert not bool(ingrain_anchors(t, _charged(rooted, 1), 0))
+
+
+# --- Grudge (#194, E3-B2-9) ---------------------------------------------------------------------
+# effect_script_0194.s sets MOVE_EFFECT_GRUDGE on the user (:6); the user's next move attempt
+# clears it (bcp.c:2427). A defender that fainted holding it to a living attacker of the other
+# side (subscript_faint_check_destiny_bond.s:28, subscript_attack_then_switch_out.s:40) takes that
+# attacker's selected move slot to 0 PP (BtlCmd_TryGrudge, battle_script.c:6743-6763), but never
+# for Struggle.
+
+
+def _gr(t, n, foe=("Growl", "Tackle"), foe_item="", mine=("Grudge", "Tackle"), hp=1):
+    """Monferno (side 0, ``mine``, ``hp`` HP, a Geodude behind it) against a Bidoof (``foe``);
+    the Monferno is the faster one, no abilities."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 50, mine), _spec(n, "Geodude", 50, ("Tackle",))],
+        [_spec(n, "Bidoof", 50, foe, foe_item)],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE), hp=s.hp.at[0, 0].set(hp))
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+
+
+def _grgo(t, n, s, me="Grudge", foe="Tackle", out=None):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def _foe_pp(s):
+    return np.asarray(s.pp[1, 0]).tolist()[:2]
+
+
+def test_grudge_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 194 (effect_script_0194.s) is EffectId.GRUDGE in both games; Grudge (move 288) is the
+    only move with it; a neutral, non-damaging effect of the enumeration; the field is a volatile
+    that Baton Pass drops (moves.h:46-48) and the Ingrain test reads."""
+    from nuzline.engine.effects import MOVE_EFFECT_MASK_FIELDS
+    from nuzline.engine.enumerate import INPUT_NEUTRAL_EFFECTS
+    from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS
+
+    assert DECOMP_EFFECT_TO_ID[194] == (EffectId.GRUDGE, (0, 0, 0))
+    for t, nn in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[nn.move("Grudge")]) == EffectId.GRUDGE
+        assert int((np.asarray(t.move_effect) == EffectId.GRUDGE).sum()) == 1
+        assert int(t.move_accuracy[nn.move("Grudge")]) == 0
+    assert EffectId.GRUDGE in INPUT_NEUTRAL_EFFECTS and EffectId.GRUDGE in NON_TABLE_DAMAGE_EFFECTS
+    assert "grudge" in VOLATILE_FIELDS and "grudge" not in BATON_PASSED_FIELDS
+    assert "grudge" in MOVE_EFFECT_MASK_FIELDS
+
+
+def test_grudge_sets_the_bit_and_a_repeat_does_not_fail(tables, names):
+    """effect_script_0194.s:6 sets the bit; the :5 fail never runs, because the user's own move
+    attempt cleared the bit first (bcp.c:2427): Grudge over a set bit sets it again."""
+    t, n = tables, names
+    s = _gr(t, n, hp=100)
+    out = _grgo(t, n, s, foe="Growl")
+    assert out.grudge.tolist() == [1, 0]
+    again = _grgo(t, n, out, foe="Growl")
+    assert again.grudge.tolist() == [1, 0]
+
+
+def test_a_ko_zeroes_the_ko_moves_slot_only(tables, names):
+    """subscript_faint_check_destiny_bond.s:28 TryGrudge: the foe's Tackle (slot 1) knocks out the
+    Grudge user; slot 1 goes to 0 PP, slot 0 keeps what it had."""
+    t, n = tables, names
+    s = _gr(t, n)
+    before = _foe_pp(s)
+    out = _grgo(t, n, s)
+    assert int(out.hp[0, 0]) == 0
+    assert _foe_pp(out) == [before[0], 0]
+    # without the bit (a user of another move) the Tackle only costs its usual PP
+    plain = _grgo(t, n, _gr(t, n), me="Tackle")
+    assert int(plain.hp[0, 0]) == 0 and _foe_pp(plain) == [before[0], before[1] - 1]
+
+
+def test_the_users_next_move_attempt_clears_grudge(tables, names):
+    """CHECK_STATUS_START (bcp.c:2426-2427) clears the bit at any move attempt: a user holding it
+    from an earlier turn that uses Tackle is not avenged."""
+    t, n = tables, names
+    s = _gr(t, n)
+    s = s._replace(grudge=s.grudge.at[0].set(1))
+    out = _grgo(t, n, s, me="Tackle")
+    assert out.grudge.tolist() == [0, 0]
+    assert _foe_pp(out) == [_foe_pp(s)[0], _foe_pp(s)[1] - 1]
+
+
+def test_a_user_that_cannot_move_still_loses_the_bit(tables, names):
+    """The clear is the first state of the check, before sleep stops the move: a sleeping user
+    holding the bit has it gone and the foe's KO takes no PP beyond its own."""
+    t, n = tables, names
+    s = _gr(t, n).with_status(0, 0, Status.SLEEP, 5)
+    s = s._replace(grudge=s.grudge.at[0].set(1))
+    out = _grgo(t, n, s, me="Tackle")
+    assert out.grudge.tolist() == [0, 0]
+    assert _foe_pp(out) == [_foe_pp(s)[0], _foe_pp(s)[1] - 1]
+
+
+def test_a_faint_outside_a_move_takes_no_pp(tables, names):
+    """Residual damage faints with onlyFaint TRUE (bcp.c:940, :4004, :4722): no TryGrudge. A poisoned
+    Grudge user at 1 HP faints at the turn end; the foe's Growl cost only its own PP."""
+    t, n = tables, names
+    s = _gr(t, n).with_status(0, 0, Status.POISON)
+    out = _grgo(t, n, s, foe="Growl")
+    assert int(out.hp[0, 0]) == 0
+    assert _foe_pp(out) == [_foe_pp(s)[0] - 1, _foe_pp(s)[1]]
+
+
+def test_a_destiny_bond_ko_leaves_no_attacker_for_grudge(tables, names):
+    """subscript_faint_check_destiny_bond.s:5-25 takes the attacker down first, then :28 TryGrudge
+    finds its HP 0 (battle_script.c:6751): nothing is zeroed. A switching holder of both bits (a
+    switch is no move attempt) knocked out by a Pursuit: the pursuer takes its Pursuit's PP only."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    t, n = tables, names
+    s = _gr(t, n, foe=("Growl", "Pursuit"))
+    s = s._replace(grudge=s.grudge.at[0].set(1), destiny_bond=s.destiny_bond.at[0].set(1))
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 1), _hits())
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert _foe_pp(out) == [_foe_pp(s)[0], _foe_pp(s)[1] - 1]
+
+
+def test_an_invokers_own_slot_is_zeroed_not_the_called_moves(tables, names):
+    """ATTACKER_MOVE_SLOT is the slot picked at command selection: a sleeping Bidoof's Sleep Talk
+    (slot 0) calling Tackle (slot 1) loses Sleep Talk's PP slot."""
+    t, n = tables, names
+    s = _gr(t, n, foe=("Sleep Talk", "Tackle")).with_status(1, 0, Status.SLEEP, 5)
+    before = _foe_pp(s)
+    out = _grgo(t, n, s, foe="Sleep Talk", out=_hits()._replace(call=jnp.zeros(2, jnp.int16)))
+    assert int(out.hp[0, 0]) == 0
+    assert _foe_pp(out) == [0, before[1]]
+
+
+def test_struggle_is_never_avenged(tables, names):
+    """BtlCmd_TryGrudge needs moveTemp != MOVE_STRUGGLE (battle_script.c:6752); the slot write
+    is skipped whatever PP the slot holds (``effects.try_grudge``), and a dead attacker keeps it."""
+    from nuzline.engine.effects import try_grudge
+
+    t, n = tables, names
+    s = _gr(t, n)
+    s = s._replace(hp=s.hp.at[0, 0].set(0))
+    spared = try_grudge(s, 1, 0, 1, 0, True, True, True)
+    assert _foe_pp(spared) == _foe_pp(s)
+    zeroed = try_grudge(s, 1, 0, 1, 0, True, False, True)
+    assert _foe_pp(zeroed) == [_foe_pp(s)[0], 0]
+    dead = s._replace(hp=s.hp.at[1, 0].set(0))
+    assert _foe_pp(try_grudge(dead, 1, 0, 1, 0, True, False, True)) == _foe_pp(dead)
+
+
+def test_a_u_turn_ko_zeroes_the_users_slot_before_it_switches(tables, names):
+    """subscript_attack_then_switch_out.s:40 TryGrudge (after the Destiny Bond block, before the
+    switch): the foe's U-turn knocks the Grudge user out and loses its slot's PP, then pauses at
+    its party list."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 50, ("Grudge",)), _spec(n, "Geodude", 50, ("Tackle",))],
+        [
+            _spec(n, "Bidoof", 50, ("Growl", "U-turn")),
+            _spec(n, "Geodude", 50, ("Tackle", "Rock Throw")),
+        ],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE), hp=s.hp.at[0, 0].set(1))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+    out = _grgo(t, n, s, foe="U-turn")
+    assert int(out.hp[0, 0]) == 0 and int(out.pivot_battler) == 2
+    assert _foe_pp(out) == [_foe_pp(s)[0], 0]
+
+
+def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables, names):
+    """subscript_pursuit.s:85 runs the same faint check: a Grudge holder at 1 HP switching out to
+    a Pursuit zeroes the pursuer's slot (the one Pursuit spent). The bit stays from an earlier
+    turn: a switch is no move attempt."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    t, n = tables, names
+    s = _gr(t, n, foe=("Growl", "Pursuit"))
+    s = s._replace(grudge=s.grudge.at[0].set(1))
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 1), _hits())
+    assert int(out.hp[0, 0]) == 0
+    assert _foe_pp(out) == [_foe_pp(s)[0], 0]
+
+
+def test_the_attackers_leppa_misses_the_zero_until_the_turn_end(tables, names):
+    """The attacker's after-move held-item check (bcp.c:3687) runs before LOOP_FAINTED, so Leppa
+    finds no empty slot at the move; the end-of-turn check (bcp.c:1363) restores the zeroed slot
+    and spends the berry."""
+    t, n = tables, names
+    s = _gr(t, n, foe_item="Leppa Berry")
+    out = _grgo(t, n, s)
+    assert int(out.item[1, 0]) == 0
+    assert _foe_pp(out)[1] == int(t.item_param[n.item("Leppa Berry"), 0])
+
+
+def test_a_mimicked_slot_loses_only_the_battlemons_pp_to_grudge(tables, names):
+    """BattleMon_CopyToParty skips a Mimic-flagged slot: the KO-ing battler's BattleMon PP goes to
+    0, the party's shadow of the slot stays."""
+    t, n = tables, names
+    s = _gr(t, n)
+    s = s._replace(
+        mimic_slots=s.mimic_slots.at[1].set(2),
+        shadow_moves=s.shadow_moves.at[1, 1].set(n.move("Rock Throw")),
+        shadow_pp=s.shadow_pp.at[1, 1].set(15),
+    )
+    out = _grgo(t, n, s)
+    assert _foe_pp(out)[1] == 0 and int(out.shadow_pp[1, 1]) == 15
+
+
+def test_a_switch_clears_grudge_and_the_ingrain_test_reads_it(tables, names):
+    """Cleared with the other volatiles (battle_lib.c:2071); the whole-mask Roar test
+    (subscript_force_target_to_switch_or_flee.s:7) no longer finds an Ingrain-only mask."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+    from nuzline.engine.effects import ingrain_anchors
+
+    t, n = tables, names
+    s = _gr(t, n, hp=100)
+    s = s._replace(grudge=s.grudge.at[0].set(1))
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 0), _hits())
+    assert out.grudge.tolist() == [0, 0]
+    rooted = s._replace(ingrain=s.ingrain.at[0].set(1))
+    assert not bool(ingrain_anchors(t, rooted, 0))
+    assert bool(ingrain_anchors(t, rooted._replace(grudge=rooted.grudge.at[0].set(0)), 0))

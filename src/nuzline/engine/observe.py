@@ -218,6 +218,8 @@ _NONZERO_SIDE = (
     "ability_suppressed",
     # E3 batch 2: "{0} began charging power!" (subscript_charge.s:7) until its count runs out.
     "charged_turns",
+    # E3 batch 2: "{0} wants the foe to bear a grudge!" (effect_script_0194.s:7) until it ends.
+    "grudge",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

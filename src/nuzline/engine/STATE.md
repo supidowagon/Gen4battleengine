@@ -114,8 +114,11 @@ three structs has a row.
   `charged_turns` (E3-B2-8: `MoveEffectsData.chargedTurns`, 2 bits, with its `MOVE_EFFECT_CHARGE`
   bit, set to 2 by subscript_charge.s:5-6, counted down at the turn end, bcp.c:1626-1630; cleared
   with the volatiles, not Baton-passed, moves.h:46-48; in `effects.MOVE_EFFECT_MASK_FIELDS`;
-  doubles the user's Electric power, battle_lib.c:6690). The rest (Grudge, Miracle Eye, Heal
-  Block) are later (M6).
+  doubles the user's Electric power, battle_lib.c:6690). Grudge -> `grudge` (E3-B2-9: the
+  `MOVE_EFFECT_GRUDGE` bit, set by effect_script_0194.s:6, cleared at the user's next move attempt,
+  bcp.c:2427, and with the volatiles; not Baton-passed, moves.h:46-48; in
+  `effects.MOVE_EFFECT_MASK_FIELDS`; `effects.try_grudge` zeroes a KO-ing attacker's selected slot's
+  PP, battle_script.c:6743-6763). The rest (Miracle Eye, Heal Block) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -515,7 +518,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns`, `grudge` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 

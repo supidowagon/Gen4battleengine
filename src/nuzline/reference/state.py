@@ -104,6 +104,7 @@ class RefBattler:
     aqua_ring: int
     infatuated: int
     destiny_bond: int
+    grudge: int  # MOVE_EFFECT_GRUDGE (E3-B2-9)
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
     perish_song: int

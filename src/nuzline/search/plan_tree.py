@@ -278,6 +278,7 @@ _COND_TEXT = {
     "embargo": "under Embargo",
     "ability_suppressed": "ability suppressed",
     "charged_turns": "charging power",
+    "grudge": "bearing a grudge",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

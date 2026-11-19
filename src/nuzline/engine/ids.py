@@ -576,6 +576,14 @@ class EffectId(IntEnum):
     # (BattleSystem_CalcCriticalMulti, battle_lib.c:7137, ``effects.crit_blocked``); no random
     # draw; E3-B2-7.
     LUCKY_CHANT = 136
+    # Grudge (194, BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT): zeros. effect_script_0194.s:5-6 sets the
+    # user's MOVE_EFFECT_GRUDGE (``BattleState.grudge``; its :5 fail branch is dead, the bit is
+    # cleared at the user's move attempt, bcp.c:2427, before the script). Where a defender that
+    # fainted holding it was KO-ed by a living attacker of the other side (subscript_faint_check_
+    # destiny_bond.s:28, subscript_attack_then_switch_out.s:40, BtlCmd_TryGrudge,
+    # battle_script.c:6743-6763), that attacker's selected move slot goes to 0 PP; no random
+    # draw; E3-B2-9.
+    GRUDGE = 137
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

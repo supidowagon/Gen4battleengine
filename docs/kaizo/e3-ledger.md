@@ -877,3 +877,68 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   the_charge_lands`, `test_the_ai_estimate_reads_the_charge`, `test_a_switch_clears_the_charge`),
   tests/ai/test_kaizo_policy.py (`test_charge_has_no_ai_label_and_one_table_entry`,
   `test_expert_encore_encourages_a_players_last_charge`); `fullset`-free.
+
+- E3-B2-9 Grudge (#194, BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT; move 288, the only move with effect 194 in either
+  game, acc 0, PP 5, RANGE_USER; player-only in Kaizo, Metronome-callable): new `EffectId.GRUDGE` (137,
+  `tools/effect_map.py` entry 194); new per-battler `grudge [B]` int8 (`MOVE_EFFECT_GRUDGE`, moves.h:22, a bit with
+  no count) in `VOLATILE_FIELDS` (cleared at switch and faint, lib.c:2071, :2166), not in `BATON_PASSED_FIELDS`
+  (moves.h:46-48), in `effects.MOVE_EFFECT_MASK_FIELDS` (Roar's whole-mask Ingrain test,
+  subscript_force_target_to_switch_or_flee.s:7; the reference's `_ingrain_anchors` list has it too). No `Outcome` field, no draw. Tables: `move_effect` of Grudge only; no
+  manifest bump (no array or key changed).
+  Script: effect_script_0194.s:6 sets the bit (`effects._grudge`, an indirect ON_HIT message, :7-9). Its :5 fail
+  branch (the bit already set) never runs: CheckStatusDisruption clears the bit at the start of every move
+  attempt of the user (`CHECK_STATUS_START`, bcp.c:2424-2427, before the script, whether the checks then
+  stop the move or not), so there is no `primary_effect_fails` entry. `step._use_move` clears it beside
+  Destiny Bond's clear (`checks`), the reference's `_fight` the same.
+  Trigger: `BtlCmd_TryGrudge` (battle_script.c:6743-6763), reached from subscript_faint_check_destiny_bond.s:28
+  (after its Destiny Bond block, :5-25) and subscript_attack_then_switch_out.s:40 (after its own copy of the
+  block, :14-34). The first runs from LOOP_FAINTED after a move (`AnyFainted`, onlyFaint FALSE, bcp.c:3820-3823,
+  :4423-4427) and from subscript_pursuit.s:85; faints outside a move (residual, recoil, Future Sight, bcp.c:940,
+  :1295, :1750, :4004, :4722) take the onlyFaint TRUE path: no Grudge. If the fainted battler held the bit, the
+  attacker is on the other side, the attacker's HP is above 0 (a Destiny Bond kill, which runs first, leaves
+  nothing) and `moveTemp` is not Struggle: `ppCur[ATTACKER_MOVE_SLOT]` = 0 and `BattleMon_CopyToParty`
+  (a Mimic-flagged slot is not copied: the party's `shadow_pp` stays). `effects.try_grudge`, called at the
+  engine's three Destiny Bond sites (`step._use_move`'s after-the-hits site and U-turn site, `step._pursuit_hit`)
+  and the reference's (`_fight`, `_u_turn`, `_pursuit`) through `_try_grudge`.
+  Slot: `ATTACKER_MOVE_SLOT` (common.h:8, `moveSlot[attacker]`) is written at command selection (bcp.c:445,
+  :526) only, so an invoker's call (Sleep Talk, Metronome, Mirror Move ...) zeroes the invoker's own slot, an
+  Encore's forced slot is the encored one, and Pursuit's is the pursuer's chosen slot (the one Pursuit spent,
+  battle_script.c:6919); the engine's `slot` of `_use_move` is that slot already (the PP decrement's). The
+  reference reads `turn.move_slot` (set from the action at `_fight`'s start).
+  Leppa Berry: the attacker's after-move held-item check (`AfterMoveEffects`, bcp.c:3687) runs before LOOP_FAINTED,
+  so it misses the zero; the end-of-turn check (bcp.c:1363; lib.c:4636-4653) restores it. Both engines already run
+  the item check inside the hit loop, before the Grudge write.
+  Enumeration: `INPUT_NEUTRAL_EFFECTS` and `NON_TABLE_DAMAGE_EFFECTS` (a status move that reads and writes PP only
+  after a faint; a PP the same turn cannot change a hit: each side has one action). No `INPUT_CLAUSE_EFFECTS`,
+  `CRIT_ODDS_EFFECTS` entry, no accuracy / evasion write (`test_accuracy_classes._NO_ACC_EVA_WRITE`).
+  Observation: `observe._NONZERO_SIDE` "grudge" ("{0} wants the foe to bear a grudge!", effect_script_0194.s:7),
+  `plan_tree._COND_TEXT`.
+  AI: no Basic or Expert label for 194 (script.s names it twice, in Expert_Encore_EncouragedMoveEffects, :3259, and
+  CheckHP_DiscourageAtHighHP, :7757, both already transcribed: `commands.ENCORE_ENCOURAGED_EFFECTS`,
+  `commands.CHECK_HP_TABLES`); no roll; no AI command reads the bit. 194 joins `outcome.KAIZO_TRANSCRIBED`
+  (a label-less transcribed effect, as Spite: its move takes the generic paths, `opponent_move_refusals` is
+  empty). Read bounds regenerated; backlog regenerated: the row "move effect #194: Grudge" (Roark Split) closes.
+  Rulings. (1) U-turn is a site the sheet did not list: subscript_attack_then_switch_out.s:40 runs TryGrudge
+  right after its Destiny Bond block (closes the E2 batch 6 open point "Grudge at :40", e2-mechanics-ledger.md
+  "Around the pivots"). (2) After a paused U-turn's list the action goes on to LOOP_FAINTED with the defender
+  still flagged (SYSCTL_MON_FAINTED, battle_script.c:1770-1771, cleared only by PlayFaintAnimation, :1799),
+  so TryGrudge would run again with the attacker battler's newcomer (moveSlot is per battler). NOT built: the
+  paused state has already reset the fainted defender's volatiles, so the bit is gone at the resume; owed
+  (Owed 1 below). (3) A reflected Magic Coat pass and Pursuit's Struggle cannot meet it (a
+  reflected move is a status move; Pursuit is not Struggle); `try_grudge` takes `struggling` for the
+  fight command's own Struggle. (4) The reference's `_ingrain_anchors` `others` has `sd.grudge`; no both-engine test: Roar's -6 priority
+  makes the foe move after the holder's own attempt, which clears the bit (engine-only test above).
+  Not built: Owed 1 (added): Grudge's second TryGrudge on a U-turn newcomer (needs the fainted defender's bit
+  kept in the pause scratch, `ts_*`). Owed lines naming Grudge before: none. Doubles: `try_grudge` tests the side of the attacker against the
+  fainted battler's (bs.c:6750, so a fainting partner's attacker on the same side is excluded) and the slot is
+  per battler; the reference's `_try_grudge` is singles. Not modelled, message only: "{0}'s {1} lost all its PP
+  due to the grudge!", "{0} wants the foe to bear a grudge!".
+  Tests: tests/engine/test_e3_batch2.py (`test_grudge_*`, `test_a_ko_zeroes_the_ko_moves_slot_only`,
+  `test_the_users_next_move_attempt_clears_grudge`, `test_a_user_that_cannot_move_still_loses_the_bit`,
+  `test_a_faint_outside_a_move_takes_no_pp`, `test_a_destiny_bond_ko_leaves_no_attacker_for_grudge`,
+  `test_an_invokers_own_slot_is_zeroed_not_the_called_moves`, `test_struggle_is_never_avenged`,
+  `test_a_u_turn_ko_zeroes_the_users_slot_before_it_switches`, `test_a_pursuit_ko_of_a_switching_grudge_
+  user_zeroes_the_pursuers_slot`, `test_the_attackers_leppa_misses_the_zero_until_the_turn_end`,
+  `test_a_mimicked_slot_loses_only_the_battlemons_pp_to_grudge`, `test_a_switch_clears_grudge_and_the_
+  ingrain_test_reads_it`), tests/ai/test_kaizo_policy.py (`test_grudge_has_no_ai_label_and_two_table_entries`,
+  `test_expert_encore_encourages_a_players_last_grudge`); `fullset`-free.

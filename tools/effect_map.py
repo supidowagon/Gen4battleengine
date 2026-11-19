@@ -573,6 +573,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # MOVE_EFFECT_CHARGE and chargedTurns = 2, then Sp. Def +1 (STAT_SELF with
     # move_param[m, 2] = CHARGE_PARAM), E3-B2-8.
     174: ("BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER", _E.STAT_SELF, (_SPD, 1, CHARGE_PARAM)),
+    # Grudge: effect_script_0194.s sets the user's MOVE_EFFECT_GRUDGE; BtlCmd_TryGrudge runs at a
+    # defender's faint (subscript_faint_check_destiny_bond.s:28, E3-B2-9).
+    194: ("BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT", _E.GRUDGE, (0, 0, 0)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

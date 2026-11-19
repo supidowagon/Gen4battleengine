@@ -5636,3 +5636,49 @@ def test_expert_encore_encourages_a_players_last_charge(
     assert _delta(t, charge, 0x3, 0x7, ((0, 3192),))[0] == 0
     tackle = s._replace(last_move=s.last_move.at[0].set(n.move("Tackle")))
     assert _delta(t, tackle, 0x3, 0x7)[0] == -2
+
+
+# --- #194 Grudge (E3-B2-9) --------------------------------------------------------------------
+
+
+def test_grudge_has_no_ai_label_and_two_table_entries(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Grudge is BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT, 194, named twice in script.s, in
+    Expert_Encore_EncouragedMoveEffects (:3259) and CheckHP_DiscourageAtHighHP (:7757), both
+    transcribed; no Basic_ScoreMoveEffect or Expert_Main entry and no roll, so it is a label-less
+    transcribed effect scored through the generic paths, and nothing is refused (E3-B2-9)."""
+    from nuzline.ai.layout import ALLIN
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+
+    t, n = kaizo_tables, kaizo_names
+    assert 194 in KAIZO_TRANSCRIBED and 194 not in KAIZO_EXPERT_LABELS
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(194) == 1
+    assert c.CHECK_HP_TABLES["CheckHP_DiscourageAtHighHP"].count(194) == 1
+    assert sum(194 in table for table in c.CHECK_HP_TABLES.values()) == 1
+    assert int(t.move_ai_effect[n.move("Grudge")]) == 194
+    assert policy.opponent_move_refusals(t, n.move("Grudge"), ALLIN) == []
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if script.exists():
+        lines = script.read_text(encoding="utf-8").splitlines()
+        named = [
+            i + 1 for i, line in enumerate(lines) if "BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT" in line
+        ]
+        assert named == [3259, 7757]
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Grudge", "Accelerock", "", ""))
+    assert not bool(c.is_damaging(t, n.move("Grudge")))
+    for flags in (0x27, 0x10F):
+        layout = layout_for(t, flags, s)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
+
+
+def test_expert_encore_encourages_a_players_last_grudge(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """Expert_Encore (script.s:3177-3200) with the player's last move Grudge, which is in the table
+    (:3259): +3 (the faster AI, :3192 not jumping), 0 when :3192 jumps (E3-B2-9)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
+    s = _speeds(s, player=1, opp=500)
+    grudge = s._replace(last_move=s.last_move.at[0].set(n.move("Grudge")))
+    assert _delta(t, grudge, 0x3, 0x7)[0] == 3
+    assert _delta(t, grudge, 0x3, 0x7, ((0, 3192),))[0] == 0

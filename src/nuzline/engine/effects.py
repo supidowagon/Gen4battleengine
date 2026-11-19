@@ -1644,6 +1644,32 @@ def _side_layers(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return state
 
 
+def _grudge(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Grudge (effect_script_0194.s, an indirect ON_HIT message): :6 sets the user's
+    MOVE_EFFECT_GRUDGE. Its :5 fail branch (the bit already set) never runs: the user's move
+    attempt cleared the bit first (``CHECK_STATUS_START``, bcp.c:2427). E3-B2-9."""
+    return _set(state, "grudge", h.side, 1, (h.effect == _E.GRUDGE) & h.landed)
+
+
+def try_grudge(
+    state: BattleState, side, mon, slot, fainted_side, fainted_has_grudge, struggling, cond
+) -> BattleState:
+    """``BtlCmd_TryGrudge`` (battle_script.c:6743-6763), run by subscript_faint_check_destiny_bond.s:28
+    and subscript_attack_then_switch_out.s:40: where ``cond`` (the defender fainted in this action)
+    the fainted battler held MOVE_EFFECT_GRUDGE (``fainted_has_grudge``), the attacker ``side``'s
+    battler (party slot ``mon``) is on the other side (``fainted_side``) with HP left and the move
+    is not Struggle: its PP of the selected move slot ``slot`` (``ATTACKER_MOVE_SLOT``) goes to 0.
+    The write is the BattleMon's: ``BattleMon_CopyToParty`` skips a Mimic-flagged slot, so the
+    party's copy (``shadow_pp``) is untouched. E3-B2-9."""
+    fmt = format_of(state)
+    hit = cond & fainted_has_grudge & (side_of(side) != side_of(fainted_side))
+    hit = hit & (state.hp[party(fmt, side), mon] > 0) & ~jnp.asarray(struggling, bool)
+    pp = state.pp.at[party(fmt, side), mon, slot].set(
+        jnp.where(hit, 0, state.pp[party(fmt, side), mon, slot]).astype(state.pp.dtype)
+    )
+    return state._replace(pp=pp)
+
+
 def _destiny_bond(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Destiny Bond (effect_script_0098.s: an ON_HIT indirect effect): subscript_destiny_bond.s:9
     sets the user's flag; there is no failure on a repeated use."""
@@ -2392,6 +2418,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "power_trick",  # B12-10
     "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, E3-2-6
     "charged_turns",  # MOVE_EFFECT_CHARGE, E3-B2-8
+    "grudge",  # MOVE_EFFECT_GRUDGE, E3-B2-9
 )
 
 
@@ -2400,7 +2427,7 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Grudge, Miracle Eye,
+    (``camouflaged``). The other bits come from unsupported moves (Miracle Eye,
     Heal Block); each joins the tuple with its move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:
@@ -3885,6 +3912,7 @@ def play_hit(
         _roost,
         _side_layers,
         _destiny_bond,
+        _grudge,
         _uproar,
     ):
         state = fn(tables, state, h, outcome)

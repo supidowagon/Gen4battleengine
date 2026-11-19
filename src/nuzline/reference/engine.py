@@ -1936,6 +1936,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "aqua_ring",
         "infatuated",
         "destiny_bond",
+        "grudge",  # MOVE_EFFECT_GRUDGE, not Baton-passed (E3-B2-9)
         "uproar",
         "ingrain",
         "mean_look",
@@ -3911,6 +3912,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[side_of(target)].toxic_spikes += 1
     elif effect == EffectId.DESTINY_BOND and landed:
         s.battlers[side].destiny_bond = 1  # subscript_destiny_bond.s:9
+    elif effect == EffectId.GRUDGE and landed:
+        s.battlers[side].grudge = 1  # effect_script_0194.s:6 (its :5 fail never runs, E3-B2-9)
     elif effect == EffectId.UPROAR and effective and not s.battlers[side].uproar:
         # effect_script_0159.s:5-6: an ON_HIT indirect subscript_uproar.s for a user not in an
         # uproar (lib.c:1524-1529: not NO_EFFECTS): moveLockedInto = moveCur, Random 3, 3 turns
@@ -4612,6 +4615,8 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             _life_orb_recoil(turn, s, side)
     if holder.hp == 0 and s.battlers[foe].destiny_bond and user.hp > 0:
         _lose_hp(turn, s, side, user.hp)
+    # :40 TryGrudge right after the Destiny Bond block (E3-B2-9).
+    _try_grudge(s, side, turn.move_slot, foe, holder.hp == 0, False)
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
         _pursuit(turn, s, side, turn.actions, turn.choices)
@@ -4929,6 +4934,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             turn.custap[side] = False
             _remove_item(s, side)
         s.battlers[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
+        s.battlers[side].grudge = 0  # bcp.c:2427 (E3-B2-9)
         # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
         # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
         s.battlers[side].last_move = 0
@@ -5677,10 +5683,32 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and mon.hp > 0
     ):
         _lose_hp(turn, s, side, mon.hp)
+    # subscript_faint_check_destiny_bond.s:28 TryGrudge, after the Destiny Bond block; the
+    # attacker's Leppa Berry check (AfterMoveEffects, bcp.c:3687) already ran (E3-B2-9).
+    _try_grudge(
+        s,
+        side,
+        turn.move_slot,
+        _foe(side),
+        foe_hp0 > 0 and foe_now is foe_mon0 and foe_now.hp == 0,
+        struggling,
+    )
     if unleash:  # the unleash script spent the Bide counter (bcp.c:2702, subscript_bide_end.s)
         _unlock(s.battlers[side])
         record = move
     return record
+
+
+def _try_grudge(
+    s: RefState, side: int, slot: int, fainted: int, fell: bool, struggling: bool
+) -> None:
+    """``BtlCmd_TryGrudge`` (battle_script.c:6743-6763): the defender ``fainted`` (battler) fell in
+    this action (``fell``) holding MOVE_EFFECT_GRUDGE; the attacker ``side`` is on the other side
+    (always, here), has HP and did not use Struggle: its PP of the selected move slot goes to 0.
+    The BattleMon's PP only (``BattleMon_CopyToParty`` skips a Mimic-flagged slot). E3-B2-9."""
+    mon = _active(s, side)
+    if fell and s.battlers[fainted].grudge and mon.hp > 0 and not struggling:
+        mon.pp[slot] = 0
 
 
 def _roar(turn: _Turn, s: RefState, side: int) -> bool:
@@ -5799,6 +5827,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     # pursuer down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
     if target_hp > 0 and _active(s, side).hp == 0 and s.battlers[side].destiny_bond and mon.hp > 0:
         _lose_hp(turn, s, pursuer, mon.hp)
+    # The same subscript's :28 TryGrudge on the pursuer's slot (E3-B2-9).
+    _try_grudge(s, pursuer, slot, side, target_hp > 0 and _active(s, side).hp == 0, False)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
     # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at
@@ -6649,7 +6679,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
-        sd.power_trick, sd.ability_suppressed, sd.charged_turns,
+        sd.power_trick, sd.ability_suppressed, sd.charged_turns, sd.grudge,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]

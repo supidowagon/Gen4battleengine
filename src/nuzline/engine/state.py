@@ -46,6 +46,12 @@ Encodings:
 * ``destiny_bond`` is the active battler's ``VOLATILE_CONDITION_DESTINY_BOND``
   (subscript_destiny_bond.s:9): cleared when its next move attempt starts
   (``CHECK_STATUS_START``, bcp.c:2425) and with the other volatiles (``step._VOLATILE``).
+* E3-B2-9 (Grudge). ``grudge`` is the active battler's ``MOVE_EFFECT_GRUDGE`` bit of
+  ``moveEffectsMask`` (moves.h; set by effect_script_0194.s:6): cleared when its next move attempt
+  starts (``CHECK_STATUS_START``, bcp.c:2424-2427), and with the other volatiles when it leaves or
+  faints (battle_lib.c:2071, :2166), not Baton-passed (moves.h:46-48). ``step`` reads it where a
+  battler that holds it fainted to a living attacker of the other side (``BtlCmd_TryGrudge``,
+  battle_script.c:6743-6763) and zeroes that attacker's selected move slot's PP.
 * ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
   ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
   (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
@@ -384,6 +390,7 @@ class BattleState(NamedTuple):
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (0/1 in D1; 1 + battler in D5)
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
+    grudge: jnp.ndarray  # int8, MOVE_EFFECT_GRUDGE in moveEffectsMask (E3-B2-9)
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
@@ -645,6 +652,7 @@ VOLATILE_FIELDS = (
     "aqua_ring",
     "infatuated",
     "destiny_bond",
+    "grudge",
     "uproar",
     "ingrain",
     "mean_look",
@@ -782,6 +790,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "aqua_ring": (_BATTLER, np.int8),
     "infatuated": (_BATTLER, np.int8),
     "destiny_bond": (_BATTLER, np.int8),
+    "grudge": (_BATTLER, np.int8),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),

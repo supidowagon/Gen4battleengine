@@ -692,6 +692,10 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # DiscourageAtLowHP (:7960), both transcribed (commands.py): no Basic_ScoreMoveEffect or
         # Expert_Main entry, so its move takes the generic paths.
         100,  # DECREASE_LAST_MOVE_PP (Spite)
+        # E3-B2-9. Named only by the tables Expert_Encore_EncouragedMoveEffects (script.s:3259) and
+        # CheckHP_DiscourageAtHighHP (:7757), both transcribed (commands.py): no Basic_ScoreMoveEffect
+        # or Expert_Main entry, no roll, and no AI command reads the bit.
+        194,  # REMOVE_ALL_PP_ON_DEFEAT (Grudge)
         # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
         # (:1623-1811) or other flag entry names these: their moves take the generic paths.
         77,  # POISON_MULTI_HIT (Twineedle)

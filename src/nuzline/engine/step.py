@@ -169,6 +169,7 @@ from nuzline.engine.effects import (
     targets_foe_side,
     targets_user,
     thaw_target,
+    try_grudge,
     unlock_move,
     uproar_on,
     weather_fails,
@@ -924,6 +925,10 @@ def _use_move(
     # the checks below find.
     bond = jnp.where(checks, 0, state.destiny_bond[side]).astype(state.destiny_bond.dtype)
     state = state._replace(destiny_bond=state.destiny_bond.at[side].set(bond))
+    # The same state clears MOVE_EFFECT_GRUDGE (bcp.c:2426-2427), so Grudge's own :5 fail never runs
+    # and a Grudge only outlives its user's next move attempt for a faint within the same turn (E3-B2-9).
+    grudge = jnp.where(checks, 0, state.grudge[side]).astype(state.grudge.dtype)
+    state = state._replace(grudge=state.grudge.at[side].set(grudge))
 
     # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2417) runs
     # before the PP decrement; the first check that disrupts the move stops the rest.
@@ -2114,6 +2119,12 @@ def _use_move(
             & (hit_state.hp[party(fmt, side), user] > 0)
         )
         hit_state = _set_mon(hit_state, "hp", side, user, 0, bonded)
+        # :40 TryGrudge (subscript_attack_then_switch_out.s, right after the Destiny Bond block):
+        # a defender that fainted holding Grudge zeroes the attacker's selected slot (E3-B2-9).
+        hit_state = try_grudge(
+            hit_state, side, user, slot, target_side, hit_state.grudge[target_side] != 0, False,
+            tries & fell,
+        )  # fmt: skip
         # :48: a user that fainted does not switch; :54 its foe's Pursuit, else the list.
         goes = tries & (hit_state.hp[party(fmt, side), user] > 0)
         foe = target_side
@@ -2317,6 +2328,14 @@ def _use_move(
     fell = (target_hp0 > 0) & (state.hp[party(fmt, target_side), target] == 0)
     bonded = fell & (state.destiny_bond[target_side] != 0) & (state.hp[party(fmt, side), user] > 0)
     state = _set_mon(state, "hp", side, user, 0, bonded)
+    # subscript_faint_check_destiny_bond.s:28 TryGrudge (BtlCmd_TryGrudge, battle_script.c:6743-6763)
+    # right after: a defender that fainted holding MOVE_EFFECT_GRUDGE zeroes the PP of the living
+    # attacker's selected slot (``slot``: an invoker's own for a called move), never for Struggle.
+    # The attacker's Leppa Berry check (AfterMoveEffects, bcp.c:3687) already ran, so it misses this
+    # zero (E3-B2-9).
+    state = try_grudge(
+        state, side, user, slot, target_side, state.grudge[target_side] != 0, struggling, fell
+    )
     # The unleash script clears the lock (the Bide counter is spent); the move above still
     # saw it locked, so effect_script_0026.s did not restart Bide.
     state = _unlock(state, side, bide_ends & head_on)
@@ -2809,6 +2828,11 @@ def _pursuit_hit(
     fell = (before_hp > 0) & (state.hp[party(fmt, switcher), state.active[switcher]] == 0)
     bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[party(fmt, pursuer), mon] > 0)
     state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
+    # The same subscript's :28 TryGrudge: the pursuer's selected slot (the one Pursuit spent) goes
+    # to 0 PP when the switcher fainted holding Grudge (E3-B2-9).
+    state = try_grudge(
+        state, pursuer, mon, slot, switcher, state.grudge[switcher] != 0, False, fell
+    )
     state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
     # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
