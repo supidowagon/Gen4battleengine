@@ -703,6 +703,7 @@ def test_kaizo_vulpix_roar_bruteforce(kaizo_tables, kaizo_names, level):
 # --- coverage --------------------------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_roar_is_supported_and_its_blockers_refused(tables, names):
     base = sample_party(names)
     mon = replace_spec(base[0], moves=(names.move("Roar"), *base[0].moves[1:]))

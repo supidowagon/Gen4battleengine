@@ -442,6 +442,7 @@ def test_battle_effect_ids_are_the_decomps():
         assert lines[member.value] == f"BATTLE_EFFECT_{name}", member
 
 
+@pytest.mark.fullset
 def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, kaizo_roark_party):
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
@@ -1343,6 +1344,7 @@ def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scrip
         ]
 
 
+@pytest.mark.fullset
 def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
     """``policy.opponent_move_refusals`` (the backlog's per-move AI lines) agrees with
     ``_refused`` for every Kaizo move in an opponent slot: a move has a kind exactly when
@@ -4711,6 +4713,7 @@ def test_batch13_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
+@pytest.mark.fullset
 def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
     """B13-23..27: the batch's effects are transcribed (no "not transcribed" or "expert
     label"); Natural Gift and Judgment take modelled id cases; Gyro Ball's TrainerAI_CalcDamage

@@ -103,6 +103,7 @@ def test_traced_matches_eager(tables, names):
     assert int(traced) == int(post_ko_switch_in(tables, s))
 
 
+@pytest.mark.fullset
 def test_skipped_first_move_reading_a_stale_score_is_refused(tables, names):
     # Stage 2 compares the stale stage-1 score when the first candidate's slot 0 is skipped
     # (power 1: a variable-power move such as Low Kick); that read is refused.

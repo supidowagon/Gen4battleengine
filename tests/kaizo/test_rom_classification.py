@@ -196,6 +196,7 @@ def test_every_classified_entry_is_decoded():
             assert CITE.search(e["note"]), e
 
 
+@pytest.mark.fullset
 def test_unknown_entries_name_their_milestone():
     for e in _entries():
         if e["status"] == "unknown" and e["note"]:
@@ -211,6 +212,7 @@ def test_done_groups_cover_every_entry():
 
 
 @pytest.mark.parametrize("group", DONE_GROUPS, ids=[g[0] for g in DONE_GROUPS])
+@pytest.mark.fullset
 def test_group_has_no_undecoded_entries(group):
     _, keys = group
     entries = _by_key()

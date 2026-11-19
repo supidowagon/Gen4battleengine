@@ -261,6 +261,7 @@ def test_tables_map_the_abilities_in_both_games(tables, names, kaizo_tables, kai
         assert name in want and int(kaizo_tables.species_abilities[i, slot]) == want[name]
 
 
+@pytest.mark.fullset
 def test_ai_still_refuses_what_it_does_not_score(tables, names):
     # K3c: IfMoveEffectivenessEquals and the AI's damage (TrainerAI_CalcDamage) run
     # ApplyTypeChart with the AI as attacker, so the player's Solid Rock and the AI's

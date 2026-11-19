@@ -187,6 +187,7 @@ def test_self_destruct_cloud_nine_user_no_longer_suppresses(tables, names):
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == boosted and int(out.hp[0, 0]) == 0
 
 
+@pytest.mark.fullset
 def test_damp_meets_self_destruct_refused(tables, names):
     # effect_script_0007.s:_038 (Damp stops the move) is not modelled: Damp is an
     # unsupported ability, so a Damp holder on either side refuses the fight.
@@ -240,6 +241,7 @@ def test_self_destruct_zero_divisor_refused(tables, names):
         assert ((18, sd) not in learned) == refused, learned
 
 
+@pytest.mark.fullset
 def test_self_destruct_ai_still_refused(tables, names):
     # The AI's Self-Destruct script paths (Basic_CheckCannotExplode, Expert_Explosion) are
     # K3c: an opponent with it is still refused.

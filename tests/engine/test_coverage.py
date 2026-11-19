@@ -49,6 +49,7 @@ def test_roark_vs_sample_party_is_fully_covered(tables, names):
     assert r.missing == [] and r.level == Support.EXACT
 
 
+@pytest.mark.fullset
 def test_all_missing_reported_at_once(tables, names, metronome_refused):
     # The held item is picked from the coverage table at run time: the first one still mapped
     # to ItemId.UNSUPPORTED.
@@ -85,6 +86,7 @@ def test_hail_route_trainer_weather_is_supported(tables, names):
     assert not any("Battle start" in m for m in r.missing)  # fog is modelled (G-44)
 
 
+@pytest.mark.fullset
 def test_double_battle_trainer_is_refused(tables, names):
     # TRAINER_TWINS_EMMA_AND_LIL (res/trainers/data/twins_emma_and_lil.json) is a
     # double battle; the engine models singles only.
@@ -123,6 +125,7 @@ def test_unknown_battle_format_is_refused_explicitly(tables, names):
 @pytest.mark.parametrize(
     ("name", "fmt"), [("Mars", "multi"), ("Ismael", "double_two_trainer"), ("Jack", "multi")]
 )
+@pytest.mark.fullset
 def test_multi_and_two_trainer_battles_are_refused(tables, names, name, fmt):
     # Mars @ Spear Pillar (tag), Artist Ismael (restaurant pair), Bug Catcher Jack (Eterna
     # Forest, Cheryl)
@@ -142,6 +145,7 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
         assert not any("battle format" in m for m in r.missing)
 
 
+@pytest.mark.fullset
 def test_unsupported_trainer_item_and_mixed_bag(tables, names):
     # E1 rulings G-43, G-62: Super Potion and Guard Spec. act by their params; a bag item
     # still refused (bag.refused_bag_params, picked from the item table) is refused by name.
@@ -157,6 +161,7 @@ def test_unsupported_trainer_item_and_mixed_bag(tables, names):
     assert any("mixed items" in m for m in r.missing)
 
 
+@pytest.mark.fullset
 def test_ai_flags_outside_the_policy_are_refused(tables, names):
     # Vanilla's policy runs BASIC, EVAL_ATTACK and EXPERT only: a vanilla 0b10111 trainer is
     # still refused by its RISKY flag (K3c Task 6 registers RISKY for Kaizo only).
@@ -168,6 +173,7 @@ def test_ai_flags_outside_the_policy_are_refused(tables, names):
     assert any("AI flag set" in m for m in r.missing)
 
 
+@pytest.mark.fullset
 def test_ai_refusals_are_included(tables, names):
     """An opponent move whose AI script paths are not transcribed (ai.policy)."""
     opp = roark_party(names)
@@ -227,6 +233,7 @@ def test_check_opponent_matches_check_coverage(tables, names, monkeypatch, train
         ),
     ],
 )
+@pytest.mark.fullset
 def test_in_battle_form_changes_are_refused(tables, names, species, form, item, line):  # Ruling 8
     # The brief writes the species title-cased; ``where`` names it as the data does
     # (``names.species_names``, upper case), so the line is compared with that name.
@@ -313,19 +320,22 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
 
 
 @pytest.mark.parametrize("flags", [0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F])
-@pytest.mark.fullset
 def test_kaizo_flag_set_has_no_flag_line(
     kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
 ):
     # E1 Ruling R2 (replaces plan K3c Ruling 10's exact set): the Kaizo policy runs each
     # trainer's own flag set, every flag of it transcribed (layout.KAIZO_FLAG_BITS): the
     # singles sets of the Roark and Gardenia splits give no "AI flag" line.
-    from nuzline.ai.layout import KAIZO_FLAG_BITS
-
-    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == KAIZO_FLAG_BITS
     trainer = replace(kaizo_roark, ai_flags=flags)
     report = check_opponent(kaizo_tables, kaizo_names, trainer, kaizo_roark_party, Weather.NONE)
     assert not [m for m in report.missing if "AI flag" in m]
+
+
+@pytest.mark.fullset
+def test_kaizo_implemented_ai_flags_are_the_transcribed_bits():
+    from nuzline.ai.layout import KAIZO_FLAG_BITS
+
+    assert set(IMPLEMENTED_AI_FLAGS["kaizo"]) == KAIZO_FLAG_BITS
 
 
 # --- Kaizo trainer fields (K2b Task 14) ----------------------------------------------
@@ -335,6 +345,7 @@ def with_area(trainer, **fields):
     return replace(trainer, area_condition=replace(trainer.area_condition, **fields))
 
 
+@pytest.mark.fullset
 def test_trick_room_refused(tables, names):
     report = check_opponent(
         tables, names, with_area(roark_trainer(), trick_room=True), roark_party(names), 0
@@ -360,6 +371,7 @@ def test_area_gravity_is_modelled(tables, names):
     assert int(make_state(tables, party, party).gravity) == 0
 
 
+@pytest.mark.fullset
 def test_gauntlet_refused_rules_not_recorded(tables, names):
     t = replace(roark_trainer(), gauntlet=("Oreburgh Gym", 2))
     report = check_opponent(tables, names, t, roark_party(names), 0)
@@ -369,6 +381,7 @@ def test_gauntlet_refused_rules_not_recorded(tables, names):
     assert line in report.missing
 
 
+@pytest.mark.fullset
 def test_gauntlet_refused_with_rules(tables, names):
     t = replace(
         roark_trainer(),

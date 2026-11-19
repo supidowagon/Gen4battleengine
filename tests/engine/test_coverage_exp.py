@@ -147,6 +147,7 @@ def _worry_off(tables, names):
     return unmodelled(tables, names.move("Worry Seed"))
 
 
+@pytest.mark.fullset
 def test_a_learnable_unsupported_move_is_refused(tables, names):
     """Worry Seed (unsupported) is reached only through the level-up in battle, and with an
     empty slot it is learned without a prompt (pokemon.c:3852-3873, ruling D10)."""
@@ -272,6 +273,7 @@ def test_an_unresolved_exp_boost_is_refused_below_level_100(tables, names):
     assert _lines(_missing(tables, names, party, roark_party(names)), "experience") == []
 
 
+@pytest.mark.fullset
 def test_an_exp_item_with_an_item_moving_move_is_refused(tables, names):
     """§4.2 (ruling D9): the payout reads the party item (battle_script.c:2209, :9706,
     :10226; pokemon.c:2649)."""
@@ -289,6 +291,7 @@ def test_an_exp_item_with_an_item_moving_move_is_refused(tables, names):
     assert _lines(_missing(tables, names, plain, thief), "experience") == []
 
 
+@pytest.mark.fullset
 def test_an_egg_location_with_a_friendship_reader_is_refused(tables, names):
     """§4.4 (ruling D6): only when the Pokemon can level and a Return / Frustration is in
     the fight (pokemon.c:2668-2670)."""
@@ -319,6 +322,7 @@ def test_a_reload_state_move_is_not_refused_when_a_level_up_is_reachable(tables,
     assert _lines(_missing(tables, names, party, roark_party(names)), "experience") == []
 
 
+@pytest.mark.fullset
 def test_junk_pp_ups_in_an_empty_slot_are_refused(tables, names):
     """§4.6: a move learned into the slot inherits its PP Ups (pokemon.c:3929-3930)."""
     party = sample_party(names)
@@ -364,6 +368,7 @@ def test_make_state_takes_the_new_spec_fields(tables, names):
         assert bool(jnp.all(a == b)) != (field == "pp_ups"), field
 
 
+@pytest.mark.fullset
 def test_knock_off_meets_the_exp_item_line(tables, names):
     """§4.2 (ruling D9) for Knock Off (B10-6): an exp-item holder in a fight where Knock Off can be
     used is refused, as the payout reads the party item (a knocked-off item stays on the party,

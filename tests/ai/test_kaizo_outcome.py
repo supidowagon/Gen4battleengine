@@ -363,6 +363,7 @@ def test_kaizo_accelerock_is_transcribed_with_its_site(kaizo_tables, kaizo_roark
     np.testing.assert_allclose(exact, policy.ai_action_distribution_loose(t, s), atol=1e-6)
 
 
+@pytest.mark.fullset
 def test_kaizo_effect_check_refuses_an_untranscribed_effect(kaizo_tables, kaizo_roark_party):
     """Task 2 review m3: with the id guard gone the effect check carries the refusal, with
     two messages: Rock Throw given an effect no layout transcribes is "not transcribed"; given
@@ -581,6 +582,7 @@ def test_exact_equals_loose(kaizo_tables, kaizo_roark_party, data):
     ("species", "abilities", "name"),
     [("Whismur", [113, SOUNDPROOF], "Scrappy"), ("Magnezone", [26, 42], "Levitate")],
 )
+@pytest.mark.fullset
 def test_loose_is_nan_on_a_switching_refusal(
     kaizo_tables, kaizo_names, kaizo_roark_party, species, abilities, name
 ):
@@ -610,7 +612,6 @@ def test_loose_joint_equals_per_slot(kaizo_tables, kaizo_roark_party):
     np.testing.assert_allclose(np.asarray(_distribution(t, s, KAIZO)), joint, atol=1e-6)
 
 
-@pytest.mark.fullset
 def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_roark_party):
     """Task 5 review m3: on a state the fight's layout refuses, the exact and the loose
     distributions are both NaN (both read ``policy._refused``). The refusal is one that stays

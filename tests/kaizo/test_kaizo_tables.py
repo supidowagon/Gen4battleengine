@@ -83,6 +83,7 @@ def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
             assert [int(x) for x in kaizo_tables.move_param[m]] == list(params), (e, m)
 
 
+@pytest.mark.fullset
 def test_repurposed_items_unsupported(kaizo_tables, kaizo_names):
     # Spec 5.5: Lava Cookie and Old Gateau became Lum clones; Shoal Shell is RageCandyBar.
     for name in ("Lava Cookie", "Old Gateau", "RageCandyBar", "Big Nugget"):

@@ -3,6 +3,7 @@ the battle-start switch-in checks over both leads (``make_state``, which only th
 runs), the turn-start laws of a Trace newcomer, and the per-candidate refusals in prep."""
 
 import numpy as np
+import pytest
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.coverage import check_coverage
@@ -73,6 +74,7 @@ def _candidate(spec: PokemonSpec, slot: int = 0) -> Candidate:
     return Candidate(("party", 0, slot), f"party slot {slot}", spec, 0, (), ())
 
 
+@pytest.mark.fullset
 def test_prep_keeps_a_weather_war_and_refuses_a_trace_copy_the_ai_refuses(tables, names):
     """B3-20, B3-21, G-26: a Drought candidate against a Drizzle opponent is kept (the weather
     war is modelled); a Trace candidate is kept unless a copy it can make is one the AI refuses
@@ -95,6 +97,7 @@ def test_prep_keeps_a_weather_war_and_refuses_a_trace_copy_the_ai_refuses(tables
     assert any("party slot 1" in m and "Trace copying Filter" in m for m in report.missing)
 
 
+@pytest.mark.fullset
 def test_coverage_reads_the_trace_copy_for_the_ai(tables, names):
     """B3-21: the AI reads the copy (LoadBattlerAbility, trainer_ai.c:1170-1209), so a Trace
     holder is refused only for a copy the AI refuses on the holder's side: Filter copied by

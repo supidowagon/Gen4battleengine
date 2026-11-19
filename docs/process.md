@@ -33,6 +33,8 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    section 5).
 5. One Opus review agent checks the batch; one fix round fixes its findings. Commits added
    after a review get their own review before the merge.
+   A new test that asserts over a growing set or a coverage-dependent refusal carries the
+   `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod.
 7. The stream sends one message: the final tip, the batch contents with citations, the
