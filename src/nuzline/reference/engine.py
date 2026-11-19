@@ -5030,6 +5030,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     turn.bide_ended = unleash
     disruption = _status_disrupted(turn, s, side, move)
     if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
+        turn.defender = side  # MoveEnd cures battleCtx->defender (bcp.c:3966-3967)
         return None
     if disruption == DISRUPTED:  # no attack message: moveHit = MOVE_NONE
         return 0 if foe_defender else None
@@ -7103,7 +7104,13 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
 def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -> None:
     """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
     turn.done[side] = True
+    battle = [(_active(s, b), _active(s, b).ability) for b in range(len(s.battlers))]
     _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+    # The MoveEnd cures read the battle abilities; the battle-end _restore_ability of
+    # _faint_check (the party's own) is put back after them (Owed 20).
+    restored = [(mon, mon.ability) for mon, _ in battle]
+    for mon, ability in battle:
+        mon.ability = ability
     # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
     # keeps the record until its replacement clears it.
     if record is not None:
@@ -7114,11 +7121,14 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # before CheckBattleOver (bcp.c:3965-3969; SF2 (a)): a battle that ends here cures them too.
     _recover_status_by_ability(s, side)
     if not s.over:
-        s.battlers[side].move_hit = 0
         _recover_status_by_ability(s, _foe(side))
-        _move_end_switch_in(turn, s)  # bcp.c:3973: an ability gained mid-battle acts now (E3-2-5)
     elif turn.commands[side] == FIGHT and turn.defender is not None:
         _recover_status_by_ability(s, turn.defender)
+    for mon, ability in restored:
+        mon.ability = ability
+    if not s.over:
+        s.battlers[side].move_hit = 0
+        _move_end_switch_in(turn, s)  # bcp.c:3973: an ability gained mid-battle acts now (E3-2-5)
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).

@@ -2549,6 +2549,10 @@ def _use_move(
         "sync_flag": looped[16],
         "sync_sem": looped[17],
         "target": jnp.asarray(target_side, _I32),
+        # battleCtx->defender at MoveEnd (bcp.c:3966-3967): BattleSystem_Defender's battler, the
+        # user for a self-range move (lib.c:1659-1664), NO_DEFENDER for BATTLER_NONE, and the
+        # user after a confusion self-hit (bcp.c:2629).
+        "defender": jnp.where(self_hit, side, resolved.defender).astype(_I32),
     }
     return state, own, foe, ctl
 
@@ -2912,7 +2916,8 @@ def _move_end(
     battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
     reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
     ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end. ``defender``: the
-    action's defender (``ctl["target"]``); ``fought``: the action was a FIGHT (SF2 (a))."""
+    action's ``battleCtx->defender`` (``ctl["defender"]``: the user for a self-range move, else
+    ``NO_DEFENDER`` for none); ``fought``: the action was a FIGHT (SF2 (a))."""
     foe = _foe(side)
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
@@ -2924,10 +2929,17 @@ def _move_end(
     # ``ran``; while the battle goes on the foe call stands for TriggerEffectOnSwitch's
     # FORBIDDEN_STATUS pass over every battler (bcp.c:3973, lib.c:4135-4148); at the battle's
     # end only the FIGHT's defender (:3966-3967). The switch-MoveEnd case is SF2 (a2).
+    # The cures read the battle abilities: ``_faint_check``'s battle-end ``_restore_ability`` (the
+    # party's own, a modelling step after the battle) is put back after them (Owed 20).
     ended = ran & (state.over != 0)
+    restored = state.ability
+    state = state._replace(ability=acted.ability)
     state = recover_status_by_ability(state, side, ran)
-    second = jnp.where(ended, defender, foe)
-    state = recover_status_by_ability(state, second, clear | (ended & fought))
+    defender = jnp.asarray(defender, _I32)
+    named = defender != NO_DEFENDER  # bcp.c:3966: BATTLER_NONE skips the call
+    second = jnp.where(ended & named, defender, foe)
+    state = recover_status_by_ability(state, second, clear | (ended & fought & named))
+    state = state._replace(ability=restored)
     # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
     # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
     return move_end_switch_in(tables, state, clear, trace_pick)
@@ -3152,7 +3164,7 @@ def _execute_actions(
             acted,
             side,
             ran,
-            ctl["target"],
+            ctl["defender"],
             ~is_switch(real[side]) & ~is_item(real[side]),
             outcome.trace_pick,
         )
