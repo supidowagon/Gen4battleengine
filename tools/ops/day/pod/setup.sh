@@ -14,6 +14,8 @@ export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_P
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; . ./meta.env; MARK="${MARK:-not slow}"
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
+# The PC's wait.sh learns the run's state only through bin/notify.sh (meta.env WATCH_CODE).
+if [ -n "${WATCH_CODE:-}" ]; then setsid nohup bash "$D/bin/notify.sh" > "$D/notify.log" 2>&1 < /dev/null & fi
 echo "SETUP_START $(date +%s)"
 # The decomp worktree is shared by every run on the pod: one setup at a time creates it.
 ( flock -w 600 9 || { echo "ERROR: decomp lock /work/_decomp/.lock still held after 600 s"; exit 1; }
