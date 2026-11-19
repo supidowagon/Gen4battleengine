@@ -14,7 +14,7 @@
 # taskset pins the process to a free slot of cores/MAXP cores (pod-wide flock on /work/_slots/<i>;
 # unpinned when every slot is taken). XLA_FLAGS is part of JAX's compile-cache key: one setting per
 # pod keeps the cache warm. Every 5 s the process group's threads, alive and running (state R),
-# go to <unit>.thr.
+# go to <unit>.thr (the sampler closes the slot lock's fd 8, so the slot frees when pytest ends).
 export PATH="/root/.local/bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 export NUZLINE_TEST_COMPILE_CACHE="${NUZLINE_TEST_COMPILE_CACHE:-/work/_jaxcache/jax-tests}"
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/meta.env"; cd "$D/repo"
@@ -30,7 +30,7 @@ case "$TH" in
       flock -n 8 && { TS=(taskset -c "$((s * K))-$((s * K + K - 1))"); break; }; exec 8>&-; done;;
 esac
 G=$(ps -o pgid= -p $$ | tr -d ' ')
-( while [ ! -f "$P.rc" ]; do ps -L -eo pgid=,stat=,comm= | awk -v g="$G" '$1 == g && $3 != "ps" && $3 != "awk" {a++; if ($2 ~ /^R/) r++}
+( exec 8>&-; while [ ! -f "$P.rc" ]; do ps -L -eo pgid=,stat=,comm= | awk -v g="$G" '$1 == g && $3 != "ps" && $3 != "awk" {a++; if ($2 ~ /^R/) r++}
     END {print a + 0, r + 0}' >> "$P.thr"; sleep 5; done ) &
 date +%s > "$P.start"
 /usr/bin/time -v -o "$P.time" "${TS[@]}" uv run --frozen pytest "${ma[@]}" -q -rfEs -p no:cacheprovider \
