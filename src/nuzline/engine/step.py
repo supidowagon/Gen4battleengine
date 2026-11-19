@@ -1102,16 +1102,20 @@ def _use_move(
     # (``targets.no_target``): a charge turn with no foe keeps the user as its defender; then D2-12:
     # REDIRECT_TARGET (bcp.c:3204-3206) moves a single-target Electric / Water move to a Lightning
     # Rod / Storm Drain holder (``targets.redirect``), the holder being the action's defender from
-    # here on. The PP above took the fight command's defender (rule 9).
+    # here on. The PP above took the fight command's defender (rule 9). At B = 2 it never fires
+    # (the holder must be the living foe, then already the defender), so the singles step skips it.
     nt_before = targets.no_target(tables, state, side, move, resolved.defender, False)
     keeps_user = targets.charge_keeps_user(tables, state, side, move, resolved.defender)
-    redirect_to, redirected = targets.redirect(
-        tables, state, side, move, jnp.where(keeps_user, side, resolved.defender), speed_order
-    )
-    resolved = resolved._replace(
-        defender=jnp.where(redirected, redirect_to, resolved.defender),
-        target_side=jnp.where(redirected, redirect_to, resolved.target_side),
-    )
+    if fmt.B == 4:
+        redirect_to, redirected = targets.redirect(
+            tables, state, side, move, jnp.where(keeps_user, side, resolved.defender), speed_order
+        )
+        resolved = resolved._replace(
+            defender=jnp.where(redirected, redirect_to, resolved.defender),
+            target_side=jnp.where(redirected, redirect_to, resolved.target_side),
+        )
+    else:
+        redirected = False
     target_side = resolved.target_side
     target = state.active[target_side]
 
@@ -1171,7 +1175,8 @@ def _use_move(
         tables, state, side, used, speed_order, outcome.call_target_draw[side]
     )
     resolved = _redefend(resolved, side, called_def, calls)
-    redirected = redirected | (calls & called_redirected)
+    if fmt.B == 4:
+        redirected = redirected | (calls & called_redirected)
     target_side = resolved.target_side
     target = state.active[target_side]
     if fmt.B == 4:
@@ -1426,10 +1431,15 @@ def _use_move(
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
     # TryMove's TriggerRedirectionAbilities (bcp.c:3247-3252): the holder's ability message
     # (subscript_lightning_rod_redirected.s:9) unless the move failed (D2-12 rule 10).
-    holder = jnp.clip(resolved.defender, 0, fmt.B - 1)
-    state = reveal_ability(
-        state, holder, state.active[holder], REDIRECTED, redirected & can_act & has_target & ~failed
-    )
+    if fmt.B == 4:
+        holder = jnp.clip(resolved.defender, 0, fmt.B - 1)
+        state = reveal_ability(
+            state,
+            holder,
+            state.active[holder],
+            REDIRECTED,
+            redirected & can_act & has_target & ~failed,
+        )
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
@@ -3973,14 +3983,17 @@ def _action_phase(
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
     Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
     ``targets`` (``int8[B]``, the menu's picks) is required at B = 4 and ignored at B = 2, where
-    the range decides (D2-1); the selection writes ``chosen_target`` before the turn order."""
+    the range decides (D2-1); at B = 4 the selection writes ``chosen_target`` before the turn
+    order. At B = 2 nothing reads it, so it is not written (ruling D2-28): singles states stay
+    equal; singles follow-up (ii) turns the B = 2 write on."""
     if targets is None:
         if state.active.shape[0] != 2:
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
-    fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
+    if state.active.shape[0] == 4:
+        fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))

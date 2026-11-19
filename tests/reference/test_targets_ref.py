@@ -7,7 +7,6 @@ import itertools
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine import targets
@@ -36,9 +35,36 @@ ORDERS = ([0, 1, 2, 3], [3, 1, 0, 2])
 
 
 def _sweep(tables, names, base, count, attackers, follow_values):
+    """One vmapped engine call per HP pattern and Follow Me value over the whole argument
+    product, each case checked against the reference."""
     t = to_numpy(tables)
     fn = jax.jit(
-        lambda s, a, m, rnd, ch, order, bit: targets.resolve(tables, s, a, m, rnd, ch, order, bit)
+        jax.vmap(
+            lambda s, a, m, rnd, ch, order, bit: targets.resolve(
+                tables, s, a, m, rnd, ch, order, bit
+            ),
+            in_axes=(None, 0, 0, 0, 0, 0, 0),
+        )
+    )
+    cases = [
+        (rng, names.move(move), rnd, chosen, a, bit, order)
+        for (rng, move), rnd, chosen, a, bit, order in itertools.product(
+            MOVE_PER_RANGE.items(),
+            (False, True),
+            range(count),
+            attackers,
+            (0, 1),
+            ORDERS if count == 4 else ([0, 1], [1, 0]),
+        )
+    ]
+    cols = list(zip(*cases, strict=True))
+    args = (
+        jnp.asarray(cols[4], jnp.int32),
+        jnp.asarray(cols[1], jnp.int32),
+        jnp.asarray(cols[2], bool),
+        jnp.asarray(cols[3], jnp.int32),
+        jnp.asarray(cols[6], jnp.int32),
+        jnp.asarray(cols[5], jnp.int32),
     )
     checked = 0
     for alive in itertools.product((True, False), repeat=count):
@@ -48,25 +74,25 @@ def _sweep(tables, names, base, count, attackers, follow_values):
         for fm in follow_values:
             sd = s._replace(ts_follow_me=jnp.asarray(fm, jnp.int8))
             ref_state = to_ref(sd)
-            for (rng, move), rnd, chosen, a, bit, order in itertools.product(
-                MOVE_PER_RANGE.items(),
-                (False, True),
-                range(count),
-                attackers,
-                (0, 1),
-                ORDERS if count == 4 else ([0, 1], [1, 0]),
-            ):
-                mid = names.move(move)
-                got = fn(sd, a, mid, rnd, chosen, jnp.asarray(order), bit)
+            got = fn(sd, *args)
+            have_all = list(
+                zip(
+                    got.defender.tolist(),
+                    got.target_side.tolist(),
+                    got.counter.tolist(),
+                    got.drew.tolist(),
+                    strict=True,
+                )
+            )
+            for (rng, mid, rnd, chosen, a, bit, order), have in zip(cases, have_all, strict=True):
                 ref = _resolve(t, ref_state, a, mid, rnd, chosen, order, bit)
                 want = (-1 if ref[0] is None else ref[0], ref[1], ref[2], ref[3])
-                have = (int(got.defender), int(got.target_side), int(got.counter), bool(got.drew))
+                have = (int(have[0]), int(have[1]), int(have[2]), bool(have[3]))
                 assert have == want, (rng, rnd, chosen, a, bit, order, alive, fm, have, want)
                 checked += 1
     return checked
 
 
-@pytest.mark.fullset
 def test_reference_resolve_equals_engine_at_b4(tables, names):
     base = four(tables, names)
     # Follow Me off, on side 1 (user 1 or 3), and set on the attacker's own side only
@@ -74,7 +100,6 @@ def test_reference_resolve_equals_engine_at_b4(tables, names):
     assert n > 10_000
 
 
-@pytest.mark.fullset
 def test_reference_resolve_equals_engine_at_b2(tables, names):
     base = make_state(tables, [mon(names)], [mon(names)])
     n = _sweep(tables, names, base, 2, (0, 1), ([0, 0], [0, 1], [1, 0]))

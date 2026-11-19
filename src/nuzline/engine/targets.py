@@ -396,11 +396,15 @@ def called_defender(tables: Tables, state: BattleState, battler, move, speed_ord
     battler, move, randomize TRUE)`` by the called move's own range (``resolve`` with the stored
     target, which a randomized single-target call never reads), then
     ``BattleSystem_CheckRedirectionAbilities`` with the same move (:2122; D2-12). ``bit`` is
-    ``Outcome.call_target_draw``. ``NO_DEFENDER`` takes the script to ``subscript_no_target.s``."""
+    ``Outcome.call_target_draw``. ``NO_DEFENDER`` takes the script to ``subscript_no_target.s``.
+    At B = 2 the redirection never fires (its holder would be the living foe, already the
+    defender), so the singles step skips it."""
     battler = jnp.asarray(battler, _I32)
     res = resolve(
         tables, state, battler, move, True, state.chosen_target[battler], speed_order, bit
     )
+    if format_of(state).B != 4:
+        return res.defender, jnp.asarray(False)
     return redirect(tables, state, battler, move, res.defender, speed_order)
 
 

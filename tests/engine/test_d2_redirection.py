@@ -5,7 +5,6 @@ orders, held equal to the reference."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine import targets
@@ -156,7 +155,6 @@ def test_reveal_names_the_player_holder(tables, names):
     assert np.array_equal(out.ai_ability_known, foe.ai_ability_known)
 
 
-@pytest.mark.fullset
 def test_storm_drain_is_a_supported_ability():
     from nuzline.engine.coverage import IMPLEMENTED_ABILITIES
     from nuzline.engine.ids import ABILITY_DECOMP_IDS

@@ -11,11 +11,11 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import chosen_targets
 from nuzline.engine.ids import MoveTarget
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step
 from nuzline.reference.convert import to_ref
-from nuzline.reference.engine import _chosen_targets
+from nuzline.reference.engine import _chosen_targets, ref_step
 from tests.engine.d2_states import as_ghost, four, mon, with_hp, with_moves
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
@@ -61,14 +61,28 @@ def test_b2_ghost_curse_targets_the_foe(tables, names):
 
 
 @pytest.mark.slow
-def test_b2_step_writes_chosen_target(tables, names):
-    # jit, not eager: an eager step peaks far above the jitted one's compile
+def test_b2_step_does_not_write_chosen_target(tables, names):
+    # Ruling D2-28: nothing reads it at B = 2, so the step keeps the stored b ^ 1 and a
+    # Swords Dance and a Tackle state stay equal. jit, not eager: an eager step peaks far above
+    # the jitted one's compile.
     fn = jax.jit(step)
-    s = _singles(tables, names, "Swords Dance")
-    out = fn(tables, s, _np_actions(0, 0), empty_outcome())
-    assert out.chosen_target.tolist() == [0, 0]
-    out = fn(tables, _singles(tables, names), _np_actions(0, 0), empty_outcome())
-    assert out.chosen_target.tolist() == [1, 0]
+    for move in ("Swords Dance", "Tackle"):
+        s = _singles(tables, names, move)
+        out = fn(tables, s, _np_actions(0, 0), empty_outcome())
+        assert out.chosen_target.tolist() == [1, 0], move
+    parked = _singles(tables, names, "Tackle")
+    parked = parked._replace(chosen_target=jnp.asarray([0, 1], jnp.int8))
+    out = fn(tables, parked, _np_actions(0, 0), empty_outcome())
+    assert out.chosen_target.tolist() == [0, 1]
+
+
+def test_b2_reference_step_does_not_write_chosen_target(tables, names):
+    for move in ("Swords Dance", "Tackle"):
+        out = ref_step(
+            to_numpy(tables), to_ref(_singles(tables, names, move)), (0, 0),
+            outcome_to_py(empty_outcome()),
+        )  # fmt: skip
+        assert [b.chosen_target for b in out.battlers] == [1, 0], move
 
 
 @pytest.mark.slow

@@ -331,7 +331,8 @@ def chosen_targets(tables: Tables, state: BattleState, actions, targets) -> jnp.
     battler the new target when it ``selects_target``, else the stored ``chosen_target``. At
     B = 2 the new target follows from the range (bcp.c:4363-4367: the user for a RANGE_MY_SIDE
     range or a non-Ghost Curse, else ``b ^ 1``) and ``targets`` is ignored; at B = 4 it is
-    ``targets[b]`` (the menu's pick, bcp.c:548)."""
+    ``targets[b]`` (the menu's pick, bcp.c:548). ``step`` stores it at B = 4 only (ruling D2-28:
+    nothing reads it at B = 2; singles follow-up (ii) turns that write on)."""
     fmt = format_of(state)
     actions = jnp.asarray(actions)
     out = []

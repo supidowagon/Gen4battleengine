@@ -4656,6 +4656,8 @@ def called_defender(tables, s: RefState, attacker: int, move: int, speed_order: 
     defender, _, _, _ = _resolve(
         tables, s, attacker, move, True, s.battlers[attacker].chosen_target, speed_order, bit
     )
+    if _fmt(s).B != 4:  # the holder would be the living foe, already the defender
+        return defender, False
     return redirect(tables, s, attacker, move, defender, speed_order)
 
 
@@ -4786,10 +4788,13 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     keeps_user = charge_keeps_user(tables, s, side, move, fight_defender)
     turn.call_redirected = False
     # D2-12: REDIRECT_TARGET (bcp.c:3204-3206), the holder is the defender from here on.
+    # At B = 2 it never fires: the holder would be the living foe, already the defender.
     order0 = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
-    redirect_to, redirected = redirect(
-        tables, s, side, move, side if keeps_user else fight_defender, order0
-    )
+    redirect_to, redirected = fight_defender, False
+    if _fmt(s).B == 4:
+        redirect_to, redirected = redirect(
+            tables, s, side, move, side if keeps_user else fight_defender, order0
+        )
     if redirected:
         turn.defender = turn.target_side = redirect_to
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
@@ -6558,7 +6563,8 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets
         if _fmt(s).B != 2:
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = [0, 0]
-    _put(s, "chosen_target", _chosen_targets(tables, s, picked, targets))  # bcp.c:548
+    if _fmt(s).B == 4:  # bcp.c:548; B = 2 writes nothing (ruling D2-28)
+        _put(s, "chosen_target", _chosen_targets(tables, s, picked, targets))
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
