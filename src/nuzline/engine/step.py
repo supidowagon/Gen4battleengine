@@ -2894,7 +2894,14 @@ def _faint_check(
 
 
 def _move_end(
-    tables: Tables, state: BattleState, acted: BattleState, side, ran, trace_pick=None
+    tables: Tables,
+    state: BattleState,
+    acted: BattleState,
+    side,
+    ran,
+    defender,
+    fought,
+    trace_pick=None,
 ) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
@@ -2904,16 +2911,23 @@ def _move_end(
     :3986) where ``ran``: the action ran (a move, switch or item; neither a fainted
     battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
     reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
-    ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end."""
+    ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end. ``defender``: the
+    action's defender (``ctl["target"]``); ``fought``: the action was a FIGHT (SF2 (a))."""
     foe = _foe(side)
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
     move_hit = move_hit.at[side].set(jnp.where(clear, 0, move_hit[side]))
     state = state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
-    # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
-    # battle that CheckBattleOver ended returns first.
-    state = recover_status_by_ability(state, side, clear)
-    state = recover_status_by_ability(state, foe, clear)
+    # SF2 (a): RecoverStatusByAbility for the attacker, then the defender, both before
+    # CheckBattleOver (bcp.c:3965-3969), so a battle that ends here cures them too (the cure is
+    # UpdateMonData, which copies to the party, battle_script.c:3077-3078). The attacker under
+    # ``ran``; while the battle goes on the foe call stands for TriggerEffectOnSwitch's
+    # FORBIDDEN_STATUS pass over every battler (bcp.c:3973, lib.c:4135-4148); at the battle's
+    # end only the FIGHT's defender (:3966-3967). The switch-MoveEnd case is SF2 (a2).
+    ended = ran & (state.over != 0)
+    state = recover_status_by_ability(state, side, ran)
+    second = jnp.where(ended, defender, foe)
+    state = recover_status_by_ability(state, second, clear | (ended & fought))
     # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
     # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
     return move_end_switch_in(tables, state, clear, trace_pick)
@@ -3138,6 +3152,8 @@ def _execute_actions(
             acted,
             side,
             ran,
+            ctl["target"],
+            ~is_switch(real[side]) & ~is_item(real[side]),
             outcome.trace_pick,
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver

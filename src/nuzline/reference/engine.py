@@ -7110,13 +7110,15 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         s.battlers[_foe(side)].move_hit = record
     # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
     # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
+    # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then defender, both
+    # before CheckBattleOver (bcp.c:3965-3969; SF2 (a)): a battle that ends here cures them too.
+    _recover_status_by_ability(s, side)
     if not s.over:
         s.battlers[side].move_hit = 0
-        # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
-        # defender (bcp.c:3965-3967).
-        _recover_status_by_ability(s, side)
         _recover_status_by_ability(s, _foe(side))
         _move_end_switch_in(turn, s)  # bcp.c:3973: an ability gained mid-battle acts now (E3-2-5)
+    elif turn.commands[side] == FIGHT and turn.defender is not None:
+        _recover_status_by_ability(s, turn.defender)
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).

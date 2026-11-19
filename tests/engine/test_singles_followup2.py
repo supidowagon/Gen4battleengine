@@ -390,3 +390,66 @@ def test_custap_holders_u_turn_shows_its_events_at_the_head_only(tables, names):
     acts = (MOVE_ACTIONS + 1, 0)
     assert int(_events(tables, paused, acts, O)["quick_claw"][0]) == 0
     assert_matches_reference(tables, paused, acts, O)
+
+
+# --- SF2 (a): MoveEnd cures the attacker and the defender before the battle-over check ----------
+
+
+def _end_duel(tables, n, foe_move, holder, foe_hp, foe_item="Life Orb"):
+    """The foe's last Pokemon (Mold Breaker) attacks the player's ``holder`` of the forbidding
+    ability; the player's Leer changes nothing."""
+    s = make_state(
+        tables,
+        [_mon(n, holder[0], ["Leer"], 50, ability=holder[1]), _bench(n)],
+        [_mon(n, "Cranidos", [foe_move], 10, item=foe_item, ability="Mold Breaker")],
+        Weather.NONE,
+    )
+    return s if foe_hp is None else s.replace_hp(1, 0, foe_hp)
+
+
+def _lands(side=1):
+    sec = jnp.zeros((2, MAX_HITS), jnp.int8).at[side].set(1)
+    return O._replace(secondary=sec)
+
+
+@pytest.mark.parametrize(
+    ("foe_move", "holder", "status"),
+    [
+        ("Body Slam", ("Persian", "Limber"), Status.PARALYSIS),
+        ("Poison Jab", ("Snorlax", "Immunity"), Status.POISON),
+    ],
+)
+def test_battle_ending_move_end_cures_the_defender(tables, names, foe_move, holder, status):
+    # bcp.c:3965-3969: the cure runs before CheckBattleOver; the foe falls to Life Orb recoil.
+    s = _end_duel(tables, names, foe_move, holder, 1)
+    out = assert_matches_reference(tables, s, (0, 0), _lands())
+    assert int(out.over) == 1
+    assert int(out.hp[1, 0]) == 0
+    assert int(out.status[0, 0]) == Status.NONE
+    # The cure is real: the status landed (the same duel without the cure's holder keeps it).
+    plain = _end_duel(tables, names, foe_move, ("Rattata", None), 1)
+    assert int(assert_matches_reference(tables, plain, (0, 0), _lands()).status[0, 0]) == status
+
+
+@pytest.mark.parametrize(
+    ("foe_move", "holder"),
+    [("Body Slam", ("Persian", "Limber")), ("Poison Jab", ("Snorlax", "Immunity"))],
+)
+def test_move_end_cure_while_the_battle_goes_on_is_as_before(tables, names, foe_move, holder):
+    s = _end_duel(tables, names, foe_move, holder, None, foe_item="")
+    out = assert_matches_reference(tables, s, (0, 0), _lands())
+    assert int(out.over) == 0
+    assert int(out.status[0, 0]) == Status.NONE
+
+
+def test_battle_ending_move_end_cures_the_attacker(tables, names):
+    s = make_state(
+        tables,
+        [_mon(names, "Persian", ["Body Slam"], 50, ability="Limber"), _bench(names)],
+        [_mon(names, "Rattata", ["Tackle"], 5)],
+        Weather.NONE,
+    )
+    s = s.with_status(0, 0, Status.PARALYSIS).replace_hp(1, 0, 1)
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.over) == 1
+    assert int(out.status[0, 0]) == Status.NONE
