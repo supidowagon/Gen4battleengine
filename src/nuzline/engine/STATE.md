@@ -152,7 +152,8 @@ three structs has a row.
   `weatherAbilityAnnounced`, `traceAnnounced` and `downloadAnnounced`
   (`BattleSystem_TriggerEffectOnSwitch`, `src/battle/battle_lib.c:3649-4168`,
   called from `src/battle/battle_controller_player.c:3673` and `:3973`), so a
-  mid-battle ability gain (Trace, Skill Swap, Role Play) announces again;
+  mid-battle ability gain (Trace, Skill Swap, Role Play) announces again (these
+  four are mapped since E3-2-5, `hooks.move_end_switch_in`);
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
   whose Quick Claw activated this turn); `monSpeedValues`, the
