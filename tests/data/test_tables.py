@@ -271,6 +271,7 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
+@pytest.mark.fullset
 def test_committed_manifest_is_the_code_version(
     names,
 ):  # the committed manifest; `names` skips when tables are absent

@@ -610,6 +610,7 @@ def test_loose_joint_equals_per_slot(kaizo_tables, kaizo_roark_party):
     np.testing.assert_allclose(np.asarray(_distribution(t, s, KAIZO)), joint, atol=1e-6)
 
 
+@pytest.mark.fullset
 def test_refused_states_are_nan_on_both_sides(kaizo_tables, kaizo_roark_party):
     """Task 5 review m3: on a state the fight's layout refuses, the exact and the loose
     distributions are both NaN (both read ``policy._refused``). The refusal is one that stays

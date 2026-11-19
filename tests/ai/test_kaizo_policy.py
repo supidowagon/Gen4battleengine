@@ -250,6 +250,7 @@ def test_roark_moves_are_all_accepted(kaizo_tables, kaizo_names, kaizo_roark_par
     assert roark_labels <= KAIZO.expert_transcribed
 
 
+@pytest.mark.fullset
 def test_expert_label_table_is_the_dispatch():
     """``KAIZO_EXPERT_LABELS`` is read off ``Expert_Main``'s dispatch table (script.s:1628-1808,
     ``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_<effect>, <label>``): each entry's line holds
@@ -299,6 +300,7 @@ def _dispatched(t, s, flag, layout) -> set[int]:
     return seen
 
 
+@pytest.mark.fullset
 def test_expert_transcribed_is_the_dispatch(
     kaizo_tables, kaizo_names, kaizo_roark_party, monkeypatch
 ):
@@ -359,6 +361,7 @@ def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
     assert _dispatched(t, s, policy._expert, VANILLA) == vanilla_expert
 
 
+@pytest.mark.fullset
 def test_basic_label_table_is_the_dispatch():
     """K3c Task 6 re-review A: ``policy._BASIC_LABELS`` is read off ``Basic_ScoreMoveEffect``
     (script.s:133-286, ``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_<effect>, <label>``).
@@ -425,6 +428,7 @@ def test_expert_guard_refuses_an_untranscribed_label(
     assert any(line in m for m in report.missing), report.missing
 
 
+@pytest.mark.fullset
 def test_battle_effect_ids_are_the_decomps():
     """``commands.BattleEffect``: line n + 1 of generated/move_battle_effects.txt is
     ``BATTLE_EFFECT_<name>``, id n."""

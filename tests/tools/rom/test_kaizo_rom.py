@@ -281,6 +281,7 @@ def test_append_unknown_members(tmp_path):
     assert append_unknown_members(p, {"battle/skill/be_seq.narc": [7, 9]}) == []
 
 
+@pytest.mark.fullset
 def test_every_changed_script_classified(kaizo_rom_dir):
     changed = json.loads((kaizo_rom_dir / "changed_scripts.json").read_text("utf-8"))
     assert sorted(changed) == sorted(SCRIPT_NARCS)

@@ -259,6 +259,7 @@ def test_decomp_ids_match_the_manifest(names):
     assert names.item("Expert Belt") == commands.ITEM_EXPERT_BELT
 
 
+@pytest.mark.fullset
 def test_transcribed_move_effects_match_the_decomp():
     """The script paths are transcribed for exactly the moves with script-roll sites, and
     their decomp battle effects match data/intermediate/moves.json."""

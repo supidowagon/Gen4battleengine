@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from benchmarks.spike_step import N_EFFECTS, batched_step, make_state
 
@@ -36,6 +37,7 @@ def test_unknown_effect_id_is_noop_except_end_of_turn():
     assert int(out.turn[0]) == int(s.turn[0]) + 1
 
 
+@pytest.mark.fullset
 def test_each_effect_changes_something():
     s = make_state(3, 1)
     # Unknown id: only end-of-turn and turn counter change.

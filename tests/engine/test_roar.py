@@ -529,6 +529,7 @@ def test_sampled_draws(tables, names):
     assert abs(target.mean() - 0.5) < 5 * math.sqrt(0.25 / 4000)
 
 
+@pytest.mark.fullset
 def test_roar_builder_is_registered():
     assert "_roar_reads" in [b.__name__ for b in _READ_BUILDERS]
 

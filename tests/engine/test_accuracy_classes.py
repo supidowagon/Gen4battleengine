@@ -556,6 +556,7 @@ _IRRELEVANT = {
 }
 
 
+@pytest.mark.fullset
 def test_every_accuracy_or_evasion_writer_is_seen_by_hit_thresholds(tables):
     """``outcome.hit_thresholds`` follows the stat effects on ``Stat.ACC`` / ``Stat.EVA``
     (``move_param[m, 0]``). An effect added later that writes them (Minimize, Haze, Psych

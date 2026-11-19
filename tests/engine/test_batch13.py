@@ -664,6 +664,7 @@ def test_variable_power_tables_both_games(tables, names, kaizo_tables, kaizo_nam
     assert int(kaizo_tables.move_effect[kaizo_names.move("Eruption")]) != EffectId.FLAIL
 
 
+@pytest.mark.fullset
 def test_variable_power_scripts_read_back_from_the_decomp():
     """B13-12..B13-17: each effect's script runs its power command before CalcCrit / CalcDamage,
     and Judgment's script maps each HOLD_EFFECT_ARCEUS_* to the type PLATE_TYPES holds, the same
