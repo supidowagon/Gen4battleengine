@@ -33,7 +33,7 @@ LATER_FIELDS = tuple(
 D2_FIELDS = ("chosen_target", "last_hit_by")
 
 
-def test_new_fields_default_to_zero(tables, names):
+def test_new_fields_start_values(tables, names):
     s = roark_state(tables, names)
     assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS + D2_FIELDS) :] == (
         LATER_FIELDS + D2_FIELDS

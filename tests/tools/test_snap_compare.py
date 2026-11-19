@@ -29,7 +29,7 @@ def result(raised=None, calls=4, diverged=None, only_base=(), only_new=()):
 
 @pytest.fixture
 def run(tmp_path, monkeypatch):
-    """``run(argv, res=...) -> (exit, printed)`` with fake parts at a git-less checkout."""
+    """``run(argv, res=...) -> exit code`` with fake parts at a git-less checkout."""
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(sc, "ROOT", repo)

@@ -76,7 +76,11 @@ partial re-capture then adds or replaces parts); it fails before running on a di
 other code (another content hash), or by an older snap_compare (see compare).
 
 compare: reruns every output from the saved inputs (no redraw); its "gen" part redraws the
-generator and checks it still draws the saved inputs (on capture, "gen" records them). Before
+generator and checks it still draws the saved inputs (on capture, "gen" records them). The
+engine parts compare on the captured inputs only, and an input field the capture lacks is pinned
+at its empty / zero value (see Version independence); so a commit that adds Outcome draws needs
+its own tests for their non-default values, and an explicit acceptance of its "gen" divergence
+(its changed draws shift the generator's stream). Before
 running it fails when: capture.json records no commit or no part list; a part to run was not
 captured or is not "ok"; it runs a strict subset of the captured parts (unless --subset-ok);
 both commits, or both content hashes, are the same (unless --same-ok; both hashes are
