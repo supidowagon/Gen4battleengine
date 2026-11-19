@@ -741,6 +741,16 @@ def _two_starly(tmp_path) -> str:
         (["--protect", "Budew"], FAINTED, ("--protect", "Budew")),
         (["--protect", "Starly"], None, ("--protect", "Starly")),
     ],
+    # Explicit ids: PARTY / FAINTED are fixture paths, absolute and so different per OS.
+    ids=[
+        "deaths-4",
+        "deaths-negative",
+        "protect-not-in-party",
+        "protect-9",
+        "protect-6",
+        "protect-fainted",
+        "protect-no-party-file",
+    ],
 )
 @pytest.mark.parametrize("command", ["rank", "solve"])
 def test_cli_bad_budget_flags(capsys, tmp_path, command, flags, party, named):
