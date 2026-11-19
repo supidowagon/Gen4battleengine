@@ -2360,6 +2360,9 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
         target_draw=_flag(sides),
+        call_target_draw=_flag(sides),
+        bide_target_draw=_flag(sides),
+        trace_pick=_flag((2, 5)),
     )
 
 

@@ -899,17 +899,24 @@ def pressure_pp_cost(tables: Tables, state: BattleState, attacker, defender, mov
     caller spends ``min(cost, ppCur)`` (:2276-2280). Ruling G-8."""
     fmt = format_of(state)
     move_range = tables.move_target[move]
-    holders = jnp.zeros((), _I32)
-    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
+    # D2-15: COUNT_ALIVE_BATTLERS_EXCEPT_ME (every living holder but the user, its partner
+    # included) and COUNT_ALIVE_BATTLERS_THEIR_SIDE (living holders of the other side), battle_lib.c:
+    # 2905-2967. At B = 2 the only other battler is the foe, so the two sums agree.
+    except_me = jnp.zeros((), _I32)
+    their_side = jnp.zeros((), _I32)
+    for battler in range(state.active.shape[0]):
         mon = state.active[battler]
         alive_holder = pressure_holder(state, battler) & (state.hp[party(fmt, battler), mon] > 0)
-        # In singles the only other battler is the other side's: EXCEPT_ME and THEIR_SIDE agree.
-        holders = holders + (alive_holder & (attacker != battler)).astype(_I32)
-    counted = (
-        (move == MOVE_IMPRISON)
-        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
-        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype))
+        except_me = except_me + (alive_holder & (attacker != battler)).astype(_I32)
+        their_side = their_side + (alive_holder & (side_of(battler) != side_of(attacker))).astype(
+            _I32
+        )
+    by_side = (move == MOVE_IMPRISON) | jnp.isin(
+        move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype)
     )
+    by_all = jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
+    counted = by_side | by_all
+    holders = jnp.where(by_side, their_side, except_me)
     silent = jnp.isin(move_range, jnp.asarray(PRESSURE_NONE, move_range.dtype))
     defender = jnp.asarray(defender, _I32)
     has_defender = defender != NO_DEFENDER
@@ -3284,6 +3291,11 @@ def play_hit(
         | is_counter
     )
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
+    # lastHitByBattler[defender] = the attacker on every UpdateHP with damage, before the
+    # Substitute branch (bcp.c:3347, :3357; D2-14): a partner's hit and a Substitute's count, and
+    # nothing clears it. Written at B = 4 only: at B = 2 it would always be the foe.
+    if fmt.B == 4:
+        state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
     # UpdateHP returns early; `real`: the rest of UpdateHP runs on the defender's HP.
     sub_hp = state.substitute_hp[target_side].astype(_I32)

@@ -659,7 +659,7 @@ def _flag_exp(state: BattleState, side) -> BattleState:
 
 
 def _send_out(
-    tables: Tables, state: BattleState, side, slot, effects=True, baton=False
+    tables: Tables, state: BattleState, side, slot, effects=True, baton=False, trace_pick=None
 ) -> BattleState:
     """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
@@ -670,7 +670,7 @@ def _send_out(
     hazards = entry_hazards(tables, entered, side)
     if effects is False:
         return hazards
-    return _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    return _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
 
 
 def _alive_mask(state: BattleState) -> jnp.ndarray:
@@ -775,6 +775,20 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
         "contact": contact,
         "dealt": landed & dealt,
     }
+
+
+def _redefend(resolved, side, defender, cond):
+    """``resolved`` with ``defender`` (a battler or ``NO_DEFENDER``) as the action's defender where
+    ``cond``: ``target_side`` is the defender when it is another battler, else the foe (as
+    ``targets.resolve``). The commands that pick a new defender mid-action (GoToMoveScript, Counter,
+    the Bide release) rebind it this way (D2-13, D2-14)."""
+    defender = jnp.asarray(defender, _I32)
+    other = (defender != NO_DEFENDER) & (defender != side)
+    target = jnp.where(other, defender, jnp.asarray(side, _I32) ^ 1)
+    return resolved._replace(
+        defender=jnp.where(cond, defender, resolved.defender).astype(_I32),
+        target_side=jnp.where(cond, target, resolved.target_side).astype(_I32),
+    )
 
 
 def _use_move(
@@ -1055,10 +1069,15 @@ def _use_move(
         )
     )
     bide_ends = biding & (bide_left == 0)
-    bide_stop = bide_ends & (
-        (state.bide_damage[side] <= 0) | (state.hp[party(fmt, target_side), target] <= 0)
-    )
+    # D2-14: the release's defender is the last battler that hit the user (``last_hit_by``) while
+    # it has HP, else a random opponent with HP (``targets.bide_defender``, bcp.c:2704-2716); none
+    # ends the move in subscript_bide_no_target.s. At B = 2 it is the foe while it lives.
+    bide_def = targets.bide_defender(state, side, outcome.bide_target_draw[side])
+    bide_stop = bide_ends & ((state.bide_damage[side] <= 0) | (bide_def == NO_DEFENDER))
     can_act = can_act & ~bide_stop
+    resolved = _redefend(resolved, side, bide_def, bide_ends)
+    target_side = resolved.target_side
+    target = state.active[target_side]
     # CHECK_STATUS_STATE_SELF_THAW (:2728): a still-frozen user of a thawing move thaws.
     self_thaw = can_act & still_frozen
     state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
@@ -1142,12 +1161,32 @@ def _use_move(
         & (state.weather == Weather.SUN)
         & ~weather_suppressed(tables, state)
     )
-    # The script runs with a defender: the foe, or for the user's own first turn the user
-    # (HasNoTarget, bcp.c:2327-2334); a called move without a foe goes to subscript_no_target.s
-    # from GoToMoveScript (battle_script.c:2124-2126) before its script.
-    script_runs = jnp.where(
-        invoker | nature_power, state.hp[party(fmt, target_side), target] > 0, ~nt_before
+    # D2-13: GoToMoveScript (script.c:2111-2134) picks the called move's defender by its own range
+    # with randomize TRUE and runs the redirection check (``targets.called_defender``; the
+    # invoker's call draw ``Outcome.call_target_draw``), writing it to the stored target (:2123,
+    # B = 4: no state at B = 2 reads it). From here the called move's hit, accuracy, Protect and
+    # records read it.
+    calls = (invoker & ~call_failed) | nature_power
+    called_def, called_redirected = targets.called_defender(
+        tables, state, side, used, speed_order, outcome.call_target_draw[side]
     )
+    resolved = _redefend(resolved, side, called_def, calls)
+    redirected = redirected | (calls & called_redirected)
+    target_side = resolved.target_side
+    target = state.active[target_side]
+    if fmt.B == 4:
+        write = can_act & ~no_pp & calls & (called_def != NO_DEFENDER)
+        state = state._replace(
+            chosen_target=state.chosen_target.at[side].set(
+                jnp.where(write, called_def, state.chosen_target[side]).astype(
+                    state.chosen_target.dtype
+                )
+            )
+        )
+    # The script runs with a defender: the foe, or for the user's own first turn the user
+    # (HasNoTarget, bcp.c:2327-2334); a called move without a defender goes to subscript_no_target.s
+    # from GoToMoveScript (battle_script.c:2126-2128) before its script.
+    script_runs = jnp.where(invoker | nature_power, called_def != NO_DEFENDER, ~nt_before)
     herb = (
         can_act
         & charge_move
@@ -1177,9 +1216,7 @@ def _use_move(
     # GoToMoveScript's (D2-13), still the foe test. TryMove checks again after the script
     # (bcp.c:3240-3245): a charge move that skipped its charge (Power Herb, sun) with no foe has
     # set SYSCTL_LAST_OF_MULTI_TURN (subscript_charge_move_cleanup.s:7) and ends in no target.
-    called_target = (state.hp[party(fmt, target_side), target] > 0) | defender_always(
-        tables, used, ghost_user(state, side)
-    )
+    called_target = called_def != NO_DEFENDER
     bm_target = ~nt_before
     last_of_multi = can_act & bm_target & (second_turn | sun_now | herb)
     nt_try = targets.no_target(
@@ -1202,9 +1239,16 @@ def _use_move(
     counter_ok = (
         (taken_by != 0)
         & (foe_taken[3 + pick] != 0)
-        & (attacker != side)
+        & (side_of(attacker) != side_of(side))  # D2-14: a partner's hit fails it too
         & (state.hp[party(fmt, attacker), state.active[attacker]] > 0)
     )
+    # D2-14: the command's defender is the living Follow Me user of the last attacker's side, else
+    # the last attacker (``targets.counter_defender``); the accuracy roll, Protect, the damage and
+    # the records read it from here, and so does Pressure below.
+    counter_def = targets.counter_defender(state, side, attacker)
+    resolved = _redefend(resolved, side, counter_def, counter & counter_ok)
+    target_side = resolved.target_side
+    target = state.active[target_side]
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     has_target = has_target | special_counter | (invoker & call_failed) | charging
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
@@ -1213,7 +1257,7 @@ def _use_move(
     # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
     # has PP left and the defender has Pressure, ruling G-9.
     counter_pressure = (
-        can_act & has_target & counter & counter_ok & pressure_holder(state, attacker)
+        can_act & has_target & counter & counter_ok & pressure_holder(state, counter_def)
     ) & (state.pp[party(fmt, side), user, slot] > 0)
     state = state._replace(
         pp=state.pp.at[party(fmt, side), user, slot].add(
@@ -1873,7 +1917,7 @@ def _use_move(
     )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
-    state = _where(entering, switch_in_effects(tables, state, fx_side), state)
+    state = _where(entering, switch_in_effects(tables, state, fx_side, outcome.trace_pick), state)
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
     # the hits below), G-69.
@@ -2205,7 +2249,7 @@ def _use_move(
             state.pivot_battler.dtype
         ),
     )
-    state = _where(transform_ok, switch_in_effects(tables, state, side), state)
+    state = _where(transform_ok, switch_in_effects(tables, state, side, outcome.trace_pick), state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
     still = state.active[target_side] == target
@@ -2482,7 +2526,13 @@ def _act(
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
     switched = _send_out(
-        tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5), effects=~resumed, baton=baton
+        tables,
+        state,
+        side,
+        jnp.clip(action - MOVE_ACTIONS, 0, 5),
+        effects=~resumed,
+        baton=baton,
+        trace_pick=outcome.trace_pick,
     )
     base = _alive_mask(state) if base is None else base
     listed = _faint_check(tables, _with_alive(state, base), switched)
@@ -3005,6 +3055,8 @@ def _execute_actions(
         # SideConditions.followMe / followMeUser (D2-11): cleared by SetupNextTurn at the turn end
         # (lib.c:2251-2252), kept at a pause.
         "ts_follow_me": state.ts_follow_me,
+        # Trace fires of the step (D2-16): 0 once the turn completes, kept at a pause.
+        "ts_trace_fires": state.ts_trace_fires,
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -4119,7 +4171,9 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
     return (active_down & jnp.any(bench, axis=1) & (state.over == 0)).astype(jnp.int8)
 
 
-def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> BattleState:
+def replace(
+    tables: Tables, state: BattleState, side, slot, effects=True, trace_pick=None
+) -> BattleState:
     """Send in party ``slot`` for ``side``'s fainted active Pokemon, through the same
     switch-in path as a switch action (``_switch_in``, then ``hooks.on_switch_in``) and a
     faint check.
@@ -4146,7 +4200,7 @@ def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> Bat
     entered = _switch_in(tables, state, side, slot, state.turn)
     effects = jnp.asarray(effects, bool)
     hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
-    arrived = _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    arrived = _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
     out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
     waits = ~effects & (out.hp[party(fmt, side), out.active[side]] > 0) & (out.over == 0)
     out = out._replace(

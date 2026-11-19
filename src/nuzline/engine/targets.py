@@ -22,6 +22,7 @@ from nuzline.engine.damage import (
     hidden_power,
     judgment_type,
     natural_gift_params,
+    trace_copy,
     weather_ball_params,
     weather_suppressed,
 )
@@ -357,3 +358,71 @@ def resolve(
     other = (defender != none) & (defender != attacker)
     target_side = jnp.where(other, defender, foe).astype(_I32)
     return Resolved(defender, target_side, counter, jnp.asarray(drew, bool))
+
+
+def opposing(fmt, battler) -> tuple:
+    """The battlers a switch-in ability of ``battler`` works on (D2-16): ``opponents(battler)`` at
+    B = 4, the foe alone at B = 2 (``fmt``'s static count). A static-length tuple, so callers loop
+    over it."""
+    if fmt.B == 4:
+        return opponents(battler)
+    return (jnp.asarray(battler, _I32) ^ 1,)
+
+
+def trace_target(tables: Tables, state: BattleState, holder, coin):
+    """``(target, found)``: the battler ``SWITCH_IN_CHECK_STATE_TRACE`` copies for ``holder``
+    (battle_lib.c:3712-3737, D2-16 rules 2-3). ``ChooseTraceTarget`` (:7750-7781) takes
+    ``GetEnemyInSlot`` RIGHT / LEFT (``opponents``): both eligible, ``coin`` 1 gives the LEFT one
+    (:7754-7767); else the eligible one, RIGHT first; none: not ``found``. ``trace_copy`` is the
+    holder's test (HP, Trace, no Griseous Orb) and the target's eligibility (HP, ability not
+    Forecast / Trace / Multitype by its raw field) together: the holder part is common to both
+    slots. At B = 2 both slots are the foe, so the pick is the foe whatever ``coin``."""
+    fmt = format_of(state)
+    holder = jnp.asarray(holder, _I32)
+    if fmt.B == 4:
+        first, second = opponents(holder)
+    else:
+        first = second = holder ^ 1
+    e1 = trace_copy(tables, state, holder, first)
+    e2 = trace_copy(tables, state, holder, second)
+    pick = jnp.where(jnp.asarray(coin, _I32) & 1 == 1, second, first)
+    target = jnp.where(e1 & e2, pick, jnp.where(e1, first, second))
+    return target.astype(_I32), e1 | e2
+
+
+def called_defender(tables: Tables, state: BattleState, battler, move, speed_order, bit):
+    """``(defender, redirected)`` of ``BtlCmd_GoToMoveScript`` for the called ``move`` (script.c:
+    2111-2134, D2-13 A3-A4; also SetMirrorMove's resolution, :3511): ``BattleSystem_Defender(
+    battler, move, randomize TRUE)`` by the called move's own range (``resolve`` with the stored
+    target, which a randomized single-target call never reads), then
+    ``BattleSystem_CheckRedirectionAbilities`` with the same move (:2122; D2-12). ``bit`` is
+    ``Outcome.call_target_draw``. ``NO_DEFENDER`` takes the script to ``subscript_no_target.s``."""
+    battler = jnp.asarray(battler, _I32)
+    res = resolve(
+        tables, state, battler, move, True, state.chosen_target[battler], speed_order, bit
+    )
+    return redirect(tables, state, battler, move, res.defender, speed_order)
+
+
+def counter_defender(state: BattleState, battler, last_attacker) -> jnp.ndarray:
+    """``int32``: the defender of Counter, Mirror Coat and Metal Burst (script.c:4628-4632,
+    :4681-4685, :7165-7169, D2-14 rules 4-6): the living Follow Me user of ``last_attacker``'s
+    side, else ``last_attacker``. The commands' success test has already required ``last_attacker``
+    on the other side with HP, so the other side of ``battler`` is its side; the random-opponent
+    fallback is unreachable (rule 7)."""
+    follow = follow_me_target(state, battler)
+    return jnp.where(follow != NO_DEFENDER, follow, jnp.asarray(last_attacker, _I32)).astype(_I32)
+
+
+def bide_defender(state: BattleState, battler, bit) -> jnp.ndarray:
+    """``int32``: the defender of Bide's release (bcp.c:2704-2716, D2-14 B2-B4):
+    ``lastHitByBattler[battler]`` while that battler has HP, else ``BattleSystem_RandomOpponent``
+    (one coin ``bit``, ``Outcome.bide_target_draw``) when its pick has HP, else ``NO_DEFENDER``
+    (``subscript_bide_no_target.s``). ``last_hit_by`` is written at B = 4 only; at B = 2 it is
+    always 0 and the opponent is the foe, the one battler that ever hit the user."""
+    fmt = format_of(state)
+    hit = state.last_hit_by[battler].astype(_I32) - 1
+    hit_alive = (hit >= 0) & alive(state, jnp.clip(hit, 0, fmt.B - 1))
+    pick, _ = random_opponent(state, battler, bit)
+    other = jnp.where(alive(state, pick), pick, NO_DEFENDER)
+    return jnp.where(hit_alive, hit, other).astype(_I32)

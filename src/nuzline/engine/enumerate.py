@@ -239,6 +239,7 @@ from nuzline.engine.ids import (
     SPECIES_CHATOT,
     STOMP_PARAM,
     TAILWIND_TURNS,
+    TRACE_FIRES,
     TRI_ATTACK_STATUSES,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
@@ -2212,6 +2213,15 @@ def outcome_laws(
             # D2-4: a fight command's BattleSystem_Defender draws one bit at B = 4 (over-
             # approximate; D6-D7 tighten it with the resolver's R4 table).
             target_draw=uses_move & (fmt.B == 4),
+            # D2-13 / D2-14 / D2-16: an invoker's called-move defender, a Bide release's
+            # RandomOpponent and ChooseTraceTarget's coin, B = 4 only (over-approximate: any Trace
+            # holder in the battle reads all its fires; D6-D7 tighten).
+            call_target_draw=uses_move & (kinds != CALL_NONE) & (fmt.B == 4),
+            bide_target_draw=uses_move & (state.bide_turns == 1) & (fmt.B == 4),
+            trace_pick=jnp.broadcast_to(
+                (jnp.any(state.ability == AbilityId.TRACE) & (fmt.B == 4))[None, None],
+                (fmt.B, TRACE_FIRES),
+            ),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2675,6 +2685,11 @@ _LAWS = {
     "berry_confusion": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
     # BattleSystem_Defender's RandNext() & 1 (lib.c:1653, :1700, :4187), B = 4 only (D2-4).
     "target_draw": _coin,
+    # GoToMoveScript's / the Bide release's / ChooseTraceTarget's RandNext() & 1 (D2-13, D2-14,
+    # D2-16), B = 4 only.
+    "call_target_draw": _coin,
+    "bide_target_draw": _coin,
+    "trace_pick": _coin,
 }
 
 

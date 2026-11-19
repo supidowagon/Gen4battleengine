@@ -465,8 +465,14 @@ class BattleState(NamedTuple):
     # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
     # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
     ts_follow_me: jnp.ndarray
+    # int8[B], the Trace fires of the battler's slot in this step (D2-16, ruling D2-5): the index
+    # into ``Outcome.trace_pick``; written at B = 4 only, 0 between turns
+    ts_trace_fires: jnp.ndarray
     # int8[B], battlerActions[b][1] (D2-1): the battler chosen as the target, kept across turns
     chosen_target: jnp.ndarray
+    # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
+    # last dealt damage to b's slot, 0 = none yet; never cleared (not by a switch or a faint)
+    last_hit_by: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -804,7 +810,9 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
+    "ts_trace_fires": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
+    "last_hit_by": (_BATTLER, np.int8),
 }
 
 

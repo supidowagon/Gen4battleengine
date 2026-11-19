@@ -322,6 +322,12 @@ class _Turn:
     defender: int | None = None
     target_side: int = 0
     speed_order: list[int] | None = None
+    call_redirected: bool = False  # GoToMoveScript's redirection check moved the defender (D2-13)
+    # The Trace fires of the battler's slot in this step (D2-16): the index into Outcome.trace_pick,
+    # written at B = 4 only; ``trace_pick`` the Trace coins outside a step (ref_replace: a list of
+    # one coin per battler), None inside it (the outcome's).
+    trace_fires: list[int] = field(default_factory=lambda: [0, 0])
+    trace_pick: list[int] | None = None
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -330,6 +336,7 @@ class _Turn:
         for name in _TURN_FLAGS:
             setattr(self, name, [False] * n)
         self.items, self.dragged = [0] * n, [0] * n
+        self.trace_fires = [0] * n
         self.taken = [[0] * 6 for _ in range(n)]
         self.order = list(range(n))
         self.actions = (0,) * n
@@ -2610,11 +2617,12 @@ def _download(s: RefState, side: int) -> None:
     mon = _active(s, side)
     if not mon.hp or mon.ability != AbilityId.DOWNLOAD:
         return
-    foe, foe_sd = _active(s, _foe(side)), s.battlers[_foe(side)]
     sum_def = sum_spd = 0
-    if foe.hp and not foe_sd.substitute_hp:
-        sum_def = _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
-        sum_spd = _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
+    for other in opposing(s, side):  # every opposing battler (D2-16 rule 8)
+        foe, foe_sd = _active(s, other), s.battlers[other]
+        if foe.hp and not foe_sd.substitute_hp:
+            sum_def += _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
+            sum_spd += _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
     if sum_def + sum_spd:
         _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
 
@@ -2632,8 +2640,8 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     mon, foe = _active(s, side), _active(s, other)
     # SWITCH_IN_CHECK_STATE_TRACE (lib.c:3718-3737): the newcomer, then the battler facing it,
     # whose Trace stayed armed while its foe was down; no two Trace holders copy each other.
-    _trace(tables, s, side, other)
-    traced = _trace(tables, s, other, side)
+    _trace(tables, s, side, *_trace_coin(turn, side), turn=turn)
+    traced = _trace(tables, s, other, *_trace_coin(turn, other), turn=turn)
     # SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES (lib.c:3740-3790).
     for battler in (side, other) if traced else (side,):
         weather = WEATHER_ABILITIES.get(_active(s, battler).ability)
@@ -2646,26 +2654,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     # script.c:2884-2902 (B9-6; White Smoke, G-46).
-    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
-    if (
-        mon.hp
-        and mon.ability == AbilityId.INTIMIDATE
-        and foe.hp
-        and not s.battlers[other].substitute_hp
-        and not _mist_blocks_drop(s, other, -1)
-        and foe.ability not in blockers
-    ):
-        _change_stage(s, other, Stat.ATK, -1)
-    if (
-        traced
-        and foe.hp
-        and foe.ability == AbilityId.INTIMIDATE
-        and mon.hp
-        and not s.battlers[side].substitute_hp
-        and not _mist_blocks_drop(s, side, -1)
-        and mon.ability not in blockers
-    ):
-        _change_stage(s, side, Stat.ATK, -1)
+    for target_battler in opposing(s, side):  # every opposing battler (D2-16 rule 7)
+        _intimidate(s, side, target_battler)
+    if traced:
+        for target_battler in opposing(s, other):
+            _intimidate(s, other, target_battler)
     # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3814-3851, G-21): the newcomer, then a battler that
     # just traced Download.
     _download(s, side)
@@ -2687,25 +2680,93 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         _held_item_hp(turn, s, battler)
 
 
-def _trace(tables, s: RefState, side: int, foe: int) -> bool:
+def opposing(s: RefState, battler: int) -> tuple[int, ...]:
+    """The battlers a switch-in ability of ``battler`` works on (D2-16): the two opponents at
+    B = 4, the foe at B = 2 (``engine.targets.opposing``)."""
+    if len(s.battlers) == 4:
+        return _opponents(battler)
+    return (_foe(battler),)
+
+
+def trace_target(tables, s: RefState, holder: int, coin: int) -> int | None:
+    """``ChooseTraceTarget`` for ``holder`` (lib.c:7750-7781, D2-16 rule 3): of its two opposing
+    slots (RIGHT, LEFT; the foe twice at B = 2) the eligible one, ``coin`` 1 giving the LEFT one
+    when both are; None when neither. A slot is eligible when the holder has HP, Trace and no
+    Griseous Orb (lib.c:3720-3725) and the target has HP and an ability that is not Forecast,
+    Trace or Multitype by its raw field (:7754-7777)."""
+    mon = _active(s, holder)
+    if len(s.battlers) == 4:
+        first, second = _opponents(holder)
+    else:
+        first = second = _foe(holder)
+
+    def eligible(d: int) -> bool:
+        target = _active(s, d)
+        return bool(
+            mon.hp
+            and mon.ability == AbilityId.TRACE
+            and mon.item != ITEM_GRISEOUS_ORB
+            and target.hp
+            and _decomp_ability(tables, target) not in UNTRACEABLE_ABILITIES
+        )
+
+    e1, e2 = eligible(first), eligible(second)
+    if e1 and e2:
+        return second if coin & 1 else first
+    if e1:
+        return first
+    return second if e2 else None
+
+
+def _trace_coin(turn: _Turn, holder: int) -> tuple[int, bool]:
+    """``(coin, in_step)`` of ``holder``'s Trace (``engine.hooks.trace_coin``): the outcome's
+    ``trace_pick[holder][fires]`` inside a step, ``turn.trace_pick[holder]`` outside, else 0."""
+    pick = turn.trace_pick
+    if pick is None and turn.outcome is not None:
+        pick = turn.outcome.trace_pick
+    if pick is None:
+        return 0, False
+    row = pick[holder]
+    if isinstance(row, list):
+        return row[min(turn.trace_fires[holder], len(row) - 1)], True
+    return row, False
+
+
+def _trace(tables, s: RefState, side: int, coin: int, count: bool = False,
+           turn: _Turn | None = None) -> bool:  # fmt: skip
     """``SWITCH_IN_CHECK_STATE_TRACE`` for ``side``'s battler (lib.c:3718-3737, ``ChooseTraceTarget``
-    :7750-7775): with HP, Trace, no Griseous Orb, a living foe whose ability is not Forecast,
-    Trace or Multitype; ``subscript_trace.s`` copies the foe's ability to the battler and the
-    AI learns both (script.c:3403, :11806)."""
-    mon, target = _active(s, side), _active(s, foe)
-    if not (
-        mon.hp
-        and mon.ability == AbilityId.TRACE
-        and mon.item != ITEM_GRISEOUS_ORB
-        and target.hp
-        and _decomp_ability(tables, target) not in UNTRACEABLE_ABILITIES
-    ):
+    :7750-7781, ``trace_target``): ``subscript_trace.s`` copies the picked foe's ability to the
+    battler and the AI learns both (script.c:3403, :11806). ``count`` (inside a step): the fire is
+    added to ``turn.trace_fires`` at B = 4."""
+    foe = trace_target(tables, s, side, coin)
+    if foe is None:
         return False
-    mon.ability = target.ability
+    _active(s, side).ability = _active(s, foe).ability
     for battler in (side, foe):
-        if battler == 0:
-            _know_ability(s, s.battlers[0].active)
+        if _party(_fmt(s), battler) == 0:
+            _know_ability(s, s.battlers[battler].active)
+    if count and turn is not None and len(s.battlers) == 4:
+        turn.trace_fires[side] += 1
     return True
+
+
+def _intimidate(s: RefState, holder: int, target_battler: int) -> None:
+    """``subscript_intimidate.s`` for one target: ATTACK_DOWN_1_STAGE on a living battler not behind
+    a substitute (:13, B10-4), the holder as the attacker (:8): the target side's Mist blocks it
+    (script.c:2876-2882, B12-23), then Clear Body, White Smoke (G-46) or Hyper Cutter
+    (script.c:2884-2902, B9-6). Its "cuts" message is built in C (script.c:2956): the AI learns
+    nothing."""
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
+    mon, target = _active(s, holder), _active(s, target_battler)
+    if (
+        mon.hp
+        and mon.ability == AbilityId.INTIMIDATE
+        and target.hp
+        and not s.battlers[target_battler].substitute_hp
+        and not _mist_blocks_drop(s, target_battler, -1)
+        and target.ability not in blockers
+    ):
+        _change_stage(s, target_battler, Stat.ATK, -1)
 
 
 def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) -> None:
@@ -3949,6 +4010,10 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     update_hp = landed and hits_foe and damage > 0
     sub_dealt = 0  # hitDamage on the substitute path
     target_sd = s.battlers[target]
+    if update_hp and len(s.battlers) == 4:
+        # lastHitByBattler[defender] = the attacker before the Substitute branch (bcp.c:3347,
+        # :3357; D2-14), B = 4 only.
+        target_sd.last_hit_by = side + 1
     if update_hp and target_sd.substitute_hp:
         # bcp.c:3359-3378 (B10-4): the substitute takes battleCtx->damage, at most its HP
         # (hitDamage, shellBellDamageDealt), the flag sets and UpdateHP returns early.
@@ -4283,9 +4348,14 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # (subscript_bide_no_target.s) ends the move; the lock is released after it (_fight).
     if sd.bide_turns:
         sd.bide_turns -= 1
-        if sd.bide_turns == 0 and (sd.bide_damage <= 0 or _active(s, _foe(side)).hp == 0):
-            _unlock(sd)
-            return DISRUPTED
+        if sd.bide_turns == 0:
+            # D2-14: lastHitByBattler with HP, else a random opponent with HP (bide_defender).
+            picked = bide_defender(s, side, turn.outcome.bide_target_draw[side])
+            if sd.bide_damage <= 0 or picked is None:
+                _unlock(sd)
+                return DISRUPTED
+            turn.defender = picked
+            turn.target_side = picked if picked != side else _foe(side)
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
@@ -4381,9 +4451,21 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
     ``skipPressureCheck`` is only set by script commands after it (G-8)."""
     if defender is None:
         return 1
-    foe = _active(s, _foe(side))
-    if move == MOVE_IMPRISON or _move_target(tables, move) in PRESSURE_COUNTED:
-        return 1 + int(foe.hp > 0 and foe.ability == AbilityId.PRESSURE)
+    # D2-15: COUNT_ALIVE_BATTLERS_THEIR_SIDE for Imprison and the opponent ranges, _EXCEPT_ME
+    # (the user's partner included) for RANGE_ALL_ADJACENT and RANGE_FIELD (lib.c:2905-2967).
+    target_range = _move_target(tables, move)
+    if move == MOVE_IMPRISON or target_range in PRESSURE_COUNTED:
+        their_side = move == MOVE_IMPRISON or target_range in (
+            MoveTarget.RANGE_ADJACENT_OPPONENTS,
+            MoveTarget.RANGE_OPPONENT_SIDE,
+        )
+        count = 0
+        for b in range(len(s.battlers)):
+            mon_b = _active(s, b)
+            if their_side and side_of(b) == side_of(side) or b == side:
+                continue
+            count += int(mon_b.hp > 0 and mon_b.ability == AbilityId.PRESSURE)
+        return 1 + count
     if _move_target(tables, move) in PRESSURE_NONE:
         return 1
     return 1 + int(defender != side and _active(s, defender).ability == AbilityId.PRESSURE)
@@ -4566,6 +4648,34 @@ def redirect(tables, s: RefState, attacker: int, move: int, defender: int | None
     return defender, False
 
 
+def called_defender(tables, s: RefState, attacker: int, move: int, speed_order: list[int],
+                    bit: int) -> tuple[int | None, bool]:  # fmt: skip
+    """``BtlCmd_GoToMoveScript``'s defender for the called ``move`` (script.c:2111-2134, D2-13):
+    ``_resolve`` with randomize TRUE and the stored target, then ``redirect`` with the same move.
+    ``(defender or None, redirected)``; mirrors ``engine.targets.called_defender``."""
+    defender, _, _, _ = _resolve(
+        tables, s, attacker, move, True, s.battlers[attacker].chosen_target, speed_order, bit
+    )
+    return redirect(tables, s, attacker, move, defender, speed_order)
+
+
+def counter_defender(s: RefState, battler: int, last_attacker: int) -> int:
+    """The defender of Counter, Mirror Coat and Metal Burst (script.c:4628-4632, D2-14): the living
+    Follow Me user of the last attacker's side, else the last attacker."""
+    follow = _follow_me_target(s, battler)
+    return last_attacker if follow is None else follow
+
+
+def bide_defender(s: RefState, battler: int, bit: int) -> int | None:
+    """The defender of Bide's release (bcp.c:2704-2716, D2-14): ``lastHitByBattler`` with HP, else
+    ``BattleSystem_RandomOpponent`` with HP, else None."""
+    hit = s.battlers[battler].last_hit_by - 1
+    if hit >= 0 and _active(s, hit).hp > 0:
+        return hit
+    pick, _ = _random_opponent(s, battler, bit)
+    return pick if _active(s, pick).hp > 0 else None
+
+
 def _reveal_redirect(s: RefState, tables, holder: int) -> None:
     """subscript_lightning_rod_redirected.s:9 tags the holder's ability: ``BattleAI_SetAbility``
     for a player's Pokemon (D2-12 rule 10)."""
@@ -4573,6 +4683,23 @@ def _reveal_redirect(s: RefState, tables, holder: int) -> None:
         mon = _active(s, holder)
         slot = s.battlers[holder].active
         s.ai_ability_known[slot] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+
+
+def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
+    """GoToMoveScript's re-pick for the called ``move`` (script.c:2111-2134, D2-13): the action's
+    defender becomes ``called_defender`` and, at B = 4, the stored target (:2123). True when it
+    finds none (``subscript_no_target.s``). ``turn.call_redirected``: the redirection check moved it."""
+    order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    called, turn.call_redirected = called_defender(
+        turn.tables, s, side, move, order, turn.outcome.call_target_draw[side]
+    )
+    if called is None:
+        return True
+    turn.defender = called
+    turn.target_side = called if called != side else _foe(side)
+    if len(s.battlers) == 4:
+        s.battlers[side].chosen_target = called
+    return False
 
 
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
@@ -4657,6 +4784,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         return record
     # HasNoTarget's second part (bcp.c:2319-2334): a charge turn with no foe keeps the user.
     keeps_user = charge_keeps_user(tables, s, side, move, fight_defender)
+    turn.call_redirected = False
     # D2-12: REDIRECT_TARGET (bcp.c:3204-3206), the holder is the defender from here on.
     order0 = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
     redirect_to, redirected = redirect(
@@ -4676,9 +4804,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # moveHit becomes moveCur.
         move = _called_move(tables, s, move)
         turn.move_cur = move
-        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, _foe(side)).hp == 0:
+        if _call_defender(turn, s, side, move):
             _unlock(s.battlers[side])
             return None
+        redirected = redirected or turn.call_redirected
         record = move
     if _t(tables, "move_effect", move) in (
         EffectId.SLEEP_TALK,
@@ -4698,9 +4827,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             return None
         move = _called_move(tables, s, called)
         turn.move_cur = move
-        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, _foe(side)).hp == 0:
+        if _call_defender(turn, s, side, move):
             _unlock(s.battlers[side])  # subscript_no_target.s
             return None
+        redirected = redirected or turn.call_redirected
         own_defender = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(
             tables, move, _ghost(s, side)
         )
@@ -4844,14 +4974,22 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         source = _t(tables, "move_param", move, 0)
         taken = turn.taken[side][source - 1]
         attacker = turn.taken[side][source + 2] - 1
-        if not taken or attacker in (-1, side) or _active(s, attacker).hp == 0:
+        if (
+            not taken
+            or attacker < 0
+            or side_of(attacker) == side_of(side)  # D2-14: a partner's hit fails it too
+            or _active(s, attacker).hp == 0
+        ):
             _unlock(s.battlers[side])
             return None if special_counter else record
         turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
-        # BattleSystem_DecPPForPressure on the new defender, the last attacker (script.c:4646,
-        # :4699, :7180; lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an
-        # invoker's when it called the move), while it has PP left, ruling G-9.
-        if _active(s, attacker).ability == AbilityId.PRESSURE and mon.pp[action] > 0:
+        # D2-14: the defender is the living Follow Me user of the attacker's side, else the attacker.
+        picked = counter_defender(s, side, attacker)
+        turn.defender = turn.target_side = picked
+        # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
+        # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
+        # the move), while it has PP left, ruling G-9.
+        if _active(s, picked).ability == AbilityId.PRESSURE and mon.pp[action] > 0:
             mon.pp[action] -= 1
         if special_counter:
             record = move
@@ -6713,6 +6851,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_switched", [int(c == SWITCH) for c in turn.commands])
     s.ts_pick_mul = turn.pick_mul
     _put(s, "ts_assurance", [int(f) for f in turn.assurance])
+    _put(s, "ts_trace_fires", turn.trace_fires)
     for k, sc in enumerate(s.sides):
         sc.ts_follow_me = turn.follow_me[k]
     for sd in s.battlers:  # read by the order, next read at the next turn
@@ -6765,6 +6904,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.move_failed = [bool(f) for f in _get(s, "ts_move_failed")]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
+    turn.trace_fires = _get(s, "ts_trace_fires")
     turn.follow_me = [sc.ts_follow_me for sc in s.sides]
     turn.fainted = [
         (_fainted_battler(s, k, i), i)
@@ -6879,7 +7019,8 @@ def _keep_qc(tables, s: RefState, qc: list[int]) -> None:
         sd.qc_roll = int(bool(value)) if kept else 0
 
 
-def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True) -> RefState:
+def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True,
+                trace_pick: list[int] | None = None) -> RefState:  # fmt: skip
     """A faint replacement (``engine.step.replace``'s contract): ``TurnEnd`` ->
     ``ReplaceFainted`` (bcp.c:1848) -> ``subscript_show_party_list.s`` sends the
     Pokemon in and runs the hazards and a faint check (:22-24); the battle-over check
@@ -6889,6 +7030,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
     # turn: the decomp's totalTurns + 1 is s.turn here.
     turn = _Turn(tables, None, entry_turn=s.turn, battler_count=_fmt(s).B)
+    turn.trace_pick = trace_pick
     _enter(turn, s, side, slot)
     # subscript_show_party_list.s:18 / :22, and subscript_replace_fainted.s:58 / :62 in shift
     # style (the same order): the exp flag at the send-out, then the hazards.

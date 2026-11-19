@@ -1449,6 +1449,10 @@ MOVE_CHATTER = 448
 CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
 MIMIC_PP_CAP = 5
+# Trace fires per slot in one step (D2-5, D2-16): its turn-start occupant's armed Trace, one entry
+# by its own action, and one drag per other battler's Roar / Whirlwind; the width of
+# ``Outcome.trace_pick`` and the bound of ``BattleState.ts_trace_fires``.
+TRACE_FIRES = 5
 # sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
 # 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``
 # (:3394-3407) bans them at selection (CHECK_INVALID_GRAVITY, :2292), at the status check

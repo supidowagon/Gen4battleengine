@@ -412,6 +412,13 @@ three structs has a row.
   battle_controller_player.c:180-182) and is written at selection (`actions.chosen_targets`, in
   `step._action_phase`) only by a battler that reaches the target menu (bcp.c:507-531); D2-9 and
   D2-13 overwrite it later. Not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`.
+- The last hitter (D2-14): `last_hit_by` (per battler, `1 + BattleContext.lastHitByBattler[b]`, 0 =
+  no hit yet), written by every damaging `UpdateHP` on `b` (a Substitute hit and a partner's hit
+  included, bcp.c:3347, :3357) and never cleared: not by a switch or a faint (lib.c:2110-2225), so
+  it is not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Bide's release reads it.
+- The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
+  counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
+  written at B = 4 only.
 
 ## BattleMon (`include/battle/battle_mon.h`)
 
@@ -535,8 +542,8 @@ three structs has a row.
 | `SideConditions.mistTurns` | `mist` | mapped |
 | `SideConditions.safeguardUser` | — | not needed because in singles the user is always that side's active Pokemon (the field names the battler for messages and doubles) |
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
-| `SideConditions.followMe` | `ts_follow_me` | mapped: `1 + followMeUser` while `followMe` is set, 0 when it is clear (`followMeUser` is read only under `followMe`); per side, cleared by `BattleSystem_SetupNextTurn` (battle_lib.c:2251-2252), so turn scratch |
-| `SideConditions.followMeUser` | `ts_follow_me` | mapped (the same field) |
+| `SideConditions.followMe` | `ts_follow_me` | mapped |
+| `SideConditions.followMeUser` | `ts_follow_me` | mapped |
 | `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |
@@ -692,7 +699,7 @@ three structs has a row.
 | `BattleContext.conversion2Type` | — | later (M6) |
 | `BattleContext.metronomeMove` | `metronome_move` | mapped |
 | `BattleContext.storedDamage` | `bide_damage` | mapped |
-| `BattleContext.lastHitByBattler` | — | later (M6) |
+| `BattleContext.lastHitByBattler` | `last_hit_by` | mapped |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |

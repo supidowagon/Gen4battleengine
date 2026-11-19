@@ -67,3 +67,9 @@ def as_ghost(state: BattleState, b: int) -> BattleState:
     return state._replace(
         types=state.types.at[p, slot].set(jnp.asarray([Type.GHOST, Type.GHOST], state.types.dtype))
     )
+
+
+def with_ability(state: BattleState, b: int, ability) -> BattleState:
+    """Battler ``b``'s active Pokemon has ``ability``."""
+    p, slot = party_of(state, b), int(state.active[b])
+    return state._replace(ability=state.ability.at[p, slot].set(int(ability)))
