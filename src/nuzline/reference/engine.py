@@ -217,8 +217,12 @@ class _Turn:
     # totalTurns + 1, the fakeOutTurnNumber a switch-in or faint writes (lib.c:2117,
     # :2195): turn + 1 during ref_step, turn in ref_replace (after the turn was counted).
     entry_turn: int
-    fainted: list[tuple[int, int]] = field(default_factory=list)  # SYSCTL_MON_FAINTED
-    # BattleMon.status of a Pokemon that fainted this turn, (side, slot) -> status: the faint
+    # The fight's battler count (``Format.B``): ``__post_init__`` sizes every per-battler list.
+    battler_count: int = 2
+    # SYSCTL_MON_FAINTED: (battler, slot) of each Pokemon flagged to faint, per battler throughout
+    # (``_alive_bits`` and ``_resume`` map it to and from the party bitmask ``ts_alive``).
+    fainted: list[tuple[int, int]] = field(default_factory=list)
+    # BattleMon.status of a Pokemon that fainted this turn, (battler, slot) -> status: the faint
     # zeroes the party copy only (battle_controller.c:1481-1486); the Synchronize step reads the
     # battler's (G-24).
     battle_status: dict = field(default_factory=dict)
@@ -305,6 +309,23 @@ class _Turn:
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
+
+    def __post_init__(self) -> None:
+        n = self.battler_count
+        if n == 2:  # the defaults above are the singles sizes
+            return
+        for name in _TURN_FLAGS:
+            setattr(self, name, [False] * n)
+        self.items, self.dragged = [0] * n, [0] * n
+        self.taken = [[0] * 6 for _ in range(n)]
+        self.order = list(range(n))
+        self.actions = (0,) * n
+
+
+# The _Turn lists of one bool per battler.
+_TURN_FLAGS = (
+    "done", "protecting", "enduring", "roosting", "custap", "claw", "move_failed", "assurance",
+)  # fmt: skip
 
 
 class _Pause(Exception):
@@ -1263,10 +1284,11 @@ def _calc_move_damage(
         a_ability == AbilityId.MINUS and _side_ability_count(s, attacker, AbilityId.PLUS)
     ):
         sp_attack = sp_attack * 150 // 100
-    # lib.c:6811 Mud Sport, :6815 Water Sport (any battler on the field).
-    if move_type == Type.ELECTRIC and (s.battlers[0].mud_sport or s.battlers[1].mud_sport):
+    # lib.c:6811 Mud Sport, :6815 Water Sport: BattleSystem_AnyBattlersWithMoveEffect, any
+    # battler on the field.
+    if move_type == Type.ELECTRIC and any(bt.mud_sport for bt in s.battlers):
         power //= 2
-    if move_type == Type.FIRE and (s.battlers[0].water_sport or s.battlers[1].water_sport):
+    if move_type == Type.FIRE and any(bt.water_sport for bt in s.battlers):
         power //= 2
     # lib.c:6819-6832 Overgrow, Blaze, Torrent.
     pinch = atk.hp <= atk.max_hp // 3
@@ -1747,11 +1769,11 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     player_fainted = 0
     for side, slot in turn.fainted:
         turn.done[side] = True  # script.c:1801, battlerActions = MOVE_END
-        if side == 1:  # script.c:1800 flags the payout; CalcExpGain pays a SOLO_ENEMY only
+        if side_of(side) == 1:  # script.c:1800 flags the payout; CalcExpGain pays a SOLO_ENEMY only
             turn.payout.append(slot)
         if s.battlers[side].active == slot:
             _cleanup_fainted(turn, s, side)
-        if side == 0:
+        if side_of(side) == 0:
             player_fainted += 1
             s.deaths[slot] = 1
     turn.fainted.clear()
@@ -6030,7 +6052,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
-    turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
+    turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
     # TrainerAI_RecordLastMove (trainer_ai.c:2705-2717) runs on the AI's FIGHT path
@@ -6047,7 +6069,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     # item (:4193), before any action runs. Its loop (:4091) does not break: every later
     # slot i with aliveMons <= trainerItemCounts - i + 1 (:4092) is zeroed too, aliveMons
     # counting the party members with HP left (:4081-4089).
-    items = [0, 0]
+    items = [0] * _fmt(s).B
     for side in range(_fmt(s).B):
         if commands[side] == ITEM:
             sd = _party_of(s, side)
@@ -6265,7 +6287,7 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).
     _keep_qc(tables, s, list(outcome.quick_claw))
     # turnFlags.roosting until SetupNextTurn (lib.c:2229-2231), after the replacements.
-    _set_roosting(s, _roosting(s, turn) if waiting and not s.over else [0, 0])
+    _set_roosting(s, _roosting(s, turn) if waiting and not s.over else [0] * _fmt(s).B)
     return s
 
 
@@ -6315,7 +6337,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_used = turn.move_cur
     s.ts_damaged = int(turn.damaged)
     s.ts_dealt = turn.pivot_dealt
-    fainted = set(turn.fainted)
+    fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
     for k, pt in enumerate(s.parties):
         pt.ts_alive = sum(1 << i for i, m in enumerate(pt.mons) if m.hp > 0 or (k, i) in fainted)
     s.ts_power_mul = turn.power_mul
@@ -6324,6 +6346,15 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_assurance", [int(f) for f in turn.assurance])
     for sd in s.battlers:  # read by the order, next read at the next turn
         sd.qc_roll = 0
+
+
+def _fainted_battler(s: RefState, k: int, i: int) -> int:
+    """The battler a paused faint of party ``k``'s slot ``i`` was flagged on: the battler of
+    party ``k`` whose active Pokemon it is (only an active Pokemon faints), else party ``k``'s
+    first battler. In singles, battler ``k``."""
+    fmt = _fmt(s)
+    own = [b for b in range(fmt.B) if fmt.party_of[b] == k]
+    return next((b for b in own if s.battlers[b].active == i), own[0])
 
 
 _SCRATCH_ZERO = {
@@ -6340,7 +6371,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     effects, the item checks, the thaw; the guarded Sticky Barb, Shell Bell and Life Orb skipped;
     ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
     side = s.pivot_battler - 1
-    turn = _Turn(tables, outcome, entry_turn=s.turn + 1)
+    turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     turn.actions = tuple(_get(s, "ts_actions"))
     turn.choices = [
         (s.battlers[k].ts_move, bool(s.battlers[k].ts_struggling), bool(s.battlers[k].ts_locked))
@@ -6362,7 +6393,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
     turn.fainted = [
-        (k, i)
+        (_fainted_battler(s, k, i), i)
         for k, pt in enumerate(s.parties)
         for i, m in enumerate(pt.mons)
         if m.hp == 0 and pt.ts_alive >> i & 1
@@ -6481,7 +6512,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     s = copy.deepcopy(state)
     # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
     # turn: the decomp's totalTurns + 1 is s.turn here.
-    turn = _Turn(tables, None, entry_turn=s.turn)
+    turn = _Turn(tables, None, entry_turn=s.turn, battler_count=_fmt(s).B)
     _enter(turn, s, side, slot)
     # subscript_show_party_list.s:18 / :22, and subscript_replace_fainted.s:58 / :62 in shift
     # style (the same order): the exp flag at the send-out, then the hazards.
@@ -6498,5 +6529,5 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
-        _set_roosting(s, [0, 0])
+        _set_roosting(s, [0] * _fmt(s).B)
     return s

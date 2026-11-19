@@ -656,10 +656,14 @@ def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
 COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE = 0, 1, 2
 
 
-def compare_speed(tables: Tables, state: BattleState, battler1: int, tie_roll, qc) -> jnp.ndarray:
-    """``int32``: ``BattleSystem_CompareBattlerSpeed(battler1, the other side)`` within equal
+def compare_speed(
+    tables: Tables, state: BattleState, battler1: int, tie_roll, qc, battler2: int | None = None
+) -> jnp.ndarray:
+    """``int32``: ``BattleSystem_CompareBattlerSpeed(battler1, battler2)`` within equal
     priority (lib.c:1401-1447): ``COMPARE_SPEED_FASTER``, ``SLOWER`` or ``TIE``.
-    ``battler1`` is a side (static int). Quick Claw first (``qc``: each side's ``speedRand``
+    ``battler1`` and ``battler2`` are battlers (static ints); ``battler2`` defaults to
+    ``foe(battler1)``. Every battler's speed, claw and lag are built (``range(fmt.B)``), then
+    the pair is read. Quick Claw first (``qc``: each side's ``speedRand``
     bit, ``quick_claw_active``): both active compare plain speeds, Trick Room and Lagging
     Tail ignored (:1402-1407); a lone active one is FASTER (:1408-1411), even under Trick
     Room and against a Lagging Tail. Lagging Tail: a lone holder is SLOWER (:1418-1421); two
@@ -671,8 +675,8 @@ def compare_speed(tables: Tables, state: BattleState, battler1: int, tie_roll, q
     trainer AI compares at its decision, with both actives alive. A Custap Berry in its pinch
     (``custap_active``) sets the same flag as an activated Quick Claw (:1288-1300)."""
     fmt = format_of(state)
-    other = _foe(battler1)
-    speed = (effective_speed(tables, state, 0), effective_speed(tables, state, 1))
+    other = _foe(battler1) if battler2 is None else battler2
+    speed = tuple(effective_speed(tables, state, b) for b in range(fmt.B))
     claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
     lag = tuple(_holds(tables, state, side, ItemId.LAGGING_TAIL) for side in range(fmt.B))
     speed1, speed2 = speed[battler1], speed[other]
