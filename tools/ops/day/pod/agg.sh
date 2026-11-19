@@ -6,7 +6,7 @@
 # wall time, container peak,
 # largest process, per unit its peak RSS and wall time (finished units), the 15 slowest tests, the count over 60 s, every FAILED/ERROR and SKIPPED line,
 # and a last line RESULT: PASS or RESULT: FAIL (<reasons>).
-D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; cd "$O"
+D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; mkdir -p "$O"; cd "$O"
 cnt() { v=$(echo "$1" | grep -oE "[0-9]+ $2" | head -1 | cut -d' ' -f1); echo "${v:-0}"; }
 TAB=$(while read -r u f; do n=$(grep -c . $u.ids)
   if [ -f $u.rc ]; then l=$(grep -E ' in [0-9.]+s' $u.log 2>/dev/null | tail -1)
@@ -24,12 +24,12 @@ CF=$(grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null); [ -n "$CF" ] 
 grep -hE '^ERROR ' "$D"/col/*.out 2>/dev/null | cut -c1-260
 NC=$( [ -n "$CF" ] && echo "$CF" | wc -l || echo 0)
 NK=$(cat crashed.txt 2>/dev/null | wc -l); [ "$NK" -gt 0 ] && echo "--- crashed units (rc 97): $(tr '\n' ' ' < crashed.txt)"
-NO=$(cat overkilled.txt 2>/dev/null | wc -l); [ "$NO" -gt 0 ] && echo "--- units killed a third time at the memory limit (rc 98): $(tr '\n' ' ' < overkilled.txt)"
+NO=$(cat overkilled.txt 2>/dev/null | wc -l); [ "$NO" -gt 0 ] && echo "--- units killed a third time at the memory limit, or left without a result after two requeues (those are in lost.txt) (rc 98):$(tr '\n' ' ' < overkilled.txt)"
 BR=$(for u in $(cut -d' ' -f1 queue.txt); do [ -f $u.rc ] || continue; c=$(cat $u.rc)
   case $c in 0|1|5|97|98) ;; *) echo "$u rc=$c $(grep "^$u " queue.txt | cut -d' ' -f2)";; esac; done)
 NB=$( [ -n "$BR" ] && echo "$BR" | wc -l || echo 0); [ "$NB" -gt 0 ] && { echo "--- units with an rc other than 0, 1 or 5"; echo "$BR"; }
 PK=n/a; [ -r /sys/fs/cgroup/memory.peak ] && PK="$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MB"
-echo "--- wall $(( $(cat ALL.end 2>/dev/null || date +%s) - $(cat ALL.start) )) s; container peak (incl. other runs) $PK"
+echo "--- wall $(( $(cat ALL.end 2>/dev/null || date +%s) - $(cat ALL.start 2>/dev/null || cat ALL.end 2>/dev/null || date +%s) )) s; container peak (incl. other runs) $PK"
 for u in $(cut -d' ' -f1 queue.txt); do awk -v u=$u '/Maximum resident/ {print int($6/1024), u}' $u.time 2>/dev/null; done | sort -n | tail -1 | while read -r m u; do echo "largest process ${m} MB: $u $(head -1 $u.ids)"; done
 echo "--- per unit: unit ids max_rss_MB wall_s rc first_id"
 while read -r u f; do [ -f $u.rc ] || continue

@@ -59,9 +59,9 @@ mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$O
 for f in "$P"/podsrc/tools/ops/day/pod/*.sh; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
 rm -rf "$P/podsrc"
 # Beacon codes: two fresh random codephrases per run, WATCH_F (first failure) and WATCH_D (results),
-# for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl's croc fork
-# (cmd/croc/croc.go, v3.1.1) puts a transfer in the relay room code[:3] and its data rooms in
-# sha256(code[:5]), so each code starts with 3 random letters (never a digit, as runpodctl's own
+# for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl v3.1.1's croc fork
+# (cmd/transfer/croc.go:551,722) puts a transfer in the relay room code[:3] and its data rooms in
+# sha256(code[:5]) (:1293), so each code starts with 3 random letters (never a digit, as runpodctl's own
 # codes do) and the two codes differ there. Never printed here.
 draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
   for b in $(od -An -N3 -tu1 /dev/urandom); do l="$l${a:$((b % 26)):1}"; done

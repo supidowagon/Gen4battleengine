@@ -11,23 +11,28 @@
 # Each offer is repeated until a receiver takes it or WATCH_HOURS (default 24) pass; the f offer
 # stops once the d offer is taken. Signals only its own send processes (timeout, and pkill of the
 # pending f send by its command line, which holds this run's random code). Never prints a code.
-# Reads only this run's folder; writes notify/, notify.log, agg.txt and results.tgz in it.
+# Ends after WATCH_HOURS in any case. Writes its PID to notify.pid: status.sh lists another run as
+# <name>(beacon) while this script is alive and notify/taken_d is missing. notify/send_<f|d>.log
+# keep runpodctl's stderr with the code replaced by <code>; its stdout (the code) is dropped.
+# Reads only this run's folder; writes notify/, notify.pid, notify.log, agg.txt and results.tgz in it.
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; . ./meta.env
 [ -n "${WATCH_F:-}" ] && [ -n "${WATCH_D:-}" ] || { echo "no WATCH_F/WATCH_D in meta.env"; exit 0; }
-RPC=/work/_bin/runpodctl; N="$D/notify"; mkdir -p "$N"
+RPC=/work/_bin/runpodctl; N="$D/notify"; mkdir -p "$N"; echo $$ > "$D/notify.pid"
 END=$(( $(date +%s) + ${WATCH_HOURS:-24} * 3600 ))
 # offer <f|d> <file in $N or $D>: send it under WATCH_F or WATCH_D until taken, END, or (for f)
 # the stop file. Each send attempt lasts at most 600 s.
-offer() { local s="$1" f="$2" c="$WATCH_D"; [ "$1" = f ] && c="$WATCH_F"
+offer() { local s="$1" f="$2" c="$WATCH_D" rc; [ "$1" = f ] && c="$WATCH_F"
   while [ "$(date +%s)" -lt "$END" ]; do
     [ "$s" = f ] && [ -f "$N/stop" ] && return 1
     ( cd "$(dirname "$f")" && timeout 600 "$RPC" send --code "$c" "$(basename "$f")" ) \
-      >> "$N/send_$s.log" 2>&1 < /dev/null && { date +%s > "$N/taken_$s"; echo "$(date +%s) $s taken"; return 0; }
+      > /dev/null 2> "$N/send_$s.err" < /dev/null; rc=$?
+    sed "s/$c/<code>/g" "$N/send_$s.err" >> "$N/send_$s.log"; rm -f "$N/send_$s.err"
+    [ "$rc" = 0 ] && { date +%s > "$N/taken_$s"; echo "$(date +%s) $s taken"; return 0; }
     sleep 10
   done; echo "$(date +%s) $s not taken before WATCH_HOURS"; return 1; }
 FAILED=0; DEAD=0
-while :; do
+while [ "$(date +%s)" -lt "$END" ]; do
   S=$(bash "$D/bin/status.sh" 2>&1); L=$(printf '%s\n' "$S" | grep -m1 '^setup=')
   over=0; dead=0
   case "$L" in
@@ -52,3 +57,4 @@ while :; do
   fi
   sleep 20
 done
+echo "$(date +%s) run not over before WATCH_HOURS"; touch "$N/stop"; wait
