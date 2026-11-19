@@ -67,11 +67,11 @@ per day is the rate used for estimates.
   listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
   archive or its extraction, the docs sheet or its extraction, or anything personal.
 - **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
-  up; its hours there count against the $15 day limit, and when its run ends the nightly
+  up; and when its run ends the nightly
   agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
   at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
   A tip that equals the last nightly's tip does not run again.
-- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, at most $15 per day, for every stream test
+- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, no daily limit, for every stream test
   run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
