@@ -8,7 +8,8 @@
 #    runner=none, or runner=gone without DONE) it packs results.tgz with `bin/fetch.sh --pack`
 #    and offers it with `runpodctl send --code <WATCH_CODE>d`.
 # Each offer is repeated until a receiver takes it or WATCH_HOURS (default 24) pass; the f offer
-# stops once the d offer is taken. Signals nothing but its own send processes (via timeout).
+# stops once the d offer is taken. Signals only its own send processes (timeout, and pkill of the
+# pending f send by its command line, which holds this run's random code).
 # Reads only this run's folder; writes notify/, notify.log, agg.txt and results.tgz in it.
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; . ./meta.env
@@ -44,7 +45,9 @@ while :; do
   fi
   if [ "$over" = 1 ]; then
     echo "$(date +%s) run over: $L"; bash "$D/bin/fetch.sh" --pack
-    offer d "$D/results.tgz"; touch "$N/stop"; wait; exit 0
+    offer d "$D/results.tgz"; touch "$N/stop"
+    # End a pending f offer now: only processes carrying this run's own random code match.
+    pkill -TERM -f -- "send --code ${WATCH_CODE}f" 2>/dev/null; wait; exit 0
   fi
   sleep 20
 done

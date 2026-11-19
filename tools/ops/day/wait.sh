@@ -58,7 +58,7 @@ while [ "$(date +%s)" -lt "$END" ]; do
     # The summary: per-file table, collection failures, crashed or killed units, wall and peak,
     # failures; the per-unit list, slowest tests and skips stay in the file.
     awk '/^--- per unit/ || /^--- slowest/ || /^--- skips/ {skip = 1; next} /^--- / {skip = 0} !skip' "$A"
-    printf '%s\n' "--- setup (last lines)"; tail -3 "$P/results/setup.log" 2>/dev/null
+    grep -E '^(SETUP_FAILED rc=|ERROR)' "$P/results/setup.log" 2>/dev/null | tail -5 | sed 's/^/setup: /'
     case "$R" in "RESULT: PASS") exit 0;; *) exit 1;; esac
   fi
   if [ "$UNTIL" = first-failure ] && take f firstfail.txt; then
