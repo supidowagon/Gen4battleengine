@@ -22,7 +22,7 @@ if (Test-Path $Streams) {
 # 1. Commits per stream
 foreach ($s in $list) {
     $ts = git -C $repo log -1 --format=%ct $s.branch 2>$null
-    if (-not $ts) { "{0}: branch {1} not found" -f $s.name, $s.branch; $flags += "$($s.name): branch $($s.branch) not found"; continue }
+    if (-not $ts) { "{0}: branch {1} not found" -f $s.name, $s.branch; $flags += "$($s.name): branch $($s.branch) not found"; $ages += [int]::MaxValue; continue }  # counts as stopped
     $subj = git -C $repo log -1 --format='%h %s' $s.branch
     $age = [int](($now.ToUniversalTime() - [DateTimeOffset]::FromUnixTimeSeconds([int64]$ts).UtcDateTime).TotalMinutes)
     $wt = Join-Path $repo $s.worktree

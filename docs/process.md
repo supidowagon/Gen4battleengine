@@ -68,22 +68,25 @@ per day is the rate used for estimates.
   archive or its extraction, the docs sheet or its extraction, or anything personal.
 - **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
   up; its hours there count against the $15 day limit, and when its run ends the nightly
-  agent deletes `ci-day-big` if no other run is active on it. Otherwise rent `ci-nightly`:
-  at most $6 per run, deleted within 4.5 hours of creation.
+  agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
+  at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
+  A tip that equals the last nightly's tip does not run again.
 - **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, at most $15 per day, for every stream test
   run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
-  and test-file list; the managing session dispatches one fresh Opus agent per run that
-  uploads that commit and its built tables, runs the list and reports counts, time and peak
-  memory per file, and reports each failure as it appears. Only committed code runs on the pod.
+  and test-file list; the managing session dispatches one fresh Opus agent per run, day or
+  nightly, that handles the whole run: uploads that commit and its built tables, runs the
+  list, polls it, reports each failure as it appears, and reports the final result with
+  counts, time and peak memory per file. Only committed code runs on the pod.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
   (`/sys/fs/cgroup/memory.current`) is under 88 GB, and run at most 10 chunks at once
   across all runs on the pod: a chunk grows to 8-12 GB after it starts. Near 118 GB kill
-  the newest chunk and queue it again. Never signal PID 1.
+  this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
+  as a failure. Never signal PID 1.
 - **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
   equals its collected count. A file whose totals differ, a file that failed to collect and
   a chunk that crashed count as failures.
@@ -101,7 +104,7 @@ per day is the rate used for estimates.
   fast-tier lock state, and lists flags.
 - `tools/ops/watch_flags.ps1` runs the watchdog every 10 minutes in the background and exits
   (waking the managing session) only on a flag that a running test tier does not explain.
-  `-HoldUntil` silences "has not committed" while streams wait on tests.
+  `-HoldUntil` silences "has not committed" and "may have stopped" while streams wait on tests.
 - A fallback check runs twice a day (section 7).
 - A stream ends a turn only with a merge tip plus results, a real blocker, or a family list
   or plan. It never sends a "still waiting" note.
@@ -114,7 +117,7 @@ or clear. Times are local cron expressions; the scheduler adds jitter.
 | Cron | What |
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
-| `7 22 * * *` | Launch the nightly fast tier: on `ci-day-big` when it is up, else on `ci-nightly` |
+| `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
 | `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
 
 ## 8. Usage rules

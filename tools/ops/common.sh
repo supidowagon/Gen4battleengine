@@ -4,8 +4,13 @@
 _ops=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 _common=$(git -C "$_ops" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
   || { echo "ERROR: $_ops is not inside a git checkout; set NUZLINE_REPO and NUZLINE_SCRATCH" >&2; exit 2; }
-REPO="${NUZLINE_REPO:-$(cd "$_common/.." && pwd)}"
-SCRATCH="${NUZLINE_SCRATCH:-$REPO/_scratch}"
+# NUZLINE_REPO / NUZLINE_SCRATCH may be Windows paths; both are normalised by cd + pwd.
+if [ -n "${NUZLINE_REPO:-}" ]; then
+  REPO=$(cd "$NUZLINE_REPO" 2>/dev/null && pwd) || { echo "ERROR: NUZLINE_REPO=$NUZLINE_REPO: no such folder" >&2; exit 2; }
+else REPO=$(cd "$_common/.." && pwd); fi
+if [ -n "${NUZLINE_SCRATCH:-}" ]; then
+  SCRATCH=$(cd "$NUZLINE_SCRATCH" 2>/dev/null && pwd) || { echo "ERROR: NUZLINE_SCRATCH=$NUZLINE_SCRATCH: no such folder" >&2; exit 2; }
+else SCRATCH="$REPO/_scratch"; fi
 RENT="$SCRATCH/rent"
 RPC="${RUNPODCTL:-$RENT/bin/runpodctl-windows-amd64.exe}"
 [ -d "$REPO/.git" ] || [ -f "$REPO/.git" ] || { echo "ERROR: NUZLINE_REPO=$REPO is not a checkout" >&2; exit 2; }

@@ -23,12 +23,14 @@ unlink_decomp() {  # removes only a link this script made; never deletes through
   LINKED=""
 }
 link_decomp() {  # $1 = checkout without external/pokeplatinum
-  local l="$1/external/pokeplatinum"; mkdir -p "$1/external"
+  local l="$1/external/pokeplatinum"
+  [ -d "$REPO/external/pokeplatinum/src" ] || { echo "ERROR: $REPO/external/pokeplatinum/src missing; not linking"; exit 2; }
+  mkdir -p "$1/external"
+  LINKED="$l"   # set first: whatever the link step leaves behind is removed on exit
   if command -v cygpath >/dev/null; then
     powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path $(psq "$l") -Target $(psq "$REPO/external/pokeplatinum") | Out-Null"
   else ln -s "$REPO/external/pokeplatinum" "$l"; fi
   [ -d "$l/src" ] || { echo "ERROR: decomp link $l failed"; exit 2; }
-  LINKED="$l"
 }
 
 if [ "$ARG" = --here ]; then
