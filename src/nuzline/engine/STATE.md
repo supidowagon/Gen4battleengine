@@ -415,7 +415,10 @@ three structs has a row.
   D2-13 overwrite it later (GoToMoveScript stores the called move's defender, script.c:2123). Not in
   `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Written in both formats (ruling D2-33, which
   supersedes D2-28): at B = 2 a locked battler reads it (bcp.c:1885-1888, lib.c:1711), the user after
-  a RANGE_MY_SIDE or non-Ghost Curse selection.
+  a RANGE_MY_SIDE or non-Ghost Curse selection. At the end of a turn at B = 2 it is canonical
+  (ruling D2-35, `step.canonical_target`, reference `_end_turn`): `b ^ 1` unless the battler is
+  locked (`locked_move`) or encored (`encore_move`), the only states in which it can be read
+  before the next selection overwrites it; a paused turn keeps it for the actions still to run.
 - The last hitter (D2-14): `last_hit_by` (per battler, `1 + BattleContext.lastHitByBattler[b]`, 0 =
   no hit yet), written by every damaging `UpdateHP` on `b` (a Substitute hit and a partner's hit
   included, bcp.c:3347, :3357) and never cleared: not by a switch or a faint (lib.c:2110-2225), so

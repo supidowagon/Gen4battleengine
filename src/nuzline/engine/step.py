@@ -765,11 +765,9 @@ def _hit_events(
     hit: effects._contact_ability). A Fire hit's thaw comes later, with the held items
     (``effects.thaw_target`` in ``_use_move``; Pursuit's hit has none)."""
     fmt = format_of(before)
-    # The defender's battler: the foe, or the user itself when a lock reads the stored target
-    # (singles follow-up (ii)).
-    foe = _foe(side)
-    if target_side is not None:
-        foe = jnp.where(jnp.asarray(target_side, _I32) == side, side, foe)
+    # The defender's battler (``targets.resolve``'s ``target_side``; default the foe): at B = 2
+    # the user itself when a lock reads the stored target (singles follow-up (ii)).
+    foe = _foe(side) if target_side is None else jnp.asarray(target_side, _I32)
     user, target = before.active[side], before.active[foe]
     dealt = before.hp[party(fmt, foe), target] > after.hp[party(fmt, foe), target]
     contact = (before.status[party(fmt, side), user] == Status.NONE) & (
@@ -1270,7 +1268,7 @@ def _use_move(
     # until MoveEnd (bcp.c:3982): no Zoom Lens, no flinch immunity, and no Quick Claw / Custap
     # flag of the defender (both cleared when its action started).
     self_target = target_side == side
-    acc_target = jnp.where(self_target, side, _foe(side))
+    acc_target = target_side
     tgt_moved = jnp.asarray(target_moved, bool) & ~self_target
     foe_protecting = jnp.asarray(foe_protecting, bool) & ~self_target
     foe_roosting = jnp.asarray(foe_roosting, bool) & ~self_target
@@ -3037,8 +3035,9 @@ def _execute_actions(
         # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
         own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
         read, shown = put((read, shown), side, own, keep)
-        # The defender's events: the foe's, or the user's own when a lock hit itself.
-        foe = jnp.where(ctl["target"] == side, side, _foe(side))
+        # The defender's events: the action's defender (``ctl["target"]``), at B = 2 the foe or
+        # the user itself when a lock hit itself.
+        foe = ctl["target"]
         merged = [
             {name: jnp.where(v != 0, v, ev[name][foe]) for name, v in foe_events.items()}
             for ev in (read, shown)
@@ -4092,8 +4091,27 @@ def step_events(
     e = e._replace(
         roosting=jnp.where(pending, roosting_now(e, read["roosted"]), 0).astype(e.roosting.dtype)
     )
+    e = canonical_target(e)
     s = _where(halted, s, e)
     return _where(state.over != 0, state, s), events
+
+
+def canonical_target(state: BattleState) -> BattleState:
+    """At B = 2, ``chosen_target[b] = b ^ 1`` unless battler ``b`` is locked (``locked_move``)
+    or encored (``encore_move``), at the end of a turn (ruling D2-35). At B = 2 the stored target
+    is read only by ``BattleSystem_Defender``'s branch 10 on an action that does not randomize
+    (lib.c:1709-1719): a locked battler, which picks no command (bcp.c:334-338, :1885-1888), so
+    the selection does not overwrite it. An encored one keeps it too: it can lock under the
+    Encore and read the old value once the Encore ends. Every other battler's next fight command
+    overwrites it at selection (bcp.c:534-542, :4363-4367) before any read; lib.c:1678 and the
+    other readers are doubles only. A paused turn (U-turn, Baton Pass) keeps it: the actions
+    still to run read this turn's selection. So states that differ only in an unread stored
+    target are one state (``search/rows.row_bytes``)."""
+    if format_of(state).B != 2:
+        return state
+    keep = (state.locked_move != 0) | (state.encore_move != 0)
+    canon = jnp.where(keep, state.chosen_target, jnp.arange(2) ^ 1)
+    return state._replace(chosen_target=canon.astype(state.chosen_target.dtype))
 
 
 def roosting_now(state: BattleState, roosted) -> jnp.ndarray:

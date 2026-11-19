@@ -17,6 +17,7 @@ from nuzline.engine.order import metronome_candidates
 from nuzline.engine.outcome import empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step
+from nuzline.search.rows import row_bytes
 from tests.engine.d2_states import as_ghost, with_ability
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
@@ -295,7 +296,7 @@ def test_metronome_calling_rollout_stores_the_foe_for_the_next_lock_turn(tables,
 def test_a_fly_strike_after_an_ended_encore_hits_its_user(tables, names):
     # turn 1: Fly (1 PP) is encored over a Swords Dance selection and charges; the Encore ends at
     # the turn's end (no PP); turn 2: the strike reads the stored user, and the user's own
-    # semi-invulnerable bit is cleared before the accuracy check (effect_script_0156.s:19-25)
+    # semi-invulnerable bit is cleared before the accuracy check (effect_script_0155.s:24)
     s = make_state(
         tables,
         [_mon(names, "Bulbasaur", ["Swords Dance", "Fly"], 30)],
@@ -377,3 +378,57 @@ def test_lucky_chant_on_the_foes_side_blocks_a_lock_turned_to_the_foe(tables, na
     blocked = assert_matches_reference(tables, chant, (0, 0), _with_crit(O, 0))
     assert _hp(blocked, 1) == _hp(plain, 1)
     assert _hp(blocked, 0) == _hp(s, 0)
+
+
+# --- the canonical stored target (ruling D2-35) ---------------------------------------------
+
+
+def _row(state):
+    return row_bytes(jax.tree.map(lambda f: np.asarray(f)[None], state), 1)[0]
+
+
+def test_an_unread_stored_target_is_canonical_at_the_turns_end(tables, names):
+    # a switch selects no target (bcp.c:534-542), so the stored one would carry over; nothing
+    # reads it before the next fight command overwrites it, so the step makes it b ^ 1 and the
+    # two states are one row (search/rows.row_bytes)
+    s = make_state(
+        tables,
+        [
+            _mon(names, "Bulbasaur", ["Swords Dance", "Tackle"], 50),
+            _mon(names, "Pidgey", ["Gust"], 50),
+        ],
+        [_mon(names, "Geodude", ["Harden"], 50)],
+    )
+    user = _set(s, "chosen_target", 0, 0)  # a Swords Dance selection's
+    foe = _set(s, "chosen_target", 0, 1)  # a Tackle selection's
+    a = assert_matches_reference(tables, user, (4 + 1, 0), O)
+    b = assert_matches_reference(tables, foe, (4 + 1, 0), O)
+    assert a.chosen_target.tolist() == [1, 0]
+    assert np.array_equal(_row(a), _row(b))
+
+
+def test_a_locked_battler_keeps_its_stored_user(tables, names):
+    # Rollout count 3 -> 2: still locked at the turn's end, its next turn reads the stored user
+    # (lib.c:1709-1719), so the value is kept
+    s = _locked_rollout(tables, names)
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.locked_move[0]) == names.move("Rollout")
+    assert int(out.chosen_target[0]) == 0
+
+
+def test_an_encored_battler_keeps_its_stored_user(tables, names):
+    # encored into Swords Dance (the selection takes the slot without the menu, bcp.c:442-453):
+    # the stored user is kept while the Encore lasts (it may lock under the Encore and read the
+    # value once the Encore ends)
+    s = make_state(
+        tables,
+        [_mon(names, "Bulbasaur", ["Swords Dance", "Tackle"], 50)],
+        [_mon(names, "Geodude", ["Harden"], 50)],
+    )
+    s = _set(s, "encore_move", 0, names.move("Swords Dance"))
+    s = _set(s, "encore_slot", 0, 0)
+    s = _set(s, "encore_turns", 0, 3)
+    s = _set(s, "chosen_target", 0, 0)
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.encore_move[0]) == names.move("Swords Dance")
+    assert int(out.chosen_target[0]) == 0

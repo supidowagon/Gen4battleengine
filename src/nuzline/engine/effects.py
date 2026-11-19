@@ -3268,8 +3268,9 @@ def play_hit(
         in_power=in_power,
         # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
         gift=gift,
-        # The defender: the foe, or the user for a lock reading its stored target (follow-up (ii)).
-        def_side=jnp.where(target_side == side, side, _foe(side)),
+        # The defender (targets.resolve): at B = 2 the foe, or the user for a lock reading its
+        # stored target (follow-up (ii)).
+        def_side=target_side,
     )
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an

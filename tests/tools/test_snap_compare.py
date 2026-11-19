@@ -426,7 +426,7 @@ def test_final_line_names_groups_and_seed_count(run, capsys):
     assert run(argv) == 0
     last = capsys.readouterr().out.strip().splitlines()[-1]
     assert last.startswith("compare: ok") and "groups: step, rest" in last
-    assert "seeds 0-24 (25)" in last
+    assert "seeds: 0-24 (25)" in last
 
 
 def test_final_line_without_a_seed_part_names_no_seeds(run, capsys):

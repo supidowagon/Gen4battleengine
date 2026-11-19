@@ -1080,7 +1080,7 @@ def parent(args) -> int:
     verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
     seeded = [p for p in parts if not p.startswith("roark.")]
     groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
-    seeds = f"seeds {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
+    seeds = f"seeds: {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
     print(
         f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); "
         f"groups: {groups}; {seeds}; "

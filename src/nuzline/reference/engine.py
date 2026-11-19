@@ -3984,9 +3984,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     ``(dealt, update_hp)``: the HP the target lost, and whether ``UpdateHP`` ran."""
     tables, o = turn.tables, turn.outcome
     target = turn.target_side
-    # The defender's battler for the helpers: the foe, or the user for a lock reading its stored
-    # target (singles follow-up (ii)).
-    tg = side if target == side else _foe(side)
+    # The defender's battler for the helpers (the resolved target): at B = 2 the foe, or the user
+    # for a lock reading its stored target (singles follow-up (ii)).
+    tg = target
     target_mon = _active(s, target)
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
@@ -5059,7 +5059,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # script does not hit (MOVE_STATUS_SEMI_INVULNERABLE), B10-12.
     # The defender's battler: the foe, or the user for a lock reading its stored target
     # (singles follow-up (ii)); every read of "the target" below goes through it.
-    tgt = side if turn.target_side == side else _foe(side)
+    tgt = turn.target_side
     # ``Battler_MovedThisTurn(defender)`` (lib.c:5365-5368) is false for the user itself.
     tgt_moved = target_moved and tgt != side
     # A non-Ghost Curse whose defender is the foe (Follow Me, a randomized call / Encore pick:
@@ -6857,6 +6857,11 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     _keep_qc(tables, s, list(outcome.quick_claw))
     # turnFlags.roosting until SetupNextTurn (lib.c:2229-2231), after the replacements.
     _set_roosting(s, _roosting(s, turn) if waiting and not s.over else [0] * _fmt(s).B)
+    # step.canonical_target (ruling D2-35): at B = 2 an unread stored target is b ^ 1.
+    if _fmt(s).B == 2:
+        for b, sd in enumerate(s.battlers):
+            if not sd.locked_move and not sd.encore_move:
+                sd.chosen_target = b ^ 1
     return s
 
 
