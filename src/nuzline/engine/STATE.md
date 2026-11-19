@@ -120,7 +120,8 @@ three structs has a row.
   together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
   `CleanupFaintedMon`, :2213, with the volatiles).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
-  `tailwind`, Lucky Chant turns -> `lucky_chant`, Future Sight -> `future_sight` (E2 batch 5:
+  `tailwind`, Lucky Chant turns -> `lucky_chant` (the 3-bit counter at bits 12-14, set to 5 by
+  `effects._lucky_chant`, subscript_lucky_chant_start.s:5-6, E3-B2-7), Future Sight -> `future_sight` (E2 batch 5:
   per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
   fires on a battler with HP, bcp.c:1767-1770, so it outlives a count that ran out on a fainted
   battler; the AI reads it). Its Reflect, Light Screen, Spikes, Safeguard, Mist, Toxic Spikes

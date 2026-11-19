@@ -288,6 +288,7 @@ from nuzline.engine.ids import (
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
+    LUCKY_CHANT_TURNS,
     MAGNET_RISE_TURNS,
     MIMIC_FORBIDDEN,
     MIMIC_PP_CAP,
@@ -1264,6 +1265,16 @@ def _mist(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "mist", h.side, MIST_TURNS, cond)
 
 
+def _lucky_chant(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Lucky Chant (effect_script_0240.s, an indirect ON_HIT subscript_lucky_chant_start.s):
+    the 3-bit counter of SIDE_CONDITION_LUCKY_CHANT (bits 12-14) set to 5 on the user's side
+    (:5-6; the message is cosmetic). The field-condition pass counts it down
+    (``step.FIELD_SIDE_TIMERS``, bcp.c:1062-1083); with the condition up already the move fails
+    (:5, ``primary_effect_fails``). The crit it blocks is ``crit_blocked``'s. E3-B2-7."""
+    cond = (h.effect == _E.LUCKY_CHANT) & h.landed & (state.lucky_chant[side_of(h.side)] == 0)
+    return _set(state, "lucky_chant", h.side, LUCKY_CHANT_TURNS, cond)
+
+
 def _belly_drum(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Belly Drum (effect_script_0142.s, a direct ON_HIT subscript_belly_drum.s; the user, a
     RANGE_USER defender, has HP): Attack set to +6, then Divide(maxHP, 2) through UPDATE_HP (:8-12).
@@ -1673,6 +1684,8 @@ def primary_effect_fails(
         | ((effect == _E.SAFEGUARD) & (state.safeguard[side_of(side)] != 0))
         # BtlCmd_TryMist (battle_script.c:4307-4309, MOVE_STATUS_FAILED), B12-23.
         | ((effect == _E.MIST) & (state.mist[side_of(side)] != 0))
+        # effect_script_0240.s:5, :9-11 (MOVE_STATUS_FAILED), E3-B2-7.
+        | ((effect == _E.LUCKY_CHANT) & (state.lucky_chant[side_of(side)] != 0))
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED), E3-B2-4.
@@ -2597,6 +2610,15 @@ def armored(state: BattleState, side, target_side) -> jnp.ndarray:
     (battle_lib.c:7135-7136) never crits it, whatever the roll (``Outcome.crit``)."""
     seen = ignorable(state, side, target_side)
     return (seen == AbilityId.SHELL_ARMOR) | (seen == AbilityId.BATTLE_ARMOR)
+
+
+def crit_blocked(state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``side``'s hit at ``target_side`` never crits whatever the roll (``Outcome.crit``):
+    the defender's Battle Armor or Shell Armor (``armored``) or SIDE_CONDITION_LUCKY_CHANT on the
+    defending side's conditions as the CalcCrit reads them now (``BattleSystem_CalcCriticalMulti``,
+    battle_lib.c:7135-7137; battle_script.c:2158-2163 passes the defender's side). The draw is spent either
+    way (:7132 runs first). A Lucky Chant used earlier this turn counts (E3-B2-7)."""
+    return armored(state, side, target_side) | (state.lucky_chant[side_of(target_side)] != 0)
 
 
 def _eat_berry(
@@ -3608,7 +3630,7 @@ def play_hit(
         crit_lands(
             tables, flung_view(state, side, fling), side, move, outcome.crit[side, hit_index]
         )
-        & ~armored(state, side, target_side),
+        & ~crit_blocked(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
@@ -3852,6 +3874,7 @@ def play_hit(
         _pain_split,
         _safeguard,
         _mist,
+        _lucky_chant,
         _encore,
         _roost,
         _side_layers,

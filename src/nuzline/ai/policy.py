@@ -545,6 +545,13 @@ def _basic_check_mist(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -8))
 
 
+def _basic_check_lucky_chant(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLuckyChant`` (script.s:1378-1381): the AI's side already under Lucky Chant
+    (SIDE_CONDITION_LUCKY_CHANT, IfSideCondition trainer_ai.c:732), -10; E3-B2-7."""
+    ctx, t = _split(c.if_side_condition(_at(ctx, mask), _A, c.SideCondition.LUCKY_CHANT))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -2055,6 +2062,27 @@ def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
     ctx = c.add_to_move_score(ctx, -1)
     ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 30))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_lucky_chant(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LuckyChant`` (script.s:5496-5517): the AI below 70 % HP -1 and end; else the player
+    knowing a move of effect HIGH_CRITICAL (43), HIGH_CRITICAL_BURN_HIT (200) or
+    HIGH_CRITICAL_POISON_HIT (209) (``IfMoveEffectKnown``, trainer_ai.c:1739) +1 and end; else the
+    64 roll (:5506) jumping +1, else nothing (E3-B2-7)."""
+    ctx, minus1 = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 70))
+    plus1 = jnp.zeros_like(ctx.live)
+    for effect in (
+        BattleEffect.HIGH_CRITICAL,
+        BattleEffect.HIGH_CRITICAL_BURN_HIT,
+        BattleEffect.HIGH_CRITICAL_POISON_HIT,
+    ):
+        ctx, t = _split(c.if_move_effect_known(ctx, _D, effect))
+        plus1 = plus1 | t
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 5506))
+    plus1 = plus1 | t
+    ctx = c.add_to_move_score(_at(ctx, plus1), 1)
+    ctx = c.add_to_move_score(_at(ctx, minus1), -1)
+    return c.pop_or_end(ctx)
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3868,6 +3896,7 @@ _BASIC_LABELS = (
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
     (BattleEffect.SUPRESS_ABILITY, _basic_check_gastro_acid),  # :269 (E3-2-6)
+    (BattleEffect.PREVENT_CRITS, _basic_check_lucky_chant),  # :270 (E3-B2-7)
     (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
@@ -3999,6 +4028,7 @@ _EXPERT_LABELS = (
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
     (BattleEffect.SUPRESS_ABILITY, _expert_gastro_acid),  # :1782 (E3-2-6)
+    (BattleEffect.PREVENT_CRITS, _expert_lucky_chant),  # :1783 (E3-B2-7)
     (BattleEffect.USE_MOVE_FIRST, _expert_me_first),  # :1784 (E3-2-3)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)

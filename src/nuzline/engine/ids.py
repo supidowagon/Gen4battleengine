@@ -568,6 +568,14 @@ class EffectId(IntEnum):
     # ``MoveFlag.MAGIC_COAT`` aimed at the user is reflected (``step._use_move``,
     # ``step._execute_actions``' reflect phase); no random draw; E3-B2-6.
     MAGIC_COAT = 135
+    # Lucky Chant (240, BATTLE_EFFECT_PREVENT_CRITS): zeros. effect_script_0240.s:5-6 fails
+    # (:9-11, MOVE_STATUS_FAILED) with SIDE_CONDITION_LUCKY_CHANT on the user's side, else an
+    # indirect ON_HIT subscript_lucky_chant_start.s:5-6 sets the 3-bit counter (bits 12-14, 0x5000)
+    # to 5 (``LUCKY_CHANT_TURNS``, ``effects._lucky_chant``); the field-condition pass counts it
+    # down (``step.FIELD_SIDE_TIMERS``). Crits against the side's battlers are off while it is up
+    # (BattleSystem_CalcCriticalMulti, battle_lib.c:7137, ``effects.crit_blocked``); no random
+    # draw; E3-B2-7.
+    LUCKY_CHANT = 136
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -603,6 +611,9 @@ STOMP_PARAM = 2
 MINIMIZE_PARAM = 2
 # subscript_tailwind_start.s:11 sets both SIDE_CONDITION_TAILWIND bits: a 2-bit counter at 3.
 TAILWIND_TURNS = 3
+# subscript_lucky_chant_start.s:5 ORs 0x5000 into the side conditions: the 3-bit counter at bits
+# 12-14 (condition.h:100-108) = 0b101 = 5 (E3-B2-7).
+LUCKY_CHANT_TURNS = 5
 SPIKES_MAX = 3  # battle_script.c:5394
 TOXIC_SPIKES_MAX = 2  # battle_script.c:7598
 

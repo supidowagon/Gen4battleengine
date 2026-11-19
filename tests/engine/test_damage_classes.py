@@ -153,6 +153,10 @@ EXACT_CASES = [
     ("Flail", "Tackle", "player", ("low_hp", "lucky_chant_opp"), [[True]]),
     ("Tackle", "Leer", "player", ("guts_asleep",), [[False]]),
     ("Tackle", "Tackle", "opp", ("lucky_chant_opp",), [[True]]),
+    # E3-B2-7: a faster foe's Lucky Chant (a clause of damage_inputs_can_change) switches the
+    # player's crit off before its hit; a slower one comes after it.
+    ("Slash", "Lucky Chant", "opp", (), [[False]]),
+    ("Slash", "Lucky Chant", "player", (), [[True]]),
     # White Herb (Task 12): Leer lowers the herb holder's Defense, which the player's own
     # hits do not read, so they stay compressed; a lowered Attack (the player's herb) or
     # Defense (the foe's herb) is restored after the first hit, so the second is not.

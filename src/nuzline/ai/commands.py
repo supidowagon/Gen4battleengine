@@ -135,6 +135,9 @@ class SideCondition(IntEnum):
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
     TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
     FUTURE_SIGHT = 1 << 4  # :92; BattleState.future_sight (per side)
+    LUCKY_CHANT = (
+        (1 << 12) | (1 << 13) | (1 << 14)
+    )  # :100-105; BattleState.lucky_chant (turns left)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -147,6 +150,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
     SideCondition.TOXIC_SPIKES: "toxic_spikes",
     SideCondition.FUTURE_SIGHT: "future_sight",
+    SideCondition.LUCKY_CHANT: "lucky_chant",
 }
 
 
@@ -463,6 +467,9 @@ class BattleEffect(IntEnum):
     COPY_MOVE = 9  # Mirror Move: Expert_MirrorMove (:1632); Risky :6539; no Basic entry
     COPY_ABILITY = 178  # Role Play: Expert_ChangeUserAbility (:1733); no Basic entry
     APPLY_MAGIC_COAT = 183  # Magic Coat: Expert_MagicCoat (:1736); no Basic entry (E3-B2-6)
+    PREVENT_CRITS = (
+        240  # Lucky Chant: Basic_CheckLuckyChant (:270); Expert_LuckyChant (:1783), E3-B2-7
+    )
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a

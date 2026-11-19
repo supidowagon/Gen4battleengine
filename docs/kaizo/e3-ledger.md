@@ -792,3 +792,45 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/ai/test_kaizo_policy.py (`test_magic_coat_*`, `test_expert_magic_coat`, the exact-equals-loose list),
   tests/engine/test_state.py (`test_magic_coat_flag_maps_to_magic_coat`),
   tests/engine/test_accuracy_classes.py; `fullset`-free.
+
+- E3-B2-7 Lucky Chant (#240, BATTLE_EFFECT_PREVENT_CRITS; move 381, the only move with effect 240 in
+  either game, acc 0; priority 0 vanilla, +2 Kaizo): new `EffectId.LUCKY_CHANT` (136). No new state
+  (`lucky_chant [2]` and its countdown, `step.FIELD_SIDE_TIMERS`, existed), no `Outcome` field and no draw.
+  Tables: only `move_effect` of Lucky Chant (effect-map entry); no manifest bump: no array or key changed.
+  Script: effect_script_0240.s:5, :9-11 fails (`MOVE_STATUS_FAILED`) with SIDE_CONDITION_LUCKY_CHANT on the
+  user's side, else :6 an indirect ON_HIT `subscript_lucky_chant_start.s:5-6` ORs 0x5000 into the side
+  conditions: the 3-bit counter (bits 12-14, condition.h:100-108) = 5 (`ids.LUCKY_CHANT_TURNS`,
+  `effects._lucky_chant`, failure in `primary_effect_fails`; reference clause and failure beside Mist's).
+  The turn-end pass (bcp.c:1062-1083, after Tailwind, before Wish) counts it down: active on the use turn
+  and the 4 after. Side state: survives switching and Baton Pass; no Snatch / Magic Coat / Protect flag.
+  Crit: `BattleSystem_CalcCriticalMulti` (battle_lib.c:7132-7140) draws `RandNext() % rate` first, then
+  no crit when the defender's side conditions (battle_script.c:2158-2163) have the condition: the draw is
+  spent either way. New `effects.crit_blocked` (= `armored` or the defending side's `lucky_chant` as of the
+  hit) replaces `armored` at the three step crit sites (the hit, Jump Kick's crash, the Pursuit hit) and
+  the move-damage call in `effects.play_hit`; the reference's `_crit_blocked` at its three. The turn-start
+  `no_crit` of `outcome.sample_outcome` / `enumerate._crit` stays (a condition up at the turn start is up
+  for the whole turn: the counter only falls at the turn's end). Same-turn case (Kaizo's +2, or a faster
+  Lucky Chant): the draw is the usual one and `step` blocks the crit at the hit; no `CRIT_ODDS_EFFECTS`
+  entry (it writes no crit input of the attacker, it blocks the crit outright). Enumeration:
+  `INPUT_CLAUSE_EFFECTS` (the lucky-chant clause in `damage_inputs_can_change`: a foe's Lucky Chant while
+  its side has none changes the side's later hit, so the turn-start crit classes are not used for it),
+  `NON_TABLE_DAMAGE_EFFECTS`; `test_accuracy_classes._NO_ACC_EVA_WRITE`.
+  AI: Basic_ScoreMoveEffect :270 -> Basic_CheckLuckyChant (:1378-1381, the AI's side under it -10;
+  `commands.SideCondition.LUCKY_CHANT` = 0x7000 reading `lucky_chant`); Expert_Main :1783 ->
+  Expert_LuckyChant (:5496-5517): AI HP below 70 % -1; else the player knowing HIGH_CRITICAL (43),
+  HIGH_CRITICAL_BURN_HIT (200) or HIGH_CRITICAL_POISON_HIT (209) +1; else the 64 roll (:5506) jumping +1,
+  else 0 (`SITE_N` 5506: 64; `policy._basic_check_lucky_chant`, `_expert_lucky_chant`;
+  `BattleEffect.PREVENT_CRITS`, KAIZO_TRANSCRIBED, KAIZO_EXPERT_LABELS, KAIZO_EXPERT_TRANSCRIBED). The
+  tables at :3277 (Encore), :6493 (SetupFirstTurn) and :7806 (CheckHP medium) were transcribed already.
+  Read bounds and backlog regenerated (the two #240 rows, "move effect #240: Lucky Chant" and "AI move
+  effect #240", close: 71 distinct missing groups from 73).
+  Rulings. (1) The sheet's `no_crit` variant for a faster Lucky Chant is `step`'s read at the hit, not an
+  enumeration variant: the crit draw's law is the same with or without it. (2) Doubles: the side field is
+  indexed by `side_of`; `crit_blocked` reads the defender's side, so it protects the partner too.
+  Not built: Owed lines naming Lucky Chant: none. Not modelled, message only: "The Lucky Chant shielded
+  your team from critical hits!" and the wear-off message.
+  Tests: tests/engine/test_e3_batch2.py (`test_lucky_chant_*`, `test_a_faster_lucky_chant_*`,
+  `test_kaizos_priority_puts_lucky_chant_*`, `test_a_lucky_chant_in_the_turn_*`),
+  tests/ai/test_kaizo_policy.py (`test_lucky_chant_*`, `test_expert_lucky_chant`, the exact-equals-loose
+  list), tests/engine/test_accuracy_classes.py, tests/engine/test_damage_classes.py (two `slow` EXACT_CASES:
+  a faster and a slower foe Lucky Chant, brute force); `fullset`-free.

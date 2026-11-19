@@ -1014,6 +1014,10 @@ INPUT_CLAUSE_EFFECTS = (
     # own item gone (the defender's item the side's hit reads, ``damage._item_modifiers``): the
     # fling clause, any foe Fling.
     _E.FLING,
+    # E3-B2-7: a foe's Lucky Chant (subscript_lucky_chant_start.s:5-6) sets the condition the side's
+    # later CalcCrit reads (battle_lib.c:7137): the crit draw it spends crits nothing: the
+    # lucky-chant clause, a Lucky Chant not up at the turn start.
+    _E.LUCKY_CHANT,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1429,6 +1433,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     # E3-B2-1: Fling's power is its item's fling power and its attacker's item is read with the
     # item still held (``damage.flung_view``), neither of ``hit_damage_table``'s turn-start reads.
     _E.FLING,
+    _E.LUCKY_CHANT,  # a status move: no damage (E3-B2-7)
 )
 
 
@@ -1585,6 +1590,9 @@ def damage_inputs_can_change(
         # E3-B2-1: the foe's Fling (the fling clause): its item's effect on the side, TryFling's
         # White Herb reset, its own item gone before the side's hit.
         | (foe_effect == _E.FLING)
+        # E3-B2-7: the foe's Lucky Chant, when its side has none yet, blocks the side's crit at its
+        # later CalcCrit (the lucky-chant clause; the turn-start ``no_crit`` is the case it is up).
+        | ((foe_effect == _E.LUCKY_CHANT) & (state.lucky_chant[side_of(foes(sides))] == 0))
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))

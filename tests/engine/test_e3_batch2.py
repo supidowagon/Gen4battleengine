@@ -1274,3 +1274,140 @@ def test_kaizos_reflectable_moves_are_reflected_too(kaizo_tables, kaizo_names):
         out = _cgo(t, n, _coat(t, n, foe_moves=(move, "Tackle")), move)
         assert int(getattr(out, field)[1]) == 1 and int(getattr(out, field)[0]) == 0, move
     # Vanilla has none of them flagged: the Spite of the foe is no reflected move there.
+
+
+# --- Lucky Chant (#240, E3-B2-7) ---------------------------------------------------------------
+# effect_script_0240.s: fails with SIDE_CONDITION_LUCKY_CHANT on the user's side (:5, :9-11), else
+# an indirect ON_HIT subscript_lucky_chant_start.s sets the counter (bits 12-14) to 5 (:5-6); the
+# field-condition pass counts it down (battle_controller_player.c:1062-1083); the defender's side
+# conditions switch the crit off (BattleSystem_CalcCriticalMulti, battle_lib.c:7137, after the
+# draw :7132; battle_script.c:2158-2163).
+
+
+def _lc(t, n, fast=False, foe="Tackle"):
+    """Monferno (side 0, Lucky Chant, Tackle) against a Geodude (``foe``), no abilities; the
+    Monferno is the faster one only if ``fast`` (vanilla Lucky Chant has priority 0)."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 30, ("Lucky Chant", "Tackle"))],
+        [_spec(n, "Geodude", 20, (foe,))],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    fast_spe, slow_spe = (500, 1) if fast else (1, 500)
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(fast_spe).at[1, 0, SPE].set(slow_spe))
+
+
+def _crits(*sides):
+    """Every hit lands; the crit draw of each side in ``sides`` is 1 (a crit at any odds)."""
+    crit = jnp.zeros((2, MAX_HITS), jnp.int8)
+    for side in sides:
+        crit = crit.at[side].set(1)
+    return empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8), crit=crit)
+
+
+def _lcgo(t, n, s, me="Lucky Chant", out=None):
+    return assert_matches_reference(
+        t, s, A(me, "Tackle", s, n), out if out is not None else _hits()
+    )
+
+
+def _lost(s, out, side):
+    return int(s.hp[side, 0]) - int(out.hp[side, 0])
+
+
+def test_lucky_chant_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 240 (effect_script_0240.s) is EffectId.LUCKY_CHANT in both games and Lucky Chant
+    (move 381) the only move with it; priority 0 in vanilla, +2 in Kaizo (moves.json); the effect
+    is a clause (the foe's earlier Lucky Chant blocks a later crit) and non-damaging."""
+    assert DECOMP_EFFECT_TO_ID[240] == (EffectId.LUCKY_CHANT, (0, 0, 0))
+    for t, nn, priority in ((tables, names, 0), (kaizo_tables, kaizo_names, 2)):
+        move = nn.move("Lucky Chant")
+        assert int(t.move_effect[move]) == EffectId.LUCKY_CHANT
+        assert int((np.asarray(t.move_effect) == EffectId.LUCKY_CHANT).sum()) == 1
+        assert int(t.move_priority[move]) == priority
+        assert int(t.move_accuracy[move]) == 0
+    assert EffectId.LUCKY_CHANT in INPUT_CLAUSE_EFFECTS
+    assert EffectId.LUCKY_CHANT in NON_TABLE_DAMAGE_EFFECTS
+
+
+def test_lucky_chant_sets_five_turns_on_the_users_side_only(tables, names):
+    """subscript_lucky_chant_start.s:5-6 ORs 0x5000: the counter is 5 on the user's side, and the
+    turn's field-condition pass counts it down once (4 left); the foe's side has none."""
+    t, n = tables, names
+    out = _lcgo(t, n, _lc(t, n))
+    assert out.lucky_chant.tolist() == [4, 0]
+
+
+def test_lucky_chant_fails_while_it_is_up_and_counts_down(tables, names):
+    """effect_script_0240.s:5, :9-11: with the condition up the move fails and sets nothing (2 left
+    becomes 1, not 4); the pass ends a counter of 1 at the turn's end (:1069)."""
+    t, n = tables, names
+    s = _lc(t, n)
+    up = s._replace(lucky_chant=s.lucky_chant.at[0].set(2))
+    assert _lcgo(t, n, up).lucky_chant.tolist() == [1, 0]
+    last = s._replace(lucky_chant=s.lucky_chant.at[0].set(1))
+    assert _lcgo(t, n, last).lucky_chant.tolist() == [0, 0]
+    # The foe's own side holding it does not stop the user's: it sets 5 (4 after the pass).
+    other = s._replace(lucky_chant=s.lucky_chant.at[1].set(3))
+    assert _lcgo(t, n, other).lucky_chant.tolist() == [4, 2]
+
+
+def test_a_faster_lucky_chant_blocks_the_foes_crit_the_same_turn(tables, names):
+    """The Monferno's Lucky Chant goes first, so the Geodude's CalcCrit meets the condition: a crit
+    draw (battle_lib.c:7132, spent either way) does nothing and the Tackle deals what a no-crit
+    Tackle does; a slower Lucky Chant comes too late and the crit lands (more damage)."""
+    t, n = tables, names
+    fast = _lc(t, n, fast=True)
+    blocked = _lcgo(t, n, fast, out=_crits(1))
+    plain = _lcgo(t, n, fast, out=_crits())
+    assert _lost(fast, blocked, 0) == _lost(fast, plain, 0) > 0
+    slow = _lc(t, n, fast=False)
+    late = _lcgo(t, n, slow, out=_crits(1))
+    assert _lost(slow, late, 0) > _lost(slow, _lcgo(t, n, slow, out=_crits()), 0)
+    assert late.lucky_chant.tolist() == [4, 0]  # it still stands for the next turns
+
+
+def test_lucky_chant_protects_its_side_only_and_through_its_last_turn(tables, names):
+    """Crits against the Monferno's side are off while its counter is up, including the turn the
+    pass ends it (a counter of 1 counts down after the actions); the Monferno's own crit against
+    the unprotected Geodude still lands; a Tackle at an unprotected Monferno crits."""
+    t, n = tables, names
+    s = _lc(t, n, fast=True)
+    for left in (1, 3, 5):
+        up = s._replace(lucky_chant=s.lucky_chant.at[0].set(left))
+        crit = _lcgo(t, n, up, me="Tackle", out=_crits(0, 1))
+        plain = _lcgo(t, n, up, me="Tackle", out=_crits(0))
+        assert _lost(up, crit, 0) == _lost(up, plain, 0) > 0
+        assert _lost(up, crit, 1) > _lost(up, _lcgo(t, n, up, me="Tackle", out=_crits(1)), 1)
+    bare = _lcgo(t, n, s, me="Tackle", out=_crits(1))
+    assert _lost(s, bare, 0) > _lost(s, _lcgo(t, n, s, me="Tackle", out=_crits()), 0)
+
+
+def test_kaizos_priority_puts_lucky_chant_before_a_faster_foe(kaizo_tables, kaizo_names):
+    """Kaizo's +2 priority: a slower Lucky Chant still goes first and blocks the faster foe's crit
+    this turn (the same-turn case above, by priority)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _lc(t, n, fast=False)
+    blocked = _lcgo(t, n, s, out=_crits(1))
+    assert _lost(s, blocked, 0) == _lost(s, _lcgo(t, n, s, out=_crits()), 0) > 0
+    assert blocked.lucky_chant.tolist() == [4, 0]
+
+
+def test_a_lucky_chant_in_the_turn_changes_the_damage_inputs_of_the_foes_hit(tables, names):
+    """enumerate.damage_inputs_can_change: the foe's Lucky Chant before the side's hit can change
+    that hit's damage (a crit becomes none), so the turn-start damage classes are not used for it;
+    not when the side's foe uses another move, or when its side has the condition at the turn
+    start (the turn-start table has no crit then, outcome_laws' ``no_crit``)."""
+    from nuzline.engine.enumerate import damage_inputs_can_change, outcome_laws
+
+    t, n = tables, names
+    s = _lc(t, n, fast=True)
+    foe_first = jnp.array([False, True])
+    acts = A("Lucky Chant", "Tackle", s, n)
+    assert bool(damage_inputs_can_change(t, s, acts, foe_first)[1, 0])
+    tackle = A("Tackle", "Tackle", s, n)
+    assert not bool(damage_inputs_can_change(t, s, tackle, foe_first)[1, 0])
+    up = s._replace(lucky_chant=s.lucky_chant.at[0].set(3))
+    assert not bool(damage_inputs_can_change(t, up, acts, foe_first)[1, 0])
+    assert bool(outcome_laws(t, up, acts).no_crit[1])
+    assert not bool(outcome_laws(t, s, acts).no_crit[1])

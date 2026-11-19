@@ -746,6 +746,14 @@ def _armored(s: RefState, attacker: int, defender: int) -> bool:
     return _ignorable(s, attacker, defender) in (AbilityId.SHELL_ARMOR, AbilityId.BATTLE_ARMOR)
 
 
+def _crit_blocked(s: RefState, attacker: int, defender: int) -> bool:
+    """``BattleSystem_CalcCriticalMulti`` (lib.c:7135-7137): no crit against Battle Armor or Shell
+    Armor (``_armored``) or with SIDE_CONDITION_LUCKY_CHANT on the defender's side, as the CalcCrit
+    reads it now (battle_script.c:2158-2163), so a Lucky Chant used earlier this turn counts
+    (E3-B2-7). The draw is spent either way."""
+    return _armored(s, attacker, defender) or bool(s.sides[side_of(defender)].lucky_chant)
+
+
 def _iron_ball(tables, s: RefState, mon: RefPokemon) -> bool:
     """``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` (``Battler_HeldItemEffect``), G-56, B13-29."""
     return _item_effect(tables, mon, s) == ItemId.IRON_BALL
@@ -4026,6 +4034,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.MIST and landed and not s.sides[side_of(side)].mist:
         # BtlCmd_TryMist (script.c:4300-4317): NUM_SCREEN_TURNS (5) on the user's side (B12-23).
         s.sides[side_of(side)].mist = 5
+    elif effect == EffectId.LUCKY_CHANT and landed and not s.sides[side_of(side)].lucky_chant:
+        # effect_script_0240.s -> subscript_lucky_chant_start.s:5-6: the counter (bits 12-14) = 5
+        # on the user's side (E3-B2-7).
+        s.sides[side_of(side)].lucky_chant = 5
     elif effect == EffectId.PAIN_SPLIT and landed and not _shielded(turn, s, target):
         # subscript_pain_split.s (B10-5): avg = (a + d) / 2 (:7-10), each battler's HP to it through
         # UPDATE_HP, capped at its max HP (:12-22). A substitute fails it (:5).
@@ -4398,7 +4410,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             s,
             side,
             move,
-            _crits_flung(turn, s, side, move, o.crit[side][hit]) and not _armored(s, side, target),
+            _crits_flung(turn, s, side, move, o.crit[side][hit])
+            and not _crit_blocked(s, side, target),
             o.roll[side][hit],
             # Payback: movePower x2 once the target acted (script.c:7198-7209, B9-12).
             power_mul=20
@@ -5330,7 +5343,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
         would = _move_damage(
             tables, s, side, move,
-            _crits(tables, s, side, move, o.crit[side][0]) and not _armored(s, side, _foe(side)),
+            _crits(tables, s, side, move, o.crit[side][0]) and not _crit_blocked(s, side, _foe(side)),
             o.roll[side][0], wonder_guard=False,
         )  # fmt: skip
         cap = _divide(_active(s, _foe(side)).max_hp, 2)
@@ -5528,6 +5541,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         full = full or (effect == EffectId.SAFEGUARD and bool(s.sides[side_of(side)].safeguard))
         # BtlCmd_TryMist (script.c:4307-4309, MOVE_STATUS_FAILED), B12-23.
         full = full or (effect == EffectId.MIST and bool(s.sides[side_of(side)].mist))
+        # effect_script_0240.s:5, :9-11 (MOVE_STATUS_FAILED), E3-B2-7.
+        full = full or (effect == EffectId.LUCKY_CHANT and bool(s.sides[side_of(side)].lucky_chant))
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
         full = full or (
             effect == EffectId.PAIN_SPLIT and bool(s.battlers[_foe(side)].substitute_hp)
@@ -5745,7 +5760,9 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     kind = _move_type(tables, s, pursuer, move)
     if side == 0 and _wonder_guarded(tables, s, pursuer, side, move, kind):
         _know_ability(s, s.battlers[0].active)
-    crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _armored(s, pursuer, side)
+    crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _crit_blocked(
+        s, pursuer, side
+    )
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
     target_sd = s.battlers[side]

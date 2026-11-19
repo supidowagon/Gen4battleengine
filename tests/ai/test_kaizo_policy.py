@@ -4770,6 +4770,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
         ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
         ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
+        ("Lucky Chant", "Mist", "Accelerock", ""),  # E3-B2-7
         ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
@@ -5471,3 +5472,126 @@ def test_magic_coat_is_scored_not_refused_and_exact_equals_loose(
         layout = layout_for(t, flags, s)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 0, 30), layout)
+
+
+# --- #240 Lucky Chant (E3-B2-7) ---------------------------------------------------------------
+
+
+def test_lucky_chant_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Lucky Chant is BATTLE_EFFECT_PREVENT_CRITS, 240, in Basic_ScoreMoveEffect (script.s:270),
+    Expert_Main (:1783) and three tables (Expert_Encore_EncouragedMoveEffects :3277,
+    SetupFirstTurn_SetupEffects :6493, CheckHP_DiscourageAtMediumHP :7806); its one roll is :5506
+    (64); SIDE_CONDITION_LUCKY_CHANT is bits 12-14 (condition.h:100-105) (E3-B2-7)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.PREVENT_CRITS == 240 and c.SideCondition.LUCKY_CHANT == 0x7000
+    assert KAIZO_EXPERT_LABELS[240] == ("Expert_LuckyChant", 1783) and 240 in KAIZO_TRANSCRIBED
+    assert SITE_N[5506] == 64
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(240) == 1
+    assert c.SETUP_FIRST_TURN_EFFECTS.count(240) == 1
+    assert c.CHECK_HP_TABLES["CheckHP_DiscourageAtMediumHP"].count(240) == 1
+    assert sum(240 in table for table in c.CHECK_HP_TABLES.values()) == 1
+    assert int(t.move_ai_effect[n.move("Lucky Chant")]) == 240
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    for number in (270, 1783, 3277, 6493, 7806):
+        assert "BATTLE_EFFECT_PREVENT_CRITS" in lines[number - 1], number
+    assert sum("BATTLE_EFFECT_PREVENT_CRITS" in line for line in lines) == 5
+    assert lines[1377] == "Basic_CheckLuckyChant:"
+    assert (
+        lines[1379].strip()
+        == "IfSideCondition AI_BATTLER_ATTACKER, SIDE_CONDITION_LUCKY_CHANT, ScoreMinus10"
+    )
+    assert lines[5495] == "Expert_LuckyChant:"
+    assert (
+        lines[5501].strip()
+        == "IfHPPercentLessThan AI_BATTLER_ATTACKER, 70, Expert_LuckyChant_ScoreMinus1"
+    )
+    assert lines[5505].strip() == "IfRandomLessThan 64, Expert_LuckyChant_ScorePlus1"
+    for number, effect in ((5503, "HIGH_CRITICAL"), (5504, "HIGH_CRITICAL_BURN_HIT")):
+        assert f"BATTLE_EFFECT_{effect}," in lines[number - 1]
+    assert "BATTLE_EFFECT_HIGH_CRITICAL_POISON_HIT," in lines[5504]
+
+
+def test_lucky_chant_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckLuckyChant (script.s:1378-1381): the AI's side (side 1) under Lucky Chant -10;
+    the player's side having it is not the attacker's (E3-B2-7)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Lucky Chant", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    ai = s._replace(lucky_chant=s.lucky_chant.at[1].set(3))
+    assert _delta(t, ai, 0x2, 0x3)[0] == -10
+    player = s._replace(lucky_chant=s.lucky_chant.at[0].set(3))
+    assert _delta(t, player, 0x2, 0x3)[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("known", "ai_hp", "plain", "rolled"),
+    [
+        # Expert_LuckyChant (script.s:5496-5517): the AI under 70 % HP -1 (:5502) whatever the
+        # player knows or the 64 roll (:5506) does; else a known HIGH_CRITICAL (Slash),
+        # HIGH_CRITICAL_BURN_HIT (Blaze Kick) or HIGH_CRITICAL_POISON_HIT (Poison Tail) +1; else
+        # the roll: +1 when it jumps, else nothing.
+        ("", 100, 0, 1),
+        ("", 70, 0, 1),
+        ("", 69, -1, -1),
+        ("Slash", 100, 1, 1),
+        ("Blaze Kick", 70, 1, 1),
+        ("Poison Tail", 100, 1, 1),
+        ("Slash", 69, -1, -1),
+        ("Tackle", 100, 0, 1),
+    ],
+)
+def test_expert_lucky_chant(
+    kaizo_tables, kaizo_names, kaizo_roark_party, known, ai_hp, plain, rolled
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Lucky Chant", "Accelerock", "", ""))
+    if known:
+        move = n.move(known)
+        s = s._replace(
+            moves=s.moves.at[0, 0, 3].set(move), ai_seen_moves=s.ai_seen_moves.at[0, 0].set(move)
+        )
+    s = _hp(s, 1, ai_hp)
+    assert _delta(t, s, 0x3, 0x7)[0] == plain
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5506),))[0] == rolled
+
+
+def test_lucky_chant_known_crit_effects_are_the_decomps(kaizo_tables, kaizo_names):
+    """The three effects Expert_LuckyChant looks for are the AI effects of the moves the test above
+    teaches (``IfMoveEffectKnown`` reads ``move_ai_effect``): Slash 43, Blaze Kick 200, Poison Tail
+    209; Tackle none of them (E3-B2-7)."""
+    t, n = kaizo_tables, kaizo_names
+    for move, effect in (("Slash", 43), ("Blaze Kick", 200), ("Poison Tail", 209)):
+        assert int(t.move_ai_effect[n.move(move)]) == effect, move
+    assert int(t.move_ai_effect[n.move("Tackle")]) not in (43, 200, 209)
+
+
+@pytest.mark.parametrize(
+    ("attacker", "target", "expected"),
+    [(100, 100, 0), (70, 100, -2), (100, 30, 0), (70, 30, -2)],
+)
+def test_lucky_chant_check_hp(
+    kaizo_tables, kaizo_names, kaizo_roark_party, attacker, target, expected
+):
+    """Lucky Chant is in CheckHP_DiscourageAtMediumHP only (script.s:7806): -2 for an AI at 31-70 %
+    HP unless :7718 jumps, nothing for the target's band (E3-B2-7)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Lucky Chant", "Accelerock", "", ""))
+    s = _hp(_hp(s, 1, attacker), 0, target)
+    assert _delta(t, s, 0x7, 0x107)[0] == expected
+    assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
+
+
+def test_lucky_chant_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Lucky Chant", "Accelerock", "", ""))
+    for flags in (0x27, 0x10F):
+        layout = layout_for(t, flags, s)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)

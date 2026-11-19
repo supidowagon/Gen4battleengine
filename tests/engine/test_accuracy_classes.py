@@ -453,6 +453,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # sets a flag on its user, no stage; the move it reflects is read as the holder's own
     # (order.used_moves, E3-B2-6)
     EffectId.MAGIC_COAT,
+    EffectId.LUCKY_CHANT,  # a side's crit block: no stage, no accuracy input (E3-B2-7)
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,

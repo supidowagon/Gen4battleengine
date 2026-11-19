@@ -568,6 +568,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     178: ("BATTLE_EFFECT_COPY_ABILITY", _E.ROLE_PLAY, (0, 0, 0)),
     # Magic Coat: effect_script_0183.s -> BtlCmd_TrySetMagicCoat (E3-B2-6).
     183: ("BATTLE_EFFECT_APPLY_MAGIC_COAT", _E.MAGIC_COAT, (0, 0, 0)),
+    # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
+    240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
