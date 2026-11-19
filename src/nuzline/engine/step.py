@@ -199,6 +199,7 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    MOVE_WILL_O_WISP,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
@@ -1629,12 +1630,21 @@ def _use_move(
         & (tables.move_power[used] != 0)
     )
     volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
+    # Flash Fire (:3515-3521): a Fire move whose holder is not frozen, with power or Will-O-Wisp;
+    # no heal: the subscript sets flashFire (subscript_absorb_and_boost_fire_type_moves.s:13), F-2.
+    flash = (
+        (seen == AbilityId.FLASH_FIRE)
+        & (move_type == Type.FIRE)
+        & (state.status[party(fmt, target_side), target] != Status.FREEZE)
+        & ((tables.move_power[used] != 0) | (used == MOVE_WILL_O_WISP))
+    )
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))
-        & (water | volt)
+        & (water | volt | flash)
         & (chart > 0)
     )
+    state = _set_side(state, "flash_fire", target_side, 1, absorbed & flash)
     target_hp = state.hp[party(fmt, target_side), target].astype(_I32)
     target_max = state.max_hp[party(fmt, target_side), target].astype(_I32)
     healed = jnp.minimum(target_hp + jnp.maximum(target_max // 4, 1), target_max)

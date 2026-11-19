@@ -711,6 +711,9 @@ class AbilityId(IntEnum):
     # E1 batch F, ruling F-1: Heatproof (BattleSystem_CalcMoveDamage, battle_lib.c:6841-6844;
     # subscript_burn_damage.s:8-9; damage._pre_random, step._burn_check).
     HEATPROOF = 90
+    # F-2: Flash Fire (BattleSystem_TriggerImmunityAbility, battle_lib.c:3515-3521; step._use_move
+    # beside Dry Skin; the flag boost in damage._pre_random, :7074-7076).
+    FLASH_FIRE = 91
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -809,6 +812,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.PLUS: 57,
     AbilityId.MINUS: 58,
     AbilityId.HEATPROOF: 85,
+    AbilityId.FLASH_FIRE: 18,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1428,6 +1432,9 @@ PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 # ``FORBIDDEN_BY_MIMIC_DELIM`` (:7152-7158): Metronome, Struggle, Sketch, Mimic, Chatter
 # (generated/moves.txt lines 119, 166, 167, 103, 449), G-68.
 MOVE_MIMIC = 102
+# MOVE_WILL_O_WISP (generated/moves.txt line 262): Flash Fire absorbs it though it has no power
+# (BattleSystem_TriggerImmunityAbility, battle_lib.c:3519), F-2.
+MOVE_WILL_O_WISP = 261
 MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
 # Chatter's confusion (battle_script.c:8397-8436): the attacker must be a Chatot that is not
 # Transformed and the defender have HP; ``effectChance`` is 0 / 10 / 30 for the Chatot cry parameter

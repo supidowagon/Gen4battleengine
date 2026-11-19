@@ -76,6 +76,7 @@ from nuzline.engine.ids import (
     MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    MOVE_WILL_O_WISP,
     NATURE_DISLIKED_FLAVOR,
     ON_HIT_EFFECTS,
     POWER_IF_TARGET_ASLEEP,
@@ -1395,6 +1396,9 @@ def _calc_move_damage(
             damage = damage * 15 // 10
         elif move_type == Type.WATER:
             damage //= 2
+    # lib.c:7074-7076: the attacker's flashFire flag (not its ability) and a Fire move: x15/10.
+    if s.battlers[attacker].flash_fire and move_type == Type.FIRE:
+        damage = damage * 15 // 10
     damage += 2  # lib.c:7078
     if crit:
         # script.c:1344, criticalMul: x3 for Sniper (Battler_Ability, lib.c:7142-7144).
@@ -1709,6 +1713,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "magnet_rise",  # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns (G-66)
         "magnet_rise_turns",
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
+        "flash_fire",  # MoveEffectsData.flashFire (F-2): lib.c:2101-2104, not kept by a Baton Pass
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -4858,16 +4863,25 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and _t(tables, "move_power", move) != 0
     )
     volt = seen == AbilityId.VOLT_ABSORB and kind == Type.ELECTRIC  # lib.c:3500-3505 (B9-6)
+    # lib.c:3515-3521 Flash Fire (F-2): a Fire move, holder not frozen, with power or Will-O-Wisp.
+    flash = (
+        seen == AbilityId.FLASH_FIRE
+        and kind == Type.FIRE
+        and _active(s, foe_side).status != Status.FREEZE
+        and (_t(tables, "move_power", move) != 0 or move == MOVE_WILL_O_WISP)
+    )
     if (
         record is not None
-        and (water or volt)
+        and (water or volt or flash)
         and _matchup_x40(
             tables, kind, _active(s, foe_side).types, _identified(tables, s, side, foe_side)
         )
         > 0
     ):
         foe = _active(s, foe_side)
-        if foe.hp != foe.max_hp:
+        if flash:  # subscript_absorb_and_boost_fire_type_moves.s:13: flashFire := 1, no heal
+            s.battlers[foe_side].flash_fire = 1
+        elif foe.hp != foe.max_hp:
             _gain_hp(s, foe_side, _divide(foe.max_hp, 4))
         if foe_side == 0:
             _know_ability(s, s.battlers[0].active)

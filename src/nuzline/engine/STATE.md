@@ -484,7 +484,7 @@ three structs has a row.
 | `MoveEffectsData.stockpileDefBoosts` | — | later (M6) |
 | `MoveEffectsData.stockpileSpDefBoosts` | — | later (M6) |
 | `MoveEffectsData.truant` | `truant`, `fake_out_turn` | mapped |
-| `MoveEffectsData.flashFire` | — | later (M6) |
+| `MoveEffectsData.flashFire` | `flash_fire` | mapped |
 | `MoveEffectsData.lockOnTarget` | `lock_on_target` | mapped |
 | `MoveEffectsData.mimickedMoveSlot` | `mimic_slots` | mapped |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |

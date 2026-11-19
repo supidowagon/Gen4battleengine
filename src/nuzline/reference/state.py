@@ -132,6 +132,7 @@ class RefBattler:
     shadow_ability_form: int
     truant: int  # MoveEffectsData.truant (G-69)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
+    flash_fire: int  # MoveEffectsData.flashFire (F-2)
     wish_timer: int
     wish_hp: int
     future_timer: int

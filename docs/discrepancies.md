@@ -172,18 +172,21 @@ each; the test is fixed.
 - **Guard:** `test_every_drawn_effect_is_compared_or_departs` fails on a damaging effect of
   the M1 pools listed in neither `_COMPARED_EFFECTS` nor `_DEPARTED_EFFECTS`.
 
-### 12. Dry Skin, Water Absorb and Volt Absorb take the move before the damage calculation
+### 12. Dry Skin, Water Absorb, Volt Absorb and Flash Fire take the move before the damage calculation
 
-- **@smogon/calc:** a Water move into Dry Skin or Water Absorb, or an Electric move into
-  Volt Absorb, deals 0. Found: a Water move into Croagunk's Dry Skin, `damage_table` 6-8.
+- **@smogon/calc:** a Water move into Dry Skin or Water Absorb, a Fire move into Flash Fire, or
+  an Electric move into Volt Absorb, deals 0. Found: a Water move into Croagunk's Dry Skin, `damage_table` 6-8.
 - **Decomp:** `TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES`
   (`src/battle/battle_controller_player.c:3281-3286`, `:2789-2798`) runs
-  `BattleSystem_TriggerImmunityAbility` (`src/battle/battle_lib.c:3500-3512`, `:3538-3544`):
-  the move ends with `MOVE_STATUS_NO_MORE_WORK` and `subscript_ability_restores_hp.s` heals
-  the holder. `BattleSystem_CalcMoveDamage` (`:6601`) never runs; it has no Water or Electric
+  `BattleSystem_TriggerImmunityAbility` (`src/battle/battle_lib.c:3500-3512`, `:3515-3521`,
+  `:3538-3544`): the move ends with `MOVE_STATUS_NO_MORE_WORK` and
+  `subscript_ability_restores_hp.s` heals the holder (Flash Fire's
+  `subscript_absorb_and_boost_fire_type_moves.s` heals nothing and sets its flag; a frozen
+  Flash Fire holder takes the hit, `:3517`). `BattleSystem_CalcMoveDamage` (`:6601`) never runs; it has no Water or Electric
   case for these abilities (its one Dry Skin factor is Fire's, `:6845-6848`).
 - **Ruling:** `damage_table` mirrors `BattleSystem_CalcMoveDamage` and is right; the absorb is
-  `step._use_move`'s (and `enumerate`'s flinch law). Not generated: `_smogon_departs` rule 6
+  `step._use_move`'s (and the absorb law of `enumerate.py:2296-2304`, which keeps a flinch
+  from being sure). Not generated: `_smogon_departs` rule 6
   (the defender's ability through `damage.ignorable`, so Mold Breaker still compares).
 
 ## JAX engine's trainer AI path vs the decomp (K3b1)

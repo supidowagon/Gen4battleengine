@@ -1053,6 +1053,8 @@ INPUT_CLAUSE_ABILITIES = (
     # G-12, G-13: passes a status mid-turn: the synchronize clauses (a burn, or any status under
     # Guts, on the receiver's later hit).
     AbilityId.SYNCHRONIZE,
+    # F-2: a foe's Fire move it absorbs sets the flag its own later Fire hit reads (flash_fire clause).
+    AbilityId.FLASH_FIRE,
     AbilityId.ROUGH_SKIN,  # the attacker's HP: HP clause
     AbilityId.AFTERMATH,  # likewise, on its holder's faint (no later hit on it)
     AbilityId.INTIMIDATE,  # on switch-in: switch clause
@@ -1490,6 +1492,13 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
+        # F-2 flash_fire: the foe's Fire move on a Flash Fire side (absorbed or not: over-
+        # approximate) sets the flag that boosts the side's own later Fire hit.
+        | (
+            (ability == AbilityId.FLASH_FIRE)
+            & (move_type == Type.FIRE)
+            & (foes(move_type) == Type.FIRE)
+        )
         | (foe_effect == _E.ROAR)
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
@@ -2288,6 +2297,10 @@ def outcome_laws(
         ((ignorable == AbilityId.DRY_SKIN) | (ignorable == AbilityId.WATER_ABSORB))
         & (kinds == Type.WATER)
     ) | ((ignorable == AbilityId.VOLT_ABSORB) & (kinds == Type.ELECTRIC))
+    # Flash Fire takes a Fire move too, unless its holder is frozen (F-2; a Fire flinch move has power).
+    absorbs = absorbs | (
+        (ignorable == AbilityId.FLASH_FIRE) & (kinds == Type.FIRE) & (foes(status) != Status.FREEZE)
+    )
     flinch_sure = (
         # Snore (FLINCH with SNORE_PARAM) fails unless its user is asleep when it acts
         # (effect_script_0092.s:5; step's ``failed``), which a wake-up this turn can undo: its

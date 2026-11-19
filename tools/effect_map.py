@@ -765,6 +765,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Plus": AbilityId.PLUS,
     "Minus": AbilityId.MINUS,
     "Heatproof": AbilityId.HEATPROOF,
+    "Flash Fire": AbilityId.FLASH_FIRE,
     "Klutz": AbilityId.KLUTZ,
 }
 

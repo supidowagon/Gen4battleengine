@@ -362,6 +362,9 @@ CONSTANTS: tuple[Constant, ...] = (
     # MOVE_HEAL_BELL (generated/moves.txt line 216): BtlCmd_TryPartyStatusRefresh's compare
     # (battle_script.c:5035), E2 batch 12.
     Constant("nuzline.engine.ids.MOVE_HEAL_BELL", "move", 215, "Heal Bell", _E),
+    # MOVE_WILL_O_WISP (generated/moves.txt line 262): Flash Fire's no-power exception
+    # (battle_lib.c:3519), F-2.
+    Constant("nuzline.engine.ids.MOVE_WILL_O_WISP", "move", 261, "Will-O-Wisp", _E),
     # MOVE_IMPRISON (generated/moves.txt line 287): DecrementPP's Pressure count for it
     # (battle_controller_player.c:2239-2240), ruling G-8.
     Constant("nuzline.engine.ids.MOVE_IMPRISON", "move", 286, "Imprison", _E),
@@ -485,6 +488,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Plus": 57,
             "Minus": 58,
             "Heatproof": 85,
+            "Flash Fire": 18,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

@@ -203,6 +203,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     # B9-6: subscript_ability_restores_hp.s and subscript_weather_continues.s:_076, as Dry Skin's.
     AbilityId.VOLT_ABSORB: frozenset({ABSORB}),
     AbilityId.WATER_ABSORB: frozenset({ABSORB}),
+    # F-2: subscript_absorb_and_boost_fire_type_moves.s:10, :18 tag the holder (TAG_NICKNAME_ABILITY).
+    AbilityId.FLASH_FIRE: frozenset({ABSORB}),
     AbilityId.RAIN_DISH: frozenset({WEATHER_HP}),
     AbilityId.AFTERMATH: frozenset({CONTACT_DAMAGE}),
     # subscript_poison_damage.s:10 (TAG_NICKNAME_ABILITY, the holder); subscript_bad_dreams.s:6

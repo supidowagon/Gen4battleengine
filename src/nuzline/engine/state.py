@@ -222,6 +222,11 @@ Encodings:
   1671-1677) and both are volatiles Baton Pass keeps (moves.h:46-48, battle_lib.c:2112), so one
   field holds both. ``held_item`` is ``Battler_HeldItem`` (battle_lib.c:5352-5363): the held item
   as every gated read sees it, none under Klutz or Embargo.
+* E1 batch F (F-2). ``flash_fire`` is the active battler's ``MoveEffectsData.flashFire``
+  (battle_mon.h:21): set by ``subscript_absorb_and_boost_fire_type_moves.s:13``, read by
+  ``BattleSystem_CalcMoveDamage`` (battle_lib.c:7074-7076) for the attacker's Fire moves
+  (the flag, not the ability: it outlives a lost ability), cleared on a switch and a faint
+  (battle_lib.c:2101-2104, :2185-2188) and not passed by Baton Pass (:2107-2115).
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -379,6 +384,7 @@ class BattleState(NamedTuple):
     # ``initial_arrays``.
     chatot_cry: jnp.ndarray
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
+    flash_fire: jnp.ndarray  # int8, MoveEffectsData.flashFire (F-2)
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -589,6 +595,7 @@ VOLATILE_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "embargo",
+    "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
 # faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
@@ -724,6 +731,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "truant": (_BATTLER, np.int8),
     "chatot_cry": (_PARTY, np.int8),
     "embargo": (_BATTLER, np.int8),
+    "flash_fire": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

@@ -1243,3 +1243,22 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   at 1 (battle_lib.c:3599-3618), so the loss is max(1, max(1, maxHP/8) / 2) (`step._burn_check`, reference
   `_burn_check`). Will-O-Wisp is not blocked (no other Heatproof read: `grep ABILITY_HEATPROOF`: lib:6842 and
   burn_damage.s:8 only).
+- F-2 Flash Fire (`AbilityId.FLASH_FIRE`, decomp 18; new per-battler `flash_fire` = `MoveEffectsData.flashFire`,
+  battle_mon.h:21). Absorb: `BattleSystem_TriggerImmunityAbility` (battle_lib.c:3515-3521): `Battler_IgnorableAbility`
+  Flash Fire, moveType Fire, defender not frozen, not `SYSCTL_FIRST_OF_MULTI_TURN`, and move power != 0 or
+  Will-O-Wisp (`ids.MOVE_WILL_O_WISP`); no attacker != defender test. Runs where Dry Skin / Water / Volt Absorb do
+  (`step._use_move`, reference `_use_move` beside them; bcp.c:3281-3286, :2789-2797: only a move that hit; no
+  damage, no effect); no heal: `subscript_absorb_and_boost_fire_type_moves.s:13` sets the flag, the holder's ability
+  is revealed (`hooks.REVEALS_ON` ABSORB). Boost: `BattleSystem_CalcMoveDamage` damage x15/10 for the attacker's flag
+  and a Fire move, after the weather block and before `+ 2` (:7074-7076; `damage._pre_random`, reference
+  `_calc_move_damage`): it reads the flag, so it survives a lost ability and Mold Breaker. The flag clears on a
+  switch and a faint (lib:2101-2104, :2185-2188: `VOLATILE_FIELDS`) and Baton Pass does not keep it (lib:2107-2115).
+  Enumerate: the absorb law removes a sure flinch; the foe's Fire move on a Flash Fire side changes its own later
+  Fire hit's input (`foe_move` clause). AI: `Basic_CheckForImmunity` already read decomp ability 18 (policy.py);
+  the AI estimate's boost is its attacker's flag; `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640-3713), Flash
+  Fire's case: a bench Flash Fire holder after a Fire `moveHit` with power (table type, :3668) draws `RandNext() & 1`
+  in party order, A's own Flash Fire holds the switch (:3678) (`switching.SwitchSite.ABSORB`). With a super-
+  effective move of A the function first reads `RandNext() % 3` (:3651), one draw shared by the bench draws:
+  independent sites cannot express it, so that state stays refused (`_Layout.absorb_gate`); Water Absorb / Volt
+  Absorb on the AI's bench stay refused wholesale (not in this group). Doubles-only AI parts (TagStrategy,
+  IfActivatedFlashFire) and Expert_ChangeUserAbility (Role Play / Skill Swap unmodelled) are not built.

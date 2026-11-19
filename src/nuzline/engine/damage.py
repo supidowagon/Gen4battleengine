@@ -1663,6 +1663,11 @@ def _pre_random(
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 
+    # :7074-7076 the attacker's flashFire flag (BATTLEMON_FLASH_FIRE; not its ability) and a Fire
+    # move: x15/10, after the weather block (F-2).
+    damage = jnp.where(
+        (s.flash_fire[atk_side] != 0) & (move_type == Type.FIRE), damage * 15 // 10, damage
+    )
     damage = damage + 2  # :7078
     # battle_script.c:1344, x3 for the attacker's Sniper (battle_lib.c:7142-7144).
     crit_mul = jnp.where(a_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
