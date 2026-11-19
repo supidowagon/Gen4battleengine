@@ -120,6 +120,16 @@ def test_a_fire_move_is_absorbed_and_sets_the_flag(tables, names):
     assert int(out.flash_fire[0]) == 0 and int(out.status[1, 0]) == Status.NONE
 
 
+def test_a_holder_below_full_hp_is_not_healed(tables, names):
+    """battle_lib.c:3515-3521 sets no hpCalcTemp (Volt / Water Absorb do, :3503/:3510): a Flash
+    Fire holder at half HP stays there; JAX equals the reference."""
+    s = _flash(tables, names)
+    half = int(s.max_hp[1, 0]) // 2
+    s = s._replace(hp=s.hp.at[1, 0].set(half))
+    out = assert_matches_reference(tables, s, A("Ember", "Tackle", s, names), O)
+    assert int(out.hp[1, 0]) == half and int(out.flash_fire[1]) == 1
+
+
 def test_will_o_wisp_is_absorbed_though_it_has_no_power(tables, names):
     s = _flash(tables, names)
     acts = A("Will-O-Wisp", "Tackle", s, names)
@@ -842,6 +852,7 @@ def test_a_frozen_shaymin_sky_becomes_land_forme_after_any_hit(tables, names):
     assert int(out.ai_ability_known[0]) != 0
 
 
+@pytest.mark.fullset
 def test_a_transform_user_facing_a_sky_shaymin_is_refused(tables, names):
     """F-26: a Transformed copy of a Sky Shaymin that is frozen has Land's ability written into
     the Transform user's own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:

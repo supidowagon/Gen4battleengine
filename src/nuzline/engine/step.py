@@ -1687,7 +1687,9 @@ def _use_move(
     target_hp = state.hp[party(fmt, target_side), target].astype(_I32)
     target_max = state.max_hp[party(fmt, target_side), target].astype(_I32)
     healed = jnp.minimum(target_hp + jnp.maximum(target_max // 4, 1), target_max)
-    state = _set_mon(state, "hp", target_side, target, healed, absorbed & (target_hp != target_max))
+    # Volt / Water Absorb only (hpCalcTemp, battle_lib.c:3503/3510); Flash Fire sets no heal.
+    heal = absorbed & ~flash & (target_hp != target_max)
+    state = _set_mon(state, "hp", target_side, target, healed, heal)
     state = reveal_ability(state, target_side, target, ABSORB, absorbed)
     no_more_work = no_more_work | absorbed
     # Jump Kick / Hi Jump Kick (EffectId.CRASH, B10-2): effect_script_0045.s set
