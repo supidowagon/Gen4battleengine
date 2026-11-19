@@ -182,12 +182,9 @@ def test_state_md_accounts_for_every_struct_field():
 # (battle_lib.c:3649-4168, battle_controller_player.c:3673/3973), Quick Claw, Protect,
 # the speed values and Sketch are read later in the turn. They are needed for M6, not M1
 # (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
-# ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count).
+# ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count; the four
+# announced flags mapped with Skill Swap, E3-2-5, ``hooks.move_end_switch_in``).
 AUDIT_LATER_ROWS = (
-    "BattleMon.intimidateAnnounced",
-    "BattleMon.weatherAbilityAnnounced",
-    "BattleMon.traceAnnounced",
-    "BattleMon.downloadAnnounced",
     "BattleContext.monSpeedValues",
     "BattleContext.moveSketched",
 )
