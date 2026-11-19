@@ -81,8 +81,9 @@ Encodings:
   name abilities the engine does not implement.
 * ``move_effect_chance`` is the move row's as stored (the ROM's); the engine reads it through
   ``outcome.read_chance``, 0 for an ON_HIT-only script such as Chatter's (G-70).
-* ``gravity_rearm`` (int8 scalar): 1 in Kaizo, where the patched sub_seq 238 sets Gravity again
-  when its counter runs out (Gravity never ends), 0 in vanilla (E1 trial batch, G-67).
+* ``gravity_rearm`` (int8 scalar): 1 where the ROM's sub_seq 238 differs from vanilla's and
+  ``rom_diff.toml`` classifies it modelled (Kaizo: it sets Gravity again when its counter runs
+  out, so Gravity never ends; ``_gravity_rearm``), 0 in vanilla (E1 trial batch, G-67).
 * ``ai_policy`` (int8 scalar): the game's trainer-AI policy, the index of
   ``game_constants.POLICY[game]`` in ``game_constants.AI_POLICIES`` (0 vanilla, 1 kaizo;
   ``nuzline.ai.layout.layout_of`` reads it). A game without a policy is a ``BuildError``.
@@ -472,6 +473,31 @@ def _kaizo_rom_changes(inter: Path, rom_diff: Path = ROM_DIFF) -> tuple[frozense
     return effects, unknown
 
 
+SUB_SEQ = "battle/skill/sub_seq.narc"
+GRAVITY_END_SUBSEQ = 238  # subscript_gravity_end (res/battle/scripts/subscripts, G-67)
+
+
+def _gravity_rearm(inter: Path, rom_diff: Path = ROM_DIFF) -> int:
+    """``gravity_rearm``: 1 when the ROM's sub_seq 238 (subscript_gravity_end, run when the
+    Gravity counter reaches 0, battle_controller_player.c:1227-1238) differs from vanilla's
+    (``rom/changed_scripts.json``, from the ROM diff) and ``rom_diff.toml`` classifies it
+    ``modelled``: Kaizo's member sets Gravity again (G-67). A changed member classified
+    otherwise is a ``BuildError``: the engine models no other script there. 0 when unchanged."""
+    from tools.rom.diff import load_member_classification
+
+    changed = _rom_intermediate(inter, "changed_scripts")
+    if GRAVITY_END_SUBSEQ not in changed.get(SUB_SEQ, []):
+        return 0
+    try:
+        members = load_member_classification(rom_diff, changed)
+    except ValueError as e:
+        raise BuildError(str(e)) from e
+    status, _ = members.get((SUB_SEQ, GRAVITY_END_SUBSEQ), ("unknown", ""))
+    if status != "modelled":
+        raise BuildError(f"{SUB_SEQ} member {GRAVITY_END_SUBSEQ} changed and is {status}")
+    return 1
+
+
 def _rom_intermediate(inter: Path, name: str):
     """``inter/rom/<name>.json``, or ``BuildError`` asking for the Kaizo extraction."""
     if not (inter / "rom" / f"{name}.json").exists():
@@ -700,8 +726,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         ),
         "item_gift_type": _arr([i["natural_gift_type"] for i in items], np.int8, "gift type"),
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
-        # sub_seq 238 (subscript_gravity_end) is replaced in Kaizo only (G-67).
-        "gravity_rearm": _arr(int(kaizo), np.int8, "gravity rearm"),
+        # sub_seq 238 (subscript_gravity_end) as the ROM diff finds it (G-67).
+        "gravity_rearm": _arr(_gravity_rearm(inter) if kaizo else 0, np.int8, "gravity rearm"),
     }
     manifest = {
         "version": MANIFEST_VERSION,
