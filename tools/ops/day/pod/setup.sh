@@ -18,7 +18,8 @@ mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinu
 # The damage oracle needs node + @smogon/calc; node is installed once per pod (DAYBOX.md).
 if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R/tools/smogon_calc" && npm ci -s ); fi
 rm -rf col out; mkdir -p col out
-grep -v '^#' files.txt | grep . | awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' > col/jobs.txt
+grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both steps below number
+awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' col/list.txt > col/jobs.txt
 collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$mk" = A ] && ma=()
   uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
@@ -27,7 +28,7 @@ xargs -d '\n' -P 8 -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
 import sys, pathlib, collections
 D = pathlib.Path(sys.argv[1]); q = []; summ = []; n = 0; seen = set()
-for k, line in enumerate([l for l in (D / "files.txt").read_text().splitlines() if l.strip() and not l.startswith("#")], 1):
+for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
     p = line.split(); f, chunk = p[0], int(p[1]); mk = "A" if len(p) > 2 and p[2] == "A" else "N"
     rc = (D / "col" / f"{k}.rc").read_text().strip()
     by = collections.OrderedDict()

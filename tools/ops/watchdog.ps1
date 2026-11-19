@@ -3,7 +3,7 @@
 # Streams come from a JSON file (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
 param([switch]$FixLock, [string]$Streams = '')
 
-$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
+$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir) }
 $scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
 if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
 $lock = Join-Path $scratch 'fast_tier.lock'
@@ -26,8 +26,8 @@ foreach ($s in $list) {
     $subj = git -C $repo log -1 --format='%h %s' $s.branch
     $age = [int](($now.ToUniversalTime() - [DateTimeOffset]::FromUnixTimeSeconds([int64]$ts).UtcDateTime).TotalMinutes)
     $wt = Join-Path $repo $s.worktree
-    $dirty = if (Test-Path $wt) { (git -C $wt status --short | Measure-Object).Count } else { 'no worktree,' }
-    $line = "{0}: last commit {1} min ago, {2} uncommitted files | {3}" -f $s.name, $age, $dirty, $subj
+    $dirty = if (Test-Path $wt) { "{0} uncommitted files" -f (git -C $wt status --short | Measure-Object).Count } else { "worktree $($s.worktree) missing" }
+    $line = "{0}: last commit {1} min ago, {2} | {3}" -f $s.name, $age, $dirty, $subj
     if ($line.Length -gt 150) { $line = $line.Substring(0, 150) }
     $line
     $ages += $age

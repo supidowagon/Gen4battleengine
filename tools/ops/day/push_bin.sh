@@ -3,10 +3,7 @@
 # `runpodctl send` and prints the exec-pod body that installs it into /work/_bin and starts it.
 # Per-run scripts (tools/ops/day/pod/) travel inside each payload (pack.sh), not here.
 set -euo pipefail
-HERE=$(cd "$(dirname "$0")" && pwd)
-REPO="${NUZLINE_REPO:-$(cd "$HERE/../../.." && pwd)}"
-RENT="${NUZLINE_SCRATCH:-$REPO/_scratch}/rent"
-RPC="${RUNPODCTL:-$RENT/bin/runpodctl-windows-amd64.exe}"
+HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 B="$RENT/bringup"; rm -rf "$B"; mkdir -p "$B"; cd "$B"
 tr -d '\r' < "$HERE/bootstrap.sh" > bootstrap.sh
 HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send bootstrap.sh > send.log 2>&1 < /dev/null &

@@ -6,7 +6,7 @@
 # -Streams: the stream list (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
 param([int]$EveryMin = 10, [string]$HoldUntil = '', [string]$Streams = '')
 
-$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
+$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir) }
 $scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
 if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
 $dog = Join-Path $PSScriptRoot 'watchdog.ps1'

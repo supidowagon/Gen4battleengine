@@ -1,38 +1,80 @@
 #!/usr/bin/env bash
-# PC SIDE (Git Bash). Usage: build_tables.sh <commit>
-# Detached worktree $NUZLINE_SCRATCH/rent/wt_<short> at <commit>, decomp link to the main
-# checkout's external/pokeplatinum, vanilla + Kaizo build, then packs the built data/**.json|npz
-# into $NUZLINE_SCRATCH/rent/tables_<short>.tar.xz and removes the worktree.
-# The ROM, PKCalc zip and docs sheet are read locally only; only built tables are packed.
+# PC SIDE (Git Bash). Builds the vanilla and Kaizo tables:
+#   build_tables.sh --here     in place, in the checkout or worktree you are in (git toplevel of $PWD)
+#   build_tables.sh <commit>   in a temporary worktree $RENT/wt_<short>, then packs the uploadable
+#                              tables (common.sh TABLE_ALLOW) into $RENT/tables_<short>.tar.xz and
+#                              removes the worktree (also on failure)
+# Inputs from the main checkout ($REPO): data/local.toml (paths to the ROM, patch, calc zip,
+# docs sheet; copied into the build checkout when it has none), .cache/decomp/<commit>/main.nef.xMAP
+# (symbols) and external/pokeplatinum (linked when the build checkout has none). These stay on the PC.
 # Python: $NUZLINE_PY (an existing venv's python, run with PYTHONPATH) or else `uv run --group rom python`.
 set -euo pipefail
-REPO="${NUZLINE_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
-RENT="${NUZLINE_SCRATCH:-$REPO/_scratch}/rent"; mkdir -p "$RENT"
-C=$(git -C "$REPO" rev-parse --short "${1:?usage: build_tables.sh <commit>}^{commit}")
-WT="$RENT/wt_$C"; LINK="$WT/external/pokeplatinum"
-unlink_decomp() { [ -e "$LINK" ] || return 0
-  if command -v cygpath >/dev/null; then cmd //c rmdir "$(cygpath -w "$LINK")"; else rm "$LINK"; fi; }
-trap unlink_decomp EXIT
-git -C "$REPO" worktree add --detach "$WT" "$C"
-mkdir -p "$WT/external"
-if command -v cygpath >/dev/null; then cmd //c mklink /J "$(cygpath -w "$LINK")" "$(cygpath -w "$REPO/external/pokeplatinum")"
-else ln -s "$REPO/external/pokeplatinum" "$LINK"; fi
-cd "$WT"; export NUZLINE_CACHE_DIR="$RENT/wt-cache_$C"
+. "$(cd "$(dirname "$0")" && pwd)/common.sh"
+ARG="${1:?usage: build_tables.sh --here | <commit>}"
+[ -f "$REPO/data/local.toml" ] || { echo "ERROR: $REPO/data/local.toml missing (see data/local.example.toml)"; exit 2; }
+[ -d "$REPO/external/pokeplatinum" ] || { echo "ERROR: $REPO/external/pokeplatinum missing"; exit 2; }
+
+LINKED=""
+unlink_decomp() {  # removes only a link this script made; never deletes through it
+  [ -n "$LINKED" ] && [ -e "$LINKED" ] || return 0
+  if command -v cygpath >/dev/null; then powershell.exe -NoProfile -Command "[System.IO.Directory]::Delete($(psq "$LINKED"))"
+  else rm "$LINKED"; fi
+  [ ! -e "$LINKED" ] || { echo "ERROR: could not remove the decomp link $LINKED; remove it by hand before deleting the worktree"; return 1; }
+  LINKED=""
+}
+link_decomp() {  # $1 = checkout without external/pokeplatinum
+  local l="$1/external/pokeplatinum"; mkdir -p "$1/external"
+  if command -v cygpath >/dev/null; then
+    powershell.exe -NoProfile -Command "New-Item -ItemType Junction -Path $(psq "$l") -Target $(psq "$REPO/external/pokeplatinum") | Out-Null"
+  else ln -s "$REPO/external/pokeplatinum" "$l"; fi
+  [ -d "$l/src" ] || { echo "ERROR: decomp link $l failed"; exit 2; }
+  LINKED="$l"
+}
+
+if [ "$ARG" = --here ]; then
+  B=$(git rev-parse --show-toplevel); MODE=here
+  trap unlink_decomp EXIT
+else
+  C=$(git -C "$REPO" rev-parse --short "$ARG^{commit}"); MODE=commit
+  B="$RENT/wt_$C"; JC="$RENT/wt-cache_$C"; mkdir -p "$RENT"
+  cleanup() {  # unlink first; delete the worktree only once no link is left in it
+    cd "$RENT"; unlink_decomp || return 1
+    [ -e "$B/external/pokeplatinum" ] && [ -z "$LINKED" ] && { echo "ERROR: $B/external/pokeplatinum still present; not deleting $B"; return 1; }
+    if [ -e "$B" ]; then git -C "$REPO" worktree remove --force "$B" 2>/dev/null || rm -rf "$B"; fi
+    git -C "$REPO" worktree prune; rm -rf "$JC"
+  }
+  if [ -e "$B" ]; then  # leftover of an earlier run: its link may still be in it
+    [ -e "$B/external/pokeplatinum" ] && LINKED="$B/external/pokeplatinum"
+    cleanup
+  fi
+  trap cleanup EXIT
+  git -C "$REPO" worktree add --detach "$B" "$C"
+  export NUZLINE_CACHE_DIR="$JC"
+fi
+cd "$B"
+[ -e external/pokeplatinum ] || link_decomp "$B"
+[ -f data/local.toml ] || cp "$REPO/data/local.toml" data/local.toml
 if [ -n "${NUZLINE_PY:-}" ]; then
   W="$(pwd -W 2>/dev/null || pwd)"; S=":"; command -v cygpath >/dev/null && S=";"
   export PYTHONPATH="$W$S$W/src"; PY=("$NUZLINE_PY")
 else uv sync --group rom -q; PY=(uv run --group rom python); fi
+DC=$("${PY[@]}" -c "from tools.rom.symbols import DECOMP_COMMIT; print(DECOMP_COMMIT)" | tr -d '\r')
+SYM="$B/.cache/decomp/$DC/main.nef.xMAP"; [ -f "$SYM" ] || SYM="$REPO/.cache/decomp/$DC/main.nef.xMAP"
+[ -f "$SYM" ] || { echo "ERROR: symbols map missing: $SYM (docs/rom_pipeline.md, Decomp build)"; exit 2; }
+
 "${PY[@]}" -m tools.extract_decomp --decomp external/pokeplatinum --out data/intermediate
 "${PY[@]}" -m tools.build_tables
-"${PY[@]}" -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom
+"${PY[@]}" -m tools.extract_rom --game kaizo --out data/intermediate_kaizo/rom --symbols "$SYM"
 "${PY[@]}" -m tools.extract_pkcalc --out data/intermediate_kaizo/pkcalc
 "${PY[@]}" -m tools.extract_kaizo_docs --out data/intermediate_kaizo/docs
 "${PY[@]}" -m tools.kaizo.overrides check
 "${PY[@]}" -m tools.build_tables --game kaizo
-{ git ls-files -o -i --exclude-standard -- data; git diff --name-only -- 'data/gen4_platinum*/'; } \
-  | grep -E '\.(json|npz)$' | grep -viE '(^|/)backups?/' | sort -u | while read -r f; do [ -f "$f" ] && echo "$f"; done > "$RENT/tables_$C.list"
-grep -q '^data/gen4_platinum_kaizo/manifest.json$' "$RENT/tables_$C.list"
-tar -cJf "$RENT/tables_$C.tar.xz" -T "$RENT/tables_$C.list"
-cd "$RENT"; unlink_decomp
-git -C "$REPO" worktree remove --force "$WT"; rm -rf "$RENT/wt-cache_$C"
-echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$RENT/tables_$C.list") files)"
+[ "$MODE" = here ] && { echo "BUILD_OK in place: $B"; exit 0; }
+
+L="$RENT/tables_$C.list"
+{ git ls-files -o -i --exclude-standard -- data; git diff --name-only -- 'data/gen4_platinum*/'; } | sort -u \
+  | grep -E "$TABLE_ALLOW" | grep -vE "$TABLE_DENY" | while read -r f; do [ -f "$f" ] && echo "$f"; done > "$L"
+grep -q '^data/gen4_platinum_kaizo/manifest.json$' "$L"
+tar -cJf "$RENT/tables_$C.tar.xz" -T "$L"
+cd "$RENT"
+echo "BUILD_OK $RENT/tables_$C.tar.xz ($(wc -l < "$L") files)"
