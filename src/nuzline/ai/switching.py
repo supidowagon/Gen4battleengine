@@ -78,7 +78,8 @@ Refused, never approximated (``switching_refusals`` names each one):
   the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
   Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
   ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
-* moves whose state the engine does not carry: Miracle Eye; the variable-type moves are
+* moves whose state the engine does not carry: none now (Miracle Eye's bit is read since E3-B2-10,
+  ``defender_chart_flags``); the variable-type moves are
   modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type`` for the AI's active and the
   player's ``moveHit``; ``Move_CalcVariableType``, battle_lib.c:8097, ``party_move_types`` for
   a bench member: Hidden Power, Natural Gift, Judgment, Weather Ball, B13-35), except Weather
@@ -183,7 +184,6 @@ ABILITY_IDS = {
 MOVE_IDS = {
     "Magnet Rise": 393,
     "Roost": 355,
-    "Miracle Eye": 357,
     "Ingrain": 275,
     "Perish Song": 195,
     "Hidden Power": 237,
@@ -203,9 +203,7 @@ _AI_SIDE_ABILITIES = {
     "Volt Absorb": "AI_HasAbsorbAbilityInParty",
     "Natural Cure": "AI_IsAsleepWithNaturalCure",
 }
-_MOVES = {
-    "Miracle Eye": "lifts the Dark immunity",
-}
+_MOVES: dict[str, str] = {}  # none refused now: Miracle Eye is modelled (E3-B2-10)
 # What the AI refuses on the player's side (side 0): the any-side abilities and every refused
 # move (Hidden Power's IV type is modelled on both sides, see ``_layout``). Decomp ids.
 PLAYER_ABILITY_REFUSALS = {
@@ -262,6 +260,7 @@ def chart_multipliers(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """The two ``ApplyTypeMultiplier`` factors (``int32`` tenths, 10 = no entry) of
     ``move``'s type against a defender of ``def_types`` (int8[2]), in the order
@@ -277,7 +276,9 @@ def chart_multipliers(
     ``ApplyTypeChart`` only; ``CalcEffectiveness``'s ``NoImmunityOverrides`` (:2759) has
     neither. ``magnet`` (the defender's Magnet Rise turns without Ingrain or an Iron Ball,
     ``defender_chart_flags``): a Ground move skips the walk (:2605-2609): both factors are 10,
-    the value keeps only STAB."""
+    the value keeps only STAB. ``eyed`` (the defender's ``MOVE_EFFECT_MIRACLE_EYE``) skips the
+    immune Dark rows (``BasicTypeMulApplies``, :2551-2555, E3-B2-10): ``ApplyTypeChart`` only,
+    like ``grounded``; ``CalcEffectiveness`` reads neither."""
     if move_type is None:
         move_type = tables.move_type[jnp.asarray(move, _I32)]
     move_type = jnp.asarray(move_type, _I32)
@@ -290,7 +291,8 @@ def chart_multipliers(
         mul = jnp.where(identified & (tables.type_chart_foresight[move_type, t] != 0), 10, mul)
         lifted = grounded & (t == _TYPE_FLYING) & (mul == 0)
         skipped = jnp.asarray(roosting, jnp.bool_) & (t == _TYPE_FLYING)
-        return jnp.where(lifted | skipped, 10, mul)
+        dark = jnp.asarray(eyed, jnp.bool_) & (t == _TYPE_DARK) & (mul == 0)
+        return jnp.where(lifted | skipped | dark, 10, mul)
 
     ground = jnp.asarray(magnet, jnp.bool_) & (move_type == _TYPE_GROUND)
     m1 = jnp.where(ground, 10, entry(t1))
@@ -353,7 +355,7 @@ def apply_type_chart(
     unchanged (:2573). The defender's Foresight, Ingrain / Iron Ball, roosting and Magnet Rise
     flags are read (``chart_multipliers``); Wonder Guard sets a flag only (``wonder_guard_bit``),
     the value is unchanged; the other type-chart modifiers (Adaptability, Normalize, Scrappy,
-    Levitate, Miracle Eye) are not implemented: ``policy.ai_refusals`` refuses them.
+    Levitate) are not implemented: ``policy.ai_refusals`` refuses them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
@@ -365,23 +367,34 @@ def apply_type_chart(
         move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, def_side)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, def_side)
     for mul in chart_multipliers(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
+        tables,
+        move,
+        d_types,
+        state.gravity,
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
+        eyed,
     ):
         out = divide(out * mul, 10)
     return jnp.where(move == MOVE_STRUGGLE, value, out)
 
 
 def defender_chart_flags(tables: Tables, state: BattleState, side) -> tuple:
-    """``(identified, grounded, roosting, magnet)`` of ``side``'s active battler as
+    """``(identified, grounded, roosting, magnet, eyed)`` of ``side``'s active battler as
     ``BattleSystem_ApplyTypeChart`` reads them (``chart_multipliers``): Foresight
     (battle_lib.c:2615), ``MOVE_EFFECT_INGRAIN`` or an Iron Ball (``Battler_HeldItemEffect``,
-    ruling G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543) and Magnet Rise
-    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66)."""
+    ruling G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543), Magnet Rise
+    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66) and
+    ``MOVE_EFFECT_MIRACLE_EYE`` (:2551-2555, E3-B2-10)."""
     grounded = (state.ingrain[side] != 0) | iron_ball(tables, state, side)
     magnet = (state.magnet_rise_turns[side] != 0) & ~grounded
-    return state.foresight[side] != 0, grounded, state.roosting[side] != 0, magnet
+    eyed = state.miracle_eye[side] != 0
+    return state.foresight[side] != 0, grounded, state.roosting[side] != 0, magnet, eyed
 
 
 def _chart_flags(
@@ -395,10 +408,11 @@ def _chart_flags(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> jnp.ndarray:
     move = jnp.asarray(move, _I32)
     first, second = chart_multipliers(
-        tables, move, def_types, gravity, identified, move_type, grounded, roosting, magnet
+        tables, move, def_types, gravity, identified, move_type, grounded, roosting, magnet, eyed
     )
     mask = _apply_mul(_apply_mul(jnp.zeros((), _I32), first, update), second, update)
     # MOVE_STATUS_MAGNET_RISE instead of the walk (:2605-2609): no other chart bit is set.
@@ -419,11 +433,12 @@ def type_chart_flags(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_ApplyTypeChart`` leaves for
     ``move`` against a defender of ``def_types`` (int8[2]), identified by Foresight or
-    not, grounded by Ingrain or not, roosting or not, magnet-risen or not
-    (``defender_chart_flags``; a Ground move against Magnet Rise leaves ``MAGNET_RISE`` alone);
+    not, grounded by Ingrain or not, roosting or not, magnet-risen or not, under Miracle Eye or
+    not (``defender_chart_flags``; a Ground move against Magnet Rise leaves ``MAGNET_RISE`` alone);
     only a move with power updates the super/not-very-effective bits. ``move_type`` overrides the
     move's table type (``damage.ai_move_type``)."""
     power = tables.move_power[jnp.asarray(move, _I32)]
@@ -438,6 +453,7 @@ def type_chart_flags(
         grounded,
         roosting,
         magnet,
+        eyed,
     )
 
 
@@ -524,7 +540,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     a_flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -536,6 +552,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
             grounded,
             roosting,
             magnet,
+            eyed,
         )
     )(a_moves)
     keep = (a_moves != 0) & ((a_flags & SUPER_EFFECTIVE) != 0)

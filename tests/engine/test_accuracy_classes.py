@@ -451,6 +451,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.CONVERSION_2,  # writes the user's types, no stage (E3-B2-3)
     EffectId.SPITE,  # writes the target's PP, no stage (E3-B2-4)
     EffectId.GRUDGE,  # sets a flag on its user, no stage (E3-B2-9)
+    # sets the target's identified bit, no stage; hit_thresholds' ``free`` clause covers its change
+    # of the evasion the later checks read (like Foresight, outcome.future_thresholds, E3-B2-10)
+    EffectId.MIRACLE_EYE,
     # sets a flag on its user, no stage; the move it reflects is read as the holder's own
     # (order.used_moves, E3-B2-6)
     EffectId.MAGIC_COAT,

@@ -552,6 +552,13 @@ def _basic_check_lucky_chant(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_miracle_eye(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMiracleEye`` (script.s:1031-1034): the player's battler already under
+    MOVE_EFFECT_MIRACLE_EYE (``IfMoveEffect``, trainer_ai.c:704-714), -10; E3-B2-10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.MIRACLE_EYE))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -2062,6 +2069,25 @@ def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
     ctx = c.add_to_move_score(ctx, -1)
     ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 30))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_miracle_eye(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MiracleEye`` (script.s:4805-4827): a Dark player type 1 or 2 goes to the extra
+    gate (:4819-4820: the 80 roll, to _End when it jumps); else an evasion stage above 8 goes to
+    _ScorePlus2 (:4815); else -2 and end (:4816). _ScorePlus2 (:4822-4824) is a second 80 roll,
+    to _End when it jumps, else +2 (E3-B2-10)."""
+    ctx = _at(ctx, mask)
+    dark = jnp.zeros_like(ctx.live)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Dark"]))
+        dark = dark | t
+    ctx, evasive = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))  # :4816-4817
+    # Expert_MiracleEye_ExtraRandomGate (:4819-4820), falling into _ScorePlus2 (:4822)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, dark), 80, 4820))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | evasive), 80, 4823))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
 
 
 def _expert_lucky_chant(ctx: AiContext, mask) -> AiContext:
@@ -3885,6 +3911,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.GRAVITY, _basic_check_gravity_active),  # :254
+    (BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE, _basic_check_miracle_eye),  # :255 (E3-B2-10)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _basic_check_non_standard_damage),  # :256
     (BattleEffect.NATURAL_GIFT, _basic_check_natural_gift),  # :258 (B13-23)
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
@@ -4011,6 +4038,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
     (BattleEffect.GRAVITY, _expert_gravity),  # :1759
+    (BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE, _expert_miracle_eye),  # :1760 (E3-B2-10)
     (BattleEffect.DOUBLE_POWER_HEAL_SLEEP, _expert_wake_up_slap),  # :1761 (B13-23)
     (BattleEffect.SPEED_DOWN_HIT, _expert_hammer_arm),  # :1762 (E3-1-5)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
@@ -4265,7 +4293,8 @@ _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 _DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
 # Ingrain and Roost are read since E1 prep batch P2, Magnet Rise since the E1 trial batch
 # (switching.defender_chart_flags).
-_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye",)}
+# Miracle Eye since E3-B2-10 (``defender_chart_flags``): no move is refused for its state now.
+_STATE_MOVE_IDS: dict[str, int] = {}
 
 
 def player_move_refusal(move: int) -> str | None:

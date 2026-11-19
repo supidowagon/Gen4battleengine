@@ -279,6 +279,7 @@ _COND_TEXT = {
     "ability_suppressed": "ability suppressed",
     "charged_turns": "charging power",
     "grudge": "bearing a grudge",
+    "miracle_eye": "identified",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

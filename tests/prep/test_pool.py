@@ -113,7 +113,8 @@ def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets, metron
 
 @pytest.mark.fullset
 def test_player_move_refusal(names):
-    assert player_move_refusal(names.move("Miracle Eye"))
+    # Miracle Eye is modelled since E3-B2-10: no move is refused for its state now.
+    assert player_move_refusal(names.move("Miracle Eye")) is None
     assert player_move_refusal(names.move("Foresight")) is None
     assert player_move_refusal(names.move("Hidden Power")) is None
 

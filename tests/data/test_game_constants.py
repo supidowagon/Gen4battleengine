@@ -76,10 +76,7 @@ LISTED = [
     "nuzline.ai.commands.MOVE_IDS",
     "nuzline.ai.commands.SOUND_MOVES",
     "nuzline.ai.switching.MOVE_IDS",
-    "nuzline.ai.switching._MOVES",
     "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS",
-    "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-    "nuzline.ai.policy._STATE_MOVE_IDS",
     "nuzline.ai.outcome._SITES",
     "nuzline.ai.commands.CALC_DAMAGE_MOVES",
     "nuzline.ai.commands.MOVE_TYPE_MOVES",
@@ -235,7 +232,6 @@ def _resolve(where: str):
 def _code_entries(where: str) -> set:
     """The table at ``where`` as ``{(name or None, id or None)}``, to compare with its
     ``CONSTANTS`` entries."""
-    from nuzline.ai import switching
     from nuzline.ai.layout import AiLayout
 
     obj = _resolve(where)
@@ -251,8 +247,6 @@ def _code_entries(where: str) -> set:
         return {("Focus Band", band.id)}
     if where == "nuzline.saves.check.ULTIMATE_MOVES":  # species keys and move values
         return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
-    if where == "nuzline.ai.switching._MOVES":
-        return {(n, switching.MOVE_IDS[n]) for n in obj}
     if where == "nuzline.engine.ids.ABILITY_DECOMP_IDS":  # AbilityId keys, decomp id values
         return {(None, v) for v in obj.values()}
     if isinstance(obj, type) and issubclass(obj, IntEnum | IntFlag):

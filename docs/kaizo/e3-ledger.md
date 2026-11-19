@@ -942,3 +942,79 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_a_mimicked_slot_loses_only_the_battlemons_pp_to_grudge`, `test_a_switch_clears_grudge_and_the_
   ingrain_test_reads_it`), tests/ai/test_kaizo_policy.py (`test_grudge_has_no_ai_label_and_two_table_entries`,
   `test_expert_encore_encourages_a_players_last_grudge`); `fullset`-free.
+
+- E3-B2-10 Miracle Eye (#216, BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE; move 357, the only move with
+  effect 216 in either game (the ROM's effect, discrepancies.md: the sheet says 217), acc 0, PP 40,
+  RANGE_SINGLE_TARGET, PROTECT and MIRROR_MOVE flags; player-only in Kaizo, Metronome-callable): new
+  `EffectId.MIRACLE_EYE` (138, `tools/effect_map.py` entry 216); new per-battler `miracle_eye [B]` int8
+  (`MOVE_EFFECT_MIRACLE_EYE`, moves.h:30, a bit with no count) in `VOLATILE_FIELDS` (cleared at switch and faint,
+  lib.c:2071, :2166), not in `BATON_PASSED_FIELDS` (moves.h:46-48), in `effects.MOVE_EFFECT_MASK_FIELDS` (Roar's
+  whole-mask Ingrain test; the reference's `_ingrain_anchors` list has it too). No `Outcome` field, no draw.
+  Tables: `move_effect` of Miracle Eye only; no manifest bump (no array or key changed); vanilla and Kaizo tables
+  rebuilt.
+  Script: effect_script_0216.s:5 an indirect ON_HIT `subscript_miracle_eye.s`, :6 SYSCTL_IGNORE_IMMUNITIES.
+  The subscript (:5) sets the bit on BTLSCR_DEFENDER with no jump: no failure when it is already set, no
+  Substitute test (the move goes through a Substitute). The ON_HIT subscript runs unless
+  MOVE_STATUS_NO_EFFECTS (`BattleSystem_TriggerSecondaryEffect`, lib.c:1524-1529): a Protect or a
+  semi-invulnerable target stops it, a miss with acc 0 cannot happen. `effects._miracle_eye` is the
+  `_foresight` shape (`h.landed`, the target's side). SYSCTL_IGNORE_IMMUNITIES is inert: CheckTypeChart skips
+  power-0 moves (bcp.c:2352-2357); the effect joins `effects.IGNORES_TYPE_CHECKS` and the reference's lists
+  for the record (`RESIST_BERRY_SKIPS`, the super-effective clear).
+  Reads of the bit, all through `MON_IS_IDENTIFIED` (common.h:48-49: Foresight volatile or this bit) or
+  `BasicTypeMulApplies` (lib.c:2551-2555):
+  (1) Accuracy: `CheckMoveHitAccuracy` (bcp.c:2888-2890): a positive evasion stage counts as 0 for every
+  attacker of the holder. `outcome._rate` (the live and grid threshold), `outcome.stage_total` (Future Sight's
+  hit) and the reference's `_hit_rate` read `foresight | miracle_eye`; `hit_thresholds`' "free" clause (the stage
+  sum takes every value when a move that can change it is in the turn) names `MIRACLE_EYE` like Foresight.
+  (2) Type chart: `BasicTypeMulApplies` skips a row whose defending type is Dark with multiplier 0, i.e. Psychic
+  hits a Dark defender at the other type's multiplier (pure Dark x1, Dark/Poison x2). It is a flag of its own:
+  `damage.CHART_EYED` (4, beside `CHART_IDENTIFIED` 1 for the Ghost rows after the 0xFE separator,
+  lib.c:2611-2621, which only Foresight and Scrappy lift, and `CHART_GROUNDED` 2), set by `damage.identified`,
+  read by `chart_entry`; the reference's `_identified` / `_chart_rows` flag 4; `switching.chart_multipliers`'
+  `eyed` (a fifth value of `defender_chart_flags`, passed through `type_chart_flags`). Only `ApplyTypeChart`
+  reads it, not `CalcEffectiveness` (lib.c:2681+): `calc_effectiveness_flags` (the bench's candidate scoring)
+  is unchanged. The AI's `ApplyTypeChart` call sites (ai.c:1281, :1320, :3096, :3306, :3394, :3403, :3582,
+  :3609) all go through `damage.identified` or `defender_chart_flags`.
+  (3) `damage.ai_damage`'s fixed-damage immunity test (:3106, Psywave is Psychic) used `foresight` alone: it
+  now reads the full `identified` flags (Foresight, Scrappy, Ingrain / Iron Ball / Gravity, Miracle Eye), which
+  changes nothing for its types (Normal, Fighting, Ghost, Dragon, Psychic) but the Miracle Eye case.
+  Enumeration: `INPUT_NEUTRAL_EFFECTS` and `NON_TABLE_DAMAGE_EFFECTS` (a status move on the foe's flag: the only
+  attacker of the target this turn is the user, who has acted). No `INPUT_CLAUSE_EFFECTS` or `CRIT_ODDS_EFFECTS`
+  entry. No accuracy / evasion write (`test_accuracy_classes._NO_ACC_EVA_WRITE`); the identified evasion is the
+  `free` clause above. `tests/strategies.py` draws the move and the bit (`_draw_miracle_eye`, `RARE_EFFECTS`).
+  Observation: `observe._NONZERO_SIDE` "miracle_eye" ("{0} identified {1}!", subscript_miracle_eye.s:6),
+  `plan_tree._COND_TEXT`.
+  AI: Basic_CheckMiracleEye (script.s:1031-1034, label entry :255): `IfMoveEffect AI_BATTLER_DEFENDER,
+  MOVE_EFFECT_MIRACLE_EYE` -10 (`commands.MoveEffectMask.MIRACLE_EYE` = 1 << 22, read from `miracle_eye`;
+  `policy._basic_check_miracle_eye`). Expert_MiracleEye (:4805-4827, label entry :1760;
+  `policy._expert_miracle_eye`): a Dark defender type 1 or 2 goes to the extra gate (the 80 roll :4820, to the end
+  when it jumps) and then _ScorePlus2; else an evasion stage above 8 (decomp units: +3 or more) goes to
+  _ScorePlus2; else -2 and end. _ScorePlus2 is a second 80 roll (:4823), to the end when it jumps, else +2: a
+  Dark defender gets +2 at (176/256)^2. `SITE_N` 4820 and 4823 (80 each); 216 joins `KAIZO_TRANSCRIBED`,
+  `KAIZO_EXPERT_LABELS` (`("Expert_MiracleEye", 1760)`) and `KAIZO_EXPERT_TRANSCRIBED`;
+  `commands.BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE`. The only table naming 216 is
+  Expert_Encore_EncouragedMoveEffects (:3266, already transcribed). Refusals removed: Miracle Eye left
+  `switching.MOVE_IDS`, `_MOVES`, `PLAYER_MOVE_REFUSALS` and `policy._STATE_MOVE_IDS` (the three tables are empty
+  now, and out of `game_constants` and its test's `LISTED`; the machinery stays for a later refusal);
+  `player_move_refusal` is None for it. Read bounds regenerated (216: 2 reads, one per roll; two rows each);
+  backlog regenerated: the rows "move effect #216: Miracle Eye" and "AI reads your move: AI switching: move Miracle
+  Eye ..." (Roark Split) close, and the Metronome row's unmodelled count drops from 3 to 2.
+  Rulings. (1) The sheet's "Not modelled: 216 absent from _EFFECTS" is closed by the entry; the other readers it
+  did not list (`damage.ai_damage`'s immunity test, `line_search`'s Thunder Wave check) now read the full
+  `identified` flags. (2) AI switching reads the bit on the player's battler only, set by the player's own Miracle
+  Eye in a fight: it never changes the AI side's own reads. (3) A Substitute does not block; a Protect or
+  semi-invulnerable target does (tests). (4) Doubles: the bit is on the target battler (`h.target_side`, the chosen
+  defender); every attacker of it reads it, the partner included, through `identified(atk_side, def_side)` and
+  `outcome._rate(target)`: nothing computes `1 - side`; the AI's `defender_chart_flags` reads the player's
+  battler it is passed.
+  Not built: Owed lines naming Miracle Eye: none. Not modelled, message only: "{0} identified {1}!".
+  Tests: tests/engine/test_e3_batch2.py (`test_miracle_eye_*`, `test_the_decomp_scripts_are_as_the_sheet_says`,
+  `test_protect_and_a_semi_invulnerable_target_stop_it`, `test_an_identified_target_ignores_positive_evasion_in_
+  every_accuracy_read`, `test_the_dark_immunity_is_skipped_for_an_identified_defender`, `test_a_psychic_hit_on_an_
+  identified_dark_foe_deals_damage_in_a_step`, `test_a_switch_clears_miracle_eye_and_the_ingrain_test_reads_it`),
+  tests/ai/test_kaizo_policy.py (`test_miracle_eye_tables_are_the_decomps`, `test_miracle_eye_basic`,
+  `test_expert_miracle_eye`, `test_the_ai_reads_the_players_miracle_eye_bit_in_the_chart`,
+  `test_miracle_eye_is_scored_not_refused_and_exact_equals_loose`, and the batch13 exact-equals-loose list);
+  `fullset` edits only: tests/ai/test_switching.py (the Miracle Eye refusal case dropped),
+  tests/prep/test_pool.py (`test_player_move_refusal`), tests/data/test_game_constants.py (the three emptied
+  tables out of `LISTED`).

@@ -544,6 +544,7 @@ def wonder_guarded(
 
 CHART_IDENTIFIED = 1  # ``chart_entry`` flag: skip the Ghost immunities (Foresight, Scrappy)
 CHART_GROUNDED = 2  # ``chart_entry`` flag: skip the Flying immunity (Ingrain)
+CHART_EYED = 4  # ``chart_entry`` flag: skip the Dark immunity (Miracle Eye, E3-B2-10)
 
 
 def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.ndarray:
@@ -552,14 +553,16 @@ def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.nd
     Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
     attacker with Scrappy (``Battler_Ability``); ``CHART_GROUNDED`` when ``BasicTypeMulApplies``
     (:2534-2537) skips the rows of an immune Flying defender for an ingrained one or one holding
-    an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67). Only
+    an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67); ``CHART_EYED`` when
+    it skips the immune Dark rows of a defender under Miracle Eye (:2551-2555, E3-B2-10). Only
     ``ApplyTypeChart`` walks the chart this way (:2626, :2636)."""
     scrappy = battler_ability(state, atk_side) == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
     rooted = (
         (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | (state.gravity != 0)
     )
-    return seen | rooted.astype(_I32) * CHART_GROUNDED
+    eyed = state.miracle_eye[def_side] != 0
+    return seen | rooted.astype(_I32) * CHART_GROUNDED | eyed.astype(_I32) * CHART_EYED
 
 
 def trace_copy(
@@ -1162,14 +1165,16 @@ def chart_entry(tables: Tables, move_type, def_type, identified=False) -> jnp.nd
     """``int32`` chart entry in tenths. ``identified``: a bool (Foresight) or ``identified``'s
     flags. The rows after the 0xFE separator (the Ghost immunities) are skipped for an
     identified defender (Foresight, battle_lib.c:2611), and an immune row of a Flying defender
-    for a grounded one (Ingrain, :2534-2537), i.e. count as neutral."""
+    for a grounded one (Ingrain, :2534-2537), and an immune row of a Dark defender for one under
+    Miracle Eye (:2551-2555), i.e. count as neutral."""
     flags = _i32(identified)
     mul = _i32(tables.type_chart[move_type, def_type])
     ghost = ((flags & CHART_IDENTIFIED) != 0) & (
         tables.type_chart_foresight[move_type, def_type] != 0
     )
     flying = ((flags & CHART_GROUNDED) != 0) & (_i32(def_type) == Type.FLYING) & (mul == 0)
-    return jnp.where(ghost | flying, 10, mul)
+    dark = ((flags & CHART_EYED) != 0) & (_i32(def_type) == Type.DARK) & (mul == 0)
+    return jnp.where(ghost | flying | dark, 10, mul)
 
 
 def effectiveness(tables: Tables, move_type, def_types, identified=False) -> jnp.ndarray:
@@ -2040,8 +2045,9 @@ def ai_damage_for_roll(
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
     fixed, amount = ai_case_fixed(state, atk_side, move, draw)
     d_types = state.types[party(fmt, def_side), state.active[def_side]]
-    identified = state.foresight[def_side] != 0
-    immune = effectiveness(tables, move_type, d_types, identified) == 0
+    # ``ApplyTypeChart``'s walk flags: Foresight, Scrappy, Ingrain / Iron Ball / Gravity, Miracle Eye.
+    seen = identified(tables, state, atk_side, def_side)
+    immune = effectiveness(tables, move_type, d_types, seen) == 0
     # :3106 MOVE_STATUS_IMMUNE includes MOVE_STATUS_WONDER_GUARD (ruling G-18).
     immune = immune | wonder_guarded(tables, state, atk_side, move, move_type, def_side)
     fixed_damage_ = jnp.where(immune, 0, divide(amount * (85 + _i32(roll)), 100))

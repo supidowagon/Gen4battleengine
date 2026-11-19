@@ -576,6 +576,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Grudge: effect_script_0194.s sets the user's MOVE_EFFECT_GRUDGE; BtlCmd_TryGrudge runs at a
     # defender's faint (subscript_faint_check_destiny_bond.s:28, E3-B2-9).
     194: ("BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT", _E.GRUDGE, (0, 0, 0)),
+    # Miracle Eye: effect_script_0216.s, an indirect ON_HIT subscript_miracle_eye.s (the
+    # defender's MOVE_EFFECT_MIRACLE_EYE) and SYSCTL_IGNORE_IMMUNITIES (E3-B2-10).
+    216: ("BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE", _E.MIRACLE_EYE, (0, 0, 0)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

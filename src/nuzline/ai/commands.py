@@ -222,6 +222,7 @@ class MoveEffectMask(IntEnum):
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
     ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
+    MIRACLE_EYE = 1 << 22  # moves.h:30; BattleState.miracle_eye (Basic_CheckMiracleEye, E3-B2-10)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -237,6 +238,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
     MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
+    MoveEffectMask.MIRACLE_EYE: "miracle_eye",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -470,6 +472,8 @@ class BattleEffect(IntEnum):
     PREVENT_CRITS = (
         240  # Lucky Chant: Basic_CheckLuckyChant (:270); Expert_LuckyChant (:1783), E3-B2-7
     )
+    # Miracle Eye: Basic_CheckMiracleEye (:255); Expert_MiracleEye (:1760), E3-B2-10
+    IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -1548,7 +1552,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
     d_types = state.types[_row(state, d), state.active[d]]
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, d)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -1560,6 +1564,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
             grounded,
             roosting,
             magnet,
+            eyed,
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1689,9 +1694,10 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock and Miracle Eye change
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter and Solid Rock change
     this value and are refused (``policy.ai_refusals``); the player's Foresight, Ingrain /
-    Iron Ball, roosting and Magnet Rise flags are read (``switching.defender_chart_flags``)."""
+    Iron Ball, roosting, Magnet Rise and Miracle Eye flags are read
+    (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1706,7 +1712,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
@@ -1717,6 +1723,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         grounded,
         roosting,
         magnet,
+        eyed,
     )
     # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, Wonder Guard's or Magnet Rise's bit.
     immune = ((flags & (INEFFECTIVE | MAGNET_RISE)) != 0) | wonder_guard_bit(

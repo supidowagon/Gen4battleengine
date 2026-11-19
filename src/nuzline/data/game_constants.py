@@ -101,9 +101,11 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain, Perish Song,
-# Magnet Rise and the variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the
-# switch check does not model. Roost and Ingrain are read since E1 prep batch P2
+# ai/switching.py MOVE_IDS; _MOVES would be these less Hidden Power, Roost, Ingrain, Perish Song,
+# Magnet Rise and the variable-type moves: moves whose decomp handling the switch check does not
+# model; none is left since Miracle Eye's bit is read (E3-B2-10), so ``_MOVES``,
+# ``PLAYER_MOVE_REFUSALS`` and ``policy._STATE_MOVE_IDS`` are empty and name no id.
+# Roost and Ingrain are read since E1 prep batch P2
 # (switching.defender_chart_flags); Perish Song (step 3, AI_PerishSongKO, G-64) and Magnet
 # Rise (G-66) since the E1 trial batch; Weather Ball, Natural Gift and Judgment are typed
 # since E2 batch 13 (B13-35: switching.party_move_types; Weather Ball refused only where its
@@ -111,28 +113,12 @@ _SOUND_MOVES = {
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
-    "Miracle Eye": 357,
     "Ingrain": 275,
     "Perish Song": 195,
     "Hidden Power": 237,
     "Weather Ball": 311,
     "Natural Gift": 363,
     "Judgment": 449,
-}
-_SWITCH_REFUSED = {
-    k: v
-    for k, v in _SWITCH_MOVES.items()
-    if k
-    not in (
-        "Hidden Power",
-        "Roost",
-        "Ingrain",
-        "Perish Song",
-        "Magnet Rise",
-        "Weather Ball",
-        "Natural Gift",
-        "Judgment",
-    )
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
@@ -238,16 +224,8 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
         *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
         # Hidden Power's AI type is modelled on both sides since E1 batch 14: in MOVE_IDS
         # (the bench's IV type), refused in neither.
-        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_REFUSED),
-        *_table("nuzline.ai.switching.PLAYER_MOVE_REFUSALS", "move", scope, _SWITCH_REFUSED),
         *_table(
             "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
-        ),
-        *_table(
-            "nuzline.ai.policy._STATE_MOVE_IDS",
-            "move",
-            scope,
-            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye",)},
         ),
     )
 

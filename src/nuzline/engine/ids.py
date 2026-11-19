@@ -584,6 +584,14 @@ class EffectId(IntEnum):
     # battle_script.c:6743-6763), that attacker's selected move slot goes to 0 PP; no random
     # draw; E3-B2-9.
     GRUDGE = 137
+    # Miracle Eye (216, BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE): zeros. effect_script_0216.s:5
+    # sets an indirect ON_HIT subscript_miracle_eye.s (:5 MOVE_EFFECT_MIRACLE_EYE on the defender, no
+    # failure and no Substitute check: ``effects._miracle_eye``); :6 SYSCTL_IGNORE_IMMUNITIES is inert
+    # (power 0 skips CheckTypeChart, bcp.c:2352-2357). The bit (``BattleState.miracle_eye``) makes
+    # the defender identified for accuracy (a positive evasion stage counts as 0, MON_IS_IDENTIFIED,
+    # bcp.c:2888) and skips the Dark rows with multiplier 0 of ``BasicTypeMulApplies`` (battle_lib.c:
+    # 2551-2555); no random draw; E3-B2-10.
+    MIRACLE_EYE = 138
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

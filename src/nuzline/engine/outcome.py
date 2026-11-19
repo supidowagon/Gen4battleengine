@@ -304,10 +304,10 @@ def _rate(
     eva = jnp.where(d_ability == AbilityId.SIMPLE, eva * 2, eva)
     acc = jnp.where(d_ability == AbilityId.UNAWARE, 0, acc)
     eva = jnp.where(a_ability == AbilityId.UNAWARE, 0, eva)
-    # MON_IS_IDENTIFIED(defender) && evaStages < 0 (:2888): a Foresight-identified
+    # MON_IS_IDENTIFIED(defender) && evaStages < 0 (:2888): a Foresight- or Miracle Eye-identified
     # defender's positive evasion is ignored (evaStages = 6 - boost, so eva = -boost).
     # A defender that switches in this turn is the fresh Pokemon, not identified.
-    identified = ~fresh & (state.foresight[target] != 0)
+    identified = ~fresh & ((state.foresight[target] != 0) | (state.miracle_eye[target] != 0))
     eva = jnp.where(identified & (eva < 0), 0, eva)
     grid = total is not None  # future_thresholds' grid point
     total = (
@@ -456,7 +456,8 @@ def stage_total(tables: Tables, state: BattleState, side, target, target_mon, ac
     eva = jnp.where(d_ability == AbilityId.SIMPLE, eva * 2, eva)
     acc = jnp.where(d_ability == AbilityId.UNAWARE, 0, acc)
     eva = jnp.where(a_ability == AbilityId.UNAWARE, 0, eva)
-    identified = (state.foresight[target] != 0) & (state.active[target] == target_mon)
+    seen = (state.foresight[target] != 0) | (state.miracle_eye[target] != 0)
+    identified = seen & (state.active[target] == target_mon)
     eva = jnp.where(identified & (eva < 0), 0, eva)
     return jnp.clip(6 + eva + acc, 0, 12)
 
@@ -508,7 +509,8 @@ def future_thresholds(
     the defender's. Their abilities and items do not change within a turn but by Trace or Transform
     (``loose``; a Gravity that is set or ends this turn is ``loose`` too).
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
-    stat effect on accuracy or evasion, Foresight, a White Herb); else the start stages of a battler
+    stat effect on accuracy or evasion, Foresight, Miracle Eye, a White Herb); else the start
+    stages of a battler
     that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
     the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
     (the only ones the rate reads besides fog, which never starts); the target confused or not;
@@ -543,7 +545,8 @@ def future_thresholds(
         | (effect == EffectId.SECONDARY_STAT_SELF)
     ) & ((params[:, 0] == Stat.ACC) | (params[:, 0] == Stat.EVA))
     herbs = jnp.any(on_field & (tables.item_effect[state.item[rows]] == ItemId.WHITE_HERB) & living)
-    free = jnp.any(uses & (accuracy_moves | (effect == EffectId.FORESIGHT))) | herbs
+    identifies = (effect == EffectId.FORESIGHT) | (effect == EffectId.MIRACLE_EYE)
+    free = jnp.any(uses & (accuracy_moves | identifies)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     weathers = jnp.stack(
@@ -818,7 +821,8 @@ def _threshold_grid(
     newcomer's switch-in checks: the weather its ability sets and the ability it traces
     (``damage.entry_weather``, ``damage.entry_ability``: a Trace newcomer facing a Sand Veil
     attacker in sand holds Sand Veil at the check). No implemented move but Gravity and Transform
-    (above) changes Gravity, an ability or Foresight's flag on the target before the target's foe
+    (above) changes Gravity, an ability or Foresight's or Miracle Eye's flag on the target before
+    the target's foe
     moves (an armed Trace
     holder copies the newcomer the foe's switch brings, before either moves: the view holds the
     copy, ``pivot_view``), and a faint of either battler leaves no check. The
@@ -1592,7 +1596,8 @@ def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> 
 
 def fresh_switch(state: BattleState, actions, side) -> jnp.ndarray:
     """``bool``: ``side`` switches this turn to a fresh battler (stat stages, evasion,
-    confusion and Foresight reset at its switch-in). A paused pivot's switch (``pivot_view``)
+    confusion, Foresight and Miracle Eye reset at its switch-in). A paused pivot's switch
+    (``pivot_view``)
     already holds the newcomer's state, a Baton Pass's carried stages included (ruling B6-10)."""
     return is_switch(jnp.asarray(actions)[side]) & (state.pivot_battler != side + 1)
 

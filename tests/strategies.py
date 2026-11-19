@@ -1657,6 +1657,18 @@ def _draw_conversion_2(draw, tables: Tables, a: dict, side: int, active: int, na
             a["taunt"][side] = 0
 
 
+def _draw_miracle_eye(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-10: maybe (1 in 6) Miracle Eye taught to the active Pokemon (``_teach``) and maybe
+    (1 in 6) the battler already identified by it (``miracle_eye``, a bit of its own, apart from
+    Foresight's)."""
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Miracle Eye")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+            a["taunt"][side] = 0
+    a["miracle_eye"][side] = int(draw(st.integers(0, 5)) == 0)
+
+
 def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
     2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
@@ -2098,6 +2110,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch9(draw, tables, a, side, active, names)
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_batch12(draw, tables, a, side, active, names)
+        _draw_miracle_eye(draw, tables, a, side, active, names)
         _draw_mimic(draw, a, side, active)
         _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
@@ -2293,6 +2306,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
 
 # The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
 RARE_EFFECTS = (
+    EffectId.MIRACLE_EYE,  # E3-B2-10
     EffectId.ENCORE,
     EffectId.ASSIST,
     EffectId.PAIN_SPLIT,

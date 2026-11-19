@@ -445,6 +445,8 @@ SITE_N: dict[int, int] = {
     1915: 128,  # Expert_MirrorMove (faster, last move in the table: to _End when it jumps, else +2)
     1922: 80,  # Expert_MirrorMove_TryScoreMinus1 (to _End when it jumps, else -1)
     5506: 64,  # Expert_LuckyChant (to _ScorePlus1 when it jumps: +1, else 0), E3-B2-7
+    4820: 80,  # Expert_MiracleEye_ExtraRandomGate (a Dark defender: to _End when it jumps), E3-B2-10
+    4823: 80,  # Expert_MiracleEye_ScorePlus2 (to _End when it jumps, else +2), E3-B2-10
     4499: 100,  # Expert_MagicCoat (to _CheckUserFirstTurn when it jumps, else -1), E3-B2-6
     4505: 150,  # Expert_MagicCoat_CheckUserFirstTurn (first turn: to _End when it jumps, else +1)
     4511: 30,  # Expert_MagicCoat_TryScoreMinus1 (to _End when it jumps, else -1)
@@ -738,6 +740,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (E3-B2-6)
         240,  # PREVENT_CRITS (Lucky Chant): Basic_CheckLuckyChant (:270); Expert_LuckyChant
         # (:1783), :5506 (E3-B2-7)
+        216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE (Miracle Eye): Basic_CheckMiracleEye (:255);
+        # Expert_MiracleEye (:1760), :4820, :4823 (E3-B2-10)
         233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
         # (E3-B2-1)
         9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
@@ -899,6 +903,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     9: ("Expert_MirrorMove", 1632),
     183: ("Expert_MagicCoat", 1736),
     240: ("Expert_LuckyChant", 1783),
+    216: ("Expert_MiracleEye", 1760),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -1039,6 +1044,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         9,  # COPY_MOVE: Expert_MirrorMove (E3-B2-2)
         183,  # APPLY_MAGIC_COAT: Expert_MagicCoat (E3-B2-6)
         240,  # PREVENT_CRITS: Expert_LuckyChant (E3-B2-7)
+        216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE: Expert_MiracleEye (E3-B2-10)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

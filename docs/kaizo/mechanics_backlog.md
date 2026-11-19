@@ -161,25 +161,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 37 | 25 | 25 |
-| Gardenia Split | 28 | 410 (65) | 37 | 25 | 0 |
-| Fantina Split | 38 | 463 (69) | 37 | 25 | 0 |
-| Maylene Split | 47 | 480 (73) | 38 | 25 | 0 |
-| Wake Split | 54 | 482 (71) | 38 | 25 | 0 |
-| Byron Split | 65 | 486 (72) | 38 | 25 | 0 |
-| Candice Split | 74 | 486 (72) | 38 | 25 | 0 |
-| Galactic Split | 100 | 493 (73) | 38 | 25 | 0 |
-| Volkner Split | 84 | 487 (73) | 38 | 25 | 0 |
-| Elite Four Split | 100 | 493 (73) | 38 | 25 | 0 |
-| **Whole game** | | | 38 | 25 | 25 |
+| Roark Split | 16 | 358 (64) | 35 | 23 | 23 |
+| Gardenia Split | 28 | 410 (65) | 35 | 23 | 0 |
+| Fantina Split | 38 | 463 (69) | 35 | 23 | 0 |
+| Maylene Split | 47 | 480 (73) | 36 | 23 | 0 |
+| Wake Split | 54 | 482 (71) | 36 | 23 | 0 |
+| Byron Split | 65 | 486 (72) | 36 | 23 | 0 |
+| Candice Split | 74 | 486 (72) | 36 | 23 | 0 |
+| Galactic Split | 100 | 493 (73) | 36 | 23 | 0 |
+| Volkner Split | 84 | 487 (73) | 36 | 23 | 0 |
+| Elite Four Split | 100 | 493 (73) | 36 | 23 | 0 |
+| **Whole game** | | | 36 | 23 | 23 |
 
-Of your 38 groups, 13 are also needed by opposing trainers and 25 are player-only.
+Of your 36 groups, 13 are also needed by opposing trainers and 23 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 5 | 5 | 9 | 6 | 0 | 0 | 25 |
+| Roark Split | 0 | 4 | 4 | 9 | 6 | 0 | 0 | 23 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -189,7 +189,7 @@ Of your 38 groups, 13 are also needed by opposing trainers and 25 are player-onl
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **5** | **5** | **9** | **6** | **0** | **0** | **25** |
+| **Whole game** | **0** | **4** | **4** | **9** | **6** | **0** | **0** | **23** |
 
 ### Player-only groups
 
@@ -199,8 +199,6 @@ Of your 38 groups, 13 are also needed by opposing trainers and 25 are player-onl
 | AI move effects | AI reads your ability: AI scoring: ability Solid Rock changes IfMoveEffectivenessEquals and is not implemented: Solid Rock | Roark Split |
 | AI move effects | AI reads your ability: AI switching: ability Levitate (LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness) is not implemented: Levitate | Roark Split |
 | AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
-| AI move effects | AI reads your move: AI switching: move Miracle Eye (lifts the Dark immunity) is not implemented: Miracle Eye | Roark Split |
-| move effects | move effect #216: Miracle Eye | Roark Split |
 | move effects | move effect #223: Feint | Roark Split |
 | move effects | move effect #246: Last Resort | Roark Split |
 | move effects | move effect #258: Defog | Roark Split |
@@ -249,7 +247,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 3 | move effect #83: Metronome; 3 of 442 callable moves unmodelled |
+| 3 | move effect #83: Metronome; 2 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 | 1 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) |
@@ -265,7 +263,7 @@ Groups by kind: battle format 2, move effect 1, trainer item 1
 | 18 | battle format: a multi battle |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 5 | battle format: a double battle |
-| 4 | move effect #83: Metronome; 3 of 442 callable moves unmodelled |
+| 4 | move effect #83: Metronome; 2 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) |
@@ -295,7 +293,7 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
 | 19 | ability: Hydration |
 | 16 | AI move-id case of TrainerAI_CalcDamage: Gyro Ball |
-| 15 | move effect #83: Metronome; 3 of 442 callable moves unmodelled |
+| 15 | move effect #83: Metronome; 2 of 442 callable moves unmodelled |
 | 10 | ability: Forecast |
 | 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
 | 8 | held item effect #36: Berserk Gene |
@@ -358,7 +356,7 @@ Greedy: each step is the group that brings the most fights closest to runnable.
 | 1 | battle format: a multi battle | 40 of 68 |
 | 2 | AI: AI_FLAG_TAG_STRATEGY | 49 of 68 |
 | 3 | battle format: a double battle | 53 of 68 |
-| 4 | move effect #83: Metronome; 3 of 442 callable moves unmodelled | 57 of 68 |
+| 4 | move effect #83: Metronome; 2 of 442 callable moves unmodelled | 57 of 68 |
 | 5 | trainer item: Poké Ball can raise a friendship of 255 past 255, which wraps the party's friendship (pokemon.c:1859-1874) | 58 of 68 |
 | 6 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) | 59 of 68 |
 | 7 | battle format: gauntlet Route 204 North B2B (position 1; rules not recorded) | 60 of 68 |

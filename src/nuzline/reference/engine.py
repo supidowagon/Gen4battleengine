@@ -872,7 +872,8 @@ def _identified(tables, s: RefState, attacker: int, defender: int) -> int:
     """``ApplyTypeChart``'s walk flags (``_chart_rows``): 1 when it skips the Ghost immunities
     (lib.c:2611-2615) for Foresight or the attacker's Scrappy, 2 when ``BasicTypeMulApplies``
     skips an immune Flying row for an ingrained defender or one holding an Iron Ball
-    (lib.c:2534-2537, G-56) or under Gravity (:2545-2549, G-67)."""
+    (lib.c:2534-2537, G-56) or under Gravity (:2545-2549, G-67), 4 when it skips an immune Dark
+    row for a defender under Miracle Eye (:2551-2555, E3-B2-10)."""
     seen = (
         bool(s.battlers[defender].foresight)
         or _ability(s, _active(s, attacker)) == AbilityId.SCRAPPY
@@ -880,7 +881,7 @@ def _identified(tables, s: RefState, attacker: int, defender: int) -> int:
     rooted = (
         s.battlers[defender].ingrain or _iron_ball(tables, s, _active(s, defender)) or s.gravity
     )
-    return int(seen) | (2 if rooted else 0)
+    return int(seen) | (2 if rooted else 0) | (4 if s.battlers[defender].miracle_eye else 0)
 
 
 def _truant_loafs(s: RefState, side: int) -> bool:
@@ -1104,6 +1105,8 @@ def _chart_rows(tables, move_type: int, identified: bool = False) -> list[tuple[
         and not (flags & 1 and tables.type_chart_foresight[move_type, d])
         # BasicTypeMulApplies (lib.c:2534-2537): an ingrained defender skips the immune Flying row.
         and not (flags & 2 and d == Type.FLYING and _t(tables, "type_chart", move_type, d) == 0)
+        # BasicTypeMulApplies (lib.c:2551-2555): a Miracle Eye defender skips the immune Dark row.
+        and not (flags & 4 and d == Type.DARK and _t(tables, "type_chart", move_type, d) == 0)
     ]
     return [(d, _t(tables, "type_chart", move_type, d)) for _, d in sorted(listed)]
 
@@ -1937,6 +1940,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "infatuated",
         "destiny_bond",
         "grudge",  # MOVE_EFFECT_GRUDGE, not Baton-passed (E3-B2-9)
+        "miracle_eye",  # MOVE_EFFECT_MIRACLE_EYE, not Baton-passed (E3-B2-10)
         "uproar",
         "ingrain",
         "mean_look",
@@ -2685,6 +2689,7 @@ def _hit_resist_berry(turn: _Turn, s: RefState, attacker: int, move: int) -> boo
         EffectId.OHKO,
         EffectId.ENDEAVOR,  # effect_script_0189.s:10 (B10-5)
         EffectId.BEAT_UP,  # effect_script_0154.s:5 (B13-10)
+        EffectId.MIRACLE_EYE,  # effect_script_0216.s:6 (E3-B2-10)
     ):
         return False
     flags: set[str] = set()
@@ -3912,6 +3917,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[side_of(target)].toxic_spikes += 1
     elif effect == EffectId.DESTINY_BOND and landed:
         s.battlers[side].destiny_bond = 1  # subscript_destiny_bond.s:9
+    elif effect == EffectId.MIRACLE_EYE and landed:
+        # effect_script_0216.s / subscript_miracle_eye.s:5: an ON_HIT indirect effect on a living
+        # target, no failure check and no Substitute test (E3-B2-10).
+        s.battlers[target].miracle_eye = 1
     elif effect == EffectId.GRUDGE and landed:
         s.battlers[side].grudge = 1  # effect_script_0194.s:6 (its :5 fail never runs, E3-B2-9)
     elif effect == EffectId.UPROAR and effective and not s.battlers[side].uproar:
@@ -4247,6 +4256,7 @@ _IGNORES_TYPE_CHECKS = (
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
     EffectId.ENDEAVOR,
+    EffectId.MIRACLE_EYE,  # effect_script_0216.s:6 SYSCTL_IGNORE_IMMUNITIES (E3-B2-10)
 )
 
 
@@ -4822,7 +4832,8 @@ def _hit_rate(
         acc_stages = 0
     if _ability(s, atk) == AbilityId.UNAWARE:  # :2885
         eva_stages = 0
-    if s.battlers[defender].foresight and eva_stages < 0:  # MON_IS_IDENTIFIED, :2888
+    identified = s.battlers[defender].foresight or s.battlers[defender].miracle_eye
+    if identified and eva_stages < 0:  # MON_IS_IDENTIFIED (common.h:48-49), :2888
         eva_stages = 0
     total = min(max(6 + eva_stages + acc_stages, 0), 12)  # :2892-2898
     rate = _t(tables, "move_accuracy", move)
@@ -6679,7 +6690,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
-        sd.power_trick, sd.ability_suppressed, sd.charged_turns, sd.grudge,
+        sd.power_trick, sd.ability_suppressed, sd.charged_turns, sd.grudge, sd.miracle_eye,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]

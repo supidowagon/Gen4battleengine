@@ -153,6 +153,9 @@ many are real). Decomp sources:
 * Night Shade, Seismic Toss (``LEVEL_DAMAGE``), Hidden Power, Magnitude: damage and type
   come from ``damage.py`` (``fixed_damage``, ``hidden_power``, ``MAGNITUDE_POWER``); no
   effect function runs for them.
+* Miracle Eye: ``effect_script_0216.s`` / ``subscript_miracle_eye.s`` set ``miracle_eye`` on the
+  defender like Foresight's flag (``_miracle_eye``); ``outcome.py`` ignores its positive evasion and
+  ``damage.chart_entry`` skips its Dark immunity rows (E3-B2-10).
 * Foresight, Odor Sleuth: ``effect_script_0113.s`` / ``subscript_foresight.s`` set
   ``foresight`` on the defender whenever the move lands on a living target (no
   failure check). ``damage.py`` skips the Ghost immunities for it and ``outcome.py``
@@ -2419,6 +2422,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, E3-2-6
     "charged_turns",  # MOVE_EFFECT_CHARGE, E3-B2-8
     "grudge",  # MOVE_EFFECT_GRUDGE, E3-B2-9
+    "miracle_eye",  # MOVE_EFFECT_MIRACLE_EYE, E3-B2-10
 )
 
 
@@ -2427,8 +2431,8 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Miracle Eye,
-    Heal Block); each joins the tuple with its move."""
+    (``camouflaged``). The other bits come from unsupported moves (Heal Block); each joins the
+    tuple with its move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
@@ -2767,6 +2771,18 @@ def _foresight(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     living target; there is no failure check."""
     cond = (h.effect == _E.FORESIGHT) & h.landed
     return _set(state, "foresight", h.target_side, 1, cond)
+
+
+def _miracle_eye(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Miracle Eye (``effect_script_0216.s``: an ``ON_HIT`` indirect effect,
+    ``subscript_miracle_eye.s:5``, run unless ``MOVE_STATUS_NO_EFFECTS``, battle_lib.c:1524-1529):
+    the defender holds ``MOVE_EFFECT_MIRACLE_EYE`` whenever the move lands on a living target; there
+    is no failure check (a set bit stays set) and no Substitute test. The script's :6
+    ``SYSCTL_IGNORE_IMMUNITIES`` is inert (``IGNORES_TYPE_CHECKS``; power 0 skips ``CheckTypeChart``,
+    bcp.c:2352-2357). The target is ``h.target_side``, so a doubles partner's hit reads it too
+    (E3-B2-10)."""
+    cond = (h.effect == _E.MIRACLE_EYE) & h.landed
+    return _set(state, "miracle_eye", h.target_side, 1, cond)
 
 
 def _attractable(state: BattleState, side, slot, foe_side, foe_slot) -> jnp.ndarray:
@@ -3347,6 +3363,7 @@ def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
 IGNORES_TYPE_CHECKS = (
     _E.LEVEL_DAMAGE,
     _E.FORESIGHT,
+    _E.MIRACLE_EYE,  # effect_script_0216.s:6 (E3-B2-10)
     _E.HALVE_HP,
     _E.COUNTER,
     _E.FUTURE_SIGHT,
@@ -3913,6 +3930,7 @@ def play_hit(
         _side_layers,
         _destiny_bond,
         _grudge,
+        _miracle_eye,
         _uproar,
     ):
         state = fn(tables, state, h, outcome)

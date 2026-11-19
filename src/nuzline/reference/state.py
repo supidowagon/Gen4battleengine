@@ -105,6 +105,7 @@ class RefBattler:
     infatuated: int
     destiny_bond: int
     grudge: int  # MOVE_EFFECT_GRUDGE (E3-B2-9)
+    miracle_eye: int  # MOVE_EFFECT_MIRACLE_EYE (E3-B2-10)
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
     perish_song: int

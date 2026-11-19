@@ -4772,6 +4772,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
         ("Lucky Chant", "Mist", "Accelerock", ""),  # E3-B2-7
         ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
+        ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -5682,3 +5683,141 @@ def test_expert_encore_encourages_a_players_last_grudge(
     grudge = s._replace(last_move=s.last_move.at[0].set(n.move("Grudge")))
     assert _delta(t, grudge, 0x3, 0x7)[0] == 3
     assert _delta(t, grudge, 0x3, 0x7, ((0, 3192),))[0] == 0
+
+
+# --- #216 Miracle Eye (E3-B2-10) ---------------------------------------------------------------
+
+
+def test_miracle_eye_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Miracle Eye is BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE, 216, in Basic_ScoreMoveEffect
+    (script.s:255), Expert_Main (:1760) and Expert_Encore_EncouragedMoveEffects (:3266) only; its
+    two rolls are :4820 and :4823 (80 each); MOVE_EFFECT_MIRACLE_EYE is 1 << 22 (moves.h:30)
+    (E3-B2-10)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE == 216
+    assert c.MoveEffectMask.MIRACLE_EYE == 1 << 22
+    assert KAIZO_EXPERT_LABELS[216] == ("Expert_MiracleEye", 1760) and 216 in KAIZO_TRANSCRIBED
+    assert SITE_N[4820] == 80 and SITE_N[4823] == 80
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(216) == 1
+    assert sum(216 in table for table in c.CHECK_HP_TABLES.values()) == 0
+    assert 216 not in c.SETUP_FIRST_TURN_EFFECTS
+    assert int(t.move_ai_effect[n.move("Miracle Eye")]) == 216
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    for number in (255, 1760, 3266):
+        assert "BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE" in lines[number - 1], number
+    assert sum("BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE" in line for line in lines) == 3
+    assert lines[1030] == "Basic_CheckMiracleEye:"
+    assert (
+        lines[1032].strip()
+        == "IfMoveEffect AI_BATTLER_DEFENDER, MOVE_EFFECT_MIRACLE_EYE, ScoreMinus10"
+    )
+    assert lines[4804] == "Expert_MiracleEye:"
+    assert lines[4811].strip() == "IfLoadedEqualTo TYPE_DARK, Expert_MiracleEye_ExtraRandomGate"
+    assert lines[4813].strip() == "IfLoadedEqualTo TYPE_DARK, Expert_MiracleEye_ExtraRandomGate"
+    assert lines[4814].strip().startswith("IfStatStageGreaterThan AI_BATTLER_DEFENDER")
+    assert "BATTLE_STAT_EVASION, 8, Expert_MiracleEye_ScorePlus2" in lines[4814]
+    assert lines[4815].strip() == "AddToMoveScore -2"
+    assert lines[4819].strip() == "IfRandomLessThan 80, Expert_MiracleEye_End"
+    assert lines[4822].strip() == "IfRandomLessThan 80, Expert_MiracleEye_End"
+    assert lines[4823].strip() == "AddToMoveScore 2"
+
+
+def test_miracle_eye_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckMiracleEye (script.s:1031-1034): the player's battler (the defender) already
+    under MOVE_EFFECT_MIRACLE_EYE -10; the AI's own bit is not the defender's (E3-B2-10)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Miracle Eye", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    player = s._replace(miracle_eye=s.miracle_eye.at[0].set(1))
+    assert _delta(t, player, 0x2, 0x3)[0] == -10
+    ai = s._replace(miracle_eye=s.miracle_eye.at[1].set(1))
+    assert _delta(t, ai, 0x2, 0x3)[0] == 0
+
+
+def _dark(s, which):
+    """``s`` with the player's active Pokemon of types ``which`` (type ids)."""
+    active = int(s.active[0])
+    return s._replace(types=s.types.at[0, active].set(jnp.asarray(which, s.types.dtype)))
+
+
+@pytest.mark.parametrize(
+    ("types", "eva", "gate", "plus2", "expected"),
+    [
+        # Expert_MiracleEye (script.s:4805-4827). Not Dark, evasion above +2 (decomp 8): the
+        # +2 roll (:4823) jumps to _End or adds 2. The rolls are read only on the paths that
+        # reach them, so a jump of the unreached :4820 changes nothing.
+        ((12, 12), 0, False, False, -2),
+        ((12, 12), 0, True, True, -2),
+        ((12, 12), 2, False, False, -2),
+        ((12, 12), 3, False, False, 2),
+        ((12, 12), 3, True, False, 2),
+        ((12, 12), 3, False, True, 0),
+        ((12, 12), 6, False, False, 2),
+        # A Dark type 1 or 2 goes to the extra gate (:4819-4820) first, whatever the evasion.
+        ((17, 17), 0, False, False, 2),
+        ((17, 12), 0, False, False, 2),
+        ((12, 17), 0, False, False, 2),
+        ((17, 12), 0, True, False, 0),
+        ((17, 12), 0, False, True, 0),
+        ((12, 17), 0, True, True, 0),
+        ((12, 17), 3, False, False, 2),
+        ((12, 17), 3, True, False, 0),
+    ],
+)
+def test_expert_miracle_eye(
+    kaizo_tables, kaizo_names, kaizo_roark_party, types, eva, gate, plus2, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Miracle Eye", "Accelerock", "", ""))
+    s = _dark(s, types)
+    s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+    jumps = tuple(((0, line) for line, on in ((4820, gate), (4823, plus2)) if on))
+    assert _delta(t, s, 0x3, 0x7, jumps=jumps)[0] == expected
+
+
+def test_the_ai_reads_the_players_miracle_eye_bit_in_the_chart(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """ApplyTypeChart (battle_lib.c:2551-2555) skips the Dark row of an eyed defender: the AI's
+    Psychic is no longer an immune hit (``IfMoveEffectivenessEquals``, trainer_ai.c:1311; the
+    bench scoring's ``apply_type_chart``, AI_CannotDamageWonderGuard :3306); CalcEffectiveness
+    (the bench's candidate flags) does not read it (E3-B2-10)."""
+    from nuzline.ai import switching
+
+    t, n = kaizo_tables, kaizo_names
+    psychic = n.move("Psychic")
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Psychic", "Accelerock", "", ""))
+    s = _dark(s, (17, 17))
+    eyed = s._replace(miracle_eye=s.miracle_eye.at[0].set(1))
+    assert int(c.effectiveness_class(t, s, psychic)) == TypeMulti.IMMUNE
+    assert int(c.effectiveness_class(t, eyed, psychic)) == TypeMulti.BASE
+    assert int(switching.apply_type_chart(t, s, 1, psychic, 40)) == 0
+    assert int(switching.apply_type_chart(t, eyed, 1, psychic, 40)) == 40
+    d_types = s.types[0, int(s.active[0])]
+    flags = switching.calc_effectiveness_flags(t, psychic, d_types, 0)
+    assert int(flags) & switching.INEFFECTIVE  # CalcEffectiveness: unchanged by the bit
+    assert int(switching.type_chart_flags(t, psychic, d_types, 0)) & switching.INEFFECTIVE
+    assert not int(switching.type_chart_flags(t, psychic, d_types, 0, eyed=True)) & (
+        switching.INEFFECTIVE
+    )
+
+
+def test_miracle_eye_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """Neither the AI's Miracle Eye nor the player's is a refusal any more (the move left
+    ``switching._MOVES`` and ``policy._STATE_MOVE_IDS``); the exact layout equals the loose one."""
+    t, n = kaizo_tables, kaizo_names
+    assert policy.player_move_refusal(n.move("Miracle Eye")) is None
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Miracle Eye", "Accelerock", "", ""))
+    player = s._replace(moves=s.moves.at[0, 0, 1].set(n.move("Miracle Eye")))
+    for state in (s, player):
+        for flags in (0x27, 0x10F):
+            layout = layout_for(t, flags, state)
+            assert policy.ai_refusals(t, state, n, layout) == []
+            _assert_exact_equals_loose(t, _hp(state, 1, 50), layout)

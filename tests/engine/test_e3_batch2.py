@@ -9,11 +9,21 @@ Decomp (external/pokeplatinum): ``res/battle/scripts/effects/effect_script_0233.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.data.spec import PokemonSpec
+from nuzline.engine.damage import (
+    CHART_EYED,
+    CHART_IDENTIFIED,
+    damage_table,
+    effectiveness,
+    identified,
+)
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
@@ -27,7 +37,7 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.order import CALL_MIRROR_MOVE, call_kind
-from nuzline.engine.outcome import MAX_HITS, empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
@@ -1836,3 +1846,238 @@ def test_a_switch_clears_grudge_and_the_ingrain_test_reads_it(tables, names):
     rooted = s._replace(ingrain=s.ingrain.at[0].set(1))
     assert not bool(ingrain_anchors(t, rooted, 0))
     assert bool(ingrain_anchors(t, rooted._replace(grudge=rooted.grudge.at[0].set(0)), 0))
+
+
+# --- Miracle Eye (#216, E3-B2-10) ---------------------------------------------------------------
+# effect_script_0216.s: an indirect ON_HIT subscript_miracle_eye.s (:5 MOVE_EFFECT_MIRACLE_EYE on
+# the defender: no failure, no Substitute test; run unless MOVE_STATUS_NO_EFFECTS, battle_lib.c:
+# 1524-1529) and SYSCTL_IGNORE_IMMUNITIES (inert: power 0 skips CheckTypeChart, bcp.c:2352-2357).
+# MON_IS_IDENTIFIED (common.h:48-49) ignores the defender's positive evasion stage (bcp.c:2888-2890)
+# and BasicTypeMulApplies skips the immune Dark rows (battle_lib.c:2551-2555).
+
+_ME_DECOMP = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
+
+
+def _me(t, n, foe="Mightyena", foe_moves=("Tackle",), fast=True, foe_level=40):
+    """Monferno (side 0: Miracle Eye, Psychic, Tackle, Earthquake) against ``foe`` (``foe_moves``),
+    no abilities, one Pokemon each; the Monferno is the faster one only if ``fast``."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 40, ("Miracle Eye", "Psychic", "Tackle", "Earthquake"))],
+        [_spec(n, foe, foe_level, foe_moves)],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    fast_spe, slow_spe = (500, 1) if fast else (1, 500)
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(fast_spe).at[1, 0, SPE].set(slow_spe))
+
+
+def _eyed(s, side=1):
+    return s._replace(miracle_eye=s.miracle_eye.at[side].set(1))
+
+
+def _me_roll(value):
+    """Every hit lands on a roll of ``value`` (``RandNext() % 100 + 1``, the accuracy check)."""
+    return empty_outcome()._replace(hit=jnp.full((2, MAX_HITS), value, jnp.int8))
+
+
+def _mego(t, n, s, me="Miracle Eye", foe="Tackle", out=None):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def test_miracle_eye_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 216 (effect_script_0216.s) is EffectId.MIRACLE_EYE in both games and Miracle Eye
+    (move 357) the only move with it: power 0, accuracy 0 (no roll), AI effect 216; its
+    SYSCTL_IGNORE_IMMUNITIES is in ``IGNORES_TYPE_CHECKS``; a neutral, non-damaging effect of the
+    enumeration; a volatile that Baton Pass drops (moves.h:46-48) and the Ingrain test reads."""
+    from nuzline.engine.effects import IGNORES_TYPE_CHECKS, MOVE_EFFECT_MASK_FIELDS
+    from nuzline.engine.enumerate import INPUT_NEUTRAL_EFFECTS
+    from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS
+
+    assert DECOMP_EFFECT_TO_ID[216] == (EffectId.MIRACLE_EYE, (0, 0, 0))
+    for t, nn in ((tables, names), (kaizo_tables, kaizo_names)):
+        move = nn.move("Miracle Eye")
+        assert move == 357 and int(t.move_effect[move]) == EffectId.MIRACLE_EYE
+        assert int((np.asarray(t.move_effect) == EffectId.MIRACLE_EYE).sum()) == 1
+        assert int(t.move_accuracy[move]) == 0 and int(t.move_power[move]) == 0
+        assert int(t.move_ai_effect[move]) == 216
+        assert int(t.move_flags[move]) & MoveFlag.PROTECT
+    assert EffectId.MIRACLE_EYE in IGNORES_TYPE_CHECKS
+    assert EffectId.MIRACLE_EYE in INPUT_NEUTRAL_EFFECTS
+    assert EffectId.MIRACLE_EYE in NON_TABLE_DAMAGE_EFFECTS
+    assert "miracle_eye" in VOLATILE_FIELDS and "miracle_eye" not in BATON_PASSED_FIELDS
+    assert "miracle_eye" in MOVE_EFFECT_MASK_FIELDS
+
+
+def test_the_decomp_scripts_are_as_the_sheet_says():
+    """effect_script_0216.s sets the indirect subscript and SYSCTL_IGNORE_IMMUNITIES; the
+    subscript sets the bit on BTLSCR_DEFENDER without a jump (no failure, no Substitute test);
+    battle_lib.c:2551-2553 and common.h:48-49 read it; bcp.c:2888 ignores positive evasion."""
+    if not _ME_DECOMP.exists():
+        pytest.skip("decomp not present")
+    effect = (_ME_DECOMP / "res/battle/scripts/effects/effect_script_0216.s").read_text("utf-8")
+    assert "MOVE_SIDE_EFFECT_ON_HIT|MOVE_SUBSCRIPT_PTR_MIRACLE_EYE" in effect
+    assert "SYSCTL_IGNORE_IMMUNITIES" in effect
+    sub = (_ME_DECOMP / "res/battle/scripts/subscripts/subscript_miracle_eye.s").read_text("utf-8")
+    assert (
+        "UpdateMonData OPCODE_FLAG_ON, BTLSCR_DEFENDER, BATTLEMON_MOVE_EFFECTS_MASK, "
+        "MOVE_EFFECT_MIRACLE_EYE" in sub
+    )
+    assert "Jump" not in sub and "Substitute" not in sub and "If" not in sub
+    lib = (_ME_DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "MOVE_EFFECT_MIRACLE_EYE" in lib[2550]
+    assert "TYPE_DARK" in lib[2551] and "TYPE_MULTI_IMMUNE" in lib[2552]
+    common = (_ME_DECOMP / "include/battle/common.h").read_text("utf-8").splitlines()
+    assert "VOLATILE_CONDITION_FORESIGHT" in common[47] and "MOVE_EFFECT_MIRACLE_EYE" in common[48]
+    bcp = (_ME_DECOMP / "src/battle/battle_controller_player.c").read_text("utf-8").splitlines()
+    assert "MON_IS_IDENTIFIED(defender) && evaStages < 0" in bcp[2887]
+
+
+def test_miracle_eye_sets_the_bit_on_the_target_and_a_repeat_keeps_it(tables, names):
+    """subscript_miracle_eye.s:5 flags BTLSCR_DEFENDER; it never fails, so a second use over a set
+    bit leaves it set (no fail branch, unlike Grudge's); the user's own bit stays clear."""
+    t, n = tables, names
+    s = _me(t, n)
+    out = _mego(t, n, s)
+    assert out.miracle_eye.tolist() == [0, 1]
+    assert _mego(t, n, out).miracle_eye.tolist() == [0, 1]
+    # Foresight's flag is another bit: not set.
+    assert out.foresight.tolist() == [0, 0]
+
+
+def test_miracle_eye_goes_through_a_substitute(tables, names):
+    """The subscript has no Substitute test (battle_lib.c:1524-1529 checks only NO_EFFECTS): a
+    target behind a Substitute is still identified."""
+    t, n = tables, names
+    s = _me(t, n)
+    sub = s._replace(substitute_hp=s.substitute_hp.at[1].set(40))
+    out = _mego(t, n, sub)
+    assert out.miracle_eye.tolist() == [0, 1] and int(out.substitute_hp[1]) == 40
+
+
+def test_protect_and_a_semi_invulnerable_target_stop_it(tables, names):
+    """NO_EFFECTS (Protect, the semi-invulnerable miss) stops the ON_HIT subscript
+    (battle_lib.c:1524-1529): a faster Protect, and a target mid-Fly, are not identified."""
+    from nuzline.engine.ids import SemiKind
+
+    t, n = tables, names
+    protected = _mego(t, n, _me(t, n, foe_moves=("Protect",), fast=False), foe="Protect")
+    assert protected.miracle_eye.tolist() == [0, 0]
+    base = _me(t, n, foe="Pidgey", foe_moves=("Fly",))
+    up = base._replace(
+        semi_invulnerable=base.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+        locked_move=base.locked_move.at[1].set(n.move("Fly")),
+    )
+    assert _mego(t, n, up, foe="Fly").miracle_eye.tolist() == [0, 0]
+    # The same foe not in the air yet: the faster Miracle Eye lands before its Fly charges.
+    assert _mego(t, n, base, foe="Fly").miracle_eye.tolist() == [0, 1]
+
+
+def test_an_identified_target_ignores_positive_evasion_in_every_accuracy_read(tables, names):
+    """bcp.c:2888-2890: evasion +2 counts as 0 for the bit's holder (hit_threshold, the future-hit
+    stage sum, the live check in ``step`` and its reference); a negative stage still counts."""
+    from nuzline.engine.outcome import stage_total
+
+    t, n = tables, names
+    s = _me(t, n)
+    acts = A("Tackle", "Tackle", s, n)
+
+    def threshold(eva, eyed):
+        x = s.with_stages(1, eva=eva)
+        return int(hit_threshold(t, _eyed(x) if eyed else x, acts)[0])
+
+    assert threshold(2, True) == 95
+    assert threshold(2, False) == 57  # 95 * 60 // 100 (HitRateByStage[4])
+    assert threshold(-2, True) == 157  # 95 * 166 // 100, unchanged by the bit
+    assert threshold(-1, True) == 126  # 95 * 133 // 100
+    assert threshold(0, True) == threshold(0, False) == 95
+    # The stage sum (``stage_total``): 6 + (-evasion) + accuracy, clamped to 0-12.
+    x = s.with_stages(1, eva=2)
+    assert int(stage_total(t, x, 0, 1, x.active[1], 0, 2)) == 4
+    assert int(stage_total(t, _eyed(x), 0, 1, x.active[1], 0, 2)) == 6
+    assert int(stage_total(t, _eyed(x), 0, 1, x.active[1], 0, -2)) == 8
+    # The attacker's own bit does not matter: only the defender's.
+    assert int(hit_threshold(t, _eyed(x, 0), acts)[0]) == 57
+    # The live check: a roll of 80 misses behind +2 evasion, hits once the target is identified.
+    miss = _mego(t, n, x, me="Tackle", out=_me_roll(80))
+    hit = _mego(t, n, _eyed(x), me="Tackle", out=_me_roll(80))
+    assert int(miss.hp[1, 0]) == int(x.hp[1, 0])
+    assert int(hit.hp[1, 0]) < int(x.hp[1, 0])
+
+
+def test_the_dark_immunity_is_skipped_for_an_identified_defender(tables, names):
+    """battle_lib.c:2551-2555 BasicTypeMulApplies drops the Dark rows with multiplier 0: Psychic
+    hits a Dark Pokemon at the other type's multiplier (pure Dark x1, Dark/Poison x2, Dark/Flying
+    x1) while the bit is up, and not before; the Ground row of a Flying defender and the Ghost
+    rows stay as they were (a separate flag from Foresight's rows after the 0xFE separator)."""
+    t, n = tables, names
+    psychic = n.move("Psychic")
+    for foe in ("Mightyena", "Drapion", "Honchkrow"):
+        s = _me(t, n, foe=foe)
+        types = [int(x) for x in np.asarray(s.types[1, 0])]
+        assert n.type("Dark") in types
+        rest = [x for x in types if x != n.type("Dark")]
+        other = rest[0] if rest else n.type("Normal")  # the other type, or a neutral one
+        compare = s._replace(types=s.types.at[1, 0].set(jnp.asarray([other, other], jnp.int8)))
+        want = int(damage_table(t, compare, 0, psychic, False)[15])
+        assert int(damage_table(t, s, 0, psychic, False)[15]) == 0, foe
+        assert want > 0, foe
+        assert int(damage_table(t, _eyed(s), 0, psychic, False)[15]) == want, foe
+    # The unit view: effectiveness(), tenths.
+    psy, dark, ground = n.type("Psychic"), n.type("Dark"), n.type("Ground")
+    flying, ghost, normal = n.type("Flying"), n.type("Ghost"), n.type("Normal")
+    assert int(effectiveness(t, psy, jnp.asarray([dark, dark]), 0)) == 0
+    assert int(effectiveness(t, psy, jnp.asarray([dark, dark]), CHART_EYED)) == 100
+    assert int(effectiveness(t, psy, jnp.asarray([dark, ghost]), CHART_EYED)) == 100
+    poison = n.type("Poison")
+    assert int(effectiveness(t, psy, jnp.asarray([poison, dark]), CHART_EYED)) == 200
+    # Only Dark rows with multiplier 0: Ground on Flying, Normal on Ghost stay immune.
+    assert int(effectiveness(t, ground, jnp.asarray([flying, flying]), CHART_EYED)) == 0
+    assert int(effectiveness(t, normal, jnp.asarray([ghost, ghost]), CHART_EYED)) == 0
+    # Fighting on Dark (x2) and other Psychic rows (Steel x0.5) are unchanged.
+    fighting, steel = n.type("Fighting"), n.type("Steel")
+    assert int(effectiveness(t, fighting, jnp.asarray([dark, dark]), CHART_EYED)) == 200
+    assert int(effectiveness(t, psy, jnp.asarray([steel, steel]), CHART_EYED)) == 50
+    # The state flags: Miracle Eye alone sets CHART_EYED, never CHART_IDENTIFIED (Foresight's bit).
+    plain = _me(t, n)
+    flags = int(identified(t, _eyed(plain), 0, 1))
+    assert flags & CHART_EYED and not flags & CHART_IDENTIFIED
+    assert not int(identified(t, plain, 0, 1)) & CHART_EYED
+
+
+def test_a_psychic_hit_on_an_identified_dark_foe_deals_damage_in_a_step(tables, names):
+    """The same through ``step`` and its reference: a Psychic into a Dark foe does nothing, and
+    with Miracle Eye in effect the foe loses HP, the turn after the Miracle Eye lands too; a
+    Sableye (Dark/Ghost) is still immune to Normal (Foresight's rows, not this bit's)."""
+    t, n = tables, names
+    s = _me(t, n)
+    nothing = _mego(t, n, s, me="Psychic")
+    assert int(nothing.hp[1, 0]) == int(s.hp[1, 0])
+    hurt = _mego(t, n, _eyed(s), me="Psychic")
+    assert int(hurt.hp[1, 0]) < int(s.hp[1, 0])
+    first = _mego(t, n, s)
+    second = _mego(t, n, first, me="Psychic")
+    assert int(second.hp[1, 0]) < int(first.hp[1, 0])
+    sab = _eyed(_me(t, n, foe="Sableye"))
+    assert int(_mego(t, n, sab, me="Tackle").hp[1, 0]) == int(sab.hp[1, 0])
+    assert int(_mego(t, n, sab, me="Psychic").hp[1, 0]) < int(sab.hp[1, 0])
+
+
+def test_a_switch_clears_miracle_eye_and_the_ingrain_test_reads_it(tables, names):
+    """Cleared with the other volatiles (battle_lib.c:2071, :2166); the whole-mask Roar test
+    (subscript_force_target_to_switch_or_flee.s:7) no longer finds an Ingrain-only mask while it
+    is set."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+    from nuzline.engine.effects import ingrain_anchors
+
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 40, ("Tackle",))],
+        [_spec(n, "Mightyena", 40, ("Tackle",)), _spec(n, "Geodude", 40, ("Tackle",))],
+    )
+    s = _eyed(s._replace(ability=s.ability.at[:, :].set(AbilityId.NONE)))
+    out = assert_matches_reference(t, s, (0, MOVE_ACTIONS + 1), _hits())
+    assert out.miracle_eye.tolist() == [0, 0]
+    rooted = _eyed(s, 0)._replace(ingrain=s.ingrain.at[0].set(1))
+    assert not bool(ingrain_anchors(t, rooted, 0))
+    assert bool(ingrain_anchors(t, rooted._replace(miracle_eye=rooted.miracle_eye * 0), 0))

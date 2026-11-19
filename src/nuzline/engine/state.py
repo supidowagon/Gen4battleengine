@@ -52,6 +52,12 @@ Encodings:
   faints (battle_lib.c:2071, :2166), not Baton-passed (moves.h:46-48). ``step`` reads it where a
   battler that holds it fainted to a living attacker of the other side (``BtlCmd_TryGrudge``,
   battle_script.c:6743-6763) and zeroes that attacker's selected move slot's PP.
+* E3-B2-10 (Miracle Eye). ``miracle_eye`` is the active battler's ``MOVE_EFFECT_MIRACLE_EYE`` bit of
+  ``moveEffectsMask`` (moves.h:30; set on the defender by subscript_miracle_eye.s:5): per battler,
+  cleared when it leaves or faints (battle_lib.c:2071, :2166), not Baton-passed (moves.h:46-48), no
+  end-of-turn count. It identifies the battler (``MON_IS_IDENTIFIED``, common.h:48-49: a positive
+  evasion stage counts as 0, bcp.c:2888-2890) and makes ``BasicTypeMulApplies`` skip its Dark
+  immunity rows (battle_lib.c:2551-2555), for every attacker of it.
 * ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
   ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
   (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
@@ -391,6 +397,7 @@ class BattleState(NamedTuple):
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (0/1 in D1; 1 + battler in D5)
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
     grudge: jnp.ndarray  # int8, MOVE_EFFECT_GRUDGE in moveEffectsMask (E3-B2-9)
+    miracle_eye: jnp.ndarray  # int8, MOVE_EFFECT_MIRACLE_EYE in moveEffectsMask (E3-B2-10)
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
@@ -653,6 +660,7 @@ VOLATILE_FIELDS = (
     "infatuated",
     "destiny_bond",
     "grudge",
+    "miracle_eye",
     "uproar",
     "ingrain",
     "mean_look",
@@ -791,6 +799,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "infatuated": (_BATTLER, np.int8),
     "destiny_bond": (_BATTLER, np.int8),
     "grudge": (_BATTLER, np.int8),
+    "miracle_eye": (_BATTLER, np.int8),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),

@@ -220,6 +220,8 @@ _NONZERO_SIDE = (
     "charged_turns",
     # E3 batch 2: "{0} wants the foe to bear a grudge!" (effect_script_0194.s:7) until it ends.
     "grudge",
+    # E3 batch 2: "{0} identified {1}!" (subscript_miracle_eye.s:6) until it leaves.
+    "miracle_eye",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

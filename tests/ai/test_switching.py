@@ -203,7 +203,6 @@ def test_too_many_sites_are_refused(tables, names):
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
-        ("player_move", "Miracle Eye"),
         ("opp_move", "Weather Ball"),
         ("ability", "Levitate"),
         ("absorb", "Water Absorb"),

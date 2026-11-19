@@ -777,6 +777,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.NATURAL_GIFT,
     _E.RECOIL,  # hurts the foe
     _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
+    # E3-B2-10: the target's own flag, read by hits and accuracy checks against it; the user is the
+    # only battler that attacks it this turn (singles) and has acted.
+    _E.MIRACLE_EYE,
     _E.LEVEL_DAMAGE,
     _E.HIDDEN_POWER,
     _E.MAGNITUDE,
@@ -1330,6 +1333,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.LEECH_SEED,
     _E.WATER_SPORT,
     _E.FORESIGHT,
+    _E.MIRACLE_EYE,  # a status move: no damage (E3-B2-10)
     _E.LEVEL_DAMAGE,
     _E.MAGNITUDE,
     _E.MUD_SPORT,

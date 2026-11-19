@@ -75,7 +75,7 @@ import numpy as np
 
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.damage import damage_table, effectiveness, move_type_of
+from nuzline.engine.damage import damage_table, effectiveness, identified, move_type_of
 from nuzline.engine.effects import can_have_status
 from nuzline.engine.ids import EffectId, Status
 from nuzline.engine.state import BattleState
@@ -159,7 +159,7 @@ def _receives(tables: Tables, state: BattleState, use, foe, move):
     s = _facing(_facing(state, 0, MOVE_ACTIONS + use), 1, MOVE_ACTIONS + foe)
     param = tables.move_param[move]
     hits = effectiveness(
-        tables, move_type_of(tables, s, 0, move), s.types[1, foe], s.foresight[1] != 0
+        tables, move_type_of(tables, s, 0, move), s.types[1, foe], identified(tables, s, 0, 1)
     )
     type_ok = (param[1] == 0) | (hits > 0)
     return type_ok & can_have_status(tables, s, 1, foe, param[0])
