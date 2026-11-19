@@ -1208,6 +1208,18 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/engine/test_accuracy_classes.py (Defog in `_FOLLOWED`), tests/ai/test_kaizo_policy.py (`test_defog_*`,
   `test_if_stat_stage_not_equal_to_negates_the_equal_command`, `test_expert_defog`, `test_defog_basic`, the slow
   `test_defog_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
+  Defog write sites for E1's field-mask conversion (merged tip 98f0109). All clear index `side_of(target_side)` (JAX) /
+  `side_of(target)` (reference), fields `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes`,
+  `stealth_rock`; the fog clear writes `weather` = NONE and `weather_timer` = 0 when `weather` is FOG.
+  - JAX `src/nuzline/engine/effects.py:_defog` (def :2696, dispatched :4073): Reflect, Light Screen, Mist, Safeguard,
+    Spikes, Toxic Spikes :2706-2707 (one `_set` loop over the six names); Stealth Rock :2708; fog :2709-2713.
+  - Reference `src/nuzline/reference/engine.py:_move_effect` (def :3740), branch `effect == EffectId.DEFOG` :4108:
+    the seven side fields :4118-4119 (loop over `_DEFOG_SIDE_FIELDS`, defined :2971-2979); fog :4120-4121.
+  Readers of the same fields (they change with the mask too, no writes): JAX `effects.defog_silent_fail` (:2668-2693,
+  the seven names inline, plus fog), `effects.defog_stage_fails` (:2654), `outcome._threshold_grid` fog variant
+  (:1059-1065), `enumerate.damage_inputs_can_change` fog clause (:1705-1707); reference `_defog_fails` (:2982-2998,
+  `_DEFOG_SIDE_FIELDS`, fog), its callers :4112 and :6234-6235; AI `policy._basic_check_defog` (:563),
+  `policy._expert_defog` (:2208).
 - E3-B2-15 Gyro Ball's TrainerAI_CalcDamage case (effect 219, move 360 in both games; sheet gyro_ball_ai.md; closes
   Owed B13-27 of docs/kaizo/e2-mechanics-ledger.md). The mechanic itself was modelled by B13-14 and is unchanged
   (`damage.gyro_ball_speeds_power` reads the speeds at the action's start, which is the value BranchActions' sort just wrote,
