@@ -183,6 +183,12 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup, tables: Tables)
         if rest
         else f"Party order: {lead} alone."
     )
+    if problem.field_move:  # ledger G-15: after the last warp onto the map, so no PC between
+        move = names.move_names[problem.field_move]
+        steps.append(
+            f"On the fight's map, after the last warp onto it, use {move} from the party menu "
+            "(clears the fog); then walk to the fight without warping."
+        )
     return steps
 
 

@@ -19,8 +19,10 @@ __all__ = [
     "CHATOT_PARAM_SAMPLE",
     "COPY_OFFSETS",
     "FOOTER_SIZE",
+    "MAP_HEADER",
     "NORMAL_PAGES",
     "NORMAL_SIZE",
+    "OVERWORLD_WEATHER",
     "PARTY_COUNT",
     "PARTY_MAX",
     "PARTY_MONS",
@@ -166,6 +168,16 @@ def page_offset(name: str) -> int:
         offset += page_body_size(size)
     raise KeyError(name)
 
+
+# FieldOverworldState (include/field_overworld_state.h:13-29) is the FIELD_PLAYER_STATE page
+# (save_table.c:55: FieldOverworldState_Size = sizeof, src/field_overworld_state.c:17-20).
+# Its first member is the player's Location (FieldOverworldState_GetPlayerLocation, :42-45;
+# the FieldSystem's ``location``, src/field_system.c:163), whose first member is the enum
+# (int) mapHeaderID (include/location.h:18-24). After the five Locations (5 ints each) and
+# u16 bgm comes u16 weather, the overworld weather a trainer battle starts with
+# (field_battle_data_transfer.c:267); Continue keeps it (field_map_change.c:521-525).
+MAP_HEADER = page_offset("FIELD_PLAYER_STATE")
+OVERWORLD_WEATHER = MAP_HEADER + 5 * 5 * 4 + 2
 
 # ChatotCry (include/struct_defs/chatot_cry.h:6-9): BOOL valid, then s8 audioData[1000]
 # (CHATOT_CRY_SIZE). SaveData_GetChatotCry (src/chatot_cry.c:27-30) is the page itself.

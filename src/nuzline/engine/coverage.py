@@ -305,10 +305,25 @@ def start_trick_room(trainer: Trainer) -> int:
     return TRICK_ROOM_TURNS if trainer.area_condition.trick_room else 0
 
 
-def start_weather(trainer: Trainer) -> Weather:
+def start_weather(trainer: Trainer, field_defog: bool = False) -> Weather:
     """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
     condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
-    other unknown value; ``check_opponent`` refuses it instead."""
+    other unknown value; ``check_opponent`` refuses it instead.
+
+    ``field_defog``: the run cleared the fight's fog with field Defog on that map visit (a
+    run input, ledger G-15): FLAG_DEFOG_ACTIVE turns the overworld weather of a fog header
+    (14) clear (field_map_change.c:275-280; ScrCmd_0C4 at once, scrcmd.c:3667-3674), and
+    the battle starts in the overworld weather (field_battle_data_transfer.c:267), so in no
+    weather. ``ValueError`` for a fight that is not on such a header
+    (``AreaCondition.fog_headers``): its fog, if any, is deep fog (15) or not map fog."""
+    if field_defog:
+        if not trainer.area_condition.fog_clearable:
+            raise ValueError(
+                f"trainer {trainer.id}: field Defog clears only the fog of a map whose weather "
+                "is OVERWORLD_WEATHER_FOG (src/field_map_change.c:275-277), and this fight "
+                "starts on none"
+            )
+        return Weather.NONE
     if trainer.start_condition == UNKNOWN_CONDITION:
         raise ValueError(
             f"trainer {trainer.id}: start condition unknown is a pending user call, not a "

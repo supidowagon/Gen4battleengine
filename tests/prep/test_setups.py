@@ -160,6 +160,34 @@ def test_setup_states_and_protected(tables, names):
         assert rows[i].tobytes() == ref_row.tobytes()
 
 
+def test_field_defog_keeps_a_defog_holder_in_the_team(tables, names):
+    """With ``field_move`` (G-15) every team setup holds a member that knows Defog after its
+    changes: the party that clears the fog with field Defog fights (field_map_change_flags.c:
+    80-85: a warp onto the map clears the flag, so no PC between). A neighbour that overwrites
+    the move is dropped; the start mask follows the start weather (bit 15, FCM.md 4.3)."""
+    from nuzline.engine.ids import Weather
+    from nuzline.prep.setups import knows_field_move
+    from nuzline.prep.variants import MoveChange
+
+    defog = names.move("Defog")
+    party = sample_party(names, override_moves={1: ["Defog", "Tackle"]})
+    pool = [candidate(names, party[i], i) for i in range(3)]
+    prob = replace(problem(tables, names, pool), field_move=defog)
+    setups = team_setups(prob, 6)
+    assert len(setups) == 1 + 2 * 2 + 3  # teams holding candidate 1, each lead
+    assert all(any(m.candidate == 1 for m in s.members) for s in setups)
+    lone = Setup((base_member(prob, 1),))
+    overwritten = Setup((replace(base_member(prob, 1), moves=(MoveChange(0, 33, LEVEL_UP),)),))
+    assert knows_field_move(prob, lone) and not knows_field_move(prob, overwritten)
+    masks = [
+        int(
+            np.asarray(setup_states(tables, replace(prob, start_condition=w), [lone]).field_mask)[0]
+        )
+        for w in (Weather.FOG, Weather.NONE)
+    ]
+    assert masks == [0x8000, 0]
+
+
 def test_dedupe_keeps_the_cheapest(tables, names):
     prob = problem(tables, names, _pool(names, 2))
     plain = Setup(tuple(base_member(prob, i) for i in (0, 1)))

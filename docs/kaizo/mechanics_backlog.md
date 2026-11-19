@@ -29,17 +29,17 @@ New groups: needed in this split and in no earlier one.
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 12 | 11 |
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 24 | 11 | 9 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 23 | 6 | 0 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 17 | 12 | 8 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 24 | 9 | 3 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 17 | 11 | 7 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 34 | 8 | 3 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 12 | 12 | 9 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 22 | 35 | 24 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 7 | 0 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 22 | 34 | 24 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 9 | 6 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 22 | 10 | 3 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 180 | 70 | 70 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 196 | 69 | 69 |
 
 ## Whole game
 
-70 distinct missing groups across all ten splits (387 battles,
+69 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -57,13 +57,13 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
 | Fantina Split | 0 | 1 | 0 | 0 | 0 | 8 | 0 | 9 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 2 | 8 |
+| Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 1 | 7 |
 | Byron Split | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | Candice Split | 0 | 3 | 2 | 0 | 0 | 4 | 0 | 9 |
 | Galactic Split | 0 | 5 | 4 | 0 | 0 | 15 | 0 | 24 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 3 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **2** | **70** |
+| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **1** | **69** |
 
 ### Groups needed in each split, by kind
 
@@ -75,13 +75,13 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Gardenia Split | 1 | 0 | 1 | 0 | 0 | 10 | 0 | 12 |
 | Fantina Split | 1 | 1 | 1 | 0 | 0 | 8 | 0 | 11 |
 | Maylene Split | 1 | 1 | 1 | 0 | 0 | 3 | 0 | 6 |
-| Wake Split | 1 | 0 | 1 | 0 | 0 | 8 | 2 | 12 |
-| Byron Split | 1 | 4 | 0 | 0 | 0 | 2 | 2 | 9 |
+| Wake Split | 1 | 0 | 1 | 0 | 0 | 8 | 1 | 11 |
+| Byron Split | 1 | 4 | 0 | 0 | 0 | 2 | 1 | 8 |
 | Candice Split | 1 | 4 | 2 | 0 | 0 | 5 | 0 | 12 |
-| Galactic Split | 1 | 7 | 4 | 0 | 0 | 21 | 2 | 35 |
-| Volkner Split | 1 | 2 | 1 | 0 | 0 | 2 | 1 | 7 |
+| Galactic Split | 1 | 7 | 4 | 0 | 0 | 21 | 1 | 34 |
+| Volkner Split | 1 | 2 | 1 | 0 | 0 | 2 | 0 | 6 |
 | Elite Four Split | 1 | 4 | 3 | 0 | 0 | 1 | 1 | 10 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **2** | **70** |
+| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **1** | **69** |
 
 ### Battle conditions and other groups
 
@@ -132,7 +132,6 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it | Galactic Split |
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it | Galactic Split |
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
-| other | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 | other | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 
 ## Your side (upper bound)
@@ -240,7 +239,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 9 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 8 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
 
 ## Roark split
 
@@ -287,7 +286,6 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 82 | battle format: a multi battle |
 | 64 | battle format: a double_two_trainer battle |
 | 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 37 | battle format: a double battle |
 | 16 | AI move-id case of TrainerAI_CalcDamage: Gyro Ball |
 | 15 | move effect #83: Metronome; 11 of 442 callable moves unmodelled |
@@ -343,8 +341,9 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 1 | battle format: gauntlet Wayward Cave (position 8; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 9; rules not recorded) |
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it |
+| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it |
 
-Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 2
+Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 1
 
 ## Build order for the first two splits
 

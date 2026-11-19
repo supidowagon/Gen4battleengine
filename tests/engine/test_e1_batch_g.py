@@ -214,3 +214,41 @@ def test_air_lock_stops_the_sand_chip_and_matches_the_reference(tables, names):
     assert after < before
     before, after = player_hp(AbilityId.AIR_LOCK)
     assert after == before
+
+
+def test_field_defog_start_is_a_run_input(kaizo_trainers, kaizo_names):
+    """MapHeader_GetMapType (rom_diff.md:277; G-15-G-17): a fight on a fog header (14) starts
+    in fog (subscript_overworld_fog, battle_lib.c:3684-3688) unless the run used field Defog on
+    that map visit (FLAG_DEFOG_ACTIVE, field_map_change.c:275-280; scrcmd.c:3667-3674), which
+    needs the Relic Badge (field_move_tasks.c:504) and a party member with Defog; a save on the
+    fight's header gives the overworld weather itself (field_battle_data_transfer.c:267,
+    field_map_change.c:521-525). Deep fog (15, Hearthome Gym) is never cleared."""
+    from types import SimpleNamespace
+
+    from nuzline.cli import RELIC_BADGE, fight_start
+    from nuzline.engine.ids import Weather
+
+    luna, names = kaizo_trainers[66], kaizo_names
+    defog = names.move("Defog")
+    holder, other = SimpleNamespace(moves=(defog, 0, 0, 0)), SimpleNamespace(moves=(33, 0, 0, 0))
+
+    def save(header=0, weather=0, badges=1 << RELIC_BADGE):
+        return SimpleNamespace(map_header=header, overworld_weather=weather, badges=badges)
+
+    assert luna.area_condition.fog_headers == (363,)
+    assert fight_start(luna, names) == (Weather.FOG, 0)
+    assert fight_start(luna, names, save(), True, [other, holder]) == (Weather.NONE, defog)
+    assert fight_start(luna, names, save(), True) == (Weather.NONE, defog)  # prep picks the team
+    with pytest.raises(ValueError, match="no team member knows Defog"):
+        fight_start(luna, names, save(), True, [other])
+    with pytest.raises(ValueError, match="Relic Badge"):
+        fight_start(luna, names, save(badges=0xEF), True, [holder])
+    assert fight_start(luna, names, save(363, 0)) == (Weather.NONE, 0)
+    assert fight_start(luna, names, save(363, 14)) == (Weather.FOG, 0)
+    with pytest.raises(ValueError, match="overworld weather 2"):
+        fight_start(luna, names, save(363, 2))
+    assert fight_start(kaizo_trainers[913], names, save(449, 0)) == (Weather.NONE, 0)
+    hearthome = kaizo_trainers[34]
+    assert hearthome.start_condition == "fog" and not hearthome.area_condition.fog_clearable
+    with pytest.raises(ValueError, match="OVERWORLD_WEATHER_FOG"):
+        fight_start(hearthome, names, None, True, [holder])

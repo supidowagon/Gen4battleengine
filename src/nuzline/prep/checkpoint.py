@@ -80,7 +80,7 @@ def fingerprint(
     ``table_version`` differs per game too, as the manifest records the game). ``problem``:
     the sha256 of the canonical JSON of the candidates (specs, locations, relearner and TM
     options, candies), the ``levelled`` moves, the opponent specs, the trainer id, start
-    condition, resources, deaths budget, protected set, prestatus, cap and source.
+    condition, resources, deaths budget, protected set, prestatus, cap, source and field move.
     ``settings``: the same for the settings without ``budget_seconds`` (a resumed run may
     have another budget)."""
     body = {
@@ -95,6 +95,8 @@ def fingerprint(
         "prestatus": problem.prestatus,
         "cap": problem.cap,
         "source": problem.source,
+        # Only when set, so a checkpoint without one keeps its digest.
+        **({"field_move": problem.field_move} if problem.field_move else {}),
     }
     knobs = {k: v for k, v in _plain(settings).items() if k != "budget_seconds"}
     return {

@@ -29,6 +29,7 @@ Frustration) is explicit too. Every Kaizo field defaults to vanilla's reading, s
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -120,6 +121,11 @@ class TrainerMon:
 # 746, 747), which is never read as a weather.
 AREA_WEATHERS = ("rain", "sun", "sandstorm", "hail")
 UNKNOWN_CONDITION = "unknown"
+# Overworld weather ids (include/constants/overworld_weather.h:4, :18): the map header's
+# weather byte and FieldOverworldState.weather. Fog (14) is the one weather field Defog
+# clears (``AreaCondition.fog_headers``).
+OVERWORLD_WEATHER_CLEAR = 0
+OVERWORLD_WEATHER_FOG = 14
 
 
 @dataclass(frozen=True)
@@ -127,17 +133,34 @@ class AreaCondition:
     """What a fight starts with, apart from ability weather (spec 5.8): the area's
     ``weather`` (one of ``AREA_WEATHERS``, ``"unknown"`` or None), fog, Trick Room and
     Gravity. ``permanent``: they never expire (every Kaizo area condition, and vanilla's
-    overworld weather)."""
+    overworld weather).
+
+    ``fog_headers``: the map headers placing a fog fight whose header weather is
+    OVERWORLD_WEATHER_FOG (14), sorted; empty for every other fight. Only that weather
+    turns clear when FLAG_DEFOG_ACTIVE is set (FieldMapChange_UpdateGameData,
+    src/field_map_change.c:275-280), and field Defog sets the flag and the overworld weather
+    clear at once (res/field/scripts/scripts_field_moves.s:385-387; scrcmd.c:3667-3674), so
+    on these headers the fog start is a run input (ledger G-15): the battle reads the
+    overworld weather (src/field_battle_data_transfer.c:267). Deep fog (15) is never cleared."""
 
     weather: str | None = None
     fog: bool = False
     trick_room: bool = False
     gravity: bool = False
     permanent: bool = True
+    fog_headers: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.weather is not None and self.weather not in (*AREA_WEATHERS, UNKNOWN_CONDITION):
             raise ValueError(f"area weather {self.weather!r} is not one of {AREA_WEATHERS}")
+        object.__setattr__(self, "fog_headers", tuple(sorted(self.fog_headers)))
+        if self.fog_headers and not self.fog:
+            raise ValueError(f"fog headers {self.fog_headers} on a fight without fog")
+
+    @property
+    def fog_clearable(self) -> bool:
+        """Field Defog can clear this fight's start fog (``fog_headers``)."""
+        return bool(self.fog_headers)
 
     @classmethod
     def from_start_condition(cls, start_condition: str) -> AreaCondition:
@@ -237,8 +260,9 @@ def _mon(d: dict) -> TrainerMon:
 
 def _area(t: dict) -> AreaCondition:
     area = t.get("area_condition")
-    if area is None:
-        return AreaCondition.from_start_condition(t["start_condition"])
+    if area is None:  # vanilla: the fog headers sit beside the start condition
+        cond = AreaCondition.from_start_condition(t["start_condition"])
+        return dataclasses.replace(cond, fog_headers=tuple(t.get("fog_headers", ())))
     return AreaCondition(**area)
 
 

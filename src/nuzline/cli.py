@@ -90,6 +90,11 @@ another starter are dropped. Several starter variants of one fight left is an er
 else the first match. ``--trainer-id`` selects exactly (plan ruling). A fight whose start
 condition is a pending user call ("unknown") or whose party lacks set data the engine
 cannot compute (``missing_set_data``) is refused (exit 2) before its party is built.
+``coverage``, ``rank``, ``solve``, ``prep`` and both ``line`` commands take ``--field-defog``:
+a fight on a fog map (weather 14) starts clear because the run uses field Defog there first
+(``fight_start``: the Relic Badge, and a team member with Defog, which ``prep`` keeps in the
+team and lists as a prep step); without it the fog stays, unless the save stands on the
+fight's map, whose overworld weather is then the start (ledger G-15).
 All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
@@ -288,6 +293,14 @@ def _parser() -> argparse.ArgumentParser:
             help="the game's data set (default vanilla)",
         )
 
+    def field_defog(cmd: argparse.ArgumentParser) -> None:
+        cmd.add_argument(
+            "--field-defog",
+            action="store_true",
+            help="a fog fight's fog was cleared with field Defog on that map visit "
+            "(needs the Relic Badge and a team member that knows Defog)",
+        )
+
     def fight(cmd: argparse.ArgumentParser) -> None:
         game(cmd)
         source = cmd.add_mutually_exclusive_group(required=True)
@@ -301,6 +314,7 @@ def _parser() -> argparse.ArgumentParser:
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
         cmd.add_argument("--lead", type=int, default=0, help="the player's active party slot")
         cmd.add_argument("--opp-active", type=int, default=0, help="the opponent's active slot")
+        field_defog(cmd)
 
     coverage = sub.add_parser("coverage", help="check that the engine supports a fight")
     fight(coverage)
@@ -368,6 +382,7 @@ def _parser() -> argparse.ArgumentParser:
         "--cap", type=int, default=None, help="level cap (default: config/level_caps.toml)"
     )
     prep.add_argument("--deaths", type=int, default=0, help="player faints allowed, 0..3")
+    field_defog(prep)
     for flag, what in (("--protect", "must not faint"), ("--exclude", "is not brought")):
         prep.add_argument(
             flag,
@@ -441,6 +456,7 @@ def _parser() -> argparse.ArgumentParser:
         who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
         cmd.add_argument("--line", type=Path, required=True, help="the line file (TOML)")
+        field_defog(cmd)
         budget(
             cmd,
             "a team member that must not faint: species or 0-based team index; repeatable",
@@ -601,6 +617,46 @@ def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
     raise _Refused(trainer, check_opponent(tables, names, trainer, opp, weather))
 
 
+# BADGE_ID_RELIC (generated/badges.txt:5, 0-based): the bit TrainerInfo_HasBadge tests
+# (src/trainer_info.c:107-112) for field Defog (src/field_move_tasks.c:504).
+RELIC_BADGE = 4
+
+
+def fight_start(trainer: Trainer, names, save=None, field_defog: bool = False, team=None):
+    """(the start weather, the field move the team must know: 0 or Defog's id) of a fight,
+    ledger G-15. A save standing on one of the fight's fog headers
+    (``AreaCondition.fog_headers``) gives the weather itself: the battle starts in the
+    overworld weather (field_battle_data_transfer.c:267), which Continue keeps
+    (field_map_change.c:521-525) and which reads fog (14) or, after field Defog on this
+    visit, clear (0; field_map_change.c:275-280, scrcmd.c:3667-3674). Otherwise the fog
+    stays unless ``field_defog``: the run uses field Defog on that map before the fight,
+    which needs the Relic Badge (field_move_tasks.c:504; ``save.badges``) and a party
+    member that knows Defog, so the team must hold one (``team``: the specs brought; None
+    when prep picks the team, which then keeps a Defog holder, ``PrepProblem.field_move``).
+    ``ValueError`` names what is missing."""
+    from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR, OVERWORLD_WEATHER_FOG
+    from nuzline.engine.coverage import start_weather
+
+    if save is not None and save.map_header in trainer.area_condition.fog_headers:
+        if save.overworld_weather == OVERWORLD_WEATHER_CLEAR:
+            return start_weather(trainer, field_defog=True), 0
+        if save.overworld_weather != OVERWORLD_WEATHER_FOG:
+            raise ValueError(
+                f"the save stands on map header {save.map_header} in overworld weather "
+                f"{save.overworld_weather}: this fight's map gives fog (14) or, after field "
+                "Defog, clear (0)"
+            )
+    if not field_defog:
+        return start_weather(trainer), 0
+    weather = start_weather(trainer, field_defog=True)
+    if save is not None and not save.badges >> RELIC_BADGE & 1:
+        raise ValueError("--field-defog: the save has no Relic Badge (field_move_tasks.c:504)")
+    defog = names.move("Defog")
+    if team is not None and not any(defog in spec.moves for spec in team):
+        raise ValueError("--field-defog: no team member knows Defog")
+    return weather, defog
+
+
 def _fight(args):
     """(game, tables, names, trainer, player party, opponent party, start weather, save or
     None) for ``args.game``. Raises
@@ -614,7 +670,6 @@ def _fight(args):
     trainers = _load_trainers(game)
     from nuzline.data.party import load_party
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import start_weather
 
     save = None
     if args.save is not None:
@@ -642,7 +697,8 @@ def _fight(args):
     tables = fight_tables(tables, trainer, opp, foe_moves=lambda: foe_moves(tables, player, opp))
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
-    return game, tables, names, trainer, player, opp, start_weather(trainer), save
+    weather, _ = fight_start(trainer, names, save, args.field_defog, player)
+    return game, tables, names, trainer, player, opp, weather, save
 
 
 def _coverage(args) -> int:
@@ -899,7 +955,7 @@ def _prep(args) -> int:
     from nuzline.data.games import load_game
     from nuzline.data.learnsets import load_learnsets
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import check_opponent, start_weather
+    from nuzline.engine.coverage import check_opponent
     from nuzline.jaxcache import code_version, enable_compile_cache
     from nuzline.prep import report
     from nuzline.prep.caps import default_cap
@@ -955,7 +1011,7 @@ def _prep(args) -> int:
         return foe_moves(tables, [c.spec for c in pool], opp, out)
 
     tables = fight_tables(tables, trainer, opp, foe_moves=pool_moves)
-    weather = start_weather(trainer)
+    weather, field_move = fight_start(trainer, names, save, args.field_defog)
     # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
     # player party here: the team is not chosen yet, so build_problem's usable_pool checks
     # each candidate's side of the Kaizo ROM-change conditions instead.
@@ -979,6 +1035,7 @@ def _prep(args) -> int:
         exclude=args.exclude,
         reserve=args.reserve,
         prestatus=args.prestatus,
+        field_move=field_move,
     )
     for line in warnings:
         print(ascii_text(line), file=sys.stderr)
@@ -1070,18 +1127,20 @@ def line_setup(
     deaths: int = 0,
     protect: Sequence[str] = (),
     allow_corrupt: bool = False,
+    field_defog: bool = False,
 ) -> LineSetup:
     """The fight of ``nuzline line`` (module docstring) without argparse: the team from
     ``party_path``, or from ``save_path`` with the line file's ``[[team]]``; the trainer's
     built party; the file's rules resolved; ``require_coverage`` with both slot-0 leads
     (raising ``UnsupportedMechanics``); the turn-0 state with ``deaths`` and the
-    ``protect``ed team members. ``ValueError`` for a bad file, name or value;
+    ``protect``ed team members; the start weather is ``fight_start``'s (``field_defog``).
+    ``ValueError`` for a bad file, name or value;
     ``FightRefused`` (with ``trainer`` and the coverage ``report``) for a fight that cannot
     be built (``_check_buildable``)."""
     from nuzline.data.games import get_game, load_game
     from nuzline.data.party import load_party
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import require_coverage, start_weather
+    from nuzline.engine.coverage import require_coverage
     from nuzline.engine.state import make_state
     from nuzline.search.line_text import (
         read_line_file,
@@ -1105,6 +1164,7 @@ def line_setup(
         player = team_from_save(file, save, tables, names)
         cry = save.chatot_cry
     else:
+        save = None
         if file.team:
             raise ValueError(
                 f"{line_path}: [[team]] needs --save; with --party the party file is the team"
@@ -1126,7 +1186,7 @@ def line_setup(
         raise ValueError("the lead (team slot 0) has fainted")
     rules = resolve_rules(file, names, player, opp)
     slots = protected_slots(player, names, protect, member="team")
-    weather = start_weather(trainer)
+    weather, _ = fight_start(trainer, names, save, field_defog, player)
     require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
     from nuzline.engine.coverage import start_gravity, start_trick_room
 
@@ -1272,6 +1332,7 @@ def _line_command(args, run) -> int:
             deaths=args.deaths,
             protect=args.protect,
             allow_corrupt=args.allow_corrupt,
+            field_defog=args.field_defog,
         )
     except UnsupportedMechanics as e:
         print(_trainer_line(trainer))

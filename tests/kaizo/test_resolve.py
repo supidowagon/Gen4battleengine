@@ -544,6 +544,25 @@ def test_start_condition_matches_area_condition(resolved_trainers):
         assert (area.weather, area.fog) == (want.weather, want.fog), t["id"]
 
 
+def test_fog_headers_are_the_weather_14_fights(resolved_trainers):
+    """``area_condition.fog_headers`` (G-15; rom-map-type sheet): the fog fights on a header of
+    d_test.narc weather 14 (ROUTE_210_NORTH 363, CELESTIC_TOWN_CAVE 449). Byron Split's Route
+    210 North rows and 913 Cyrus #1; Wake 695 / 696 (start none) and Candice 610 (rain by
+    override) are on 363 / 247 but do not start in fog; the deep-fog (15) Hearthome Gym and
+    Coronet fights are never clearable (field_map_change.c:275-277)."""
+    got = {
+        t["id"]: t["area_condition"]["fog_headers"]
+        for t in resolved_trainers.values()
+        if t["area_condition"]["fog_headers"]
+    }
+    byron = [66, 67, 68, 69, 71, 72, 73, 74, 75, 76, 78, 79, 81, 441, 442, 489, 490]
+    assert {i: got[i] for i in byron} == {i: [363] for i in byron}
+    assert got[913] == [449]
+    assert set(got) == {*byron, 913, 636, 637, 659, 660, 748, 774, 776}
+    for tid in (34, 562, 572, 695, 696, 610):
+        assert resolved_trainers[tid]["area_condition"]["fog_headers"] == [], tid
+
+
 def test_rom_trick_room_and_gravity(resolved_trainers):
     assert resolved_trainers[403]["area_condition"]["trick_room"] is True  # Cyrus, header 308
     assert sum(t["area_condition"]["gravity"] for t in resolved_trainers.values()) == 1

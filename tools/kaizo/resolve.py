@@ -36,13 +36,13 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
-from nuzline.data.trainer import AreaCondition, default_moves
+from nuzline.data.trainer import OVERWORLD_WEATHER_FOG, AreaCondition, default_moves
 from tools.kaizo.crosscheck import (
     DEFAULT_REPORT,
     DEFAULT_RESOLUTIONS,
@@ -162,6 +162,9 @@ class Sources:
     trainer_maps: dict[int, list[int]]
     pkcalc: dict
     docs: dict
+    # Each map header's weather byte (rom/rom_map_weather.json, by header id): the fog
+    # headers a fog fight can clear with field Defog (``fog_headers``, ledger G-15).
+    map_weather: tuple[int, ...] = ()
 
 
 def load_sources(inter: Path) -> Sources:
@@ -188,6 +191,7 @@ def load_sources(inter: Path) -> Sources:
         trainer_maps={int(k): list(v) for k, v in where.items()},
         pkcalc=pkcalc,
         docs=docs,
+        map_weather=tuple(_read(rom_dir / "rom_map_weather.json")),
     )
 
 
@@ -404,12 +408,33 @@ def bare_tags(rows: list[tuple[dict, dict]]) -> frozenset[str]:
     return frozenset(out)
 
 
-def _area(start_condition: str, area: Any, bare: frozenset[str] = frozenset()) -> tuple[str, dict]:
+def fog_headers(headers: list[int], map_weather: tuple[int, ...]) -> list[int]:
+    """The ``headers`` whose weather byte is OVERWORLD_WEATHER_FOG (14,
+    include/constants/overworld_weather.h:18), the one fog FLAG_DEFOG_ACTIVE clears
+    (src/field_map_change.c:275-277; deep fog 15 is not). ``ResolveError`` for a header past
+    the weather table."""
+    out = []
+    for h in sorted(headers):
+        if h >= len(map_weather):
+            raise ResolveError(f"map header {h} has no weather byte (rom_map_weather.json)")
+        if map_weather[h] == OVERWORLD_WEATHER_FOG:
+            out.append(h)
+    return out
+
+
+def _area(
+    start_condition: str,
+    area: Any,
+    bare: frozenset[str] = frozenset(),
+    fog: Callable[[], list[int]] | None = None,
+) -> tuple[str, dict]:
     """(start_condition, area_condition) from the ROM start condition and an overrides
     ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add).
     ``permanent``: map weather is permanent in battle (``FIELD_CONDITION_*_PERM``, Ruling 8),
     so it is True, except where the trainer's sheet tags its weather or Trick Room only
-    barely (``bare``, ``bare_tags``): there it is ``BARE_WEATHER_PERMANENT`` (Ruling 22)."""
+    barely (``bare``, ``bare_tags``): there it is ``BARE_WEATHER_PERMANENT`` (Ruling 22).
+    ``fog``: gives the trainer's ``fog_headers``, read only when the fight starts in fog
+    (``AreaCondition.fog_headers``, ledger G-15)."""
     weather = getattr(area, "weather", None)
     start = start_condition if weather is None else weather
     cond = AreaCondition.from_start_condition(start)
@@ -419,6 +444,7 @@ def _area(start_condition: str, area: Any, bare: frozenset[str] = frozenset()) -
         "trick_room": bool(getattr(area, "trick_room", False)),
         "gravity": bool(getattr(area, "gravity", False)),
         "permanent": True,
+        "fog_headers": fog() if cond.fog and fog is not None else [],
     }
     barely = (out["weather"] in bare) or (out["trick_room"] and "trick_room" in bare)
     if barely:
@@ -587,7 +613,10 @@ def trainer_record(
                 sources["split_order"] = fsrc + "; no sheet position for the corrected split"
 
     start, area = _area(
-        t["start_condition"], overrides.area.get(tid), bare_tags(sheet.get(tid, []))
+        t["start_condition"],
+        overrides.area.get(tid),
+        bare_tags(sheet.get(tid, [])),
+        lambda: fog_headers(src.trainer_maps.get(tid, []), src.map_weather),
     )
     out["start_condition"], out["area_condition"] = start, area
     where = ", ".join(map(str, sorted(src.trainer_maps.get(tid, [])))) or "none"

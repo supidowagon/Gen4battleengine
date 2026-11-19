@@ -1812,6 +1812,50 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   ability id numbering). Backlog: the Roark Split's "ability: Air Lock" row is gone (regenerated). Trainer 745's
   Rayquaza still waits on its other groups. Tests: `tests/engine/test_e1_batch_g.py` (rain / sun damage equals Cloud
   Nine's and the no-weather value; no sand chip).
+- G-15 MapHeader_GetMapType (rom_diff.md:277; sheet rom-map-type): `modelled`, its `when` dropped. The patched getter
+  changes no fight: every header a fight reaches keeps vanilla's mapType (d_test.narc u16 at 22, bits 0-6: 363
+  ROUTE_210_NORTH outdoors, 449 CELESTIC_TOWN_CAVE indoors, 247 VICTORY_ROAD_1F_ROOM_2 cave; 154-156, 284 the same).
+  The field rule it feeds is vanilla: a warp into a non-cave map clears FLAG_FLASH_ACTIVE / FLAG_DEFOG_ACTIVE
+  (field_map_change_flags.c:80-85; a walking zone change keeps them, :36-53); every map change sets the overworld
+  weather to the header's, clear for 14 with the Defog flag or 16 with the Flash flag (field_map_change.c:273-280);
+  field Defog sets the flag and the weather clear at once (scripts_field_moves.s:385-387, scrcmd.c:3667-3674),
+  offered only under weather 14 with the Relic Badge (field_move_tasks.c:285-288, :504); the battle starts in the
+  overworld weather (field_battle_data_transfer.c:267). Weather 16 has no battle effect (the field-weather switch's
+  default, battle_lib.c:3700; Kaizo keeps it, rom_diff.md:368): the 24 dark-flash rows (Sunyshore Gym, Wayward Cave)
+  leave the refusal on that source (manager ruling 4). Weather 14: `AreaCondition.fog_headers` (sorted header ids;
+  `fog_clearable`) lists a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`, data/trainer.py); Kaizo:
+  `tools/kaizo/resolve.py` `fog_headers` over `rom_trainer_maps.json` and `rom_map_weather.json` (`Sources.
+  map_weather`), into `area_condition`; vanilla: `tools/extract_decomp.py` writes `fog_headers` beside the start
+  condition (header ids from `tools.terrain.header_names`). Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
+  78, 79, 81, 441, 442, 489, 490), 913 Cyrus #1 (449) and the unplaced-split 636, 637, 659, 660, 748, 774, 776;
+  Wake 695 / 696 (start none) and Candice 610 (rain, overrides) are on 363 / 247 without a fog start; deep fog (15:
+  Hearthome Gym, Coronet) is never cleared (fmc:275 tests 14 only). MANIFEST_VERSION 37 (table inputs changed:
+  trainers.json). Backlog: the GetMapType group is gone (Byron Split ready rows 24 -> 34; regenerated).
+- G-16 The fog start is a run input (manager ruling 4, the Route 213 input kind: default from the map, fog).
+  `coverage.start_weather(trainer, field_defog)` gives no weather for a `fog_clearable` fight and refuses any other.
+  `cli.fight_start` (called by `_fight` for coverage / rank / solve, `_prep`, `line_setup` for both line commands):
+  a save standing on one of the fight's fog headers gives the start from its overworld weather (`SaveFile.map_header`
+  = the player Location's mapHeaderID, `overworld_weather` = FieldOverworldState.weather, `saves.layout.MAP_HEADER`
+  0x1280 / `OVERWORLD_WEATHER` 0x12E6, field_overworld_state.h:13-20, location.h:18-24; Continue keeps it,
+  field_map_change.c:521-525): 0 clear, 14 fog, any other value refused. Otherwise fog unless `--field-defog`,
+  which needs the save's Relic Badge (bit 4, generated/badges.txt:5, trainer_info.c:107-112) and a team member that
+  knows Defog (a fixed team: checked; prep: `PrepProblem.field_move` = Defog). FLAG_DEFOG_ACTIVE itself is not read:
+  on the header the weather already carries it (fmc:275-280), and off it the way in may warp (fmcf:80-85). Prep: the
+  user's flag is the confirmation the sheet asks for, so prep runs the chosen start only (not both); the party at the
+  fight is the party that used Defog (no PC after the last warp), so `setups.knows_field_move` keeps only team setups
+  whose members still know it after their changes (`team_setups`, `neighbours`' `add`, `exhaustive.restricted_setups`
+  / `pruned_setups`); `build_problem` refuses a pool with no Defog knower (the team phase starts from the candidates'
+  own moves: an HM05 Defog taught in prep counts only beside a base knower); `report.prep_steps` adds the field step;
+  the checkpoint digest carries `field_move` when set. Engine and AI unchanged: the start is `ids.start_field_mask`
+  (fog bit 15 or none, FCM.md 4.3), read by accuracy, Weather Ball, SolarBeam, recovery and the AI through the mask
+  (G-6); doubles 68, 75, 79, 441, 442 share the one `_FIELD` mask. Tests: tests/tools/rom/test_kaizo_rom.py
+  (headers), tests/kaizo/test_resolve.py and tests/data/test_trainer.py (`fog_headers`), tests/saves/test_save.py
+  (layout), tests/prep/test_setups.py (Defog teams, start mask), tests/engine/test_e1_batch_g.py (`fight_start`).
+- G-17 Rulings by group: ruling 4 (overworld Defog before a fog fight; the 24 weather-16 rows) is applied here
+  (G-15, G-16). Ruling 3 (Route 213 script rain as a start input) and ruling 5 (835 / 836 start in rain, scr_seq
+  329 + PKCalc) are the rom-field-script-commands group's (gFieldScriptCommands, sheet steps 1-2); its Route 213
+  check of a save on header 373 can reuse `SaveFile.map_header` / `overworld_weather`. Ruling 1 (per-fight terrain)
+  is terrain-per-map's.
 
 ## Stream state (restart point, 2026-11-19)
 
