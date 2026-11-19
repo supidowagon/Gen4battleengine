@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
@@ -226,13 +226,19 @@ def _assert_same(got, want):
 def _learn_party(draw, tables, s):
     """``s`` with pending learn markers (any level up to the Pokemon's, any cursor) and move
     lists edited toward the learnsets: empty slots (gaps included), moves of the row (so
-    "already known" and duplicates happen), the volatiles and AI knowledge the options read."""
+    "already known" and duplicates happen), the volatiles and AI knowledge the options read.
+    The learnset is the party Pokemon's own species: a Transformed active's is its shadow
+    species and form, as the reference reads it (``_party_moves``; ruling G-69)."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rows = np.asarray(tables.species_form_row)
     lm, ll = np.asarray(tables.learnset_move), np.asarray(tables.learnset_level)
+    active, transformed = int(a["active"][0]), bool(a["transformed"][0])
     for slot in np.flatnonzero(a["species"][0]):
         level = int(a["level"][0, slot])
-        row = rows[a["species"][0, slot], a["form"][0, slot]]
+        if transformed and slot == active:
+            row = rows[a["shadow_species"][0], a["shadow_form"][0]]
+        else:
+            row = rows[a["species"][0, slot], a["form"][0, slot]]
         learnable = [int(m) for m, lv in zip(lm[row], ll[row], strict=True) if lv]
         if level >= 2 and draw(st.integers(0, 2)):
             a["learn_level"][slot] = draw(st.integers(max(2, level - 20), level))
@@ -270,6 +276,21 @@ def _learn_party(draw, tables, s):
     return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
 
 
+def _transformed_learner(tables, names, cursor: int):
+    """The falsifying draw of the Transformed learn (G-69): the player's active (slot 0) is a
+    Pidgey (16, its shadow species) Transformed into a Teddiursa (216), level 5, a learn marker
+    at level 2 with ``cursor`` into Pidgey's learnset (13 rows: 13 is its terminator, where
+    Teddiursa's 14-row learnset would still read a row)."""
+    from tests.engine.helpers import roark_real_state
+
+    s = roark_real_state(tables, names)
+    a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
+    a["species"][0, 0], a["form"][0, 0], a["level"][0, 0] = 216, 0, 5
+    a["transformed"][0], a["shadow_species"][0], a["shadow_form"][0] = 1, 16, 0
+    a["learn_level"][0], a["learn_cursor"][0] = 2, cursor
+    return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
+
+
 @pytest.mark.filterwarnings("ignore:Generating overly large repr")
 @pytest.mark.slow
 @settings(
@@ -277,10 +298,15 @@ def _learn_party(draw, tables, s):
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
-@given(data=st.data())
-def test_learn_resolve_matches_reference(tables, names, data):
+@given(data=st.data(), pinned=st.none())
+@example(data=None, pinned=13)  # the Transformed active's own terminator (G-69)
+@example(data=None, pinned=1)  # the same learner one row in: Sand Attack at level 5
+def test_learn_resolve_matches_reference(tables, names, data, pinned):
     np_tables = to_numpy(tables)
-    s = _learn_party(data.draw, tables, data.draw(supported_state(tables, names)))
+    if pinned is None:
+        s = _learn_party(data.draw, tables, data.draw(supported_state(tables, names)))
+    else:
+        s = _transformed_learner(tables, names, pinned)
     got = jit_advance(tables, s)
     _assert_same(got, from_ref(ref_advance_learns(np_tables, to_ref(s))))
     for _ in range(6):
@@ -288,7 +314,7 @@ def test_learn_resolve_matches_reference(tables, names, data):
             break
         options = [bool(x) for x in np.asarray(jit_options(tables, got))]
         assert options == ref_learn_options(np_tables, to_ref(got)) and options[4]
-        option = data.draw(st.integers(0, 4))
+        option = 4 if data is None else data.draw(st.integers(0, 4))
         want = from_ref(ref_learn(np_tables, to_ref(got), option))
         got = jit_learn(tables, got, jnp.int32(option))
         _assert_same(got, want)
