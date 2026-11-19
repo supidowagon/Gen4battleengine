@@ -198,6 +198,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import targets
 from nuzline.engine.actions import imprisoning_foe
 from nuzline.engine.damage import (
     PHYSICAL,
@@ -238,6 +239,7 @@ from nuzline.engine.ids import (
     SPECIES_CHATOT,
     STOMP_PARAM,
     TAILWIND_TURNS,
+    TRACE_FIRES,
     TRI_ATTACK_STATUSES,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
@@ -822,7 +824,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PERISH_SONG,
     # Yawn's sleep comes at the turn end, after every hit.
     _E.YAWN,
-    # E2 batch 9: Follow Me changes nothing in singles; Helping Hand fails there.
+    # E2 batch 9: Follow Me changes no defender at B = 2 (its user is the target); at B = 4
+    # enumeration is D11's. Helping Hand fails in singles.
     _E.FOLLOW_ME,
     _E.HELPING_HAND,
     # The user's Attack and HP only (the foe's later hit reads the user's Defense and HP: the HP
@@ -1025,7 +1028,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.SERENE_GRACE,
     AbilityId.SHIELD_DUST,
     AbilityId.TRUANT,  # removes its holder's hit
-    AbilityId.LIGHTNINGROD,  # no effect in singles
+    # D2-12: no effect at B = 2 (redirects only to a battler other than the defender).
+    AbilityId.LIGHTNINGROD,
+    AbilityId.STORM_DRAIN,
     AbilityId.HONEY_GATHER,  # after the battle
     # E2 batch 4: fixed damage factors of the hit's own battlers (damage._pre_random,
     # _finish); Magic Guard only spares its holder HP losses (the HP clause).
@@ -1338,7 +1343,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.LOCK_ON,
     _E.PERISH_SONG,
     _E.YAWN,
-    _E.FOLLOW_ME,  # status moves: no damage
+    _E.FOLLOW_ME,  # status moves: no damage (no defender change at B = 2; B = 4 is D11's)
     _E.HELPING_HAND,
     _E.BELLY_DRUM,
     _E.SUBSTITUTE,  # a status move: no damage (B10-4)
@@ -2200,7 +2205,20 @@ def outcome_laws(
         [
             jnp.sum(
                 acupressure_valid(
-                    state, defender_side(tables, state, side, target, moves[side])
+                    state,
+                    defender_side(
+                        target,
+                        targets.resolve(
+                            tables,
+                            state,
+                            side,
+                            moves[side],
+                            targets.fight_randomizes(state, side, False),
+                            state.chosen_target[side],
+                            jnp.arange(fmt.B),
+                            0,
+                        ).defender,
+                    ),
                 ).astype(_I32)
             )
             for side, target in ((b, _foe(b)) for b in range(fmt.B))
@@ -2266,6 +2284,18 @@ def outcome_laws(
             future_band=live & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
+            # D2-4: a fight command's BattleSystem_Defender draws one bit at B = 4 (over-
+            # approximate; D6-D7 tighten it with the resolver's R4 table).
+            target_draw=uses_move & (fmt.B == 4),
+            # D2-13 / D2-14 / D2-16: an invoker's called-move defender, a Bide release's
+            # RandomOpponent and ChooseTraceTarget's coin, B = 4 only (over-approximate: any Trace
+            # holder in the battle reads all its fires; D6-D7 tighten).
+            call_target_draw=uses_move & (kinds != CALL_NONE) & (fmt.B == 4),
+            bide_target_draw=uses_move & (state.bide_turns == 1) & (fmt.B == 4),
+            trace_pick=jnp.broadcast_to(
+                (jnp.any(state.ability == AbilityId.TRACE) & (fmt.B == 4))[None, None],
+                (fmt.B, TRACE_FIRES),
+            ),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2731,6 +2761,13 @@ _LAWS = {
     "future_band": _focus_band,
     # subscript_confuse.s:34 Random 3, 2 (G-5): 2-5, uniform.
     "berry_confusion": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
+    # BattleSystem_Defender's RandNext() & 1 (lib.c:1653, :1700, :4187), B = 4 only (D2-4).
+    "target_draw": _coin,
+    # GoToMoveScript's / the Bide release's / ChooseTraceTarget's RandNext() & 1 (D2-13, D2-14,
+    # D2-16), B = 4 only.
+    "call_target_draw": _coin,
+    "bide_target_draw": _coin,
+    "trace_pick": _coin,
 }
 
 

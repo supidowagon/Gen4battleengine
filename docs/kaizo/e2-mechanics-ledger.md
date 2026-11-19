@@ -5,16 +5,39 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
 
 ## 1. Current state
 
-- Batch 13 (branch e2-batch13, tip 0d30135; rulings B13-1..B13-40) passed the merge check (MERGE
-  WITH NOTES); its pod runs and the merge are the manager's. Do not commit to e2-batch13 and do
-  not touch its worktree (_scratch/e2/b13wt) or its tables.
-- Branch e2-d1 (from 0d30135 plus ledger commits) holds the merge-check notes (B13-41..B13-45)
-  and Owed 13. D1 plan committed; next, after the manager reports the batch 13 merge, merge
-  main into e2-d1 and do group A.
-- The doubles plan follows docs/doubles-state-design.md; the manager acknowledged it.
-- Batch 14 (the other Metronome moves) is parked behind doubles. Moved to E1: AI blocks #16,
-  #57, #114, #173, #215, #267, #109, #116, #252, #82, plus Plus and Minus; mechanics #57,
-  #215, #267, #116, #252, #82 and sub_seq #238.
+Orders for a restart after a clear, in this order:
+
+1. D1 is on main (a838c20). D2 (16 groups) is complete on e2-d2 at f5f1508 (main a838c20
+   merged, review FIX done, rulings D2-1..D2-31), worktree _scratch/e2/wt_d2. The manager runs
+   its pod run (d2d + fullset) and the merge-gate review and sends each result. On a failure: fix
+   on e2-d2, then send the tip. Add no other commits to e2-d2.
+2. Remove the merged worktrees _scratch/e2/wt_b (e2-d1b) and _scratch/e2/wt_pay
+   (e2-payexp-pin) with `git worktree remove`.
+3. Queue, each on its own branch cut from f5f1508 in its own worktree under _scratch/e2/:
+   a. The snap_compare follow-up (Owed 14): tool and test only. Source: _scratch/e2/snap_followup.md.
+   b. One singles follow-up commit with the three approved decomp fixes in the "Singles changes,
+      ruled" list under "D2: plan": (i) Follow Me / non-Ghost Curse (lib.c:1714-1717), (ii) Encore
+      ending under a Rollout lock (bcp.c:1861-1903; turn on the B = 2 chosen_target write, ruling
+      D2-28), (iii) randomized non-Ghost Curse (D2-12). Its own tests, a snap_compare diff
+      limited to those states with each diff explained, and delete the batch 9 note at
+      enumerate.py:816.
+4. Next milestone after D2: D3 (four-actor turn order, action loop, faints and replacement). It
+   owes: the speed order before each action (bcp.c:888), resuming an action after U-turn or
+   Pursuit with the action's defender, the format draw in the differential, and rulings D2-17,
+   D2-31, D2-32. Send the D3 family list to the manager before starting.
+5. Pod tips: three lines (branch and sha; table inputs changed yes/no; the pod list path
+   _scratch/e2/podlist.txt in the main checkout). One pod run at a time per stream. Prose only
+   for a ruling or a finding the manager must act on.
+6. Tests run on the test pod. Locally: one heavy process (pytest or script) at a time, one file,
+   only with more than 6 GB RAM free. test_invokers.py never runs locally. A subagent never
+   kills a process it did not start. Use PYTHONPATH="src;." (semicolon) from the worktree. Run
+   tools.build_tables only that way, or it writes into the main checkout.
+7. Ownership: E2 owns doubles D2-D12. From 19 Nov E3 owns singles move effects
+   (_scratch/e2/handover_e3.md): Owed 1-5 and 12 are E3's; delete them here once E3's ledger
+   carries them. E1 owns abilities, held items, battle conditions and AI flags.
+8. Parked: batch 14 (the other Metronome moves). Moved to E1: AI blocks #16, #57, #114, #173,
+   #215, #267, #109, #116, #252, #82, plus Plus and Minus; mechanics #57, #215, #267, #116,
+   #252, #82 and sub_seq #238.
 
 ### Doubles: the manager's decisions (settled; do not re-open)
 
@@ -23,8 +46,6 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
   doubles fight counts as playable only when both paths exist.
 - Plain doubles fights are reported as playable when they get there.
 - Before each doubles batch, send the manager E1's file list for that batch.
-- New work goes on a new branch cut from main once batch 13 is merged. Until the manager
-  reports on the merge, nothing goes on e2-batch13.
 
 ### D1: what to build (docs/doubles-state-design.md sections 4 and 5)
 
@@ -245,12 +266,158 @@ Group B status (E1 files, re-index only):
   lists): at P > 2 the shapes do not broadcast. Owed to D8 (which parties an AI scores).
 - Group B review = MERGE.
 
+### D2: plan
+
+Family: targets, the action space and redirection. 16 groups, one batch. Decomp paths below are
+under external/pokeplatinum (at 579d2d5); lib.c = src/battle/battle_lib.c, bcp.c =
+src/battle/battle_controller_player.c, script.c = src/battle/battle_script.c, sys.c =
+src/battle/battle_system.c, subs/ = res/battle/scripts/subscripts/. Engine paths under
+src/nuzline/.
+
+Orders:
+
+1. Send the manager the family list and the E1/E3 file list below; start on its answer.
+2. An Opus rule writer writes one sheet per group to `_scratch/e2/rules/d2/D2-<n>.md`: every
+   rule cited by file:line from both the C and the scripts; per process.md section 2 step 2 each
+   sheet states the group's effect on hit chance, damage inputs, crit inputs, held items read
+   later in the turn and the trainer AI's view, or "none" with the cite. The writer re-reads
+   every line cited here; a cite that does not hold is fixed in the sheet and in this plan.
+3. Sonnet builders implement each sheet in the JAX engine and reference/engine.py, with the
+   coverage check and tests; rulings go in section 3 as D2-<n>.
+4. Fixed for every group: the resolver lives in a new `engine/targets.py` (E2), mirrored in
+   reference/engine.py; singles stays byte-identical (at B = 2 the target follows from the
+   range, bcp.c:4363-4367, and `BattleSystem_RandomOpponent` draws nothing, lib.c:4177-4198);
+   every new random draw is an Outcome field indexed by the acting battler ([B]); AI target
+   choice and scoring stay D8's; search/prep/CLI with joint actions stay D11's; the four-battler
+   `monSpeedOrder` recomputed before each action (bcp.c:888, lib.c:3364-3383), its tie draws and
+   the resumption of an action after a U-turn / Pursuit pause at B = 4 stay D3's (ruling D2-2).
+   New Outcome fields and their sample keys: D2-4 sheet, section R8.
+
+Groups (rule source; files; owner flags):
+
+- D2-1 Action encoding. Each battler's action is today's scalar plus a target battler: `step`
+  takes `actions` int32[B] and `targets` int8[B]. Source: the target stored per battler at
+  `battlerActions[b][1]` = menu input - 1 (bcp.c:534-551); the AI's pick enters the same slot
+  (`BATTLECTX_AICTX_SELECTED_TARGET` + 1, src/battle/battle_display.c:3748-3752); at B = 2 the
+  target is `battler ^ 1`, or the user for a RANGE_MY_SIDE range or a non-Ghost Curse
+  (bcp.c:4342-4370, Curse :4344-4349; include/constants/battle/moves.h:91). D2-1 owns the stored
+  target `chosen_target` int8[B] (initial `b ^ 1`), kept between turns (ruling D2-1). Files:
+  engine/state.py, STATE.md, reference/state.py, engine/actions.py, step.py (`step`,
+  `_action_phase`), reference/engine.py, tools/differential.py and tests/test_differential.py
+  (targets drawn at B = 2 only; the format draw is D3 / D6's, ruling D2-3).
+- D2-2 Legal targets per range. Doubles always asks for a target except a RANGE_ALLY move whose
+  partner is switching (bcp.c:4342-4370); a non-Ghost Curse is RANGE_USER (:4344-4349). The
+  menu's selectable battlers: `GetTargetSelectLayout` (src/battle/battle_subscreen.c:1336-1364),
+  `sMoveTargetSlotFlags` (:797-810), slot i = battler type 2 + i, absent battlers off
+  (:2567-2582; `BattleSystem_SetBattlersByType`, sys.c:1477-1484; types
+  include/constants/battle.h:101-107). Range list: generated/move_ranges.txt:1-17 (a mask,
+  generated/meson.build:72). Files: engine/actions.py (`legal_targets`), reference/engine.py.
+  The effects.py helpers (`targets_user`, `self_defender`, `defender_side`) are the resolver's:
+  D2-4 / D2-5.
+- D2-3 Joint action legality at B = 4: the player's pair of actions; the second battler's party
+  menu receives the partner's pending switch slot (bcp.c:570-587); the item command draws a
+  random opponent as defender (bcp.c:1905-1908, lib.c:4177-4198), which no state reads: no
+  Outcome field, no engine change (ruling D2-8). Files: engine/actions.py
+  (`legal_actions`, `decision_actions` per battler plus the pair mask).
+- D2-4 Single-target resolution and retargeting: Follow Me user if alive, else the chosen target
+  if alive, else `BattleSystem_RandomOpponent` (lib.c:1709-1727; one `RandNext() & 1` in
+  doubles, the other opponent if that one fainted, lib.c:4177-4198); opponent slots
+  `BattleSystem_GetEnemyInSlot` (sys.c:413-433; slots include/battle/battle_system.h:39-40).
+  RANGE_SINGLE_TARGET_ME_FIRST without randomize takes this branch. Files: engine/targets.py,
+  outcome.py (`target_draw` [B]; `targets.resolve`, `targets.opponents`), step.py (`_use_move` `target_side`, ~862),
+  effects.py (`play_hit` `target_side`, ~3198), reference/engine.py.
+- D2-5 Own-side ranges: RANGE_USER / USER_SIDE / SINGLE_TARGET_SPECIAL / FIELD give the user
+  (lib.c:1665-1669); RANGE_ALLY the partner in doubles (:1670-1675; `BattleSystem_GetPartner`,
+  sys.c:394-411); RANGE_USER_OR_ALLY the chosen battler, the user if it fainted (:1676-1684);
+  randomized RANGE_USER_OR_ALLY a coin flip for the partner in doubles (:1651-1660). Files:
+  engine/targets.py, effects.py (`defender_side`, Acupressure's defender ~1604), outcome.py.
+- D2-6 RANGE_OPPONENT_SIDE and randomized Me First: a random opponent (lib.c:1661-1664).
+  Files: engine/targets.py, effects.py (hazard setters' defender).
+- D2-7 RANGE_RANDOM_OPPONENT and every randomized move: Follow Me user if alive, else a coin
+  flip between two living opponents, else the living one (lib.c:1685-1708). Files:
+  engine/targets.py, outcome.py.
+- D2-8 Spread ranges' first defender: RANGE_ADJACENT_OPPONENTS the first living enemy in
+  `monSpeedOrder`, RANGE_ALL_ADJACENT the first living battler other than the user; both leave
+  `battlerCounter` one past it (lib.c:1611-1650). The per-target loop is D4's. The speed order is
+  an input (D3's, ruling D2-2); the B = 4 tests pass an explicit order. Files: engine/targets.py.
+- D2-9 When the fight command randomizes: Struggle, Encore, an Encore slot that no longer holds
+  the move, a selected move not in its slot; a move lock does not and reads D2-1's `chosen_target`
+  (bcp.c:1861-1903).
+  Disobedience's other move: randomized, and the chosen target overwritten (bcp.c:2186-2192).
+  Files: step.py, order.py (Encore / Struggle sites), reference/engine.py.
+- D2-10 No target: `BattleControllerPlayer_HasNoTarget` (bcp.c:2306-2338; `NO_TARGET`,
+  include/battle/common.h:56-61), checked after PP is spent (bcp.c:3181-3187, cost 1 with no
+  defender, :2238; then :3189-3194) and again at TryMove (:3239-3246); the "no target" script unlocks the move choice and clears Rage
+  (subs/subscript_no_target.s:4-18); a charge turn with no defender targets the user
+  (bcp.c:2326-2334). Files: step.py, effects.py, reference/engine.py.
+- D2-11 Follow Me: set per side with its user (script.c:6261-6270), cleared each turn
+  (lib.c:2251-2252, in `BattleSystem_SetupNextTurn` from :2228), read at lib.c:1694-1697,
+  :1714-1717, :1743-1745. One new per-side turn-scratch field `ts_follow_me` (1 + user battler,
+  0 = off; ruling D2-9) in state.py, STATE.md (rows :530-531), reference/state.py. Files: those, effects.py (EffectId
+  FOLLOW_ME, ids.py:270-277), engine/targets.py.
+- D2-12 Lightning Rod and Storm Drain: `BattleSystem_CheckRedirectionAbilities` (lib.c:1732-1790:
+  none with no defender, a Normalize or Mold Breaker attacker, or a living Follow Me user;
+  Electric / Water by `CalcMoveType`, Normal falls back to the data type (:1748-1750; Weather
+  Ball with no weather reads an uninitialized type, ruling D2-6); single-target or
+  random-opponent range; the multi-turn-first test (:1755, :1773) is never true at either call
+  site (SYSCTL_FIRST_OF_MULTI_TURN cleared at :2009); first living holder other than the
+  attacker in the speed order, an input, ruling D2-2), run at BEFORE_MOVE_STATE_REDIRECT_TARGET (bcp.c:3204-3206);
+  `BattleSystem_TriggerRedirectionAbilities` (lib.c:1792-1817) at TryMove (bcp.c:3247-3252),
+  message subs/subscript_lightning_rod_redirected.s:4-12. Files: engine/targets.py, hooks.py,
+  ids.py (the LIGHTNINGROD comment :610-612 names
+  the wrong function: the redirection is `BattleSystem_CheckRedirectionAbilities`), reference/engine.py.
+- D2-13 Invoked and reflected moves: `BtlCmd_GoToMoveScript` resolves a randomized defender,
+  runs the redirection check and overwrites `chosen_target` (script.c:2111-2134); D2 builds this
+  part only (ruling D2-4). Reference rules for the effects' builders: Mirror Move takes
+  `moveCopied[attacker]`, in doubles when that is 0 draws among `moveCopiedHit`, and resolves the
+  copied move by its own range with randomize (:3483-3525; `inRange` is ignored for a nonzero
+  move, lib.c:1604-1608), writing `chosen_target` (:3517); Magic Coat (:6487-6513) sends the
+  reflected move to the living Follow Me user of the original attacker's side, else the original
+  attacker; its computed target (:6502) is unused. Files: step.py, engine/targets.py, outcome.py
+  (`call_target_draw` [B]), reference/engine.py.
+- D2-14 Counter, Mirror Coat, Metal Burst in doubles: the last attacker, or the Follow Me user
+  on its side (script.c:4615-4653, :4668-4706, :7153-7186). Bide's release joins it (ruling
+  D2-7): the last battler that hit the user, else a random opponent, a new coin (bcp.c:2702-2714).
+  Files: step.py, effects.py, engine/targets.py, state.py (`last_hit_by`), outcome.py
+  (`bide_target_draw` [B]), reference/engine.py.
+- D2-15 Pressure's PP cost reads the resolved defender (bcp.c:2235-2270) at B = 4. Files:
+  effects.py (`pressure_pp_cost`, ruling G-8), step.py.
+- D2-16 Switch-in abilities over both foes (Owed from D1): Intimidate lowers every living
+  battler of the other side without a Substitute, in speed order (lib.c:3795-3813;
+  subs/subscript_intimidate.s:10-23); Download sums Defense and Sp. Def over every living foe
+  without a Substitute (lib.c:3815-3859); Trace draws between two eligible foes
+  (lib.c:3712-3737; `ChooseTraceTarget` lib.c:7750-7781; the coin is rolled on every pass
+  for every battler, at B = 2 too, where it cannot change the pick); Intimidate also skips a foe
+  whose Substitute was hit during the running action (script.c:9180-9181). Model them as
+  multi-target, not a defender choice. Files: hooks.py (`show_battle_mon` ~907-926, `switch_in_effects` ~840,
+  `intimidate` ~786, `download` ~219, `trace` ~279), outcome.py (`trace_pick` int8[B, 5] with the turn-scratch
+  `ts_trace_fires`, ruling D2-5),
+  reference/engine.py.
+
+Singles changes, ruled by the managing session 18 Nov: decomp-correct, approved. D2 builds all three
+byte-identical to today's singles. One follow-up commit right after the D2 merge makes the three
+changes, with its own tests and a snap_compare diff limited to those states, each diff explained,
+and deletes the batch 9 note "changes nothing in singles" at enumerate.py:816:
+
+- (i) Follow Me sends a non-Ghost Curse to a living Follow Me user at B = 2 (lib.c:1714-1717),
+  against batch 9's "Follow Me changes nothing in singles" (enumerate.py:816). Sheets D2-4, D2-11.
+  It needs the B = 2 `ts_follow_me` write, off since ruling D2-32: this follow-up turns it on.
+- (ii) A battler whose stored target is itself (a RANGE_MY_SIDE selection) and that a faster Encore
+  forces into Rollout reads that target once the Encore ends inside the lock (bcp.c:1885-1888,
+  lib.c:1709-1719); at B = 2 that makes the user Rollout's defender. Sheets D2-1, D2-3, D2-4, D2-9.
+  It needs the B = 2 `chosen_target` write, off since ruling D2-28: this follow-up turns it on.
+- (iii) A randomized non-Ghost Curse at B = 2 takes the foe as its defender (ruling D2-12); today it
+  keeps the user. Added by the managing session 18 Nov.
+
+Files E2 touches that another stream owns (send with the family list):
+
+- E1: engine/hooks.py (D2-12, D2-16); effects.py `pressure_pp_cost` (D2-15).
+- E3: engine/actions.py, step.py, effects.py, outcome.py, order.py, ids.py (comments only),
+  coverage.py (refusals lifted per group), reference/engine.py.
+
 ### D2-D12
 
-- D2: targets, the action space and redirection.
-  - Owed: hooks.py `show_battle_mon` / `switch_in_effects`: Intimidate, Download and Trace use
-    `foe(side)`, a single target; in doubles Intimidate and Download act on both foes. Model them
-    as multi-target hits, not a defender choice.
+- D2: targets, the action space and redirection (plan above).
 - D3: the four-actor turn.
   - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
     TWO_TRAINERS/MULTI a side is out only when all its parties are empty. The same in
@@ -337,6 +504,27 @@ Each is open; close it with its ruling.
 13. tests/engine/test_accuracy_classes.py (45.8 GB in one process): moved to E1's speed pass by
     the managing session, 18 Nov. Cause: the unjitted `sample_outcome` in
     `test_accuracy_classes_equal_raw_rolls` (slow-marked).
+14. snap_compare follow-up (tools/snap_compare.py and its test only; own branch off main after
+    the D1 merge; low priority; source _scratch/e2/snap_followup.md):
+    - M1 Record in capture.json a content hash of everything the child runs (src/nuzline/**/*.py,
+      tools/*.py, tests/strategies.py, tests/engine/helpers.py, the golden trace, table files);
+      compare fails on equal hashes unless --same-ok and prints both; no git: `dirty: null`,
+      print "not checkable" (today nothing ties code to --commit: :703-719, :764, :823).
+    - N1 The final line names the compared groups and the seed count.
+    - N2 Fail on steps == 0 or calls == 0. R5 Flag a part with zero calls.
+    - N3 Warn or fail above a raise-rate threshold.
+    - N4 Shape/dtype check for Outcome and the action inputs.
+    - N5 NaN payload in Python / np.float64 scalars.
+    - N6 Raise-vs-structure is an explicit divergence, not one-sided keys --allow-new passes.
+    - N7 The dirty check also covers tests/strategies*, tests/engine/helpers.py.
+    - N8 Tests: a crashing child, a SKIPPED part, a NaN payload, a one-sided input field, the
+      escape-flag defaults.
+    - N9 Fix the stale line number in the ledger near :231 (as at 80ee4a9).
+    - R1 snap_compare and draw_inputs docstrings: "drawn last so the segments draw as before"
+      holds only for each seed's first example (Hypothesis shares one random); fix the wording.
+    - R2 "Roark's real party and bag": roark_states draws 0-BAG_SLOTS Potions; fix the wording.
+    - R3 Put the pinned G-69 learn cases (cursor 13 and 1) in a separate fast test.
+    - R4 Test the raise when opp2_items is None (choosing the start path is D11's).
 
 ### Closes with its mechanic
 
@@ -2188,3 +2376,108 @@ docs/doubles-state-design.md.
   four-battler fight must pass (`ValueError` otherwise; no default): TWO_TRAINERS / MULTI the
   second trainer's bag, DOUBLES `opp_items` when spotted or scripted `t, t`, `()` when talked to.
   RefBattler holds the bag.
+
+- D2-1 `chosen_target` int8[B] (`battlerActions[b][1]`, battler index, initial `b ^ 1`, kept between
+  turns and switches) is D2-1's field. D2-9 reads it for a locked battler (bcp.c:1885-1888,
+  lib.c:1711); D2-13 writes it for a called move (script.c:2123); Mirror Move's write (:3517) goes
+  with that effect's builder.
+- D2-2 The four-battler `monSpeedOrder` recomputed before each action (bcp.c:888, lib.c:3364-3383)
+  and its tie draws (lib.c:1405-1437) are D3's. D2-8 and D2-12 take the order as an input (B = 2:
+  `jnp.arange(2)`, order-free; no new draw); their B = 4 tests pass an explicit order. Resuming an
+  action after a U-turn / Pursuit pause with its defender at B = 4 is D3's.
+- D2-3 The differential draws `targets` at B = 2 only; drawing the format moves to D3 / D6.
+- D2-4 D2-13 builds GoToMoveScript only (the existing invoked moves). Its Mirror Move and Magic
+  Coat doubles-targeting rules (script.c:3483-3525, :6487-6513; bcp.c:3059-3112) stay in the sheet
+  for whoever builds those effects; coverage keeps refusing both.
+- D2-5 Trace's draw is `Outcome.trace_pick` int8[B, 5], indexed `[holder, ts_trace_fires[holder]]`
+  with the turn-scratch `ts_trace_fires` int8[B]: a slot traces at most once for its turn-start
+  occupant and once per entry (own action, three Roar / Whirlwind drags) (lib.c:3712-3737,
+  :7750-7781).
+- D2-6 Weather Ball with no weather, fog or Cloud Nine / Air Lock: `CalcMoveType` leaves `type`
+  uninitialized (lib.c:7894-7913, no else); the redirection check treats it as Normal and falls back
+  to the data type (lib.c:1748-1750).
+- D2-7 Bide's release in doubles joins D2-14: the defender is `lastHitByBattler[attacker]` when it
+  has HP, else `BattleSystem_RandomOpponent` (one new coin, `Outcome.bide_target_draw` [B]), no
+  target when both opponents are down (bcp.c:2702-2716; lastHitByBattler written on every damaging
+  UpdateHP, partner and Substitute hits included, never cleared, bcp.c:3357).
+- D2-8 The item command's random defender (bcp.c:1905-1908) is read by no state: no Outcome field,
+  no engine change.
+- D2-9 Follow Me is one per-side turn-scratch field `ts_follow_me` (1 + user battler, 0 = off;
+  `followMe` / `followMeUser`, script.c:6261-6270, cleared lib.c:2251-2252).
+- D2-10 (build of D2-1) The differential's `targets` are drawn inside `tests/test_differential._step_both`
+  (after the caller's outcome draw, once per half), so `test_jax_matches_reference` and
+  `tools/differential.check` need no edit. `step`, `step_events`, `turn_events`, `_action_phase`
+  and `ref_step` take `targets=None`; at B = 4 `None` raises ValueError, at B = 2 it is zeros.
+- D2-11 (build of D2-2 / D2-3) `ghost_user` is imported inside `actions.selection_range`
+  (effects imports actions). The reference had no `Battler_IsTrapped`: `reference/engine._trapped`
+  mirrors `actions.trapped`. `decision_pairs` raises ValueError at B = 2 and for MULTI (the
+  player commands battler 0 alone there: `legal_choices(tables, state, 0)`).
+- D2-12 (build of D2-4) At B = 2 a randomized call (an Encore takeover) of a non-Ghost Curse keeps
+  today's self defender: `targets.resolve` applies the Curse rule in branch 9 as in branch 10,
+  whereas lib.c:1685-1707 would give the foe (singles `attacker ^ 1`). Joins pending ruling (i)
+  for the follow-up commit after the D2 merge.
+- D2-13 (build of D2-4) D2-9 is not in this batch, so `targets.fight_randomizes(state, side,
+  struggling)` holds its randomize condition: Struggle or any Encore on the attacker at the action's
+  start (bcp.c:1866-1884); the selected-move-not-in-slot case (:1889-1893) cannot occur (the move
+  is read from the slot).
+- D2-14 (build of D2-4) `play_hit` / `apply_move_effect` take `target_side` and `defender` as optional
+  keywords (None: today's pair, the foe, and the user for a `self_defender` move) because
+  test_k3b_abilities and test_small_moves call `apply_move_effect` directly; `_use_move` and
+  Pursuit's hit always pass them. `primary_effect_fails` takes `defender` after `target_side`.
+- D2-15 (build of D2-4) The reference's `_fight` reads `chosen` from `s.battlers[side].chosen_target`
+  and the speed order from `_Turn.speed_order` (None: the identity); it mirrors the resolver for the
+  defender, the PP defender and `_hit`'s target only, the other `_foe(side)` reads of `_fight` stay
+  B = 2 (D3's four-actor turn). `_use_move` takes `speed_order=None` (identity).
+- D2-16 (build of D2-4) The `fullset` marker is registered in pyproject.toml (CLAUDE.md names it; it
+  did not exist). `tests/reference/test_targets_ref.py` carries it.
+- D2-17 (build of D2-6, D2-11) The B = 4 step tests (Stealth Rock landing on side 1, a foe's move
+  redirected to the Follow Me user) need a four-actor `step`: owed to D3. Until then the resolver
+  tests (`tests/engine/test_targets.py`, `tests/engine/test_d2_follow_me.py`) are the tests.
+- D2-18 (build of D2-4..D2-8, D2-11) The `ts_follow_me` write sits behind step.py's `script_on`
+  (script ran, not failed to find a target) as Imprison's does; D2-11 and the resolver share
+  step.py / reference/engine.py edits, so the engine code is one commit.
+- D2-19 (build of D2-9) `targets.fight_randomizes` already held the sheet's rule (`struggling |
+  encore_move != 0`, ruling D2-13); D2-9 changes no code, adds its tests, and the docstring cites the
+  six branches. Branch 1.5 needs no code. Owed to D10: `learn_pin` (state.py, one scalar) must pin
+  per player battler at B = 4 (a partner's KO pays exp while two player battlers hold pending move
+  actions). Disobedience (rule 4) stays unbuilt: the engine has no obedience check (Kaizo always obeys).
+- D2-20 (build of D2-10) `nt_before` / `charge_keeps_user` / the TryMove check read the resolver's
+  `defender` of `move` (moveTemp). A called move (invoker, Nature Power) keeps today's "foe has HP or
+  `defender_always`" test as `called_target` (D2-13 re-picks its defender); every other move's
+  `has_target` is `~nt_before & ~nt_try`, with `last_of_multi = can_act & ~nt_before & (second_turn |
+  sun_now | herb)`. `succeeded`, `_unlock` and the `no_target` event are unchanged. `resolved.defender`
+  stays NO_DEFENDER for a charge turn with no foe (the user is the defender for the checks only), so
+  `play_hit`, Pressure and `record` read what they read today. The reference's `_fight` mirrors it
+  (`no_target0`, the HasNoTarget block, the charge strike's TryMove check) and keeps its other
+  `_foe(side)` reads. The four-battler step cases of the sheet (both foes down: PP, lock, `last_move`,
+  Choice lock; Spikes; Helping Hand; Fly with and without a Power Herb) are owed to D3 with the
+  four-actor `step` (as D2-17); `tests/engine/test_d2_no_target.py` composes the resolver and the
+  three functions at B = 4 instead.
+- D2-21 (build of D2-12) `targets.redirect` returns the holder in place of the defender; `_use_move`
+  writes it into `resolved.defender` / `target_side` (and `target`) after the PP block, so the move
+  script and `play_hit` read the holder, Pressure's cost the fight command's defender. The reveal
+  sits before the accuracy roll with `redirected & can_act & has_target & ~failed`
+  (`hooks.REDIRECTED`); the reference reveals at the same point and also on a charge turn (the
+  engine's cond holds there). The step-level reveal-not-on-failure test needs a four-actor `step`
+  (owed to D3, as D2-17); `test_d2_redirection.py` tests the hook and `redirect` directly. A
+  Normalize attacker (not an `AbilityId`) is owed to E1: it adds `| (_ability(attacker) ==
+  AbilityId.NORMALIZE)` to `redirect`'s exits. `targets._ability` is the single place E3's
+  suppressed-ability function replaces. `ids.MOVE_*` for `CalcMoveType`'s four moves were added.
+- D2-22 (build of D2-12) Storm Drain: `AbilityId.STORM_DRAIN = 90`, `ABILITY_DECOMP_IDS` 114,
+  `effect_map`, `INPUT_NEUTRAL_ABILITIES`, `tests/strategies.py`, and the `game_constants.py`
+  "ability" table row (the guard `tests/data/test_game_constants.py` compares it). The vanilla and
+  Kaizo table rebuild (`tools.build_tables`) was not run by this builder (ordered not to): the
+  tables keep refusing Storm Drain's holders until the managing session rebuilds; the
+  differential's Storm Drain draw is gated by the supported set after the rebuild.
+- D2-23 (build of D2-13) `targets.called_defender` returns `(defender, redirected)`; `_use_move` rebinds `resolved` through `_redefend` for an invoker that found a move or Nature Power, and its `has_target` / `script_runs` read `called_def != NO_DEFENDER`. The stored-target write (script.c:2123) is made at B = 4 only and only for a defender (a BATTLER_NONE write is not stored: the C stores 255, which nothing may read); at B = 2 no state reads it, and skipping it keeps singles states unchanged. Parts B and C (Mirror Move, Magic Coat) are not built; coverage still refuses them.
+- D2-24 (build of D2-14) `last_hit_by` is written at B = 4 only (`effects.play_hit`, on every damaging UpdateHP, Substitute hits included, before the Substitute branch). At B = 2 it stays 0 so singles states keep merging; `targets.bide_defender` then takes the random-opponent arm, which gives the foe while alive, the value the sheet's B = 2 argument reaches. Counter's `counter_ok` tests the side (a partner's hit fails it); its defender is `targets.counter_defender`, and Pressure reads it. The STATE.md rows for `ts_follow_me` and `last_hit_by` read plain "mapped" (`test_state` accepts no other status; the follow-me row was failing it).
+- D2-25 (build of D2-15) The sheet's `pressure_pp_cost` edit and the reference `_pp_cost` are built as written; step.py already passed the fight command's pre-redirection defender, so it changes nothing. The redirected-Electric case is a step-level test owed to D3 (ledger D2-17).
+- D2-26 (build of D2-16) `hooks.trace` takes `coin` and a `count` flag; `ts_trace_fires` is added to the fire only inside `step` (an `Outcome.trace_pick` of rank 2 passed down through `_send_out`, `_act`, `_use_move`, `replace`) and at B = 4 only. Outside a step (`battle_start`, `show_battle_mon`, `replace`) a `trace_pick` int8[B] (default zeros) gives one coin per slot. Intimidate keeps today's substitute test (the bit), as no flag for a Substitute hit in the running action exists in the state; the sheet's extra skip (script.c:9180-9181) is owed to D3 with the four-actor step. Sheet build note 9 (`outcome._armed_trace` / `pivot_view` using `trace_target`) is not built: those pair one side with its one foe and need the four-battler entry view (D3). playout.py's calls keep today's B = 2 arguments (`download(..., (1,))` equals `opposing`). `trace_target` tests cannot give a battler an untraceable raw ability by writing `state.ability` (the check reads the species row, `damage.decomp_abilities`), so the Forecast / Trace / Multitype skip is covered by the existing singles tests; B = 4 tests cover HP and the coin.
+- D2-27 (build of D2-13, D2-14, D2-16) Outcome gets `call_target_draw` (key 45), `bide_target_draw` (46), `trace_pick` int8[B, TRACE_FIRES = 5] (47); enumerate relevance is B = 4 only and over-approximate (any Trace in the battle reads all five fires), law `_coin`.
+- D2-28 (D2 review fix, finding 1) The selection's `chosen_target` write (D2-1, bcp.c:548, :4363-4367) is made at B = 4 only, in both engines (`step._action_phase`, reference `ref_step`), as D2-23 and D2-24 do: at B = 2 no state reads it (`targets.resolve` and `called_defender` ignore `chosen` there), and writing it split singles states that were equal (an asleep Tackle and Swords Dance gave 1 and 0), so `search/rows.row_bytes` stopped merging them. `actions.chosen_targets` / `_chosen_targets` keep the B = 2 rule; the D2-1 tests test the rule directly and assert the step writes nothing at B = 2. Singles follow-up (ii) (an Encore ending under a Rollout lock reads the stored target) must turn the B = 2 write on when it lands.
+- D2-29 (D2 review fix, finding 2) `targets.redirect` runs at B = 4 only: in `_use_move` (the fight command's check, the merge of the called move's flag and the TryMove reveal, all under a static `fmt.B == 4`), in `targets.called_defender`, and in the reference `_fight` / `called_defender`. At B = 2 it can never fire (the holder must be a living Pokemon other than the attacker, the foe, which is then already the defender), so the singles step no longer traces `redirect_type` (Hidden Power, Weather Ball, Natural Gift, Judgment types) every action.
+- D2-30 (D2 review, finding 3) Owed to D6 / D11: at B = 4 Trace outside a step, at battle start (`state.py` `make_state` -> `hooks.battle_start`) and on faint replacement (`playout` -> `replace` / `show_battle_mon`), never receives a `trace_pick`, so a Trace lead facing two eligible foes always copies the same one (ChooseTraceTarget, battle_lib.c:7750-7781, picks one by the random draw). The entry points that create those draws (D6, D11) pass it.
+- D2-31 (D2 review, finding 5) Owed to D3 step tests: the redirect message's failure gate at B = 4 (`step._use_move` reveal `~failed` vs the reference reveal in `_fight`; the C's TryMove skips the Lightning Rod / Storm Drain message under MOVE_STATUS_NO_EFFECTS, battle_lib.c:1796, :1806) is unreachable until D3's four-actor step; D3 tests it there (with D2-17 and D2-21).
+- D2-32 (D2 gate review fix, finding 2) Follow Me's `ts_follow_me` write (D2-11, script.c:6261-6270) is made at B = 4 only, in both engines (`step._use_move`, reference `_fight`), as D2-28: at B = 2 nothing reads it (`targets.resolve` and redirection are B = 4 only; `counter_defender` gives the foe either way) and, kept over a U-turn / Baton Pass pause, it split equal singles states. The D2-11 singles step tests assert it stays clear; the B = 4 step write is tested with D3's four-actor step (with D2-31). Singles follow-up (i) turns the B = 2 write on. Finding 1: `test_download_sums_both_foes` pins the stat raised in two cases whose sum disagrees with one foe alone (battle_lib.c:3815-3851).
+- D2-33 (merge of main 7c635e2, E3 batch 1, into D2) Resolutions. (1) `hooks.trace` keeps D2's `trace_target` pick (`coin`, `count`) and sets E3's `trace_announced` where it copied (battle_lib.c:3727); `trace_copy` (the eligibility both slots share) reads the holder through `battler_ability` (lib.c:3088-3093, Battler_Ability at :3720-3725) and the target's raw ability (:7754-7776). (2) `switch_in_effects`, `show_battle_mon` and E3's `move_end_switch_in` gate Trace by `trace_announced == 0` (:3726) and take its coin from `trace_coin`; `move_end_switch_in` (bcp.c:3973) gets `trace_pick` (`step._move_end` passes `Outcome.trace_pick`), Intimidate over every opposing battler (subscript_intimidate.s:10-23) and Download's sums over `targets.opposing` (lib.c:3814-3851). (3) `_intimidate_one` and the reference `_intimidate` set `intimidate_announced` for a living Intimidate holder whatever the target (:3799-3803); the reference `_download` sets `download_announced` before its sums over `opposing` (:3836). (4) Every D2 ability read goes through the shared reader: `targets._ability` is `state.battler_ability` (redirection, lib.c:1737-1738, :1756-1778); in the reference `_pp_cost` and Counter's Pressure (BattleSystem_CountAbility :2870-2967, DecPPForPressure :7390-7397), `trace_target`, `redirect`, `_trapped` (BattlerIsGrounded :5502, CountAbilityTheirSide :5509-5532) read `_ability`. The reveal of a redirect holder keeps the raw ability (BattleAI_SetAbility, script.c:11805). (5) `TRACE_FIRES` = 5 still bounds a slot's fires: the armed turn-start Trace plus one per action, a Skill Swap that hands Trace being one action. (6) Owed to D3 (E3 logic, not changed by the merge): Me First's copy reads `_foe(side)`'s chosen move (`step._use_move` through `pursuit`, `enumerate.used_moves` / `_side_call_law`, reference `_fight`); at B = 4 the decomp copies the defender's (BtlCmd_TryMeFirst, battle_script.c:7286-7312), which needs the four-actor step's per-battler actions.
+- D2-34 (pod run on e688271: 2 of 3,570 failed; both tests were stale, the code is right) 1. `test_faints.py::test_new_fields_default_to_zero` asserted every field after `replace_mul` is 0; D2-1's commit d061cd2 (not the merge) appended `chosen_target`, whose spec start is `b ^ 1` (D2-1, STATE.md; `make_state` state.py:1128): the game's 0 is never read, as every battler selects on turn 1 (bcp.c:507-531), and at B = 2 the step does not write it (D2-28), so a fresh singles state holds [1, 0]. The test now checks the turn scratch (`pivot_battler`, `ts_*`) and `last_hit_by` at 0 and `chosen_target` at `b ^ 1`; on e2-singles-fix the canonical value (D2-35 there) is the same `b ^ 1`. 2. `test_field_pass.py::test_trick_room_is_not_counted_in_the_field_pass` assumed the countdown unbuilt. CheckFieldConditions (bcp.c:932-1254) has no Trick Room step; CheckSideConditions runs after it and its SIDE_COND_CHECK_STATE_TRICK_ROOM (bcp.c:1740-1742, :1822-1830) subtracts 1 << FIELD_CONDITION_TRICK_ROOM_SHIFT each turn end (condition.h:123-149), running subscript_trick_room_end at 0. E3's `step._trick_room_check` (after `_perish_song_check`) does that, so one turn takes 3 to 2. The test is now `test_trick_room_counts_down_once_per_turn` (3 to 2). No engine change.

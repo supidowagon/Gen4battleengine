@@ -78,8 +78,10 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import targets
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
+    chosen_targets,
     gravity_banned,
     imprisoning_foe,
     locked_slot,
@@ -175,6 +177,7 @@ from nuzline.engine.hooks import (
     ABSORB,
     DAMAGE_AVOIDED,
     OHKO_BLOCKED,
+    REDIRECTED,
     STATUS_CURE,
     STATUS_HP,
     TORMENT,
@@ -663,7 +666,7 @@ def _flag_exp(state: BattleState, side) -> BattleState:
 
 
 def _send_out(
-    tables: Tables, state: BattleState, side, slot, effects=True, baton=False
+    tables: Tables, state: BattleState, side, slot, effects=True, baton=False, trace_pick=None
 ) -> BattleState:
     """A switch action, or Roar's drag (``_use_move``): ``_switch_out``, ``_switch_in``, the
     entry hazards, then (``effects``, static ``False`` or a traced flag) the rest of
@@ -674,7 +677,7 @@ def _send_out(
     hazards = entry_hazards(tables, entered, side)
     if effects is False:
         return hazards
-    return _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    return _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
 
 
 def _alive_mask(state: BattleState) -> jnp.ndarray:
@@ -781,6 +784,20 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     }
 
 
+def _redefend(resolved, side, defender, cond):
+    """``resolved`` with ``defender`` (a battler or ``NO_DEFENDER``) as the action's defender where
+    ``cond``: ``target_side`` is the defender when it is another battler, else the foe (as
+    ``targets.resolve``). The commands that pick a new defender mid-action (GoToMoveScript, Counter,
+    the Bide release) rebind it this way (D2-13, D2-14)."""
+    defender = jnp.asarray(defender, _I32)
+    other = (defender != NO_DEFENDER) & (defender != side)
+    target = jnp.where(other, defender, jnp.asarray(side, _I32) ^ 1)
+    return resolved._replace(
+        defender=jnp.where(cond, defender, resolved.defender).astype(_I32),
+        target_side=jnp.where(cond, target, resolved.target_side).astype(_I32),
+    )
+
+
 def _use_move(
     tables: Tables,
     state: BattleState,
@@ -800,6 +817,7 @@ def _use_move(
     entry_status=None,
     pursuit_sync=None,
     foe_enduring=False,
+    speed_order=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -866,7 +884,23 @@ def _use_move(
     encored_now = encore_holds & ~jnp.asarray(struggling, bool)
     move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
     slot = jnp.where(encored_now, encore_slot, slot)
-    target_side = _foe(side)
+    # BattleControllerPlayer_FightCommand (bcp.c:1900) fixes the defender with the move after the
+    # Encore takeover (``moveTemp``) and the stored target (D2-1) at the action's start: the
+    # resolver (``targets.resolve``, D2-4). ``speed_order``: monSpeedOrder, D3's input (B = 2: the
+    # identity, order-free).
+    if speed_order is None:
+        speed_order = jnp.arange(fmt.B)
+    resolved = targets.resolve(
+        tables,
+        state_in,
+        side,
+        move,
+        targets.fight_randomizes(state_in, side, choice[1]),
+        state_in.chosen_target[side],
+        speed_order,
+        outcome.target_draw[side],
+    )
+    target_side = resolved.target_side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[party(fmt, side), user] > 0)
     # A move of the battler is disabled when its action starts (a faster foe's Disable this turn
@@ -885,9 +919,7 @@ def _use_move(
     # defender before the status checks: the foe when it is alive (any HP for
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
     # and a non-Ghost Curse (effects.self_defender).
-    foe_defender = ~self_defender(tables, move, ghost_user(state, side)) & (
-        (state.hp[party(fmt, target_side), target] > 0) | targets_foe_side(tables, move)
-    )
+    foe_defender = (resolved.defender != NO_DEFENDER) & (resolved.defender != side)
     custap = jnp.asarray(custap, bool)
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143), before the status checks:
     # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
@@ -1044,10 +1076,15 @@ def _use_move(
         )
     )
     bide_ends = biding & (bide_left == 0)
-    bide_stop = bide_ends & (
-        (state.bide_damage[side] <= 0) | (state.hp[party(fmt, target_side), target] <= 0)
-    )
+    # D2-14: the release's defender is the last battler that hit the user (``last_hit_by``) while
+    # it has HP, else a random opponent with HP (``targets.bide_defender``, bcp.c:2704-2716); none
+    # ends the move in subscript_bide_no_target.s. At B = 2 it is the foe while it lives.
+    bide_def = targets.bide_defender(state, side, outcome.bide_target_draw[side])
+    bide_stop = bide_ends & ((state.bide_damage[side] <= 0) | (bide_def == NO_DEFENDER))
     can_act = can_act & ~bide_stop
+    resolved = _redefend(resolved, side, bide_def, bide_ends)
+    target_side = resolved.target_side
+    target = state.active[target_side]
     # CHECK_STATUS_STATE_SELF_THAW (:2728): a still-frozen user of a thawing move thaws.
     self_thaw = can_act & still_frozen
     state = _set_mon(state, "status", side, user, Status.NONE, self_thaw)
@@ -1062,17 +1099,32 @@ def _use_move(
     # offers no 0-PP slot).
     no_pp = spend & (state.pp[party(fmt, side), user, slot] == 0)
     spend = spend & ~no_pp
-    defender = jnp.where(
-        foe_defender,
-        target_side,
-        jnp.where(self_defender(tables, move, ghost_user(state, side)), side, NO_DEFENDER),
-    )
-    cost = pressure_pp_cost(tables, state, side, defender, move)
+    cost = pressure_pp_cost(tables, state, side, resolved.defender, move)
     left = jnp.maximum(state.pp[party(fmt, side), user, slot].astype(_I32) - cost, 0)
     pp = state.pp.at[party(fmt, side), user, slot].set(
         jnp.where(spend, left, state.pp[party(fmt, side), user, slot]).astype(state.pp.dtype)
     )
     state = state._replace(pp=pp)
+    # D2-10: HasNoTarget (bcp.c:3189-3194, :2306-2337) on the fight command's defender
+    # (``targets.no_target``): a charge turn with no foe keeps the user as its defender; then D2-12:
+    # REDIRECT_TARGET (bcp.c:3204-3206) moves a single-target Electric / Water move to a Lightning
+    # Rod / Storm Drain holder (``targets.redirect``), the holder being the action's defender from
+    # here on. The PP above took the fight command's defender (rule 9). At B = 2 it never fires
+    # (the holder must be the living foe, then already the defender), so the singles step skips it.
+    nt_before = targets.no_target(tables, state, side, move, resolved.defender, False)
+    keeps_user = targets.charge_keeps_user(tables, state, side, move, resolved.defender)
+    if fmt.B == 4:
+        redirect_to, redirected = targets.redirect(
+            tables, state, side, move, jnp.where(keeps_user, side, resolved.defender), speed_order
+        )
+        resolved = resolved._replace(
+            defender=jnp.where(redirected, redirect_to, resolved.defender),
+            target_side=jnp.where(redirected, redirect_to, resolved.target_side),
+        )
+    else:
+        redirected = False
+    target_side = resolved.target_side
+    target = state.active[target_side]
 
     # Nature Power (effect_script_0173.s): its script turns it into the terrain's move
     # (order.called_move: GetTerrainMove, then GoToMoveScript sets moveCur and re-picks the
@@ -1140,10 +1192,33 @@ def _use_move(
         & (state.weather == Weather.SUN)
         & ~weather_suppressed(tables, state)
     )
+    # D2-13: GoToMoveScript (script.c:2111-2134) picks the called move's defender by its own range
+    # with randomize TRUE and runs the redirection check (``targets.called_defender``; the
+    # invoker's call draw ``Outcome.call_target_draw``), writing it to the stored target (:2123,
+    # B = 4: no state at B = 2 reads it). From here the called move's hit, accuracy, Protect and
+    # records read it.
+    calls = (invoker & ~call_failed) | nature_power
+    called_def, called_redirected = targets.called_defender(
+        tables, state, side, used, speed_order, outcome.call_target_draw[side]
+    )
+    resolved = _redefend(resolved, side, called_def, calls)
+    if fmt.B == 4:
+        redirected = redirected | (calls & called_redirected)
+    target_side = resolved.target_side
+    target = state.active[target_side]
+    if fmt.B == 4:
+        write = can_act & ~no_pp & calls & (called_def != NO_DEFENDER)
+        state = state._replace(
+            chosen_target=state.chosen_target.at[side].set(
+                jnp.where(write, called_def, state.chosen_target[side]).astype(
+                    state.chosen_target.dtype
+                )
+            )
+        )
     # The script runs with a defender: the foe, or for the user's own first turn the user
-    # (HasNoTarget, bcp.c:2327-2334); a called move without a foe goes to subscript_no_target.s
-    # from GoToMoveScript (battle_script.c:2124-2126) before its script.
-    script_runs = (state.hp[party(fmt, target_side), target] > 0) | (~invoker & ~nature_power)
+    # (HasNoTarget, bcp.c:2327-2334); a called move without a defender goes to subscript_no_target.s
+    # from GoToMoveScript (battle_script.c:2126-2128) before its script.
+    script_runs = jnp.where(invoker | nature_power, called_def != NO_DEFENDER, ~nt_before)
     herb = (
         can_act
         & charge_move
@@ -1168,9 +1243,18 @@ def _use_move(
     never_misses = (tables.move_accuracy[used] == 0) | (
         tables.move_effect[used] == EffectId.FUTURE_SIGHT
     )
-    has_target = (state.hp[party(fmt, target_side), target] > 0) | defender_always(
-        tables, used, ghost_user(state, side)
+    # D2-10: the BeforeMove check is ``~nt_before`` (the resolver's defender; at B = 2 today's "the
+    # foe has HP or the move has a defender whatever its HP"); a called move's defender is
+    # GoToMoveScript's (D2-13), still the foe test. TryMove checks again after the script
+    # (bcp.c:3240-3245): a charge move that skipped its charge (Power Herb, sun) with no foe has
+    # set SYSCTL_LAST_OF_MULTI_TURN (subscript_charge_move_cleanup.s:7) and ends in no target.
+    called_target = called_def != NO_DEFENDER
+    bm_target = ~nt_before
+    last_of_multi = can_act & bm_target & (second_turn | sun_now | herb)
+    nt_try = targets.no_target(
+        tables, state, side, used, jnp.where(keeps_user, side, resolved.defender), last_of_multi
     )
+    has_target = jnp.where(invoker | nature_power, called_target, bm_target & ~nt_try)
     # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
     # reads the user's turnFlags damage and its last attacker (physical / special /
     # lastAttacker, stored as 1 + battler) and fails (MOVE_STATUS_FAILED) on 0 taken, an
@@ -1187,9 +1271,16 @@ def _use_move(
     counter_ok = (
         (taken_by != 0)
         & (foe_taken[3 + pick] != 0)
-        & (attacker != side)
+        & (side_of(attacker) != side_of(side))  # D2-14: a partner's hit fails it too
         & (state.hp[party(fmt, attacker), state.active[attacker]] > 0)
     )
+    # D2-14: the command's defender is the living Follow Me user of the last attacker's side, else
+    # the last attacker (``targets.counter_defender``); the accuracy roll, Protect, the damage and
+    # the records read it from here, and so does Pressure below.
+    counter_def = targets.counter_defender(state, side, attacker)
+    resolved = _redefend(resolved, side, counter_def, counter & counter_ok)
+    target_side = resolved.target_side
+    target = state.active[target_side]
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     # Me First's defender is its target, not its user: it needs a living one (RANGE_SINGLE_TARGET_
     # ME_FIRST, battle_lib.c:1599-1727), unlike the self-targeting invokers.
@@ -1201,7 +1292,7 @@ def _use_move(
     # the user's chosen slot (moveSlot: an invoker's when the invoker called it) while that slot
     # has PP left and the defender has Pressure, ruling G-9.
     counter_pressure = (
-        can_act & has_target & counter & counter_ok & pressure_holder(state, attacker)
+        can_act & has_target & counter & counter_ok & pressure_holder(state, counter_def)
     ) & (state.pp[party(fmt, side), user, slot] > 0)
     state = state._replace(
         pp=state.pp.at[party(fmt, side), user, slot].add(
@@ -1313,6 +1404,14 @@ def _use_move(
     for battler in range(state.active.shape[0]):  # battler b is on side b in singles
         state = _set_side(state, "imprisoned", battler, 1, imprison_runs & (side != battler))
     failed = failed | ((effect_used == EffectId.IMPRISON) & imprison_fails(state, side))
+    # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (battle_script.c:6261-6270) sets the
+    # user's side's followMe and followMeUser, on every run of the script (no failure branch; a
+    # called Follow Me counts: ``effect_used`` is the called move's). One per-side field holds
+    # both (``ts_follow_me``, D2-11): 1 + the user battler, read by ``targets.follow_me_target``.
+    # Written at B = 4 only (D2-32): at B = 2 nothing reads it.
+    if fmt.B == 4:
+        follow = script_on & (effect_used == EffectId.FOLLOW_ME)
+        state = _set_side(state, "ts_follow_me", side, side + 1, follow)
     # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
     failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
     failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))
@@ -1365,6 +1464,17 @@ def _use_move(
     # CheckMoveHitAccuracy reads the threshold now, with this moment's stages (bcp.c:
     # 2873-2874): a faster Sand-Attack or Double Team this turn counts. outcome.hit[side, 0]
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
+    # TryMove's TriggerRedirectionAbilities (bcp.c:3247-3252): the holder's ability message
+    # (subscript_lightning_rod_redirected.s:9) unless the move failed (D2-12 rule 10).
+    if fmt.B == 4:
+        holder = jnp.clip(resolved.defender, 0, fmt.B - 1)
+        state = reveal_ability(
+            state,
+            holder,
+            state.active[holder],
+            REDIRECTED,
+            redirected & can_act & has_target & ~failed,
+        )
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
@@ -1596,6 +1706,7 @@ def _use_move(
             state,
             side,
             target_side,
+            resolved.defender,
             used,
             # play_hit's flags (below): the defender's quickClaw and custapBerry until it moved.
             foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
@@ -1851,7 +1962,7 @@ def _use_move(
     )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
-    state = _where(entering, switch_in_effects(tables, state, fx_side), state)
+    state = _where(entering, switch_in_effects(tables, state, fx_side, outcome.trace_pick), state)
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
     # the hits below), G-69.
@@ -1964,6 +2075,8 @@ def _use_move(
             foe_enduring=foe_enduring,
             in_power=in_power,
             gift=gift_removed,
+            target_side=target_side,
+            defender=resolved.defender,
             # The script ran (its CalcDamage before TryMove's checks, bcp.c:3214-3216): Me First's
             # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
             script_calc=script_calc,
@@ -2186,7 +2299,7 @@ def _use_move(
             state.pivot_battler.dtype
         ),
     )
-    state = _where(transform_ok, switch_in_effects(tables, state, side), state)
+    state = _where(transform_ok, switch_in_effects(tables, state, side, outcome.trace_pick), state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
     still = state.active[target_side] == target
@@ -2463,7 +2576,13 @@ def _act(
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
     switched = _send_out(
-        tables, state, side, jnp.clip(action - MOVE_ACTIONS, 0, 5), effects=~resumed, baton=baton
+        tables,
+        state,
+        side,
+        jnp.clip(action - MOVE_ACTIONS, 0, 5),
+        effects=~resumed,
+        baton=baton,
+        trace_pick=outcome.trace_pick,
     )
     base = _alive_mask(state) if base is None else base
     listed = _faint_check(tables, _with_alive(state, base), switched)
@@ -2622,6 +2741,8 @@ def _pursuit_hit(
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
         pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
         # subscript_pursuit.s ends in BtlCmd_CheckHoldOnWith1HP, which ignores Endure (G-65).
+        target_side=switcher,
+        defender=switcher,
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
@@ -2713,7 +2834,9 @@ def _faint_check(
     return after
 
 
-def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran) -> BattleState:
+def _move_end(
+    tables: Tables, state: BattleState, acted: BattleState, side, ran, trace_pick=None
+) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
@@ -2721,7 +2844,8 @@ def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran)
     ``BattleControllerPlayer_MoveEnd`` clears the actor's own (``ClearFlags``, :4389, via
     :3986) where ``ran``: the action ran (a move, switch or item; neither a fainted
     battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
-    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969)."""
+    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
+    ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end."""
     foe = _foe(side)
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
@@ -2733,7 +2857,7 @@ def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran)
     state = recover_status_by_ability(state, foe, clear)
     # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
     # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
-    return move_end_switch_in(tables, state, clear)
+    return move_end_switch_in(tables, state, clear, trace_pick)
 
 
 def execute_actions(
@@ -2921,6 +3045,7 @@ def _execute_actions(
             acted,
             side,
             ran,
+            outcome.trace_pick,
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
@@ -2988,6 +3113,11 @@ def _execute_actions(
         "ts_pick_mul": pick_mul,
         # turnFlags.assuranceDamageMask (B13-17): the turn's, kept at a pause.
         "ts_assurance": state.ts_assurance,
+        # SideConditions.followMe / followMeUser (D2-11): cleared by SetupNextTurn at the turn end
+        # (lib.c:2251-2252), kept at a pause.
+        "ts_follow_me": state.ts_follow_me,
+        # Trace fires of the step (D2-16): 0 once the turn completes, kept at a pause.
+        "ts_trace_fires": state.ts_trace_fires,
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -3914,14 +4044,24 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
 
 
 def _action_phase(
-    tables: Tables, state: BattleState, actions, outcome: Outcome
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict, dict, jnp.ndarray]:
     """Phases 2-3 with the turn's events: ``(state, shown, read, order)``. ``learn_pin`` is the
     turn's own (design §3.3(a)): it starts each turn at 0. A resumed pause (``pivot_battler``)
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
-    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch."""
+    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
+    ``targets`` (``int8[B]``, the menu's picks) is required at B = 4 and ignored at B = 2, where
+    the range decides (D2-1); at B = 4 the selection writes ``chosen_target`` before the turn
+    order. At B = 2 nothing reads it, so it is not written (ruling D2-28): singles states stay
+    equal; singles follow-up (ii) turns the B = 2 write on."""
+    if targets is None:
+        if state.active.shape[0] != 2:
+            raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
+        targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
+    if state.active.shape[0] == 4:
+        fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))
@@ -3932,14 +4072,16 @@ def _action_phase(
     return s, {**shown, "order": order, "quick_claw": claw}, read, order
 
 
-def turn_events(tables: Tables, state: BattleState, actions, outcome: Outcome) -> dict:
+def turn_events(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
+) -> dict:
     """The events of ``step(tables, state, actions, outcome)``'s action phase, without
     playing the end of the turn (``step_events``)."""
-    return _action_phase(tables, state, jnp.asarray(actions, _I32), outcome)[1]
+    return _action_phase(tables, state, jnp.asarray(actions, _I32), outcome, targets)[1]
 
 
 def step_events(
-    tables: Tables, state: BattleState, actions, outcome: Outcome
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict]:
     """``(step(...), its events)``: one implementation of the turn serves both ``step``
     (which drops the events) and ``engine.observe`` (which reads them). The events, a
@@ -3949,7 +4091,7 @@ def step_events(
     6) returns the first half's events and stops before the end of the turn; the resuming call
     returns the second half's."""
     actions = jnp.asarray(actions, _I32)
-    s, events, read, order = _action_phase(tables, state, actions, outcome)
+    s, events, read, order = _action_phase(tables, state, actions, outcome, targets)
     halted = s.pivot_battler != 0
     sides = end_of_turn_order(tables, s, outcome)
     e = field_conditions(tables, s, sides)
@@ -3982,9 +4124,13 @@ def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
     return ((jnp.asarray(roosted) != 0) & alive).astype(jnp.int8)
 
 
-def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
-    """Play one turn: ``actions`` is ``int32[B]`` (singles: player, opponent; see ``order``)."""
-    return step_events(tables, state, actions, outcome)[0]
+def step(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
+) -> BattleState:
+    """Play one turn: ``actions`` is ``int32[B]`` (singles: player, opponent; see ``order``),
+    ``targets`` the ``int8[B]`` target each battler chose (D2-1; required at B = 4, ignored
+    at B = 2, where the range decides)."""
+    return step_events(tables, state, actions, outcome, targets)[0]
 
 
 def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
@@ -4106,7 +4252,9 @@ def needs_replacement(state: BattleState) -> jnp.ndarray:
     return (active_down & jnp.any(bench, axis=1) & (state.over == 0)).astype(jnp.int8)
 
 
-def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> BattleState:
+def replace(
+    tables: Tables, state: BattleState, side, slot, effects=True, trace_pick=None
+) -> BattleState:
     """Send in party ``slot`` for ``side``'s fainted active Pokemon, through the same
     switch-in path as a switch action (``_switch_in``, then ``hooks.on_switch_in``) and a
     faint check.
@@ -4133,7 +4281,7 @@ def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> Bat
     entered = _switch_in(tables, state, side, slot, state.turn)
     effects = jnp.asarray(effects, bool)
     hazards = entry_hazards(tables, entered, side)  # hooks.on_switch_in's first part
-    arrived = _where(effects, switch_in_effects(tables, hazards, side), hazards)
+    arrived = _where(effects, switch_in_effects(tables, hazards, side, trace_pick), hazards)
     out = _faint_check(tables, entered, arrived, entry_turn=state.turn)
     waits = ~effects & (out.hp[party(fmt, side), out.active[side]] > 0) & (out.over == 0)
     out = out._replace(

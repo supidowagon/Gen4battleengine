@@ -408,6 +408,8 @@ three structs has a row.
   `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
   `turnFlags` later actors read
   (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`,
+  `ts_follow_me` (per side, `SideConditions.followMe` / `followMeUser`: `1 + followMeUser`, 0 when `followMe`
+  is clear; `BattleSystem_SetupNextTurn` clears it, battle_lib.c:2251-2252, D2-11),
   `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
@@ -420,6 +422,21 @@ three structs has a row.
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
   Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.
+- The chosen target (D2-1): `chosen_target` (per battler, `battlerActions[b][1]`, a battler index
+  0..B-1, not 1 + battler: it has no "none" value; initial `b ^ 1`). Unlike the other
+  `battlerActions` values it persists across turns and switches (no code clears it,
+  battle_controller_player.c:180-182) and is written at selection (`actions.chosen_targets`, in
+  `step._action_phase`) only by a battler that reaches the target menu (bcp.c:507-531); D2-9 and
+  D2-13 overwrite it later. Not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Written at B = 4
+  only (ruling D2-28).
+- The last hitter (D2-14): `last_hit_by` (per battler, `1 + BattleContext.lastHitByBattler[b]`, 0 =
+  no hit yet), written by every damaging `UpdateHP` on `b` (a Substitute hit and a partner's hit
+  included, bcp.c:3347, :3357) and never cleared: not by a switch or a faint (lib.c:2110-2225), so
+  it is not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Bide's release reads it. Written at
+  B = 4 only (ruling D2-24).
+- The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
+  counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
+  written at B = 4 only.
 
 ## BattleMon (`include/battle/battle_mon.h`)
 
@@ -543,8 +560,8 @@ three structs has a row.
 | `SideConditions.mistTurns` | `mist` | mapped |
 | `SideConditions.safeguardUser` | — | not needed because in singles the user is always that side's active Pokemon (the field names the battler for messages and doubles) |
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
-| `SideConditions.followMe` | — | not needed because Follow Me only redirects moves in doubles |
-| `SideConditions.followMeUser` | — | not needed because Follow Me only redirects moves in doubles |
+| `SideConditions.followMe` | `ts_follow_me` | mapped |
+| `SideConditions.followMeUser` | `ts_follow_me` | mapped |
 | `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |
@@ -641,7 +658,7 @@ three structs has a row.
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
-| `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
+| `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`); `lightningRodActivated` / `stormDrainActivated` are `_use_move`'s local `redirected` |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -673,7 +690,7 @@ three structs has a row.
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
+| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |
@@ -700,7 +717,7 @@ three structs has a row.
 | `BattleContext.conversion2Type` | — | later (M6) |
 | `BattleContext.metronomeMove` | `metronome_move` | mapped |
 | `BattleContext.storedDamage` | `bide_damage` | mapped |
-| `BattleContext.lastHitByBattler` | — | later (M6) |
+| `BattleContext.lastHitByBattler` | `last_hit_by` | mapped |
 | `BattleContext.battlerSpeedTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.battlersSwitchingMask` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |

@@ -249,7 +249,7 @@ Encodings:
   inside one action and its flag clears at the switch, battle_script.c:2511, or the faint,
   battle_lib.c:2222), else 0. While it is set, the ``ts_*`` fields hold the turn's scratch
   (``BattleContext``: the order and its counter, the picks of command selection, the turn flags
-  later actors read, the paused action's own inputs, and the search's ``powerMul`` reads), which
+  later actors read (Follow Me, ``ts_follow_me``, included), the paused action's own inputs, and the search's ``powerMul`` reads), which
   ``step`` resumes from (``step.step``'s docstring); otherwise every ``ts_*`` is 0, so states
   between turns merge. ``qc_roll`` is 0 at a pause: the order read it, and the next read is the
   next turn's, from the resumed half's draw.
@@ -503,6 +503,17 @@ class BattleState(NamedTuple):
     ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
     ts_assurance: jnp.ndarray  # int8[B], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
+    # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
+    # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
+    ts_follow_me: jnp.ndarray
+    # int8[B], the Trace fires of the battler's slot in this step (D2-16, ruling D2-5): the index
+    # into ``Outcome.trace_pick``; written at B = 4 only, 0 between turns
+    ts_trace_fires: jnp.ndarray
+    # int8[B], battlerActions[b][1] (D2-1): the battler chosen as the target, kept across turns
+    chosen_target: jnp.ndarray
+    # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
+    # last dealt damage to b's slot, 0 = none yet; never cleared (not by a switch or a faint)
+    last_hit_by: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -856,6 +867,10 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_switched": (_BATTLER, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
+    "ts_follow_me": (_SIDE, np.int8),
+    "ts_trace_fires": (_BATTLER, np.int8),
+    "chosen_target": (_BATTLER, np.int8),
+    "last_hit_by": (_BATTLER, np.int8),
 }
 
 
@@ -1108,6 +1123,9 @@ def initial_arrays(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"
             )
     a["exp_mask"][...] = 1 << leads[0]
+    # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
+    # a hand-built state's lock on today's defender.
+    a["chosen_target"][...] = np.arange(fmt.B) ^ 1
     bags = {1: opp_items}
     if fmt.B == 4:
         if opp2_items is None:

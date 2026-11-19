@@ -67,16 +67,21 @@ from nuzline.engine.ids import (
     MIMIC_PP_CAP,
     MINIMIZE_PARAM,
     MOVE_BATON_PASS,
+    MOVE_CURSE,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
+    MOVE_HIDDEN_POWER,
     MOVE_IMPRISON,
+    MOVE_JUDGMENT,
     MOVE_KNOCK_OFF,
     MOVE_MIMIC,
+    MOVE_NATURAL_GIFT,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    MOVE_WEATHER_BALL,
     NATURE_DISLIKED_FLAVOR,
     ON_HIT_EFFECTS,
     POWER_IF_TARGET_ASLEEP,
@@ -311,6 +316,20 @@ class _Turn:
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
+    # SideConditions.followMe / followMeUser per side as 1 + followMeUser (0 = off), written by
+    # BtlCmd_FollowMe (script.c:6261-6270), cleared by SetupNextTurn (lib.c:2251-2252): D2-11.
+    follow_me: list[int] = field(default_factory=lambda: [0, 0])
+    # The fight command's BattleSystem_Defender result (D2-4): the defender (None: BATTLER_NONE)
+    # and the battler the hit reads as its target; monSpeedOrder (D3's input; None: the identity).
+    defender: int | None = None
+    target_side: int = 0
+    speed_order: list[int] | None = None
+    call_redirected: bool = False  # GoToMoveScript's redirection check moved the defender (D2-13)
+    # The Trace fires of the battler's slot in this step (D2-16): the index into Outcome.trace_pick,
+    # written at B = 4 only; ``trace_pick`` the Trace coins outside a step (ref_replace: a list of
+    # one coin per battler), None inside it (the outcome's).
+    trace_fires: list[int] = field(default_factory=lambda: [0, 0])
+    trace_pick: list[int] | None = None
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -319,6 +338,7 @@ class _Turn:
         for name in _TURN_FLAGS:
             setattr(self, name, [False] * n)
         self.items, self.dragged = [0] * n, [0] * n
+        self.trace_fires = [0] * n
         self.taken = [[0] * 6 for _ in range(n)]
         self.order = list(range(n))
         self.actions = (0,) * n
@@ -2700,11 +2720,12 @@ def _download(s: RefState, side: int) -> None:
     if not mon.hp or _ability(s, mon) != AbilityId.DOWNLOAD:
         return
     s.battlers[side].download_announced = 1  # :3836, whatever the sums
-    foe, foe_sd = _active(s, _foe(side)), s.battlers[_foe(side)]
     sum_def = sum_spd = 0
-    if foe.hp and not foe_sd.substitute_hp:
-        sum_def = _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
-        sum_spd = _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
+    for other in opposing(s, side):  # every opposing battler (D2-16 rule 8)
+        foe, foe_sd = _active(s, other), s.battlers[other]
+        if foe.hp and not foe_sd.substitute_hp:
+            sum_def += _apply_stage(foe.stats[Stat.DEF - 1], foe_sd.stages[Stat.DEF])
+            sum_spd += _apply_stage(foe.stats[Stat.SPD - 1], foe_sd.stages[Stat.SPD])
     if sum_def + sum_spd:
         _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
 
@@ -2725,8 +2746,10 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # traceAnnounced gates it (:3726); only a holder that traced already and got Trace back (Skill
     # Swap) has it set.
     if not s.battlers[side].trace_announced:
-        _trace(tables, s, side, other)
-    traced = not s.battlers[other].trace_announced and _trace(tables, s, other, side)
+        _trace(tables, s, side, *_trace_coin(turn, side), turn=turn)
+    traced = not s.battlers[other].trace_announced and _trace(
+        tables, s, other, *_trace_coin(turn, other), turn=turn
+    )
     # SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES (lib.c:3740-3790).
     for battler in (side, other) if traced else (side,):
         weather = WEATHER_ABILITIES.get(_ability(s, _active(s, battler)))
@@ -2740,25 +2763,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     # script.c:2884-2902 (B9-6; White Smoke, G-46).
-    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
-    if mon.hp and _ability(s, mon) == AbilityId.INTIMIDATE:
-        s.battlers[side].intimidate_announced = 1  # :3799-3803, whatever the foe
-        if (
-            foe.hp
-            and not s.battlers[other].substitute_hp
-            and not _mist_blocks_drop(s, other, -1)
-            and _ability(s, foe) not in blockers
-        ):
-            _change_stage(s, other, Stat.ATK, -1)
-    if traced and foe.hp and _ability(s, foe) == AbilityId.INTIMIDATE:
-        s.battlers[other].intimidate_announced = 1
-        if (
-            mon.hp
-            and not s.battlers[side].substitute_hp
-            and not _mist_blocks_drop(s, side, -1)
-            and _ability(s, mon) not in blockers
-        ):
-            _change_stage(s, side, Stat.ATK, -1)
+    for target_battler in opposing(s, side):  # every opposing battler (D2-16 rule 7)
+        _intimidate(s, side, target_battler)
+    if traced:
+        for target_battler in opposing(s, other):
+            _intimidate(s, other, target_battler)
     # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3814-3851, G-21): the newcomer, then a battler that
     # just traced Download.
     _download(s, side)
@@ -2780,39 +2789,112 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         _held_item_hp(turn, s, battler)
 
 
-def _trace(tables, s: RefState, side: int, foe: int) -> bool:
+def opposing(s: RefState, battler: int) -> tuple[int, ...]:
+    """The battlers a switch-in ability of ``battler`` works on (D2-16): the two opponents at
+    B = 4, the foe at B = 2 (``engine.targets.opposing``)."""
+    if len(s.battlers) == 4:
+        return _opponents(battler)
+    return (_foe(battler),)
+
+
+def trace_target(tables, s: RefState, holder: int, coin: int) -> int | None:
+    """``ChooseTraceTarget`` for ``holder`` (lib.c:7750-7781, D2-16 rule 3): of its two opposing
+    slots (RIGHT, LEFT; the foe twice at B = 2) the eligible one, ``coin`` 1 giving the LEFT one
+    when both are; None when neither. A slot is eligible when the holder has HP, Trace and no
+    Griseous Orb (lib.c:3720-3725) and the target has HP and an ability that is not Forecast,
+    Trace or Multitype by its raw field (:7754-7777)."""
+    mon = _active(s, holder)
+    if len(s.battlers) == 4:
+        first, second = _opponents(holder)
+    else:
+        first = second = _foe(holder)
+
+    def eligible(d: int) -> bool:
+        target = _active(s, d)
+        return bool(
+            mon.hp
+            and _ability(s, mon) == AbilityId.TRACE
+            and mon.item != ITEM_GRISEOUS_ORB
+            and target.hp
+            and _decomp_ability(tables, target) not in UNTRACEABLE_ABILITIES
+        )
+
+    e1, e2 = eligible(first), eligible(second)
+    if e1 and e2:
+        return second if coin & 1 else first
+    if e1:
+        return first
+    return second if e2 else None
+
+
+def _trace_coin(turn: _Turn, holder: int) -> tuple[int, bool]:
+    """``(coin, in_step)`` of ``holder``'s Trace (``engine.hooks.trace_coin``): the outcome's
+    ``trace_pick[holder][fires]`` inside a step, ``turn.trace_pick[holder]`` outside, else 0."""
+    pick = turn.trace_pick
+    if pick is None and turn.outcome is not None:
+        pick = turn.outcome.trace_pick
+    if pick is None:
+        return 0, False
+    row = pick[holder]
+    if isinstance(row, list):
+        return row[min(turn.trace_fires[holder], len(row) - 1)], True
+    return row, False
+
+
+def _trace(tables, s: RefState, side: int, coin: int, count: bool = False,
+           turn: _Turn | None = None) -> bool:  # fmt: skip
     """``SWITCH_IN_CHECK_STATE_TRACE`` for ``side``'s battler (lib.c:3718-3737, ``ChooseTraceTarget``
-    :7750-7775): with HP, Trace, no Griseous Orb, a living foe whose ability is not Forecast,
-    Trace or Multitype; ``subscript_trace.s`` copies the foe's ability to the battler and the
-    AI learns both (script.c:3403, :11806)."""
-    mon, target = _active(s, side), _active(s, foe)
-    if not (
-        mon.hp
-        and _ability(s, mon) == AbilityId.TRACE
-        and mon.item != ITEM_GRISEOUS_ORB
-        and target.hp
-        # Raw: ChooseTraceTarget (lib.c:7754-7776) and the copy (subscript_trace.s:6-7).
-        and _decomp_ability(tables, target) not in UNTRACEABLE_ABILITIES
-    ):
+    :7750-7781, ``trace_target``): ``subscript_trace.s`` copies the picked foe's ability to the
+    battler and the AI learns both (script.c:3403, :11806). ``count`` (inside a step): the fire is
+    added to ``turn.trace_fires`` at B = 4."""
+    foe = trace_target(tables, s, side, coin)
+    if foe is None:
         return False
-    mon.ability = target.ability
+    # Raw: subscript_trace.s:6-7 copies BATTLEMON_ABILITY.
+    _active(s, side).ability = _active(s, foe).ability
     s.battlers[side].trace_announced = 1  # :3727
     for battler in (side, foe):
-        if battler == 0:
-            _know_ability(s, s.battlers[0].active)
+        if _party(_fmt(s), battler) == 0:
+            _know_ability(s, s.battlers[battler].active)
+    if count and turn is not None and len(s.battlers) == 4:
+        turn.trace_fires[side] += 1
     return True
+
+
+def _intimidate(s: RefState, holder: int, target_battler: int) -> None:
+    """``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795-3808) and ``subscript_intimidate.s`` for one
+    target: a living holder with Intimidate (``Battler_Ability``) sets its ``intimidateAnnounced``
+    (:3799-3803, whatever the target), then ATTACK_DOWN_1_STAGE on a living battler not behind a
+    substitute (:13, B10-4), the holder as the attacker (:8): the target side's Mist blocks it
+    (script.c:2876-2882, B12-23), then Clear Body, White Smoke (G-46) or Hyper Cutter
+    (script.c:2884-2902, B9-6). Its "cuts" message is built in C (script.c:2956): the AI learns
+    nothing."""
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
+    mon, target = _active(s, holder), _active(s, target_battler)
+    if not (mon.hp and _ability(s, mon) == AbilityId.INTIMIDATE):
+        return
+    s.battlers[holder].intimidate_announced = 1
+    if (
+        target.hp
+        and not s.battlers[target_battler].substitute_hp
+        and not _mist_blocks_drop(s, target_battler, -1)
+        and _ability(s, target) not in blockers
+    ):
+        _change_stage(s, target_battler, Stat.ATK, -1)
 
 
 def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
     """MoveEnd's ``BattleSystem_TriggerEffectOnSwitch`` (bcp.c:3973; lib.c:3718-3851, E3-2-5):
     each state loops over every battler and acts for one whose announced flag is still clear:
-    Trace, the weather abilities, Intimidate, Download. A battler that gained the ability
-    mid-battle (Skill Swap) acts at once; nothing else is unannounced, so the pass changes
-    nothing otherwise. The battlers run in the order 0, 1 (``engine.hooks.move_end_switch_in``)."""
+    Trace (its target by ``trace_target`` with the step's coin, ``_trace_coin``), the weather
+    abilities, Intimidate (every opposing battler), Download (the sums over every opposing
+    battler). A battler that gained the ability mid-battle (Skill Swap) acts at once; nothing else
+    is unannounced, so the pass changes nothing otherwise. The battlers run in the order 0, 1, ...
+    (``engine.hooks.move_end_switch_in``)."""
     tables, battlers = turn.tables, range(_fmt(s).B)
     for b in battlers:
         if not s.battlers[b].trace_announced:
-            _trace(tables, s, b, _foe(b))
+            _trace(tables, s, b, *_trace_coin(turn, b), turn=turn)
     for b in battlers:
         sd, mon = s.battlers[b], _active(s, b)
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
@@ -2821,19 +2903,10 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
             sd.weather_announced = 1
-    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
     for b in battlers:
-        sd, mon, o = s.battlers[b], _active(s, b), _foe(b)
-        if not sd.intimidate_announced and mon.hp and _ability(s, mon) == AbilityId.INTIMIDATE:
-            sd.intimidate_announced = 1
-            foe = _active(s, o)
-            if (
-                foe.hp
-                and not s.battlers[o].substitute_hp
-                and not _mist_blocks_drop(s, o, -1)
-                and _ability(s, foe) not in blockers
-            ):
-                _change_stage(s, o, Stat.ATK, -1)
+        if not s.battlers[b].intimidate_announced:
+            for o in opposing(s, b):
+                _intimidate(s, b, o)
     for b in battlers:
         if not s.battlers[b].download_announced:
             _download(s, b)
@@ -4102,7 +4175,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     contact ability (``*_TRIGGER_ABILITY``), then King's Rock (``*_EXTRA_FLINCH``). Returns
     ``(dealt, update_hp)``: the HP the target lost, and whether ``UpdateHP`` ran."""
     tables, o = turn.tables, turn.outcome
-    target = _foe(side)
+    target = turn.target_side
     target_mon = _active(s, target)
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
@@ -4158,6 +4231,10 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     update_hp = landed and hits_foe and damage > 0
     sub_dealt = 0  # hitDamage on the substitute path
     target_sd = s.battlers[target]
+    if update_hp and len(s.battlers) == 4:
+        # lastHitByBattler[defender] = the attacker before the Substitute branch (bcp.c:3347,
+        # :3357; D2-14), B = 4 only.
+        target_sd.last_hit_by = side + 1
     if update_hp and target_sd.substitute_hp:
         # bcp.c:3359-3378 (B10-4): the substitute takes battleCtx->damage, at most its HP
         # (hitDamage, shellBellDamageDealt), the flag sets and UpdateHP returns early.
@@ -4493,9 +4570,14 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # (subscript_bide_no_target.s) ends the move; the lock is released after it (_fight).
     if sd.bide_turns:
         sd.bide_turns -= 1
-        if sd.bide_turns == 0 and (sd.bide_damage <= 0 or _active(s, _foe(side)).hp == 0):
-            _unlock(sd)
-            return DISRUPTED
+        if sd.bide_turns == 0:
+            # D2-14: lastHitByBattler with HP, else a random opponent with HP (bide_defender).
+            picked = bide_defender(s, side, turn.outcome.bide_target_draw[side])
+            if sd.bide_damage <= 0 or picked is None:
+                _unlock(sd)
+                return DISRUPTED
+            turn.defender = picked
+            turn.target_side = picked if picked != side else _foe(side)
     # CHECK_STATUS_STATE_SELF_THAW (bcp.c:2728).
     if still_frozen:
         mon.status = Status.NONE
@@ -4591,12 +4673,257 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
     ``skipPressureCheck`` is only set by script commands after it (G-8)."""
     if defender is None:
         return 1
-    foe = _active(s, _foe(side))
-    if move == MOVE_IMPRISON or _move_target(tables, move) in PRESSURE_COUNTED:
-        return 1 + int(foe.hp > 0 and _ability(s, foe) == AbilityId.PRESSURE)
+    # D2-15: COUNT_ALIVE_BATTLERS_THEIR_SIDE for Imprison and the opponent ranges, _EXCEPT_ME
+    # (the user's partner included) for RANGE_ALL_ADJACENT and RANGE_FIELD (lib.c:2905-2967).
+    target_range = _move_target(tables, move)
+    if move == MOVE_IMPRISON or target_range in PRESSURE_COUNTED:
+        their_side = move == MOVE_IMPRISON or target_range in (
+            MoveTarget.RANGE_ADJACENT_OPPONENTS,
+            MoveTarget.RANGE_OPPONENT_SIDE,
+        )
+        count = 0
+        for b in range(len(s.battlers)):
+            mon_b = _active(s, b)
+            if their_side and side_of(b) == side_of(side) or b == side:
+                continue
+            count += int(mon_b.hp > 0 and _ability(s, mon_b) == AbilityId.PRESSURE)
+        return 1 + count
     if _move_target(tables, move) in PRESSURE_NONE:
         return 1
     return 1 + int(defender != side and _ability(s, _active(s, defender)) == AbilityId.PRESSURE)
+
+
+def _follow_me_target(s: RefState, attacker: int) -> int | None:
+    """The living Follow Me user on the other side of ``attacker`` (lib.c:1694-1697, :1714-1717):
+    ``followMe`` set on ``side ^ 1`` and the Pokemon in the user's battler slot with HP; else
+    None (D2-11 rule 4)."""
+    value = s.sides[side_of(attacker) ^ 1].ts_follow_me
+    if value and _active(s, value - 1).hp > 0:
+        return value - 1
+    return None
+
+
+def _opponents(battler: int) -> tuple[int, int]:
+    """``BattleSystem_GetEnemyInSlot`` (RIGHT, LEFT) at B = 4 (sys.c:419-433; D2-4 R2.4)."""
+    return (battler ^ 1) | 2, (battler ^ 1) & 1
+
+
+def _random_opponent(s: RefState, attacker: int, bit: int) -> tuple[int, bool]:
+    """``BattleSystem_RandomOpponent`` (lib.c:4177-4198): ``(battler, drew)``."""
+    if len(s.battlers) != 4:
+        return attacker ^ 1, False
+    pair = _opponents(attacker)
+    pick = pair[bit & 1]
+    if _active(s, pick).hp == 0:
+        pick = pair[(bit & 1) ^ 1]
+    return pick, True
+
+
+def _resolve(tables, s: RefState, attacker: int, move: int, randomize: bool, chosen: int,
+             speed_order: list[int], bit: int) -> tuple[int | None, int, int, bool]:  # fmt: skip
+    """``BattleSystem_Defender`` (lib.c:1600-1730), the R3 table of D2-4.md in plain Python:
+    ``(defender or None for BATTLER_NONE, target_side, battlerCounter, drew)``. Mirrors
+    ``engine.targets.resolve``; at B = 2 (``len(s.battlers) == 2``) ``bit`` is not read."""
+    doubles = len(s.battlers) == 4
+    rng = _move_target(tables, move)
+    foe, partner = attacker ^ 1, attacker ^ 2
+    n = len(s.battlers)
+
+    def hp(b: int) -> bool:
+        return _active(s, b).hp > 0
+
+    def result(defender: int | None, counter: int = 0, drew: bool = False):
+        other = defender is not None and defender != attacker
+        return defender, defender if other else foe, counter, drew
+
+    def first(cands):
+        for k, b in enumerate(speed_order):
+            if cands(b):
+                return result(b, k + 1)
+        return result(None, n)
+
+    if rng == MoveTarget.RANGE_ADJACENT_OPPONENTS:
+        return first(lambda b: hp(b) and side_of(b) != side_of(attacker))
+    if rng == MoveTarget.RANGE_ALL_ADJACENT:
+        return first(lambda b: hp(b) and b != attacker)
+    if rng == MoveTarget.RANGE_USER_OR_ALLY and randomize:
+        if not doubles:
+            return result(attacker)
+        return result(partner if bit & 1 == 0 and hp(partner) else attacker, 0, True)
+    if rng == MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST and randomize:
+        pick, drew = _random_opponent(s, attacker, bit)
+        return result(pick, 0, drew)
+    if rng == MoveTarget.RANGE_OPPONENT_SIDE:
+        pick, drew = _random_opponent(s, attacker, bit)
+        return result(pick, 0, drew)
+    if rng in (
+        MoveTarget.RANGE_USER,
+        MoveTarget.RANGE_USER_SIDE,
+        MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+        MoveTarget.RANGE_FIELD,
+    ):
+        return result(attacker)
+    if rng == MoveTarget.RANGE_ALLY:
+        return result(partner if doubles else attacker)
+    if rng == MoveTarget.RANGE_USER_OR_ALLY:
+        return result((chosen if hp(chosen) else attacker) if doubles else attacker)
+    randomized = rng == MoveTarget.RANGE_RANDOM_OPPONENT or randomize
+    if not doubles:
+        # A non-Ghost Curse names the user, today's singles value (ledger D2-12); Follow Me names
+        # the foe there, so its arm changes nothing.
+        if _curse_on_user(tables, move, _ghost(s, attacker)):
+            return result(attacker)
+        return result(foe if hp(foe) else None)
+    fm = _follow_me_target(s, attacker)
+    if randomized:
+        o0, o1 = _opponents(attacker)
+        if fm is not None:
+            return result(fm)
+        if hp(o0) and hp(o1):
+            return result(o0 if bit & 1 == 0 else o1, 0, True)
+        return result(o0 if hp(o0) else o1 if hp(o1) else None)
+    if fm is not None:
+        return result(fm)
+    if hp(chosen):
+        return result(chosen)
+    pick, _ = _random_opponent(s, attacker, bit)
+    return result(pick if hp(pick) else None, 0, True)
+
+
+def multi_turn(tables, move: int) -> bool:
+    """``Move_IsMultiTurn`` (lib.c:2975-2992): Bide and the charge effects (D2-10 rule 1)."""
+    return bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) or (
+        _t(tables, "move_effect", move) == EffectId.BIDE
+    )
+
+
+def no_target(tables, s: RefState, battler: int, move: int, defender: int | None,
+              last_of_multi: bool) -> bool:  # fmt: skip
+    """``NO_TARGET`` (include/battle/common.h:56-61): no defender (None or -1) and the move is
+    not multi-turn, or the battler is ``MOVE_LOCKED`` or ``SYSCTL_LAST_OF_MULTI_TURN`` is set."""
+    none = defender is None or defender == -1
+    return none and (
+        not multi_turn(tables, move) or bool(s.battlers[battler].locked_move) or last_of_multi
+    )
+
+
+def charge_keeps_user(tables, s: RefState, battler: int, move: int,
+                      defender: int | None) -> bool:  # fmt: skip
+    """``BattleControllerPlayer_HasNoTarget``'s second part (bcp.c:2319-2334): the user becomes the
+    defender of a multi-turn move that found none, unless SolarBeam in sun, a Power Herb or a
+    lock (D2-10 rule 2)."""
+    none = defender is None or defender == -1
+    sun_now = (
+        bool(_t(tables, "move_flags", move) & MoveFlag.SUN_SKIP)
+        and s.weather == Weather.SUN
+        and not _weather_suppressed(tables, s)
+    )
+    herb = _item_effect(tables, _active(s, battler), s) == ItemId.POWER_HERB
+    return (
+        none
+        and multi_turn(tables, move)
+        and not no_target(tables, s, battler, move, defender, False)
+        and not sun_now
+        and not herb
+    )
+
+
+def redirect_type(tables, s: RefState, attacker: int, move: int) -> int:
+    """``CalcMoveType`` by move id, Normal replaced by the data type (lib.c:1747-1750, :7815-7917;
+    D2-12 rule 3; Weather Ball with no weather: Normal, ledger D2-6)."""
+    mon = _active(s, attacker)
+    kind = Type.NORMAL
+    if move == MOVE_HIDDEN_POWER:
+        kind = _hidden_power(mon.ivs)[0]
+    elif move == MOVE_WEATHER_BALL:
+        if _weather_ball_on(tables, s):
+            kind = WEATHER_BALL_TYPES.get(s.weather, Type.NORMAL)
+    elif move == MOVE_NATURAL_GIFT:
+        kind = _t(tables, "item_gift_type", _held(s, mon))
+    elif move == MOVE_JUDGMENT:
+        kind = PLATE_TYPES.get(_t(tables, "item_hold_effect", _held(s, mon)), Type.NORMAL)
+    return _t(tables, "move_type", move) if kind == Type.NORMAL else kind
+
+
+def redirect(tables, s: RefState, attacker: int, move: int, defender: int | None,
+             speed_order: list[int]) -> tuple[int | None, bool]:  # fmt: skip
+    """``BattleSystem_CheckRedirectionAbilities`` (lib.c:1732-1790; D2-12): ``(defender,
+    redirected)``."""
+    if defender is None or defender == -1:
+        return defender, False
+    if _ability(s, _active(s, attacker)) == AbilityId.MOLD_BREAKER:  # lib.c:1737-1738
+        return defender, False
+    if _follow_me_target(s, attacker) is not None:
+        return defender, False
+    if _move_target(tables, move) not in (
+        MoveTarget.RANGE_SINGLE_TARGET,
+        MoveTarget.RANGE_RANDOM_OPPONENT,
+    ):
+        return defender, False
+    kind = redirect_type(tables, s, attacker, move)
+    wanted = {Type.ELECTRIC: AbilityId.LIGHTNINGROD, Type.WATER: AbilityId.STORM_DRAIN}.get(kind)
+    if wanted is None:
+        return defender, False
+    for b in speed_order:
+        if b != attacker and _active(s, b).hp > 0 and _ability(s, _active(s, b)) == wanted:
+            return (b, True) if b != defender else (defender, False)
+    return defender, False
+
+
+def called_defender(tables, s: RefState, attacker: int, move: int, speed_order: list[int],
+                    bit: int) -> tuple[int | None, bool]:  # fmt: skip
+    """``BtlCmd_GoToMoveScript``'s defender for the called ``move`` (script.c:2111-2134, D2-13):
+    ``_resolve`` with randomize TRUE and the stored target, then ``redirect`` with the same move.
+    ``(defender or None, redirected)``; mirrors ``engine.targets.called_defender``."""
+    defender, _, _, _ = _resolve(
+        tables, s, attacker, move, True, s.battlers[attacker].chosen_target, speed_order, bit
+    )
+    if _fmt(s).B != 4:  # the holder would be the living foe, already the defender
+        return defender, False
+    return redirect(tables, s, attacker, move, defender, speed_order)
+
+
+def counter_defender(s: RefState, battler: int, last_attacker: int) -> int:
+    """The defender of Counter, Mirror Coat and Metal Burst (script.c:4628-4632, D2-14): the living
+    Follow Me user of the last attacker's side, else the last attacker."""
+    follow = _follow_me_target(s, battler)
+    return last_attacker if follow is None else follow
+
+
+def bide_defender(s: RefState, battler: int, bit: int) -> int | None:
+    """The defender of Bide's release (bcp.c:2704-2716, D2-14): ``lastHitByBattler`` with HP, else
+    ``BattleSystem_RandomOpponent`` with HP, else None."""
+    hit = s.battlers[battler].last_hit_by - 1
+    if hit >= 0 and _active(s, hit).hp > 0:
+        return hit
+    pick, _ = _random_opponent(s, battler, bit)
+    return pick if _active(s, pick).hp > 0 else None
+
+
+def _reveal_redirect(s: RefState, tables, holder: int) -> None:
+    """subscript_lightning_rod_redirected.s:9 tags the holder's ability: ``BattleAI_SetAbility``
+    for a player's Pokemon (D2-12 rule 10)."""
+    if _party_of(s, holder) is s.parties[0]:
+        mon = _active(s, holder)
+        slot = s.battlers[holder].active
+        s.ai_ability_known[slot] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+
+
+def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
+    """GoToMoveScript's re-pick for the called ``move`` (script.c:2111-2134, D2-13): the action's
+    defender becomes ``called_defender`` and, at B = 4, the stored target (:2123). True when it
+    finds none (``subscript_no_target.s``). ``turn.call_redirected``: the redirection check moved it."""
+    order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    called, turn.call_redirected = called_defender(
+        turn.tables, s, side, move, order, turn.outcome.call_target_draw[side]
+    )
+    if called is None:
+        return True
+    turn.defender = called
+    turn.target_side = called if called != side else _foe(side)
+    if len(s.battlers) == 4:
+        s.battlers[side].chosen_target = called
+    return False
 
 
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
@@ -4618,12 +4945,14 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     turn.sync_flag, turn.sync_mon = False, -1
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
-    target_range = _move_target(tables, move)
-    foe_defender = (
-        target_range not in SELF_DEFENDER
-        and not _curse_on_user(tables, move, _ghost(s, side))
-        and (_active(s, _foe(side)).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
-    )
+    # Randomized: Struggle or any Encore at the action's start (bcp.c:1866-1884).
+    randomize = struggling or bool(s.battlers[side].encore_move)
+    order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    turn.defender, turn.target_side, _, _ = _resolve(
+        tables, s, side, move, randomize, s.battlers[side].chosen_target, order,
+        o.target_draw[side],
+    )  # fmt: skip
+    foe_defender = turn.defender is not None and turn.defender != side
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
     # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
     turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
@@ -4651,15 +4980,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # 1 plus Pressure's (bcp.c:2236-2270), capped at the PP left (:2276-2280), ruling G-8.
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221), past DecrementPP
     # (whose no-PP case only flags MOVE_STATUS_NO_PP) and HasNoTarget (below), G-60.
-    first_charge0 = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
-        s.battlers[side].locked_move
-    )
-    no_target0 = (
-        _move_target(tables, move) != MoveTarget.RANGE_SINGLE_TARGET_SPECIAL
-        and not first_charge0
-        and not _defender_always(tables, move, _ghost(s, side))
-        and _active(s, _foe(side)).hp == 0
-    )
+    fight_defender = turn.defender
+    no_target0 = no_target(tables, s, side, move, fight_defender, False)  # D2-10
     if not no_target0:
         _metronome_update(tables, s, side, move)
         turn.met_reached = True
@@ -4667,13 +4989,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         slot = action
         if mon.pp[slot] == 0:
             return record
-        if foe_defender:
-            defender = _foe(side)
-        elif target_range in SELF_DEFENDER or _curse_on_user(tables, move, _ghost(s, side)):
-            defender = side
-        else:
-            defender = None  # BATTLER_NONE
-        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, defender, move), 0)
+        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
     # living foe for a move aimed at it. A RANGE_SINGLE_TARGET_SPECIAL move's defender is its
     # user (FightCommand bcp.c:1900; lib.c:1665-1669, ahead of the ``randomize`` branch), so it
@@ -4681,26 +4997,28 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # invokers (Sleep Talk, Metronome, Copycat, Assist: their called move's defender is
     # re-picked by GoToMoveScript, below) and Counter / Mirror Coat / Metal Burst, whose
     # command re-picks the foe. Ruling B12-30.
-    special_range = _move_target(tables, move) == MoveTarget.RANGE_SINGLE_TARGET_SPECIAL
     nature_power = _t(tables, "move_effect", move) == EffectId.NATURE_POWER
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
-    # A charge move's first use keeps a defender (the user, bcp.c:2327-2334) and runs its script,
-    # whose hit then finds none (below), B10-12.
-    first_charge = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
-        s.battlers[side].locked_move
-    )
     # The invokers (Metronome, Sleep Talk, Copycat, Assist) are RANGE_SINGLE_TARGET_SPECIAL too:
     # their own defender is the user (lib.c:1665-1669), so they pass here and their call's
     # GoToMoveScript re-picks one below (E1 Batch D; step's ``succeeded``).
-    if (
-        not special_range
-        and not first_charge
-        and not _defender_always(tables, move, _ghost(s, side))
-        and _active(s, _foe(side)).hp == 0
-    ):
+    if no_target0:  # D2-10: NO_TARGET on the fight command's defender
         _unlock(s.battlers[side])  # subscript_no_target.s
         return record
+    # HasNoTarget's second part (bcp.c:2319-2334): a charge turn with no foe keeps the user.
+    keeps_user = charge_keeps_user(tables, s, side, move, fight_defender)
+    turn.call_redirected = False
+    # D2-12: REDIRECT_TARGET (bcp.c:3204-3206), the holder is the defender from here on.
+    # At B = 2 it never fires: the holder would be the living foe, already the defender.
+    order0 = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    redirect_to, redirected = fight_defender, False
+    if _fmt(s).B == 4:
+        redirect_to, redirected = redirect(
+            tables, s, side, move, side if keeps_user else fight_defender, order0
+        )
+    if redirected:
+        turn.defender = turn.target_side = redirect_to
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
@@ -4713,9 +5031,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # moveHit becomes moveCur.
         move = _called_move(tables, s, move)
         turn.move_cur = move
-        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, _foe(side)).hp == 0:
+        if _call_defender(turn, s, side, move):
             _unlock(s.battlers[side])
             return None
+        redirected = redirected or turn.call_redirected
         record = move
     if _t(tables, "move_effect", move) in (
         EffectId.SLEEP_TALK,
@@ -4746,9 +5065,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             s.battlers[side].me_first_turn = s.turn + 1
         move = _called_move(tables, s, called)
         turn.move_cur = move
-        if not _defender_always(tables, move, _ghost(s, side)) and _active(s, _foe(side)).hp == 0:
+        if _call_defender(turn, s, side, move):
             _unlock(s.battlers[side])  # subscript_no_target.s
             return None
+        redirected = redirected or turn.call_redirected
         own_defender = _move_target(tables, move) in SELF_DEFENDER or _curse_on_user(
             tables, move, _ghost(s, side)
         )
@@ -4763,6 +5083,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # SYSCTL_ATTACK_MESSAGE_SHOWN (subscript_update_stat_stage.s:6-7).
     flags = _t(tables, "move_flags", move)
     sd = s.battlers[side]
+    if redirected and flags & MoveFlag.CHARGE:
+        _reveal_redirect(s, tables, turn.defender)  # TryMove's message, a charge turn too
     if flags & MoveFlag.CHARGE:
         second = bool(sd.locked_move)
         sun_now = (
@@ -4790,7 +5112,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         sd.locked_move = 0  # subscript_charge_move_cleanup.s:6
         turn.charge_strike = True  # :7 SYSCTL_LAST_OF_MULTI_TURN (G-60)
         sd.semi_invulnerable = 0  # the scripts' FLAG_OFF MOVE_EFFECT_SEMI_INVULNERABLE
-        if _active(s, _foe(side)).hp == 0:  # TryMove's HasNoTarget: subscript_no_target.s
+        # TryMove's HasNoTarget: subscript_no_target.s, SYSCTL_LAST_OF_MULTI_TURN set (D2-10)
+        if no_target(tables, s, side, move, turn.defender, True):
             _unlock(sd)
             return record
     # TryMove's CheckMoveHitAccuracy runs after the move script, whatever the script set (a failed
@@ -4853,6 +5176,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # first (script.c:6686-6690), whatever follows.
     if effect == EffectId.IMPRISON:
         s.battlers[_foe(side)].imprisoned = 1
+    # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (script.c:6261-6270) runs with the
+    # script, no failure branch (D2-11). Written at B = 4 only (D2-32): at B = 2 nothing reads it.
+    if effect == EffectId.FOLLOW_ME and len(s.battlers) == 4:
+        turn.follow_me[side_of(side)] = side + 1
     # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
     # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),
     # Water Sport (_0210.s:5); Imprison also without a move shared with a foe (script.c:6692-6722).
@@ -4885,14 +5212,22 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         source = _t(tables, "move_param", move, 0)
         taken = turn.taken[side][source - 1]
         attacker = turn.taken[side][source + 2] - 1
-        if not taken or attacker in (-1, side) or _active(s, attacker).hp == 0:
+        if (
+            not taken
+            or attacker < 0
+            or side_of(attacker) == side_of(side)  # D2-14: a partner's hit fails it too
+            or _active(s, attacker).hp == 0
+        ):
             _unlock(s.battlers[side])
             return None if special_counter else record
         turn.counter_damage = taken * _t(tables, "move_param", move, 1) // 10
-        # BattleSystem_DecPPForPressure on the new defender, the last attacker (script.c:4646,
-        # :4699, :7180; lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an
-        # invoker's when it called the move), while it has PP left, ruling G-9.
-        if _ability(s, _active(s, attacker)) == AbilityId.PRESSURE and mon.pp[action] > 0:
+        # D2-14: the defender is the living Follow Me user of the attacker's side, else the attacker.
+        picked = counter_defender(s, side, attacker)
+        turn.defender = turn.target_side = picked
+        # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
+        # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
+        # the move), while it has PP left, ruling G-9.
+        if _ability(s, _active(s, picked)) == AbilityId.PRESSURE and mon.pp[action] > 0:
             mon.pp[action] -= 1
         if special_counter:
             record = move
@@ -4988,6 +5323,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and not _protected(turn, s, side, move, unleash)
     ):
         _know_ability(s, s.battlers[0].active)
+    if redirected:
+        _reveal_redirect(s, tables, turn.defender)  # TryMove, bcp.c:3247-3252 (D2-12 rule 10)
     roll = o.hit[side][0]
     missed = (
         _t(tables, "move_accuracy", move) != 0
@@ -6295,6 +6632,174 @@ def _locked_slot(s: RefState, side: int) -> int:
     return moves.index(locked) if locked in moves else 0
 
 
+# RANGE_MY_SIDE (moves.h:91): the B = 2 target is the user (bcp.c:4363-4367).
+_MY_SIDE_RANGES = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+# The target menu's legal set per range (D2-2 rule 5, battle_subscreen.c:797-810, :1336-1364) as
+# relations of the user: (user, partner b ^ 2, foe b ^ 1, foe b ^ 3).
+_TARGET_RELATIONS = {
+    MoveTarget.RANGE_SINGLE_TARGET: (0, 1, 1, 1),
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL: (1, 0, 0, 0),
+    MoveTarget.RANGE_RANDOM_OPPONENT: (1, 0, 0, 0),
+    MoveTarget.RANGE_ADJACENT_OPPONENTS: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALL_ADJACENT: (0, 1, 1, 1),
+    MoveTarget.RANGE_USER: (1, 0, 0, 0),
+    MoveTarget.RANGE_USER_SIDE: (1, 1, 0, 0),
+    MoveTarget.RANGE_FIELD: (1, 1, 1, 1),
+    MoveTarget.RANGE_OPPONENT_SIDE: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALLY: (0, 1, 0, 0),
+    MoveTarget.RANGE_USER_OR_ALLY: (1, 1, 0, 0),
+    MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST: (0, 0, 1, 1),
+}
+
+
+def _present(s: RefState, b: int) -> bool:
+    """Battler ``b``'s active Pokemon has HP (not in ``battlersSwitchingMask``, D2-1 rule 5)."""
+    return _active(s, b).hp > 0
+
+
+def _selection_range(tables, s: RefState, b: int, slot: int) -> int:
+    """``MustSelectTarget``'s range (bcp.c:4344-4349): ``RANGE_USER`` for the move Curse on a
+    non-Ghost user, else the move's data range."""
+    move = _active(s, b).moves[min(slot, MOVE_ACTIONS - 1)]
+    if move == MOVE_CURSE and not _ghost(s, b):
+        return MoveTarget.RANGE_USER
+    return _move_target(tables, move)
+
+
+def _selects_target(tables, s: RefState, b: int, action: int) -> bool:
+    """Battler ``b`` reaches the target menu with ``action`` (D2-1 rule 5)."""
+    if not (
+        action < MOVE_ACTIONS
+        and _locked_slot(s, b) < 0
+        and any(_usable(tables, s, b))
+        and not s.battlers[b].encore_move
+        and _present(s, b)
+    ):
+        return False
+    if _fmt(s).B == 4:
+        alone = not _present(s, b ^ 2)
+        return not (_selection_range(tables, s, b, action) == MoveTarget.RANGE_ALLY and alone)
+    return True
+
+
+def _chosen_targets(tables, s: RefState, actions, targets) -> list[int]:
+    """``chosen_target`` of every battler after the turn's selection (D2-1): a selecting battler's
+    new target (B = 2: the user for a RANGE_MY_SIDE range, else ``b ^ 1``; B = 4: ``targets[b]``),
+    else its stored value."""
+    out = []
+    for b in range(_fmt(s).B):
+        if not _selects_target(tables, s, b, actions[b]):
+            out.append(s.battlers[b].chosen_target)
+        elif _fmt(s).B == 2:
+            own = _selection_range(tables, s, b, actions[b]) in _MY_SIDE_RANGES
+            out.append(b if own else b ^ 1)
+        else:
+            out.append(int(targets[b]))
+    return out
+
+
+def _legal_targets(tables, s: RefState, b: int, slot: int) -> list[bool]:
+    """The battlers ``b`` may choose as the target of move slot ``slot`` (D2-2)."""
+    rng = _selection_range(tables, s, b, slot)
+    count = _fmt(s).B
+    if count == 2:
+        one = b if rng in _MY_SIDE_RANGES else b ^ 1
+        return [x == one for x in range(2)]
+    out = [False] * count
+    for who, flag in zip((b, b ^ 2, b ^ 1, b ^ 3), _TARGET_RELATIONS[rng]):
+        out[who] = bool(flag) and _present(s, who)
+    return out
+
+
+def _trapped(tables, s: RefState, b: int) -> bool:
+    """``Battler_IsTrapped`` (lib.c:5514-5536): Bind, Mean Look, Ingrain, or a living foe's Shadow
+    Tag, Magnet Pull (Steel) or Arena Trap (grounded)."""
+    mon, sd = _active(s, b), s.battlers[b]
+    grounded = (
+        (
+            _ability(s, mon) != AbilityId.LEVITATE  # BattlerIsGrounded, lib.c:5502
+            and not sd.magnet_rise_turns
+            and Type.FLYING not in mon.types
+        )
+        or _iron_ball(tables, s, mon)
+        or bool(s.gravity)
+    )
+    if sd.trapped or sd.mean_look or sd.ingrain:
+        return True
+    for foe in range(_fmt(s).B):
+        if foe == b or not _present(s, foe):
+            continue
+        theirs = _ability(s, _active(s, foe))  # CountAbilityTheirSide, lib.c:5509-5512
+        if (
+            (theirs == AbilityId.SHADOW_TAG and _ability(s, mon) != AbilityId.SHADOW_TAG)
+            or (theirs == AbilityId.MAGNET_PULL and Type.STEEL in mon.types)
+            or (theirs == AbilityId.ARENA_TRAP and grounded)
+        ):
+            return True
+    return False
+
+
+def _switch_targets(tables, s: RefState, b: int) -> list[bool]:
+    """The party slots ``b`` may switch to (D2-3 rule 7)."""
+    mons = _party_of(s, b).mons
+    blocked = _trapped(tables, s, b) or _locked_slot(s, b) >= 0
+    partner = None
+    if _fmt(s).B == 4 and _party(_fmt(s), b ^ 2) == _party(_fmt(s), b):
+        partner = s.battlers[b ^ 2].active
+    return [
+        not blocked
+        and slot != s.battlers[b].active
+        and slot != partner
+        and mon.species > 0
+        and mon.hp > 0
+        for slot, mon in enumerate(mons)
+    ]
+
+
+def _legal_choices(tables, s: RefState, b: int) -> list[list[bool]]:
+    """``[action][target]``: battler ``b``'s legal (action, target) pairs (D2-3)."""
+    count = _fmt(s).B
+    placeholder = [x == b for x in range(count)]
+    none = [False] * count
+    if not _present(s, b):
+        return [placeholder if a == 0 else none for a in range(MOVE_ACTIONS + 6)]
+    usable = _usable(tables, s, b)
+    if not any(usable):  # Struggle: action 0 stays legal
+        usable[0] = True
+    rows = []
+    for a in range(MOVE_ACTIONS):
+        picks = _legal_targets(tables, s, b, a) if _selects_target(tables, s, b, a) else placeholder
+        rows.append(picks if usable[a] else none)
+    for ok in _switch_targets(tables, s, b):
+        rows.append(placeholder if ok else none)
+    return rows
+
+
+def _decision_pairs(tables, s: RefState) -> list[list[list[list[bool]]]]:
+    """``[a0][t0][a2][t2]``: the player's joint decision of battlers 0 and 2 (D2-3 rule 8)."""
+    first, second = _legal_choices(tables, s, 0), _legal_choices(tables, s, 2)
+    return [
+        [
+            [
+                [
+                    first[a0][t0]
+                    and second[a2][t2]
+                    and not (a0 >= MOVE_ACTIONS and a2 >= MOVE_ACTIONS and a0 == a2)
+                    for t2 in range(len(second[a2]))
+                ]
+                for a2 in range(len(second))
+            ]
+            for t0 in range(len(first[a0]))
+        ]
+        for a0 in range(len(first))
+    ]
+
+
 def _command(action: int) -> str:
     if action >= FIRST_ITEM_ACTION:
         return ITEM
@@ -6312,7 +6817,7 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
     return _active(s, side).moves[min(action, MOVE_ACTIONS - 1)], False, False
 
 
-def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
+def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets=None) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
     picked slot (``_resume``); a turn that reaches such a list stops there and writes the
@@ -6320,10 +6825,17 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     s = copy.deepcopy(state)
     if s.over:
         return s
+    picked = [int(a) for a in actions]
     actions = (int(actions[0]), int(actions[1]))
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
+    if targets is None:
+        if _fmt(s).B != 2:
+            raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
+        targets = [0, 0]
+    if _fmt(s).B == 4:  # bcp.c:548; B = 2 writes nothing (ruling D2-28)
+        _put(s, "chosen_target", _chosen_targets(tables, s, picked, targets))
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]
@@ -6617,6 +7129,9 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_switched", [int(c == SWITCH) for c in turn.commands])
     s.ts_pick_mul = turn.pick_mul
     _put(s, "ts_assurance", [int(f) for f in turn.assurance])
+    _put(s, "ts_trace_fires", turn.trace_fires)
+    for k, sc in enumerate(s.sides):
+        sc.ts_follow_me = turn.follow_me[k]
     for sd in s.battlers:  # read by the order, next read at the next turn
         sd.qc_roll = 0
 
@@ -6667,6 +7182,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.move_failed = [bool(f) for f in _get(s, "ts_move_failed")]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
+    turn.trace_fires = _get(s, "ts_trace_fires")
+    turn.follow_me = [sc.ts_follow_me for sc in s.sides]
     turn.fainted = [
         (_fainted_battler(s, k, i), i)
         for k, pt in enumerate(s.parties)
@@ -6690,6 +7207,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
             setattr(bt, name, [0] * 6 if name == "ts_taken" else 0)
     for pt in s.parties:
         pt.ts_alive = 0
+    for sc in s.sides:
+        sc.ts_follow_me = 0
     foe = _foe(side)
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
     # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party
@@ -6778,7 +7297,8 @@ def _keep_qc(tables, s: RefState, qc: list[int]) -> None:
         sd.qc_roll = int(bool(value)) if kept else 0
 
 
-def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True) -> RefState:
+def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = True,
+                trace_pick: list[int] | None = None) -> RefState:  # fmt: skip
     """A faint replacement (``engine.step.replace``'s contract): ``TurnEnd`` ->
     ``ReplaceFainted`` (bcp.c:1848) -> ``subscript_show_party_list.s`` sends the
     Pokemon in and runs the hazards and a faint check (:22-24); the battle-over check
@@ -6788,6 +7308,7 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     # ReplaceFainted runs before totalTurns++ (bcp.c:1852), after ref_step counted the
     # turn: the decomp's totalTurns + 1 is s.turn here.
     turn = _Turn(tables, None, entry_turn=s.turn, battler_count=_fmt(s).B)
+    turn.trace_pick = trace_pick
     _enter(turn, s, side, slot)
     # subscript_show_party_list.s:18 / :22, and subscript_replace_fainted.s:58 / :62 in shift
     # style (the same order): the exp flag at the send-out, then the hazards.
