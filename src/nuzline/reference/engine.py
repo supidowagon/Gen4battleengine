@@ -1279,7 +1279,10 @@ def _calc_move_damage(
     elif not in_power and effect == EffectId.GYRO_BALL:  # the turn-start table's speeds
         power = _gyro_power(tables, s, attacker, defender)
     elif not in_power and effect == EffectId.TRUMP_CARD and move in atk.moves:
-        power = TRUMP_CARD_POWER[min(max(atk.pp[atk.moves.index(move)] - 1, 0), 4)]
+        # The PP after DecrementPP's cost, Pressure's included (bcp.c:2235-2297, _pp_cost with
+        # the defender as the fight command's), then CalcTrumpCardPower (script.c:7233-7245).
+        cost = _pp_cost(tables, s, attacker, defender, move)
+        power = TRUMP_CARD_POWER[min(max(atk.pp[atk.moves.index(move)] - cost, 0), 4)]
     elif not in_power and effect == EffectId.NATURAL_GIFT:  # script.c:8088-8102, B13-20
         power = _t(tables, "item_gift_power", _gift_item(s, attacker, gift))
     move_type = _move_type(tables, s, attacker, move, gift)  # lib.c:6680 (Normalize is unsupported)
