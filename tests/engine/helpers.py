@@ -41,6 +41,48 @@ _GENDERS = {"male": 0, "female": 1, "none": 2}  # BattleState.gender
 OPP_FIXTURE_MOVES = ("Tackle", "Rock Throw", "Stealth Rock", "Leer")
 
 
+# Shared programs: every test module steps through these objects, so a program compiled in one
+# module serves the next (the conftest keeps JAX's in-memory programs across modules until the
+# process passes its memory threshold). ``jit_step`` is ``step`` compiled: an eager ``step``
+# call runs the whole engine op by op and compiles each control-flow branch on its own (one
+# eager module reached 16 GB). ``BATCH`` is the suite's one padded row count for vmapped
+# programs: ``step_rows`` and ``sample_rows`` pad every call to it, so one program per kind
+# serves every file whatever its row count.
+BATCH = 1024
+jit_step = jax.jit(step)
+step_batch = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
+
+
+def _padded_calls(n: int):
+    """``(rows, padded index)`` per ``BATCH``-row call over ``n`` rows (padding: row 0 of the
+    call repeated); a row's result does not depend on the call it is in."""
+    for start in range(0, n, BATCH):
+        idx = np.arange(start, min(start + BATCH, n))
+        yield idx, jnp.asarray(np.concatenate([idx, np.full(BATCH - len(idx), idx[0])]))
+
+
+def _joined(parts, counts):
+    """The calls' real rows, in order (the padding dropped)."""
+    parts = [jax.tree.map(lambda f, n=n: f[:n], p) for p, n in zip(parts, counts, strict=True)]
+    return parts[0] if len(parts) == 1 else jax.tree.map(lambda *fs: jnp.concatenate(fs), *parts)
+
+
+def padded_rows(program, tables: Tables, state: BattleState, actions, outcomes: Outcome):
+    """``program`` (a jitted vmap over the outcome rows, as ``step_batch``) of every outcome
+    row, in ``BATCH``-row calls: one compile whatever the row count."""
+    calls = list(_padded_calls(len(outcomes.hit)))
+    parts = [
+        program(tables, state, actions, jax.tree.map(lambda f, p=pad: jnp.asarray(f)[p], outcomes))
+        for _, pad in calls
+    ]
+    return _joined(parts, [len(idx) for idx, _ in calls])
+
+
+def step_rows(tables: Tables, state: BattleState, actions, outcomes: Outcome) -> BattleState:
+    """``step`` of every outcome row, in ``BATCH``-row calls of one program."""
+    return padded_rows(step_batch, tables, state, actions, outcomes)
+
+
 def drop_programs() -> None:
     """Drop JAX's in-memory programs and traces (``jax.clear_caches``), between two whole-engine
     programs of one test: a compiled loop or turn program keeps gigabytes resident, and the
@@ -309,11 +351,11 @@ def A(player, opp, state: BattleState, names: Names) -> jnp.ndarray:
 def assert_matches_reference(
     tables: Tables, state: BattleState, actions, outcome: Outcome
 ) -> BattleState:
-    """Step ``state`` with the JAX engine (``jax.jit(step)``) and the plain-Python
+    """Step ``state`` with the JAX engine (``jit_step``) and the plain-Python
     reference engine (``ref_step`` through ``to_ref`` / ``from_ref``), assert every
     field equal (the field name is in the message), and return the JAX state."""
     acts = jnp.asarray(actions, jnp.int32)
-    out = jax.jit(step)(tables, state, acts, outcome)
+    out = jit_step(tables, state, acts, outcome)
     ref = from_ref(
         ref_step(
             to_numpy(tables),
@@ -358,5 +400,9 @@ def _sample_rows(keys, tables: Tables, state: BattleState, actions, replacement:
 
 def sample_rows(keys, tables: Tables, state: BattleState, actions):
     """``sample_outcome`` of every key (one program per ``replacement`` value): its static
-    ``replacement`` from ``outcome.replacement_known`` of the concrete ``state``."""
-    return _sample_rows(keys, tables, state, actions, replacement_known(tables, state))
+    ``replacement`` from ``outcome.replacement_known`` of the concrete ``state``. In
+    ``BATCH``-key calls: one program whatever the key count."""
+    replacement = replacement_known(tables, state)
+    calls = list(_padded_calls(len(keys)))
+    parts = [_sample_rows(keys[pad], tables, state, actions, replacement) for _, pad in calls]
+    return _joined(parts, [len(idx) for idx, _ in calls])
