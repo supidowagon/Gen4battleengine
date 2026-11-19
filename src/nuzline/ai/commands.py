@@ -80,6 +80,7 @@ from nuzline.engine.damage import (
     ai_move_type,
     decomp_abilities,
 )
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -1474,8 +1475,8 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     4108-4110, :4133-4134), and the partner check needs a doubles battle (:3597)."""
     tables, state = ctx.tables, ctx.state
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
-    moves = state.moves[a, state.active[a]].astype(_I32)
-    d_types = state.types[d, state.active[d]]
+    moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
+    d_types = state.types[_row(state, d), state.active[d]]
     identified, grounded, roosting, magnet = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
@@ -1518,16 +1519,22 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     cases = drawn_cases(tables, state, SIM_ROLL_MAX)  # IVs reach Hidden Power's case only
 
     def estimates(moves, ivs, item):
-        as_active = state._replace(ivs=state.ivs.at[a, active].set(ivs))
+        as_active = state._replace(ivs=state.ivs.at[_row(state, a), active].set(ivs))
         return jax.vmap(
             lambda m: estimate(tables, as_active, m, SIM_ROLL_MAX, cases=cases, item=item)
         )(moves.astype(_I32))
 
-    mine = estimates(state.moves[a, active], state.ivs[a, active], held_item(state, a))
-    member_items = jnp.where(state.ability[a] == AbilityId.KLUTZ, 0, state.item[a])
-    theirs = jax.vmap(estimates)(state.moves[a], state.ivs[a], member_items)  # [SLOTS, 4, C]
+    mine = estimates(
+        state.moves[_row(state, a), active], state.ivs[_row(state, a), active], held_item(state, a)
+    )
+    member_items = jnp.where(
+        state.ability[_row(state, a)] == AbilityId.KLUTZ, 0, state.item[_row(state, a)]
+    )
+    theirs = jax.vmap(estimates)(
+        state.moves[_row(state, a)], state.ivs[_row(state, a)], member_items
+    )  # [SLOTS, 4, C]
     slots = jnp.arange(state.species.shape[1])
-    alive = (state.species[a] > 0) & (state.hp[a] > 0) & (slots != active)
+    alive = (state.species[_row(state, a)] > 0) & (state.hp[_row(state, a)] > 0) & (slots != active)
     # A member that is not estimated draws nothing (:2145-2148).
     theirs = theirs._replace(kind=jnp.where(alive[:, None], theirs.kind, CALC_NONE))
     n = theirs.kind.shape[0]
@@ -1583,7 +1590,7 @@ def if_battler_deals_more_damage(
         SIM_ROLL_MAX,
         atk_side=d,
         def_side=_side(Battler.DEFENDER),
-        ivs=state.ivs[a, state.active[a]],
+        ivs=state.ivs[_row(state, a), state.active[a]],
         damaging_test=False,
     )
     # Psywave's and Magnitude's draws (:2210 the AI's moves, :2228 the battler's; Psywave at
@@ -1778,6 +1785,11 @@ def _side(battler: Battler) -> int:
     return int(battler)
 
 
+def _row(state: BattleState, battler):
+    """The party index of ``battler`` (``engine.format.party``)."""
+    return party(format_of(state), battler)
+
+
 def _jump(ctx: AiContext, cond) -> AiContext:
     return ctx._replace(jump=jnp.asarray(cond))
 
@@ -1929,7 +1941,7 @@ def load_type_from(ctx: AiContext, target: LoadType) -> AiContext:
         return ctx._replace(calc_temp=ctx.tables.move_type[ctx.move].astype(_I32))
     target = LoadType(target)
     side = 1 if target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2) else 0
-    types = state.types[side, state.active[side]].astype(_I32)
+    types = state.types[_row(state, side), state.active[side]].astype(_I32)
     index = 0 if target in (LoadType.DEFENDER_TYPE_1, LoadType.ATTACKER_TYPE_1) else 1
     return ctx._replace(calc_temp=types[index])
 
@@ -1954,8 +1966,8 @@ def if_level(ctx: AiContext, op: int) -> AiContext:
     ``op`` never jumps."""
     state = ctx.state
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
-    mine = state.level[a, state.active[a]].astype(_I32)
-    theirs = state.level[d, state.active[d]].astype(_I32)
+    mine = state.level[_row(state, a), state.active[a]].astype(_I32)
+    theirs = state.level[_row(state, d), state.active[d]].astype(_I32)
     jump = {
         CHECK_HIGHER_THAN_TARGET: mine > theirs,
         CHECK_LOWER_THAN_TARGET: mine < theirs,
@@ -1988,7 +2000,7 @@ def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
     item a message named, 0 none)."""
     state, side = ctx.state, _side(battler)
     if side == _side(Battler.ATTACKER):
-        return state.item[side, state.active[side]].astype(_I32)
+        return state.item[_row(state, side), state.active[side]].astype(_I32)
     return state.ai_item_known[state.active[side]].astype(_I32)
 
 
@@ -2001,7 +2013,7 @@ def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadHeldItem`` (trainer_ai.c:1891-1899): ``battleMons[battler].heldItem``, the true item of
     either side (unlike ``IfHeldItemEqualTo``)."""
     state, side = ctx.state, _side(battler)
-    return ctx._replace(calc_temp=state.item[side, state.active[side]].astype(_I32))
+    return ctx._replace(calc_temp=state.item[_row(state, side), state.active[side]].astype(_I32))
 
 
 def load_held_item_effect(ctx: AiContext, battler: Battler) -> AiContext:
@@ -2022,7 +2034,7 @@ def load_current_move_pp(ctx: AiContext) -> AiContext:
     """``LoadCurrentMovePP`` (trainer_ai.c:2024-2028): the attacker's
     ``ppCur[AI_CONTEXT.moveSlot]``."""
     state, a = ctx.state, _side(Battler.ATTACKER)
-    return ctx._replace(calc_temp=state.pp[a, state.active[a], ctx.slot].astype(_I32))
+    return ctx._replace(calc_temp=state.pp[_row(state, a), state.active[a], ctx.slot].astype(_I32))
 
 
 def sum_positive_stat_stages(ctx: AiContext, battler: Battler) -> AiContext:
@@ -2112,7 +2124,7 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     on = jnp.asarray(False)
     for member, field in _SIDE_CONDITION_FIELDS.items():
         if mask & member:
-            on = on | (getattr(ctx.state, field)[side] > 0)
+            on = on | (getattr(ctx.state, field)[side_of(side)] > 0)
     return _jump(ctx, on)
 
 
@@ -2148,14 +2160,14 @@ def load_spikes_layers(ctx: AiContext, battler: Battler, condition: SideConditio
     field = {SideCondition.SPIKES: "spikes", SideCondition.TOXIC_SPIKES: "toxic_spikes"}[
         SideCondition(int(condition))
     ]
-    return ctx._replace(calc_temp=getattr(ctx.state, field)[_side(battler)].astype(_I32))
+    return ctx._replace(calc_temp=getattr(ctx.state, field)[side_of(_side(battler))].astype(_I32))
 
 
 def count_alive_party_battlers(ctx: AiContext, battler: Battler) -> AiContext:
     """``CountAlivePartyBattlers`` (trainer_ai.c:1126): the side's living party members
     other than the active one."""
     state, side = ctx.state, _side(battler)
-    alive = (state.species[side] > 0) & (state.hp[side] > 0)
+    alive = (state.species[_row(state, side)] > 0) & (state.hp[_row(state, side)] > 0)
     alive = alive & (jnp.arange(alive.shape[0]) != state.active[side])
     return ctx._replace(calc_temp=jnp.sum(alive.astype(_I32)))
 
@@ -2233,7 +2245,11 @@ def if_move_known(ctx: AiContext, battler: Battler, move: int) -> AiContext:
 def _hp_percent(ctx: AiContext, battler: Battler) -> jnp.ndarray:
     state, side = ctx.state, _side(battler)
     mon = state.active[side]
-    return state.hp[side, mon].astype(_I32) * 100 // state.max_hp[side, mon].astype(_I32)
+    return (
+        state.hp[_row(state, side), mon].astype(_I32)
+        * 100
+        // state.max_hp[_row(state, side), mon].astype(_I32)
+    )
 
 
 def if_hp_percent_less_than(ctx: AiContext, battler: Battler, percent: int) -> AiContext:
@@ -2314,7 +2330,7 @@ def if_status(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     asleep Pokemon meets the whole ``SLEEP`` group: the battle tests sleep as
     ``status & MON_CONDITION_SLEEP`` (e.g. battle_lib.c:1845)."""
     side = _side(battler)
-    status = ctx.state.status[side, ctx.state.active[side]].astype(_I32)
+    status = ctx.state.status[_row(ctx.state, side), ctx.state.active[side]].astype(_I32)
     return _jump(ctx, jnp.isin(status, jnp.asarray(_condition_statuses(mask), _I32)))
 
 
@@ -2325,9 +2341,13 @@ def if_party_member_status(ctx: AiContext, battler: Battler, mask: int) -> AiCon
     side = _side(battler)
     state = ctx.state
     statuses = jnp.asarray(_condition_statuses(mask), _I32)
-    status = state.status[side].astype(_I32)
+    status = state.status[_row(state, side)].astype(_I32)
     slots = jnp.arange(status.shape[0])
-    member = (slots != state.active[side]) & (state.hp[side] != 0) & (state.species[side] != 0)
+    member = (
+        (slots != state.active[side])
+        & (state.hp[_row(state, side)] != 0)
+        & (state.species[_row(state, side)] != 0)
+    )
     return _jump(ctx, jnp.any(member & jnp.isin(status, statuses)))
 
 
@@ -2512,7 +2532,7 @@ def load_gender(ctx: AiContext, battler: Battler) -> AiContext:
     (``BattleState.gender`` of the side's active Pokemon; ``Gender``)."""
     side = _side(battler)
     state = ctx.state
-    return ctx._replace(calc_temp=state.gender[side, state.active[side]].astype(_I32))
+    return ctx._replace(calc_temp=state.gender[_row(state, side), state.active[side]].astype(_I32))
 
 
 def load_defender_last_used_move_class(ctx: AiContext) -> AiContext:

@@ -23,6 +23,7 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.effects import MIST_TURNS
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     HP_RESTORED_ALL,
     HP_RESTORED_HALF,
@@ -33,7 +34,7 @@ from nuzline.engine.ids import (
     Stat,
     Status,
 )
-from nuzline.engine.state import BattleState
+from nuzline.engine.state import BattleState, field_index
 
 _I32 = jnp.int32
 MAX_STAGE = 6  # MAX_STAT_STAGE 12 in the decomp's 0-12 encoding; BattleState stages are -6..6
@@ -128,9 +129,9 @@ def bag_item_branch(tables: Tables, state: BattleState, side, item) -> tuple:
     used from the battler's first turn on (``fakeOutTurnNumber - totalTurns >= 0``, :4156;
     Guard Spec also without Mist on side 1, the AI's own, ``sideConditionsMask[1]``)."""
     p = _params(tables, item)
-    mon = state.active[side]
-    hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
-    status = state.status[side, mon].astype(_I32)
+    mon, row = state.active[side], party(format_of(state), side)
+    hp, max_hp = state.hp[row, mon].astype(_I32), state.max_hp[row, mon].astype(_I32)
+    status = state.status[row, mon].astype(_I32)
     low = (hp > 0) & (hp < max_hp // 4)
     restored = p[ItemParam.HP_RESTORED] & 0xFF  # u8 hpRestore (trainer_ai.c:4061, :4106)
     heals = (restored > 0) & (hp > 0) & ((hp < max_hp // 4) | (max_hp - hp > restored))
@@ -169,6 +170,7 @@ def bag_item_category(tables: Tables, state: BattleState, side, item) -> jnp.nda
 
 def _set(state: BattleState, field: str, index, value, cond) -> BattleState:
     arr = getattr(state, field)
+    index = field_index(state, field, index)
     new = jnp.where(cond, value, arr[index]).astype(arr.dtype)
     return state._replace(**{field: arr.at[index].set(new)})
 
@@ -209,14 +211,14 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     # condition held (an item action the AI did not choose is a test's, not the game's).
     cat, cond, _ = bag_item_branch(tables, state, side, item)
     p = _params(tables, item)
-    mon = state.active[side]
+    mon, row = state.active[side], party(format_of(state), side)
     full = run & (cat == ItemAiCategory.FULL_RESTORE)
     state = _set(state, "status", (side, mon), Status.NONE, full)
     state = _set(state, "status_counter", (side, mon), 0, full)
     state = _set(state, "confusion", side, 0, full)
 
     applied = jnp.asarray(False)
-    status = state.status[side, mon].astype(_I32)
+    status = state.status[row, mon].astype(_I32)
     for param, statuses in STATUS_CURES:
         has = jnp.isin(status, jnp.array([int(s) for s in statuses], _I32))
         cure = run & (p[param] != 0) & has
@@ -229,7 +231,7 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     cure = run & (p[ItemParam.HEAL_ATTRACT] != 0) & (state.infatuated[side] > 0)
     state = _set(state, "infatuated", side, 0, cure)
     applied = applied | cure
-    mist = run & (p[ItemParam.GUARD_SPEC] != 0) & (state.mist[side] == 0)
+    mist = run & (p[ItemParam.GUARD_SPEC] != 0) & (state.mist[side_of(side)] == 0)
     state = _set(state, "mist", side, MIST_TURNS, mist)
     applied = applied | mist
     for param, stat in STAGE_PARAMS:
@@ -240,21 +242,21 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     focus = run & (p[ItemParam.CRIT_STAGES] != 0) & (state.focus_energy[side] == 0)
     state = _set(state, "focus_energy", side, 1, focus)
     applied = applied | focus
-    moves = state.moves[side, mon].astype(_I32)
+    moves = state.moves[row, mon].astype(_I32)
     max_pp = tables.move_pp[moves].astype(_I32)
     gain = p[ItemParam.PP_RESTORED]
     slots = jnp.arange(moves.shape[0])
     one = (p[ItemParam.PP_RESTORE] != 0) & (slots == 0)
     every = p[ItemParam.PP_RESTORE_ALL] != 0
     # PP_RESTORE then PP_RESTORE_ALL: slot 0 can take both (:628-661).
-    pp = state.pp[side, mon].astype(_I32)
+    pp = state.pp[row, mon].astype(_I32)
     for restore in (one, every & (slots >= 0)):
         restore = run & restore & (pp != max_pp)
         pp = jnp.where(restore, jnp.minimum(pp + gain, max_pp), pp)
         applied = applied | jnp.any(restore)
     state = _set(state, "pp", (side, mon), pp, run)
 
-    hp, max_hp = state.hp[side, mon].astype(_I32), state.max_hp[side, mon].astype(_I32)
+    hp, max_hp = state.hp[row, mon].astype(_I32), state.max_hp[row, mon].astype(_I32)
     revive = p[ItemParam.REVIVE] != 0
     target = jnp.where(revive, hp == 0, hp != 0)
     heal = run & (p[ItemParam.HP_RESTORE] != 0) & target & (hp != max_hp)
@@ -271,7 +273,7 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     applied = applied | heal
     recovery = jnp.where(heal & ~revive, amount, 0)
 
-    friendship = state.friendship[side, mon].astype(_I32)
+    friendship = state.friendship[row, mon].astype(_I32)
     gain = jnp.int32(0)
     low = 0
     for give, amt, top in FRIENDSHIP_BANDS:

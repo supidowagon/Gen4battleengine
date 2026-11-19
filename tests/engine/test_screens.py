@@ -53,8 +53,10 @@ def test_light_screen_halves_special_noncrit(tables, names):
     screened = damage_table(tables, _put(s, "light_screen", 1, 3), 0, ember, False).tolist()
     assert all(b < a for a, b in zip(plain, screened, strict=True))
     # Exactly the decomp's `damage /= 2` (lib.c:7030), before the `+ 2` (:7078).
-    base = int(_pre_random(tables, s, 0, ember, False)[0]) - 2
-    halved = int(_pre_random(tables, _put(s, "light_screen", 1, 3), 0, ember, False)[0]) - 2
+    base = int(_pre_random(tables, s, 0, ember, False, def_side=1)[0]) - 2
+    halved = (
+        int(_pre_random(tables, _put(s, "light_screen", 1, 3), 0, ember, False, def_side=1)[0]) - 2
+    )
     assert halved == base // 2
     # A crit ignores it (lib.c:7023 criticalMul == 1) and Reflect does not touch special.
     assert damage_table(tables, _put(s, "light_screen", 1, 3), 0, ember, True).tolist() == (

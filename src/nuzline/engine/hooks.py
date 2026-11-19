@@ -83,6 +83,8 @@ from nuzline.engine.damage import (
     trace_copy,
 )
 from nuzline.engine.effects import change_stage, entry_hazards, forget_item, mist_blocks_drop
+from nuzline.engine.format import foe as _foe
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
@@ -227,13 +229,14 @@ def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleSt
     battle_script.c:2841-2873: at +6 it ends silently). Its "raised its" message is built in C
     (``SetupNicknameAbilityStatMsg``, :2854): the AI learns nothing. ``staged=False`` reads every
     foe's stages as 0 (``search.playout.replacement_pass``, a fresh newcomer)."""
+    fmt = format_of(state)
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
     sum_def, sum_spd = jnp.int32(0), jnp.int32(0)
     for foe in foes:  # the opposing battlers (doubles: both)
         target = state.active[foe]
-        counts = (state.hp[foe, target] > 0) & (state.substitute_hp[foe] == 0)
-        stats = state.stats[foe, target].astype(_I32)
+        counts = (state.hp[party(fmt, foe), target] > 0) & (state.substitute_hp[foe] == 0)
+        stats = state.stats[party(fmt, foe), target].astype(_I32)
         stages = state.stages[foe].astype(_I32) * int(bool(staged))
         defense = apply_stage(stats[Stat.DEF - 1], stages[Stat.DEF])
         sp_def = apply_stage(stats[Stat.SPD - 1], stages[Stat.SPD])
@@ -241,8 +244,8 @@ def download(state: BattleState, side, foes, cond=True, staged=True) -> BattleSt
         sum_spd = sum_spd + jnp.where(counts, sp_def, 0)
     on = (
         jnp.asarray(cond)
-        & (state.ability[side, mon] == AbilityId.DOWNLOAD)
-        & (state.hp[side, mon] > 0)
+        & (state.ability[party(fmt, side), mon] == AbilityId.DOWNLOAD)
+        & (state.hp[party(fmt, side), mon] > 0)
         & (sum_def + sum_spd != 0)
     )
     state = change_stage(state, side, Stat.SPA, 1, on & (sum_def >= sum_spd))
@@ -255,8 +258,9 @@ def reveal_ability(state: BattleState, side, slot, phase: str, cond=True) -> Bat
     at ``phase`` (``REVEALS_ON``): ``BattleAI_SetAbility`` records the id the message names (G-69)."""
     abilities = jnp.asarray([a for a, p in REVEALS_ON.items() if phase in p], state.ability.dtype)
     side = jnp.asarray(side, _I32)
-    on = cond & (side == 0) & jnp.isin(state.ability[side, slot], abilities)
-    record = decomp_ability_id(state.ability[side, slot])
+    row = party(format_of(state), side)
+    on = cond & (row == 0) & jnp.isin(state.ability[row, slot], abilities)
+    record = decomp_ability_id(state.ability[row, slot])
     known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
@@ -265,8 +269,9 @@ def _know(state: BattleState, side, slot, cond) -> BattleState:
     """``ai_ability_known[slot] = 1`` where ``cond`` and ``side`` is the player: a script
     wrote or tagged the battler's ability (``BattleAI_SetAbility``, battle_script.c:3074,
     :3403, :11806), whatever the ability."""
-    on = jnp.asarray(cond) & (jnp.asarray(side, _I32) == 0)
-    record = decomp_ability_id(state.ability[jnp.asarray(side, _I32), slot])
+    row = party(format_of(state), jnp.asarray(side, _I32))
+    on = jnp.asarray(cond) & (row == 0)
+    record = decomp_ability_id(state.ability[row, slot])
     known = jnp.where(on, record, state.ai_ability_known[slot]).astype(state.ai_ability_known.dtype)
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
@@ -283,10 +288,15 @@ def trace(
     (battle_script.c:3403) and the message tags the target's ability (``BTLSCR_MSG_DEFENDER``,
     :11806): the AI knows both (``_know``). Abilities the engine does not model are refused by
     coverage before they can be copied (the target holds them)."""
+    fmt = format_of(state)
     mon, target = state.active[side], state.active[foe]
     traced = jnp.asarray(cond) & trace_copy(tables, state, side, foe)
-    new = jnp.where(traced, state.ability[foe, target], state.ability[side, mon])
-    state = state._replace(ability=state.ability.at[side, mon].set(new.astype(state.ability.dtype)))
+    new = jnp.where(
+        traced, state.ability[party(fmt, foe), target], state.ability[party(fmt, side), mon]
+    )
+    state = state._replace(
+        ability=state.ability.at[party(fmt, side), mon].set(new.astype(state.ability.dtype))
+    )
     state = _know(state, side, mon, traced)
     return _know(state, foe, target, traced), traced
 
@@ -298,9 +308,9 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     becomes that one, permanently (``weather_timer`` 0; subscript_drizzle.s etc.:
     ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless that permanent weather is
     up already (no script then, the field is the same). Cloud Nine does not stop it."""
-    mon = state.active[side]
-    weather = ability_weather(state.ability[side, mon])
-    on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[side, mon] > 0)
+    mon, row = state.active[side], party(format_of(state), side)
+    weather = ability_weather(state.ability[row, mon])
+    on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
     already = (state.weather == weather) & (state.weather_timer == 0)
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     return state._replace(
@@ -322,7 +332,8 @@ def order_swaps(tables: Tables, state: BattleState) -> jnp.ndarray:
     leaves both priorities 0, but each Quick Claw's ``speedRand`` bit ``qc`` still activates it,
     :1278-1286, and an exact tie swaps on ``RandNext() & 1``, :1445). A fainted battler goes
     after a living one (:1205-1211). Ruling G-26."""
-    down = [state.hp[side, state.active[side]] == 0 for side in (0, 1)]
+    fmt = format_of(state)
+    down = [state.hp[party(fmt, b), state.active[b]] == 0 for b in range(fmt.B)]
     bits = jnp.int32(0)
     for draw in range(ORDER_DRAWS):
         qc = jnp.asarray([(draw >> 1) & 1, (draw >> 2) & 1], _I32)
@@ -337,8 +348,11 @@ def weather_war(state: BattleState) -> jnp.ndarray:
     (``Battler_Ability``: Drizzle, Sand Stream, Drought, Snow Warning) that set different
     weathers. Run in one weather state (battle_lib.c:3740-3790), each sets its own (the other's
     permanent weather is not its own), so the second in ``monSpeedOrder`` leaves its weather."""
-    weathers = [ability_weather(state.ability[side, state.active[side]]) for side in (0, 1)]
-    alive = [state.hp[side, state.active[side]] > 0 for side in (0, 1)]
+    fmt = format_of(state)
+    weathers = [
+        ability_weather(state.ability[party(fmt, b), state.active[b]]) for b in range(fmt.B)
+    ]
+    alive = [state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)]
     return (
         alive[0]
         & alive[1]
@@ -356,7 +370,7 @@ def swap_war(state: BattleState, swapped) -> BattleState:
     ``WEATHER_SET``). Ruling G-26."""
     on = jnp.asarray(swapped, bool)
     mon = state.active[0]
-    weather = ability_weather(state.ability[0, mon])
+    weather = ability_weather(state.ability[party(format_of(state), 0), mon])
     state = reveal_ability(state, 0, mon, WEATHER_SET, on)
     return state._replace(
         weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
@@ -395,8 +409,8 @@ def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
     mon = state.active[side]
     on = (
         jnp.asarray(cond)
-        & (state.ability[side, mon] == AbilityId.UNBURDEN)
-        & (state.item[side, mon] != 0)
+        & (state.ability[party(format_of(state), side), mon] == AbilityId.UNBURDEN)
+        & (state.item[party(format_of(state), side), mon] != 0)
     )
     value = jnp.where(on, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
     return state._replace(can_unburden=state.can_unburden.at[side].set(value))
@@ -414,22 +428,22 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
     battle_lib.c:4135-4145)."""
     side = jnp.asarray(side, _I32)
     state = arm_unburden(state, side, cond)
-    mon = state.active[side]
-    ability, status = state.ability[side, mon], state.status[side, mon]
+    mon, row = state.active[side], party(format_of(state), side)
+    ability, status = state.ability[row, mon], state.status[row, mon]
     woke = (
         cond
         & (
             (sleepless(ability) & (status == Status.SLEEP))  # :4404-4405 (G-47)
             | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
         )
-        & (state.hp[side, mon] > 0)
+        & (state.hp[row, mon] > 0)
     )
     state = state._replace(
-        status=state.status.at[side, mon].set(
-            jnp.where(woke, Status.NONE, state.status[side, mon]).astype(state.status.dtype)
+        status=state.status.at[row, mon].set(
+            jnp.where(woke, Status.NONE, state.status[row, mon]).astype(state.status.dtype)
         ),
-        status_counter=state.status_counter.at[side, mon].set(
-            jnp.where(woke, 0, state.status_counter[side, mon]).astype(state.status_counter.dtype)
+        status_counter=state.status_counter.at[row, mon].set(
+            jnp.where(woke, 0, state.status_counter[row, mon]).astype(state.status_counter.dtype)
         ),
     )
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
@@ -458,7 +472,8 @@ def _restore(state: BattleState, side, mon, effect, cond):
     status, then the confusion); White Herb: every stage below neutral back to neutral
     (battle_lib.c:4875-4887, done in C before ``..._statdown_restore.s``). A cured status
     takes its counter with it (sleep turns and the toxic counter are bits of ``status``)."""
-    status = state.status[side, mon]
+    row = party(format_of(state), side)
+    status = state.status[row, mon]
     any_status = status != Status.NONE
     confused = state.confusion[side] > 0
     lowered = state.stages[side] < 0
@@ -473,11 +488,11 @@ def _restore(state: BattleState, side, mon, effect, cond):
     cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
     state = state._replace(
-        status=state.status.at[side, mon].set(
+        status=state.status.at[row, mon].set(
             jnp.where(cure_status, Status.NONE, status).astype(state.status.dtype)
         ),
-        status_counter=state.status_counter.at[side, mon].set(
-            jnp.where(cure_status, 0, state.status_counter[side, mon]).astype(
+        status_counter=state.status_counter.at[row, mon].set(
+            jnp.where(cure_status, 0, state.status_counter[row, mon]).astype(
                 state.status_counter.dtype
             )
         ),
@@ -508,8 +523,9 @@ def max_pp(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
     """``int32[MOVES]``: ``MoveTable_CalcMaxPP`` (move_table.c:25-34) of each move slot of
     ``side``'s party ``mon``: ``pp + pp * 20 * ppUps / 100`` with ``ppUps`` capped at 3, kept in
     a ``u8``."""
-    base = tables.move_pp[state.moves[side, mon]].astype(_I32)
-    ups = jnp.minimum(state.pp_ups[side, mon].astype(_I32), 3)
+    row = party(format_of(state), side)
+    base = tables.move_pp[state.moves[row, mon]].astype(_I32)
+    ups = jnp.minimum(state.pp_ups[row, mon].astype(_I32), 3)
     return (base + base * 20 * ups // 100) & 0xFF
 
 
@@ -530,8 +546,9 @@ def _leppa(tables: Tables, state: BattleState, side, mon, power, cond, pluck=Fal
     ``BATTLEMON_TRANSFORMED_PERSONALITY``, the switch's default (``GF_ASSERT``, whose
     ``ErrorHandling_AssertFail`` does nothing outside a link, error_handling.c:11-16): no PP
     changes, but ``subscript_held_item_pp_restore.s`` still runs (G-58)."""
-    pp = state.pp[side, mon].astype(_I32)
-    moves = state.moves[side, mon]
+    row = party(format_of(state), side)
+    pp = state.pp[row, mon].astype(_I32)
+    moves = state.moves[row, mon]
     cap = max_pp(tables, state, side, mon)
     slots = jnp.arange(pp.shape[0])
     if pluck:
@@ -547,7 +564,7 @@ def _leppa(tables: Tables, state: BattleState, side, mon, power, cond, pluck=Fal
         triggered = jnp.asarray(cond) & hit
     add = triggered & hit & (slots == k)
     new = jnp.where(add, jnp.minimum(pp + power, cap), pp)
-    return state._replace(pp=state.pp.at[side, mon].set(new.astype(state.pp.dtype))), triggered
+    return state._replace(pp=state.pp.at[row, mon].set(new.astype(state.pp.dtype))), triggered
 
 
 def _hp_restore(effect, power, max_hp) -> jnp.ndarray:
@@ -573,9 +590,13 @@ def berry_confuse(tables: Tables, state: BattleState, side, mon, cond) -> Battle
     (``Outcome.berry_confusion``, ``step._use_move``): nothing reads more than the confusion
     bit before that, so the late draw has the decomp's law, in and out of ``step`` (the battle
     start, a faint replacement), ruling G-5."""
-    own_tempo = decomp_abilities(tables, state)[side, mon] == ITEM_ABILITY_IDS["Own Tempo"]
+    row = party(format_of(state), side)
+    own_tempo = decomp_abilities(tables, state)[row, mon] == ITEM_ABILITY_IDS["Own Tempo"]
     on = (
-        jnp.asarray(cond) & ~own_tempo & (state.confusion[side] == 0) & (state.safeguard[side] == 0)
+        jnp.asarray(cond)
+        & ~own_tempo
+        & (state.confusion[side] == 0)
+        & (state.safeguard[side_of(side)] == 0)
     )
     new = jnp.where(on, CONFUSION_PENDING, state.confusion[side]).astype(state.confusion.dtype)
     return state._replace(confusion=state.confusion.at[side].set(new))
@@ -600,18 +621,18 @@ def held_item_check(
     ``SELF_TURN_FLAG_PLUCK_BERRY`` is set (``keep``, ``effects.MoveHit.pluck_flag``), and
     clears that flag."""
     side = jnp.asarray(side, _I32)
-    mon = state.active[side]
-    raw = state.item[side, mon]
+    mon, row = state.active[side], party(format_of(state), side)
+    raw = state.item[row, mon]
     item = held_item(state, side, mon)  # Battler_HeldItemEffect / _HeldItemPower (B13-29)
     effect = tables.item_effect[item]
     power = tables.item_param[item, 0].astype(_I32)
-    hp = state.hp[side, mon].astype(_I32)
-    max_hp = state.max_hp[side, mon].astype(_I32)
+    hp = state.hp[row, mon].astype(_I32)
+    max_hp = state.max_hp[row, mon].astype(_I32)
     live = jnp.asarray(cond) & (hp > 0)
     heal = _hp_restore(effect, power, max_hp)
     healed = live & (heal > 0) & (hp * 2 <= max_hp)
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
-    state = state._replace(hp=state.hp.at[side, mon].set(new_hp.astype(state.hp.dtype)))
+    state = state._replace(hp=state.hp.at[row, mon].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, mon, effect, live)
     limit = pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
     pinch = live & (hp <= limit)
@@ -630,9 +651,9 @@ def held_item_check(
     spent = on & ~jnp.asarray(keep)
     state = forget_item(state, side, mon, spent)  # RemoveItem's CopyToParty
     state = state._replace(
-        item=state.item.at[side, mon].set(jnp.where(spent, 0, raw).astype(state.item.dtype)),
-        item_consumed=state.item_consumed.at[side, mon].set(
-            jnp.where(spent, item, state.item_consumed[side, mon]).astype(state.item_consumed.dtype)
+        item=state.item.at[row, mon].set(jnp.where(spent, 0, raw).astype(state.item.dtype)),
+        item_consumed=state.item_consumed.at[row, mon].set(
+            jnp.where(spent, item, state.item_consumed[row, mon]).astype(state.item_consumed.dtype)
         ),
         # RemoveItem's recycleItem[battler] (battle_script.c:8977, B13-19).
         recycle_item=state.recycle_item.at[side].set(
@@ -712,22 +733,24 @@ def pluck_berry(
     it (B13-29)."""
     side = jnp.asarray(side, _I32)
     foe = jnp.asarray(foe, _I32)
+    fmt = format_of(state)
+    row, foe_row = party(fmt, side), party(fmt, foe)
     user, target = state.active[side], state.active[foe]
-    item = state.item[foe, target]
+    item = state.item[foe_row, target]
     effect = tables.item_effect[item]
     power = tables.item_param[item, 0].astype(_I32)
-    hp = state.hp[side, user].astype(_I32)
-    max_hp = state.max_hp[side, user].astype(_I32)
+    hp = state.hp[row, user].astype(_I32)
+    max_hp = state.max_hp[row, user].astype(_I32)
     blocked = jnp.asarray(foe_custap) & (item != 0)
     eaten = jnp.asarray(cond) & ~blocked & jnp.isin(effect, jnp.asarray(PLUCKABLE, effect.dtype))
     # :5839-5844: an eater with Klutz (Battler_Ability) or MOVE_EFFECT_EMBARGO gets scriptTemp 0:
     # the berry is eaten with no effect and the pluck flag stays set (B13-31).
-    numb = (state.ability[side, user] == AbilityId.KLUTZ) | (state.embargo[side] != 0)
+    numb = (state.ability[row, user] == AbilityId.KLUTZ) | (state.embargo[side] != 0)
     on = eaten & ~numb
     heal = _hp_restore(effect, power, max_hp)
     healed = on & (heal > 0) & (hp != max_hp)
     new_hp = jnp.where(healed, jnp.minimum(hp + heal, max_hp), hp)
-    state = state._replace(hp=state.hp.at[side, user].set(new_hp.astype(state.hp.dtype)))
+    state = state._replace(hp=state.hp.at[row, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
     state, raised = _raise_stat(tables, state, side, item, on)
     state, restored = _leppa(
@@ -745,9 +768,9 @@ def pluck_berry(
     # (:10) clears the record again (forget_item).
     state = forget_item(state, foe, target, eaten)
     state = state._replace(
-        item=state.item.at[foe, target].set(jnp.where(eaten, 0, item).astype(state.item.dtype)),
-        item_consumed=state.item_consumed.at[foe, target].set(
-            jnp.where(eaten, item, state.item_consumed[foe, target]).astype(
+        item=state.item.at[foe_row, target].set(jnp.where(eaten, 0, item).astype(state.item.dtype)),
+        item_consumed=state.item_consumed.at[foe_row, target].set(
+            jnp.where(eaten, item, state.item_consumed[foe_row, target]).astype(
                 state.item_consumed.dtype
             )
         ),
@@ -766,7 +789,9 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     for a newcomer and for a battler that just traced Intimidate;
     ``playout.replacement_pass`` runs it again for a player newcomer that entered while the
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
-    foe = 1 - side if foe is None else foe
+    foe = _foe(side) if foe is None else foe
+    fmt = format_of(state)
+    row, foe_row = party(fmt, side), party(fmt, foe)
     mon, target = state.active[side], state.active[foe]
     # BtlCmd_ChangeStatStage (battle_script.c:2874-2902): the foe side's Mist (:2876-2882; the
     # holder is the attacker, subscript_intimidate.s:8), B12-23, then the foe's Clear Body,
@@ -774,16 +799,16 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     # Intimidate holder as attacker, never Mold Breaker) blocks the drop; its "suppressed"
     # message is built in C (no AI reveal), B9-6.
     blocks = (
-        (state.ability[foe, target] == AbilityId.CLEAR_BODY)
-        | (state.ability[foe, target] == AbilityId.WHITE_SMOKE)
-        | (state.ability[foe, target] == AbilityId.HYPER_CUTTER)
+        (state.ability[foe_row, target] == AbilityId.CLEAR_BODY)
+        | (state.ability[foe_row, target] == AbilityId.WHITE_SMOKE)
+        | (state.ability[foe_row, target] == AbilityId.HYPER_CUTTER)
     )
     blocks = blocks | mist_blocks_drop(state, foe, -1)
     on = (
         jnp.asarray(cond)
-        & (state.ability[side, mon] == AbilityId.INTIMIDATE)
-        & (state.hp[side, mon] > 0)
-        & (state.hp[foe, target] > 0)
+        & (state.ability[row, mon] == AbilityId.INTIMIDATE)
+        & (state.hp[row, mon] > 0)
+        & (state.hp[foe_row, target] > 0)
         # subscript_intimidate.s:13: a foe behind a substitute is skipped (B10-4); outside an
         # action no flag is set, so its bit.
         & (state.substitute_hp[foe] == 0)
@@ -819,7 +844,7 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     rest comes at ``AfterMoveEffects``' ``TRIGGER_SWITCH_IN_EFFECTS`` (bcp.c:3672-3682;
     ``step._use_move``)."""
     side = jnp.asarray(side, _I32)
-    foe = 1 - side  # the entry point: the battler facing the newcomer in singles
+    foe = _foe(side)  # the entry point: the battler facing the newcomer in singles
     state, _ = trace(tables, state, side, foe)
     state, traced = trace(tables, state, foe, side)
     state = weather_ability(state, side)
@@ -829,7 +854,9 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     state = download(state, side, (foe,))
     state = download(state, foe, (side,), traced)
     mon, other = state.active[side], state.active[foe]
-    state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
+    state = reveal_ability(
+        state, side, mon, SWITCH_IN, state.hp[party(format_of(state), side), mon] > 0
+    )
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
@@ -856,12 +883,12 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
     ``monSpeedOrder``, which ``TrainerMessage`` sorted before (battle_controller_player.c:251)
     on the leads as sent out, with the battle-start ``speedRand`` and a tie draw still to come
     (``order_swaps``, ``hold_war``: settled at the root, ``step.resolve_war``; ruling G-26)."""
-    sides = (0, 1)
+    fmt = format_of(state)
     # Before ShowBattleMon, BattleSystem_InitBattleMon (bcp.c:227) arms canUnburden for every
     # lead holding an item, whatever its ability (battle_lib.c:161-166; no item is knocked off
     # yet): a lead that gains Unburden later (Trace) still has it.
-    for side in sides:
-        held = state.item[side, state.active[side]] != 0
+    for side in range(fmt.B):
+        held = state.item[party(fmt, side), state.active[side]] != 0
         value = jnp.where(held, 1, state.can_unburden[side]).astype(state.can_unburden.dtype)
         state = state._replace(can_unburden=state.can_unburden.at[side].set(value))
     # TrainerMessage sorts monSpeedOrder before ShowBattleMon (battle_controller_player.c:251):
@@ -886,19 +913,20 @@ def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> Battl
     start (``battle_start``) and, at a double KO whose player newcomer fainted on its hazards,
     the waiting opposing newcomer with the player's next one (``search.playout.
     replacement_pass``, ruling G-32)."""
-    sides = (0, 1)
+    fmt = format_of(state)
+    sides = range(fmt.B)
     for side in sides:
-        state, _ = trace(tables, state, side, 1 - side)
+        state, _ = trace(tables, state, side, _foe(side))
     for side in sides:  # the engine's order, player first; hold_war reorders a weather war
         state = weather_ability(state, side)
     state = hold_war(state, weather_war(state), swaps, qc)
     for side in sides:
-        state = intimidate(state, side, foe=1 - side)
+        state = intimidate(state, side, foe=_foe(side))
     for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate
-        state = download(state, side, (1 - side,))
+        state = download(state, side, (_foe(side),))
     for side in sides:
         mon = state.active[side]
-        state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[side, mon] > 0)
+        state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[party(fmt, side), mon] > 0)
     for side in sides:
         state = recover_status_by_ability(state, side)
     for side in sides:

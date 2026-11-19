@@ -68,7 +68,7 @@ def test_reference_fainted_pokemon_has_no_status(tables, names):
     out = ref_step(
         to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(empty_outcome())
     )
-    geodude = out.sides[1].party[0]
+    geodude = out.parties[1].mons[0]
     assert geodude.hp == 0
     assert geodude.status == 0 and geodude.status_counter == 0
 
