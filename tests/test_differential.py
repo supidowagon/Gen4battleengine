@@ -71,8 +71,7 @@ def test_jax_matches_reference(tables, names, data):
 @given(data=st.data())
 def test_jax_matches_reference_four(tables, names, data):
     """D3-1: the four-battler differential, the acceptance test of batch D3, green at every D3 commit through the
-    coverage gate (``four_turn_refusals`` filters the draws the engine does not model yet; until
-    D3-3 it refuses every draw)."""
+    coverage gate (``four_turn_refusals`` filters the draws the engine does not model yet)."""
     s = data.draw(four_state(tables, names))
     acts, targets = data.draw(legal_actions_four(tables, s))
     assume(not four_turn_refusals(tables, s, acts))

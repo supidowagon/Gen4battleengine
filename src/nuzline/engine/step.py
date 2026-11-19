@@ -3100,13 +3100,16 @@ def _execute_actions(
     stopped = state.pivot_battler != 0
     # Each battler whose action is still to come (after the paused one in ``order``): doubles
     # section 5 rule 5, a fact about the named battler, not "the second actor" (B10-17).
-    to_come = jnp.stack([jnp.any((order == b) & (jnp.arange(2) > position)) for b in range(fmt.B)])
+    # Positions 0-1 only: at B = 4 the absent battlers 2 and 3 follow and never act (D3-1c).
+    to_come = jnp.stack(
+        [jnp.any((order[:2] == b) & (jnp.arange(2) > position)) for b in range(fmt.B)]
+    )
     scratch = {
         "ts_cursor": position,
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
         # paused one are over (MoveEnd, bcp.c:3989).
         "ts_acted": jnp.stack(
-            [jnp.any((order == b) & (jnp.arange(2) < position)) for b in range(fmt.B)]
+            [jnp.any((order[:2] == b) & (jnp.arange(2) < position)) for b in range(fmt.B)]
         ),
         "ts_order": order,
         "ts_actions": real,

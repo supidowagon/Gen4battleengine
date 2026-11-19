@@ -674,7 +674,10 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     whoever adds it must re-set the flag there."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
-    return custap_active(tables, state) & fight[0] & fight[1]
+    flags = custap_active(tables, state) & fight[0] & fight[1]
+    if format_of(state).B == 4:  # battlers 2 and 3 absent (action_order): no compare with HP
+        flags = flags & (jnp.arange(4) < 2)
+    return flags
 
 
 def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -688,6 +691,8 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     any other battler fights (doubles design section 5 rule 4)."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
+    if format_of(state).B == 4:  # battlers 2 and 3 absent (action_order): no compare with HP
+        fight = fight & (jnp.arange(4) < 2)
     others = jnp.sum(fight.astype(_I32)) - fight.astype(_I32)
     return quick_claw_active(tables, state, state.qc_roll) & fight & (others > 0)
 
@@ -763,10 +768,13 @@ def player_second(tables: Tables, state: BattleState, tie_roll, qc) -> jnp.ndarr
 
 
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
-    """``int8[2]``: the two sides in execution order. ``outcome.speed_tie`` decides
+    """``int8[B]``: the battlers in execution order. ``outcome.speed_tie`` decides
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``. Quick Claw
     reads ``state.qc_roll``, the draw of the turn before (module docstring), never the
-    outcome."""
+    outcome. At B = 4 positions 0-1 are the two-battler order and battlers 2 and 3 follow:
+    they are absent (``battlersSwitchingMask``: PICK_COMMAND MOVE_END, bcp.c:330-333) and a
+    0-HP battler loses every compare against a living one (lib.c:1204-1211), so they never
+    act; ``coverage.FOUR_TURN_CLAUSES`` refuses a living battler 2 or 3 until D3-3."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     switch, item = is_switch(actions), is_item(actions)
@@ -783,7 +791,10 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
     player_second_ = jnp.where(same_kind, player_second_, early[1] & ~early[0])
     first = player_second_.astype(jnp.int8)
-    return jnp.stack([first, _foe(first)]).astype(jnp.int8)
+    order = jnp.stack([first, _foe(first)]).astype(jnp.int8)
+    if fmt.B == 4:
+        order = jnp.concatenate([order, jnp.arange(2, 4, dtype=jnp.int8)])
+    return order
 
 
 def truant_loafs(state: BattleState, side) -> jnp.ndarray:

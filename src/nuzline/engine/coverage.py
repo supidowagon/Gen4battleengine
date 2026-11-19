@@ -87,9 +87,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``). ``four_turn_refusals`` is the
+  battles and walking partners) is refused (``Trainer.format``). A four-battler state is
+  stepped only where the decomp's turn is the two-battler turn: ``four_turn_refusals`` is the
   per-turn refusal every four-battler caller runs before ``step`` (one clause per D3 group,
-  each deleted by its group); until D3-3 it refuses every four-battler turn;
+  each deleted by its group);
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
   (``Trainer.area_condition``; both are modelled: Gravity since the E1 trial batch, G-67, Trick
   Room since E3-2-4, ``start_trick_room``), a gauntlet (a chain
@@ -335,8 +336,8 @@ def _replacement_point(state: BattleState) -> bool:
 
 # Build order of the D3 groups; each group deletes its own clause, and the tuple is empty after
 # D3-16 (tests/engine/test_coverage_four.py::OWED). Battlers 2 and 3 absent (0 HP, nothing left
-# in their parties) is the decomp's two-battler turn, supported once D3-3 lands: until then
-# ``step`` cannot trace any four-battler state (the D3-3 clause).
+# in their parties) is the supported turn: the decomp's turn is then the two-battler turn
+# (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
     # D3-2: absent / non-choosing battlers; ref_step four actions in _actions; deleted by D3-2
     TurnClause("D3-2", "absent and non-choosing battlers", lambda t, s, a: _four(s)),
@@ -344,11 +345,9 @@ FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
     TurnClause("D3-6", "moved-this-turn per battler", lambda t, s, a: _four(s)),
     # D3-5: four-position action loop (step.py `position < 2`); deleted by D3-5
     TurnClause("D3-5", "four-position action loop", lambda t, s, a: _four(s)),
-    # D3-3: CalcTurnOrder over four (action_order int8[2]); deleted by D3-3. Every four-battler
-    # turn, absent battlers 2 and 3 included: the [2] order meets the [B] scratch ts_order
-    # (step.py _action_phase `jnp.where(paused, state.ts_order, order)`, _execute_actions
-    # "ts_order": order), so no B = 4 state traces before D3-3 resizes the order to [B].
-    TurnClause("D3-3", "turn order over four battlers", lambda t, s, a: format_of(s).B == 4),
+    # D3-3: CalcTurnOrder over four (action_order int8[B] since D3-1: the two-battler order, then
+    # the absent battlers 2 and 3); deleted by D3-3
+    TurnClause("D3-3", "turn order over four battlers", lambda t, s, a: _four(s)),
     # D3-4: monSpeedOrder before each action (identity speed_order); deleted by D3-4
     TurnClause("D3-4", "speed order before each action", lambda t, s, a: _four(s)),
     # D3-7: side-out per format (_faint_check species[0] / [1]); deleted by D3-7

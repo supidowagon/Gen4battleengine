@@ -6900,6 +6900,13 @@ def ref_step(tables, state: RefState, actions: tuple[int, ...], outcome, targets
                 _item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0
                 for side in range(_fmt(s).B)
             ]
+    if _fmt(s).B == 4:
+        # Battlers 2 and 3 are absent (MOVE_END, bcp.c:330-333): a 0-HP battler loses every
+        # compare against a living one (lib.c:1204-1211), so they go last, never act and get
+        # no claw flag. The four-battler compare is D3-3's (coverage.FOUR_TURN_CLAUSES).
+        order = order + [2, 3]
+        turn.custap = turn.custap[:2] + [False, False]
+        turn.claw = turn.claw[:2] + [False, False]
     turn.actions, turn.choices, turn.items = actions, choices, items
     turn.commands, turn.order = commands, order
     try:
