@@ -367,6 +367,17 @@ three structs has a row.
     writes both (`engine.bag.use_bag_item`); every switch-in (`step._switch_in`, battle_lib.c:136),
     a level-up and Shaymin-Sky's revert (`BattleSystem_ReloadPokemon`, :179) copy it into
     `friendship`. It is the value a save returns for the player's Pokemon.
+  - `party_ability` (F-O2, per party Pokemon like `party_friendship`): the ability a script wrote into
+    the party Pokemon in battle (MON_DATA_ABILITY written in battle, `BtlIOCmd_UpdatePartyMon`,
+    battle_io_command.c:601-604); 0 (`UNSUPPORTED`) = none, the personal row's. Only `hooks.shaymin_land`
+    on a Transformed battler writes it (Land's ability: the revert's `UpdateMonDataFromVar` sends the
+    BattleMon's ability to the Transform user's OWN party Pokemon, battle_script.c:3401-3407,
+    battle_controller.c:1496-1499); `step._restore_ability` puts it back into `ability` when that
+    Pokemon leaves (`BattleSystem_InitBattleMon`, battle_lib.c:124), so every later read of the bench
+    slot (`damage.decomp_abilities`, the AI's, Natural Cure, Heal Bell) sees it through `ability`. The
+    same write sets the party's form 0 and recalculated stats: `shadow_form` / `shadow_stats` /
+    `max_hp` / `hp` (`hooks.own_stats`). A state built with `party_ability` set must set `ability`
+    to match (a run planner carrying the override forward does both).
   - `form` (F-16): a frozen Shaymin-Sky's form becomes 0 after a hit (`hooks.shaymin_land`;
     `subscript_check_shaymin_form.s`), with `ability`, `ability_slot`, `ability_form`, `types`,
     `stats`, `max_hp` / `hp` and `friendship` rewritten as `BattleSystem_ReloadPokemon` reloads them;
@@ -498,7 +509,7 @@ three structs has a row.
 | `BattleMon.formNum` | `form`, `shadow_form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
-| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
+| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form`, `party_ability` | mapped |
 | `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped |
 | `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped |
 | `BattleMon.traceAnnounced` | `trace_announced` | mapped |

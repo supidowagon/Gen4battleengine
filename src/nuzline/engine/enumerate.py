@@ -233,7 +233,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.hooks import entry_damage_up, land_stats, starf_holders
+from nuzline.engine.hooks import entry_damage_up, reverted_stats, starf_holders
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -557,8 +557,9 @@ def _end_speeds(
     item, E2 batch 9, or get one back through Recycle, B13-19), every point is also taken with
     Unburden's state toggled (:1268-1272). Where ``land_free`` (a Sky Shaymin of the side can be
     frozen and hit this turn, F-16), every point is also taken with a Sky Shaymin's stats
-    recalculated on Land Forme's row (``hooks.land_stats``: base Speed 127 -> 100,
-    subscript_check_shaymin_form.s:22-30, battle_io_command.c:601-604, battle_lib.c:169-193)."""
+    recalculated on Land Forme's row (``hooks.reverted_stats``: base Speed 127 -> 100; a Transform
+    user's own species, F-O2; subscript_check_shaymin_form.s:22-30, battle_io_command.c:601-604,
+    battle_lib.c:169-193)."""
     fmt = format_of(state)
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
@@ -644,7 +645,7 @@ def _end_speeds(
         sky = (state.species[row, mon] == SPECIES_SHAYMIN) & (state.form[row, mon] != 0)
         land = ((wind & 4) != 0) & sky
         reverted = jnp.where(
-            land, land_stats(tables, state, row, mon)[Stat.ATK :], state.stats[row, mon]
+            land, reverted_stats(tables, state, side, mon)[Stat.ATK :], state.stats[row, mon]
         )
         # A Pokemon other than the active one comes in fresh: UpdateAfterSwitch zeroes its
         # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
@@ -1572,10 +1573,8 @@ def damage_inputs_can_change(
     # F-16: a Shaymin-Sky that a hit freezes becomes Land Forme (hooks.shaymin_land): the foe's
     # earlier freezing move changes the side's own stats, types and ability, and the hits of
     # any move against a Sky Shaymin frozen at the turn start (the first hit reverts it).
-    sky = (
-        (state.species[party(fmt, sides), mons] == SPECIES_SHAYMIN)
-        & (state.form[party(fmt, sides), mons] != 0)
-        & (state.transformed == 0)
+    sky = (state.species[party(fmt, sides), mons] == SPECIES_SHAYMIN) & (
+        state.form[party(fmt, sides), mons] != 0
     )
     foe_freezes = _inflicts(
         tables, state, foes(moves), Status.FREEZE, users=tuple(_foe(b) for b in range(fmt.B))

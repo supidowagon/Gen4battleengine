@@ -338,6 +338,11 @@ class BattleState(NamedTuple):
     # (pokemon.c:1859-1874); every switch-in and ``BattleSystem_ReloadPokemon`` re-read it into
     # ``friendship`` (lib.c:136, :179), and a bag item's band reads it (battle_system.c:716-733)
     party_friendship: jnp.ndarray
+    # int16, ``ids.AbilityId``: the party Pokemon's ability where a script wrote it in battle
+    # (F-O2: a Sky Shaymin revert of a Transform user writes Land's into its OWN party Pokemon,
+    # ``BtlIOCmd_UpdatePartyMon``, battle_io_command.c:601-604); 0 (``UNSUPPORTED``) = no override,
+    # the personal row's ability. ``step._restore_ability`` reads it (F-O2)
+    party_ability: jnp.ndarray
     ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
@@ -743,6 +748,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "gender": (_MON, np.int8),
     "friendship": (_MON, np.int16),
     "party_friendship": (_MON, np.int16),
+    "party_ability": (_MON, np.int16),
     "ivs": ((*_MON, 6), np.int8),
     "active": (_BATTLER, np.int8),
     "stages": ((*_BATTLER, 8), np.int8),

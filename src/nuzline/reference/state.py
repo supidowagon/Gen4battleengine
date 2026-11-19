@@ -47,6 +47,7 @@ class RefPokemon:
     gender: int
     friendship: int
     party_friendship: int  # the party Pokemon's u8 friendship (F-15)
+    party_ability: int  # the party Pokemon's ability a script wrote, 0 = none (F-O2)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int

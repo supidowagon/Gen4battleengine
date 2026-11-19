@@ -78,15 +78,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
   Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
-  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), except for a Transformed
-  battler that copied a Sky Shaymin: the script tests only the copied species and form, then its
-  ``UpdateMonDataFromVar`` writes Land's ability into the Transform user's own party Pokemon
-  (``BattleMon_CopyToParty`` with ``updateStats``, battle_script.c:3401-3407,
+  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), also for a Transformed
+  battler that copied a Sky Shaymin: the script writes Land's ability into the Transform user's
+  own party Pokemon (``BattleMon_CopyToParty`` with ``updateStats``, battle_script.c:3401-3407,
   battle_io_command.c:601-604), which keeps it for its later switch-ins (``InitBattleMon``,
-  battle_lib.c:124): a party ability apart from its species row, which the engine does not
-  model. A fight where one side can use Transform (its moves, a player's learnable moves,
-  Metronome's calls, or Mimic / Copycat while the fight has Transform) against a Sky Shaymin is
-  refused (``transform_sky_refusals``, F-26).
+  battle_lib.c:124): ``BattleState.party_ability``, modelled in E1 batch G (F-O2).
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
   (``Tables.species_form_row``), like Giratina-Origin holding the Orb. A trainer Pokemon in
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
@@ -154,7 +150,6 @@ from nuzline.engine.ids import (
     METRONOME_DRAW,
     MOVE_CHATTER,
     SPECIES_CHATOT,
-    SPECIES_SHAYMIN,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -768,46 +763,6 @@ def _check_party(
         _check_form(c, where, mon)
 
 
-def _transform_reach(tables: Tables, specs: Sequence[PokemonSpec], extra, fight_has: bool):
-    """``bool``: a Pokemon of ``specs`` can run Transform: its moves, ``extra`` (a player's
-    learnable moves) or its Metronome calls hold the effect, or Mimic / Copycat while
-    ``fight_has`` (the fight holds Transform, which they can copy)."""
-    effect = np.asarray(tables.move_effect)
-    moves = [m for s in specs for m in s.moves if m] + list(extra) + fight_calls(tables, specs)
-    kinds = {int(effect[m]) for m in moves if m}
-    copies = bool(kinds & {EffectId.MIMIC, EffectId.COPYCAT})
-    return EffectId.TRANSFORM in kinds or (copies and fight_has)
-
-
-def transform_sky_refusals(
-    tables: Tables,
-    names: Names,
-    player: Sequence[PokemonSpec],
-    opp: Sequence[PokemonSpec],
-    extra_moves: Sequence[int] = (),
-) -> list[str]:
-    """The fight's lines for a Transform user facing a Sky Shaymin (F-26): when a Transformed
-    copy of a Sky Shaymin is frozen, subscript_check_shaymin_form.s (:6-9: species and form, which
-    Transform copies, battle_script.c:5346-5348) writes Land's ability into the Transform user's
-    own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:601-604), which the engine
-    cannot hold (``hooks.shaymin_land`` leaves a Transformed battler out)."""
-    sides = ((player, tuple(extra_moves)), (opp, ()))
-    reach = [_transform_reach(tables, s, e, False) for s, e in sides]
-    fight_has = any(reach)
-    reach = [_transform_reach(tables, s, e, fight_has) for s, e in sides]
-    out = []
-    for i, (specs, _) in enumerate(sides):
-        if not reach[1 - i]:
-            continue
-        for mon in specs:
-            if mon.species == SPECIES_SHAYMIN and mon.form != 0:
-                out.append(
-                    f"a Transform user facing Sky Forme {names.species_names[mon.species]}: its "
-                    "freeze writes Land's ability into the user's party Pokemon"
-                )
-    return out
-
-
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
     """Ruling 8: a form the battle changes, which the engine does not model."""
     if (
@@ -1045,8 +1000,6 @@ def check_opponent(
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
-    for line in transform_sky_refusals(tables, names, player, opp, extra_moves):
-        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "form change")
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):

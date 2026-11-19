@@ -7,8 +7,7 @@ not transcribed, keyed by battle effect), which `check_opponent` skips. Both run
 opposing trainer row of every split.
 It counts only what the trainers' teams, bags, AI and battle conditions need.
 Your own Pokemon's moves, abilities and items are not counted, nor are the teams of
-AI partners beside you in multi battles, except F-26: a trainer's Sky Shaymin is counted
-as facing your Transform user (form change).
+AI partners beside you in multi battles.
 Moves are grouped by the game's move-effect number and held items by hold-effect number,
 since one implementation covers the whole group.
 
@@ -35,12 +34,12 @@ New groups: needed in this split and in no earlier one.
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 12 | 12 | 9 |
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 22 | 35 | 24 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 7 | 0 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 21 | 11 | 4 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 179 | 71 | 71 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 22 | 10 | 3 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 180 | 70 | 70 |
 
 ## Whole game
 
-71 distinct missing groups across all ten splits (387 battles,
+70 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -63,8 +62,8 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Candice Split | 0 | 3 | 2 | 0 | 0 | 4 | 0 | 9 |
 | Galactic Split | 0 | 5 | 4 | 0 | 0 | 15 | 0 | 24 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Elite Four Split | 0 | 2 | 1 | 0 | 0 | 0 | 1 | 4 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **3** | **71** |
+| Elite Four Split | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 3 |
+| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **2** | **70** |
 
 ### Groups needed in each split, by kind
 
@@ -81,8 +80,8 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Candice Split | 1 | 4 | 2 | 0 | 0 | 5 | 0 | 12 |
 | Galactic Split | 1 | 7 | 4 | 0 | 0 | 21 | 2 | 35 |
 | Volkner Split | 1 | 2 | 1 | 0 | 0 | 2 | 1 | 7 |
-| Elite Four Split | 1 | 4 | 3 | 0 | 0 | 1 | 2 | 11 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **3** | **71** |
+| Elite Four Split | 1 | 4 | 3 | 0 | 0 | 1 | 1 | 10 |
+| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **2** | **70** |
 
 ### Battle conditions and other groups
 
@@ -135,7 +134,6 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
 | other | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 | other | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
-| other | form change a Transform user facing Sky Forme Shaymin: its freeze writes Land's ability into the user's party Pokemon (F-26; your Transform user assumed): Champion Cynthia | Elite Four Split |
 
 ## Your side (upper bound)
 
@@ -347,7 +345,7 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 1 | battle format: gauntlet Wayward Cave (position 9; rules not recorded) |
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it |
 
-Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 2, form change 1
+Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 2
 
 ## Build order for the first two splits
 

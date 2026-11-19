@@ -1070,39 +1070,74 @@ def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:
     )
 
 
+def own_stats(tables: Tables, state: BattleState, side, row, mon) -> jnp.ndarray:
+    """``int32[6]``: the party Pokemon ``mon`` of ``side`` recalculated on its OWN species at form 0
+    (``shadow_species``, its own IVs in ``shadow_ivs``, its EVs, level and nature): what
+    ``BtlIOCmd_UpdatePartyMon`` writes for a Transform user whose ``MON_DATA_FORM`` is set to 0
+    (``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604) and ``BattleSystem_ReloadPokemon``
+    reads back (battle_lib.c:169-194), HP first (``ids.Stat`` order), F-O2."""
+    species = state.shadow_species[side].astype(_I32)
+    return calc_stats_jnp(
+        tables.species_base_stats[tables.species_form_row[species, 0]],
+        state.shadow_ivs[side],
+        state.evs[row, mon],
+        state.level[row, mon],
+        tables.nature_mods[state.nature[row, mon]],
+        species,
+    )
+
+
+def reverted_stats(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
+    """``int32[6]``: the stats party ``mon`` of ``side`` has once a Sky Shaymin's revert has run on
+    it (``shaymin_land``): Land Forme's (``land_stats``), or, for the Transformed active battler,
+    its own species' (``own_stats``): the party Pokemon is the one recalculated (F-O2)."""
+    row = party(format_of(state), side)
+    own = (state.transformed[side] != 0) & (mon == state.active[side])
+    return jnp.where(
+        own, own_stats(tables, state, side, row, mon), land_stats(tables, state, row, mon)
+    )
+
+
 def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
     """``subscript_check_shaymin_form.s`` (``AfterMoveMessage``'s ``*_FORM_CHANGE`` states,
-    battle_controller_player.c:3497-3505, :3557-3565; F-16) for ``side``'s active battler, the
-    hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute and
-    status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its personality
-    picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds none there),
-    types Land's (:24-27), stats recalculated from Land's row (``SYSCTL_RECALC_MON_STATS``,
+    battle_controller_player.c:3497-3505, :3557-3565; F-16, F-O2) for ``side``'s active battler,
+    the hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute
+    and status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its
+    personality picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds
+    none there), types Land's (:24-27), stats recalculated (``SYSCTL_RECALC_MON_STATS``,
     ``BattleMon_CopyToParty`` -> ``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604;
     ``Pokemon_CalcStats``: the HP change moves the current HP, as ``levelup``), and
     ``RefreshMonData`` reloads the battler from the party (:30): Attack, Defense, Speed, Special
     stats, HP, and friendship (``BattleSystem_ReloadPokemon``, battle_lib.c:169-193; the Power
     Trick swap stays, as ``levelup``). Stages, status and volatiles stay. The AI learns the
-    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403). A Transformed battler
-    is left out: the script would write Land's ability into its own party Pokemon
-    (battle_script.c:3401-3407, battle_io_command.c:601-604), a party ability the engine does not
-    hold, so coverage refuses a Transform user facing a Sky Shaymin
-    (``coverage.transform_sky_refusals``, F-26)."""
+    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403).
+
+    A Transformed battler (F-O2) is a copy of a Sky Shaymin: the script tests the copy (Transform
+    copies the BattleMon up to ``ability``, battle_script.c:5346-5348), but the ability slot is the
+    battler's own personality's (``shadow_ability_slot``: ``BATTLEMON_PERSONALITY`` is not copied,
+    battle_mon.h:105-106), and ``BattleMon_CopyToParty`` writes into the Transform user's OWN
+    party Pokemon: its ability (``party_ability``, io:601-604), form 0 and stats recalculated on
+    its own species. ``RefreshMonData`` then gives the copy those own stats (``shadow_stats`` too:
+    the party's), not Land's; types and ability are Land's."""
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
     row, mon = party(fmt, side), state.active[side]
+    tr = state.transformed[side] != 0
     on = (
         jnp.asarray(cond)
         & (state.species[row, mon] == SPECIES_SHAYMIN)
         & (state.form[row, mon] != 0)
         & (state.substitute_hp[side] == 0)
         & (state.status[row, mon] == Status.FREEZE)
-        & (state.transformed[side] == 0)
     )
     land = tables.species_form_row[SPECIES_SHAYMIN, 0]
     abilities = tables.species_abilities[land].astype(_I32)
-    slot = state.ability_slot[row, mon].astype(_I32)
-    slot = jnp.where(abilities[slot] != 0, slot, 0)
-    stats = land_stats(tables, state, row, mon)
+    slot = jnp.where(tr, state.shadow_ability_slot[side], state.ability_slot[row, mon]).astype(_I32)
+    # An empty slot is decomp ability 0 (AbilityId.NONE here, not 0): shay:18-19 tests the raw id.
+    slot = jnp.where(tables.species_abilities_decomp[land, slot] != 0, slot, 0)
+    stats = jnp.where(
+        tr, own_stats(tables, state, side, row, mon), land_stats(tables, state, row, mon)
+    )
     old_max, hp = state.max_hp[row, mon].astype(_I32), state.hp[row, mon].astype(_I32)
 
     def put(arr, value):
@@ -1118,6 +1153,20 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
         max_hp=put(state.max_hp, stats[Stat.HP]),
         hp=put(state.hp, jnp.where(hp != 0, hp + stats[Stat.HP] - old_max, hp)),
         friendship=put(state.friendship, state.party_friendship[row, mon]),
+        # F-O2: the Transform user's own party Pokemon takes Land's ability (io:601-604) and its
+        # form 0 / stats (io:597-604): the shadow holds the party's own values while it is
+        # Transformed (``step._restore_transform`` puts them back on leaving).
+        party_ability=put(
+            state.party_ability, jnp.where(tr, abilities[slot], state.party_ability[row, mon])
+        ),
+        shadow_form=state.shadow_form.at[side].set(
+            jnp.where(on & tr, 0, state.shadow_form[side]).astype(state.shadow_form.dtype)
+        ),
+        shadow_stats=state.shadow_stats.at[side].set(
+            jnp.where(on & tr, stats[Stat.ATK :], state.shadow_stats[side]).astype(
+                state.shadow_stats.dtype
+            )
+        ),
         power_trick_desync=state.power_trick_desync.at[side].set(
             jnp.where(on, state.power_trick[side], state.power_trick_desync[side]).astype(
                 state.power_trick_desync.dtype

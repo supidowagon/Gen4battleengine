@@ -641,7 +641,8 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
 
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
-    its party Pokemon's (``tables.species_abilities`` at its ``ability_form``'s row and
+    its party Pokemon's (``party_ability`` where a script wrote it, F-O2; else
+    ``tables.species_abilities`` at its ``ability_form``'s row and
     ability slot, as ``make_state`` builds it). Only Trace
     (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
     ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
@@ -654,6 +655,9 @@ def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleSt
         state.species[party(fmt, side), mon], state.ability_form[party(fmt, side), mon]
     ]
     own_ability = tables.species_abilities[row, state.ability_slot[party(fmt, side), mon]]
+    # F-O2: the party Pokemon's written ability (``party_ability``) is what InitBattleMon reads.
+    party_ability = state.party_ability[party(fmt, side), mon]
+    own_ability = jnp.where(party_ability != 0, party_ability, own_ability)
     # The raw BattleMon.ability write-back (battle_lib.c:124).
     value = jnp.where(cond, own_ability, state.ability[party(fmt, side), mon]).astype(
         state.ability.dtype

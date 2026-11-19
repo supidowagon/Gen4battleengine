@@ -854,28 +854,6 @@ def test_a_foes_self_targeted_move_leaves_a_frozen_shaymin_sky(tables, names):
     assert int(out.form[0, 0]) == 1 and int(out.stages[1, Stat.ATK]) == 2
 
 
-@pytest.mark.fullset
-def test_a_transform_user_facing_a_sky_shaymin_is_refused(tables, names):
-    """F-26: a Transformed copy of a Sky Shaymin that is frozen has Land's ability written into
-    the Transform user's own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:
-    601-604), which the engine does not hold: the fight is refused. Mimic alone copies no
-    Transform unless the fight has one; a Land Shaymin never reverts."""
-    from nuzline.engine.coverage import transform_sky_refusals
-
-    sky = dataclasses.replace(_mon(names, "Shaymin", ["Air Slash"], 50), form=1)
-    land = dataclasses.replace(sky, form=0)
-    ditto = _mon(names, "Ditto", ["Transform"], 30)
-    mimic = _mon(names, "Geodude", ["Mimic"], 30)
-    assert len(transform_sky_refusals(tables, names, [ditto], [sky])) == 1
-    assert len(transform_sky_refusals(tables, names, [sky], [ditto])) == 1
-    assert transform_sky_refusals(tables, names, [mimic], [sky]) == []
-    assert transform_sky_refusals(tables, names, [ditto], [land]) == []
-    # Mimic copies the fight's Transform (the player's Ditto) and meets the player's Sky Shaymin.
-    assert len(transform_sky_refusals(tables, names, [ditto, sky], [mimic])) == 1
-    learns = transform_sky_refusals(tables, names, [mimic], [sky], [names.move("Transform")])
-    assert len(learns) == 1
-
-
 @pytest.mark.parametrize(
     "case", ["not frozen", "substitute", "land forme already"], ids=lambda c: c
 )

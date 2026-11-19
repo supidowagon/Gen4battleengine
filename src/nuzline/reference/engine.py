@@ -762,12 +762,15 @@ def _party_moves(s: RefState, slot: int):
 
 
 def _restore_ability(tables, s: RefState, side: int) -> None:
-    """The leaving battler's ability goes back to its personal row's: Trace writes only the
-    battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the
-    party (lib.c:124)."""
+    """The leaving battler's ability goes back to its party Pokemon's (``party_ability`` where a
+    script wrote it, F-O2; else its personal row's): Trace writes only the battler's
+    ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the party
+    (lib.c:124)."""
     mon = _active(s, side)
     row = _t(tables, "species_form_row", mon.species, mon.ability_form)
     mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)  # raw write, lib.c:124
+    if mon.party_ability:  # F-O2: a script wrote the party Pokemon's ability (io:601-604)
+        mon.ability = mon.party_ability
 
 
 def _armored(s: RefState, attacker: int, defender: int) -> bool:
@@ -4336,30 +4339,44 @@ def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int)
 
 def _shaymin_land(tables, s: RefState, side: int) -> None:
     """``subscript_check_shaymin_form.s`` for ``side``'s active battler, the hit's defender
-    (``hooks.shaymin_land``, F-16): a Shaymin with a form number, no Substitute and status
+    (``hooks.shaymin_land``, F-16, F-O2): a Shaymin with a form number, no Substitute and status
     Freeze (:6-9) becomes Land Forme (:10): its ability slot in Land's row (slot 0 when the row
     holds none there, :11-19), Land's types (:24-27), stats recalculated (``_calc_stats``,
     ``BattleMon_CopyToParty``) and the battler's friendship re-read from the party
-    (``BattleSystem_ReloadPokemon``, :30); the AI learns the ability. A Transformed battler is
-    left out: coverage refuses a Transform user facing a Sky Shaymin (F-26)."""
+    (``BattleSystem_ReloadPokemon``, :30); the AI learns the ability. A Transformed battler is a
+    copy: the slot is its own personality's (``shadow_ability_slot``), the party Pokemon (its own
+    species, form 0) is the one recalculated and takes Land's ability (``party_ability``,
+    battle_io_command.c:597-604), and the reload gives the copy those own stats."""
     mon, sd = _active(s, side), s.battlers[side]
     if not (
         mon.species == SPECIES_SHAYMIN
         and mon.form
         and not sd.substitute_hp
         and mon.status == Status.FREEZE
-        and not sd.transformed
     ):
         return
     land = _t(tables, "species_form_row", SPECIES_SHAYMIN, 0)
-    mon.form = 0
-    slot = mon.ability_slot
-    if not _t(tables, "species_abilities", land, slot):
+    slot = sd.shadow_ability_slot if sd.transformed else mon.ability_slot
+    if not _t(tables, "species_abilities_decomp", land, slot):  # empty: decomp id 0 (:18-19)
         slot = 0
+    mon.form = 0
     mon.ability = _t(tables, "species_abilities", land, slot)
     mon.ability_slot, mon.ability_form = slot, 0
     mon.types = [_t(tables, "species_types", land, k) for k in range(len(mon.types))]
-    _calc_stats(tables, mon)
+    if sd.transformed:
+        # The party Pokemon is the one recalculated: its own species at form 0 and IVs (the
+        # shadow), written onto the copy by the reload (shadow_stats: the party's).
+        mon.species, sd.shadow_species = sd.shadow_species, mon.species
+        mon.ivs, sd.shadow_ivs = sd.shadow_ivs, mon.ivs
+        mon.form = 0
+        _calc_stats(tables, mon)
+        mon.species, sd.shadow_species = sd.shadow_species, mon.species
+        mon.ivs, sd.shadow_ivs = sd.shadow_ivs, mon.ivs
+        mon.party_ability = mon.ability
+        sd.shadow_form = 0
+        sd.shadow_stats = list(mon.stats)
+    else:
+        _calc_stats(tables, mon)
     mon.friendship = mon.party_friendship
     sd.power_trick_desync = sd.power_trick
     if side == 0:

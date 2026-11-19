@@ -1238,7 +1238,7 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it under any weather). A player's own
   Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any battle. Trigger: a real-game check
   (memory dump per caller) when the user next does real-game checks.
-- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch.** Ruling
+- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch (closed: G-1).** Ruling
   (manager, merge gate of batch F): kept as ordinary backlog in this batch, built as the next batch's first group. The
   decomp path: a frozen Transformed copy passes `subscript_check_shaymin_form.s:5-9` (species 492, form not 0, no
   Substitute, Freeze); :10 sets the form to 0; :12-19 load Land's ability by the copy's own personality bit 0; :22-23
@@ -1612,6 +1612,37 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     party index gives that in every format.
   - `outcome._threshold_grid`'s "one move has one effect" (one foe move between the turn start and the side's check)
     holds with one foe only; with two foes both moves can land before the check (the D-steps).
+## Batch G
+
+- G-1 A Transform user's Sky Shaymin revert (F-O2, closes F-26): modelled, nothing is refused. The copy of a frozen
+  Sky Shaymin passes `subscript_check_shaymin_form.s:5-9` (Transform copies the BattleMon up to `ability`,
+  battle_script.c:5346-5348). The revert writes Land's ability into the Transform user's OWN party Pokemon:
+  :23's `UpdateMonDataFromVar` runs `BattleMon_CopyToParty` (battle_script.c:3401-3407) under
+  `SYSCTL_RECALC_MON_STATS`, which sends `updateStats` and `updateForm` (battle_controller.c:1496-1499), and
+  `BtlIOCmd_UpdatePartyMon` sets `MON_DATA_FORM` (form 0 from :10) and `MON_DATA_ABILITY` and recalculates the
+  stats (battle_io_command.c:597-604). New state `party_ability[P, 6]` (0 = no override); `hooks.shaymin_land`
+  and the reference's `_shaymin_land` drop the Transformed term. For a Transformed battler: the copy takes
+  form 0, Land's ability, ability slot / form and types; `party_ability` := Land's ability; `shadow_form` := 0;
+  the party's own stats (its own species at form 0, its IVs from `shadow_ivs`, EVs, level, nature:
+  `hooks.own_stats`) go to `shadow_stats`, `max_hp` / `hp` (by the max-HP delta) and, through `RefreshMonData`
+  (:30, `BattleSystem_ReloadPokemon`, battle_lib.c:169-193), to the copy's Atk..Spe: the copy has the user's own
+  stats, not Land's. Coverage: `coverage.transform_sky_refusals`, its call in `check_opponent` and the backlog's
+  F-26 rows are deleted; `enumerate.damage_inputs_can_change`'s `sky` loses its `transformed == 0` term; the end
+  speed grid's Land point is `hooks.reverted_stats` (the user's own Speed for a Transformed battler).
+- G-2 The Land ability slot is the battler's own personality bit (:12-19: `BATTLEMON_PERSONALITY` is not in the
+  copied range, battle_mon.h:105-106): `shadow_ability_slot` while Transformed (the own `ability_slot` saved by
+  Transform), the battler's `ability_slot` otherwise; slot 1 falls back to slot 0 when Land's ability 2 is empty
+  (:18-19). Kaizo's Land Shaymin is [Natural Cure, -]: always Natural Cure.
+- G-3 Later reads of the written ability go through `ability`, not a second lookup. `step._restore_ability`
+  (battle_lib.c:124, `InitBattleMon` reads `MON_DATA_ABILITY`) puts `party_ability` into `ability` when the
+  Transform user leaves (the shadow is restored first, so species and slot are its own), so the bench slot
+  reads as written (`damage.decomp_abilities`, whose written-ability branch needs no new term; its readers: the
+  AI's bench reads, Natural Cure at switch-out, Heal Bell's Soundproof) and a new Transform copies the target's
+  ability over it again (:5346-5348). The AI learns Land's ability at the write (`_know`,
+  battle_script.c:3401-3403). `AI_IsAsleepWithNaturalCure` is still refused (`switching._AI_SIDE_ABILITIES`): an
+  AI Ditto with the override now reaches that refusal, which names it. A state built with `party_ability` set
+  must also set `ability` (the planner that carries a player's override forward does both).
+  Also fixed: the empty-slot fallback tested `AbilityId` 0, but an empty slot maps to `AbilityId.NONE` (1); it tests the decomp id now (:18-19). Tests: `tests/engine/test_e1_batch_g.py`.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
