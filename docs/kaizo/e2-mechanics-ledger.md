@@ -2519,8 +2519,12 @@ docs/doubles-state-design.md.
   :5400-5409, :7357-7374) and not `bonded`, else the switcher; written only when the operand is nonzero
   and a weather, Gravity, Trick Room or another battler's Uproar bit is up (the switcher's bit is gone at
   :115, lib.c:2213; a Destiny Bond faint clears the pursuer's too, a recoil faint keeps it). Refusal:
-  `coverage.check_acid_rain` at `enumerate_turn` and `step.root_belief` (so stage A / B and prep through
-  `solve`); `search.learn.learn_reason` carries the message for the playout / replay refusal reasons; the
+  `coverage.check_acid_rain` at `enumerate_turn`, `step.root_belief` (Stage B `solve`; prep solves through
+  it and screens its own turn-0 states, `prep.setups.setup_states`, `acid_rain` 0, by playouts that refuse
+  it in the jit, playout.py), `stage_a.rank_actions` (CLI `rank`), `player_eval.evaluate_players` (CLI
+  `line odds`) and `line_search.find_line` (CLI `line find`); the last three added in the review: they took
+  a state without reaching either check. The CLI has no play / replay command (cli.py: coverage, rank,
+  solve, prep, line odds / find, trainers, save); `search.learn.learn_reason` carries the message for the playout / replay refusal reasons; the
   jitted readers of `exp_refused` also refuse `acid_rain != 0` (search/expand.py, learn.py, playout.py,
   player.py). Coverage: `CoverageReport.runtime` (non-refusing, `level` unchanged), the line "field
   condition: Acid Rain (runtime refusal)" when a trainer move is BATTLE_EFFECT_HIT_BEFORE_SWITCH
