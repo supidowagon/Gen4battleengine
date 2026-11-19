@@ -4,7 +4,7 @@
 # in docs/process.md section 5); then collection failures, crashed units (rc 97), units killed a
 # third time (rc 98), units with any other rc but 0, 1 or 5 (a failure even with complete counts),
 # wall time, container peak,
-# largest process, the 15 slowest tests, the count over 60 s, every FAILED/ERROR and SKIPPED line,
+# largest process, per unit its peak RSS and wall time (finished units), the 15 slowest tests, the count over 60 s, every FAILED/ERROR and SKIPPED line,
 # and a last line RESULT: PASS or RESULT: FAIL (<reasons>).
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; cd "$O"
 cnt() { v=$(echo "$1" | grep -oE "[0-9]+ $2" | head -1 | cut -d' ' -f1); echo "${v:-0}"; }
@@ -31,6 +31,11 @@ NB=$( [ -n "$BR" ] && echo "$BR" | wc -l || echo 0); [ "$NB" -gt 0 ] && { echo "
 PK=n/a; [ -r /sys/fs/cgroup/memory.peak ] && PK="$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MB"
 echo "--- wall $(( $(cat ALL.end 2>/dev/null || date +%s) - $(cat ALL.start) )) s; container peak (incl. other runs) $PK"
 for u in $(cut -d' ' -f1 queue.txt); do awk -v u=$u '/Maximum resident/ {print int($6/1024), u}' $u.time 2>/dev/null; done | sort -n | tail -1 | while read -r m u; do echo "largest process ${m} MB: $u $(head -1 $u.ids)"; done
+echo "--- per unit: unit ids max_rss_MB wall_s rc first_id"
+while read -r u f; do [ -f $u.rc ] || continue
+  m=$(awk '/Maximum resident/ {print int($6/1024)}' $u.time 2>/dev/null)
+  echo "$u $(grep -c . $u.ids) ${m:-0} $(( $(cat $u.end) - $(cat $u.start 2>/dev/null || cat $u.end) )) $(cat $u.rc) $(head -1 $u.ids | cut -c1-160)"
+done < queue.txt
 DUR=$(for u in $(cut -d' ' -f1 queue.txt); do [ -f $u.log ] && grep -hE '^[0-9.]+s (call|setup|teardown) ' $u.log; done | sort -rn)
 echo "--- slowest 15 (of $(echo "$DUR" | awk '$1+0 > 60' | wc -l) over 60 s)"; echo "$DUR" | head -15 | cut -c1-200
 echo "--- failures"; for u in $(cut -d' ' -f1 queue.txt); do [ -f $u.log ] && grep -E '^(FAILED|ERROR) ' $u.log; done | cut -c1-260

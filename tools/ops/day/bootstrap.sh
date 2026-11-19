@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # POD SIDE, once per fresh pod (ubuntu:24.04). Installs tools, uv, Python 3.12, runpodctl,
-# and pre-clones the decomp. Run detached; log /work/bootstrap.log; ends with BOOTSTRAP_OK.
+# and pre-clones the decomp. Run detached from /work/_bin/new (push_bin.sh); every step skips what
+# is already installed, so it is safe to repeat on a running pod. Ends with BOOTSTRAP_OK.
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 mkdir -p /work/_bin /work/_decomp /work/_uvcache

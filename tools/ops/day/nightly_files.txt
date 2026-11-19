@@ -1,4 +1,6 @@
 # Nightly fast tier: <test file, folder or node id> <ids per chunk> [A]; slowest first; the last line queues every id not queued above
+# The damage oracle runs whole, without -m (slow cases included), in one process; the exec-pod env sets NUZLINE_REQUIRE_NODE=1
+tests/test_damage_oracle.py 1000 A
 tests/search/test_player_learn.py 40
 tests/ai/test_kaizo_policy.py 57
 tests/engine/test_batch11.py 40

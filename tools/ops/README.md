@@ -26,13 +26,13 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `common.sh`: sourced by the PC-side scripts; main checkout and scratch paths, the table upload rules (`TABLE_ALLOW`, `TABLE_DENY`), run-name check.
 - `build_tables.sh --here | <commit>`: builds the vanilla and Kaizo tables in place, or for a commit in a temporary worktree packed into `_scratch/rent/tables_<short>.tar.xz` (only `TABLE_ALLOW` files). Local inputs come from the main checkout. `NUZLINE_PY` selects an existing venv's python; default `uv run --group rom python`.
 - `nightly_brief.md`: the brief for the nightly run.
-- `day/push_bin.sh`: once per pod; sends `day/bootstrap.sh` and prints the exec-pod body that runs it.
+- `day/push_bin.sh`: once per pod (safe to repeat); sends `day/bootstrap.sh` and prints the exec-pod body that runs it in `/work/_bin/new`.
 - `day/bootstrap.sh`: pod side, once per pod; apt tools, uv, Python 3.12, runpodctl checksum, decomp clone; ends with `BOOTSTRAP_OK`.
 - `day/pack.sh <commit> <tables> <run> <files.txt>`: bundles the `git archive`, the tables, the test list and `day/pod/*.sh`; refuses forbidden files and tables outside `TABLE_ALLOW`; sends; prints the exec-pod body.
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
 - `day/pod/setup.sh`: checkout, tables, env, collection, chunked units; starts the runner.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate; kills and requeues the newest unit near the limit; records crashed units.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units.
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/agg.sh`: per-file totals and completeness, collection failures, crashes, peaks, slowest tests, failures, skips, RESULT line.

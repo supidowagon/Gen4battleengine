@@ -29,8 +29,10 @@ R="$D/repo"; rm -rf "$R"; mkdir "$R"; tar --no-same-owner -xf code.tar -C "$R"
 tar --no-same-owner -xJf tables.tar.xz -C "$R"; [ -f "$R/data/gen4_platinum_kaizo/manifest.json" ]
 mkdir -p "$R/external"; ln -sfn "/work/_decomp/$DECOMP" "$R/external/pokeplatinum"
 ( cd "$R" && uv sync --frozen -q )
-# The damage oracle needs node + @smogon/calc; node is installed once per pod (DAYBOX.md).
-if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R/tools/smogon_calc" && npm ci -s ); fi
+# The damage oracle needs node + @smogon/calc; node is installed once per pod (DAYBOX.md bring-up
+# step 6). With NUZLINE_REQUIRE_NODE=1 (the nightly) a pod without npm fails the setup.
+if command -v npm >/dev/null && [ -f "$R/tools/smogon_calc/package-lock.json" ]; then ( cd "$R" && npm ci -s --prefix tools/smogon_calc )
+elif [ "${NUZLINE_REQUIRE_NODE:-}" = 1 ]; then echo "ERROR: npm or tools/smogon_calc/package-lock.json missing"; exit 1; fi
 rm -rf col out; mkdir -p col out
 grep -vE '^[[:space:]]*(#|$)' files.txt > col/list.txt   # the one list both steps below number
 awk '{print NR "|" $1 "|" ($3 == "A" ? "A" : "N")}' col/list.txt > col/jobs.txt
