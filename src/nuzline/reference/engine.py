@@ -7626,8 +7626,12 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.claw = [bool(f) for f in _get(s, "ts_claw")]
     turn.pursued = s.ts_pursued
     # The paused move's battleCtx->defender, for MoveEnd's battle-end cure (bcp.c:3966-3967):
-    # FightCommand's pick (bcp.c:1900) on the paused state, as ``step`` re-resolves it in
-    # MODE_RESUME (``_act``: the Encore takeover, the stored target, ``fight_randomizes``).
+    # FightCommand's pick (bcp.c:1900) re-resolved here on the paused state, before ``_enter``
+    # (the outgoing mon's Encore and chosen_target still in place); ``step._act`` re-resolves in
+    # MODE_RESUME on the post-list state. No visible case at B = 2 (ledger SF2-gate (2)); at B = 4 they can differ (an
+    # encored U-turn user randomizes in one and not the other). The game never re-resolves:
+    # battleCtx->defender stays from FightCommand. Owed 22 (ledger): carry the action-start
+    # defender in both engines.
     p_move, p_struggling, _ = turn.choices[side]
     p_sd = s.battlers[side]
     if (

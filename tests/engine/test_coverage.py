@@ -635,11 +635,22 @@ def test_acid_rain_note_scans_both_sides_moves(tables, names):
     """SF2 gate 3: either side's Pursuit chases a switch (battle_script.c:6884-6935), so the Acid
     Rain report line (subscript_pursuit.s:115) reads the player's party and learnable moves too."""
     line = "field condition: Acid Rain (runtime refusal)"
-    opp = roark_party(names)
+    pursuit = names.move("Pursuit")
+    real = roark_party(names)
+    # Roark's Cranidos knows Pursuit: the opponent's side alone raises the line.
+    assert line in check_opponent(tables, names, roark_trainer(), real, 0, []).runtime
+    # The control: Pursuit taken off Cranidos, and the sample party knows no Pursuit.
+    opp = [
+        replace(
+            mon, moves=tuple(m for m in mon.moves if m != pursuit) + (0,) * (pursuit in mon.moves)
+        )
+        for mon in real
+    ]
     plain = sample_party(names)
+    assert not any(pursuit in mon.moves for mon in (*opp, *plain))
     assert line not in check_opponent(tables, names, roark_trainer(), opp, 0, plain).runtime
     party = sample_party(names, override_moves={0: ["Pursuit", "Scratch"]})
     assert line in check_opponent(tables, names, roark_trainer(), opp, 0, party).runtime
-    learn = [names.move("Pursuit")]
+    learn = [pursuit]
     r = check_opponent(tables, names, roark_trainer(), opp, 0, plain, learn)
     assert line in r.runtime

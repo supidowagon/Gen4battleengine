@@ -525,8 +525,8 @@ class BattleState(NamedTuple):
     ts_item: jnp.ndarray  # int16[B], the bag item picked
     ts_custap: jnp.ndarray  # int8[B], moveEffectsData.custapBerry from the turn order
     ts_claw: jnp.ndarray  # int8[B], moveEffectsData.quickClaw from the turn order (B10-6)
-    # int8, bitmask of the battlers whose action a Pursuit ended (bit b = battler b); at B = 2
-    # written as 1 + pursuer, the same value
+    # int8, bitmask of the battlers whose action a Pursuit ended (bit b = battler b), written
+    # |= 1 << pursuer by both engines
     ts_pursued: jnp.ndarray
     ts_protect_ok: jnp.ndarray  # int8[B], turnFlags.protecting
     ts_endure_ok: jnp.ndarray  # int8[B], turnFlags.enduring (Endure, G-65)
