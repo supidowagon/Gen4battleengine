@@ -3,8 +3,10 @@ check a later commit gives the same bytes.
 
 Usage:
 
-    uv run python tools/snap_compare.py capture DIR A-B [--chunk 10] [--repo PATH] [--no-roark] [-v]
-    uv run python tools/snap_compare.py compare DIR A-B [--chunk 10] [--repo PATH] [--no-roark] [-v]
+    uv run python tools/snap_compare.py capture DIR A-B [--chunk 10] [--repo PATH] [--no-roark]
+        [--parts G,...] [-v]
+    uv run python tools/snap_compare.py compare DIR A-B [--chunk 10] [--repo PATH] [--no-roark]
+        [--parts G,...] [--allow-new NAME[,NAME...]] [--same-ok] [-v]
 
     DIR      the snapshot folder (capture writes it, compare reads it).
     A-B      the seed range, inclusive (one seed: A).
@@ -13,12 +15,17 @@ Usage:
              and root go first on sys.path, so this script captures an older commit with
              ``--repo <that checkout>`` from any environment with the same dependencies.
     --no-roark  leave out the two Roark parts.
+    --parts  run only these groups/parts (step, jitstep, sample, rest, gen, roark.trace,
+             roark.rank); a left-out part is neither run nor counted.
+    --allow-new  field names (any segment of an entry path, e.g. ``new_field``) whose presence
+             on one side only does not fail; name both names of a renamed field.
+    --same-ok  allow compare at the capture's own commit (otherwise a failure).
     -v       print each part's timings per output.
 
 Needs a checkout and its built tables only (tools/ops/build_tables.sh: ``data/gen4_platinum``,
 ``data/gen4_platinum_kaizo``, ``data/intermediate``, ``data/intermediate_kaizo``); never the
 ROM, a save, the calc archive or the docs sheet. A part whose built file is missing is
-SKIPPED with the file named; a skip is not a pass.
+SKIPPED with the file named; a skip is a failure (exit 1).
 
 capture: per seed of tools/differential.py's generator (tests.strategies, Hypothesis @seed, no
 shrink), 5 drawn turns: the drawn input state, actions and outcome, and each segment of a turn
@@ -28,6 +35,10 @@ jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), ai_action_d
 jit(decision_actions), root_belief. Roark: the golden replay of tests/golden/kaizo_roark_02.json
 (its converted states, replay_turn and the reference replay of each turn) and rank_actions at
 tests.engine.helpers.roark_real_state, N = 256, PRNGKey(0).
+
+capture also writes DIR/capture.json: the checkout's ``git rev-parse HEAD`` and whether its
+tracked files are dirty. compare prints that commit and its own, and fails when the capture
+records none or both are the same commit (unless --same-ok).
 
 compare: reruns every output from the saved inputs (no redraw); its "gen" part redraws the
 generator and checks it still draws the saved inputs (on capture, "gen" records them).
@@ -41,10 +52,22 @@ peak memory and flags a part over 60 s or 4 GB (OVER LIMIT).
 Version independence: inputs are saved as plain {field: array} dicts, not pickled NamedTuples.
 A later commit rebuilds them by field name: a field it has that the capture lacks starts at the
 singles zero (BattleState: ``state.LAYOUT``'s shape and dtype) or at ``empty_outcome()``'s value
-(Outcome); a captured field it lacks is dropped. Outputs are flattened to
-"path" -> (kind, dtype, shape, bytes) entries keyed by name. compare checks the entries present
-on both sides byte for byte (dtype, shape and bytes) and reports, per part, the fields present
-on one side only (indices folded to []). Exit 1 on a divergence or an error.
+(Outcome); a captured field it lacks is dropped. Each such input field is reported as one-sided
+(``in_state.NAME`` / ``in_outcome.NAME``). Outputs (states, Outcomes, events, reference outputs)
+are flattened to "path" -> (kind, dtype, shape, bytes) entries keyed by name. compare checks
+the entries present on both sides byte for byte (dtype, shape and bytes) and lists, per part,
+the entries present on one side only (indices folded to []).
+
+An output that raised is stored as its exception (a refusal is an output) and compared like
+one: a raise against a result is a divergence (a changed entry, or entries on one side only).
+Each part prints its raise count (raised/calls) and, per function, count/calls and the first
+error.
+
+Pass: compare prints "compare: ok" and exits 0 only when every listed part ran (no skip, no
+error), no entry diverged, every one-sided input field or output entry is named by
+--allow-new, no part had every output raise, and the capture's commit is recorded and differs
+from this checkout's (or --same-ok). Anything else exits 1. capture exits 1 on a skip, an
+error or a part where every output raised.
 """
 
 from __future__ import annotations
@@ -173,12 +196,22 @@ def plain(x):
     return x
 
 
+# Saved input fields one side lacks: {"base": {...}, "new": {...}} (compare fails on them).
+INPUT_ONE_SIDED: dict[str, set[str]] = {"base": set(), "new": set()}
+
+
+def _note_input_fields(kind: str, saved: dict, fields: tuple[str, ...]) -> None:
+    INPUT_ONE_SIDED["base"] |= {f"{kind}.{n}" for n in set(saved) - set(fields)}
+    INPUT_ONE_SIDED["new"] |= {f"{kind}.{n}" for n in set(fields) - set(saved)}
+
+
 def rebuild_state(saved: dict):
     """A ``BattleState`` of this checkout from a saved field dict (see the docstring)."""
     import numpy as np
 
     from nuzline.engine.state import LAYOUT, BattleState
 
+    _note_input_fields("in_state", saved, BattleState._fields)
     return BattleState(
         **{
             n: saved[n] if n in saved else np.zeros(LAYOUT[n][0], LAYOUT[n][1])
@@ -194,22 +227,28 @@ def rebuild_outcome(saved: dict):
     from nuzline.engine.outcome import Outcome, empty_outcome
 
     empty = jax.device_get(empty_outcome())
+    _note_input_fields("in_outcome", saved, Outcome._fields)
     return Outcome(**{n: saved.get(n, getattr(empty, n)) for n in Outcome._fields})
 
 
 # --- the runs ---------------------------------------------------------------------------
 
 TIMES: dict[str, float] = {}
+CALLS: dict[str, int] = {}
+RAISED: dict[str, list] = {}  # name -> [count, first "Type: message"]
 
 
 def timed(name, f):
-    """``device_get(f())``, or the exception it raised (a refusal is an output)."""
+    """``device_get(f())``, or the exception it raised (a refusal is an output; counted)."""
     import jax
 
     start = time.monotonic()
+    CALLS[name] = CALLS.get(name, 0) + 1
     try:
         return jax.device_get(f())
     except Exception as e:  # noqa: BLE001
+        r = RAISED.setdefault(name, [0, f"{type(e).__name__}: {str(e)[:160]}"])
+        r[0] += 1
         return e
     finally:
         TIMES[name] = TIMES.get(name, 0.0) + time.monotonic() - start
@@ -481,7 +520,14 @@ def child(mode: str, directory: Path, part: str) -> int:
         steps = seed_steps(ctx, directory, mode, lo, hi, group)
     dump = [(key, canon(outs)) for key, outs in steps]
     path = directory / f"{part}.pkl.gz"
-    result = {"steps": len(dump), "diverged": None, "only_base": [], "only_new": []}
+    result = {
+        "steps": len(dump),
+        "diverged": None,
+        "only_base": [],
+        "only_new": [],
+        "calls": sum(CALLS.values()),
+        "raised": {k: [v[0], CALLS[k], v[1]] for k, v in sorted(RAISED.items())},
+    }
     if mode == "capture":
         record = [(key, digest(d), d) for key, d in dump]
         with gzip.open(path, "wb") as f:
@@ -503,6 +549,8 @@ def child(mode: str, directory: Path, part: str) -> int:
                 diff = first_diff(want, got)
                 if diff and not result["diverged"]:
                     result["diverged"] = f"{key}: {diff}"
+        only_base |= INPUT_ONE_SIDED["base"]
+        only_new |= INPUT_ONE_SIDED["new"]
         result["only_base"], result["only_new"] = sorted(only_base), sorted(only_new)
     result["peak_bytes"] = _peak_bytes()
     print("TIMES " + json.dumps({k: round(v, 1) for k, v in TIMES.items()}), file=sys.stderr)
@@ -515,19 +563,64 @@ def _names(fields: list[str]) -> str:
     return shown + (f" (+{len(fields) - LIST_SHOWN} more)" if len(fields) > LIST_SHOWN else "")
 
 
+def allowed(path: str, allow: set[str]) -> bool:
+    """``path`` (a folded entry path) names an ``--allow-new`` field as one of its segments."""
+    return any(seg in allow for seg in re.split(r"[.\[\]#]+", path) if seg)
+
+
+def commit_of(repo: Path) -> dict:
+    """``{"commit", "dirty"}`` of checkout ``repo`` (commit None outside git)."""
+
+    def git(*a):
+        r = subprocess.run(
+            ["git", "-C", str(repo), *a], capture_output=True, text=True, check=False
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    status = git("status", "--porcelain", "--untracked-files=no")
+    return {
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": bool(status) if status is not None else None,
+    }
+
+
+def _show(c: dict) -> str:
+    return f"{c.get('commit')}{' (dirty)' if c.get('dirty') else ''}"
+
+
 def parent(args) -> int:
     lo, _, hi = args.seeds.partition("-")
     lo, hi = int(lo), int(hi or lo)
     directory = Path(args.dir).resolve()
+    allow = {n.strip() for n in (args.allow_new or "").split(",") if n.strip()}
+    groups = [g.strip() for g in args.parts.split(",")] if args.parts else None
     parts = [
         f"{a}-{min(a + args.chunk - 1, hi)}.{g}"
         for a in range(lo, hi + 1, args.chunk)
         for g in SEED_GROUPS
+        if groups is None or g in groups
     ]
     if not args.no_roark:
-        parts += ["roark.trace", "roark.rank"]
+        parts += [p for p in ("roark.trace", "roark.rank") if groups is None or p in groups]
     print(f"{args.mode}: checkout {ROOT}, snapshot {directory}, {len(parts)} parts", flush=True)
     bad, overs, skipped, total = 0, [], [], time.monotonic()
+    here = commit_of(ROOT)
+    if args.mode == "capture":
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "capture.json").write_text(json.dumps(here, indent=1), encoding="utf-8")
+        print(f"capture commit {_show(here)}", flush=True)
+    else:
+        try:
+            base = json.loads((directory / "capture.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            base = {}
+        print(f"capture commit {_show(base)}; this checkout {_show(here)}", flush=True)
+        if not base.get("commit"):
+            print("FAIL: the capture records no commit (capture.json)", flush=True)
+            bad += 1
+        elif base["commit"] == here["commit"] and not args.same_ok:
+            print("FAIL: same commit on both sides (pass --same-ok to allow)", flush=True)
+            bad += 1
     for part in parts:
         lack = missing(part)
         if lack:
@@ -556,33 +649,52 @@ def parent(args) -> int:
             bad += 1
             continue
         res = json.loads(line[7:])
-        gb = res["peak_bytes"] / 2**30
-        over = took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES
-        if args.mode == "capture":
-            verdict = "captured"
-        else:
-            verdict = f"DIVERGED: {res['diverged']}" if res["diverged"] else "identical"
-        print(
-            f"{part}: {verdict}; {res['steps']} steps, {took:.1f} s, peak {gb:.2f} GB"
-            f"{'  OVER LIMIT' if over else ''}",
-            flush=True,
-        )
-        if res["only_base"]:
-            print(f"  only in the capture: {_names(res['only_base'])}", flush=True)
-        if res["only_new"]:
-            print(f"  only in this checkout: {_names(res['only_new'])}", flush=True)
-        if args.verbose:
-            print(
-                "  " + next((ln for ln in proc.stderr.splitlines() if ln.startswith("TIMES")), "")
-            )
-        bad += bool(res["diverged"])
-        overs += [part] if over else []
+        bad += report(args, part, res, took, allow, proc.stderr)
+        overs += [part] if took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES else []
+    if skipped:
+        bad += len(skipped)
+    verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
     print(
-        f"{args.mode}: {'ok' if not bad else f'{bad} part(s) failed'} "
-        f"({time.monotonic() - total:.0f} s); over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
-        f"skipped: {', '.join(skipped) or 'none'}"
+        f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); "
+        f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
+        f"skipped (each a failure): {', '.join(skipped) or 'none'}"
     )
     return 1 if bad else 0
+
+
+def report(args, part: str, res: dict, took: float, allow: set[str], stderr: str) -> int:
+    """Print one part's result; 1 if it failed: a divergence, a one-sided field not in
+    ``--allow-new``, or every output raised."""
+    gb = res["peak_bytes"] / 2**30
+    over = took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES
+    if args.mode == "capture":
+        verdict = "captured"
+    else:
+        verdict = f"DIVERGED: {res['diverged']}" if res["diverged"] else "identical"
+    print(
+        f"{part}: {verdict}; {res['steps']} steps, {took:.1f} s, peak {gb:.2f} GB"
+        f"{'  OVER LIMIT' if over else ''}",
+        flush=True,
+    )
+    failed = bool(res["diverged"])
+    for label, key in (("only in the capture", "only_base"), ("only in this checkout", "only_new")):
+        hard = [f for f in res[key] if not allowed(f, allow)]
+        ok = [f for f in res[key] if allowed(f, allow)]
+        if hard:
+            print(f"  FAIL {label}: {_names(hard)}", flush=True)
+            failed = True
+        if ok:
+            print(f"  {label} (--allow-new): {_names(ok)}", flush=True)
+    n_raised = sum(r[0] for r in res["raised"].values())
+    print(f"  raised: {n_raised}/{res['calls']} outputs", flush=True)
+    for name, (count, calls, first) in res["raised"].items():
+        print(f"  raised: {name} {count}/{calls} ({first})", flush=True)
+    if res["calls"] and n_raised == res["calls"]:
+        print(f"  FAIL: every output raised ({n_raised}/{res['calls']})", flush=True)
+        failed = True
+    if args.verbose:
+        print("  " + next((ln for ln in stderr.splitlines() if ln.startswith("TIMES")), ""))
+    return int(failed)
 
 
 def main(argv=None) -> int:
@@ -603,6 +715,9 @@ def main(argv=None) -> int:
     p.add_argument("--chunk", type=int, default=10)
     p.add_argument("--repo", type=Path, default=ROOT)
     p.add_argument("--no-roark", action="store_true")
+    p.add_argument("--parts", help="only these groups/parts, e.g. step,rest,roark.trace")
+    p.add_argument("--allow-new", help="NAME[,NAME...]: one-sided fields that do not fail")
+    p.add_argument("--same-ok", action="store_true", help="allow the capture's own commit")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
     set_root(args.repo)
