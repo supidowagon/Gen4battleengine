@@ -1721,6 +1721,20 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   prerequisite commit a397bce, the snap base). Clean masks read as before (4.4). Tests:
   `tests/engine/test_field_mask.py` (0x7FFF, 0x5000 - 3, 0xFFF readers; 0x7000 to the Kaizo re-arm; engine =
   reference), `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_gravity_reads_the_mask`.
+- G-9 FCM step 2, Uproar family (FCM.md 4.4 (2), 4.7 Uproar): the field's Uproar readers read the mask's bits
+  8-11 (`field.uproar_any`: any `FIELD_CONDITION_UPROAR` bit; `effects.uproar_on` is gone), the reference the
+  same (`_uproar_on`): a sleeper wakes at its move (bcp.c:2432, subscript_wake_up.s:6), sleep does not land
+  (subscript_fall_asleep.s:16, :45, `_inflict`, the sleep move's `kept_awake`), Yawn's sleep and block
+  (subscript_yawn.s:16), Rest fails (subscript_rest.s:11). `uproar[b]` stays the battler's
+  VOLATILE_CONDITION_UPROAR count and is still read where the decomp reads the volatile: Uproar's own start
+  test (effect_script_0159.s:5), the lock (B5-5), the end check (bcp.c:1504-1535) and Metronome's count
+  (battle_lib.c:6160-6198, `statusVolatile & VOLATILE_CONDITION_UPROAR`). So a spurious bit (FCM 3.1, e.g.
+  0xFFF) keeps every battler awake until its battler switches or faints (battle_lib.c:2135, :2213). Not
+  built, no engine site: CheckObedience's nap (bcp.c:2204; Kaizo always obeys, rom_diff.md:365) and
+  DecrementPP's second-call `MON_IS_UPROARING` (bcp.c:2287-2293; the engine models the first call only).
+  No hand-built test state sets `uproar` (tests.strategies derives the bits), so no prerequisite commit: the
+  snap base is the Gravity commit. Tests: `tests/engine/test_field_mask.py::
+  test_spurious_uproar_bits_keep_everyone_awake_until_their_battler_leaves` (0xFFF; engine = reference).
 
 ## Stream state (restart point, 2026-11-19)
 

@@ -170,7 +170,6 @@ from nuzline.engine.effects import (
     targets_user,
     thaw_target,
     unlock_move,
-    uproar_on,
     weather_fails,
     yawn_blocks,
     yawn_sleep,
@@ -999,7 +998,7 @@ def _use_move(
     # instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every sleep bit).
     status = state.status[party(fmt, side), user]
     asleep = ready & (status == Status.SLEEP)
-    roused = asleep & uproar_on(state)
+    roused = asleep & fcm.uproar_any(state)
     sleep_left = jnp.maximum(state.status_counter[party(fmt, side), user].astype(_I32) - 1, 0)
     sleep_left = jnp.where(roused, 0, sleep_left)
     sleeping = asleep & (sleep_left > 0)
@@ -1933,7 +1932,7 @@ def _use_move(
         & (state.status[party(fmt, target_side), target] != Status.SLEEP)
         # :40 CheckSubstitute comes first: behind a substitute it fails instead (B10-4).
         & (state.substitute_hp[target_side] == 0)
-        & uproar_on(state)
+        & fcm.uproar_any(state)
     )
     no_more_work = no_more_work | kept_awake
     # moveFailFlags (BattleContext_MoveFailed, battle_lib.c:2808-2820), which only the Uproar check

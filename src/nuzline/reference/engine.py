@@ -3347,8 +3347,9 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
 
 
 def _uproar_on(s: RefState) -> bool:
-    """FIELD_CONDITION_UPROAR: a battler's bit is set while it is in an uproar."""
-    return any(bt.uproar for bt in s.battlers)
+    """Any FIELD_CONDITION_UPROAR bit (bits 8-11, ``engine.field.uproar_any``); a battler's
+    ``uproar`` is its VOLATILE_CONDITION_UPROAR count."""
+    return bool(s.field_mask & FieldCondition.UPROAR)
 
 
 # fieldConditionsMask (``field_mask``) and weatherTurns (``weather_turns``), written beside the old

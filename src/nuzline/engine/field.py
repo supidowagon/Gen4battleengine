@@ -8,8 +8,9 @@ battle/condition.h:110-149). Step 2 (4.4): the weather readers read the weather 
 deep fog 15) and ``weather_turns`` through the views below (``weather_bits``, ``rain`` ..
 ``fog``, ``weather_ball_type``, ``weather_state``), each as its decomp test reads the mask, so a
 mask with several groups (FCM 3.2) reads as the game reads it; the Gravity readers read bits
-12-14 (``gravity_on``, ``gravity_count``); the Uproar and Trick Room readers still read the old
-fields. On every state the engine
+12-14 (``gravity_on``, ``gravity_count``), the Uproar readers bits 8-11 (``uproar_any``; the
+battler's ``uproar`` count stays its VOLATILE_CONDITION_UPROAR); the Trick Room readers still
+read the old field. On every state the engine
 reaches the mask is clean: at most one weather group, TEMP-only with ``weather_turns ==
 weather_timer`` or PERM-only; the Gravity / Trick Room bits are ``gravity`` / ``trick_room``;
 Uproar bit ``8 + b`` is ``uproar[b] != 0``. ``weather_turns`` is written only by the weather
@@ -54,6 +55,7 @@ WEATHER_STATES = (
 # The groups an observer sees, by ``Weather`` id (1 sun .. 5 fog): one message per set group.
 _SEEN_GROUPS = (_SUNNY, _RAINING, _SANDSTORM, _HAILING, _DEEP_FOG)
 _GRAVITY = int(FieldCondition.GRAVITY)
+_UPROAR = int(FieldCondition.UPROAR)
 _TRICK_ROOM = int(FieldCondition.TRICK_ROOM)
 
 
@@ -74,6 +76,14 @@ def uproar_bit(b) -> jnp.ndarray:
     """``int32``: battler ``b``'s ``FIELD_CONDITION_UPROAR`` bit (``FlagIndex(b) << 8``,
     condition.h:118, :147)."""
     return jnp.left_shift(jnp.int32(1), FIELD_CONDITION_UPROAR_SHIFT + jnp.asarray(b, _I32))
+
+
+def uproar_any(state: BattleState) -> jnp.ndarray:
+    """``bool``: any ``FIELD_CONDITION_UPROAR`` bit set (bits 8-11, condition.h:118, :147), the
+    field test of the Uproar readers: a sleeper wakes at its move (bcp.c:2432,
+    subscript_wake_up.s:6), sleep does not land (subscript_fall_asleep.s:16, :45, _yawn.s:16),
+    Rest fails (subscript_rest.s:11). A spurious bit (a borrow, FCM 3.1) counts too."""
+    return (_mask(state) & _UPROAR) != 0
 
 
 def weather_move(state: BattleState, weather, turns, cond) -> BattleState:

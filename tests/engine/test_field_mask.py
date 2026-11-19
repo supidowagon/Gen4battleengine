@@ -3,7 +3,8 @@
 writer path the mask is clean (4.4: it equals the old fields) and the engine equals the
 reference. Step 2 (4.6): the weather readers read the mask, so a corrupted mask (3.1: 0x7F, 0x5,
 0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference; the Gravity
-readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3)."""
+readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3); the Uproar
+readers read bits 8-11 (0xFFF: a bit of every battler, none uproaring)."""
 
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from nuzline.engine.ids import (
     TRICK_ROOM_TURNS,
     WEATHER_TURNS,
     FieldCondition,
+    Status,
     Weather,
     clean_field_mask,
 )
@@ -299,3 +301,26 @@ def test_a_borrowed_gravity_counter_runs_seven_turns_and_kaizo_rearms_it(tables,
     for left in (6, 5, 4, 3, 2, 1, GRAVITY_TURNS):
         s = assert_matches_reference(t, s, A("Growl", "Growl", s, names), _hits())
         assert int(s.field_mask) == left << 12
+
+
+# --- FCM step 2, Uproar readers (FCM 3.2 "Status scripts", "Spurious Uproar bit", 4.6) --------
+
+
+def test_spurious_uproar_bits_keep_everyone_awake_until_their_battler_leaves(tables, names):
+    """0xFFF: every Uproar bit (8-11) with no battler uproaring (FCM 3.1). Any FIELD_CONDITION_UPROAR
+    bit wakes the sleeping Monferno at its move (bcp.c:2432, subscript_wake_up.s:6), fails its Rest
+    (subscript_rest.s:11) and the foe's Hypnosis (subscript_fall_asleep.s:16); the turn end's Uproar
+    check runs only for a battler with the volatile (bcp.c:1506), so the bits stay; a switch clears
+    the switcher's bit only (battle_lib.c:2135)."""
+    s = _fight(tables, names, ("Rest",), ("Hypnosis",), bench=("Chimchar",))
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 2).with_status(0, 0, Status.SLEEP, 3)
+    s = _masked(s, 0xFFF, 0)
+    out = assert_matches_reference(tables, s, A("Rest", "Hypnosis", s, names), _hits())
+    assert int(out.status[0, 0]) == Status.NONE
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # no Rest heal, the weather chips
+    assert int(out.field_mask) == 0xFFF
+    out = assert_matches_reference(
+        tables, out, A(MOVE_ACTIONS + 1, "Hypnosis", out, names), _hits()
+    )
+    assert int(out.status[0, 1]) == Status.NONE  # Chimchar: Hypnosis still fails
+    assert int(out.field_mask) == 0xEFF

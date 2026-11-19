@@ -573,7 +573,7 @@ def _inflict(
     # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
     # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
     # indirect one silently (:_292).
-    blocked = blocked | (cond & (status == Status.SLEEP) & uproar_on(state))
+    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state))
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[party(fmt, h.target_side), h.target]
@@ -1358,7 +1358,7 @@ def rest_fails(tables, state: BattleState, side) -> tuple:
     ids = STAT_MOVE_ABILITY_IDS
     by_ability = (own == ids["Insomnia"]) | (own == ids["Vital Spirit"])
     asleep = state.status[party(fmt, side), mon] == Status.SLEEP
-    uproar = (own != ids["Soundproof"]) & uproar_on(state)
+    uproar = (own != ids["Soundproof"]) & fcm.uproar_any(state)
     full = state.hp[party(fmt, side), mon] == state.max_hp[party(fmt, side), mon]
     return by_ability | asleep | uproar | full, by_ability
 
@@ -1561,12 +1561,6 @@ def _uproar(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     state = fcm.uproar_start(state, h.side, cond)
     state = _set(state, "locked_move", h.side, h.move, cond)
     return _set(state, "uproar", h.side, outcome.duration[h.side], cond)
-
-
-def uproar_on(state: BattleState) -> jnp.ndarray:
-    """``bool``: ``FIELD_CONDITION_UPROAR`` is set: some battler is in an uproar
-    (``BattleState.uproar``)."""
-    return jnp.any(state.uproar != 0)
 
 
 def primary_effect_fails(
@@ -2273,7 +2267,7 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
     fails = (
         by_ability
         | (state.substitute_hp[target_side] != 0)
-        | ((own != ids["Soundproof"]) & uproar_on(state))
+        | ((own != ids["Soundproof"]) & fcm.uproar_any(state))
         | (state.status[party(fmt, target_side), mon] != Status.NONE)
         | (state.safeguard[side_of(target_side)] != 0)
         | (state.yawn[target_side] != 0)
@@ -2326,7 +2320,7 @@ def yawn_sleep(tables, state: BattleState, side, outcome: Outcome) -> BattleStat
     sleeps = (
         falls
         & ~awake
-        & ~((own != ids["Soundproof"]) & uproar_on(state))
+        & ~((own != ids["Soundproof"]) & fcm.uproar_any(state))
         & (state.status[party(fmt, side), mon] == Status.NONE)
     )
     state = _set(state, "status", (side, mon), Status.SLEEP, sleeps)
