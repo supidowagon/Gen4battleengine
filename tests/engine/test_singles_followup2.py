@@ -137,9 +137,10 @@ def test_rough_skin_switcher_without_bond_acts_as_before(tables, names):
     n = names
     s = _player_pursuit(tables, n, "Rough Skin", False)
     out = assert_matches_reference(tables, s, (0, SWITCH), _proc(1))
-    assert int(out.hp[0, 0]) < int(s.hp[0, 0])  # Rough Skin's damage
-    ev = _events(tables, s, (0, SWITCH), _proc(1))
-    assert int(ev["contact_ability"][1]) != 0
+    assert int(out.hp[1, 0]) == 0
+    # Rough Skin: maxHP / 8, at least 1, off the pursuer (battle_lib.c:4257-4266, :3599-3620). The ``contact_ability``
+    # event shows only a status or infatuation change (step._hit_events), not this damage.
+    assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == max(1, int(s.max_hp[0, 0]) // 8)
 
 
 def test_surviving_bond_switcher_gets_no_take_down(tables, names):
@@ -147,13 +148,13 @@ def test_surviving_bond_switcher_gets_no_take_down(tables, names):
     s = make_state(
         tables,
         [_mon(n, "Houndour", ["Pursuit"], 5), _bench(n)],
-        [_mon(n, "Geodude", ["Tackle"], 60, ability="Rough Skin"), _bench(n)],
+        [_mon(n, "Sharpedo", ["Tackle"], 60, ability="Rough Skin"), _bench(n)],
     )
     s = _bond(s, 1)
     out = assert_matches_reference(tables, s, (0, SWITCH), _proc(1))
     assert int(out.hp[1, 0]) > 0
-    ev = _events(tables, s, (0, SWITCH), _proc(1))
-    assert int(ev["contact_ability"][1]) != 0  # Rough Skin ran as today
+    # Rough Skin ran as today: maxHP / 8, at least 1, off the pursuer (battle_lib.c:4257-4266, :3599-3620).
+    assert int(s.hp[0, 0]) - int(out.hp[0, 0]) == max(1, int(s.max_hp[0, 0]) // 8)
 
 
 # SF2 (c): the paused view counts a pursuer as acted (battle_script.c:6931; battle_lib.c:5365-5368).

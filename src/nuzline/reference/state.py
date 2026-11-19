@@ -213,11 +213,11 @@ class RefState:
     learn_cursor: list[int]
     learn_pin: int
     exp_refused: int
-    acid_rain: int
     deaths: list[int]
     faint_budget: int
     protected: list[int]
     replace_mul: int
+    acid_rain: int
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int

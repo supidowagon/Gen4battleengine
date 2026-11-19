@@ -29,6 +29,13 @@ three structs has a row.
   traced data the engine never reads. `replace_mul` is the decomp's `powerMul` kept
   for a pending player replacement (it persists until `BattleContext_Init`,
   battle_controller_player.c:1855), 0 otherwise.
+  `acid_rain` (int8, after `replace_mul`, outside the experience block; sticky to the
+  battle's end) is not decomp state either: the operand of Pursuit's
+  `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
+  battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a
+  nonzero operand while a field condition is up. The engine cannot hold the result: a state
+  with `acid_rain != 0` is refused (`coverage.check_acid_rain`; the search's `exp_refused`
+  readers). Owed: FCM.md (the field conditions as the decomp mask).
 - **Battlers vs. party slots.** The decomp keeps a `BattleMon` per battler
   (`BattleContext.battleMons[4]`, built from the party mon by
   `BattleSystem_InitBattleMon`, `src/battle/battle_lib.c:70`) and writes HP, PP,
@@ -374,12 +381,6 @@ three structs has a row.
     payout reached its active before its move ran) and `exp_refused` (a sticky refusal
     code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
     resolve set them.
-  - `acid_rain` (int8, sticky to the battle's end): the operand of Pursuit's
-    `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
-    battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a
-    nonzero operand while a field condition is up. The engine cannot hold the result: a state
-    with `acid_rain != 0` is refused (`coverage.check_acid_rain`; the search's `exp_refused`
-    readers). Owed: FCM.md (the field conditions as the decomp mask).
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
     replacing the active learner's disabled or encored move, or the slot pinned by
     `learn_pin` (the decomp ends Disable and Encore, and re-reads the pinned slot, after a
