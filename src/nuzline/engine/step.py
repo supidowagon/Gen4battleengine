@@ -30,7 +30,8 @@ is unlocked when the next turn is set up (``_unlock_sleepers``, battle_lib.c:224
 
 The Choice lock (``choice_lock``, ``moveEffectsData.choiceLockedMove``): ``_choice_lock``
 sets and clears it where ``UpdateMoveBuffers`` and ``UpdateFlagsWhenHit`` do, and
-``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does; ``actions.usable_moves`` reads it.
+``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does, and ``_clear_stale_choice_locks`` clears a
+lock its holder no longer knows at the command selection; ``actions.usable_moves`` reads it.
 Shell Bell's heal and Life Orb's recoil follow the move's hits (``effects.shell_bell_heal``,
 ``effects.life_orb_recoil``); after every hit, ``AfterMoveEffects`` checks the held items,
 moves a Sticky Barb and thaws the defender, in that order (``_use_move``). A Custap Berry the
@@ -73,6 +74,7 @@ The Trick Room countdown is the turn end's side-condition pass's last state
 from __future__ import annotations
 
 import itertools
+import math
 
 import jax
 import jax.numpy as jnp
@@ -107,6 +109,7 @@ from nuzline.engine.damage import (
     ignorable,
     move_type_of,
     natural_gift_params,
+    personal_types,
     trump_card_power,
     weather_suppressed,
     wonder_guarded,
@@ -183,14 +186,20 @@ from nuzline.engine.hooks import (
     TORMENT,
     WEATHER_HP,
     after_damage_items,
+    entry_damage_up,
+    forecast,
     held_item_check,
     move_end_switch_in,
     recover_status_by_ability,
+    resolve_starf,
     reveal_ability,
+    starf_count,
+    starf_holders,
     swap_war,
     switch_in_effects,
 )
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     COUNTER_PHYSICAL,
@@ -203,10 +212,13 @@ from nuzline.engine.ids import (
     MOVE_SNORE,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    MOVE_WILL_O_WISP,
     PROTECT_CHAIN_MOVES,
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
     SNORE_PARAM,
+    STARF_DRAWS,
+    STARF_STATS,
     TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
@@ -451,6 +463,23 @@ def _set_choice_lock(state: BattleState, side, move, cond) -> BattleState:
     return state._replace(choice_lock=state.choice_lock.at[side].set(lock))
 
 
+def _clear_stale_choice_locks(tables: Tables, state: BattleState, actions) -> BattleState:
+    """The command selection's ``BattleSystem_CheckInvalidMoves`` (bcp.c:433, run for every
+    battler whose command is FIGHT, before its Struggle and Encore checks): a Choice holder
+    whose ``choiceLockedMove`` it no longer knows has the lock cleared (battle_lib.c:2307-2310).
+    A locked battler picks no command (``Battler_CanPickCommand``, bcp.c:335; lib.c:6224-6235).
+    ``actions.choice_locked`` already reads such a lock as none; the clear keeps a move forgotten
+    and learned again later from reviving it."""
+    fmt = format_of(state)
+    for side in range(fmt.B):
+        mon = state.active[side]
+        known = jnp.any(state.moves[party(fmt, side), mon] == state.choice_lock[side])
+        fight = (actions[side] < MOVE_ACTIONS) & (locked_slot(state, side) < 0)
+        stale = fight & _holds_choice(tables, state, side) & ~known
+        state = _set_choice_lock(state, side, 0, stale)
+    return state
+
+
 def _choice_lock(
     tables: Tables, state: BattleState, side, defender, move, shown, record, exempt=False
 ) -> BattleState:
@@ -590,16 +619,22 @@ def _restore_moves(state: BattleState, side, cond) -> BattleState:
 
 def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``types`` go back to its
-    personal row's (``tables.species_types`` at ``species_form_row``, as ``make_state`` builds
-    them). Only Camouflage (``effects._camouflage``) writes ``types``; the decomp writes the
-    battler's ``BattleMon.type1/type2`` and ``BattleSystem_InitBattleMon`` re-reads the party
-    Pokemon's on its next switch-in (battle_lib.c:114-115), so the party never sees it."""
+    personal row's (``damage.personal_types``, as ``make_state`` builds them: a Multitype
+    Arceus' are its plate's). Camouflage (``effects._camouflage``) and Transform write
+    ``types``; the decomp writes the battler's ``BattleMon.type1/type2`` and
+    ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on its next switch-in
+    (battle_lib.c:114-115), so the party never sees it."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    own_types = tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own_types = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
+    ).astype(state.types.dtype)
     value = jnp.where(cond, own_types, state.types[party(fmt, side), mon])
     return state._replace(types=state.types.at[party(fmt, side), mon].set(value))
 
@@ -641,6 +676,11 @@ def _switch_in(
     state = _restore_ability(tables, state, side, True)
     state = _restore_moves(state, side, True)
     state = _reset_battler(state, side, True, baton)
+    # BattleSystem_InitBattleMon re-reads the party's friendship (battle_lib.c:136, F-15).
+    row = party(format_of(state), side)
+    state = state._replace(
+        friendship=state.friendship.at[row, slot].set(state.party_friendship[row, slot])
+    )
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
@@ -1804,18 +1844,29 @@ def _use_move(
         & (tables.move_power[used] != 0)
     )
     volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
-    # Volt Absorb tests ``attacker != defender`` (:3500-3502), Water Absorb and Dry Skin do not
-    # (:3507-3512, :3538-3544): a Dive that hit its own user can heal it.
+    # Flash Fire (:3515-3521): a Fire move whose holder is not frozen, with power or Will-O-Wisp;
+    # no heal: the subscript sets flashFire (subscript_absorb_and_boost_fire_type_moves.s:13), F-2.
+    # Volt Absorb tests ``attacker != defender`` (:3500-3502); Water Absorb, Dry Skin and Flash
+    # Fire do not (:3507-3512, :3538-3544, :3515-3521): a Dive that hit its own user can heal it.
+    flash = (
+        (seen == AbilityId.FLASH_FIRE)
+        & (move_type == Type.FIRE)
+        & (state.status[party(fmt, target_side), target] != Status.FREEZE)
+        & ((tables.move_power[used] != 0) | (used == MOVE_WILL_O_WISP))
+    )
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))
-        & (water | (volt & ~self_target))
+        & (water | (volt & ~self_target) | flash)
         & (chart > 0)
     )
+    state = _set_side(state, "flash_fire", target_side, 1, absorbed & flash)
     target_hp = state.hp[party(fmt, target_side), target].astype(_I32)
     target_max = state.max_hp[party(fmt, target_side), target].astype(_I32)
     healed = jnp.minimum(target_hp + jnp.maximum(target_max // 4, 1), target_max)
-    state = _set_mon(state, "hp", target_side, target, healed, absorbed & (target_hp != target_max))
+    # Volt / Water Absorb only (hpCalcTemp, battle_lib.c:3503/3510); Flash Fire sets no heal.
+    heal = absorbed & ~flash & (target_hp != target_max)
+    state = _set_mon(state, "hp", target_side, target, healed, heal)
     state = reveal_ability(state, target_side, target, ABSORB, absorbed)
     no_more_work = no_more_work | absorbed
     # Jump Kick / Hi Jump Kick (EffectId.CRASH, B10-2): effect_script_0045.s set
@@ -2002,7 +2053,19 @@ def _use_move(
     )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
-    state = _where(entering, switch_in_effects(tables, state, fx_side, outcome.trace_pick), state)
+    # subscript_intimidate.s:13: the resumed U-turn's newcomer skips a foe whose substitute the
+    # paused action's hit struck (the flag stays through the party list), F-4. Only the resumed
+    # action reads it: BattleContext_Init clears selfTurnFlags at its end (battle_lib.c:2013-
+    # 2015, bcp.c:3998), so a later drag's newcomer in the same turn finds it clear.
+    entry_sub_hit = resumed & (state_in.ts_sub_hit != 0)
+    state = _where(
+        entering,
+        switch_in_effects(tables, state, fx_side, outcome.trace_pick, sub_hit=entry_sub_hit),
+        state,
+    )
+    state = state._replace(
+        ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype)
+    )
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
     # the hits below), G-69.
@@ -2328,6 +2391,7 @@ def _use_move(
     looped = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
     paused, pursue, damaged0, dealt0 = looped[11:15]
+    sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -2337,6 +2401,11 @@ def _use_move(
         ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
+        ts_sub_hit=jnp.where(
+            note,
+            (jnp.arange(fmt.B) == target_side) & sub_hit_now,
+            state.ts_sub_hit,
+        ).astype(state.ts_sub_hit.dtype),
         pivot_battler=jnp.where(paused, side + 1, state.pivot_battler).astype(
             state.pivot_battler.dtype
         ),
@@ -2344,8 +2413,10 @@ def _use_move(
     state = _where(transform_ok, switch_in_effects(tables, state, side, outcome.trace_pick), state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
-    still = state.active[target_side] == target
-    back = jnp.where(still, target_types, state.types[party(fmt, target_side), target])
+    # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
+    now = state.types[party(fmt, target_side), target]
+    still = (state.active[target_side] == target) & jnp.all(now == roost_types)
+    back = jnp.where(still, target_types, now)
     state = state._replace(types=state.types.at[party(fmt, target_side), target].set(back))
     # BATTLE_CONTROL_LOOP_FAINTED (bcp.c:3820-3823, :4425-4426) after the hits:
     # subscript_faint_check_destiny_bond.s takes a living attacker of the other side down with a
@@ -2905,7 +2976,12 @@ def _move_end(
     state = recover_status_by_ability(state, foe, clear)
     # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
     # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
-    return move_end_switch_in(tables, state, clear, trace_pick)
+    state = move_end_switch_in(tables, state, clear, trace_pick)
+    # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (battle_lib.c:4115, after
+    # the Trace / weather / Intimidate / Download states; AfterMoveEffects' :3672-3680 before it):
+    # its Castform form change runs after every move, so a weather move or a type change takes
+    # effect before the next battler acts (F-6).
+    return forecast(tables, state, clear)
 
 
 def execute_actions(
@@ -3157,6 +3233,7 @@ def _execute_actions(
         "ts_used": state.ts_used,
         "ts_damaged": state.ts_damaged,
         "ts_dealt": state.ts_dealt,
+        "ts_sub_hit": state.ts_sub_hit,
         "ts_alive": base,
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
         "ts_switched": is_switch(real),
@@ -3291,10 +3368,14 @@ def _toxic_check(tables: Tables, state: BattleState, side) -> BattleState:
 
 
 def _burn_check(tables: Tables, state: BattleState, side) -> BattleState:
-    """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8, which is
-    ``BattleSystem_Divide`` (battle_script.c:4413; Magic Guard and Heatproof are not
-    implemented)."""
-    return _status_damage(state, side, Status.BURN, _eighth(state, side))
+    """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8 (:6-7, ``BattleSystem_Divide``
+    floored at 1, battle_lib.c:3599-3618), then a Heatproof holder (``CheckAbility``, :8, so
+    ``Battler_Ability``: Mold Breaker never reaches it) takes ``Divide(loss, 2)`` (:9). Magic
+    Guard skips it (:5, ``_status_damage``). E1 batch F ruling F-1."""
+    ability = battler_ability(state, side)
+    loss = _eighth(state, side)
+    loss = jnp.where(ability == AbilityId.HEATPROOF, jnp.maximum(loss // 2, 1), loss)
+    return _status_damage(state, side, Status.BURN, loss)
 
 
 def _curse_check(state: BattleState, side) -> BattleState:
@@ -3726,7 +3807,10 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     Sun (:5585-5596): a Dry Skin or Solar Power holder loses ``Divide(maxHP, 8)``
     (``subscript_weather_continues.s`` :_045 / :_057, after its Magic Guard skip, tag the
     ability). Rain (:5613-5625): a Dry Skin holder below full HP regains ``Divide(maxHP, 8)``
-    (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45); Hydration is unsupported.
+    (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45). Rain, a Hydration holder
+    (``Battler_Ability``: ``damage.battler_decomp_ability``) with HP and any status loses it
+    (:5626-5639 sets WEATHER_EFFECT_HYDRATION, ``subscript_weather_continues.s`` runs
+    ``subscript_ability_restore_status.s``: status := 0, counters with it, the ability tagged), F-5.
     Sand Veil, Snow Cloak, Ice Body, Dry Skin and Solar Power are read through
     ``state.battler_ability``; Magic Guard by decomp id from ``ability`` (``int32[B]``,
     ``damage.battler_decomp_ability`` of each battler). The caller applies ``NO_CLOUD_NINE``.
@@ -3779,6 +3863,18 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     alive = hp > 0
     # :_076 tags every heal's battler, Ice Body's included (G-45).
     state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | heal))
+    # Hydration (:5626-5639): no weather-hidden test in the rain block (a Diving holder is cured);
+    # subscript_ability_restore_status.s:5 sets the status to 0, counter bits included (F-5).
+    row = party(fmt, side)
+    hydrate = (
+        alive
+        & (state.weather == Weather.RAIN)
+        & (ab == ABILITY_DECOMP_IDS[AbilityId.HYDRATION])
+        & (state.status[row, mon] != Status.NONE)
+    )
+    state = _set_mon(state, "status", side, mon, Status.NONE, hydrate)
+    state = _set_mon(state, "status_counter", side, mon, 0, hydrate)
+    state = reveal_ability(state, side, mon, STATUS_CURE, hydrate)
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
@@ -4055,7 +4151,7 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     """The next turn's ``ShowBattleMon`` (battle_controller_player.c:256-268) runs
     ``BattleSystem_TriggerEffectOnSwitch``, whose ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     (battle_lib.c:4151-4165) checks every battler's held item before the commands are chosen
-    (``hooks.after_damage_items``). Its other states find nothing new at a turn start, and before
+    (``hooks.after_damage_items``). Its other states find nothing new at a turn start (Forecast's form change does, ``hooks.forecast``), and before
     a Future Sight hit (``_future_sight``, after the last item check of the turn's end,
     ``MON_COND_CHECK_STATE_ITEM_CONDITION``) the item check found nothing new either; a berry the
     hit brings into its range is eaten here. With a replacement pending, ``replace`` runs the
@@ -4063,6 +4159,9 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     hazards (``TurnEnd``'s ``ReplaceFainted``, bcp.c:1848, comes before the next ``ShowBattleMon``)."""
     fmt = format_of(state)
     run = (state.over == 0) & ~jnp.any(needs_replacement(state) != 0)
+    # SWITCH_IN_CHECK_STATE_FORM_CHANGE comes first (battle_lib.c:3629-3640): a Castform whose
+    # weather ended this turn reverts before the commands are chosen (F-6).
+    state = forecast(tables, state, run)
     for side in range(fmt.B):
         state = after_damage_items(tables, state, side, run)
     return state
@@ -4108,7 +4207,13 @@ def _action_phase(
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
+    # A battle-start Starf Berry still open (a state no root drew for) draws here first; then the
+    # turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events replaces them.
+    turn_draw = jnp.asarray(outcome.starf)[:, 0]
+    state = resolve_starf(state, turn_draw)
+    state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
+    fresh = _clear_stale_choice_locks(tables, fresh, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
@@ -4159,7 +4264,31 @@ def step_events(
     )
     e = canonical_target(e)
     s = _where(halted, s, e)
+    # The faint replacement's Starf Berry draw, kept for ``replace`` where it can be read; 0 at a
+    # pause and elsewhere, so states merge (F-10).
+    # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
+    # at most an Intimidate or Download stage before it), so states that read alike merge.
+    kept = starf_kept(tables, s) & ~halted
+    replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
+    s = s._replace(starf_roll=jnp.where(kept, replacement_draw, 0).astype(s.starf_roll.dtype))
     return _where(state.over != 0, state, s), events
+
+
+def starf_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the side's faint replacement can eat a Starf Berry before the next turn's draw:
+    its active Pokemon is down with one to send in (``needs_replacement``) and a living Pokemon
+    of its party other than the active holds one (the raw item: Klutz and Embargo are read at the
+    check) at its pinch, or Spikes / Stealth Rock can take it there at the entry
+    (``hooks.starf_holders``, ``entry_damage_up``). The replacement's switch-in item check
+    (``step.replace``: ``hooks.on_switch_in``, ``subscript_show_party_list.s:22-24`` then
+    ``ShowBattleMon``, battle_lib.c:4151) draws ``RandNext() % 5`` (battle_lib.c:5273-5294), held
+    in ``starf_roll`` (F-10)."""
+    fmt = format_of(state)
+    rows = party(fmt, jnp.arange(fmt.B))
+    holds, pinched = starf_holders(tables, state)
+    can = pinched[rows] | (holds[rows] & entry_damage_up(state)[:, None])
+    bench = jnp.arange(state.hp.shape[1])[None, :] != state.active[:, None]
+    return (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
 
 
 def canonical_target(state: BattleState) -> BattleState:
@@ -4244,6 +4373,10 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (format_of(state).B,), 0, QUICK_CLAW_MODULUS) == 0
     state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
+    # A lead's battle-start Starf Berry (``starf_open``): its RandNext() % 5 (battle_lib.c:
+    # 5273-5294), uniform over the eligible stats (F-10).
+    starf = jax.random.randint(jax.random.fold_in(key, 2), (format_of(state).B,), 0, STARF_DRAWS)
+    state = resolve_starf(state, starf)
     return sample_war(jax.random.fold_in(key, 1), state)
 
 
@@ -4261,6 +4394,12 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
+    # A lead's battle-start Starf Berry (``starf_open``): one value per eligible stat, uniform
+    # (``hooks.resolve_starf``, F-10); visible, so its outcomes are separate groups.
+    counts = [
+        int(jax.device_get(starf_count(state, b))) if int(state.starf_open[b]) else 1
+        for b in range(len(kept))
+    ]
     out = []
     for bits in itertools.product(*((0, 1) if k else (0,) for k in kept)):
         prob = 1.0
@@ -4268,10 +4407,13 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
             if k:
                 prob *= 1 / n if b else (n - 1) / n
         drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
-        if bool(war_split(drawn)):
-            out.extend((resolve_war(drawn, tie), prob / 2) for tie in (0, 1))
-        else:
-            out.append((resolve_war(drawn, 0), prob))
+        for picks in itertools.product(*(range(max(c, 1)) for c in counts)):
+            p = prob / math.prod(max(c, 1) for c in counts)
+            picked = resolve_starf(drawn, jnp.asarray(picks, jnp.int32))
+            if bool(war_split(picked)):
+                out.extend((resolve_war(picked, tie), p / 2) for tie in (0, 1))
+            else:
+                out.append((resolve_war(picked, 0), p))
     return out
 
 
@@ -4364,6 +4506,11 @@ def replace(
             out.exp_refused.dtype
         )
     )
+    # The kept Starf Berry draw (F-10) is read; kept on for a side whose next replacement can
+    # still eat one (a newcomer that the hazards fainted) or whose newcomer's checks wait for
+    # ShowBattleMon (``entry_pending``, G-32), else 0.
+    keep = starf_kept(tables, out) | (out.entry_pending != 0)
+    out = out._replace(starf_roll=jnp.where(keep, out.starf_roll, 0).astype(out.starf_roll.dtype))
     # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))

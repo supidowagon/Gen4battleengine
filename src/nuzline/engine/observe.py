@@ -211,6 +211,9 @@ _NONZERO_SIDE = (
     # E2 batch 13: "{0} can't use items anymore!" (subscript_embargo_start.s:16) until "{0} can
     # use items again!" (subscript_embargo_end.s:6); the count is hidden (B13-31).
     "embargo",
+    # F-2: "{0}'s {1} raised the power of its Fire-type moves!" (subscript_absorb_and_boost_
+    # fire_type_moves.s:10) until the battler leaves.
+    "flash_fire",
     # E3 batch 1: "{0} was subjected to torment!" (subscript_torment_start.s) until it leaves.
     "torment",
     # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it

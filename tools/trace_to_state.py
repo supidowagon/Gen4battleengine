@@ -1169,7 +1169,9 @@ def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice:
       Encore once the move is no longer known (battle_controller_player.c:1565-1576,
       :1591-1602), the engine runs them before the resolve.
 
-    The locked and the choice-locked move are read by id and replay exactly (offered by
+    None of them once the battle is over: the payout that ended it runs no later turn end or
+    move (bcp.c:3965-3969), so ``learn_options`` offers them. The locked and the choice-locked
+    move are read by id and replay exactly (offered by
     ``learn_options``); a move the AI has seen keeps its id in ``ai_seen_moves``
     (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68). The
     D10 mask (an unsupported offered move) is refused first, by ``_check_learned``."""
@@ -1181,10 +1183,8 @@ def _learn_refusal(tables: Tables, inference: _Turn, state: BattleState, choice:
         why = "the slot selected this turn, re-read when its move runs (bcp.c:1891-1895)"
     elif move == int(state.disabled_move[0]):
         why = "the disabled move, whose Disable the turn's end would end (bcp.c:1565-1576)"
-    elif move == int(state.encore_move[0]):
+    else:  # the encored move: the converter fits no HM, and D10 is refused first
         why = "the encored move, whose Encore the turn's end would end (bcp.c:1591-1602)"
-    else:
-        why = "an option the engine masks (levelup.learn_options: ruling D10)"
     raise inference.fail(
         f"the player replaced move {move} (party slot {slot}, move slot {choice}) at a "
         f"learn-move prompt: {why}"

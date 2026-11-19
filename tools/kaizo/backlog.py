@@ -546,7 +546,12 @@ def main(out_path):
     from nuzline.ai.policy import opponent_move_refusals
     from nuzline.data.games import load_game
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import check_opponent, start_weather
+    from nuzline.engine.coverage import (
+        check_opponent,
+        display_name,
+        start_weather,
+        transform_sky_refusals,
+    )
 
     game = cli._game(argparse.Namespace(game="kaizo"))
     tables, names = load_game(game)
@@ -600,7 +605,13 @@ def main(out_path):
                         helper = "CalcDamage" if kind == "calc damage" else "MoveType"
                         # Weather Ball's MoveType case: refused where it assigns no type
                         # (outside rain, sand, sun and hail; B13-26).
-                        where = " where it assigns no type" if kind == "move type" else ""
+                        # Open item (E1 batch F ruling): the value it returns there needs a
+                        # real-game check (memory dump per caller), trainer_ai.c:3222-3240.
+                        where = (
+                            " where it assigns no type (open: real-game check, trainer_ai.c:3222-3240)"
+                            if kind == "move type"
+                            else ""
+                        )
                         k = ("AI", f"move-id case of TrainerAI_{helper}{where}")
                     else:
                         k = ("AI", f"move effect #{e} {name}: {kind}")
@@ -621,6 +632,7 @@ def main(out_path):
         return (kind, name), None
 
     errors = []
+    transform = names.move("Transform")
 
     def check(t, mem=members, errs=errors):
         """The missing groups of trainer row ``t`` (its team, bag, AI and battle conditions)."""
@@ -629,6 +641,14 @@ def main(out_path):
             party = build_trainer_party(t, inter)
             r = check_opponent(tables, names, t, party, start_weather(t))
             ks = ai_move_groups(t, party, mem)
+            # F-26 (open, E1's next batch): check_opponent runs without your party, so a
+            # trainer's Sky Shaymin is counted here as facing your Transform user (Ditto),
+            # whose freeze revert writes Land's ability into your party Pokemon
+            # (battle_script.c:3401-3407, battle_io_command.c:601-604).
+            for line in transform_sky_refusals(tables, names, (), party, (transform,)):
+                k = ("form change", f"{line} (F-26; your Transform user assumed)")
+                ks.add(k)
+                mem[k].add(display_name(t))
             for m in r.missing:
                 k, member = key(str(m))
                 ks.add(k)
@@ -691,7 +711,8 @@ def main(out_path):
         "opposing trainer row of every split.",
         "It counts only what the trainers' teams, bags, AI and battle conditions need.",
         "Your own Pokemon's moves, abilities and items are not counted, nor are the teams of",
-        "AI partners beside you in multi battles.",
+        "AI partners beside you in multi battles, except F-26: a trainer's Sky Shaymin is counted",
+        "as facing your Transform user (form change).",
         "Moves are grouped by the game's move-effect number and held items by hold-effect number,",
         "since one implementation covers the whole group.",
         "",

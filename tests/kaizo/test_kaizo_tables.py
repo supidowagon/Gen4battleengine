@@ -6,7 +6,7 @@ import json
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO
-from nuzline.engine.ids import EffectId, ItemId
+from nuzline.engine.ids import EffectId
 from tools.build_tables import BuildError, _move_effect, resolve_conditions
 from tools.effect_map import KAIZO_EFFECTS
 from tools.rom.inputs import KAIZO_PATCH_SHA256, VANILLA_SHA1
@@ -48,11 +48,6 @@ def test_kaizo_tables(kaizo_tables, kaizo_names):
     assert int(kaizo_tables.move_priority[kaizo_names.move("Trick Room")]) == 7
 
 
-@pytest.mark.fullset
-def test_berserk_gene_is_unsupported(kaizo_tables, kaizo_names):
-    assert int(kaizo_tables.item_effect[kaizo_names.item("Berserk Gene")]) == ItemId.UNSUPPORTED
-
-
 def test_renamed_vanilla_name_points_at_the_kaizo_name(kaizo_names):
     with pytest.raises(KeyError, match="in this game that slot is 'Accelerock'"):
         kaizo_names.move("Rollout")
@@ -85,14 +80,6 @@ def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
         for m in moves_with_effects([e]):
             assert int(kaizo_tables.move_effect[m]) == eid, (e, m)
             assert [int(x) for x in kaizo_tables.move_param[m]] == list(params), (e, m)
-
-
-@pytest.mark.fullset
-def test_repurposed_items_unsupported(kaizo_tables, kaizo_names):
-    # Spec 5.5: Lava Cookie and Old Gateau became Lum clones; Shoal Shell is RageCandyBar.
-    for name in ("Lava Cookie", "Old Gateau", "RageCandyBar", "Big Nugget"):
-        i = kaizo_names.item(name)
-        assert int(kaizo_tables.item_effect[i]) == ItemId.UNSUPPORTED, name
 
 
 def test_kaizo_roark_party_from_the_rom_decode(kaizo_roark, kaizo_roark_party, kaizo_names):

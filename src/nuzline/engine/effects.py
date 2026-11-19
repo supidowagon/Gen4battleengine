@@ -268,6 +268,8 @@ from nuzline.engine.damage import (
     ignorable,
     me_first_after_calc,
     move_type_of,
+    multitype_plate,
+    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -1900,7 +1902,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
-    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    (battle_script.c:4476-4524) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
     defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
     battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
     (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
@@ -2015,7 +2017,19 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         form=put(state.form, own, state.form[pf, target]),
         stats=put(state.stats, own, battle_stats(state, foe, target)),
         ivs=put(state.ivs, own, state.ivs[pf, target]),
-        types=put(state.types, own, state.types[pf, target]),
+        # A copied Multitype Arceus gives the user its own plate's types, not the target's
+        # (Battler_MonType reads the user's raw heldItem, battle_lib.c:7629-7699), F-3.
+        types=put(
+            state.types,
+            own,
+            multitype_plate(
+                tables,
+                state.species[pf, target],
+                state.ability[pf, target],
+                state.item[own],
+                state.types[pf, target],
+            ),
+        ),
         # Raw: BtlCmd_Transform copies BattleMon.ability (battle_script.c:5342-5348).
         ability=put(state.ability, own, state.ability[pf, target]),
         ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
@@ -2135,12 +2149,16 @@ def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     the bit is set exactly when the types differ from the personal row's."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    return jnp.any(
-        state.types[party(fmt, side), mon] != tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
     )
+    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
 
 
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
@@ -3673,6 +3691,13 @@ def play_hit(
     state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _embargo(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
+    if not pursuit_switch:  # subscript_pursuit.s runs no AfterMoveMessage (F-16)
+        from nuzline.engine.hooks import shaymin_land  # hooks imports this module
+
+        # The check reads BTLVAR_DEFENDER, the user itself for a self-targeted move
+        # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
+        on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
+        state = shaymin_land(tables, state, target_side, on_foe)
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
