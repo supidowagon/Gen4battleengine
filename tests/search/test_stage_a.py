@@ -162,6 +162,7 @@ def test_stats_are_counts_over_the_shared_playouts(tables, names):
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_refused_playouts_are_refused_loudly(tables, names):
     # Levitate on the player's lead is refused by the AI: the ranking must not count
     # those playouts as losses.

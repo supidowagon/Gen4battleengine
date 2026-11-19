@@ -119,6 +119,7 @@ def test_replace_mul_reaches_the_ai(tables, names):
     assert int(after.active[1]) == o
 
 
+@pytest.mark.fullset
 def test_refused_opponent_replacement_at_a_player_replacement(tables, names):
     s = _both_down(tables, names)
     _, refused = send_replacements(tables, s, True, 10)
@@ -207,6 +208,7 @@ def test_replace_mul_is_the_ai_power_mul(tables, names, monkeypatch):
     assert int(fresh(tables, s._replace(replace_mul=jnp.int8(20)), 1)[0].active[1]) == 2
 
 
+@pytest.mark.fullset
 def test_refusal_reason_replays_a_pending_state(tables, names):
     s = _both_down(tables, names)
     key = jax.random.PRNGKey(5)

@@ -156,6 +156,7 @@ def _struct_fields(header: Path, name: str) -> list[str]:
     return fields
 
 
+@pytest.mark.fullset
 def test_state_md_accounts_for_every_struct_field():
     rows = _state_md_rows()
     assert len(rows) > 100

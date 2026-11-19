@@ -44,6 +44,7 @@ def test_screen_pools_both_halves(tables, names):
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_screen_flags_refused(tables, names):
     states = batch(switch_refusal_root(tables, names), roark_real_state(tables, names))
     refusing, fine = screen(tables, states, 256, KEY)

@@ -187,6 +187,7 @@ def test_policy_jits_and_vmaps(tables, names):
     assert acts.tolist() == [0, 0]
 
 
+@pytest.mark.fullset
 def test_refuses_untranscribed_opponent_move(tables, names):
     s = trace_a(tables, names)
     s = s._replace(moves=s.moves.at[1, 0, 2].set(names.move("Ember")))
@@ -200,6 +201,7 @@ def test_refuses_untranscribed_opponent_move(tables, names):
         ai_action_distribution(tables, s)
 
 
+@pytest.mark.fullset
 def test_refusals_name_moves_and_items_in_the_callers_game(tables, names, vanilla_manifest):
     # Final review I3: a game that renames a slot (Kaizo: Rollout is Accelerock) must not
     # see the shipped vanilla name in its refusal lines.
@@ -222,6 +224,7 @@ def test_refusals_name_moves_and_items_in_the_callers_game(tables, names, vanill
     assert any("Belt of Doom" in r for r in ai_refusals(tables, s, other))
 
 
+@pytest.mark.fullset
 def test_refuses_effectiveness_modifiers(tables, names):
     s = versus(tables, names, CRANIDOS, "Starly")
     belt = s._replace(item=s.item.at[1, CRANIDOS].set(names.item("Expert Belt")))
@@ -235,6 +238,7 @@ def test_refuses_effectiveness_modifiers(tables, names):
     assert any("Solid Rock" in r for r in ai_refusals(edited, s))
 
 
+@pytest.mark.fullset
 def test_refused_state_poisons_traced_results(tables, names):
     s = trace_a(tables, names)
     s = s._replace(moves=s.moves.at[1, 0, 2].set(names.move("Ember")))
@@ -249,6 +253,7 @@ def test_roark_real_fight_is_supported(tables, names):
         assert ai_refusals(tables, versus(tables, names, 0, player)) == []
 
 
+@pytest.mark.fullset
 def test_decomp_ids_match_the_manifest(names):
     for name, ability in commands.ABILITY_IDS.items():
         assert names.ability(name) == ability, name
@@ -259,6 +264,7 @@ def test_decomp_ids_match_the_manifest(names):
     assert names.item("Expert Belt") == commands.ITEM_EXPERT_BELT
 
 
+@pytest.mark.fullset
 def test_transcribed_move_effects_match_the_decomp():
     """The script paths are transcribed for exactly the moves with script-roll sites, and
     their decomp battle effects match data/intermediate/moves.json."""

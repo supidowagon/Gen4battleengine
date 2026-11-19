@@ -234,6 +234,7 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
     assert int(s.hp[1, 0]) - int(low.hp[1, 0]) == max(base * 85 // 100, 1)
 
 
+@pytest.mark.fullset
 def test_end_of_turn_order_lists_the_implemented_checks_in_decomp_order():
     # enum MonCondCheckState (battle_controller_player.c:1259-1284): INGRAIN and AQUA_RING (one
     # faint check for the two heals), then ABILITY,

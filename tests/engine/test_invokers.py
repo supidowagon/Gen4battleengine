@@ -494,6 +494,7 @@ def test_sampled_calls_match_the_enumeration(tables, names):
         assert abs(k / count - p) <= 5 * math.sqrt(p * (1 - p) / count) + 1e-9
 
 
+@pytest.mark.fullset
 def test_enumerate_refuses_uncalled_laws(tables, names):
     t, n = tables, names
     s = make_state(t, [_mon(n, "Snorlax", ["Copycat"])], [_mon(n, "Geodude", ["Tackle"])])

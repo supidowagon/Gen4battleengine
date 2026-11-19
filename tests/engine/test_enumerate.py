@@ -893,6 +893,7 @@ def test_order_branches_cases(tables, names, player, opp, tie, setup):
         assert width < brute
 
 
+@pytest.mark.fullset
 def test_read_builders_registered():
     # Every conditional-read builder is registered once the engine entry points are
     # imported (a builder left out by import order would silently drop its gates).

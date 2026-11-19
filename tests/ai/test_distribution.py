@@ -116,6 +116,7 @@ def test_matches_enumeration_on_switch_and_potion_traces(tables, names):
     assert 0 < _both(tables, switch)[0][4] < 1  # a voluntary switch
 
 
+@pytest.mark.fullset
 def test_factored_distribution_refused_states_nan(tables, names):
     scoring = trace_a(tables, names)
     scoring = scoring._replace(moves=scoring.moves.at[1, 0, 2].set(names.move("Ember")))
