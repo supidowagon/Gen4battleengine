@@ -214,18 +214,20 @@ def test_a_transform_into_another_species_still_copies_its_types(tables, names):
 # --- Intimidate and a substitute the action hit (F-4) --------------------------------------
 
 
-def _u_turn_into_intimidate(tables, names, substitute):
-    """Scyther's U-turn hits Bulbasaur (a 1 HP substitute up, or none), then Gyarados comes in."""
+def _u_turn_into_intimidate(tables, names, substitute, foe_move="Tackle", outcome=O):
+    """Scyther's U-turn hits Bulbasaur (a 1 HP substitute up, or none), then Gyarados comes in;
+    a second Gyarados waits on the bench."""
     n = names
+    gyarados = _mon(n, "Gyarados", ["Tackle"], 30)
     s = make_state(
         tables,
-        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Gyarados", ["Tackle"], 30)],
-        [_mon(n, "Bulbasaur", ["Tackle"], 35)],
+        [_mon(n, "Scyther", ["U-turn"], 30), gyarados, gyarados],
+        [_mon(n, "Bulbasaur", [foe_move], 35)],
     )
     if substitute:
         s = s._replace(substitute_hp=s.substitute_hp.at[1].set(1))
     paused = assert_matches_reference(tables, s, (0, 0), O)
-    return _resume(tables, paused, 1)
+    return _resume(tables, paused, 1, outcome)
 
 
 def test_a_u_turn_newcomer_skips_a_foe_whose_substitute_the_action_hit(tables, names):
@@ -238,6 +240,15 @@ def test_a_u_turn_newcomer_skips_a_foe_whose_substitute_the_action_hit(tables, n
     broken = _u_turn_into_intimidate(tables, names, substitute=True)
     assert int(broken.substitute_hp[1]) == 0 and int(broken.stages[1, ATK]) == 0
     assert np.asarray(broken.ts_sub_hit).tolist() == [0, 0]  # the action ended
+
+
+def test_a_later_drag_in_the_same_turn_finds_the_substitute_flag_clear(tables, names):
+    """BattleContext_Init clears selfTurnFlags at the U-turn's end (battle_lib.c:2013-2015,
+    bcp.c:3998): the foe's Roar later in the turn drags the second Gyarados in, whose Intimidate
+    (subscript_intimidate.s:13) now lowers the foe's Attack."""
+    roar = O._replace(roar_target=jnp.asarray([0, 1], O.roar_target.dtype))
+    out = _u_turn_into_intimidate(tables, names, True, "Roar", roar)
+    assert int(out.active[0]) == 2 and int(out.stages[1, Stat.ATK]) == -1
 
 
 # --- Hydration (F-5) and Forecast (F-6) ----------------------------------------------------
@@ -494,6 +505,11 @@ def test_a_lansat_holder_can_have_focus_energy_before_its_own_hit_after_a_foes(t
     assert not bool(possible[1, bit])  # the foe holds nothing
     calm = _hold(_state(tables, names, mine=["Tackle"], opp="Growl"), 0, lansat)
     assert not bool(crit_variants(tables, calm, A("Tackle", "Growl", calm, names))[1][0, bit])
+    # Pain Split, a status move, lowers its target's HP (subscript_pain_split.s:12-22): the
+    # defender's held-item check follows the move (bcp.c:3691-3696).
+    split = _hold(_state(tables, names, mine=["Tackle"], opp="Pain Split"), 0, lansat)
+    acts = A("Tackle", "Pain Split", split, names)
+    assert bool(crit_variants(tables, split, acts)[1][0, bit])
     bare = _state(tables, names, mine=["Tackle"], opp="Tackle")
     assert not bool(crit_variants(tables, bare, A("Tackle", "Tackle", bare, names))[1][0, bit])
 
@@ -680,6 +696,27 @@ def test_a_frozen_shaymin_sky_becomes_land_forme_after_any_hit(tables, names):
     assert out.stats[0, 0].tolist() == land.stats[0, 0].tolist() != sky.stats[0, 0].tolist()
     assert int(out.max_hp[0, 0]) == int(sky.max_hp[0, 0])
     assert int(out.ai_ability_known[0]) != 0
+
+
+def test_a_transform_user_facing_a_sky_shaymin_is_refused(tables, names):
+    """F-26: a Transformed copy of a Sky Shaymin that is frozen has Land's ability written into
+    the Transform user's own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:
+    601-604), which the engine does not hold: the fight is refused. Mimic alone copies no
+    Transform unless the fight has one; a Land Shaymin never reverts."""
+    from nuzline.engine.coverage import transform_sky_refusals
+
+    sky = dataclasses.replace(_mon(names, "Shaymin", ["Air Slash"], 50), form=1)
+    land = dataclasses.replace(sky, form=0)
+    ditto = _mon(names, "Ditto", ["Transform"], 30)
+    mimic = _mon(names, "Geodude", ["Mimic"], 30)
+    assert len(transform_sky_refusals(tables, names, [ditto], [sky])) == 1
+    assert len(transform_sky_refusals(tables, names, [sky], [ditto])) == 1
+    assert transform_sky_refusals(tables, names, [mimic], [sky]) == []
+    assert transform_sky_refusals(tables, names, [ditto], [land]) == []
+    # Mimic copies the fight's Transform (the player's Ditto) and meets the player's Sky Shaymin.
+    assert len(transform_sky_refusals(tables, names, [ditto, sky], [mimic])) == 1
+    learns = transform_sky_refusals(tables, names, [mimic], [sky], [names.move("Transform")])
+    assert len(learns) == 1
 
 
 @pytest.mark.parametrize(

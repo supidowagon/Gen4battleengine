@@ -956,8 +956,10 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
     stats, HP, and friendship (``BattleSystem_ReloadPokemon``, battle_lib.c:169-193; the Power
     Trick swap stays, as ``levelup``). Stages, status and volatiles stay. The AI learns the
     written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403). A Transformed battler
-    is left out (its copy of the form is the party's to change, which the sheet does not
-    settle)."""
+    is left out: the script would write Land's ability into its own party Pokemon
+    (battle_script.c:3401-3407, battle_io_command.c:601-604), a party ability the engine does not
+    hold, so coverage refuses a Transform user facing a Sky Shaymin
+    (``coverage.transform_sky_refusals``, F-26)."""
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
     row, mon = party(fmt, side), state.active[side]

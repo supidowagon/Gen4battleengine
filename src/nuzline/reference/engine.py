@@ -3991,7 +3991,7 @@ def _shaymin_land(tables, s: RefState, side: int) -> None:
     holds none there, :11-19), Land's types (:24-27), stats recalculated (``_calc_stats``,
     ``BattleMon_CopyToParty``) and the battler's friendship re-read from the party
     (``BattleSystem_ReloadPokemon``, :30); the AI learns the ability. A Transformed battler is
-    left out."""
+    left out: coverage refuses a Transform user facing a Sky Shaymin (F-26)."""
     mon, sd = _active(s, side), s.battlers[side]
     if not (
         mon.species == SPECIES_SHAYMIN
