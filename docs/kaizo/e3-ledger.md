@@ -1317,3 +1317,29 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Owed lines closed: none. Owed lines added: none. Not built: none. Message-only: none.
   Tests: tests/ai/test_kaizo_policy.py (`test_lock_on_tables_are_the_decomps`, `test_lock_on_basic`, `test_expert_lock_on`,
   `test_lock_on_is_scored_not_refused_and_exact_equals_loose`).
+- E3-B2-18 Foresight / Odor Sleuth AI (#113 BATTLE_EFFECT_FORESIGHT; moves 193 and 316 in both games; sheet
+  e113_odor_sleuth.md). The mechanic was modelled before this group and is unchanged: effect-map 113 -> `FORESIGHT`,
+  per-battler `foresight` (`VOLATILE_FIELDS`, cleared at switch, not Baton-passed), the accuracy read (`outcome._rate`,
+  `foresight | miracle_eye`) and the Ghost-row chart skip (`damage.CHART_IDENTIFIED`; `CHART_EYED` is Miracle Eye's own
+  flag, E3-B2-10, checked: no change needed). This group is the AI's transcription only. No new state, no `Outcome`
+  field, no table array or key, no manifest bump.
+  AI: Basic_ScoreMoveEffect script.s:198 -> Basic_CheckForesight (:715-718): `IfVolatileStatus DEFENDER
+  VOLATILE_CONDITION_FORESIGHT` (`commands.VolatileCondition.FORESIGHT` = 1 << 29, condition.h:61, read from
+  `foresight[t]`) -10. Expert_Main :1703 -> Expert_Foresight (:3608-3631, the code, not its comment): `LoadTypeFrom
+  LOAD_ATTACKER_TYPE_1` / `_2` == Ghost (the AI's own types: the decomp marks it a bug, :3610; kept) goes to _FirstRoll
+  (:3623-3624, the 80 roll at :3624 to _End when it jumps) and falls into _SecondRoll; else `IfStatStageGreaterThan
+  DEFENDER EVASION 8` (:3619; decomp stage above 8, i.e. +3 or more)
+  goes to _SecondRoll; else -2 and end (:3620-3621). _SecondRoll (:3626-3628) is the 80 roll at :3627, to _End when it
+  jumps, else +2. A Ghost AI battler gets +2 at (176/256)^2; a non-Ghost one against raised evasion at 176/256.
+  `policy._basic_check_foresight`, `_expert_foresight`; `SITE_N` 3624 and 3627 (80 each); 113 joins `KAIZO_TRANSCRIBED`,
+  `KAIZO_EXPERT_LABELS` (`("Expert_Foresight", 1703)`) and `KAIZO_EXPERT_TRANSCRIBED`; `commands.BattleEffect.FORESIGHT`;
+  entries in `_BASIC_LABELS` and `_EXPERT_LABELS`. The other read, Expert_Encore_EncouragedMoveEffects (:3230), was
+  transcribed already. Read bounds regenerated (113: 2 reads, one per roll) and the backlog regenerated (the row "AI move
+  effect #113 FORESIGHT not transcribed" closes: Byron Split, Odor Sleuth).
+  Hit chance, damage inputs, crit inputs, held items: none (AI only). Doubles (section 5): nothing stored or indexed
+  here; `foresight` is per battler and the AI's reads go through `_side(Battler.DEFENDER)` as every Basic check;
+  the Expert check reads the AI battler's own types (`LOAD_ATTACKER_*`) and the defender's evasion stage.
+  Owed lines closed: none. Owed lines added: none. Not built: none. Message-only: none.
+  Tests: tests/ai/test_kaizo_policy.py (`test_foresight_tables_are_the_decomps`, `test_foresight_basic`,
+  `test_expert_foresight`, `test_expert_foresight_reads_the_ais_type_not_the_players`,
+  `test_foresight_is_scored_not_refused_and_exact_equals_loose`).

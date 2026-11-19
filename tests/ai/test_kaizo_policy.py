@@ -6687,3 +6687,123 @@ def test_lock_on_is_scored_not_refused_and_exact_equals_loose(
         layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)
+
+
+# --- #113 Foresight, Odor Sleuth (E3-B2-18) ----------------------------------------------------
+
+
+def test_foresight_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Foresight (193) and Odor Sleuth (316) are BATTLE_EFFECT_FORESIGHT, 113, named in
+    Basic_ScoreMoveEffect (script.s:198), Expert_Main (:1703) and Expert_Encore (:3230) only; its
+    two rolls are :3624 and :3627 (80 each); VOLATILE_CONDITION_FORESIGHT is 1 << 29
+    (condition.h:61) (E3-B2-18)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.FORESIGHT == 113
+    assert c.VolatileCondition.FORESIGHT == 1 << 29
+    assert KAIZO_EXPERT_LABELS[113] == ("Expert_Foresight", 1703) and 113 in KAIZO_TRANSCRIBED
+    assert SITE_N[3624] == 80 and SITE_N[3627] == 80
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(113) == 1
+    assert sum(113 in table for table in c.CHECK_HP_TABLES.values()) == 0
+    for move in ("Foresight", "Odor Sleuth"):
+        assert int(t.move_ai_effect[n.move(move)]) == 113, move
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    named = [i + 1 for i, line in enumerate(lines) if "BATTLE_EFFECT_FORESIGHT" in line]
+    assert named == [198, 1703, 3230]
+    assert lines[714] == "Basic_CheckForesight:"
+    assert (
+        lines[716].strip()
+        == "IfVolatileStatus AI_BATTLER_DEFENDER, VOLATILE_CONDITION_FORESIGHT, ScoreMinus10"
+    )
+    assert lines[3607] == "Expert_Foresight:"
+    assert lines[3614].strip() == "LoadTypeFrom LOAD_ATTACKER_TYPE_1"
+    assert lines[3615].strip() == "IfLoadedEqualTo TYPE_GHOST, Expert_Foresight_FirstRoll"
+    assert lines[3616].strip() == "LoadTypeFrom LOAD_ATTACKER_TYPE_2"
+    assert lines[3617].strip() == "IfLoadedEqualTo TYPE_GHOST, Expert_Foresight_FirstRoll"
+    assert "BATTLE_STAT_EVASION, 8, Expert_Foresight_SecondRoll" in lines[3618]
+    assert lines[3619].strip() == "AddToMoveScore -2"
+    assert lines[3623].strip() == "IfRandomLessThan 80, Expert_Foresight_End"
+    assert lines[3626].strip() == "IfRandomLessThan 80, Expert_Foresight_End"
+    assert lines[3627].strip() == "AddToMoveScore 2"
+
+
+@pytest.mark.parametrize("move", ["Foresight", "Odor Sleuth"])
+def test_foresight_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move):
+    """Basic_CheckForesight (script.s:715-718): the player's battler (the defender) already under
+    VOLATILE_CONDITION_FORESIGHT -10; the AI's own flag is not the defender's (E3-B2-18)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    player = s._replace(foresight=s.foresight.at[0].set(1))
+    assert _delta(t, player, 0x2, 0x3)[0] == -10
+    ai = s._replace(foresight=s.foresight.at[1].set(1))
+    assert _delta(t, ai, 0x2, 0x3)[0] == 0
+
+
+def _ai_types(s, which):
+    """``s`` with the AI's active Pokemon (side 1) of types ``which`` (type ids)."""
+    active = int(s.active[1])
+    return s._replace(types=s.types.at[1, active].set(jnp.asarray(which, s.types.dtype)))
+
+
+@pytest.mark.parametrize("move", ["Foresight", "Odor Sleuth"])
+@pytest.mark.parametrize(
+    ("types", "eva", "first", "second", "expected"),
+    [
+        # Expert_Foresight (script.s:3608-3631). The AI's own type (the decomp's bug) not Ghost,
+        # the player's evasion above +2 (decomp 8): the second roll (:3627) jumps to _End or
+        # adds 2; the first roll (:3624) is read only on the Ghost path.
+        ((12, 12), 0, False, False, -2),
+        ((12, 12), 0, True, True, -2),
+        ((12, 12), 2, False, False, -2),
+        ((12, 12), 3, False, False, 2),
+        ((12, 12), 3, True, False, 2),
+        ((12, 12), 3, False, True, 0),
+        ((12, 12), 6, False, False, 2),
+        # A Ghost AI type 1 or 2 goes to the first roll, whatever the evasion, then the second.
+        ((7, 7), 0, False, False, 2),
+        ((7, 12), 0, False, False, 2),
+        ((12, 7), 0, False, False, 2),
+        ((7, 12), 0, True, False, 0),
+        ((7, 12), 0, False, True, 0),
+        ((12, 7), 0, True, True, 0),
+        ((12, 7), 3, False, False, 2),
+        ((12, 7), 3, True, False, 0),
+    ],
+)
+def test_expert_foresight(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move, types, eva, first, second, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    assert c.TYPE_IDS["Ghost"] == 7
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    s = _ai_types(s, types)
+    s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+    jumps = tuple(((0, line) for line, on in ((3624, first), (3627, second)) if on))
+    assert _delta(t, s, 0x3, 0x7, jumps=jumps)[0] == expected
+
+
+def test_expert_foresight_reads_the_ais_type_not_the_players(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """The decomp marks it a bug (script.s:3610): a Ghost player battler with no evasion still
+    scores -2; a Ghost AI battler scores +2 (E3-B2-18)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Foresight", "Accelerock", "", ""))
+    assert _delta(t, _dark(_ai_types(s, (12, 12)), (7, 7)), 0x3, 0x7)[0] == -2
+    assert _delta(t, _dark(_ai_types(s, (7, 7)), (12, 12)), 0x3, 0x7)[0] == 2
+
+
+def test_foresight_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    for move in ("Foresight", "Odor Sleuth"):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+        layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)

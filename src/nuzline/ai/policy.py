@@ -596,6 +596,13 @@ def _basic_check_miracle_eye(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_foresight(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckForesight`` (script.s:715-718): the player's battler already under
+    VOLATILE_CONDITION_FORESIGHT (``IfVolatileStatus``, trainer_ai.c:676-686), -10; E3-B2-18."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.FORESIGHT))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_lock_on(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckLockOn`` (script.s:665-672): the player's battler already under
     MOVE_EFFECT_LOCK_ON (``IfMoveEffect``, trainer_ai.c:704-714; any locker's bit), -10; else
@@ -2138,6 +2145,25 @@ def _expert_miracle_eye(ctx: AiContext, mask) -> AiContext:
     # Expert_MiracleEye_ExtraRandomGate (:4819-4820), falling into _ScorePlus2 (:4822)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, dark), 80, 4820))  # -> _End
     ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | evasive), 80, 4823))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_foresight(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Foresight`` (script.s:3608-3631): the AI's own type 1 or 2 Ghost (the decomp's
+    bug, :3610: ``LOAD_ATTACKER_TYPE_*``) goes to the first roll (:3624, to _End when it jumps);
+    else an evasion stage above 8 goes to the second roll (:3619); else -2 and end. The second
+    roll (:3627) is to _End when it jumps, else +2 (E3-B2-18)."""
+    ctx = _at(ctx, mask)
+    ghost = jnp.zeros_like(ctx.live)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = ghost | t
+    ctx, evasive = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))  # :3620-3621
+    # Expert_Foresight_FirstRoll (:3623-3624), falling into _SecondRoll (:3626)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ghost), 80, 3624))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | evasive), 80, 3627))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, 2))
 
 
@@ -4028,6 +4054,7 @@ _BASIC_LABELS = (
     (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
+    (BattleEffect.FORESIGHT, _basic_check_foresight),  # :198 (E3-B2-18)
     (BattleEffect.ALL_FAINT_3_TURNS, _basic_check_perish_song),  # :199
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
@@ -4156,6 +4183,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
+    (BattleEffect.FORESIGHT, _expert_foresight),  # :1703 (E3-B2-18)
     (BattleEffect.SURVIVE_WITH_1_HP, _expert_endure),  # :1704
     (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706

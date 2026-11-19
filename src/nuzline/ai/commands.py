@@ -195,6 +195,7 @@ class VolatileCondition(IntEnum):
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
     TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
+    FORESIGHT = 1 << 29  # :61; BattleState.foresight (Basic_CheckForesight, E3-B2-18)
 
 
 _VOLATILE_FIELDS = {
@@ -205,6 +206,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.MEAN_LOOK: "mean_look",
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
     VolatileCondition.TORMENT: "torment",
+    VolatileCondition.FORESIGHT: "foresight",
 }
 
 
@@ -474,6 +476,7 @@ class BattleEffect(IntEnum):
     PREVENT_CRITS = (
         240  # Lucky Chant: Basic_CheckLuckyChant (:270); Expert_LuckyChant (:1783), E3-B2-7
     )
+    FORESIGHT = 113  # Foresight, Odor Sleuth: Basic_CheckForesight (:198); Expert_Foresight (:1703), E3-B2-18
     # Miracle Eye: Basic_CheckMiracleEye (:255); Expert_MiracleEye (:1760), E3-B2-10
     IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
     # Last Resort: Basic_CheckLastResort (:275); Expert_LastResort (:1789), E3-B2-11

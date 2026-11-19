@@ -31,16 +31,16 @@ New groups: needed in this split and in no earlier one.
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 31 | 9 | 8 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 25 | 4 | 0 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 17 | 11 | 8 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 27 | 7 | 2 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 27 | 6 | 1 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 14 | 7 | 5 |
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 24 | 26 | 16 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 5 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 25 | 4 | 1 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 202 | 53 | 53 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 202 | 52 | 52 |
 
 ## Whole game
 
-53 distinct missing groups across all ten splits (387 battles,
+52 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -59,12 +59,12 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 8 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 2 | 8 |
-| Byron Split | 0 | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
+| Byron Split | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
 | Candice Split | 0 | 1 | 0 | 0 | 0 | 4 | 0 | 5 |
 | Galactic Split | 0 | 1 | 0 | 0 | 0 | 15 | 0 | 16 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
-| **Whole game** | **1** | **4** | **0** | **0** | **0** | **45** | **3** | **53** |
+| **Whole game** | **1** | **3** | **0** | **0** | **0** | **45** | **3** | **52** |
 
 ### Groups needed in each split, by kind
 
@@ -77,12 +77,12 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Fantina Split | 1 | 0 | 0 | 0 | 0 | 8 | 0 | 9 |
 | Maylene Split | 1 | 0 | 0 | 0 | 0 | 3 | 0 | 4 |
 | Wake Split | 1 | 0 | 0 | 0 | 0 | 8 | 2 | 11 |
-| Byron Split | 1 | 2 | 0 | 0 | 0 | 2 | 2 | 7 |
+| Byron Split | 1 | 1 | 0 | 0 | 0 | 2 | 2 | 6 |
 | Candice Split | 1 | 1 | 0 | 0 | 0 | 5 | 0 | 7 |
 | Galactic Split | 1 | 2 | 0 | 0 | 0 | 21 | 2 | 26 |
 | Volkner Split | 1 | 1 | 0 | 0 | 0 | 2 | 1 | 5 |
 | Elite Four Split | 1 | 0 | 0 | 0 | 0 | 1 | 2 | 4 |
-| **Whole game** | **1** | **4** | **0** | **0** | **0** | **45** | **3** | **53** |
+| **Whole game** | **1** | **3** | **0** | **0** | **0** | **45** | **3** | **52** |
 
 ### Battle conditions and other groups
 
@@ -288,7 +288,6 @@ Groups by kind: battle format 12, AI 1
 | 4 | AI move-id case of TrainerAI_MoveType where it assigns no type (open: real-game check, trainer_ai.c:3222-3240): Weather Ball |
 | 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it |
 | 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it |
-| 1 | AI move effect #113 FORESIGHT not transcribed (Basic_CheckForesight / Expert_Foresight): Odor Sleuth |
 | 1 | AI move effect #213 CAMOUFLAGE not transcribed (Basic_CheckCamouflage): Camouflage |
 | 1 | AI move effect #251 RESTORE_HP_EVERY_TURN not transcribed (Basic_CheckAquaRing / Expert_AquaRing): Aqua Ring |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
@@ -331,7 +330,7 @@ Groups by kind: battle format 12, AI 1
 | 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_MOUNTAIN, TERRAIN_CAVE), and Nature Power would read it |
 | 1 | form change a Transform user facing Sky Forme Shaymin: its freeze writes Land's ability into the user's party Pokemon (F-26; your Transform user assumed): Champion Cynthia |
 
-Groups by kind: battle format 36, battle terrain 9, AI 5, ROM change 2, form change 1
+Groups by kind: battle format 36, battle terrain 9, AI 4, ROM change 2, form change 1
 
 ## Build order for the first two splits
 
