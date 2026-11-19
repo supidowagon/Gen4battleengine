@@ -591,7 +591,8 @@ def _equations(jaxpr) -> int:
 # end-of-turn check (22) made step take over an hour to compile. Raised 800 -> 880 at the E1 trial's
 # Transform (G-69, c7ccdf8): a Transformed payer's party identity (``levelup.party_identity``) and
 # the shadow stats it reloads took pay_exp 777 -> 834; linear growth from a modelled mechanic, about
-# 340 step equations over the 6 copies. The ceiling still fails a copy per end-of-turn check.
+# 340 step equations over the 6 copies. The ceiling still fails a duplicated stats calculation (about
+# 74 equations) inside pay_exp; it does not count how often step inlines pay_exp.
 PAY_EXP_CEILING = 880
 
 
