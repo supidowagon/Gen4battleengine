@@ -188,6 +188,7 @@ class VolatileCondition(IntEnum):
     SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
+    TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
 
 
 _VOLATILE_FIELDS = {
@@ -197,6 +198,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.SUBSTITUTE: "substitute_hp",
     VolatileCondition.MEAN_LOOK: "mean_look",
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
+    VolatileCondition.TORMENT: "torment",
 }
 
 
@@ -215,6 +217,7 @@ class MoveEffectMask(IntEnum):
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
+    ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -229,6 +232,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.POWER_TRICK: "power_trick",
     MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
+    MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -441,6 +445,19 @@ class BattleEffect(IntEnum):
     HIGHER_POWER_WHEN_LOW_PP = 235  # Trump Card: NonStandard (:265), Expert_TrumpCard (:1778)
     INCREASE_POWER_WITH_MORE_STAT_UP = 245  # Punishment: NonStandard (:274), Expert (:1788)
     JUDGEMENT = 268  # Judgment: no script entry
+    # E3 batch 1 (E3-1-1..E3-1-5).
+    LOWER_SP_ATK_HIT = 71  # Mist Ball, Kaizo Mystical Fire: no script entry
+    DO_NOTHING = 85  # Splash, Kaizo Thief (power 40): no Basic or Expert entry; Encore table :3220
+    DISABLE = 86  # Basic_CheckCannotDisable (:184); Expert_Disable (:1687)
+    FLEE_FROM_WILD_BATTLE = 153  # Teleport: Basic :221 ScoreMinus10
+    SPEED_DOWN_HIT = 218  # Hammer Arm: Expert_HammerArm (:1762)
+    # E3 batch 1 round 2 (E3-2-1 .. E3-2-4).
+    TORMENT = 165  # Basic_CheckTorment (:229); no Expert entry
+    USE_MOVE_FIRST = 241  # Me First: Expert_MeFirst (:1784); Risky :6560
+    SET_ABILITY_TO_INSOMNIA = 247  # Worry Seed: Basic :276; Expert_WorrySeed (:1790)
+    TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
+    SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
+    SUPRESS_ABILITY = 239  # Gastro Acid: Basic_CheckGastroAcid (:269); Expert_GastroAcid (:1782)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -960,7 +977,7 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 }
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
-CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
+CLASS_PHYSICAL, CLASS_SPECIAL, CLASS_STATUS = 0, 1, 2
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
 # refused: Gyro Ball (:2995-3003), whose power reads monSpeedValues, the speeds of the last
 # CompareBattlerSpeed of any caller (battle_lib.c:1372-1373: the action order's sorts,
@@ -984,6 +1001,17 @@ COPYCAT_ENCOURAGED_MOVES = (
     79, 142, 147, 95, 47, 320, 325, 28, 108, 92, 12, 32, 90, 329, 238, 177, 109, 186, 103,
     178, 184, 313, 319, 86, 137, 77, 247, 223, 63, 245, 168, 343, 213, 207, 259, 260, 271,
     276, 285, 375, 384, 385, 389, 391, 415, 445, 464,
+)  # fmt: skip
+
+# Expert_ChangeUserAbility_DesirableAbilities (script.s:4435-4461): ABILITY_SPEED_BOOST, _BATTLE_ARMOR,
+# _SAND_VEIL, _STATIC, _FLASH_FIRE, _WONDER_GUARD, _EFFECT_SPORE, _SWIFT_SWIM, _HUGE_POWER,
+# _RAIN_DISH, _CUTE_CHARM, _SHED_SKIN, _MARVEL_SCALE, _PURE_POWER, _CHLOROPHYLL, _SHIELD_DUST,
+# _ADAPTABILITY, _MAGIC_GUARD, _MOLD_BREAKER, _SUPER_LUCK, _UNAWARE, _TINTED_LENS, _FILTER,
+# _SOLID_ROCK, _RECKLESS (decomp ability ids, E3-2-5; checked against the manifest's names by
+# tests/engine/test_e3_batch1.py).
+CHANGE_USER_ABILITY_DESIRABLE = (
+    3, 4, 8, 9, 18, 25, 27, 33, 37, 44, 56, 61, 63, 74, 34, 19, 91, 98, 104, 105, 109, 110, 111,
+    116, 120,
 )  # fmt: skip
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
@@ -1051,6 +1079,15 @@ ABILITY_IDS = {
     # E2 batch 13: Expert_TrumpCard (script.s:5331-5332), Expert_Assurance (:5200-5201).
     "Pressure": 46,
     "Rough Skin": 24,
+    # E3-2-2: Basic_CheckWorrySeed (script.s:1430-1433; Insomnia and Vital Spirit above).
+    "Truant": 54,
+    "Multitype": 121,
+    # E3-2-6: Basic_CheckGastroAcid (script.s:1371-1376; Truant and Multitype above).
+    "Slow Start": 112,
+    "Stench": 1,
+    "Run Away": 50,
+    "Pickup": 53,
+    "Honey Gather": 118,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1099,6 +1136,9 @@ MOVE_IDS = {
     # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
     "Earthquake": 89,
     "Earth Power": 414,
+    # E3-2-2: Basic_CheckWorrySeed (script.s:1436-1437, with Snore above), Expert_WorrySeed (:5979).
+    "Sleep Talk": 214,
+    "Rest": 156,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]
@@ -1527,6 +1567,7 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     mine = estimates(
         state.moves[_row(state, a), active], state.ivs[_row(state, a), active], held_item(state, a)
     )
+    # The bench's own MON_DATA_ABILITY (trainer_ai.c:2162): raw party data.
     member_items = jnp.where(
         state.ability[_row(state, a)] == AbilityId.KLUTZ, 0, state.item[_row(state, a)]
     )
@@ -1655,10 +1696,13 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
 
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32``: the AI's active Pokemon's current ability (decomp id): ``battleMons[battler]
-    .ability`` (trainer_ai.c:1205): ``damage.decomp_abilities``, the engine's current ability
-    (a change in battle such as Trace's copy follows it once the engine models the change)."""
-    return decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
+    """``int32``: the AI's active Pokemon's current ability (decomp id): ``ABILITY_NONE`` (0)
+    while its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit is set (trainer_ai.c:1177-1178, :1221-1222:
+    the bit alone, no Multitype exception), else the raw ``battleMons[battler].ability``
+    (:1208, :1256): ``damage.decomp_abilities``, the engine's current ability (a change in
+    battle such as Trace's copy follows it once the engine models the change)."""
+    raw = decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
+    return jnp.where(state.ability_suppressed[1] != 0, 0, raw)
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
@@ -1669,13 +1713,17 @@ def _defender_abilities(tables: Tables, state: BattleState):
     pre-Transform reveal stays the old ability after a Transform, G-69), else the battler's current
     ability when it is Shadow Tag, Magnet Pull or Arena Trap (trainer_ai.c:1181-1188;
     ``damage.decomp_abilities``: the form's, or a copy the engine models, Trace's or Transform's).
-    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192)."""
+    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192).
+    A battler with its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit reads ``ABILITY_NONE`` (0), known,
+    before any of that (:1177-1178, :1221-1222: the bit alone, no Multitype exception; no coin)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
+    # Raw battleMons[].ability (:1185-1188, :1230-1233), not Battler_Ability.
     current = decomp_abilities(tables, state)[0, d]
     recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
-    true = jnp.where(recorded > 0, recorded, current)
-    known = (recorded != 0) | jnp.isin(current, _TRAPPING)
+    suppressed = state.ability_suppressed[0] != 0
+    true = jnp.where(suppressed, 0, jnp.where(recorded > 0, recorded, current))
+    known = suppressed | (recorded != 0) | jnp.isin(current, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
 
@@ -1694,8 +1742,8 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     """``int32``: ``LoadBattlerAbility DEFENDER`` (trainer_ai.c:1170; roark.md 9.2): the
     true ability when the AI has learned it or when it is Shadow Tag, Magnet Pull or
     Arena Trap; else the guessed species slot ``ability_guess`` when the species has two
-    abilities; else its only one. The engine has no ability suppression (Gastro Acid),
-    so the ``ABILITY_NONE`` case never applies.
+    abilities; else its only one. ``ABILITY_NONE`` for a suppressed battler (Gastro Acid,
+    :1177-1178; ``_defender_abilities``).
 
     The true ability is the form's (its personal row: ``BoxPokemon_SetGiratinaForm``
     recomputes it, ``src/pokemon.c:4391-4400``); the guess is the base species' two
@@ -2131,7 +2179,8 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
 def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> AiContext:
     """``CheckBattlerAbility`` (trainer_ai.c:1212-1265): ``AI_HAVE`` when the battler's
     ability as the AI sees it is ``expected``, ``AI_NOT_HAVE`` when it is another, and
-    ``AI_UNKNOWN`` when the AI does not know it. The AI's own Pokemon: its current ability.
+    ``AI_UNKNOWN`` when the AI does not know it, or the battler's ability is suppressed
+    (:1221-1222: ``ABILITY_NONE``). The AI's own Pokemon: its current ability.
     The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
     a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
     is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""

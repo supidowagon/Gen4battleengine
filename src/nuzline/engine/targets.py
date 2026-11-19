@@ -40,7 +40,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
-from nuzline.engine.state import BattleState, held_item
+from nuzline.engine.state import BattleState, battler_ability, held_item
 
 _I32 = jnp.int32
 
@@ -141,12 +141,10 @@ def charge_keeps_user(tables: Tables, state: BattleState, battler, move, defende
 
 
 def _ability(state: BattleState, battler) -> jnp.ndarray:
-    """``int32``: ``Battler_Ability`` of ``battler`` (lib.c:3088-3106; D2-12 rule 11). The one read
-    of a battler's ability in this module: E3's suppressed-ability function (Gastro Acid) replaces
-    this body when it lands in hooks.py."""
-    fmt = format_of(state)
-    battler = jnp.asarray(battler, _I32)
-    return state.ability[party(fmt, battler), state.active[battler]].astype(_I32)
+    """``int32``: ``Battler_Ability`` of ``battler`` (lib.c:3088-3093; D2-12 rule 11) through the
+    shared reader ``state.battler_ability`` (none under Gastro Acid's suppression, E3-2-6a). The
+    one read of a battler's ability in this module."""
+    return battler_ability(state, jnp.asarray(battler, _I32)).astype(_I32)
 
 
 def redirect_type(tables: Tables, state: BattleState, attacker, move) -> jnp.ndarray:

@@ -32,19 +32,29 @@ from nuzline.engine.outcome import (
     hit_threshold,
     sample_outcome,
 )
-from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
+from tests.engine.helpers import (
+    BATCH,
+    A,
+    assert_matches_reference,
+    jit_step,
+    roark_state,
+    sample_rows,
+    step_batch,
+)
 from tests.strategies import legal_action_pair, outcome_law_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
-CHUNK = 1024
+CHUNK = BATCH  # the suite's one padded row count (tests.engine.helpers)
 HYPOTHESIS = {
     "deadline": None,
     "suppress_health_check": [HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 }
 _laws = jax.jit(outcome_laws)
-_step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
+_step = step_batch
 _sample = sample_rows
+# One compiled program for every example (an eager sample_outcome dispatches op by op and
+# compiles its control flow anew on each call, so memory grew over the examples).
+_sample_one = jax.jit(sample_outcome)
 
 
 def laws_of(tables, state, actions):
@@ -118,7 +128,7 @@ def test_sand_attack_lowers_a_later_move_this_turn(tables, names):
     assert hit_law(tables, s, acts, 0) == {1: 75, 76: 25}
     assert abs(hit_probability(tables, s, acts, 0) - 0.75) < 1e-12
     # The stage drop is there after the turn (the move hit: Sand-Attack has accuracy 100).
-    out = step(tables, s, acts, empty_outcome())
+    out = jit_step(tables, s, acts, empty_outcome())
     assert int(out.stages[0, Stat.ACC]) == -1
 
     # A slower Sand-Attack comes after Scratch: the turn-start rate stands.
@@ -171,12 +181,12 @@ def test_class_values_against_live_threshold(tables, names):
     s, acts = sand_attack_first(tables, names)
     for value, connects in ((1, True), (75, True), (76, False), (0, False)):
         o = empty_outcome()._replace(hit=empty_outcome().hit.at[0, 0].set(value))
-        out = step(tables, s, acts, o)
+        out = jit_step(tables, s, acts, o)
         assert (int(out.hp[1, 0]) < int(s.hp[1, 0])) == connects, value
     # Without the Sand-Attack, 76 is a hit at 100.
     plain = roark_state(tables, names, opp_faster=True)
     o = empty_outcome()._replace(hit=empty_outcome().hit.at[0, 0].set(76))
-    out = step(tables, plain, A("Scratch", "Leer", plain, names), o)
+    out = jit_step(tables, plain, A("Scratch", "Leer", plain, names), o)
     assert int(out.hp[1, 0]) < int(plain.hp[1, 0])
 
 
@@ -301,7 +311,7 @@ def test_accuracy_classes_equal_raw_rolls(tables, names, data):
     laws = laws_of(tables, s, acts)
     assume(laws.relevant.hit[:, 0].any())
     base = jax.tree.map(
-        np.asarray, sample_outcome(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
+        np.asarray, _sample_one(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
     )
 
     def rows(values0, values1):
@@ -436,6 +446,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.METRONOME,
     EffectId.COPYCAT,
     EffectId.ASSIST,  # an invoker (B10-11)
+    EffectId.ME_FIRST,  # an invoker (E3-2-3): the copied move's own effect decides
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -518,6 +529,12 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
     # defender through subscript_confuse: a volatile status, no stage.
     EffectId.CHATTER,
+    # E3 batch 1: Splash / Kaizo Thief (effect_script_0085.s:5) and Teleport (effect_script_0153.s)
+    # write no stage: a used move's last_move and PP only.
+    EffectId.DO_NOTHING,
+    EffectId.FLEE,
+    EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
+    EffectId.TRICK_ROOM,  # E3-2-4: a field condition bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,
@@ -527,7 +544,12 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # Gravity (effects._gravity) sets FIELD_CONDITION_GRAVITY, whose x10/6 the check applies
 # (battle_controller_player.c:2972-2974); Transform (BtlCmd_Transform, battle_script.c:5330-5373) copies the
 # defender's statBoosts and ability (battle_mon.h:75, :84) and reruns its switch-in checks:
-# test_gravity_and_transform_are_seen_by_hit_thresholds.
+# test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
+# ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
+# test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds. Skill Swap (E3-2-5) swaps the two
+# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Gastro Acid (E3-2-6) suppresses the target's
+# ability (Compoundeyes, Hustle, ... read NONE at its check):
+# tests/engine/test_e3_batch1.py test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds.
 _FOLLOWED = frozenset(
     {
         EffectId.HAZE,
@@ -535,6 +557,9 @@ _FOLLOWED = frozenset(
         EffectId.ACUPRESSURE,
         EffectId.GRAVITY,
         EffectId.TRANSFORM,
+        EffectId.WORRY_SEED,
+        EffectId.SKILL_SWAP,
+        EffectId.GASTRO_ACID,
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.

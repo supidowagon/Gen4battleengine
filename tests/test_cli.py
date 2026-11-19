@@ -636,6 +636,64 @@ def test_cli_rank_deaths_and_protect(capsys):
     assert "deaths under the leader:" in out
 
 
+def _fixed_ranking(monkeypatch, seen):
+    """``stage_a.rank_actions`` replaced by one that records the root it is given and ranks
+    its legal actions with a fixed ladder and death distribution, without the playout
+    program (8-10 GB resident): the CLI's budget, protect and header lines run as in a real
+    ``rank``; the playouts are the two slow tests'."""
+    import numpy as np
+
+    from nuzline.engine.actions import decision_actions
+    from nuzline.search import deaths, stage_a
+
+    def fixed(tables, names, state, n, key, max_turns=100):
+        seen.append((int(state.faint_budget), np.flatnonzero(np.asarray(state.protected))))
+        legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))
+        dist = deaths.DeathDistribution((0.4, 0.2, 0.1, 0.05, 0.05, 0.1, 0.05, 0.05), n)
+        ladder = tuple(dist.rung(k) for k in range(deaths.MAX_DEATH_BUDGET + 1))
+        k = int(state.faint_budget)
+        rows = [
+            stage_a.ActionResult(
+                int(a),
+                stage_a.action_label(names, state, int(a), False),
+                0.4,
+                0.3,
+                0.5,
+                0.9,
+                1.0,
+                n,
+                p_success=ladder[k] if k else None,
+                ladder=ladder,
+                distribution=dist,
+            )
+            for a in legal
+        ]
+        return stage_a.Ranking.of(rows)
+
+    monkeypatch.setattr(stage_a, "rank_actions", fixed)
+
+
+def test_cli_rank_deaths_protect_and_header_without_playouts(capsys, monkeypatch):
+    # The fast sibling of the slow rank tests on either side: --deaths and --protect reach the ranked
+    # root, and the header, ladder, protected and distribution lines print.
+    seen = []
+    _fixed_ranking(monkeypatch, seen)
+    args = ["rank", "--party", SAMPLE, "--trainer", "roark", "--n", "50", "--devices", "1"]
+    assert main([*args, "--deaths", "1", "--protect", "Prinplup"]) == 0
+    out = capsys.readouterr().out
+    out.encode("cp1252")
+    assert out.isascii()
+    assert "P(win, <=1 deaths)" in out and "E[deaths]" in out
+    assert "<=0" in out and "<=3" in out and "(screen)" in out
+    assert "protected: prinplup" in out.lower()
+    assert "deaths under the leader:" in out
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "P(win, 0 faints) [95% CI]" in out and "protected:" not in out
+    (k1, prot1), (k0, prot0) = seen
+    assert (k1, k0) == (1, 0) and len(prot1) == 1 and len(prot0) == 0
+
+
 @pytest.mark.slow
 def test_cli_rank_default_budget_keeps_the_header(capsys):
     # The playout program of the test above (same party, --n and --devices; the budget is a
@@ -682,6 +740,16 @@ def _two_starly(tmp_path) -> str:
         (["--protect", "6"], PARTY, ("--protect", "6")),
         (["--protect", "Budew"], FAINTED, ("--protect", "Budew")),
         (["--protect", "Starly"], None, ("--protect", "Starly")),
+    ],
+    # Explicit ids: PARTY / FAINTED are fixture paths, absolute and so different per OS.
+    ids=[
+        "deaths-4",
+        "deaths-negative",
+        "protect-not-in-party",
+        "protect-9",
+        "protect-6",
+        "protect-fainted",
+        "protect-no-party-file",
     ],
 )
 @pytest.mark.parametrize("command", ["rank", "solve"])

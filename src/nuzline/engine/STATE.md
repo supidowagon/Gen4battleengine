@@ -78,8 +78,11 @@ three structs has a row.
   `curse` (below), Focus Energy -> `focus_energy` (E2 batch 12, B12-4: per battler, set by
   subscript_focus_energy.s:6, ORed in by Psych Up, battle_script.c:6050, cleared by Haze, :3544,
   and with the volatiles; Baton Pass keeps it, condition.h:72). The other bits (Thrash,
-  Transform, Rage, Substitute flag, Nightmare, Torment) are later (M6); the Substitute flag is
-  implied by `substitute_hp > 0`.
+  Transform, Rage, Substitute flag, Nightmare) are later (M6); the Substitute flag is
+  implied by `substitute_hp > 0`. Torment -> `torment` (E3 batch 1, E3-2-1: per battler `[B]`,
+  `VOLATILE_CONDITION_TORMENT` bit 31, set by subscript_torment_start.s:8 with no count, cleared
+  with the volatiles; Baton Pass drops it, condition.h:72-76, battle_lib.c:2075; it only blocks
+  the slot holding `last_move` at the next move selection, `actions.usable_moves`).
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
@@ -100,8 +103,15 @@ three structs has a row.
   trial batch, G-68: the BattleMon / party split of the move and PP arrays, below). Embargo ->
   `embargo` (E2 batch 13, B13-29: embargoTurns with its bit, set to 5 by
   subscript_embargo_start.s:13-14, counted down at the turn end, battle_controller_player.c:1671-1677,
-  kept by Baton Pass, moves.h:46-48, battle_lib.c:2112; `state.held_item` reads it). The rest
-  (Charge, Grudge, Gastro Acid, Miracle Eye, Heal Block) are later (M6).
+  kept by Baton Pass, moves.h:46-48, battle_lib.c:2112; `state.held_item` reads it). Gastro
+  Acid's ABILITY_SUPPRESSED (moves.h:29) -> `ability_suppressed` (E3-2-6a: per battler `[B]`,
+  0/1, cleared on switch-out, battle_lib.c:2071, kept by Baton Pass, moves.h:46-48, :2076; read
+  through `state.battler_ability` / `damage.battler_decomp_ability`, `Battler_Ability`,
+  battle_lib.c:3088-3093, and by the AI's LoadBattlerAbility / CheckBattlerAbility,
+  trainer_ai.c:1177-1178, :1221-1222). Gastro Acid (E3-2-6, `effects._gastro_acid`) sets it
+  (subscript_suppress_target_ability.s:10); it is in `effects.MOVE_EFFECT_MASK_FIELDS`, so a
+  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). The rest
+  (Charge, Grudge, Miracle Eye, Heal Block) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -124,8 +134,9 @@ three structs has a row.
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
   a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
-  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) and
-  `trick_room` (the turn end's side-condition pass, :1823-1826) are not counted down yet.
+  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) is not counted
+  down yet. `trick_room` is counted down by the turn end's side-condition pass
+  (`step._trick_room_check`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
 - **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
@@ -148,7 +159,8 @@ three structs has a row.
   `weatherAbilityAnnounced`, `traceAnnounced` and `downloadAnnounced`
   (`BattleSystem_TriggerEffectOnSwitch`, `src/battle/battle_lib.c:3649-4168`,
   called from `src/battle/battle_controller_player.c:3673` and `:3973`), so a
-  mid-battle ability gain (Trace, Skill Swap, Role Play) announces again;
+  mid-battle ability gain (Trace, Skill Swap, Role Play) announces again (these
+  four are mapped since E3-2-5, `hooks.move_end_switch_in`);
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
   whose Quick Claw activated this turn); `monSpeedValues`, the
@@ -162,17 +174,21 @@ three structs has a row.
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
   `ability`, `step._restore_ability` puts the party's back when it leaves (as
   `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
-  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`).
-  `traceAnnounced` and `weatherAbilityAnnounced` stay without a field: of the implemented
-  mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
-  Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the
-  weather ability of the newcomer and of a battler that just traced; Skill Swap and Role
-  Play, which would need the flags, are unsupported. `downloadAnnounced` (E1 Gardenia batch,
-  ruling G-21) likewise stays without a field: `hooks.download` runs for the newcomer and for
-  a battler that just traced Download, the only times the flag is clear, and the one
-  newcomer that meets no living foe (the player's at a double KO) has it fired by
-  `search.playout.replacement_pass` once the opposing newcomer is in (G-22); the row stays
-  `later (M6)` for Skill Swap and Role Play. `MoveEffectsData.truant` is
+  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
+  `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and `downloadAnnounced` are
+  the per-battler fields `trace_announced`, `weather_announced`, `intimidate_announced` and
+  `download_announced` since E3-2-5 (Skill Swap gives a battler an ability mid-battle): cleared
+  by a switch (`VOLATILE_FIELDS`, `BattleSystem_InitBattleMon`, battle_lib.c:103-106) and by
+  Transform (battle_script.c:5350-5362), set by the hook that acts on a living holder
+  (`hooks.trace`, `weather_ability`, `intimidate`, `download`), and read by
+  `hooks.move_end_switch_in`, MoveEnd's `BattleSystem_TriggerEffectOnSwitch` pass over every
+  battler (battle_controller_player.c:3973), which fires an entry ability whose flag is still
+  clear. The entry hooks (`on_switch_in`, `show_battle_mon`) keep their explicit conditions
+  (newcomer, traced battler) but read `trace_announced` for a Trace holder. The one newcomer that
+  meets no living foe (the player's at a double KO) still has Intimidate and Download fired by
+  `search.playout.replacement_pass` once the opposing newcomer is in (G-22). Anticipation,
+  Forewarn and Slow Start have no ability id in the engine (coverage refuses their holders), so
+  they get no flag, and Skill Swap cannot hand a battler Slow Start (E3-2-5). `MoveEffectsData.truant` is
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
   :2195-2197; 0 for a lead) and `totalTurns & 1` after a Transform (battle_script.c:5359): the
   field `truant` (`order.truant_loafs`; E1 trial batch, G-69).
@@ -228,7 +244,7 @@ three structs has a row.
   `step.resolve_war` makes it; else 0.
 - **The announced flags while a list newcomer waits -> `entry_pending`** (E1 Gardenia review,
   ruling G-32): `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and
-  `downloadAnnounced` stay `later (M6)` rows (Skill Swap, Role Play), but one span needs their
+  `downloadAnnounced` are fields since E3-2-5, but one span needs their
   "all still clear" state: a newcomer a replacement's party list sent in
   (subscript_show_party_list.s:22-24) while the player's newcomer of the same list fainted on
   its hazards, so `TurnEnd` re-enters `ReplaceFainted` (battle_controller_player.c:1846-1858)
@@ -455,10 +471,10 @@ three structs has a row.
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
-| `BattleMon.weatherAbilityAnnounced` | — | later (M6) |
-| `BattleMon.intimidateAnnounced` | — | later (M6) |
-| `BattleMon.traceAnnounced` | — | later (M6) |
-| `BattleMon.downloadAnnounced` | — | later (M6) |
+| `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped |
+| `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped |
+| `BattleMon.traceAnnounced` | `trace_announced` | mapped |
+| `BattleMon.downloadAnnounced` | `download_announced` | mapped |
 | `BattleMon.anticipationAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.forewarnAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.slowStartAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
@@ -478,7 +494,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `transformed` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -487,7 +503,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -521,12 +537,12 @@ three structs has a row.
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
 | `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
-| `MoveEffectsData.meFirst` | — | later (M6) |
+| `MoveEffectsData.meFirst` | `me_first` | mapped |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
 | `MoveEffectsData.fakeOutTurnNumber` | `fake_out_turn` | mapped |
 | `MoveEffectsData.slowStartTurnNumber` | — | later (M6) |
-| `MoveEffectsData.meFirstTurnNumber` | — | later (M6) |
+| `MoveEffectsData.meFirstTurnNumber` | `me_first_turn` | mapped |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
 | `MoveEffectsData.transformedPID` | — | not needed because it is cosmetic (the transformed sprite and name, messages): Transform copies no personality for any battle rule |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
@@ -640,7 +656,7 @@ three structs has a row.
 | `BattleContext.totalTurns` | `turn` | mapped |
 | `BattleContext.totalFainted` | `player_faints` | mapped |
 | `BattleContext.totalDamage` | — | not needed because only the post-battle records read it |
-| `BattleContext.meFirstTurnOrder` | — | later (M6) |
+| `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |

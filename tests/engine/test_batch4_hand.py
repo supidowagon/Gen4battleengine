@@ -10,9 +10,9 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.ids import EffectId
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
+from tests.engine.helpers import jit_step
 
 
 def _mon(names, species: str, moves, level=30, speed_iv=15) -> PokemonSpec:
@@ -32,7 +32,7 @@ def _mon(names, species: str, moves, level=30, speed_iv=15) -> PokemonSpec:
 
 
 def _both(tables, state, actions, outcome):
-    jax_out = step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
+    jax_out = jit_step(tables, state, jnp.asarray(actions, jnp.int32), outcome)
     ref = from_ref(ref_step(to_numpy(tables), to_ref(state), actions, outcome_to_py(outcome)))
     for name, a, b in zip(jax_out._fields, jax_out, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)

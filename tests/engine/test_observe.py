@@ -34,9 +34,9 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step, step_events
+from nuzline.engine.step import PURSUIT_POWER_MUL, pursuit_fires, step_events
 from nuzline.search.playout import replacement_pass, send_replacements
-from tests.engine.helpers import A, roark_real_state, roark_state
+from tests.engine.helpers import BATCH, A, jit_step, roark_real_state, roark_state
 from tests.search.fixtures import (
     at_replacement,
     bind_1v1,
@@ -47,7 +47,7 @@ from tests.search.fixtures import (
 )
 from tests.strategies import any_outcome, legal_action_pair, supported_state
 
-CHUNK = 1024  # one compiled shape per program in this file
+CHUNK = BATCH  # the suite's one padded row count: one compiled shape per program
 HYPOTHESIS = {
     "deadline": None,
     "suppress_health_check": [
@@ -69,7 +69,7 @@ def _turn_row(tables, before, actions, outcome):
     choices = (jnp.stack([p[0] for p in picks]), jnp.stack([p[1] for p in picks]))
     pursued = pursuit_fires(tables, before, 0, actions, choices)
     power_mul = jnp.where(pursued, PURSUIT_POWER_MUL, 10)
-    stepped = step(tables, before, actions, outcome)
+    stepped = jit_step(tables, before, actions, outcome)
     after, refused = send_replacements(tables, stepped, is_switch(actions[1]), power_mul)
     obs = observe(tables, before, actions, outcome, after)
     with_events, events = step_events(tables, before, actions, outcome)
@@ -766,7 +766,7 @@ def test_magnitude_level_is_observed_only_when_shown(tables, names):
         out = []
         for level in (4, 10):
             o = empty_outcome()._replace(magnitude=jnp.full((2,), level, jnp.int8))
-            after = step(tables, s, acts, o)
+            after = jit_step(tables, s, acts, o)
             out.append(np.asarray(observe(tables, s, acts, o, after)))
         return out
 

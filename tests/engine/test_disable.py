@@ -19,8 +19,8 @@ from nuzline.engine.ids import MOVE_STRUGGLE
 from nuzline.engine.observe import ACT_DISABLED, OBS_FIELDS, observe
 from nuzline.engine.order import selected_move
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
-from nuzline.engine.step import ACT_MOVE, step, step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from nuzline.engine.step import ACT_MOVE, step_events
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
 FIELDS = dict(OBS_FIELDS)
 SPE = 4  # stats[..., 0..4] are Atk..Spe
@@ -61,7 +61,7 @@ def faster(s):
 @pytest.mark.slow
 def test_disable_disables_last_move(tables, names, state):
     rock = names.move("Rock Throw")
-    out = step(tables, state, A("Disable", "Tackle", state, names), outcome(4))
+    out = jit_step(tables, state, A("Disable", "Tackle", state, names), outcome(4))
     # The counter drops at the end of the Disable turn itself.
     assert int(out.disabled_move[1]) == rock and int(out.disable_turns[1]) == 3
     assert int(out.disabled_move[0]) == 0
@@ -109,7 +109,7 @@ FAIL_SETUPS = (
 def test_disable_fails(tables, names, state, setup, hit):
     s = setup(state, names)
     before = int(s.disabled_move[1]), int(s.disable_turns[1])
-    out = step(tables, s, A("Disable", "Tackle", s, names), outcome(4, hit))
+    out = jit_step(tables, s, A("Disable", "Tackle", s, names), outcome(4, hit))
     # Nothing new is disabled; an earlier Disable only ticks down at the end of the turn.
     expected = (before[0], before[1] - 1) if before[0] else (0, 0)
     assert (int(out.disabled_move[1]), int(out.disable_turns[1])) == expected
@@ -118,10 +118,10 @@ def test_disable_fails(tables, names, state, setup, hit):
 @pytest.mark.slow
 def test_disable_countdown(tables, names, state):
     rock = names.move("Rock Throw")
-    s = step(tables, state, A("Disable", "Tackle", state, names), outcome(3))
+    s = jit_step(tables, state, A("Disable", "Tackle", state, names), outcome(3))
     seen = [(int(s.disabled_move[1]), int(s.disable_turns[1]))]
     for _ in range(3):
-        s = step(tables, s, A("Scratch", "Tackle", s, names), outcome(3))
+        s = jit_step(tables, s, A("Scratch", "Tackle", s, names), outcome(3))
         seen.append((int(s.disabled_move[1]), int(s.disable_turns[1])))
     # 3 -> 2 on the Disable turn, 2 -> 1, 1 -> 0, then the move is cleared.
     assert seen == [(rock, 2), (rock, 1), (rock, 0), (0, 0)]
@@ -130,7 +130,7 @@ def test_disable_countdown(tables, names, state):
 def test_unknown_disabled_move_is_cleared_at_once(tables, names, state):
     # The counter is zeroed and the move cleared in the same check (bcp.c:1568-1581).
     s = disabled(state, names, "Water Gun", 5)
-    out = step(tables, s, A("Scratch", "Tackle", s, names), outcome())
+    out = jit_step(tables, s, A("Scratch", "Tackle", s, names), outcome())
     assert (int(out.disabled_move[1]), int(out.disable_turns[1])) == (0, 0)
 
 
@@ -140,7 +140,7 @@ def test_countdown_end_is_observed(tables, names, state):
     acts = A("Scratch", "Tackle", state, names)
     for turns, shown in ((0, 0), (1, rock)):
         s = disabled(state, names, "Rock Throw", turns)
-        out = step(tables, s, acts, outcome())
+        out = jit_step(tables, s, acts, outcome())
         obs = np.asarray(observe(tables, s, acts, outcome(), out))
         assert obs[FIELDS["disabled_move"]].tolist() == [0, shown]
 

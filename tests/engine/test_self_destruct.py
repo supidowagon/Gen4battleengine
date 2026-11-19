@@ -35,6 +35,7 @@ from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
 from tests.engine.helpers import (
     A,
+    as_species,
     assert_matches_reference,
     roark_party,
     roark_state,
@@ -178,7 +179,7 @@ def test_self_destruct_cloud_nine_user_no_longer_suppresses(tables, names):
                     player_moves=["Confusion"])  # fmt: skip
     s = _weather(s, Weather.SANDSTORM)
     confusion = names.move("Confusion")
-    damp = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0))  # Damp: no suppression
+    damp = as_species(tables, s, 0, 0, int(s.species[0, 0]))  # Damp: no suppression
     boosted = int(damage_table(tables, damp, 0, confusion, False)[15])  # empty_outcome: roll 15
     suppressed = int(damage_table(tables, s, 0, confusion, False)[15])
     assert boosted < suppressed < int(s.hp[1, 0])

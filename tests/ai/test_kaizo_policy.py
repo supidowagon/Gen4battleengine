@@ -53,6 +53,7 @@ from tests.ai.test_kaizo_outcome import (
     _with_player,
     layout_for,
 )
+from tests.engine.helpers import as_species
 
 DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 
@@ -68,6 +69,14 @@ SWEEP_FLAGS = [
     pytest.param(0x17, marks=pytest.mark.slow),
     pytest.param(0x10F, marks=pytest.mark.slow),
     0x11F,
+]
+# The heavy exact-equals-loose sweeps: their first state at 0x11F is fast (one per family keeps
+# exact == loose and no refusal in the fast tier); every state at every flag set is slow.
+SWEEP_ONE = [
+    pytest.param(0x11F, 1, id="0x11F-one"),
+    pytest.param(0x17, None, id="0x17", marks=pytest.mark.slow),
+    pytest.param(0x10F, None, id="0x10F", marks=pytest.mark.slow),
+    pytest.param(0x11F, None, id="0x11F", marks=pytest.mark.slow),
 ]
 STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK = 446, 120, 280, 205
 SLUDGE_BOMB, GIGA_DRAIN, ANCIENTPOWER, RECOVER = 188, 202, 246, 105
@@ -448,8 +457,9 @@ def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, ka
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
     t = kaizo_tables
-    # Kaizo's Mystical Fire (vanilla Bind's id, LOWER_SP_ATK_HIT, not transcribed); Hurricane
-    # (Barrage's id) was the example until its effect was transcribed (E2 batch 13, B13-23).
+    # Kaizo's Mystical Fire (vanilla Bind's id, LOWER_SP_ATK_HIT): outside this test layout's
+    # transcribed set (K3C_EFFECTS); Hurricane (Barrage's id) was the example until its effect
+    # was transcribed (E2 batch 13, B13-23).
     mystical_fire = 20
     assert names.move_names[mystical_fire] == "Bind"
     assert kaizo_names.move_names[mystical_fire] == "Mystical Fire"
@@ -1765,9 +1775,7 @@ def test_basic_high_stat_stage(
             for sp in range(1, rows.shape[0])
             if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
         )
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
@@ -2021,10 +2029,7 @@ def test_flare_blitz_recoil_move(
         name, slot, ability = attacker
         species = n.species(name)
         assert int(abilities[species, slot]) == c.ABILITY_IDS[ability]
-        s = s._replace(
-            species=s.species.at[1, 0].set(species),
-            ability_slot=s.ability_slot.at[1, 0].set(slot),
-        )
+        s = as_species(t, s, 1, 0, species, slot)
     else:
         bonsly = kaizo_roark_party[BONSLY]
         assert int(abilities[bonsly.species, bonsly.ability_slot]) == ROCK_HEAD
@@ -2077,9 +2082,7 @@ def test_paralyze_absorb_branches(
     s = _with_player(t, s, volt, 0, known=True)
     if attacker:
         species = _species_with(t, c.ABILITY_IDS[attacker])
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
@@ -2222,9 +2225,7 @@ def test_basic_double_stat_stage_simple(
     species = next(
         sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
     )
-    s = s._replace(
-        species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-    )
+    s = as_species(t, s, 1, 0, species)
     for stat, stage in stages.items():
         s = s._replace(stages=s.stages.at[1, stat].set(stage))
     assert _delta(t, s, 0x2, 0x3)[0] == expected
@@ -3348,13 +3349,13 @@ def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Roar", "Substitute", "Dream Eater", "Accelerock")
     )
-    for hp, turn, last in ((100, 5, "Toxic"), (40, 0, "")):
+    for hp, turn, last in ((100, 5, "Toxic"), (40, 0, ""))[:states]:
         s2 = _turn(_hp(s, 1, hp), turn)
         if last:
             s2 = s2._replace(last_move=s2.last_move.at[0].set(n.move_names.index(last)))
@@ -3503,9 +3504,7 @@ def test_evasion_up(
             for sp in range(1, rows.shape[0])
             if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
         )
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     if expert is not None:
         assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
@@ -3575,13 +3574,13 @@ def test_imprison(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, exp
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Metal Burst", "Sand-Attack", "Minimize", "Knock Off")
     )
-    for own, turn in ((100, 0), (40, 3)):
+    for own, turn in ((100, 0), (40, 3))[:states]:
         s2 = _turn(_hp(s, 1, own), turn)
         s2 = s2._replace(ingrain=s2.ingrain.at[1].set(1))
         layout = layout_for(t, flags, s2)
@@ -3701,11 +3700,11 @@ def test_ai_chart_reads_ingrain_and_roosting(kaizo_tables, kaizo_names, kaizo_ro
     assert int(apply_type_chart(t, roosted, 1, accelerock, 40)) * 2 == flying
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Copycat", "Accelerock", "Ingrain", ""))
-    for speed, turn, last in ((100, 0, ""), (1, 3, "Toxic"), (500, 3, "Earthquake")):
+    for speed, turn, last in ((100, 0, ""), (1, 3, "Toxic"), (500, 3, "Earthquake"))[:states]:
         s2 = _turn(_speeds(s, player=speed, opp=100), turn)
         if last:
             s2 = s2._replace(last_move=s2.last_move.at[0].set(n.move_names.index(last)))
@@ -3785,12 +3784,18 @@ def test_baton_pass_flag_without_baton_pass(
     assert _delta(t, s, 0x1, 0x41, jumps)[0] == expected
 
 
-@pytest.mark.parametrize("flags", [0x57])
-def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(
+    ("flags", "states"),
+    [
+        pytest.param(0x57, 1, id="0x57-one"),
+        pytest.param(0x57, None, id="0x57", marks=pytest.mark.slow),
+    ],
+)
+def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     moves = _ids(n, "Swords Dance", "Sand-Attack", "Baton Pass", "Protect")
     s = _state(t, kaizo_roark_party, BONSLY, moves)
-    for own, turn, stage in ((100, 0, 0), (50, 3, 3), (100, 3, 2)):
+    for own, turn, stage in ((100, 0, 0), (50, 3, 3), (100, 3, 2))[:states]:
         s2 = _turn(_hp(s, 1, own), turn)
         s2 = s2._replace(stages=s2.stages.at[1, Stat.ATK].set(stage))
         layout = layout_for(t, flags, s2)
@@ -3833,11 +3838,11 @@ def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, e
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
-    for own, weather in ((100, Weather.SUN), (30, Weather.NONE)):
+    for own, weather in ((100, Weather.SUN), (30, Weather.NONE))[:states]:
         s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
@@ -4009,14 +4014,16 @@ def test_shadow_force(kaizo_tables, kaizo_names, kaizo_roark_party, case, expect
     assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_charge_turn_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
+):
     """Exact == loose for the charge-turn moves, on paths through the :4058 roll."""
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Razor Wind", "SolarBeam", "Fly", "Shadow Force")
     )
-    for weather, faster in ((Weather.SANDSTORM, False), (Weather.SUN, True)):
+    for weather, faster in ((Weather.SANDSTORM, False), (Weather.SUN, True))[:states]:
         s2 = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
         layout = layout_for(t, flags, s2)
@@ -4083,11 +4090,13 @@ def test_expert_encore(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_batch11_encore_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_batch11_encore_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
+):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
-    for disabled, faster in ((0, True), (2, False), (0, False)):
+    for disabled, faster in ((0, True), (2, False), (0, False))[:states]:
         s2 = s._replace(disable_turns=s.disable_turns.at[0].set(disabled))
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
         layout = layout_for(t, flags, s2)
@@ -4267,11 +4276,14 @@ def test_mist_check_hp(kaizo_tables, kaizo_names, kaizo_roark_party, attacker, t
     assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
 
 
-def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+@pytest.mark.parametrize(
+    "states", [pytest.param(1, id="one"), pytest.param(None, id="all", marks=pytest.mark.slow)]
+)
+def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, states):
     """Under Roark's flag set (0x17), misted or not: scored, not refused, exact == loose."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mist", "Accelerock", "", ""))
-    for s2 in (s, s._replace(mist=s.mist.at[1].set(2))):
+    for s2 in (s, s._replace(mist=s.mist.at[1].set(2)))[:states]:
         layout = layout_for(t, 0x17, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
@@ -4458,10 +4470,7 @@ def test_magnet_rise_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
     if case == "bit":
         s = s._replace(magnet_rise=s.magnet_rise.at[1].set(1))
     if case == "levitate":
-        s = s._replace(
-            species=s.species.at[1, 0].set(_levitate_species(t)),
-            ability_slot=s.ability_slot.at[1, 0].set(0),
-        )
+        s = as_species(t, s, 1, 0, _levitate_species(t))
     if case == "flying":
         s = s._replace(types=s.types.at[1, 0, 1].set(2))  # TYPE_FLYING
     assert _delta(t, s, 0x2, 0x3)[0] == (0 if case == "plain" else -10)
@@ -4758,6 +4767,8 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
         ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
         ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
+        ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
+        ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -4768,3 +4779,355 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E3 batch 1: Disable, Teleport, Hammer Arm; Mist Ball and Thief have no label (E3-1-1..5) --
+
+
+def _player_last(s, move: int):
+    """``s`` with the player's ``movePrevByBattler`` (``last_move[0]``) set."""
+    return s._replace(last_move=s.last_move.at[0].set(move))
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        # Basic_CheckCannotDisable (script.s:650-653): IfBattlerUnderEffect CHECK_DISABLE reads
+        # disabledTurns (trainer_ai.c:1833-1836), so the last disabled turn (turns 0, the move
+        # still set) is not seen.
+        ("plain", 0),
+        ("disabled", -8),
+        ("last turn", 0),
+    ],
+)
+def test_disable_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Disable", "Accelerock", "", ""))
+    if case != "plain":
+        s = s._replace(
+            disabled_move=s.disabled_move.at[0].set(n.move("Tackle")),
+            disable_turns=s.disable_turns.at[0].set(3 if case == "disabled" else 0),
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("case", "last", "jumps", "expected"),
+    [
+        # Expert_Disable (script.s:3075-3093): slower than the player, nothing; else the power of
+        # the player's last move (none reads 0): above 0 +1, else -1 unless the :3089 roll
+        # (N 100) jumps. Kaizo's Thief has power 40, so it reads as a damaging move.
+        ("slower", "Tackle", (), 0),
+        ("slower", "Leer", (), 0),
+        ("faster", "Tackle", (), 1),
+        ("faster", "Thief", (), 1),
+        ("faster", "Leer", (), -1),
+        ("faster", "Leer", (3089,), 0),
+        ("faster", "", (), -1),
+        ("faster", "", (3089,), 0),
+        ("faster", "Tackle", (3089,), 1),
+    ],
+)
+def test_disable_expert(kaizo_tables, kaizo_names, kaizo_roark_party, case, last, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Disable", "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if case == "slower" else _speeds(s, player=1, opp=500)
+    s = _player_last(s, n.move(last) if last else 0)
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_teleport_is_minus_ten_with_no_expert_entry(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_ScoreMoveEffect :221: FLEE_FROM_WILD_BATTLE jumps straight to ScoreMinus10 (no test,
+    no roll); Expert_Main has no entry for it."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Teleport", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == -10
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+
+
+_POISON, _FLYING, _BUG, _GHOST = 3, 2, 6, 7
+
+
+@pytest.mark.parametrize(
+    ("typing", "case", "expected"),
+    [
+        # Expert_HammerArm (script.s:4849-4867): immune, half or quarter damage -1; else slower
+        # than the player +1 (the SLOWER compare reads no tie); else nothing. No roll.
+        (None, "slower", 1),
+        (None, "faster", 0),
+        ((_POISON, _POISON), "slower", -1),  # Fighting against Poison: half
+        ((_FLYING, _BUG), "faster", -1),  # quarter
+        ((_GHOST, _GHOST), "slower", -1),  # immune
+    ],
+)
+def test_hammer_arm_expert(kaizo_tables, kaizo_names, kaizo_roark_party, typing, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Hammer Arm", "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if case == "slower" else _speeds(s, player=1, opp=500)
+    if typing:
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray(typing, s.types.dtype)))
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("move", ["Mist Ball", "Mystical Fire", "Thief"])
+def test_label_less_moves_score_through_the_damage_path_only(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move
+):
+    """LOWER_SP_ATK_HIT (71) and DO_NOTHING (85) have no Basic or Expert entry (script.s): the
+    refusal is lifted and Expert adds nothing. Kaizo's Thief keeps its 40-power damage reads
+    (trainer_ai.c:31-45 does not list effect 85, E3-1-2), so it stays a damaging move for the
+    AI."""
+    from nuzline.ai.layout import ALLIN
+
+    t, n = kaizo_tables, kaizo_names
+    assert policy.opponent_move_refusals(t, n.move(move), ALLIN) == []
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+    assert bool(c.is_damaging(t, n.move(move)))
+
+
+# --- E3 batch 1 round 2: Torment, Worry Seed, Me First, Trick Room (E3-2-1 .. E3-2-4) ---------
+
+
+def test_torment_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckTorment (script.s:874-877): the player already tormented, -10, else nothing; no
+    Expert entry (E3-2-1)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Torment", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    tormented = s._replace(torment=s.torment.at[0].set(1))
+    assert _delta(t, tormented, 0x2, 0x3)[0] == -10
+    assert _delta(t, tormented, 0x3, 0x7)[0] == 0
+
+
+def test_worry_seed_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckWorrySeed (script.s:1428-1443): the player's known ability Truant, Insomnia or
+    Vital Spirit -10; asleep and (as far as the AI has seen) without Sleep Talk and Snore -10;
+    else nothing (E3-2-2)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Status
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Worry Seed", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    for ability in (AbilityId.TRUANT, AbilityId.INSOMNIA, AbilityId.VITAL_SPIRIT):
+        known = s._replace(
+            ability=s.ability.at[0, 0].set(ability),
+            ai_ability_known=s.ai_ability_known.at[0].set(ABILITY_DECOMP_IDS[ability]),
+        )
+        assert _delta(t, known, 0x2, 0x3)[0] == -10, ability
+    asleep = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    assert _delta(t, asleep, 0x2, 0x3)[0] == -10
+    assert _delta(t, asleep, 0x3, 0x7)[0] != -10  # Expert adds, never the Basic -10
+
+
+def test_worry_seed_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_WorrySeed (script.s:5973-5993), the AI above 50 % HP: the 128 roll (:5984) not
+    jumping +1, then the 64 roll (:5988) not jumping +1; each jump drops its +1 (E3-2-2)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Worry Seed", "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 2
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984),))[0] == 1
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5988),))[0] == 1
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984), (0, 5988)))[0] == 0
+
+
+def test_me_first_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_MeFirst (script.s:5519-5550): slower than the player -2 (and nothing else); faster,
+    the player's last move not a status one: +1 for the 128 roll (:5538) not jumping and +1 for
+    the 64 roll (:5542), plus +1 first when the player out-damages the AI's best and the 32 roll
+    (:5532) does not jump (E3-2-3). Risky_RiskyEffects lists the effect (:6560)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Me First", "Accelerock", "", ""))
+    slow = s._replace(stats=s.stats.at[1, 0, 4].set(1))
+    assert _delta(t, slow, 0x3, 0x7)[0] == -2
+    fast = s._replace(stats=s.stats.at[1, 0, 4].set(500).at[0, 0, 4].set(1))
+    assert _delta(t, fast, 0x3, 0x7, jumps=((0, 5538), (0, 5532)))[0] == 0
+    assert _delta(t, fast, 0x3, 0x7, jumps=((0, 5538),))[0] in (0, 1)
+    assert _delta(t, fast, 0x3, 0x7)[0] in (2, 3)
+    assert c.BattleEffect.USE_MOVE_FIRST in c.RISKY_EFFECTS
+
+
+def test_trick_room_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckTrickRoom (script.s:1501-1506): faster than the player, or a speed tie (read as
+    faster, :1503), -10; slower nothing (E3-2-4)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
+    assert _delta(t, _speeds(s, player=1, opp=500), 0x2, 0x3)[0] == -10
+    assert _delta(t, _speeds(s, player=500, opp=1), 0x2, 0x3)[0] == 0
+    assert _delta(t, _speeds(s, player=100, opp=100), 0x2, 0x3, tie=1)[0] == -10
+
+
+def test_trick_room_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_TrickRoom (script.s:6190-6214): faster -1; slower +3 unless the 64 roll (:6210)
+    jumps; the AI at 30 % HP or less with no living party member left scores nothing (E3-2-4)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
+    slow, fast = _speeds(s, player=500, opp=1), _speeds(s, player=1, opp=500)
+    assert _delta(t, fast, 0x3, 0x7)[0] == -1
+    assert _delta(t, slow, 0x3, 0x7)[0] == 3
+    assert _delta(t, slow, 0x3, 0x7, jumps=((0, 6210),))[0] == 0
+    # Low HP: a living bench member still goes to the speed check, none ends the script.
+    low = slow._replace(hp=slow.hp.at[1, 0].set(1))
+    assert _delta(t, low, 0x3, 0x7)[0] == 3
+    alone = low._replace(hp=low.hp.at[1, 1].set(0))
+    assert _delta(t, alone, 0x3, 0x7)[0] == 0
+
+
+# --- E3-2-5 Skill Swap (#191) ----------------------------------------------------------------
+
+
+def _swap_delta(t, s, guess: int = 0, jumps=()) -> list[int]:
+    """The Expert flag's score change (0x7 over 0x3) per slot, as ``_delta`` with the defender
+    ability guess ``guess`` (the species coin, trainer_ai.c:1191-1198) taken."""
+    lo, hi = layout_for(t, 0x3, s), layout_for(t, 0x7, s)
+    before = _layout_scores(t, s, _outcome(t, s, guess=guess, layout=lo), lo)
+    after = _layout_scores(t, s, _outcome(t, s, guess=guess, jumps=jumps, layout=hi), hi)
+    return [int(b) - int(a) for a, b in zip(before, after, strict=True)]
+
+
+def test_change_user_ability_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """``commands.CHANGE_USER_ABILITY_DESIRABLE`` is Expert_ChangeUserAbility_DesirableAbilities
+    (script.s:4435-4461) entry by entry, and Skill Swap is in the Encore table twice
+    (script.s:3229, :3256)."""
+    names = kaizo_names.ability_names
+    spelled = [names[i].upper().replace(" ", "_") for i in c.CHANGE_USER_ABILITY_DESIRABLE]
+    assert len(set(c.CHANGE_USER_ABILITY_DESIRABLE)) == 25
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(BattleEffect.SWITCH_ABILITIES) == 2
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    start = lines.index("Expert_ChangeUserAbility_DesirableAbilities:")
+    entries = []
+    for line in lines[start + 1 :]:
+        name = line.split()[1]
+        if name == "TABLE_END":
+            break
+        entries.append(name.removeprefix("ABILITY_"))
+    assert spelled == entries
+
+
+def test_change_user_ability_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_ChangeUserAbility (script.s:4415-4433): the AI's own desirable ability -1; else the
+    player's desirable one +2 unless the 50 roll (:4429) jumps; neither falls through to -1
+    (the script's comment says +0, the code does not). An unknown player ability guesses its
+    species' slot (the coin): slot 0 desirable +2, slot 1 not -1 (E3-2-5)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Skill Swap", "Accelerock", "", ""))
+
+    def known(state, ability):
+        return state._replace(
+            ability=state.ability.at[0, 0].set(ability),
+            ai_ability_known=state.ai_ability_known.at[0].set(ABILITY_DECOMP_IDS[ability]),
+        )
+
+    good, plain = known(s, AbilityId.SPEED_BOOST), known(s, AbilityId.KEEN_EYE)
+    assert _delta(t, good, 0x3, 0x7)[0] == 2
+    assert _delta(t, good, 0x3, 0x7, jumps=((0, 4429),))[0] == 0
+    assert _delta(t, plain, 0x3, 0x7)[0] == -1
+    # The AI's own desirable ability decides first, whatever the player holds.
+    own = s._replace(ability=s.ability.at[1, 0].set(AbilityId.HUGE_POWER))
+    assert _delta(t, known(own, AbilityId.SPEED_BOOST), 0x3, 0x7)[0] == -1
+    assert _delta(t, known(own, AbilityId.KEEN_EYE), 0x3, 0x7)[0] == -1
+    # The coin: the player's species has Speed Boost in slot 0 and Keen Eye in slot 1.
+    t2 = _with_abilities(t, int(s.species[0, 0]), [3, 51])
+    assert _swap_delta(t2, s, guess=0)[0] == 2
+    assert _swap_delta(t2, s, guess=0, jumps=((0, 4429),))[0] == 0
+    assert _swap_delta(t2, s, guess=1)[0] == -1
+
+
+def test_gastro_acid_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Gastro Acid is BATTLE_EFFECT_SUPRESS_ABILITY, 239 (generated/move_battle_effects.txt line
+    240), in Basic_ScoreMoveEffect (script.s:269), Expert_Main (:1782) and the Encore table once
+    (:3276); Basic_CheckGastroAcid's seven abilities are the decomp's ids (E3-2-6)."""
+    assert BattleEffect.SUPRESS_ABILITY == 239
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(BattleEffect.SUPRESS_ABILITY) == 1
+    names = kaizo_names.ability_names
+    for name in (
+        "Multitype",
+        "Truant",
+        "Slow Start",
+        "Stench",
+        "Run Away",
+        "Pickup",
+        "Honey Gather",
+    ):
+        assert names[c.ABILITY_IDS[name]].upper() == name.upper()
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert "BATTLE_EFFECT_SUPRESS_ABILITY" in lines[268] and "Basic_CheckGastroAcid" in lines[268]
+    assert "BATTLE_EFFECT_SUPRESS_ABILITY" in lines[1781] and "Expert_GastroAcid" in lines[1781]
+    assert lines[5480].strip() == "IfRandomLessThan 64, Expert_GastroAcid_End"
+    assert lines[5483].strip() == "IfRandomLessThan 128, Expert_GastroAcid_ContinueHPCheck"
+    start = lines.index("Basic_CheckGastroAcid:")
+    entries = []
+    for line in lines[start + 1 :]:
+        if line.strip() == "PopOrEnd":
+            break
+        if line.strip().startswith("IfLoadedEqualTo"):
+            entries.append(line.split()[1].removeprefix("ABILITY_").rstrip(","))
+    assert entries == [
+        "MULTITYPE", "TRUANT", "SLOW_START", "STENCH", "RUN_AWAY", "PICKUP", "HONEY_GATHER"
+    ]  # fmt: skip
+
+
+def test_gastro_acid_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckGastroAcid (script.s:1363-1376): the player already suppressed (``IfMoveEffect``)
+    -10, once (the script ends there, so a known Truant adds nothing, and LoadBattlerAbility would
+    read NONE anyway); else a known Multitype, Truant, Slow Start, Stench, Run Away, Pickup or
+    Honey Gather -10; any other ability nothing (E3-2-6)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gastro Acid", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+
+    def known(state, ability, decomp):
+        return state._replace(
+            ability=state.ability.at[0, 0].set(ability),
+            ai_ability_known=state.ai_ability_known.at[0].set(decomp),
+        )
+
+    # Each ability as the AI knows it (the decomp id of its record, ``ai_ability_known``).
+    for decomp in (121, 54, 112, 1, 50, 53, 118):
+        assert _delta(t, known(s, AbilityId.UNSUPPORTED, decomp), 0x2, 0x3)[0] == -10, decomp
+    keen = known(s, AbilityId.KEEN_EYE, ABILITY_DECOMP_IDS[AbilityId.KEEN_EYE])
+    assert _delta(t, keen, 0x2, 0x3)[0] == 0
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    assert _delta(t, off, 0x2, 0x3)[0] == -10
+    both = known(off, AbilityId.TRUANT, ABILITY_DECOMP_IDS[AbilityId.TRUANT])
+    assert _delta(t, both, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("percent", "plain", "skipped"),
+    [
+        # Expert_GastroAcid (script.s:5471-5494, the code, not its comment): +1 after the 64 roll
+        # (:5481); above 70 % HP it ends; else the 128 roll (:5484) not jumping -1; above 50 %
+        # ends, else -1; above 30 % ends, else -1.
+        (100, 1, 1),
+        (71, 1, 1),
+        (70, 0, 1),
+        (51, 0, 1),
+        (50, -1, 0),
+        (31, -1, 0),
+        (30, -2, -1),
+        (1, -2, -1),
+    ],
+)
+def test_gastro_acid_expert(kaizo_tables, kaizo_names, kaizo_roark_party, percent, plain, skipped):
+    """Expert_GastroAcid with both rolls: no jump gives ``plain``, the 128 roll (:5484) jumping
+    gives ``skipped`` (it drops the first -1), the 64 roll (:5481) jumping gives 0 at any HP
+    (E3-2-6)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gastro Acid", "Accelerock", "", ""))
+    s = s._replace(hp=s.hp.at[0, 0].set(int(s.max_hp[0, 0]) * percent // 100))
+    assert _delta(t, s, 0x3, 0x7)[0] == plain
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5484),))[0] == skipped
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481),))[0] == 0
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481), (0, 5484)))[0] == 0

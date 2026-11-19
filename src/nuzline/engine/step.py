@@ -66,8 +66,8 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented: the Trick Room countdown of the turn end's side-condition pass
-(battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
+The Trick Room countdown is the turn end's side-condition pass's last state
+(battle_controller_player.c:1822-1830, ``_trick_room_check``).
 """
 
 from __future__ import annotations
@@ -93,11 +93,11 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.damage import (
     PRESENT_HEAL,
+    battler_decomp_ability,
     calc_move_damage,
     chart_types,
     confusion_damage,
     damage_for_roll,
-    decomp_abilities,
     divide,
     effectiveness,
     ground_immune,
@@ -184,6 +184,7 @@ from nuzline.engine.hooks import (
     WEATHER_HP,
     after_damage_items,
     held_item_check,
+    move_end_switch_in,
     recover_status_by_ability,
     reveal_ability,
     swap_war,
@@ -206,6 +207,7 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
     SNORE_PARAM,
+    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -221,6 +223,7 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.levelup import pay_exp, pay_exp_leveled
 from nuzline.engine.order import (
+    CALL_ME_FIRST,
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
@@ -232,6 +235,7 @@ from nuzline.engine.order import (
     invoked_move,
     is_item,
     is_switch,
+    me_first_copy,
     player_second,
     quick_claw_active,
     selected_move,
@@ -254,6 +258,7 @@ from nuzline.engine.state import (
     TURN_SCRATCH,
     VOLATILE_FIELDS,
     BattleState,
+    battler_ability,
     field_index,
     held_item,
     record_seen_move,
@@ -386,6 +391,7 @@ def _natural_cure(state: BattleState, side, cond=True) -> BattleState:
     Pursuit hit; repeating it in ``_send_out`` changes nothing."""
     fmt = format_of(state)
     mon = state.active[side]
+    # Raw BattleMon.ability (battle_script.c:9151), not Battler_Ability: Gastro Acid leaves it.
     cure = (state.ability[party(fmt, side), mon] == AbilityId.NATURAL_CURE) & (
         state.hp[party(fmt, side), mon] > 0
     )
@@ -613,6 +619,7 @@ def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleSt
         state.species[party(fmt, side), mon], state.ability_form[party(fmt, side), mon]
     ]
     own_ability = tables.species_abilities[row, state.ability_slot[party(fmt, side), mon]]
+    # The raw BattleMon.ability write-back (battle_lib.c:124).
     value = jnp.where(cond, own_ability, state.ability[party(fmt, side), mon]).astype(
         state.ability.dtype
     )
@@ -972,7 +979,7 @@ def _use_move(
     go = go & ~loafing
     # CHECK_STATUS_STATE_FLINCH (:2529); subscript_flinched.s:10-14 gives Steadfast +1 Speed.
     flinched = go & (state.flinched[side] != 0)
-    steadfast = flinched & (state.ability[party(fmt, side), user] == AbilityId.STEADFAST)
+    steadfast = flinched & (battler_ability(state, side, user) == AbilityId.STEADFAST)
     state = change_stage(state, side, Stat.SPE, 1, steadfast)
     state = _unlock(state, side, flinched)  # subscript_flinched.s:9
     go = go & ~flinched
@@ -1042,7 +1049,7 @@ def _use_move(
     # CHECK_STATUS_STATE_PARALYSIS (:2652-2654): RandNext() % 4 == 0 (outcome.full_para) fully
     # paralyzes, never a Magic Guard holder (Battler_Ability, tested before the draw).
     # Gated on reaching the check, so the event is set only when it had an effect.
-    guarded = state.ability[party(fmt, side), user] == AbilityId.MAGIC_GUARD
+    guarded = battler_ability(state, side, user) == AbilityId.MAGIC_GUARD
     full_para = (
         go
         & (state.status[party(fmt, side), user] == Status.PARALYSIS)
@@ -1140,7 +1147,15 @@ def _use_move(
     # (moveTemp).
     kind = call_kind(tables, move)
     invoker = kind != CALL_NONE
-    invoked = invoked_move(tables, state, side, move, outcome.call[side])
+    # Me First (E3-2-3; BtlCmd_TryMeFirst, battle_script.c:7286-7312) copies the foe's chosen move
+    # while the foe has not acted (``target_moved``): ``pursuit`` carries its action, selected move
+    # and struggling flag (``_act``); with none given the call finds nothing.
+    me_first = jnp.asarray(0, _I32)
+    if pursuit is not None:
+        foe_fights = ~is_switch(pursuit[0]) & ~is_item(pursuit[0])
+        copied = me_first_copy(tables, state, _foe(side), pursuit[1], foe_fights)
+        me_first = jnp.where(jnp.asarray(target_moved, bool), 0, copied)
+    invoked = invoked_move(tables, state, side, move, outcome.call[side], me_first=me_first)
     call_failed = invoker & (
         (invoked == 0)
         | ((kind == CALL_SLEEP_TALK) & (state.status[party(fmt, side), user] != Status.SLEEP))
@@ -1149,6 +1164,18 @@ def _use_move(
         invoker & ~call_failed,
         called_move(tables, state, invoked),
         called_move(tables, state, move),
+    )
+    # TryMeFirst's success sets meFirst and meFirstTurnNumber = meFirstTurnOrder (:7303-7304).
+    first_ok = head_on & can_act & (kind == CALL_ME_FIRST) & ~call_failed
+    state = state._replace(
+        me_first=state.me_first.at[side].set(
+            jnp.where(first_ok, 1, state.me_first[side]).astype(state.me_first.dtype)
+        ),
+        me_first_turn=state.me_first_turn.at[side].set(
+            jnp.where(first_ok, state.turn.astype(_I32) + 1, state.me_first_turn[side]).astype(
+                state.me_first_turn.dtype
+            )
+        ),
     )
     # E2 batch 10 family 7, the charge turn (B10-12..). A charge move's script (MoveFlag.CHARGE:
     # effect_script_0039.s, _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s)
@@ -1258,7 +1285,10 @@ def _use_move(
     target_side = resolved.target_side
     target = state.active[target_side]
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
-    has_target = has_target | special_counter | (invoker & call_failed) | charging
+    # Me First's defender is its target, not its user: it needs a living one (RANGE_SINGLE_TARGET_
+    # ME_FIRST, battle_lib.c:1599-1727), unlike the self-targeting invokers.
+    self_invoker = invoker & (kind != CALL_ME_FIRST)
+    has_target = has_target | special_counter | (self_invoker & call_failed) | charging
     # Singles follow-up (ii): a lock move (Rollout, Ice Ball, a charge move's strike) reads the
     # stored target (lib.c:1711, :1718-1719), the user after a RANGE_MY_SIDE or non-Ghost Curse
     # selection, so the defender is the user (``targets.resolve``: ``target_side == side``). The
@@ -1297,7 +1327,7 @@ def _use_move(
     # A charge move's own first use passes BeforeMove's no-target check whatever the foe's HP
     # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
-    succeeded = can_act & (has_target | nature_power | invoker | first_charge)
+    succeeded = can_act & (has_target | nature_power | self_invoker | first_charge)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
@@ -1332,6 +1362,9 @@ def _use_move(
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
+    # Teleport (effect_script_0153.s:5, :9-10): MOVE_STATUS_FAILED in a trainer battle, which every
+    # Nuzline battle is (E3-1-4); it still counts as used (bcp.c:3212, :3945-3949).
+    failed = failed | (effect_used == EffectId.FLEE)
     # Dream Eater (effect_script_0008.s:5-6, :12-20): MOVE_STATUS_NO_MORE_WORK when the defender
     # is behind a substitute (:5, CheckSubstitute; no hit of this action came first) or is not
     # asleep (B9-12, B10-4).
@@ -1496,8 +1529,8 @@ def _use_move(
         | bide_ends
         | curse_at_foe
     )
-    no_guard = (state.ability[party(fmt, side), user] == AbilityId.NO_GUARD) | (
-        state.ability[party(fmt, target_side), target] == AbilityId.NO_GUARD
+    no_guard = (battler_ability(state, side, user) == AbilityId.NO_GUARD) | (
+        battler_ability(state, target_side, target) == AbilityId.NO_GUARD
     )
     # An OHKO move: BtlCmd_TryOHKOMove sets SYSCTL_NONSTANDARD_ACC_CHECK first (battle_script.c:
     # 4338), which skips the Lock-On / No Guard return (bcp.c:3016); only its
@@ -1799,7 +1832,7 @@ def _use_move(
     # ApplyTypeChart leaves it: the chart applied, not zeroed (ruling G-19).
     crash = can_act & has_target & (~connected | guarded)
     crash = crash & (tables.move_effect[used] == EffectId.CRASH)
-    crash = crash & (state.ability[party(fmt, side), user] != AbilityId.MAGIC_GUARD)
+    crash = crash & (battler_ability(state, side, user) != AbilityId.MAGIC_GUARD)
     crash_crit = crit_lands(tables, state, side, used, outcome.crit[side, 0]) & ~crit_blocked(
         state, side, target_side
     )
@@ -2010,6 +2043,8 @@ def _use_move(
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
+    script_calc = head_on & can_act & has_target & ~failed & ~charging
+
     def one_hit(hit_index, carry):
         state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
         # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
@@ -2084,6 +2119,9 @@ def _use_move(
             gift=gift_removed,
             target_side=target_side,
             defender=resolved.defender,
+            # The script ran (its CalcDamage before TryMove's checks, bcp.c:3214-3216): Me First's
+            # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
+            script_calc=script_calc,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2844,7 +2882,9 @@ def _faint_check(
     return after
 
 
-def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
+def _move_end(
+    tables: Tables, state: BattleState, acted: BattleState, side, ran, trace_pick=None
+) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
@@ -2852,7 +2892,8 @@ def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
     ``BattleControllerPlayer_MoveEnd`` clears the actor's own (``ClearFlags``, :4389, via
     :3986) where ``ran``: the action ran (a move, switch or item; neither a fainted
     battler's action nor a pursuer's, which ``TryPursuit`` ends, battle_script.c:6931,
-    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969)."""
+    reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
+    ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end."""
     foe = _foe(side)
     move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
     clear = ran & (state.over == 0)
@@ -2861,7 +2902,10 @@ def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
     # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
-    return recover_status_by_ability(state, foe, clear)
+    state = recover_status_by_ability(state, foe, clear)
+    # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
+    # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
+    return move_end_switch_in(tables, state, clear, trace_pick)
 
 
 def execute_actions(
@@ -3046,7 +3090,12 @@ def _execute_actions(
         shown = _put(shown, foe, merged[1], keep)
         stop = ctl["pause"] | ctl["pursue"]
         done = _move_end(
-            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted), acted, side, ran
+            tables,
+            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
+            acted,
+            side,
+            ran,
+            outcome.trace_pick,
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
@@ -3153,7 +3202,7 @@ def _leech_seed_check(tables: Tables, state: BattleState, side) -> BattleState:
     other = _foe(side)
     mon, recipient = state.active[side], state.active[other]
     hp = state.hp[party(fmt, side), mon].astype(_I32)
-    guarded = state.ability[party(fmt, side), mon] == AbilityId.MAGIC_GUARD  # bcp.c:1381
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD  # bcp.c:1381
     on = (
         (state.leech_seed[side] != 0)
         & (hp > 0)
@@ -3196,7 +3245,7 @@ def _status_damage(state: BattleState, side, status, damage) -> BattleState:
     mon = state.active[side]
     # subscript_poison_damage.s:5 / subscript_burn_damage.s:5 skip a Magic Guard holder
     # (CheckAbility); the toxic counter has already risen (bcp.c:1405-1415).
-    guarded = state.ability[party(fmt, side), mon] == AbilityId.MAGIC_GUARD
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
     on = (
         (state.status[party(fmt, side), mon] == status)
         & (state.hp[party(fmt, side), mon] > 0)
@@ -3206,7 +3255,7 @@ def _status_damage(state: BattleState, side, status, damage) -> BattleState:
     # below full HP heals Divide(maxHP, 8) instead and tags its ability; at full HP nothing (B9-8).
     poisoned = (status == Status.POISON) | (status == Status.TOXIC)
     max_hp = state.max_hp[party(fmt, side), mon].astype(_I32)
-    healer = on & poisoned & (state.ability[party(fmt, side), mon] == AbilityId.POISON_HEAL)
+    healer = on & poisoned & (battler_ability(state, side, mon) == AbilityId.POISON_HEAL)
     heals = healer & (state.hp[party(fmt, side), mon].astype(_I32) != max_hp)
     delta = jnp.where(heals, jnp.maximum(max_hp // 8, 1), jnp.where(on & ~healer, -damage, 0))
     state = _hp_change(state, side, mon, delta)
@@ -3254,7 +3303,7 @@ def _curse_check(state: BattleState, side) -> BattleState:
     ``Divide(maxHP, 4)`` through UPDATE_HP (:5-13, capped at its HP; it may faint)."""
     fmt = format_of(state)
     mon = state.active[side]
-    guarded = state.ability[party(fmt, side), mon] == AbilityId.MAGIC_GUARD
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
     on = (state.curse[side] != 0) & (state.hp[party(fmt, side), mon] > 0) & ~guarded
     loss = jnp.maximum(state.max_hp[party(fmt, side), mon].astype(_I32) // 4, 1)
     return _hp_change(state, side, mon, -jnp.where(on, loss, 0))
@@ -3276,7 +3325,7 @@ def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
     trapped = state.trapped[side] - on.astype(state.trapped.dtype)
     damage = jnp.maximum(state.max_hp[party(fmt, side), mon].astype(_I32) // 16, 1)
     # subscript_bind_effect.s:5: no damage to a Magic Guard holder (CheckAbility).
-    guarded = state.ability[party(fmt, side), mon] == AbilityId.MAGIC_GUARD
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
     state = _hp_change(state, side, mon, -jnp.where(on & (trapped > 0) & ~guarded, damage, 0))
     return state._replace(
         trapped=state.trapped.at[side].set(trapped),
@@ -3297,10 +3346,10 @@ def _bad_dreams_check(tables: Tables, state: BattleState, side) -> BattleState:
         holder = state.active[foe]
         on = (
             (jnp.asarray(side) != foe)
-            & (state.ability[party(fmt, foe), holder] == AbilityId.BAD_DREAMS)
+            & (battler_ability(state, foe, holder) == AbilityId.BAD_DREAMS)
             & (state.hp[party(fmt, foe), holder] > 0)
             & (state.status[party(fmt, side), mon] == Status.SLEEP)
-            & (state.ability[party(fmt, side), mon] != AbilityId.MAGIC_GUARD)
+            & (battler_ability(state, side, mon) != AbilityId.MAGIC_GUARD)
             & (state.hp[party(fmt, side), mon] > 0)
         )
         state = _hp_change(state, side, mon, -jnp.where(on, jnp.maximum(max_hp // 8, 1), 0))
@@ -3479,7 +3528,7 @@ def _leftovers_check(tables: Tables, state: BattleState, side) -> BattleState:
     )
     poison = jnp.any(state.types[party(fmt, side), mon] == Type.POISON)
     magic_guard = (
-        decomp_abilities(tables, state)[party(fmt, side), mon] == WEATHER_ABILITY_IDS["Magic Guard"]
+        battler_decomp_ability(tables, state, side, mon) == WEATHER_ABILITY_IDS["Magic Guard"]
     )
     sludge = effect == ItemId.BLACK_SLUDGE
     heal = ((effect == ItemId.LEFTOVERS) | (sludge & poison)) & (hp < max_hp)
@@ -3520,7 +3569,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
         state.max_hp[party(fmt, side), mon].astype(_I32),
     )
     alive = hp > 0
-    ability = decomp_abilities(tables, state)[party(fmt, side), mon]
+    ability = battler_decomp_ability(tables, state, side, mon)
     sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
     leaf_guard = sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     toxic = (
@@ -3576,14 +3625,14 @@ def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome
     fmt = format_of(state)
     mon = state.active[side]
     boost = (
-        (state.ability[party(fmt, side), mon] == AbilityId.SPEED_BOOST)
+        (battler_ability(state, side, mon) == AbilityId.SPEED_BOOST)
         & (state.hp[party(fmt, side), mon] > 0)
         & (state.stages[side, Stat.SPE] < STAGE_MAX)
         & (state.fake_out_turn[side].astype(_I32) != state.turn.astype(_I32) + 1)
     )
     state = change_stage(state, side, Stat.SPE, 1, boost)
     cured = (
-        (state.ability[party(fmt, side), mon] == AbilityId.SHED_SKIN)
+        (battler_ability(state, side, mon) == AbilityId.SHED_SKIN)
         & (state.status[party(fmt, side), mon] != Status.NONE)
         & (state.hp[party(fmt, side), mon] > 0)
         & (outcome.shed_skin[side] != 0)
@@ -3678,8 +3727,9 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     (``subscript_weather_continues.s`` :_045 / :_057, after its Magic Guard skip, tag the
     ability). Rain (:5613-5625): a Dry Skin holder below full HP regains ``Divide(maxHP, 8)``
     (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45); Hydration is unsupported.
-    Sand Veil, Snow Cloak, Ice Body, Dry Skin and Solar Power are read from ``state.ability``;
-    Magic Guard by decomp id from ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
+    Sand Veil, Snow Cloak, Ice Body, Dry Skin and Solar Power are read through
+    ``state.battler_ability``; Magic Guard by decomp id from ``ability`` (``int32[B]``,
+    ``damage.battler_decomp_ability`` of each battler). The caller applies ``NO_CLOUD_NINE``.
     The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
     (moves.h:50: Dig's UNDERGROUND, Dive's UNDERWATER; :5580, :5587, :5600), rain does not
     (B10-12)."""
@@ -3690,8 +3740,8 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         state.max_hp[party(fmt, side), mon].astype(_I32),
     )
     types = state.types[party(fmt, side), mon]
-    ab = ability[side, mon]
-    own = state.ability[party(fmt, side), mon]
+    ab = ability[side]
+    own = battler_ability(state, side)
 
     def has(t):
         return jnp.any(types == t)
@@ -3792,7 +3842,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         state = _where(live, _wish(state, sides[position]), state)
 
     before = state
-    ability = decomp_abilities(tables, state)
+    ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
     effects = live & ~ended & ~weather_suppressed(tables, state)
     for position in (0, 1):
         side = sides[position]
@@ -3922,9 +3972,9 @@ def _future_sight(
         # The hit's ordinary accuracy check clears the attacker slot's Micle flag (G-59).
         acc_run = fires & (tables.move_accuracy[move] != 0)
         state = _set_side(state, "micle", attacker, 0, acc_run)
-        no_guard = (
-            state.ability[party(fmt, attacker), state.active[attacker]] == AbilityId.NO_GUARD
-        ) | (state.ability[party(fmt, d), mon] == AbilityId.NO_GUARD)
+        no_guard = (battler_ability(state, attacker) == AbilityId.NO_GUARD) | (
+            battler_ability(state, d, mon) == AbilityId.NO_GUARD
+        )
         # MON_IS_LOCKED_ONTO of the stored attacker's battler slot (bcp.c:3016-3018).
         no_guard = no_guard | locked_onto(state, attacker, d)
         blocked = (protecting[d] != 0) & protect_blocks(tables, move, False)
@@ -3960,9 +4010,25 @@ def _future_sight(
         state = _faint_check(tables, mid, state, decide=False)
         mid = state
     state = _perish_song_check(tables, state, sides, live)
+    state = _trick_room_check(tables, state, live)
     # TurnEnd's CheckBattleOver (bcp.c:1845) after the whole side-condition pass.
     state = _faint_check(tables, state, state)
     return pay_exp(tables, start, state)
+
+
+def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
+    """``SIDE_COND_CHECK_STATE_TRICK_ROOM`` (bcp.c:1822-1830), after Perish Song's: a Trick Room
+    counter above 0 drops by 1; at 0 ``subscript_trick_room_end`` runs: vanilla's only prints, so
+    Trick Room ends (started at 5 on turn T it is up through T + 4); Kaizo's (sub_seq 251, byte
+    for byte the Trick Room move's script, ``Tables.trick_room_rearm``) finds the bits clear and
+    sets ``FIELD_CONDITION_TRICK_ROOM_INIT`` again: it never ends. E3-2-4."""
+    counted = _count_down(state.trick_room)
+    running = live & (state.trick_room != 0)
+    rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)
+    value = jnp.where(rearm, TRICK_ROOM_TURNS, counted)
+    return state._replace(
+        trick_room=jnp.where(running, value, state.trick_room).astype(state.trick_room.dtype)
+    )
 
 
 def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> BattleState:
