@@ -216,3 +216,75 @@ def test_enumeration_after_a_pursuit_is_the_old_views_distribution(tables, names
     assert new.keys() == old.keys()
     for k in new:
         assert new[k] == pytest.approx(old[k], abs=1e-9)
+
+
+# SF2 (j): the paused view counts a fainted foe as done (laws only; subscript_show_party_list.s:22-24,
+# subscript_faint_mon.s:7, battle_script.c:1801).
+
+
+def _ko_pause(tables, n, mirror, ko=True):
+    rock = _mon(n, "Scyther", ["U-turn"], 25, "King’s Rock")
+    bench = _mon(n, "Geodude", ["Tackle"], 30)
+    victim = _mon(n, "Rattata", ["Tackle"], 3) if ko else _mon(n, "Houndour", ["Tackle"], 35)
+    mine, theirs = ([victim, bench], [rock, bench]) if mirror else ([rock, bench], [victim, bench])
+    s = make_state(tables, mine, theirs)
+    pivot = 1 if mirror else 0
+    acts = (0, 0)
+    # The foe's faster U-turn: raise its speed order by making the player's Pokemon slow.
+    paused = assert_matches_reference(tables, s, acts, O)
+    assert int(paused.pivot_battler) == pivot + 1
+    return paused, pivot
+
+
+def _pick(pivot):
+    acts = [0, 0]
+    acts[pivot] = MOVE_ACTIONS + 1
+    return jnp.asarray(acts, jnp.int32)
+
+
+def _old_merged(tables, paused, acts, monkeypatch):
+    old_mask = lambda s: (s.ts_acted != 0) | (
+        ((s.ts_pursued.astype(jnp.int32) >> jnp.arange(2)) & 1) != 0
+    )
+    monkeypatch.setattr(outcome_mod, "moved_mask", old_mask)
+    monkeypatch.setattr(enum_mod, "moved_mask", old_mask)
+    enum_mod._jit_laws.clear_cache()
+    enum_mod._jit_call_laws.clear_cache()
+    try:
+        return _merged(tables, paused, acts), len(enumerate_turn(tables, paused, acts)[1])
+    finally:
+        monkeypatch.undo()
+        enum_mod._jit_laws.clear_cache()
+        enum_mod._jit_call_laws.clear_cache()
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_fainted_foe_is_done_in_the_paused_view(tables, names, monkeypatch, mirror):
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    paused, pivot = _ko_pause(tables, names, mirror)
+    other = 1 - pivot
+    assert int(paused.hp[other, int(paused.active[other])]) == 0
+    assert int(paused.ts_acted[other]) == 0
+    acts = _pick(pivot)
+    _, viewed = pivot_view(tables, paused, acts)
+    assert int(viewed[other]) == MOVE_ACTIONS + int(paused.active[other])
+    assert not np.any(np.asarray(_paused_rock(tables, paused)))
+    assert_equals_bruteforce(tables, paused, acts)
+    new = _merged(tables, paused, acts)
+    n_new = len(enumerate_turn(tables, paused, acts)[1])
+    old, n_old = _old_merged(tables, paused, acts, monkeypatch)
+    assert new.keys() == old.keys()
+    for k in new:
+        assert new[k] == pytest.approx(old[k], abs=1e-9)
+    assert n_new < n_old
+
+
+@pytest.mark.parametrize("mirror", [False, True])
+def test_surviving_foe_keeps_its_action_in_the_paused_view(tables, names, mirror):
+    paused, pivot = _ko_pause(tables, names, mirror, ko=False)
+    other = 1 - pivot
+    assert int(paused.hp[other, int(paused.active[other])]) > 0
+    _, viewed = pivot_view(tables, paused, _pick(pivot))
+    assert int(viewed[other]) == int(paused.ts_actions[other]) == 0
+    assert bool(np.asarray(_paused_rock(tables, paused))[pivot])

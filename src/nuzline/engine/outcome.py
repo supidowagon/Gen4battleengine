@@ -1487,12 +1487,28 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
 
 
 def moved_mask(state: BattleState) -> jnp.ndarray:
-    """``bool[B]``: Battler_MovedThisTurn of a paused turn's battlers: the actions before the cursor
-    (``ts_acted``) and each pursuer TryPursuit ended (battle_script.c:6931; ``ts_pursued``, bit b =
-    battler b: at B = 2 the stored ``1 + pursuer`` is that bitmask)."""
+    """``bool[B]``: Battler_MovedThisTurn of a paused turn's battlers, or no action still to play:
+    the actions before the cursor (``ts_acted``), each pursuer TryPursuit ended
+    (battle_script.c:6931; ``ts_pursued``, bit b = battler b: at B = 2 the stored ``1 + pursuer``
+    is that bitmask), and (SF2 (j)) each battler whose active Pokemon has 0 HP. A U-turn that KOs
+    its defender with a bench left opens the list with the defender at 0 HP and not yet MOVE_END:
+    TryFaintMon (subscript_update_hp.s:17; battle_script.c:1763-1777) and the U-turn script
+    (subscript_attack_then_switch_out.s:5, :6, :14-34, :37-47, :54, :71; a 0-HP battler cannot
+    pursue, battle_script.c:6901, subscript_pursuit.s:8 -> :238) write no PICK_COMMAND. It becomes
+    MOVE_END in the same action before any action of its own: subscript_show_party_list.s:22-24
+    FAINT_MON -> PlayFaintAnimation (subscript_faint_mon.s:7; battle_script.c:1801, :1803), or,
+    when the newcomer faints to hazards, LOOP_FAINTED's AnyFainted (battle_controller_player.c:
+    3820-3826, :4430-4431), both before MoveEnd (:3989). No reader of that MOVE_END runs between:
+    the list reads none (subscript_show_party_list.s:9-22) and the tail's King's Rock flinch
+    (subscript_flinch_mon.s:5) needs the defender's ``curHP`` (battle_controller_player.c:4642).
+    So its chosen action never runs and no draw of it is read. Read on the paused state, before
+    ``pivot_view`` swaps the pivot's active (the pivot is alive,
+    subscript_attack_then_switch_out.s:48, :55)."""
     fmt = format_of(state)
     bits = (state.ts_pursued.astype(_I32) >> jnp.arange(fmt.B)) & 1
-    return (state.ts_acted != 0) | (bits != 0)
+    sides = jnp.arange(fmt.B)
+    fainted = state.hp[party(fmt, sides), state.active[sides].astype(_I32)] == 0
+    return (state.ts_acted != 0) | (bits != 0) | fainted
 
 
 def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
@@ -1505,7 +1521,8 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     97-101, :2078-2079, :2107; ruling B6-10), the battle's movePrev the paused move's moveTemp
     (the tail's UpdateMoveBuffers writes it before a later actor's Copycat reads it, bcp.c:
     3936-3942) and the other side's action as chosen (``ts_actions``) while it has not moved
-    (``moved_mask``), else a switch to its own active Pokemon (no move). Its switch-in effects
+    (``moved_mask``: acted, pursued, or at 0 HP, SF2 (j)), else a switch to its own active Pokemon
+    (no move). Its switch-in effects
     (weather, Trace, Intimidate) are still a switch's: ``fresh_switch`` tells the laws that its
     stages and volatiles are the view's, not a fresh battler's. The paused action's own King's
     Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged, but for an armed

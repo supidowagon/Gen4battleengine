@@ -3529,7 +3529,9 @@ CALL_SEALED = 3 * SLEEP_TALK_VALUES
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[B]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
     a paused U-turn whose hit damaged its target (``ts_damaged``), with
-    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``moved_mask``); whether the
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``moved_mask``: also a 0-HP target, whose KO'd action never runs and whose
+    King's Rock flinch needs its ``curHP``: battle_controller_player.c:4642, :3820-3826, :4430-4431;
+    subscript_flinch_mon.s:5; SF2 (j)); whether the
     newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
     fmt = format_of(state)
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
