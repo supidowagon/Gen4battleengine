@@ -36,6 +36,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -598,7 +599,7 @@ def test_toxic_cannot_poison(
     elif change == "safeguard":
         s = s._replace(safeguard=s.safeguard.at[0].set(5))
     elif change == "sun":
-        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+        s = with_weather(s, Weather.SUN)
     assert _effectiveness(t, s, TOXIC) != TypeMulti.QUADRUPLE
     assert _two_flag_scores(t, s) == [expected, 0, 0, 0]
 
@@ -638,7 +639,7 @@ def test_toxic_ability_guess(
     s = _state(t, kaizo_roark_party, SHUCKLE, (TOXIC, 0, 0, 0), bench=(BONSLY,))
     s = _with_player(t, s, species)
     assert _effectiveness(t, s, TOXIC) != TypeMulti.QUADRUPLE
-    wet = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    wet = with_weather(s, weather)
     assert _two_flag_scores(t, wet, slot) == [90, 0, 0, 0]
     assert _two_flag_scores(t, wet, 1 - slot) == [100, 0, 0, 0]
     if weather != Weather.NONE:
@@ -1204,7 +1205,7 @@ def _loose_cases(t, party, names):
     toxic = _named(t, names, _state(t, party, SHUCKLE, _SHUCKLE_MOVES, (BONSLY,)), "Zangoose")
     curse = toxic._replace(stages=toxic.stages.at[1, Stat.ATK].set(6))
     rain = _named(t, names, _state(t, party, SHUCKLE, _SHUCKLE_MOVES, (BONSLY,)), "Whiscash")
-    rain = rain._replace(weather=jnp.asarray(Weather.RAIN, rain.weather.dtype))
+    rain = with_weather(rain, Weather.RAIN)
     lileep = _state(t, party, LILEEP, _LILEEP_MOVES)
     corsola = _state(t, party, CORSOLA, (RECOVER, WATER_PULSE, LIGHT_SCREEN, ACCELEROCK))
     corsola = corsola._replace(light_screen=corsola.light_screen.at[1].set(5))
@@ -1491,7 +1492,7 @@ def test_weather(kaizo_tables, kaizo_names, kaizo_roark_party, weather, turn, ex
         if weather in own_weather:
             expected[own_weather[weather]] = 0
     s = _state(t, kaizo_roark_party, BONSLY, (STEALTH_ROCK, ROCK_POLISH, first, second))
-    s = _turn(s, turn)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(_turn(s, turn), weather)
     assert _delta(t, s, 0x7, 0x207) == expected
 
 
@@ -2828,7 +2829,7 @@ def test_weather_moves(
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
     s = _hp(_speeds(s, player=1, opp=100), 1, hp)
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
@@ -3122,7 +3123,7 @@ def test_basic_safeguard(kaizo_tables, kaizo_names, kaizo_roark_party, case, bas
 def test_sunny_day(kaizo_tables, kaizo_names, kaizo_roark_party, weather, hp, basic, expert):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Sunny Day", "Accelerock", "", ""))
-    s = _hp(s, 1, hp)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(_hp(s, 1, hp), weather)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
@@ -3229,7 +3230,7 @@ def test_expert_blizzard(
 ):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Blizzard", "Accelerock", "", ""))
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     if player != "Gible":
         s = _with_player(t, s, n.species_names.index(player), 0, known=True)
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
@@ -3828,7 +3829,7 @@ def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, e
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Accelerock", "", ""))
     if case == "sun":
-        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+        s = with_weather(s, Weather.SUN)
     elif case == "power herb":
         s = s._replace(item=s.item.at[1, 0].set(c.ITEM_POWER_HERB))
     elif case == "low hp":
@@ -3843,7 +3844,7 @@ def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, fla
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
     for own, weather in ((100, Weather.SUN), (30, Weather.NONE))[:states]:
-        s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        s2 = with_weather(_hp(s, 1, own), weather)
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
@@ -3927,7 +3928,7 @@ def test_charge_turn_no_invuln(
     s = _charge_state(t, n, kaizo_roark_party, move, player, herb)
     if protect:
         s = _seen_protect(t, n, s)
-    s = _hp(s, 1, hp)._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(_hp(s, 1, hp), weather)
     if player != "Gible":
         resisted = (TypeMulti.HALF, TypeMulti.QUARTER)
         assert _effectiveness(t, s, n.move_names.index(move)) in resisted
@@ -3979,7 +3980,7 @@ def test_charge_turn_with_invuln(
     if case == "seeded":
         s = s._replace(leech_seed=s.leech_seed.at[0].set(1))
     weather = {"sand": Weather.SANDSTORM, "hail": Weather.HAIL}.get(case, Weather.NONE)
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     if case.startswith("faster"):
         s = _speeds(s, player=1, opp=500)
     if case == "faster lock-on":
@@ -4024,7 +4025,7 @@ def test_charge_turn_exact_equals_loose(
         t, kaizo_roark_party, BONSLY, _ids(n, "Razor Wind", "SolarBeam", "Fly", "Shadow Force")
     )
     for weather, faster in ((Weather.SANDSTORM, False), (Weather.SUN, True))[:states]:
-        s2 = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        s2 = with_weather(s, weather)
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
@@ -4369,7 +4370,7 @@ def test_batch12_healing_expert(
     if case == "bench statused":
         s = s._replace(status=s.status.at[1, 1].set(Status.BURN))
     if case == "rain":
-        s = s._replace(weather=jnp.asarray(Weather.RAIN, s.weather.dtype))
+        s = with_weather(s, Weather.RAIN)
     if case == "player low":
         s = _hp(s, 0, 40)
     if case == "burned":
@@ -4753,7 +4754,7 @@ def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
         (Weather.HAIL, False),
         (Weather.FOG, True),
     ):
-        s2 = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        s2 = with_weather(s, weather)
         assert bool(policy._refused(t, s2, KAIZO).move_type[0, 0]) == refused, weather
 
 

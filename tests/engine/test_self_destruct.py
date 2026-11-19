@@ -26,6 +26,7 @@ from nuzline.data.learnsets import load_learnsets
 from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import check_coverage
 from nuzline.engine.damage import damage_table
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, EffectId, Stat, Weather
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER, step_events
@@ -52,7 +53,7 @@ def _with_effect(tables, move, effect):
 
 
 def _weather(s, weather):
-    return s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    return with_weather(s, weather)
 
 
 @pytest.mark.slow

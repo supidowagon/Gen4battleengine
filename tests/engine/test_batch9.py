@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
@@ -28,11 +29,11 @@ def test_thunder_and_blizzard_weather_accuracy(tables, names):
         [_mon(n, "Pikachu", ["Thunder", "Blizzard"], 40)],
         [_mon(n, "Psyduck", ["Growl"], 20)],
     )
-    sun = s._replace(weather=jnp.int8(Weather.SUN))
+    sun = with_weather(s, Weather.SUN)
     assert int(live_hit_threshold(tables, sun, 0, n.move("Thunder"))) == 50
     assert int(live_hit_threshold(tables, s, 0, n.move("Thunder"))) == 70
     for weather, slot in ((Weather.RAIN, 0), (Weather.HAIL, 1)):
-        w = s._replace(weather=jnp.int8(weather))
+        w = with_weather(s, weather)
         out = assert_matches_reference(tables, w, (slot, 0), _roll(100))
         assert int(out.hp[1, 0]) < int(s.hp[1, 0])
     missed = assert_matches_reference(tables, s, (1, 0), _roll(100))
@@ -335,7 +336,7 @@ def test_chlorophyll_moves_first_in_sun(tables, names):
     s = s._replace(hp=s.hp.at[1, 0].set(1))
     plain = assert_matches_reference(tables, s, (0, 0), O)
     assert int(plain.hp[0, 0]) < int(s.hp[0, 0])
-    sunny = s._replace(weather=jnp.int8(Weather.SUN))
+    sunny = with_weather(s, Weather.SUN)
     out = assert_matches_reference(tables, sunny, (0, 0), O)
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.hp[1, 0]) == 0
 
@@ -356,7 +357,7 @@ def test_swarm_and_flower_gift_raise_the_hit(tables, names):
     low = s._replace(hp=s.hp.at[0, 0].set(max(int(s.max_hp[0, 0]) // 3, 1)))
     assert _dealt(tables, low) > _dealt(tables, s)
     f = make_state(tables, [_mon(n, "Cherrim", ["Tackle"], 30)], [_mon(n, "Snorlax", ["Leer"], 40)])
-    f = _set_ability(f, 1, AbilityId.NONE)._replace(weather=jnp.int8(Weather.SUN))
+    f = with_weather(_set_ability(f, 1, AbilityId.NONE), Weather.SUN)
     gift = _set_ability(f, 0, AbilityId.FLOWER_GIFT)
     assert _dealt(tables, gift) > _dealt(tables, _set_ability(f, 0, AbilityId.NONE))
 
@@ -375,7 +376,7 @@ def test_water_absorb_rain_dish_aftermath_sonicboom(tables, names):
     assert int(out.hp[1, 0]) == 1 + max(int(s.max_hp[1, 0]) // 4, 1)
     r = make_state(tables, [_mon(n, "Lotad", ["Leer"], 30)], [_mon(n, "Geodude", ["Leer"], 30)])
     r = _set_ability(_set_ability(r, 0, AbilityId.RAIN_DISH), 1, AbilityId.NONE)
-    r = r._replace(weather=jnp.int8(Weather.RAIN), weather_timer=jnp.int8(0))
+    r = with_weather(r, Weather.RAIN)
     r = r._replace(hp=r.hp.at[0, 0].set(1))
     out = assert_matches_reference(tables, r, (0, 0), O)
     assert int(out.hp[0, 0]) == 1 + max(int(r.max_hp[0, 0]) // 16, 1)

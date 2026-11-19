@@ -24,6 +24,7 @@ from nuzline.ai.switching import (
     switch_sites,
     switching_refusals,
 )
+from nuzline.engine.field import with_weather
 from tests.engine.helpers import as_species, roark_real_state, roark_state
 
 K = SwitchSite
@@ -413,10 +414,7 @@ def test_party_variable_types_follow_move_calc_variable_type(tables, names):
     assert not any("Natural Gift" in r or "Judgment" in r for r in refusals), refusals
     rock_gift = s._replace(item=s.item.at[1, 0].set(rock))
     assert int(party_move_types(tables, rock_gift)[0, 3]) == AI_TYPELESS
-    rain = s._replace(
-        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
-        weather_timer=jnp.asarray(5, s.weather_timer.dtype),
-    )
+    rain = with_weather(s, Weather.RAIN, 5)
     assert int(party_move_types(tables, rain)[0, 2]) == Type.WATER
     assert switching_refusals(tables, rain) == []
     # The post-KO replacement types its candidates the same way (battle_lib.c:7998, :8051).

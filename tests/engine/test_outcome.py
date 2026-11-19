@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Weather
 from nuzline.engine.outcome import (
     INT16_FIELDS,
@@ -57,7 +58,7 @@ def test_hit_threshold_accuracy_and_stages(tables, names):
 
 def test_hit_threshold_fog_gravity_and_never_miss(tables, names):
     s = roark_state(tables, names)
-    fog = s._replace(weather=jnp.int8(Weather.FOG))
+    fog = with_weather(s, Weather.FOG)
     assert hit_threshold(tables, fog, acts(SCRATCH, TACKLE)).tolist() == [60, 57]  # x 6 // 10
     grav = s._replace(gravity=jnp.int8(5))
     assert hit_threshold(tables, grav, acts(SCRATCH, TACKLE)).tolist() == [166, 158]  # x 10 // 6

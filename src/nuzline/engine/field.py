@@ -156,6 +156,23 @@ def with_weather_of(state: BattleState, source: BattleState) -> BattleState:
     return _put(state, mask, True)._replace(weather_turns=source.weather_turns)
 
 
+def with_weather(state: BattleState, weather, timer=0) -> BattleState:
+    """``state`` holding the one ``Weather`` ``weather`` (an int), clean (FCM 4.4): a weather
+    move's TEMP bit with ``timer`` turns left (``weather_turns``), or with ``timer`` 0 a
+    permanent PERM bit (deep fog: bit 15; ``weather_turns`` kept). The old ``weather`` /
+    ``weather_timer`` fields too, until FCM step 3 drops them. For a state set by hand: a test,
+    a what-if view."""
+    timer = jnp.asarray(timer, _I32)
+    temp = timer != 0
+    bits = jnp.where(temp, _bit(WEATHER_TEMP_BIT, weather), _bit(WEATHER_PERM_BIT, weather))
+    state = _put(state, (_mask(state) & ~_WEATHER) | bits, True)
+    return state._replace(
+        weather=jnp.asarray(weather).astype(state.weather.dtype),
+        weather_timer=timer.astype(state.weather_timer.dtype),
+        weather_turns=jnp.where(temp, timer, state.weather_turns).astype(state.weather_turns.dtype),
+    )
+
+
 def without_weather(state: BattleState) -> BattleState:
     """``state`` with no weather bit (a view: the battle-start speed sort before the
     start condition is set, ``hooks.battle_start``)."""

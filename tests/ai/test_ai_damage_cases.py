@@ -9,6 +9,7 @@ import pytest
 
 from nuzline.ai import commands as c
 from nuzline.engine import damage
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import Weather
 from tests.ai.test_kaizo_outcome import _with_player
 from tests.ai.test_kaizo_policy import BONSLY, _ids, _state
@@ -222,7 +223,7 @@ def test_weather_ball_move_type(kaizo_tables, kaizo_names, kaizo_roark_party, we
     (table power and type, :3074-3078) whatever the weather."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Weather Ball", "", "", ""))
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     move = n.move_names.index("Weather Ball")
     assert bool(damage.ai_weather_ball_typed(t, s))
     assert int(damage.ai_move_type(t, s, 1, move)) == c.TYPE_IDS[type_name]
@@ -240,7 +241,7 @@ def test_weather_ball_move_type_is_untyped_outside_the_four_weathers(
     is false and the policy refuses the move (``ai_refusals``, test_kaizo_policy)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Weather Ball", "", "", ""))
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     move = n.move_names.index("Weather Ball")
     assert not bool(damage.ai_weather_ball_typed(t, s))
     assert int(damage.ai_case_power(t, s, 1, move)) == 0

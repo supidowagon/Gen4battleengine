@@ -49,6 +49,7 @@ from nuzline.engine.ids import (
     Status,
     Type,
     Weather,
+    clean_field_mask,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
@@ -2138,6 +2139,11 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    # FCM 4.4: fieldConditionsMask and weatherTurns of the old fields drawn above (a clean mask).
+    a["field_mask"][...] = clean_field_mask(
+        a["weather"][()], a["weather_timer"][()], a["gravity"][()], a["trick_room"][()], a["uproar"]
+    )
+    a["weather_turns"][...] = a["weather_timer"][()]
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 

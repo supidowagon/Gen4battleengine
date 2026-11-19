@@ -17,6 +17,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.data.trainer import IntermediateData
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, IMPLEMENTED_WEATHER, Support
 from nuzline.engine.damage import damage_table
+from nuzline.engine.field import with_weather
 from nuzline.engine.hooks import intimidate
 from nuzline.engine.ids import AbilityId, MoveFlag, Stat, Status, Weather
 from nuzline.engine.order import MOVE_ACTIONS
@@ -40,10 +41,7 @@ BATCH_C = (
 
 
 def _weather(s, weather, timer=0):
-    return s._replace(
-        weather=jnp.asarray(weather, s.weather.dtype),
-        weather_timer=jnp.asarray(timer, s.weather_timer.dtype),
-    )
+    return with_weather(s, weather, timer)
 
 
 def _ability(s, side, slot, ability):

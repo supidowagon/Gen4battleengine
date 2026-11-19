@@ -7,6 +7,7 @@ Gravity."""
 import jax.numpy as jnp
 import pytest
 
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER
@@ -25,10 +26,7 @@ def _normal_foe(s):
 
 
 def _weather(s, weather, timer=0):
-    return s._replace(
-        weather=jnp.asarray(weather, s.weather.dtype),
-        weather_timer=jnp.asarray(timer, s.weather_timer.dtype),
-    )
+    return with_weather(s, weather, timer)
 
 
 def _max_hp(s, side, value, hp=None):

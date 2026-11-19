@@ -21,6 +21,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, damage_table, decomp_abilities
 from nuzline.engine.enumerate import hit_class_law, outcome_laws
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
@@ -980,9 +981,8 @@ def test_gastro_acid_hides_a_speed_ability(tables, names):
     from nuzline.engine.order import action_order, effective_speed
 
     s = _fight(tables, names, ("Tackle",), ("Tackle",))
-    s = s._replace(
+    s = with_weather(s, Weather.RAIN)._replace(
         ability=s.ability.at[0, 0].set(AbilityId.SWIFT_SWIM),
-        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
         stats=s.stats.at[0, 0, SPE].set(100).at[1, 0, SPE].set(150),
     )
     acts = A("Tackle", "Tackle", s, names)

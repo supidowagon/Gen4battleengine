@@ -21,6 +21,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from nuzline.engine.step import _turn_end_ability, step
@@ -124,7 +125,7 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
 @given(data=st.data())
 def test_cloud_nine_is_inert(tables, names, data):
     s = data.draw(supported_state(tables, names))
-    s = s._replace(weather=jnp.full_like(s.weather, Weather.NONE))
+    s = with_weather(s, Weather.NONE)
     acts = data.draw(legal_action_pair(tables, s))
     outcome = data.draw(any_outcome())
     side = data.draw(st.integers(0, 1))

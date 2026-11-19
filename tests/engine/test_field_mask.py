@@ -11,11 +11,10 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
     TRICK_ROOM_TURNS,
-    WEATHER_PERM_BIT,
-    WEATHER_TEMP_BIT,
     WEATHER_TURNS,
     FieldCondition,
     Weather,
+    clean_field_mask,
 )
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
@@ -49,15 +48,10 @@ def _hits():
 
 
 def clean_mask(s) -> int:
-    """fieldConditionsMask of the old fields (FCM 4.4): the weather's TEMP bit while its timer
-    runs, else its PERM bit (deep fog: bit 15); Gravity << 12; Trick Room << 16; battler b's
-    Uproar bit 8 + b while ``uproar[b] != 0``."""
-    w, timer = int(s.weather), int(s.weather_timer)
-    mask = int((WEATHER_TEMP_BIT if timer else WEATHER_PERM_BIT)[w])
-    mask |= int(s.gravity) << 12 | int(s.trick_room) << 16
-    for b, count in enumerate(s.uproar.tolist()):
-        mask |= (count != 0) << (8 + b)
-    return mask
+    """fieldConditionsMask of the old fields (FCM 4.4, ``ids.clean_field_mask``)."""
+    return clean_field_mask(
+        int(s.weather), int(s.weather_timer), int(s.gravity), int(s.trick_room), s.uproar.tolist()
+    )
 
 
 def _step(t, s, acts, outcome=None):

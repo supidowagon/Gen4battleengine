@@ -21,7 +21,7 @@ from nuzline.engine.enumerate import (
     enumerate_turn,
     taken_events,
 )
-from nuzline.engine.ids import Stat, Status
+from nuzline.engine.ids import FieldCondition, Stat, Status
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_COPYCAT,
@@ -333,6 +333,7 @@ def _steer(data, tables, names, s):
     a["taunt"][foe] = 0
     a["locked_move"][:] = a["choice_lock"][:] = 0
     a["trick_room"][...] = 0
+    a["field_mask"][...] &= ~int(FieldCondition.TRICK_ROOM)  # its bits with it (FCM 4.4)
     s = type(s)(**{name: jnp.asarray(a[name]) for name in type(s)._fields})
     foe_slot = int(np.flatnonzero(np.asarray(s.moves[foe, foe_mon]) == names.move(kind))[0])
     legal = [np.asarray(legal_actions(tables, s, sd))[:MOVE_ACTIONS] for sd in (0, 1)]

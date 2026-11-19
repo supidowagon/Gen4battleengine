@@ -43,6 +43,7 @@ from nuzline.engine.enumerate import (
     damage_inputs_can_change,
     enumerate_drawn,
 )
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Type, Weather
 from nuzline.engine.observe import OBS_FIELDS, observe
 from nuzline.engine.order import MOVE_ACTIONS
@@ -259,9 +260,8 @@ def test_a_miss_and_protect_stop_it(tables, names):
         "missed"
     ].tolist() == [1, 0]
     # Accuracy 100 still rolls: Sand Veil in sand and the target's evasion count.
-    sand = s._replace(
-        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
-        ability=s.ability.at[1, 0].set(AbilityId.SAND_VEIL),
+    sand = with_weather(s, Weather.SANDSTORM)._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.SAND_VEIL)
     )
     assert int(hit_threshold(tables, sand, acts)[0]) == 80
     evasive = s._replace(stages=s.stages.at[1, Stat.EVA].set(1))

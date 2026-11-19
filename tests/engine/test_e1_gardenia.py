@@ -21,6 +21,7 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import legal_actions
 from nuzline.engine.damage import ai_damage_for_roll, damage_table
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import (
     CONFUSION_PENDING,
     FOCUS_BAND_PARAM,
@@ -432,7 +433,7 @@ def _ability(s, side, ability, slot=None):
 
 
 def _weather(s, weather):
-    return s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    return with_weather(s, weather)
 
 
 def _status(s, side, slot, status):

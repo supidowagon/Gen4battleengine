@@ -23,6 +23,7 @@ from nuzline.engine.enumerate import (
     hit_class_law,
     outcome_laws,
 )
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -700,9 +701,8 @@ def _gravity_transform_cases(tables, names):
     # Transform copies the player's Sand Veil (battle_mon.h:84) in sand: Scratch x80/100
     # (bcp.c:2927-2929) against the transformed Geodude.
     veil = roark_state(tables, names, opp_moves=["Transform"], opp_faster=True)
-    veil = veil._replace(
-        ability=veil.ability.at[0, int(veil.active[0])].set(AbilityId.SAND_VEIL),
-        weather=jnp.asarray(Weather.SANDSTORM, veil.weather.dtype),
+    veil = with_weather(veil, Weather.SANDSTORM)._replace(
+        ability=veil.ability.at[0, int(veil.active[0])].set(AbilityId.SAND_VEIL)
     )
     return [
         (grav, A("Rock Throw", "Gravity", grav, names), {1: 90, 91: 10}, 100),
@@ -780,14 +780,13 @@ def _taken_and_copied_cases(tables, names):
         opp_faster=True,
     )
     slot = names.species_abilities(names.species("Psyduck")).index(names.ability("Cloud Nine"))
-    nine = nine._replace(
+    nine = with_weather(nine, Weather.RAIN)._replace(
         ability_slot=nine.ability_slot.at[1, 0].set(slot),
         ability=nine.ability.at[1, 0].set(AbilityId.CLOUD_NINE),
-        weather=jnp.asarray(Weather.RAIN, nine.weather.dtype),
     )
     cases.append((nine, A("Thunder", "Transform", nine, names), {1: 70, 71: 30}, 100))
     # In sun the lost Cloud Nine lets Thunder's hitRate = 50 apply (bcp.c:2915-2917), F-25.
-    sun = nine._replace(weather=jnp.asarray(Weather.SUN, nine.weather.dtype))
+    sun = with_weather(nine, Weather.SUN)
     cases.append((sun, A("Thunder", "Transform", sun, names), {1: 50, 51: 20, 0: 30}, 50))
     return cases
 

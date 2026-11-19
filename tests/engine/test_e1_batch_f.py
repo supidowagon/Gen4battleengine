@@ -17,6 +17,7 @@ from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, personal_types
 from nuzline.engine.enumerate import outcome_laws
+from nuzline.engine.field import with_weather
 from nuzline.engine.hooks import battle_start
 from nuzline.engine.ids import (
     SPECIES_FARFETCHD,
@@ -273,10 +274,7 @@ def _become(tables, names, s, side, species, ability_slot=0):
 
 
 def _weather(s, weather, timer=0):
-    return s._replace(
-        weather=jnp.asarray(weather, s.weather.dtype),
-        weather_timer=jnp.asarray(timer, s.weather_timer.dtype),
-    )
+    return with_weather(s, weather, timer)
 
 
 def _hydration(tables, names, status, weather=Weather.RAIN, timer=0, foe="Phione"):

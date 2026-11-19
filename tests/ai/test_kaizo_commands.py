@@ -34,6 +34,7 @@ from nuzline.ai.commands import (
     SideCondition,
 )
 from nuzline.engine.damage import ai_damage_for_roll, weather_suppressed
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import WEATHER_ABILITY_IDS, Stat, Status, Type, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -303,7 +304,7 @@ def test_ai_weather_ids_are_the_decomps():
 )
 def test_load_current_weather(tables, names, weather, expected):
     s = versus(tables, names, GEODUDE)
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
     assert _temp(c.load_current_weather(_ctx(tables, s))) == expected
 
 
@@ -316,10 +317,7 @@ def test_load_current_weather_ignores_cloud_nine(tables, names, side, lock):
     # or Air Lock holder on the field still loads AI_WEATHER_SANDSTORM.
     holder = {"Cloud Nine": "Psyduck", "Air Lock": "Rayquaza"}[lock]
     s = versus(tables, names, GEODUDE)
-    s = s._replace(
-        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
-        weather_timer=jnp.asarray(0, s.weather_timer.dtype),  # permanent
-    )
+    s = with_weather(s, Weather.SANDSTORM)
     s = _species_with(tables, s, side, names.species(holder), WEATHER_ABILITY_IDS[lock])
     assert bool(weather_suppressed(tables, s))  # the battle's weather effects are off
     assert _temp(c.load_current_weather(_ctx(tables, s))) == AiWeather.SANDSTORM
@@ -350,10 +348,7 @@ def test_ai_damage_sand_spdef_gated(tables, names):
         return int(ai_damage_for_roll(tables, st, 1, water_gun, 15))
 
     def weather(st, w):
-        return st._replace(
-            weather=jnp.asarray(w, st.weather.dtype),
-            weather_timer=jnp.asarray(0, st.weather_timer.dtype),
-        )
+        return with_weather(st, w)
 
     no_lock = _species_with(tables, s, 1, psyduck, damp)
     clear, sand = (

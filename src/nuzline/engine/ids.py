@@ -1506,6 +1506,23 @@ def start_field_mask(start_condition: int, gravity: int = 0, trick_room: int = 0
     )
 
 
+def clean_field_mask(
+    weather: int, timer: int = 0, gravity: int = 0, trick_room: int = 0, uproar=()
+) -> int:
+    """The clean ``fieldConditionsMask`` of one ``Weather`` (FCM 4.4): its TEMP bit while a
+    weather move's ``timer`` runs (effect_script_0136.s etc. :9), else its PERM bit (deep fog:
+    bit 15); the Gravity and Trick Room counters (``<< 12``, ``<< 16``); battler ``b``'s Uproar
+    bit ``8 + b`` where ``uproar[b]`` is nonzero (subscript_uproar.s:9-11). For a state built
+    by hand (``engine.field.with_weather``, ``tests.strategies``)."""
+    bits = WEATHER_TEMP_BIT if int(timer) else WEATHER_PERM_BIT
+    mask = int(bits[int(weather)])
+    mask |= int(gravity) << FIELD_CONDITION_GRAVITY_SHIFT
+    mask |= int(trick_room) << FIELD_CONDITION_TRICK_ROOM_SHIFT
+    for b, count in enumerate(uproar):
+        mask |= int(int(count) != 0) << (FIELD_CONDITION_UPROAR_SHIFT + b)
+    return mask
+
+
 class Type(IntEnum):
     """Decomp type ids (``generated/pokemon_types.txt`` order), as stored in
     ``tables.move_type``, ``tables.species_types`` and the type chart axes."""
