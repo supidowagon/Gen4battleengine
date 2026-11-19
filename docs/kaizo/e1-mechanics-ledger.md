@@ -1220,3 +1220,77 @@ of them, :2107-2115).
   input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
   reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
   `test_damage_classes.py` (Chatter's exact case, Transform's compression case).
+
+## Stream state (restart point, 2026-11-18)
+
+Read this section first after a clear, then `docs/process.md` section 2.
+
+### Branches and worktrees
+- `claude/e1-test-speed-p1` (worktree `_scratch/e1/sp1wt`): speed pass part 1, test-side only,
+  rebased on main 47a62e2. Tip carries this section. Last code commit 7c62f18: slow marks on
+  `search/test_learn.py::test_window_c_refuses_finish_turn` (pod 190 s / 5.38 GB) and
+  `search/test_stage_b_learn.py::test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`
+  (172 s / 6.00 GB), both kept `fullset`; `test_sheet_unmapped::test_ally_reasons_name_the_partner_rows_starter`
+  skips without `docs/docs.json`. Not run locally (under 6 GB free).
+- `claude/e1-test-speed` (worktree `_scratch/e1/speedwt`): WIP measurements only, never merge.
+  80cfb4b = change 1 (fixed-size batches for keep and turn_events), f2114f3 = change 2
+  (`_reset_battler` side mask). Source for part 2.
+- `claude/e1-fullset` (worktree `_scratch/e1/fswt`): merged into main (ad6504b). Remove the worktree.
+
+### Waiting on the manager
+- Pod run of the whole fast tier at part 1 (first at 2845c4d; rerun at the new tip). Fix any
+  failure, then one fresh review of part 1, then hand the tip over for merge.
+
+### Next steps, in order
+1. Part 1 to merge (above). After the merge remove `sp1wt` and `fswt` (unlink the `external`
+   and `.cache` junctions with `cmd /c rmdir` before `git worktree remove`).
+2. Small branch off main: a Water move into Croagunk's Dry Skin gives 6-8 in the damage table,
+   the calc gives 0. Decide from the decomp; fix, or record a cited departure in the
+   damage-oracle test's list.
+3. Part 2 (changes 1 and 2 from `claude/e1-test-speed`) only after E2's D1 group A merges (it
+   rewrites `engine/enumerate.py` keep step and `engine/step.py` `_reset_battler`). Change 1:
+   time a real prep search on the pod before and after; several bucket sizes if small turns
+   slow by more than 5%. Change 2: `test_differential` with slow tests, own review. Keep E3's
+   "announced" flags in `_reset_battler`.
+4. Next mechanics batch: send the family list to the manager first. Kaizo abilities (5 groups,
+   13 battles; Hydration covers 8), held items (8 groups, 6 battles), Weather Ball AI typeless
+   refusal, Poke Ball friendship wrapping past 255, Sky Forme reverting when frozen, Effect Spore
+   and Suction Cups (check whether `tools/kaizo/backlog.py` undercounts). Owed items below first.
+
+### Frozen files (E2 D1 group B, until the manager says merged)
+`engine/hooks.py`, `engine/bag.py`, `ai/commands.py`, `ai/switching.py`, `ai/policy.py`,
+`ai/replacement.py`, `ai/outcome.py`.
+
+### After every merge of main into an E1 branch
+Rebuild tables, duplicate scan, the unsupported-asserting tests, `pytest -m "fullset and not slow"`
+locally; the pod list carries `-m fullset`. Locally one pytest process per stream, one file or
+chunk, only with more than 6 GB free; everything else on the pod (send tip plus file list).
+
+### Owed items (into the next mechanics batch)
+- `chatot_cry` is per side; the decomp keeps it per battler in tag/2vs2
+  (battle_system.c:915-924). Tell E2 for doubles.
+- Confirm the Kaizo ROM leaves `sMovesAffectedByGravity` unpatched (Kaizo move 150 is Hidden
+  Power Water); confirm the Kaizo AI scripts match the vanilla script.s lines cited.
+- Bag Ether/Elixir on a Transformed/Mimic slot (battle_system.c:636-653).
+- `gravity_rearm`: read from ROM sub_seq 238, not the game id.
+- Learn masks (levelup.py:462-469, reference/engine.py:2079-2082) and `_learn_refusal` ignore
+  battle end: add `& (state.over == 0)` in both engines (learn_pin, step.py:2833-2834).
+- Stale Choice lock: the decomp clears `choiceLockedMove` at the next selection
+  (battle_lib.c:2307-2310); the engine reads it lazily (step.py:31, 436-456). Model the clear.
+- Nits: unreachable D10 fallback in `_learn_refusal`; STATE.md:349-352 "mid-turn learn"; end-of-turn
+  Disable/Encore on an unknown move; Spite, Grudge, Last Resort, Mimic `_masked` readers.
+- A. `hit_thresholds`: a faster foe's Knock Off removes Wide Lens before the hit
+  (battle_script.c:6608-6632); same-turn Knock Off vs Future Sight's items.
+- B. `future_thresholds` `free` (outcome.py:522) lacks Haze, Psych Up, Acupressure.
+- C. Tests for copied weather, copied No Guard / Unaware, losing the foe's own Cloud Nine /
+  No Guard, the Gravity/Transform loose flag.
+- D. outcome.py:595-599 Gravity "ends a count of 1" is wrong for Kaizo (`gravity_rearm`); cite
+  nits (Sand Veil/Snow Cloak are bcp.c lines; Gravity countdown to :1238; Mimic ends at :4524).
+- E. Doubles: `_threshold_grid`'s "one move has one effect" holds only with one foe. Tell E2.
+- F. Sleep Talk's call law (enumerate.py:3550-3555; order.py:316) uses the foe's turn-start moves
+  while it imprisons; a faster Transform/Mimic changes the sealed set (battle_lib.c:2287-2290).
+- G. Tests: `assert_equals_bruteforce` in test_transform_laws.py; copied Cute Charm with the kept
+  gender (battle_script.c:5732-5735); copied Wonder Guard; Transform through an invoker.
+- H. Cites: copy loop battle_script.c:5346-5348; switch-in re-trigger bcp.c:3672-3673 and 3973.
+- I. Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups vs Roar: confirm
+  coverage refuses their holders, then build them.
