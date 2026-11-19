@@ -11,6 +11,7 @@ skips damage 0; :3212, :3945-3949 a used move)."""
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -18,15 +19,16 @@ import nuzline.ai.commands as c
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import usable_moves
-from nuzline.engine.damage import ai_damage_for_roll, damage_table
-from nuzline.engine.ids import AbilityId, EffectId, Stat
+from nuzline.engine.damage import ai_damage_for_roll, damage_table, decomp_abilities
+from nuzline.engine.enumerate import hit_class_law, outcome_laws
+from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
 from nuzline.engine.step import step_events
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import _usable as ref_usable
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, assert_matches_reference
+from tests.engine.helpers import A, assert_matches_reference, roark_state
 from tools.effect_map import CERTAIN_SECONDARY_EFFECTS, DECOMP_EFFECT_TO_ID
 
 SPE = 4  # stats[..., 0..4] are Atk..Spe
@@ -294,3 +296,121 @@ def test_torment_is_read_at_selection_only_and_leaves_with_the_battler(tables, n
     switch = jnp.array([names.move_slot(two, 0, "Tackle"), 4 + 1], jnp.int32)
     out = assert_matches_reference(tables, two, switch, empty_outcome())
     assert int(out.torment[1]) == 0
+
+
+# --- #247 Worry Seed (E3-2-2) -----------------------------------------------------------------
+#
+# ``effect_script_0247.s:5`` runs ``subscript_give_target_insomnia.s``: fails (:5-9) on a miss,
+# a semi-invulnerable target, a Substitute, a raw Truant or Multitype ability, a held Griseous
+# Orb; else :11 writes ``BattleMon.ability`` = Insomnia, and the MoveEnd recovery
+# (battle_controller_player.c:3965-3967, battle_lib.c:4404-4410) wakes a sleeper.
+
+
+def hit_law(tables, state, actions, side) -> dict[int, int]:
+    """``value -> weight`` (out of 100) of ``hit[side, 0]`` in the enumeration."""
+    laws = jax.tree.map(np.asarray, jax.jit(outcome_laws)(tables, state, actions))
+    values, weights, den = hit_class_law(laws.hit_thresholds[side][laws.hit_possible[side]])
+    assert den == 100
+    return dict(zip(values, weights, strict=True))
+
+
+def _hits():
+    return empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8))
+
+
+def _seeded(t, n, **over):
+    """Monferno (side 0) a sleeper with Tackle; the Geodude seeds it. ``over``: state fields."""
+    s = _fight(t, n, ("Tackle",), ("Worry Seed",))
+    s = s._replace(
+        status=s.status.at[0, 0].set(Status.SLEEP),
+        status_counter=s.status_counter.at[0, 0].set(3),
+        ability=s.ability.at[0, 0].set(AbilityId.BLAZE),
+    )
+    return s._replace(**over) if over else s
+
+
+def test_worry_seed_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 247 (effect_script_0247.s:5); Worry Seed is in both games' move tables."""
+    assert DECOMP_EFFECT_TO_ID[247] == (EffectId.WORRY_SEED, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Worry Seed")]) == EffectId.WORRY_SEED
+
+
+def test_worry_seed_writes_insomnia_wakes_the_sleeper_and_the_ai_learns_it(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """:11 sets the battler's ability to Insomnia; ``damage.decomp_abilities`` (Battler_Ability)
+    reads it; the sleeper is cured at the move's end; ``BattleAI_SetAbility`` records it
+    (battle_script.c:3073-3075). The foe's own ability is untouched."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = _seeded(t, n)
+        out = assert_matches_reference(t, s, A("Tackle", "Worry Seed", s, n), _hits())
+        assert int(out.ability[0, 0]) == AbilityId.INSOMNIA
+        assert int(out.ability[1, 0]) == int(s.ability[1, 0])
+        assert int(decomp_abilities(t, out)[0, 0]) == 15  # ABILITY_INSOMNIA
+        assert int(out.status[0, 0]) == Status.NONE
+        assert int(out.ai_ability_known[0]) == 15
+        # a miss writes nothing
+        miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+        out = assert_matches_reference(t, s, A("Tackle", "Worry Seed", s, n), miss)
+        assert int(out.ability[0, 0]) == AbilityId.BLAZE and int(out.ai_ability_known[0]) == 0
+        # an Insomnia target succeeds again
+        again = s._replace(ability=s.ability.at[0, 0].set(AbilityId.INSOMNIA))
+        out = assert_matches_reference(t, again, A("Tackle", "Worry Seed", s, n), _hits())
+        assert int(out.ability[0, 0]) == AbilityId.INSOMNIA
+
+
+def test_worry_seed_fails_on_substitute_truant_multitype_and_griseous_orb(tables, names):
+    """subscript_give_target_insomnia.s:6-9: CheckSubstitute, a raw Truant (:7) or Multitype (:8)
+    ability, a held Griseous Orb (:9): the ability stays and the sleeper sleeps on."""
+    s = _seeded(tables, names)
+    acts = A("Tackle", "Worry Seed", s, names)
+    shielded = s._replace(substitute_hp=s.substitute_hp.at[0].set(30))
+    truant = s._replace(ability=s.ability.at[0, 0].set(AbilityId.TRUANT))
+    orb = s._replace(item=s.item.at[0, 0].set(names.item("Griseous Orb")))
+    for case, kept in (
+        (shielded, AbilityId.BLAZE),
+        (truant, AbilityId.TRUANT),
+        (orb, AbilityId.BLAZE),
+    ):
+        out = assert_matches_reference(tables, case, acts, _hits())
+        assert int(out.ability[0, 0]) == kept
+    arceus = make_state(
+        tables,
+        [_spec(names, "Arceus", 20, ("Tackle",))],
+        [_spec(names, "Geodude", 40, ("Worry Seed",))],
+    )
+    out = assert_matches_reference(
+        tables, arceus, A("Tackle", "Worry Seed", arceus, names), _hits()
+    )
+    assert int(decomp_abilities(tables, out)[0, 0]) == 121  # ABILITY_MULTITYPE stays
+
+
+def test_worry_seed_ends_with_the_battler(tables, names):
+    """The write is the BattleMon's (lib.c:124 reloads the party Pokemon's ability on the next
+    switch-in): ``_restore_ability`` puts the species' ability back when the battler leaves."""
+    two = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Tackle",)), _spec(names, "Monferno", 20, ("Scratch",))],
+        [_spec(names, "Geodude", 40, ("Worry Seed",))],
+    )
+    out = assert_matches_reference(tables, two, A("Tackle", "Worry Seed", two, names), _hits())
+    assert int(out.ability[0, 0]) == AbilityId.INSOMNIA
+    switch = jnp.array([4 + 1, names.move_slot(out, 1, "Worry Seed")], jnp.int32)
+    out2 = assert_matches_reference(tables, out, switch, empty_outcome())
+    assert int(out2.ability[0, 0]) == int(two.ability[0, 0])
+
+
+def test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
+    """A faster foe's Worry Seed takes the side's Compoundeyes before its check (bcp.c:2876-2947):
+    Rock Throw's 90 is 117 at the turn start and 90 once seeded (hit_thresholds holds both);
+    it also takes Super Luck (battle_lib.c:7126), so ``CRIT_ODDS_EFFECTS`` carries it."""
+    s = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Worry Seed"], opp_faster=True
+    )
+    s = s._replace(ability=s.ability.at[0, int(s.active[0])].set(AbilityId.COMPOUNDEYES))
+    acts = A("Rock Throw", "Worry Seed", s, names)
+    assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
+    from nuzline.engine.outcome import CRIT_ODDS_EFFECTS
+
+    assert EffectId.WORRY_SEED in CRIT_ODDS_EFFECTS

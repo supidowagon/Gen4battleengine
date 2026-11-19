@@ -306,15 +306,17 @@ def decomp_ability_id(ability) -> jnp.ndarray:
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``int32[P, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
     ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
-    ability slot; for
-    a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
-    copied ability's (``ids.ABILITY_DECOMP_IDS``)."""
+    ability slot; for a battler whose ``ability`` a script wrote (Trace's copy, ``hooks.trace``;
+    Worry Seed's Insomnia, ``effects._worry_seed``), the written ability's
+    (``ids.ABILITY_DECOMP_IDS``)."""
     row = _i32(tables.species_form_row[_i32(state.species), _i32(state.ability_form)])
     slot = _i32(state.ability_slot)
     own = _i32(tables.species_abilities_decomp[row, slot])
-    trace = ABILITY_DECOMP_IDS[AbilityId.TRACE]
-    traced = (own == trace) & (_i32(state.ability) != AbilityId.TRACE)
-    return jnp.where(traced, _ABILITY_DECOMP[_i32(state.ability)], own)
+    # A script wrote the battler's ``ability`` (Trace, ``hooks.trace``; Worry Seed,
+    # ``effects._worry_seed``): it differs from the personal row's, and the decomp id is the
+    # written one's (``_restore_ability`` puts the row's back when the battler leaves).
+    written = _i32(state.ability) != _i32(tables.species_abilities[row, slot])
+    return jnp.where(written, _ABILITY_DECOMP[_i32(state.ability)], own)
 
 
 def battle_stats(state: BattleState, side, slot) -> jnp.ndarray:

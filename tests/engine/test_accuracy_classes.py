@@ -532,7 +532,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # Gravity (effects._gravity) sets FIELD_CONDITION_GRAVITY, whose x10/6 the check applies
 # (battle_controller_player.c:2972-2974); Transform (BtlCmd_Transform, battle_script.c:5330-5373) copies the
 # defender's statBoosts and ability (battle_mon.h:75, :84) and reruns its switch-in checks:
-# test_gravity_and_transform_are_seen_by_hit_thresholds.
+# test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
+# ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
+# test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds.
 _FOLLOWED = frozenset(
     {
         EffectId.HAZE,
@@ -540,6 +542,7 @@ _FOLLOWED = frozenset(
         EffectId.ACUPRESSURE,
         EffectId.GRAVITY,
         EffectId.TRANSFORM,
+        EffectId.WORRY_SEED,
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.

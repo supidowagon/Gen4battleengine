@@ -945,6 +945,10 @@ INPUT_CLAUSE_EFFECTS = (
     # (:5350-5358: a copied Intimidate or weather ability acts). Every input of the side's later
     # hit against it, and of its own stats the side's hit meets, can change: the transform clause.
     _E.TRANSFORM,
+    # E3-2-2: Worry Seed overwrites the side's ability with Insomnia before its later hit
+    # (subscript_give_target_insomnia.s:11): every ability factor of that hit, its accuracy and
+    # crit odds, and a Klutz holder's item: the worry-seed clause.
+    _E.WORRY_SEED,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1040,7 +1044,8 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.VITAL_SPIRIT,
     AbilityId.IRON_FIST,
     # B13-29: Klutz hides its holder's item from every gated read (state.held_item) from the
-    # start of the turn; nothing changes it mid-turn.
+    # start of the turn; nothing changes it mid-turn but a foe's Worry Seed (E3-2-2: the
+    # worry-seed clause).
     AbilityId.KLUTZ,
     # E1 trial batch (G-63): a fixed Sp. Atk factor of the hit's own side's active battlers
     # (the ally's ability and HP), whose inputs have their clauses.
@@ -1346,6 +1351,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
     _E.TORMENT,  # a status move: no damage (E3-2-1)
+    _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
 )
 
 
@@ -1491,6 +1497,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.GRAVITY)
         # G-69: the foe's Transform copies the side's stats, stages, types and ability onto it.
         | (foe_effect == _E.TRANSFORM)
+        # E3-2-2: the foe's Worry Seed makes the side's ability Insomnia (the worry-seed clause).
+        | (foe_effect == _E.WORRY_SEED)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -2101,7 +2109,10 @@ def outcome_laws(
     # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
     # kept (over-approximate).
     xform_used = uses_move & (effect == _E.TRANSFORM)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used))
+    # E3-2-2: a Worry Seed takes its target's speed ability (Swift Swim, Chlorophyll, Quick Feet,
+    # Unburden, ...), which the grid does not follow either: the tie is kept.
+    worry_used = uses_move & (effect == _E.WORRY_SEED)
+    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used | worry_used))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).

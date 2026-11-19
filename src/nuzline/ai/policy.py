@@ -887,6 +887,21 @@ def _basic_check_torment(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _basic_check_worry_seed(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckWorrySeed`` (script.s:1428-1443): the player's ability (``LoadBattlerAbility``)
+    Truant, Insomnia, Vital Spirit or Multitype -10; else, asleep (``IfNotStatus`` SLEEP) and
+    knowing neither Sleep Talk nor Snore (``IfMoveKnown``, the moves the AI has seen), -10
+    (E3-2-2)."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _D)
+    for name in ("Truant", "Insomnia", "Vital Spirit", "Multitype"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    ctx, _ = _split(c.if_not_status(ctx, _D, c.MonCondition.SLEEP))  # -> _Terminate
+    for name in ("Sleep Talk", "Snore"):
+        ctx, _ = _split(c.if_move_known(ctx, _D, _MOVE[name]))  # -> _Terminate
+    return c.pop_or_end(c.add_to_move_score(ctx, -10))
+
+
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
     """``ScoreMinus10`` (Basic_ScoreMoveEffect, script.s:221: ``IfCurrentMoveEffectEqualTo
     BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE``): Teleport, -10 with no further test (E3-1-4)."""
@@ -1782,6 +1797,21 @@ def _expert_disable(ctx: AiContext, mask) -> AiContext:
     # Expert_Disable_TryScoreMinus1 (:3088)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, minus1), 100, 3089))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_worry_seed(ctx: AiContext, mask) -> AiContext:
+    """``Expert_WorrySeed`` (script.s:5973-5993): the player knowing Rest +1; then the AI under
+    50 % HP, or the 128 roll (:5984) jumping, goes straight to the 64 roll, else +1 first; the
+    64 roll (:5988) jumping ends, else +1 (E3-2-2)."""
+    ctx, check_hp = _split(c.if_move_not_known(_at(ctx, mask), _D, _MOVE["Rest"]))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_WorrySeed_CheckUserHP (:5982)
+    ctx, try_plus1 = _split(c.if_hp_percent_less_than(_at(ctx, check_hp | ctx.live), _A, 50))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 5984))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_WorrySeed_TryScorePlus1 (:5987)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, try_plus1 | t | ctx.live), 64, 5988))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 1))
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3547,6 +3577,7 @@ _BASIC_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _basic_check_non_standard_damage),  # :274
+    (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
@@ -3670,6 +3701,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _expert_punishment),  # :1788
+    (BattleEffect.SET_ABILITY_TO_INSOMNIA, _expert_worry_seed),  # :1790 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796

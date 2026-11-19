@@ -509,6 +509,11 @@ class EffectId(IntEnum):
     # subscript_torment_start.s: VOLATILE_CONDITION_TORMENT on the defender, through a Substitute,
     # unless it has the bit already or the move missed (``effects._torment``, E3-2-1).
     TORMENT = 124
+    # Worry Seed (247, BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA): zeros. effect_script_0247.s:5 runs
+    # subscript_give_target_insomnia.s: the defender's ``BattleMon.ability`` becomes Insomnia
+    # unless the move missed, the defender is semi-invulnerable, behind a Substitute, or holds
+    # Truant, Multitype or a Griseous Orb (``effects._worry_seed``, E3-2-2).
+    WORRY_SEED = 125
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

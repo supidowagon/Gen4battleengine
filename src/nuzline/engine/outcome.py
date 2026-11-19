@@ -606,10 +606,16 @@ def future_thresholds(
     # Gravity at the hit (x10/6, bcp.c:2972-2974) is the turn end's: a Gravity used this turn
     # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1235) ends a count of 1 before the
     # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
-    # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373). Either way the roll is
-    # kept whole, rare and sound.
+    # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its
+    # target's ability (subscript_give_target_insomnia.s:11). Either way the roll is kept whole,
+    # rare and sound.
     field_change = jnp.any(
-        uses & ((effect == EffectId.GRAVITY) | (effect == EffectId.TRANSFORM))
+        uses
+        & (
+            (effect == EffectId.GRAVITY)
+            | (effect == EffectId.TRANSFORM)
+            | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
+        )
     ) | (state.gravity == 1)
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
@@ -822,6 +828,16 @@ def _threshold_grid(
         & (stat == Stat.EVA)
     )
     held = tables.item_effect[held_items(state)]
+    # A foe's Worry Seed takes a Klutz holder's ability, so its item (hidden at the turn start,
+    # ``state.held_item``) is live at the check: the flags below read the raw item then
+    # (subscript_give_target_insomnia.s:11; battle_lib.c:5352-5356), E3-2-2.
+    mons = jnp.arange(fmt.B)
+    klutz_lost = foes(changes & (effect == EffectId.WORRY_SEED)) & (
+        state.ability[party(fmt, mons), state.active] == AbilityId.KLUTZ
+    )
+    held = jnp.where(
+        klutz_lost, tables.item_effect[state.item[party(fmt, mons), state.active]], held
+    )
     herb = held == ItemId.WHITE_HERB
     firsts = [
         action_order(tables, state, actions, empty_outcome(fmt)._replace(speed_tie=jnp.int8(t)))[0]
@@ -902,7 +918,11 @@ def _threshold_grid(
         )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         gravity_move = effect[foe] == EffectId.GRAVITY
-        field_move = weather_move[foe] | (changes[foe] & (gravity_move | xform))
+        # E3-2-2: the foe's Worry Seed makes the side's own ability Insomnia before the check
+        # (subscript_give_target_insomnia.s:11; the side loses Compoundeyes, Hustle, Simple,
+        # Unaware, No Guard, ...). The foe's own accuracy check (Worry Seed's, 100) came first.
+        worry_move = effect[foe] == EffectId.WORRY_SEED
+        field_move = weather_move[foe] | (changes[foe] & (gravity_move | xform | worry_move))
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
@@ -948,17 +968,23 @@ def _threshold_grid(
             foe=foe,
             xf=xform,
             grav=gravity_move,
+            wk=worry_move,
             copied=side_ability,
         ):
             embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
             foe_mon = state.active[foe]
             ability = jnp.where(f & xf, copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
+            side_mon = state.active[side]
+            insomnia = jnp.where(
+                f & wk, AbilityId.INSOMNIA, state.ability[party(fmt, side), side_mon]
+            )
             hidden = state._replace(
                 embargo=state.embargo.at[side].set(embargo),
-                ability=state.ability.at[party(fmt, foe), foe_mon].set(
-                    ability.astype(state.ability.dtype)
-                ),
+                ability=state.ability.at[party(fmt, foe), foe_mon]
+                .set(ability.astype(state.ability.dtype))
+                .at[party(fmt, side), side_mon]
+                .set(insomnia.astype(state.ability.dtype)),
                 gravity=gravity.astype(state.gravity.dtype),
             )
             return _hit_threshold(
@@ -1064,6 +1090,21 @@ def _remove_held_item(state: BattleState) -> BattleState:
     return state._replace(item=state.item.at[party(fmt, battlers), state.active].set(0))
 
 
+def _insomnia_all(state: BattleState) -> BattleState:
+    """Worry Seed's write to the crit inputs: subscript_give_target_insomnia.s:11 sets the
+    defender's ``BattleMon.ability`` to Insomnia, which removes Super Luck (battle_lib.c:7126)
+    and a Klutz holder's hidden crit item (:7117), here every battler's own. A Battle Armor or
+    Shell Armor target (``armored``) is the defender of another battler's hit: the Worry Seed
+    user's own action is no hit, so no such hit follows in singles."""
+    fmt = format_of(state)
+    battlers = jnp.arange(state.active.shape[0])
+    return state._replace(
+        ability=state.ability.at[party(fmt, battlers), state.active].set(
+            jnp.asarray(AbilityId.INSOMNIA, state.ability.dtype)
+        )
+    )
+
+
 def _embargo_all(state: BattleState) -> BattleState:
     """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
     embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
@@ -1081,6 +1122,7 @@ CRIT_ODDS_EFFECTS = {
     EffectId.HAZE: _clear_focus_energy,
     EffectId.KNOCK_OFF: _remove_held_item,
     EffectId.EMBARGO: _embargo_all,
+    EffectId.WORRY_SEED: _insomnia_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.

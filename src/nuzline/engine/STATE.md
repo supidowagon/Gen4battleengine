@@ -165,7 +165,7 @@ three structs has a row.
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
   `ability`, `step._restore_ability` puts the party's back when it leaves (as
   `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
-  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`).
+  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
   `traceAnnounced` and `weatherAbilityAnnounced` stay without a field: of the implemented
   mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
   Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the

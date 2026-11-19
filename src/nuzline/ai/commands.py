@@ -973,7 +973,7 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 }
 # A move's class (MoveTable.class, generated/move_classes.txt: line n + 1 is id n), as
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
-CLASS_PHYSICAL, CLASS_SPECIAL = 0, 1
+CLASS_PHYSICAL, CLASS_SPECIAL, CLASS_STATUS = 0, 1, 2
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
 # refused: Gyro Ball (:2995-3003), whose power reads monSpeedValues, the speeds of the last
 # CompareBattlerSpeed of any caller (battle_lib.c:1372-1373: the action order's sorts,
@@ -1064,6 +1064,9 @@ ABILITY_IDS = {
     # E2 batch 13: Expert_TrumpCard (script.s:5331-5332), Expert_Assurance (:5200-5201).
     "Pressure": 46,
     "Rough Skin": 24,
+    # E3-2-2: Basic_CheckWorrySeed (script.s:1430-1433; Insomnia and Vital Spirit above).
+    "Truant": 54,
+    "Multitype": 121,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1112,6 +1115,9 @@ MOVE_IDS = {
     # Expert_MagnetRise's IfMoveKnown DEFENDER list (script.s:6100-6102), E1 trial batch.
     "Earthquake": 89,
     "Earth Power": 414,
+    # E3-2-2: Basic_CheckWorrySeed (script.s:1436-1437, with Snore above), Expert_WorrySeed (:5979).
+    "Sleep Talk": 214,
+    "Rest": 156,
 }
 SOUND_MOVES = tuple(
     MOVE_IDS[n]

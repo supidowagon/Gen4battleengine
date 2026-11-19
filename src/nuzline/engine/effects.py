@@ -274,6 +274,7 @@ from nuzline.engine.damage import (
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
     GENDER_NONE,
@@ -1660,6 +1661,36 @@ def _torment(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.torment[h.target_side] == 0)
     )
     return _set(state, "torment", h.target_side, 1, cond)
+
+
+def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Worry Seed (effect_script_0247.s:5 ON_HIT | TO_DEFENDER; ``subscript_give_target_insomnia.s``):
+    fails (:5-9) on a miss or a semi-invulnerable target (``h.effective``), behind a Substitute
+    (:6 CheckSubstitute, ``h.shielded``), and when the defender's ``BattleMon.ability`` is Truant
+    (:7) or Multitype (:8) or it holds a Griseous Orb (:9, the raw ``heldItem``): the raw reads
+    are ``decomp_abilities`` and ``state.item``, which a Gastro Acid suppression does not hide.
+    Otherwise (:11) ``BattleMon.ability`` becomes Insomnia, whatever it was (an Insomnia holder
+    succeeds again, a suppressed one stays suppressed), and ``UpdateMonData`` tags it for the AI
+    (``BattleAI_SetAbility``, battle_script.c:3073-3075: ``know_ability``). The write is the
+    battler's: ``step._restore_ability`` puts its party Pokemon's back when it leaves
+    (battle_lib.c:124); ``damage.decomp_abilities`` reads the written ability. The sleeper wakes
+    at the move's end (``step._move_end``: ``hooks.recover_status_by_ability``,
+    battle_controller_player.c:3965-3967; battle_lib.c:4404-4410)."""
+    fmt = format_of(state)
+    pf, mon = party(fmt, h.target_side), h.target
+    raw = decomp_abilities(tables, state)[pf, mon]
+    cond = (
+        (h.effect == _E.WORRY_SEED)
+        & h.effective
+        & _alive(state, h.target_side, mon)
+        & ~h.shielded
+        & (raw != ABILITY_DECOMP_IDS[AbilityId.TRUANT])
+        & (raw != ABILITY_MULTITYPE)
+        & (state.item[pf, mon] != ITEM_GRISEOUS_ORB)
+    )
+    value = jnp.where(cond, AbilityId.INSOMNIA, state.ability[pf, mon]).astype(state.ability.dtype)
+    state = state._replace(ability=state.ability.at[pf, mon].set(value))
+    return know_ability(state, h.target_side, mon, cond)
 
 
 def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3410,6 +3441,7 @@ def play_hit(
         _trap,
         _taunt,
         _torment,
+        _worry_seed,
         _disable,
         _confuse_foe,
         _secondary_confuse,

@@ -3226,6 +3226,21 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # test; no count (E3-2-1).
         if target_alive and not s.battlers[target].torment:
             s.battlers[target].torment = 1
+    elif effect == EffectId.WORRY_SEED and effective:
+        # subscript_give_target_insomnia.s:5-11: fails behind a substitute (:6), on a raw Truant
+        # (:7) or Multitype (:8) ability, or a held Griseous Orb (:9); else the battler's
+        # ability is Insomnia (the AI tags it, :11), E3-2-2.
+        mon = _active(s, target)
+        if (
+            target_alive
+            and not _shielded(turn, s, target)
+            and _decomp_ability(tables, mon)
+            not in (ABILITY_DECOMP_IDS[AbilityId.TRUANT], ABILITY_MULTITYPE)
+            and mon.item != ITEM_GRISEOUS_ORB
+        ):
+            mon.ability = AbilityId.INSOMNIA
+            if target == 0:
+                _know_ability(s, s.battlers[0].active)
     elif effect == EffectId.DISABLE and effective:
         # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
         # the target's movePrevByBattler is one of its moves with PP left; RandNext() % 4 + 3.
@@ -5389,9 +5404,9 @@ def _decomp_ability(tables, mon: RefPokemon) -> int:
     """``Battler_Ability``: the decomp ability id at the Pokemon's ability row
     (``ability_form``) and ability slot."""
     row = _t(tables, "species_form_row", mon.species, mon.ability_form)
-    traced = _t(tables, "species_abilities", row, mon.ability_slot) == AbilityId.TRACE
-    if traced and mon.ability != AbilityId.TRACE:
-        return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]  # a traced ability
+    written = _t(tables, "species_abilities", row, mon.ability_slot) != mon.ability
+    if written:  # a script wrote it: Trace's copy, Worry Seed's Insomnia
+        return ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
     return _t(tables, "species_abilities_decomp", row, mon.ability_slot)
 
 

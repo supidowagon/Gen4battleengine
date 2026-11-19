@@ -254,3 +254,18 @@ Each is open; close it with its ruling.
   :6480 and Harrassment :8055 table entries, and the Encore table :3247, were already in
   `commands`). Kaizo's CAN_MAGIC_COAT flag on Torment: Owed 1. Tests: tests/engine/test_e3_batch1.py,
   tests/ai/test_kaizo_policy.py `test_torment_basic`.
+- E3-2-2 Worry Seed (#247): new `EffectId.WORRY_SEED` (effect 247). `effects._worry_seed`
+  (effect_script_0247.s:5; subscript_give_target_insomnia.s:5-11): fails on a miss or
+  semi-invulnerable target, a Substitute, a raw Truant or Multitype ability, a held Griseous Orb;
+  else `ability[party, mon]` = Insomnia (no new state: the existing per-battler written ability,
+  restored by `step._restore_ability`, battle_lib.c:124) and the AI tags it (`know_ability`,
+  battle_script.c:3073-3075). `damage.decomp_abilities` (and the reference's) now read the
+  written ability whenever `ability` differs from the personal row's, not only for Trace. The
+  sleeper wakes at the move's end by the existing MoveEnd recovery (bcp.c:3965-3967,
+  battle_lib.c:4404-4410). Hit chance: `outcome._threshold_grid` field variant (the side's own
+  ability becomes Insomnia, Klutz item live); crit: `CRIT_ODDS_EFFECTS` write (Super Luck, Klutz
+  item; Battle/Shell Armor is another battler's hit, none follows in singles); the AI-roll
+  `loose` flag; enumerate: INPUT_CLAUSE effect (the worry-seed clause: foe_move, end-speed tie).
+  AI: Basic_CheckWorrySeed (script.s:1428-1443), Expert_WorrySeed (:5973-5993; rolls :5984, :5988);
+  read bounds regenerated. Kaizo and vanilla CAN_MAGIC_COAT: Owed 1. Tests:
+  tests/engine/test_e3_batch1.py, tests/ai/test_kaizo_policy.py.

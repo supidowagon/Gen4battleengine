@@ -4878,3 +4878,34 @@ def test_torment_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
     tormented = s._replace(torment=s.torment.at[0].set(1))
     assert _delta(t, tormented, 0x2, 0x3)[0] == -10
     assert _delta(t, tormented, 0x3, 0x7)[0] == 0
+
+
+def test_worry_seed_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckWorrySeed (script.s:1428-1443): the player's known ability Truant, Insomnia or
+    Vital Spirit -10; asleep and (as far as the AI has seen) without Sleep Talk and Snore -10;
+    else nothing (E3-2-2)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Status
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Worry Seed", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    for ability in (AbilityId.TRUANT, AbilityId.INSOMNIA, AbilityId.VITAL_SPIRIT):
+        known = s._replace(
+            ability=s.ability.at[0, 0].set(ability),
+            ai_ability_known=s.ai_ability_known.at[0].set(ABILITY_DECOMP_IDS[ability]),
+        )
+        assert _delta(t, known, 0x2, 0x3)[0] == -10, ability
+    asleep = s._replace(status=s.status.at[0, 0].set(Status.SLEEP))
+    assert _delta(t, asleep, 0x2, 0x3)[0] == -10
+    assert _delta(t, asleep, 0x3, 0x7)[0] != -10  # Expert adds, never the Basic -10
+
+
+def test_worry_seed_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_WorrySeed (script.s:5973-5993), the AI above 50 % HP: the 128 roll (:5984) not
+    jumping +1, then the 64 roll (:5988) not jumping +1; each jump drops its +1 (E3-2-2)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Worry Seed", "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 2
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984),))[0] == 1
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5988),))[0] == 1
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984), (0, 5988)))[0] == 0
