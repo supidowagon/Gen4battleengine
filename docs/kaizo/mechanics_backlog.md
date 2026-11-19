@@ -318,7 +318,7 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 6 | move effect #259: Trick Room |
 | 5 | held item effect #41: Lansat Berry |
 | 4 | AI move effect #241 USE_MOVE_FIRST not transcribed (Expert_MeFirst): Me First |
-| 4 | AI move-id case of TrainerAI_MoveType where it assigns no type: Weather Ball |
+| 4 | AI move-id case of TrainerAI_MoveType where it assigns no type (open: real-game check, trainer_ai.c:3222-3240): Weather Ball |
 | 4 | held item effect #42: Starf Berry |
 | 4 | held item effect #92: Leek |
 | 4 | move effect #241: Me First |

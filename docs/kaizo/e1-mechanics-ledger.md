@@ -1220,3 +1220,16 @@ of them, :2107-2115).
   input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
   reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
   `test_damage_classes.py` (Chatter's exact case, Transform's compression case).
+
+## Batch F (Kaizo abilities, held items, other)
+
+Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_scratch/e1/b-next/carry.md`.
+
+### Open items
+- **F-O1 Weather Ball's AI type outside the typed weathers.** `TrainerAI_MoveType` (src/battle/trainer_ai/trainer_ai.c:
+  3222-3240) assigns a type only in rain, sand, sun and hail; with no weather, fog, or Cloud Nine / Air Lock out it
+  returns an uninitialised local. Ruling (manager, 2026-11-18): build the four typed weathers; keep the AI refusal
+  for the other states, its test carrying `fullset`. Blocks 4 Kaizo battles (opponent parties with Weather Ball,
+  `mechanics_backlog.md`); each can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it
+  under any weather). A player's own Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any
+  battle. Trigger: a real-game check (memory dump per caller) when the user next does real-game checks.

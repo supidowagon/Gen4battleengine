@@ -600,7 +600,13 @@ def main(out_path):
                         helper = "CalcDamage" if kind == "calc damage" else "MoveType"
                         # Weather Ball's MoveType case: refused where it assigns no type
                         # (outside rain, sand, sun and hail; B13-26).
-                        where = " where it assigns no type" if kind == "move type" else ""
+                        # Open item (E1 batch F ruling): the value it returns there needs a
+                        # real-game check (memory dump per caller), trainer_ai.c:3222-3240.
+                        where = (
+                            " where it assigns no type (open: real-game check, trainer_ai.c:3222-3240)"
+                            if kind == "move type"
+                            else ""
+                        )
                         k = ("AI", f"move-id case of TrainerAI_{helper}{where}")
                     else:
                         k = ("AI", f"move effect #{e} {name}: {kind}")
