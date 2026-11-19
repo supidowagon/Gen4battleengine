@@ -61,6 +61,7 @@ from nuzline.engine.ids import (
     ITEM_FULL_RESTORE,
     ITEM_GRISEOUS_ORB,
     MAGNET_RISE_TURNS,
+    ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
     MIMIC_FORBIDDEN,
     MIMIC_PP_CAP,
@@ -440,7 +441,26 @@ def _gravity_banned(s: RefState, move: int) -> bool:
     return bool(s.gravity) and move in GRAVITY_MOVES
 
 
-def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
+def _me_first_copy(tables, s: RefState, target: int, pick: int, fights: bool) -> int:
+    """``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) on ``target``'s battler, 0 when it fails: its
+    encored move when it still holds it in its slot (:7293-7296), else ``Battler_SelectedMove``
+    (``pick`` if it chose FIGHT); not struggling, no battle effect shared with a
+    ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:7242-7252), with power
+    (E3-2-3)."""
+    sd, mon = s.battlers[target], _active(s, target)
+    held = sd.encore_move and sd.encore_move == mon.moves[sd.encore_slot]
+    move = sd.encore_move if held else (pick if fights else 0)
+    banned = {_t(tables, "move_ai_effect", m) for m in ME_FIRST_BANNED_MOVES}
+    if (
+        not any(_usable(tables, s, target))
+        or _t(tables, "move_ai_effect", move) in banned
+        or not _t(tables, "move_power", move)
+    ):
+        return 0
+    return move
+
+
+def _invoked_move(tables, s: RefState, side: int, move: int, call: int, me_first: int = 0) -> int:
     """The move an invoker's script calls (``order.invoked_move``), 0 when it finds none; any
     other move itself. BtlCmd_TrySleepTalk (script.c:4907-4937): the allowed slots (not
     Move_IsInvoker / Focus Punch / Uproar / Chatter / Move_IsMultiTurn, ``NO_SLEEP_TALK``; not
@@ -489,6 +509,8 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             and not _gravity_banned(s, prev)
         )
         return prev if ok else 0
+    if effect == EffectId.ME_FIRST:
+        return me_first  # the caller's ``_me_first_copy`` (0 once the target has acted)
     if effect == EffectId.ASSIST:
         # BtlCmd_TryAssist (script.c:6405-6444, B10-11): every move of every other party slot
         # with a Pokemon, not an invoker, Metronome-able; RandNext() % numMoves.
@@ -1545,6 +1567,31 @@ def _beat_up_damage(tables, s: RefState, attacker: int, defender: int, move: int
     return _variance(damage, roll)
 
 
+def _me_first_number(s: RefState, side: int) -> int:
+    """The stored Me First turn number as ``BattleScript_CalcMoveDamage`` reads it (:1356-1358):
+    lowered by 1 when it equals ``meFirstTurnOrder`` = ``turn`` + 1."""
+    number = s.battlers[side].me_first_turn
+    return number - 1 if s.turn + 1 == number else number
+
+
+def _me_first_boost(s: RefState, side: int, damage: int) -> int:
+    """x15/10 while ``meFirst`` is set and the order is less than 2 above the number (:1360-1361)."""
+    if s.battlers[side].me_first and s.turn + 1 - _me_first_number(s, side) < 2:
+        return damage * 15 // 10
+    return damage
+
+
+def _me_first_after_calc(s: RefState, side: int) -> None:
+    """The counter writes of one CalcDamage (battle_script.c:1356-1363): the number drops by 1 when
+    it equals the order; ``meFirst`` clears once the order is 2 or more above it."""
+    sd = s.battlers[side]
+    if not sd.me_first:
+        return
+    sd.me_first_turn = _me_first_number(s, side)
+    if s.turn + 1 - sd.me_first_turn >= 2:
+        sd.me_first = 0
+
+
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
@@ -1610,6 +1657,7 @@ def _move_damage(
     # script.c:1350-1352: the Metronome item, (10 + metronomeTurns) / 10 (G-60).
     if _item_effect(tables, atk, s) == ItemId.METRONOME_ITEM:
         damage = damage * (10 + s.battlers[attacker].metronome_turns) // 10
+    damage = _me_first_boost(s, attacker, damage)  # script.c:1354-1364 (E3-2-3)
     damage = _variance(damage, roll)
     kind = _move_type(tables, s, attacker, move, gift)
     if wonder_guard and _wonder_guarded(tables, s, attacker, defender, move, kind):
@@ -1660,6 +1708,8 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "substitute_hp",
         "taunt",
         "torment",  # VOLATILE_CONDITION_TORMENT: statusVolatile, not Baton-passed (E3-2-1)
+        "me_first",  # moveEffectsData, cleared with it (lib.c:2096-2100), E3-2-3
+        "me_first_turn",
         "trapped",
         "trap_move",
         "flinched",
@@ -3957,6 +4007,14 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             in_power=_script_power(turn, s, side, target, move),
             gift=turn.gift,
         )
+    # The same CalcDamage's Me First counter update (battle_script.c:1356-1363, E3-2-3).
+    if (
+        landed
+        and _t(tables, "move_category", move) != STATUS_CLASS
+        and _t(tables, "move_power", move) != 0
+        and _t(tables, "move_effect", move) not in UNROLLED_EFFECTS
+    ):
+        _me_first_after_calc(s, side)
     dealt = stored = 0
     update_hp = landed and hits_foe and damage > 0
     sub_dealt = 0  # hitDamage on the substitute path
@@ -4524,17 +4582,28 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         EffectId.METRONOME,
         EffectId.COPYCAT,
         EffectId.ASSIST,  # B10-11
+        EffectId.ME_FIRST,  # E3-2-3
     ):
         # The invokers (B5-1..): the script picks the move now (Copycat reads the battle's
         # movePrev as the faster foe left it), then GoToMoveScript (script.c:2111-2134) runs it
         # as moveCur with a defender re-picked for it. Sleep Talk fails unless the user is still
         # asleep (effect_script_0097.s:5); a call that finds no move fails (MOVE_STATUS_FAILED,
         # subscript_missed.s); either way the defender stays the user (no moveHit).
-        called = _invoked_move(tables, s, side, move, turn.outcome.call[side])
+        first = 0
+        if _t(tables, "move_effect", move) == EffectId.ME_FIRST and not target_moved:
+            foe = _foe(side)
+            first = _me_first_copy(
+                tables, s, foe, turn.choices[foe][0], turn.actions[foe] < MOVE_ACTIONS
+            )
+        called = _invoked_move(tables, s, side, move, turn.outcome.call[side], first)
         sleep_talk = _t(tables, "move_effect", move) == EffectId.SLEEP_TALK
         if called == 0 or (sleep_talk and mon.status != Status.SLEEP):
             _unlock(s.battlers[side])
             return None
+        if _t(tables, "move_effect", move) == EffectId.ME_FIRST:
+            # TryMeFirst's success (:7303-7304): meFirst, meFirstTurnNumber = meFirstTurnOrder.
+            s.battlers[side].me_first = 1
+            s.battlers[side].me_first_turn = s.turn + 1
         move = _called_move(tables, s, called)
         turn.move_cur = move
         if not _defender_always(tables, move, _ghost(s, side)) and _active(s, _foe(side)).hp == 0:

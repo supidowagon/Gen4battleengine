@@ -1799,6 +1799,31 @@ def _expert_disable(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, -1))
 
 
+def _expert_me_first(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MeFirst`` (script.s:5519-5550): slower than the player (the SLOWER compare, no tie
+    read) -2; else the player out-damaging the AI's best (``IfBattlerDealsMoreDamage``) gives +1
+    unless the 32 roll (:5532) jumps, then on to the player's last move: a status move
+    (``LoadDefenderLastUsedMoveClass``) goes straight to the 64 roll, else the 128 roll (:5538)
+    jumping ends, else +1 first; the 64 roll (:5542) jumping ends, else +1 (E3-2-3)."""
+    ctx, minus2 = _split(c.if_speed_compare_equal_to(_at(ctx, mask), c.COMPARE_SPEED_SLOWER))
+    ctx, try_plus1 = _split(c.if_battler_deals_more_damage(ctx, _D, c.USE_MAX_DAMAGE))
+    ctx, check_last = _split(c.go_to(ctx))
+    # Expert_MeFirst_TryScorePlus1 (:5531)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, try_plus1), 32, 5532))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_MeFirst_CheckLastUsedMove (:5535)
+    ctx = c.load_defender_last_used_move_class(_at(ctx, check_last | t | ctx.live))
+    ctx, status = _split(c.if_loaded_equal_to(ctx, c.CLASS_STATUS))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 5538))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_MeFirst_TryScorePlus1AndEnd (:5541)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, status | ctx.live), 64, 5542))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_MeFirst_ScoreMinus2 (:5546)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
+
+
 def _expert_worry_seed(ctx: AiContext, mask) -> AiContext:
     """``Expert_WorrySeed`` (script.s:5973-5993): the player knowing Rest +1; then the AI under
     50 % HP, or the 128 roll (:5984) jumping, goes straight to the 64 roll, else +1 first; the
@@ -3697,6 +3722,7 @@ _EXPERT_LABELS = (
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
+    (BattleEffect.USE_MOVE_FIRST, _expert_me_first),  # :1784 (E3-2-3)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)

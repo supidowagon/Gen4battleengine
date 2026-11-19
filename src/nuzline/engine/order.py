@@ -56,6 +56,7 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     GRAVITY_TURNS,
     INVOKER_MOVES,
+    ME_FIRST_BANNED_MOVES,
     METRONOME_DRAW,
     METRONOME_HEAVY,
     MOVE_STRUGGLE,
@@ -144,6 +145,7 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
 # The invokers (ids.EffectId.SLEEP_TALK, METRONOME, COPYCAT): ``call_kind``.
 CALL_NONE, CALL_SLEEP_TALK, CALL_METRONOME, CALL_COPYCAT = 0, 1, 2, 3
 CALL_ASSIST = 4  # E2 batch 10, B10-11
+CALL_ME_FIRST = 5  # E3-2-3: Me First, ``me_first_copy``; no draw, ordered like Copycat
 
 
 def call_kind(tables: Tables, move) -> jnp.ndarray:
@@ -158,7 +160,11 @@ def call_kind(tables: Tables, move) -> jnp.ndarray:
             jnp.where(
                 effect == EffectId.COPYCAT,
                 CALL_COPYCAT,
-                jnp.where(effect == EffectId.ASSIST, CALL_ASSIST, CALL_NONE),
+                jnp.where(
+                    effect == EffectId.ASSIST,
+                    CALL_ASSIST,
+                    jnp.where(effect == EffectId.ME_FIRST, CALL_ME_FIRST, CALL_NONE),
+                ),
             ),
         ),
     ).astype(_I32)
@@ -255,7 +261,34 @@ def copycat_call(tables: Tables, move_prev, state: BattleState | None = None) ->
     return jnp.where(ok, move_prev, 0).astype(_I32)
 
 
-def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev=None):
+def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fights) -> jnp.ndarray:
+    """``int32``: the move ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) copies from
+    ``target_side``'s battler, 0 when it fails, for a target that has not acted yet (the caller's
+    test: ``BATTLE_ACTION_PICK_COMMAND`` is not MOVE_END). The move is the target's encored move when
+    it still holds it in its encored slot (:7293-7296), else ``Battler_SelectedMove`` (battle_lib.c:
+    2858-2868): ``picked`` (its ``selected_move``) when it chose FIGHT (``fights``), else MOVE_NONE.
+    It must not be struggling (the target's ``usable_moves`` leave no slot, bcp.c:433), differ in
+    battle effect from every ``ME_FIRST_BANNED_MOVES`` move (``Move_MeFirstCanCopy``, battle_lib.c:
+    7242-7252, ``tables.move_ai_effect``) and have power (:7300)."""
+    fmt = format_of(state)
+    mon = state.active[target_side]
+    moves = state.moves[party(fmt, target_side), mon].astype(_I32)
+    encored = state.encore_move[target_side].astype(_I32)
+    held = (encored != 0) & (encored == moves[state.encore_slot[target_side]])
+    move = jnp.where(held, encored, jnp.where(fights, jnp.asarray(picked, _I32), 0))
+    banned = tables.move_ai_effect[jnp.asarray(ME_FIRST_BANNED_MOVES, _I32)]
+    struggling = ~jnp.any(usable_moves(tables, state, target_side))
+    ok = (
+        ~struggling
+        & ~jnp.any(tables.move_ai_effect[move] == banned)
+        & (tables.move_power[move] != 0)
+    )
+    return jnp.where(ok, move, 0).astype(_I32)
+
+
+def invoked_move(
+    tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None
+):
     """``int32``: the move ``side``'s ``move`` runs through its invoker script, read with
     ``state`` as it is when the script runs; 0 when the invoker finds none. Sleep Talk: the
     allowed slot ``call % count`` (``Outcome.call``, ``ids.SLEEP_TALK_VALUES``); Metronome: the
@@ -263,7 +296,8 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     ``metronome_weights``); Copycat: ``copycat_call`` of ``move_prev`` (default
     ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
     Nature Power on the result is ``called_move``'s. A Gravity variant's ``CALL_GRAVITY`` offset
-    is dropped (``call % CALL_GRAVITY``)."""
+    is dropped (``call % CALL_GRAVITY``). Me First: ``me_first``, the caller's ``me_first_copy`` of
+    its target (0 when none is given or the target has acted)."""
     fmt = format_of(state)
     move = jnp.asarray(move, _I32)
     call = jnp.asarray(call, _I32) % CALL_GRAVITY
@@ -282,13 +316,22 @@ def invoked_move(tables: Tables, state: BattleState, side, move, call, move_prev
     listed, valid = assist_candidates(tables, state, side)
     n_listed = jnp.sum(valid.astype(_I32))
     assist = jnp.where(n_listed > 0, listed[_nth(valid, call % jnp.maximum(n_listed, 1))], 0)
+    first = jnp.asarray(0 if me_first is None else me_first, _I32)
     return jnp.where(
         kind == CALL_SLEEP_TALK,
         talk,
         jnp.where(
             kind == CALL_METRONOME,
             metronome,
-            jnp.where(kind == CALL_COPYCAT, copycat, jnp.where(kind == CALL_ASSIST, assist, move)),
+            jnp.where(
+                kind == CALL_COPYCAT,
+                copycat,
+                jnp.where(
+                    kind == CALL_ASSIST,
+                    assist,
+                    jnp.where(kind == CALL_ME_FIRST, first, move),
+                ),
+            ),
         ),
     ).astype(_I32)
 
@@ -496,8 +539,14 @@ def used_moves(
     call = jnp.asarray(call, _I32)
     out = []
     for side in range(fmt.B):
-        prev = jnp.where(after_foe[side], chosen[_foe(side)], state.move_prev.astype(_I32))
-        invoked = invoked_move(tables, state, side, chosen[side], call[side], prev)
+        foe = _foe(side)
+        prev = jnp.where(after_foe[side], chosen[foe], state.move_prev.astype(_I32))
+        # Me First copies a target that has not acted: ``after_foe`` says it has (E3-2-3).
+        fights = (state.over == 0) & ~is_switch(actions[foe]) & ~is_item(actions[foe])
+        first = jnp.where(
+            after_foe[side], 0, me_first_copy(tables, state, foe, chosen[foe], fights)
+        )
+        invoked = invoked_move(tables, state, side, chosen[side], call[side], prev, first)
         out.append(
             jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
         )

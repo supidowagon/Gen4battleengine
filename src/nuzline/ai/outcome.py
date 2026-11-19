@@ -432,6 +432,9 @@ SITE_N: dict[int, int] = {
     # E3 batch 1 round 2.
     5984: 128,  # Expert_WorrySeed_CheckUserHP (to _TryScorePlus1 when it jumps)
     5988: 64,  # Expert_WorrySeed_TryScorePlus1 (+1 when it does NOT jump)
+    5532: 32,  # Expert_MeFirst_TryScorePlus1 (jumps to _CheckLastUsedMove)
+    5538: 128,  # Expert_MeFirst_CheckLastUsedMove (+1 when it does NOT jump)
+    5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -699,6 +702,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         218,  # SPEED_DOWN_HIT (Hammer Arm): Expert_HammerArm (:1762), no roll (E3-1-5)
         # E3 batch 1 round 2.
         165,  # TORMENT: Basic_CheckTorment (:229); no Expert entry; tables :6480, :8055 (E3-2-1)
+        241,  # USE_MOVE_FIRST (Me First): no Basic entry; Expert_MeFirst (:1784), :5532, :5538, :5542;
+        # Risky :6560 (E3-2-3)
         247,  # SET_ABILITY_TO_INSOMNIA (Worry Seed): Basic_CheckWorrySeed (:276); Expert_WorrySeed
         # (:1790), :5984, :5988 (E3-2-2)
     }
@@ -846,6 +851,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     86: ("Expert_Disable", 1687),
     218: ("Expert_HammerArm", 1762),
     # E3 batch 1 round 2.
+    241: ("Expert_MeFirst", 1784),
     247: ("Expert_WorrySeed", 1790),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
@@ -977,6 +983,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: Expert_Punishment
         86,  # DISABLE: Expert_Disable (E3-1-3)
         218,  # SPEED_DOWN_HIT: Expert_HammerArm (E3-1-5)
+        241,  # USE_MOVE_FIRST: Expert_MeFirst (E3-2-3)
         247,  # SET_ABILITY_TO_INSOMNIA: Expert_WorrySeed (E3-2-2)
     }
 )

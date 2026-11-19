@@ -269,3 +269,27 @@ Each is open; close it with its ruling.
   AI: Basic_CheckWorrySeed (script.s:1428-1443), Expert_WorrySeed (:5973-5993; rolls :5984, :5988);
   read bounds regenerated. Kaizo and vanilla CAN_MAGIC_COAT: Owed 1. Tests:
   tests/engine/test_e3_batch1.py, tests/ai/test_kaizo_policy.py.
+- E3-2-3 Me First (#241): new `EffectId.ME_FIRST` (effect 241) and `order.CALL_ME_FIRST`, an
+  invoker ordered like Copycat (no draw: call value 0 = the target has not acted, 1 = it has, the
+  call fails). `order.me_first_copy` is `BtlCmd_TryMeFirst` (battle_script.c:7286-7312): the
+  target's encored move when it still holds it in its slot, else its selected move
+  (`Battler_SelectedMove`, battle_lib.c:2858-2868: none when it chose no FIGHT); it fails for a
+  struggling target, a move whose battle effect (`tables.move_ai_effect`) equals that of Counter,
+  Mirror Coat, Thief, Covet, Focus Punch or Chatter (`ids.ME_FIRST_BANNED_MOVES`, by move id per
+  game: Move_MeFirstCanCopy, battle_lib.c:7242-7252; Kaizo's Covet slot has effect 0, so every
+  plain hit and Kaizo Thief are refused), and for a move without power (:7300). `step._use_move`
+  reads the target's action from the `pursuit` triple `_act` already passes, and the call fails
+  once `target_moved`. New per-battler `[B]` state `me_first` (int8) and `me_first_turn` (int16):
+  `MoveEffectsData.meFirst` / `meFirstTurnNumber` (zeroed with the volatiles, lib.c:2096-2100; not
+  Baton-passed); `meFirstTurnOrder` is `turn` + 1 (lib.c:2028, bcp.c:1853). The x1.5 is
+  `damage.me_first_boost` after the crit, Life Orb and Metronome item and before the variance
+  (battle_script.c:1346-1364) on every CalcDamage of that battler while `me_first_active`; the
+  counter writes (number - 1 when equal to the order, clear at 2 or more above, :1356-1363) run in
+  `effects.play_hit` where a hit calculated damage (reference `_me_first_after_calc`). Enumeration:
+  a Me First hit is never a damage class (the boost is not in the turn-start table); its calls
+  are Copycat's two orders. Me First's own defender is its target (RANGE_SINGLE_TARGET_ME_FIRST),
+  so it needs a living foe, unlike the self-targeting invokers. AI: Expert_MeFirst
+  (script.s:5519-5550; rolls :5532, :5538, :5542), no Basic entry, Risky's table already lists
+  241; read bounds regenerated. Tests: tests/engine/test_e3_batch1.py,
+  tests/ai/test_kaizo_policy.py `test_me_first_expert`.
+

@@ -69,6 +69,8 @@ class RefBattler:
     substitute_hp: int
     taunt: int
     torment: int  # VOLATILE_CONDITION_TORMENT (E3-2-1)
+    me_first: int  # MoveEffectsData.meFirst (E3-2-3)
+    me_first_turn: int  # MoveEffectsData.meFirstTurnNumber (E3-2-3)
     trapped: int
     trap_move: int
     flinched: int

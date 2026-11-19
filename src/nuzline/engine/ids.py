@@ -514,6 +514,10 @@ class EffectId(IntEnum):
     # unless the move missed, the defender is semi-invulnerable, behind a Substitute, or holds
     # Truant, Multitype or a Griseous Orb (``effects._worry_seed``, E3-2-2).
     WORRY_SEED = 125
+    # Me First (241, BATTLE_EFFECT_USE_MOVE_FIRST): zeros. effect_script_0241.s: BtlCmd_TryMeFirst
+    # (battle_script.c:7286-7312) then GoToMoveScript: an invoker (``order.CALL_ME_FIRST``) of its
+    # target's chosen move, x1.5 on its user's later CalcDamage (``damage.me_first_boost``), E3-2-3.
+    ME_FIRST = 126
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1419,6 +1423,11 @@ MOVE_KNOCK_OFF = 282
 # (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
 # Encore, Struggle (generated/moves.txt), B10-9.
 CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
+# ``sCannotMeFirstMoves`` (battle_lib.c:7233-7240): Counter, Mirror Coat, Thief, Covet, Focus Punch,
+# Chatter. ``Move_MeFirstCanCopy`` (:7242-7252) compares their battle EFFECTS with the move's
+# (``tables.move_ai_effect``), so a move sharing any of them is refused: in Kaizo Covet's slot
+# (343) has effect 0, so every plain hit is (E3-2-3).
+ME_FIRST_BANNED_MOVES = (68, 243, 168, 343, 264, 448)
 # Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
 # Mirror Move, Metronome (generated/moves.txt), B10-11.
 INVOKER_MOVES = (0, 214, 383, 274, 382, 119, 118)

@@ -298,6 +298,10 @@ class BattleState(NamedTuple):
     substitute_hp: jnp.ndarray  # int16
     taunt: jnp.ndarray  # int8, turns left
     torment: jnp.ndarray  # int8, VOLATILE_CONDITION_TORMENT (bit 31; no turn count), E3-2-1
+    # int8 / int16, MoveEffectsData.meFirst and meFirstTurnNumber (the turn order of the Me First,
+    # battle_script.c:7303-7304; E3-2-3), per battler, zeroed with the volatiles
+    me_first: jnp.ndarray
+    me_first_turn: jnp.ndarray
     trapped: jnp.ndarray  # int8, turns left
     trap_move: jnp.ndarray  # int16
     flinched: jnp.ndarray  # int8
@@ -541,6 +545,8 @@ VOLATILE_FIELDS = (
     "substitute_hp",
     "taunt",
     "torment",
+    "me_first",
+    "me_first_turn",
     "trapped",
     "trap_move",
     "flinched",
@@ -662,6 +668,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "substitute_hp": (_BATTLER, np.int16),
     "taunt": (_BATTLER, np.int8),
     "torment": (_BATTLER, np.int8),
+    "me_first": (_BATTLER, np.int8),
+    "me_first_turn": (_BATTLER, np.int16),
     "trapped": (_BATTLER, np.int8),
     "trap_move": (_BATTLER, np.int16),
     "flinched": (_BATTLER, np.int8),

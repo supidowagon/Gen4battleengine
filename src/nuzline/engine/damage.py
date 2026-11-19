@@ -6,7 +6,8 @@ Mirrors the decomp's pipeline for one hit of a damaging move:
    stat modifiers, stages, ``A * power * level_factor / D / 50``, burn, screens,
    weather, ``+ 2``.
 2. ``BattleScript_CalcMoveDamage`` (``src/battle/battle_script.c:1344``): ``* criticalMul``, then
-   Life Orb (``:1346``, ``life_orb``).
+   Life Orb (``:1346``, ``life_orb``), the Metronome item (``:1350``) and Me First x1.5
+   (``:1354``, ``me_first_boost``).
 3. ``BattleSystem_CalcDamageVariance`` (``battle_lib.c:7081``): ``* (100 - rand % 16) / 100``,
    at least 1. Our ``roll`` is ``15 - rand % 16``, so roll ``r`` multiplies by
    ``85 + r`` and ``damage_table`` is ascending.
@@ -1256,6 +1257,45 @@ def metronome_boost(tables: Tables, s: BattleState, atk_side, damage) -> jnp.nda
     return jnp.where(held, damage * (10 + turns) // 10, damage)
 
 
+def me_first_active(state: BattleState, atk_side) -> jnp.ndarray:
+    """``bool``: ``BattleScript_CalcMoveDamage``'s Me First test (battle_script.c:1354-1364) at
+    ``atk_side``'s next CalcDamage: ``meFirst`` is set and, with ``meFirstTurnOrder`` = ``turn`` + 1
+    (lib.c:2028, +1 at each TurnEnd, bcp.c:1853) and the stored turn number lowered by 1 first when
+    they are equal (:1356-1358), the order is less than 2 above it (:1360). E3-2-3."""
+    atk_side = _i32(atk_side)
+    order = _i32(state.turn) + 1
+    number = _i32(state.me_first_turn[atk_side])
+    number = jnp.where(order == number, number - 1, number)
+    return (state.me_first[atk_side] != 0) & (order - number < 2)
+
+
+def me_first_boost(state: BattleState, atk_side, damage) -> jnp.ndarray:
+    """``int32``: ``damage`` x15/10 (:1361) while ``me_first_active``, after Life Orb and the
+    Metronome item (:1346-1352) and before the variance (E3-2-3)."""
+    return jnp.where(me_first_active(state, atk_side), damage * 15 // 10, damage)
+
+
+def me_first_after_calc(state: BattleState, atk_side, cond) -> BattleState:
+    """The state change of the same CalcDamage (:1356-1363) where ``cond``: the stored turn number
+    drops by 1 when it equals the order, and ``meFirst`` clears once the order is 2 or more above
+    it (E3-2-3)."""
+    atk_side = _i32(atk_side)
+    order = _i32(state.turn) + 1
+    number = _i32(state.me_first_turn[atk_side])
+    lowered = jnp.where(order == number, number - 1, number)
+    on = jnp.asarray(cond) & (state.me_first[atk_side] != 0)
+    number_after = jnp.where(on, lowered, number)
+    clear = on & (order - lowered >= 2)
+    return state._replace(
+        me_first=state.me_first.at[atk_side].set(
+            jnp.where(clear, 0, state.me_first[atk_side]).astype(state.me_first.dtype)
+        ),
+        me_first_turn=state.me_first_turn.at[atk_side].set(
+            number_after.astype(state.me_first_turn.dtype)
+        ),
+    )
+
+
 def pinch_ability(move_type, ability) -> jnp.ndarray:
     """``bool``: ``ability`` boosts ``move_type`` in a pinch (battle_lib.c:6819-6838): Overgrow
     Grass, Blaze Fire, Torrent Water, Swarm Bug."""
@@ -1796,6 +1836,7 @@ def damage_table(
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
+    damage = me_first_boost(state, atk_side, damage)  # :1354-1364 (E3-2-3)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, rolls,
@@ -1865,6 +1906,7 @@ def damage_for_roll(
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
+    damage = me_first_boost(state, atk_side, damage)  # :1354-1364 (E3-2-3)
     rolled = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard, def_side=def_side,

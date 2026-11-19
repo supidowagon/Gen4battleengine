@@ -501,12 +501,12 @@ three structs has a row.
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
 | `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
-| `MoveEffectsData.meFirst` | — | later (M6) |
+| `MoveEffectsData.meFirst` | `me_first` | mapped (E3-2-3: per battler `[B]` int8, set by `BtlCmd_TryMeFirst`, battle_script.c:7303; zeroed with the moveEffectsData on a switch, lib.c:2096-2100; not Baton-passed) |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
 | `MoveEffectsData.fakeOutTurnNumber` | `fake_out_turn` | mapped |
 | `MoveEffectsData.slowStartTurnNumber` | — | later (M6) |
-| `MoveEffectsData.meFirstTurnNumber` | — | later (M6) |
+| `MoveEffectsData.meFirstTurnNumber` | `me_first_turn` | mapped (E3-2-3: per battler `[B]` int16, the `meFirstTurnOrder` of the Me First, :7304) |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
 | `MoveEffectsData.transformedPID` | — | not needed because it is cosmetic (the transformed sprite and name, messages): Transform copies no personality for any battle rule |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |
@@ -620,7 +620,7 @@ three structs has a row.
 | `BattleContext.totalTurns` | `turn` | mapped |
 | `BattleContext.totalFainted` | `player_faints` | mapped |
 | `BattleContext.totalDamage` | — | not needed because only the post-battle records read it |
-| `BattleContext.meFirstTurnOrder` | — | later (M6) |
+| `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |

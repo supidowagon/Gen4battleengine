@@ -218,6 +218,7 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.levelup import pay_exp, pay_exp_leveled
 from nuzline.engine.order import (
+    CALL_ME_FIRST,
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
@@ -229,6 +230,7 @@ from nuzline.engine.order import (
     invoked_move,
     is_item,
     is_switch,
+    me_first_copy,
     player_second,
     quick_claw_active,
     selected_move,
@@ -1084,7 +1086,15 @@ def _use_move(
     # (moveTemp).
     kind = call_kind(tables, move)
     invoker = kind != CALL_NONE
-    invoked = invoked_move(tables, state, side, move, outcome.call[side])
+    # Me First (E3-2-3; BtlCmd_TryMeFirst, battle_script.c:7286-7312) copies the foe's chosen move
+    # while the foe has not acted (``target_moved``): ``pursuit`` carries its action, selected move
+    # and struggling flag (``_act``); with none given the call finds nothing.
+    me_first = jnp.asarray(0, _I32)
+    if pursuit is not None:
+        foe_fights = ~is_switch(pursuit[0]) & ~is_item(pursuit[0])
+        copied = me_first_copy(tables, state, _foe(side), pursuit[1], foe_fights)
+        me_first = jnp.where(jnp.asarray(target_moved, bool), 0, copied)
+    invoked = invoked_move(tables, state, side, move, outcome.call[side], me_first=me_first)
     call_failed = invoker & (
         (invoked == 0)
         | ((kind == CALL_SLEEP_TALK) & (state.status[party(fmt, side), user] != Status.SLEEP))
@@ -1093,6 +1103,18 @@ def _use_move(
         invoker & ~call_failed,
         called_move(tables, state, invoked),
         called_move(tables, state, move),
+    )
+    # TryMeFirst's success sets meFirst and meFirstTurnNumber = meFirstTurnOrder (:7303-7304).
+    first_ok = head_on & can_act & (kind == CALL_ME_FIRST) & ~call_failed
+    state = state._replace(
+        me_first=state.me_first.at[side].set(
+            jnp.where(first_ok, 1, state.me_first[side]).astype(state.me_first.dtype)
+        ),
+        me_first_turn=state.me_first_turn.at[side].set(
+            jnp.where(first_ok, state.turn.astype(_I32) + 1, state.me_first_turn[side]).astype(
+                state.me_first_turn.dtype
+            )
+        ),
     )
     # E2 batch 10 family 7, the charge turn (B10-12..). A charge move's script (MoveFlag.CHARGE:
     # effect_script_0039.s, _0075.s, _0145.s, _0151.s, _0155.s, _0255.s, _0256.s, _0263.s, _0272.s)
@@ -1164,7 +1186,10 @@ def _use_move(
         & (state.hp[party(fmt, attacker), state.active[attacker]] > 0)
     )
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
-    has_target = has_target | special_counter | (invoker & call_failed) | charging
+    # Me First's defender is its target, not its user: it needs a living one (RANGE_SINGLE_TARGET_
+    # ME_FIRST, battle_lib.c:1599-1727), unlike the self-targeting invokers.
+    self_invoker = invoker & (kind != CALL_ME_FIRST)
+    has_target = has_target | special_counter | (self_invoker & call_failed) | charging
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
     # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
     # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
@@ -1187,7 +1212,7 @@ def _use_move(
     # A charge move's own first use passes BeforeMove's no-target check whatever the foe's HP
     # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
-    succeeded = can_act & (has_target | nature_power | invoker | first_charge)
+    succeeded = can_act & (has_target | nature_power | self_invoker | first_charge)
     state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never

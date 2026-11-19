@@ -4909,3 +4909,19 @@ def test_worry_seed_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984),))[0] == 1
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5988),))[0] == 1
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5984), (0, 5988)))[0] == 0
+
+
+def test_me_first_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_MeFirst (script.s:5519-5550): slower than the player -2 (and nothing else); faster,
+    the player's last move not a status one: +1 for the 128 roll (:5538) not jumping and +1 for
+    the 64 roll (:5542), plus +1 first when the player out-damages the AI's best and the 32 roll
+    (:5532) does not jump (E3-2-3). Risky_RiskyEffects lists the effect (:6560)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Me First", "Accelerock", "", ""))
+    slow = s._replace(stats=s.stats.at[1, 0, 4].set(1))
+    assert _delta(t, slow, 0x3, 0x7)[0] == -2
+    fast = s._replace(stats=s.stats.at[1, 0, 4].set(500).at[0, 0, 4].set(1))
+    assert _delta(t, fast, 0x3, 0x7, jumps=((0, 5538), (0, 5532)))[0] == 0
+    assert _delta(t, fast, 0x3, 0x7, jumps=((0, 5538),))[0] in (0, 1)
+    assert _delta(t, fast, 0x3, 0x7)[0] in (2, 3)
+    assert c.BattleEffect.USE_MOVE_FIRST in c.RISKY_EFFECTS

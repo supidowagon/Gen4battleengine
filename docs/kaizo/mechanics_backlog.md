@@ -30,16 +30,16 @@ New groups: needed in this split and in no earlier one.
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 24 | 11 | 9 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 19 | 11 | 5 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 9 | 22 | 16 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 24 | 21 | 5 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 24 | 19 | 3 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 11 | 18 | 9 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 9 | 54 | 31 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 1 | 14 | 0 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 9 | 52 | 31 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 2 | 12 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 19 | 16 | 5 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 148 | 95 | 95 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 149 | 93 | 93 |
 
 ## Whole game
 
-95 distinct missing groups across all ten splits (387 battles,
+93 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -58,12 +58,12 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Fantina Split | 0 | 1 | 0 | 0 | 0 | 8 | 0 | 9 |
 | Maylene Split | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 5 |
 | Wake Split | 0 | 2 | 2 | 2 | 1 | 6 | 3 | 16 |
-| Byron Split | 0 | 4 | 1 | 0 | 0 | 0 | 0 | 5 |
+| Byron Split | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | Candice Split | 0 | 3 | 2 | 0 | 0 | 4 | 0 | 9 |
 | Galactic Split | 0 | 6 | 5 | 3 | 1 | 16 | 0 | 31 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 0 | 1 | 5 |
-| **Whole game** | **1** | **18** | **12** | **8** | **5** | **46** | **5** | **95** |
+| **Whole game** | **1** | **17** | **11** | **8** | **5** | **46** | **5** | **93** |
 
 ### Groups needed in each split, by kind
 
@@ -76,12 +76,12 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Fantina Split | 1 | 1 | 1 | 0 | 0 | 8 | 0 | 11 |
 | Maylene Split | 1 | 1 | 1 | 3 | 2 | 3 | 0 | 11 |
 | Wake Split | 1 | 2 | 3 | 3 | 2 | 8 | 3 | 22 |
-| Byron Split | 1 | 7 | 3 | 2 | 3 | 2 | 3 | 21 |
+| Byron Split | 1 | 6 | 2 | 2 | 3 | 2 | 3 | 19 |
 | Candice Split | 1 | 5 | 3 | 1 | 3 | 5 | 0 | 18 |
-| Galactic Split | 1 | 11 | 8 | 5 | 4 | 22 | 3 | 54 |
-| Volkner Split | 1 | 4 | 3 | 2 | 1 | 2 | 1 | 14 |
+| Galactic Split | 1 | 10 | 7 | 5 | 4 | 22 | 3 | 52 |
+| Volkner Split | 1 | 3 | 2 | 2 | 1 | 2 | 1 | 12 |
 | Elite Four Split | 1 | 4 | 3 | 0 | 3 | 2 | 3 | 16 |
-| **Whole game** | **1** | **18** | **12** | **8** | **5** | **46** | **5** | **95** |
+| **Whole game** | **1** | **17** | **11** | **8** | **5** | **46** | **5** | **93** |
 
 ### Battle conditions and other groups
 
@@ -163,19 +163,19 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 49 | 27 | 27 |
-| Gardenia Split | 28 | 410 (65) | 49 | 27 | 0 |
-| Fantina Split | 38 | 463 (69) | 49 | 27 | 0 |
-| Maylene Split | 47 | 480 (73) | 50 | 27 | 0 |
-| Wake Split | 54 | 482 (71) | 50 | 27 | 0 |
-| Byron Split | 65 | 486 (72) | 50 | 27 | 0 |
-| Candice Split | 74 | 486 (72) | 50 | 27 | 0 |
-| Galactic Split | 100 | 493 (73) | 50 | 27 | 0 |
-| Volkner Split | 84 | 487 (73) | 50 | 27 | 0 |
-| Elite Four Split | 100 | 493 (73) | 50 | 27 | 0 |
-| **Whole game** | | | 50 | 27 | 27 |
+| Roark Split | 16 | 358 (64) | 48 | 27 | 27 |
+| Gardenia Split | 28 | 410 (65) | 48 | 27 | 0 |
+| Fantina Split | 38 | 463 (69) | 48 | 27 | 0 |
+| Maylene Split | 47 | 480 (73) | 49 | 27 | 0 |
+| Wake Split | 54 | 482 (71) | 49 | 27 | 0 |
+| Byron Split | 65 | 486 (72) | 49 | 27 | 0 |
+| Candice Split | 74 | 486 (72) | 49 | 27 | 0 |
+| Galactic Split | 100 | 493 (73) | 49 | 27 | 0 |
+| Volkner Split | 84 | 487 (73) | 49 | 27 | 0 |
+| Elite Four Split | 100 | 493 (73) | 49 | 27 | 0 |
+| **Whole game** | | | 49 | 27 | 27 |
 
-Of your 50 groups, 23 are also needed by opposing trainers and 27 are player-only.
+Of your 49 groups, 22 are also needed by opposing trainers and 27 are player-only.
 
 ### New player-only groups per split, by kind
 
@@ -314,11 +314,9 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 6 | move effect #233: Fling |
 | 6 | move effect #259: Trick Room |
 | 5 | held item effect #41: Lansat Berry |
-| 4 | AI move effect #241 USE_MOVE_FIRST not transcribed (Expert_MeFirst): Me First |
 | 4 | AI move-id case of TrainerAI_MoveType where it assigns no type: Weather Ball |
 | 4 | held item effect #42: Starf Berry |
 | 4 | held item effect #92: Leek |
-| 4 | move effect #241: Me First |
 | 3 | AI move effect #191 SWITCH_ABILITIES not transcribed (Expert_ChangeUserAbility): Skill Swap |
 | 3 | move effect #191: Skill Swap |
 | 2 | ability: Flash Fire |
@@ -350,8 +348,10 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 1 | battle format: gauntlet Route 204 North B2B (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Route 213 (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Route 213 (position 2; rules not recorded) |
+| 1 | battle format: gauntlet Route 213 (position 3; rules not recorded) |
+| 1 | battle format: gauntlet Route 213 (position 4; rules not recorded) |
 
-Groups by kind: battle format 36, AI 19, move effect 12, battle terrain 9, held item effect 8, ability 5, ROM change 3, trainer item 1, field condition 1, form change 1
+Groups by kind: battle format 36, AI 18, move effect 11, battle terrain 9, held item effect 8, ability 5, ROM change 3, trainer item 1, field condition 1, form change 1
 
 ## Build order for the first two splits
 

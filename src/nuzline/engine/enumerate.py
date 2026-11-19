@@ -254,6 +254,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_COPYCAT,
+    CALL_ME_FIRST,
     CALL_METRONOME,
     CALL_NONE,
     CALL_SLEEP_TALK,
@@ -272,6 +273,7 @@ from nuzline.engine.order import (
     invoked_move,
     is_item,
     is_switch,
+    me_first_copy,
     metronome_weights,
     move_effects,
     sealed_state,
@@ -798,6 +800,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.METRONOME,
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
+    _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -1302,6 +1305,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.METRONOME,
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
+    _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -1652,7 +1656,9 @@ def outcome_laws(
     took_state = encored_state(tables, state, taken)
     chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
     kinds = call_kind(tables, chosen)
-    copycat = uses_move & (kinds == CALL_COPYCAT)
+    # Copycat's and Me First's calls follow the order (the foe's move before them, or not).
+    copycat = uses_move & ((kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST))
+    me_first_used = uses_move & (kinds == CALL_ME_FIRST)
     if call is None:
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
         call = jnp.zeros((fmt.B,), _I32)
@@ -2390,7 +2396,9 @@ def outcome_laws(
     # whatever happened before it (damage_inputs_can_change), of a move whose table is
     # its damage (TABLE_DAMAGE_EFFECTS, an allowlist), and whose roll is not also a
     # confusion self-hit's.
-    tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS)
+    # A Me First user's hit carries the x1.5 its own move sets (``damage.me_first_boost``): the
+    # turn-start table does not hold it (E3-2-3).
+    tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS) & ~me_first_used
     # The crit odds at the hit (outcome.crit_variants): a hit whose odds can change before its
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
@@ -3560,6 +3568,11 @@ def _side_call_law(
         copycat_call(tables, state.move_prev, state),
         jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
+    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
+    # value 1, it has (the call fails).
+    first_called = jnp.where(
+        values == 0, me_first_copy(tables, state, _foe(side), foe_chosen, foe_uses_move), 0
+    )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
         talk_w,
@@ -3567,7 +3580,7 @@ def _side_call_law(
             kind == CALL_METRONOME,
             metro_w,
             jnp.where(
-                kind == CALL_COPYCAT,
+                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST),
                 copy_w,
                 jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
             ),
@@ -3582,7 +3595,11 @@ def _side_call_law(
             jnp.where(
                 kind == CALL_COPYCAT,
                 copy_called,
-                jnp.where(kind == CALL_ASSIST, assist_called, 0),
+                jnp.where(
+                    kind == CALL_ASSIST,
+                    assist_called,
+                    jnp.where(kind == CALL_ME_FIRST, first_called, 0),
+                ),
             ),
         ),
     )
@@ -3724,7 +3741,7 @@ def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tu
                 # its assumption (``call_consistent``).
                 out += [(v + off, w, den) for off in offsets]
         return out
-    if kind == CALL_COPYCAT:
+    if kind in (CALL_COPYCAT, CALL_ME_FIRST):
         return [(int(v), 1, 1) for v in np.flatnonzero(weight)]
     return [(0, 1, 1)]
 

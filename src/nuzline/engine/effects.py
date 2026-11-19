@@ -265,6 +265,7 @@ from nuzline.engine.damage import (
     grounded,
     identified,
     ignorable,
+    me_first_after_calc,
     move_type_of,
     spikes_loss,
     stealth_rock_loss,
@@ -304,6 +305,7 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
+    UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
     WISH_TURNS,
@@ -3279,6 +3281,15 @@ def play_hit(
         # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
         gift=gift,
     )
+    # CalcDamage ran for this hit (a landed hit of a move with a rolled table damage): the Me First
+    # counter update of the same script command (battle_script.c:1356-1363, E3-2-3).
+    calc = (
+        landed
+        & (tables.move_category[move] != STATUS)
+        & (tables.move_power[move] != 0)
+        & ~jnp.isin(tables.move_effect[move], jnp.asarray(UNROLLED_EFFECTS, _I32))
+    )
+    state = me_first_after_calc(state, side, calc)
     # Counter / Mirror Coat / Metal Burst (``counter_damage``: the amount step._use_move read
     # off the turn): battleCtx->damage, under SYSCTL_IGNORE_TYPE_CHECKS; the chart still flags an
     # immunity (battle_lib.c:7550-7551). No Counter-family move is RANGE_USER in either game

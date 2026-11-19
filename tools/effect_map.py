@@ -548,6 +548,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     165: ("BATTLE_EFFECT_TORMENT", _E.TORMENT, (0, 0, 0)),
     # Worry Seed: effect_script_0247.s:5 -> subscript_give_target_insomnia.s (E3-2-2).
     247: ("BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA", _E.WORRY_SEED, (0, 0, 0)),
+    # Me First: effect_script_0241.s -> BtlCmd_TryMeFirst, then GoToMoveScript (E3-2-3).
+    241: ("BATTLE_EFFECT_USE_MOVE_FIRST", _E.ME_FIRST, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

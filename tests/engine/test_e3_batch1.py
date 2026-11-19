@@ -414,3 +414,104 @@ def test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     from nuzline.engine.outcome import CRIT_ODDS_EFFECTS
 
     assert EffectId.WORRY_SEED in CRIT_ODDS_EFFECTS
+
+
+# --- #241 Me First (E3-2-3) -------------------------------------------------------------------
+#
+# ``effect_script_0241.s:5`` ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312), then GoToMoveScript;
+# ``Move_MeFirstCanCopy`` (battle_lib.c:7242-7252) compares battle EFFECTS; the x1.5 is
+# ``BattleScript_CalcMoveDamage`` (battle_script.c:1354-1364).
+
+
+def _me_first_fight(t, n, foe_move, mine=("Me First", "Rock Throw"), fast=True):
+    """A level 50 Monferno (``mine``) against a level 50 Geodude using ``foe_move`` on slot 0."""
+    s = make_state(
+        t, [_spec(n, "Monferno", 50, mine)], [_spec(n, "Geodude", 50, (foe_move, "Growl"))]
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(500 if fast else 1))
+
+
+def test_me_first_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 241 (effect_script_0241.s:5); Me First is in both games' move tables."""
+    assert DECOMP_EFFECT_TO_ID[241] == (EffectId.ME_FIRST, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Me First")]) == EffectId.ME_FIRST
+
+
+def test_me_first_runs_the_targets_move_at_one_and_a_half(tables, names):
+    """The copied Rock Throw deals what the user's own Rock Throw deals with the Me First counter
+    set (x1.5 after the crit and Life Orb, before the variance), more than without it; the counter
+    ends up at the Me First turn number minus 1 (:1356-1358), and the user is not moved by the
+    foe's move first (it was faster)."""
+    s = _me_first_fight(tables, names, "Rock Throw")
+    out = assert_matches_reference(tables, s, A("Me First", "Rock Throw", s, names), _hits())
+    boosted = int(s.hp[1, 0]) - int(out.hp[1, 0])
+    assert boosted > 0 and int(out.me_first[0]) == 1 and int(out.me_first_turn[0]) == 0
+    seeded = s._replace(
+        me_first=s.me_first.at[0].set(1), me_first_turn=s.me_first_turn.at[0].set(1)
+    )
+    own = assert_matches_reference(tables, seeded, A("Rock Throw", "Growl", s, names), _hits())
+    assert int(s.hp[1, 0]) - int(own.hp[1, 0]) == boosted
+    plain = assert_matches_reference(tables, s, A("Rock Throw", "Growl", s, names), _hits())
+    assert int(s.hp[1, 0]) - int(plain.hp[1, 0]) < boosted
+
+
+def test_me_first_fails_after_the_target_moved_on_status_and_on_banned_effects(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """TryMeFirst fails (:7305-7309) when the target has acted (DEFENDER_ACTION is MOVE_END), chose
+    no damaging move, or the move shares a battle effect with Counter, Mirror Coat, Thief, Covet,
+    Focus Punch or Chatter: vanilla Covet (effect 105) is refused, and Kaizo, whose Covet slot has
+    effect 0, refuses every plain hit (Rock Throw)."""
+    cases = (
+        (tables, names, "Rock Throw", False, "Me First moves after the target"),
+        (tables, names, "Growl", True, "a status move has no power"),
+        (tables, names, "Covet", True, "effect 105 is Thief's"),
+        (kaizo_tables, kaizo_names, "Rock Throw", True, "Kaizo's effect 0 is banned"),
+    )
+    for t, n, foe_move, fast, why in cases:
+        s = _me_first_fight(t, n, foe_move, fast=fast)
+        out = assert_matches_reference(t, s, A("Me First", foe_move, s, n), _hits())
+        assert int(out.hp[1, 0]) == int(s.hp[1, 0]), why
+        assert int(out.me_first[0]) == 0, why
+
+
+class _CounterState:
+    """The three fields ``damage.me_first_*`` read and write, one battler."""
+
+    def __init__(self, turn, flag, number):
+        self.turn = jnp.asarray(turn)
+        self.me_first = jnp.asarray([flag], jnp.int8)
+        self.me_first_turn = jnp.asarray([number], jnp.int16)
+
+    def _replace(self, **kw):
+        new = _CounterState(0, 0, 0)
+        new.turn, new.me_first, new.me_first_turn = self.turn, self.me_first, self.me_first_turn
+        for k, v in kw.items():
+            setattr(new, k, v)
+        return new
+
+
+def test_me_first_counter_arithmetic():
+    """``damage.me_first_active`` / ``me_first_after_calc`` (battle_script.c:1354-1364) with
+    meFirstTurnOrder = turn + 1: boosted on the Me First turn and (after the first CalcDamage
+    lowered the number) cleared at the next turn's first one; a copy that never calculated keeps
+    the number, so the next turn's first calculation is boosted too and clears one turn later."""
+    from nuzline.engine.damage import me_first_active, me_first_after_calc
+
+    calc = me_first_after_calc
+    st = _CounterState(0, 1, 1)
+    assert bool(me_first_active(st, 0))
+    st = calc(st, 0, True)  # number 1 -> 0, order 1: still boosted
+    assert (int(st.me_first[0]), int(st.me_first_turn[0])) == (1, 0) and bool(
+        me_first_active(st, 0)
+    )
+    nxt = st._replace(turn=jnp.asarray(1))  # order 2, number 0: 2 above
+    assert not bool(me_first_active(nxt, 0))
+    assert int(calc(nxt, 0, True).me_first[0]) == 0
+    idle = _CounterState(1, 1, 1)  # the Me First turn made no calculation; order 2, number 1
+    assert bool(me_first_active(idle, 0))
+    assert int(calc(idle, 0, True).me_first[0]) == 1  # 2 - 1 < 2: stays
+    later = _CounterState(2, 1, 1)
+    assert not bool(me_first_active(later, 0)) and int(calc(later, 0, True).me_first[0]) == 0
