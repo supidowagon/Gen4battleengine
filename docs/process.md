@@ -65,29 +65,29 @@ per day is the rate used for estimates.
 
 - **What may leave the PC:** source code at a commit and the built tables (`.json`/`.npz`).
   Never the ROM, save files, the calc archive, the docs sheet, or anything personal.
-- **Agents never wait on a pod.** A runner agent launches the pod run and returns. The
-  managing session checks the result later with a second runner that reads the status,
-  fetches the logs and reports.
-- **Nightly pod (`ci-nightly`):** at most $6 per run. Brief: `tools/ops/nightly_brief.md`.
-  Delete the pod within 4.5 hours of creation.
+- **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
+  up. Otherwise rent `ci-nightly`: at most $6 per run, deleted within 4.5 hours of creation.
 - **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, at most $15 per day, for every stream test
   run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
-  and test-file list; the managing session dispatches a Sonnet runner that uploads that
-  commit and its built tables and starts the run, then a later runner reports counts, time
-  and peak memory per file. Only committed code runs on the pod.
+  and test-file list; the managing session dispatches one fresh Opus agent per run that
+  uploads that commit and its built tables, runs the list and reports counts, time and peak
+  memory per file, and reports each failure as it appears. Only committed code runs on the pod.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
-  (`/sys/fs/cgroup/memory.current`) is under 88 GB. The passed, failed and skipped totals
+  (`/sys/fs/cgroup/memory.current`) is under 88 GB, and run at most about 10 memory-heavy
+  processes at once: a chunk grows to 8-12 GB after it starts. Near 118 GB kill the newest
+  chunk and queue it again. Never signal PID 1. The passed, failed and skipped totals
   per file equal its collected count; a file whose totals differ has not run.
 - Only the managing session rents, uses and deletes pods. Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
-  Runpod tools' pod exec.
+  Runpod tools' pod exec. A pod exec call ends after 25 seconds: start work with `nohup`
+  and poll.
 
 ## 6. Watching the streams
 
