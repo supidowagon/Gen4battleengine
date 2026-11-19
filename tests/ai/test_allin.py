@@ -288,6 +288,7 @@ def test_draws_do_not_depend_on_the_read_bound(kaizo_tables, fights):
     assert allin.shape == (4, ALLIN_READS) and np.array_equal(allin[:, : lay.slot_reads], own)
 
 
+@pytest.mark.fullset
 def test_every_fight_reads_within_the_allin_bound(kaizo_tables):
     # ALLIN never refuses a path (missing_read) that a fight's own layout accepts.
     d = GAMES[KAIZO]

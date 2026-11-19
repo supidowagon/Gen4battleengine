@@ -847,6 +847,7 @@ def _check_fight_reads(t, party, every: int, moves, rng, species, n: int = 4):
     return reached
 
 
+@pytest.mark.fullset
 def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
     """E1 Ruling R6 against the data, the fast version: one fight per flag piece (the full
     sweep is ``test_slot_reads_fit_every_transcribed_effect_full``, slow). The proof that no

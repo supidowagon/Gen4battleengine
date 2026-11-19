@@ -241,6 +241,7 @@ def test_program_caches_key_on_the_flag_set():
     assert not bad, bad
 
 
+@pytest.mark.fullset
 def test_every_kaizo_fight_fits_the_width_cap(kaizo_tables, kaizo_trainers):
     """E1 Ruling R6: every Kaizo trainer's fight, under the transcribed bits of its own AI
     flags, has a read bound whose layout passes WIDTH_CAP (``kaizo_layout`` raises otherwise).

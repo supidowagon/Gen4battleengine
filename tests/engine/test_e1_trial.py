@@ -814,6 +814,7 @@ def test_mimic_fight_holds_the_foes_possible_moves(tables, names):
 
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
+@pytest.mark.fullset
 def test_a_copier_fight_holds_every_move_the_foe_may_have(request, names, game):
     """The largest pool: six Pokemon with four distinct moves, one of them Mimic, against a foe
     that may have every move id. ``AI_MOVES_ROWS`` holds it, so no fight is refused for its

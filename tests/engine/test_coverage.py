@@ -175,6 +175,7 @@ def test_ai_refusals_are_included(tables, names):
     assert any("Ember" in m and "trainer AI" in m for m in r.missing)
 
 
+@pytest.mark.fullset
 def test_sampling_only_is_unimplemented():
     # The spec's sampling-only grade (section 4.2) has no registry entry and no engine
     # path yet (coverage.py docstring): a registry that assigns it must come with that

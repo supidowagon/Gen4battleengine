@@ -226,6 +226,7 @@ def test_semi_invulnerable_flags(tables, names, kaizo_tables, kaizo_names):
         assert not int(kaizo_tables.move_flags[kaizo_names.move(move)]) & MoveFlag.CHARGE
 
 
+@pytest.mark.fullset
 def test_script_flag_effects_match_every_script():
     """B13-1, B13-2: every effect script that adds BTLVAR_CRITICAL_BOOSTS is HIGH_CRIT or carries
     MoveFlag.CRIT_UP (CHARGE_FLAG_EFFECTS, SCRIPT_FLAG_EFFECTS), and every SetMultiHit 2 is

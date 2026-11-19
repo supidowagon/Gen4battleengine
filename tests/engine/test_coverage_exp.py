@@ -226,6 +226,7 @@ def test_the_effect_ids_are_the_decomp_moves(tables, names):
 
 
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
+@pytest.mark.fullset
 def test_every_exp_sensitive_move_meets_its_exp_line(request, game, names):
     """Every move of §4.2, §4.4 and §4.5, in both games and whatever its engine support, meets
     its family's ``exp_refusals`` line: an item-moving move with an exp-item holder (§4.2), a
