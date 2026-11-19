@@ -523,6 +523,12 @@ Each is open; close it with its ruling.
     Add the same check for its crit, damage classes, flinch and status cuts on a self-lock
     state (each foe-keyed cut in `enumerate.outcome_laws` lifted for `self_lock`).
 
+19. Acid Rain: fieldConditionsMask -= faintedMon at a Pursuit KO (subscript_pursuit.s:100, :115;
+    script.c:1769-1770, :3282-3287; recoil operand lib.c:4257-4269, :4358-4371, :5400-5409,
+    :7357-7374); refused at run time (acid_rain) in every format; owed: FCM.md (E1). Field
+    conditions as the decomp mask (FCM.md section 4); then rule 8 is a subtraction and the
+    refusal goes.
+
 ### Closes with its mechanic
 
 Rules left out because another mechanic is missing; each closes when that mechanic lands.
@@ -2510,3 +2516,20 @@ docs/doubles-state-design.md.
 - D2-37 (merge of e2-snap-notes, carrying main 38d22f4, into the singles follow-up) The follow-up's defender-based reads keep E3's shared reader (Battler_Ability, battle_lib.c:3088-3093): `step._use_move`'s No Guard on the user and the resolved defender (bcp.c:3016) and Crash's Magic Guard read `battler_ability`; the reference `_fight` No Guard and `_contact_ability` (its `target` argument) read `_ability`. E3's Me First rule (a failed Me First keeps a target, RANGE_SINGLE_TARGET_ME_FIRST, battle_lib.c:1599-1727: `self_invoker`) stands beside the follow-up's lock-target checks.
 - D2-38 (numbered D2-34 on e2-d2; pod run on e2-d2 e688271: 2 of 3,570 failed; both tests were stale, the code is right) 1. `test_faints.py::test_new_fields_default_to_zero` (renamed `test_new_fields_start_values`) asserted every field after `replace_mul` is 0; D2-1's commit d061cd2 (not the merge) appended `chosen_target`, whose spec start is `b ^ 1` (D2-1, STATE.md; `make_state` state.py:1128): the game's 0 is never read, as every battler selects on turn 1 (bcp.c:507-531) and the selection writes the target (TARGET_SELECT_INIT passes `&battlerActions[i][1]` to BattleControllerPlayer_MustSelectTarget, bcp.c:534-542, which writes the user or `b ^ 1` at :4363-4367), and at B = 2 the step does not write it (D2-28), so a fresh singles state holds [1, 0]. The test now checks the turn scratch (`pivot_battler`, `ts_*`) and `last_hit_by` at 0 and `chosen_target` at `b ^ 1`; here D2-33 turns the B = 2 write on and D2-35 canonicalizes the value to the same `b ^ 1` at a turn's end, so the fresh state and the test are unchanged. 2. `test_field_pass.py::test_trick_room_is_not_counted_in_the_field_pass` assumed the countdown unbuilt. CheckFieldConditions (bcp.c:932-1254) has no Trick Room step; CheckSideConditions runs after it and its SIDE_COND_CHECK_STATE_TRICK_ROOM (bcp.c:1740-1742, :1822-1830) subtracts 1 << FIELD_CONDITION_TRICK_ROOM_SHIFT each turn end (condition.h:123-149), running subscript_trick_room_end at 0. E3's `step._trick_room_check` (after `_perish_song_check`) does that, so one turn takes 3 to 2. The test is now `test_trick_room_counts_down_once_per_turn` (3 to 2). No engine change.
 - D2-39 (D2 snap_compare, BASE a838c20 vs NEW e07c0bd; log _scratch/rent/snapd2/compare.log in the main checkout) Accepted: the 20 "gen" parts DIVERGED at turn 1, all 102 engine parts (step, jitstep, sample, rest, ai, roark.trace, roark.rank) are identical. Cause, generator only: "gen" (tools/snap_compare.py:568-580, `draw_inputs` :500-565) redraws the Hypothesis inputs at NEW and diffs them against the captured ones (result check :1107); D2 changed `tests/strategies.py` (`any_outcome` draws four new fields, `target_draw`, `call_target_draw`, `bide_target_draw`, `trace_pick`; `BATCH3_ABILITIES` gained Storm Drain), so one `st.data()` stream is consumed differently and every later draw shifts. Turn 0 matches because Hypothesis's first example is the all-zero one. Every engine part reruns on the captured inputs, so an engine difference would show there; none does. Limit: engine parts see only captured inputs, so the new Outcome fields stay at `empty_outcome()`'s value there; D2's non-default draws are covered by its own tests (test_d2_*, test_outcome.py). Proposal, no tool change: "gen" reports "generator changed" (not a failure) when `tests/strategies.py` or the generator's imports differ between the two commits, and fails only on a divergence with an unchanged generator.
+- SF2-f Acid Rain interim guard. A Pursuit KO of the switcher runs `fieldConditionsMask -= faintedMon`
+  (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO, script.c:3282-3287). Built: `BattleState.acid_rain`
+  (int8, sticky, not a scratch field; reference `RefState.acid_rain`) written at the one Pursuit site of
+  `step._execute_actions` and at the end of reference `_pursuit`: `ko` = the switcher alive before and at 0
+  HP after the hit; `bonded` = `pre.destiny_bond[switcher]` (the game's order, Destiny Bond at :85 restores
+  `faintedMon`, subscript_faint_check_destiny_bond.s:10, :25; not `_pursuit_hit`'s `bonded`); operand = the
+  pursuer when it fell to Rough Skin, Aftermath, Jaboca or its Life Orb (lib.c:4257-4269, :4358-4371,
+  :5400-5409, :7357-7374) and not `bonded`, else the switcher; written only when the operand is nonzero
+  and a weather, Gravity, Trick Room or another battler's Uproar bit is up (the switcher's bit is gone at
+  :115, lib.c:2213; a Destiny Bond faint clears the pursuer's too, a recoil faint keeps it). Refusal:
+  `coverage.check_acid_rain` at `enumerate_turn` and `step.root_belief` (so stage A / B and prep through
+  `solve`); `search.learn.learn_reason` carries the message for the playout / replay refusal reasons; the
+  jitted readers of `exp_refused` also refuse `acid_rain != 0` (search/expand.py, learn.py, playout.py,
+  player.py). Coverage: `CoverageReport.runtime` (non-refusing, `level` unchanged), the line "field
+  condition: Acid Rain (runtime refusal)" when a trainer move is BATTLE_EFFECT_HIT_BEFORE_SWITCH
+  (`check_opponent`); backlog kind "field condition", section "Playable, lines hitting the glitch refused".
+  Tests: tests/engine/test_acid_rain_guard.py (`fullset`), tests/tools/test_backlog.py.

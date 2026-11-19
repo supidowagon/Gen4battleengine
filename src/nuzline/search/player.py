@@ -169,7 +169,13 @@ def _player_run(
         played, pass_refused = _replace_while_needed(
             tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
-        refused = refused | pass_refused | act_refused | (played.exp_refused != 0)
+        refused = (
+            refused
+            | pass_refused
+            | act_refused
+            | (played.exp_refused != 0)
+            | (played.acid_rain != 0)
+        )
         s = _select(refused, s, played)
         counted = jnp.where(refused, 0, 1)
         return s, key, turns + counted, fallback + jnp.where(by_fallback, counted, 0), refused

@@ -2736,6 +2736,11 @@ def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.nd
     return jnp.where(pursued, PURSUIT_POWER_MUL, NORMAL_POWER_MUL).astype(_I32)
 
 
+def _active_hp(fmt: Format, state: BattleState, battler):
+    """The HP of ``battler``'s active Pokemon."""
+    return state.hp[party(fmt, battler), state.active[battler]]
+
+
 def _pursuit_hit(
     tables: Tables, state: BattleState, pursuer, switcher, actions, choices, outcome: Outcome
 ) -> BattleState:
@@ -3029,6 +3034,38 @@ def _execute_actions(
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
+        # subscript_pursuit.s:100, :115: the KO of the switcher runs ``fieldConditionsMask -=
+        # faintedMon`` (SUB_TO_ZERO, battle_script.c:3282-3287), which the engine cannot hold:
+        # ``acid_rain`` records the operand and the state is refused (docs/kaizo FCM.md). The
+        # operand is the switcher, unless the pursuer then fell to a recoil (Rough Skin,
+        # Aftermath, Jaboca Berry, its Life Orb: battle_lib.c:4257-4269, :4358-4371, :5400-5409,
+        # :7357-7374), and not after Destiny Bond, which restores ``faintedMon`` to the switcher
+        # (subscript_faint_check_destiny_bond.s:10, :25) and runs first (:85) on the switcher's
+        # own flag (not ``_pursuit_hit``'s ``bonded``). A Destiny Bond faint clears the
+        # pursuer's Uproar bit before :115 (battle_lib.c:2213), a recoil faint keeps it; the
+        # switcher's bit is gone too.
+        ko = fire & (_active_hp(fmt, pre, side) > 0) & (_active_hp(fmt, hit, side) == 0)
+        bonded_ko = ko & (pre.destiny_bond[side] != 0)
+        operand = jnp.where(
+            (_active_hp(fmt, hit, pursuer) == 0) & ~bonded_ko, pursuer, side
+        ).astype(_I32)
+        mask_up = (
+            (hit.weather != Weather.NONE)
+            | (hit.gravity != 0)
+            | (hit.trick_room != 0)
+            | jnp.any(
+                jnp.stack(
+                    [
+                        (hit.uproar[b] != 0) & (b != side) & ~(bonded_ko & (b == pursuer))
+                        for b in range(fmt.B)
+                    ]
+                )
+            )
+        )
+        acid = ko & (operand != 0) & mask_up
+        state = state._replace(
+            acid_rain=jnp.where(acid, operand, state.acid_rain).astype(state.acid_rain.dtype)
+        )
         pursued = jnp.where(fire, 1 + pursuer, pursued)
         fired = fired | fire
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
@@ -4258,6 +4295,9 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     visible outcomes, each its own belief node (``search.stage_b``, ruling G-34). A host
     state (NumPy leaves, as ``prep`` and the CLI build it) is read as JAX arrays first: the
     war's settling writes with ``.at`` (``hooks.reveal_ability``)."""
+    from nuzline.engine.coverage import check_acid_rain  # coverage imports the engine
+
+    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS

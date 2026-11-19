@@ -471,6 +471,7 @@ class BattleState(NamedTuple):
     learn_cursor: jnp.ndarray  # int8[6], index into that level's learnset scan
     learn_pin: jnp.ndarray  # int8, 0 none, else 1 + the move slot the player selected
     exp_refused: jnp.ndarray  # int8, sticky refusal code (0 none, 2 = window (c))
+    acid_rain: jnp.ndarray  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
     # faint budget (search data; the engine only records deaths and never reads k)
     deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
@@ -838,6 +839,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "learn_cursor": ((SLOTS,), np.int8),
     "learn_pin": (_FIELD, np.int8),
     "exp_refused": (_FIELD, np.int8),
+    "acid_rain": (_FIELD, np.int8),
     "deaths": ((SLOTS,), np.int8),
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),

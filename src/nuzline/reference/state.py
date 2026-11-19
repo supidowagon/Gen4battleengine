@@ -213,6 +213,7 @@ class RefState:
     learn_cursor: list[int]
     learn_pin: int
     exp_refused: int
+    acid_rain: int
     deaths: list[int]
     faint_budget: int
     protected: list[int]

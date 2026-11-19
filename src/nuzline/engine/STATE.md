@@ -374,6 +374,12 @@ three structs has a row.
     payout reached its active before its move ran) and `exp_refused` (a sticky refusal
     code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
     resolve set them.
+  - `acid_rain` (int8, sticky to the battle's end): the operand of Pursuit's
+    `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
+    battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a
+    nonzero operand while a field condition is up. The engine cannot hold the result: a state
+    with `acid_rain != 0` is refused (`coverage.check_acid_rain`; the search's `exp_refused`
+    readers). Owed: FCM.md (the field conditions as the decomp mask).
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
     replacing the active learner's disabled or encored move, or the slot pinned by
     `learn_pin` (the decomp ends Disable and Encore, and re-reads the pinned slot, after a
@@ -659,7 +665,7 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
+| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar`, `acid_rain` | mapped |
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |

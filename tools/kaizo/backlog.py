@@ -54,6 +54,32 @@ def group_kind(k):
     return _KIND_OF.get(kind, "other")
 
 
+RUNTIME_NOTE = "any fight is exposed when the player carries Pursuit"
+
+
+def runtime_section(entries):
+    """The lines of the "playable, lines hitting the glitch refused" section. ``entries``:
+    ``(battle label, runtime lines)`` of each runnable battle (no missing group) whose opponents
+    report ``CoverageReport.runtime`` lines (kind "field condition": a trainer move whose
+    effect is BATTLE_EFFECT_HIT_BEFORE_SWITCH, the Acid Rain guard). Such a fight stays
+    playable: only the play lines that reach the glitch are refused at run time."""
+    out = [
+        "",
+        "## Playable, lines hitting the glitch refused",
+        "",
+        "Runnable battles whose opponents report a runtime line (`CoverageReport.runtime`,",
+        "kind field condition): the fight is playable and only the lines that reach the",
+        f"glitch are refused ({RUNTIME_NOTE}).",
+        "",
+        f"{len(entries)} battles.",
+        "",
+        "| Battle | Runtime lines |",
+        "|---|---|",
+    ]
+    out += [f"| {label} | {'; '.join(sorted(set(lines)))} |" for label, lines in entries]
+    return out
+
+
 def battles(rows, by_id):
     """The battles of the split rows ``rows``, each a sorted tuple of trainer ids: a row joined
     with its ``opponent_2`` (both directions, transitively). A second opponent that is not a
@@ -621,6 +647,7 @@ def main(out_path):
         return (kind, name), None
 
     errors = []
+    runtime_of = {}  # trainer id -> CoverageReport.runtime lines (refuse no fight)
 
     def check(t, mem=members, errs=errors):
         """The missing groups of trainer row ``t`` (its team, bag, AI and battle conditions)."""
@@ -628,6 +655,7 @@ def main(out_path):
             cli._check_buildable(tables, names, t, inter)
             party = build_trainer_party(t, inter)
             r = check_opponent(tables, names, t, party, start_weather(t))
+            runtime_of[t.id] = list(r.runtime)
             ks = ai_move_groups(t, party, mem)
             for m in r.missing:
                 k, member = key(str(m))
@@ -817,6 +845,18 @@ def main(out_path):
         L.extend(["", "Groups by kind: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common())])
         return cnt
 
+    L.extend(
+        runtime_section(
+            [
+                (
+                    ", ".join(f"{i} {by_id[i].label}" for i in b),
+                    [line for i in b for line in runtime_of.get(i, ())],
+                )
+                for b in bs
+                if not battle_groups[b] and any(runtime_of.get(i) for i in b)
+            ]
+        )
+    )
     table("Roark split", order[:1])
     table("Roark and Gardenia splits (up to the second gym)", order[:2])
     table("All ten splits (top 60)", order, 60)

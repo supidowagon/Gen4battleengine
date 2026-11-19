@@ -5837,6 +5837,22 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         _on_hit_berry(turn, s, pursuer, side, True, False, _super_effective(turn, s, pursuer, move))
         _shell_bell(turn, s, pursuer, min(damage, target_hp))
         _life_orb_recoil(turn, s, pursuer)
+    # subscript_pursuit.s:100, :115: the switcher's KO runs ``fieldConditionsMask -=
+    # faintedMon`` (script.c:3282-3287): ``acid_rain`` records the operand, the state is
+    # refused (engine.step's Pursuit site; docs/kaizo FCM.md). The operand is the pursuer when
+    # it fell to a recoil (Rough Skin, Aftermath, Jaboca Berry, its Life Orb) and the switcher
+    # after Destiny Bond (subscript_faint_check_destiny_bond.s:10, :25), whose own flag decides.
+    if target_hp > 0 and _active(s, side).hp == 0:
+        bonded = bool(s.battlers[side].destiny_bond)
+        fm = pursuer if (mon.hp == 0 and not bonded) else side
+        # The switcher's Uproar bit is gone at :115 (lib.c:2213), and a Destiny Bond faint
+        # clears the pursuer's too; a recoil faint keeps it.
+        mask_up = bool(s.weather != Weather.NONE or s.gravity or s.trick_room) or any(
+            s.battlers[b].uproar != 0 and b != side and not (bonded and b == pursuer)
+            for b in range(len(s.battlers))
+        )
+        if fm and mask_up:
+            s.acid_rain = fm
 
 
 def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) -> None:

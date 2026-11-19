@@ -3952,6 +3952,9 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
     Talk variants (ruling B5-13) and takeover variants (B11-1) are played (``step.turn_events``)
     and each row is kept only where ``call_consistent``."""
+    from nuzline.engine.coverage import check_acid_rain  # coverage imports the engine
+
+    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     parts, tags = [], []

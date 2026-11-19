@@ -237,6 +237,12 @@ def _picks(tables: Tables, states: BattleState, actions) -> jnp.ndarray:
     return jax.vmap(lambda s, a: turn_inputs(tables, s, a)[0])(states, actions)
 
 
+def _refused_state(state: BattleState) -> jnp.ndarray:
+    """A state the search must not play on: learn work refused (``exp_refused``) or a Pursuit
+    Acid Rain (``acid_rain``)."""
+    return (state.exp_refused != 0) | (state.acid_rain != 0)
+
+
 def _select(cond, a, b):
     return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
 
@@ -273,7 +279,7 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome, taken)
     held_refused = ai_switched & (needs_replacement(stepped)[1] == 1)
     sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
     after = _select(prompt, held, sent)
-    refused = jnp.where(prompt, held_refused, sent_refused) | (after.exp_refused != 0)
+    refused = jnp.where(prompt, held_refused, sent_refused) | _refused_state(after)
     after = _select(halted, paused_child, after)
     refused = jnp.where(halted, False, refused) | pick_refused
     keep = call_consistent(tables, before, actions, outcome, events, taken)
@@ -409,7 +415,7 @@ def expand(
 
 def _replace(tables: Tables, state: BattleState, action):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    refused = refused | (after.exp_refused != 0)
+    refused = refused | _refused_state(after)
     # An open weather war (ruling G-26): its tie bit is a chance node here, before the
     # player's next decision (step.resolve_war), else both rows are the one child.
     ties = [resolve_war(after, tie) for tie in (0, 1)]
@@ -509,7 +515,7 @@ def _learn(tables: Tables, state: BattleState, option):
         replace_mul=jnp.where(pending, sent.replace_mul, 0).astype(sent.replace_mul.dtype)
     )
     after = _select(prompt, answered, sent)
-    refused = (~prompt & sent_refused) | (after.exp_refused != 0)
+    refused = (~prompt & sent_refused) | _refused_state(after)
     return after, refused, replacement_observation(after)
 
 
