@@ -477,7 +477,8 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Endeavor and Pain Split write HP only (B10-5).
     EffectId.ENDEAVOR,
     EffectId.PAIN_SPLIT,
-    # Knock Off takes an item only (B10-6).
+    # Knock Off takes an item only (B10-6), no stage; the Wide Lens it takes is
+    # hit_thresholds' second half, as Embargo's (F-17).
     EffectId.KNOCK_OFF,
     EffectId.SAFEGUARD,  # a side condition (B10-7)
     EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
@@ -524,7 +525,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # magnetRiseTurns on its user, no stage.
     EffectId.MAGNET_RISE,
     # Mimic (effect_script_0082.s:5) runs subscript_mimic (:5-11): BtlCmd_TryMimic
-    # (battle_script.c:4476-4523) writes a move slot, no stage.
+    # (battle_script.c:4476-4524) writes a move slot, no stage.
     EffectId.MIMIC,
     # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
     # defender through subscript_confuse: a volatile status, no stage.
@@ -729,6 +730,91 @@ def test_gravity_and_transform_are_seen_by_hit_thresholds(tables, names):
                 hits.append(bool(out.hp[1, 0] < s.hp[1, 0]))
             assert hits == [lo <= live] * 2, (lo, hi - 1, hits)
             hit_weight += law[lo] if hits[0] else 0
+        assert hit_weight == live
+
+
+def _taken_and_copied_cases(tables, names):
+    """(state, actions, law, live) per case: a faster foe's move before the slower player move
+    that changes its threshold through an item or an ability (F-17, G-69 follow-ups)."""
+    cases = []
+    # Knock Off takes the player's Wide Lens (BtlCmd_TryKnockOff, battle_script.c:6622-6624):
+    # Rock Throw 90 * 110 / 100 = 99 becomes 90 (bcp.c:2955-2957), F-17.
+    lens = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Knock Off"], opp_faster=True
+    )
+    lens = lens._replace(item=lens.item.at[0, 0].set(names.item("Wide Lens")))
+    law = {1: 90, 91: 9, 0: 1}  # class 0: roll 100 misses at every threshold
+    cases.append((lens, A("Rock Throw", "Knock Off", lens, names), law, 90))
+    # Transform copies the player's Drizzle (battle_mon.h:84), whose switch-in check reruns
+    # (bcp.c:3672-3673): rain, so Thunder never misses (bcp.c:3025-3027).
+    rain = roark_state(
+        tables, names, player_moves=["Thunder"], opp_moves=["Transform"], opp_faster=True
+    )
+    rain = rain._replace(ability=rain.ability.at[0, 0].set(AbilityId.DRIZZLE))
+    cases.append((rain, A("Thunder", "Transform", rain, names), {1: 70, 71: 30}, 100))
+    # The transformed foe holds the player's Unaware: the player's accuracy +1 is ignored
+    # (bcp.c:2882-2884), Rock Throw 90 * 133 / 100 = 119 back to 90.
+    unaware = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Transform"], opp_faster=True
+    )
+    unaware = unaware._replace(
+        ability=unaware.ability.at[0, 0].set(AbilityId.UNAWARE),
+        stages=unaware.stages.at[0, Stat.ACC].set(1),
+    )
+    cases.append((unaware, A("Rock Throw", "Transform", unaware, names), {1: 90, 91: 10}, 90))
+    # The foe loses its own No Guard (bcp.c:3016-3021): Rock Throw can miss again.
+    guard = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Transform"], opp_faster=True
+    )
+    guard = guard._replace(ability=guard.ability.at[1, 0].set(AbilityId.NO_GUARD))
+    cases.append((guard, A("Rock Throw", "Transform", guard, names), {1: 90, 91: 10}, 90))
+    # The foe loses its own Cloud Nine (NO_CLOUD_NINE, bcp.c:3024): rain's Thunder never misses.
+    # NO_CLOUD_NINE reads the decomp ability (damage.decomp_abilities): a Psyduck in its
+    # Cloud Nine slot.
+    nine = roark_state(
+        tables,
+        names,
+        player_moves=["Thunder"],
+        opp_species="Psyduck",
+        opp_moves=["Transform"],
+        opp_faster=True,
+    )
+    slot = names.species_abilities(names.species("Psyduck")).index(names.ability("Cloud Nine"))
+    nine = nine._replace(
+        ability_slot=nine.ability_slot.at[1, 0].set(slot),
+        ability=nine.ability.at[1, 0].set(AbilityId.CLOUD_NINE),
+        weather=jnp.asarray(Weather.RAIN, nine.weather.dtype),
+    )
+    cases.append((nine, A("Thunder", "Transform", nine, names), {1: 70, 71: 30}, 100))
+    # In sun the lost Cloud Nine lets Thunder's hitRate = 50 apply (bcp.c:2915-2917), F-25.
+    sun = nine._replace(weather=jnp.asarray(Weather.SUN, nine.weather.dtype))
+    cases.append((sun, A("Thunder", "Transform", sun, names), {1: 50, 51: 20, 0: 30}, 50))
+    return cases
+
+
+@pytest.mark.slow
+def test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_thresholds(tables, names):
+    """Each case's law holds the live threshold, and each class is decided alike by the live
+    check at both its ends, in both engines (as test_gravity_and_transform_are_seen_by_...)."""
+    for s, acts, law, live in _taken_and_copied_cases(tables, names):
+        assert hit_law(tables, s, acts, 0) == law, law
+        # Class k > 0 holds the rolls k up to the next class; class 0 the top rolls that miss
+        # at every threshold.
+        bounds = sorted(k for k in law if k)
+        top = 101 - law.get(0, 0)
+        ranges = list(zip(bounds, [*bounds[1:], top], strict=True))
+        ranges += [(top, 101)] if 0 in law else []
+        hit_weight = 0
+        for lo, hi in ranges:
+            hits = []
+            for roll in (lo, hi - 1):
+                o = empty_outcome()
+                out = assert_matches_reference(
+                    tables, s, acts, o._replace(hit=o.hit.at[0, 0].set(roll))
+                )
+                hits.append(bool(out.hp[1, 0] < s.hp[1, 0]))
+            assert hits == [lo <= live] * 2, (law, lo, hi - 1, hits)
+            hit_weight += law[lo if lo < top else 0] if hits[0] else 0
         assert hit_weight == live
 
 

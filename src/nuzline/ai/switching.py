@@ -28,9 +28,11 @@ writes it (:3797). A bench Pokemon can be in both passes: ``UpateMoveStatusForTy
 row cleared it (Ground on Flying/Bug), and Wonder Guard's ``INEFFECTIVE`` (:2734-2739) never
 clears ``NOT_VERY_EFFECTIVE``; so the passes hold up to ``2 * 5 * 4 = 40`` draws. The Wonder
 Guard draws (step 4) exist only when no move of ``A`` is super effective (:3300-3311), so never
-beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates (ruling G-33), and a party
-of six never has more sites than ``KAIZO_SWITCH_SITES``
-(``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``).
+beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates without the Flash Fire draws
+(ruling G-33; ``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``). The
+absorb draws (step 6, at most 5) share the keep draws' condition, so with the Wonder Guard draws
+a party of six could pass 60 only for a Wonder Guard player, a Fire ``moveHit`` and bench Flash
+Fire holders together: refused by the count test, never approximated.
 
 Wonder Guard (ruling G-23). ``AI_CannotDamageWonderGuard`` (step 4) runs when ``D``'s
 ``battleMons[].ability`` is Wonder Guard (no Mold Breaker test, no knowledge: the true
@@ -75,9 +77,14 @@ Breaker only matters against Levitate, which is refused, and the AI bench's Wond
 Refused, never approximated (``switching_refusals`` names each one):
 
 * abilities on either side that change these masks: Levitate, Scrappy, Normalize; and on
-  the AI's side the steps 6-7 abilities (Flash Fire, Water Absorb,
-  Volt Absorb: ``AI_HasAbsorbAbilityInParty``; Natural Cure:
-  ``AI_IsAsleepWithNaturalCure``), whose draws are not modelled;
+  the AI's side the steps 6-7 abilities (Water Absorb, Volt Absorb:
+  ``AI_HasAbsorbAbilityInParty``; Natural Cure: ``AI_IsAsleepWithNaturalCure``), whose draws are
+  not modelled; Flash Fire's case of step 6 is (``SwitchSite.ABSORB``, F-2: one
+  ``RandNext() & 1`` per bench Pokemon with it after a Fire ``moveHit`` with power, in party
+  order, beside the Wonder Guard draws and only when no move of ``A`` is super effective: with
+  one, the function's ``RandNext() % 3`` gate (:3651) is shared by those draws, which independent
+  sites cannot express: refused, ``_Layout.absorb_gate``). A state with more candidates than the
+  layout's sites is refused (Wonder Guard, absorb and both passes together can exceed 60);
 * moves whose state the engine does not carry: Miracle Eye; the variable-type moves are
   modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type`` for the AI's active and the
   player's ``moveHit``; ``Move_CalcVariableType``, battle_lib.c:8097, ``party_move_types`` for
@@ -123,7 +130,7 @@ from nuzline.engine.damage import (
     weather_ball_params,
 )
 from nuzline.engine.format import foe, format_of, party
-from nuzline.engine.ids import ItemId
+from nuzline.engine.ids import ItemId, Type
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
 SWITCH_SITES = 9  # roark.md 11.1: 1 keep draw + 4 + 4 party-pass draws for Roark
@@ -155,6 +162,9 @@ class SwitchSite(IntEnum):
     # AI_CannotDamageWonderGuard (:3286): RandNext() % 3 < 2 switches (:3338), 43691 of 65536
     # (ruling G-23).
     WONDER_GUARD = 5
+    # AI_HasAbsorbAbilityInParty (:3640-3713), Flash Fire's case (F-2): a bench Pokemon with Flash
+    # Fire after a Fire moveHit with power: RandNext() & 1 switches to it (:3706), 32768 of 65536.
+    ABSORB = 6
 
 
 # MOVE_STATUS_* bits (include/constants/battle/moves.h:58-60).
@@ -198,7 +208,6 @@ _ANY_SIDE_ABILITIES = {
     "Normalize": "makes every move Normal",
 }
 _AI_SIDE_ABILITIES = {
-    "Flash Fire": "AI_HasAbsorbAbilityInParty",
     "Water Absorb": "AI_HasAbsorbAbilityInParty",
     "Volt Absorb": "AI_HasAbsorbAbilityInParty",
     "Natural Cure": "AI_IsAsleepWithNaturalCure",
@@ -222,17 +231,21 @@ _ABILITY_NAMES = {i: n for n, i in ABILITY_IDS.items()}
 _MOVE_NAMES = {i: n for n, i in MOVE_IDS.items()}
 
 # Wonder Guard draws, then keep draws, then pass 1, then pass 2.
-_CANDIDATES = MOVES + 3 * SLOTS * MOVES
+_CANDIDATES = MOVES + SLOTS + 3 * SLOTS * MOVES
 _CANDIDATE_KINDS = jnp.array(
     [SwitchSite.WONDER_GUARD] * (SLOTS * MOVES)
+    + [SwitchSite.ABSORB] * SLOTS
     + [SwitchSite.KEEP] * MOVES
     + [SwitchSite.PASS_INEFFECTIVE] * (SLOTS * MOVES)
     + [SwitchSite.PASS_NOT_VERY_EFFECTIVE] * (SLOTS * MOVES),
     _I8,
 )
 _BENCH_TARGETS = [j for j in range(SLOTS) for _ in range(MOVES)]
-_CANDIDATE_TARGETS = jnp.array(_BENCH_TARGETS + [-1] * MOVES + _BENCH_TARGETS * 2, _I8)
+_CANDIDATE_TARGETS = jnp.array(
+    _BENCH_TARGETS + list(range(SLOTS)) + [-1] * MOVES + _BENCH_TARGETS * 2, _I8
+)
 _WONDER_GUARD, _MOLD_BREAKER = ABILITY_IDS["Wonder Guard"], ABILITY_IDS["Mold Breaker"]
+_FLASH_FIRE = ABILITY_IDS["Flash Fire"]
 
 
 class UnsupportedSwitching(ValueError):
@@ -330,7 +343,7 @@ def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.n
 def weather_ball_refused(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: a type read of the voluntary-switch rule or the post-KO replacement meets
     Weather Ball where its case assigns no type (``damage.ai_weather_ball_typed``: no weather,
-    fog alone, or Cloud Nine / Air Lock): ``TrainerAI_MoveType`` (trainer_ai.c:3209-3227) of
+    fog alone, or Cloud Nine / Air Lock): ``TrainerAI_MoveType`` (trainer_ai.c:3222-3240) of
     the AI's active's moves (:3302, :3387, :3578, :3605) or of the player's ``moveHit`` (:3767),
     and ``Move_CalcVariableType`` (battle_lib.c:8177-8195) of an AI party member's (:3324,
     :3443, :3502, :3782; battle_lib.c:7998, :8051) return an uninitialized register, not
@@ -489,6 +502,7 @@ class _Layout(NamedTuple):
     weather_ball: jnp.ndarray  # bool, weather_ball_refused
     refused: jnp.ndarray  # bool
     perish: jnp.ndarray  # bool, AI_PerishSongKO (step 3) switches the AI's active out
+    absorb_gate: jnp.ndarray  # bool, AI_HasAbsorbAbilityInParty's correlated gate draw applies
 
 
 @partial(jax.jit, static_argnames="sites")
@@ -591,7 +605,27 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # order (``bench_se``), draw (:3338). Doubles return FALSE (:3294), so singles only.
     guard = (d_ability == _WONDER_GUARD) & ~jnp.any(keep)
     guard_draws = (guard & bench[:, None] & bench_se).reshape(-1)
-    exists = jnp.concatenate([guard_draws, keep, *passes]) & ~gate & ~perish  # [_CANDIDATES]
+    # Step 6, AI_HasAbsorbAbilityInParty (:3640-3713), Flash Fire's case (F-2). After the keep
+    # test (flag TRUE, no draw inside, :3586-3587; ``keep``'s flags) the function reads
+    # RandNext() % 3 (:3651) and returns FALSE unless it is 0: when A has a super-effective move
+    # that gate is one draw shared by every bench draw below it, which independent sites cannot
+    # express (the later draws are conditioned on it): refused, ``absorb_gate``. Otherwise: a
+    # moveHit with power (:3657-3665) of table type Fire (``MOVE_DATA().type``, :3668), A's own
+    # ``Battler_Ability`` not Flash Fire (:3678), and each living bench Pokemon (the same bench
+    # as the passes; ``aiSwitchedPartySlot`` is 6) whose MON_DATA_ABILITY is Flash Fire draws
+    # ``RandNext() & 1`` in party order, the first success switching to it (:3706-3708).
+    flash_bench = (
+        bench
+        & hit_ok
+        & (tables.move_type[hit] == Type.FIRE)
+        & (ability[1, a] != _FLASH_FIRE)
+        & (ability[1] == _FLASH_FIRE)
+    )
+    absorb_gate = ~gate & ~perish & jnp.any(keep) & jnp.any(flash_bench)
+    absorb_draws = flash_bench & ~jnp.any(keep)
+    exists = (
+        jnp.concatenate([guard_draws, absorb_draws, keep, *passes]) & ~gate & ~perish
+    )  # [_CANDIDATES]
 
     position = jnp.cumsum(exists.astype(_I32)) - 1
     target = jnp.where(exists, position, sites)  # out of range: dropped
@@ -606,7 +640,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
     weather_ball = weather_ball_refused(tables, state)
     refused = (count > sites) | only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
-    refused = refused | weather_ball
+    refused = refused | weather_ball | absorb_gate
     kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
     return _Layout(
         kinds,
@@ -618,6 +652,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         weather_ball,
         refused,
         perish,
+        absorb_gate,
     )
 
 
@@ -637,8 +672,14 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
     if bool(lay.weather_ball):
         out.append(
             "switching: Weather Ball's type case assigns nothing in this weather "
-            "(TrainerAI_MoveType, trainer_ai.c:3209-3227; Move_CalcVariableType, "
+            "(TrainerAI_MoveType, trainer_ai.c:3222-3240; Move_CalcVariableType, "
             "battle_lib.c:8177-8195): an uninitialized register"
+        )
+    if bool(lay.absorb_gate):
+        out.append(
+            "switching: AI_HasAbsorbAbilityInParty reads one RandNext() % 3 (trainer_ai.c:3651) "
+            "before its bench draws while the AI's active has a super-effective move: the gate "
+            "is shared by those draws and not expressible as independent sites"
         )
     if bool(lay.only_ineffective):
         out.append(
@@ -693,6 +734,7 @@ def switch_action(
         (kind == SwitchSite.PASS_INEFFECTIVE)
         | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)
         | (kind == SwitchSite.WONDER_GUARD)
+        | (kind == SwitchSite.ABSORB)
     )
     action = jnp.where(is_pass, MOVE_ACTIONS + lay.targets[index].astype(_I32), NO_SWITCH)
     # AI_PerishSongKO switches whatever the stop (no draw precedes it): TrainerAI_PickCommand

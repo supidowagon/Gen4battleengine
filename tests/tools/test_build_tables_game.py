@@ -159,3 +159,26 @@ def test_kaizo_gate_on_the_real_diff(tmp_path):  # skips until extract_rom --gam
     trimmed = tmp_path / "rom_diff.toml"
     trimmed.write_text(text[:first] + text[text.index("[[code]]", first + 1) :], "utf-8")
     assert build_tables._kaizo_rom_changes(inter, trimmed)[1] >= full  # never fewer unknowns
+
+
+@pytest.mark.parametrize(
+    ("changed", "status", "want"),
+    [([], None, 0), ([238], "modelled", 1), ([238], "irrelevant", None)],
+)
+def test_gravity_rearm_reads_sub_seq_238_from_the_rom_diff(tmp_path, changed, status, want):
+    """G-67 / F-22: ``gravity_rearm`` follows the ROM's sub_seq 238 (subscript_gravity_end):
+    1 only when the diff changed it and rom_diff.toml models it; a changed member classified
+    otherwise stops the build."""
+    rom = tmp_path / "inter" / "rom"
+    rom.mkdir(parents=True)
+    sub = "battle/skill/sub_seq.narc"
+    scripts = {_BE_SEQ: [], sub: changed, "battle/tr_ai/tr_ai_seq.narc": []}
+    (rom / "changed_scripts.json").write_text(json.dumps(scripts), encoding="utf-8")
+    toml = tmp_path / "rom_diff.toml"
+    entry = f'[[member]]\nnarc = "{sub}"\nindex = 238\nstatus = "{status}"\nnote = ""\n'
+    toml.write_text(entry if status else "", encoding="utf-8")
+    if want is None:
+        with pytest.raises(build_tables.BuildError, match="238 changed and is irrelevant"):
+            build_tables._gravity_rearm(tmp_path / "inter", toml)
+    else:
+        assert build_tables._gravity_rearm(tmp_path / "inter", toml) == want

@@ -4728,7 +4728,7 @@ def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
     """B13-23..27: the batch's effects are transcribed (no "not transcribed" or "expert
     label"); Natural Gift and Judgment take modelled id cases; Gyro Ball's TrainerAI_CalcDamage
     case stays refused (monSpeedValues), and Weather Ball's TrainerAI_MoveType case is refused
-    exactly where it assigns no type (trainer_ai.c:3209-3227)."""
+    exactly where it assigns no type (trainer_ai.c:3222-3240)."""
     from nuzline.ai.layout import ALLIN
 
     t, n = kaizo_tables, kaizo_names

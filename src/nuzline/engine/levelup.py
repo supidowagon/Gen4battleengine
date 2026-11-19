@@ -234,7 +234,7 @@ def pay_exp_leveled(
     leveled = new_level > level
 
     soothe = hold == HOLD_EFFECT_FRIENDSHIP_UP
-    f0 = after.friendship[0].astype(_I32)
+    f0 = after.party_friendship[0].astype(_I32)  # Pokemon_UpdateFriendship reads the party
     bonus = after.friend_bonus.astype(_I32)
     friendship = jnp.where(leveled, _friendship(f0, new_level - level, bonus, soothe), f0)
 
@@ -273,7 +273,9 @@ def pay_exp_leveled(
                 after.shadow_stats[0],
             ).astype(after.shadow_stats.dtype)
         ),
-        friendship=put("friendship", friendship),
+        # The level-up's ReloadPokemon re-reads the party value into the battler (F-15).
+        friendship=put("friendship", jnp.where(leveled, friendship, after.friendship[0])),
+        party_friendship=put("party_friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),
         exp_mask=jnp.where(paying, 0, after.exp_mask).astype(after.exp_mask.dtype),
@@ -437,6 +439,8 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
       the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
       bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
       (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895);
+      none of these while the battle is over (``state.over``: the payout that ended it runs no
+      later turn end or move, bcp.c:3965-3969);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
       D10). Coverage refuses an unsupported move only where it could be learned without a
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
@@ -465,7 +469,9 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
         | (live == state.encore_move[0])
         | (jnp.arange(MOVES) + 1 == state.learn_pin)
     )
-    ok = ok & ~((slot == state.active[0]) & held)
+    # After the battle ends no turn end or move runs (MoveEnd's AnyExpPayout precedes
+    # CheckBattleOver, bcp.c:3965-3969): the D2 and pin masks drop nothing then.
+    ok = ok & ~((slot == state.active[0]) & held & (state.over == 0))
     return jnp.concatenate([ok, jnp.ones(1, bool)])
 
 

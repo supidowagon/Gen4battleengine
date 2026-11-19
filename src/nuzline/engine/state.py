@@ -177,7 +177,7 @@ Encodings:
   move can change under Mimic, so the record cannot be flags.
 * E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
   species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
-  target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the ``shadow_*`` fields hold
+  target's (``BtlCmd_Transform``, battle_script.c:5346-5348, :5364-5370), and the ``shadow_*`` fields hold
   the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
   They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
   fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
@@ -234,6 +234,22 @@ Encodings:
   1671-1677) and both are volatiles Baton Pass keeps (moves.h:46-48, battle_lib.c:2112), so one
   field holds both. ``held_item`` is ``Battler_HeldItem`` (battle_lib.c:5352-5363): the held item
   as every gated read sees it, none under Klutz or Embargo.
+* E1 batch F (F-2). ``flash_fire`` is the active battler's ``MoveEffectsData.flashFire``
+  (battle_mon.h:21): set by ``subscript_absorb_and_boost_fire_type_moves.s:13``, read by
+  ``BattleSystem_CalcMoveDamage`` (battle_lib.c:7074-7076) for the attacker's Fire moves
+  (the flag, not the ability: it outlives a lost ability), cleared on a switch and a faint
+  (battle_lib.c:2101-2104, :2185-2188) and not passed by Baton Pass (:2107-2115).
+* E1 batch F (F-10). ``starf_roll`` holds a Starf Berry's ``RandNext() % 5`` draw as one value in
+  [0, ``ids.STARF_DRAWS``) for the held-item checks (``hooks.held_item_check`` and
+  ``pluck_berry``, which have no outcome argument): ``step._action_phase`` loads the turn's
+  (``Outcome.starf[:, 0]``); at the turn's end ``step_events`` keeps the faint replacement's
+  (``Outcome.starf[:, 1]``) where a replacement can send in a living Starf holder
+  (``step.starf_kept``; ``step.replace`` reads it, then clears it), else 0, and 0 at a pause, so
+  states merge. Hidden from the player, like ``qc_roll``. ``STARF_UNDRAWN`` while the battle
+  start's checks run (``hooks.battle_start``): a lead's Starf Berry is eaten there with its stat
+  left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
+  ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
+  from ``Outcome.starf[:, 0]``); else 0.
 * E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
   ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
   mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
@@ -282,6 +298,8 @@ SIDES, SLOTS, MOVES = 2, 6, 4
 MAX_DEATH_BUDGET = 3  # the ladder's range: k = 0..3 deaths allowed (spec §4)
 BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[battler] holds the AI's bag (D1-5)
 STAGE_MIN, STAGE_MAX = -6, 6
+# ``starf_roll`` while no draw is loaded (the battle start's checks): the berry's stat stays open.
+STARF_UNDRAWN = -1
 _STAGE_KEYWORDS = {
     "atk": Stat.ATK,
     "def_": Stat.DEF,
@@ -315,7 +333,11 @@ class BattleState(NamedTuple):
     status: jnp.ndarray  # int8, ids.Status
     status_counter: jnp.ndarray  # int8, sleep turns / toxic counter
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
-    friendship: jnp.ndarray  # int16
+    friendship: jnp.ndarray  # int16, the BattleMon's (clamped 0-255, lib.c:1032-1043)
+    # int16, the party Pokemon's u8 friendship (F-15): ``Pokemon_IncreaseValue`` wraps past 255
+    # (pokemon.c:1859-1874); every switch-in and ``BattleSystem_ReloadPokemon`` re-read it into
+    # ``friendship`` (lib.c:136, :179), and a bag item's band reads it (battle_system.c:716-733)
+    party_friendship: jnp.ndarray
     ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
@@ -400,7 +422,7 @@ class BattleState(NamedTuple):
     shadow_pp: jnp.ndarray  # int8[B,4], the party's PP of each masked slot (G-68)
     # Transform (G-69): ``transformed`` is VOLATILE_CONDITION_TRANSFORM; while it is set the active
     # slot's species, form, stats, ivs, ability slot / form, types, ability, moves and PP are the
-    # copied target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the
+    # copied target's (``BtlCmd_Transform``, battle_script.c:5346-5348, :5364-5370), and the
     # ``shadow_*`` hold the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot,
     # ``mimic_slots`` all four). Restored by ``step._restore_transform`` / ``_restore_moves``.
     transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)
@@ -419,6 +441,7 @@ class BattleState(NamedTuple):
     # ``initial_arrays``.
     chatot_cry: jnp.ndarray
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
+    flash_fire: jnp.ndarray  # int8, MoveEffectsData.flashFire (F-2)
     ability_suppressed: jnp.ndarray  # int8, MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
@@ -440,6 +463,8 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
+    starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
+    starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -506,6 +531,9 @@ class BattleState(NamedTuple):
     ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
     ts_assurance: jnp.ndarray  # int8[B], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
+    # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
+    # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
+    ts_sub_hit: jnp.ndarray
     # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
     # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
     ts_follow_me: jnp.ndarray
@@ -651,6 +679,7 @@ VOLATILE_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "embargo",
+    "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
@@ -716,6 +745,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "status_counter": (_MON, np.int8),
     "gender": (_MON, np.int8),
     "friendship": (_MON, np.int16),
+    "party_friendship": (_MON, np.int16),
     "ivs": ((*_MON, 6), np.int8),
     "active": (_BATTLER, np.int8),
     "stages": ((*_BATTLER, 8), np.int8),
@@ -795,6 +825,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "truant": (_BATTLER, np.int8),
     "chatot_cry": (_PARTY, np.int8),
     "embargo": (_BATTLER, np.int8),
+    "flash_fire": (_BATTLER, np.int8),
     "ability_suppressed": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
@@ -815,6 +846,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
+    "starf_roll": (_BATTLER, np.int8),
+    "starf_open": (_BATTLER, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
@@ -871,6 +904,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_switched": (_BATTLER, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
+    "ts_sub_hit": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
@@ -1029,9 +1063,16 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["hp"][side, slot] = hp
     a["max_hp"][side, slot] = max_hp
     a["stats"][side, slot] = stats[Stat.ATK : Stat.SPE + 1]
-    a["types"][side, slot] = np.asarray(tables.species_types[row])
     ability_row = personal_row(tables, species, mon.ability_from)
     a["ability"][side, slot] = int(tables.species_abilities[ability_row, mon.ability_slot])
+    from nuzline.engine.damage import multitype_plate  # damage imports this module
+
+    # MON_DATA_TYPE_1/2 (pokemon.c:1219-1226): a Multitype Arceus' types are its plate's (F-3).
+    a["types"][side, slot] = np.asarray(
+        multitype_plate(
+            tables, species, a["ability"][side, slot], mon.item, tables.species_types[row]
+        )
+    )
     a["ability_slot"][side, slot] = mon.ability_slot
     a["ability_form"][side, slot] = mon.ability_from
     a["item"][side, slot] = mon.item
@@ -1042,6 +1083,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["status_counter"][side, slot] = mon.status_counter
     a["gender"][side, slot] = mon.gender
     a["friendship"][side, slot] = mon.friendship
+    a["party_friendship"][side, slot] = mon.friendship
     a["ivs"][side, slot] = mon.ivs
     a["evs"][side, slot] = mon.evs
     a["nature"][side, slot] = mon.nature
