@@ -36,7 +36,8 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    A new test that asserts over a growing set or a coverage-dependent refusal carries the
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
-   the targeted run on the merged tip (CLAUDE.md, Merges) on the pod.
+   the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
+   tests are their own pod run (DAYBOX.md: one mark per run).
 7. The stream sends one message: the final tip, the batch contents with citations, the
    review outcome, and the targeted run's results with time and peak memory per test file.
 8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
