@@ -63,9 +63,12 @@ def foes(x):
 
 def party(fmt: Format, b):
     """The party index of battler ``b``: ``b`` when ``party_of`` is the identity, ``b & 1`` when
-    there are two parties, else a gather of ``party_of``."""
+    there are two parties, else ``party_of[b]``: a Python int for a Python int ``b`` (the
+    reference indexes lists with it), a gather for an array."""
     if fmt.party_of == tuple(range(fmt.B)):
         return b
     if fmt.P == 2:
         return b & 1
+    if isinstance(b, int):
+        return fmt.party_of[b]
     return jnp.asarray(fmt.party_of)[b]

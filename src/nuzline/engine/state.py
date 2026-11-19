@@ -253,7 +253,7 @@ from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
 MAX_DEATH_BUDGET = 3  # the ladder's range: k = 0..3 deaths allowed (spec §4)
-BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[side] holds the AI's bag
+BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[battler] holds the AI's bag (D1-5)
 STAGE_MIN, STAGE_MAX = -6, 6
 _STAGE_KEYWORDS = {
     "atk": Stat.ATK,
@@ -273,8 +273,8 @@ class BattleState(NamedTuple):
     level: jnp.ndarray  # int8
     hp: jnp.ndarray  # int16
     max_hp: jnp.ndarray  # int16
-    stats: jnp.ndarray  # int16[2,6,5]: Atk, Def, SpA, SpD, Spe
-    types: jnp.ndarray  # int8[2,6,2]
+    stats: jnp.ndarray  # int16[P,6,5]: Atk, Def, SpA, SpD, Spe
+    types: jnp.ndarray  # int8[P,6,2]
     ability: jnp.ndarray  # int16, ids.AbilityId
     ability_slot: jnp.ndarray  # int8, species ability slot 0/1
     ability_form: jnp.ndarray  # int8, the form whose personal row ability_slot indexes
@@ -282,17 +282,17 @@ class BattleState(NamedTuple):
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
     # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
     knocked_off: jnp.ndarray
-    moves: jnp.ndarray  # int16[2,6,4]
-    pp: jnp.ndarray  # int8[2,6,4]
-    pp_ups: jnp.ndarray  # int8[2,6,4], BattleMon.ppUps (E1 Batch D)
+    moves: jnp.ndarray  # int16[P,6,4]
+    pp: jnp.ndarray  # int8[P,6,4]
+    pp_ups: jnp.ndarray  # int8[P,6,4], BattleMon.ppUps (E1 Batch D)
     status: jnp.ndarray  # int8, ids.Status
     status_counter: jnp.ndarray  # int8, sleep turns / toxic counter
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
     friendship: jnp.ndarray  # int16
-    ivs: jnp.ndarray  # int8[2,6,6], ids.Stat order
+    ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
-    stages: jnp.ndarray  # int8[2,8], index ids.Stat, 0 = neutral
+    stages: jnp.ndarray  # int8[B,8], index ids.Stat, 0 = neutral
     confusion: jnp.ndarray  # int8, turns left
     leech_seed: jnp.ndarray  # int8
     substitute_hp: jnp.ndarray  # int16
@@ -323,7 +323,7 @@ class BattleState(NamedTuple):
     curled: jnp.ndarray  # int8, VOLATILE_CONDITION_DEFENSE_CURL
     mud_sport: jnp.ndarray  # int8, MOVE_EFFECT_MUD_SPORT in moveEffectsMask
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
-    infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (source: the foe's active)
+    infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (0/1 in D1; 1 + battler in D5)
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
@@ -339,7 +339,7 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
-    recycle_item: jnp.ndarray  # int16[2], BattleContext.recycleItem per battler (B13-19)
+    recycle_item: jnp.ndarray  # int16[B], BattleContext.recycleItem per battler (B13-19)
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
     micle: jnp.ndarray  # int8, MoveEffectsData.micleBerry (E1 Batch D)
@@ -397,7 +397,7 @@ class BattleState(NamedTuple):
     future_attacker: jnp.ndarray  # int8, 1 + futureSightAttacker (per battler), 0 = none
     future_sight: jnp.ndarray  # int8, SIDE_CONDITION_FUTURE_SIGHT (per side)
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
-    trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
+    trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
@@ -405,7 +405,7 @@ class BattleState(NamedTuple):
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
-    entry_pending: jnp.ndarray  # int8[2], 1: a list newcomer's switch-in states wait (docstring)
+    entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
     terrain: jnp.ndarray  # int8, decomp TERRAIN_* id, -1 unknown (constant per battle)
     turn: jnp.ndarray  # int16
@@ -420,8 +420,8 @@ class BattleState(NamedTuple):
     ai_ability_known: jnp.ndarray
     # experience (K3d-exp, design §2.1; see the module docstring)
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
-    evs: jnp.ndarray  # int16[2,6,6], ids.Stat order
-    nature: jnp.ndarray  # int8[2,6]
+    evs: jnp.ndarray  # int16[P,6,6], ids.Stat order
+    nature: jnp.ndarray  # int8[P,6]
     exp_mask: jnp.ndarray  # int8, sideGetExpMask[0]: bit = player party slot
     exp_boost: jnp.ndarray  # int16[6], 100 / 150 / 170 percent, 0 = unresolved
     pokerus: jnp.ndarray  # int8[6], 1 = the Pokerus byte is nonzero
@@ -438,29 +438,30 @@ class BattleState(NamedTuple):
     # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
-    ts_acted: jnp.ndarray  # int8[2], the battler's action is over (Battler_MovedThisTurn)
-    ts_order: jnp.ndarray  # int8[2], battlerActionOrder
-    ts_actions: jnp.ndarray  # int8[2], the turn's actions as chosen
-    ts_move: jnp.ndarray  # int16[2], each side's move fixed at selection (selected_move)
-    ts_struggling: jnp.ndarray  # int8[2]
-    ts_locked: jnp.ndarray  # int8[2], locked at selection (no PP)
-    ts_item: jnp.ndarray  # int16[2], the bag item picked
-    ts_custap: jnp.ndarray  # int8[2], moveEffectsData.custapBerry from the turn order
-    ts_claw: jnp.ndarray  # int8[2], moveEffectsData.quickClaw from the turn order (B10-6)
+    ts_acted: jnp.ndarray  # int8[B], the battler's action is over (Battler_MovedThisTurn)
+    # int8[B], battlerActionOrder (written from order.action_order's [2] until D6-D7)
+    ts_order: jnp.ndarray
+    ts_actions: jnp.ndarray  # int8[B], the turn's actions as chosen
+    ts_move: jnp.ndarray  # int16[B], each battler's move fixed at selection (selected_move)
+    ts_struggling: jnp.ndarray  # int8[B]
+    ts_locked: jnp.ndarray  # int8[B], locked at selection (no PP)
+    ts_item: jnp.ndarray  # int16[B], the bag item picked
+    ts_custap: jnp.ndarray  # int8[B], moveEffectsData.custapBerry from the turn order
+    ts_claw: jnp.ndarray  # int8[B], moveEffectsData.quickClaw from the turn order (B10-6)
     ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
-    ts_protect_ok: jnp.ndarray  # int8[2], turnFlags.protecting
+    ts_protect_ok: jnp.ndarray  # int8[B], turnFlags.protecting
     ts_endure_ok: jnp.ndarray  # int8[B], turnFlags.enduring (Endure, G-65)
-    ts_taken: jnp.ndarray  # int16[2,6], turnFlags damage taken and attackers (step._use_move)
-    ts_dragged: jnp.ndarray  # int8[2], 1 + the slot a Roar dragged in this turn
-    ts_move_failed: jnp.ndarray  # int8[2], moveFailFlags (the turn end's Uproar check)
+    ts_taken: jnp.ndarray  # int16[B,6], turnFlags damage taken and attackers (step._use_move)
+    ts_dragged: jnp.ndarray  # int8[B], 1 + the slot a Roar dragged in this turn
+    ts_move_failed: jnp.ndarray  # int8[B], moveFailFlags (the turn end's Uproar check)
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
-    ts_alive: jnp.ndarray  # int8[2], per side the party bitmask of HP > 0 at the last faint check
+    ts_alive: jnp.ndarray  # int8[P], per party its bitmask of HP > 0 at the last faint check
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
-    ts_switched: jnp.ndarray  # int8[2], the battler chose a switch this turn
+    ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
-    ts_assurance: jnp.ndarray  # int8[2], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
+    ts_assurance: jnp.ndarray  # int8[B], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -627,8 +628,9 @@ BATON_PASSED_FIELDS = (
 # Shape key and storage dtype of every field, in BattleState order: per party slot [P, 6]
 # (``_MON``), per battler [B], per side [2], per party [P], or a scalar (docs/kaizo/
 # e2-mechanics-ledger.md "D1: change plan", field decisions).
-# A shape key names its leading axes: "P" parties, "B" battlers; ``layout(fmt)`` fills them in.
-_MON, _BATTLER, _PARTY, _SIDE, _FIELD = ("P", SLOTS), ("B",), ("P",), (SIDES,), ()
+# A shape key names its leading axes: "P" parties, "B" battlers, "S" sides; ``layout(fmt)``
+# fills them in.
+_MON, _BATTLER, _PARTY, _SIDE, _FIELD = ("P", SLOTS), ("B",), ("P",), ("S",), ()
 _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "species": (_MON, np.int16),
     "form": (_MON, np.int8),
@@ -801,7 +803,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
 
 def layout(fmt: Format) -> dict[str, tuple[tuple[int, ...], type]]:
     """Shape and storage dtype of every field of a ``fmt`` fight, in ``BattleState`` order."""
-    dims = {"P": fmt.P, "B": fmt.B}
+    dims = {"P": fmt.P, "B": fmt.B, "S": SIDES}
     return {
         name: (tuple(dims.get(d, d) for d in shape), dtype)  # type: ignore[arg-type]
         for name, (shape, dtype) in _KEYS.items()
@@ -846,12 +848,14 @@ def field_index(state: BattleState, field: str, index):
     """``index`` (a battler, or ``(battler, slot, ...)``) re-indexed to the leading axis of the
     named field: the party of the battler for a ``[P, ...]`` field, its side for a ``[2]`` field,
     the battler itself for a ``[B, ...]`` field (docs/doubles-state-design.md section 5.2). For
-    the generic field writers that take the field name as data."""
+    the generic field writers that take the field name as data. ``index`` leads with a battler,
+    never an already mapped party or side: the map is not idempotent (TWO_TRAINERS: battler 3
+    is party 2, and party 2 read as a battler is party 0)."""
     lead = _KEYS[field][0][:1]
     parts = index if isinstance(index, tuple) else (index,)
     if lead == ("P",):
         parts = (party(format_of(state), parts[0]), *parts[1:])
-    elif lead == (SIDES,):
+    elif lead == _SIDE:
         parts = (side_of(parts[0]), *parts[1:])
     return parts if isinstance(index, tuple) else parts[0]
 
@@ -998,12 +1002,17 @@ def initial_arrays(
             raise ValueError(f"side {side}: a party has 1-{SLOTS} Pokemon, got {len(members)}")
         for slot, mon in enumerate(members):
             _fill_slot(a, tables, side, slot, mon)
-        for b in (b for b in range(fmt.B) if fmt.party_of[b] == side):
+        own = [b for b in range(fmt.B) if fmt.party_of[b] == side]
+        for b in own:
             if not 0 <= leads[b] < len(members):
                 raise ValueError(
                     f"side {side}: lead slot {leads[b]} is not in a party of {len(members)}"
                 )
             a["active"][b] = leads[b]
+        if len({leads[b] for b in own}) != len(own):
+            raise ValueError(
+                f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"
+            )
     a["exp_mask"][...] = 1 << leads[0]
     bags = {1: opp_items}
     if fmt.B == 4:

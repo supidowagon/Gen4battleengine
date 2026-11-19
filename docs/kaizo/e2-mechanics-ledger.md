@@ -128,6 +128,16 @@ report:
 4. src/nuzline/ai/switching.py: R2 (:348, :353), R4.
 5. src/nuzline/ai/policy.py, src/nuzline/ai/replacement.py, src/nuzline/ai/outcome.py: R4, R3
    where an axis is per battler.
+6. The trainer bag per opponent, with bag.py (merge check, post-trial items 5b, 5c):
+   `trainer_items` / `trainer_item_count` per party [P] is wrong for plain DOUBLES. The decomp
+   keeps `aiContext.trainerItems[MAX_OPPONENTS][4]` (include/battle/ai_context.h:31), indexed by
+   `battler >> 1` (battle_controller_player.c:4808, trainer_ai.c:4092-4093), filled from
+   `trainers[battler]`; a plain double starts with enemyTrainer1ID == enemyTrainer2ID
+   (encounter.c:736, :751-752). Confirm from the decomp (Opus); make both per opponent [2]
+   indexed by `battler >> 1`. And state.py `initial_arrays` fills party 1's bag only (`opp_items`
+   -> `trainer_items[1]`): the second opponent in TWO_TRAINERS / MULTI starts without items.
+   Done in group B as ruling D1-5: per battler [B] (the opponent's `battler >> 1` bag), battler
+   3 filled from `initial_arrays`' `opp2_items`.
 
 Test net (singles byte-identical):
 
@@ -169,8 +179,11 @@ Group A status and decisions (commits 1-5):
 - Done: 6 order.py 92c1c0b; 7 damage.py 87f6da4; 8 effects.py + actions.py 4db7d93; 9 outcome.py
   446e6a9; 10 step.py fb7adc2; 11 enumerate.py 31be426; 12 coverage.py 19290b3; 13
   tools/trace_to_state.py 01494eb; 14 no edit left (the smoke test's `out.parties[1].mons[0]`
-  came with 84da8d1; strategies.py has no constructor call to change). Snap compare 0-19
-  identical after each.
+  came with 84da8d1; strategies.py has no constructor call to change).
+- Snap compares run: 0-19 identical after commits 1, 2, 5, 6-11 and 13; none after 3-4 (not
+  runnable alone) or 14 (no edit); 0-199 identical at 84da8d1, 19290b3 and 5c32327. Merged tip
+  (main 235f2f8 into e2-d1, plus the merge-check notes and tools/snap_compare.py) against a
+  baseline captured at 235f2f8, 0-199: pending pod run.
 - `def_side` is required only on the internal `_pre_random` / `_finish`; the public damage entry
   points pass `foe(atk_side)`. `ai_case_power` and `ai_damage_for_roll` keep an optional `def_side`
   defaulting to `foe(atk_side)`, so ai/commands.py (E1) is unchanged.
@@ -198,6 +211,21 @@ Group A status and decisions (commits 1-5):
 - Rule: tests run on the pod (send the manager the tip and the test-file list during a batch and
   for the final tip); locally one process, one file, more than 6 GB free.
 - Group A review 1 = FIX (fixed in 5c32327). Review 2 of 5c32327 = MERGE.
+- Merge check of commits 1-5 (post-trial, fixed; singles unchanged, each reduces at B = 2):
+  - reference/engine.py: `turn.fainted` holds (battler, slot) throughout; `ts_alive` is built
+    from it through the battler's party, and `_resume` maps a paused faint back to the party's
+    battler whose active it is (`_fainted_battler`; singles: battler k).
+  - reference/engine.py: Mud Sport / Water Sport read every battler
+    (`BattleSystem_AnyBattlersWithMoveEffect`, battle_lib.c:6812); `_faint_check`'s payout and
+    death branches test `side_of(b)`; `_Turn` takes `battler_count` and sizes its per-battler
+    lists; the turn's items and the roosting clears are B long.
+  - state.py: the field comments give [P] / [B] / [S] shapes; `initial_arrays` rejects two
+    battlers of one party leading from one slot.
+  - order.py `compare_speed` builds every battler's speed over `range(fmt.B)` and takes an
+    optional `battler2` (default `foe(battler1)`).
+  - state.py: the side shape key is "S" (not the literal 2); `field_index` documents that it
+    maps a battler once (not idempotent for TWO_TRAINERS); `format.party` returns a Python int
+    for a Python int battler (the reference indexes lists with it).
 
 Group B status (E1 files, re-index only):
 
@@ -224,7 +252,9 @@ Group B status (E1 files, re-index only):
     as multi-target hits, not a defender choice.
 - D3: the four-actor turn.
   - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
-    TWO_TRAINERS/MULTI a side is out only when all its parties are empty.
+    TWO_TRAINERS/MULTI a side is out only when all its parties are empty. The same in
+    reference/engine.py `_faint_check` (`s.parties[0]` / `s.parties[1]`), and its payout of a side-1
+    faint indexes `s.parties[1]` (`_grant_exp`): party 2's slot in TWO_TRAINERS (D10 with exp).
 - D4: spread moves and the doubles modifiers.
 - D5: ally mechanics.
 - D6-D7: outcomes and enumeration at B=4.
@@ -232,6 +262,11 @@ Group B status (E1 files, re-index only):
     comment at ~390 still says int8[2]); step.py ~2762/~2768 use jnp.arange(2) against order: resize
     together at B=4.
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
+  - Owed (D8): the reference's "player" checks before `_know_ability` test battler 0, not side 0,
+    and record `s.battlers[0].active` (reference/engine.py ~2562-2563, ~2882-2883, ~3141,
+    ~3469; 28 calls of `_know_ability(s, s.battlers[0].active)` in all), as JAX hooks.py `_know`
+    (~264) tests `side == 0` against the state's side-0 slot. Consistent today; at B=4 the
+    player's other battler and the partner's are not recorded: rework with per-battler AI knowledge.
 - D10: the multi format, with partner teams from the calc repo.
   - Nit: `initial_arrays` accepts an `opp2_items` that differs from `opp_items` in a plain DOUBLES
     battle (the game copies one trainer's bag); reject it there.
@@ -289,6 +324,9 @@ Each is open; close it with its ruling.
     via rawrolls_phase.py; at least 12 GB free at start). Seeds 1-4 are done.
 12. The AI move-effect blocks #71, #85, #86, #153, #165, #191, #218, #239, #241, #247, #259 are
     E2's (manager, 18 Nov; #233 goes with Fling). They go in the next singles batch, after D1.
+13. tests/engine/test_accuracy_classes.py (45.8 GB in one process): moved to E1's speed pass by
+    the managing session, 18 Nov. Cause: the unjitted `sample_outcome` in
+    `test_accuracy_classes_equal_raw_rolls` (slow-marked).
 
 ### Closes with its mechanic
 

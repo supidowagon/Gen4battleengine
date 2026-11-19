@@ -924,10 +924,10 @@ def test_wake_up_slap_doubles_and_wakes_a_sleeper(tables, names, kaizo_tables, k
 def test_hp_update_marks_assurance():
     """subscript_update_hp.s:18-19: hpCalcTemp <= 0 is stored: a loss sets, a zero update
     clears, a heal or no update keeps; HP stays within [0, maxHP]."""
-    from nuzline.engine.state import BattleState
+    from nuzline.engine.state import LAYOUT, BattleState
 
-    s = BattleState(*[jnp.zeros(1)] * len(BattleState._fields))._replace(
-        ts_assurance=jnp.zeros(2, jnp.int8),
+    zeros = {name: jnp.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
+    s = BattleState(**zeros)._replace(  # an all-zero singles state (B = 2, P = 2)
         hp=jnp.full((2, 6), 10, jnp.int16),
         max_hp=jnp.full((2, 6), 20, jnp.int16),
     )
