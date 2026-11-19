@@ -78,7 +78,6 @@ def test_a_refused_replacement_refuses(tables, names):
 
 
 @pytest.mark.slow
-@pytest.mark.fullset
 def test_refusal_reason_replays_the_run(tables, names):
     # switch_refusal_root: on some keys the AI switches to Geodude at 1 HP and Starly KOs
     # it on entry; that replacement is refused (roark.md 14, item 3).
@@ -107,7 +106,6 @@ def test_refusal_reason_replays_the_run(tables, names):
 
 
 @pytest.mark.slow
-@pytest.mark.fullset
 def test_refusal_reason_names_an_ai_refusal(tables, names):
     # test_playout.py::test_refusal_reason_names_the_refused_mechanic's state: the AI's
     # Levitate refusal refuses the first turn (the player's choice and the AI's action).

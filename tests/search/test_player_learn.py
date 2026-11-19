@@ -128,7 +128,6 @@ def test_greedy_equals_playout_through_learns(tables, roots):
             assert not bool(needs_learn(out)), f"{root}: a learn prompt was left pending"
 
 
-@pytest.mark.fullset
 def test_a_pending_learn_root_window_c_is_refused_and_named(tables, names):
     # Refused at the root's settle, before any turn: both loops refuse with no turn to play
     # (max_turns 0, the no-turn programs: the root's settle alone, about 1.5 GB each where a
@@ -172,7 +171,6 @@ def test_a_turn_resolves_its_learns(tables, names):
     assert levelled, "no key levelled Bulbasaur"
 
 
-@pytest.mark.fullset
 def test_a_turn_window_c_refuses_the_fixed_player_and_is_named(tables, names):
     # The playout's window (c) turn (the test below) in the player loop, on the FIXED
     # program of the test above; its refusal_reason replays the turn in playout's _play_jit,
@@ -186,7 +184,6 @@ def test_a_turn_window_c_refuses_the_fixed_player_and_is_named(tables, names):
     assert "window (c)" in reason
 
 
-@pytest.mark.fullset
 def test_a_turn_window_c_refuses_the_playout_and_is_named(tables, names):
     # Refused in the first turn's payout (test_learn.py::_window_c). Formerly
     # test_learn.py::test_window_c_refuses_the_playout_and_names_it. The replay's _play_jit
