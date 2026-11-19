@@ -1130,8 +1130,10 @@ def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
     """A Lansat Berry's write to the crit inputs (``HOLD_EFFECT_PINCH_CRITRATE_UP``,
     battle_lib.c:4838-4848: the holder's Focus Energy, ``hooks._pinch_effects``): every
     battler holding one has Focus Energy (its HP test is not judged: over-approximate). It is
-    another battler's damaging hit that brings the pinch before the holder's CalcCrit, so it is
-    the last variant bit, used by any non-status move (``crit_variants``), F-9."""
+    another battler's move that brings the pinch before the holder's CalcCrit (bcp.c:3691-3696:
+    the held-item check after every move), so it is the last variant bit, used by any non-status
+    move and by Pain Split, the one modelled status move that lowers its target's HP
+    (``effects._pain_split``, subscript_pain_split.s:12-22) (``crit_variants``), F-9."""
     holds = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
     return state._replace(
         focus_energy=(state.focus_energy | holds).astype(state.focus_energy.dtype)
@@ -1173,9 +1175,10 @@ def crit_variants(
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     effect = tables.move_effect[moves]
     # Each write's user: the battlers that use its effect; the Lansat pinch's (the last entry), a
-    # non-status move (F-9).
+    # non-status move or Pain Split, which lowers its target's HP (F-9).
     users = [uses_move & (effect == eff) for eff in CRIT_ODDS_EFFECTS]
-    users.append(uses_move & (tables.move_category[moves] != STATUS_CATEGORY))
+    hp_lowering = (tables.move_category[moves] != STATUS_CATEGORY) | (effect == EffectId.PAIN_SPLIT)
+    users.append(uses_move & hp_lowering)
     for e, used in enumerate(users):  # [B], by the user
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
         singles.append(reached & (odds[1 << e] != base))
