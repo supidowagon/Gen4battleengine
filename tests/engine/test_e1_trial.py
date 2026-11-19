@@ -554,6 +554,7 @@ def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
     assert int(s.magnet_rise_turns[0]) == 0  # zeroed by the first start at 0 or the loop
 
 
+@pytest.mark.fullset
 def test_gravity_move_ids_match_the_decomp():
     """``ids.GRAVITY_MOVES`` is ``sMovesAffectedByGravity`` (battle_lib.c:3385-3392) by decomp id."""
     import re
@@ -612,6 +613,7 @@ def test_mimic_is_mapped_and_pinned(tables, names, kaizo_tables, kaizo_names):
     assert MIMIC_PP_CAP == 5
 
 
+@pytest.mark.fullset
 def test_mimic_forbidden_ids_match_the_decomp():
     """``ids.MIMIC_FORBIDDEN`` is the head of ``sCannotMetronomeMoves`` (battle_lib.c:7152-7158)."""
     import re

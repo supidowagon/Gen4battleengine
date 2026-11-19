@@ -249,6 +249,7 @@ def test_roark_real_fight_is_supported(tables, names):
         assert ai_refusals(tables, versus(tables, names, 0, player)) == []
 
 
+@pytest.mark.fullset
 def test_decomp_ids_match_the_manifest(names):
     for name, ability in commands.ABILITY_IDS.items():
         assert names.ability(name) == ability, name

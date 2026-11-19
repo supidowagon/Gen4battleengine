@@ -64,6 +64,7 @@ def test_kaizo_manifest_provenance(kaizo_manifest):
     assert kaizo_manifest["unclassified_rom_changes"] == 0
 
 
+@pytest.mark.fullset
 def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
     """Ruling 13: a changed be_seq member not marked modelled makes its moves UNSUPPORTED; a
     modelled one maps them to its KAIZO_EFFECTS entry. Since E2 batch 13 (B13-5: members 88 and
@@ -185,6 +186,7 @@ def test_unresolved_name_fails_build(tmp_path, kaizo_intermediate):
         )
 
 
+@pytest.mark.fullset
 def test_manifest_conditions_are_the_not_reached_entries(kaizo_manifest):
     from tools.build_tables import ROM_DIFF
     from tools.rom.diff import load_conditions

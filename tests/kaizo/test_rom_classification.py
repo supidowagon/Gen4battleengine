@@ -188,6 +188,7 @@ def _by_key() -> dict[tuple, dict]:
     return out
 
 
+@pytest.mark.fullset
 def test_every_classified_entry_is_decoded():
     for e in _entries():
         if e["status"] != "unknown" or e["note"]:
@@ -201,6 +202,7 @@ def test_unknown_entries_name_their_milestone():
             assert e["note"].endswith(("-> K3b", "-> K3c")), e
 
 
+@pytest.mark.fullset
 def test_done_groups_cover_every_entry():
     # Final review M4 (K3a): a new [[code]] or [[member]] entry cannot escape the group checks.
     grouped = {k for _, keys in DONE_GROUPS for k in keys}

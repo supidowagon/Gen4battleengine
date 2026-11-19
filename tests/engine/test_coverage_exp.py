@@ -201,6 +201,7 @@ def test_a_learnable_move_reaches_a_kaizo_rom_change(tables, names, vanilla_mani
 # --- §4.2-4.7 --------------------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_the_effect_ids_are_the_decomp_moves(tables, names):
     """generated/move_battle_effects.txt (line N is id N - 1), read through each move's
     res/moves/<move>/data.json effect."""

@@ -47,6 +47,7 @@ def _actions(tables, s):
     return np.asarray(jax.vmap(lambda st: switch_action(tables, s, st))(stops)).tolist()
 
 
+@pytest.mark.fullset
 def test_decomp_ids_match_the_manifest(names):
     for name, ability in switching.ABILITY_IDS.items():
         assert names.ability(name) == ability, name

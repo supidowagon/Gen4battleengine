@@ -345,6 +345,7 @@ def test_expert_transcribed_is_the_dispatch(
     assert reasons == [line]
 
 
+@pytest.mark.fullset
 def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
     """Task 6 review m1: the jump tables hold only the layout's effects, decided at trace
     time, so the vanilla program traces none of the Kaizo labels. Vanilla's transcribed moves
@@ -1399,6 +1400,7 @@ def _turn(s, turn: int):
 _SETUP_MOVES = (ROCK_POLISH, LIGHT_SCREEN, CURSE, STEALTH_ROCK)
 
 
+@pytest.mark.fullset
 def test_setup_first_turn_effects_are_the_decomps():
     """``commands.SETUP_FIRST_TURN_EFFECTS`` is SetupFirstTurn_SetupEffects (script.s:6435-6497)
     entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n)."""
@@ -1517,6 +1519,7 @@ def test_prioritize_extremes(kaizo_tables, kaizo_roark_party, jump):
     _assert_exact_equals_loose(t, s, layout_for(t, 0x27, s))
 
 
+@pytest.mark.fullset
 def test_check_hp_tables_are_the_decomps():
     """``commands.CHECK_HP_TABLES`` is CheckHP_Main's six tables (script.s:7748-7977), label by
     label and entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n);
@@ -4021,6 +4024,7 @@ def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_p
 # --- E2 batch 11 (B11-4): Encore -------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_encore_encouraged_effects_are_the_decomps():
     """``commands.ENCORE_ENCOURAGED_EFFECTS`` is Expert_Encore_EncouragedMoveEffects
     (script.s:3202-3285) entry by entry, through generated/move_battle_effects.txt."""

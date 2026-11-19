@@ -67,6 +67,7 @@ def test_all_missing_reported_at_once(tables, names, metronome_refused):
     assert e.value.report.level == Support.NONE
 
 
+@pytest.mark.fullset
 def test_every_weather_is_supported():
     # E2 batch 3: sun, rain and hail join sandstorm (coverage docstring); E1 Batch C: deep fog
     # (G-44).
@@ -312,6 +313,7 @@ def test_kaizo_roark_ai_flags_exact(kaizo_tables, kaizo_names, kaizo_roark, kaiz
 
 
 @pytest.mark.parametrize("flags", [0x1, 0x5, 0x7, 0x17, 0xD, 0xF, 0x1F, 0x207, 0x20F, 0x27, 0x10F])
+@pytest.mark.fullset
 def test_kaizo_flag_set_has_no_flag_line(
     kaizo_tables, kaizo_names, kaizo_roark, kaizo_roark_party, flags
 ):
