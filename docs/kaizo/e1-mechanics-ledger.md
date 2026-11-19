@@ -1762,6 +1762,43 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   4.4's `where(temp_only, weather_turns, 0)`), `gravity_of`, `trick_room_of`; `tests.strategies` draws the
   field into the mask (`_set_weather`, `_drawn_weather`, `ids.clean_field_mask`). Snap diff: the four
   dropped fields only.
+- G-12 FCM step 4, Acid Rain (FCM.md 1, 3, 4.3; fcm-verify (c), (d)): modelled in every format, nothing refused.
+  At a Pursuit KO of the switcher (subscript_pursuit.s:39 `_166`) :100 copies `faintedMon` to `scriptTemp` and
+  :115, after the payout loop (:102-113), runs `fieldConditionsMask = sub_to_zero(mask, scriptTemp)` (OPCODE_
+  SUB_TO_ZERO on the signed int, battle_script.c:3282-3287; `field.sub_to_zero`, `field.acid_rain`). Engine:
+  `step._acid_rain`, called at the one Pursuit site of `_execute_actions` after the pass's faint check and
+  `pay_exp` (the switch's chase and U-turn's, subscript_attack_then_switch_out.s:54); reference: `_pursuit`
+  returns the operand, `_acid_rain` applies it after `_faint_check` / `_pay_exp` in `_switch` and the U-turn
+  site. `faintedMon` (FCM 1.3): the pursuer when it is at 0 HP after the chain (Rough Skin, Aftermath, Jaboca
+  Berry, Life Orb: UPDATE_HP's TryFaintMon, battle_script.c:1767-1770) and the switcher held no Destiny Bond
+  (the game's order: Destiny Bond at :85 before every recoil, the pursuer always alive there; it restores
+  `faintedMon`, subscript_faint_check_destiny_bond.s:10, :25), else the switcher. The mask read at :115 (FCM 1.4,
+  fcm-verify (c)): the switcher's Uproar bit is gone (its FAINT_MON, :36) and, after Destiny Bond, the
+  pursuer's (:16 PlayFaintAnimation -> battle_script.c:1803 -> battle_lib.c:2213); a recoil-fainted pursuer's
+  bit is still set (TryFaintMon only, battle_script.c:1769-1772) and cleared after the subtraction by its own
+  cleanup (`kept`). fcm-verify (d): `step.first_pursuer` (reference `_pursuit`) takes the first ready battler
+  of the other side in index order (battle_script.c:6899, `break` :6934; not acted, :6900, a `waiting` input),
+  not the fastest; `pursuit_fires` reads it; in singles it is the foe as before. Battlers are passed in
+  (doubles-state-design section 5): the B = 4 Pursuit site calls `first_pursuer` with its `waiting` battlers
+  and `_acid_rain` with the pursuer it found. G-6's owed item: `outcome.future_thresholds`' weathers are none,
+  sandstorm, hail, each with and without the start's deep fog bit (`_rate` reads sand for Sand Veil, hail for
+  Snow Cloak and fog; a defender holds one ability): every mask at the hit, a corrupted start that loses a TEMP
+  group included (0x8044 -> 0x8040), since weather moves and abilities clear fog (effect_script_0115.s etc. :8,
+  subscript_drizzle.s etc. :11). A Pursuit used this turn on a nonzero mask keeps the Future Sight roll whole
+  (`loose`: Acid Rain can turn Gravity or fog on or off) and frees the end-speed weather points
+  (`enumerate`'s `weather_free`: it can set rain and sun bits). `outcome._threshold_grid` needs no change: its
+  weathers are the start mask through `field.ability_bits` / `move_bits`, exact on any mask, and in singles an
+  Acid Rain write ends both actions (the pursuer's and the switcher's), so no accuracy check follows it.
+  Coverage had no Acid Rain refusal on this branch (none in src); its docstring describes the mask (FCM 4.5).
+  Tests: `tests/engine/test_field_mask.py` (3.1's rows; the player's and the foe's Pursuit KO, a Life Orb
+  recoil faint, Destiny Bond against a recoil with a spurious Uproar bit, U-turn's chase under Gravity; the
+  first pursuer by index at B = 4; the Future Sight law on 0x8044). tests/engine/test_d3_pursuit.py does not
+  exist on this branch.
+- G-13 Manager ruling 7: E2's interim Acid Rain guard (SF2 (f) at B = 2, D3-9 at B = 4; the `acid_rain` field,
+  its refusal and its `fullset` test) is not on main, so batch G touches no guard. When E2 merges main after
+  G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
+  kind and tests/engine/test_acid_rain_guard.py) and its B = 4 Pursuit site calls `step.first_pursuer` and
+  `step._acid_rain` instead (G-12).
 
 ## Stream state (restart point, 2026-11-19)
 

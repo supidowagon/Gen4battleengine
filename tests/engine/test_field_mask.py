@@ -4,9 +4,14 @@ writer path the mask holds the decomp's bits and the engine equals the reference
 0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference; the Gravity
 readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3); the Uproar
 readers read bits 8-11 (0xFFF: a bit of every battler, none uproaring); the Trick Room readers
-bits 16-18 (0x40000 - 3: Trick Room 3; 0x1FFFF: a counter of 1, Kaizo re-arm)."""
+bits 16-18 (0x40000 - 3: Trick Room 3; 0x1FFFF: a counter of 1, Kaizo re-arm). Step 4
+(4.6): each row of 3.1 through ``sub_to_zero``; Acid Rain on the Pursuit KO paths of 1.3
+(fcm-verify (c), (d))."""
 
 from __future__ import annotations
+
+from dataclasses import replace
+from types import SimpleNamespace
 
 import jax.numpy as jnp
 import pytest
@@ -15,6 +20,8 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.engine.actions import MOVE_ACTIONS, gravity_banned
 from nuzline.engine.damage import grounded, weather_ball_params
 from nuzline.engine.effects import weather_fails, weather_heal_amount
+from nuzline.engine.field import acid_rain, sub_to_zero
+from nuzline.engine.format import SINGLES
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
     TRICK_ROOM_TURNS,
@@ -24,7 +31,10 @@ from nuzline.engine.ids import (
     Weather,
 )
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
-from nuzline.engine.state import make_state
+from nuzline.engine.state import BattleState, layout, make_state
+from nuzline.engine.step import first_pursuer
+from nuzline.reference.engine import _acid_rain as ref_acid_rain
+from tests.engine.d2_states import four, with_moves
 from tests.engine.helpers import A, assert_matches_reference
 
 
@@ -342,3 +352,185 @@ def test_trick_room_bits_toggle_and_count_down(tables, names, mask, move, rearm,
     s = _masked(_fight(t, names, ("Trick Room", "Growl")), mask, 0)
     out = assert_matches_reference(t, s, A(move, "Growl", s, names), _hits())
     assert int(out.field_mask) == after
+
+
+# --- FCM step 4, Acid Rain (FCM 1, 3.1, 4.6; ledger G-12) -----------------------------------
+
+# FCM 3.1, each row: (start m, (m - 1, m - 2, m - 3) clamped at 0).
+_SUB_ROWS = [
+    (0, (0, 0, 0)),
+    (0x1, (0, 0, 0)),
+    (0x2, (0x1, 0, 0)),
+    (0x4, (0x3, 0x2, 0x1)),
+    (0x8, (0x7, 0x6, 0x5)),
+    (0x10, (0xF, 0xE, 0xD)),
+    (0x20, (0x1F, 0x1E, 0x1D)),
+    (0x40, (0x3F, 0x3E, 0x3D)),
+    (0x80, (0x7F, 0x7E, 0x7D)),
+    (0x8000, (0x7FFF, 0x7FFE, 0x7FFD)),
+    *((0x100 << b, tuple((0x100 << b) - k for k in (1, 2, 3))) for b in range(4)),
+    *((c << 12, tuple(((c - 1) << 12) | (0x1000 - k) for k in (1, 2, 3))) for c in range(1, 8)),
+    *((t << 16, tuple(((t - 1) << 16) | (0x10000 - k) for k in (1, 2, 3))) for t in range(1, 8)),
+    (0x80 | 5 << 12, (0x507F, 0x507E, 0x507D)),
+    (0x1 | 5 << 12, (0x5000, 0x4FFF, 0x4FFE)),
+]
+
+
+@pytest.mark.parametrize("start, results", _SUB_ROWS)
+def test_sub_to_zero_gives_each_row_of_3_1(start, results):
+    """OPCODE_SUB_TO_ZERO (battle_script.c:3282-3287) on fieldConditionsMask with faintedMon
+    1-3 (subscript_pursuit.s:115): ``field.sub_to_zero``, ``field.acid_rain`` and the
+    reference's ``_acid_rain`` give FCM 3.1's table."""
+    blank = {k: jnp.zeros(shape, dtype) for k, (shape, dtype) in layout(SINGLES).items()}
+    state = BattleState(**blank)._replace(field_mask=jnp.asarray(start, jnp.int32))
+    ref = SimpleNamespace(field_mask=start)
+    for k, want in zip((1, 2, 3), results, strict=True):
+        assert int(sub_to_zero(start, k)) == want
+        assert int(acid_rain(state, k, True).field_mask) == want
+        ref.field_mask = start
+        ref_acid_rain(ref, (k, 0))
+        assert ref.field_mask == want
+
+
+def _pursuit_fight(
+    t, n, mine, theirs, foe="Geodude", my_item="", foe_item="", my_level=20, **start
+):
+    """A Monferno (``my_level``, ``mine``, ``my_item``) with a Chimchar behind it against a level
+    40 ``foe`` (``theirs``, ``foe_item``) with a Geodude behind it; ``start``: make_state's."""
+    me = replace(_spec(n, "Monferno", my_level, mine), item=n.item(my_item) if my_item else 0)
+    them = replace(_spec(n, foe, 40, theirs), item=n.item(foe_item) if foe_item else 0)
+    player = [me, _spec(n, "Chimchar", 20, ("Growl",))]
+    return make_state(t, player, [them, _spec(n, "Geodude", 40, ("Growl",))], **start)
+
+
+def test_the_players_pursuit_ko_subtracts_the_switcher(tables, names):
+    """Permanent hail (0x80); the foe (battler 1) switches and the player's Pursuit KOs it
+    (subscript_pursuit.s:39): faintedMon = 1 (:100, battle_script.c:1769-1770), 0x80 - 1 = 0x7F
+    (:115). The turn end then runs rain, sand, sun (PERM bits) and hail (TEMP only: the stale
+    weatherTurns 0 counts to -1 and never ends, FCM 3.2)."""
+    s = _pursuit_fight(tables, names, ("Pursuit",), ("Growl",), start_condition=Weather.HAIL)
+    s = s.replace_hp(1, 0, 1)
+    out = _step(tables, s, A("Pursuit", MOVE_ACTIONS + 1, s, names))
+    assert int(out.hp[1, 0]) == 0
+    assert (int(out.field_mask), int(out.weather_turns)) == (0x7F, -1)
+
+
+@pytest.mark.parametrize("item, mask", [("", 0x80), ("Life Orb", 0x7F)])
+def test_the_foes_pursuit_ko_subtracts_battler_0_or_the_fallen_pursuer(tables, names, item, mask):
+    """The player's 1 HP Monferno (battler 0) switches and the foe's Pursuit KOs it: faintedMon
+    0, the mask unchanged (FCM verdict, B = 2). Holding Life Orb at 1 HP the pursuer falls to its
+    recoil (TriggerHeldItemOnPivotMove, subscript_pursuit.s:94-95; battle_lib.c:7357-7365) after
+    the KO: UPDATE_HP's TryFaintMon makes it faintedMon (FCM 1.3): 0x80 - 1."""
+    s = _pursuit_fight(
+        tables, names, ("Growl",), ("Pursuit",), foe_item=item, start_condition=Weather.HAIL
+    )
+    s = s.replace_hp(0, 0, 1)
+    s = s.replace_hp(1, 0, 1) if item else s  # the recoil faints it (the hail chip would too)
+    out = _step(tables, s, A(MOVE_ACTIONS + 1, "Pursuit", s, names))
+    assert int(out.hp[0, 0]) == 0 and (int(out.hp[1, 0]) == 0) is bool(item)
+    assert int(out.field_mask) == mask
+
+
+def test_destiny_bond_clears_the_pursuers_bit_before_the_subtraction(tables, names):
+    """fcm-verify (c): the foe's switcher holds Destiny Bond, the player's 1 HP pursuer with a
+    spurious Uproar bit (0x100, FCM 3.1) the only condition up KOs it. Destiny Bond
+    (subscript_pursuit.s:85) faints the pursuer at once (subscript_faint_check_destiny_bond.s:16
+    -> battle_script.c:1803 -> battle_lib.c:2213 clears bit 8) and restores faintedMon = 1 (:25):
+    0 - 1 clamps to 0."""
+    s = _pursuit_fight(tables, names, ("Pursuit",), ("Growl",))
+    s = _masked(s.replace_hp(0, 0, 1).replace_hp(1, 0, 1), 0x100, 0)
+    s = s._replace(destiny_bond=s.destiny_bond.at[1].set(1))
+    out = _step(tables, s, A("Pursuit", MOVE_ACTIONS + 1, s, names))
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert int(out.field_mask) == 0
+
+
+def test_a_recoil_fainted_pursuer_keeps_its_bit_for_the_subtraction(tables, names):
+    """Against (c): the foe's 1 HP pursuer (battler 1, Life Orb) with a spurious bit 0x200 the
+    only condition up KOs the player's switcher and falls to its recoil: UPDATE_HP's TryFaintMon
+    only (battle_script.c:1769-1772), so its bit is still set at :115: 0x200 - 1 = 0x1FF, and its
+    later CleanupFaintedMon (battle_lib.c:2213) finds bit 9 clear already. The switch then goes
+    on (subscript_switch_pokemon.s:22, SwitchAndUpdateMon -> BattleSystem_UpdateAfterSwitch,
+    battle_lib.c:2135) and clears the switcher's bit 8, which the borrow set: 0xFF."""
+    s = _pursuit_fight(tables, names, ("Growl",), ("Pursuit",), foe_item="Life Orb")
+    s = _masked(s.replace_hp(0, 0, 1).replace_hp(1, 0, 1), 0x200, 0)
+    out = _step(tables, s, A(MOVE_ACTIONS + 1, "Pursuit", s, names))
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert int(out.field_mask) == 0xFF
+
+
+def test_pursuit_chasing_a_u_turn_subtracts_too(tables, names):
+    """Under Gravity (0x5000) the foe's 1 HP Scyther U-turns and the slower player's Pursuit KOs it
+    before the list (subscript_attack_then_switch_out.s:54, the same subscript_pursuit.s): 0x5000
+    - 1 = 0x4FFF; the turn end takes 1 << 12 (bcp.c:1229): 0x3FFF. (A Monferno that the four
+    weather chips of 0xFF faint loses its own bit 8 too, battle_lib.c:2213: level 35 survives.)"""
+    s = _pursuit_fight(
+        tables,
+        names,
+        ("Pursuit",),
+        ("U-turn",),
+        foe="Scyther",
+        my_level=35,
+        gravity=GRAVITY_TURNS,
+    )
+    s = s.replace_hp(1, 0, 1)
+    out = _step(tables, s, A("Pursuit", "U-turn", s, names))
+    assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) > 0 and int(out.pivot_battler) == 0
+    assert int(out.field_mask) == 0x3FFF
+
+
+def test_the_first_pursuer_is_the_first_ready_battler_by_index(tables, names):
+    """fcm-verify (d): BtlCmd_TryPursuit loops the battlers in index order (battle_script.c:6899)
+    and breaks at the first that is ready (:6934), whatever the speeds: battler 0 switches and
+    battlers 1 and 3 (battler 3 the faster) both chose Pursuit; battler 1 is taken, and battler 3
+    once battler 1 has acted (:6900)."""
+    s = four(tables, names)
+    for b in (1, 3):
+        s = with_moves(s, names, b, ("Pursuit",))
+    s = s._replace(stats=s.stats.at[1, 1, 4].set(999))  # battler 3: party 1, slot 1
+    acts = jnp.asarray([MOVE_ACTIONS + 2, 0, 0, 0], jnp.int32)
+    moves = jnp.asarray([0, names.move("Pursuit"), 0, names.move("Pursuit")], jnp.int32)
+    choices = (moves, jnp.zeros(4, bool), jnp.zeros(4, bool))
+    who, found = first_pursuer(tables, s, 0, acts, choices)
+    assert (int(who), bool(found)) == (1, True)
+    waiting = jnp.asarray([True, False, True, True])
+    who, found = first_pursuer(tables, s, 0, acts, choices, waiting)
+    assert (int(who), bool(found)) == (3, True)
+    assert not bool(first_pursuer(tables, s, 1, acts, choices)[1])  # battlers 0, 2: none ready
+
+
+def test_future_sight_law_covers_a_corrupted_mask_that_loses_a_group(tables, names):
+    """G-6's owed item: 0x8044 (sand T, hail T, deep fog) with weatherTurns 1 ends the turn as
+    0x8040 (SANDSTORM counts 1 -> 0 and ends, subscript_sandstorm_end.s:5; HAILING counts to -1
+    and goes on, bcp.c:1138-1211). The Future Sight hit (bcp.c:1758-1783) on a Sand Veil
+    Sandshrew then reads fog without sand (bcp.c:2927, :2934): its threshold is in the law
+    (``outcome.future_thresholds``' none / sand / hail grid, each with and without the start's
+    fog), and the step hits at it and misses above it."""
+    import numpy as np
+
+    from nuzline.engine.enumerate import outcome_laws
+    from nuzline.engine.outcome import future_threshold
+
+    n = names
+    s = make_state(
+        tables, [_spec(n, "Abra", 30, ("Future Sight",))], [_spec(n, "Sandshrew", 30, ("Growl",))]
+    )
+    s = _masked(s, 0x8044, 1)._replace(
+        future_timer=s.future_timer.at[1].set(1),
+        future_damage=s.future_damage.at[1].set(5),
+        future_move=s.future_move.at[1].set(n.move("Future Sight")),
+        future_attacker=s.future_attacker.at[1].set(1),
+        future_sight=s.future_sight.at[1].set(1),
+    )
+    live = int(future_threshold(tables, _masked(s, 0x8040, -1), 1))
+    assert live != int(future_threshold(tables, s, 1))  # the start's (sand and fog) differs
+    laws = outcome_laws(tables, s, jnp.asarray([0, 0]))
+    ts = np.asarray(laws.future_thresholds[1])[np.asarray(laws.future_possible[1], bool)]
+    assert live in {int(t) for t in ts}
+    left = []
+    for roll in (live, live + 1):
+        o = _hits()._replace(future_hit=jnp.asarray([1, roll], jnp.int8))
+        out = assert_matches_reference(tables, s, (0, 0), o)
+        assert (int(out.field_mask), int(out.weather_turns)) == (0x8040, -1)
+        left.append(int(out.hp[1, 0]))
+    assert left[0] == left[1] - 5  # the stored 5 HP hit lands at the live threshold only

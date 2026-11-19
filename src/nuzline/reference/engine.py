@@ -4691,7 +4691,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         _lose_hp(turn, s, side, user.hp)
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
-        _pursuit(turn, s, side, turn.actions, turn.choices)
+        acid = _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
             # The Synchronize flag goes on: a user that falls to it ends the script at :55,
             # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
@@ -4700,6 +4700,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             turn.pick_mul = PURSUIT_POWER_MUL
             _faint_check(turn, s)
             _pay_exp(turn, s)
+            _acid_rain(s, acid)
     if user.hp > 0 and not s.over:
         # TryRestoreStatusOnSwitch, script.c:9139: raw BattleMon.ability (:9151).
         if user.ability == AbilityId.NATURAL_CURE:
@@ -6007,28 +6008,43 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     return True
 
 
-def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
+def _pursuer_ready(turn: _Turn, s: RefState, b: int, actions, choices) -> bool:
+    """``BtlCmd_TryPursuit``'s test of battler ``b`` (script.c:6900-6916): it has not acted,
+    chose Pursuit (not Struggle) with PP left, is alive, neither asleep nor frozen, and not
+    loafing (:6903)."""
+    if turn.done[b] or actions[b] >= MOVE_ACTIONS:
+        return False
+    move, struggling, _ = choices[b]
+    mon = _active(s, b)
+    if struggling or _t(turn.tables, "move_effect", move) != EffectId.PURSUIT:
+        return False
+    if mon.hp == 0 or mon.status in (Status.SLEEP, Status.FREEZE):
+        return False
+    return not _truant_loafs(s, b) and mon.pp[actions[b]] != 0
+
+
+def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int, int] | None:
     """``side`` is switching: ``BtlCmd_TryPursuit`` (script.c:6884, from
-    ``subscript_switch_pokemon.s:11``): a foe that has not acted, chose Pursuit with
-    PP left, alive and neither asleep nor frozen, spends the PP and hits with
+    ``subscript_switch_pokemon.s:11``): the first battler in index order (:6899, ``break``
+    :6934) on the other side (:6904) that is ``_pursuer_ready`` spends the PP and hits with
     ``powerMul = 20``; ``subscript_pursuit.s`` runs crit, damage and the type chart
     (no accuracy check, no secondary effect), then the contact ability. The
-    pursuer's action is over."""
+    pursuer's action is over. Returns ``(faintedMon, kept)`` for ``_acid_rain`` after a KO
+    of the switcher (subscript_pursuit.s:100, FCM 1.3-1.4), else None."""
     tables = turn.tables
-    pursuer = _foe(side)
-    if turn.done[pursuer] or actions[pursuer] >= MOVE_ACTIONS:
-        return
-    move, struggling, _ = choices[pursuer]
+    pursuer = next(
+        (
+            b
+            for b in range(len(s.battlers))
+            if side_of(b) != side_of(side) and _pursuer_ready(turn, s, b, actions, choices)
+        ),
+        None,
+    )
+    if pursuer is None:
+        return None
+    move = choices[pursuer][0]
     mon = _active(s, pursuer)
-    if struggling or _t(tables, "move_effect", move) != EffectId.PURSUIT:
-        return
-    if mon.hp == 0 or mon.status in (Status.SLEEP, Status.FREEZE):
-        return
-    if _truant_loafs(s, pursuer):  # script.c:6903
-        return
     slot = actions[pursuer]
-    if mon.pp[slot] == 0:
-        return
     mon.pp[slot] -= 1
     # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
     # (ruling G-9).
@@ -6058,7 +6074,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         # the ability, the items and SYSCTL_MOVE_HIT.
         if target_sd.substitute_hp <= damage:
             target_sd.substitute_hp = 0
-        return
+        return None
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
     armed = armed or _band_rolls(turn, s, side, o.focus_band[pursuer][0])  # G-1
@@ -6087,6 +6103,23 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         _on_hit_berry(turn, s, pursuer, side, True, False, _super_effective(turn, s, pursuer, move))
         _shell_bell(turn, s, pursuer, min(damage, target_hp))
         _life_orb_recoil(turn, s, pursuer)
+    if not (target_hp > 0 and _active(s, side).hp == 0):
+        return None
+    # subscript_pursuit.s:100 (FCM 1.3): the pursuer when a recoil left it at 0 HP and the
+    # switcher's Destiny Bond (the game runs it first, :85) did not fire, else the switcher; a
+    # recoil-fainted pursuer's Uproar bit is still in the mask at :115 (FCM 1.4, fcm-verify (c)).
+    if mon.hp == 0 and not s.battlers[side].destiny_bond:
+        return pursuer, s.field_mask & (1 << (FIELD_CONDITION_UPROAR_SHIFT + pursuer))
+    return side, 0
+
+
+def _acid_rain(s: RefState, acid: tuple[int, int] | None) -> None:
+    """Acid Rain (subscript_pursuit.s:115, after the payout; script.c:3282-3287): the mask (with
+    ``kept``, the Uproar bits whose faint cleanup comes later) minus ``faintedMon``, clamped at
+    0, then ``kept`` cleared (battle_lib.c:2213). ``acid``: ``_pursuit``'s."""
+    if acid is not None:
+        fainted, kept = acid
+        s.field_mask = max(0, (s.field_mask | kept) - fainted) & ~kept
 
 
 def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) -> None:
@@ -6099,9 +6132,10 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
         mon.status = Status.NONE
         mon.status_counter = 0
     # :11 Pursuit, then its own faint check (the battle may end here).
-    _pursuit(turn, s, side, actions, choices)
+    acid = _pursuit(turn, s, side, actions, choices)
     _faint_check(turn, s)
     _pay_exp(turn, s)  # subscript_pursuit.s:106-108: Pursuit's own payout
+    _acid_rain(s, acid)  # :115, G-12
     if s.over:
         return
     # The outgoing Pokemon goes back to the party: battle_controller.c:1482 writes its

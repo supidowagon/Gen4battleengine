@@ -62,7 +62,13 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
   E2 batch 9, Kaizo's Hurricane and Weather Ball since batch 13) are modelled too; the rest
   belong to unsupported moves (SolarBeam, Moonlight), refused with their holder (Leaf Guard is
-  modelled since the E1 Gardenia batch, G-14; Hydration and Forecast since E1 batch F, F-5, F-6);
+  modelled since the E1 Gardenia batch, G-14; Hydration and Forecast since E1 batch F, F-5, F-6).
+  The field conditions are ``fieldConditionsMask`` bit for bit (``BattleState.field_mask``,
+  ``engine.field``; FCM.md 4.5): weather and deep fog, the Uproar bits, the Gravity and Trick
+  Room counters, each reader testing its own bits, so a mask with several groups or a borrowed
+  counter reads as the decomp reads it. Acid Rain (a Pursuit KO subtracts ``faintedMon`` from
+  the mask, subscript_pursuit.s:100, :115; ledger G-12) is modelled in every format: nothing is
+  refused for it;
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
   (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
   is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).

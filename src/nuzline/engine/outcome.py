@@ -522,9 +522,10 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
 
 
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
-# total (13) x weather (4: the turn start's, none, sandstorm, hail) x the target confused or not.
+# total (13) x weather (6: none, sandstorm, hail, each with the start's deep fog bit or not) x
+# the target confused or not.
 _FUTURE_TOTALS = 13
-_FUTURE_WEATHERS = 4
+_FUTURE_WEATHERS = 6
 
 
 def future_thresholds(
@@ -544,8 +545,13 @@ def future_thresholds(
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
     stat effect on accuracy or evasion, Foresight, Haze, Psych Up, Acupressure, a White Herb);
     else the start stages of a battler that stays and 0 for a newcomer or a fainted attacker
-    (CleanupFaintedMon). The weather can be the start's, none (it ended, or a lock), or a
-    weather move's or ability's sandstorm or hail (the only ones the rate reads besides fog, which never starts); the target confused or not;
+    (CleanupFaintedMon). The rate reads three weather tests (``_rate``: sand for Sand Veil, hail
+    for Snow Cloak, deep fog; a defender holds one ability), so the grid's weathers are none,
+    sandstorm and hail, each with and without the start's deep fog bit: that covers every mask
+    at the hit, a corrupted one included (FCM 3.1: a group ending, 0x8044 -> 0x8040, a lock,
+    a weather move or ability, which clear fog, effect_script_0115.s etc. :8, subscript_
+    drizzle.s etc. :11); nothing but Acid Rain sets fog after the start (``loose`` below); the
+    target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
     roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
@@ -589,13 +595,13 @@ def future_thresholds(
     free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
-    # As weather bits (field.weather_bits): the start's, none, a sandstorm, a hail.
+    # As weather bits (field.weather_bits): none, a sandstorm, a hail, each with the start's fog.
+    fog = fcm.weather_bits(state) & int(FieldCondition.DEEP_FOG)
     weathers = jnp.stack(
         [
-            fcm.weather_bits(state),
-            jnp.asarray(0, _I32),
-            jnp.asarray(int(FieldCondition.SANDSTORM_TEMP), _I32),
-            jnp.asarray(int(FieldCondition.HAILING_TEMP), _I32),
+            jnp.asarray(bits, _I32) | f
+            for f in (jnp.asarray(0, _I32), fog)
+            for bits in (0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP))
         ]
     )
     a_mon, d_mon, total, wi, conf, lk = (
@@ -679,6 +685,9 @@ def future_thresholds(
     # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     ends = (fcm.gravity_count(state) == 1) & (tables.gravity_rearm == 0)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO this turn subtracts a battler from
+    # a nonzero mask, which can turn Gravity or deep fog on or off (FCM 3.1): kept whole too.
+    acid = jnp.any(uses & (effect == EffectId.PURSUIT)) & (state.field_mask != 0)
     field_change = (
         jnp.any(
             uses
@@ -691,6 +700,7 @@ def future_thresholds(
             )
         )
         | ends
+        | acid
     )
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
@@ -845,7 +855,11 @@ def _threshold_grid(
       the turn-start threshold, always is);
     * the weather (Sand Veil, Snow Cloak): the foe's weather move (``EffectId.WEATHER``,
       ``effects._weather``) sets its weather first; a switch-in weather ability is in the
-      turn-start threshold (``damage.entry_weather``);
+      turn-start threshold (``damage.entry_weather``). Both variants are the start mask's
+      weather bits through ``field``'s what-ifs (``ability_bits``, ``move_bits``), exact on any
+      mask, a corrupted one included (FCM 3.1); the turn end's countdown comes after every
+      check, and an Acid Rain write (a Pursuit KO, subscript_pursuit.s:115, G-12) ends both
+      singles actions (the pursuer's and the switcher's), so no check follows it;
     * the foe's field move, the second weather variant (one move has one effect): its weather
       move's weather; its Gravity (``effects._gravity``), FIELD_CONDITION_GRAVITY's x10/6
       (battle_controller_player.c:2972-2974); its Transform into the side's battler, which then

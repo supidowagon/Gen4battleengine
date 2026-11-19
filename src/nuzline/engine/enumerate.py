@@ -2215,8 +2215,12 @@ def outcome_laws(
     alive_setter = jnp.any(
         _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
     )[party(fmt, jnp.arange(fmt.B))]
-    weather_free = live & jnp.any(
-        (uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO subtracts a battler from a nonzero
+    # mask before the turn end's sort, which can set the rain and sun bits (FCM 3.1).
+    acid = jnp.any(uses_move & (effect == _E.PURSUIT)) & (state.field_mask != 0)
+    weather_free = live & (
+        jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
+        | acid
     )
     # F-16: a Sky Shaymin of the side, frozen now or by a foe's move, that a foe's move hits
     # becomes Land Forme mid-turn (hooks.shaymin_land): its end speed may be Land's.

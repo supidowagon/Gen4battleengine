@@ -9,6 +9,9 @@ and deep fog 15 with ``weather_turns`` (``weather_bits``, ``rain`` .. ``fog``,
 ``weather_ball_type``, ``weather_state``), the Uproar bits 8-11 (``uproar_any``; the battler's
 ``uproar`` count stays its VOLATILE_CONDITION_UPROAR), the Gravity counter bits 12-14
 (``gravity_on``, ``gravity_count``) and the Trick Room counter bits 16-18 (``trick_room_on``).
+Acid Rain (``acid_rain``, subscript_pursuit.s:115) subtracts a battler number from the whole
+mask, so any bit pattern of bits 0-18 can arise (FCM 3.1); every view reads it as the decomp's
+test does.
 ``weather_turns`` is written only by the weather moves and the TEMP-only countdown (stale
 outside a TEMP-only weather, as the decomp's).
 
@@ -284,6 +287,25 @@ def trick_room_tick(state: BattleState, live, rearm) -> BattleState:
     mask = jnp.where(on, mask - (1 << FIELD_CONDITION_TRICK_ROOM_SHIFT), mask)
     again = on & ((mask & _TRICK_ROOM) == 0) & jnp.asarray(rearm)
     return _put(state, jnp.where(again, mask | int(FieldCondition.TRICK_ROOM_INIT), mask), True)
+
+
+def sub_to_zero(mask, k) -> jnp.ndarray:
+    """``int32``: ``OPCODE_SUB_TO_ZERO`` (battle_script.c:3282-3287) on the signed ``int``:
+    ``mask - k``, 0 where that goes below 0. FCM 3.1: the lowest set bit at or above ``k``'s
+    borrows, every bit below it becomes 1, the bits above it stay."""
+    return jnp.maximum(jnp.asarray(mask, _I32) - jnp.asarray(k, _I32), 0)
+
+
+def acid_rain(state: BattleState, fainted, cond, kept=0) -> BattleState:
+    """Acid Rain (docs/bugs_and_glitches.md; FCM.md 1.2) where ``cond`` (a Pursuit KO):
+    subscript_pursuit.s:100 copies ``faintedMon`` (the battler ``fainted``) to ``scriptTemp``
+    and :115 runs ``fieldConditionsMask = sub_to_zero(fieldConditionsMask, scriptTemp)``.
+    ``kept``: Uproar bits of a battler whose faint is cleaned up only after :115 (a pursuer
+    that fell to a recoil, FCM 1.4: its ``CleanupFaintedMon``, battle_lib.c:2213, runs later),
+    which the engine's faint check has cleared already: they are in the mask the subtraction
+    reads and cleared after it."""
+    kept = jnp.asarray(kept, _I32)
+    return _put(state, sub_to_zero(_mask(state) | kept, fainted) & ~kept, cond)
 
 
 def uproar_start(state: BattleState, b, cond) -> BattleState:

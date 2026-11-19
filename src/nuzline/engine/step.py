@@ -2787,15 +2787,35 @@ def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, st
     )
 
 
+def first_pursuer(
+    tables: Tables, state: BattleState, switcher, actions, choices, waiting=None
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32, bool)``: the battler ``BtlCmd_TryPursuit`` takes against ``switcher``
+    (``switchedMon``) and whether there is one. It loops the battlers in index order
+    (battle_script.c:6899) and takes the first (``break``, :6934) that has not acted
+    (``waiting``, ``bool[B]``, :6900; default every battler), is on the other side (:6904)
+    and is ``_pursuer_ready`` (:6901-6916), not the fastest (fcm-verify (d)). None: the
+    battler across from ``switcher``, so the caller's hit is computed on a real foe and
+    masked. Singles: the foe or none."""
+    fmt = format_of(state)
+    waiting = jnp.ones((fmt.B,), bool) if waiting is None else jnp.asarray(waiting, bool)
+    who, found = _foe(jnp.asarray(switcher, _I32)), jnp.asarray(False)
+    for b in range(fmt.B):
+        ready = (
+            waiting[b]
+            & (side_of(b) != side_of(switcher))
+            & _pursuer_ready(tables, state, b, actions[b], choices[0][b], choices[1][b])
+        )
+        who = jnp.where(ready & ~found, b, who)
+        found = found | ready
+    return who, found
+
+
 def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
-    """``side`` switches and the other side, which has not acted yet, chose Pursuit:
-    ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
-    ``subscript_switch_pokemon.s:11`` before the switch; ``_pursuer_ready``)."""
-    pursuer = _foe(side)
-    ready = _pursuer_ready(
-        tables, state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
-    )
-    return is_switch(actions[side]) & ready
+    """``side`` switches and a battler of the other side, which has not acted yet, chose
+    Pursuit: ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
+    ``subscript_switch_pokemon.s:11`` before the switch; ``first_pursuer``)."""
+    return is_switch(actions[side]) & first_pursuer(tables, state, side, actions, choices)[1]
 
 
 def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -2889,6 +2909,33 @@ def _pursuit_hit(
     )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
     return life_orb_recoil(tables, state, pursuer, info.update_hp)
+
+
+def _acid_rain(pre: BattleState, hit: BattleState, state: BattleState, pursuer, switcher, fire):
+    """Acid Rain (docs/bugs_and_glitches.md; FCM.md 1.2-1.4, 4.3; ledger G-12) on ``state``, the
+    state after a Pursuit pass's faint check and payout (``pre``: before the hit, ``hit``: after
+    ``_pursuit_hit``). Where ``fire`` and the hit KO'd the switcher (subscript_pursuit.s:39,
+    ``_166``), :100 copies ``faintedMon`` and :115 subtracts it from fieldConditionsMask,
+    clamped at 0 (``field.acid_rain``). ``faintedMon`` (FCM 1.3) is the pursuer when it is at 0
+    HP after the chain (Rough Skin, Aftermath, Jaboca Berry, Life Orb: UPDATE_HP's TryFaintMon,
+    battle_script.c:1767-1770) and the switcher's Destiny Bond did not fire, else the switcher:
+    Destiny Bond (subscript_pursuit.s:85, the game's order: before every recoil, the pursuer
+    always alive there) fires exactly when the switcher holds it (subscript_faint_check_destiny_
+    bond.s:5-7) and restores ``faintedMon`` (:10, :25). The mask at :115 (FCM 1.4, fcm-verify
+    (c)) has lost the switcher's Uproar bit (its FAINT_MON, :36) and, when Destiny Bond fired,
+    the pursuer's (:16 PlayFaintAnimation, battle_script.c:1803, battle_lib.c:2213); a pursuer
+    that fell to a recoil keeps its bit until its own faint is cleaned up (``kept``). Battlers
+    are passed in (doubles-state-design section 5)."""
+    fmt = format_of(pre)
+
+    def hp(s, b):
+        return s.hp[party(fmt, b), s.active[b]]
+
+    ko = jnp.asarray(fire, bool) & (hp(pre, switcher) > 0) & (hp(hit, switcher) == 0)
+    recoil = (hp(hit, pursuer) == 0) & (pre.destiny_bond[switcher] == 0)
+    fainted = jnp.where(recoil, pursuer, switcher)
+    kept = jnp.where(recoil, hit.field_mask.astype(_I32) & fcm.uproar_bit(pursuer), 0)
+    return fcm.acid_rain(state, fainted, ko, kept)
 
 
 def _faint_check(
@@ -3075,10 +3122,12 @@ def _execute_actions(
         # the Pursuit (:11).
         first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
         state = _natural_cure(state, side, first_switch)
-        # The one Pursuit site: the hit before a first actor's switch, or the one U-turn's
-        # head stopped for (``ap``); the pursuer has not acted yet, so it is the second actor.
-        pursuer = _foe(side)
-        fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
+        # The one Pursuit site: the hit before a first actor's switch (the first ready battler
+        # of the other side, ``first_pursuer``), or the one U-turn's head stopped for (``ap``,
+        # its foe); the pursuer has not acted yet.
+        first, ready = first_pursuer(tables, state, side, acts, choices)
+        pursuer = jnp.where(ap, _foe(side), first)
+        fire = (start & (position == 0) & is_switch(acts[side]) & ready) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
@@ -3109,6 +3158,8 @@ def _execute_actions(
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
+        # subscript_pursuit.s:100, :115 after that payout: Acid Rain (G-12).
+        state = _acid_rain(pre, hit, state, pursuer, side, fire)
         pursued = jnp.where(fire, 1 + pursuer, pursued)
         fired = fired | fire
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
