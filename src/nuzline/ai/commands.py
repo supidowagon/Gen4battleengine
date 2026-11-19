@@ -72,6 +72,7 @@ from nuzline.ai.switching import (
 )
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import (
     AI_MAGNITUDE,
@@ -81,7 +82,7 @@ from nuzline.engine.damage import (
     decomp_abilities,
 )
 from nuzline.engine.format import format_of, party, side_of
-from nuzline.engine.ids import AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
@@ -2435,29 +2436,20 @@ def load_current_weather(ctx: AiContext) -> AiContext:
     ``fieldConditionsMask`` through ``WEATHER_IS_*`` (include/battle/common.h:68-72), with
     **no** Cloud Nine or Air Lock check. Each ``WEATHER_IS_*`` takes both the temporary and
     the permanent bit (``FIELD_CONDITION_SANDSTORM`` = ``_TEMP | _PERM``,
-    include/constants/battle/condition.h:112-128). The battle holds one weather at a time:
-    a weather move clears ``FIELD_CONDITION_WEATHER`` before it sets its own bit
-    (effect_script_0115.s:8-9, Sandstorm), so the decomp's last-match order does not matter
-    and the engine's single ``BattleState.weather`` gives the value."""
-    w = ctx.state.weather
-    value = jnp.select(
-        [
-            w == Weather.RAIN,
-            w == Weather.SANDSTORM,
-            w == Weather.SUN,
-            w == Weather.HAIL,
-            w == Weather.FOG,
-        ],
-        [
-            AiWeather.RAINING,
-            AiWeather.SANDSTORM,
-            AiWeather.SUNNY,
-            AiWeather.HAILING,
-            AiWeather.DEEP_FOG,
-        ],
-        AiWeather.CLEAR,
-    )
-    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
+    include/constants/battle/condition.h:112-128), ``if`` after ``if``: the last set group wins,
+    rain < sand < sun < hail < fog (``field.weather_bits``; a mask with several groups, FCM
+    3.2)."""
+    w = fcm.weather_bits(ctx.state)
+    value = jnp.asarray(AiWeather.CLEAR, _I32)
+    for test, kind in (
+        (fcm.rain, AiWeather.RAINING),
+        (fcm.sand, AiWeather.SANDSTORM),
+        (fcm.sun, AiWeather.SUNNY),
+        (fcm.hail, AiWeather.HAILING),
+        (fcm.fog, AiWeather.DEEP_FOG),
+    ):
+        value = jnp.where(test(w), int(kind), value)
+    return ctx._replace(calc_temp=value)
 
 
 def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:

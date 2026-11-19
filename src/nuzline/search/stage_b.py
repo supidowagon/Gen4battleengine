@@ -128,9 +128,9 @@ import numpy as np
 import nuzline.search.stage_a  # noqa: F401 - registers Tables/BattleState for jax.export
 from nuzline.ai.policy import UnsupportedAi, ai_path_refusals, ai_refusals
 from nuzline.data.tables import Names, Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import FIRST_ITEM_ACTION, MOVE_ACTIONS, decision_actions, usable_moves
 from nuzline.engine.enumerate import SamplingOnly
-from nuzline.engine.ids import Weather
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn_options, needs_learn
 from nuzline.engine.observe import replacement_observation
 from nuzline.engine.state import BattleState
@@ -1309,7 +1309,7 @@ def _chance_root(tables, names, state, groups, key, settings, leaf_fn, start) ->
     for i, (obs, p, members) in enumerate(groups):
         k = jax.random.fold_in(key, 1 + i)
         sub = _solve_belief(tables, names, state, members, k, settings, leaf_fn, start)
-        weather = Weather(int(np.asarray(members[0][0].weather))).name.lower()
+        weather = fcm.weather_text(fcm.weather_seen(fcm.weather_bits(members[0][0])))
         outcomes.append(RootOutcome(p, obs, f"weather {weather}", sub))
     dropped = {}
     for o in outcomes:

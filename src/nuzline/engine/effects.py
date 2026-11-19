@@ -324,7 +324,6 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
 from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
@@ -496,7 +495,7 @@ def can_have_status(
     (``damage.weather_suppressed``, read on ``state``: the field when the effect runs)."""
     fmt = format_of(state)
     types = state.types[party(fmt, side), slot]
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = _sunny(tables, state)
     has = lambda t: jnp.any(types == t)
     immune = (
         ((status == Status.BURN) & has(Type.FIRE))
@@ -1381,11 +1380,13 @@ def _rest(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def weather_heal_amount(tables, state: BattleState, side) -> jnp.ndarray:
     """``int32``: BtlCmd_WeatherHPRecovery (battle_script.c:5966-5979) for ``side``'s battler:
     ``maxHP / 2`` with no weather or a weather lock (NO_WEATHER, include/battle/common.h:65-67;
-    deep fog is a weather), ``Divide(maxHP * 20, 30)`` in sun, else ``Divide(maxHP, 4)``."""
+    deep fog is a weather), ``Divide(maxHP * 20, 30)`` with any SUNNY bit, else
+    ``Divide(maxHP, 4)`` (script.c:5970-5976)."""
     fmt = format_of(state)
     max_hp = state.max_hp[party(fmt, side), state.active[side]].astype(_I32)
-    no_weather = (state.weather == Weather.NONE) | weather_suppressed(tables, state)
-    sun = state.weather == Weather.SUN
+    w = fcm.weather_bits(state)
+    no_weather = ~fcm.any_weather(w) | weather_suppressed(tables, state)
+    sun = fcm.sun(w)
     return jnp.where(
         no_weather, max_hp // 2, jnp.where(sun, divide(max_hp * 20, 30), divide(max_hp, 4))
     )
@@ -2250,8 +2251,9 @@ YAWN_TURNS = 2  # BtlCmd_TryYawn: 1 << (MOVE_EFFECT_YAWN_SHIFT + 1) (battle_scri
 
 
 def _sunny(tables, state: BattleState) -> jnp.ndarray:
-    """``CheckIgnoreWeather`` then ``FIELD_CONDITION_SUNNY`` (battle_script.c:9195-9206)."""
-    return (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    """``CheckIgnoreWeather`` then ``FIELD_CONDITION_SUNNY`` (battle_script.c:9195-9206): any
+    SUNNY bit of the mask (``field.sun``)."""
+    return fcm.sun(fcm.weather_bits(state)) & ~weather_suppressed(tables, state)
 
 
 def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -2372,9 +2374,9 @@ def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Sandstorm, Rain Dance, Sunny Day, Hail (``WEATHER``; effect_script_0115.s, _0136.s,
     _0137.s, _0164.s, run before ``TryMove``, which cannot stop this accuracy-0
-    ``RANGE_FIELD`` move): ``MOVE_STATUS_FAILED`` when its weather is up already, either kind
-    (``move_param[m, 1] == 1``) or, for Hail, only a temporary one (``weather_timer != 0``);
-    else ``FIELD_CONDITION_WEATHER`` is cleared and the temporary weather set with
+    ``RANGE_FIELD`` move): ``MOVE_STATUS_FAILED`` while a bit of its weather's group is set
+    (``move_param[m, 1] == 1``) or, for Hail, its TEMP bit (``weather_fails``); else
+    ``FIELD_CONDITION_WEATHER`` is cleared and the temporary weather set with
     ``WEATHER_TURNS`` turns plus the param of the user's matching weather rock
     (``CheckItemHoldEffect`` / ``GetItemEffectParam`` on the attacker). The failure skips
     ``AfterMoveEffects`` (``step._use_move``)."""
@@ -2394,10 +2396,10 @@ def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def weather_fails(state: BattleState, param) -> jnp.ndarray:
     """``bool``: a ``WEATHER`` move with ``param`` (``move_param[m]``) fails on this field
-    (``_weather``)."""
-    up = state.weather == param[0]
-    temporary = state.weather_timer != 0
-    return up & ((param[1] == 1) | temporary)
+    (``_weather``): Sandstorm, Rain Dance, Sunny Day test their whole group (``param[1] == 1``:
+    effect_script_0115.s, _0136.s, _0137.s :5), Hail only HAILING_TEMP (effect_script_0164.s:5),
+    so Hail succeeds under a HAILING_PERM-only mask."""
+    return fcm.weather_move_fails(fcm.weather_bits(state), param[0], param[1] == 1)
 
 
 def armored(state: BattleState, side, target_side) -> jnp.ndarray:
@@ -3006,7 +3008,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     absorbed = down & (layers > 0) & poison_type
     state = _set(state, "toxic_spikes", side, 0, absorbed)
     ability = battler_decomp_ability(tables, state, side, mon)
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = _sunny(tables, state)
     status = jnp.where(layers >= 2, Status.TOXIC, Status.POISON)
     # subscript_poison.s:5-10 / subscript_badly_poison.s:5-10 (CheckAbility, before the status
     # and type checks): Immunity, or Leaf Guard in sun, jumps to "{0}'s {1} prevents

@@ -1667,6 +1667,39 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
 - G-5 Motor Drive also tests ``attacker != defender`` (battle_lib.c:3532-3536), as Volt Absorb does
   (:3500-3502); Water Absorb, Dry Skin and Flash Fire do not. Whoever models Motor Drive gates it like
   Volt Absorb (`volt & ~self_target`, step.py `absorbed`). Not modelled here (batch F gate note).
+- G-6 FCM step 2, weather family (FCM.md 4.4 (2), 4.7 weather; fcm-verify (b)): every reader of the weather
+  bits (0-7, deep fog 15) and `weatherTurns` reads `field_mask` / `weather_turns` through `engine.field`
+  (`weather_bits`, `rain` .. `fog` = WEATHER_IS_*, include/battle/common.h:68-72; `any_weather`, `solar_down`,
+  condition.h:131-139), the reference the same; `weather` / `weather_timer` are written only (step 3 drops them).
+  Each reader tests its own group, so several set groups read as the decomp reads them (FCM 3.2): damage
+  (lib.c:6921-6940, :7046-7070: rain's step then sun's, SOLAR_DOWN); Weather Ball power on any WEATHER bit, type
+  of the last set group rain < sand < sun < hail (battle_script.c:6847-6865, lib.c:7896-7911, trainer_ai.c:
+  3223-3238; `field.weather_ball_type`); the AI's `LoadCurrentWeather` last writer rain < sand < sun < hail < fog
+  (trainer_ai.c:1414-1438); accuracy: Thunder-flag sun 50 then rain sure, Sand Veil, Snow Cloak, fog (bcp.c:
+  2915-2935, :3025-3029), where Kaizo's effect 141 (Hurricane) already carries `MoveFlag.THUNDER` (B13-3), so
+  fcm-verify (b) (rom_diff.md:366-367) needs no new branch; Swift Swim / Chlorophyll (lib.c:1229-1235); the
+  weather moves' fail tests (effect_script_0115/0136/0137.s:5 the group, 0164.s:5 HAILING_TEMP only:
+  `field.weather_move_fails`); the weather abilities skip on their own PERM bit (lib.c:3749-3776; the AI
+  reveal follows); WeatherHPRecovery (script.c:5970-5976); Leaf Guard / freeze / SolarBeam charge (any SUNNY
+  bit, script.c:9195-9206, bcp.c:2320-2323); Forecast (lib.c:6318-6352, if-else). The turn end runs one weather
+  state per set group in bcp.c order (:1113-1225, `field.weather_state`, a `lax.scan`): a TEMP-only group counts
+  the shared `weather_turns` down (two such groups: twice; past 0 it never ends, the u32 wrap), and each group
+  that goes on runs EndOfTurnWeatherEffect on the whole mask, last writer of hpCalcTemp sand < sun < hail < rain
+  (script.c:5573-5625; Ice Body at full HP writes nothing), Hydration's scriptTemp 1 skips the HP step
+  (subscript_weather_continues.s:13), a chip under any SUNNY bit tags the ability (:17); the faint check, the
+  payout and the battle end run after each state (the loop head, bcp.c:938-944). The outcome / enumerate what-if
+  weathers are weather bits (`field.ability_bits`, `field.move_bits`); the observation's weather is
+  `field.weather_seen` (the one group's `Weather` id, or 8 + a bit per group), printed by `field.weather_text`.
+  A clean mask reads as before (4.4). Prerequisite commit: `tests.strategies` and the hand-built test states set
+  a clean mask (`ids.clean_field_mask`, `field.with_weather`), the G-4 owed item; the snap capture for this
+  step is taken there. Owed for the Acid Rain commit (corrupted masks become reachable there): the Future Sight
+  threshold grid's weathers (start, none, sand, hail) and `_threshold_grid`'s (start, the foe's move's) cover
+  clean masks; a corrupted start can end the turn as itself minus an ended TEMP group (0x8044 -> 0x8040). Not
+  built: Forecast under sun + rain bits re-triggers forever (lib.c:6327-6343 alternate Fire / Water); Forecast
+  stays refused (FCM 4.5). Gravity, Uproar and Trick Room readers unchanged (their commits). Tests:
+  `tests/engine/test_field_mask.py` (readers on 0x7F, 0x5, 0x1, 0x3F, fog; turn end on 0x7F stale 3; 0x5 twice
+  and the wrap; Snow Warning cleaning 0x7F; Rain Dance failing under 0x7F, Hail under 0x3F; engine = reference),
+  `tests/ai/test_kaizo_commands.py::test_load_current_weather_takes_the_last_set_group`.
 
 ## Stream state (restart point, 2026-11-19)
 

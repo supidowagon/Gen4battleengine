@@ -1241,7 +1241,7 @@ def _use_move(
     second_turn = charge_move & (state.locked_move[side] != 0)
     sun_now = (
         ((used_flags & MoveFlag.SUN_SKIP) != 0)
-        & (state.weather == Weather.SUN)
+        & fcm.sun(fcm.weather_bits(state))
         & ~weather_suppressed(tables, state)
     )
     # D2-13: GoToMoveScript (script.c:2111-2134) picks the called move's defender by its own range
@@ -3660,7 +3660,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
     )
     alive = hp > 0
     ability = battler_decomp_ability(tables, state, side, mon)
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = fcm.sun(fcm.weather_bits(state)) & ~weather_suppressed(tables, state)
     leaf_guard = sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     toxic = (
         alive
@@ -3825,7 +3825,14 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     ``damage.battler_decomp_ability`` of each battler). The caller applies ``NO_CLOUD_NINE``.
     The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
     (moves.h:50: Dig's UNDERGROUND, Dive's UNDERWATER; :5580, :5587, :5600), rain does not
-    (B10-12)."""
+    (B10-12).
+
+    Each branch tests its own group of the mask (``WEATHER_IS_*``) and writes ``hpCalcTemp``,
+    so with several groups set the last writer wins, in the order sand, sun, hail, rain (FCM
+    3.2): Ice Body at full HP writes nothing (a sand chip stays). Hydration's
+    ``scriptTemp`` 1 skips the whole HP step (subscript_weather_continues.s:13 -> _098). A
+    chip (no Magic Guard, :12) tags the ability whenever any SUNNY bit is set (:14 -> _045;
+    subscript_weather_continues.s:17), every heal at _076."""
     fmt = format_of(state)
     mon = state.active[side]
     hp, max_hp = (
@@ -3840,8 +3847,9 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         return jnp.any(types == t)
 
     sixteenth = jnp.maximum(max_hp // 16, 1)
+    w = fcm.weather_bits(state)
     sand = (
-        (state.weather == Weather.SANDSTORM)
+        fcm.sand(w)
         & ~has(Type.ROCK)
         & ~has(Type.STEEL)
         & ~has(Type.GROUND)
@@ -3851,36 +3859,38 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         state.semi_invulnerable[side] == SemiKind.UNDERWATER
     )
     sand = sand & ~hidden
-    hail = (state.weather == Weather.HAIL) & ~hidden
+    hail = fcm.hail(w) & ~hidden
     ice_body = hail & (own == AbilityId.ICE_BODY)  # battle_script.c:5601 (G-45)
     hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
     eighth = jnp.maximum(max_hp // 8, 1)
-    sun = (
-        (state.weather == Weather.SUN)
-        & ~hidden
-        & ((own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER))
-    )
-    rain = (state.weather == Weather.RAIN) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
+    sun = fcm.sun(w) & ~hidden & ((own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER))
+    rain = fcm.rain(w) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
     # battle_script.c:5614-5618 Rain Dish: Divide(maxHP, 16) below full HP in rain (B9-6).
-    rain_dish = (state.weather == Weather.RAIN) & (own == AbilityId.RAIN_DISH) & (hp < max_hp)
+    rain_dish = fcm.rain(w) & (own == AbilityId.RAIN_DISH) & (hp < max_hp)
     magic_guard = ab == WEATHER_ABILITY_IDS["Magic Guard"]
-    chip = (sand | hail_chip) & ~magic_guard
-    sun_chip = sun & ~magic_guard
-    heal = (ice_body | rain_dish) & (hp < max_hp)
-    delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
-    delta = jnp.where(sun_chip, -eighth, jnp.where(rain, eighth, delta))
+    # hpCalcTemp, each branch in the decomp's order over the last (:5573-5625).
+    delta = jnp.where(sand, -sixteenth, 0)
+    delta = jnp.where(sun, -eighth, delta)
+    delta = jnp.where(ice_body & (hp < max_hp), sixteenth, delta)
+    delta = jnp.where(hail_chip, -sixteenth, delta)
+    delta = jnp.where(rain_dish, sixteenth, delta)
+    delta = jnp.where(rain, eighth, delta)
     alive = hp > 0
-    # :_076 tags every heal's battler, Ice Body's included (G-45).
-    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | heal))
     # Hydration (:5626-5639): no weather-hidden test in the rain block (a Diving holder is cured);
     # subscript_ability_restore_status.s:5 sets the status to 0, counter bits included (F-5).
     row = party(fmt, side)
     hydrate = (
         alive
-        & (state.weather == Weather.RAIN)
+        & fcm.rain(w)
         & (ab == ABILITY_DECOMP_IDS[AbilityId.HYDRATION])
         & (state.status[row, mon] != Status.NONE)
     )
+    delta = jnp.where(hydrate | ((delta < 0) & magic_guard), 0, delta)
+    # :_076 tags every heal's battler, Ice Body's included (G-45); :_045 / :_057 tag a chip's
+    # battler under any SUNNY bit with TAG_NICKNAME_ABILITY, whatever its ability (a sand or hail
+    # chip too, FCM 3.2): BattleAI_SetAbility records it (battle_script.c:11805).
+    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (delta > 0))
+    state = know_ability(state, side, mon, alive & (delta < 0) & fcm.sun(w))
     state = _set_mon(state, "status", side, mon, Status.NONE, hydrate)
     state = _set_mon(state, "status_counter", side, mon, 0, hydrate)
     state = reveal_ability(state, side, mon, STATUS_CURE, hydrate)
@@ -3917,14 +3927,16 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
        a nonzero ``wish_timer`` counts it down, and at 0 a battler with HP regains
        ``Divide(maxHP, 2)`` of its own (subscript_wish_heal.s: "HP is full!" at full HP, else
        UPDATE_HP, capped; Heal Block is unsupported) (``_wish``).
-    3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
-       with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
-       one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
-       ``_weather_effect`` for each battler in ``sides`` (``monSpeedOrder``, sorted after
-       the last action, :887) unless ``damage.weather_suppressed``. Deep fog never counts
-       down (:1213-1225). The faints the chip causes are checked once, after both
-       battlers (``BATTLE_SUBSCRIPT_FAINT_MON`` inside the subscript; the battle end only
-       when the loop resumes, :939-944): two last Pokemon down at once is a draw, a loss.
+    3. The weather states RAINING, SANDSTORM, SUNNY, HAILING, DEEP_FOG (:1113-1225), one per
+       set group of the mask, in that order (``field.weather_state``): a TEMP-only group
+       counts ``weather_turns`` down and ends at 0 with no effect that turn
+       (``subscript_sandstorm_end.s`` and the like); a PERM group and deep fog go on. A group
+       that goes on runs ``_weather_effect`` (on the whole mask) for each battler in
+       ``sides`` (``monSpeedOrder``, sorted after the last action, :887) unless
+       ``damage.weather_suppressed``, so N set groups run it N times. The faints a group's
+       chip causes are checked after both battlers (``BATTLE_SUBSCRIPT_FAINT_MON`` inside the
+       subscript) and paid at the loop head; the battle end stops the next state (:939-944):
+       two last Pokemon down at once is a draw, a loss.
     4. Gravity (:1227-1238) drops by 1.
 
     Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
@@ -3942,19 +3954,25 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather=jnp.where(ended, Weather.NONE, weather).astype(weather.dtype),
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
-    state = _where(live, fcm.weather_countdown(counted, live), state)
+    state = _where(live, counted, state)
     for position in (0, 1):
         state = _where(live, _wish(state, sides[position]), state)
 
-    before = state
-    ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
-    effects = live & ~ended & ~weather_suppressed(tables, state)
-    for position in (0, 1):
-        side = sides[position]
-        state = _where(effects, _weather_effect(state, side, ability), state)
-    state = _faint_check(tables, before, state)
-    # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
-    state = pay_exp(tables, before, state)
+    def weather_state(state, bits):
+        before = state
+        state, goes_on = fcm.weather_state(state, bits[0], bits[1], state.over == 0)
+        ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
+        effects = goes_on & ~weather_suppressed(tables, state)
+        for position in (0, 1):
+            state = _where(effects, _weather_effect(state, sides[position], ability), state)
+        state = _faint_check(tables, before, state)
+        # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
+        state = pay_exp(tables, before, state)
+        return jax.tree.map(lambda x, y: x.astype(y.dtype), state, before), None
+
+    # One trace for the five states (a scan): each runs on the state the one before left.
+    state = jax.tree.map(lambda x: jnp.asarray(x).astype(jnp.asarray(x).dtype), state)
+    state, _ = jax.lax.scan(weather_state, state, jnp.asarray(fcm.WEATHER_STATES, _I32))
 
     # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
     # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the

@@ -18,6 +18,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     hidden_power,
     judgment_type,
@@ -38,7 +39,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     MoveTarget,
     Type,
-    Weather,
 )
 from nuzline.engine.state import BattleState, battler_ability, held_item
 
@@ -132,7 +132,7 @@ def charge_keeps_user(tables: Tables, state: BattleState, battler, move, defende
     attacker, so a charge turn with no foe charges."""
     sun_now = (
         ((tables.move_flags[move].astype(_I32) & MoveFlag.SUN_SKIP) != 0)
-        & (state.weather == Weather.SUN)
+        & fcm.sun(fcm.weather_bits(state))
         & ~weather_suppressed(tables, state)
     )
     herb = tables.item_effect[held_item(state, battler)] == ItemId.POWER_HERB
@@ -312,9 +312,7 @@ def resolve(
         live_foe = jnp.where(alive(state, foe), foe, none)
         fm = follow_me_target(state, attacker)
         random_def = live_foe
-        single_def = jnp.where(
-            fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe)
-        )
+        single_def = jnp.where(fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe))
         random_drew = single_drew = uoa_random_drew = jnp.asarray(False)
 
     is_ = lambda *ranges: jnp.isin(rng, jnp.asarray([int(r) for r in ranges], _I32))

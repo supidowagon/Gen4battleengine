@@ -71,6 +71,7 @@ from nuzline.engine.ids import (
     TRACE_FIRES,
     AbilityId,
     EffectId,
+    FieldCondition,
     ItemId,
     MoveFlag,
     MoveTarget,
@@ -288,8 +289,9 @@ def _rate(
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
     (``target_switches``: it comes in this turn, fresh); ``target_moved``: the target's action
     is over (``Battler_MovedThisTurn``, battle_lib.c:5365-5368: in singles, the attacker acts
-    second), for Zoom Lens; ``weather`` (default ``state.weather``) and ``target_confused``
-    (default: the target's confusion counter is nonzero, a newcomer never) as at the check.
+    second), for Zoom Lens; ``weather`` (the mask's weather bits, default
+    ``field.weather_bits`` of ``state``) and ``target_confused`` (default: the target's
+    confusion counter is nonzero, a newcomer never) as at the check.
     100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021). A
     target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
     traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
@@ -305,7 +307,7 @@ def _rate(
     Triple Kick hit's: the first hit's check cleared the flag, :2968, so only a berry eaten
     since sets it; default ``micle``)."""
     fmt = format_of(state)
-    weather = state.weather if weather is None else weather
+    weather = fcm.weather_bits(state) if weather is None else jnp.asarray(weather, _I32)
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
     fresh = jnp.asarray(target_switches, bool) & (state.pivot_battler != target + 1)
     if target_confused is None:
@@ -347,21 +349,24 @@ def _rate(
     suppressed = weather_suppressed(tables, state._replace(hp=hp), on_field)
     if grid:  # the grid's weather is the one at the check (none for a lock)
         suppressed = jnp.asarray(False)
-    weather = jnp.where(suppressed, Weather.NONE, weather)
+    weather = jnp.where(suppressed, 0, weather)
     flags = tables.move_flags[move]
+    # MoveFlag.THUNDER: Thunder (effect 152) and Kaizo's effect 141 (Hurricane), whose two
+    # compares Kaizo widened (docs/kaizo/rom_diff.md:366-367; B13-3).
     thunder = (flags & MoveFlag.THUNDER) != 0
-    # :2915-2917 Thunder in sun: hitRate = 50, before the stage scaling (B9-1).
-    base = jnp.where(thunder & (weather == Weather.SUN), 50, accuracy)
+    # :2915-2917 Thunder in sun (any SUNNY bit): hitRate = 50, before the stage scaling (B9-1).
+    base = jnp.where(thunder & fcm.sun(weather), 50, accuracy)
     rate = base * _ACC_NUM[total] // _ACC_DEN[total]
     # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
     rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
     # Sand Veil in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces
     # them, :2927, :2931) x80/100, then deep fog x6/10 (:2934).
-    veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
-        (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
+    # Each its own WEATHER_IS_* test (sand and hail both set: both can apply, FCM 3.2).
+    rate = jnp.where(fcm.sand(weather) & (d_ability == AbilityId.SAND_VEIL), rate * 80 // 100, rate)
+    rate = jnp.where(
+        fcm.hail(weather) & (d_ability == AbilityId.SNOW_CLOAK), rate * 80 // 100, rate
     )
-    rate = jnp.where(veiled, rate * 80 // 100, rate)
-    rate = jnp.where(weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
+    rate = jnp.where(fcm.fog(weather), rate * 6 // 10, rate)  # deep fog
     # :2944-2947 Tangled Feet (Battler_IgnorableAbility) on a confused target: x50/100 (Hustle,
     # just before it, is unsupported).
     tangled = (d_ability == AbilityId.TANGLED_FEET) & jnp.asarray(target_confused, bool)
@@ -407,8 +412,8 @@ def _rate(
     no_guard = no_guard | locked
     # :3023-3031 (after No Guard / Lock-On, inside NO_CLOUD_NINE): Thunder in rain, Blizzard in
     # hail clear MOVE_STATUS_MISSED (B9-1).
-    weather_sure = (thunder & (weather == Weather.RAIN)) | (
-        ((flags & MoveFlag.BLIZZARD) != 0) & (weather == Weather.HAIL)
+    weather_sure = (thunder & fcm.rain(weather)) | (
+        ((flags & MoveFlag.BLIZZARD) != 0) & fcm.hail(weather)
     )
     no_guard = no_guard | weather_sure
     # An OHKO move (BtlCmd_TryOHKOMove, battle_script.c:4334-4386) sets
@@ -584,9 +589,15 @@ def future_thresholds(
     free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
+    # As weather bits (field.weather_bits): the start's, none, a sandstorm, a hail.
     weathers = jnp.stack(
-        [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
-    ).astype(_I32)
+        [
+            fcm.weather_bits(state),
+            jnp.asarray(0, _I32),
+            jnp.asarray(int(FieldCondition.SANDSTORM_TEMP), _I32),
+            jnp.asarray(int(FieldCondition.HAILING_TEMP), _I32),
+        ]
+    )
     a_mon, d_mon, total, wi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
@@ -717,7 +728,9 @@ def _hit_threshold(
         eva = jnp.where(fresh_switch(state, actions, target), 0, state.stages[target, Stat.EVA])
     if weather is None:
         weather = jnp.where(
-            target_switches, entry_weather(tables, state, target, target_mon, side), state.weather
+            target_switches,
+            entry_weather(tables, state, target, target_mon, side),
+            fcm.weather_bits(state),
         )
     rate = _rate(
         tables,
@@ -985,8 +998,12 @@ def _threshold_grid(
             herb[foe] & ~foe_fresh,
         )
         _, _, target_mon = _target_mon(state, actions, side)
+        # As weather bits (field.weather_bits); the what-ifs below act on them as the game's
+        # writers do (field.ability_bits, field.move_bits).
         weather0 = jnp.where(
-            foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
+            foe_switches,
+            entry_weather(tables, state, foe, target_mon, side),
+            fcm.weather_bits(state),
         )
         # The foe's field move (the second variant): a weather move's weather (another move's
         # param 0 is no weather); a Transform's copied weather ability, which its switch-in checks
@@ -1004,23 +1021,23 @@ def _threshold_grid(
         foe_weather = ability_weather(foe_ability)
         swap_weather = jnp.where(
             (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
-            copied_weather,
+            fcm.ability_bits(weather0, copied_weather),
             jnp.where(
                 (foe_weather != Weather.NONE) & (state.weather_announced[side] == 0),
-                foe_weather,
+                fcm.ability_bits(weather0, foe_weather),
                 weather0,
             ),
         )
         moved_weather = jnp.where(
             effect[foe] == EffectId.WEATHER,
-            stat[foe],
+            fcm.move_bits(weather0, stat[foe]),
             jnp.where(
                 xform & (copied_weather != Weather.NONE),
-                copied_weather,
+                fcm.ability_bits(weather0, copied_weather),
                 jnp.where(swap_move, swap_weather, weather0),
             ),
         )
-        weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
+        weathers = jnp.stack([weather0, moved_weather])
         gravity_move = effect[foe] == EffectId.GRAVITY
         # E3-2-2: the foe's Worry Seed makes the side's own ability Insomnia before the check
         # (subscript_give_target_insomnia.s:11; the side loses Compoundeyes, Hustle, Simple,

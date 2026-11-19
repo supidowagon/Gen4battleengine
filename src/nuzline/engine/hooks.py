@@ -364,12 +364,13 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     active battler where ``cond`` (it has not announced: it entered, or it just traced): with
     HP left and Drizzle, Sand Stream, Drought or Snow Warning (``Battler_Ability``), the weather
     becomes that one, permanently (``weather_timer`` 0; subscript_drizzle.s etc.:
-    ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless that permanent weather is
-    up already (no script then, the field is the same). Cloud Nine does not stop it."""
+    ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless its own PERM bit is set
+    already (:3749, :3758, :3767, :3776: no script, no reveal). Cloud Nine does not stop it."""
     mon, row = state.active[side], party(format_of(state), side)
     weather = ability_weather(battler_ability(state, side))
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
-    already = (state.weather == weather) & (state.weather_timer == 0)
+    w = fcm.weather_bits(state)
+    already = fcm.ability_bits(w, weather) == w
     state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
     state = fcm.weather_ability(state, weather, on)
@@ -1025,7 +1026,8 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
     ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
     fmt = format_of(state)
     clear = ~weather_suppressed(tables, state)
-    rain, sun, hail = (state.weather == w for w in (Weather.RAIN, Weather.SUN, Weather.HAIL))
+    w = fcm.weather_bits(state)
+    rain, sun, hail = fcm.rain(w), fcm.sun(w), fcm.hail(w)
     weathered = rain | sun | hail
     for side in range(fmt.B):
         row, mon = party(fmt, side), state.active[side]

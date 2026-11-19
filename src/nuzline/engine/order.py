@@ -72,7 +72,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     Stat,
     Status,
-    Weather,
 )
 from nuzline.engine.state import BattleState, battler_ability, held_item
 
@@ -560,21 +559,23 @@ def effective_speed(
 ) -> jnp.ndarray:
     """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it. ``suppressed``
     (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
-    lock (``NO_CLOUD_NINE``) and ``weather`` (default ``state.weather``) the weather, for a
-    lock or a weather that can change before the speed is read (``enumerate._end_speeds``)."""
+    lock (``NO_CLOUD_NINE``) and ``weather`` (weather bits, default ``field.weather_bits`` of
+    ``state``) the weather, for a lock or a weather that can change before the speed is read
+    (``enumerate._end_speeds``)."""
     fmt = format_of(state)
     if suppressed is None:
         suppressed = weather_suppressed(tables, state)
-    weather = state.weather if weather is None else weather
+    weather = fcm.weather_bits(state) if weather is None else weather
     mon = state.active[side]
     ability = battler_ability(state, side)  # CompareBattlerSpeed (battle_lib.c:1213-1214)
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[party(fmt, side), mon, Stat.SPE - 1].astype(_I32), stage)
-    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability), inside NO_CLOUD_NINE.
+    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability, WEATHER_IS_RAIN /
+    # _SUN of the mask), inside NO_CLOUD_NINE.
     swim = (
-        ((ability == AbilityId.SWIFT_SWIM) & (weather == Weather.RAIN))
-        | ((ability == AbilityId.CHLOROPHYLL) & (weather == Weather.SUN))
+        ((ability == AbilityId.SWIFT_SWIM) & fcm.rain(weather))
+        | ((ability == AbilityId.CHLOROPHYLL) & fcm.sun(weather))
     ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
     # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),

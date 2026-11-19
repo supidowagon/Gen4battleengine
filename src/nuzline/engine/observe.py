@@ -121,6 +121,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.format import format_of
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
@@ -343,7 +344,8 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         # "{0}'s perish count fell to {1}!" (subscript_continue_perish_song.s:3): 1 + the count
         # while the effect is up, else 0.
         "perish_count": jnp.where(after.perish_song != 0, 1 + after.perish_song_turns, 0),
-        "weather": after.weather,
+        # The weather the player sees (one message per set group): field.weather_seen.
+        "weather": fcm.weather_seen(fcm.weather_bits(after)),
         **{name: _nonzero(getattr(after, name)) for name in _NONZERO_FIELD},
         "over": after.over,
         "winner": after.winner,

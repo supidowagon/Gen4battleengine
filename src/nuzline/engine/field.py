@@ -4,7 +4,11 @@
 Every writer of the old field fields (``weather``, ``weather_timer``, ``gravity``,
 ``trick_room``, the per-battler ``uproar``) also writes the mask through these, bit for bit as
 the decomp writes ``fieldConditionsMask`` (bits ``ids.FieldCondition``, include/constants/
-battle/condition.h:110-149); the readers still read the old fields. On every state the engine
+battle/condition.h:110-149). Step 2 (4.4): the weather readers read the weather bits (bits 0-7,
+deep fog 15) and ``weather_turns`` through the views below (``weather_bits``, ``rain`` ..
+``fog``, ``weather_ball_type``, ``weather_state``), each as its decomp test reads the mask, so a
+mask with several groups (FCM 3.2) reads as the game reads it; the Gravity, Uproar and Trick
+Room readers still read the old fields. On every state the engine
 reaches the mask is clean: at most one weather group, TEMP-only with ``weather_turns ==
 weather_timer`` or PERM-only; the Gravity / Trick Room bits are ``gravity`` / ``trick_room``;
 Uproar bit ``8 + b`` is ``uproar[b] != 0``. ``weather_turns`` is written only by the weather
@@ -25,11 +29,29 @@ from nuzline.engine.ids import (
     WEATHER_PERM_BIT,
     WEATHER_TEMP_BIT,
     FieldCondition,
+    Type,
+    Weather,
 )
 from nuzline.engine.state import BattleState
 
 _I32 = jnp.int32
 _WEATHER = int(FieldCondition.WEATHER)
+_RAINING = int(FieldCondition.RAINING)
+_SANDSTORM = int(FieldCondition.SANDSTORM)
+_SUNNY = int(FieldCondition.SUNNY)
+_HAILING = int(FieldCondition.HAILING)
+_DEEP_FOG = int(FieldCondition.DEEP_FOG)
+# FIELD_CONDITION_SOLAR_DOWN (condition.h:136-139): every weather bit but SUNNY's.
+_SOLAR_DOWN = _WEATHER & ~_SUNNY
+# The weather states of CheckFieldConditions in order (battle_controller_player.c:907-912,
+# :1113-1225) as (TEMP, PERM) bits: RAINING .. HAILING count a TEMP-only group down; DEEP_FOG
+# (:1213-1225) has one bit and never counts down (as a PERM bit: it always goes on).
+WEATHER_STATES = (
+    *((int(temp), int(perm)) for temp, perm in WEATHER_COUNTDOWN),
+    (0, _DEEP_FOG),
+)
+# The groups an observer sees, by ``Weather`` id (1 sun .. 5 fog): one message per set group.
+_SEEN_GROUPS = (_SUNNY, _RAINING, _SANDSTORM, _HAILING, _DEEP_FOG)
 _GRAVITY = int(FieldCondition.GRAVITY)
 _TRICK_ROOM = int(FieldCondition.TRICK_ROOM)
 
@@ -74,21 +96,127 @@ def weather_ability(state: BattleState, weather, cond) -> BattleState:
     return _put(state, (mask & ~_WEATHER) | perm, runs)
 
 
-def weather_countdown(state: BattleState, live) -> BattleState:
-    """The weather states of CheckFieldConditions (battle_controller_player.c:1113-1211, in that
-    order) where ``live``: a set group with its PERM bit goes on; a TEMP-only one counts the one
-    shared ``weatherTurns`` down (``--weatherTurns == 0``, :1121, :1146, :1171, :1196) and at 0
-    its end script clears its TEMP bit (subscript_raining_end.s, _sandstorm_end.s, _sunny_end.s,
-    _hailing_end.s :5). Deep fog never counts down (:1213-1225)."""
+def weather_state(state: BattleState, temp, perm, live) -> tuple[BattleState, jnp.ndarray]:
+    """One weather state of CheckFieldConditions (battle_controller_player.c:1113-1225) where
+    ``live``, for the group of bits ``temp | perm`` (``WEATHER_STATES``): ``(state, goes_on)``.
+    A set group with its PERM bit goes on (subscript_weather_continues.s); a TEMP-only one counts
+    the one shared ``weatherTurns`` down (``--weatherTurns == 0``, :1121, :1146, :1171, :1196):
+    at 0 its end script clears its TEMP bit (subscript_raining_end.s, _sandstorm_end.s,
+    _sunny_end.s, _hailing_end.s :5) and nothing else of it runs that turn, else it goes on. Two
+    TEMP-only groups count it down twice a turn; past 0 it goes negative (the u32 wraps) and
+    ``--x == 0`` never holds again. Deep fog (``temp`` 0) always goes on (:1213-1225)."""
     mask, turns = _mask(state), state.weather_turns.astype(_I32)
-    live = jnp.asarray(live)
-    for temp, perm in WEATHER_COUNTDOWN:
-        group = int(temp) | int(perm)
-        counts = live & ((mask & group) != 0) & ((mask & int(perm)) == 0)
-        turns = jnp.where(counts, turns - 1, turns)
-        mask = jnp.where(counts & (turns == 0), mask & ~int(temp), mask)
+    temp, perm = jnp.asarray(temp, _I32), jnp.asarray(perm, _I32)
+    on = jnp.asarray(live) & ((mask & (temp | perm)) != 0)
+    counts = on & ((mask & perm) == 0)
+    turns = jnp.where(counts, turns - 1, turns)
+    ends = counts & (turns == 0)
     state = state._replace(weather_turns=turns.astype(state.weather_turns.dtype))
-    return _put(state, mask, True)
+    return _put(state, mask & ~temp, ends), on & ~ends
+
+
+def weather_bits(state: BattleState) -> jnp.ndarray:
+    """``int32``: the mask's ``FIELD_CONDITION_WEATHER`` bits (condition.h:131-135: the four
+    weathers, TEMP and PERM, and deep fog), what the weather readers test. A what-if view of the
+    weather is such a value too (``outcome``, ``enumerate``, ``order.effective_speed``)."""
+    return _mask(state) & _WEATHER
+
+
+def rain(w) -> jnp.ndarray:
+    """``WEATHER_IS_RAIN`` (include/battle/common.h:68) of the weather bits ``w``."""
+    return (jnp.asarray(w, _I32) & _RAINING) != 0
+
+
+def sand(w) -> jnp.ndarray:
+    """``WEATHER_IS_SAND`` (common.h:69)."""
+    return (jnp.asarray(w, _I32) & _SANDSTORM) != 0
+
+
+def sun(w) -> jnp.ndarray:
+    """``WEATHER_IS_SUN`` (common.h:70)."""
+    return (jnp.asarray(w, _I32) & _SUNNY) != 0
+
+
+def hail(w) -> jnp.ndarray:
+    """``WEATHER_IS_HAIL`` (common.h:71)."""
+    return (jnp.asarray(w, _I32) & _HAILING) != 0
+
+
+def fog(w) -> jnp.ndarray:
+    """``WEATHER_IS_FOG`` (common.h:72)."""
+    return (jnp.asarray(w, _I32) & _DEEP_FOG) != 0
+
+
+def any_weather(w) -> jnp.ndarray:
+    """Any ``FIELD_CONDITION_WEATHER`` bit, fog included (``NO_WEATHER``'s first test,
+    common.h:65; CalcWeatherBallParams' power test, battle_script.c:6848)."""
+    return (jnp.asarray(w, _I32) & _WEATHER) != 0
+
+
+def solar_down(w) -> jnp.ndarray:
+    """Any ``FIELD_CONDITION_SOLAR_DOWN`` bit (condition.h:136-139: rain, sand, hail, fog)."""
+    return (jnp.asarray(w, _I32) & _SOLAR_DOWN) != 0
+
+
+def weather_ball_type(w, default) -> jnp.ndarray:
+    """``int32``: the type Weather Ball's three readers write (``BtlCmd_CalcWeatherBallParams``,
+    battle_script.c:6851-6865; ``CalcMoveType``, battle_lib.c:7896-7911; ``TrainerAI_MoveType``,
+    trainer_ai.c:3223-3238): ``if`` after ``if``, so the last set group wins: rain Water < sand
+    Rock < sun Fire < hail Ice; ``default`` (the move's own) when none is set (fog alone)."""
+    out = jnp.asarray(default, _I32)
+    for test, kind in ((rain, Type.WATER), (sand, Type.ROCK), (sun, Type.FIRE), (hail, Type.ICE)):
+        out = jnp.where(test(w), int(kind), out)
+    return out
+
+
+def ability_bits(w, weather) -> jnp.ndarray:
+    """``int32``: the weather bits ``w`` after a weather ability that sets ``weather`` (an
+    ``ids.Weather``; NONE: no weather ability, ``w``) acts: skipped while its own PERM bit is set
+    (battle_lib.c:3749, :3758, :3767, :3776), else ``FIELD_CONDITION_WEATHER`` off and the PERM
+    bit on (subscript_drizzle.s etc. :11-12). A what-if view (``damage.entry_weather``,
+    ``outcome``)."""
+    w = jnp.asarray(w, _I32)
+    perm = _bit(WEATHER_PERM_BIT, weather)
+    sets = (jnp.asarray(weather, _I32) != Weather.NONE) & ((w & perm) == 0)
+    return jnp.where(sets, (w & ~_WEATHER) | perm, w)
+
+
+def weather_move_fails(w, weather, whole_group) -> jnp.ndarray:
+    """``bool``: the weather move of ``weather`` fails on the weather bits ``w``: a bit of its
+    group set (``whole_group``: Sandstorm, Rain Dance, Sunny Day, effect_script_0115.s, _0136.s,
+    _0137.s :5), else (Hail, effect_script_0164.s:5) its TEMP bit set."""
+    weather = jnp.clip(jnp.asarray(weather, _I32), 0, len(WEATHER_TEMP_BIT) - 1)
+    temp = _bit(WEATHER_TEMP_BIT, weather)
+    bits = jnp.where(jnp.asarray(whole_group), temp | _bit(WEATHER_PERM_BIT, weather), temp)
+    return (weather != Weather.NONE) & ((jnp.asarray(w, _I32) & bits) != 0)
+
+
+def move_bits(w, weather) -> jnp.ndarray:
+    """``int32``: the weather bits ``w`` after a weather move of ``weather`` succeeds
+    (effect_script_0115.s etc. :8-9: ``FIELD_CONDITION_WEATHER`` off, the TEMP bit on). A what-if
+    view (``outcome``)."""
+    return (jnp.asarray(w, _I32) & ~_WEATHER) | _bit(WEATHER_TEMP_BIT, weather)
+
+
+def weather_seen(w) -> jnp.ndarray:
+    """``int32``: the weather a player sees (an observation): the ``Weather`` id of the one set
+    group (CheckFieldConditions prints one message per set group, :1113-1225; TEMP and PERM read
+    alike), 0 with none, and with several groups ``8 +`` a bit per set group (bit ``id - 1``)."""
+    w = jnp.asarray(w, _I32)
+    sets = jnp.stack([(w & group) != 0 for group in _SEEN_GROUPS])
+    ids = jnp.arange(1, len(_SEEN_GROUPS) + 1, dtype=_I32)
+    one = jnp.max(jnp.where(sets, ids, 0))
+    groups = jnp.sum(jnp.where(sets, jnp.left_shift(1, ids - 1), 0))
+    return jnp.where(jnp.sum(sets) > 1, 8 + groups, one)
+
+
+def weather_text(seen) -> str:
+    """A ``weather_seen`` value as text (``search.plan_tree``, ``search.stage_b``)."""
+    names = {weather: weather.name.lower() for weather in Weather}
+    seen = int(seen)
+    if seen < 8:
+        return names[Weather(seen)]
+    return " + ".join(names[w] for w in Weather if w and (seen - 8) >> (w - 1) & 1)
 
 
 def gravity_start(state: BattleState, cond) -> BattleState:

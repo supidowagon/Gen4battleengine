@@ -28,8 +28,9 @@ Encodings:
 * ``field_mask`` is ``BattleContext.fieldConditionsMask`` bit for bit (``ids.FieldCondition``,
   condition.h:110-149) and ``weather_turns`` is ``FieldConditions.weatherTurns``
   (battle_context.h:29), written beside the old fields by every writer (``engine.field``; FCM
-  step 1): the readers still read ``weather``, ``weather_timer``, ``gravity``, ``trick_room`` and
-  ``uproar``. A clean mask equals them: at most one weather group, TEMP-only with
+  step 1). The weather readers read the mask's weather bits and ``weather_turns`` (step 2,
+  ``engine.field`` views); ``weather`` / ``weather_timer`` are written only (until step 3), and
+  ``gravity``, ``trick_room`` and ``uproar`` are still read. A clean mask equals them: at most one weather group, TEMP-only with
   ``weather_turns == weather_timer`` or PERM-only (``weather_timer == 0``); Gravity bits 12-14 =
   ``gravity``, Trick Room bits 16-18 = ``trick_room``; Uproar bit ``8 + b`` = ``uproar[b] != 0``.
   ``weather_turns`` is stale outside a TEMP-only weather (only the weather moves and the countdown

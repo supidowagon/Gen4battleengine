@@ -308,6 +308,24 @@ def test_load_current_weather(tables, names, weather, expected):
     assert _temp(c.load_current_weather(_ctx(tables, s))) == expected
 
 
+@pytest.mark.parametrize(
+    "mask, expected",
+    [
+        (0x7F, AiWeather.HAILING),
+        (0x807F, AiWeather.DEEP_FOG),
+        (0x5, AiWeather.SANDSTORM),
+        (0x3D, AiWeather.SUNNY),
+    ],
+)
+def test_load_current_weather_takes_the_last_set_group(tables, names, mask, expected):
+    # LoadCurrentWeather (trainer_ai.c:1414-1438) tests WEATHER_IS_RAIN, _SAND, _SUN, _HAIL,
+    # _FOG one after another, each overwriting calcTemp: on a mask with several groups (FCM
+    # 3.1-3.2) the last set one wins.
+    s = versus(tables, names, GEODUDE)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
+    assert _temp(c.load_current_weather(_ctx(tables, s))) == expected
+
+
 @pytest.mark.parametrize("side", [0, 1])
 @pytest.mark.parametrize("lock", ["Cloud Nine", "Air Lock"])
 def test_load_current_weather_ignores_cloud_nine(tables, names, side, lock):

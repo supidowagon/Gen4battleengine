@@ -125,7 +125,11 @@ three structs has a row.
   weather (only the weather moves, effect_script_0115/0136/0137/0164.s :10-14, and the TEMP-only
   countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM step 1 (FCM.md 4.4): every writer of
   `weather`, `weather_timer`, `gravity`, `trick_room` and `uproar` also writes these
-  (`engine.field`; reference: the same writes), the readers still read the old fields. A clean
+  (`engine.field`; reference: the same writes). Step 2, weather: every weather reader reads the
+  weather bits (0-7, 15) and `weather_turns` (`engine.field` views; the reference the same), so
+  a mask with several groups reads as the decomp reads it (FCM 3.2); `weather` /
+  `weather_timer` are written only, until step 3 drops them. The Gravity, Trick Room and Uproar
+  readers still read the old fields. A clean
   mask equals the old fields: at most one weather group, TEMP-only with `weather_turns ==
   weather_timer` or PERM-only; bits 12-14 = `gravity`, 16-18 = `trick_room`; bit `8 + b` =
   `uproar[b] != 0`.

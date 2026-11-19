@@ -47,6 +47,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
@@ -147,34 +148,20 @@ def falloff_power(power, cur, max_hp) -> jnp.ndarray:
     return jnp.maximum(out, 1)
 
 
-# BtlCmd_CalcWeatherBallParams (battle_script.c:6843-6872): moveType per weather; fog
-# (FIELD_CONDITION_DEEP_FOG, part of FIELD_CONDITION_WEATHER, condition.h:131-135) doubles the
-# power and sets no type (the move's own). Indexed by ids.Weather.
-WEATHER_BALL_TYPES = (
-    Type.NORMAL,  # NONE (unused: no weather leaves the table type)
-    Type.FIRE,  # SUN: WEATHER_IS_SUN
-    Type.WATER,  # RAIN: WEATHER_IS_RAIN
-    Type.ROCK,  # SANDSTORM: WEATHER_IS_SAND
-    Type.ICE,  # HAIL: WEATHER_IS_HAIL
-    Type.NORMAL,  # FOG: no WEATHER_IS_* holds (unused: the table type)
-)
-
-
 def weather_ball_params(tables, state, move) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``(on, power, type)`` of Weather Ball (``BtlCmd_CalcWeatherBallParams``,
     battle_script.c:6843-6872): under ``NO_CLOUD_NINE`` (``weather_suppressed``) and any weather
     (FIELD_CONDITION_WEATHER, fog included) the script sets movePower = power x 2 and moveType
-    (``WEATHER_BALL_TYPES``; fog sets none); else it sets nothing, so CalcMoveDamage and the
-    chart use the move's own power and type (battle_lib.c:6673-6684, :2582-2588). ``on``: the
-    script doubled the power (B13-12)."""
+    (``field.weather_ball_type``: the last set group of rain, sand, sun, hail; fog sets none);
+    else it sets nothing, so CalcMoveDamage and the chart use the move's own power and type
+    (battle_lib.c:6673-6684, :2582-2588). ``on``: the script doubled the power (B13-12)."""
     move = _i32(move)
-    weather = _i32(state.weather)
-    on = (weather != Weather.NONE) & ~weather_suppressed(tables, state)
+    w = fcm.weather_bits(state)
+    on = fcm.any_weather(w) & ~weather_suppressed(tables, state)
     table_power = _i32(tables.move_power[move])
     table_type = _i32(tables.move_type[move])
-    kind = jnp.asarray(WEATHER_BALL_TYPES, _I32)[jnp.clip(weather, 0, len(WEATHER_BALL_TYPES) - 1)]
-    typed = on & (weather != Weather.FOG)
-    return on, jnp.where(on, table_power * 2, table_power), jnp.where(typed, kind, table_type)
+    kind = fcm.weather_ball_type(w, table_type)
+    return on, jnp.where(on, table_power * 2, table_power), jnp.where(on, kind, table_type)
 
 
 # effect_script_0268.s:5-95: HOLD_EFFECT_ARCEUS_* (generated/item_hold_effects.txt, id = line
@@ -695,12 +682,11 @@ def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 
 
 def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
-    """``int32``: the weather once ``side``'s party ``slot`` has switched in
-    (``hooks.on_switch_in``): its entry hazards (``hazards_loss``) leave
-    it HP, and its weather ability, its own or the one it traces from the foe's active
-    battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
-    ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
-    first."""
+    """``int32``: the weather bits (``field.weather_bits``) once ``side``'s party ``slot`` has
+    switched in (``hooks.on_switch_in``): its entry hazards (``hazards_loss``) leave it HP, and
+    its weather ability, its own or the one it traces from the foe's active battler
+    (``entry_ability``; ``foe``: the other side), acts (``field.ability_bits``); else the
+    field's. For the turn-start laws of the foe's move (``outcome``): a switch goes first."""
     fmt = format_of(state)
     # A switch action's newcomer: no Ingrain, no Magnet Rise (only Baton Pass keeps them).
     alive = (
@@ -709,7 +695,8 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
         > 0
     )
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
-    return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
+    w = fcm.weather_bits(state)
+    return jnp.where(alive, fcm.ability_bits(w, weather), w)
 
 
 # effect_script_0048.s, _0269.s (RECOIL: Take Down, Double-Edge, ...): a Reckless attacker
@@ -1090,8 +1077,9 @@ def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
     BattleSystem pointer in AICmd_IfMoveEffectivenessEquals at 0x0222111A), a heap address
     whose low byte ApplyTypeChart reads as the type (battle_lib.c:2564, u8 moveType). The
     policy refuses that state (``ai.commands.MOVE_TYPE_MOVES``, B13-26)."""
-    weather = _i32(s.weather)
-    return (weather != Weather.NONE) & (weather != Weather.FOG) & ~weather_suppressed(tables, s)
+    w = fcm.weather_bits(s)
+    typed = fcm.rain(w) | fcm.sand(w) | fcm.sun(w) | fcm.hail(w)
+    return typed & ~weather_suppressed(tables, s)
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
@@ -1690,20 +1678,22 @@ def _pre_random(
 
     # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
     # passes no field conditions).
-    weather = jnp.where(weather_suppressed(tables, s), Weather.NONE, s.weather)
+    # The mask's weather bits (field.weather_bits): each test below is one WEATHER_IS_*, so with
+    # several groups set each modifier applies in the decomp's order.
+    w = jnp.where(weather_suppressed(tables, s), 0, fcm.weather_bits(s))
     # :6922-6924 Solar Power (attackerParams.ability) in sun: Sp. Atk x15/10 (the self-hit
     # passes no field conditions).
-    solar = (weather == Weather.SUN) & (a_ability == AbilityId.SOLAR_POWER) & (not self_hit)
+    solar = fcm.sun(w) & (a_ability == AbilityId.SOLAR_POWER) & (not self_hit)
     sp_attack = jnp.where(solar, sp_attack * 15 // 10, sp_attack)
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
-    sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
+    sand = fcm.sand(w) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
     # :6930-6941 Flower Gift in sun: COUNT_ALIVE_BATTLERS_OUR_SIDE (battle_lib.c:2886-2893, a
     # living battler of the side with the ability, Battler_Ability): the attacker's side's makes
     # attackStat x15/10, the defender's spDefenseStat x15/10 unless the attacker has Mold Breaker.
     # In singles each side's only battler is its active one (the self-hit passes no weather).
-    sunny = (weather == Weather.SUN) & (not self_hit)
+    sunny = fcm.sun(w) & (not self_hit)
     a_gift = (a_ability == AbilityId.FLOWER_GIFT) & (a_hp > 0)
     d_gift = (
         (_i32(battler_ability(s, def_side, d_slot)) == AbilityId.FLOWER_GIFT)
@@ -1743,21 +1733,17 @@ def _pre_random(
     screen = screen & (not self_hit) & (effect != EffectId.BRICK_BREAK)  # :6984, :7025
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
-    # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.
-    rain = (weather == Weather.RAIN) & (not self_hit)
-    sun = (weather == Weather.SUN) & (not self_hit)
+    # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing. Both
+    # rain and sun set: rain's integer step, then sun's (FCM 3.2).
+    rain = fcm.rain(w) & (not self_hit)
+    sun = fcm.sun(w) & (not self_hit)
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
     # :7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (rain, sandstorm, hail,
     # fog: condition.h:136-139) is halved, between rain and sun (B10-13).
-    solar_down = (
-        (weather == Weather.RAIN)
-        | (weather == Weather.SANDSTORM)
-        | (weather == Weather.HAIL)
-        | (weather == Weather.FOG)
-    )
-    damage = jnp.where(solar_down & (move == MOVE_SOLAR_BEAM) & (not self_hit), damage // 2, damage)
+    solar_down = fcm.solar_down(w) & (move == MOVE_SOLAR_BEAM) & (not self_hit)
+    damage = jnp.where(solar_down, damage // 2, damage)
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 

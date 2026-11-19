@@ -205,6 +205,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.actions import imprisoning_foe
 from nuzline.engine.damage import (
@@ -256,12 +257,12 @@ from nuzline.engine.ids import (
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FieldCondition,
     ItemId,
     MoveFlag,
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
 from nuzline.engine.order import (
@@ -692,8 +693,10 @@ def _end_speeds(
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
         chlorophyll = battler_ability(s, side, mon) == AbilityId.CHLOROPHYLL
-        doubling = jnp.where(chlorophyll, Weather.SUN, Weather.RAIN)
-        weather = jnp.where(lock == 3, doubling, s.weather).astype(s.weather.dtype)
+        doubling = jnp.where(
+            chlorophyll, int(FieldCondition.SUNNY_PERM), int(FieldCondition.RAINING_PERM)
+        )
+        weather = jnp.where(lock == 3, doubling, fcm.weather_bits(s))
         return effective_speed(tables, s, side, suppressed, weather)
 
     return jax.vmap(speed)(mons, stages, paras, locks, winds), possible
@@ -1984,9 +1987,12 @@ def outcome_laws(
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
     # gives a Focus Band mid-turn); a self-hit's roll is the user's own (_branch_masks).
     band_held = _holds_item(tables, state, actions, (ItemId.FOCUS_BAND,))
-    band_move = lands & (
-        (tables.move_category[moves] != STATUS) & (foes(band_held) | (band_held & lock))
-    )[:, None]
+    band_move = (
+        lands
+        & ((tables.move_category[moves] != STATUS) & (foes(band_held) | (band_held & lock)))[
+            :, None
+        ]
+    )
     own_band = tables.item_effect[state.item[party(fmt, sides), mons]] == ItemId.FOCUS_BAND
     # A disliked flavor berry on the side's active Pokemon (hooks.berry_confuse, G-5).
     own_berry = jnp.stack(
@@ -2560,9 +2566,7 @@ def outcome_laws(
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
-        protect_blocks=off
-        if loose
-        else uses_move & protect_blocks(tables, moves, False) & ~lock,
+        protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False) & ~lock,
         self_lock=lock,
         endure_sure=off if loose else reach & (effect == _E.ENDURE),
         roar=off if loose else roar,
@@ -2655,8 +2659,10 @@ def outcome_laws(
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
         # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
-        no_crit=((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | armored(tables, state, actions, moves))
+        no_crit=(
+            (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
+            | armored(tables, state, actions, moves)
+        )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
@@ -2737,7 +2743,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     plucked = uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1))
     hazards = entry_damage_up(state)
     residual = (
-        (state.weather != Weather.NONE)
+        fcm.any_weather(fcm.weather_bits(state))
         | jnp.any((state.status != Status.NONE) & (state.hp > 0))
         | jnp.any(state.leech_seed != 0)
         | jnp.any(state.curse != 0)
