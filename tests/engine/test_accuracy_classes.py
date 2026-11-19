@@ -550,7 +550,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
 # ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
 # test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds. Skill Swap (E3-2-5) swaps the two
-# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Gastro Acid (E3-2-6) suppresses the target's
+# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Role Play (E3-B2-5) gives its user the target's ability: tests/engine/test_e3_batch2.py test_role_play_is_seen_by_hit_thresholds_and_armor. Gastro Acid (E3-2-6) suppresses the target's
 # ability (Compoundeyes, Hustle, ... read NONE at its check):
 # tests/engine/test_e3_batch1.py test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds.
 _FOLLOWED = frozenset(
@@ -562,6 +562,7 @@ _FOLLOWED = frozenset(
         EffectId.TRANSFORM,
         EffectId.WORRY_SEED,
         EffectId.SKILL_SWAP,
+        EffectId.ROLE_PLAY,
         EffectId.GASTRO_ACID,
         EffectId.FLING,
     }

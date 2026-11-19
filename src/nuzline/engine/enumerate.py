@@ -996,6 +996,11 @@ INPUT_CLAUSE_EFFECTS = (
     # that hit, its accuracy and crit odds, a Klutz holder's item, an Intimidate or Download
     # stage change of its stats: the skill-swap clause.
     _E.SKILL_SWAP,
+    # E3-B2-5: Role Play gives the foe (its user) the side's ability
+    # (subscript_copy_ability.s:14-15) before the side's later hit, and an entry ability it
+    # gains acts at the move's end (``hooks.move_end_switch_in``): every ability factor of that
+    # hit, its accuracy and crit odds (the side's own ability is unchanged): the role-play clause.
+    _E.ROLE_PLAY,
     # E3-2-6: Gastro Acid suppresses the side's ability before its later hit
     # (subscript_suppress_target_ability.s:10; ``Battler_Ability`` reads NONE, battle_lib.c:3088-
     # 3093): every ability factor of that hit, its accuracy and crit odds, a Klutz holder's item,
@@ -1417,6 +1422,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
     _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
+    _E.ROLE_PLAY,  # a status move: no damage (E3-B2-5)
     _E.GASTRO_ACID,  # a status move: no damage (E3-2-6)
     # E3-B2-1: Fling's power is its item's fling power and its attacker's item is read with the
     # item still held (``damage.flung_view``), neither of ``hit_damage_table``'s turn-start reads.
@@ -1570,6 +1576,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.WORRY_SEED)
         # E3-2-5: the foe's Skill Swap gives the side the foe's ability (the skill-swap clause).
         | (foe_effect == _E.SKILL_SWAP)
+        # E3-B2-5: the foe's Role Play gives the foe the side's ability (the role-play clause).
+        | (foe_effect == _E.ROLE_PLAY)
         # E3-2-6: the foe's Gastro Acid suppresses the side's ability (the gastro-acid clause).
         | (foe_effect == _E.GASTRO_ACID)
         # E3-B2-1: the foe's Fling (the fling clause): its item's effect on the side, TryFling's
@@ -2254,6 +2262,8 @@ def outcome_laws(
     worry_used = uses_move & (effect == _E.WORRY_SEED)
     # E3-2-5: a Skill Swap moves a speed ability (and Shed Skin) between the battlers likewise.
     swap_used = uses_move & (effect == _E.SKILL_SWAP)
+    # E3-B2-5: a Role Play gives its user its target's speed ability (and Shed Skin) likewise.
+    role_used = uses_move & (effect == _E.ROLE_PLAY)
     # E3-2-6: a Gastro Acid suppresses its target's speed ability (Swift Swim, Chlorophyll, Quick
     # Feet, Unburden) and Shed Skin likewise (Battler_Ability reads NONE, battle_lib.c:3088-3093).
     gastro_used = uses_move & (effect == _E.GASTRO_ACID)
@@ -2262,7 +2272,10 @@ def outcome_laws(
     # defender's Speed (a Speed or Starf item, a status): neither is in the grid either.
     fling_used = uses_move & (effect == _E.FLING)
     end_speed_tie = end_speed_tie | (
-        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used | fling_used)
+        live
+        & jnp.any(
+            tracer | xform_used | worry_used | swap_used | role_used | gastro_used | fling_used
+        )
     )
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
@@ -2283,6 +2296,7 @@ def outcome_laws(
         | tracer
         | (xform_used & foes(shed_holder))
         | (jnp.any(swap_used) & foes(shed_holder))  # E3-2-5: Skill Swap hands it over
+        | (role_used & foes(shed_holder))  # E3-B2-5: Role Play copies it
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))

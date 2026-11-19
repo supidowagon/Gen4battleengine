@@ -194,7 +194,7 @@ three structs has a row.
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
   `ability`, `step._restore_ability` puts the party's back when it leaves (as
   `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
-  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
+  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Role Play (E3-B2-5) writes the user's `ability` = the target's the same way (and its `truant`; no announced flag, so the move-end switch-in pass acts for the copied entry ability); Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
   `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and `downloadAnnounced` are
   the per-battler fields `trace_announced`, `weather_announced`, `intimidate_announced` and
   `download_announced` since E3-2-5 (Skill Swap gives a battler an ability mid-battle): cleared

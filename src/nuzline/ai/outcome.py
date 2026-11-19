@@ -725,6 +725,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (:1790), :5984, :5988 (E3-2-2)
         259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
+        178,  # COPY_ABILITY (Role Play): Expert_ChangeUserAbility (:1733), :4429 (E3-B2-5)
         233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
         # (E3-B2-1)
         9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
@@ -881,6 +882,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     239: ("Expert_GastroAcid", 1782),
     259: ("Expert_TrickRoom", 1800),
     191: ("Expert_ChangeUserAbility", 1743),
+    178: ("Expert_ChangeUserAbility", 1733),
     233: ("Expert_Fling", 1776),
     9: ("Expert_MirrorMove", 1632),
 }
@@ -1018,6 +1020,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         239,  # SUPRESS_ABILITY: Expert_GastroAcid (E3-2-6)
         259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
         191,  # SWITCH_ABILITIES: Expert_ChangeUserAbility (E3-2-5)
+        178,  # COPY_ABILITY: Expert_ChangeUserAbility (E3-B2-5)
         233,  # FLING: Expert_Fling (E3-B2-1)
         9,  # COPY_MOVE: Expert_MirrorMove (E3-B2-2)
     }

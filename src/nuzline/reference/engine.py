@@ -1838,6 +1838,20 @@ def _spite_slot(s: RefState, target: int) -> tuple[bool, int, int]:
     return mon.pp[slot] == 0, slot, min(4, mon.pp[slot])
 
 
+def _role_play_fails(tables, s: RefState, side: int, target: int) -> bool:
+    """Role Play's failure after the miss test (effect_script_0178.s:5-6; subscript_copy_ability.s:
+    6-9; E3-B2-5): the user's Multitype (``Battler_Ability`` or raw: Multitype survives Gastro
+    Acid) or held Griseous Orb, the defender's raw Wonder Guard, Multitype or no ability."""
+    user, foe = _active(s, side), _active(s, target)
+    theirs = _decomp_ability(tables, foe)
+    return (
+        _battler_decomp_ability(tables, s, user) == ABILITY_MULTITYPE
+        or _decomp_ability(tables, user) == ABILITY_MULTITYPE
+        or user.item == ITEM_GRISEOUS_ORB
+        or theirs in (ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD], ABILITY_MULTITYPE, 0)
+    )
+
+
 def _conv2_type(tables, s: RefState, side: int, o) -> int:
     """The type ``BtlCmd_TryConversion2`` gives ``side``'s battler (not ``_conv2_fails``):
     ``o.conv2[side][recorded type]`` when that row is eligible, else the linear scan's first one."""
@@ -3645,6 +3659,19 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
             if 0 in (side, target):
                 _know_ability(s, s.battlers[0].active)
+    elif effect == EffectId.ROLE_PLAY and landed:
+        # subscript_copy_ability.s:5-15 (E3-B2-5): fails on a miss or a semi-invulnerable miss (:5,
+        # ``landed`` covers it), the defender's raw Wonder Guard (:6), Multitype (:7) or no ability
+        # (:9), the user's raw Multitype (:8); effect_script_0178.s:5-6 also on the user's Multitype
+        # or held Griseous Orb (``_role_play_fails``). Else the user's truant becomes totalTurns & 1
+        # (:11-13) and its BattleMon ability the defender's raw one (:14-15); the AI tags the new
+        # one (:3402-3404). No Substitute test. Slow Start (:16-21) is unsupported: no holder exists.
+        mon, foe_mon = _active(s, side), _active(s, target)
+        if foe_mon.hp and not _role_play_fails(tables, s, side, target):
+            s.battlers[side].truant = s.turn & 1
+            mon.ability = foe_mon.ability
+            if side == 0:
+                _know_ability(s, s.battlers[0].active)
     elif effect == EffectId.DISABLE and effective:
         # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
         # the target's movePrevByBattler is one of its moves with PP left; RandNext() % 4 + 3.
@@ -5444,6 +5471,11 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         if effect == EffectId.CONVERSION_2 and _conv2_fails(tables, s, side):
             full = True
             turn.attack_message = False
+        # Role Play's failure (effect_script_0178.s:5-6, subscript_copy_ability.s:6-9): the attack
+        # message after it is skipped (E3-B2-5).
+        if effect == EffectId.ROLE_PLAY and _role_play_fails(tables, s, side, _foe(side)):
+            full = True
+            turn.attack_message = False
         # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED); the
         # attack message it skips is cleared where the move connects (``_move_effect``), E3-B2-4.
         full = full or (effect == EffectId.SPITE and _spite_slot(s, _foe(side))[0])
@@ -6723,12 +6755,13 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             finally:
                 if _active(s, _foe(side)) is foe:
                     foe.types = saved
-            # A failed Spite skipped its attack message (subscript_reduce_target_pp.s:6): UpdateFlags
-            # WhenHit then clears moveHit instead of recording the move (bcp.c:4498-4508), E3-B2-4.
+            # A failed Spite or Role Play skipped its attack message (subscript_reduce_target_pp.s:6,
+            # subscript_copy_ability.s:5-6, effect_script_0178.s:10-12): UpdateFlagsWhenHit then
+            # clears moveHit instead of recording the move (bcp.c:4498-4508), E3-B2-4, E3-B2-5.
             if (
                 record
                 and not turn.attack_message
-                and _t(tables, "move_effect", move) == EffectId.SPITE
+                and _t(tables, "move_effect", move) in (EffectId.SPITE, EffectId.ROLE_PLAY)
             ):
                 record = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.

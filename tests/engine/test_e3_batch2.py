@@ -16,6 +16,7 @@ import numpy as np
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     MOVE_STRUGGLE,
     AbilityId,
     EffectId,
@@ -28,7 +29,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import CALL_MIRROR_MOVE, call_kind
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
-from tests.engine.helpers import A, assert_matches_reference
+from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
 SPE = 4
@@ -905,3 +906,168 @@ def test_a_mimicked_slot_loses_only_the_battlemons_pp(tables, names):
     out = _spite(t, n, s)
     assert _pp(out)[0] == _pp(s)[0] - 4
     assert int(out.shadow_pp[1, 0]) == 15
+
+
+# --- #178 Role Play (E3-B2-5) -----------------------------------------------------------------
+#
+# effect_script_0178.s:5-7 fails on the user's Multitype or held Griseous Orb, else runs
+# subscript_copy_ability.s: it fails (:5-9, :31-32) on a miss or a semi-invulnerable defender, the
+# defender's raw Wonder Guard, Multitype or no ability, the user's raw Multitype; else (:11-15) the
+# user's truant becomes ``totalTurns & 1`` and its BattleMon ability the defender's raw one. No
+# random draw, no Protect flag, no Substitute test.
+
+
+def _rp(t, n, mine, foe, item="", foe_item=""):
+    """Monferno (side 0, Role Play) holding ``item`` with ``mine`` against Geodude holding
+    ``foe_item`` with ``foe``, at turn 1 (a Truant write of ``totalTurns & 1`` reads 1)."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 20, ("Role Play", "Tackle"), item)],
+        [_spec(n, "Geodude", 40, ("Tackle",), foe_item)],
+    )
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(1).at[1, 0, SPE].set(500))
+    return s._replace(
+        ability=s.ability.at[0, 0].set(mine).at[1, 0].set(foe),
+        turn=jnp.asarray(1, s.turn.dtype),
+    )
+
+
+def _rpgo(t, n, s, out=None):
+    return assert_matches_reference(
+        t, s, A("Role Play", "Tackle", s, n), out if out is not None else _hits()
+    )
+
+
+def test_role_play_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 178 (effect_script_0178.s) is EffectId.ROLE_PLAY, a clause and a non-damaging effect
+    of the enumeration, with no Protect flag."""
+    assert DECOMP_EFFECT_TO_ID[178] == (EffectId.ROLE_PLAY, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        move = n.move("Role Play")
+        assert int(t.move_effect[move]) == EffectId.ROLE_PLAY
+        assert int(t.move_flags[move]) & MoveFlag.PROTECT == 0
+    assert EffectId.ROLE_PLAY in INPUT_CLAUSE_EFFECTS
+    assert EffectId.ROLE_PLAY in NON_TABLE_DAMAGE_EFFECTS
+
+
+def test_role_play_copies_the_targets_ability_only_and_the_ai_learns_it(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """:14-15 copy the defender's ability onto the user, :11-13 write ``totalTurns & 1`` (1 at turn
+    1) to the user's ``truant`` only; the defender keeps its ability and its truant. The AI is
+    tagged with the user's new ability (battle_script.c:3401-3404)."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = _rp(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+        out = _rpgo(t, n, s)
+        assert out.ability[:, 0].tolist() == [AbilityId.ROCK_HEAD, AbilityId.ROCK_HEAD]
+        assert out.truant.tolist() == [1, 0]
+        assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.ROCK_HEAD]
+
+
+def test_role_play_fails_on_its_listed_conditions_and_skips_the_attack_message(tables, names):
+    """effect_script_0178.s:5-6 (the user's Multitype, a held Griseous Orb) and
+    subscript_copy_ability.s:6-9 (the defender's Wonder Guard, Multitype, no ability; the user's
+    Multitype): nothing is copied, truant stays, and the attack message after the failure jump is
+    skipped, so the battle's movePrev stays empty (the Monferno acts last here); a success
+    records the move. The defender's Orb, the user's own Wonder Guard or no ability, and a Substitute do not stop it."""
+    t, n = tables, names
+    orb = n.item("Griseous Orb")
+    base = _rp(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+    ok = _rpgo(t, n, base)
+    assert int(ok.move_prev) == n.move("Role Play")
+    fails = {
+        "wonder guard foe": base._replace(
+            ability=base.ability.at[1, 0].set(AbilityId.WONDER_GUARD)
+        ),
+        "no ability foe": base._replace(ability=base.ability.at[1, 0].set(AbilityId.NONE)),
+        "orb user": _rp(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD, item="Griseous Orb"),
+    }
+    for label, case in fails.items():
+        out = _rpgo(t, n, case)
+        assert out.ability[:, 0].tolist() == case.ability[:, 0].tolist(), label
+        assert out.truant.tolist() == case.truant.tolist(), label
+        assert int(out.move_prev) == 0, label
+    arceus = as_species(t, base, 1, 0, n.species("Arceus"))
+    out = _rpgo(t, n, arceus)  # the defender's Multitype
+    assert int(out.ability[0, 0]) == int(arceus.ability[0, 0]) and int(out.move_prev) == 0
+    mt_user = as_species(t, base, 0, 0, n.species("Arceus"))
+    out = _rpgo(t, n, mt_user)  # the user's Multitype
+    assert int(out.ability[0, 0]) == int(mt_user.ability[0, 0]) and int(out.move_prev) == 0
+    for case in (
+        base._replace(ability=base.ability.at[0, 0].set(AbilityId.WONDER_GUARD)),
+        base._replace(ability=base.ability.at[0, 0].set(AbilityId.NONE)),
+        base._replace(item=base.item.at[1, 0].set(orb)),
+        base._replace(substitute_hp=base.substitute_hp.at[1].set(30)),
+    ):
+        out = _rpgo(t, n, case)
+        assert int(out.ability[0, 0]) == AbilityId.ROCK_HEAD
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    # Accuracy 0: no roll, so a failing hit draw changes nothing (bcp.c:2901-2903).
+    assert _rpgo(t, n, base, miss).ability[:, 0].tolist() == [AbilityId.ROCK_HEAD] * 2
+    gone = base._replace(semi_invulnerable=base.semi_invulnerable.at[1].set(1))
+    assert _rpgo(t, n, gone).ability[:, 0].tolist() == base.ability[:, 0].tolist()
+
+
+def test_role_play_reads_the_raw_ability_through_gastro_acid(tables, names):
+    """:14 reads BattleMon.ability: a Gastro Acid suppressed defender still gives its ability, and
+    the user's own suppression bit stays (:14-15 write only the ability)."""
+    t, n = tables, names
+    s = _rp(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+    s = s._replace(ability_suppressed=s.ability_suppressed.at[1].set(1).at[0].set(1))
+    out = _rpgo(t, n, s)
+    assert int(out.ability[0, 0]) == AbilityId.ROCK_HEAD
+    assert out.ability_suppressed.tolist() == [1, 1]
+
+
+def test_role_play_gives_the_user_the_targets_entry_ability_once_at_the_move_end(tables, names):
+    """The Intimidate the defender announced at its entry arrives with the user's flag clear:
+    MoveEnd's TriggerEffectOnSwitch (bcp.c:3973) fires it, the foe's Attack -1; an Intimidate the
+    user had announced already stays quiet."""
+    t, n = tables, names
+    s = _rp(t, n, AbilityId.BLAZE, AbilityId.INTIMIDATE)
+    s = s._replace(intimidate_announced=jnp.asarray([0, 1], s.intimidate_announced.dtype))
+    out = _rpgo(t, n, s)
+    assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
+    assert out.intimidate_announced.tolist() == [1, 1]
+    spent = s._replace(intimidate_announced=jnp.asarray([1, 1], s.intimidate_announced.dtype))
+    assert int(_rpgo(t, n, spent).stages[1, Stat.ATK]) == 0
+
+
+def test_the_copy_ends_with_the_battler(tables, names):
+    """The write is the BattleMon's (battle_lib.c:124): ``_restore_ability`` puts the party
+    Pokemon's own ability back when it leaves."""
+    t, n = tables, names
+    two = make_state(
+        t,
+        [_spec(n, "Monferno", 20, ("Role Play",)), _spec(n, "Monferno", 20, ("Scratch",))],
+        [_spec(n, "Geodude", 40, ("Tackle",))],
+    )
+    two = two._replace(ability=two.ability.at[1, 0].set(AbilityId.ROCK_HEAD))
+    own = int(two.ability[0, 0])
+    out = _rpgo(t, n, two)
+    assert int(out.ability[0, 0]) == AbilityId.ROCK_HEAD
+    switch = jnp.array([4 + 1, n.move_slot(out, 1, "Tackle")], jnp.int32)
+    out2 = assert_matches_reference(t, out, switch, empty_outcome())
+    assert int(out2.ability[0, 0]) == own
+
+
+def test_role_play_is_seen_by_hit_thresholds_and_armor(tables, names):
+    """A faster foe's Role Play gives the foe the side's ability before the side's check
+    (bcp.c:2876-2947): a Sand Veil copy in a sandstorm takes Rock Throw's 90 to 72, so the law has
+    a second class beside the turn start's; a Role Play user may hold the side's Battle Armor at
+    the side's CalcCrit (``outcome.armored``)."""
+    from nuzline.engine.outcome import armored
+    from tests.engine.test_accuracy_classes import hit_law
+
+    t, n = tables, names
+    s = roark_state(t, n, player_moves=["Rock Throw"], opp_moves=["Role Play"], opp_faster=True)
+    mon = int(s.active[0])
+    s = s._replace(
+        ability=s.ability.at[0, mon].set(AbilityId.SAND_VEIL),
+        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
+    )
+    law = hit_law(t, s, A("Rock Throw", "Role Play", s, n), 0)
+    assert law == {0: 10, 1: 72, 73: 18}  # a roll up to 72 hits either way; 73-90 only at 90
+    s2 = s._replace(ability=s.ability.at[0, mon].set(AbilityId.BATTLE_ARMOR))
+    acts = A("Rock Throw", "Role Play", s2, n)
+    assert bool(armored(t, s2, acts)[0]) is False

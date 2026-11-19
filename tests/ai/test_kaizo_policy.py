@@ -4769,6 +4769,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
         ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
         ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
+        ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -5037,6 +5038,35 @@ def test_change_user_ability_expert(kaizo_tables, kaizo_names, kaizo_roark_party
     assert _swap_delta(t2, s, guess=0)[0] == 2
     assert _swap_delta(t2, s, guess=0, jumps=((0, 4429),))[0] == 0
     assert _swap_delta(t2, s, guess=1)[0] == -1
+
+
+def test_role_play_shares_the_change_user_ability_block(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """Role Play is BATTLE_EFFECT_COPY_ABILITY, 178: Expert_Main's :1733 goes to the same
+    Expert_ChangeUserAbility as Skill Swap's :1743 (script.s:4415-4433), so the score change is
+    the same for the same abilities, the 50 roll (:4429) included; it is also in the Encore table
+    (:3252); no Basic entry (E3-B2-5)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.COPY_ABILITY == 178 and 178 in c.ENCORE_ENCOURAGED_EFFECTS
+    assert KAIZO_EXPERT_LABELS[178] == ("Expert_ChangeUserAbility", 1733)
+    assert 178 in KAIZO_TRANSCRIBED
+    assert int(t.move_ai_effect[n.move("Role Play")]) == 178
+    swap = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Skill Swap", "Accelerock", "", ""))
+    role = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Role Play", "Accelerock", "", ""))
+    for ability in (AbilityId.SPEED_BOOST, AbilityId.KEEN_EYE):
+        for state in (swap, role):
+            known = state._replace(
+                ability=state.ability.at[0, 0].set(ability),
+                ai_ability_known=state.ai_ability_known.at[0].set(ABILITY_DECOMP_IDS[ability]),
+            )
+            expect = 2 if ability == AbilityId.SPEED_BOOST else -1
+            assert _delta(t, known, 0x3, 0x7)[0] == expect
+            if expect == 2:
+                assert _delta(t, known, 0x3, 0x7, jumps=((0, 4429),))[0] == 0
 
 
 def test_gastro_acid_tables_are_the_decomps(kaizo_tables, kaizo_names):

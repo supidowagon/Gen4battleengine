@@ -461,6 +461,7 @@ class BattleEffect(IntEnum):
     FLING = 233  # Basic_CheckFling (:263); Expert_Fling (:1776)
     # E3 batch 2 (E3-B2-2).
     COPY_MOVE = 9  # Mirror Move: Expert_MirrorMove (:1632); Risky :6539; no Basic entry
+    COPY_ABILITY = 178  # Role Play: Expert_ChangeUserAbility (:1733); no Basic entry
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a

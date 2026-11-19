@@ -159,6 +159,7 @@ from nuzline.engine.effects import (
     resist_berry,
     resist_berry_damage,
     reveal_item,
+    role_play_fails,
     self_defender,
     shell_bell_heal,
     spite_slot,
@@ -1844,6 +1845,15 @@ def _use_move(
         & spite_slot(tables, state, target_side)[0]
     )
     items_full = items_full & ~spite_failed
+    # Role Play (effect_script_0178.s:5-6, subscript_copy_ability.s:6-9, :31-32): every failure
+    # jumps before the subscript's attack message (``shown_t``), E3-B2-5; its AfterMoveEffects are
+    # skipped by ``primary_effect_fails``.
+    role_failed = (
+        connected
+        & (tables.move_effect[used] == EffectId.ROLE_PLAY)
+        & role_play_fails(tables, state, side, target_side)
+    )
+    items_full = items_full & ~role_failed
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -2297,7 +2307,9 @@ def _use_move(
     # subscript_update_stat_stage.s, whose PrintAttackMessage (:6-7, shown or not) sets it
     # (battle_script.c:1431-1432), B10-12.
     shown_t = jnp.where(
-        head_on, can_act & ~(charging & ~def_up) & ~conv2_failed & ~spite_failed, True
+        head_on,
+        can_act & ~(charging & ~def_up) & ~conv2_failed & ~spite_failed & ~role_failed,
+        True,
     )
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
     hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])

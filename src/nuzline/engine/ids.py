@@ -556,6 +556,12 @@ class EffectId(IntEnum):
     # min(4, ppCur) from the PP of the slot of the target's last move (``BattleState.last_move``),
     # no random draw; E3-B2-4.
     SPITE = 133
+    # Role Play (178, BATTLE_EFFECT_COPY_ABILITY): zeros. effect_script_0178.s:5-7 fails on the
+    # user's Multitype or held Griseous Orb, else runs subscript_copy_ability.s: the user's
+    # ``BattleMon.ability`` becomes the defender's raw one and its ``truant`` ``totalTurns & 1``,
+    # unless the move missed, the defender is semi-invulnerable, has Wonder Guard, Multitype or no
+    # ability, or the user has Multitype (``effects._role_play``); no random draw; E3-B2-5.
+    ROLE_PLAY = 134
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

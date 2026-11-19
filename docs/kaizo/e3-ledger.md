@@ -715,3 +715,42 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   is per battler, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
   (`test_spite_*`, `test_a_*` of the Spite section), tests/ai/test_kaizo_policy.py
   (`test_spite_has_no_basic_or_expert_label`); `fullset`-free.
+
+- E3-B2-5 Role Play (#178, BATTLE_EFFECT_COPY_ABILITY; move 272, the only move with effect 178 in either
+  game, acc 0, no PROTECT / MIRROR_MOVE flag): new `EffectId.ROLE_PLAY` (134). No new state, no
+  `Outcome` field and no draw. Tables: only `move_effect` of Role Play (effect-map entry); no manifest bump:
+  no array or key changed. Machinery is Skill Swap's (E3-2-5), nothing new.
+  Script: effect_script_0178.s:5-6 fails (:10-12 `MOVE_STATUS_FAILED`) on the user's `Battler_Ability`
+  Multitype (`CheckAbility CHECK_HAVE`, battle_script.c:3145-3183; Multitype survives Gastro Acid,
+  battle_lib.c:3090-3091) or raw held Griseous Orb; :7 runs `subscript_copy_ability.s` as a direct
+  `CHECK_HP | TO_DEFENDER` (living defender, battle_lib.c:1492-1507). The subscript fails (:5-9, :31-32) on
+  MISSED | SEMI_INVULNERABLE (`h.landed`), the defender's raw Wonder Guard, Multitype or ABILITY_NONE, the
+  user's raw Multitype; no Protect flag and no Substitute test (it goes through both). Else `truant` of the
+  USER = `totalTurns & 1` (:11-13) and its `BattleMon.ability` = the defender's raw one (:14-15; a Gastro
+  Acid suppressed defender still gives it, the user's own suppression bit stays); only the user changes.
+  `effects.role_play_fails` (shared by `_role_play`, `primary_effect_fails`, `step`'s `role_failed`) and
+  `effects._role_play`; the AI is tagged with the user's new ability (`know_ability`,
+  battle_script.c:3401-3404; the GET at :14 reveals nothing). A failure skips the attack message (the
+  subscript's `Call`, :10 / effect script's early End): `step`'s `shown_t` and `items_full`, the
+  reference `_fight` (`attack_message = False`) and `_actions` (moveHit record cleared, as Spite).
+  Accuracy 0: no roll (bcp.c:2901-2903), so the hit draw is irrelevant.
+  Entry abilities: no announced flag is touched, so an entry ability the user now holds acts at the
+  move's end through `hooks.move_end_switch_in` (bcp.c:3973) when its flag is clear (Intimidate,
+  weather, Trace, Download; tested with Intimidate). Persistence: the BattleMon only, `_restore_ability`.
+  Hit chance: a faster foe's Role Play gives the foe the side's ability (`outcome._threshold_grid`'s
+  field variant, `rp`: the foe holds the side's ability, a weather one acting at the move's end;
+  `future_thresholds`' `loose`); crit: no `CRIT_ODDS_EFFECTS` entry (it writes only the user's ability,
+  never another battler's crit inputs: test_batch12's writer scan stays), `outcome.armored` counts a
+  foe's Role Play like Transform / Skill Swap; enumerate: `INPUT_CLAUSE_EFFECTS` (role-play clause),
+  `NON_TABLE_DAMAGE_EFFECTS`, `damage_inputs_can_change`, end-speed tie and Shed Skin copy.
+  AI: Expert_Main :1733 -> Expert_ChangeUserAbility (script.s:4415-4433, shared with Skill Swap's :1743;
+  roll site 4429); `BattleEffect.COPY_ABILITY` (the Encore table entry :3252 was already in `commands`);
+  no Basic entry; read bounds and backlog regenerated (the #178 AI row closes).
+  Rulings. (1) A copied Slow Start (:16-21) cannot arise: unsupported ability, coverage refuses its
+  holders (as Skill Swap). (2) Skill Swap's own failure paths do not yet clear the attack message /
+  movePrev record (its subscript fails before its `Call` too, subscript_exchange_abilities.s:5-14);
+  found while building this, not changed here: owed to Skill Swap. (3) Doubles: the target is the chosen
+  `h.target`; `role_play_fails` reads `state.active[target_side]`.
+  Tests: tests/engine/test_e3_batch2.py (`test_role_play_*`, `test_the_copy_ends_with_the_battler`),
+  tests/ai/test_kaizo_policy.py (`test_role_play_shares_the_change_user_ability_block`, the exact-equals-loose
+  list), tests/engine/test_accuracy_classes.py (`_FOLLOWED`); `fullset`-free.

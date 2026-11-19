@@ -1942,7 +1942,7 @@ def _expert_me_first(ctx: AiContext, mask) -> AiContext:
 
 
 def _expert_change_user_ability(ctx: AiContext, mask) -> AiContext:
-    """``Expert_ChangeUserAbility`` (script.s:4415-4433, entry :1743, E3-2-5): the attacker's
+    """``Expert_ChangeUserAbility`` (script.s:4415-4433, entries :1733 (Role Play, E3-B2-5) and :1743 (Skill Swap, E3-2-5)): the attacker's
     ability (``LoadBattlerAbility``: its own true one, NONE when suppressed) in
     ``CHANGE_USER_ABILITY_DESIRABLE`` -1; else the player's (its known one, else the species coin
     flip, the draw of ``load_battler_ability``) in the table: the 50 roll (:4429) jumping ends, else
@@ -3935,6 +3935,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _expert_focus_punch),  # :1730
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
+    (BattleEffect.COPY_ABILITY, _expert_change_user_ability),  # :1733 (E3-B2-5)
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _expert_ingrain),  # :1734
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
     (BattleEffect.RECYCLE, _expert_recycle),  # :1737 (B13-23)

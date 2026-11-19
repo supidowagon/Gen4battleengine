@@ -624,7 +624,8 @@ def future_thresholds(
     # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
     # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its
     # target's ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
-    # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
+    # (subscript_exchange_abilities.s:21-24); a Role Play gives its user its target's
+    # (subscript_copy_ability.s:14-15); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     field_change = jnp.any(
         uses
@@ -633,6 +634,7 @@ def future_thresholds(
             | (effect == EffectId.TRANSFORM)
             | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
             | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
+            | (effect == EffectId.ROLE_PLAY)  # the user takes its target's ability (E3-B2-5)
             | (effect == EffectId.GASTRO_ACID)  # the target's ability is suppressed (E3-2-6)
         )
     ) | (state.gravity == 1)
@@ -797,7 +799,8 @@ def _threshold_grid(
       its weather (``hooks.weather_ability``, battle_lib.c:3740-3790); its Skill Swap (E3-2-5):
       the foe holds the side's ability and the side the foe's
       (subscript_exchange_abilities.s:21-24), and a weather ability one of them gained acts at the
-      move's end (``hooks.move_end_switch_in``);
+      move's end (``hooks.move_end_switch_in``); its Role Play (E3-B2-5): the foe holds the
+      side's ability (subscript_copy_ability.s:14-15), a weather one acting at the move's end;
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
@@ -967,13 +970,21 @@ def _threshold_grid(
                 weather0,
             ),
         )
+        # E3-B2-5: a Role Play gives the foe the side's ability only; its entry weather ability
+        # acts at the move's end for the foe whose flag is clear (hooks.move_end_switch_in).
+        role_move = effect[foe] == EffectId.ROLE_PLAY
+        role_weather = jnp.where(
+            (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
+            copied_weather,
+            weather0,
+        )
         moved_weather = jnp.where(
             effect[foe] == EffectId.WEATHER,
             stat[foe],
             jnp.where(
                 xform & (copied_weather != Weather.NONE),
                 copied_weather,
-                jnp.where(swap_move, swap_weather, weather0),
+                jnp.where(swap_move, swap_weather, jnp.where(role_move, role_weather, weather0)),
             ),
         )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
@@ -989,7 +1000,7 @@ def _threshold_grid(
         # side's later check; a doubles Gastro Acid on a defender is the doubles milestone's.
         gastro_move = effect[foe] == EffectId.GASTRO_ACID
         field_move = weather_move[foe] | (
-            changes[foe] & (gravity_move | xform | worry_move | swap_move | gastro_move)
+            changes[foe] & (gravity_move | xform | worry_move | swap_move | role_move | gastro_move)
         )
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
@@ -1038,6 +1049,7 @@ def _threshold_grid(
             grav=gravity_move,
             wk=worry_move,
             sw=swap_move,
+            rp=role_move,
             ga=gastro_move,
             foe_old=foe_ability,
             copied=side_ability,
@@ -1046,7 +1058,7 @@ def _threshold_grid(
             foe_mon = state.active[foe]
             # Transform copies the side's ability onto the foe; Skill Swap also gives the side
             # the foe's (below). Raw writes of BattleMon.ability.
-            ability = jnp.where(f & (xf | sw), copied, state.ability[party(fmt, foe), foe_mon])
+            ability = jnp.where(f & (xf | sw | rp), copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
             side_mon = state.active[side]
             insomnia = jnp.where(
@@ -1345,7 +1357,12 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
     uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     # A foe's Skill Swap (E3-2-5) likewise gives the foe the side's ability.
     foe_effect = tables.move_effect[jnp.asarray(moves, _I32)]
-    xform = uses & ((foe_effect == EffectId.TRANSFORM) | (foe_effect == EffectId.SKILL_SWAP))
+    # and a foe's Role Play (E3-B2-5) gives the foe the side's ability too.
+    xform = uses & (
+        (foe_effect == EffectId.TRANSFORM)
+        | (foe_effect == EffectId.SKILL_SWAP)
+        | (foe_effect == EffectId.ROLE_PLAY)
+    )
     out = []
     for side in range(fmt.B):
         target, switches, target_mon = _target_mon(state, actions, side)

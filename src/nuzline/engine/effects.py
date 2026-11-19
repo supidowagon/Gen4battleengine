@@ -1674,6 +1674,8 @@ def primary_effect_fails(
         | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED), E3-B2-4.
         | ((effect == _E.SPITE) & spite_slot(tables, state, target_side)[0])
+        # effect_script_0178.s:5-6, subscript_copy_ability.s:6-9 (MOVE_STATUS_FAILED), E3-B2-5.
+        | ((effect == _E.ROLE_PLAY) & role_play_fails(tables, state, side, target_side))
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side_of(side)] != 0))
@@ -1942,6 +1944,61 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     state = know_ability(state, side, user, cond)
     return know_ability(state, foe, target, cond)
+
+
+def role_play_fails(tables: Tables, state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``side``'s Role Play, if it lands, ends with ``MOVE_STATUS_FAILED``
+    (effect_script_0178.s:5-6, :10-12 and subscript_copy_ability.s:6-9, :31-32; the attack message
+    after them is skipped, so ``step`` clears the move's record): the user's ``Battler_Ability``
+    (``CheckAbility``, battle_script.c:3145-3183; Multitype survives Gastro Acid, battle_lib.c:
+    3090-3091) or raw ability is Multitype (effect script :5, subscript :8), its raw held item is a
+    Griseous Orb (:6), or the defender's raw ``BattleMon.ability`` is Wonder Guard (subscript :6),
+    Multitype (:7) or none (:9). The miss and semi-invulnerable test (:5) is ``landed``'s. Every
+    read is raw, so a Gastro Acid suppression hides nothing. E3-B2-5."""
+    fmt = format_of(state)
+    user, target = state.active[side], state.active[target_side]
+    raw = decomp_abilities(tables, state)
+    mine, theirs = raw[party(fmt, side), user], raw[party(fmt, target_side), target]
+    wonder = ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD]
+    return (
+        (battler_decomp_ability(tables, state, side, user) == ABILITY_MULTITYPE)
+        | (mine == ABILITY_MULTITYPE)
+        | (state.item[party(fmt, side), user] == ITEM_GRISEOUS_ORB)
+        | (theirs == wonder)
+        | (theirs == ABILITY_MULTITYPE)
+        | (theirs == 0)
+    )
+
+
+def _role_play(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Role Play (effect_script_0178.s:5-7, a direct ``CHECK_HP | TO_DEFENDER``
+    ``subscript_copy_ability.s``; no ``MOVE_FLAG_CAN_PROTECT`` (moves.json), so a Protect does not
+    stop it, and the subscript has no Substitute test). The script runs for a living defender
+    (battle_lib.c:1492-1507); unless ``role_play_fails`` (MOVE_STATUS_MISSED / _SEMI_INVULNERABLE is
+    ``landed``'s, as Skill Swap's), the user's ``truant`` becomes ``totalTurns & 1`` (:11-13) and its
+    ``BattleMon.ability`` the defender's raw one (:14-15: a Gastro Acid suppressed defender still
+    gives it, the user's own suppression bit stays). Only the user changes. The AI learns the user's
+    new ability (``UpdateMonDataFromVar`` SET, ``BattleAI_SetAbility``, battle_script.c:3401-3404;
+    the GET at :14 reveals nothing). A copied Slow Start (:16-21) cannot arise: Slow Start is an
+    unsupported ability, which coverage refuses on any Pokemon. As Skill Swap's, the write is the
+    battler's (``step._restore_ability``, battle_lib.c:124) and an entry ability it now holds acts at
+    the move's end (``hooks.move_end_switch_in``: no announced flag is touched). E3-B2-5."""
+    fmt = format_of(state)
+    side, user, foe, target = h.side, h.user, h.target_side, h.target
+    cond = (
+        (h.effect == _E.ROLE_PLAY)
+        & h.landed
+        & _alive(state, foe, target)
+        & ~role_play_fails(tables, state, side, foe)
+    )
+    pu, pt = party(fmt, side), party(fmt, foe)
+    parity = (state.turn.astype(_I32) & 1).astype(state.truant.dtype)
+    new = jnp.where(cond, state.ability[pt, target], state.ability[pu, user])
+    state = state._replace(
+        ability=state.ability.at[pu, user].set(new.astype(state.ability.dtype)),
+        truant=state.truant.at[side].set(jnp.where(cond, parity, state.truant[side])),
+    )
+    return know_ability(state, side, user, cond)
 
 
 def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3730,6 +3787,7 @@ def play_hit(
         _fling,
         _trick_room,
         _skill_swap,
+        _role_play,
         _disable,
         _confuse_foe,
         _secondary_confuse,
