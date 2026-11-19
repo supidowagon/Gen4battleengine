@@ -924,7 +924,10 @@ the command's handler:
 - Roar: the player's Roar is recorded as a seen move like any other (section 9). No label of
   Roark's reads seen moves except Recover's Snatch test (section 9).
 - Camouflage: the types the AI reads are the battler's current ones, which the engine writes
-  through (`LoadTypeFrom` reads `BATTLEMON_TYPE_1/2`).
+  through (`LoadTypeFrom` reads `BATTLEMON_TYPE_1/2`). Its own effect (213) is transcribed
+  (E1 batch G, G-20): `Basic_CheckCamouflage` (`script.s:252` -> `:1021-1024`) scores -10 when
+  the attacker has `MOVE_EFFECT_CAMOUFLAGE` (`BattleState.camouflage`, set only by a Camouflage
+  that changed the types, not copied by Transform); no `Expert_Main` entry.
 - Nature Power: the class read is Nature Power's own (7.4).
 - `AICmd_LoadBattlerSpeedRank` (`trainer_ai.c:2056-2093`) is reached only from `TagStrategy`
   (flag 7), which Roark lacks (Ruling 4).

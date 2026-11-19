@@ -1170,6 +1170,13 @@ def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_camouflage(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCamouflage`` (script.s:1021-1024): the attacker already has
+    MOVE_EFFECT_CAMOUFLAGE (``IfMoveEffect``, trainer_ai.c:704-714), -10 (G-20)."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.CAMOUFLAGE))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_gravity_active(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckGravityActive`` (script.s:1026-1029): Gravity already up, -10."""
     ctx, t = _split(c.if_field_conditions_mask(_at(ctx, mask), c.FieldCondition.GRAVITY))
@@ -3677,6 +3684,7 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
+    (BattleEffect.CAMOUFLAGE, _basic_check_camouflage),  # :252 (G-20)
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.GRAVITY, _basic_check_gravity_active),  # :254
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _basic_check_non_standard_damage),  # :256

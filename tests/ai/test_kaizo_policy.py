@@ -4474,6 +4474,21 @@ def test_magnet_rise_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
     assert _delta(t, s, 0x2, 0x3)[0] == (0 if case == "plain" else -10)
 
 
+@pytest.mark.parametrize("case", ["plain", "bit", "transformed"])
+def test_camouflage_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
+    """Basic_CheckCamouflage (script.s:252 -> :1021-1024, G-20): the attacker with
+    MOVE_EFFECT_CAMOUFLAGE scores -10; a Transform copy of other types has no bit (the copy
+    stops at ``ability``, battle_script.c:5346-5348) and scores 0."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Camouflage", "Accelerock", "", ""))
+    if case == "bit":
+        s = s._replace(camouflage=s.camouflage.at[1].set(1))
+    if case == "transformed":
+        grass = jnp.asarray([12, 12], s.types.dtype)  # TYPE_GRASS
+        s = s._replace(transformed=s.transformed.at[1].set(1), types=s.types.at[1, 0].set(grass))
+    assert _delta(t, s, 0x2, 0x3)[0] == (-10 if case == "bit" else 0)
+
+
 @pytest.mark.parametrize(
     ("own_hp", "ground", "known", "jumps", "expert"),
     [

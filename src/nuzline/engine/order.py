@@ -112,16 +112,12 @@ def selected_move(
 def terrain_index(state: BattleState) -> jnp.ndarray:
     """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
     battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
-    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010). An unknown terrain
-    (``TERRAIN_UNKNOWN``, -1) is clamped to row 0 so that no table is ever indexed with -1;
-    its readers test ``terrain_known`` and do nothing then (coverage and ``trace_to_state``
-    refuse such a battle before it reaches the engine)."""
+    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010;
+    ``BtlCmd_GetTerrainSecondaryEffect``, :8067-8070). A fight that reads it has a named terrain:
+    ``TERRAIN_UNKNOWN`` (-1, the run named none) with a terrain move is refused before the engine
+    (``coverage.terrain_refusal``, manager ruling 1; ledger G-21); the lower bound 0 only keeps the
+    index in the tables."""
     return jnp.clip(jnp.asarray(state.terrain, _I32), 0, TERRAIN_SPECIAL)
-
-
-def terrain_known(state: BattleState) -> jnp.ndarray:
-    """``bool``: the battle's terrain is a ``TERRAIN_*`` id, not ``TERRAIN_UNKNOWN``."""
-    return jnp.asarray(state.terrain, _I32) >= 0
 
 
 def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
@@ -133,11 +129,9 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
     effect and ``moveHit`` read the called move (``step._use_move``); otherwise ``move``
     itself. Nature Power stays the move for the status checks, the PP, Taunt, Disable,
     priority and ``movePrevByBattler`` (``moveTemp``, set at command selection,
-    bcp.c:1861-1898, is never changed by ``GoToMoveScript``). With ``TERRAIN_UNKNOWN`` the
-    call is ``MOVE_NONE`` (0, the guard of ``terrain_index``): the move then does nothing."""
+    bcp.c:1861-1898, is never changed by ``GoToMoveScript``)."""
     move = jnp.asarray(move, _I32)
     terrain_move = jnp.asarray(TERRAIN_MOVES, _I32)[terrain_index(state)]
-    terrain_move = jnp.where(terrain_known(state), terrain_move, 0)
     nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
     return jnp.where(nature_power, terrain_move, move)
 
@@ -487,15 +481,13 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
     ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
     (``ids.SECRET_POWER_EFFECTS``; effect_script_0197.s ``GetTerrainSecondaryEffect``,
     battle_script.c:8063-8075: ``min(terrain, TERRAIN_SPECIAL)``), the effect every hit and law
-    reads. An unknown terrain (coverage refuses it) resolves to ``PLAIN``. ``move`` may be
-    batched."""
+    reads. ``move`` may be batched."""
     move = jnp.asarray(move, _I32)
     effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
     row = terrain_index(state)
     sp_effect = jnp.asarray([e for e, _ in SECRET_POWER_EFFECTS], _I32)[row]
     sp_param = jnp.asarray([p for _, p in SECRET_POWER_EFFECTS], _I32)[row]
-    sp_effect = jnp.where(terrain_known(state), sp_effect, EffectId.PLAIN)
     secret = effect == EffectId.SECRET_POWER
     return (
         jnp.where(secret, sp_effect, effect),

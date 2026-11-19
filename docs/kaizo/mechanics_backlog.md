@@ -31,15 +31,15 @@ New groups: needed in this split and in no earlier one.
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 23 | 6 | 0 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 17 | 11 | 7 |
 | Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 34 | 8 | 3 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 12 | 12 | 9 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 13 | 11 | 8 |
 | Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 22 | 34 | 24 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 9 | 6 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 22 | 10 | 3 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 196 | 69 | 69 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 197 | 68 | 68 |
 
 ## Whole game
 
-69 distinct missing groups across all ten splits (387 battles,
+68 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -59,11 +59,11 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 1 | 7 |
 | Byron Split | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| Candice Split | 0 | 3 | 2 | 0 | 0 | 4 | 0 | 9 |
+| Candice Split | 0 | 2 | 2 | 0 | 0 | 4 | 0 | 8 |
 | Galactic Split | 0 | 5 | 4 | 0 | 0 | 15 | 0 | 24 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 3 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **1** | **69** |
+| **Whole game** | **1** | **13** | **8** | **0** | **0** | **45** | **1** | **68** |
 
 ### Groups needed in each split, by kind
 
@@ -77,11 +77,11 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Maylene Split | 1 | 1 | 1 | 0 | 0 | 3 | 0 | 6 |
 | Wake Split | 1 | 0 | 1 | 0 | 0 | 8 | 1 | 11 |
 | Byron Split | 1 | 4 | 0 | 0 | 0 | 2 | 1 | 8 |
-| Candice Split | 1 | 4 | 2 | 0 | 0 | 5 | 0 | 12 |
+| Candice Split | 1 | 3 | 2 | 0 | 0 | 5 | 0 | 11 |
 | Galactic Split | 1 | 7 | 4 | 0 | 0 | 21 | 1 | 34 |
 | Volkner Split | 1 | 2 | 1 | 0 | 0 | 2 | 0 | 6 |
 | Elite Four Split | 1 | 4 | 3 | 0 | 0 | 1 | 1 | 10 |
-| **Whole game** | **1** | **14** | **8** | **0** | **0** | **45** | **1** | **69** |
+| **Whole game** | **1** | **13** | **8** | **0** | **0** | **45** | **1** | **68** |
 
 ### Battle conditions and other groups
 
@@ -300,7 +300,6 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 1 | AI move effect #113 FORESIGHT not transcribed (Basic_CheckForesight / Expert_Foresight): Odor Sleuth |
 | 1 | AI move effect #178 COPY_ABILITY not transcribed (Expert_ChangeUserAbility): Role Play |
 | 1 | AI move effect #183 APPLY_MAGIC_COAT not transcribed (Expert_MagicCoat): Magic Coat |
-| 1 | AI move effect #213 CAMOUFLAGE not transcribed (Basic_CheckCamouflage): Camouflage |
 | 1 | AI move effect #240 PREVENT_CRITS not transcribed (Basic_CheckLuckyChant / Expert_LuckyChant): Lucky Chant |
 | 1 | AI move effect #251 RESTORE_HP_EVERY_TURN not transcribed (Basic_CheckAquaRing / Expert_AquaRing): Aqua Ring |
 | 1 | AI move effect #34 INCREASE_PRIZE_MONEY not transcribed (no Basic or Expert label): Pay Day |
@@ -342,8 +341,9 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 1 | battle format: gauntlet Wayward Cave (position 9; rules not recorded) |
 | 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
 | 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain |
 
-Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 1
+Groups by kind: battle format 36, AI 14, battle terrain 9, move effect 8, ROM change 1
 
 ## Build order for the first two splits
 

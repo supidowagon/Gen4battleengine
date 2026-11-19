@@ -715,6 +715,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
         239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
         # (:1782), :5481, :5484 (E3-2-6)
+        # E1 batch G (G-20): no Expert_Main entry; tables :3264, :6477, :6490, :8065.
+        213,  # CAMOUFLAGE: Basic_CheckCamouflage (:252 -> :1021-1024)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

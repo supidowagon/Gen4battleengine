@@ -68,8 +68,10 @@ many are real). Decomp sources:
   (battle_script.c:7997-8022), in the move script before ``TryMove`` (which cannot stop this
   ``RANGE_USER``, accuracy-0 move): it fails for Multitype (``ABILITY_MULTITYPE``) or when
   either of the user's types already is ``TERRAIN_TYPES[min(terrain, TERRAIN_SPECIAL)]``,
-  else writes that type to both (``_camouflage``). ``step`` restores the party types when
-  the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115).
+  else writes that type to both and sets the user's ``MOVE_EFFECT_CAMOUFLAGE``
+  (``camouflage``, effect_script_0213.s:6; ``_camouflage``). ``step`` restores the party types
+  when the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115)
+  and clears the bit with the volatiles (battle_lib.c:2071, :2166; Baton Pass drops it, :2076).
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -270,7 +272,6 @@ from nuzline.engine.damage import (
     me_first_after_calc,
     move_type_of,
     multitype_plate,
-    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -324,7 +325,7 @@ from nuzline.engine.ids import (
     Type,
     sleepless,
 )
-from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
+from nuzline.engine.order import encore_slot_of, move_effects, terrain_index
 from nuzline.engine.outcome import Outcome, crit_lands, read_chance
 from nuzline.engine.state import (
     MOVES,
@@ -614,22 +615,17 @@ def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring). An unknown terrain
-    (``order.terrain_known``) writes nothing (coverage refuses such a fight)."""
+    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring): on success both types and
+    the user's ``camouflage`` bit (effect_script_0213.s:5-6; a failure jumps to :16 past it)."""
     fmt = format_of(state)
     new = jnp.asarray(TERRAIN_TYPES, _I32)[terrain_index(state)]
     types = state.types[party(fmt, h.side), h.user]
     # BtlCmd_TryCamouflage (battle_script.c:8001): Battler_Ability.
     multitype = battler_decomp_ability(tables, state, h.side, h.user) == ABILITY_MULTITYPE
-    cond = (
-        (h.effect == _E.CAMOUFLAGE)
-        & h.landed
-        & terrain_known(state)
-        & ~multitype
-        & ~jnp.any(types.astype(_I32) == new)
-    )
+    cond = (h.effect == _E.CAMOUFLAGE) & h.landed & ~multitype & ~jnp.any(types.astype(_I32) == new)
     value = jnp.where(cond, new, types.astype(_I32)).astype(types.dtype)
-    return state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+    state = state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+    return _set(state, "camouflage", h.side, 1, cond)
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
@@ -2130,25 +2126,6 @@ def imprison_fails(state: BattleState, side) -> jnp.ndarray:
     return (state.imprison[side] != 0) | ~shared
 
 
-def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``bool``: ``side``'s active battler has ``MOVE_EFFECT_CAMOUFLAGE`` (effect_script_0213.s:6).
-    ``BtlCmd_TryCamouflage`` fails a battler that has the terrain's type already, so a Camouflage
-    that ran left both types on a type the personal row lacks, and nothing else writes ``types``:
-    the bit is set exactly when the types differ from the personal row's."""
-    fmt = format_of(state)
-    mon = state.active[side]
-    pm = (party(fmt, side), mon)
-    own = personal_types(
-        tables,
-        state.species[pm],
-        state.form[pm],
-        state.ability_form[pm],
-        state.ability_slot[pm],
-        state.item[pm],
-    )
-    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
-
-
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
 MOVE_EFFECT_MASK_FIELDS = (
     "leech_seed",
@@ -2165,6 +2142,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "semi_invulnerable",  # B10-12
     "power_trick",  # B12-10
     "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, E3-2-6
+    "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20)
 )
 
 
@@ -2172,10 +2150,10 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool``: subscript_force_target_to_switch_or_flee.s:7 finds the defender's
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
-    Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Miracle Eye,
-    Heal Block); each joins the tuple with its move."""
-    other = camouflaged(tables, state, side)
+    Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14). The other bits come
+    from unsupported moves (Charge, Grudge, Miracle Eye, Heal Block); each joins the tuple with its
+    move."""
+    other = jnp.bool_(False)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
     return (state.ingrain[side] != 0) & ~other

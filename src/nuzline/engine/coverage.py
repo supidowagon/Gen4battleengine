@@ -115,10 +115,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
   ``TERRAIN_UNKNOWN``: its start tiles give several terrains and the run has not named one
   (``cli.fight_terrain``, ``--terrain``: a run input, ledger G-18; the line names the
-  choices) or its maps give none (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
-  move it calls there (``terrain_call``, ``ids.TERRAIN_MOVES``) has an unsupported effect
-  (Earthquake, Blizzard). Its call also counts as a move of the fight for the Kaizo ROM-change
-  conditions (``rom_change_refusals``).
+  choices) or its maps give none (``terrain_refusal``). That is a run input (manager ruling 1),
+  not a coverage gap: with a named terrain all three are modelled (ledger G-21). Nature Power's
+  call (``terrain_call``, ``ids.TERRAIN_MOVES``) also counts as a move of the fight for the
+  Kaizo ROM-change conditions (``rom_change_refusals``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -872,21 +872,11 @@ def terrain_refusal(
     """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
     battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
     and not named by the run (``cli.fight_terrain``; the line names every terrain its start
-    tiles give and the three sources checked, ledger G-18) or unplaced; or, on a known
-    terrain, Nature Power calls a move whose effect the engine does not implement; else
-    None."""
+    tiles give and the three sources checked, ledger G-18) or unplaced; else None. Every
+    move Nature Power calls is modelled (ledger G-21)."""
     effect = np.asarray(tables.move_ai_effect)
     hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
-    if not hit:
-        return None
-    if trainer.terrain != TERRAIN_UNKNOWN:
-        for called in terrain_calls(tables, trainer, hit):
-            engine = EffectId(int(np.asarray(tables.move_effect)[called]))
-            if IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE:
-                return (
-                    f"{display_name(trainer)}: on {TERRAIN_NAMES[trainer.terrain]} Nature Power "
-                    f"calls {names.move_names[called]}, whose effect is not supported"
-                )
+    if not hit or trainer.terrain != TERRAIN_UNKNOWN:
         return None
     if trainer.terrains:
         known = [TERRAIN_NAMES[t] for t in trainer.terrains if t != TERRAIN_UNKNOWN]

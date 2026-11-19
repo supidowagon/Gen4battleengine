@@ -466,22 +466,22 @@ def _t(tables, name: str, *index) -> int:
     return int(getattr(tables, name)[index])
 
 
-def _terrain_row(s: RefState) -> int | None:
+def _terrain_row(s: RefState) -> int:
     """The terrain tables' row ``BattleSystem_GetTerrain`` gives ``GetTerrainMove`` /
-    ``TryCamouflage`` (``min(terrain, TERRAIN_SPECIAL)``, script.c:8007-8010, :8040-8043), or
-    None for an unknown terrain (-1), which no table is indexed with (coverage refuses such a
-    fight; its readers do nothing, as the JAX engine's)."""
-    return None if s.terrain < 0 else min(s.terrain, TERRAIN_SPECIAL)
+    ``TryCamouflage`` / ``GetTerrainSecondaryEffect`` (``min(terrain, TERRAIN_SPECIAL)``,
+    script.c:8007-8010, :8040-8043, :8067-8070). An unnamed terrain (-1) with a terrain move is
+    refused before the engine (``coverage.terrain_refusal``, G-21); 0 bounds the index, as the
+    JAX engine's ``order.terrain_index``."""
+    return min(max(s.terrain, 0), TERRAIN_SPECIAL)
 
 
 def _called_move(tables, s: RefState, move: int) -> int:
     """effect_script_0173.s (Nature Power): ``GetTerrainMove`` (script.c:8036-8048) then
-    ``GoToMoveScript`` (:2111-2134) runs ``sTerrainMove[row]`` as ``moveCur``; MOVE_NONE for
-    an unknown terrain. Any other move runs itself."""
+    ``GoToMoveScript`` (:2111-2134) runs ``sTerrainMove[row]`` as ``moveCur``. Any other move
+    runs itself."""
     if _t(tables, "move_effect", move) != EffectId.NATURE_POWER:
         return move
-    row = _terrain_row(s)
-    return 0 if row is None else TERRAIN_MOVES[row]
+    return TERRAIN_MOVES[_terrain_row(s)]
 
 
 def _gravity_ground(s: RefState) -> None:
@@ -1904,6 +1904,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "power_trick_desync",  # a Baton Pass newcomer is swapped by the bit (lib.c:2137-2141)
         "magnet_rise",  # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns (G-66)
         "magnet_rise_turns",
+        "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20): not Baton-passed (moves.h:46-48)
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
         "flash_fire",  # MoveEffectsData.flashFire (F-2): lib.c:2101-2104, not kept by a Baton Pass
         "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, Baton-passed (E3-2-6a)
@@ -3508,11 +3509,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     p0, p1 = _t(tables, "move_param", move, 0), _t(tables, "move_param", move, 1)
     if effect == EffectId.SECRET_POWER:
         # effect_script_0197.s GetTerrainSecondaryEffect (script.c:8063-8075).
-        row = _terrain_row(s)
-        if row is None:
-            effect = EffectId.PLAIN
-        else:
-            effect, (p0, p1, _) = SECRET_POWER_EFFECTS[row]
+        effect, (p0, p1, _) = SECRET_POWER_EFFECTS[_terrain_row(s)]
     # The chance the battle reads: none for an ON_HIT-only script (ids.ON_HIT_EFFECTS,
     # lib.c:1524-1529).
     on_hit = _t(tables, "move_effect", move) in ON_HIT_EFFECTS
@@ -3555,12 +3552,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         _inflict(turn, s, side, target, TRI_ATTACK_STATUSES[o.tri_attack[side]], False)
     elif effect == EffectId.CAMOUFLAGE and landed:
         # effect_script_0213.s -> BtlCmd_TryCamouflage (script.c:7997-8022): fails for
-        # Multitype or when either type already is the terrain's; else both become it.
-        user, row = _active(s, side), _terrain_row(s)
-        if row is not None and _battler_decomp_ability(tables, s, user) != ABILITY_MULTITYPE:
-            new = int(TERRAIN_TYPES[row])
-            if new not in user.types:
-                user.types = [new] * len(user.types)
+        # Multitype or when either type already is the terrain's; else both become it and
+        # the user's MOVE_EFFECT_CAMOUFLAGE is set (effect_script_0213.s:6, G-20).
+        user, new = _active(s, side), int(TERRAIN_TYPES[_terrain_row(s)])
+        if _battler_decomp_ability(tables, s, user) != ABILITY_MULTITYPE and new not in user.types:
+            user.types = [new] * len(user.types)
+            s.battlers[side].camouflage = 1
     elif effect == EffectId.FANG_PARALYZE_FLINCH and effective:
         # effect_script_0275.s -> subscript_paralyze_or_flinch.s: CheckEffectActivation
         # (the roll, then the target's HP; script.c:8377-8378) and the indirect paralysis,
@@ -6984,16 +6981,14 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
 
 def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     """subscript_force_target_to_switch_or_flee.s:7: the defender's ``moveEffectsMask`` is
-    exactly ``MOVE_EFFECT_INGRAIN`` (``OPCODE_EQU``): ingrained, no other kept bit, no Camouflage
-    (its types are the personal row's)."""
-    sd, mon = s.battlers[side], _active(s, side)
+    exactly ``MOVE_EFFECT_INGRAIN`` (``OPCODE_EQU``): ingrained and no other kept bit."""
+    sd = s.battlers[side]
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
-        sd.power_trick, sd.ability_suppressed,
+        sd.power_trick, sd.ability_suppressed, sd.camouflage,
     )  # fmt: skip
-    party = _personal_types(tables, mon)
-    return bool(sd.ingrain) and not any(others) and list(mon.types) == party
+    return bool(sd.ingrain) and not any(others)
 
 
 def _locked_slot(s: RefState, side: int) -> int:

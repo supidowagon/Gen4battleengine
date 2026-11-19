@@ -129,6 +129,7 @@ class RefBattler:
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: int  # MOVE_EFFECT_MAGNET_RISE (G-66)
     magnet_rise_turns: int  # MoveEffectsData.magnetRiseTurns (G-66)
+    camouflage: int  # MOVE_EFFECT_CAMOUFLAGE (G-20)
     mimic_slots: int  # MoveEffectsData.mimickedMoveSlot bitmask (G-68)
     shadow_moves: list[int]  # the party's move of each flagged slot (G-68)
     shadow_pp: list[int]  # the party's PP of each flagged slot (G-68)

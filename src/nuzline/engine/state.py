@@ -201,6 +201,12 @@ Encodings:
   the run names none (``cli.fight_terrain``, ledger G-18) or no map places it
   (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
   read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
+* ``camouflage`` (G-20) is the battler's MOVE_EFFECT_CAMOUFLAGE (moves.h:36), 0/1: set only by a
+  Camouflage that changed the types (effect_script_0213.s:6, after ``TryCamouflage _016``, whose
+  failure skips it), never copied by Transform (BtlCmd_Transform copies the BattleMon up to
+  ``ability``, battle_script.c:5346-5348; the mask lies after it), cleared by a switch or a faint
+  and not Baton-passed (MOVE_EFFECT_BATON_PASSED, moves.h:46-48, omits it). Read by the AI's
+  Basic_CheckCamouflage (script.s:1021-1024) and Roar's Ingrain test (``effects.ingrain_anchors``).
 * ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
   Quick Claw would activate), the per-battler draw the next turn's order reads
   (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
@@ -427,6 +433,7 @@ class BattleState(NamedTuple):
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
     magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
+    camouflage: jnp.ndarray  # int8, MOVE_EFFECT_CAMOUFLAGE in moveEffectsMask (G-20)
     # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
     # active slot are the BattleMon's, and these hold the party's values of the slots the battler
     # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
@@ -688,6 +695,7 @@ VOLATILE_FIELDS = (
     "power_trick_desync",
     "magnet_rise",
     "magnet_rise_turns",
+    "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20); not in BATON_PASSED_FIELDS (moves.h:46-48)
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
@@ -823,6 +831,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "power_trick_desync": (_BATTLER, np.int8),
     "magnet_rise": (_BATTLER, np.int8),
     "magnet_rise_turns": (_BATTLER, np.int8),
+    "camouflage": (_BATTLER, np.int8),
     "mimic_slots": (_BATTLER, np.int8),
     "shadow_moves": ((*_BATTLER, MOVES), np.int16),
     "shadow_pp": ((*_BATTLER, MOVES), np.int8),

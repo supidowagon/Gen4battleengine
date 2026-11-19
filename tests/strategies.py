@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
+from nuzline.data.trainer import TERRAIN_NAMES, IntermediateData
 from nuzline.engine.actions import (
     MOVE_ACTIONS,
     legal_actions,
@@ -652,14 +652,15 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
-# TERRAIN_UNKNOWN and every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24).
-TERRAINS = (TERRAIN_UNKNOWN, *range(len(TERRAIN_NAMES)))
+# Every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24). TERRAIN_UNKNOWN with a move that
+# reads it is refused before the engine (coverage.terrain_refusal, ledger G-21).
+TERRAINS = tuple(range(len(TERRAIN_NAMES)))
 
 
 def _draw_terrain(draw, tables: Tables, a: dict) -> None:
     """A terrain (``TERRAINS``) when any Pokemon knows a move that reads it (Nature Power,
-    Camouflage), so that both engines play those moves on a known terrain too; otherwise the
-    state keeps ``make_state``'s ``TERRAIN_UNKNOWN`` (nothing reads it)."""
+    Secret Power, Camouflage); otherwise the state keeps ``make_state``'s ``TERRAIN_UNKNOWN``
+    (nothing reads it)."""
     effect = np.asarray(tables.move_effect)[a["moves"]]
     readers = (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE, EffectId.SECRET_POWER)
     if np.isin(effect, readers).any():
@@ -1433,6 +1434,8 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
     turns = rnd.choice((0, 0, 0, 1, 2, 5))
     a["magnet_rise_turns"][side] = turns
     a["magnet_rise"][side] = int(turns > 0 or rnd.random() < 0.1)
+    # E1 batch G (G-20): a Camouflage bit (the AI's Basic_CheckCamouflage, Roar's Ingrain test).
+    a["camouflage"][side] = int(rnd.random() < 0.1)
     if draw(st.integers(0, 1)) != 0:
         return
     move = rnd.choice(BATCH12_MOVES)

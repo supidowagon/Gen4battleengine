@@ -88,7 +88,10 @@ three structs has a row.
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
   Imprison -> `imprison` (its user) and Imprisoned -> `imprisoned` (its foes) (E2 batch 7, per
   battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
-  Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
+  Song, Yawn and Lock-On (below). Camouflage -> `camouflage` (E1 batch G, G-20: per battler, set
+  by a Camouflage that changed the types, effect_script_0213.s:6; not copied by Transform, which
+  copies the BattleMon up to `ability`, battle_script.c:5346-5348; cleared by a switch or a faint,
+  battle_lib.c:2071, :2166, and not Baton-passed, moves.h:46-48).
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
   `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
   UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
@@ -293,16 +296,17 @@ three structs has a row.
   it from `Trainer.terrain` (`tools/terrain.py`), or for a trainer whose start tiles give
   several, from the run's `--terrain` (`cli.fight_terrain`, ledger G-18); `TERRAIN_UNKNOWN`
   (-1) while none is named or no map places the trainer, and coverage then refuses those
-  three effects.
-  Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
-  `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
-  (`order.terrain_index`: those readers then do nothing).
+  three effects (G-21).
+  Nature Power (`order.called_move`), Secret Power (`order.move_effects`) and Camouflage
+  (`effects._camouflage`) read it through `ids.TERRAIN_MOVES` / `SECRET_POWER_EFFECTS` /
+  `TERRAIN_TYPES` (`order.terrain_index`, the decomp's clamp to `TERRAIN_SPECIAL`).
 - **BattleMon.type1/type2 -> `types`**: per party slot, from the personal row; written for
   the active battler by Camouflage (`BtlCmd_TryCamouflage`, `battle_script.c:7997-8022`)
   and restored from the personal row when the battler leaves (a switch, a faint,
   `step._restore_types`), as `BattleSystem_InitBattleMon` re-reads the party's types on the
-  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` stays
-  later: only the AI's own Camouflage scoring reads it (`script.s:1023`).
+  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` is
+  `camouflage` (G-20; read by the AI's `Basic_CheckCamouflage`, `script.s:1023`, and Roar's
+  Ingrain test).
 - **moveCur / msgMoveTemp** (Nature Power's call) stay per-action scratch: `step._use_move`
   recomputes the called move (`order.called_move`) from the chosen move and the terrain.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
@@ -552,7 +556,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `camouflage` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 

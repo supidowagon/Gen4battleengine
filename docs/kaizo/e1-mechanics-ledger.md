@@ -1886,6 +1886,48 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   instead. `order.terrain_known` and the reference `_terrain_row` None paths stay: a mixed fight without a terrain
   move still builds with TERRAIN_UNKNOWN (nothing reads it); dropping them is terrain-moves.md "Missing 1" (the
   next group), which reads the state's `terrain` as set here.
+- G-20 Camouflage's `MOVE_EFFECT_CAMOUFLAGE` (moves.h:36, bit 28) is a battler field, `camouflage` (int8 per
+  battler, doubles convention 2; the decomp's `BattleMon.moveEffectsMask`, battle_mon.h:127), replacing
+  `effects.camouflaged`, which inferred it from types != personal row. Set only on success:
+  effect_script_0213.s:5-6 (`TryCamouflage _016` jumps to :16, MOVE_STATUS_FAILED, past the
+  `UpdateMonData ... MOVE_EFFECT_CAMOUFLAGE` on Multitype or an existing type, battle_script.c:7997-8022).
+  Cleared with the mask on a switch (battle_lib.c:2071) and a faint (:2166); Baton Pass keeps only
+  MOVE_EFFECT_BATON_PASSED (:2076, moves.h:46-48, which omits it): `VOLATILE_FIELDS`, not
+  `BATON_PASSED_FIELDS`; reference `_reset_battler` likewise. Transform does not copy it (BtlCmd_Transform
+  copies the BattleMon bytes up to `ability`, battle_script.c:5346-5348; the mask lies after), so a
+  Transformed copy of a Camouflaged foe has its types and no bit: the old inference read such a battler as
+  camouflaged. Readers: Roar's Ingrain test (`effects.ingrain_anchors` / reference `_ingrain_anchors`, the
+  bit joins `MOVE_EFFECT_MASK_FIELDS`, subscript_force_target_to_switch_or_flee.s:7) and the AI. AI (the
+  approved list's "#213", backlog row "AI move effect #213 CAMOUFLAGE not transcribed"): Basic_ScoreMoveEffect
+  dispatches BATTLE_EFFECT_CAMOUFLAGE at script.s:252 to Basic_CheckCamouflage (:1021-1024): `IfMoveEffect
+  AI_BATTLER_ATTACKER, MOVE_EFFECT_CAMOUFLAGE` (trainer_ai.c:704-714) -> -10. `MoveEffectMask.CAMOUFLAGE`
+  (ai/commands.py) reads `camouflage`; `policy._basic_check_camouflage` at :252 in the Basic table; 213 joins
+  `outcome.KAIZO_TRANSCRIBED` (no Expert_Main entry, :1623-1811; its other mentions are tables the generic
+  code already reads: Encore :3264, SetupFirstTurn :6477 / :6490, Harrassment :8065). Kaizo: overlay14
+  changes only script.s:78 (rom_diff.md:359). Observation: unchanged (the types it shows are the written
+  ones; no message-only state). Random states draw the bit (tests/strategies.py `_draw_batch12`).
+- G-21 The `terrain_known` guards are gone (terrain-moves.md "Missing 1"): `order.called_move`,
+  `order.move_effects` (its PLAIN fallback) and `effects._camouflage` read `TERRAIN_MOVES` /
+  `SECRET_POWER_EFFECTS` / `TERRAIN_TYPES` at `order.terrain_index` = min(terrain, TERRAIN_SPECIAL)
+  (battle_script.c:8007-8010, :8040-8043, :8067-8070); the reference `_terrain_row` returns a row, never
+  None, and both bound -1 at row 0 only to keep the index in the tables. What stays refused, and why:
+  `coverage.terrain_refusal` for a trainer whose terrain is `TERRAIN_UNKNOWN` (mixed start tiles the run
+  has not named, or no map places it) when a terrain move is in the fight. That is manager ruling 1
+  ("refused until set", a user input like the gauntlet rules), not a coverage gap, so it is kept;
+  `tools/trace_to_state.py` keeps its own TraceError for the same case. Dropped: the branch that refused
+  Nature Power on a named terrain whose call has an unsupported effect: all 13 calls (Earthquake, Seed
+  Bomb, Rock Slide, Blizzard, Hydro Pump, Ice Beam, Tri Attack, Mud Bomb, Air Slash) are modelled in both
+  games (tests/engine/test_terrain_moves.py). Random states draw only named terrains when a reader is
+  known (tests/strategies.py `TERRAINS`).
+- G-22 Secret Power's gates (terrain-moves.md "Missing 4"), confirmed, no change: effect_script_0197.s:7
+  sets `sideEffectIndirectFlags = sTerrainSideEffect[row]` with TO_DEFENDER only (battle_script.c:
+  8063-8075), the plain-flags branch of TriggerSecondaryEffect (battle_lib.c:1570-1587: chance x2 for
+  Serene Grace, roll, then HP, no substitute hit, no NO_EFFECTS), which is the branch of Rock Slide's,
+  Flamethrower's and Crunch's own scripts (effect_script_0031.s, 0004.s, 0069.s: TO_DEFENDER | PTR). So
+  the swapped-in effect (`order.move_effects`) runs through the same handlers as those moves' table
+  effects (SECONDARY_STATUS, FLINCH, SECONDARY_STAT_FOE: the substitute gate, the target-HP gate) with
+  Secret Power's own chance (`move_effect_chance`, 30). Tests: SNOW freeze, none through a substitute;
+  BRIDGE evasion -1 (engine == reference).
 
 ## Stream state (restart point, 2026-11-19)
 

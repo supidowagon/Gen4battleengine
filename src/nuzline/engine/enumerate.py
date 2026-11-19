@@ -845,8 +845,7 @@ INPUT_NEUTRAL_EFFECTS = (
     # Damages the side: its HP (the HP clause).
     _E.COUNTER,
     # Never the effect read here: the predicate reads the move each action runs
-    # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
-    # by coverage) calls MOVE_NONE and does nothing.
+    # (order.called_move), Nature Power's call on the battle's terrain.
     _E.NATURE_POWER,
     # The invokers likewise (order.used_moves): their called move is read; one whose call
     # fails does nothing.
@@ -1395,8 +1394,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DESTINY_BOND,
     _E.COUNTER,  # the damage taken this turn, no roll
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
-    # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
-    # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
+    # move (order.called_move), whose own effect decides (Tri Attack's is a table hit): this
+    # entry is never read.
     _E.NATURE_POWER,
     # The invokers likewise: their called move's effect decides; a failed call deals nothing.
     _E.SLEEP_TALK,

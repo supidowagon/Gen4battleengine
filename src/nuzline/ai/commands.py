@@ -219,6 +219,7 @@ class MoveEffectMask(IntEnum):
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
     ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
+    CAMOUFLAGE = 1 << 28  # :36; BattleState.camouflage (G-20)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -234,6 +235,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
     MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
+    MoveEffectMask.CAMOUFLAGE: "camouflage",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -295,6 +297,7 @@ class BattleEffect(IntEnum):
     SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
     GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
     GRAVITY = 215  # Gravity (Basic_CheckGravityActive :254; Expert_Gravity :1759)
+    CAMOUFLAGE = 213  # Camouflage (Basic_CheckCamouflage :252; no Expert_Main entry), G-20
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
