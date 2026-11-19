@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# PC SIDE (Git Bash), morning bring-up only. Packs tools/ops/day/pod/*.sh and starts a detached
-# `runpodctl send`; prints the exec-pod command that installs them and runs bootstrap.sh.
+# PC SIDE (Git Bash), once per new pod. Sends tools/ops/day/bootstrap.sh (LF) with a detached
+# `runpodctl send` and prints the exec-pod body that installs it into /work/_bin and starts it.
+# Per-run scripts (tools/ops/day/pod/) travel inside each payload (pack.sh), not here.
 set -euo pipefail
-: "${NUZLINE_SCRATCH:?set NUZLINE_SCRATCH (git-bash style path of the scratch folder)}"
-: "${NUZLINE_REPO:?set NUZLINE_REPO}"
-RENT="$NUZLINE_SCRATCH/rent"; DAY="$RENT/day"
-cd "$DAY"; rm -f bin.tar bin_send.log
-tar -cf bin.tar -C "$NUZLINE_REPO/tools/ops/day/pod" .
-HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RENT/bin/runpodctl-windows-amd64.exe" send bin.tar > bin_send.log 2>&1 < /dev/null &
-for i in $(seq 1 60); do grep -q "code is" bin_send.log 2>/dev/null && break; sleep 0.5; done
-CODE=$(grep -o "code is: [^ ]*" bin_send.log | head -1 | sed 's/code is: //' | tr -d '\r')
-[ -n "$CODE" ] || { echo "FAILED: see $DAY/bin_send.log"; exit 4; }
-echo "exec-pod on $(cat POD_ID):"
-echo "  {\"command\": [\"sh\", \"-c\", \"cd /work/_bin && ./runpodctl receive $CODE && tar --no-same-owner -xf bin.tar && rm bin.tar && chmod +x *.sh && (nohup bash bootstrap.sh > /work/bootstrap.log 2>&1 &)\"], \"timeoutSeconds\": 20}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO="${NUZLINE_REPO:-$(cd "$HERE/../../.." && pwd)}"
+RENT="${NUZLINE_SCRATCH:-$REPO/_scratch}/rent"
+RPC="${RUNPODCTL:-$RENT/bin/runpodctl-windows-amd64.exe}"
+B="$RENT/bringup"; rm -rf "$B"; mkdir -p "$B"; cd "$B"
+tr -d '\r' < "$HERE/bootstrap.sh" > bootstrap.sh
+HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send bootstrap.sh > send.log 2>&1 < /dev/null &
+for i in $(seq 1 60); do grep -q "code is" send.log 2>/dev/null && break; sleep 0.5; done
+CODE=$(grep -o "code is: [^ ]*" send.log | head -1 | sed 's/code is: //' | tr -d '\r')
+[ -n "$CODE" ] || { echo "FAILED: see $B/send.log"; exit 4; }
+echo "== exec-pod body:"
+echo "{\"command\":[\"sh\",\"-c\",\"cd /work/_bin && ./runpodctl receive $CODE && nohup bash bootstrap.sh > /work/bootstrap.log 2>&1 < /dev/null & sleep 15; tail -2 /work/bootstrap.log\"],\"timeoutSeconds\":25}"

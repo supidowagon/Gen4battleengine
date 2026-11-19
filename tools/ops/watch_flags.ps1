@@ -3,24 +3,34 @@
 # needs the manager: an unexplained flag, or the fast-tier lock going away.
 # Flags that a live, progressing fast tier explains are ignored. While
 # -HoldUntil is in the future, "has not committed" and "may have stopped" are ignored.
-param([int]$EveryMin = 10, [string]$HoldUntil = '')
+# -Streams: the stream list (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
+param([int]$EveryMin = 10, [string]$HoldUntil = '', [string]$Streams = '')
 
 $repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
-$scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '..\_scratch' }
+$scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
+if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
 $dog = Join-Path $PSScriptRoot 'watchdog.ps1'
 $lock = Join-Path $scratch 'fast_tier.lock'
-$logDirs = (Join-Path $scratch 'e1\gard'), (Join-Path $scratch 'e2')
 $hold = if ($HoldUntil) { [datetime]$HoldUntil } else { [datetime]::MinValue }
 $hadLock = Test-Path $lock
 
 while ($true) {
-    $out = & $dog -FixLock
+    $out = & $dog -FixLock -Streams $Streams
     $flags = @($out | Where-Object { $_ -match '^ - ' })
     $hasLock = Test-Path $lock
 
-    # A fast tier is "progressing" when the lock exists and some ft_*.log was written in the last 25 min.
-    $newest = Get-ChildItem $logDirs -Filter 'ft_*.log' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    # Fast-tier log folders: each stream's optional "logs" entry (relative to the repo), re-read every round.
+    $logDirs = @()
+    if (Test-Path $Streams) {
+        $logDirs = @(Get-Content $Streams -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object { $_.logs } |
+            ForEach-Object { Join-Path $repo $_.logs } | Where-Object { Test-Path $_ })
+    }
+    # A fast tier is "progressing" when the lock exists and some ft_*.log was written in the last 150 min.
+    $newest = $null
+    if ($logDirs.Count) {
+        $newest = Get-ChildItem $logDirs -Filter 'ft_*.log' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
     $progressing = $hasLock -and $newest -and (((Get-Date) - $newest.LastWriteTime).TotalMinutes -lt 150)
 
     $real = @()
