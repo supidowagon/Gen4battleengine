@@ -114,6 +114,7 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
+    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
@@ -3332,6 +3333,10 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # effect_script_0215.s (the failure is ``_script_fails``), subscript_gravity_start.s:9.
         s.gravity = GRAVITY_TURNS
         _gravity_ground(s)
+    elif effect == EffectId.TRICK_ROOM and landed:
+        # effect_script_0259.s:5-12: any Trick Room bit up -> cleared, else FIELD_CONDITION_
+        # TRICK_ROOM_INIT (5); it never fails (E3-2-4).
+        s.trick_room = 0 if s.trick_room else TRICK_ROOM_TURNS
     elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.battlers[side].magnet_rise = 1
@@ -5690,8 +5695,20 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
             _remove_item(s, d)
         _faint_check(turn, s, decide=False)
     _perish_song_check(turn, s, order)
+    _trick_room_check(turn, s)
     _faint_check(turn, s)  # TurnEnd's CheckBattleOver (bcp.c:1845)
     _pay_exp(turn, s)
+
+
+def _trick_room_check(turn: _Turn, s: RefState) -> None:
+    """``SIDE_COND_CHECK_STATE_TRICK_ROOM`` (bcp.c:1822-1830), after Perish Song's: a counter above
+    0 drops by 1; at 0 ``subscript_trick_room_end`` runs: vanilla's only prints (Trick Room ends),
+    Kaizo's (sub_seq 251, ``Tables.trick_room_rearm``) is the move's own script and sets the
+    counter to 5 again (E3-2-4)."""
+    if s.trick_room:
+        s.trick_room -= 1
+        if not s.trick_room and _t(turn.tables, "trick_room_rearm"):
+            s.trick_room = TRICK_ROOM_TURNS
 
 
 def _perish_song_check(turn: _Turn, s: RefState, order: list[int]) -> None:

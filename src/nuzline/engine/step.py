@@ -66,8 +66,8 @@ used and the result of each status check, hits and crits: ``ACT_*``, ``EVENT_FLA
 recorded where ``_use_move`` and ``execute_actions`` run it; ``engine.observe`` builds
 the player's observation from them, ``step`` drops them.
 
-Not implemented: the Trick Room countdown of the turn end's side-condition pass
-(battle_controller_player.c:1823-1826): a nonzero ``trick_room`` never counts down.
+The Trick Room countdown is the turn end's side-condition pass's last state
+(battle_controller_player.c:1822-1830, ``_trick_room_check``).
 """
 
 from __future__ import annotations
@@ -203,6 +203,7 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
     SNORE_PARAM,
+    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -3812,9 +3813,25 @@ def _future_sight(
         state = _faint_check(tables, mid, state, decide=False)
         mid = state
     state = _perish_song_check(tables, state, sides, live)
+    state = _trick_room_check(tables, state, live)
     # TurnEnd's CheckBattleOver (bcp.c:1845) after the whole side-condition pass.
     state = _faint_check(tables, state, state)
     return pay_exp(tables, start, state)
+
+
+def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
+    """``SIDE_COND_CHECK_STATE_TRICK_ROOM`` (bcp.c:1822-1830), after Perish Song's: a Trick Room
+    counter above 0 drops by 1; at 0 ``subscript_trick_room_end`` runs: vanilla's only prints, so
+    Trick Room ends (started at 5 on turn T it is up through T + 4); Kaizo's (sub_seq 251, byte
+    for byte the Trick Room move's script, ``Tables.trick_room_rearm``) finds the bits clear and
+    sets ``FIELD_CONDITION_TRICK_ROOM_INIT`` again: it never ends. E3-2-4."""
+    counted = _count_down(state.trick_room)
+    running = live & (state.trick_room != 0)
+    rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)
+    value = jnp.where(rearm, TRICK_ROOM_TURNS, counted)
+    return state._replace(
+        trick_room=jnp.where(running, value, state.trick_room).astype(state.trick_room.dtype)
+    )
 
 
 def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> BattleState:

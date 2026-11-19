@@ -436,6 +436,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.METRONOME,
     EffectId.COPYCAT,
     EffectId.ASSIST,  # an invoker (B10-11)
+    EffectId.ME_FIRST,  # an invoker (E3-2-3): the copied move's own effect decides
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -523,6 +524,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.DO_NOTHING,
     EffectId.FLEE,
     EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
+    EffectId.TRICK_ROOM,  # E3-2-4: a field condition bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

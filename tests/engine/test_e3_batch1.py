@@ -21,7 +21,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, damage_table, decomp_abilities
 from nuzline.engine.enumerate import hit_class_law, outcome_laws
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status
+from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
 from nuzline.engine.step import step_events
@@ -515,3 +515,77 @@ def test_me_first_counter_arithmetic():
     assert int(calc(idle, 0, True).me_first[0]) == 1  # 2 - 1 < 2: stays
     later = _CounterState(2, 1, 1)
     assert not bool(me_first_active(later, 0)) and int(calc(later, 0, True).me_first[0]) == 0
+
+
+# --- #259 Trick Room (E3-2-4) -----------------------------------------------------------------
+#
+# ``effect_script_0259.s:5-6`` toggles FIELD_CONDITION_TRICK_ROOM_INIT (5 turns, condition.h:145);
+# the side-condition pass counts it down (battle_controller_player.c:1822-1830) after Perish Song;
+# the Kaizo end script (sub_seq 251) sets it again, so it never ends there; map weather 18
+# (subscript_overworld_trick_room.s:14) starts a fight with it up.
+
+
+def _trick(t, n, turns=0, mine=("Trick Room",), opp=("Growl",)):
+    s = _fight(t, n, mine, opp)
+    return s._replace(trick_room=jnp.asarray(turns, s.trick_room.dtype))
+
+
+def test_trick_room_is_mapped_and_rearmed_only_in_kaizo(tables, names, kaizo_tables, kaizo_names):
+    assert DECOMP_EFFECT_TO_ID[259] == (EffectId.TRICK_ROOM, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Trick Room")]) == EffectId.TRICK_ROOM
+    assert (int(tables.trick_room_rearm), int(kaizo_tables.trick_room_rearm)) == (0, 1)
+
+
+def test_trick_room_toggles_and_the_turn_pass_counts_it_once(tables, names):
+    s = _trick(tables, names)
+    out = assert_matches_reference(tables, s, A("Trick Room", "Growl", s, names), _hits())
+    # Set to 5 by the move, then the turn's pass counts it once (up through turn T + 4).
+    assert int(out.trick_room) == TRICK_ROOM_TURNS - 1
+    up = _trick(tables, names, turns=3)
+    out = assert_matches_reference(tables, up, A("Trick Room", "Growl", up, names), _hits())
+    assert int(out.trick_room) == 0  # a second use ends it (the pass has nothing left to count)
+
+
+def test_trick_room_ends_in_vanilla_and_is_rearmed_in_kaizo(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """The pass takes the last turn to 0: vanilla's end script only prints, Kaizo's sets the field
+    condition again (``Tables.trick_room_rearm``)."""
+    for t, n, after in ((tables, names, 0), (kaizo_tables, kaizo_names, TRICK_ROOM_TURNS)):
+        s = _trick(t, n, turns=1, mine=("Growl",))
+        out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
+        assert int(out.trick_room) == after
+        s = _trick(t, n, turns=2, mine=("Growl",))
+        out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
+        assert int(out.trick_room) == 1
+
+
+def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names):
+    """Under Trick Room the slower Geodude hits the 1 HP Monferno first, which never moves."""
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    s = s._replace(hp=s.hp.at[0, 0].set(1), stats=s.stats.at[0, 0, SPE].set(500))
+    acts = A("Tackle", "Tackle", s, names)
+    normal = assert_matches_reference(tables, s, acts, _hits())
+    assert int(normal.hp[1, 0]) < int(s.hp[1, 0])
+    started = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Tackle",))],
+        [_spec(names, "Geodude", 40, ("Tackle",))],
+        trick_room=TRICK_ROOM_TURNS,
+    )
+    assert int(started.trick_room) == TRICK_ROOM_TURNS
+    reversed_ = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    out = assert_matches_reference(tables, reversed_, acts, _hits())
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+    for bad in (-1, TRICK_ROOM_TURNS + 1):
+        try:
+            make_state(
+                tables,
+                [_spec(names, "Monferno", 20, ("Tackle",))],
+                [_spec(names, "Geodude", 40, ("Tackle",))],
+                trick_room=bad,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(bad)

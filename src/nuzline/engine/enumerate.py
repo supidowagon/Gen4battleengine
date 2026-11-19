@@ -861,6 +861,12 @@ INPUT_NEUTRAL_EFFECTS = (
     # E3-2-1: Torment sets a bit read only at the target's next move selection
     # (CHECK_INVALID_TORMENTED, battle_lib.c:2275-2279); no hit of this turn reads it.
     _E.TORMENT,
+    # E3-2-4: Trick Room sets trickRoomActivated (battle_script.c:7863), which re-sorts the
+    # action order and restarts the turn counter (battle_controller_player.c:3990-3994); in
+    # singles the foe has either acted already or still acts next, and the move's user is
+    # marked done, so no action changes. Its flip of the order bit is read at the next turn's
+    # order (order.py), not by a hit of this one. A doubles partner's order is not a singles case.
+    _E.TRICK_ROOM,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1355,6 +1361,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
     _E.TORMENT,  # a status move: no damage (E3-2-1)
+    _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
 )
 

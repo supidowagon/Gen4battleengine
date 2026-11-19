@@ -435,6 +435,7 @@ SITE_N: dict[int, int] = {
     5532: 32,  # Expert_MeFirst_TryScorePlus1 (jumps to _CheckLastUsedMove)
     5538: 128,  # Expert_MeFirst_CheckLastUsedMove (+1 when it does NOT jump)
     5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
+    6210: 64,  # Expert_TrickRoom_TryScorePlus3 (+3 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -706,6 +707,7 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Risky :6560 (E3-2-3)
         247,  # SET_ABILITY_TO_INSOMNIA (Worry Seed): Basic_CheckWorrySeed (:276); Expert_WorrySeed
         # (:1790), :5984, :5988 (E3-2-2)
+        259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -853,6 +855,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     # E3 batch 1 round 2.
     241: ("Expert_MeFirst", 1784),
     247: ("Expert_WorrySeed", 1790),
+    259: ("Expert_TrickRoom", 1800),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -985,6 +988,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         218,  # SPEED_DOWN_HIT: Expert_HammerArm (E3-1-5)
         241,  # USE_MOVE_FIRST: Expert_MeFirst (E3-2-3)
         247,  # SET_ABILITY_TO_INSOMNIA: Expert_WorrySeed (E3-2-2)
+        259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

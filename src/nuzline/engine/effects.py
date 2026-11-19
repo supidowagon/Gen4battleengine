@@ -305,6 +305,7 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
+    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
@@ -1663,6 +1664,20 @@ def _torment(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.torment[h.target_side] == 0)
     )
     return _set(state, "torment", h.target_side, 1, cond)
+
+
+def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Trick Room (effect_script_0259.s:5-12): with any FIELD_CONDITION_TRICK_ROOM bit up the move
+    clears them (:12, "restored the twisted dimensions"), else it sets FIELD_CONDITION_TRICK_ROOM_INIT
+    (:6, the counter 5, ``ids.TRICK_ROOM_TURNS``). It never fails (:20-21 are unreachable) and has no
+    accuracy roll (RANGE_FIELD, accuracy 0). ``step._trick_room_check`` counts it down
+    (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
+    (battle_lib.c:1432-1439). E3-2-4."""
+    cond = (h.effect == _E.TRICK_ROOM) & h.landed
+    value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
+    return state._replace(
+        trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
+    )
 
 
 def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3453,6 +3468,7 @@ def play_hit(
         _taunt,
         _torment,
         _worry_seed,
+        _trick_room,
         _disable,
         _confuse_foe,
         _secondary_confuse,

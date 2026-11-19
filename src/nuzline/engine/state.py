@@ -248,7 +248,14 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
 from nuzline.engine.format import SINGLES, Format, format_of, party, side_of
-from nuzline.engine.ids import CHATTER_CHANCES, GRAVITY_TURNS, AbilityId, Stat, Weather
+from nuzline.engine.ids import (
+    CHATTER_CHANCES,
+    GRAVITY_TURNS,
+    TRICK_ROOM_TURNS,
+    AbilityId,
+    Stat,
+    Weather,
+)
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -967,6 +974,7 @@ def initial_arrays(
     gravity: int = 0,
     chatot_cry: int = 0,
     opp2_items: Sequence[int] | None = None,
+    trick_room: int = 0,
 ) -> dict[str, np.ndarray]:
     """Every ``layout(fmt)`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start`` for singles): ``parties`` holds the
@@ -1043,6 +1051,9 @@ def initial_arrays(
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
     a["gravity"][...] = gravity
+    if not 0 <= trick_room <= TRICK_ROOM_TURNS:
+        raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
+    a["trick_room"][...] = trick_room
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).
@@ -1062,6 +1073,7 @@ def make_state(
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
     chatot_cry: int = 0,
+    trick_room: int = 0,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.battle_start``). Singles: ``initial_arrays`` with ``SINGLES``."""
@@ -1077,6 +1089,7 @@ def make_state(
         terrain,
         gravity,
         chatot_cry,
+        trick_room=trick_room,
     )
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

@@ -1154,6 +1154,14 @@ def _basic_check_gravity_active(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_trick_room(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckTrickRoom`` (script.s:1501-1506): faster than the target, or tied (:1503
+    reads a tie as faster), -10 (E3-2-4)."""
+    ctx, t1 = _split(c.if_speed_compare_equal_to(_at(ctx, mask), c.COMPARE_SPEED_FASTER))
+    ctx, t2 = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_TIE))
+    return c.pop_or_end(_score(ctx, t1 | t2, -10))
+
+
 def _basic_check_magnet_rise(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckMagnetRise`` (script.s:1461-1474): the attacker already under the effect
     (the mask bit, :1463), with Levitate (:1466-1467) or of a Flying type (:1470-1473), -10."""
@@ -1837,6 +1845,28 @@ def _expert_worry_seed(ctx: AiContext, mask) -> AiContext:
     # Expert_WorrySeed_TryScorePlus1 (:5987)
     ctx, _ = _split(c.if_random_less_than(_at(ctx, try_plus1 | t | ctx.live), 64, 5988))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_trick_room(ctx: AiContext, mask) -> AiContext:
+    """``Expert_TrickRoom`` (script.s:6190-6214): a doubles battle ends; above 30 % HP, or with a
+    living party member left, goes to the speed check (:6204), else ends; slower than the
+    player (the SLOWER compare, a tie is not slower): the 64 roll (:6210) jumping ends, else +3;
+    otherwise -1 (E3-2-4)."""
+    ctx = c.load_battle_type(_at(ctx, mask))
+    ctx, _ = _split(c.if_loaded_mask(ctx, c.BATTLE_TYPE_DOUBLES))
+    ctx, check = _split(c.if_hp_percent_greater_than(ctx, _A, 30))
+    ctx = c.count_alive_party_battlers(ctx, _A)
+    ctx, _ = _split(c.if_loaded_equal_to(ctx, 0))
+    # Expert_TrickRoom_CheckSpeed (:6204)
+    ctx, slower = _split(
+        c.if_speed_compare_equal_to(_at(ctx, check | ctx.live), COMPARE_SPEED_SLOWER)
+    )
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_TrickRoom_TryScorePlus3 (:6209)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, slower), 64, 6210))  # -> _End
+    ctx = c.add_to_move_score(ctx, 3)
+    return c.pop_or_end(ctx)
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3605,6 +3635,7 @@ _BASIC_LABELS = (
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
+    (BattleEffect.TRICK_ROOM, _basic_check_trick_room),  # :282 (E3-2-4)
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
 )
@@ -3733,6 +3764,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
     (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
+    (BattleEffect.TRICK_ROOM, _expert_trick_room),  # :1800 (E3-2-4)
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
     (BattleEffect.BOUNCE, _expert_charge_turn_with_invuln),  # :1803

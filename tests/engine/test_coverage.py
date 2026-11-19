@@ -332,12 +332,21 @@ def with_area(trainer, **fields):
     return replace(trainer, area_condition=replace(trainer.area_condition, **fields))
 
 
-def test_trick_room_refused(tables, names):
-    report = check_opponent(
-        tables, names, with_area(roark_trainer(), trick_room=True), roark_party(names), 0
-    )
-    assert "Battle start: permanent Trick Room (field condition UNSUPPORTED)" in report.missing
-    assert report.level == Support.NONE
+def test_area_trick_room_is_modelled(tables, names):
+    """E3-2-4: a Trick Room area (map weather 18) is no longer refused; the fight starts with it
+    up for ``TRICK_ROOM_TURNS`` (``start_trick_room``), which Kaizo's tables re-arm for ever."""
+    from nuzline.engine.coverage import start_trick_room
+    from nuzline.engine.ids import TRICK_ROOM_TURNS
+    from nuzline.engine.state import make_state
+
+    trainer = with_area(roark_trainer(), trick_room=True)
+    report = check_opponent(tables, names, trainer, roark_party(names), 0)
+    assert not any("Trick Room" in line for line in report.missing)
+    assert start_trick_room(trainer) == TRICK_ROOM_TURNS and start_trick_room(roark_trainer()) == 0
+    party = roark_party(names)
+    state = make_state(tables, party, party, trick_room=start_trick_room(trainer))
+    assert int(state.trick_room) == TRICK_ROOM_TURNS
+    assert int(make_state(tables, party, party).trick_room) == 0
 
 
 def test_area_gravity_is_modelled(tables, names):

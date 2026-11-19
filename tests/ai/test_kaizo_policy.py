@@ -4925,3 +4925,33 @@ def test_me_first_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert _delta(t, fast, 0x3, 0x7, jumps=((0, 5538),))[0] in (0, 1)
     assert _delta(t, fast, 0x3, 0x7)[0] in (2, 3)
     assert c.BattleEffect.USE_MOVE_FIRST in c.RISKY_EFFECTS
+
+
+def _speeds(s, ai: int, player: int):
+    return s._replace(stats=s.stats.at[1, 0, 4].set(ai).at[0, 0, 4].set(player))
+
+
+def test_trick_room_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckTrickRoom (script.s:1501-1506): faster than the player, or a speed tie (read as
+    faster, :1503), -10; slower nothing (E3-2-4)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
+    assert _delta(t, _speeds(s, 500, 1), 0x2, 0x3)[0] == -10
+    assert _delta(t, _speeds(s, 1, 500), 0x2, 0x3)[0] == 0
+    assert _delta(t, _speeds(s, 100, 100), 0x2, 0x3, tie=1)[0] == -10
+
+
+def test_trick_room_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_TrickRoom (script.s:6190-6214): faster -1; slower +3 unless the 64 roll (:6210)
+    jumps; the AI at 30 % HP or less with no living party member left scores nothing (E3-2-4)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
+    slow, fast = _speeds(s, 1, 500), _speeds(s, 500, 1)
+    assert _delta(t, fast, 0x3, 0x7)[0] == -1
+    assert _delta(t, slow, 0x3, 0x7)[0] == 3
+    assert _delta(t, slow, 0x3, 0x7, jumps=((0, 6210),))[0] == 0
+    # Low HP: a living bench member still goes to the speed check, none ends the script.
+    low = slow._replace(hp=slow.hp.at[1, 0].set(1))
+    assert _delta(t, low, 0x3, 0x7)[0] == 3
+    alone = low._replace(hp=low.hp.at[1, 1].set(0))
+    assert _delta(t, alone, 0x3, 0x7)[0] == 0

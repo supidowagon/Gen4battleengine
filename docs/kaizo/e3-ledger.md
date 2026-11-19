@@ -180,6 +180,14 @@ Each is open; close it with its ruling.
    Me First's `sCannotMeFirstMoves` compares by effect (lib.c:7233-7251), so in Kaizo every
    effect-85 move is uncopyable (sheet e241): both belong to their own groups (Mirror Move
    label, #241 Me First).
+3. Tag Strategy in singles (E3-2-4): the engine's AI has no Tag Strategy flag (bit 7,
+   script.s:26), but a singles trainer whose header sets it runs TagStrategy_Main
+   (ai.c:249-271, :297-309). Its Trick Room entry (script.s:6979-7025) reads the empty
+   partner slots (curHP 0, maxHP 0), and the unsigned 0/0 returns the dividend (0), so
+   script.s:6981 always jumps to ScoreMinus30: Trick Room gets -30 every turn, on top of Basic
+   and Expert (sheet e259, "Tag Strategy in singles"). The same 0/0 read shapes the other Tag
+   Strategy entries (:6663, :6675, :6836, :6847, :7057-7071, :7156). Model the flag with
+   empty slots as zeroed battlers when the Tag Strategy group is built; not modelled here.
 
 ## 3. Rulings
 
@@ -292,4 +300,23 @@ Each is open; close it with its ruling.
   (script.s:5519-5550; rolls :5532, :5538, :5542), no Basic entry, Risky's table already lists
   241; read bounds regenerated. Tests: tests/engine/test_e3_batch1.py,
   tests/ai/test_kaizo_policy.py `test_me_first_expert`.
+- E3-2-4 Trick Room (#259): new `EffectId.TRICK_ROOM` (effect 259) and `ids.TRICK_ROOM_TURNS` = 5
+  (condition.h:145). `effects._trick_room` toggles the existing `trick_room` field scalar:
+  `FIELD_CONDITION_TRICK_ROOM_INIT` is set when no Trick Room bit is up and cleared when one is
+  (effect_script_0259.s:5-6); the move reads like Gravity's (a failed move leaves it alone). The
+  countdown is its own block after Perish Song's (`step._trick_room_check`, reference
+  `_trick_room_check`): SIDE_COND_CHECK_STATE_TRICK_ROOM (battle_controller_player.c:1822-1830)
+  drops the counter by 1 and, at 0, runs `subscript_trick_room_end`: vanilla's only prints (up
+  through turn T + 4); Kaizo's (sub_seq 251, byte for byte the move's own script) finds the bits
+  clear and sets them again: it never ends. New table scalar `Tables.trick_room_rearm` (0 vanilla,
+  1 Kaizo, `tools/build_tables.py`, modelled on `gravity_rearm`), manifest version 34; rom_diff
+  member 251 is now `modelled`. Area start (map weather 18,
+  subscript_overworld_trick_room.s:14): `coverage.start_trick_room` gives 5, threaded as
+  `make_state(trick_room=...)` through `prep` and `cli`; `coverage` no longer refuses it. The
+  mid-turn re-sort (`trickRoomActivated`, bcp.c:3990-3994) changes no action in singles (the
+  foe has acted or acts next; the user is marked done), so the effect is an INPUT_NEUTRAL, no-
+  damage enumeration class; a doubles partner's re-sort is the doubles design's (section 5,
+  "has acted" per battler). AI: Basic_CheckTrickRoom (script.s:1501-1506) and Expert_TrickRoom
+  (:6190-6214; roll :6210); read bounds regenerated. Tests: tests/engine/test_e3_batch1.py,
+  tests/ai/test_kaizo_policy.py, tests/engine/test_coverage.py `test_area_trick_room_is_modelled`.
 

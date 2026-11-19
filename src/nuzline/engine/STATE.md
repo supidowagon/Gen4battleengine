@@ -127,8 +127,9 @@ three structs has a row.
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
   a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
-  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) and
-  `trick_room` (the turn end's side-condition pass, :1823-1826) are not counted down yet.
+  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) is not counted
+  down yet. `trick_room` is counted down by the turn end's side-condition pass
+  (`step._trick_room_check`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
 - **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it

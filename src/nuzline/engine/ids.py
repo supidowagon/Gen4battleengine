@@ -518,6 +518,10 @@ class EffectId(IntEnum):
     # (battle_script.c:7286-7312) then GoToMoveScript: an invoker (``order.CALL_ME_FIRST``) of its
     # target's chosen move, x1.5 on its user's later CalcDamage (``damage.me_first_boost``), E3-2-3.
     ME_FIRST = 126
+    # Trick Room (259, BATTLE_EFFECT_TRICK_ROOM): zeros. effect_script_0259.s:5-12: with any
+    # FIELD_CONDITION_TRICK_ROOM bit up it clears them, else sets FIELD_CONDITION_TRICK_ROOM_INIT
+    # (``effects._trick_room``, E3-2-4); it never fails.
+    TRICK_ROOM = 127
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -525,6 +529,10 @@ MAGNET_RISE_TURNS = 5
 # FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
 # (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
 GRAVITY_TURNS = 5
+# FIELD_CONDITION_TRICK_ROOM_INIT (condition.h:145): bits 16 and 18 of the 3-bit counter = 5, set
+# by effect_script_0259.s:6 and subscript_overworld_trick_room.s:14, counted down by
+# SIDE_COND_CHECK_STATE_TRICK_ROOM (battle_controller_player.c:1822-1830; ``step._trick_room_check``).
+TRICK_ROOM_TURNS = 5
 # The effects whose script sets only ``MOVE_SIDE_EFFECT_ON_HIT`` in its indirect flags and rolls
 # nothing through ``effectChance``: BattleSystem_TriggerSecondaryEffect's ON_HIT branch
 # (battle_lib.c:1524-1529) runs the subscript with no ``RandNext() % 100 < effectChance`` (only
