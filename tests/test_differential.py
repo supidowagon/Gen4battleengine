@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
@@ -147,6 +147,30 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
 jit_pay = jax.jit(pay_exp)
 
 
+def _transformed_payer(tables, names):
+    """The shape of the pay test's gb2 failure: the player's active Transformed into a Teddiursa
+    (216), one exp short of its next level, low HP, its max HP its own formula's
+    (``recalc_stats`` on the shadow identity). With the copy's max HP, the first level's
+    ``hp += newMax - oldMax`` reached 0 and the per-level loop left the telescoped HP."""
+    from tests.engine.helpers import roark_real_state
+
+    s = roark_real_state(tables, names)
+    a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
+    act = int(a["active"][0])
+    a["transformed"][0] = 1
+    a["shadow_species"][0], a["shadow_form"][0] = a["species"][0, act], a["form"][0, act]
+    a["shadow_ivs"][0] = a["ivs"][0, act]
+    a["shadow_stats"][0] = a["stats"][0, act]
+    a["species"][0, act], a["form"][0, act] = 216, 0
+    rate = int(np.asarray(tables.species_exp_rate)[int(a["shadow_species"][0])])
+    level = int(a["level"][0, act])
+    a["exp"][act] = int(np.asarray(tables.exp_table)[rate, level + 1]) - 1
+    a["exp_mask"][...] = 1 << act
+    recalc_stats(tables, a, 0, act)
+    a["hp"][0, act] = 1
+    return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
+
+
 # The lazy strategy's repr carries the tables (72 kB); Hypothesis warns when it builds it.
 @pytest.mark.filterwarnings("ignore:Generating overly large repr")
 @pytest.mark.slow
@@ -155,17 +179,21 @@ jit_pay = jax.jit(pay_exp)
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
-@given(data=st.data())
-def test_pay_exp_matches_the_per_level_loop(tables, names, data):
+@given(data=st.data(), pinned=st.none())
+@example(data=None, pinned=True)  # a Transformed payer one exp short of its level (G-69)
+def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
     # The closed form (one level count, telescoped HP, friendship by tier counts) against the
     # decomp's literal per-level ShouldLevelUp loop. A foe up to level 100 pays up to
     # 255 * 100 / 7 = 3642 before the multipliers: many levels at once.
-    s = data.draw(supported_state(tables, names))
-    s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
-    living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
-    j = data.draw(st.sampled_from(living))
-    s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
-    pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
+    if pinned:
+        s, j, pending, selected = _transformed_payer(tables, names), 0, False, 0
+    else:
+        s = data.draw(supported_state(tables, names))
+        s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
+        living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
+        j = data.draw(st.sampled_from(living))
+        s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
+        pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
     after = s.replace_hp(1, j, 0)
     got = jit_pay(tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32))
     want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j, pending, selected))
