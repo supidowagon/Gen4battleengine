@@ -69,6 +69,14 @@ SWEEP_FLAGS = [
     pytest.param(0x10F, marks=pytest.mark.slow),
     0x11F,
 ]
+# The heavy exact-equals-loose sweeps: their first state at 0x11F is fast (one per family keeps
+# exact == loose and no refusal in the fast tier); every state at every flag set is slow.
+SWEEP_ONE = [
+    pytest.param(0x11F, 1, id="0x11F-one"),
+    pytest.param(0x17, None, id="0x17", marks=pytest.mark.slow),
+    pytest.param(0x10F, None, id="0x10F", marks=pytest.mark.slow),
+    pytest.param(0x11F, None, id="0x11F", marks=pytest.mark.slow),
+]
 STEALTH_ROCK, SELFDESTRUCT, BRICK_BREAK, ACCELEROCK = 446, 120, 280, 205
 SLUDGE_BOMB, GIGA_DRAIN, ANCIENTPOWER, RECOVER = 188, 202, 246, 105
 DRAGONBREATH, FLAMETHROWER, THUNDER_FANG, EARTH_POWER = 225, 53, 422, 414
@@ -3348,15 +3356,13 @@ def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
-@pytest.mark.slow  # 163 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Roar", "Substitute", "Dream Eater", "Accelerock")
     )
-    for hp, turn, last in ((100, 5, "Toxic"), (40, 0, "")):
+    for hp, turn, last in ((100, 5, "Toxic"), (40, 0, ""))[:states]:
         s2 = _turn(_hp(s, 1, hp), turn)
         if last:
             s2 = s2._replace(last_move=s2.last_move.at[0].set(n.move_names.index(last)))
@@ -3577,15 +3583,13 @@ def test_imprison(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, exp
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
-@pytest.mark.slow  # 233 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Metal Burst", "Sand-Attack", "Minimize", "Knock Off")
     )
-    for own, turn in ((100, 0), (40, 3)):
+    for own, turn in ((100, 0), (40, 3))[:states]:
         s2 = _turn(_hp(s, 1, own), turn)
         s2 = s2._replace(ingrain=s2.ingrain.at[1].set(1))
         layout = layout_for(t, flags, s2)
@@ -3705,13 +3709,11 @@ def test_ai_chart_reads_ingrain_and_roosting(kaizo_tables, kaizo_names, kaizo_ro
     assert int(apply_type_chart(t, roosted, 1, accelerock, 40)) * 2 == flying
 
 
-@pytest.mark.slow  # 330 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Copycat", "Accelerock", "Ingrain", ""))
-    for speed, turn, last in ((100, 0, ""), (1, 3, "Toxic"), (500, 3, "Earthquake")):
+    for speed, turn, last in ((100, 0, ""), (1, 3, "Toxic"), (500, 3, "Earthquake"))[:states]:
         s2 = _turn(_speeds(s, player=speed, opp=100), turn)
         if last:
             s2 = s2._replace(last_move=s2.last_move.at[0].set(n.move_names.index(last)))
@@ -3791,14 +3793,18 @@ def test_baton_pass_flag_without_baton_pass(
     assert _delta(t, s, 0x1, 0x41, jumps)[0] == expected
 
 
-@pytest.mark.slow  # 277 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", [0x57])
-def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(
+    ("flags", "states"),
+    [
+        pytest.param(0x57, 1, id="0x57-one"),
+        pytest.param(0x57, None, id="0x57", marks=pytest.mark.slow),
+    ],
+)
+def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     moves = _ids(n, "Swords Dance", "Sand-Attack", "Baton Pass", "Protect")
     s = _state(t, kaizo_roark_party, BONSLY, moves)
-    for own, turn, stage in ((100, 0, 0), (50, 3, 3), (100, 3, 2)):
+    for own, turn, stage in ((100, 0, 0), (50, 3, 3), (100, 3, 2))[:states]:
         s2 = _turn(_hp(s, 1, own), turn)
         s2 = s2._replace(stages=s2.stages.at[1, Stat.ATK].set(stage))
         layout = layout_for(t, flags, s2)
@@ -3841,13 +3847,11 @@ def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, e
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
-@pytest.mark.slow  # 157 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags, states):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "SolarBeam", "Helping Hand", "Accelerock", ""))
-    for own, weather in ((100, Weather.SUN), (30, Weather.NONE)):
+    for own, weather in ((100, Weather.SUN), (30, Weather.NONE))[:states]:
         s2 = _hp(s, 1, own)._replace(weather=jnp.asarray(weather, s.weather.dtype))
         layout = layout_for(t, flags, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
@@ -4019,16 +4023,16 @@ def test_shadow_force(kaizo_tables, kaizo_names, kaizo_roark_party, case, expect
     assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
 
 
-@pytest.mark.slow  # 139 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_charge_turn_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
+):
     """Exact == loose for the charge-turn moves, on paths through the :4058 roll."""
     t, n = kaizo_tables, kaizo_names
     s = _state(
         t, kaizo_roark_party, BONSLY, _ids(n, "Razor Wind", "SolarBeam", "Fly", "Shadow Force")
     )
-    for weather, faster in ((Weather.SANDSTORM, False), (Weather.SUN, True)):
+    for weather, faster in ((Weather.SANDSTORM, False), (Weather.SUN, True))[:states]:
         s2 = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
         layout = layout_for(t, flags, s2)
@@ -4095,13 +4099,13 @@ def test_expert_encore(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
-@pytest.mark.slow  # 178 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-@pytest.mark.parametrize("flags", SWEEP_FLAGS)
-def test_batch11_encore_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
+@pytest.mark.parametrize(("flags", "states"), SWEEP_ONE)
+def test_batch11_encore_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, flags, states
+):
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
-    for disabled, faster in ((0, True), (2, False), (0, False)):
+    for disabled, faster in ((0, True), (2, False), (0, False))[:states]:
         s2 = s._replace(disable_turns=s.disable_turns.at[0].set(disabled))
         s2 = _speeds(s2, player=1, opp=500) if faster else _speeds(s2, player=500, opp=1)
         layout = layout_for(t, flags, s2)
@@ -4281,13 +4285,14 @@ def test_mist_check_hp(kaizo_tables, kaizo_names, kaizo_roark_party, attacker, t
     assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
 
 
-@pytest.mark.slow  # 136 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
-# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
-def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+@pytest.mark.parametrize(
+    "states", [pytest.param(1, id="one"), pytest.param(None, id="all", marks=pytest.mark.slow)]
+)
+def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, states):
     """Under Roark's flag set (0x17), misted or not: scored, not refused, exact == loose."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mist", "Accelerock", "", ""))
-    for s2 in (s, s._replace(mist=s.mist.at[1].set(2))):
+    for s2 in (s, s._replace(mist=s.mist.at[1].set(2)))[:states]:
         layout = layout_for(t, 0x17, s2)
         assert policy.ai_refusals(t, s2, n, layout) == []
         _assert_exact_equals_loose(t, s2, layout)
