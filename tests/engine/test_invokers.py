@@ -41,10 +41,10 @@ from nuzline.engine.order import (
 )
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step, step_events, turn_events
+from nuzline.engine.step import step_events, turn_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import sample_rows, unmodelled
+from tests.engine.helpers import BATCH, padded_rows, sample_rows, step_batch, unmodelled
 from tests.strategies import legal_action_pair, supported_state
 
 
@@ -250,8 +250,8 @@ def test_call_laws_and_variants(tables, names):
     assert len(variants) == 2 * len(metronome_calls(t, _mon(n, "Clefairy", ["Metronome"])))
 
 
-CHUNK = 1024  # one compiled step program for every batch in this file
-_steps = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
+CHUNK = BATCH  # the suite's one padded row count: one step program for every file
+_steps = step_batch
 _turn_events = jax.jit(jax.vmap(turn_events, in_axes=(None, None, None, 0)))
 _order = jax.jit(action_order)
 
@@ -304,7 +304,8 @@ def _raw_brute(tables, state, actions) -> dict[bytes, float]:
                 keep = np.ones(len(p), bool)
                 if len(ties) == 2:
                     keep &= np.asarray(o.speed_tie) == tie
-                events = _turn_events(tables, state, jnp.asarray(actions, jnp.int32), o)
+                acts = jnp.asarray(actions, jnp.int32)
+                events = padded_rows(_turn_events, tables, state, acts, o)  # one compile
                 disabled, sealed = _split_events(state, events)
                 disabled, sealed = np.asarray(disabled), np.asarray(sealed)
                 landed = np.asarray(gravity_events(state, events))

@@ -13,9 +13,10 @@ from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Weather
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
-from nuzline.engine.step import replace, step
+from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace, ref_step
+from tests.engine.helpers import jit_step
 
 
 def _same(a, b):
@@ -82,7 +83,7 @@ def test_a_loafing_truant_does_not_pursue(tables, names):
     for turn, loafs in ((1, True), (2, False)):
         s = make_state(tables, player, opp)
         s = s._replace(turn=jnp.asarray(turn, s.turn.dtype))  # leads: truant 0
-        out = step(tables, s, acts, o)
+        out = jit_step(tables, s, acts, o)
         ref = ref_step(to_numpy(tables), to_ref(s), tuple(int(a) for a in acts), outcome_to_py(o))
         _same(out, from_ref(ref))
         hit = int(out.hp[0, 0]) < int(s.hp[0, 0])

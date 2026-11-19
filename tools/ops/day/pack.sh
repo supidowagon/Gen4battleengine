@@ -3,12 +3,15 @@
 # Bundles the git archive of <commit> + built tables + the test list + the pod scripts of
 # tools/ops/day/pod (from git at this checkout's HEAD, LF) into $RENT/out/<run>/payload.tar,
 # lists it, refuses forbidden files, starts a detached send and prints the exec-pod body that
-# receives the payload into /work/<run> and starts bin/setup.sh there. <run>: [a-z0-9_-], used once.
+# receives the payload into /work/<run>, starts bin/notify.sh, then bin/setup.sh there; a failed
+# receive or unpack ends setup.log with RECEIVE_FAILED or UNPACK_FAILED. <run>: [a-z0-9_-], used once.
 # Refuses: uncommitted changes under tools/ops/day/pod; a files.txt line outside the list format
 # (tools/ops/day/pod/setup.sh); forbidden files; table entries (directories included) with '..'
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
 # Env: MARK (pytest -m for lines without A; default "not slow"), runner knobs go in the exec body.
+# meta.env also gets WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
+# tools/ops/day/wait.sh.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
 [ $# -eq 4 ] || { echo "usage: pack.sh <commit> <tables.tar.xz> <run> <files.txt>"; exit 2; }
@@ -55,7 +58,18 @@ cp "$TB" "$P/tables.tar.xz"
 mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
 for f in "$P"/podsrc/tools/ops/day/pod/*.sh; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
 rm -rf "$P/podsrc"
-printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow}" > "$P/meta.env"
+# Beacon codes: two fresh random codephrases per run, WATCH_F (first failure) and WATCH_D (results),
+# for bin/notify.sh (runpodctl send --code) and tools/ops/day/wait.sh. runpodctl v3.1.1's croc fork
+# (cmd/transfer/croc.go:551,722) puts a transfer in the relay room code[:3] and its data rooms in
+# sha256(code[:5]) (:1293), so each code starts with 3 random letters (never a digit, as runpodctl's own
+# codes do) and the two codes differ there. Never printed here.
+draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
+  for b in $(od -An -N3 -tu1 /dev/urandom); do l="$l${a:$((b % 26)):1}"; done
+  echo "$l$(od -An -N15 -tx1 /dev/urandom | tr -d ' \n')"; }
+WF=$(draw); WD=$(draw)
+while [ "${WD:0:3}" = "${WF:0:3}" ]; do WD=$(draw); done
+for w in "$WF" "$WD"; do echo "$w" | grep -qE '^[a-z]{3}[0-9a-f]{30}$' || refuse "could not draw a random beacon code" "${#w} characters"; done
+printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow}" "$WF" "$WD" > "$P/meta.env"
 CT=$(tar -tf "$P/code.tar"); TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
 T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"
@@ -66,11 +80,12 @@ deny "tables entry outside the allowed data/ paths" "$T" -vE "$TABLE_ALLOW"
 tar -cf "$P/payload.tar" -C "$P" code.tar tables.tar.xz meta.env files.txt bin
 echo "== payload.tar"; tar -tvf "$P/payload.tar"
 echo "== code.tar $(echo "$CT" | wc -l) entries; tables $(echo "$T" | wc -l) files:"
-echo "$T" | sed 's/^/  /'; cat "$P/meta.env"
-cd "$P"; HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send payload.tar > send.log 2>&1 < /dev/null &
+echo "$T" | sed 's/^/  /'; grep -v '^WATCH_' "$P/meta.env"
+cd "$P"; HOME="$RENT/home" USERPROFILE="$RENT/home" nohup bash -c '"$0" send payload.tar & c=$!; trap "kill $c" TERM; wait "$c"; echo "SEND_RC=$?"' "$RPC"   > send.log 2>&1 < /dev/null &   # SEND_RC=<exit code of the send>: wait.sh reads it
 SPID=$!
 for i in $(seq 1 60); do grep -q "code is" send.log 2>/dev/null && break; sleep 0.5; done
 CODE=$(grep -o "code is: [^ ]*" send.log | head -1 | sed 's/code is: //' | tr -d '\r' || true)
 [ -n "$CODE" ] || { echo "no code; send.log:"; cat send.log; kill "$SPID" 2>/dev/null || true; exit 4; }
 echo "== exec-pod body:"
-echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > setup.pid; /work/_bin/runpodctl receive $CODE && tar --no-same-owner -xf payload.tar && bash bin/setup.sh' > setup.log 2>&1 < /dev/null & sleep 15; tail -3 /work/$RUN/setup.log\"],\"timeoutSeconds\":25}"
+echo "{\"command\":[\"sh\",\"-c\",\"mkdir -p /work/$RUN && cd /work/$RUN && nohup sh -c 'echo \$\$ > setup.pid; /work/_bin/runpodctl receive $CODE || { echo RECEIVE_FAILED; exit 1; }; tar --no-same-owner -xf payload.tar || { echo UNPACK_FAILED; exit 1; }; setsid nohup bash bin/notify.sh > notify.log 2>&1 < /dev/null & bash bin/setup.sh' > setup.log 2>&1 < /dev/null & sleep 15; tail -3 /work/$RUN/setup.log\"],\"timeoutSeconds\":25}"
+echo "== then, as one background Bash call: bash tools/ops/day/wait.sh $RUN [--until done|first-failure] [--timeout <hours>]"

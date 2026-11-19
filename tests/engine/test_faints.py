@@ -13,14 +13,12 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, legal_actions
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import LAYOUT, MAX_DEATH_BUDGET, BattleState
-from nuzline.engine.step import NORMAL_POWER_MUL, needs_replacement, replace, step
+from nuzline.engine.step import NORMAL_POWER_MUL, needs_replacement, replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace, ref_step
 from nuzline.search.playout import finish_turn, playout
-from tests.engine.helpers import roark_real_state, roark_state
+from tests.engine.helpers import jit_step, roark_real_state, roark_state
 from tests.strategies import any_outcome, legal_action_pair, supported_state
-
-jit_step = jax.jit(step)
 
 NEW_FIELDS = ("deaths", "faint_budget", "protected", "replace_mul")
 # Fields added after them (E2 batch 6: the turn scratch, 0 between turns, docs/kaizo/
@@ -65,7 +63,7 @@ def test_faint_records_the_slot(tables, names):
     s = roark_state(tables, names, player_count=1).replace_hp(0, 0, 1)
     tackle = names.move_slot(s, 1, "Tackle")
     actions = jnp.array([0, tackle])
-    out = step(tables, s, actions, empty_outcome())
+    out = jit_step(tables, s, actions, empty_outcome())
     assert np.asarray(out.deaths).tolist() == [1, 0, 0, 0, 0, 0]
     assert int(out.player_faints) == 1
     ref = from_ref(
@@ -79,7 +77,7 @@ def test_faint_records_the_slot(tables, names):
     assert all(np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(out, ref, strict=True))
 
     won = roark_state(tables, names).replace_hp(1, 0, 1)
-    out = step(tables, won, jnp.array([0, 0]), empty_outcome())
+    out = jit_step(tables, won, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and not np.any(np.asarray(out.deaths))
     assert int(out.player_faints) == 0
 
@@ -103,7 +101,7 @@ def _struggle_double_ko(tables, names, player_count):
 def test_player_faint_counts_a_death_and_the_battle_goes_on(tables, names):
     s = roark_state(tables, names).replace_hp(0, 0, 1)
     tackle = names.move_slot(s, 1, "Tackle")
-    out = step(tables, s, jnp.array([0, tackle]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([0, tackle]), empty_outcome())
     assert int(out.hp[0, 0]) == 0 and int(out.over) == 0
     assert np.asarray(out.deaths).tolist() == [1, 0, 0, 0, 0, 0]
     assert needs_replacement(out).tolist() == [1, 0]
@@ -112,14 +110,14 @@ def test_player_faint_counts_a_death_and_the_battle_goes_on(tables, names):
 def test_double_ko_of_last_pokemon_is_a_loss(tables, names):
     # Ruling 2: both sides out at one faint check is BATTLE_RESULT_DRAW, played as a loss.
     s = _struggle_double_ko(tables, names, player_count=1)
-    out = step(tables, s, jnp.array([0, 0]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
     assert int(out.over) == 1 and int(out.winner) == 1
 
 
 def test_last_opponent_with_a_non_last_player_faint_is_a_win(tables, names):
     s = _struggle_double_ko(tables, names, player_count=2)
-    out = step(tables, s, jnp.array([0, 0]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([0, 0]), empty_outcome())
     assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
     assert int(out.over) == 1 and int(out.winner) == 2
     assert int(out.deaths[0]) == 1
@@ -130,7 +128,7 @@ def test_entry_faint_needs_a_second_replacement(tables, names):
     s = roark_state(tables, names).replace_hp(0, 0, 1)
     s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1))
     tackle = names.move_slot(s, 1, "Tackle")
-    out = step(tables, s, jnp.array([0, tackle]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([0, tackle]), empty_outcome())
     assert needs_replacement(out).tolist() == [1, 0]
     out = out.replace_hp(0, 3, 1)  # Starly, which Stealth Rock faints on entry
     entered = replace(tables, out, 0, 3)
@@ -153,7 +151,7 @@ def test_pursuit_ko_still_completes_the_switch(tables, names):
         tables, names, player_species="Budew", opp_species="Cranidos", opp_moves=["Pursuit"]
     ).replace_hp(0, 0, 1)
     pursuit = names.move_slot(s, 1, "Pursuit")
-    out = step(tables, s, jnp.array([MOVE_ACTIONS + 1, pursuit]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([MOVE_ACTIONS + 1, pursuit]), empty_outcome())
     assert int(out.hp[0, 0]) == 0 and int(out.active[0]) == 1 and int(out.over) == 0
     assert int(out.deaths[0]) == 1
 

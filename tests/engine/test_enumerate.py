@@ -46,14 +46,14 @@ from nuzline.engine.outcome import (
     read_chance,
 )
 from nuzline.engine.state import BattleState, make_state
-from nuzline.engine.step import step, step_events
+from nuzline.engine.step import step_events
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import A, roark_real_state, roark_state, sample_rows
+from tests.engine.helpers import BATCH, A, roark_real_state, roark_state, sample_rows, step_batch
 from tests.search.fixtures import shinx_vs_cranidos, spike_cannon_root, spore_1v1
 from tests.strategies import any_outcome, legal_action_pair, outcome_law_state
 
-CHUNK = 1024  # one compiled step program for every batch in this file
+CHUNK = BATCH  # the suite's one padded row count: one step program for every file
 EMPTY = Outcome(*(np.asarray(f) for f in empty_outcome()))
 HYPOTHESIS = {
     "deadline": None,
@@ -66,7 +66,7 @@ HYPOTHESIS = {
 
 _laws = jax.jit(outcome_laws)
 _loose_laws = jax.jit(partial(outcome_laws, loose=True))
-_step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
+_step = step_batch
 _sample = sample_rows
 
 

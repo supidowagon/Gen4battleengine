@@ -1566,3 +1566,13 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     party index gives that in every format.
   - `outcome._threshold_grid`'s "one move has one effect" (one foe move between the turn start and the side's check)
     holds with one foe only; with two foes both moves can land before the check (the D-steps).
+## Stream state (restart point, 2026-11-19)
+
+Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
+pod state are kept outside the repo (the stream's `_scratch/e1/` notes).
+
+- Batch F (section above) holds the Kaizo abilities, held items, Weather Ball's AI type, the Poke Ball
+  friendship wrap, Sky Forme's freeze revert, the U-turn Intimidate case and the owed items
+  (F-17..F-25). Effect Spore and Suction Cups are dropped (no Kaizo species has them).
+- Still open from the owed list: F (Sleep Talk's sealed set after a faster Transform/Mimic) and G
+  (the `test_transform_laws.py` additions); see Batch F's open items.

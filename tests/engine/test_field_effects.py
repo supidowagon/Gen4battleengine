@@ -13,19 +13,20 @@ from nuzline.engine.step import (
     END_OF_TURN_ORDER,
     PURSUIT_POWER_MUL,
     replacement_power_mul,
-    step,
 )
-from tests.engine.helpers import A, roark_state
+from tests.engine.helpers import A, jit_step, roark_state
 
 
 @pytest.mark.slow
 def test_stealth_rock_sets_and_damages_on_switch(tables, names):
     s = roark_state(tables, names)  # Geodude leads with Stealth Rock
-    out = step(tables, s, A("Scratch", "Stealth Rock", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Scratch", "Stealth Rock", s, names), empty_outcome())
     assert int(out.stealth_rock[0]) == 1
     # Without its Oran Berry, which Geodude's Tackle would otherwise trigger (hooks.py).
     out = out._replace(item=out.item.at[0, 3].set(0))
-    out2 = step(tables, out, A(4 + 3, "Tackle", out, names), empty_outcome())  # Starly (Flying: 2x)
+    out2 = jit_step(
+        tables, out, A(4 + 3, "Tackle", out, names), empty_outcome()
+    )  # Starly (Flying: 2x)
     assert int(out2.hp[0, 3]) <= int(out.max_hp[0, 3]) - int(out.max_hp[0, 3]) // 4
 
 
@@ -34,16 +35,16 @@ def test_stealth_rock_damage_is_max_hp_over_8_scaled_by_rock_effectiveness(table
     # BtlCmd_CheckStealthRock (battle_script.c:8302): maxHP / 8 at neutral, / 4 at 2x.
     s = roark_state(tables, names)
     s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1))
-    starly = step(tables, s, A(4 + 3, "Leer", s, names), empty_outcome())  # Normal/Flying: 2x
+    starly = jit_step(tables, s, A(4 + 3, "Leer", s, names), empty_outcome())  # Normal/Flying: 2x
     assert int(starly.max_hp[0, 3]) - int(starly.hp[0, 3]) == int(s.max_hp[0, 3]) // 4
-    prinplup = step(tables, s, A(4 + 1, "Leer", s, names), empty_outcome())  # Water: neutral
+    prinplup = jit_step(tables, s, A(4 + 1, "Leer", s, names), empty_outcome())  # Water: neutral
     assert int(prinplup.max_hp[0, 1]) - int(prinplup.hp[0, 1]) == int(s.max_hp[0, 1]) // 8
 
 
 def test_stealth_rock_can_faint_incoming_and_needs_a_replacement(tables, names):
     s = roark_state(tables, names).replace_hp(0, 3, 1)
     s = s._replace(stealth_rock=s.stealth_rock.at[0].set(1))
-    out = step(tables, s, A(4 + 3, "Tackle", s, names), empty_outcome())
+    out = jit_step(tables, s, A(4 + 3, "Tackle", s, names), empty_outcome())
     assert int(out.hp[0, 3]) == 0 and int(out.over) == 0
     assert int(out.deaths[3]) == 1 and int(out.player_faints) == 1
 
@@ -52,11 +53,11 @@ def test_stealth_rock_can_faint_incoming_and_needs_a_replacement(tables, names):
 def test_bind_traps_and_ticks(tables, names):
     s = roark_state(tables, names, opp_species="Onix", opp_moves=["Bind"])
     o = empty_outcome()._replace(duration=jnp.array([0, 4], jnp.int8))
-    out = step(tables, s, A("Scratch", "Bind", s, names), o)
+    out = jit_step(tables, s, A("Scratch", "Bind", s, names), o)
     assert int(out.trapped[0]) > 0
     # Onix with Bind first has no Leer left (four slots: Bind, Tackle, Rock Throw, Stealth
     # Rock), so the brief's "Leer" is Stealth Rock here: no damage except the Bind tick.
-    tick = step(tables, out, A("Leer", "Stealth Rock", out, names), empty_outcome())
+    tick = jit_step(tables, out, A("Leer", "Stealth Rock", out, names), empty_outcome())
     assert int(out.hp[0, 0]) - int(tick.hp[0, 0]) == int(s.max_hp[0, 0]) // 16
     assert int(tick.trapped[0]) == int(out.trapped[0]) - 1
 
@@ -67,10 +68,10 @@ def test_bind_counter_is_the_rolled_duration_and_last_decrement_deals_no_damage(
     # (battle_controller_player.c:1462) decrements first and only damages while it stays > 0.
     s = roark_state(tables, names, opp_species="Onix", opp_moves=["Bind"])
     o = empty_outcome()._replace(duration=jnp.array([0, 3], jnp.int8))
-    out = step(tables, s, A("Leer", "Bind", s, names), o)
+    out = jit_step(tables, s, A("Leer", "Bind", s, names), o)
     assert int(out.trapped[0]) == 2 and int(out.trap_move[0]) == names.move("Bind")
     last = out._replace(trapped=out.trapped.at[0].set(1))
-    end = step(tables, last, A("Leer", "Stealth Rock", last, names), empty_outcome())
+    end = jit_step(tables, last, A("Leer", "Stealth Rock", last, names), empty_outcome())
     assert int(end.trapped[0]) == 0 and int(end.hp[0, 0]) == int(last.hp[0, 0])
 
 
@@ -80,15 +81,15 @@ def test_bind_ends_when_the_binder_switches_out(tables, names):
     s = s._replace(
         trapped=s.trapped.at[0].set(4), trap_move=s.trap_move.at[0].set(names.move("Bind"))
     )
-    out = step(tables, s, A("Leer", 4 + 1, s, names), empty_outcome())
+    out = jit_step(tables, s, A("Leer", 4 + 1, s, names), empty_outcome())
     assert int(out.trapped[0]) == 0 and int(out.hp[0, 0]) == int(s.hp[0, 0])
 
 
 @pytest.mark.slow
 def test_pursuit_hits_switching_target_double(tables, names):
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
-    stay = step(tables, s, A("Leer", "Pursuit", s, names), empty_outcome())
-    go = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
+    stay = jit_step(tables, s, A("Leer", "Pursuit", s, names), empty_outcome())
+    go = jit_step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
     assert (int(s.hp[0, 0]) - int(go.hp[0, 0])) > (int(s.hp[0, 0]) - int(stay.hp[0, 0]))
     assert int(go.active[0]) == 1
 
@@ -108,7 +109,7 @@ def test_pursuit_on_a_switch_ignores_accuracy_spends_pp_once_and_ends_the_turn(t
     # spends the PP and ends the pursuer's action, so the incoming Pokemon is not hit.
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
     miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
-    go = step(tables, s, A(4 + 1, "Pursuit", s, names), miss)
+    go = jit_step(tables, s, A(4 + 1, "Pursuit", s, names), miss)
     assert int(go.hp[0, 0]) < int(s.hp[0, 0])
     assert int(go.hp[0, 1]) == int(s.hp[0, 1])
     assert int(go.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
@@ -120,8 +121,8 @@ def test_pursuit_with_its_last_pp_still_pursues(tables, names):
     # does not turn the hit into Struggle (no recoil, same damage).
     s = roark_state(tables, names, opp_species="Cranidos", opp_moves=["Pursuit"])
     last = s.with_pp(1, 0, [1, 10, 10, 10])
-    go = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
-    go_last = step(tables, last, A(4 + 1, "Pursuit", last, names), empty_outcome())
+    go = jit_step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
+    go_last = jit_step(tables, last, A(4 + 1, "Pursuit", last, names), empty_outcome())
     assert int(go_last.hp[0, 0]) == int(go.hp[0, 0])
     assert int(go_last.hp[1, 0]) == int(s.hp[1, 0])
     assert int(go_last.pp[1, 0, 0]) == 0
@@ -130,7 +131,7 @@ def test_pursuit_with_its_last_pp_still_pursues(tables, names):
 def test_taunt_sets_counter(tables, names):
     s = roark_state(tables, names, player_moves=["Taunt"])
     o = empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8))
-    out = step(tables, s, A("Taunt", "Tackle", s, names), o)
+    out = jit_step(tables, s, A("Taunt", "Tackle", s, names), o)
     assert int(out.taunt[1]) > 0
 
 
@@ -141,11 +142,11 @@ def test_taunt_counts_down_at_end_of_turn_and_blocks_status_moves(tables, names)
     s = roark_state(tables, names, player_moves=["Taunt"])
     o = empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8))
     taunted = s._replace(taunt=s.taunt.at[1].set(3))
-    out = step(tables, taunted, A("Scratch", "Leer", taunted, names), o)
+    out = jit_step(tables, taunted, A("Scratch", "Leer", taunted, names), o)
     assert int(out.taunt[1]) == 2
     assert int(out.stages[0, 2]) == 0  # Leer failed
     assert int(out.pp[1, 0, 3]) == int(s.pp[1, 0, 3])  # and spent no PP
-    hit = step(tables, out, A("Leer", "Tackle", out, names), empty_outcome())
+    hit = jit_step(tables, out, A("Leer", "Tackle", out, names), empty_outcome())
     assert int(hit.hp[0, 0]) < int(out.hp[0, 0])  # damaging moves still work
 
 
@@ -154,7 +155,7 @@ def test_leech_seed_drains_and_grass_immune(tables, names):
     s = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"]).replace_hp(
         0, 0, 5
     )
-    out = step(tables, s, A("Leech Seed", "Leer", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Leech Seed", "Leer", s, names), empty_outcome())
     assert int(out.leech_seed[1]) == 1 and int(out.hp[0, 0]) > 5
     g = roark_state(
         tables, names, player_species="Budew", player_moves=["Leech Seed"], opp_species="Budew"
@@ -162,7 +163,8 @@ def test_leech_seed_drains_and_grass_immune(tables, names):
     # The brief's opponent action was "Absorb", but an opp_species lead without opp_moves
     # gets the fixture moveset (plan ruling), which has no Absorb; Leer is used instead.
     assert (
-        int(step(tables, g, A("Leech Seed", "Leer", g, names), empty_outcome()).leech_seed[1]) == 0
+        int(jit_step(tables, g, A("Leech Seed", "Leer", g, names), empty_outcome()).leech_seed[1])
+        == 0
     )
 
 
@@ -171,7 +173,7 @@ def test_leech_seed_drains_an_eighth_and_heals_by_the_hp_lost(tables, names):
     s = roark_state(tables, names, player_species="Budew", player_moves=["Leech Seed"]).replace_hp(
         0, 0, 5
     )
-    out = step(tables, s, A("Leech Seed", "Leer", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Leech Seed", "Leer", s, names), empty_outcome())
     drained = int(s.max_hp[1, 0]) // 8
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == drained
     assert int(out.hp[0, 0]) == 5 + drained
@@ -180,7 +182,7 @@ def test_leech_seed_drains_an_eighth_and_heals_by_the_hp_lost(tables, names):
 def test_water_sport_sets_flag_and_halves_fire(tables, names):
     # effect_script_0210.s sets the user's flag; battle_lib.c:6815 halves Fire power.
     s = roark_state(tables, names, player_species="Prinplup", opp_species="Cranidos")
-    out = step(tables, s, A("Water Sport", "Leer", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Water Sport", "Leer", s, names), empty_outcome())
     assert int(out.water_sport[0]) == 1
     ember = names.move("Ember")
     flat = out._replace(water_sport=jnp.zeros_like(out.water_sport))
@@ -195,10 +197,10 @@ def test_confusion_self_hit_replaces_move(tables, names):
     # Plan ruling: Outcome.duration is indexed by the acting (inflicting) side, so the
     # player's Supersonic reads duration[0] (the brief had [0, 3]).
     o = empty_outcome()._replace(duration=jnp.array([3, 0], jnp.int8))
-    out = step(tables, s, A("Supersonic", "Leer", s, names), o)
+    out = jit_step(tables, s, A("Supersonic", "Leer", s, names), o)
     assert int(out.confusion[1]) > 0
     hit_self = empty_outcome()._replace(confusion_hit=jnp.array([0, 1], jnp.int8))
-    out2 = step(tables, out, A("Supersonic", "Tackle", out, names), hit_self)
+    out2 = jit_step(tables, out, A("Supersonic", "Tackle", out, names), hit_self)
     assert int(out2.hp[1, 0]) < int(out.hp[1, 0]) and int(out2.hp[0, 0]) == int(out.hp[0, 0])
 
 
@@ -207,7 +209,7 @@ def test_confusion_counter_decrements_before_the_roll_and_snaps_out_at_zero(tabl
     s = roark_state(tables, names)
     s = s._replace(confusion=s.confusion.at[1].set(1))
     hit_self = empty_outcome()._replace(confusion_hit=jnp.array([0, 1], jnp.int8))
-    out = step(tables, s, A("Leer", "Tackle", s, names), hit_self)
+    out = jit_step(tables, s, A("Leer", "Tackle", s, names), hit_self)
     assert int(out.confusion[1]) == 0
     assert int(out.hp[1, 0]) == int(s.hp[1, 0]) and int(out.hp[0, 0]) < int(s.hp[0, 0])
 
@@ -220,12 +222,12 @@ def test_confusion_self_hit_is_40_power_typeless_physical_with_the_roll(tables, 
     s = s._replace(confusion=s.confusion.at[1].set(3))
     hit_self = empty_outcome()._replace(confusion_hit=jnp.array([0, 1], jnp.int8))
     # The player switches so that nothing changes Geodude's stages before it moves.
-    out = step(tables, s, A(4 + 1, "Tackle", s, names), hit_self)
+    out = jit_step(tables, s, A(4 + 1, "Tackle", s, names), hit_self)
     atk, def_ = int(s.stats[1, 0, 0]), int(s.stats[1, 0, 1])
     level = int(s.level[1, 0])
     base = atk * 40 * (level * 2 // 5 + 2) // def_ // 50 + 2
     assert int(s.hp[1, 0]) - int(out.hp[1, 0]) == base  # roll 15: x100/100
-    low = step(
+    low = jit_step(
         tables,
         s,
         A(4 + 1, "Tackle", s, names),
@@ -262,10 +264,10 @@ def test_end_of_turn_runs_the_faster_battler_first(tables, names):
     s = roark_state(tables, names, player_count=1)  # Monferno outspeeds Geodude
     s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
-    out = step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
     assert int(out.over) == 1 and int(out.winner) == 1 and int(out.hp[1, 0]) == 2  # healed 1
     slow = s._replace(stats=s.stats.at[0, 0, 4].set(1))
-    out = step(tables, slow, A("Leer", "Leer", slow, names), empty_outcome())
+    out = jit_step(tables, slow, A("Leer", "Leer", slow, names), empty_outcome())
     assert int(out.over) == 1 and int(out.winner) == 2 and int(out.hp[0, 0]) == 2
 
 
@@ -274,8 +276,8 @@ def test_end_of_turn_speed_tie_uses_its_own_outcome(tables, names):
     s = roark_state(tables, names, equal_speed=True, player_count=1)
     s = s._replace(leech_seed=jnp.ones_like(s.leech_seed)).replace_hp(0, 0, 1).replace_hp(1, 0, 1)
     s = s._replace(species=s.species.at[1, 1:].set(0), hp=s.hp.at[1, 1:].set(0))
-    first = step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
-    second = step(
+    first = jit_step(tables, s, A("Leer", "Leer", s, names), empty_outcome())
+    second = jit_step(
         tables, s, A("Leer", "Leer", s, names), empty_outcome()._replace(end_speed_tie=jnp.int8(1))
     )
     assert int(first.winner) == 1 and int(second.winner) == 2
@@ -306,7 +308,7 @@ def test_stealth_rock_lands_after_the_foe_fainted_from_its_own_recoil(tables, na
         opp_moves=["Take Down"],
         opp_faster=True,
     ).replace_hp(1, 0, 1)
-    out = step(tables, s, A("Stealth Rock", "Take Down", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Stealth Rock", "Take Down", s, names), empty_outcome())
     assert int(out.hp[1, 0]) == 0 and int(out.over) == 0
     assert int(out.stealth_rock[1]) == 1
 
@@ -318,6 +320,6 @@ def test_natural_cure_comes_before_a_pursuit_that_faints_the_switcher(tables, na
         tables, names, player_species="Budew", opp_species="Cranidos", opp_moves=["Pursuit"]
     )
     s = s.replace_hp(0, 0, 1).with_status(0, 0, Status.PARALYSIS)
-    out = step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
+    out = jit_step(tables, s, A(4 + 1, "Pursuit", s, names), empty_outcome())
     assert int(out.hp[0, 0]) == 0
     assert int(out.status[0, 0]) == Status.NONE

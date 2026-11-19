@@ -24,10 +24,9 @@ from nuzline.engine.actions import (
 from nuzline.engine.ids import ItemParam
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
-from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_step
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import jit_step, roark_state
 
 DECOMP = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
 POTION = 17  # decomp ITEM_POTION
@@ -63,7 +62,7 @@ def test_make_state_loads_roarks_bag(tables, names):
 @pytest.mark.slow
 def test_potion_heals_20_and_is_consumed(tables, names):
     s = roark_state(tables, names).replace_hp(1, 0, 5)  # Geodude at 5 HP
-    out = step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
     assert int(out.hp[1, 0]) == min(5 + 20, int(s.max_hp[1, 0]))
     assert out.trainer_items[1].tolist() == [0, POTION, 0, 0]
 
@@ -72,7 +71,7 @@ def test_potion_is_capped_at_max_hp(tables, names):
     s = roark_state(tables, names)
     max_hp = int(s.max_hp[1, 0])
     s = s.replace_hp(1, 0, max_hp - 3)
-    out = step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
     assert int(out.hp[1, 0]) == max_hp and out.trainer_items[1].tolist() == [0, POTION, 0, 0]
 
 
@@ -86,9 +85,11 @@ def test_item_goes_before_a_faster_move(tables, names):
     scratch = names.move_slot(base, 0, "Scratch")
     tackle = names.move_slot(base, 1, "Tackle")
     o = empty_outcome()
-    healed = step(tables, base.replace_hp(1, 0, max_hp - 3), jnp.array([scratch, USE_SLOT_0]), o)
+    healed = jit_step(
+        tables, base.replace_hp(1, 0, max_hp - 3), jnp.array([scratch, USE_SLOT_0]), o
+    )
     # The same Scratch on a full-HP Geodude that does not heal.
-    plain = step(tables, base, jnp.array([scratch, tackle]), o)
+    plain = jit_step(tables, base, jnp.array([scratch, tackle]), o)
     assert 0 < int(plain.hp[1, 0]) < max_hp
     assert int(healed.hp[1, 0]) == int(plain.hp[1, 0])
     assert action_order(tables, base, jnp.array([scratch, USE_SLOT_0]), o).tolist() == [1, 0]
@@ -106,7 +107,7 @@ def test_item_in_a_pursuit_slot_does_not_pursue(tables, names):
     s = roark_state(
         tables, names, opp_moves=["Tackle", "Rock Throw", "Stealth Rock", "Pursuit"]
     ).replace_hp(1, 0, 5)
-    out = step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
+    out = jit_step(tables, s, jnp.array([SWITCH_TO_1, USE_SLOT_0]), empty_outcome())
     assert int(out.hp[0, 0]) == int(s.hp[0, 0])
     assert out.pp[1, 0].tolist() == s.pp[1, 0].tolist()
 
@@ -135,6 +136,6 @@ def test_reference_matches_on_item_use(tables, names, player):
     p = names.move_slot(s, 0, player) if isinstance(player, str) else player
     acts = [p, USE_SLOT_0 + 1]  # slot 1: the reference must use the slot it is given
     o = empty_outcome()
-    out = step(tables, s, jnp.array(acts), o)
+    out = jit_step(tables, s, jnp.array(acts), o)
     _same(out, _ref(tables, s, acts, o))
     assert out.trainer_items[1].tolist() == [POTION, 0, 0, 0]
