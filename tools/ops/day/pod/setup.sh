@@ -6,7 +6,7 @@
 # and starts bin/runner.sh detached. Writes its PID to setup.pid and the runner's to runner.pid
 # (status.sh counts a run as active only while one of them is alive). A failure after the trap
 # below is set ends the log with SETUP_FAILED; one before it (receive, unpack, meta.env, a kill)
-# leaves none, so status.sh's setup=gone with runner=none is the failure test. Collection runs at most 4 jobs at once, each started only
+# leaves none, so status.sh's setup=gone with runner=none is the failure test. Collection runs at most COLLECTP (default 4) jobs at once, each started only
 # while container memory is under GATE_GB (default 88, the runner's gate).
 # files.txt lines: "<test file, folder or node id> <ids per chunk> [A]"; A = no -m filter.
 set -euxo pipefail
@@ -43,7 +43,7 @@ collect_one() { IFS='|' read -r n f mk <<< "$1"; cd "$R"; ma=(-m "$MARK"); [ "$m
   uv run --frozen pytest --collect-only -q "${ma[@]}" -p no:cacheprovider "$f" > "$D/col/$n.out" 2>&1
   echo $? > "$D/col/$n.rc"; grep '::' "$D/col/$n.out" > "$D/col/$n.ids" || true; }
 export -f collect_one; export D R MARK GATE_GB="${GATE_GB:-88}"
-xargs -d '\n' -P 4 -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
+xargs -d '\n' -P "${COLLECTP:-4}" -I{} bash -c 'collect_one "$@"' _ {} < col/jobs.txt
 (cd "$R" && uv run --frozen python - "$D") <<'PY'
 import sys, pathlib, collections
 D = pathlib.Path(sys.argv[1]); q = []; summ = []; n = 0; seen = set()
