@@ -266,6 +266,7 @@ def test_compressed_rows_draw_crit_and_roll_together(tables, names):
         assert r == int(np.argmax(table[c] == table[c, r]))
 
 
+@pytest.mark.fullset
 def test_every_damage_input_id_classified():
     # Each later mechanic (Present, Camouflage, Protect, Roar, ...) must classify its ids
     # for damage_inputs_can_change: neutral, or handled by one of its clauses.
@@ -279,6 +280,7 @@ def test_every_damage_input_id_classified():
         assert known == set(enum), (enum.__name__, set(enum) - known)
 
 
+@pytest.mark.fullset
 def test_every_effect_classified_for_table_damage():
     # The attacker's own effect decides whether its hits can be damage classes at all: an
     # allowlist, so a new effect (Present's drawn power, Nature Power's chosen move) is

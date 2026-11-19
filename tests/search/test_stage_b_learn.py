@@ -141,6 +141,7 @@ def test_a_learn_answer_sends_the_opponent_replacement_with_the_carried_mul(tabl
         assert int(held.active[1]) == newcomer and int(held.replace_mul) == 0
 
 
+@pytest.mark.fullset
 def test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop(tables, names):
     # The foe switches to Onix (1 HP); Tackle KOs it: Bulbasaur prompts, and the opponent's
     # replacement after its AI switched is refused (roark.md 14, item 3), at the stop.

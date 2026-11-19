@@ -46,6 +46,10 @@ def test_kaizo_tables(kaizo_tables, kaizo_names):
     assert kaizo_names.game == "platinum_kaizo_nightmare_final"
     assert kaizo_names.move_names[205] == "Accelerock" and kaizo_names.move("Water Ball") == 4
     assert int(kaizo_tables.move_priority[kaizo_names.move("Trick Room")]) == 7
+
+
+@pytest.mark.fullset
+def test_berserk_gene_is_unsupported(kaizo_tables, kaizo_names):
     assert int(kaizo_tables.item_effect[kaizo_names.item("Berserk Gene")]) == ItemId.UNSUPPORTED
 
 
@@ -64,6 +68,7 @@ def test_kaizo_manifest_provenance(kaizo_manifest):
     assert kaizo_manifest["unclassified_rom_changes"] == 0
 
 
+@pytest.mark.fullset
 def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
     """Ruling 13: a changed be_seq member not marked modelled makes its moves UNSUPPORTED; a
     modelled one maps them to its KAIZO_EFFECTS entry. Since E2 batch 13 (B13-5: members 88 and
@@ -82,6 +87,7 @@ def test_changed_effect_unsupported(kaizo_tables, kaizo_manifest):
             assert [int(x) for x in kaizo_tables.move_param[m]] == list(params), (e, m)
 
 
+@pytest.mark.fullset
 def test_repurposed_items_unsupported(kaizo_tables, kaizo_names):
     # Spec 5.5: Lava Cookie and Old Gateau became Lum clones; Shoal Shell is RageCandyBar.
     for name in ("Lava Cookie", "Old Gateau", "RageCandyBar", "Big Nugget"):
@@ -185,6 +191,7 @@ def test_unresolved_name_fails_build(tmp_path, kaizo_intermediate):
         )
 
 
+@pytest.mark.fullset
 def test_manifest_conditions_are_the_not_reached_entries(kaizo_manifest):
     from tools.build_tables import ROM_DIFF
     from tools.rom.diff import load_conditions

@@ -164,6 +164,7 @@ def test_iron_ball_halves_speed_and_grounds_a_flyer(tables, names):
     assert int(damage_table(tables, ball, 1, names.move("Mud-Slap"), False)[0]) > 0
 
 
+@pytest.mark.fullset
 def test_speed_halving_hold_effects_match_the_decomp():
     """sSpeedHalvingItemEffects (battle_lib.c:1160-1169) by decomp hold effect id (line N of
     generated/item_hold_effects.txt is id N - 1)."""

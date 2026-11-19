@@ -680,6 +680,7 @@ def test_if_loaded_not_in_table(tables, names):
 # --- The command table ---------------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_script_commands_table_matches_the_module():
     # Every row of docs/ai/script_commands.md names a function of nuzline.ai.commands, and the
     # count check at its end holds.

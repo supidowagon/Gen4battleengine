@@ -489,6 +489,7 @@ def _replace_both(tables, s, side, slot):
     return out
 
 
+@pytest.mark.fullset
 def test_a_hazard_ko_inside_the_replacement_loop_refuses_learn_work(tables, names):
     # The opponent sends Bonsly (1 HP) into Stealth Rock: TurnEnd's payout (bcp.c:1846) levels
     # Prinplup, and the next replacement pick would read the moves before the learn

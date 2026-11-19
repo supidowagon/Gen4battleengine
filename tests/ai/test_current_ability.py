@@ -55,6 +55,7 @@ def test_defender_reads_its_current_ability_when_known(monkeypatch, kaizo_tables
         assert LEVITATE not in got
 
 
+@pytest.mark.fullset
 def test_refusals_read_the_current_ability(monkeypatch, kaizo_tables, kaizo_names, state):
     """A player's Pokemon whose current ability is a refused one (Levitate, policy
     _DEFENDER_ABILITIES) is refused although its species has none."""
@@ -67,6 +68,7 @@ def test_refusals_read_the_current_ability(monkeypatch, kaizo_tables, kaizo_name
         assert any("Levitate" in r for r in policy.ai_refusals(t, state, n))
 
 
+@pytest.mark.fullset
 def test_switching_reads_the_current_ability(monkeypatch, kaizo_tables, state):
     """The switch logic refuses on the current ability too (``switching._layout`` and its
     message, ``_refusals``): a player's Pokemon whose current ability is Levitate

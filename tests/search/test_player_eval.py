@@ -105,6 +105,7 @@ def test_ladder_is_monotone(tables, names):
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_refused_playout_raises(tables, names):
     # test_playout.py::test_refused_playout_cannot_be_counted_as_a_loss's state: the AI's
     # Levitate refusal stops every playout on its first turn.
@@ -125,6 +126,7 @@ def test_refused_playout_raises(tables, names):
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_exclude_leaves_refused_playouts_out(tables, names):
     # switch_refusal_root: on some keys the AI switches to Geodude at 1 HP and Starly KOs
     # it on entry, a replacement the engine refuses (roark.md 14, item 3); on the others
