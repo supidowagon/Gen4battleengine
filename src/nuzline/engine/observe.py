@@ -66,9 +66,9 @@ Events, per side (``[side]``; 0 = player):
   ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed), ``in_love``
   ("X is in love with Y!", subscript_infatuated.s: the attract check ran) and ``immobilized``
   ("X is immobilized by love!", subscript_immobilized_by_love.s).
-* ``quick_claw``: bit 0 the held-item animation of its Quick Claw (it acts first: both chose a
-  move, its draw of the turn before activated the claw, ``state.qc_roll``,
-  ``step._quick_claw_shown``) or its Custap Berry (its move started,
+* ``quick_claw``: bit 0 the held-item animation of its Quick Claw (its flag stands at its
+  move's start and the foe has not acted: the turn order set it from ``state.qc_roll``, or the
+  turn before left it, ``state.claw_flag``; ``step._use_move``) or its Custap Berry (its move started,
   ``subscript_check_quick_claw.s:12-13``), bit 1 Custap's message "let it move first!" (another
   battler had not acted yet, :15-19); values 0-3. The turn's own draw (``Outcome.quick_claw``)
   shows only in the end-of-turn order, which is not in the vector (below).

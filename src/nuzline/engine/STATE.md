@@ -175,8 +175,9 @@ three structs has a row.
   speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
-  activation is `qc_roll` (below; the per-turn flag only shows its animation, a
-  `step` event), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
+  activation is `qc_roll` (below; the flag `claw_flag` carries its animation and the
+  Knock Off / Thief / Covet failures into the next turn when no BeforeMove cleared it,
+  SF2 (k)), and none of Thief, Covet, Gyro Ball or Sketch is in M1. M6's
   coverage work must add these fields before the mechanics that read them.
 - **Trace, the weather abilities and Truant (E2 batch 3).** `BattleMon.ability` is per
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
@@ -437,7 +438,7 @@ three structs has a row.
   subscript_baton_pass.s:17, else 0) and the turn scratch `ts_*` (per field: the
   `BattleContext` values a resumed turn reads: `turnOrderCounter`, `battlerActionOrder`, the
   command-selection picks (`ts_move`, `ts_struggling`, `ts_locked`, `ts_item`), the per-battler
-  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
+  `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6; between turns `custap_flag` / `claw_flag`, SF2 (k)), the per-battler
   `turnFlags` later actors read
   (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`,
   `ts_follow_me` (per side, `SideConditions.followMe` / `followMeUser`: `1 + followMeUser`, 0 when `followMe`
@@ -573,8 +574,8 @@ three structs has a row.
 | `MoveEffectsData.canUnburden` | `can_unburden` | mapped |
 | `MoveEffectsData.metronomeTurns` | `metronome_turns` | mapped |
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
-| `MoveEffectsData.custapBerry` | — | later (M6) |
-| `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
+| `MoveEffectsData.custapBerry` | `custap_flag`, `ts_custap` | mapped |
+| `MoveEffectsData.quickClaw` | `claw_flag`, `ts_claw` | mapped |
 | `MoveEffectsData.meFirst` | `me_first` | mapped |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |

@@ -20,6 +20,7 @@ from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import _paused_rock, enumerate_turn
 from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.order import metronome_weights
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
@@ -245,8 +246,8 @@ def _pick(pivot):
 
 
 def _old_merged(tables, paused, acts, monkeypatch):
-    old_mask = lambda s: (s.ts_acted != 0) | (
-        ((s.ts_pursued.astype(jnp.int32) >> jnp.arange(2)) & 1) != 0
+    old_mask = lambda s: (
+        (s.ts_acted != 0) | (((s.ts_pursued.astype(jnp.int32) >> jnp.arange(2)) & 1) != 0)
     )
     monkeypatch.setattr(outcome_mod, "moved_mask", old_mask)
     monkeypatch.setattr(enum_mod, "moved_mask", old_mask)
@@ -375,7 +376,7 @@ def test_custap_holder_knocked_out_before_its_move_shows_nothing(tables, names):
 def test_custap_holders_u_turn_shows_its_events_at_the_head_only(tables, names):
     # The flag moves a Custap holder first (order.custap_flags), so the holder's own U-turn
     # pauses the turn at its head: bits 0 and 1 there (the foe has not acted); its resumed
-    # step carries no flag of its own (``ts_custap & to_come``). A Custap holder acting after
+    # step carries no flag of its own (cleared at its move start). A Custap holder acting after
     # a pause is unreachable: no pivot move has priority.
     n = names
     s = make_state(
@@ -939,3 +940,166 @@ def test_the_battle_goes_on_with_a_foe_bench(tables, names):
     assert int(out.over) == 0 and int(out.active[0]) == 1
     assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 1]) == int(s.hp[0, 1])
     assert int(out.exp[0]) > int(s.exp[0])
+
+
+# --- SF2 (k): claw_flag / custap_flag persist across the turn end (B = 2) --------------------
+# A Trick Room's MoveEnd re-sort sets the flags of the activated holders again (bcp.c:3991,
+# lib.c:7276-7300); a U-turn's pursuer never runs BeforeMove (script.c:6931). Only the holder's
+# own BeforeMove, a switch-in and a faint clear them (subscript_check_quick_claw.s:22-28,
+# lib.c:2100-2104, :2185-2188).
+
+_SPE = Stat.SPE - 1
+
+
+def _tr_duel(tables, n, item, foe_moves, *, foe_item="", foe_hp=None, foe_bench=False):
+    """The player's Houndour (``item``; Trick Room, Tackle) and a bench Geodude against a Rattata."""
+    s = make_state(
+        tables,
+        [_mon(n, "Houndour", ["Trick Room", "Tackle"], 40, item), _bench(n)],
+        [_mon(n, "Rattata", foe_moves, 5, foe_item)] + ([_bench(n)] if foe_bench else []),
+    )
+    return s if foe_hp is None else s.replace_hp(1, 0, foe_hp)
+
+
+def _pinch_after_tackle(tables, s, acts=(0, 0), o=O):
+    """``s`` with the player's lead at the HP that leaves it exactly at the Custap pinch (a
+    quarter of its max HP) once the foe's Tackle has hit: above it when the turn starts."""
+    probe = assert_matches_reference(tables, s, acts, o)
+    taken = int(s.hp[0, 0]) - int(probe.hp[0, 0])
+    assert taken > 0
+    return s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + taken)
+
+
+def test_trick_room_sets_custap_again_and_the_next_turn_eats_it(tables, names):
+    n = names
+    s = _pinch_after_tackle(tables, _tr_duel(tables, n, "Custap Berry", ["Tackle"], foe_bench=True))
+    assert np.asarray(s.custap_flag).tolist() == [0, 0]
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4 and int(out.trick_room) != 0
+    assert int(out.item[0, 0]) == n.item("Custap Berry")
+    assert np.asarray(out.custap_flag).tolist() == [1, 0]
+    assert np.asarray(out.claw_flag).tolist() == [0, 0]
+    # Next turn the foe switches; the holder (above its pinch) attacks: the standing flag eats
+    # the berry (animation, no message: the foe has acted) and is gone.
+    nxt = out.replace_hp(0, 0, int(out.max_hp[0, 0]))
+    acts = (1, SWITCH)
+    after = assert_matches_reference(tables, nxt, acts, O)
+    assert int(after.item[0, 0]) == 0
+    assert int(_events(tables, nxt, acts, O)["quick_claw"][0]) == 1
+    assert np.asarray(after.custap_flag).tolist() == [0, 0]
+
+
+def test_trick_room_sets_no_flag_when_the_foe_is_down_or_switching(tables, names):
+    n = names
+    # The foe's Tackle hurts the holder into its pinch, then its Life Orb recoil fells it: it is
+    # at 0 HP at the Trick Room's MoveEnd (a bench keeps the battle going).
+    s = _tr_duel(
+        tables, n, "Custap Berry", ["Tackle"], foe_item="Life Orb", foe_hp=1, foe_bench=True
+    )
+    s = _pinch_after_tackle(tables, s)
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[1, 0]) == 0 and int(out.trick_room) != 0 and int(out.over) == 0
+    assert int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4
+    assert np.asarray(out.custap_flag).tolist() == [0, 0]
+    # The foe switched: no FIGHT pair, no compare, whatever the holder's HP.
+    s = _tr_duel(tables, n, "Custap Berry", ["Tackle"], foe_bench=True)
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4)
+    out = assert_matches_reference(tables, s, (0, SWITCH), O)
+    assert int(out.trick_room) != 0
+    assert np.asarray(out.custap_flag).tolist() == [0, 0]
+
+
+def _claw_next(out):
+    """The turn after: the claw draw of the turn before is 0, Trick Room is over, the foe fast."""
+    nxt = out._replace(
+        qc_roll=jnp.zeros_like(out.qc_roll), trick_room=jnp.zeros_like(out.trick_room)
+    )
+    return nxt._replace(stats=nxt.stats.at[1, 0, _SPE].set(999))
+
+
+def test_trick_room_sets_quick_claw_again_and_it_guards_against_knock_off(tables, names):
+    n = names
+    s = _tr_duel(tables, n, "Quick Claw", ["Tackle", "Knock Off"])
+    o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8))
+    out = assert_matches_reference(tables, s, (0, 0), o)
+    assert int(out.trick_room) != 0
+    assert np.asarray(out.claw_flag).tolist() == [1, 0]
+    nxt = _claw_next(out)
+    acts = (1, 1)  # the foe's Knock Off comes first, on the standing flag
+    after = assert_matches_reference(tables, nxt, acts, O)
+    assert int(after.item[0, 0]) == n.item("Quick Claw")
+    assert np.asarray(after.claw_flag).tolist() == [0, 0]  # the holder's BeforeMove cleared it
+    # Without the flag the Knock Off lands.
+    bare = nxt._replace(claw_flag=jnp.zeros_like(nxt.claw_flag))
+    assert int(assert_matches_reference(tables, bare, acts, O).item[0, 0]) == 0
+
+
+def test_a_called_trick_room_guards_the_holder_in_the_same_turn(tables, names):
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Houndour", ["Metronome", "Tackle"], 40, "Quick Claw")],
+        [_mon(n, "Rattata", ["Knock Off"], 5)],
+    )
+    s = s._replace(qc_roll=jnp.asarray([1, 0], s.qc_roll.dtype))  # the claw moves the holder first
+    weights = np.asarray(metronome_weights(tables, s, 0))
+    room = n.move("Trick Room")
+    assert weights[room] > 0
+    rank = int(np.count_nonzero(weights[:room]))
+    o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8), call=jnp.asarray([rank, 0], jnp.int16))
+    out = assert_matches_reference(tables, s, (0, 0), o)
+    assert int(out.trick_room) != 0
+    assert int(out.item[0, 0]) == n.item("Quick Claw")  # the slower foe's Knock Off failed
+
+
+def _pursuit_duel(tables, n):
+    """The player's faster U-turner (Quick Claw) and a Knock Off bench against the foe's Pursuit
+    holder (Quick Claw) and a bench; both claws active when the turn starts."""
+    s = make_state(
+        tables,
+        [
+            _a2_mon(n, "Scyther", item="Quick Claw", moves=("U-turn",), level=50),
+            _a2_mon(n, "Growlithe", moves=("Knock Off",)),
+        ],
+        [_mon(n, "Tyranitar", ["Pursuit"], 50, item="Quick Claw"), _bench(n)],
+        Weather.NONE,
+    )
+    return s._replace(qc_roll=jnp.asarray([1, 1], s.qc_roll.dtype))
+
+
+def test_a_u_turns_pursuer_keeps_its_claw_flag(tables, names):
+    n = names
+    s = _pursuit_duel(tables, n)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    assert np.asarray(paused.ts_claw).tolist() == [0, 1]  # the pursuer never ran BeforeMove
+    out = _resume_slot1(tables, paused)
+    assert int(out.active[0]) == 1
+    assert np.asarray(out.claw_flag).tolist() == [0, 1]
+    nxt = out._replace(qc_roll=jnp.zeros_like(out.qc_roll))
+    nxt = nxt._replace(stats=nxt.stats.at[0, 1, _SPE].set(999))  # the Growlithe moves first
+    acts = (0, 0)
+    after = assert_matches_reference(tables, nxt, acts, O)
+    assert int(after.item[1, 0]) == n.item("Quick Claw")  # the Knock Off failed on the flag
+    bare = nxt._replace(claw_flag=jnp.zeros_like(nxt.claw_flag))
+    assert int(assert_matches_reference(tables, bare, acts, O).item[1, 0]) == 0
+    # The foe switches instead: the newcomer carries nothing.
+    gone = assert_matches_reference(tables, nxt, (0, SWITCH), O)
+    assert np.asarray(gone.claw_flag).tolist() == [0, 0]
+
+
+def test_a_flagged_battler_that_faints_at_the_turn_end_keeps_no_flag(tables, names):
+    n = names
+    s = _tr_duel(tables, n, "Quick Claw", ["Leer"]).with_status(0, 0, Status.POISON)
+    s = s.replace_hp(0, 0, 1)
+    o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8))
+    out = assert_matches_reference(tables, s, (0, 0), o)
+    assert int(out.hp[0, 0]) == 0 and int(out.trick_room) != 0
+    assert np.asarray(out.claw_flag).tolist() == [0, 0]
+
+
+def test_a_trick_room_turn_without_a_holder_leaves_no_flag(tables, names):
+    s = _tr_duel(tables, names, "", ["Tackle"])
+    out = assert_matches_reference(tables, s, (0, 0), O._replace(quick_claw=jnp.ones(2, jnp.int8)))
+    assert int(out.trick_room) != 0
+    assert not np.any(np.asarray(out.claw_flag)) and not np.any(np.asarray(out.custap_flag))

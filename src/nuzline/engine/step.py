@@ -249,7 +249,7 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     player_second,
-    quick_claw_active,
+    resort_claw_flags,
     selected_move,
     truant_loafs,
 )
@@ -969,6 +969,9 @@ def _use_move(
     # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
     # (RemoveItem BTLSCR_ATTACKER, kept in item_consumed), whether or not the battler acts last.
     state = consume_item(state, side, ready & custap[side])
+    # The action's own start pass runs BeforeMove (the pursuer's tail and a resume do not, script.c:
+    # 6931): it clears the battler's quickClaw and custapBerry flags (SF2 (k)).
+    started = ready & head_on
     # BattleControllerPlayer_FightCommand (bcp.c:1874-1883), B10-9: an encored battler whose
     # encored slot no longer holds the encored move uses the slot's move and its encore ends
     # (move, slot and count to 0); Struggle comes first (:1866-1868).
@@ -1780,8 +1783,8 @@ def _use_move(
             resolved.defender,
             used,
             # play_hit's flags (below): the defender's quickClaw and custapBerry until it moved.
-            foe_claw=claw_target & ~tgt_moved,
-            foe_custap=custap_target & ~tgt_moved,
+            foe_claw=claw_target,
+            foe_custap=custap_target,
         )
     )
     # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286, :2782-2810): a move that hit
@@ -2171,9 +2174,10 @@ def _use_move(
             focus_armed=armed,
             # moveEffectsData.custapBerry, cleared when its holder's move starts
             # (subscript_check_quick_claw.s:26-27, above), B13-31.
-            foe_custap=custap_target & ~tgt_moved,
-            # moveEffectsData.quickClaw (order.claw_flags), cleared once its holder moved.
-            foe_claw=claw_target & ~tgt_moved,
+            foe_custap=custap_target,
+            # moveEffectsData.quickClaw (the carried flag, SF2 (k)): cleared at its holder's
+            # BeforeMove unless a Trick Room's re-sort set it again.
+            foe_claw=claw_target,
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
@@ -2561,11 +2565,15 @@ def _use_move(
         # (bit 0) always, and prints "let it move first!" (:16-19, bit 1) unless
         # waitingBattlers == 1 (:15; bcp.c:881-886, itself counted): at B = 2 the foe has acted
         # (``target_moved``). The same term as the removal above; Quick Claw's bit 0 comes from
-        # ``_quick_claw_shown`` (one battler holds one item).
+        # Quick Claw's animation (:6-10) is bit 0 where the foe has not acted
+        # (``WAITING_BATTLERS != 1``), whatever the order of the turn (SF2 (k); one battler holds
+        # one item).
         "quick_claw": jnp.where(
             ready & custap[side],
             1 + 2 * (~jnp.asarray(target_moved, bool)).astype(_I32),
-            0,
+            (started & jnp.asarray(claw, bool)[side] & ~jnp.asarray(target_moved, bool)).astype(
+                _I32
+            ),
         ),
         # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
         # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
@@ -2640,6 +2648,11 @@ def _use_move(
         # user for a self-range move (lib.c:1659-1664), NO_DEFENDER for BATTLER_NONE, and the
         # user after a confusion self-hit (bcp.c:2629).
         "defender": jnp.where(self_hit, side, resolved.defender).astype(_I32),
+        "started": started,
+        # Trick Room's script ran (set or restore, direct or called): the field's counter toggled
+        # (effects._trick_room is the only writer inside an action), so the action's MoveEnd
+        # re-sorts (effect_script_0259.s:18, bcp.c:3991; ``order.resort_claw_flags``).
+        "trick_room": (state.trick_room != 0) != (state_in.trick_room != 0),
     }
     return state, own, foe, ctl
 
@@ -2796,6 +2809,8 @@ def _act(
     runs_move = (is_move & live) | resumed
     ctl = {
         **ctl,
+        "started": ctl["started"] & is_move & live,
+        "trick_room": ctl["trick_room"] & runs_move,
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,
         "fbase": jnp.where(resumed, _alive_mask(listed), base),
@@ -3103,10 +3118,16 @@ def _execute_actions(
     items = jnp.stack([state.trainer_items[side, _bag_slot(real[side])] for side in range(fmt.B)])
     items = jnp.where(is_item(real), items, 0)
     items = jnp.where(paused, state.ts_item, items).astype(_I32)
-    # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.
-    custap = jnp.where(paused, state.ts_custap != 0, custap_flags(tables, state, real))
+    # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in, and the
+    # flags the last turn left standing (``custap_flag``: only the holder's BeforeMove, a switch-in
+    # and a faint clear them, SF2 (k)).
+    custap0 = jnp.where(
+        paused, state.ts_custap != 0, custap_flags(tables, state, real) | (state.custap_flag != 0)
+    )
     # CalcTurnOrder's moveEffectsData.quickClaw (B10-6), likewise.
-    claw = jnp.where(paused, state.ts_claw != 0, claw_flags(tables, state, real))
+    claw0 = jnp.where(
+        paused, state.ts_claw != 0, claw_flags(tables, state, real) | (state.claw_flag != 0)
+    )
     consumed = _consume_trainer_items(state, real).trainer_items
     state = state._replace(trainer_items=jnp.where(paused, state.trainer_items, consumed))
     state = state._replace(pivot_battler=jnp.zeros_like(state.pivot_battler))
@@ -3132,7 +3153,9 @@ def _execute_actions(
         return (position < 2) & (state.pivot_battler == 0)
 
     def body(carry):
-        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry
+        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry[:10]
+        custap, claw = carry[10:]
+        active0 = state.active
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
@@ -3303,13 +3326,39 @@ def _execute_actions(
         pending = (position == 0) & (side == 1) & (real[0] < MOVE_ACTIONS)
         done = pay_exp(tables, _with_alive(acted, base | owed), done, pending, real[0])
         state = _where(stop, acted, done)
+        # moveEffectsData.quickClaw / .custapBerry (SF2 (k)): the acting battler's BeforeMove
+        # cleared its own (subscript_check_quick_claw.s:22-28; not a pursuer's or a resumed tail),
+        # a battler that switched in or is fainted lost them (battle_lib.c:2100-2104, :2185-2188);
+        # a Trick Room's MoveEnd re-sort sets them again where a FIGHT pair is alive (bcp.c:3991).
+        gone = (jnp.arange(fmt.B) == side) & ctl["started"] & ~skip
+        gone = gone | (state.active != active0)
+        gone = gone | jnp.stack(
+            [state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)]
+        )
+        claw_set, custap_set = resort_claw_flags(tables, state, real, outcome.quick_claw)
+        resort = ran & ctl["trick_room"] & (state.over == 0) & ~stop
+        claw = (claw & ~gone) | (resort & claw_set)
+        custap = (custap & ~gone) | (resort & custap_set)
         position = jnp.where(stop, position, position + 1)
         phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
         sync = (
             jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
             jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
         )
-        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync
+        return (
+            state,
+            read,
+            shown,
+            position,
+            phase,
+            pursued,
+            base,
+            pick_mul,
+            fired,
+            sync,
+            custap,
+            claw,
+        )
 
     start = (
         state,
@@ -3322,14 +3371,14 @@ def _execute_actions(
         jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
         (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
+        custap0,
+        claw0,
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _ = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
-    # Each battler whose action is still to come (after the paused one in ``order``): doubles
-    # section 5 rule 5, a fact about the named battler, not "the second actor" (B10-17).
-    to_come = jnp.stack([jnp.any((order == b) & (jnp.arange(2) > position)) for b in range(fmt.B)])
+    alive_now = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
     scratch = {
         "ts_cursor": position,
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
@@ -3343,11 +3392,10 @@ def _execute_actions(
         "ts_struggling": choices[1],
         "ts_locked": choices[2],
         "ts_item": items,
-        # Only an actor still to come keeps its flag: an earlier one ate its Custap Berry when
-        # its move started (_use_move).
-        "ts_custap": custap & to_come,
-        # Likewise: an earlier actor's own move start cleared its quickClaw.
-        "ts_claw": claw & to_come,
+        # The flags standing at the pause (an earlier actor ate its Custap Berry and cleared its
+        # quickClaw when its move started; a Trick Room's re-sort may have set them again).
+        "ts_custap": custap,
+        "ts_claw": claw,
         "ts_pursued": pursued,
         "ts_protect_ok": read["protect_ok"],
         "ts_endure_ok": read["endure_ok"],
@@ -3380,6 +3428,14 @@ def _execute_actions(
         },
         # Read when the order was fixed, read again only at the next turn (the resumed half's).
         qc_roll=jnp.where(stopped, 0, state.qc_roll).astype(state.qc_roll.dtype),
+        # The turn's end leaves the flags standing for the next turn (SetupNextTurn clears
+        # neither, battle_lib.c:2228-2253); a pause keeps them in the scratch.
+        claw_flag=jnp.where(stopped, state.claw_flag, claw & alive_now).astype(
+            state.claw_flag.dtype
+        ),
+        custap_flag=jnp.where(stopped, state.custap_flag, custap & alive_now).astype(
+            state.custap_flag.dtype
+        ),
         roosting=jnp.where(stopped, roosting_now(state, read["roosted"]), 0).astype(
             state.roosting.dtype
         ),
@@ -4302,22 +4358,6 @@ def _unlock_sleepers(state: BattleState) -> BattleState:
     return state
 
 
-def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp.ndarray:
-    """``int32[B]``: the side's Quick Claw animation played (``subscript_check_quick_claw.s``,
-    the first step of ``BeforeMove``, bcp.c:3140-3143). ``CalcTurnOrder`` sets the battler's
-    ``moveEffectsData.quickClaw`` only when two FIGHT commands are compared
-    (``ignoreQuickClaw = FALSE``, bcp.c:772-786; battle_lib.c:1281-1284), whatever the
-    priorities, from the turn's starting ``speedRand`` (``state.qc_roll``); the script plays
-    the held-item animation (no text) only when the battler is not the last to act
-    (``WAITING_BATTLERS != 1``): in singles, when it acts first. Bit 0 of the ``quick_claw``
-    event; the Custap part comes from ``_use_move``."""
-    fmt = format_of(state)
-    fight = ~is_switch(actions) & ~is_item(actions)
-    claw = quick_claw_active(tables, state, state.qc_roll)
-    first = jnp.arange(fmt.B) == order[0]
-    return (fight[0] & fight[1] & claw & first).astype(_I32)
-
-
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict, dict, jnp.ndarray]:
@@ -4343,12 +4383,11 @@ def _action_phase(
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
-    claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
     s = _where(paused, state, fresh)
     s, read, shown = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
-    return s, {**shown, "order": order, "quick_claw": claw | shown["quick_claw"]}, read, order
+    return s, {**shown, "order": order}, read, order
 
 
 def turn_events(

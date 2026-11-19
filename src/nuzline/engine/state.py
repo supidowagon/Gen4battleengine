@@ -258,6 +258,12 @@ Encodings:
   makes through ``Battler_Ability``, ``Battler_IgnorableAbility``, ``BattleSystem_CountAbility``
   or ``BtlCmd_CheckAbility`` goes through one of them; a raw ``BattleMon.ability`` read stays on
   ``ability`` with a comment naming its decomp line.
+* SF2 (k). ``claw_flag`` / ``custap_flag`` are the battler's ``MoveEffectsData.quickClaw`` /
+  ``.custapBerry`` between turns: CalcTurnOrder (and a Trick Room's re-sort at its MoveEnd) sets
+  them, only the holder's BeforeMove (subscript_check_quick_claw.s:22-28), a switch-in
+  (battle_lib.c:2100-2104) and a faint (:2185-2188) clear them; SetupNextTurn does not (:2228-2253),
+  and a U-turn's pursuer never runs BeforeMove (script.c:6931). At a pause ``ts_claw`` /
+  ``ts_custap`` hold them. Not kept by a Baton Pass (:2107-2115).
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -443,6 +449,10 @@ class BattleState(NamedTuple):
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     flash_fire: jnp.ndarray  # int8, MoveEffectsData.flashFire (F-2)
     ability_suppressed: jnp.ndarray  # int8, MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
+    # int8[B], MoveEffectsData.quickClaw / .custapBerry between turns (SF2 (k)): the flag
+    # CalcTurnOrder or a Trick Room's re-sort set and no BeforeMove has cleared yet.
+    claw_flag: jnp.ndarray
+    custap_flag: jnp.ndarray
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -684,6 +694,8 @@ VOLATILE_FIELDS = (
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
+    "claw_flag",  # MoveEffectsData.quickClaw (lib.c:2100-2104); not in BATON_PASSED_FIELDS
+    "custap_flag",  # MoveEffectsData.custapBerry
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
 # faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
@@ -830,6 +842,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "embargo": (_BATTLER, np.int8),
     "flash_fire": (_BATTLER, np.int8),
     "ability_suppressed": (_BATTLER, np.int8),
+    "claw_flag": (_BATTLER, np.int8),
+    "custap_flag": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),

@@ -287,6 +287,9 @@ class _Turn:
     # moveEffectsData.quickClaw per side, written by the same compare (lib.c:1283, :1349) and
     # cleared at its holder's move start (subscript_check_quick_claw.s:22-23), B10-6.
     claw: list[bool] = field(default_factory=lambda: [False, False])
+    # The action's move ran Trick Room's script (set or restore, direct or called): its MoveEnd
+    # re-sorts (effect_script_0259.s:18; bcp.c:3991), which sets the two flags again (SF2 (k)).
+    trick_room_ran: bool = False
     # moveFailFlags per side (BattleContext_MoveFailed, lib.c:2808-2820; cleared by
     # SetupNextTurn, lib.c:2232): the Uproar check of the turn's end reads them.
     move_failed: list[bool] = field(default_factory=lambda: [False, False])
@@ -1791,6 +1794,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
+    turn.claw[side] = turn.custap[side] = False  # moveEffectsData (lib.c:2185-2188), SF2 (k)
     turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
@@ -1876,6 +1880,8 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
         "flash_fire",  # MoveEffectsData.flashFire (F-2): lib.c:2101-2104, not kept by a Baton Pass
         "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, Baton-passed (E3-2-6a)
+        "claw_flag",  # MoveEffectsData.quickClaw / .custapBerry (SF2 (k)): lib.c:2100-2104,
+        "custap_flag",  # not kept by a Baton Pass
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -3078,6 +3084,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _restore_moves(s, side)  # and its Mimic copies (G-68)
     sd.active = slot
     _reset_battler(sd, baton)
+    turn.claw[side] = turn.custap[side] = False  # UpdateAfterSwitch (lib.c:2100-2104), SF2 (k)
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
@@ -3700,6 +3707,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # effect_script_0259.s:5-12: any Trick Room bit up -> cleared, else FIELD_CONDITION_
         # TRICK_ROOM_INIT (5); it never fails (E3-2-4).
         s.trick_room = 0 if s.trick_room else TRICK_ROOM_TURNS
+        turn.trick_room_ran = True  # trickRoomActivated (effect_script_0259.s:18)
     elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.battlers[side].magnet_rise = 1
@@ -3787,7 +3795,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _shielded(turn, s, target)
             or raw == ABILITY_MULTITYPE
             or foe.item == ITEM_GRISEOUS_ORB
-            or (turn.claw[target] and not target_moved)
+            or turn.claw[target]
             or turn.custap[target]
         )
         if foe.item and not blocked and not sticky:
@@ -6845,7 +6853,7 @@ def _embargo_fails(tables, s: RefState, turn: _Turn, target: int, target_moved: 
         or _decomp_ability(tables, foe) == ABILITY_MULTITYPE  # raw: subscript_embargo_start.s:7
         or s.battlers[target].embargo
         or foe.item == ITEM_GRISEOUS_ORB
-        or (turn.claw[target] and not target_moved)
+        or turn.claw[target]
         or turn.custap[target]
     )
 
@@ -7279,6 +7287,11 @@ def _ref_step(
                 _item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0
                 for side in range(_fmt(s).B)
             ]
+    # The flags the last turn left standing (only the holder's BeforeMove, a switch-in and a
+    # faint clear them, SF2 (k)).
+    for side in range(_fmt(s).B):
+        turn.claw[side] = turn.claw[side] or bool(s.battlers[side].claw_flag)
+        turn.custap[side] = turn.custap[side] or bool(s.battlers[side].custap_flag)
     turn.actions, turn.choices, turn.items = actions, choices, items
     turn.commands, turn.order = commands, order
     try:
@@ -7383,6 +7396,20 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
         _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
         _finish_action(turn, s, side, position, record)
+        # Trick Room's MoveEnd: SortMonActionOrder (bcp.c:3991, lib.c:7276-7300) compares every
+        # pair of FIGHT commands with both alive, ignoreQuickClaw = FALSE, which sets the flags of
+        # an activated Quick Claw (this turn's speedRand) and of a Custap holder in its pinch;
+        # it never clears (SF2 (k); ``order.resort_claw_flags``).
+        if turn.trick_room_ran:
+            turn.trick_room_ran = False
+            alive = [_active(s, b).hp > 0 for b in range(_fmt(s).B)]
+            if not s.over and all(c == FIGHT for c in commands) and all(alive):
+                qc = turn.outcome.quick_claw
+                for b in range(_fmt(s).B):
+                    if _custap_active(tables, s, b):
+                        turn.custap[b] = True
+                    if _item_effect(tables, _active(s, b), s) == ItemId.QUICK_CLAW and qc[b] != 0:
+                        turn.claw[b] = True
 
 
 def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -> None:
@@ -7443,6 +7470,11 @@ def _stale_known_item(s: RefState, snap: tuple[int, bool, int], fought: bool) ->
 def _end_turn(turn: _Turn, s: RefState) -> RefState:
     """The end of the turn after the actions."""
     tables, outcome = turn.tables, turn.outcome
+    # The flags standing at the turn's end carry into the next turn (SetupNextTurn clears neither,
+    # lib.c:2228-2253; SF2 (k)).
+    for b, sd in enumerate(s.battlers):
+        sd.claw_flag = int(turn.claw[b] and _active(s, b).hp > 0)
+        sd.custap_flag = int(turn.custap[b] and _active(s, b).hp > 0)
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     snap = _stale_snapshot(s)
     _field_conditions(turn, s, order)
