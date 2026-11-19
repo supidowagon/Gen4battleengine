@@ -1375,8 +1375,10 @@ def _use_move(
     # user's side's followMe and followMeUser, on every run of the script (no failure branch; a
     # called Follow Me counts: ``effect_used`` is the called move's). One per-side field holds
     # both (``ts_follow_me``, D2-11): 1 + the user battler, read by ``targets.follow_me_target``.
-    follow = script_on & (effect_used == EffectId.FOLLOW_ME)
-    state = _set_side(state, "ts_follow_me", side, side + 1, follow)
+    # Written at B = 4 only (D2-32): at B = 2 nothing reads it.
+    if fmt.B == 4:
+        follow = script_on & (effect_used == EffectId.FOLLOW_ME)
+        state = _set_side(state, "ts_follow_me", side, side + 1, follow)
     # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
     failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
     failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))

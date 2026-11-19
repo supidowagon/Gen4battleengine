@@ -4944,8 +4944,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if effect == EffectId.IMPRISON:
         s.battlers[_foe(side)].imprisoned = 1
     # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (script.c:6261-6270) runs with the
-    # script, no failure branch (D2-11).
-    if effect == EffectId.FOLLOW_ME:
+    # script, no failure branch (D2-11). Written at B = 4 only (D2-32): at B = 2 nothing reads it.
+    if effect == EffectId.FOLLOW_ME and len(s.battlers) == 4:
         turn.follow_me[side_of(side)] = side + 1
     # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
     # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),

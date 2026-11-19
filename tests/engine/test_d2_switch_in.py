@@ -48,14 +48,36 @@ def test_intimidate_skips(tables, names):
     assert atk(intimidate(s, 0), 1) == 0  # the side's Mist
 
 
+def _def_spd(s, b, defense, sp_def):
+    """Battler ``b``'s active Pokemon has Defense ``defense`` and Sp. Def ``sp_def``."""
+    p, slot = format_of(s).party_of[b], int(s.active[b])
+    stats = s.stats.at[p, slot, Stat.DEF - 1].set(defense)
+    return s._replace(stats=stats.at[p, slot, Stat.SPD - 1].set(sp_def))
+
+
 def test_download_sums_both_foes(tables, names):
-    s = with_ability(four(tables, names), 0, AbilityId.DOWNLOAD)
-    s = s._replace(stages=s.stages.at[1, Stat.DEF].set(-6))  # foe 1's Defense is tiny
-    out = download(s, 0, targets.opposing(format_of(s), 0))
-    assert int(out.stages[0, Stat.SPA]) + int(out.stages[0, Stat.ATK]) == 1
-    r = to_ref(s)
-    ref._download(r, 0)
-    assert r.battlers[0].stages[Stat.SPA] == int(out.stages[0, Stat.SPA])
+    """SWITCH_IN_CHECK_STATE_DOWNLOAD (battle_lib.c:3815-3851): Defense and Sp. Def summed, each
+    through its stage, over every opposing battler with HP and no substitute; sumDef >= sumSpDef
+    raises Sp. Atk, else Attack, through subscript_update_stat_stage. Each case's sum disagrees
+    with one foe alone: a one-foe Download fails one of the two."""
+    base = with_ability(four(tables, names), 0, AbilityId.DOWNLOAD)
+    # (RIGHT foe 3, LEFT foe 1) as (Defense, Sp. Def), foe 1's Defense stage, the stat raised
+    cases = (
+        # 100 + 160 * 2/8 = 140 < 60 + 100 = 160: Attack; foe 3 alone (100 >= 60) gives Sp. Atk,
+        # and foe 1's Defense read without its -6 stage (260 >= 160) gives Sp. Atk too
+        (((100, 60), (160, 100)), -6, Stat.ATK),
+        # 60 + 100 = 160 >= 100 + 40 = 140: Sp. Atk; foe 3 alone (60 < 100) gives Attack
+        (((60, 100), (100, 40)), 0, Stat.SPA),
+    )
+    for ((d3, s3), (d1, s1)), stage, raised in cases:
+        s = _def_spd(_def_spd(base, 3, d3, s3), 1, d1, s1)
+        s = s._replace(stages=s.stages.at[1, Stat.DEF].set(stage))
+        out = download(s, 0, targets.opposing(format_of(s), 0))
+        other = Stat.SPA if raised == Stat.ATK else Stat.ATK
+        assert (int(out.stages[0, raised]), int(out.stages[0, other])) == (1, 0), raised
+        r = to_ref(s)
+        ref._download(r, 0)
+        assert (r.battlers[0].stages[raised], r.battlers[0].stages[other]) == (1, 0), raised
 
 
 def test_trace_coin_picks(tables, names):
