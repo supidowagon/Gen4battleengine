@@ -2397,3 +2397,27 @@ docs/doubles-state-design.md.
   (effects imports actions). The reference had no `Battler_IsTrapped`: `reference/engine._trapped`
   mirrors `actions.trapped`. `decision_pairs` raises ValueError at B = 2 and for MULTI (the
   player commands battler 0 alone there: `legal_choices(tables, state, 0)`).
+- D2-12 (build of D2-4) At B = 2 a randomized call (an Encore takeover) of a non-Ghost Curse keeps
+  today's self defender: `targets.resolve` applies the Curse rule in branch 9 as in branch 10,
+  whereas lib.c:1685-1707 would give the foe (singles `attacker ^ 1`). Joins pending ruling (i)
+  for the follow-up commit after the D2 merge.
+- D2-13 (build of D2-4) D2-9 is not in this batch, so `targets.fight_randomizes(state, side,
+  struggling)` holds its randomize condition: Struggle or any Encore on the attacker at the action's
+  start (bcp.c:1866-1884); the selected-move-not-in-slot case (:1889-1893) cannot occur (the move
+  is read from the slot).
+- D2-14 (build of D2-4) `play_hit` / `apply_move_effect` take `target_side` and `defender` as optional
+  keywords (None: today's pair, the foe, and the user for a `self_defender` move) because
+  test_k3b_abilities and test_small_moves call `apply_move_effect` directly; `_use_move` and
+  Pursuit's hit always pass them. `primary_effect_fails` takes `defender` after `target_side`.
+- D2-15 (build of D2-4) The reference's `_fight` reads `chosen` from `s.battlers[side].chosen_target`
+  and the speed order from `_Turn.speed_order` (None: the identity); it mirrors the resolver for the
+  defender, the PP defender and `_hit`'s target only, the other `_foe(side)` reads of `_fight` stay
+  B = 2 (D3's four-actor turn). `_use_move` takes `speed_order=None` (identity).
+- D2-16 (build of D2-4) The `fullset` marker is registered in pyproject.toml (CLAUDE.md names it; it
+  did not exist). `tests/reference/test_targets_ref.py` carries it.
+- D2-17 (build of D2-6, D2-11) The B = 4 step tests (Stealth Rock landing on side 1, a foe's move
+  redirected to the Follow Me user) need a four-actor `step`: owed to D3. Until then the resolver
+  tests (`tests/engine/test_targets.py`, `tests/engine/test_d2_follow_me.py`) are the tests.
+- D2-18 (build of D2-4..D2-8, D2-11) The `ts_follow_me` write sits behind step.py's `script_on`
+  (script ran, not failed to find a target) as Imprison's does; D2-11 and the resolver share
+  step.py / reference/engine.py edits, so the engine code is one commit.

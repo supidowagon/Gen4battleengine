@@ -78,6 +78,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import targets
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     chosen_targets,
@@ -794,6 +795,7 @@ def _use_move(
     entry_status=None,
     pursuit_sync=None,
     foe_enduring=False,
+    speed_order=None,
 ) -> tuple[BattleState, dict, dict, dict]:
     """``side``'s active Pokemon uses the move in slot ``action`` (or Struggle).
     ``choice``: its ``(move, struggling, locked)`` from ``selected_move`` and
@@ -860,7 +862,23 @@ def _use_move(
     encored_now = encore_holds & ~jnp.asarray(struggling, bool)
     move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
     slot = jnp.where(encored_now, encore_slot, slot)
-    target_side = _foe(side)
+    # BattleControllerPlayer_FightCommand (bcp.c:1900) fixes the defender with the move after the
+    # Encore takeover (``moveTemp``) and the stored target (D2-1) at the action's start: the
+    # resolver (``targets.resolve``, D2-4). ``speed_order``: monSpeedOrder, D3's input (B = 2: the
+    # identity, order-free).
+    if speed_order is None:
+        speed_order = jnp.arange(fmt.B)
+    resolved = targets.resolve(
+        tables,
+        state_in,
+        side,
+        move,
+        targets.fight_randomizes(state_in, side, choice[1]),
+        state_in.chosen_target[side],
+        speed_order,
+        outcome.target_draw[side],
+    )
+    target_side = resolved.target_side
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[party(fmt, side), user] > 0)
     # A move of the battler is disabled when its action starts (a faster foe's Disable this turn
@@ -879,9 +897,7 @@ def _use_move(
     # defender before the status checks: the foe when it is alive (any HP for
     # RANGE_OPPONENT_SIDE: BattleSystem_RandomOpponent), the user for a self-defender range
     # and a non-Ghost Curse (effects.self_defender).
-    foe_defender = ~self_defender(tables, move, ghost_user(state, side)) & (
-        (state.hp[party(fmt, target_side), target] > 0) | targets_foe_side(tables, move)
-    )
+    foe_defender = (resolved.defender != NO_DEFENDER) & (resolved.defender != side)
     custap = jnp.asarray(custap, bool)
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143), before the status checks:
     # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
@@ -1056,12 +1072,7 @@ def _use_move(
     # offers no 0-PP slot).
     no_pp = spend & (state.pp[party(fmt, side), user, slot] == 0)
     spend = spend & ~no_pp
-    defender = jnp.where(
-        foe_defender,
-        target_side,
-        jnp.where(self_defender(tables, move, ghost_user(state, side)), side, NO_DEFENDER),
-    )
-    cost = pressure_pp_cost(tables, state, side, defender, move)
+    cost = pressure_pp_cost(tables, state, side, resolved.defender, move)
     left = jnp.maximum(state.pp[party(fmt, side), user, slot].astype(_I32) - cost, 0)
     pp = state.pp.at[party(fmt, side), user, slot].set(
         jnp.where(spend, left, state.pp[party(fmt, side), user, slot]).astype(state.pp.dtype)
@@ -1281,6 +1292,12 @@ def _use_move(
     for battler in range(state.active.shape[0]):  # battler b is on side b in singles
         state = _set_side(state, "imprisoned", battler, 1, imprison_runs & (side != battler))
     failed = failed | ((effect_used == EffectId.IMPRISON) & imprison_fails(state, side))
+    # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (battle_script.c:6261-6270) sets the
+    # user's side's followMe and followMeUser, on every run of the script (no failure branch; a
+    # called Follow Me counts: ``effect_used`` is the called move's). One per-side field holds
+    # both (``ts_follow_me``, D2-11): 1 + the user battler, read by ``targets.follow_me_target``.
+    follow = script_on & (effect_used == EffectId.FOLLOW_ME)
+    state = _set_side(state, "ts_follow_me", side, side + 1, follow)
     # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
     failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
     failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))
@@ -1564,6 +1581,7 @@ def _use_move(
             state,
             side,
             target_side,
+            resolved.defender,
             used,
             # play_hit's flags (below): the defender's quickClaw and custapBerry until it moved.
             foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
@@ -1930,6 +1948,8 @@ def _use_move(
             foe_enduring=foe_enduring,
             in_power=in_power,
             gift=gift_removed,
+            target_side=target_side,
+            defender=resolved.defender,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2585,6 +2605,8 @@ def _pursuit_hit(
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
         pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
         # subscript_pursuit.s ends in BtlCmd_CheckHoldOnWith1HP, which ignores Endure (G-65).
+        target_side=switcher,
+        defender=switcher,
     )
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
     # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
@@ -2944,6 +2966,9 @@ def _execute_actions(
         "ts_pick_mul": pick_mul,
         # turnFlags.assuranceDamageMask (B13-17): the turn's, kept at a pause.
         "ts_assurance": state.ts_assurance,
+        # SideConditions.followMe / followMeUser (D2-11): cleared by SetupNextTurn at the turn end
+        # (lib.c:2251-2252), kept at a pause.
+        "ts_follow_me": state.ts_follow_me,
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")

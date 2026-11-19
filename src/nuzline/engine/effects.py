@@ -329,6 +329,7 @@ from nuzline.engine.state import (
     field_index,
     held_item,
 )
+from nuzline.engine.targets import NO_DEFENDER
 
 _I32 = jnp.int32
 _E = EffectId
@@ -343,6 +344,7 @@ class _Hit(NamedTuple):
 
     side: jnp.ndarray  # attacking side
     target_side: jnp.ndarray
+    defender: jnp.ndarray  # BattleSystem_Defender's battler (targets.resolve), NO_DEFENDER for none
     user: jnp.ndarray  # party slots
     target: jnp.ndarray
     effect: jnp.ndarray  # EffectId
@@ -850,14 +852,14 @@ def self_defender(tables: Tables, move, ghost=False) -> jnp.ndarray:
     return in_range | targets_user(tables, move, ghost)
 
 
-def defender_side(tables: Tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
-    """``int32``: the side of ``BattleSystem_Defender``'s defender (battle_lib.c:1599-1727) for
-    ``side``'s ``move`` aimed at ``target_side``: the user's own for a ``self_defender`` move (in
-    singles RANGE_ALLY and RANGE_USER_OR_ALLY give the attacker, :1670-1684; in doubles they give
-    the chosen partner, which the doubles resolver replaces), else ``target_side``. Counter's
-    later defender (the last hitter) is the caller's."""
-    own = self_defender(tables, move, ghost_user(state, side))
-    return jnp.where(own, jnp.asarray(side, _I32), jnp.asarray(target_side, _I32))
+def defender_side(target_side, defender) -> jnp.ndarray:
+    """``int32``: the battler ``BattleSystem_Defender`` picked (``targets.resolve``,
+    battle_lib.c:1600-1730; ``defender``), or ``target_side`` when it is BATTLER_NONE: the user
+    itself for a ``self_defender`` move at B = 2, the partner or the chosen battler for
+    RANGE_ALLY / RANGE_USER_OR_ALLY at B = 4. Counter's later defender (the last hitter) is the
+    caller's."""
+    defender = jnp.asarray(defender, _I32)
+    return jnp.where(defender == NO_DEFENDER, jnp.asarray(target_side, _I32), defender)
 
 
 # BattleControllerPlayer_DecrementPP's range switch (battle_controller_player.c:2241-2267):
@@ -873,8 +875,7 @@ PRESSURE_NONE = (
     MoveTarget.RANGE_USER_OR_ALLY,
     MoveTarget.RANGE_ALLY,
 )
-# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE.
-NO_DEFENDER = -1
+# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE (``targets.NO_DEFENDER``).
 
 
 def pressure_holder(state: BattleState, battler) -> jnp.ndarray:
@@ -1312,7 +1313,7 @@ def _acupressure(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     the user in singles), unless ``acupressure_fails``, a direct TO_DEFENDER +2
     (MOVE_SUBSCRIPT_PTR_ATTACK_UP_2_STAGES + the stat) on ``acupressure_stat``; the stat is below
     +6, so it rises (B12-9). The draw is the acting battler's (``Outcome.acupressure[h.side]``)."""
-    defender = defender_side(tables, state, h.side, h.target_side, h.move)
+    defender = defender_side(h.target_side, h.defender)
     cond = (h.effect == _E.ACUPRESSURE) & h.landed
     cond = cond & _alive(state, defender, state.active[defender])
     cond = cond & ~acupressure_fails(state, defender)
@@ -1548,12 +1549,13 @@ def uproar_on(state: BattleState) -> jnp.ndarray:
 
 
 def primary_effect_fails(
-    tables, state: BattleState, side, target_side, move, foe_claw=False, foe_custap=False
+    tables, state: BattleState, side, target_side, defender, move, foe_claw=False, foe_custap=False
 ) -> jnp.ndarray:
     """``bool``: ``side``'s ``move``, if it lands, has a direct effect that ends it with
     ``MOVE_STATUS_FAILED`` or ``_NO_MORE_WORK``, which ``BattleControllerPlayer_CheckMoveFailure``
     (bcp.c:3312-3331) sends past AfterMoveEffects: Swagger (``swagger_fails``), Dragon Dance
-    (``dragon_dance_fails``). ``target_side``: the defender's side; ``foe_claw`` /
+    (``dragon_dance_fails``). ``target_side``: the battler the hit reads as its target;
+    ``defender``: ``targets.resolve``'s (Acupressure's); ``foe_claw`` /
     ``foe_custap``: its quickClaw / custapBerry flags (``play_hit``'s)."""
     effect = tables.move_effect[jnp.asarray(move, _I32)]
     param = tables.move_param[jnp.asarray(move, _I32)].astype(_I32)
@@ -1601,7 +1603,7 @@ def primary_effect_fails(
         # defender (RANGE_USER_OR_ALLY: defender_side, the user in singles).
         | (
             (effect == _E.ACUPRESSURE)
-            & acupressure_fails(state, defender_side(tables, state, side, target_side, move))
+            & acupressure_fails(state, defender_side(target_side, defender))
         )
         # subscript_rest.s:73 (NO_MORE_WORK), BtlCmd_TryWish (FAILED), subscript_recover_psn_prz_
         # brn.s:15-16 and BtlCmd_CheckCanShareStatus (FAILED).
@@ -3106,6 +3108,8 @@ def apply_move_effect(
     target_moved,
     power_mul=10,
     struggling=False,
+    target_side=None,
+    defender=None,
 ) -> BattleState:
     """``play_hit``'s state, for a hit that is the first (or only) of its action."""
     return play_hit(
@@ -3119,6 +3123,8 @@ def apply_move_effect(
         target_moved=target_moved,
         power_mul=power_mul,
         struggling=struggling,
+        target_side=target_side,
+        defender=defender,
     )[0]
 
 
@@ -3144,6 +3150,8 @@ def play_hit(
     foe_enduring=False,
     in_power=0,
     gift=0,
+    target_side=None,
+    defender=None,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -3195,7 +3203,17 @@ def play_hit(
     """
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
-    target_side = _foe(side)
+    # ``target_side`` / ``defender``: the fight command's ``targets.resolve`` (D2-4); omitted
+    # (a direct call of one hit), today's singles pair: the foe, and the user for a
+    # ``self_defender`` move, else the foe.
+    if target_side is None:
+        target_side = _foe(side)
+    target_side = jnp.asarray(target_side, _I32)
+    if defender is None:
+        defender = jnp.where(
+            self_defender(tables, move, ghost_user(state, side)), side, target_side
+        )
+    defender = jnp.asarray(defender, _I32)
     user, target = state.active[side], state.active[target_side]
     move = jnp.asarray(move, _I32)
     # A RANGE_USER move (Growth, Withdraw, Rock Polish) lands on its user, so the
@@ -3352,6 +3370,7 @@ def play_hit(
     h = _Hit(
         side=side,
         target_side=target_side,
+        defender=defender,
         user=user,
         target=target,
         effect=effect,

@@ -392,6 +392,8 @@ three structs has a row.
   `moveEffectsData.custapBerry` (`ts_custap`) and `.quickClaw` (`ts_claw`, B10-6), the per-battler
   `turnFlags` later actors read
   (`ts_protect_ok`, `ts_endure_ok` (`turnFlags.enduring`, Endure, G-65), `ts_taken`,
+  `ts_follow_me` (per side, `SideConditions.followMe` / `followMeUser`: `1 + followMeUser`, 0 when `followMe`
+  is clear; `BattleSystem_SetupNextTurn` clears it, battle_lib.c:2251-2252, D2-11),
   `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
@@ -533,8 +535,8 @@ three structs has a row.
 | `SideConditions.mistTurns` | `mist` | mapped |
 | `SideConditions.safeguardUser` | — | not needed because in singles the user is always that side's active Pokemon (the field names the battler for messages and doubles) |
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
-| `SideConditions.followMe` | — | not needed because Follow Me only redirects moves in doubles |
-| `SideConditions.followMeUser` | — | not needed because Follow Me only redirects moves in doubles |
+| `SideConditions.followMe` | `ts_follow_me` | mapped: `1 + followMeUser` while `followMe` is set, 0 when it is clear (`followMeUser` is read only under `followMe`); per side, cleared by `BattleSystem_SetupNextTurn` (battle_lib.c:2251-2252), so turn scratch |
+| `SideConditions.followMeUser` | `ts_follow_me` | mapped (the same field) |
 | `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |

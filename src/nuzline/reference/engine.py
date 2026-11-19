@@ -310,6 +310,14 @@ class _Turn:
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
+    # SideConditions.followMe / followMeUser per side as 1 + followMeUser (0 = off), written by
+    # BtlCmd_FollowMe (script.c:6261-6270), cleared by SetupNextTurn (lib.c:2251-2252): D2-11.
+    follow_me: list[int] = field(default_factory=lambda: [0, 0])
+    # The fight command's BattleSystem_Defender result (D2-4): the defender (None: BATTLER_NONE)
+    # and the battler the hit reads as its target; monSpeedOrder (D3's input; None: the identity).
+    defender: int | None = None
+    target_side: int = 0
+    speed_order: list[int] | None = None
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -3889,7 +3897,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     contact ability (``*_TRIGGER_ABILITY``), then King's Rock (``*_EXTRA_FLINCH``). Returns
     ``(dealt, update_hp)``: the HP the target lost, and whether ``UpdateHP`` ran."""
     tables, o = turn.tables, turn.outcome
-    target = _foe(side)
+    target = turn.target_side
     target_mon = _active(s, target)
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
@@ -4377,6 +4385,103 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
     return 1 + int(defender != side and _active(s, defender).ability == AbilityId.PRESSURE)
 
 
+def _follow_me_target(s: RefState, attacker: int) -> int | None:
+    """The living Follow Me user on the other side of ``attacker`` (lib.c:1694-1697, :1714-1717):
+    ``followMe`` set on ``side ^ 1`` and the Pokemon in the user's battler slot with HP; else
+    None (D2-11 rule 4)."""
+    value = s.sides[side_of(attacker) ^ 1].ts_follow_me
+    if value and _active(s, value - 1).hp > 0:
+        return value - 1
+    return None
+
+
+def _opponents(battler: int) -> tuple[int, int]:
+    """``BattleSystem_GetEnemyInSlot`` (RIGHT, LEFT) at B = 4 (sys.c:419-433; D2-4 R2.4)."""
+    return (battler ^ 1) | 2, (battler ^ 1) & 1
+
+
+def _random_opponent(s: RefState, attacker: int, bit: int) -> tuple[int, bool]:
+    """``BattleSystem_RandomOpponent`` (lib.c:4177-4198): ``(battler, drew)``."""
+    if len(s.battlers) != 4:
+        return attacker ^ 1, False
+    pair = _opponents(attacker)
+    pick = pair[bit & 1]
+    if _active(s, pick).hp == 0:
+        pick = pair[(bit & 1) ^ 1]
+    return pick, True
+
+
+def _resolve(tables, s: RefState, attacker: int, move: int, randomize: bool, chosen: int,
+             speed_order: list[int], bit: int) -> tuple[int | None, int, int, bool]:  # fmt: skip
+    """``BattleSystem_Defender`` (lib.c:1600-1730), the R3 table of D2-4.md in plain Python:
+    ``(defender or None for BATTLER_NONE, target_side, battlerCounter, drew)``. Mirrors
+    ``engine.targets.resolve``; at B = 2 (``len(s.battlers) == 2``) ``bit`` is not read."""
+    doubles = len(s.battlers) == 4
+    rng = _move_target(tables, move)
+    foe, partner = attacker ^ 1, attacker ^ 2
+    n = len(s.battlers)
+
+    def hp(b: int) -> bool:
+        return _active(s, b).hp > 0
+
+    def result(defender: int | None, counter: int = 0, drew: bool = False):
+        other = defender is not None and defender != attacker
+        return defender, defender if other else foe, counter, drew
+
+    def first(cands):
+        for k, b in enumerate(speed_order):
+            if cands(b):
+                return result(b, k + 1)
+        return result(None, n)
+
+    if rng == MoveTarget.RANGE_ADJACENT_OPPONENTS:
+        return first(lambda b: hp(b) and side_of(b) != side_of(attacker))
+    if rng == MoveTarget.RANGE_ALL_ADJACENT:
+        return first(lambda b: hp(b) and b != attacker)
+    if rng == MoveTarget.RANGE_USER_OR_ALLY and randomize:
+        if not doubles:
+            return result(attacker)
+        return result(partner if bit & 1 == 0 and hp(partner) else attacker, 0, True)
+    if rng == MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST and randomize:
+        pick, drew = _random_opponent(s, attacker, bit)
+        return result(pick, 0, drew)
+    if rng == MoveTarget.RANGE_OPPONENT_SIDE:
+        pick, drew = _random_opponent(s, attacker, bit)
+        return result(pick, 0, drew)
+    if rng in (
+        MoveTarget.RANGE_USER,
+        MoveTarget.RANGE_USER_SIDE,
+        MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+        MoveTarget.RANGE_FIELD,
+    ):
+        return result(attacker)
+    if rng == MoveTarget.RANGE_ALLY:
+        return result(partner if doubles else attacker)
+    if rng == MoveTarget.RANGE_USER_OR_ALLY:
+        return result((chosen if hp(chosen) else attacker) if doubles else attacker)
+    randomized = rng == MoveTarget.RANGE_RANDOM_OPPONENT or randomize
+    if not doubles:
+        # A non-Ghost Curse names the user, today's singles value (ledger D2-12); Follow Me names
+        # the foe there, so its arm changes nothing.
+        if _curse_on_user(tables, move, _ghost(s, attacker)):
+            return result(attacker)
+        return result(foe if hp(foe) else None)
+    fm = _follow_me_target(s, attacker)
+    if randomized:
+        o0, o1 = _opponents(attacker)
+        if fm is not None:
+            return result(fm)
+        if hp(o0) and hp(o1):
+            return result(o0 if bit & 1 == 0 else o1, 0, True)
+        return result(o0 if hp(o0) else o1 if hp(o1) else None)
+    if fm is not None:
+        return result(fm)
+    if hp(chosen):
+        return result(chosen)
+    pick, _ = _random_opponent(s, attacker, bit)
+    return result(pick if hp(pick) else None, 0, True)
+
+
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
            struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -4396,12 +4501,14 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     turn.sync_flag, turn.sync_mon = False, -1
     # FightCommand (bcp.c:1900) picks the defender first: the foe while it is alive (any
     # HP for RANGE_OPPONENT_SIDE), the user for SELF_DEFENDER ranges.
-    target_range = _move_target(tables, move)
-    foe_defender = (
-        target_range not in SELF_DEFENDER
-        and not _curse_on_user(tables, move, _ghost(s, side))
-        and (_active(s, _foe(side)).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
-    )
+    # Randomized: Struggle or any Encore at the action's start (bcp.c:1866-1884).
+    randomize = struggling or bool(s.battlers[side].encore_move)
+    order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    turn.defender, turn.target_side, _, _ = _resolve(
+        tables, s, side, move, randomize, s.battlers[side].chosen_target, order,
+        o.target_draw[side],
+    )  # fmt: skip
+    foe_defender = turn.defender is not None and turn.defender != side
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
     # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
     turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
@@ -4445,13 +4552,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         slot = action
         if mon.pp[slot] == 0:
             return record
-        if foe_defender:
-            defender = _foe(side)
-        elif target_range in SELF_DEFENDER or _curse_on_user(tables, move, _ghost(s, side)):
-            defender = side
-        else:
-            defender = None  # BATTLER_NONE
-        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, defender, move), 0)
+        mon.pp[slot] = max(mon.pp[slot] - _pp_cost(tables, s, side, turn.defender, move), 0)
     # BattleControllerPlayer_HasNoTarget (bcp.c:2306, :3190): BattleSystem_Defender found no
     # living foe for a move aimed at it. A RANGE_SINGLE_TARGET_SPECIAL move's defender is its
     # user (FightCommand bcp.c:1900; lib.c:1665-1669, ahead of the ``randomize`` branch), so it
@@ -4620,6 +4721,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # first (script.c:6686-6690), whatever follows.
     if effect == EffectId.IMPRISON:
         s.battlers[_foe(side)].imprisoned = 1
+    # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (script.c:6261-6270) runs with the
+    # script, no failure branch (D2-11).
+    if effect == EffectId.FOLLOW_ME:
+        turn.follow_me[side_of(side)] = side + 1
     # The scripts that fail a user that has their effect already (MOVE_STATUS_FAILED, as Fake
     # Out's): Ingrain (effect_script_0181.s:5), Aqua Ring (_0251.s:5), Mud Sport (_0201.s:5),
     # Water Sport (_0210.s:5); Imprison also without a move shared with a foe (script.c:6692-6722).
@@ -6519,6 +6624,8 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_switched", [int(c == SWITCH) for c in turn.commands])
     s.ts_pick_mul = turn.pick_mul
     _put(s, "ts_assurance", [int(f) for f in turn.assurance])
+    for k, sc in enumerate(s.sides):
+        sc.ts_follow_me = turn.follow_me[k]
     for sd in s.battlers:  # read by the order, next read at the next turn
         sd.qc_roll = 0
 
@@ -6569,6 +6676,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.move_failed = [bool(f) for f in _get(s, "ts_move_failed")]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
+    turn.follow_me = [sc.ts_follow_me for sc in s.sides]
     turn.fainted = [
         (_fainted_battler(s, k, i), i)
         for k, pt in enumerate(s.parties)
@@ -6592,6 +6700,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
             setattr(bt, name, [0] * 6 if name == "ts_taken" else 0)
     for pt in s.parties:
         pt.ts_alive = 0
+    for sc in s.sides:
+        sc.ts_follow_me = 0
     foe = _foe(side)
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
     # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party

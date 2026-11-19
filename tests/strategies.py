@@ -2358,6 +2358,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
+        target_draw=_flag(sides),
     )
 
 

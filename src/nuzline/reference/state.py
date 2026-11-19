@@ -171,6 +171,7 @@ class RefSideConds:
     lucky_chant: int
     tailwind: int
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
+    ts_follow_me: int  # 1 + followMeUser while followMe is set, else 0 (D2-11)
 
 
 @dataclass

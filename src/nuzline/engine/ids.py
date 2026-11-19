@@ -270,8 +270,11 @@ class EffectId(IntEnum):
     # E2 batch 9 (B9-5). Follow Me (effect_script_0172.s): BtlCmd_FollowMe sets the user side's
     # followMe and followMeUser (battle_script.c:6261-6270), which BattleSystem_Defender
     # (battle_lib.c:1714-1717), the redirection abilities (:1743) and Counter (battle_script.c:
-    # 4628) read for the foe's moves: in singles they name the side's one battler, the target
-    # anyway, so the move only shows its message. Helping Hand (effect_script_0176.s):
+    # 4628) read for the foe's moves; the one per-side field is ``BattleState.ts_follow_me``
+    # (1 + followMeUser) and its reader ``targets.follow_me_target`` (D2-11): the single-target
+    # branch of BattleSystem_Defender at any B, the random-opponent branch at B = 4, the
+    # redirection abilities, Counter, Mirror Coat, Metal Burst and Magic Coat. In singles the
+    # user is the target anyway, so the move only shows its message. Helping Hand (effect_script_0176.s):
     # BtlCmd_TryHelpingHand (:6291-6314) needs a double battle and a partner; in singles it jumps
     # to MOVE_STATUS_FAILED (:6309-6311, effect_script_0176.s:15-17).
     FOLLOW_ME = 77

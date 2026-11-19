@@ -173,6 +173,10 @@ class Outcome(NamedTuple):
     # int8[B], 1 = Chatter's roll passes (``RandNext() % 100 <= effectChance``, battle_script.c:
     # 8428-8430; the chance is ``ids.CHATTER_CHANCES`` of the user's ``chatot_cry``), G-70.
     chatter: jnp.ndarray
+    # int8[B], the low bit of the one RandNext() a fight command's BattleSystem_Defender call may
+    # draw (bcp.c:1900; lib.c:1653, :1700, :4187), indexed by the acting battler; read only at
+    # B = 4 (``targets.resolve``), D2-4. Its sample key is 44.
+    target_draw: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -210,6 +214,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         future_band=sides,
         berry_confusion=sides + 2,
         chatter=sides,
+        target_draw=sides,
     )
 
 
@@ -1737,6 +1742,9 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         <= jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        # BattleSystem_Defender's one RandNext() & 1 (lib.c:1653, :1700, :4187), read at B = 4 only
+        # (D2-4, ledger D2-4 section R8). From a fold_in key: every field above keeps its samples.
+        target_draw=jax.random.randint(jax.random.fold_in(key, 44), per_side, 0, 2, dtype=_I32),
     )
     outcome = _cast(outcome)
 
