@@ -257,8 +257,10 @@ from nuzline.engine.order import (
     CALL_COPYCAT,
     CALL_ME_FIRST,
     CALL_METRONOME,
+    CALL_MIRROR_MOVE,
     CALL_NONE,
     CALL_SLEEP_TALK,
+    MIRROR_SELF_RANGES,
     MOVE_ACTIONS,
     action_order,
     assist_candidates,
@@ -276,6 +278,8 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     metronome_weights,
+    mirror_call,
+    mirror_copied,
     move_effects,
     sealed_state,
     selected_move,
@@ -808,6 +812,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
+    _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -1337,6 +1342,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
+    _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -1700,8 +1706,11 @@ def outcome_laws(
     took_state = encored_state(tables, state, taken)
     chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
     kinds = call_kind(tables, chosen)
-    # Copycat's and Me First's calls follow the order (the foe's move before them, or not).
-    copycat = uses_move & ((kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST))
+    # Copycat's, Me First's and Mirror Move's calls follow the order (the foe's move before them,
+    # or not).
+    copycat = uses_move & (
+        (kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST) | (kinds == CALL_MIRROR_MOVE)
+    )
     me_first_used = uses_move & (kinds == CALL_ME_FIRST)
     if call is None:
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
@@ -3668,6 +3677,19 @@ def _side_call_law(
     first_called = jnp.where(
         values == 0, me_first_copy(tables, state, _foe(side), foe_chosen, foe_uses_move), 0
     )
+    # Mirror Move (E3-B2-2): value 0, the foe has not recorded a move for it this turn (it calls
+    # its turn-start moveCopied), value 1, the foe's move before it did (the foe's chosen move when
+    # it is Mirror-Move-able and aimed at the user, else the moveCopied it had).
+    held = mirror_copied(state, side, 0)
+    foe_flagged = (tables.move_flags[foe_chosen] & MoveFlag.MIRROR_MOVE) != 0
+    foe_aimed = foe_flagged & ~jnp.isin(
+        tables.move_target[foe_chosen], jnp.asarray(MIRROR_SELF_RANGES, _I32)
+    )
+    mirror_called = jnp.where(
+        values == 0,
+        mirror_call(tables, held),
+        jnp.where(values == 1, mirror_call(tables, jnp.where(foe_aimed, foe_chosen, held)), 0),
+    )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
         talk_w,
@@ -3675,7 +3697,7 @@ def _side_call_law(
             kind == CALL_METRONOME,
             metro_w,
             jnp.where(
-                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST),
+                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST) | (kind == CALL_MIRROR_MOVE),
                 copy_w,
                 jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
             ),
@@ -3693,7 +3715,11 @@ def _side_call_law(
                 jnp.where(
                     kind == CALL_ASSIST,
                     assist_called,
-                    jnp.where(kind == CALL_ME_FIRST, first_called, 0),
+                    jnp.where(
+                        kind == CALL_ME_FIRST,
+                        first_called,
+                        jnp.where(kind == CALL_MIRROR_MOVE, mirror_called, 0),
+                    ),
                 ),
             ),
         ),
@@ -3719,7 +3745,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       Metronome or Assist call (``order.gravity_possible``), the law read with Gravity up
       (``order.gravity_state``: ``Move_CanBeMetronomed``, battle_lib.c:7198-7201, and Sleep
       Talk's CHECK_INVALID_GRAVITY, :2292-2295, read Gravity when the call runs);
-    * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
+    * Copycat and Mirror Move (E3-B2-2: value 1 is the foe's recorded move): no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move;
     * the takeover variant (ruling B11-1): where a foe's Encore can replace the side's move
@@ -3836,7 +3862,7 @@ def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tu
                 # its assumption (``call_consistent``).
                 out += [(v + off, w, den) for off in offsets]
         return out
-    if kind in (CALL_COPYCAT, CALL_ME_FIRST):
+    if kind in (CALL_COPYCAT, CALL_ME_FIRST, CALL_MIRROR_MOVE):
         return [(int(v), 1, 1) for v in np.flatnonzero(weight)]
     return [(0, 1, 1)]
 

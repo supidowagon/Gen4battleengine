@@ -69,6 +69,7 @@ from nuzline.engine.ids import (
     EffectId,
     ItemId,
     MoveFlag,
+    MoveTarget,
     Stat,
     Status,
     Weather,
@@ -146,6 +147,9 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
 CALL_NONE, CALL_SLEEP_TALK, CALL_METRONOME, CALL_COPYCAT = 0, 1, 2, 3
 CALL_ASSIST = 4  # E2 batch 10, B10-11
 CALL_ME_FIRST = 5  # E3-2-3: Me First, ``me_first_copy``; no draw, ordered like Copycat
+CALL_MIRROR_MOVE = (
+    6  # E3-B2-2: Mirror Move, ``mirror_call``; no draw in singles, ordered like Copycat
+)
 
 
 def call_kind(tables: Tables, move) -> jnp.ndarray:
@@ -163,7 +167,11 @@ def call_kind(tables: Tables, move) -> jnp.ndarray:
                 jnp.where(
                     effect == EffectId.ASSIST,
                     CALL_ASSIST,
-                    jnp.where(effect == EffectId.ME_FIRST, CALL_ME_FIRST, CALL_NONE),
+                    jnp.where(
+                        effect == EffectId.ME_FIRST,
+                        CALL_ME_FIRST,
+                        jnp.where(effect == EffectId.MIRROR_MOVE, CALL_MIRROR_MOVE, CALL_NONE),
+                    ),
                 ),
             ),
         ),
@@ -261,6 +269,46 @@ def copycat_call(tables: Tables, move_prev, state: BattleState | None = None) ->
     return jnp.where(ok, move_prev, 0).astype(_I32)
 
 
+# The ranges whose defender stays the user (a Counter-family command re-picks it, so its special
+# range is left out: it may be aimed at the foe, over-approximately): such a move does not write the
+# foe's ``moveCopied``.
+MIRROR_SELF_RANGES = (
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+
+def mirror_call(tables: Tables, copied) -> jnp.ndarray:
+    """``int32``: the move ``BtlCmd_SetMirrorMove`` (battle_script.c:3483-3525) calls with the
+    user's ``moveCopied`` ``copied``, 0 when it fails: MOVE_NONE, or a move ``Move_CanBeEncored``
+    refuses (battle_lib.c:7221-7231: the battle effect of a ``CANNOT_ENCORE_MOVES`` move, the
+    table Mirror Move shares with Encore). A call is not Metronome-limited (an invoker is never
+    recorded: no invoker has ``MoveFlag.MIRROR_MOVE``) and reads nothing of Gravity (E3-B2-2)."""
+    copied = jnp.asarray(copied, _I32)
+    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
+    refused = jnp.any(tables.move_ai_effect[copied][..., None] == banned, axis=-1)
+    return jnp.where((copied != 0) & ~refused, copied, 0).astype(_I32)
+
+
+def mirror_copied(state: BattleState, side, call) -> jnp.ndarray:
+    """``int32``: ``moveCopied`` of ``side``'s battler as ``BtlCmd_SetMirrorMove`` reads it
+    (battle_script.c:3490-3503): ``move_copied``, else in a doubles battle (more than two battlers)
+    a random nonzero entry of its ``move_copied_hit`` row (``RandNext() % 4`` until nonzero:
+    uniform over the nonzero entries, the ``call % count``-th of them), else none (E3-B2-2)."""
+    fmt = format_of(state)
+    own = state.move_copied[side].astype(_I32)
+    if fmt.B <= 2:
+        return own
+    row = state.move_copied_hit[side].astype(_I32)
+    nonzero = row != 0
+    count = jnp.sum(nonzero.astype(_I32))
+    pick = row[_nth(nonzero, jnp.asarray(call, _I32) % jnp.maximum(count, 1))]
+    return jnp.where(own != 0, own, jnp.where(count > 0, pick, 0)).astype(_I32)
+
+
 def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fights) -> jnp.ndarray:
     """``int32``: the move ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) copies from
     ``target_side``'s battler, 0 when it fails, for a target that has not acted yet (the caller's
@@ -287,7 +335,7 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
 
 
 def invoked_move(
-    tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None
+    tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None, copied=None
 ):
     """``int32``: the move ``side``'s ``move`` runs through its invoker script, read with
     ``state`` as it is when the script runs; 0 when the invoker finds none. Sleep Talk: the
@@ -297,7 +345,8 @@ def invoked_move(
     ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
     Nature Power on the result is ``called_move``'s. A Gravity variant's ``CALL_GRAVITY`` offset
     is dropped (``call % CALL_GRAVITY``). Me First: ``me_first``, the caller's ``me_first_copy`` of
-    its target (0 when none is given or the target has acted)."""
+    its target (0 when none is given or the target has acted). Mirror Move: ``mirror_call`` of
+    ``copied`` (default ``mirror_copied``, the user's moveCopied when the script runs)."""
     fmt = format_of(state)
     move = jnp.asarray(move, _I32)
     call = jnp.asarray(call, _I32) % CALL_GRAVITY
@@ -317,6 +366,8 @@ def invoked_move(
     n_listed = jnp.sum(valid.astype(_I32))
     assist = jnp.where(n_listed > 0, listed[_nth(valid, call % jnp.maximum(n_listed, 1))], 0)
     first = jnp.asarray(0 if me_first is None else me_first, _I32)
+    held = mirror_copied(state, side, call) if copied is None else jnp.asarray(copied, _I32)
+    mirror = mirror_call(tables, held)
     return jnp.where(
         kind == CALL_SLEEP_TALK,
         talk,
@@ -329,7 +380,11 @@ def invoked_move(
                 jnp.where(
                     kind == CALL_ASSIST,
                     assist,
-                    jnp.where(kind == CALL_ME_FIRST, first, move),
+                    jnp.where(
+                        kind == CALL_ME_FIRST,
+                        first,
+                        jnp.where(kind == CALL_MIRROR_MOVE, mirror, move),
+                    ),
                 ),
             ),
         ),
@@ -435,12 +490,14 @@ def can_call_effect(tables: Tables, state: BattleState, side, move, wanted) -> j
     listed, valid = assist_candidates(tables, state, side)
     assist = jnp.any(valid & (effect[listed] == wanted))
     copycat = effect[copycat_call(tables, state.move_prev, state)] == wanted
+    mirror = effect[mirror_call(tables, mirror_copied(state, side, 0))] == wanted
     return (
         (effect[move] == wanted)
         | ((kind == CALL_SLEEP_TALK) & talk)
         | ((kind == CALL_METRONOME) & metronome)
         | ((kind == CALL_ASSIST) & assist)
         | ((kind == CALL_COPYCAT) & copycat)
+        | ((kind == CALL_MIRROR_MOVE) & mirror)
     )
 
 
@@ -546,7 +603,18 @@ def used_moves(
         first = jnp.where(
             after_foe[side], 0, me_first_copy(tables, state, foe, chosen[foe], fights)
         )
-        invoked = invoked_move(tables, state, side, chosen[side], call[side], prev, first)
+        # Mirror Move copies what the foe's move this turn recorded for its user (UpdateFlagsWhenHit,
+        # bcp.c:4480-4486): the foe's chosen move when it has MoveFlag.MIRROR_MOVE and is aimed at
+        # the user, else the turn-start ``move_copied`` (E3-B2-2).
+        flagged = (tables.move_flags[chosen[foe]] & MoveFlag.MIRROR_MOVE) != 0
+        own_range = jnp.isin(tables.move_target[chosen[foe]], jnp.asarray(MIRROR_SELF_RANGES, _I32))
+        aimed = flagged & ~own_range
+        held = jnp.where(
+            after_foe[side] & aimed, chosen[foe], mirror_copied(state, side, call[side])
+        )
+        invoked = invoked_move(
+            tables, state, side, chosen[side], call[side], prev, first, copied=held
+        )
         out.append(
             jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
         )

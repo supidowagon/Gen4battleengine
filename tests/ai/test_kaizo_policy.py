@@ -5257,3 +5257,67 @@ def test_fling_expert_power_bands(kaizo_tables, kaizo_names, kaizo_roark_party):
         s = s._replace(item=s.item.at[1, 0].set(item))
         assert _delta(t, s, 0x3, 0x7)[0] == plain, item
         assert _delta(t, s, 0x3, 0x7, ((0, 5276),))[0] == jumped, item
+
+
+# --- #9 Mirror Move (E3-B2-2) -----------------------------------------------------------------
+
+
+def test_mirror_move_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Mirror Move is BATTLE_EFFECT_COPY_MOVE, 9, in Expert_Main (script.s:1632) and
+    Risky_RiskyEffects (:6539), with Expert_MirrorMove at :1907, its rolls at :1915 and :1922 and
+    its table at :1928-1976; ``commands.MIRROR_MOVE_TABLE`` is that table by move name, and the
+    same 47 moves as Expert_Copycat_EncouragedMoves (:5582), in the same order (E3-B2-2)."""
+    assert BattleEffect.COPY_MOVE == 9 and 9 in c.RISKY_EFFECTS
+    assert c.MIRROR_MOVE_TABLE == c.COPYCAT_ENCOURAGED_MOVES
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    moves = DECOMP / "generated/moves.txt"
+    if not script.exists() or not moves.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert "BATTLE_EFFECT_COPY_MOVE" in lines[1631] and "Expert_MirrorMove" in lines[1631]
+    assert lines[1906] == "Expert_MirrorMove:"
+    assert lines[1914].strip() == "IfRandomLessThan 128, Expert_MirrorMove_End"
+    assert lines[1921].strip() == "IfRandomLessThan 80, Expert_MirrorMove_End"
+    assert "BATTLE_EFFECT_COPY_MOVE" in lines[6538]
+    ids = [x.strip() for x in moves.read_text(encoding="utf-8").splitlines()]
+
+    def table(label):
+        start = lines.index(label + ":") + 1
+        entries = []
+        for line in lines[start:]:
+            word = line.split()
+            if not word or word[0] != "TableEntry" or word[1] == "TABLE_END":
+                break
+            entries.append(ids.index(word[1]))
+        return tuple(entries)
+
+    assert table("Expert_MirrorMove_MoveTable") == c.MIRROR_MOVE_TABLE
+    assert table("Expert_Copycat_EncouragedMoves") == c.COPYCAT_ENCOURAGED_MOVES
+
+
+@pytest.mark.parametrize(
+    ("speed", "last", "jumps", "expected"),
+    [
+        # Expert_MirrorMove (script.s:1907-1926). Faster with the player's last move in the table:
+        # +2 unless the 128 roll (:1915) jumps.
+        ("faster", "Toxic", (), 2),
+        ("faster", "Toxic", (1915,), 0),
+        # Faster, not in the table (or none): _TryScoreMinus1: -1 unless the 80 roll (:1922) jumps.
+        ("faster", "Earthquake", (), -1),
+        ("faster", "Earthquake", (1922,), 0),
+        ("faster", "", (), -1),
+        # Slower: straight to _TryScoreMinus1; a table move ends there.
+        ("slower", "Toxic", (), 0),
+        ("slower", "Growl", (), -1),
+        ("slower", "Growl", (1922,), 0),
+    ],
+)
+def test_expert_mirror_move(
+    kaizo_tables, kaizo_names, kaizo_roark_party, speed, last, jumps, expected
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Mirror Move", "Accelerock", "", ""))
+    s = _speeds(s, player=1 if speed == "faster" else 500, opp=100)
+    if last:
+        s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected

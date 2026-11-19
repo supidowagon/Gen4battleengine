@@ -541,6 +541,10 @@ class EffectId(IntEnum):
     # the item's fling effect to the defender after the hit (``effects._fling``, ``step._use_move``,
     # E3-B2-1).
     FLING = 130
+    # Mirror Move (9, BATTLE_EFFECT_COPY_MOVE): zeros. effect_script_0009.s: BtlCmd_SetMirrorMove
+    # (battle_script.c:3483-3525) then GoToMoveScript on the defender's last Mirror-Move-able move
+    # at it (``BattleState.move_copied``): an invoker (``order.CALL_MIRROR_MOVE``), E3-B2-2.
+    MIRROR_MOVE = 131
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1354,6 +1358,10 @@ class MoveFlag(IntFlag):
     # secondary roll (bcp.c:3544-3554, the script reloaded per hit :3789). ``MULTI_HIT``
     # (Double Kick's effect_script_0044.s, a plain hit twice) keeps its count in its param.
     HIT_TWICE = 4194304
+    # MOVE_FLAG_CAN_MIRROR_MOVE (generated move flags): UpdateFlagsWhenHit records a move that has it
+    # as the defender's ``moveCopied`` (battle_controller_player.c:4480-4486), which Mirror Move
+    # copies (E3-B2-2).
+    MIRROR_MOVE = 8388608
 
 
 class SemiKind(IntEnum):

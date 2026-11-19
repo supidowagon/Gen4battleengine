@@ -558,6 +558,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     239: ("BATTLE_EFFECT_SUPRESS_ABILITY", _E.GASTRO_ACID, (0, 0, 0)),
     # Fling: effect_script_0233.s, the held item's fling power and effect (E3-B2-1).
     233: ("BATTLE_EFFECT_FLING", _E.FLING, (0, 0, 0)),
+    # Mirror Move: effect_script_0009.s -> BtlCmd_SetMirrorMove, then GoToMoveScript (E3-B2-2).
+    9: ("BATTLE_EFFECT_COPY_MOVE", _E.MIRROR_MOVE, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

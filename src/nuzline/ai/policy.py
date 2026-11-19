@@ -3056,6 +3056,31 @@ def _expert_copycat(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | ctx.live))
 
 
+def _expert_mirror_move(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MirrorMove`` (script.s:1907-1926): slower (the SLOWER compare, no tie read), or
+    the player's last move (``LoadBattlerPreviousMove``) not in ``MIRROR_MOVE_TABLE``, goes to
+    ``_TryScoreMinus1`` (:1919): the last move in the table ends, else -1 unless the 80 roll
+    (:1922) jumps; faster with it in the table, +2 unless the 128 roll (:1915) jumps (E3-B2-2)."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_SLOWER))
+    ctx = c.load_battler_previous_move(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.MIRROR_MOVE_TABLE))
+    minus1 = minus1 | t
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 1915))
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _TryScoreMinus1 (:1919)
+    ctx = c.load_battler_previous_move(_at(ctx, minus1), _D)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.MIRROR_MOVE_TABLE))
+    end = end | t
+    ctx, t = _split(c.if_random_less_than(ctx, 80, 1922))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _End (:1925)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _status_stat_trick(label: str, lines: dict[str, int], first, hp_check):
     """``Expert_StatusAccuracyDown`` (script.s:2431-2498) and ``Expert_StatusEvasionUp``
     (:2184-2253), one shape after their first round (``first``): the attacker's own
@@ -3836,6 +3861,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
     (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
     (BattleEffect.RECOVER_DAMAGE_SLEEP, _expert_dream_eater),  # :1631
+    (BattleEffect.COPY_MOVE, _expert_mirror_move),  # :1632 (E3-B2-2)
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636

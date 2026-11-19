@@ -547,6 +547,16 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int, me_first
         return prev if ok else 0
     if effect == EffectId.ME_FIRST:
         return me_first  # the caller's ``_me_first_copy`` (0 once the target has acted)
+    if effect == EffectId.MIRROR_MOVE:
+        # BtlCmd_SetMirrorMove (script.c:3483-3525, E3-B2-2): moveCopied, else (doubles) a random
+        # nonzero moveCopiedHit entry; it must pass Move_CanBeEncored (lib.c:7221-7231).
+        copied = sd.move_copied
+        if not copied and len(s.battlers) > 2:
+            row = [m for m in sd.move_copied_hit if m]
+            copied = row[call % len(row)] if row else 0
+        banned = {_t(tables, "move_ai_effect", m) for m in CANNOT_ENCORE_MOVES}
+        refused = _t(tables, "move_ai_effect", copied) in banned
+        return copied if copied and not refused else 0
     if effect == EffectId.ASSIST:
         # BtlCmd_TryAssist (script.c:6405-6444, B10-11): every move of every other party slot
         # with a Pokemon, not an invoker, Metronome-able; RandNext() % numMoves.
@@ -1750,6 +1760,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
+    _clear_copied(s, side)
     turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
@@ -1766,9 +1777,22 @@ BATON_PASSED = (
 )  # fmt: skip
 
 
+def _clear_copied(s: RefState, side: int) -> None:
+    """``moveCopied`` / ``moveCopiedHit`` at ``side``'s battler's switch-in or faint
+    (``BattleSystem_UpdateAfterSwitch`` lib.c:2125-2149, ``BattleSystem_CleanupFaintedMon``
+    :2203-2220): its own row, every foe's ``moveCopied`` and every holder's column of it
+    (E3-B2-2)."""
+    s.battlers[side].move_copied_hit = [0] * len(s.battlers)
+    for other, sd in enumerate(s.battlers):
+        if other != side and other & 1 != side & 1:
+            sd.move_copied = 0
+        sd.move_copied_hit[side] = 0
+
+
 def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
     """The volatile state of a side's active battler back to a fresh battler's; a Baton Pass
-    keeps ``BATON_PASSED`` and the stages."""
+    keeps ``BATON_PASSED`` and the stages. ``move_copied_hit`` and the foes' ``moveCopied`` are
+    ``_clear_copied``'s."""
     if not baton:
         sd.stages = [0] * len(sd.stages)
     for name in (
@@ -1791,6 +1815,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "pursuit_target",
         "water_sport",
         "move_hit",
+        "move_copied",  # moveCopied of the holder (lib.c:2125-2129), E3-B2-2
         "foresight",
         "disabled_move",
         "disable_turns",
@@ -2880,6 +2905,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _restore_moves(s, side)  # and its Mimic copies (G-68)
     sd.active = slot
     _reset_battler(sd, baton)
+    _clear_copied(s, side)
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
     # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (it only
@@ -4844,6 +4870,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         EffectId.COPYCAT,
         EffectId.ASSIST,  # B10-11
         EffectId.ME_FIRST,  # E3-2-3
+        EffectId.MIRROR_MOVE,  # E3-B2-2
     ):
         # The invokers (B5-1..): the script picks the move now (Copycat reads the battle's
         # movePrev as the faster foe left it), then GoToMoveScript (script.c:2111-2134) runs it
@@ -6559,6 +6586,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         if turn.done[side] or _active(s, side).hp == 0:
             continue
         record = None
+        copied = (0, 0)
         if commands[side] == ITEM:
             _use_item(tables, s, side, items[side])
         elif commands[side] == SWITCH:
@@ -6621,6 +6649,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
+            copied = _copied_writes(tables, turn, move, record)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
@@ -6628,10 +6657,26 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 s.battlers[side].protect_count = 0
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
         _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
-        _finish_action(turn, s, side, position, record)
+        _finish_action(turn, s, side, position, record, copied)
 
 
-def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -> None:
+def _copied_writes(tables, turn: _Turn, move: int, record) -> tuple[int, int]:
+    """``UpdateFlagsWhenHit``'s moveCopied write (bcp.c:4480-4486, E3-B2-2): ``(for the foe, for
+    the user)``, the move written (0: none). moveTemp ``move`` needs ``MoveFlag.MIRROR_MOVE`` and
+    its attack message shown; the defender is the foe exactly when ``record`` is a moveHit write
+    (nonzero: the message showed), else the user for a self-defender range."""
+    if not (turn.attack_message and _t(tables, "move_flags", move) & MoveFlag.MIRROR_MOVE):
+        return 0, 0
+    if record:
+        return move, 0
+    if record is None and _move_target(tables, move) in SELF_DEFENDER:
+        return 0, move
+    return 0, 0
+
+
+def _finish_action(
+    turn: _Turn, s: RefState, side: int, position: int, record, copied=(0, 0)
+) -> None:
     """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
     turn.done[side] = True
     _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
@@ -6639,6 +6684,12 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # keeps the record until its replacement clears it.
     if record is not None:
         s.battlers[_foe(side)].move_hit = record
+    # moveCopied / moveCopiedHit likewise (bcp.c:4480-4486): the write after the faint check's
+    # cleanup (lib.c:2203-2220), kept until the replacement's switch-in (E3-B2-2).
+    for holder, value in ((_foe(side), copied[0]), (side, copied[1])):
+        if value:
+            s.battlers[holder].move_copied = value
+            s.battlers[holder].move_copied_hit[side] = value
     # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
     # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
     if not s.over:
@@ -6879,7 +6930,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     s.move_prev = move
     s.battlers[side].last_move = move
     s.battlers[side].protect_count = 0
-    _finish_action(turn, s, side, position, record)
+    copied = (_copied_writes(tables, turn, move, record)[0], 0)  # a pivot is never self-ranged
+    _finish_action(turn, s, side, position, record, copied)
     try:
         _actions(turn, s, position + 1)
     except _Pause:

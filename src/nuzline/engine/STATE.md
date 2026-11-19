@@ -141,6 +141,16 @@ three structs has a row.
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
   (`order.copycat_call`). A field condition, not a battler's: it does not leave with a battler.
+- **moveCopied / moveCopiedHit -> `move_copied` / `move_copied_hit`** (E3-B2-2): per battler `[B]`
+  (the holder) and `[B,B]` (holder, then attacking battler), int16 move ids, 0 = none. Mirror Move
+  (`order.mirror_call`) reads `move_copied[b]`, else in a doubles battle a random nonzero
+  `move_copied_hit[b]` entry (battle_script.c:3483-3503). `UpdateFlagsWhenHit` writes both for the
+  defender when moveTemp has `MoveFlag.MIRROR_MOVE` and the attack message showed
+  (battle_controller_player.c:4480-4486; `step._use_move` computes the write, `step._move_end`
+  applies it after the faint check like `move_hit`). A battler's switch-in or faint clears its own
+  entry and row (`VOLATILE_FIELDS`) and, through `state.clear_copied`, every foe's `move_copied`
+  and every holder's column of it (battle_lib.c:2125-2149, :2203-2220; `step._reset_battler`).
+  Nothing counts them down; Baton Pass clears them too.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout, Uproar, and since E2 batch 10 the
   charge-up moves: subscript_vanish_on_charge_turn.s:10 locks into moveCur, B10-12), and
@@ -690,8 +700,8 @@ three structs has a row.
 | `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
 | `BattleContext.moveHitType` | — | later (M6) |
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
-| `BattleContext.moveCopied` | — | later (M6) |
-| `BattleContext.moveCopiedHit` | — | later (M6) |
+| `BattleContext.moveCopied` | `move_copied` | mapped |
+| `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
 | `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |

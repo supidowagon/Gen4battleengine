@@ -342,6 +342,13 @@ class BattleState(NamedTuple):
     water_sport: jnp.ndarray  # int8
     fake_out_turn: jnp.ndarray  # int16, fakeOutTurnNumber
     move_hit: jnp.ndarray  # int16, moveHit: decomp move id, 0 = none
+    # int16, BattleContext.moveCopied (per battler: the last Mirror-Move-able move aimed at it,
+    # battle_controller_player.c:4480-4486) and moveCopiedHit (per holder, then per attacking
+    # battler; read only in doubles, battle_script.c:3492-3503); E3-B2-2. Cleared with the volatiles
+    # of the holder and, on any battler's switch-in or faint, for every foe's entry and every
+    # holder's column of that battler (battle_lib.c:2125-2149, :2203-2220: ``step._reset_battler``).
+    move_copied: jnp.ndarray
+    move_copied_hit: jnp.ndarray
     foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
     disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
     disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
@@ -595,6 +602,8 @@ VOLATILE_FIELDS = (
     "pursuit_target",
     "water_sport",
     "move_hit",
+    "move_copied",
+    "move_copied_hit",
     "foresight",
     "disabled_move",
     "disable_turns",
@@ -725,6 +734,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "water_sport": (_BATTLER, np.int8),
     "fake_out_turn": (_BATTLER, np.int16),
     "move_hit": (_BATTLER, np.int16),
+    "move_copied": (_BATTLER, np.int16),
+    "move_copied_hit": ((*_BATTLER, "B"), np.int16),
     "foresight": (_BATTLER, np.int8),
     "disabled_move": (_BATTLER, np.int16),
     "disable_turns": (_BATTLER, np.int8),
@@ -872,6 +883,25 @@ LAYOUT = layout(SINGLES)  # the singles shapes: what every caller outside the fo
 
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
+
+
+def clear_copied(state: BattleState, b, cond=True) -> BattleState:
+    """``moveCopied`` / ``moveCopiedHit`` as battler ``b`` switches in or faints, where ``cond``
+    (``BattleSystem_UpdateAfterSwitch`` battle_lib.c:2125-2149, ``BattleSystem_CleanupFaintedMon``
+    :2203-2220): every foe's ``move_copied`` (the other side's holders: what ``b`` did is gone) and
+    every holder's ``move_copied_hit`` column of ``b``. ``b``'s own entry and row are
+    ``VOLATILE_FIELDS``' (E3-B2-2)."""
+    fmt = format_of(state)
+    b = jnp.asarray(b, jnp.int32)
+    foes = (jnp.arange(fmt.B) & 1) != (b & 1)
+    copied = jnp.where(cond & foes, 0, state.move_copied)
+    column = jnp.where(cond, 0, state.move_copied_hit[:, b])
+    return state._replace(
+        move_copied=copied.astype(state.move_copied.dtype),
+        move_copied_hit=state.move_copied_hit.at[:, b].set(
+            column.astype(state.move_copied_hit.dtype)
+        ),
+    )
 
 
 def ability_is_suppressed(state: BattleState, b, slot=None) -> jnp.ndarray:

@@ -73,6 +73,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_METRONOME,
+    CALL_MIRROR_MOVE,
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
@@ -101,6 +102,7 @@ from nuzline.engine.state import (
     VOLATILE_FIELDS,
     BattleState,
     battler_ability,
+    clear_copied,
     held_item,
     held_items,
 )
@@ -1496,6 +1498,7 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
         move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
     )
+    seen = clear_copied(seen, pivot)  # the foes' moveCopied of the newcomer's switch-in (E3-B2-2)
     view = jax.tree.map(lambda a, b: jnp.where(paused, a, b), seen, state)
     viewed = jnp.where(paused, viewed, actions)
     return _armed_trace(tables, view, viewed, paused, pivot), viewed
@@ -1594,13 +1597,26 @@ def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
         draw_ = jax.random.randint(jax.random.fold_in(key, 34 + side), (), 0, jnp.maximum(count, 1))
         assist.append(draw_.astype(_I32))
     kinds = call_kind(tables, chosen)
+    # Mirror Move's pick among its holder's moveCopiedHit row in a doubles battle (BtlCmd_
+    # SetMirrorMove, battle_script.c:3492-3503: RandNext() % 4 until nonzero, uniform over the
+    # nonzero entries); singles never draws (E3-B2-2).
+    mirror = jnp.zeros((fmt.B,), _I32)
+    if fmt.B > 2:
+        counts = jnp.sum((state.move_copied_hit != 0).astype(_I32), axis=1)
+        mirror = jax.random.randint(
+            jax.random.fold_in(key, 44), (fmt.B,), 0, jnp.maximum(counts, 1), dtype=_I32
+        )
     return jnp.where(
         kinds == CALL_SLEEP_TALK,
         talk,
         jnp.where(
             kinds == CALL_METRONOME,
             jnp.stack(ranks),
-            jnp.where(kinds == CALL_ASSIST, jnp.stack(assist), 0),
+            jnp.where(
+                kinds == CALL_ASSIST,
+                jnp.stack(assist),
+                jnp.where(kinds == CALL_MIRROR_MOVE, mirror, 0),
+            ),
         ),
     ).astype(_I32)
 

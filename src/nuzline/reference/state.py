@@ -84,6 +84,8 @@ class RefBattler:
     water_sport: int
     fake_out_turn: int
     move_hit: int
+    move_copied: int  # BattleContext.moveCopied (E3-B2-2)
+    move_copied_hit: list[int]  # moveCopiedHit[holder][attacker] (E3-B2-2)
     foresight: int
     disabled_move: int
     disable_turns: int

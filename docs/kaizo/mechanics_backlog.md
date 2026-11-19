@@ -32,14 +32,14 @@ New groups: needed in this split and in no earlier one.
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 12 | 17 | 11 |
 | Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 24 | 14 | 3 |
 | Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 11 | 16 | 9 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 12 | 42 | 26 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 12 | 40 | 24 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 8 | 0 |
 | Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 20 | 12 | 5 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 157 | 83 | 83 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 157 | 81 | 81 |
 
 ## Whole game
 
-83 distinct missing groups across all ten splits (387 battles,
+81 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -60,10 +60,10 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Wake Split | 0 | 0 | 0 | 2 | 1 | 6 | 2 | 11 |
 | Byron Split | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
 | Candice Split | 0 | 3 | 2 | 0 | 0 | 4 | 0 | 9 |
-| Galactic Split | 0 | 4 | 3 | 3 | 1 | 15 | 0 | 26 |
+| Galactic Split | 0 | 3 | 2 | 3 | 1 | 15 | 0 | 24 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 2 | 1 | 0 | 1 | 0 | 1 | 5 |
-| **Whole game** | **1** | **13** | **7** | **8** | **5** | **45** | **4** | **83** |
+| **Whole game** | **1** | **12** | **6** | **8** | **5** | **45** | **4** | **81** |
 
 ### Groups needed in each split, by kind
 
@@ -78,10 +78,10 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Wake Split | 1 | 0 | 1 | 3 | 2 | 8 | 2 | 17 |
 | Byron Split | 1 | 4 | 0 | 2 | 3 | 2 | 2 | 14 |
 | Candice Split | 1 | 4 | 2 | 1 | 3 | 5 | 0 | 16 |
-| Galactic Split | 1 | 6 | 3 | 5 | 4 | 21 | 2 | 42 |
+| Galactic Split | 1 | 5 | 2 | 5 | 4 | 21 | 2 | 40 |
 | Volkner Split | 1 | 1 | 0 | 2 | 1 | 2 | 1 | 8 |
 | Elite Four Split | 1 | 3 | 2 | 0 | 3 | 1 | 2 | 12 |
-| **Whole game** | **1** | **13** | **7** | **8** | **5** | **45** | **4** | **83** |
+| **Whole game** | **1** | **12** | **6** | **8** | **5** | **45** | **4** | **81** |
 
 ### Battle conditions and other groups
 
@@ -161,19 +161,19 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 45 | 27 | 27 |
-| Gardenia Split | 28 | 410 (65) | 45 | 27 | 0 |
-| Fantina Split | 38 | 463 (69) | 45 | 27 | 0 |
-| Maylene Split | 47 | 480 (73) | 46 | 27 | 0 |
-| Wake Split | 54 | 482 (71) | 46 | 27 | 0 |
-| Byron Split | 65 | 486 (72) | 46 | 27 | 0 |
-| Candice Split | 74 | 486 (72) | 46 | 27 | 0 |
-| Galactic Split | 100 | 493 (73) | 46 | 27 | 0 |
-| Volkner Split | 84 | 487 (73) | 46 | 27 | 0 |
-| Elite Four Split | 100 | 493 (73) | 46 | 27 | 0 |
-| **Whole game** | | | 46 | 27 | 27 |
+| Roark Split | 16 | 358 (64) | 44 | 27 | 27 |
+| Gardenia Split | 28 | 410 (65) | 44 | 27 | 0 |
+| Fantina Split | 38 | 463 (69) | 44 | 27 | 0 |
+| Maylene Split | 47 | 480 (73) | 45 | 27 | 0 |
+| Wake Split | 54 | 482 (71) | 45 | 27 | 0 |
+| Byron Split | 65 | 486 (72) | 45 | 27 | 0 |
+| Candice Split | 74 | 486 (72) | 45 | 27 | 0 |
+| Galactic Split | 100 | 493 (73) | 45 | 27 | 0 |
+| Volkner Split | 84 | 487 (73) | 45 | 27 | 0 |
+| Elite Four Split | 100 | 493 (73) | 45 | 27 | 0 |
+| **Whole game** | | | 45 | 27 | 27 |
 
-Of your 46 groups, 19 are also needed by opposing trainers and 27 are player-only.
+Of your 45 groups, 18 are also needed by opposing trainers and 27 are player-only.
 
 ### New player-only groups per split, by kind
 
@@ -320,7 +320,6 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 1 | AI move effect #240 PREVENT_CRITS not transcribed (Basic_CheckLuckyChant / Expert_LuckyChant): Lucky Chant |
 | 1 | AI move effect #251 RESTORE_HP_EVERY_TURN not transcribed (Basic_CheckAquaRing / Expert_AquaRing): Aqua Ring |
 | 1 | AI move effect #34 INCREASE_PRIZE_MONEY not transcribed (no Basic or Expert label): Pay Day |
-| 1 | AI move effect #9 COPY_MOVE not transcribed (Expert_MirrorMove): Mirror Move |
 | 1 | AI move effect #93 CONVERSION2 not transcribed (no Basic or Expert label): Conversion 2 |
 | 1 | AI move effect #94 NEXT_ATTACK_ALWAYS_HITS not transcribed (Basic_CheckLockOn / Expert_LockOn): Lock-On |
 | 1 | ability: Multitype |
@@ -348,8 +347,9 @@ Groups by kind: battle format 12, AI 1, move effect 1, trainer item 1
 | 1 | battle format: gauntlet Wayward Cave (position 10; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 11; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 12; rules not recorded) |
+| 1 | battle format: gauntlet Wayward Cave (position 1; rules not recorded) |
 
-Groups by kind: battle format 36, AI 14, battle terrain 9, held item effect 8, move effect 7, ability 5, ROM change 2, trainer item 1, form change 1
+Groups by kind: battle format 36, AI 13, battle terrain 9, held item effect 8, move effect 6, ability 5, ROM change 2, trainer item 1, form change 1
 
 ## Build order for the first two splits
 

@@ -168,6 +168,8 @@ DECOMP_FLAG_BITS = {
     "MOVE_FLAG_CAN_PROTECT": MoveFlag.PROTECT,
     # BattleControllerPlayer_CheckExtraFlinch (battle_controller_player.c:4642).
     "MOVE_FLAG_TRIGGERS_KINGS_ROCK": MoveFlag.KINGS_ROCK,
+    # UpdateFlagsWhenHit's moveCopied write (bcp.c:4480-4486), E3-B2-2.
+    "MOVE_FLAG_CAN_MIRROR_MOVE": MoveFlag.MIRROR_MOVE,
 }
 SECONDARY = (
     EffectId.SECONDARY_STAT_SELF,

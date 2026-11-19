@@ -1637,6 +1637,16 @@ def _draw_batch5(draw, tables: Tables, a: dict, side: int, active: int, names: N
     a["move_prev"][...] = draw(st.sampled_from([0, *pool, *extra]))
 
 
+def _draw_mirror_move(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-2: maybe (1 in 6) Mirror Move taught to the active Pokemon (an unused slot or one
+    already holding another move: ``_teach``), untaunted like the other invokers."""
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Mirror Move")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+            a["taunt"][side] = 0
+
+
 def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
     2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
@@ -2042,6 +2052,10 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         a["fake_out_turn"][side] = draw(st.integers(0, turn + 1))
         foe_moves = [int(m) for m in a["moves"][1 - side, parties[1 - side][1]] if m]
         a["move_hit"][side] = draw(st.sampled_from([0, *foe_moves]))
+        # E3-B2-2: moveCopied, the foe's last move aimed at the side (moveCopiedHit holds the same
+        # entry in singles).
+        a["move_copied"][side] = draw(st.sampled_from([0, *foe_moves]))
+        a["move_copied_hit"][side, 1 - side] = a["move_copied"][side]
         own_moves = [int(m) for m in a["moves"][side, active] if m]
         a["last_move"][side] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
         disabled = draw(st.sampled_from([0, *own_moves]))
@@ -2058,6 +2072,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch4(draw, tables, a, side, active, names)
         if invokers:
             _draw_batch5(draw, tables, a, side, active, names)
+            _draw_mirror_move(draw, tables, a, side, active, names)
         _draw_uproar(draw, tables, a, side, active, names)
         _draw_future_sight(draw, tables, a, side, active, names)
         _draw_pivot(draw, tables, a, side, active, names)
@@ -2507,7 +2522,13 @@ def outcome_law_state(draw, tables: Tables, names: Names) -> BattleState:
     effect = np.asarray(tables.move_effect)
     invoker = np.isin(
         effect[a["moves"]],
-        (EffectId.SLEEP_TALK, EffectId.METRONOME, EffectId.COPYCAT, EffectId.ASSIST),
+        (
+            EffectId.SLEEP_TALK,
+            EffectId.METRONOME,
+            EffectId.COPYCAT,
+            EffectId.ASSIST,
+            EffectId.MIRROR_MOVE,
+        ),
     )
     tackle = names.move("Tackle")
     for side, mon, k in zip(*np.nonzero(invoker)):  # a learnset's own invoker too

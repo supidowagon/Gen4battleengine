@@ -564,3 +564,61 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Tests: tests/engine/test_e3_batch2.py (`test_fling_*`, `test_flung_*`), tests/ai/test_kaizo_policy.py
   (`test_fling_*`); test_batch12's crit-writer scan and test_accuracy_classes' `_FOLLOWED` list
   carry Fling.
+
+- E3-B2-2 Mirror Move (#9, BATTLE_EFFECT_COPY_MOVE; the only move with effect 9 in either game):
+  new `EffectId.MIRROR_MOVE` (131), `order.CALL_MIRROR_MOVE` (an invoker with no draw in singles,
+  ordered like Copycat and Me First), `MoveFlag.MIRROR_MOVE` (bit 1 << 23 from
+  MOVE_FLAG_CAN_MIRROR_MOVE; `tools/build_tables._move_flags`; manifest 35: the packed `move_flags`
+  values changed), state `move_copied` `[B]` and `move_copied_hit` `[B, B]` (int16, in
+  `VOLATILE_FIELDS` for the holder's own entry and row; STATE.md rows mapped).
+  Script: effect_script_0009.s:5-13 attack message, SetMirrorMove, else "Mirror Move failed!" and
+  MOVE_STATUS_NO_MORE_WORK (the engine's failure path is Dream Eater's, B10-4: `failed`, no further
+  difference). `BtlCmd_SetMirrorMove` (bs.c:3483-3525): `order.mirror_copied` (moveCopied, else in a
+  doubles battle, `fmt.B > 2`, the `call % count`-th nonzero `move_copied_hit` entry: the decomp's
+  `RandNext() % 4` until nonzero is uniform over the nonzero entries; `outcome._draw_calls` draws it,
+  fold 44; singles never reads moveCopiedHit: it is moveCopied's twin there), then `order.mirror_call`:
+  0 for MOVE_NONE or a move whose battle effect (`tables.move_ai_effect`) is that of a
+  `CANNOT_ENCORE_MOVES` move (`Move_CanBeEncored`, lib.c:7221-7231: Transform, Mimic, Sketch, Mirror
+  Move, Encore, Struggle); no Gravity or Metronome ban (no invoker has the flag, so none is ever
+  recorded). A success is GoToMoveScript on the called move as the user's (the existing invoker
+  path: `invoked_move`, `called_move`, a defender re-picked by the called move's own range,
+  `subscript_no_target` with none); PP is Mirror Move's alone (DecrementPP ran at BeforeMove,
+  bcp.c:3181-3185). Choice lock and `last_move` are moveTemp's (Mirror Move).
+  Writer (`UpdateFlagsWhenHit`, bcp.c:4480-4486): `step._use_move` computes it from moveTemp
+  (`move`, not the called move), `MoveFlag.MIRROR_MOVE`, the attack message shown (`shown_t`) and the
+  defender: the foe (`record`) or the user for a flagged self-defended move (Trick Room, RANGE_FIELD;
+  a failed Metal Burst, RANGE_SINGLE_TARGET_SPECIAL: the Counter family's defender is the user until
+  its command succeeds), and `step._move_end` applies it after the faint check like `move_hit`
+  (LOOP_FAINTED precedes it, bcp.c:3820-3837), so a fainted defender keeps it until its replacement
+  switches in; a miss or Protect still records (the message showed), a confusion self-hit does not
+  (no message). A pivot's resumed tail writes for the foe only. Reference engine: `_copied_writes`
+  and `_finish_action`. Clears: `state.clear_copied` (every foe's `move_copied`, every holder's
+  column of the battler) beside the own entry and row (`VOLATILE_FIELDS`) at a switch-in or faint
+  (`step._reset_battler`, lib.c:2125-2149, :2203-2220), and in `outcome.pivot_view`; the reference
+  `_clear_copied`. Nothing counts down.
+  Hit chance, damage and crit: those of the called move (no draw of its own; the accuracy roll is the
+  called move's, Mirror Move has accuracy 0). Enumeration: `INPUT_NEUTRAL_EFFECTS` and
+  `NON_TABLE_DAMAGE_EFFECTS` (an invoker), `outcome_laws`' `copycat` branch (two orders), call law
+  `_side_call_law`: value 0 the turn-start moveCopied, value 1 the foe's chosen move when it has
+  the flag and is not self-ranged (`order.MIRROR_SELF_RANGES`; a Counter-family move counts as aimed,
+  over-approximate) else the turn-start entry, `order.used_moves`, `can_call_effect`.
+  AI: Expert_MirrorMove (script.s:1907-1926, dispatch :1632; rolls :1915 (128, +2 when it does not
+  jump) and :1922 (80, -1 when it does not jump): `SITE_N`, `KAIZO_TRANSCRIBED` 9,
+  `KAIZO_EXPERT_LABELS`, `KAIZO_EXPERT_TRANSCRIBED`, `BattleEffect.COPY_MOVE`); the table
+  (:1928-1976) is `commands.MIRROR_MOVE_TABLE`, the same 47 moves in the same order as
+  `COPYCAT_ENCOURAGED_MOVES` (compared name by name against the decomp by
+  `test_mirror_move_tables_are_the_decomps`; no new ids, so no game_constants entry). It reads
+  `LoadBattlerPreviousMove` (movePrevByBattler, `last_move`), not moveCopied. Risky_RiskyEffects
+  already lists 9 (:6539). No Basic entry. Read bounds and the backlog regenerated.
+  Rulings. (1) skipPressureCheck (bs.c:3521, set on a failed call) is not modelled: it is read only
+  by DecrementPP (bcp.c:2238), which already ran in this action, and dies with selfTurnFlags at the
+  next BattleContext_Init (bcp.c:3998). (2) SYSCTL_REUSE_LAST_MOVE (Magic Coat / Snatch, bcp.c:3077,
+  :3099) keeps their reuse of a move from recording; neither mechanic exists yet (Owed 1): when
+  they are built the write must skip that path. (3) The write's defender for a self-defended flagged
+  move records for the user, so a user's own Trick Room can be Mirror Moved by itself later.
+  Not built: Tag Strategy and the doubles path of the enumeration (the doubles draw is in
+  `mirror_copied` / `_draw_calls`, no doubles format runs `call_laws` yet). Tests:
+  tests/engine/test_e3_batch2.py (`test_mirror_move_*`, `test_flagged_*`,
+  `test_a_self_defended_*`, `test_a_switch_clears_*`), tests/ai/test_kaizo_policy.py
+  (`test_mirror_move_tables_*`, `test_expert_mirror_move`); test_accuracy_classes' `_FOLLOWED` list
+  and the state strategy (`move_copied`, `_draw_mirror_move`) carry it.

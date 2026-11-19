@@ -261,6 +261,7 @@ from nuzline.engine.state import (
     VOLATILE_FIELDS,
     BattleState,
     battler_ability,
+    clear_copied,
     field_index,
     held_item,
     record_seen_move,
@@ -424,7 +425,9 @@ def _reset_battler(state: BattleState, side, cond, baton=False) -> BattleState:
         clear = cond & ~baton if name in (*_BATON_PASSED, "stages") else cond
         return getattr(state, name).at[side].set(jnp.where(clear, 0, getattr(state, name)[side]))
 
-    return state._replace(**{name: reset(name) for name in (*_VOLATILE, "stages")})
+    state = state._replace(**{name: reset(name) for name in (*_VOLATILE, "stages")})
+    # The foes' moveCopied and every holder's column of this battler go too (E3-B2-2).
+    return clear_copied(state, side, cond)
 
 
 def _entered(state: BattleState, side, entry_turn, cond) -> BattleState:
@@ -2276,6 +2279,17 @@ def _use_move(
     state = state._replace(
         move_hit=state.move_hit.at[target_side].set(hit_record.astype(state.move_hit.dtype))
     )
+    # UpdateFlagsWhenHit's moveCopied (bcp.c:4480-4486, E3-B2-2): moveTemp (the chosen move, not
+    # the one an invoker called) when it has MOVE_FLAG_CAN_MIRROR_MOVE (``MoveFlag.MIRROR_MOVE``;
+    # no invoker has it) and the attack message showed is written for the battler that is the
+    # defender: the foe (``copy_foe``, ``record``'s defender) or, for a flagged move whose
+    # defender is its own user (Trick Room's field range, a failed Metal Burst), the user
+    # (``copy_self``). ``_move_end`` applies both after the faint check, as it keeps moveHit.
+    flagged = (tables.move_flags[move] & MoveFlag.MIRROR_MOVE) != 0
+    copy_foe = jnp.where(tail & record & shown_t & flagged, move, 0).astype(_I32)
+    own_defender = head_on & ready & ~self_hit & ~record & shown_t
+    own_defender = own_defender & self_defender(tables, used, ghost_user(state, side))
+    copy_self = jnp.where(tail & own_defender & flagged, move, 0).astype(_I32)
     # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915, after LOOP_SPREAD_MOVES and
     # FAINT_AFTER_SELFDESTRUCT): AFTER_MOVE_HIT_STATE_SHELL_BELL (:4736-4752) and
     # AFTER_MOVE_HIT_STATE_LIFE_ORB (:4758-4772) need SYSCTL_MOVE_HIT (a hit's UpdateHP,
@@ -2415,7 +2429,14 @@ def _use_move(
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
     # The head's Synchronize flag and sideEffectMon where it stopped for U-turn's Pursuit: the
     # MODE_PURSUIT tail's Synchronize step reads them (``pursuit_sync``, ruling G-24).
-    ctl = {"pause": paused, "pursue": pursue, "sync_flag": looped[16], "sync_sem": looped[17]}
+    ctl = {
+        "pause": paused,
+        "pursue": pursue,
+        "sync_flag": looped[16],
+        "sync_sem": looped[17],
+        "copy_foe": copy_foe,
+        "copy_self": copy_self,
+    }
     return state, own, foe, ctl
 
 
@@ -2750,7 +2771,9 @@ def _faint_check(
     return after
 
 
-def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran) -> BattleState:
+def _move_end(
+    tables: Tables, state: BattleState, acted: BattleState, side, ran, copied=(0, 0)
+) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
@@ -2764,6 +2787,23 @@ def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran)
     clear = ran & (state.over == 0)
     move_hit = move_hit.at[side].set(jnp.where(clear, 0, move_hit[side]))
     state = state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
+    # moveCopied / moveCopiedHit (UpdateFlagsWhenHit, bcp.c:4480-4486, after LOOP_FAINTED like
+    # moveHit): ``copied`` = (the move written for the foe, for the actor), 0 for none, E3-B2-2.
+    # The faint check above cleared a fainted battler's entry and its foes' (battle_lib.c:2203-
+    # 2220); the write comes after it and stays until the replacement's switch-in.
+    for holder, other, value in ((foe, side, copied[0]), (side, side, copied[1])):
+        value = jnp.where(ran, jnp.asarray(value, _I32), 0)
+        write = value != 0
+        state = state._replace(
+            move_copied=state.move_copied.at[holder].set(
+                jnp.where(write, value, state.move_copied[holder]).astype(state.move_copied.dtype)
+            ),
+            move_copied_hit=state.move_copied_hit.at[holder, other].set(
+                jnp.where(write, value, state.move_copied_hit[holder, other]).astype(
+                    state.move_copied_hit.dtype
+                )
+            ),
+        )
     # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
@@ -2958,6 +2998,7 @@ def _execute_actions(
             acted,
             side,
             ran,
+            (ctl["copy_foe"], ctl["copy_self"]),
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first

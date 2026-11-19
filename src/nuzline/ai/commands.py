@@ -459,6 +459,8 @@ class BattleEffect(IntEnum):
     SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
     SUPRESS_ABILITY = 239  # Gastro Acid: Basic_CheckGastroAcid (:269); Expert_GastroAcid (:1782)
     FLING = 233  # Basic_CheckFling (:263); Expert_Fling (:1776)
+    # E3 batch 2 (E3-B2-2).
+    COPY_MOVE = 9  # Mirror Move: Expert_MirrorMove (:1632); Risky :6539; no Basic entry
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -1003,6 +1005,11 @@ COPYCAT_ENCOURAGED_MOVES = (
     178, 184, 313, 319, 86, 137, 77, 247, 223, 63, 245, 168, 343, 213, 207, 259, 260, 271,
     276, 285, 375, 384, 385, 389, 391, 415, 445, 464,
 )  # fmt: skip
+
+# Expert_MirrorMove_MoveTable (script.s:1928-1976): the same 47 moves in the same order as
+# Expert_Copycat_EncouragedMoves above (compared name by name against the decomp's two tables by
+# tests/engine/test_e3_batch2.py, E3-B2-2).
+MIRROR_MOVE_TABLE = COPYCAT_ENCOURAGED_MOVES
 
 # Expert_ChangeUserAbility_DesirableAbilities (script.s:4435-4461): ABILITY_SPEED_BOOST, _BATTLE_ARMOR,
 # _SAND_VEIL, _STATIC, _FLASH_FIRE, _WONDER_GUARD, _EFFECT_SPORE, _SWIFT_SWIM, _HUGE_POWER,

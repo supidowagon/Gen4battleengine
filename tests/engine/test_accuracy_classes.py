@@ -447,6 +447,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.COPYCAT,
     EffectId.ASSIST,  # an invoker (B10-11)
     EffectId.ME_FIRST,  # an invoker (E3-2-3): the copied move's own effect decides
+    EffectId.MIRROR_MOVE,  # an invoker (E3-B2-2): the copied move's own effect decides
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,

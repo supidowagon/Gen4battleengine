@@ -15,7 +15,8 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
-from nuzline.engine.ids import AbilityId, EffectId, FlingEffect, Stat, Status
+from nuzline.engine.ids import AbilityId, EffectId, FlingEffect, MoveFlag, Stat, Status
+from nuzline.engine.order import CALL_MIRROR_MOVE, call_kind
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import A, assert_matches_reference
@@ -260,3 +261,160 @@ def test_fling_is_seen_by_hit_thresholds(tables, names):
         laws = jax.tree.map(np.asarray, jax.jit(outcome_laws)(tables, s, acts))
         values, _weights, den = hit_class_law(laws.hit_thresholds[0][laws.hit_possible[0]])
         assert den == 100 and len(values) > 2, item
+
+
+# --- #9 Mirror Move (E3-B2-2) -----------------------------------------------------------------
+#
+# effect_script_0009.s -> BtlCmd_SetMirrorMove (battle_script.c:3483-3525) calls the user's
+# ``moveCopied`` (``BattleState.move_copied``) when Move_CanBeEncored allows it; UpdateFlagsWhenHit
+# (battle_controller_player.c:4480-4486) writes it for the defender of a move with
+# MOVE_FLAG_CAN_MIRROR_MOVE whose attack message showed; a battler's switch-in or faint clears it
+# (battle_lib.c:2125-2149, :2203-2220).
+
+
+def _mirror_fight(
+    t, n, foe=("Tackle", "Growl"), fast=True, copied="", mine=("Mirror Move", "Rock Throw")
+):
+    """A level 50 Monferno (``mine``) against a level 50 Geodude (``foe``); ``copied`` names the
+    move the Monferno's ``moveCopied`` holds at the start."""
+    s = make_state(t, [_spec(n, "Monferno", 50, mine)], [_spec(n, "Geodude", 50, foe)])
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500 if fast else 1))
+    if copied:
+        move = n.move(copied)
+        s = s._replace(
+            move_copied=s.move_copied.at[0].set(move),
+            move_copied_hit=s.move_copied_hit.at[0, 1].set(move),
+        )
+    return s
+
+
+def _mgo(t, n, s, out=None, foe="Tackle"):
+    """One turn of Mirror Move against ``foe``, both engines (hits, no crits)."""
+    return assert_matches_reference(
+        t, s, A("Mirror Move", foe, s, n), out if out is not None else _hits()
+    )
+
+
+def test_mirror_move_is_mapped_and_flagged_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 9 (effect_script_0009.s) is EffectId.MIRROR_MOVE in both games and the only move
+    with it; MOVE_FLAG_CAN_MIRROR_MOVE is ``MoveFlag.MIRROR_MOVE``: Tackle and Trick Room have it,
+    Mirror Move and Metronome do not (so an invoker records nothing)."""
+    assert DECOMP_EFFECT_TO_ID[9] == (EffectId.MIRROR_MOVE, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        effect = np.asarray(t.move_effect)
+        assert list(np.flatnonzero(effect == EffectId.MIRROR_MOVE)) == [n.move("Mirror Move")]
+        flags = np.asarray(t.move_flags)
+        for move, has in (("Tackle", True), ("Trick Room", True), ("Mirror Move", False)):
+            assert bool(flags[n.move(move)] & MoveFlag.MIRROR_MOVE) is has, move
+        assert not flags[n.move("Metronome")] & MoveFlag.MIRROR_MOVE
+        assert int(call_kind(t, n.move("Mirror Move"))) == CALL_MIRROR_MOVE
+
+
+def test_mirror_move_calls_the_held_move_as_its_own(tables, names):
+    """A fast user whose moveCopied holds Rock Throw calls it: the foe takes what the user's own
+    Rock Throw deals (accuracy, type, damage of the called move, effects with the user as
+    attacker), and the PP spent is Mirror Move's alone."""
+    s = _mirror_fight(tables, names, copied="Rock Throw")
+    out = _mgo(tables, names, s, foe="Growl")
+    mine = _mirror_fight(tables, names)
+    own = assert_matches_reference(tables, mine, A("Rock Throw", "Growl", mine, names), _hits())
+    taken = int(s.hp[1, 0]) - _hp(out, 1)
+    assert taken > 0 and taken == int(mine.hp[1, 0]) - _hp(own, 1)
+    mirror = names.move_slot(s, 0, "Mirror Move")
+    rock = names.move_slot(s, 0, "Rock Throw")
+    assert int(out.pp[0, 0, mirror]) == int(s.pp[0, 0, mirror]) - 1
+    assert int(out.pp[0, 0, rock]) == int(s.pp[0, 0, rock])
+
+
+def test_mirror_move_copies_a_faster_foes_move_of_this_turn(tables, names):
+    """A slower user copies the move that hit it this turn (the foe's Tackle wrote ``move_copied``
+    and ``move_copied_hit`` for it before it acted): the foe takes Tackle damage, and the user's own
+    call records nothing for the foe (Mirror Move has no MOVE_FLAG_CAN_MIRROR_MOVE)."""
+    s = _mirror_fight(tables, names, fast=False)
+    out = _mgo(tables, names, s, foe="Tackle")
+    tackle = names.move("Tackle")
+    assert _hp(out, 1) < int(s.hp[1, 0]) and _hp(out, 0) < int(s.hp[0, 0])
+    assert int(out.move_copied[0]) == tackle and int(out.move_copied_hit[0, 1]) == tackle
+    assert int(out.move_copied[1]) == 0 and not np.asarray(out.move_copied_hit[1]).any()
+
+
+def test_mirror_move_fails_without_a_move_or_with_a_move_encore_refuses(tables, names):
+    """BtlCmd_SetMirrorMove (:3507): nothing copied, or a copied move Move_CanBeEncored refuses
+    (the battle effect of Transform, Mimic, Sketch, Mirror Move, Encore or Struggle), fails: the
+    foe is untouched."""
+    for copied in ("", "Encore", "Transform"):
+        s = _mirror_fight(tables, names, copied=copied)
+        out = _mgo(tables, names, s, foe="Growl")
+        assert _hp(out, 1) == int(s.hp[1, 0]), copied
+
+
+def test_flagged_moves_are_recorded_and_the_rest_are_not(tables, names):
+    """UpdateFlagsWhenHit (:4480-4486): a foe's Growl (flagged) is recorded for the user, its
+    Swords Dance (not flagged) is not; a miss still records (the attack message showed)."""
+    for foe, recorded in (("Growl", True), ("Swords Dance", False)):
+        s = _mirror_fight(tables, names, foe=(foe, "Tackle"))
+        out = _mgo(tables, names, s, foe=foe)
+        want = names.move(foe) if recorded else 0
+        assert int(out.move_copied[0]) == want, foe
+        assert int(out.move_copied_hit[0, 1]) == want, foe
+    s = _mirror_fight(tables, names)
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = _mgo(tables, names, s, miss, foe="Tackle")
+    assert int(out.move_copied[0]) == names.move("Tackle")
+
+
+def test_a_self_defended_flagged_move_records_for_its_user(tables, names):
+    """Trick Room (flagged, RANGE_FIELD) has its user as defender (BattleSystem_Defender,
+    battle_lib.c:1665-1669): moveCopied[user] = Trick Room, after the foe's Growl (Trick Room's
+    priority -7 puts it last) wrote Growl there."""
+    s = _mirror_fight(tables, names, mine=("Trick Room", "Rock Throw"))
+    out = assert_matches_reference(tables, s, A("Trick Room", "Growl", s, names), _hits())
+    room = names.move("Trick Room")
+    assert int(out.move_copied[0]) == room and int(out.move_copied_hit[0, 0]) == room
+
+
+def test_a_switch_clears_the_copied_moves(tables, names):
+    """A battler's switch-in clears its own moveCopied and moveCopiedHit row and every foe's
+    moveCopied and every holder's column of it (battle_lib.c:2125-2149)."""
+    s = make_state(
+        tables,
+        [_spec(names, "Monferno", 50, ("Mirror Move",)), _spec(names, "Bidoof", 50, ("Tackle",))],
+        [_spec(names, "Geodude", 50, ("Swords Dance",))],
+    )
+    s = s._replace(ability=s.ability.at[:, :].set(AbilityId.NONE))
+    tackle, growl = names.move("Tackle"), names.move("Growl")
+    s = s._replace(
+        move_copied=jnp.asarray([tackle, growl], s.move_copied.dtype),
+        move_copied_hit=jnp.asarray([[0, tackle], [growl, 0]], s.move_copied_hit.dtype),
+    )
+    acts = jnp.asarray([4 + 1, names.move_slot(s, 1, "Swords Dance")], jnp.int32)
+    out = assert_matches_reference(tables, s, acts, _hits())
+    assert int(out.active[0]) == 1
+    assert not np.asarray(out.move_copied).any() and not np.asarray(out.move_copied_hit).any()
+
+
+def test_mirror_move_is_an_ordered_invoker_in_the_enumeration(tables, names):
+    """``call_laws``: Mirror Move is ``CALL_MIRROR_MOVE``; behind a foe that Tackles (a move that
+    records for its user) value 0 is the turn-start moveCopied (Rock Throw here) and value 1 the
+    foe's Tackle; each weighs 1 and ``call_variants`` keeps both. Behind a foe whose move records
+    nothing for it (Swords Dance) both values call the turn-start move. It is in both effect lists
+    the enumeration reads an invoker through."""
+    from nuzline.engine.enumerate import (
+        INPUT_NEUTRAL_EFFECTS,
+        call_laws,
+        call_variants,
+    )
+
+    assert EffectId.MIRROR_MOVE in INPUT_NEUTRAL_EFFECTS
+    assert EffectId.MIRROR_MOVE in NON_TABLE_DAMAGE_EFFECTS
+    s = _mirror_fight(tables, names, fast=False, copied="Rock Throw")
+    acts = A("Mirror Move", "Tackle", s, names)
+    laws = jax.tree.map(np.asarray, call_laws(tables, s, acts))
+    assert int(laws.kind[0]) == CALL_MIRROR_MOVE
+    assert list(laws.weight[0][:2]) == [1, 1]
+    assert list(laws.called[0][:2]) == [names.move("Rock Throw"), names.move("Tackle")]
+    assert len(call_variants(laws)) == 2
+    quiet = _mirror_fight(tables, names, fast=False, copied="Rock Throw", foe=("Swords Dance",))
+    laws = jax.tree.map(np.asarray, call_laws(tables, quiet, A("Mirror Move", 0, quiet, names)))
+    assert list(laws.called[0][:2]) == [names.move("Rock Throw")] * 2
