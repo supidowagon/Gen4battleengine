@@ -7,20 +7,31 @@ e2-mechanics-ledger-archive.md. Process: docs/process.md.
 
 Orders for a restart after a clear, in this order:
 
-1. D1 groups A and B are frozen at c6c44b6 (branch e2-d1b, which contains e2-d1 80ee4a9). Add
-   no commits to e2-d1 or e2-d1b. The manager merges c6c44b6 when its pod list and the 0-199
-   snap compare are clean, and sends the new main tip.
-2. Work goes on e2-d2 (cut from c6c44b6), worktree _scratch/e2/wt_d2. Worktree _scratch/e2/wt_b
-   holds e2-d1b: remove it (`git worktree remove`) after the merge.
-3. After the merge: rebase e2-d2 onto main or merge main into it, then the after-merge steps
-   (CLAUDE.md): rebuild the vanilla and Kaizo tables, scan for names, enum members and table
-   rows defined twice, run the unsupported and fullset tests.
-4. Next work: D2 (section "D2: plan" below). Send the manager the D2 family list and E1/E3
-   file list first (process.md section 2, step 1).
-5. Then the snap_compare follow-up (Owed 14): its own branch off main after the merge, tool
-   and test only, low priority. Source: _scratch/e2/snap_followup.md.
-6. Tests run on the test pod: send the manager the tip and the test-file list. Locally: one
-   pytest process, one file, only with more than 6 GB RAM free.
+1. D1 is on main (a838c20). D2 (16 groups) is complete on e2-d2 at f5f1508 (main a838c20
+   merged, review FIX done, rulings D2-1..D2-31), worktree _scratch/e2/wt_d2. The manager runs
+   its pod run (d2d + fullset) and the merge-gate review and sends each result. On a failure: fix
+   on e2-d2, then send the tip. Add no other commits to e2-d2.
+2. Remove the merged worktrees _scratch/e2/wt_b (e2-d1b) and _scratch/e2/wt_pay
+   (e2-payexp-pin) with `git worktree remove`.
+3. Queue, each on its own branch cut from f5f1508 in its own worktree under _scratch/e2/:
+   a. The snap_compare follow-up (Owed 14): tool and test only. Source: _scratch/e2/snap_followup.md.
+   b. One singles follow-up commit with the three approved decomp fixes in the "Singles changes,
+      ruled" list under "D2: plan": (i) Follow Me / non-Ghost Curse (lib.c:1714-1717), (ii) Encore
+      ending under a Rollout lock (bcp.c:1861-1903; turn on the B = 2 chosen_target write, ruling
+      D2-28), (iii) randomized non-Ghost Curse (D2-12). Its own tests, a snap_compare diff
+      limited to those states with each diff explained, and delete the batch 9 note at
+      enumerate.py:816.
+4. Next milestone after D2: D3 (four-actor turn order, action loop, faints and replacement). It
+   owes: the speed order before each action (bcp.c:888), resuming an action after U-turn or
+   Pursuit with the action's defender, the format draw in the differential, and rulings D2-17,
+   D2-31. Send the D3 family list to the manager before starting.
+5. Pod tips: three lines (branch and sha; table inputs changed yes/no; the pod list path
+   _scratch/e2/podlist.txt in the main checkout). One pod run at a time per stream. Prose only
+   for a ruling or a finding the manager must act on.
+6. Tests run on the test pod. Locally: one heavy process (pytest or script) at a time, one file,
+   only with more than 6 GB RAM free. test_invokers.py never runs locally. A subagent never
+   kills a process it did not start. Use PYTHONPATH="src;." (semicolon) from the worktree. Run
+   tools.build_tables only that way, or it writes into the main checkout.
 7. Ownership: E2 owns doubles D2-D12. From 19 Nov E3 owns singles move effects
    (_scratch/e2/handover_e3.md): Owed 1-5 and 12 are E3's; delete them here once E3's ledger
    carries them. E1 owns abilities, held items, battle conditions and AI flags.
