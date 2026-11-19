@@ -1585,6 +1585,13 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   gate took every absorb); the heal is now Volt / Water Absorb's only (`hpCalcTemp`, battle_lib.c:3503, :3510; Flash
   Fire's branch :3515-3521 sets none, `subscript_absorb_and_boost_fire_type_moves.s` changes no HP), as the
   reference. Test: `test_a_holder_below_full_hp_is_not_healed`. F-26's test carries `fullset`. Open items F-O2..F-O5.
+  F-16's `landed` gate checked against bcp.c:3497-3505 / :3557-3565: `AfterMoveMessage` runs after `UpdateHP` for
+  every connected hit, damaging or not, and after a substitute hit (:3376, :3440, :3443; a substitute broken by the hit
+  no longer blocks the check, :3362, which `substitute_hp` 0 gives), never after a miss or `NO_MORE_WORK` (:3313-3328,
+  `subscript_missed` -> `LOOP_FAINTED`). One fix: the script reads `BTLVAR_DEFENDER`, which for a self-targeted move
+  (RANGE_USER, USER_SIDE, FIELD, and ALLY / USER_OR_ALLY in singles; `targets_user`) is the user (battle_lib.c:
+  1665-1684), so `effects.play_hit` and the reference's `_hit` no longer revert a frozen foe Shaymin on a Swords Dance.
+  Test: `test_a_foes_self_targeted_move_leaves_a_frozen_shaymin_sky`.
 - Open (not modelled; cites where stopped):
   - Sleep Talk's sealed set after a faster foe that already imprisons Transforms (copies every move) or Mimics (one
     slot): the call reads the foe's moves when it runs (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290), but

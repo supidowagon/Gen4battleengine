@@ -813,14 +813,14 @@ def test_a_switch_in_rereads_the_party_friendship(tables, names):
 # --- Shaymin-Sky reverts to Land Forme when frozen (F-16) -------------------------------------
 
 
-def _shaymin_state(tables, names, *, status=Status.FREEZE, substitute=0):
-    """Side 0: a Shaymin-Sky (form 1) and a bench Geodude; side 1: a Geodude (Tackle), slower
-    than the Shaymin's frozen action."""
+def _shaymin_state(tables, names, *, status=Status.FREEZE, substitute=0, foe=("Tackle",)):
+    """Side 0: a Shaymin-Sky (form 1) and a bench Geodude; side 1: a Geodude (``foe``'s moves),
+    faster than the Shaymin's frozen action."""
     sky = dataclasses.replace(_mon(names, "Shaymin", ["Air Slash"], 50), form=1)
     s = make_state(
         tables,
         [sky, _mon(names, "Geodude", ["Tackle"], 30)],
-        [_mon(names, "Geodude", ["Tackle"], 30)],
+        [_mon(names, "Geodude", list(foe), 30)],
     )
     s = s._replace(stats=s.stats.at[1, 0, Stat.SPE].set(500))  # the foe moves first
     if status:
@@ -850,6 +850,14 @@ def test_a_frozen_shaymin_sky_becomes_land_forme_after_any_hit(tables, names):
     assert out.stats[0, 0].tolist() == land.stats[0, 0].tolist() != sky.stats[0, 0].tolist()
     assert int(out.max_hp[0, 0]) == int(sky.max_hp[0, 0])
     assert int(out.ai_ability_known[0]) != 0
+
+
+def test_a_foes_self_targeted_move_leaves_a_frozen_shaymin_sky(tables, names):
+    """The form check reads BTLVAR_DEFENDER (subscript_check_shaymin_form.s:5-9), which for
+    Swords Dance (RANGE_USER) is its user (BattleSystem_Defender, battle_lib.c:1665-1669)."""
+    sky = _shaymin_state(tables, names, foe=("Swords Dance",))
+    out = assert_matches_reference(tables, sky, A("Air Slash", "Swords Dance", sky, names), O)
+    assert int(out.form[0, 0]) == 1 and int(out.stages[1, Stat.ATK]) == 2
 
 
 @pytest.mark.fullset

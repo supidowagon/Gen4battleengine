@@ -3474,7 +3474,10 @@ def play_hit(
     if not pursuit_switch:  # subscript_pursuit.s runs no AfterMoveMessage (F-16)
         from nuzline.engine.hooks import shaymin_land  # hooks imports this module
 
-        state = shaymin_land(tables, state, target_side, h.landed)
+        # The check reads BTLVAR_DEFENDER, the user itself for a self-targeted move
+        # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
+        on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
+        state = shaymin_land(tables, state, target_side, on_foe)
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)

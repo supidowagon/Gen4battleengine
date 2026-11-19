@@ -4188,7 +4188,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # effect_script_0254.s: MOVE_SIDE_EFFECT_ON_HIT | subscript_struggle.s, a
         # secondary effect: Divide(maxHP, 4) recoil, before the contact ability.
         _lose_hp(turn, s, side, _divide(_active(s, side).max_hp, 4))
-    if landed:  # ONE_HIT_FORM_CHANGE / MULTI_HIT_FORM_CHANGE, before the contact ability (F-16)
+    # ONE_HIT_FORM_CHANGE / MULTI_HIT_FORM_CHANGE, before the contact ability (F-16), on
+    # BTLVAR_DEFENDER: the user itself for a self-targeted move (battle_lib.c:1665-1669).
+    if landed and not _targets_user(tables, move, _ghost(s, side)):
         _shaymin_land(tables, s, target)
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.U_TURN and effective and _u_turn(turn, s, side, move, hit, dealt):
