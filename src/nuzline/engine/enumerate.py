@@ -302,6 +302,7 @@ from nuzline.engine.outcome import (
     roar_inputs,
     roar_levels,
     secondary_chance,
+    self_lock,
 )
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
@@ -353,6 +354,7 @@ class Reads(NamedTuple):
     tri_attack: jnp.ndarray  # its move runs Tri Attack: its status draw needs the proc
     protect_sure: jnp.ndarray  # it uses Protect and reaches TryProtection whatever the rolls
     protect_blocks: jnp.ndarray  # its move is stopped by a protecting foe (protect_blocks)
+    self_lock: jnp.ndarray  # its lock move may be aimed at itself (outcome.self_lock)
     endure_sure: jnp.ndarray  # it uses Endure and reaches TryProtection whatever the rolls
     roar: jnp.ndarray  # it uses Roar: its slot pick needs the level check to pass
     confused_own: jnp.ndarray  # it moves confused (counter >= 2) at the start
@@ -387,6 +389,7 @@ class OutcomeLaws(NamedTuple):
     # B13-6: a later Triple Kick hit's thresholds (outcome.hit_thresholds, overrides=False).
     hit_later_thresholds: jnp.ndarray  # int32[B, outcome.HIT_VARIANTS]
     hit_later_possible: jnp.ndarray  # bool[B, outcome.HIT_VARIANTS]
+    hit_whole: jnp.ndarray  # bool[B]: every accuracy roll its own class (outcome.self_lock)
     # B12-4 review: the odds each side's hit can meet at its CalcCrit (outcome.crit_variants).
     crit_variants: jnp.ndarray  # int32[B, outcome.CRIT_VARIANTS], variant 0 the turn start
     crit_possible: jnp.ndarray  # bool[B, outcome.CRIT_VARIANTS]
@@ -671,6 +674,8 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         b["effect"],
         (_E.SECONDARY_STATUS, _E.RECOIL_STATUS, _E.FANG_PARALYZE_FLINCH, _E.TRI_ATTACK),
     )
+    # A lock aimed at its user: its target has not moved either, whatever the order.
+    first_self = first_self | b["self_lock"]
     blocked = first_self & (
         (status_effect & b["status_blocked"])
         | ((b["effect"] == _E.SECONDARY_CONFUSE) & b["confused_blocked"])
@@ -815,8 +820,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.PERISH_SONG,
     # Yawn's sleep comes at the turn end, after every hit.
     _E.YAWN,
-    # E2 batch 9: Follow Me changes no defender at B = 2 (its user is the target); at B = 4
-    # enumeration is D11's. Helping Hand fails in singles.
+    # E2 batch 9: Follow Me draws nothing and changes no damaging move's defender at B = 2 (the foe
+    # already is it); the Curse it redirects (lib.c:1714-1717) has no accuracy or damage roll. At
+    # B = 4 enumeration is D11's. Helping Hand fails in singles.
     _E.FOLLOW_ME,
     _E.HELPING_HAND,
     # The user's Attack and HP only (the foe's later hit reads the user's Defense and HP: the HP
@@ -1627,6 +1633,11 @@ def outcome_laws(
     sides = jnp.arange(fmt.B)
     switch, item = is_switch(actions), is_item(actions)
     uses_move = live & ~switch & ~item  # bool[B]
+    # Singles follow-up (ii): a lock move that may be aimed at its own user (outcome.self_lock).
+    # Every cut below that reads the foe as the defender (its armor, immunity, Protect, status
+    # eligibility, order gates of a flinch, the damage table) is lifted for such a side, whose
+    # defender can also be the foe (a faster Encore or Follow Me): over-approximate, sound.
+    lock = uses_move & self_lock(tables, state)
     # ``chosen``: the move each action selects (its status checks: Disable, Taunt); ``moves``:
     # the move it runs (Nature Power's and the invokers' call, order.called_move,
     # order.used_moves), whose draws these are.
@@ -1752,7 +1763,9 @@ def outcome_laws(
     if loose:
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
-    contact_proc = foes(lands & (damaging & contact & foes(holders))[:, None])
+    contact_proc = foes(lands & (damaging & contact & foes(holders))[:, None]) | (
+        lands & (damaging & contact & holders & lock)[:, None]
+    )
     # Chatter (G-70): a Chatot that is not Transformed confuses (effects._chatter; over-approximate:
     # the roll may fail, the target may be confused already or behind a Substitute).
     chatot = (state.species[party(fmt, sides), mons] == SPECIES_CHATOT) & (state.transformed == 0)
@@ -1815,6 +1828,8 @@ def outcome_laws(
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
         status_blocked = confused_blocked = flinch_blocked = jnp.zeros((fmt.B,), bool)
+    status_blocked, confused_blocked = status_blocked & ~lock, confused_blocked & ~lock
+    flinch_blocked = flinch_blocked & ~lock
     confuses = _any_of(effect, (_E.CONFUSE_FOE, _E.SECONDARY_CONFUSE, _E.SWAGGER)) | chatter_user
     # Attract on the foe's active Pokemon (effects._attract); in love at the start, read
     # unless the source switches out first (step._source_leaves).
@@ -1828,7 +1843,9 @@ def outcome_laws(
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
     # gives a Focus Band mid-turn); a self-hit's roll is the user's own (_branch_masks).
     band_held = _holds_item(tables, state, actions, (ItemId.FOCUS_BAND,))
-    band_move = lands & ((tables.move_category[moves] != STATUS) & foes(band_held))[:, None]
+    band_move = lands & (
+        (tables.move_category[moves] != STATUS) & (foes(band_held) | (band_held & lock))
+    )[:, None]
     own_band = tables.item_effect[state.item[party(fmt, sides), mons]] == ItemId.FOCUS_BAND
     # A disliked flavor berry on the side's active Pokemon (hooks.berry_confuse, G-5).
     own_berry = jnp.stack(
@@ -1859,6 +1876,7 @@ def outcome_laws(
         "flinch_item": lands & (damaging & kings_move & (kings_rock > 0))[:, None],
         "certain": chance == 0,
         "flinch_blocked": flinch_blocked,
+        "self_lock": lock,
         "protect": uses_move & _any_of(effect, (_E.PROTECT, _E.ENDURE)) & (state.protect_count > 0),
         "para_own": uses_move & (status == Status.PARALYSIS),
         "freeze_own": uses_move & (status == Status.FREEZE),
@@ -2332,6 +2350,7 @@ def outcome_laws(
         & foe_moves
         & (chance != 0)
         & single
+        & ~lock  # a lock aimed at its user flinches the user, not the foe
     )
     proc_effects = (
         _E.SECONDARY_STATUS,
@@ -2353,7 +2372,10 @@ def outcome_laws(
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
-        protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False),
+        protect_blocks=off
+        if loose
+        else uses_move & protect_blocks(tables, moves, False) & ~lock,
+        self_lock=lock,
         endure_sure=off if loose else reach & (effect == _E.ENDURE),
         roar=off if loose else roar,
         confused_own=base["confused_own"],
@@ -2412,6 +2434,7 @@ def outcome_laws(
             & ~crit_moves[:, None]
             & ~damage_inputs_can_change(tables, state, actions, firsts[t] == _foe(sides), moves)
             & ~(m["confusion_hit"][:, None] & (hit_index == 0))
+            & ~lock[:, None]  # the table is the foe's; a lock may read the user's own
             for t, m in enumerate(branches)
         ]
     )
@@ -2435,11 +2458,13 @@ def outcome_laws(
         hit_possible=possible,
         hit_later_thresholds=later_thr,
         hit_later_possible=later_ok,
+        hit_whole=lock,
         crit_variants=odds_variants,
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
-        no_crit=(state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | armored(tables, state, actions, moves),
+        no_crit=((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
+        | armored(tables, state, actions, moves))
+        & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),
         relevant=relevant,
@@ -2489,7 +2514,10 @@ def hit_class_law(thresholds) -> _Law:
 
 def _hit(laws: OutcomeLaws, side: int, hit: int = 0) -> _Law:
     """The accuracy roll's class law: hit 0's over ``hit_thresholds``, a later Triple Kick
-    hit's over ``hit_later_thresholds`` (B13-6)."""
+    hit's over ``hit_later_thresholds`` (B13-6). A lock that may be aimed at its user keeps every
+    roll whole (``hit_whole``, outcome.self_lock)."""
+    if bool(laws.hit_whole[side]):
+        return list(range(1, 101)), [1] * 100, 100
     if hit == 0:
         possible = np.asarray(laws.hit_possible[side], bool)
         return hit_class_law(np.asarray(laws.hit_thresholds[side])[possible])
@@ -2905,6 +2933,8 @@ def _move_reads(laws: OutcomeLaws, branch: Branch, plan: ReadPlan) -> None:
                 ("flinch_item", (s, i)),
             ):
                 plan.path(elem, "move", *hits, *own)
+            if bool(reads.self_lock[s]):  # a lock aimed at its user: its own contact holder
+                plan.path(("contact_proc", (s, i)), "self", *hits, *own)
             if bool(reads.band_move[s, i]):  # the foe's Focus Band on this hit (G-1)
                 plan.path(("focus_band", (s, i)), "move", *hits, *own)
             # roll[s, 0]: damage, Future Sight's stored damage, or a self-hit below.

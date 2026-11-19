@@ -754,7 +754,9 @@ def _put(events: dict, side, values: dict, cond) -> dict:
     return out
 
 
-def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> dict:
+def _hit_events(
+    before: BattleState, after: BattleState, side, landed, crit, target_side=None
+) -> dict:
     """What one hit of ``side``'s move showed, from the states around it: a crit on a
     landed hit that dealt damage (the target's HP drop: only the hit itself lowers it,
     effects.py:441-444; a crit into a substitute is not seen, a documented coarsening in
@@ -763,7 +765,11 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     hit: effects._contact_ability). A Fire hit's thaw comes later, with the held items
     (``effects.thaw_target`` in ``_use_move``; Pursuit's hit has none)."""
     fmt = format_of(before)
+    # The defender's battler: the foe, or the user itself when a lock reads the stored target
+    # (singles follow-up (ii)).
     foe = _foe(side)
+    if target_side is not None:
+        foe = jnp.where(jnp.asarray(target_side, _I32) == side, side, foe)
     user, target = before.active[side], before.active[foe]
     dealt = before.hp[party(fmt, foe), target] > after.hp[party(fmt, foe), target]
     contact = (before.status[party(fmt, side), user] == Status.NONE) & (
@@ -1168,7 +1174,7 @@ def _use_move(
     # D2-13: GoToMoveScript (script.c:2111-2134) picks the called move's defender by its own range
     # with randomize TRUE and runs the redirection check (``targets.called_defender``; the
     # invoker's call draw ``Outcome.call_target_draw``), writing it to the stored target (:2123,
-    # B = 4: no state at B = 2 reads it). From here the called move's hit, accuracy, Protect and
+    # both formats: ruling D2-33). From here the called move's hit, accuracy, Protect and
     # records read it.
     calls = (invoker & ~call_failed) | nature_power
     called_def, called_redirected = targets.called_defender(
@@ -1179,15 +1185,14 @@ def _use_move(
         redirected = redirected | (calls & called_redirected)
     target_side = resolved.target_side
     target = state.active[target_side]
-    if fmt.B == 4:
-        write = can_act & ~no_pp & calls & (called_def != NO_DEFENDER)
-        state = state._replace(
-            chosen_target=state.chosen_target.at[side].set(
-                jnp.where(write, called_def, state.chosen_target[side]).astype(
-                    state.chosen_target.dtype
-                )
+    write = can_act & ~no_pp & calls & (called_def != NO_DEFENDER)
+    state = state._replace(
+        chosen_target=state.chosen_target.at[side].set(
+            jnp.where(write, called_def, state.chosen_target[side]).astype(
+                state.chosen_target.dtype
             )
         )
+    )
     # The script runs with a defender: the foe, or for the user's own first turn the user
     # (HasNoTarget, bcp.c:2327-2334); a called move without a defender goes to subscript_no_target.s
     # from GoToMoveScript (battle_script.c:2126-2128) before its script.
@@ -1256,6 +1261,22 @@ def _use_move(
     target = state.active[target_side]
     special_counter = counter & self_defender(tables, used, ghost_user(state, side))
     has_target = has_target | special_counter | (invoker & call_failed) | charging
+    # Singles follow-up (ii): a lock move (Rollout, Ice Ball, a charge move's strike) reads the
+    # stored target (lib.c:1711, :1718-1719), the user after a RANGE_MY_SIDE or non-Ghost Curse
+    # selection, so the defender is the user (``targets.resolve``: ``target_side == side``). The
+    # checks below read the defender, not the foe: the user's own stages, items and abilities
+    # (bcp.c:2865-2981), no Protect / Endure / Roost of the defender (its flags are set by its own
+    # action, which is this one), and ``Battler_MovedThisTurn(defender)`` (lib.c:5365-5368) is false
+    # until MoveEnd (bcp.c:3982): no Zoom Lens, no flinch immunity, and no Quick Claw / Custap
+    # flag of the defender (both cleared when its action started).
+    self_target = target_side == side
+    acc_target = jnp.where(self_target, side, _foe(side))
+    tgt_moved = jnp.asarray(target_moved, bool) & ~self_target
+    foe_protecting = jnp.asarray(foe_protecting, bool) & ~self_target
+    foe_roosting = jnp.asarray(foe_roosting, bool) & ~self_target
+    foe_enduring = jnp.asarray(foe_enduring, bool) & ~self_target
+    claw_target = jnp.asarray(claw, bool)[target_side] & ~self_target
+    custap_target = custap[target_side] & ~self_target
     # A Counter-family command that passes (its script's first command, effect_script_0089.s,
     # _0144.s, _0227.s) runs BattleSystem_DecPPForPressure on its new defender, the last
     # attacker (battle_script.c:4646, :4699, :7180; battle_lib.c:7390-7397): one more PP from
@@ -1375,10 +1396,9 @@ def _use_move(
     # user's side's followMe and followMeUser, on every run of the script (no failure branch; a
     # called Follow Me counts: ``effect_used`` is the called move's). One per-side field holds
     # both (``ts_follow_me``, D2-11): 1 + the user battler, read by ``targets.follow_me_target``.
-    # Written at B = 4 only (D2-32): at B = 2 nothing reads it.
-    if fmt.B == 4:
-        follow = script_on & (effect_used == EffectId.FOLLOW_ME)
-        state = _set_side(state, "ts_follow_me", side, side + 1, follow)
+    # Written in both formats (ruling D2-33): at B = 2 the other side's non-Ghost Curse reads it.
+    follow = script_on & (effect_used == EffectId.FOLLOW_ME)
+    state = _set_side(state, "ts_follow_me", side, side + 1, follow)
     # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
     failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
     failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))
@@ -1443,7 +1463,7 @@ def _use_move(
             redirected & can_act & has_target & ~failed,
         )
     roll = outcome.hit[side, 0].astype(_I32)
-    threshold = live_hit_threshold(tables, state, side, used, target_moved)
+    threshold = live_hit_threshold(tables, state, side, used, tgt_moved, target=acc_target)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging
     # bcp.c:2967-2970: the check clears the attacker's Micle Berry flag once it gets past its
     # early returns (accuracy 0, SYSCTL_FIRST_OF_MULTI_TURN, SYSCTL_NONSTANDARD_ACC_CHECK of
@@ -1464,7 +1484,20 @@ def _use_move(
     # (MoveFlag.HIT_*: SYSCTL_HIT_DURING_*), B10-12. A special-range Counter's command and Bide's
     # unleash have made the foe the defender by then.
     foe_semi = state.semi_invulnerable[target_side]
-    aims_foe = ~self_defender(tables, used, ghost_user(state, side)) | special_counter | bide_ends
+    # A non-Ghost Curse whose defender is the foe (Follow Me, or a randomized call / Encore pick:
+    # BattleSystem_Defender, lib.c:1706-1707, :1714-1717) is tested like any move aimed at it.
+    curse_at_foe = (
+        (effect_used == EffectId.CURSE)
+        & ~ghost_user(state, side)
+        & (resolved.defender != NO_DEFENDER)
+        & (resolved.defender != side)
+    )
+    aims_foe = (
+        ~self_defender(tables, used, ghost_user(state, side))
+        | special_counter
+        | bide_ends
+        | curse_at_foe
+    )
     no_guard = (state.ability[party(fmt, side), user] == AbilityId.NO_GUARD) | (
         state.ability[party(fmt, target_side), target] == AbilityId.NO_GUARD
     )
@@ -1493,7 +1526,7 @@ def _use_move(
     # CheckMoveHitOverrides (bcp.c:3001-3014) runs after the accuracy roll, hit or miss: a
     # protecting foe stops the move (effects.protect_blocks), MOVE_STATUS_PROTECTED, and
     # Battler_UnlockMoveChoice (the unlock below). Selfdestruct's user already fainted.
-    blocked = jnp.asarray(foe_protecting) & protect_blocks(tables, used, bide_ends) & ~charging
+    blocked = foe_protecting & protect_blocks(tables, used, bide_ends) & ~charging
     # An OHKO move against an ignorable Sturdy (BtlCmd_TryOHKOMove, battle_script.c:4340-4341:
     # MOVE_STATUS_STURDY, no roll): subscript_missed.s:67-69 tags the defender's ability
     # ("{0} was protected by {1}!", BattleAI_SetAbility, battle_script.c:11798-11806), unless a
@@ -1676,8 +1709,8 @@ def _use_move(
             resolved.defender,
             used,
             # play_hit's flags (below): the defender's quickClaw and custapBerry until it moved.
-            foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
-            foe_custap=custap[target_side] & ~jnp.asarray(target_moved, bool),
+            foe_claw=claw_target & ~tgt_moved,
+            foe_custap=custap_target & ~tgt_moved,
         )
     )
     # TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES (bcp.c:3281-3286, :2782-2810): a move that hit
@@ -1692,7 +1725,7 @@ def _use_move(
     # or a non-Flying test, so its types read as damage.chart_types until the move ends.
     target_types = state.types[party(fmt, target_side), target]
     # (a foe the move's Roar dragged out is no longer the target: it keeps its party types).
-    roosted_foe = jnp.asarray(foe_roosting, bool) & (state.active[target_side] == target)
+    roosted_foe = foe_roosting & (state.active[target_side] == target)
     roost_types = chart_types(state, target_side, target, roosted_foe).astype(state.types.dtype)
     state = state._replace(types=state.types.at[party(fmt, target_side), target].set(roost_types))
     move_type = move_type_of(tables, state, side, used, gift_removed)
@@ -1740,10 +1773,12 @@ def _use_move(
         & (tables.move_power[used] != 0)
     )
     volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
+    # Volt Absorb tests ``attacker != defender`` (:3500-3502), Water Absorb and Dry Skin do not
+    # (:3507-3512, :3538-3544): a Dive that hit its own user can heal it.
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))
-        & (water | volt)
+        & (water | (volt & ~self_target))
         & (chart > 0)
     )
     target_hp = state.hp[party(fmt, target_side), target].astype(_I32)
@@ -1864,7 +1899,7 @@ def _use_move(
     # AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS (bcp.c:3672-3682): the newcomer's switch-in
     # effects, at the site Roar's drag shares.
     rock = resumed & (state_in.ts_damaged != 0) & (outcome.flinch_item[side, 0] != 0)
-    state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
+    state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~tgt_moved)
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
     items_full = items_full & ~baton_failed & ~guarded
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
@@ -1997,7 +2032,9 @@ def _use_move(
         later_roll = outcome.hit[side, hit_index].astype(_I32)
         later_ok = (later_roll > 0) & (
             later_roll
-            <= live_hit_threshold(tables, state, side, used, target_moved, overrides=False)
+            <= live_hit_threshold(
+                tables, state, side, used, tgt_moved, overrides=False, target=acc_target
+            )
         )
         kick_check = (
             (tables.move_effect[used] == EffectId.TRIPLE_KICK)
@@ -2026,14 +2063,14 @@ def _use_move(
             outcome,
             hit_index,
             connected=going,
-            target_moved=target_moved,
+            target_moved=tgt_moved,
             struggling=struggling,
             focus_armed=armed,
             # moveEffectsData.custapBerry, cleared when its holder's move starts
             # (subscript_check_quick_claw.s:26-27, above), B13-31.
-            foe_custap=custap[target_side] & ~jnp.asarray(target_moved, bool),
+            foe_custap=custap_target & ~tgt_moved,
             # moveEffectsData.quickClaw (order.claw_flags), cleared once its holder moved.
-            foe_claw=jnp.asarray(claw, bool)[target_side] & ~jnp.asarray(target_moved, bool),
+            foe_claw=claw_target & ~tgt_moved,
             counter_damage=counter_damage,
             extra_flinch=~is_uturn,  # U-turn's check comes after its secondary effect (below)
             sub_hit=sub_hit,
@@ -2082,7 +2119,7 @@ def _use_move(
         foe = target_side
         chases = (
             goes
-            & ~jnp.asarray(target_moved)
+            & ~tgt_moved
             & _pursuer_ready(tables, hit_state, foe, foe_action, foe_move, foe_struggling)
         )
         lists = goes & ~chases
@@ -2090,7 +2127,7 @@ def _use_move(
         # A U-turn that does not switch makes its King's Rock check after the secondary effect
         # (ONE_HIT_EXTRA_FLINCH, bcp.c:3524).
         rock_now = going & first & is_uturn & ~goes & landed & info.damaged
-        rock_now = rock_now & (outcome.flinch_item[side, 0] != 0) & ~jnp.asarray(target_moved)
+        rock_now = rock_now & (outcome.flinch_item[side, 0] != 0) & ~tgt_moved
         hit_state = kings_rock_flinch(tables, hit_state, side, target_side, used, rock_now)
         stop_now = lists | chases
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
@@ -2098,7 +2135,7 @@ def _use_move(
         # The crit draw read with the odds at this hit (outcome.crit_lands, battle_lib.c:7105-7132).
         crit = crit_lands(tables, state, side, used, outcome.crit[side, hit_index])
         crit = crit & ~armored(state, side, target_side) & ~unrolled
-        seen = _hit_events(state, hit_state, side, landed, crit)
+        seen = _hit_events(state, hit_state, side, landed, crit, target_side)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs
         # after every hit of a move that connected: AFTER_MOVE_EFFECT_ATTACKER_ITEM
         # (:3684), then _DEFENDER_ITEM (:3691). A disrupted move, a confusion self-hit,
@@ -2154,7 +2191,7 @@ def _use_move(
             items & landed & head_on & ~dragged,
         )
         state, item_used = held_item_check(tables, hit_state, side, items, info.pluck_flag)
-        state = after_damage_items(tables, state, _foe(side), items)
+        state = after_damage_items(tables, state, acc_target, items)
         struck = struck | info.update_hp
         # The transfer reads the defender's physical / specialDamageTaken (MoveHit.damaged).
         barbed = barbed | info.damaged
@@ -2294,7 +2331,7 @@ def _use_move(
     # when the called move's defender is the foe (not a self-defender range) and it has one.
     record = jnp.where(
         invoker,
-        can_act & ~call_failed & has_target & ~self_defender(tables, used, ghost_user(state, side)),
+        can_act & ~call_failed & has_target & (called_def != NO_DEFENDER) & (called_def != side),
         record,
     )
     # A special-range Counter's defender is the foe only once its command succeeded.
@@ -2453,7 +2490,13 @@ def _use_move(
     own["roosted"] = connected & (tables.move_effect[used] == EffectId.ROOST) & ~no_more_work
     # The head's Synchronize flag and sideEffectMon where it stopped for U-turn's Pursuit: the
     # MODE_PURSUIT tail's Synchronize step reads them (``pursuit_sync``, ruling G-24).
-    ctl = {"pause": paused, "pursue": pursue, "sync_flag": looped[16], "sync_sem": looped[17]}
+    ctl = {
+        "pause": paused,
+        "pursue": pursue,
+        "sync_flag": looped[16],
+        "sync_sem": looped[17],
+        "target": jnp.asarray(target_side, _I32),
+    }
     return state, own, foe, ctl
 
 
@@ -2987,7 +3030,8 @@ def _execute_actions(
         # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
         own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
         read, shown = put((read, shown), side, own, keep)
-        foe = _foe(side)
+        # The defender's events: the foe's, or the user's own when a lock hit itself.
+        foe = jnp.where(ctl["target"] == side, side, _foe(side))
         merged = [
             {name: jnp.where(v != 0, v, ev[name][foe]) for name, v in foe_events.items()}
             for ev in (read, shown)
@@ -3985,17 +4029,15 @@ def _action_phase(
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
     Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
     ``targets`` (``int8[B]``, the menu's picks) is required at B = 4 and ignored at B = 2, where
-    the range decides (D2-1); at B = 4 the selection writes ``chosen_target`` before the turn
-    order. At B = 2 nothing reads it, so it is not written (ruling D2-28): singles states stay
-    equal; singles follow-up (ii) turns the B = 2 write on."""
+    the range decides (D2-1); the selection writes ``chosen_target`` before the turn order in both
+    formats (ruling D2-33: a locked battler's defender reads it at B = 2 too, lib.c:1711)."""
     if targets is None:
         if state.active.shape[0] != 2:
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
-    if state.active.shape[0] == 4:
-        fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
+    fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))

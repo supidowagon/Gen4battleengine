@@ -61,28 +61,28 @@ def test_b2_ghost_curse_targets_the_foe(tables, names):
 
 
 @pytest.mark.slow
-def test_b2_step_does_not_write_chosen_target(tables, names):
-    # Ruling D2-28: nothing reads it at B = 2, so the step keeps the stored b ^ 1 and a
-    # Swords Dance and a Tackle state stay equal. jit, not eager: an eager step peaks far above
-    # the jitted one's compile.
+def test_b2_step_writes_chosen_target(tables, names):
+    # Ruling D2-33 (singles follow-up (ii)): the selection writes it at B = 2 too (bcp.c:534-542,
+    # :4363-4367): the user for a RANGE_MY_SIDE move, else the foe. jit, not eager: an eager step
+    # peaks far above the jitted one's compile.
     fn = jax.jit(step)
-    for move in ("Swords Dance", "Tackle"):
+    for move, want in (("Swords Dance", [0, 0]), ("Tackle", [1, 0])):
         s = _singles(tables, names, move)
         out = fn(tables, s, _np_actions(0, 0), empty_outcome())
-        assert out.chosen_target.tolist() == [1, 0], move
+        assert out.chosen_target.tolist() == want, move
     parked = _singles(tables, names, "Tackle")
     parked = parked._replace(chosen_target=jnp.asarray([0, 1], jnp.int8))
     out = fn(tables, parked, _np_actions(0, 0), empty_outcome())
-    assert out.chosen_target.tolist() == [0, 1]
+    assert out.chosen_target.tolist() == [1, 0]
 
 
-def test_b2_reference_step_does_not_write_chosen_target(tables, names):
-    for move in ("Swords Dance", "Tackle"):
+def test_b2_reference_step_writes_chosen_target(tables, names):
+    for move, want in (("Swords Dance", [0, 0]), ("Tackle", [1, 0])):
         out = ref_step(
             to_numpy(tables), to_ref(_singles(tables, names, move)), (0, 0),
             outcome_to_py(empty_outcome()),
         )  # fmt: skip
-        assert [b.chosen_target for b in out.battlers] == [1, 0], move
+        assert [b.chosen_target for b in out.battlers] == want, move
 
 
 @pytest.mark.slow

@@ -705,3 +705,21 @@ def test_gravity_and_transform_are_seen_by_hit_thresholds(tables, names):
             assert hits == [lo <= live] * 2, (lo, hi - 1, hits)
             hit_weight += law[lo] if hits[0] else 0
         assert hit_weight == live
+
+
+@pytest.mark.slow
+def test_a_self_lock_keeps_the_accuracy_roll_whole(tables, names):
+    """Singles follow-up (ii): a lock whose stored target is its user may read either battler's
+    evasion, items and abilities (the user's own, or the foe's after a faster Encore or Follow
+    Me), so ``outcome.self_lock`` keeps its roll whole: the law and the sampler give every roll 1-100
+    its own class, and the foe's side keeps its thresholds' two classes."""
+    from tests.engine.test_singles_followup import _locked_rollout
+
+    s = _locked_rollout(tables, names)
+    acts = jnp.asarray([0, 0], jnp.int32)
+    laws = laws_of(tables, s, acts)
+    assert bool(laws.hit_whole[0]) and not bool(laws.hit_whole[1])
+    keys = jax.random.split(jax.random.key(7), 4000)
+    hit = np.asarray(_sample(keys, tables, s, acts).hit)
+    assert set(hit[:, 0, 0].tolist()) == set(range(1, 101))
+    assert set(hit[:, 1, 0].tolist()) <= {0, 1}  # Harden: accuracy 0, never rolls

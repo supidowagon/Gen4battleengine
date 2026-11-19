@@ -95,9 +95,31 @@ def test_b2_singles_values(tables, names):
                 assert go(tables, names, s, 0, move, randomize=rnd, bit=bit) == (0, 1, 0, False)
         for rnd in (False, True):
             assert go(tables, names, s, 0, "Acupressure", randomize=rnd, bit=bit)[0] == 0
-            # a non-Ghost Curse names its user, kept for a randomized call (ledger D2-12)
-            assert go(tables, names, s, 0, "Curse", randomize=rnd, bit=bit)[0] == 0
+        # a randomized non-Ghost Curse takes the living foe (lib.c:1706-1707, ruling D2-33), else NONE
+        assert go(tables, names, s, 0, "Curse", randomize=True, bit=bit) == (1, 1, 0, False)
+        assert go(tables, names, foe_dead, 0, "Curse", randomize=True, bit=bit)[0] == NONE
     assert go(tables, names, s, 1, "Tackle", chosen=0)[:2] == (0, 0)
+
+
+def test_b2_reads_the_stored_target_and_follow_me(tables, names):
+    # lib.c:1709-1725: Follow Me's living user, else the stored target while it has HP, else the foe
+    s, _ = _states(tables, names)
+    # a lock reading a stored user: it is the defender and the target of a move that aims at it
+    assert go(tables, names, s, 0, "Tackle", chosen=0) == (0, 0, 0, False)
+    # a non-Ghost Curse names its user too but its gates read the foe (a self-defender move)
+    assert go(tables, names, s, 0, "Curse", chosen=0) == (0, 1, 0, False)
+    assert go(tables, names, s, 0, "Curse", chosen=1) == (1, 1, 0, False)  # a stored foe
+    # Follow Me's user (the foe) comes first, for a non-Ghost Curse too
+    fm = follow_me(s, 1, 1)
+    assert go(tables, names, fm, 0, "Curse", chosen=0) == (1, 1, 0, False)
+    assert go(tables, names, fm, 0, "Tackle", chosen=0) == (1, 1, 0, False)
+    # its user fainted: the stored target as if the field were clear
+    assert go(tables, names, with_hp(fm, 1, 0), 0, "Curse", chosen=0)[:2] == (0, 1)
+    # a randomized call ignores both
+    assert go(tables, names, fm, 0, "Tackle", chosen=0, randomize=True)[:2] == (1, 1)
+    assert go(tables, names, s, 0, "Tackle", chosen=0, randomize=True)[:2] == (1, 1)
+    # the stored target fainted: the foe (BattleSystem_RandomOpponent, lib.c:1720-1725)
+    assert go(tables, names, with_hp(s, 0, 0), 0, "Tackle", chosen=0)[0] == 1
 
 
 def test_own_side_ranges_at_b4(tables, names):  # D2-5
@@ -181,9 +203,13 @@ def test_fight_randomizes(tables, names):
 
 
 @pytest.mark.parametrize("fmt_b", [2, 4])
-def test_target_side_is_never_the_attacker(tables, names, fmt_b):
+def test_target_side_is_the_attacker_only_for_a_lock_reading_itself(tables, names, fmt_b):
+    # a self-defender move (a RANGE_MY_SIDE one, a non-Ghost Curse) keeps the foe as the side its
+    # gates read; a move that aims at its stored target, the user, reads the user (ruling D2-33)
     b2, b4 = _states(tables, names)
     s = b2 if fmt_b == 2 else b4
-    for move in ("Tackle", "Swords Dance", "Helping Hand", "Curse"):
+    for move in ("Swords Dance", "Helping Hand", "Curse"):
         for a in range(fmt_b):
             assert go(tables, names, s, a, move, chosen=a)[1] != a
+    for a in range(fmt_b):
+        assert go(tables, names, s, a, "Tackle", chosen=a)[:2] == (a, a)

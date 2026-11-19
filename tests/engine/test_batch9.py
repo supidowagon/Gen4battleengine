@@ -113,9 +113,11 @@ def test_kaizo_recoil_scripts(kaizo_tables, kaizo_names):
         assert int(np.asarray(t.move_param)[m, 0]) == divisor, move
 
 
-def test_helping_hand_fails_and_follow_me_changes_nothing_in_singles(tables, names):
+def test_helping_hand_fails_and_follow_me_redirects_only_a_curse_in_singles(tables, names):
     """B9-5: BtlCmd_TryHelpingHand fails outside a double battle (battle_script.c:6309-6311);
-    Follow Me's followMe names the side's one battler, the foe's target anyway."""
+    Follow Me's followMe names the side's one battler, the foe's target anyway, except for a
+    non-Ghost Curse, which takes it from the user (lib.c:1714-1717, ruling D2-33; tested in
+    ``test_singles_followup``)."""
     n = names
     s = make_state(
         tables,
@@ -125,6 +127,15 @@ def test_helping_hand_fails_and_follow_me_changes_nothing_in_singles(tables, nam
     for slot in (0, 1):
         out = assert_matches_reference(tables, s, (slot, 0), O)
         assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+    # the Curse a non-Ghost foe aims at the Follow Me user: its user's stages as ever, the PP and
+    # the record of the Togepi's side change (``test_singles_followup``)
+    c = make_state(
+        tables,
+        [_mon(n, "Togepi", ["Follow Me"], 30)],
+        [_mon(n, "Geodude", ["Curse"], 30)],
+    )
+    out = assert_matches_reference(tables, c, (0, 0), O)
+    assert int(out.move_hit[0]) == n.move("Curse")
 
 
 def test_volt_absorb_takes_thunder_wave_and_clear_body_keeps_its_attack(tables, names):
