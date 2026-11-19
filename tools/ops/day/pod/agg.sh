@@ -5,6 +5,8 @@
 # third time (rc 98), units with any other rc but 0, 1 or 5 (a failure even with complete counts),
 # wall time, container peak, CPU-s (user + sys) of the units and of the warm-up (out/warmup/),
 # the thread setting (threads.env) and the units' threads (<unit>.thr, unit.sh's 5 s samples),
+# per unit its compile-cache hits and writes and the highest peak of a test with a hit and of one
+# with cold compiles only (tests/conftest.py's summary line; the memtable's hit-peak column),
 # largest process, per unit its peak RSS and wall time (finished units), the 15 slowest tests, the count over 60 s, every FAILED/ERROR and SKIPPED line,
 # and a last line RESULT: PASS or RESULT: FAIL (<reasons>).
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; mkdir -p "$O"; cd "$O"
@@ -40,6 +42,10 @@ echo "--- per unit: unit ids max_rss_MB wall_s rc first_id"
 while read -r u f; do [ -f $u.rc ] || continue
   m=$(awk '/Maximum resident/ {print int($6/1024)}' $u.time 2>/dev/null)
   echo "$u $(grep -c . $u.ids) ${m:-0} $(( $(cat $u.end) - $(cat $u.start 2>/dev/null || cat $u.end) )) $(cat $u.rc) $(head -1 $u.ids | cut -c1-160)"
+done < queue.txt
+echo "--- compile cache per unit: unit hits writes hit_peak_GB cold_peak_GB first_id"
+while read -r u f; do [ -f $u.log ] || continue
+  grep -h '^compile cache: ' $u.log | tail -1 | sed -E 's/^compile cache: ([0-9]+) hits, ([0-9]+) writes; .* with a hit ([0-9.]+) GB .* cold compiles only ([0-9.]+) GB.*/\1 \2 \3 \4/' | while read -r h w hp cp; do echo "$u $h $w $hp $cp $(head -1 $u.ids | cut -c1-160)"; done
 done < queue.txt
 DUR=$(for u in $(cut -d' ' -f1 queue.txt); do [ -f $u.log ] && grep -hE '^[0-9.]+s (call|setup|teardown) ' $u.log; done | sort -rn)
 echo "--- slowest 15 (of $(echo "$DUR" | awk '$1+0 > 60' | wc -l) over 60 s)"; echo "$DUR" | head -15 | cut -c1-200
