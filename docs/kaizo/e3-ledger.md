@@ -193,6 +193,20 @@ Each is open; close it with its ruling.
    the player's Shadow Tag, Pure Power, Huge Power, Mold Breaker, Solid Rock, Filter or Flower
    Gift +2) runs in singles for a trainer whose header sets the flag (ai.c:249-271), on top of
    Expert_ChangeUserAbility. Not modelled, with the rest of the Tag Strategy flag (Owed 3).
+5. Tag Strategy's Gastro Acid entry (E3-2-6): `IfMoveEqualTo MOVE_GASTRO_ACID` (script.s:7454) ->
+   TagStrategy_PartnerGastroAcid (:7624-7645: the AI's partner already suppressed -30; its
+   partner's Truant or Slow Start +5) is the doubles partner-targeting path: it reads
+   AI_BATTLER_ATTACKER_PARTNER, an empty slot in singles, and is not modelled with the rest of
+   the Tag Strategy flag (Owed 3).
+6. Doubles: `outcome._threshold_grid`'s Gastro Acid variant and `outcome.armored` assume the
+   singles pairing (the foe's Gastro Acid reaches the side's own ability only; no ally Gastro Acid
+   reaches a defender's Battle Armor / Shell Armor / Sand Veil before a partner's hit). The
+   doubles milestone adds those pairs (docs/doubles-state-design.md section 5).
+7. `effects.MOVE_EFFECT_MASK_FIELDS` lacks the Embargo bit (`embargo`, MOVE_EFFECT_EMBARGO,
+   moves.h:34), which `ingrain_anchors` (subscript_force_target_to_switch_or_flee.s:7 compares
+   the whole mask) should count like Gastro Acid's; found while adding the Gastro Acid bit, not
+   changed here (the same one-line change in the tuple, the reference's `_ingrain_anchors` and
+   a Roar test).
 
 ## 3. Rulings
 
@@ -425,3 +439,44 @@ Each is open; close it with its ruling.
   Battler_Ability they stand for. Not done here: observation of the bit (`observe`) and its
   test strategy, with the mechanic in 2/2. Local check: ruff clean; the byte-identity run did
   not fit the 4 GB local cap (a jitted or eager `step` passes 3.8 GB): pod.
+- E3-2-6 Gastro Acid 2/2 (#239): new `EffectId.GASTRO_ACID` (effect 239, BATTLE_EFFECT_SUPRESS_
+  ABILITY; move 380; no manifest bump: no array or key changed, only the move row's effect
+  value). `effects._gastro_acid` (in the dispatch tuple, after Worry Seed) runs
+  subscript_suppress_target_ability.s: fails (:5-8) behind a Substitute (``h.shielded``), on a
+  defender that has the bit (:6), on a miss or a semi-invulnerable defender (``h.effective``), on
+  a raw Multitype ability (``decomp_abilities``, not the accessor); else :10 sets
+  `ability_suppressed[target]`. `BattleMon.ability` is not written, so no `know_ability` tag (the
+  AI reads the bit, trainer_ai.c:1177-1178). Reference clause beside Worry Seed's. The bit is in
+  `effects.MOVE_EFFECT_MASK_FIELDS` and the reference's `_ingrain_anchors`: Roar's Ingrain test
+  compares the whole mask to MOVE_EFFECT_INGRAIN (subscript_force_target_to_switch_or_flee.s:7),
+  so a suppressed Ingrain user is dragged out. Not modelled, message only:
+  subscript_gravity_start.s:17 (a suppressed Levitate holder prints no "couldn't stay airborne").
+  Hit chance: `outcome._threshold_grid` gains the foe's Gastro Acid as a field variant (the
+  side's own bit set before its check: Compoundeyes, Hustle, Simple, Unaware, No Guard read NONE,
+  bcp.c:2876-2947), the Klutz-lost item live as for Worry Seed, and `future_thresholds`' loose
+  flag. Crit: `CRIT_ODDS_EFFECTS[GASTRO_ACID]` = `_suppress_all` (every battler's bit): Super Luck
+  stays (raw, lib.c:7122, :7126), a Klutz holder's crit item goes live (:7117, :5352-5356); the
+  defender's Battle Armor / Shell Armor read (:7135-7136) is `armored`'s and in singles no Gastro
+  Acid precedes the side's hit against its target (Owed 6); test_batch12's writer scan reads
+  `battler_ability` as well as the raw ability. Enumerate: INPUT_CLAUSE effect (gastro-acid
+  clause), NON_TABLE_DAMAGE, `damage_inputs_can_change` (foe Gastro Acid), end-speed tie
+  (a speed ability or Shed Skin suppressed mid-turn). Klutz: `state.held_item` already reads
+  `battler_ability` (E3-2-6a). Observation: `observe._NONZERO_SIDE` gains the bit (the message
+  at :12), `plan_tree._COND_TEXT` its text; the Hypothesis state strategy
+  (`tests/strategies._draw_klutz`) draws the bit and teaches Gastro Acid. AI:
+  Basic_CheckGastroAcid (script.s:1363-1376): the player's bit -10, then LoadBattlerAbility in
+  {Multitype, Truant, Slow Start, Stench, Run Away, Pickup, Honey Gather} -10
+  (`commands.ABILITY_IDS` gains Slow Start 112, Stench 1, Run Away 50, Pickup 53, Honey Gather
+  118, and `data/game_constants.py` lists them); Expert_GastroAcid (:5471-5494, the code, not
+  the comment): 64 roll (:5481) jumping ends with 0, else +1, HP above 70 % ends, the 128 roll
+  (:5484) jumping skips the first -1, else -1, above 50 % ends, else -1, above 30 % ends, else -1
+  (`SITE_N` 5481: 64, 5484: 128). `KAIZO_TRANSCRIBED`, `KAIZO_EXPERT_LABELS` (:1782) and
+  `KAIZO_EXPERT_TRANSCRIBED` carry 239; the Encore table already had it (:3276, once). Tag
+  Strategy's partner path (:7454, :7624-7645): Owed 5, doubles only. Read bounds and the backlog
+  regenerated (85 missing groups from 87: the two #239 rows, "move effect #239: Gastro Acid" and
+  "AI move effect #239", used by 9 opposing rows, close; Metronome's callable list is 11 of 442
+  unmodelled).
+  Tests: tests/engine/test_e3_batch1.py `test_gastro_acid_*`, `test_the_suppressed_bit_is_observed`,
+  tests/ai/test_kaizo_policy.py `test_gastro_acid_*`. Local check: ruff clean, the id-table scan
+  and constants (16), test_state (24) passed; the step-running tests (a jitted `step` passes the
+  4 GB local cap) and the AI scoring tests: pod.

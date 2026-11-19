@@ -5017,3 +5017,97 @@ def test_change_user_ability_expert(kaizo_tables, kaizo_names, kaizo_roark_party
     assert _swap_delta(t2, s, guess=0)[0] == 2
     assert _swap_delta(t2, s, guess=0, jumps=((0, 4429),))[0] == 0
     assert _swap_delta(t2, s, guess=1)[0] == -1
+
+
+def test_gastro_acid_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Gastro Acid is BATTLE_EFFECT_SUPRESS_ABILITY, 239 (generated/move_battle_effects.txt line
+    240), in Basic_ScoreMoveEffect (script.s:269), Expert_Main (:1782) and the Encore table once
+    (:3276); Basic_CheckGastroAcid's seven abilities are the decomp's ids (E3-2-6)."""
+    assert BattleEffect.SUPRESS_ABILITY == 239
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(BattleEffect.SUPRESS_ABILITY) == 1
+    names = kaizo_names.ability_names
+    for name in (
+        "Multitype",
+        "Truant",
+        "Slow Start",
+        "Stench",
+        "Run Away",
+        "Pickup",
+        "Honey Gather",
+    ):
+        assert names[c.ABILITY_IDS[name]].upper() == name.upper()
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert "BATTLE_EFFECT_SUPRESS_ABILITY" in lines[268] and "Basic_CheckGastroAcid" in lines[268]
+    assert "BATTLE_EFFECT_SUPRESS_ABILITY" in lines[1781] and "Expert_GastroAcid" in lines[1781]
+    assert lines[5480].strip() == "IfRandomLessThan 64, Expert_GastroAcid_End"
+    assert lines[5483].strip() == "IfRandomLessThan 128, Expert_GastroAcid_ContinueHPCheck"
+    start = lines.index("Basic_CheckGastroAcid:")
+    entries = []
+    for line in lines[start + 1 :]:
+        if line.strip() == "PopOrEnd":
+            break
+        if line.strip().startswith("IfLoadedEqualTo"):
+            entries.append(line.split()[1].removeprefix("ABILITY_").rstrip(","))
+    assert entries == [
+        "MULTITYPE", "TRUANT", "SLOW_START", "STENCH", "RUN_AWAY", "PICKUP", "HONEY_GATHER"
+    ]  # fmt: skip
+
+
+def test_gastro_acid_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckGastroAcid (script.s:1363-1376): the player already suppressed (``IfMoveEffect``)
+    -10, once (the script ends there, so a known Truant adds nothing, and LoadBattlerAbility would
+    read NONE anyway); else a known Multitype, Truant, Slow Start, Stench, Run Away, Pickup or
+    Honey Gather -10; any other ability nothing (E3-2-6)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gastro Acid", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+
+    def known(state, ability, decomp):
+        return state._replace(
+            ability=state.ability.at[0, 0].set(ability),
+            ai_ability_known=state.ai_ability_known.at[0].set(decomp),
+        )
+
+    # Each ability as the AI knows it (the decomp id of its record, ``ai_ability_known``).
+    for decomp in (121, 54, 112, 1, 50, 53, 118):
+        assert _delta(t, known(s, AbilityId.UNSUPPORTED, decomp), 0x2, 0x3)[0] == -10, decomp
+    keen = known(s, AbilityId.KEEN_EYE, ABILITY_DECOMP_IDS[AbilityId.KEEN_EYE])
+    assert _delta(t, keen, 0x2, 0x3)[0] == 0
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    assert _delta(t, off, 0x2, 0x3)[0] == -10
+    both = known(off, AbilityId.TRUANT, ABILITY_DECOMP_IDS[AbilityId.TRUANT])
+    assert _delta(t, both, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize(
+    ("percent", "plain", "skipped"),
+    [
+        # Expert_GastroAcid (script.s:5471-5494, the code, not its comment): +1 after the 64 roll
+        # (:5481); above 70 % HP it ends; else the 128 roll (:5484) not jumping -1; above 50 %
+        # ends, else -1; above 30 % ends, else -1.
+        (100, 1, 1),
+        (71, 1, 1),
+        (70, 0, 1),
+        (51, 0, 1),
+        (50, -1, 0),
+        (31, -1, 0),
+        (30, -2, -1),
+        (1, -2, -1),
+    ],
+)
+def test_gastro_acid_expert(kaizo_tables, kaizo_names, kaizo_roark_party, percent, plain, skipped):
+    """Expert_GastroAcid with both rolls: no jump gives ``plain``, the 128 roll (:5484) jumping
+    gives ``skipped`` (it drops the first -1), the 64 roll (:5481) jumping gives 0 at any HP
+    (E3-2-6)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gastro Acid", "Accelerock", "", ""))
+    s = s._replace(hp=s.hp.at[0, 0].set(int(s.max_hp[0, 0]) * percent // 100))
+    assert _delta(t, s, 0x3, 0x7)[0] == plain
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5484),))[0] == skipped
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481),))[0] == 0
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481), (0, 5484)))[0] == 0

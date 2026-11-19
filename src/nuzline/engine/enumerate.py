@@ -970,6 +970,11 @@ INPUT_CLAUSE_EFFECTS = (
     # that hit, its accuracy and crit odds, a Klutz holder's item, an Intimidate or Download
     # stage change of its stats: the skill-swap clause.
     _E.SKILL_SWAP,
+    # E3-2-6: Gastro Acid suppresses the side's ability before its later hit
+    # (subscript_suppress_target_ability.s:10; ``Battler_Ability`` reads NONE, battle_lib.c:3088-
+    # 3093): every ability factor of that hit, its accuracy and crit odds, a Klutz holder's item,
+    # the speed abilities of the turn's end: the gastro-acid clause.
+    _E.GASTRO_ACID,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1066,7 +1071,7 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.IRON_FIST,
     # B13-29: Klutz hides its holder's item from every gated read (state.held_item) from the
     # start of the turn; nothing changes it mid-turn but a foe's Worry Seed (E3-2-2: the
-    # worry-seed clause).
+    # worry-seed clause) or Gastro Acid (E3-2-6: the gastro-acid clause).
     AbilityId.KLUTZ,
     # E1 trial batch (G-63): a fixed Sp. Atk factor of the hit's own side's active battlers
     # (the ally's ability and HP), whose inputs have their clauses.
@@ -1376,6 +1381,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
     _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
+    _E.GASTRO_ACID,  # a status move: no damage (E3-2-6)
 )
 
 
@@ -1525,6 +1531,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.WORRY_SEED)
         # E3-2-5: the foe's Skill Swap gives the side the foe's ability (the skill-swap clause).
         | (foe_effect == _E.SKILL_SWAP)
+        # E3-2-6: the foe's Gastro Acid suppresses the side's ability (the gastro-acid clause).
+        | (foe_effect == _E.GASTRO_ACID)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -2146,7 +2154,12 @@ def outcome_laws(
     worry_used = uses_move & (effect == _E.WORRY_SEED)
     # E3-2-5: a Skill Swap moves a speed ability (and Shed Skin) between the battlers likewise.
     swap_used = uses_move & (effect == _E.SKILL_SWAP)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used | worry_used | swap_used))
+    # E3-2-6: a Gastro Acid suppresses its target's speed ability (Swift Swim, Chlorophyll, Quick
+    # Feet, Unburden) and Shed Skin likewise (Battler_Ability reads NONE, battle_lib.c:3088-3093).
+    gastro_used = uses_move & (effect == _E.GASTRO_ACID)
+    end_speed_tie = end_speed_tie | (
+        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used)
+    )
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).

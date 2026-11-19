@@ -554,6 +554,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     259: ("BATTLE_EFFECT_TRICK_ROOM", _E.TRICK_ROOM, (0, 0, 0)),
     # Skill Swap: effect_script_0191.s:5 -> subscript_exchange_abilities.s (E3-2-5).
     191: ("BATTLE_EFFECT_SWITCH_ABILITIES", _E.SKILL_SWAP, (0, 0, 0)),
+    # Gastro Acid: effect_script_0239.s:5 -> subscript_suppress_target_ability.s (E3-2-6).
+    239: ("BATTLE_EFFECT_SUPRESS_ABILITY", _E.GASTRO_ACID, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

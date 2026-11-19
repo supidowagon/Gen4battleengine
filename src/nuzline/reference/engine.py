@@ -3378,6 +3378,18 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             mon.ability = AbilityId.INSOMNIA
             if target == 0:
                 _know_ability(s, s.battlers[0].active)
+    elif effect == EffectId.GASTRO_ACID and effective:
+        # subscript_suppress_target_ability.s:5-10: fails behind a substitute (:5), on a target
+        # that has the bit (:6), on a raw Multitype ability (:8); else the bit is set (:10), E3-2-6.
+        mon = _active(s, target)
+        if (
+            target_alive
+            and not _shielded(turn, s, target)
+            and not s.battlers[target].ability_suppressed
+            # Raw BATTLEMON_ABILITY (:8), not Battler_Ability.
+            and _decomp_ability(tables, mon) != ABILITY_MULTITYPE
+        ):
+            s.battlers[target].ability_suppressed = 1
     elif effect == EffectId.SKILL_SWAP and landed:
         # subscript_exchange_abilities.s:5-24 (E3-2-5): fails on a semi-invulnerable defender (:5),
         # a raw Wonder Guard (:6-7) or Multitype (:8-9) ability of either, a held Griseous Orb of
@@ -6252,7 +6264,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
-        sd.power_trick,
+        sd.power_trick, sd.ability_suppressed,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]

@@ -902,6 +902,28 @@ def _basic_check_worry_seed(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(ctx, -10))
 
 
+def _basic_check_gastro_acid(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckGastroAcid`` (script.s:1363-1376): the player already suppressed
+    (``IfMoveEffect`` ABILITY_SUPPRESSED, trainer_ai.c:704-714) -10; else its ability
+    (``LoadBattlerAbility``: ``ABILITY_NONE`` while suppressed, a known or guessed one) Multitype,
+    Truant, Slow Start, Stench, Run Away, Pickup or Honey Gather -10 (E3-2-6)."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.ABILITY_SUPPRESSED))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in (
+        "Multitype",
+        "Truant",
+        "Slow Start",
+        "Stench",
+        "Run Away",
+        "Pickup",
+        "Honey Gather",
+    ):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
     """``ScoreMinus10`` (Basic_ScoreMoveEffect, script.s:221: ``IfCurrentMoveEffectEqualTo
     BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE``): Teleport, -10 with no further test (E3-1-4)."""
@@ -1887,6 +1909,24 @@ def _expert_trick_room(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_random_less_than(_at(ctx, slower), 64, 6210))  # -> _End
     ctx = c.add_to_move_score(ctx, 3)
     return c.pop_or_end(ctx)
+
+
+def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
+    """``Expert_GastroAcid`` (script.s:5471-5494, the code, not its comment): the 64 roll (:5481)
+    jumping ends with 0; else +1, then the player above 70 % HP ends; else the 128 roll (:5484)
+    jumping skips the -1, else -1; the player above 50 % HP then ends, else -1; above 30 % ends,
+    else -1 (E3-2-6)."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 64, 5481))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 70))  # -> _End
+    ctx, skip = _split(c.if_random_less_than(ctx, 128, 5484))
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_GastroAcid_ContinueHPCheck (:5487)
+    ctx = _at(ctx, skip | ctx.live)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 50))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)
+    ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 30))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3648,6 +3688,7 @@ _BASIC_LABELS = (
     (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
+    (BattleEffect.SUPRESS_ABILITY, _basic_check_gastro_acid),  # :269 (E3-2-6)
     (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
@@ -3774,6 +3815,7 @@ _EXPERT_LABELS = (
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
+    (BattleEffect.SUPRESS_ABILITY, _expert_gastro_acid),  # :1782 (E3-2-6)
     (BattleEffect.USE_MOVE_FIRST, _expert_me_first),  # :1784 (E3-2-3)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)

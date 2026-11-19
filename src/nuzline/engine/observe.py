@@ -213,6 +213,9 @@ _NONZERO_SIDE = (
     "embargo",
     # E3 batch 1: "{0} was subjected to torment!" (subscript_torment_start.s) until it leaves.
     "torment",
+    # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it
+    # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
+    "ability_suppressed",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

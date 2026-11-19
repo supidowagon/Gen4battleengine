@@ -432,6 +432,8 @@ SITE_N: dict[int, int] = {
     # E3 batch 1 round 2.
     5984: 128,  # Expert_WorrySeed_CheckUserHP (to _TryScorePlus1 when it jumps)
     5988: 64,  # Expert_WorrySeed_TryScorePlus1 (+1 when it does NOT jump)
+    5481: 64,  # Expert_GastroAcid (to _End when it jumps: 0 for the whole script)
+    5484: 128,  # Expert_GastroAcid (to _ContinueHPCheck when it jumps: skips the -1)
     5532: 32,  # Expert_MeFirst_TryScorePlus1 (jumps to _CheckLastUsedMove)
     5538: 128,  # Expert_MeFirst_CheckLastUsedMove (+1 when it does NOT jump)
     5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
@@ -710,6 +712,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (:1790), :5984, :5988 (E3-2-2)
         259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
+        239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
+        # (:1782), :5481, :5484 (E3-2-6)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -857,6 +861,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     # E3 batch 1 round 2.
     241: ("Expert_MeFirst", 1784),
     247: ("Expert_WorrySeed", 1790),
+    239: ("Expert_GastroAcid", 1782),
     259: ("Expert_TrickRoom", 1800),
     191: ("Expert_ChangeUserAbility", 1743),
 }
@@ -991,6 +996,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         218,  # SPEED_DOWN_HIT: Expert_HammerArm (E3-1-5)
         241,  # USE_MOVE_FIRST: Expert_MeFirst (E3-2-3)
         247,  # SET_ABILITY_TO_INSOMNIA: Expert_WorrySeed (E3-2-2)
+        239,  # SUPRESS_ABILITY: Expert_GastroAcid (E3-2-6)
         259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
         191,  # SWITCH_ABILITIES: Expert_ChangeUserAbility (E3-2-5)
     }

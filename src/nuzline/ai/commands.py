@@ -457,6 +457,7 @@ class BattleEffect(IntEnum):
     SET_ABILITY_TO_INSOMNIA = 247  # Worry Seed: Basic :276; Expert_WorrySeed (:1790)
     TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
     SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
+    SUPRESS_ABILITY = 239  # Gastro Acid: Basic_CheckGastroAcid (:269); Expert_GastroAcid (:1782)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -1081,6 +1082,12 @@ ABILITY_IDS = {
     # E3-2-2: Basic_CheckWorrySeed (script.s:1430-1433; Insomnia and Vital Spirit above).
     "Truant": 54,
     "Multitype": 121,
+    # E3-2-6: Basic_CheckGastroAcid (script.s:1371-1376; Truant and Multitype above).
+    "Slow Start": 112,
+    "Stench": 1,
+    "Run Away": 50,
+    "Pickup": 53,
+    "Honey Gather": 118,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)

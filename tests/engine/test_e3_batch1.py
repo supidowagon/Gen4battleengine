@@ -792,3 +792,267 @@ def test_skill_swap_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](s)
     assert int(swapped.ability[1, int(s.active[1])]) == AbilityId.COMPOUNDEYES
     assert int(swapped.ability[0, int(s.active[0])]) == int(s.ability[1, int(s.active[1])])
+
+
+# --- #239 Gastro Acid (E3-2-6) --------------------------------------------------------------
+#
+# ``effect_script_0239.s:5`` runs ``subscript_suppress_target_ability.s``: fails (:5-8) behind a
+# Substitute, on a defender that has MOVE_EFFECT_ABILITY_SUPPRESSED, on a miss or a
+# semi-invulnerable defender, on a raw Multitype ability; else :10 sets the bit. Every
+# ``Battler_Ability`` read then gives ABILITY_NONE (battle_lib.c:3088-3093) unless the raw ability
+# is Multitype; the bit ends with a switch (battle_lib.c:2071) and Baton Pass keeps it (:2076).
+
+
+def _gastro(t, n, mine=("Gastro Acid",), foe=("Tackle",), bit=(0, 0), **over):
+    """``_fight`` with the ``ability_suppressed`` bits ``bit`` (side 0, side 1)."""
+    s = _fight(t, n, mine, foe)
+    s = s._replace(ability_suppressed=jnp.asarray(bit, s.ability_suppressed.dtype))
+    return s._replace(**over) if over else s
+
+
+def _hp_lost(before, after, side):
+    return int(before.hp[side, 0]) - int(after.hp[side, 0])
+
+
+def test_gastro_acid_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 239 (effect_script_0239.s:5); Gastro Acid is in both games' move tables."""
+    assert DECOMP_EFFECT_TO_ID[239] == (EffectId.GASTRO_ACID, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Gastro Acid")]) == EffectId.GASTRO_ACID
+
+
+def test_gastro_acid_sets_the_bit_and_leaves_the_ability_written(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """:10 sets the defender's bit; ``BattleMon.ability`` is not written (no AI tag), the user's
+    own bit stays clear."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = _gastro(t, n)
+        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.ROCK_HEAD))
+        out = assert_matches_reference(t, s, A("Gastro Acid", "Tackle", s, n), _hits())
+        assert out.ability_suppressed.tolist() == [0, 1]
+        assert int(out.ability[1, 0]) == AbilityId.ROCK_HEAD
+        assert int(out.ai_ability_known[0]) == 0
+
+
+def test_gastro_acid_fails_on_its_listed_conditions(tables, names):
+    """subscript_suppress_target_ability.s:5-8: a Substitute (:5, the bit is not set behind it), a
+    defender that has the bit (:6), a miss or a semi-invulnerable defender (:7), a raw Multitype
+    ability (:8). The Multitype exception is also the accessor's (lib.c:3090)."""
+    from nuzline.engine.damage import battler_decomp_ability
+
+    s = _gastro(tables, names)
+    acts = A("Gastro Acid", "Tackle", s, names)
+    shielded = s._replace(substitute_hp=s.substitute_hp.at[1].set(30))
+    out = assert_matches_reference(tables, shielded, acts, _hits())
+    assert out.ability_suppressed.tolist() == [0, 0]
+    flying = s._replace(semi_invulnerable=s.semi_invulnerable.at[1].set(1))
+    out = assert_matches_reference(tables, flying, acts, _hits())
+    assert out.ability_suppressed.tolist() == [0, 0]
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = assert_matches_reference(tables, s, acts, miss)
+    assert out.ability_suppressed.tolist() == [0, 0]
+    already = _gastro(tables, names, bit=(0, 1))
+    out = assert_matches_reference(tables, already, acts, _hits())
+    assert out.ability_suppressed.tolist() == [0, 1]
+    arceus = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Gastro Acid",))],
+        [_spec(names, "Arceus", 40, ("Tackle",))],
+    )
+    out = assert_matches_reference(
+        tables, arceus, A("Gastro Acid", "Tackle", arceus, names), _hits()
+    )
+    assert out.ability_suppressed.tolist() == [0, 0]
+    # A Multitype holder that has the bit (a hand-built state) still reads Multitype:
+    # Battler_Ability's exception.
+    forced = out._replace(ability_suppressed=jnp.asarray([0, 1], out.ability_suppressed.dtype))
+    assert int(battler_decomp_ability(tables, forced, 1)) == 121  # ABILITY_MULTITYPE
+
+
+def test_gastro_acid_hides_a_damage_ability_and_an_immunity(tables, names):
+    """Battler_Ability gives NONE for a suppressed battler (lib.c:6653-6654: attacker and defender
+    both): a suppressed Levitate stops granting Earthquake's immunity, a suppressed Huge Power
+    stops doubling its holder's Attack."""
+    s = _fight(tables, names, ("Earthquake",), ("Tackle",))
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.LEVITATE))
+    acts = A("Earthquake", "Tackle", s, names)
+    base = assert_matches_reference(tables, s, acts, _hits())
+    assert _hp_lost(s, base, 1) == 0  # the Levitate immunity
+    bit = s._replace(ability_suppressed=s.ability_suppressed.at[1].set(1))
+    hit = assert_matches_reference(tables, bit, acts, _hits())
+    assert _hp_lost(s, hit, 1) > 0
+    power = _fight(tables, names, ("Tackle",), ("Tackle",))
+    power = power._replace(ability=power.ability.at[0, 0].set(AbilityId.HUGE_POWER))
+    acts = A("Tackle", "Tackle", power, names)
+    full = assert_matches_reference(tables, power, acts, _hits())
+    off = power._replace(ability_suppressed=power.ability_suppressed.at[0].set(1))
+    weak = assert_matches_reference(tables, off, acts, _hits())
+    assert _hp_lost(power, weak, 1) < _hp_lost(power, full, 1)
+
+
+def test_gastro_acid_hides_a_speed_ability(tables, names):
+    """Swift Swim in rain doubles its holder's speed (CompareBattlerSpeed, lib.c:1213-1214,
+    :1228-1238, through ``Battler_Ability``); suppressed, the foe moves first."""
+    from nuzline.engine.ids import Weather
+    from nuzline.engine.order import action_order, effective_speed
+
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    s = s._replace(
+        ability=s.ability.at[0, 0].set(AbilityId.SWIFT_SWIM),
+        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
+        stats=s.stats.at[0, 0, SPE].set(100).at[1, 0, SPE].set(150),
+    )
+    acts = A("Tackle", "Tackle", s, names)
+    assert int(effective_speed(tables, s, 0)) == 200
+    assert int(action_order(tables, s, acts, empty_outcome())[0]) == 0
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    assert int(effective_speed(tables, off, 0)) == 100
+    assert int(action_order(tables, off, acts, empty_outcome())[0]) == 1
+    assert_matches_reference(tables, off, acts, _hits())
+
+
+def test_gastro_acid_hides_an_end_of_turn_ability(tables, names):
+    """Speed Boost's +1 at the turn end reads ``Battler_Ability``: none while suppressed."""
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.SPEED_BOOST))
+    acts = A("Tackle", "Tackle", s, names)
+    boosted = assert_matches_reference(tables, s, acts, _hits())
+    assert _stage(boosted, 0, Stat.SPE) == 1
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    quiet = assert_matches_reference(tables, off, acts, _hits())
+    assert _stage(quiet, 0, Stat.SPE) == 0
+
+
+def test_gastro_acid_makes_a_klutz_holders_item_live(tables, names):
+    """``Battler_HeldItem`` hides the item while ``Battler_Ability`` is Klutz (lib.c:5352-5356);
+    a suppressed Klutz is NONE, so the Leftovers heal at the turn end."""
+    from nuzline.engine.state import held_item
+
+    leftovers = names.item("Leftovers")
+    s = _fight(tables, names, ("Tackle",), ("Growl",))
+    s = s._replace(
+        ability=s.ability.at[0, 0].set(AbilityId.KLUTZ),
+        item=s.item.at[0, 0].set(leftovers),
+        hp=s.hp.at[0, 0].set(s.max_hp[0, 0] // 2),
+    )
+    assert int(held_item(s, 0)) == 0
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    assert int(held_item(off, 0)) == leftovers
+    acts = A("Tackle", "Growl", s, names)
+    hidden = assert_matches_reference(tables, s, acts, _hits())
+    live = assert_matches_reference(tables, off, acts, _hits())
+    assert int(live.hp[0, 0]) - int(hidden.hp[0, 0]) == max(1, int(s.max_hp[0, 0]) // 16)
+
+
+def test_gastro_acid_ends_on_a_switch_and_baton_pass_keeps_it(tables, names):
+    """The bit is a volatile (switch-out clears the mask, lib.c:2071) that Baton Pass keeps
+    (moves.h:46-48, lib.c:2076). A Monferno with Intimidate on the bench: a plain switch clears
+    the bit, so its Intimidate (``Battler_Ability``) drops the foe's Attack; a Baton Pass keeps
+    it, so the newcomer is suppressed and its Intimidate stays silent (an unsuppressed Baton Pass
+    newcomer's does fire)."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    assert "ability_suppressed" in VOLATILE_FIELDS and "ability_suppressed" in BATON_PASSED_FIELDS
+    n = names
+    s = make_state(
+        tables,
+        [_spec(n, "Ninjask", 30, ("Baton Pass",)), _spec(n, "Monferno", 20, ("Tackle",))],
+        [_spec(n, "Geodude", 20, ("Tackle",))],
+    )
+    s = s._replace(
+        ability=s.ability.at[:, 0].set(AbilityId.NONE).at[0, 1].set(AbilityId.INTIMIDATE)
+    )
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[0].set(1))
+    switch = jnp.array([4 + 1, n.move_slot(s, 1, "Tackle")], jnp.int32)
+    out = assert_matches_reference(tables, off, switch, empty_outcome())
+    assert out.ability_suppressed.tolist() == [0, 0]
+    assert _stage(out, 1, Stat.ATK) == -1  # the newcomer's Intimidate fired
+
+    def baton(state):
+        acts = A("Baton Pass", "Tackle", state, n)
+        paused = assert_matches_reference(tables, state, acts, _hits())
+        assert int(paused.pivot_battler) == 1
+        resume = np.asarray(paused.ts_actions).astype(int).tolist()
+        resume[0] = MOVE_ACTIONS + 1
+        return assert_matches_reference(tables, paused, tuple(resume), empty_outcome())
+
+    passed = baton(off)
+    assert int(passed.active[0]) == 1 and passed.ability_suppressed.tolist() == [1, 0]
+    assert _stage(passed, 1, Stat.ATK) == 0
+    control = baton(s)
+    assert control.ability_suppressed.tolist() == [0, 0]
+    assert _stage(control, 1, Stat.ATK) == -1
+
+
+def test_gastro_acid_leaves_super_luck_and_frees_a_klutz_crit_item(tables, names):
+    """CalcCrit reads the attacker's ability raw (lib.c:7122, :7126: Super Luck stays) and its item
+    through ``Battler_HeldItem`` (:7117: a suppressed Klutz holder's Scope Lens counts)."""
+    from nuzline.engine.outcome import side_crit_odds
+
+    tackle = names.move("Tackle")
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    luck = s._replace(ability=s.ability.at[0, 0].set(AbilityId.SUPER_LUCK))
+    off = luck._replace(ability_suppressed=luck.ability_suppressed.at[0].set(1))
+    plain = int(side_crit_odds(tables, s, 0, tackle))
+    with_luck = int(side_crit_odds(tables, luck, 0, tackle))
+    assert with_luck < plain  # Super Luck: +1 stage
+    assert int(side_crit_odds(tables, off, 0, tackle)) == with_luck
+    lens = s._replace(
+        ability=s.ability.at[0, 0].set(AbilityId.KLUTZ),
+        item=s.item.at[0, 0].set(names.item("Scope Lens")),
+    )
+    free = lens._replace(ability_suppressed=lens.ability_suppressed.at[0].set(1))
+    assert int(side_crit_odds(tables, lens, 0, tackle)) == plain
+    assert int(side_crit_odds(tables, free, 0, tackle)) < plain
+
+
+def test_gastro_acid_stops_ingrain_anchoring_against_roar(tables, names):
+    """Roar's Ingrain test compares the whole mask to MOVE_EFFECT_INGRAIN
+    (subscript_force_target_to_switch_or_flee.s:7): the suppressed bit is another bit."""
+    from nuzline.engine.effects import ingrain_anchors
+
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    s = s._replace(ingrain=s.ingrain.at[1].set(1))
+    assert bool(ingrain_anchors(tables, s, 1))
+    off = s._replace(ability_suppressed=s.ability_suppressed.at[1].set(1))
+    assert not bool(ingrain_anchors(tables, off, 1))
+
+
+def test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
+    """A faster foe's Gastro Acid takes the side's Compoundeyes before its check (bcp.c:2876-2947):
+    Rock Throw's 90 is 117 at the turn start and 90 suppressed (hit_thresholds holds both). Its
+    write to the crit inputs is every battler's bit: Super Luck (raw) does not move, a Klutz
+    holder's Scope Lens does (``crit_variants``). It is an input clause of the enumeration and
+    deals no table damage."""
+    from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
+    from nuzline.engine.outcome import CRIT_ODDS_EFFECTS, crit_variants
+
+    assert EffectId.GASTRO_ACID in INPUT_CLAUSE_EFFECTS
+    assert EffectId.GASTRO_ACID in NON_TABLE_DAMAGE_EFFECTS
+    s = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Gastro Acid"], opp_faster=True
+    )
+    mon = int(s.active[0])
+    s = s._replace(ability=s.ability.at[0, mon].set(AbilityId.COMPOUNDEYES))
+    acts = A("Rock Throw", "Gastro Acid", s, names)
+    assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
+    assert EffectId.GASTRO_ACID in CRIT_ODDS_EFFECTS
+    assert CRIT_ODDS_EFFECTS[EffectId.GASTRO_ACID](s).ability_suppressed.tolist() == [1, 1]
+    bit = 1 << list(CRIT_ODDS_EFFECTS).index(EffectId.GASTRO_ACID)
+    odds, possible = crit_variants(tables, s, acts)
+    assert not bool(possible[0, bit])  # Super Luck / Compoundeyes: no crit input changes
+    lens = s._replace(
+        ability=s.ability.at[0, mon].set(AbilityId.KLUTZ),
+        item=s.item.at[0, mon].set(names.item("Scope Lens")),
+    )
+    odds, possible = crit_variants(tables, lens, acts)
+    assert bool(possible[0, bit]) and int(odds[0, bit]) < int(odds[0, 0])
+
+
+def test_the_suppressed_bit_is_observed():
+    """The "ability was suppressed" message (subscript_suppress_target_ability.s:12) is in the
+    observation (``observe._NONZERO_SIDE``)."""
+    from nuzline.engine.observe import OBS_FIELDS
+
+    assert "ability_suppressed" in [name for name, _ in OBS_FIELDS]

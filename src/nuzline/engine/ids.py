@@ -528,6 +528,11 @@ class EffectId(IntEnum):
     # semi-invulnerable, either has Wonder Guard or Multitype or holds a Griseous Orb, or both
     # have no ability (``effects._skill_swap``, E3-2-5). No Substitute test.
     SKILL_SWAP = 128
+    # Gastro Acid (239, BATTLE_EFFECT_SUPRESS_ABILITY): zeros. effect_script_0239.s:5 runs
+    # subscript_suppress_target_ability.s: MOVE_EFFECT_ABILITY_SUPPRESSED on the defender unless
+    # it is behind a Substitute, already has the bit, the move missed, the defender is
+    # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
+    GASTRO_ACID = 129
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

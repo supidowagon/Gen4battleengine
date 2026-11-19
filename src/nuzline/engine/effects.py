@@ -1716,6 +1716,29 @@ def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return know_ability(state, h.target_side, mon, cond)
 
 
+def _gastro_acid(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Gastro Acid (effect_script_0239.s:5 ON_HIT | TO_DEFENDER;
+    ``subscript_suppress_target_ability.s``): fails (:5-8, MOVE_STATUS_FAILED) behind a
+    Substitute (:5 CheckSubstitute, ``h.shielded``), on a defender that has
+    MOVE_EFFECT_ABILITY_SUPPRESSED already (:6), on a miss or a semi-invulnerable defender (:7,
+    ``h.effective``), and on a raw Multitype ability (:8: ``decomp_abilities``, not the
+    ``Battler_Ability`` the bit changes). Otherwise (:10) the defender's
+    ``ability_suppressed`` is set: until it leaves (``VOLATILE_FIELDS``), kept by Baton Pass
+    (``BATON_PASSED_FIELDS``). ``BattleMon.ability`` itself is not written, so no AI tag
+    (the AI reads the bit, trainer_ai.c:1177-1178). E3-2-6."""
+    fmt = format_of(state)
+    raw = decomp_abilities(tables, state)[party(fmt, h.target_side), h.target]
+    cond = (
+        (h.effect == _E.GASTRO_ACID)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & ~h.shielded
+        & (state.ability_suppressed[h.target_side] == 0)
+        & (raw != ABILITY_MULTITYPE)
+    )
+    return _set(state, "ability_suppressed", h.target_side, 1, cond)
+
+
 def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Skill Swap (effect_script_0191.s:5, a direct ``CHECK_HP | TO_DEFENDER``
     ``subscript_exchange_abilities.s``; no ``CAN_PROTECT`` bit, so its ``Protect`` and
@@ -2124,6 +2147,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "minimized",
     "semi_invulnerable",  # B10-12
     "power_trick",  # B12-10
+    "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, E3-2-6
 )
 
 
@@ -2132,8 +2156,8 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Gastro Acid,
-    Miracle Eye, Heal Block, Embargo, Magnet Rise); each joins the tuple with its move."""
+    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Miracle Eye,
+    Heal Block); each joins the tuple with its move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
@@ -3532,6 +3556,7 @@ def play_hit(
         _taunt,
         _torment,
         _worry_seed,
+        _gastro_acid,
         _trick_room,
         _skill_swap,
         _disable,

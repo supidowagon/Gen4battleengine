@@ -312,6 +312,12 @@ CONSTANTS: tuple[Constant, ...] = (
             # E3-2-2: Basic_CheckWorrySeed (script.s:1430-1433).
             "Truant": 54,
             "Multitype": 121,
+            # E3-2-6: Basic_CheckGastroAcid (script.s:1371-1376).
+            "Slow Start": 112,
+            "Stench": 1,
+            "Run Away": 50,
+            "Pickup": 53,
+            "Honey Gather": 118,
         },
     ),
     *_table(

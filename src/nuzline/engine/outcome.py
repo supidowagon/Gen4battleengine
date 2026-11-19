@@ -609,7 +609,8 @@ def future_thresholds(
     # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
     # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its
     # target's ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
-    # (subscript_exchange_abilities.s:21-24). Either way the roll is kept whole, rare and sound.
+    # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
+    # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     field_change = jnp.any(
         uses
         & (
@@ -617,6 +618,7 @@ def future_thresholds(
             | (effect == EffectId.TRANSFORM)
             | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
             | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
+            | (effect == EffectId.GASTRO_ACID)  # the target's ability is suppressed (E3-2-6)
         )
     ) | (state.gravity == 1)
     loose = (
@@ -841,9 +843,11 @@ def _threshold_grid(
     # The swap moves the raw BattleMon.ability (subscript_exchange_abilities.s:21-24).
     raw_ability = state.ability[party(fmt, mons), state.active]
     # A foe's Skill Swap does the same to a Klutz holder that does not get Klutz back
-    # (subscript_exchange_abilities.s:21-24; the foe's ability is the side's after it).
+    # (subscript_exchange_abilities.s:21-24; the foe's ability is the side's after it), and a
+    # foe's Gastro Acid to any Klutz holder (:10; Battler_Ability reads NONE, lib.c:3088-3093).
     klutz_lost = (
         foes(changes & (effect == EffectId.WORRY_SEED))
+        | foes(changes & (effect == EffectId.GASTRO_ACID))
         | (foes(changes & (effect == EffectId.SKILL_SWAP)) & (foes(raw_ability) != AbilityId.KLUTZ))
     ) & (mon_ability == AbilityId.KLUTZ)
     held = jnp.where(
@@ -955,8 +959,14 @@ def _threshold_grid(
         # (subscript_give_target_insomnia.s:11; the side loses Compoundeyes, Hustle, Simple,
         # Unaware, No Guard, ...). The foe's own accuracy check (Worry Seed's, 100) came first.
         worry_move = effect[foe] == EffectId.WORRY_SEED
+        # E3-2-6: the foe's Gastro Acid suppresses the side's ability before the check
+        # (subscript_suppress_target_ability.s:10; Battler_Ability reads NONE, so the side
+        # loses Compoundeyes, Hustle, Simple, Unaware, No Guard, ... as attacker, bcp.c:2876-2947).
+        # In singles the user's own ability is the foe's, and it is not the defender of the
+        # side's later check; a doubles Gastro Acid on a defender is the doubles milestone's.
+        gastro_move = effect[foe] == EffectId.GASTRO_ACID
         field_move = weather_move[foe] | (
-            changes[foe] & (gravity_move | xform | worry_move | swap_move)
+            changes[foe] & (gravity_move | xform | worry_move | swap_move | gastro_move)
         )
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
@@ -1005,6 +1015,7 @@ def _threshold_grid(
             grav=gravity_move,
             wk=worry_move,
             sw=swap_move,
+            ga=gastro_move,
             foe_old=foe_ability,
             copied=side_ability,
         ):
@@ -1027,6 +1038,12 @@ def _threshold_grid(
                 .at[party(fmt, side), side_mon]
                 .set(insomnia.astype(state.ability.dtype)),
                 gravity=gravity.astype(state.gravity.dtype),
+                # Gastro Acid's bit (MOVE_EFFECT_ABILITY_SUPPRESSED), the side's own.
+                ability_suppressed=state.ability_suppressed.at[side].set(
+                    jnp.where(f & ga, 1, state.ability_suppressed[side]).astype(
+                        state.ability_suppressed.dtype
+                    )
+                ),
             )
             return _hit_threshold(
                 tables, hidden, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
@@ -1147,6 +1164,16 @@ def _insomnia_all(state: BattleState) -> BattleState:
     )
 
 
+def _suppress_all(state: BattleState) -> BattleState:
+    """Gastro Acid's write to the crit inputs: subscript_suppress_target_ability.s:10 sets the
+    defender's MOVE_EFFECT_ABILITY_SUPPRESSED, here every battler's own. CalcCrit's own-ability
+    read is raw (battle_lib.c:7122, :7126: Super Luck stays), but a Klutz holder's crit item
+    becomes live (``Battler_HeldItem``, :7117, :5352-5356: ``Battler_Ability``); the defender's
+    Battle Armor / Shell Armor read (:7135-7136, ``Battler_IgnorableAbility``) is ``armored``'s,
+    another battler's hit, which in singles no Gastro Acid user's own action precedes."""
+    return state._replace(ability_suppressed=jnp.ones_like(state.ability_suppressed))
+
+
 def _swap_abilities_all(state: BattleState) -> BattleState:
     """Skill Swap's write to the crit inputs: subscript_exchange_abilities.s:21-24 swaps the user's
     and the defender's ``BattleMon.ability``, which moves Super Luck (battle_lib.c:7126) and a
@@ -1180,6 +1207,7 @@ CRIT_ODDS_EFFECTS = {
     EffectId.EMBARGO: _embargo_all,
     EffectId.WORRY_SEED: _insomnia_all,
     EffectId.SKILL_SWAP: _swap_abilities_all,
+    EffectId.GASTRO_ACID: _suppress_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.

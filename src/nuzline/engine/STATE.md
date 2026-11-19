@@ -108,8 +108,10 @@ three structs has a row.
   0/1, cleared on switch-out, battle_lib.c:2071, kept by Baton Pass, moves.h:46-48, :2076; read
   through `state.battler_ability` / `damage.battler_decomp_ability`, `Battler_Ability`,
   battle_lib.c:3088-3093, and by the AI's LoadBattlerAbility / CheckBattlerAbility,
-  trainer_ai.c:1177-1178, :1221-1222). The rest (Charge, Grudge, Miracle Eye, Heal Block) are
-  later (M6).
+  trainer_ai.c:1177-1178, :1221-1222). Gastro Acid (E3-2-6, `effects._gastro_acid`) sets it
+  (subscript_suppress_target_ability.s:10); it is in `effects.MOVE_EFFECT_MASK_FIELDS`, so a
+  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). The rest
+  (Charge, Grudge, Miracle Eye, Heal Block) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
