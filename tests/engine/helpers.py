@@ -56,6 +56,8 @@ step_batch = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
 def _padded_calls(n: int):
     """``(rows, padded index)`` per ``BATCH``-row call over ``n`` rows (padding: row 0 of the
     call repeated); a row's result does not depend on the call it is in."""
+    if n < 1:
+        raise ValueError(f"padded calls need at least one row, got {n}")
     for start in range(0, n, BATCH):
         idx = np.arange(start, min(start + BATCH, n))
         yield idx, jnp.asarray(np.concatenate([idx, np.full(BATCH - len(idx), idx[0])]))
