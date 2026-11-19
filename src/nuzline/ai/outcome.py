@@ -424,6 +424,7 @@ SITE_N: dict[int, int] = {
     5333: 30,  # Expert_TrumpCard (the Pressure +1)
     5347: 100,  # Expert_TrumpCard_ScorePlus1
     5225: 128,  # Expert_Embargo (+1 when it does NOT jump), B13-32
+    3089: 100,  # Expert_Disable_TryScoreMinus1 (-1 when it does NOT jump), E3-1-3
     5935: 128,  # Expert_Punishment_TryScorePlus4
     5939: 128,  # Expert_Punishment_TryScorePlus3
     5943: 128,  # Expert_Punishment_TryScorePlus2
@@ -687,6 +688,12 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # :5347
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: NonStandard (:274); Expert_Punishment (:1788)
         232,  # PREVENT_ITEM_USE: Basic_CheckEmbargo (:262); Expert_Embargo (:1775), :5225 (B13-32)
+        # E3 batch 1.
+        71,  # LOWER_SP_ATK_HIT (Mist Ball, Mystical Fire): no Basic or Expert entry (E3-1-1)
+        85,  # DO_NOTHING (Kaizo Thief): no Basic or Expert entry; Encore table :3220 (E3-1-2)
+        86,  # DISABLE: Basic_CheckCannotDisable (:184); Expert_Disable (:1687), :3089 (E3-1-3)
+        153,  # FLEE_FROM_WILD_BATTLE (Teleport): Basic :221 ScoreMinus10 (E3-1-4)
+        218,  # SPEED_DOWN_HIT (Hammer Arm): Expert_HammerArm (:1762), no roll (E3-1-5)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -828,6 +835,9 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     231: ("Expert_Assurance", 1774),
     235: ("Expert_TrumpCard", 1778),
     245: ("Expert_Punishment", 1788),
+    # E3 batch 1.
+    86: ("Expert_Disable", 1687),
+    218: ("Expert_HammerArm", 1762),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -956,6 +966,8 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         232,  # PREVENT_ITEM_USE: Expert_Embargo (B13-32)
         235,  # HIGHER_POWER_WHEN_LOW_PP: Expert_TrumpCard
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: Expert_Punishment
+        86,  # DISABLE: Expert_Disable (E3-1-3)
+        218,  # SPEED_DOWN_HIT: Expert_HammerArm (E3-1-5)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

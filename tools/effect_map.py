@@ -539,6 +539,11 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     232: ("BATTLE_EFFECT_PREVENT_ITEM_USE", _E.EMBARGO, (0, 0, 0)),
     # Judgment: effect_script_0268.s, the held plate's type (B13-12).
     268: ("BATTLE_EFFECT_JUDGEMENT", _E.JUDGMENT, (0, 0, 0)),
+    # Splash (Kaizo: Thief, power 40): effect_script_0085.s:5 sets MOVE_STATUS_SPLASH only: no
+    # CalcCrit, no CalcDamage (E3-1-1).
+    85: ("BATTLE_EFFECT_DO_NOTHING", _E.DO_NOTHING, (0, 0, 0)),
+    # Teleport: effect_script_0153.s:5, :9-10, MOVE_STATUS_FAILED in a trainer battle (E3-1-4).
+    153: ("BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE", _E.FLEE, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

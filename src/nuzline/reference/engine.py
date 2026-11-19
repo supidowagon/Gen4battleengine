@@ -906,6 +906,8 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.FUTURE_SIGHT:  # effect_script_0148.s: no CalcDamage at the use
         return 0
+    if effect == EffectId.DO_NOTHING:  # effect_script_0085.s:5: no CalcDamage (E3-1-1)
+        return 0
     if effect == EffectId.BIDE:
         return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
     foe = _active(s, _foe(attacker))
@@ -5968,6 +5970,8 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
     """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
     sd = s.battlers[side]
     if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
+        return True
+    if effect == EffectId.FLEE:  # effect_script_0153.s:5, :9-10: a trainer battle (E3-1-4)
         return True
     if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5-6
         # CheckSubstitute (:5; no hit of the action yet) then the sleep test (:6), B10-4.

@@ -872,6 +872,20 @@ def _basic_check_embargo(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_cannot_disable(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCannotDisable`` (script.s:650-653): the player already under Disable, -8.
+    ``CHECK_DISABLE`` reads ``disabledTurns``, not ``disabledMove`` (trainer_ai.c:1833-1836), so
+    the last disabled turn (counter 0, move still set) is not seen (E3-1-3)."""
+    ctx, t = _split(c.if_battler_under_effect(_at(ctx, mask), _D, c.CHECK_DISABLE))
+    return c.pop_or_end(_score(ctx, t, -8))
+
+
+def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
+    """``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE, ScoreMinus10``
+    (script.s:221): Teleport, -10 with no further test (E3-1-4)."""
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, mask), -10))
+
+
 def _basic_check_natural_gift(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckNaturalGift`` (script.s:1053-1059): the attacker's true held item
     (``LoadHeldItem``) not a berry of ``Basic_NaturalGiftBerries`` (:1061-1126), -10; else
@@ -1746,6 +1760,31 @@ def _expert_embargo(ctx: AiContext, mask) -> AiContext:
     """``Expert_Embargo`` (script.s:5223-5229): +1 unless the 128 roll (:5225) jumps, B13-32."""
     ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 5225))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, 1))
+
+
+def _expert_disable(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Disable`` (script.s:3075-3093): slower than the player (the SLOWER compare, no
+    tie read) nothing; else the power of the player's last move (``movePrevByBattler``, none
+    reads as 0): above 0 +1, else -1 unless the 100 roll (:3089) jumps to the end (E3-1-3)."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))  # -> _End
+    ctx = c.load_power_of_loaded_move(c.load_battler_previous_move(ctx, _D))
+    ctx, minus1 = _split(c.if_loaded_equal_to(ctx, 0))  # -> _TryScoreMinus1
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_Disable_TryScoreMinus1 (:3088)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, minus1), 100, 3089))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
+    """``Expert_HammerArm`` (script.s:4849-4867): resisted (immune, quarter, half) -1; else
+    slower than the player (the SLOWER compare, no tie read) +1; else nothing, E3-1-5."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, plus1 = _split(c.if_speed_compare_equal_to(ctx, COMPARE_SPEED_SLOWER))
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:4859)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))  # _ScorePlus1 (:4863)
 
 
 def _expert_water_spout(ctx: AiContext, mask) -> AiContext:
@@ -3435,6 +3474,7 @@ _BASIC_LABELS = (
     (BattleEffect.STATUS_PARALYZE, _basic_check_cannot_paralyze),  # :180
     (BattleEffect.SET_SUBSTITUTE, _basic_check_substitute),  # :181
     (BattleEffect.STATUS_LEECH_SEED, _basic_check_cannot_leech_seed),  # :183
+    (BattleEffect.DISABLE, _basic_check_cannot_disable),  # :184 (E3-1-3)
     (BattleEffect.LEVEL_DAMAGE_FLAT, _basic_check_non_standard_damage),  # :185
     (BattleEffect.RANDOM_DAMAGE_1_TO_150_LEVEL, _basic_check_non_standard_damage),  # :186
     (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
@@ -3464,6 +3504,7 @@ _BASIC_LABELS = (
     (BattleEffect.MIRROR_COAT, _basic_check_non_standard_damage),  # :218
     (BattleEffect.CHARGE_TURN_DEF_UP, _basic_check_non_standard_damage),  # :219
     (BattleEffect.HIT_IN_3_TURNS, _basic_check_future_sight),  # :220
+    (BattleEffect.FLEE_FROM_WILD_BATTLE, _basic_score_minus_10),  # :221 (E3-1-4)
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
     (BattleEffect.SP_ATK_UP_CAUSE_CONFUSION, _basic_check_cannot_confuse),  # :230 (B12-11)
@@ -3548,6 +3589,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CHARGE_TURN_HIGH_CRIT_FLINCH, _expert_charge_turn_no_invuln),  # :1682
     (BattleEffect.SET_SUBSTITUTE, _expert_substitute),  # :1684
     (BattleEffect.STATUS_LEECH_SEED, _expert_toxic_leech_seed),  # :1686
+    (BattleEffect.DISABLE, _expert_disable),  # :1687 (E3-1-3)
     (BattleEffect.COUNTER, _expert_counter),  # :1688
     (BattleEffect.ENCORE, _expert_encore),  # :1689
     (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690
@@ -3602,6 +3644,7 @@ _EXPERT_LABELS = (
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
     (BattleEffect.GRAVITY, _expert_gravity),  # :1759
     (BattleEffect.DOUBLE_POWER_HEAL_SLEEP, _expert_wake_up_slap),  # :1761 (B13-23)
+    (BattleEffect.SPEED_DOWN_HIT, _expert_hammer_arm),  # :1762 (E3-1-5)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767

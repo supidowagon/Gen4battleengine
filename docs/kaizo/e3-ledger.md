@@ -150,3 +150,84 @@ by each split, replacing option A's upper bound.
 - Survey: no Kaizo (605 calls) or vanilla (573) script calls CallCommonScript with a local
   id, and none uses Unused_013. Real extraction: rom_trainer_maps.json byte-identical.
 - E3 is finished; the worktree stays as it is.
+
+---
+
+# E3 mechanics ledger (engine build rounds)
+
+Three parts: the current state, the orders, the rulings. Everything above this line is the
+earlier E3 stream's (backlog measurement). Rule sheets: `_scratch/e3/rules/` of the managing
+worktree. Conventions: section 5 of docs/doubles-state-design.md. Process: docs/process.md.
+
+## 1. Current state
+
+- Branch `claude/e3-batch1` (from E2's battler re-index 0eceaf4). Round 1 of the first batch:
+  #71 Mist Ball, #85 Thief (Kaizo Splash script), #86 Disable AI, #153 Teleport, #218 Hammer
+  Arm. Rulings E3-1-1 .. E3-1-6 below. Tables rebuilt (vanilla and Kaizo) after the effect map
+  change; `src/nuzline/ai/read_bounds.py` regenerated (`uv run python -m tools.ai_read_bounds`).
+- Not run locally: the four guards and the targeted merge run (the test pod's job).
+
+## 2. Orders (Owed)
+
+Each is open; close it with its ruling.
+
+1. Kaizo Magic Coat on Disable (E3-1-3): Disable carries CAN_MAGIC_COAT in Kaizo
+   (data/intermediate_kaizo/moves.json). Magic Coat is unmodelled engine-wide (batch 2), so a
+   Disable aimed at a Magic Coat user is not reflected today. Model it with Magic Coat.
+2. Mirror Move's AI table reads the player's last move by id (script.s:1959, MOVE_THIEF) and
+   Me First's `sCannotMeFirstMoves` compares by effect (lib.c:7233-7251), so in Kaizo every
+   effect-85 move is uncopyable (sheet e241): both belong to their own groups (Mirror Move
+   label, #241 Me First).
+
+## 3. Rulings
+
+- E3-1-1 Mist Ball (#71) is fully modelled; no mechanic change. `tools/effect_map.py` maps
+  effect 71 to SECONDARY_STAT_FOE (Sp. Atk, -1) rolled at the move's chance (50; Kaizo
+  Mystical Fire 100): effect_script_0071.s:5-7, battle_lib.c:1570-1586, bs.c:2804-2976 (Mist
+  :2876-2882, Shield Dust :2918-2920, floor :2969-2973). The AI has no Basic or Expert entry
+  (script.s), so 71 joins `KAIZO_TRANSCRIBED` as a label-less effect (the generic damage path
+  is already transcribed); the backlog row closes. Tests: tests/engine/test_e3_batch1.py
+  (mapping, proc, Shield Dust, Mist, both games), tests/ai/test_kaizo_policy.py (refusal lifted,
+  Expert adds 0).
+- E3-1-2 Splash / Kaizo Thief (#85): new `EffectId.DO_NOTHING` (effect 85, `effect_map`). The
+  script only sets MOVE_STATUS_SPLASH (effect_script_0085.s:5): no CalcCrit, no CalcDamage, so
+  `battleCtx->damage` stays 0 (battle_lib.c:1974-1976) and UpdateHP does nothing (bcp.c:3347:
+  no HP change, no Substitute hit, no Focus Sash, no contact ability, no Life Orb or Shell Bell).
+  Accuracy, Protect and the type chart run as for any move with power (bcp.c:2350-2370); the
+  move still counts as used (bcp.c:3212, :3945-3949: PP, `last_move`). Engine: the effect is in
+  `ids.UNROLLED_EFFECTS` (no crit message) and `damage.fixed_damage` returns 0 (reference:
+  `_fixed_damage`). Classified INPUT_NEUTRAL and NON_TABLE_DAMAGE; `_NO_ACC_EVA_WRITE` in the
+  accuracy-class test. AI: nothing to transcribe (no Basic or Expert entry, effect 85 already in
+  `ENCORE_ENCOURAGED_EFFECTS`, script.s:3220; Copycat's table has 168). The AI keeps the 40-power
+  damage estimate: effect 85 is not in sNoDamageCalcMoveEffects (trainer_ai.c:31-45), so
+  `commands.is_damaging` is true and `damage.ai_damage_for_roll`, which does not go through
+  `fixed_damage`, gives a positive estimate while the engine deals 0. 85 joins
+  `KAIZO_TRANSCRIBED`. Vanilla Splash (power 0) takes the same effect.
+- E3-1-3 Disable (#86): the mechanic was modelled (effects._disable, step._disable_check; the
+  decomp cites are in the sheet and tests/engine/test_disable.py). New AI blocks.
+  Basic_CheckCannotDisable (script.s:650-653, entry :184): the player under Disable -8, where
+  CHECK_DISABLE reads `disabledTurns != 0` (trainer_ai.c:1833-1836), so on the last disabled
+  turn (counter 0, move still set) the AI does not see it. Expert_Disable (script.s:3075-3093,
+  entry :1687): slower than the player (the SLOWER compare, which reads no tie) nothing; else
+  the power of the player's `movePrevByBattler` (ai.c:1068-1076, :2526-2530; none reads 0): above
+  0 +1, else -1 unless the 100 roll at :3089 jumps. One random read on the power-0 path
+  (`outcome.SITE_N[3089] = 100`); read bounds regenerated. Kaizo's Thief has power 40, so a
+  player whose last move was Thief reads as damaging (+1). Kaizo Magic Coat: Owed 1.
+- E3-1-4 Teleport (#153): new `EffectId.FLEE` (effect 153). effect_script_0153.s:5, :9-10 sets
+  MOVE_STATUS_FAILED in a trainer battle (every Nuzline battle): `step._use_move` adds it to the
+  failing scripts (reference `_script_fails`), PP is spent and `last_move` set (bcp.c:3178-3183,
+  :3212, :3945-3949). The wild-only flee (:6, subscript_teleport.s) is not modelled. Accuracy 0 and
+  RANGE_USER: no roll (bcp.c:2901-2903). Kaizo priority +1 comes from the move row (moves.json);
+  the test checks the order in both games. AI: Basic_ScoreMoveEffect :221 jumps straight to
+  ScoreMinus10 (`policy._basic_score_minus_10`); no Expert entry, no roll.
+- E3-1-5 Hammer Arm (#218): the mechanic was modelled (SECONDARY_STAT_SELF (Spe, -1), certain:
+  effect_script_0218.s:5-7, battle_lib.c:1524-1529: no HP, Substitute or chance test; bs.c:2876
+  skips the user's guards; floor -6 :2924-2937, :2969-2973). New test of the substitute, faint and
+  floor cases. AI: Expert_HammerArm (script.s:4849-4867, entry :1762): immune, half or quarter
+  damage -1; else slower than the player (SLOWER compare, no tie) +1; else 0. No roll.
+- E3-1-6 AI plumbing: `commands.BattleEffect` gains LOWER_SP_ATK_HIT (71), DO_NOTHING (85),
+  DISABLE (86), FLEE_FROM_WILD_BATTLE (153), SPEED_DOWN_HIT (218); `outcome.KAIZO_TRANSCRIBED`
+  gains all five; `KAIZO_EXPERT_LABELS` / `KAIZO_EXPERT_TRANSCRIBED` gain 86 and 218. Coverage:
+  `coverage.IMPLEMENTED_EFFECTS` covers every EffectId, so the two new ids are supported with no
+  list edit; `tests/ai/test_kaizo_policy.py` `test_batch13_exact_equals_loose` sweeps
+  Disable, Hammer Arm, Thief and Mist Ball against the loose oracle.

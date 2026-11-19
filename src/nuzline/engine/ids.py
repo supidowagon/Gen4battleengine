@@ -495,6 +495,16 @@ class EffectId(IntEnum):
     # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
     # subscript_confuse.s (``effects._chatter``, G-70).
     CHATTER = 121
+    # E3 batch 1. Splash (85, BATTLE_EFFECT_DO_NOTHING; Kaizo's Thief carries the effect at power 40):
+    # zeros. effect_script_0085.s:5 sets only MOVE_STATUS_SPLASH: no CalcCrit, no CalcDamage, so
+    # ``battleCtx->damage`` stays 0 (battle_lib.c:1974-1976) while the accuracy, Protect and type
+    # chart steps run as for any move with power (battle_controller_player.c:2350-2370); no HP
+    # change (UpdateHP skips damage 0, :3347) (``damage.fixed_damage``, E3-1-1).
+    DO_NOTHING = 122
+    # Teleport (153, BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE): zeros. effect_script_0153.s:5, :9-10: in a
+    # trainer battle MOVE_STATUS_FAILED (``step._use_move``, E3-1-4); the wild-only flee is not
+    # modelled (every Nuzline battle is a trainer battle).
+    FLEE = 123
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -557,6 +567,7 @@ UNROLLED_EFFECTS = (
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
     EffectId.ENDEAVOR,  # effect_script_0189.s: the HP difference (B10-5)
+    EffectId.DO_NOTHING,  # effect_script_0085.s:5: no CalcCrit, no CalcDamage (E3-1-1)
 )
 # BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
 FUTURE_SIGHT_TURNS = 3

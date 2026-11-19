@@ -518,6 +518,10 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
     # defender through subscript_confuse: a volatile status, no stage.
     EffectId.CHATTER,
+    # E3 batch 1: Splash / Kaizo Thief (effect_script_0085.s:5) and Teleport (effect_script_0153.s)
+    # write no stage: a used move's last_move and PP only.
+    EffectId.DO_NOTHING,
+    EffectId.FLEE,
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

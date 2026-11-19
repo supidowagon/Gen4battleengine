@@ -441,8 +441,9 @@ def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, ka
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
     t = kaizo_tables
-    # Kaizo's Mystical Fire (vanilla Bind's id, LOWER_SP_ATK_HIT, not transcribed); Hurricane
-    # (Barrage's id) was the example until its effect was transcribed (E2 batch 13, B13-23).
+    # Kaizo's Mystical Fire (vanilla Bind's id, LOWER_SP_ATK_HIT): outside this test layout's
+    # transcribed set (K3C_EFFECTS); Hurricane (Barrage's id) was the example until its effect
+    # was transcribed (E2 batch 13, B13-23).
     mystical_fire = 20
     assert names.move_names[mystical_fire] == "Bind"
     assert kaizo_names.move_names[mystical_fire] == "Mystical Fire"
@@ -4746,6 +4747,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Trump Card", "Punishment", "Cross Poison", "Blaze Kick"),
         ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
         ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
+        ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -4756,3 +4758,109 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
             layout = layout_for(t, flags, s2)
             assert policy.ai_refusals(t, s2, n, layout) == []
             _assert_exact_equals_loose(t, s2, layout)
+
+
+# --- E3 batch 1: Disable, Teleport, Hammer Arm; Mist Ball and Thief have no label (E3-1-1..5) --
+
+
+def _player_last(s, move: int):
+    """``s`` with the player's ``movePrevByBattler`` (``last_move[0]``) set."""
+    return s._replace(last_move=s.last_move.at[0].set(move))
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        # Basic_CheckCannotDisable (script.s:650-653): IfBattlerUnderEffect CHECK_DISABLE reads
+        # disabledTurns (trainer_ai.c:1833-1836), so the last disabled turn (turns 0, the move
+        # still set) is not seen.
+        ("plain", 0),
+        ("disabled", -8),
+        ("last turn", 0),
+    ],
+)
+def test_disable_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Disable", "Accelerock", "", ""))
+    if case != "plain":
+        s = s._replace(
+            disabled_move=s.disabled_move.at[0].set(n.move("Tackle")),
+            disable_turns=s.disable_turns.at[0].set(3 if case == "disabled" else 0),
+        )
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("case", "last", "jumps", "expected"),
+    [
+        # Expert_Disable (script.s:3075-3093): slower than the player, nothing; else the power of
+        # the player's last move (none reads 0): above 0 +1, else -1 unless the :3089 roll
+        # (N 100) jumps. Kaizo's Thief has power 40, so it reads as a damaging move.
+        ("slower", "Tackle", (), 0),
+        ("slower", "Leer", (), 0),
+        ("faster", "Tackle", (), 1),
+        ("faster", "Thief", (), 1),
+        ("faster", "Leer", (), -1),
+        ("faster", "Leer", (3089,), 0),
+        ("faster", "", (), -1),
+        ("faster", "", (3089,), 0),
+        ("faster", "Tackle", (3089,), 1),
+    ],
+)
+def test_disable_expert(kaizo_tables, kaizo_names, kaizo_roark_party, case, last, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Disable", "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if case == "slower" else _speeds(s, player=1, opp=500)
+    s = _player_last(s, n.move(last) if last else 0)
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_teleport_is_minus_ten_with_no_expert_entry(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_ScoreMoveEffect :221: FLEE_FROM_WILD_BATTLE jumps straight to ScoreMinus10 (no test,
+    no roll); Expert_Main has no entry for it."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Teleport", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == -10
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+
+
+_POISON, _FLYING, _BUG, _GHOST = 3, 2, 6, 7
+
+
+@pytest.mark.parametrize(
+    ("typing", "case", "expected"),
+    [
+        # Expert_HammerArm (script.s:4849-4867): immune, half or quarter damage -1; else slower
+        # than the player +1 (the SLOWER compare reads no tie); else nothing. No roll.
+        (None, "slower", 1),
+        (None, "faster", 0),
+        ((_POISON, _POISON), "slower", -1),  # Fighting against Poison: half
+        ((_FLYING, _BUG), "faster", -1),  # quarter
+        ((_GHOST, _GHOST), "slower", -1),  # immune
+    ],
+)
+def test_hammer_arm_expert(kaizo_tables, kaizo_names, kaizo_roark_party, typing, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Hammer Arm", "Accelerock", "", ""))
+    s = _speeds(s, player=500, opp=1) if case == "slower" else _speeds(s, player=1, opp=500)
+    if typing:
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray(typing, s.types.dtype)))
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+@pytest.mark.parametrize("move", ["Mist Ball", "Mystical Fire", "Thief"])
+def test_label_less_moves_score_through_the_damage_path_only(
+    kaizo_tables, kaizo_names, kaizo_roark_party, move
+):
+    """LOWER_SP_ATK_HIT (71) and DO_NOTHING (85) have no Basic or Expert entry (script.s): the
+    refusal is lifted and Expert adds nothing. Kaizo's Thief keeps its 40-power damage reads
+    (trainer_ai.c:31-45 does not list effect 85, E3-1-2), so it stays a damaging move for the
+    AI."""
+    from nuzline.ai.layout import ALLIN
+
+    t, n = kaizo_tables, kaizo_names
+    assert policy.opponent_move_refusals(t, n.move(move), ALLIN) == []
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+    assert bool(c.is_damaging(t, n.move(move)))

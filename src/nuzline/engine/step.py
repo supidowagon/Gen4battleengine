@@ -1222,6 +1222,9 @@ def _use_move(
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
+    # Teleport (effect_script_0153.s:5, :9-10): MOVE_STATUS_FAILED in a trainer battle, which every
+    # Nuzline battle is (E3-1-4); it still counts as used (bcp.c:3212, :3945-3949).
+    failed = failed | (effect_used == EffectId.FLEE)
     # Dream Eater (effect_script_0008.s:5-6, :12-20): MOVE_STATUS_NO_MORE_WORK when the defender
     # is behind a substitute (:5, CheckSubstitute; no hit of this action came first) or is not
     # asleep (B9-12, B10-4).

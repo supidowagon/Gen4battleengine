@@ -850,6 +850,11 @@ INPUT_NEUTRAL_EFFECTS = (
     # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
     _E.MIMIC,
     _E.CHATTER,
+    # E3 batch 1: Splash / Kaizo Thief deals no damage and writes no state but its user's
+    # last move (effect_script_0085.s:5), Teleport fails (effect_script_0153.s:9-10): neither
+    # changes an input of the side's hit (E3-1-1, E3-1-4).
+    _E.DO_NOTHING,
+    _E.FLEE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1335,6 +1340,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.EMBARGO,  # B13-31: a status move, no damage
     _E.MIMIC,  # G-68, G-69: status moves, no damage
     _E.TRANSFORM,
+    _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
+    _E.FLEE,  # a status move that fails: no damage (E3-1-4)
 )
 
 

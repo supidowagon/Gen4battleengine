@@ -907,8 +907,12 @@ def fixed_damage(
     # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
     # the stored hit is step._future_sight's.
     is_future = effect == EffectId.FUTURE_SIGHT
-    fixed = is_level | is_bide | is_halve | is_ohko | is_future | is_endeavor
-    amount = jnp.where(is_future, 0, amount)
+    # Splash (Kaizo Thief, effect_script_0085.s:5): no CalcDamage, so battleCtx->damage stays 0
+    # (battle_lib.c:1974-1976) whatever the move's power; the AI's own estimate keeps the power
+    # (``ai_damage_for_roll`` does not come through here), E3-1-1.
+    is_splash = effect == EffectId.DO_NOTHING
+    fixed = is_level | is_bide | is_halve | is_ohko | is_future | is_endeavor | is_splash
+    amount = jnp.where(is_future | is_splash, 0, amount)
     return fixed, jnp.where(is_bide, stored, jnp.where(immune, 0, amount))
 
 

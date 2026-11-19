@@ -441,6 +441,12 @@ class BattleEffect(IntEnum):
     HIGHER_POWER_WHEN_LOW_PP = 235  # Trump Card: NonStandard (:265), Expert_TrumpCard (:1778)
     INCREASE_POWER_WITH_MORE_STAT_UP = 245  # Punishment: NonStandard (:274), Expert (:1788)
     JUDGEMENT = 268  # Judgment: no script entry
+    # E3 batch 1 (E3-1-1..E3-1-5).
+    LOWER_SP_ATK_HIT = 71  # Mist Ball, Kaizo Mystical Fire: no script entry
+    DO_NOTHING = 85  # Splash, Kaizo Thief (power 40): no Basic or Expert entry; Encore table :3220
+    DISABLE = 86  # Basic_CheckCannotDisable (:184); Expert_Disable (:1687)
+    FLEE_FROM_WILD_BATTLE = 153  # Teleport: Basic :221 ScoreMinus10
+    SPEED_DOWN_HIT = 218  # Hammer Arm: Expert_HammerArm (:1762)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
