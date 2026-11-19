@@ -3348,6 +3348,8 @@ def test_dream_eater(kaizo_tables, kaizo_names, kaizo_roark_party, asleep, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
 
 
+@pytest.mark.slow  # 163 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch17_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -3575,6 +3577,8 @@ def test_imprison(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic, exp
     assert _delta(t, s, 0x3, 0x7)[0] == expert
 
 
+@pytest.mark.slow  # 233 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_p1_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -3701,6 +3705,8 @@ def test_ai_chart_reads_ingrain_and_roosting(kaizo_tables, kaizo_names, kaizo_ro
     assert int(apply_type_chart(t, roosted, 1, accelerock, 40)) * 2 == flying
 
 
+@pytest.mark.slow  # 330 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_p2_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -3785,6 +3791,8 @@ def test_baton_pass_flag_without_baton_pass(
     assert _delta(t, s, 0x1, 0x41, jumps)[0] == expected
 
 
+@pytest.mark.slow  # 277 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", [0x57])
 def test_p3_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -3833,6 +3841,8 @@ def test_expert_solar_beam(kaizo_tables, kaizo_names, kaizo_roark_party, case, e
     assert _delta(t, s, 0x3, 0x7)[0] == expected
 
 
+@pytest.mark.slow  # 157 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_p4_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -4009,6 +4019,8 @@ def test_shadow_force(kaizo_tables, kaizo_names, kaizo_roark_party, case, expect
     assert _delta(t, s, 0x3, 0x7)[:2] == [expected, 0]
 
 
+@pytest.mark.slow  # 139 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     """Exact == loose for the charge-turn moves, on paths through the :4058 roll."""
@@ -4083,6 +4095,8 @@ def test_expert_encore(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
+@pytest.mark.slow  # 178 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 @pytest.mark.parametrize("flags", SWEEP_FLAGS)
 def test_batch11_encore_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party, flags):
     t, n = kaizo_tables, kaizo_names
@@ -4267,6 +4281,8 @@ def test_mist_check_hp(kaizo_tables, kaizo_names, kaizo_roark_party, attacker, t
     assert _delta(t, s, 0x7, 0x107, ((0, 7718), (0, 7742)))[0] == 0
 
 
+@pytest.mark.slow  # 136 s on the nightly pod (b9b7d04); the fast tier's exact-equals-loose
+# sweeps at 0x11F (test_stat_raises_exact_equals_loose and the others) keep the rule fast
 def test_mist_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Under Roark's flag set (0x17), misted or not: scored, not refused, exact == loose."""
     t, n = kaizo_tables, kaizo_names
