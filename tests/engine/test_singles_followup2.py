@@ -13,13 +13,15 @@ import numpy as np
 import pytest
 
 from nuzline.data.spec import PokemonSpec
+from nuzline.engine import enumerate as enum_mod
+from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.enumerate import enumerate_turn
+from nuzline.engine.enumerate import _paused_rock, enumerate_turn
 from nuzline.engine.ids import Status, Weather
-from nuzline.engine.outcome import MAX_HITS, empty_outcome
+from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
-from tests.engine.helpers import assert_matches_reference, jit_step
+from tests.engine.helpers import assert_matches_reference, jit_step, step_rows
 
 pytestmark = pytest.mark.fullset
 
@@ -99,9 +101,7 @@ def test_bond_takes_the_pursuer_before_rough_skin(tables, names, pursuer_hp):
 def test_bond_leaves_the_players_switcher_ability_unrevealed(tables, names, pursuer_hp):
     # The AI tracks only the player's Pokemon: mirror the case with the foe chasing.
     n = names
-    s = make_state(
-        tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)]
-    )
+    s = make_state(tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)])
     s = _bond(s, 0)
     if pursuer_hp is not None:
         s = s.replace_hp(1, 0, pursuer_hp)
@@ -109,9 +109,7 @@ def test_bond_leaves_the_players_switcher_ability_unrevealed(tables, names, purs
     assert int(out.hp[1, 0]) == 0
     assert int(out.ai_ability_known[0]) == 0
     # Without the bond Rough Skin reveals itself (test 4's contrast).
-    s = make_state(
-        tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)]
-    )
+    s = make_state(tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)])
     out = assert_matches_reference(tables, s, (SWITCH, 0), _proc(1))
     assert int(out.ai_ability_known[0]) != 0
 
@@ -147,7 +145,8 @@ def test_rough_skin_switcher_without_bond_acts_as_before(tables, names):
 def test_surviving_bond_switcher_gets_no_take_down(tables, names):
     n = names
     s = make_state(
-        tables, [_mon(n, "Houndour", ["Pursuit"], 5), _bench(n)],
+        tables,
+        [_mon(n, "Houndour", ["Pursuit"], 5), _bench(n)],
         [_mon(n, "Geodude", ["Tackle"], 60, ability="Rough Skin"), _bench(n)],
     )
     s = _bond(s, 1)
@@ -155,3 +154,64 @@ def test_surviving_bond_switcher_gets_no_take_down(tables, names):
     assert int(out.hp[1, 0]) > 0
     ev = _events(tables, s, (0, SWITCH), _proc(1))
     assert int(ev["contact_ability"][1]) != 0  # Rough Skin ran as today
+
+
+# SF2 (c): the paused view counts a pursuer as acted (battle_script.c:6931; battle_lib.c:5365-5368).
+
+
+def _paused_u_turn(tables, n, foe_moves):
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 25, "King’s Rock"), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", foe_moves, 35)],
+    )
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    return paused
+
+
+def test_pursuer_is_moved_in_the_paused_view(tables, names):
+    paused = _paused_u_turn(tables, names, ["Pursuit"])
+    assert int(paused.ts_pursued) == 2 and int(paused.ts_acted[1]) == 0
+    acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+    _, viewed = pivot_view(tables, paused, acts)
+    assert int(viewed[1]) == MOVE_ACTIONS + int(paused.active[1])
+    assert not np.any(np.asarray(_paused_rock(tables, paused)))
+
+
+def test_paused_view_without_pursuit_keeps_the_foes_action(tables, names):
+    paused = _paused_u_turn(tables, names, ["Tackle"])
+    assert int(paused.ts_pursued) == 0
+    acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+    _, viewed = pivot_view(tables, paused, acts)
+    assert int(viewed[1]) == int(paused.ts_actions[1]) == 0
+
+
+def _merged(tables, paused, acts):
+    outcomes, probs = enumerate_turn(tables, paused, acts)
+    after = jax.tree.map(np.asarray, step_rows(tables, paused, acts, outcomes))
+    merged = {}
+    for i in range(len(probs)):
+        key = tuple(np.asarray(f)[i].tobytes() for f in after)
+        merged[key] = merged.get(key, 0.0) + float(probs[i])
+    return merged
+
+
+def test_enumeration_after_a_pursuit_is_the_old_views_distribution(tables, names, monkeypatch):
+    paused = _paused_u_turn(tables, names, ["Pursuit"])
+    acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
+    new = _merged(tables, paused, acts)
+    old_mask = lambda s: s.ts_acted != 0
+    monkeypatch.setattr(outcome_mod, "moved_mask", old_mask)
+    monkeypatch.setattr(enum_mod, "moved_mask", old_mask)
+    enum_mod._jit_laws.clear_cache()
+    enum_mod._jit_call_laws.clear_cache()
+    try:
+        old = _merged(tables, paused, acts)
+    finally:
+        monkeypatch.undo()
+        enum_mod._jit_laws.clear_cache()
+        enum_mod._jit_call_laws.clear_cache()
+    assert new.keys() == old.keys()
+    for k in new:
+        assert new[k] == pytest.approx(old[k], abs=1e-9)

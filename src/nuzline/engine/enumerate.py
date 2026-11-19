@@ -299,6 +299,7 @@ from nuzline.engine.outcome import (
     empty_outcome,
     future_thresholds,
     hit_threshold_pair,
+    moved_mask,
     pivot_view,
     read_chance,
     roar_inputs,
@@ -3528,14 +3529,14 @@ CALL_SEALED = 3 * SLEEP_TALK_VALUES
 def _paused_rock(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[B]``: the paused action's King's Rock read (``flinch_item[pivot, 0]``) is possible:
     a paused U-turn whose hit damaged its target (``ts_damaged``), with
-    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``ts_acted``); whether the
+    ``MOVE_FLAG_TRIGGERS_KINGS_ROCK``, before its target moved (``moved_mask``); whether the
     newcomer holds one is the law's (``flinch_item_chance``, its item through ``pivot_view``)."""
     fmt = format_of(state)
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
     flag = (tables.move_flags[state.ts_used] & MoveFlag.KINGS_ROCK) != 0
     on = (state.pivot_battler != 0) & (state.ts_damaged != 0) & flag
     # The target: the other battler (singles), not yet acted.
-    target_free = foes(state.ts_acted) == 0
+    target_free = foes(moved_mask(state)) == 0
     return on & (jnp.arange(fmt.B) == pivot) & target_free
 
 

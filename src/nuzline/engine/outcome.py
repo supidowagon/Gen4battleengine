@@ -1486,6 +1486,15 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
     return roar_level_weight(la, ld), jnp.stack(counts)
 
 
+def moved_mask(state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: Battler_MovedThisTurn of a paused turn's battlers: the actions before the cursor
+    (``ts_acted``) and each pursuer TryPursuit ended (battle_script.c:6931; ``ts_pursued``, bit b =
+    battler b: at B = 2 the stored ``1 + pursuer`` is that bitmask)."""
+    fmt = format_of(state)
+    bits = (state.ts_pursued.astype(_I32) >> jnp.arange(fmt.B)) & 1
+    return (state.ts_acted != 0) | (bits != 0)
+
+
 def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState, jnp.ndarray]:
     """``(state, actions)`` the laws and the sampler read (E2 batch 6, rulings B6-n). A state
     paused at a U-turn's or Baton Pass's party list (``pivot_battler``) resumes with
@@ -1495,8 +1504,8 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     InitBattleMon do, a Baton Pass keeping the stages and ``BATON_PASSED_FIELDS``, battle_lib.c:
     97-101, :2078-2079, :2107; ruling B6-10), the battle's movePrev the paused move's moveTemp
     (the tail's UpdateMoveBuffers writes it before a later actor's Copycat reads it, bcp.c:
-    3936-3942) and the other side's action as chosen (``ts_actions``) while it has not acted
-    (``ts_acted``), else a switch to its own active Pokemon (no move). Its switch-in effects
+    3936-3942) and the other side's action as chosen (``ts_actions``) while it has not moved
+    (``moved_mask``), else a switch to its own active Pokemon (no move). Its switch-in effects
     (weather, Trace, Intimidate) are still a switch's: ``fresh_switch`` tells the laws that its
     stages and volatiles are the view's, not a fresh battler's. The paused action's own King's
     Rock read is ``enumerate.outcome_laws``'. Any other state: unchanged, but for an armed
@@ -1506,7 +1515,7 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
     paused = state.pivot_battler != 0
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
     sides = jnp.arange(fmt.B)
-    acted = state.ts_acted != 0
+    acted = moved_mask(state)
     other = jnp.where(
         acted, MOVE_ACTIONS + state.active.astype(_I32), state.ts_actions.astype(_I32)
     )
