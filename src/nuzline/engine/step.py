@@ -3224,7 +3224,9 @@ def _execute_actions(
         pp, pm = party(fmt, pursuer), pre.active[pursuer]
         p_fell = fire & (pre.hp[pp, pm] > 0) & (struck.hp[pp, pm] == 0)
         owed_site = p_fell & ~bonded_ko
-        owed_res = resumed & (pursued == 1 + pursuer) & (state.hp[pp, state.active[pursuer]] == 0)
+        owed_res = (
+            resumed & (((pursued >> pursuer) & 1) != 0) & (state.hp[pp, state.active[pursuer]] == 0)
+        )
         bit = jnp.left_shift(jnp.int32(1), pm.astype(_I32))
         owed_bit = jnp.where(jnp.where(resumed, owed_res, owed_site), bit, 0)
         owed = jnp.zeros_like(base).at[pp].set(owed_bit.astype(base.dtype))
@@ -3240,7 +3242,7 @@ def _execute_actions(
         # Aftermath, Jaboca Berry, its Life Orb: battle_lib.c:4257-4269, :4358-4371, :5400-5409,
         # :7357-7374), and not after Destiny Bond, which restores ``faintedMon`` to the switcher
         # (subscript_faint_check_destiny_bond.s:10, :25) and runs first (:85) on the switcher's
-        # own flag (not ``_pursuit_hit``'s ``bonded``). A Destiny Bond faint clears the
+        # own flag (not the take-down in ``play_hit``). A Destiny Bond faint clears the
         # pursuer's Uproar bit before :115 (battle_lib.c:2213), a recoil faint keeps it; the
         # switcher's bit is gone too.
         operand = jnp.where(
@@ -3263,7 +3265,9 @@ def _execute_actions(
         state = state._replace(
             acid_rain=jnp.where(acid, operand, state.acid_rain).astype(state.acid_rain.dtype)
         )
-        pursued = jnp.where(fire, 1 + pursuer, pursued)
+        # ``ts_pursued`` is a bitmask of the pursuers (bit b = battler b): BtlCmd_TryPursuit
+        # loops over every battler (battle_script.c:6884-6935), so several may chase one switch.
+        pursued = jnp.where(fire, pursued | jnp.left_shift(jnp.int32(1), pursuer), pursued)
         fired = fired | fire
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
         pick_mul = jnp.where(ap, PURSUIT_POWER_MUL, pick_mul)
@@ -3303,7 +3307,7 @@ def _execute_actions(
         # act this turn (UpdateAfterSwitch, battle_lib.c:2053: its action is MOVE_END, so
         # BranchActions runs only MoveEnd for it, bcp.c:893, whose checks repeat the first
         # actor's and change nothing).
-        skip = second & start & ((pursued == 1 + side) | (read["dragged"][side] != 0))
+        skip = second & start & ((((pursued >> side) & 1) != 0) | (read["dragged"][side] != 0))
         acted = _where(skip, state, acted)
         ran = ran & ~skip
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.

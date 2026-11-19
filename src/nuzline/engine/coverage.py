@@ -1069,9 +1069,12 @@ def check_opponent(
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
     # BATTLE_EFFECT_HIT_BEFORE_SWITCH (Pursuit): a KO of the switcher subtracts from
-    # fieldConditionsMask (subscript_pursuit.s:115); only those play lines are refused.
+    # fieldConditionsMask (subscript_pursuit.s:115); only those play lines are refused. Either
+    # side's Pursuit chases a switch (battle_script.c:6884-6935): the opponent's, the player's
+    # party's and the player's learnable moves (a report line only).
     move_effect = np.asarray(tables.move_effect)
-    if any(int(move_effect[m]) == EffectId.PURSUIT for mon in opp for m in mon.moves if m):
+    pool = [m for mon in (*opp, *player) for m in mon.moves if m] + [m for m in extra_moves if m]
+    if any(int(move_effect[m]) == EffectId.PURSUIT for m in pool):
         c.report.runtime.append("field condition: Acid Rain (runtime refusal)")
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
     for line in transform_sky_refusals(tables, names, player, opp, extra_moves):

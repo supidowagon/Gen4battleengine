@@ -1558,8 +1558,8 @@ def roar_inputs(state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
 def moved_mask(state: BattleState) -> jnp.ndarray:
     """``bool[B]``: Battler_MovedThisTurn of a paused turn's battlers, or no action still to play:
     the actions before the cursor (``ts_acted``), each pursuer TryPursuit ended
-    (battle_script.c:6931; ``ts_pursued``, bit b = battler b: at B = 2 the stored ``1 + pursuer``
-    is that bitmask), and (SF2 (j)) each battler whose active Pokemon has 0 HP. A U-turn that KOs
+    (battle_script.c:6931; ``ts_pursued``, the bitmask ``1 << pursuer`` of every pursuer,
+    battle_script.c:6884-6935, subscript_pursuit.s:82), and (SF2 (j)) each battler whose active Pokemon has 0 HP. A U-turn that KOs
     its defender with a bench left opens the list with the defender at 0 HP and not yet MOVE_END:
     TryFaintMon (subscript_update_hp.s:17; battle_script.c:1763-1777) and the U-turn script
     (subscript_attack_then_switch_out.s:5, :6, :14-34, :37-47, :54, :71; a 0-HP battler cannot

@@ -1109,3 +1109,17 @@ def test_a_trick_room_turn_without_a_holder_leaves_no_flag(tables, names):
     out = assert_matches_reference(tables, s, (0, 0), O._replace(quick_claw=jnp.ones(2, jnp.int8)))
     assert int(out.trick_room) != 0
     assert not np.any(np.asarray(out.claw_flag)) and not np.any(np.asarray(out.custap_flag))
+
+
+def test_moved_mask_reads_ts_pursued_as_a_bitmask_at_b4(tables, names):
+    """``ts_pursued`` is ``1 << pursuer`` per pursuer (BtlCmd_TryPursuit's loop,
+    battle_script.c:6884-6935, subscript_pursuit.s:82): at B = 4 pursuer 2 is bit 2, and two
+    pursuers are both read."""
+    from nuzline.engine.outcome import moved_mask
+    from tests.engine.d2_states import four
+
+    s = four(tables, names)
+    one = s._replace(ts_pursued=jnp.asarray(1 << 2, s.ts_pursued.dtype))
+    assert np.asarray(moved_mask(one)).tolist() == [False, False, True, False]
+    two = s._replace(ts_pursued=jnp.asarray((1 << 1) | (1 << 3), s.ts_pursued.dtype))
+    assert np.asarray(moved_mask(two)).tolist() == [False, True, False, True]

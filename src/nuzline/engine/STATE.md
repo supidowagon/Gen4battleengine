@@ -460,7 +460,7 @@ three structs has a row.
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
   `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
-  Pursuit, `ts_pursued` (a bitmask of the battlers whose action a Pursuit ended, bit b = battler b; at B = 2 written as 1 + pursuer, the same value), and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
+  Pursuit, `ts_pursued` (a bitmask of the battlers whose action a Pursuit ended, bit b = battler b, written `|= 1 << pursuer` by both engines; BtlCmd_TryPursuit's loop, battle_script.c:6884-6935 with subscript_pursuit.s:82, lets several battlers chase one switch), and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.
 - The chosen target (D2-1): `chosen_target` (per battler, `battlerActions[b][1]`, a battler index
   0..B-1, not 1 + battler: it has no "none" value; initial `b ^ 1`). Unlike the other

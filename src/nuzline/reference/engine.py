@@ -4640,7 +4640,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             # The Synchronize flag goes on: a user that falls to it ends the script at :55,
             # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
             # BattleMon.status (G-24).
-            turn.pursued = foe + 1
+            turn.pursued |= 1 << foe  # a bitmask of the pursuers (battle_script.c:6884-6935)
             turn.pick_mul = PURSUIT_POWER_MUL
             # No battle-over check until MoveEnd (SF2 (a2) R1); a recoil-felled pursuer's exp
             # waits for it too (R3), and a U-turn user has no Destiny Bond (bcp.c:2425).
@@ -5160,8 +5160,9 @@ def _reveal_redirect(s: RefState, tables, holder: int) -> None:
 
 def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
     """GoToMoveScript's re-pick for the called ``move`` (script.c:2111-2134, D2-13): the action's
-    defender becomes ``called_defender`` and, at B = 4, the stored target (:2123). True when it
-    finds none (``subscript_no_target.s``). ``turn.call_redirected``: the redirection check moved it."""
+    defender becomes ``called_defender`` and the stored target (:2123, both formats, ruling
+    D2-33). True when it finds none (``subscript_no_target.s``). ``turn.call_redirected``: the
+    redirection check moved it."""
     order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
     called, turn.call_redirected = called_defender(
         turn.tables, s, side, move, order, turn.outcome.call_target_draw[side]
@@ -7352,7 +7353,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             pursuer_done = turn.done[_foe(side)]
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
             if turn.done[_foe(side)] and not pursuer_done:  # its Pursuit hit (_pursuit)
-                turn.pursued = 2 - side
+                turn.pursued |= 1 << _foe(side)
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
@@ -7624,6 +7625,22 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.custap = [bool(f) for f in _get(s, "ts_custap")]
     turn.claw = [bool(f) for f in _get(s, "ts_claw")]
     turn.pursued = s.ts_pursued
+    # The paused move's battleCtx->defender, for MoveEnd's battle-end cure (bcp.c:3966-3967):
+    # FightCommand's pick (bcp.c:1900) on the paused state, as ``step`` re-resolves it in
+    # MODE_RESUME (``_act``: the Encore takeover, the stored target, ``fight_randomizes``).
+    p_move, p_struggling, _ = turn.choices[side]
+    p_sd = s.battlers[side]
+    if (
+        not p_struggling
+        and p_sd.encore_move
+        and _active(s, side).moves[p_sd.encore_slot] == p_sd.encore_move
+    ):
+        p_move = p_sd.encore_move
+    turn.defender = _resolve(
+        tables, s, side, p_move, p_struggling or bool(p_sd.encore_move), p_sd.chosen_target,
+        turn.speed_order if turn.speed_order is not None else list(range(_fmt(s).B)),
+        outcome.target_draw[side],
+    )[0]  # fmt: skip
     turn.protecting = [bool(f) for f in _get(s, "ts_protect_ok")]
     turn.enduring = [bool(f) for f in _get(s, "ts_endure_ok")]
     turn.roosting = [bool(sd.roosting) for sd in s.battlers]
@@ -7644,8 +7661,9 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     ]
     for position in range(s.ts_cursor):
         turn.done[turn.order[position]] = True
-    if s.ts_pursued:
-        turn.done[s.ts_pursued - 1] = True
+    for k in range(_fmt(s).B):
+        if s.ts_pursued >> k & 1:
+            turn.done[k] = True
     for k in range(_fmt(s).B):
         if s.battlers[k].ts_dragged:
             turn.done[k] = True
@@ -7723,7 +7741,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     s.battlers[side].protect_count = 0
     # SF2 (a2) R3, R4: the pursuer the Pursuit's recoil felled in the paused pass (a U-turn user
     # has no Destiny Bond) is paid at this MoveEnd.
-    if turn.pursued == foe + 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
+    if turn.pursued >> foe & 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
         turn.payout.append(s.battlers[foe].active)
     _finish_action(turn, s, side, position, record)
     try:

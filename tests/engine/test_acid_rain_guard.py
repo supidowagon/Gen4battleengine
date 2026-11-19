@@ -189,3 +189,24 @@ def test_jitted_step_search_and_reason_agree(tables, names):
     ok = _fight(tables, n, [_chaser(n), _bench(n)], [_weak(n), _bench(n)])
     ok_out = step(tables, ok, acts, O)
     assert learn_reason(ok_out) is None
+
+
+def test_search_entry_points_refuse_an_acid_rain_state(tables, names):
+    """The search's host entry points refuse a state holding Acid Rain before any work:
+    ``rank_actions`` (Stage A), ``evaluate_players`` (line odds) and ``find_line`` (line find)."""
+    import jax
+
+    from nuzline.search.line_search import find_line
+    from nuzline.search.player_eval import evaluate_players
+    from nuzline.search.stage_a import rank_actions
+    from tests.engine.helpers import roark_state
+
+    s = roark_state(tables, names)
+    s = s._replace(acid_rain=_i8(s.acid_rain, 1))
+    key = jax.random.PRNGKey(0)
+    with pytest.raises(UnsupportedMechanics, match="Acid Rain"):
+        rank_actions(tables, names, s, 1, key)
+    with pytest.raises(UnsupportedMechanics, match="Acid Rain"):
+        evaluate_players(tables, s, None, [()], 1, key)
+    with pytest.raises(UnsupportedMechanics, match="Acid Rain"):
+        find_line(tables, names, s, key)

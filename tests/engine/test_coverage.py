@@ -629,3 +629,17 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
+
+
+def test_acid_rain_note_scans_both_sides_moves(tables, names):
+    """SF2 gate 3: either side's Pursuit chases a switch (battle_script.c:6884-6935), so the Acid
+    Rain report line (subscript_pursuit.s:115) reads the player's party and learnable moves too."""
+    line = "field condition: Acid Rain (runtime refusal)"
+    opp = roark_party(names)
+    plain = sample_party(names)
+    assert line not in check_opponent(tables, names, roark_trainer(), opp, 0, plain).runtime
+    party = sample_party(names, override_moves={0: ["Pursuit", "Scratch"]})
+    assert line in check_opponent(tables, names, roark_trainer(), opp, 0, party).runtime
+    learn = [names.move("Pursuit")]
+    r = check_opponent(tables, names, roark_trainer(), opp, 0, plain, learn)
+    assert line in r.runtime
