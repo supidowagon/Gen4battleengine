@@ -419,7 +419,7 @@ Files E2 touches that another stream owns (send with the family list):
 
 - D2: targets, the action space and redirection (plan above).
 - D3: the four-actor turn.
-  - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
+  - Owed (D3/D6): step.py `_faint_check` (~2733) reads species[0]/species[1] as the two sides; for
     TWO_TRAINERS/MULTI a side is out only when all its parties are empty. The same in
     reference/engine.py `_faint_check` (`s.parties[0]` / `s.parties[1]`), and its payout of a side-1
     faint indexes `s.parties[1]` (`_grant_exp`): party 2's slot in TWO_TRAINERS (D10 with exp).
@@ -509,7 +509,7 @@ Each is open; close it with its ruling.
     - M1 Record in capture.json a content hash of everything the child runs (src/nuzline/**/*.py,
       tools/*.py, tests/strategies.py, tests/engine/helpers.py, the golden trace, table files);
       compare fails on equal hashes unless --same-ok and prints both; no git: `dirty: null`,
-      print "not checkable" (today nothing ties code to --commit: :703-719, :764, :823).
+      print "not checkable" (today nothing ties code to --commit: git_info :795, identify :823, _keep :860, parent :931 as of this commit).
     - N1 The final line names the compared groups and the seed count.
     - N2 Fail on steps == 0 or calls == 0. R5 Flag a part with zero calls.
     - N3 Warn or fail above a raise-rate threshold.
