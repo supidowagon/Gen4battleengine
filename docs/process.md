@@ -126,7 +126,7 @@ The weekly usage limit caps how much work lands in a week. The user manages the 
 managing session lowers cost per unit of work and never throttles the streams.
 
 - No idle turns and stream clears: CLAUDE.md, Usage. A stream restarts from its ledger.
-- The managing session compacts at about 100k tokens, and only right after a user message.
+- The managing session reads every session's context use at each stream commit point and clears a stream past 30% there. It compacts itself before 35%, and only right after a user message. Automatic compaction is set to 50% as the backstop.
 - Batch size (CLAUDE.md, Batches) spreads the fixed cost per batch: review, merge check,
   merge of `main`, table rebuild, targeted run.
 - Models: CLAUDE.md, Usage.
