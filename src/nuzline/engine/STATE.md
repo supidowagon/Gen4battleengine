@@ -33,8 +33,21 @@ three structs has a row.
   (`BattleContext.battleMons[4]`, built from the party mon by
   `BattleSystem_InitBattleMon`, `src/battle/battle_lib.c:70`) and writes HP, PP,
   status and item back to the party. `BattleState` instead keeps every party
-  slot's persistent data in `[2,6]` arrays and the active Pokemon's volatile
-  data in `[2]` arrays indexed by side; `active[side]` is the battler's party slot.
+  slot's persistent data in `[P,6]` arrays and the active Pokemon's volatile
+  data in `[B]` arrays indexed by battler; `active[b]` is the battler's party slot.
+  `B` is the battler count and `P` the party count of the fight's `Format`
+  (`format.py`: singles 2 and 2; doubles 4 and 2; two trainers 4 and 3; multi 4 and 4);
+  battler `b` has side `b & 1`, partner `b ^ 2` and party `party(fmt, b)`. Four shape
+  keys (`state._MON` `[P,6]`, `_BATTLER` `[B]`, `_SIDE` `[2]`, `_PARTY` `[P]`) place every
+  field, and `state.layout(fmt)` gives the shapes. Per side `[2]`: `spikes`, `toxic_spikes`,
+  `stealth_rock`, `reflect`, `light_screen`, `safeguard`, `mist`, `lucky_chant`, `tailwind`,
+  `future_sight` (`SideConditions`). Per party `[P]`: `ts_alive`. Every other `[2]` field of
+  the singles state is per battler `[B]`, `trainer_items` and `trainer_item_count` included
+  (the bag `trainerItems[battler >> 1]` sits on the opposing battler, ruling D1-5), `stages`,
+  `ts_taken` and `entry_pending` included. The player-only fields (`ai_*`, the exp block,
+  `deaths`, `protected`) stay on party 0. A field that names another battler stores
+  `1 + battler` (docs/doubles-state-design.md section 5); `infatuated` is still 0/1 (D5).
+  Singles shapes are unchanged.
 - **Stats.** `attack`/`defense`/`speed`/`spAttack`/`spDefense` become
   `stats[..., 0..4]` in Atk, Def, SpA, SpD, Spe order (`ids.Stat` minus one);
   HP is `max_hp`. IVs become `ivs` in `ids.Stat` order (HP, Atk, Def, SpA, SpD, Spe).
@@ -275,7 +288,7 @@ three structs has a row.
 - **chatotCries -> `chatot_cry`** (E1 trial batch, G-70): `BattleSystem.chatotCries[battler]` as
   Chatter's parameter 0 / 1 / 2 (`ids.CHATTER_CHANCES`, sound_chatot.c:193-213), a battle constant
   like `terrain`: every enemy's is 0 (`ChatotCry_New` is invalid, field_battle_data_transfer.c:97,
-  chatot_cry.c:13-25), the player's is the save's (`make_state(chatot_cry=...)`, side 0).
+  chatot_cry.c:13-25), the player's is the save's (`make_state(chatot_cry=...)`, party 0 (`[P]`, battle_system.c:915-924)).
 - **BattleMon vs. party moves** (G-68): `moves` / `pp` of the active slot are the BattleMon's;
   Mimic writes only those (battle_script.c:4502-4516), flags the slot in `mimic_slots` and keeps the
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots

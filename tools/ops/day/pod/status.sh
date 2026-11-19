@@ -1,19 +1,45 @@
 #!/usr/bin/env bash
-# POD SIDE. Usage: bash /work/_bin/status.sh [run name] [log lines, default 15]
-# Without a run name: one line per run plus free memory.
-N="${2:-15}"
-if [ -z "${1:-}" ]; then
-  for d in /work/*/; do n=$(basename "$d"); [ "${n#_}" = "$n" ] && echo "$n: $(cat "$d/STATE" 2>/dev/null)"; done
-  echo "free: $(bash /work/_bin/freemem.sh) GB of $(( $(cat /sys/fs/cgroup/memory.max) / 1073741824 )) GB"
-  exit 0
-fi
-D="/work/$1"; [ -d "$D" ] || { echo "no run $1"; exit 1; }
-echo "state: $(cat "$D/STATE")"
-if [ -f "$D/start" ]; then
-  E=$( [ -f "$D/end" ] && cat "$D/end" || date +%s ); echo "wall: $(( E - $(cat "$D/start") )) s"
-fi
-[ -f "$D/rc" ] && echo "exit code: $(cat "$D/rc")"
-[ -f "$D/time.txt" ] && grep -E "Maximum resident|Elapsed" "$D/time.txt" | sed 's/^\s*//'
-echo "--- launch steps"; grep -E "^[[0-9:]+]|rror" "$D/launch.log" 2>/dev/null | tail -n 6
-echo "--- pytest.log (last $N)"; tail -n "$N" "$D/pytest.log" 2>/dev/null; echo
-echo "free: $(bash /work/_bin/freemem.sh) GB"
+# POD SIDE. Usage: status.sh [wait seconds]. Setup state, this run's setup= and runner= state
+# (always printed), collection failures, unit counts, memory, killed and crashed units, running
+# units with F/E marks so far, every failing finished unit with its FAILED/ERROR lines, and the
+# other runs still active on the pod (/work/*/ and /work/*/*/) plus the count of live pytest
+# processes outside this run; "other active runs: none" only when both are empty.
+# setup=alive|done|gone: setup.pid's process alive | dead with runner.pid written | dead (or no
+# setup.pid) without runner.pid, a failed setup whether or not the log says SETUP_FAILED.
+# runner=alive|gone|starting|none: runner.pid's process alive | dead | not alive yet while setup
+# is alive | no runner.pid and setup not alive.
+[ -n "${1:-}" ] && sleep "$1"
+D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
+grep -E 'SETUP_|units|RUNNER|rror|code' "$D/setup.log" 2>/dev/null | tail -4 | sed 's/^/setup: /'
+grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null | sed 's/^/COLLECT FAILED: /'
+# A run is active only while its setup or runner process (setup.pid, runner.pid) is alive, runs
+# a runner*.sh or setup*.sh script and has its working folder inside that run; log text alone
+# never counts. A zombie has an empty cmdline, so it fails the script test.
+alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; case "$p" in ''|*[!0-9]*) return 1;; esac
+  kill -0 "$p" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'runner[0-9]*\.sh|setup[_a-z0-9]*\.sh' || return 1
+  case "$(readlink "/proc/$p/cwd" 2>/dev/null)" in "$2"|"$2"/*) return 0;; esac; return 1; }
+if alive "$D/setup.pid" "$D"; then SETUP=alive; elif [ -f "$D/runner.pid" ]; then SETUP=done; else SETUP=gone; fi
+if [ -f "$D/runner.pid" ]; then
+  if alive "$D/runner.pid" "$D"; then RUNNER=alive; elif [ "$SETUP" = alive ]; then RUNNER=starting; else RUNNER=gone; fi
+elif [ "$SETUP" = alive ]; then RUNNER=starting; else RUNNER=none; fi
+echo "setup=$SETUP runner=$RUNNER DONE=$([ -f "$O/DONE" ] && echo y || echo n)"
+active=""; for d in /work/*/ /work/*/*/; do r=${d%/}
+  case "$r" in "$D"|"$D"/*|/work/_*) continue;; esac; n=${r#/work/}
+  if alive "$r/runner.pid" "$r"; then active="$active $n"
+  elif alive "$r/setup.pid" "$r"; then active="$active $n(setup)"; fi; done
+# Live pytest processes whose working folder is outside this run (pgrep skips zombies: no cmdline).
+np=0; for p in $(pgrep -f '/\.venv/bin/pytest'); do
+  case "$(readlink "/proc/$p/cwd" 2>/dev/null)" in "$D"|"$D"/*) ;; *) np=$((np + 1));; esac; done
+[ "$np" -gt 0 ] && active="$active pytest_outside_this_run=$np"
+echo "other active runs:${active:- none}"
+[ -f "$O/queue.txt" ] || exit 0
+cd "$O"
+NRUN=0; for r in run/*; do [ -e "$r" ] && [ ! -f "$(basename "$r").rc" ] && NRUN=$((NRUN + 1)); done   # with an .rc: done
+echo "now $(date +%s) start $(cat ALL.start 2>/dev/null) units $(grep -c . queue.txt) done $(ls *.rc 2>/dev/null | wc -l) running $NRUN pending $(grep -c . pending.txt 2>/dev/null) killed $(cat killed.txt 2>/dev/null | wc -l) crashed $(cat crashed.txt 2>/dev/null | wc -l)"
+pk=n/a; [ -r /sys/fs/cgroup/memory.peak ] && pk="$(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MB"
+echo "mem now $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 )) MB peak $pk load $(cut -d' ' -f1 /proc/loadavg)"
+for u in $(ls run 2>/dev/null); do n=$(head -c 20000 "$u.log" 2>/dev/null | grep -E '^[.sFExX]+' | tr -cd 'FE' | wc -c); [ "$n" -gt 0 ] && echo "running $u has $n F/E"; done
+for r in *.rc; do [ -e "$r" ] || continue; c=$(cat "$r"); u=$(basename "$r" .rc)
+  case $c in 0) ;; *) echo "BAD $u rc=$c $(grep "^$u " queue.txt | cut -d' ' -f2)"; grep -E '^(FAILED|ERROR) ' "$u.log" 2>/dev/null | cut -c1-240 | head -20;; esac; done
+tail -2 "$D/runner.log"

@@ -123,7 +123,7 @@ does not generate those matchups (`_smogon_departs`).
   L20 Budew (Grass/Poison), L7 Furret's Ice Ball into L20 Swinub (Ice/Ground), L6 Cranidos's
   Magnitude into L19 Budew: the engine 2 at every roll, @smogon/calc 1 at all but the top roll.
 - **Ruling:** the engine (`damage._finish`: `divide` per row in `type_chart_order`) is
-  right. `_smogon_departs` rule 4 (`_chart_rounding_departs`) computes both roundings from
+  right. `_smogon_departs`' last rule (`_chart_rounding_departs`) computes both roundings from
   the engine's pre-chart damage and skips a matchup only when they differ. Test:
   `tests/engine/test_damage.py::test_type_rows_lift_to_one_in_chart_order`.
 
@@ -171,6 +171,20 @@ each; the test is fixed.
   300; the 300 are unchanged.
 - **Guard:** `test_every_drawn_effect_is_compared_or_departs` fails on a damaging effect of
   the M1 pools listed in neither `_COMPARED_EFFECTS` nor `_DEPARTED_EFFECTS`.
+
+### 12. Dry Skin, Water Absorb and Volt Absorb take the move before the damage calculation
+
+- **@smogon/calc:** a Water move into Dry Skin or Water Absorb, or an Electric move into
+  Volt Absorb, deals 0. Found: a Water move into Croagunk's Dry Skin, `damage_table` 6-8.
+- **Decomp:** `TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES`
+  (`src/battle/battle_controller_player.c:3281-3286`, `:2789-2798`) runs
+  `BattleSystem_TriggerImmunityAbility` (`src/battle/battle_lib.c:3500-3512`, `:3538-3544`):
+  the move ends with `MOVE_STATUS_NO_MORE_WORK` and `subscript_ability_restores_hp.s` heals
+  the holder. `BattleSystem_CalcMoveDamage` (`:6601`) never runs; it has no Water or Electric
+  case for these abilities (its one Dry Skin factor is Fire's, `:6845-6848`).
+- **Ruling:** `damage_table` mirrors `BattleSystem_CalcMoveDamage` and is right; the absorb is
+  `step._use_move`'s (and `enumerate`'s flinch law). Not generated: `_smogon_departs` rule 6
+  (the defender's ability through `damage.ignorable`, so Mold Breaker still compares).
 
 ## JAX engine's trainer AI path vs the decomp (K3b1)
 

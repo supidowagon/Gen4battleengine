@@ -65,31 +65,39 @@ per day is the rate used for estimates.
 
 ## 5. Rented test pods (Runpod CPU)
 
-- **What may leave the PC:** source code at a commit and the built tables (`.json`/`.npz`).
-  Never the ROM, save files, the calc archive, the docs sheet, or anything personal.
-- **Agents never wait on a pod.** A runner agent launches the pod run and returns. The
-  managing session checks the result later with a second runner that reads the status,
-  fetches the logs and reports.
-- **Nightly pod (`ci-nightly`):** at most $6 per run. Brief: `tools/ops/nightly_brief.md`.
-  Delete the pod within 4.5 hours of creation.
-- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, at most $15 per day, for every stream test
+- **What may leave the PC:** source code at a commit (`git archive`) and the built tables
+  listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
+  archive or its extraction, the docs sheet or its extraction, or anything personal.
+- **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
+  up; when its run ends the nightly
+  agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
+  at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
+  A tip that equals the last nightly's tip does not run again.
+- **Test pod (`ci-day-big`):** 32 vCPU / 128 GB CPU, no daily limit, for every stream test
   run. Never rent a 16 vCPU / 64 GB pod. Keep it up while streams work; delete it when
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
-  and test-file list; the managing session dispatches a Sonnet runner that uploads that
-  commit and its built tables and starts the run, then a later runner reports counts, time
-  and peak memory per file. Only committed code runs on the pod.
+  and test-file list; the managing session dispatches one fresh Opus agent per run, day or
+  nightly, that handles the whole run: uploads that commit and its built tables, runs the
+  list, polls it, reports each failure as it appears, and reports the final result with
+  counts, time and peak memory per file. Only committed code runs on the pod.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
-  (`/sys/fs/cgroup/memory.current`) is under 88 GB. The passed, failed and skipped totals
-  per file equal its collected count; a file whose totals differ has not run.
+  (`/sys/fs/cgroup/memory.current`) is under 88 GB, and run at most 10 chunks at once
+  across all runs on the pod: a chunk grows to 8-12 GB after it starts. Near 118 GB kill
+  this run's newest chunk and queue it again, at most twice per chunk; a third kill counts
+  as a failure. Never signal PID 1.
+- **Completeness.** Per test file, passed + failed + skipped + errors + xfailed + xpassed
+  equals its collected count. A file whose totals differ, a file that failed to collect and
+  a chunk that crashed count as failures.
 - Only the managing session rents, uses and deletes pods. Use generic names. Verify every
   delete with a pod listing. Each spending cap is the user's explicit approval; anything
   larger or longer needs a new approval.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
-  Runpod tools' pod exec.
+  Runpod tools' pod exec. A pod exec call ends after 25 seconds: start work with `nohup`
+  and poll.
 
 ## 6. Watching the streams
 
@@ -98,7 +106,7 @@ per day is the rate used for estimates.
   fast-tier lock state, and lists flags.
 - `tools/ops/watch_flags.ps1` runs the watchdog every 10 minutes in the background and exits
   (waking the managing session) only on a flag that a running test tier does not explain.
-  `-HoldUntil` silences "has not committed" while streams wait on tests.
+  `-HoldUntil` silences "has not committed" and "may have stopped" while streams wait on tests.
 - A fallback check runs twice a day (section 7).
 - A stream ends a turn only with a merge tip plus results, a real blocker, or a family list
   or plan. It never sends a "still waiting" note.
@@ -111,8 +119,8 @@ or clear. Times are local cron expressions; the scheduler adds jitter.
 | Cron | What |
 |---|---|
 | `47 9,21 * * *` | Fallback check: watchdog plus usage; silent unless something is wrong |
-| `7 22 * * *` | Launch the nightly fast tier on the nightly pod |
-| `57 22 * * *` | Delete the test pod if nothing is queued, verify with a pod listing, log the cost |
+| `7 22 * * *` | Dispatch the nightly agent (`tools/ops/nightly_brief.md`): it runs the fast tier on `ci-day-big` when that is up, else on `ci-nightly`, and deletes `ci-nightly` itself |
+| `57 22 * * *` | Delete the test pod if nothing is queued and no nightly runs on it, verify with a pod listing, log the cost |
 
 ## 8. Usage rules
 
@@ -120,7 +128,7 @@ The weekly usage limit caps how much work lands in a week. The user manages the 
 managing session lowers cost per unit of work and never throttles the streams.
 
 - No idle turns and stream clears: CLAUDE.md, Usage. A stream restarts from its ledger.
-- The managing session compacts at about 100k tokens, and only right after a user message.
+- The managing session reads every session's context use at each stream commit point and clears a stream past 30% there. It compacts itself before 35%, and only right after a user message. Automatic compaction is set to 50% as the backstop.
 - Batch size (CLAUDE.md, Batches) spreads the fixed cost per batch: review, merge check,
   merge of `main`, table rebuild, targeted run.
 - Models: CLAUDE.md, Usage.
@@ -141,7 +149,11 @@ managing session lowers cost per unit of work and never throttles the streams.
 `tools/ops/build_tables.sh` runs the full sequence: `tools.extract_decomp`,
 `tools.build_tables`, then for Kaizo `tools.extract_rom`, `tools.extract_pkcalc`,
 `tools.extract_kaizo_docs`, `tools.kaizo.overrides check` and `tools.build_tables --game kaizo`.
-Rebuild after every merge of `main` (CLAUDE.md).
+It takes the local inputs (`data/local.toml`, the symbols map in `.cache/decomp/`, the decomp)
+from the main checkout.
+
+- In a stream's worktree, after every merge of `main` (CLAUDE.md): `bash tools/ops/build_tables.sh --here`.
+- For a pod run: `bash tools/ops/build_tables.sh <commit>` writes `_scratch/rent/tables_<short>.tar.xz`.
 
 ## 11. Tidiness
 

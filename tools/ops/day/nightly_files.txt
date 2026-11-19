@@ -1,0 +1,38 @@
+# Nightly fast tier: <test file, folder or node id> <ids per chunk> [A]; slowest first; the last line queues every id not queued above
+# The damage oracle runs whole, without -m (slow cases included), in one process; the exec-pod env sets NUZLINE_REQUIRE_NODE=1
+tests/test_damage_oracle.py 1000 A
+tests/search/test_player_learn.py 40
+tests/ai/test_kaizo_policy.py 57
+tests/engine/test_batch11.py 40
+tests/engine/test_invokers.py 8
+tests/engine/test_observe.py 40
+tests/engine/test_e1_trial.py 8
+tests/engine/test_transform_laws.py 40
+tests/engine/test_chatter.py 40
+tests/test_cli.py 40
+tests/engine/test_effects.py 40
+tests/engine/test_terrain_moves.py 40
+tests/engine/test_e1_roark_close.py 40
+tests/engine/test_field_effects.py 40
+tests/engine/test_roar.py 40
+tests/engine/test_e1_gardenia.py 40
+tests/engine/test_outcome.py 40
+tests/search/test_pivot_search.py 40
+tests/engine/test_abilities_items.py 40
+tests/engine/test_present.py 40
+tests/ai/test_knowledge.py 40
+tests/engine/test_attract.py 40
+tests/ai/test_kaizo_outcome.py 8
+tests/engine/test_accuracy_classes.py 8
+tests/engine/test_enumerate.py 8
+tests/prep/test_search.py 40
+tests/search/test_stage_b_learn.py 40
+tests/engine/test_fangs.py 40
+tests/engine/test_protect.py 40
+tests/engine/test_step_basic.py 40
+tests/test_trace_to_state.py 40
+tests/prep/test_checkpoint.py 40
+tests/test_jax_hygiene.py 40
+tests/engine/test_status.py 40
+tests/engine/test_pivot_review.py 40
+tests 40

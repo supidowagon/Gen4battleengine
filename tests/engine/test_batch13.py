@@ -13,17 +13,17 @@ from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     PLATE_TYPES,
     damage_for_roll,
-    iron_ball,
     falloff_power,
     gift_item,
     gyro_ball_power,
+    iron_ball,
     move_type_of,
     natural_gift_params,
     punishment_power,
     trump_card_power,
     weather_ball_params,
 )
-from nuzline.engine.effects import assurance_mark
+from nuzline.engine.effects import hp_update
 from nuzline.engine.ids import (
     ITEM_GRISEOUS_ORB,
     AbilityId,
@@ -471,6 +471,7 @@ def test_triple_kick_law_exact_and_sampled(kaizo_tables, kaizo_names):
     check_frequencies(expected, sampled(t, low, acts, n_), n_)
 
 
+@pytest.mark.slow  # 36-50 s per case, peak 5.05 GB (18 Nov)
 @pytest.mark.parametrize("later", [1, 2])
 def test_triple_kick_later_classes_equal_raw_rolls(tables, names, later):
     """B13-6: a later hit's class over hit_thresholds(..., overrides=False) (enumerate's
@@ -921,19 +922,24 @@ def test_wake_up_slap_doubles_and_wakes_a_sleeper(tables, names, kaizo_tables, k
 # B13-17: Assurance (effect_script_0231.s, turnFlags.assuranceDamageMask).
 
 
-def test_assurance_mark_follows_update_hp():
+def test_hp_update_marks_assurance():
     """subscript_update_hp.s:18-19: hpCalcTemp <= 0 is stored: a loss sets, a zero update
-    clears, a heal or no update keeps."""
-    from nuzline.engine.state import BattleState
+    clears, a heal or no update keeps; HP stays within [0, maxHP]."""
+    from nuzline.engine.state import LAYOUT, BattleState
 
-    s = BattleState(*[jnp.zeros(1)] * len(BattleState._fields))._replace(
-        ts_assurance=jnp.zeros(2, jnp.int8)
+    zeros = {name: jnp.zeros(shape, dtype) for name, (shape, dtype) in LAYOUT.items()}
+    s = BattleState(**zeros)._replace(  # an all-zero singles state (B = 2, P = 2)
+        hp=jnp.full((2, 6), 10, jnp.int16),
+        max_hp=jnp.full((2, 6), 20, jnp.int16),
     )
-    s = assurance_mark(s, 1, 5, True)
+    s = hp_update(s, 1, 0, -15, True)
     assert np.asarray(s.ts_assurance).tolist() == [0, 1]
-    assert np.asarray(assurance_mark(s, 1, 0, False).ts_assurance).tolist() == [0, 1]
-    assert np.asarray(assurance_mark(s, 1, -3, True).ts_assurance).tolist() == [0, 1]
-    assert np.asarray(assurance_mark(s, 1, 0, True).ts_assurance).tolist() == [0, 0]
+    assert int(s.hp[1, 0]) == 0
+    assert np.asarray(hp_update(s, 1, 0, 0, False).ts_assurance).tolist() == [0, 1]
+    healed = hp_update(s, 1, 0, 30, True)
+    assert np.asarray(healed.ts_assurance).tolist() == [0, 1] and int(healed.hp[1, 0]) == 20
+    assert np.asarray(hp_update(s, 1, 0, 0, True).ts_assurance).tolist() == [0, 0]
+    assert int(hp_update(s, 1, 1, -3, False).hp[1, 1]) == 10
 
 
 def _assurance(t, n, foe_moves, levels=(25, 70), foe_item="", bench=False):
