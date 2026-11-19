@@ -4927,18 +4927,14 @@ def test_me_first_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert c.BattleEffect.USE_MOVE_FIRST in c.RISKY_EFFECTS
 
 
-def _speeds(s, ai: int, player: int):
-    return s._replace(stats=s.stats.at[1, 0, 4].set(ai).at[0, 0, 4].set(player))
-
-
 def test_trick_room_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
     """Basic_CheckTrickRoom (script.s:1501-1506): faster than the player, or a speed tie (read as
     faster, :1503), -10; slower nothing (E3-2-4)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
-    assert _delta(t, _speeds(s, 500, 1), 0x2, 0x3)[0] == -10
-    assert _delta(t, _speeds(s, 1, 500), 0x2, 0x3)[0] == 0
-    assert _delta(t, _speeds(s, 100, 100), 0x2, 0x3, tie=1)[0] == -10
+    assert _delta(t, _speeds(s, player=1, opp=500), 0x2, 0x3)[0] == -10
+    assert _delta(t, _speeds(s, player=500, opp=1), 0x2, 0x3)[0] == 0
+    assert _delta(t, _speeds(s, player=100, opp=100), 0x2, 0x3, tie=1)[0] == -10
 
 
 def test_trick_room_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
@@ -4946,7 +4942,7 @@ def test_trick_room_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
     jumps; the AI at 30 % HP or less with no living party member left scores nothing (E3-2-4)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Trick Room", "Accelerock", "", ""))
-    slow, fast = _speeds(s, 1, 500), _speeds(s, 500, 1)
+    slow, fast = _speeds(s, player=500, opp=1), _speeds(s, player=1, opp=500)
     assert _delta(t, fast, 0x3, 0x7)[0] == -1
     assert _delta(t, slow, 0x3, 0x7)[0] == 3
     assert _delta(t, slow, 0x3, 0x7, jumps=((0, 6210),))[0] == 0
