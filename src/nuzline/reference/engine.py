@@ -1775,7 +1775,8 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
             _cleanup_fainted(turn, s, side)
         if side_of(side) == 0:
             player_fainted += 1
-            s.deaths[slot] = 1
+            if _party(_fmt(s), side) == 0:  # the player's party only (step._faint_check)
+                s.deaths[slot] = 1
     turn.fainted.clear()
     s.player_faints += player_fainted
     if not decide:  # AnyFainted alone, no CheckBattleOver (the side-condition pass, bcp.c:1749)
@@ -6350,11 +6351,13 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
 
 def _fainted_battler(s: RefState, k: int, i: int) -> int:
     """The battler a paused faint of party ``k``'s slot ``i`` was flagged on: the battler of
-    party ``k`` whose active Pokemon it is (only an active Pokemon faints), else party ``k``'s
-    first battler. In singles, battler ``k``."""
+    party ``k`` whose active Pokemon it is (only an active Pokemon faints; asserted). In
+    singles, battler ``k``."""
     fmt = _fmt(s)
     own = [b for b in range(fmt.B) if fmt.party_of[b] == k]
-    return next((b for b in own if s.battlers[b].active == i), own[0])
+    found = [b for b in own if s.battlers[b].active == i]
+    assert found, f"party {k} slot {i} fainted while not active"
+    return found[0]
 
 
 _SCRATCH_ZERO = {

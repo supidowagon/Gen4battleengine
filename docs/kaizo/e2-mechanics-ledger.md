@@ -238,6 +238,11 @@ Group A status and decisions (commits 1-5):
     comment at ~390 still says int8[2]); step.py ~2762/~2768 use jnp.arange(2) against order: resize
     together at B=4.
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
+  - Owed (D8): the reference's "player" checks before `_know_ability` test battler 0, not side 0,
+    and record `s.battlers[0].active` (reference/engine.py ~2562-2563, ~2882-2883, ~3141,
+    ~3469; 28 calls of `_know_ability(s, s.battlers[0].active)` in all), as JAX hooks.py `_know`
+    (~264) tests `side == 0` against the state's side-0 slot. Consistent today; at B=4 the
+    player's other battler and the partner's are not recorded: rework with per-battler AI knowledge.
 - D10: the multi format, with partner teams from the calc repo.
 - D11: search, prep, the line player and the CLI with two actives.
   - Owed (D11 or tool note): tools/trace_to_state.py calls empty_outcome() without a format (B=2
