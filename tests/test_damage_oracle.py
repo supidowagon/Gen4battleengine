@@ -512,6 +512,7 @@ def _describe(m: dict) -> str:
     return json.dumps(m["smogon"], sort_keys=True)
 
 
+@pytest.mark.fullset
 def test_every_drawn_effect_is_compared_or_departs(tables, names):
     """A new damaging effect in the M1 pools fails here, not as a reshuffled sample."""
     pools = m1_move_pools(tables, names)

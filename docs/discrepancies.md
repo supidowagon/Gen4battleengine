@@ -160,8 +160,9 @@ each; the test is fixed.
   `enumerate`'s `hit_damage_table` (Trump Card is non-table there, only `damage > 0` is read)
   and `tools/trace_to_state.py` also take the default. Ruling: `damage._pre_random`'s default
   subtracts `effects.pressure_pp_cost` with the other side's active as the defender; the
-  oracle's `_trump_card_power` does the same. The AI's replacement score never reaches it:
-  it skips power-1 moves (`battle_lib.c:8053`; Trump Card's power is 1, `data.json:11`).
+  oracle's `_trump_card_power` and the reference engine's `_calc_move_damage` (its `_pp_cost`;
+  fixed, it took one PP) do the same (`test_batch13.test_trump_card_default_power_counts_pressure`).
+  The AI's replacement score never reaches it: it skips power-1 moves (`battle_lib.c:8053`; Trump Card's power is 1, `data.json:11`).
 - **Wring Out, Low Kick:** power from the defender's HP (`BtlCmd_CalcWringOutPower`,
   `battle_script.c:7261-7268`) or weight (`BtlCmd_CalcWeightBasedPower`, `:6808-6826`).
   @smogon/calc reports power 0 and computes it in `calculateBasePowerDPP` (`gen4.js:320-325`,
