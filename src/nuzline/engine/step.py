@@ -756,6 +756,18 @@ def _blacked_out(state: BattleState, side) -> jnp.ndarray:
     return ~jnp.any((state.species[party(fmt, side)] != 0) & (state.hp[party(fmt, side)] > 0))
 
 
+def _sides_out(state: BattleState) -> tuple:
+    """``(player_out, opp_out)``: BattleControllerPlayer_CheckBattleOver's per-side test
+    (bcp.c:4181-4260) as built today: party 0 / party 1 has no Pokemon with HP, one party per
+    side (the singles branch, :4242-4260). The one helper for ``_faint_check`` and the switch's
+    ``decided`` (SF2 (a2)); D3-7 builds the per-format rule here, for both at once: 2vs2 and
+    the tag opponents sum the partner's party (:4211-4240), the AI-partner battles test the
+    player's own party only (:4189-4210)."""
+    player_out = jnp.all((state.species[0] == 0) | (state.hp[0] == 0))
+    opp_out = jnp.all((state.species[1] == 0) | (state.hp[1] == 0))
+    return player_out, opp_out
+
+
 def _empty_events(fmt: Format) -> dict:
     """The turn's events before any action ran: every per-battler field 0 (``[B]``, ``crit``
     ``[B, MAX_HITS]``)."""
@@ -2750,7 +2762,7 @@ def _act(
     # whose CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
     # that leaves a side out runs no switch-in effects (SF2 (a2) R2). The party list's run in
     # the resumed tail (R4).
-    decided = jnp.any(jnp.all((entered.species == 0) | (entered.hp == 0), axis=1))
+    decided = jnp.logical_or(*_sides_out(entered))
     switched = _where(
         ~resumed & ~decided,
         switch_in_effects(tables, entered, side, outcome.trace_pick),
@@ -2976,8 +2988,7 @@ def _faint_check(
         ),
     )
     player_fainted = jnp.sum(fainted[0].astype(_I32))
-    player_out = jnp.all((after.species[0] == 0) | (after.hp[0] == 0))
-    opp_out = jnp.all((after.species[1] == 0) | (after.hp[1] == 0))
+    player_out, opp_out = _sides_out(after)
     ended = (after.over == 0) & (player_out | opp_out)
     winner = jnp.where(player_out, WINNER_OPPONENT, WINNER_PLAYER)
     # ``decide`` False: the faint alone (AnyFainted), no CheckBattleOver after it (the side-

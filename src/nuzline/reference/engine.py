@@ -1926,6 +1926,15 @@ def _source_leaves(s: RefState, side: int, baton: bool = False, faint: bool = Fa
                     sd.lock_on = sd.lock_on_target = 0
 
 
+def _sides_out(s: RefState) -> tuple[bool, bool]:
+    """``(player_out, opp_out)``: CheckBattleOver's per-side test (bcp.c:4181-4260) as built
+    today, party 0 / party 1 with no Pokemon with HP (the singles branch, :4242-4260); shared by
+    ``_faint_check`` and ``_switch``. D3-7's per-format rule (2vs2 / tag sum the partner's party,
+    :4211-4240; AI partner: the player's own party, :4189-4210) goes here (step._sides_out)."""
+    out = [all(m.species == 0 or m.hp == 0 for m in s.parties[p].mons) for p in (0, 1)]
+    return out[0], out[1]
+
+
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     """``BattleControllerPlayer_AnyFainted`` (bcp.c:4409) then ``CheckBattleOver``:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
@@ -1956,9 +1965,10 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     s.player_faints += player_fainted
     if not decide:  # AnyFainted alone, no CheckBattleOver (the side-condition pass, bcp.c:1749)
         return
-    if all(m.species == 0 or m.hp == 0 for m in s.parties[0].mons):
+    player_out, opp_out = _sides_out(s)
+    if player_out:
         s.over, s.winner = 1, WINNER_OPPONENT
-    elif all(m.species == 0 or m.hp == 0 for m in s.parties[1].mons):
+    elif opp_out:
         s.over, s.winner = 1, WINNER_PLAYER
     if s.over:  # the player's party never saw a Mimic or Transform copy (step._faint_check)
         for b in range(_fmt(s).B):  # every battler of party 0 (ruling D1-3)
@@ -6125,7 +6135,7 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _entry_hazards(turn, s, side)  # :43
     # MoveEnd's CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
     # that leaves a side out runs no switch-in effects (R2).
-    if not any(all(m.species == 0 or m.hp == 0 for m in p.mons) for p in s.parties):
+    if not any(_sides_out(s)):
         _switch_in_effects(turn, s, side)
 
 
