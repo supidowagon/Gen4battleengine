@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
-# POD SIDE, started detached by setup.sh when meta.env sets WATCH_CODE (pack.sh does). Feeds the
+# POD SIDE, started detached by the exec-pod body that pack.sh prints, right after the payload is
+# unpacked and before bin/setup.sh, when meta.env sets WATCH_F and WATCH_D (pack.sh does). Feeds the
 # PC's tools/ops/day/wait.sh, which cannot call pod exec: every 20 s it reads bin/status.sh, and
 #  - at the first failure (a BAD unit, a COLLECT FAILED line, a running unit with F/E marks,
 #    SETUP_FAILED, or a dead run) it writes notify/firstfail.txt (the status text) and offers it
-#    with `runpodctl send --code <WATCH_CODE>f`;
+#    with `runpodctl send --code <WATCH_F>`;
 #  - when the run is over (DONE=y, or the same dead state on two reads 20 s apart: setup=gone
 #    runner=none, or runner=gone without DONE) it packs results.tgz with `bin/fetch.sh --pack`
-#    and offers it with `runpodctl send --code <WATCH_CODE>d`.
+#    and offers it with `runpodctl send --code <WATCH_D>`.
 # Each offer is repeated until a receiver takes it or WATCH_HOURS (default 24) pass; the f offer
 # stops once the d offer is taken. Signals only its own send processes (timeout, and pkill of the
-# pending f send by its command line, which holds this run's random code).
+# pending f send by its command line, which holds this run's random code). Never prints a code.
 # Reads only this run's folder; writes notify/, notify.log, agg.txt and results.tgz in it.
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; . ./meta.env
-[ -n "${WATCH_CODE:-}" ] || { echo "no WATCH_CODE in meta.env"; exit 0; }
+[ -n "${WATCH_F:-}" ] && [ -n "${WATCH_D:-}" ] || { echo "no WATCH_F/WATCH_D in meta.env"; exit 0; }
 RPC=/work/_bin/runpodctl; N="$D/notify"; mkdir -p "$N"
 END=$(( $(date +%s) + ${WATCH_HOURS:-24} * 3600 ))
-# offer <suffix> <file in $N or $D>: send it under WATCH_CODE<suffix> until taken, END, or
-# (for f) the stop file. Each send attempt lasts at most 600 s.
-offer() { local s="$1" f="$2"
+# offer <f|d> <file in $N or $D>: send it under WATCH_F or WATCH_D until taken, END, or (for f)
+# the stop file. Each send attempt lasts at most 600 s.
+offer() { local s="$1" f="$2" c="$WATCH_D"; [ "$1" = f ] && c="$WATCH_F"
   while [ "$(date +%s)" -lt "$END" ]; do
     [ "$s" = f ] && [ -f "$N/stop" ] && return 1
-    ( cd "$(dirname "$f")" && timeout 600 "$RPC" send --code "$WATCH_CODE$s" "$(basename "$f")" ) \
+    ( cd "$(dirname "$f")" && timeout 600 "$RPC" send --code "$c" "$(basename "$f")" ) \
       >> "$N/send_$s.log" 2>&1 < /dev/null && { date +%s > "$N/taken_$s"; echo "$(date +%s) $s taken"; return 0; }
     sleep 10
   done; echo "$(date +%s) $s not taken before WATCH_HOURS"; return 1; }
@@ -47,7 +48,7 @@ while :; do
     echo "$(date +%s) run over: $L"; bash "$D/bin/fetch.sh" --pack
     offer d "$D/results.tgz"; touch "$N/stop"
     # End a pending f offer now: only processes carrying this run's own random code match.
-    pkill -TERM -f -- "send --code ${WATCH_CODE}f" 2>/dev/null; wait; exit 0
+    pkill -TERM -f -- "send --code $WATCH_F" 2>/dev/null; wait; exit 0
   fi
   sleep 20
 done

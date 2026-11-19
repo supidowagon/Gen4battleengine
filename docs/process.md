@@ -78,12 +78,13 @@ per day is the rate used for estimates.
   nothing is queued. Delete and re-create a pod whose container has not started within
   5 minutes. Bring-up and run scripts: `tools/ops/day/DAYBOX.md`.
 - **Pod runs.** Streams have no pod tool: a stream sends the managing session its commit
-  and test-file list; the managing session dispatches one fresh agent per run (Sonnet for a day
-  run; `tools/ops/nightly_brief.md` for the nightly) that packs and starts the run with the scripts (`pack.sh`, then its exec-pod
-  body), makes one blocking `wait.sh` call in the background, and reports once: the final
-  result with counts, time and peak memory per file, or the first failure when the brief
-  asked for `--until first-failure`. No polling turns: the agent does not call `status.sh`
-  while `wait.sh` runs. Only committed code runs on the pod.
+  and test-file list; the managing session dispatches one fresh agent per run (Sonnet for a
+  day run; `tools/ops/nightly_brief.md` for the nightly) that packs and starts the run with
+  the scripts (`pack.sh`, then its exec-pod body), makes one blocking `wait.sh` call in the
+  background, and reports once: the final result with counts, time and peak memory per
+  file, or the first failure when the brief asked for `--until first-failure`. No polling
+  turns: the agent does not call `status.sh` while `wait.sh` runs. Only committed code runs
+  on the pod.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory
@@ -100,8 +101,8 @@ per day is the rate used for estimates.
 - Transfer files with `runpodctl send` / `receive`; run commands on the pod through the
   Runpod tools' pod exec. A pod exec call ends after 25 seconds: start work with `nohup`.
   The pod reports back without pod exec: its `notify.sh` offers a first-failure beacon and
-  the results under the run's random `runpodctl send --code`, and the PC's `wait.sh` takes
-  them (`tools/ops/day/DAYBOX.md`, "Wait").
+  the results, each under its own random `runpodctl send --code`, and the PC's `wait.sh`
+  takes them (`tools/ops/day/DAYBOX.md`, "Wait").
 
 ## 6. Watching the streams
 
