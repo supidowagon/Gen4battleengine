@@ -165,7 +165,7 @@ Encodings:
   move can change under Mimic, so the record cannot be flags.
 * E1 trial batch (G-69, Transform). ``transformed`` is VOLATILE_CONDITION_TRANSFORM: the active slot's
   species, form, stats, IVs, ability slot / form, types, ability, moves and PP are then the copied
-  target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the ``shadow_*`` fields hold
+  target's (``BtlCmd_Transform``, battle_script.c:5346-5348, :5364-5370), and the ``shadow_*`` fields hold
   the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot, ``mimic_slots`` all four).
   They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
   fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
@@ -375,7 +375,7 @@ class BattleState(NamedTuple):
     shadow_pp: jnp.ndarray  # int8[B,4], the party's PP of each masked slot (G-68)
     # Transform (G-69): ``transformed`` is VOLATILE_CONDITION_TRANSFORM; while it is set the active
     # slot's species, form, stats, ivs, ability slot / form, types, ability, moves and PP are the
-    # copied target's (``BtlCmd_Transform``, battle_script.c:5342-5348, :5364-5370), and the
+    # copied target's (``BtlCmd_Transform``, battle_script.c:5346-5348, :5364-5370), and the
     # ``shadow_*`` hold the party Pokemon's own (``shadow_moves`` / ``shadow_pp`` of every slot,
     # ``mimic_slots`` all four). Restored by ``step._restore_transform`` / ``_restore_moves``.
     transformed: jnp.ndarray  # int8, VOLATILE_CONDITION_TRANSFORM, kept until restored (G-69)

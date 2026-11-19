@@ -500,13 +500,14 @@ def future_thresholds(
 
     The hit reads the battlers on the field at the turn's end. The attacker's slot holds its
     active Pokemon, the one it switches in, or (a foe's Roar) any living party member; likewise
-    the defender's. Their abilities and items do not change within a turn but by Trace or Transform
-    (``loose``; a Gravity that is set or ends this turn is ``loose`` too).
+    the defender's. Their abilities and items do not change within a turn but by Trace,
+    Transform, Embargo or Knock Off (``loose``; a Gravity that is set or ends this turn is
+    ``loose`` too).
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
-    stat effect on accuracy or evasion, Foresight, a White Herb); else the start stages of a battler
-    that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
-    the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
-    (the only ones the rate reads besides fog, which never starts); the target confused or not;
+    stat effect on accuracy or evasion, Foresight, Haze, Psych Up, Acupressure, a White Herb);
+    else the start stages of a battler that stays and 0 for a newcomer or a fainted attacker
+    (CleanupFaintedMon). The weather can be the start's, none (it ended, or a lock), or a
+    weather move's or ability's sandstorm or hail (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
     roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
@@ -538,7 +539,16 @@ def future_thresholds(
         | (effect == EffectId.SECONDARY_STAT_SELF)
     ) & ((params[:, 0] == Stat.ACC) | (params[:, 0] == Stat.EVA))
     herbs = jnp.any(on_field & (tables.item_effect[state.item[rows]] == ItemId.WHITE_HERB) & living)
-    free = jnp.any(uses & (accuracy_moves | (effect == EffectId.FORESIGHT))) | herbs
+    # Haze zeroes both stages, Psych Up copies them, Acupressure can raise evasion (B12-31's
+    # writers; F-18): the sum then need be neither the kept nor the reset one (Transform's copy
+    # keeps the roll whole, ``loose`` below).
+    stage_writers = (
+        (effect == EffectId.FORESIGHT)
+        | (effect == EffectId.HAZE)
+        | (effect == EffectId.PSYCH_UP)
+        | (effect == EffectId.ACUPRESSURE)
+    )
+    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     weathers = jnp.stack(
         [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
@@ -611,16 +621,20 @@ def future_thresholds(
     # Embargo (B13-31): an Embargo used this turn, or a count that the turn end's
     # MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677) can end before the side-condition pass's
     # hit (:1758-1783), changes which items the hit reads (state.held_item): the roll is kept
-    # whole, rare and sound.
-    embargo_field = jnp.any(uses & (effect == EffectId.EMBARGO)) | jnp.any(state.embargo != 0)
+    # whole, rare and sound. So does a Knock Off used this turn, which takes an item
+    # (battle_script.c:6622-6624, F-17).
+    item_takers = (effect == EffectId.EMBARGO) | (effect == EffectId.KNOCK_OFF)
+    embargo_field = jnp.any(uses & item_takers) | jnp.any(state.embargo != 0)
     # Gravity at the hit (x10/6, bcp.c:2972-2974) is the turn end's: a Gravity used this turn
-    # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1235) ends a count of 1 before the
-    # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
-    # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373). Either way the roll is
-    # kept whole, rare and sound.
-    field_change = jnp.any(
-        uses & ((effect == EffectId.GRAVITY) | (effect == EffectId.TRANSFORM))
-    ) | (state.gravity == 1)
+    # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238) ends a count of 1 before the
+    # side-condition pass's hit (:1758-1783), except in Kaizo, whose sub_seq 238 sets it again
+    # (``Tables.gravity_rearm``, G-67). A Transform used this turn copies a battler's ability and
+    # stages (BtlCmd_Transform, battle_script.c:5330-5373). Either way the roll is kept whole,
+    # rare and sound.
+    ends = (state.gravity == 1) & (tables.gravity_rearm == 0)
+    field_change = (
+        jnp.any(uses & ((effect == EffectId.GRAVITY) | (effect == EffectId.TRANSFORM))) | ends
+    )
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
     )
@@ -778,7 +792,8 @@ def _threshold_grid(
       (battle_controller_player.c:2972-2974); its Transform into the side's battler, which then
       holds the side's ability (Sand Veil, Snow Cloak, Tangled Feet, Simple, Unaware, No Guard,
       Cloud Nine as the target, :2876-2947, bcp.c:3016-3021) and runs its switch-in checks again
-      (step._use_move, the announce flags cleared :5350-5358), so a copied weather ability sets
+      (step._use_move: the announce flags cleared, battle_script.c:5350-5358, rerun at
+      bcp.c:3672-3673 and :3973), so a copied weather ability sets
       its weather (``hooks.weather_ability``, battle_lib.c:3740-3790);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
@@ -788,6 +803,10 @@ def _threshold_grid(
 
     * the attacker's Micle Berry flag (G-59): its berry can trigger before the check (the
       second half of the grid, Zoom Lens's, possible for a holder: one item holds one of them).
+
+    * the attacker's Wide Lens hidden by the foe's Embargo (B13-31) or taken by its Knock Off
+      (``BtlCmd_TryKnockOff``, battle_script.c:6622-6624; F-17) before the check: the second
+      half, the threshold without the lens.
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s and Twineedle's (``MoveFlag.HIT_TWICE``, a poison), which change no stage
@@ -854,9 +873,11 @@ def _threshold_grid(
     # second half, which a Wide Lens holder (no Zoom Lens, no Micle Berry) never used, is its
     # threshold without the lens. A Zoom Lens or Micle holder's hidden item is the first half's
     # (no Zoom bonus, no berry); a hidden Bright Powder needs the defender embargoed before
-    # the side's own move: only the side itself could do it.
+    # the side's own move: only the side itself could do it. The foe's Knock Off before the
+    # check takes the item outright (BtlCmd_TryKnockOff, battle_script.c:6622-6624: heldItem =
+    # ITEM_NONE), which the check reads alike (F-17): the same second half.
     wide = held == ItemId.WIDE_LENS
-    foe_embargo = foes(changes & (effect == EffectId.EMBARGO))
+    foe_embargo = foes(changes & ((effect == EffectId.EMBARGO) | (effect == EffectId.KNOCK_OFF)))
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in range(fmt.B):
@@ -964,11 +985,22 @@ def _threshold_grid(
             foe_mon = state.active[foe]
             ability = jnp.where(f & xf, copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
+            # The copy also holds the side's species and ability row and slot, which
+            # NO_CLOUD_NINE reads (damage.decomp_abilities): a foe that loses its own Cloud
+            # Nine / Air Lock by its Transform no longer suppresses the weather (F-25).
+            mine, theirs = (party(fmt, side), state.active[side]), (party(fmt, foe), foe_mon)
+
+            def take(arr):
+                return arr.at[theirs].set(jnp.where(f & xf, arr[mine], arr[theirs]))
+
             hidden = state._replace(
                 embargo=state.embargo.at[side].set(embargo),
                 ability=state.ability.at[party(fmt, foe), foe_mon].set(
                     ability.astype(state.ability.dtype)
                 ),
+                species=take(state.species),
+                ability_form=take(state.ability_form),
+                ability_slot=take(state.ability_slot),
                 gravity=gravity.astype(state.gravity.dtype),
             )
             return _hit_threshold(
@@ -1187,7 +1219,7 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
 
     A foe that uses Transform this turn (``moves``: the move each action runs, as
     ``crit_odds``') may hold the side's own ability at the side's CalcCrit: ``BtlCmd_Transform``
-    copies the BattleMon up to ``ability`` (battle_script.c:5342-5345, battle_mon.h:84). It is
+    copies the BattleMon up to ``ability`` (battle_script.c:5346-5348, battle_mon.h:84). It is
     armored then only when the side's own ability is an armor too (over-approximate: the
     Transform may move later or fail, so either ability can be the one read)."""
     fmt = format_of(state)

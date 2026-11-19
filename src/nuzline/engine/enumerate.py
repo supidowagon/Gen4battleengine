@@ -854,7 +854,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.WISH,
     _E.HEAL_BELL,
     _E.REFRESH,
-    # E1 trial batch. Mimic (BtlCmd_TryMimic, battle_script.c:4476-4523) writes only its user's
+    # E1 trial batch. Mimic (BtlCmd_TryMimic, battle_script.c:4476-4524) writes only its user's
     # moves, ppCur, mimickedMoveSlot and lastResortCount: none is an input of the side's hit,
     # whose move is chosen already (G-68). Chatter (effect_script_0267.s:5-7) is a plain hit
     # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
@@ -944,7 +944,8 @@ INPUT_CLAUSE_EFFECTS = (
     # E1 trial batch (G-69): BtlCmd_Transform (battle_script.c:5330-5373) copies the defender's
     # BattleMon up to ``ability`` (battle_mon.h:57-84) onto its user: species (weight), Attack to
     # Sp. Def, the stat stages, both types and the ability, and reruns its switch-in checks
-    # (:5350-5358: a copied Intimidate or weather ability acts). Every input of the side's later
+    # (the announce flags cleared, :5350-5358, rerun at bcp.c:3672-3673 and :3973: a copied
+    # Intimidate or weather ability acts). Every input of the side's later
     # hit against it, and of its own stats the side's hit meets, can change: the transform clause.
     _E.TRANSFORM,
 )
@@ -1775,7 +1776,7 @@ def outcome_laws(
         tables, state, actions, (AbilityId.STATIC, AbilityId.POISON_POINT, AbilityId.FLAME_BODY)
     )
     # G-69: a side whose Transform lands before the foe's contact hit holds the foe's ability then
-    # (BtlCmd_Transform copies ``ability``, battle_script.c:5342-5345, battle_mon.h:84), but not its
+    # (BtlCmd_Transform copies ``ability``, battle_script.c:5346-5348, battle_mon.h:84), but not its
     # gender (a separate field, battle_mon.h after ``ability``; ``transformedGender`` is the
     # sprite's, :5338). Over-approximate: the Transform may move later or fail.
     xform = uses_move & (effect == _E.TRANSFORM)
@@ -2146,7 +2147,7 @@ def outcome_laws(
     ]
     tracer = _holds(tables, state, actions, (AbilityId.TRACE,)) | (dragged & trace_party)
     # G-69: a Transform copies its target's Speed, Speed stage and ability (BtlCmd_Transform,
-    # battle_script.c:5342-5345; battle_mon.h:57-84): the two end speeds are then often equal, by
+    # battle_script.c:5346-5348; battle_mon.h:57-84): the two end speeds are then often equal, by
     # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
     # kept (over-approximate).
     xform_used = uses_move & (effect == _E.TRANSFORM)

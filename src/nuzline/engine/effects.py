@@ -1751,7 +1751,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
-    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    (battle_script.c:4476-4524) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
     defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
     battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
     (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the

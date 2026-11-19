@@ -484,7 +484,7 @@ class EffectId(IntEnum):
     # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
     GRAVITY = 118
     # Mimic (82, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE): zeros. effect_script_0082.s runs
-    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
+    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4524) copies the
     # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
     MIMIC = 119
     # Transform (57, BATTLE_EFFECT_TRANSFORM): zeros. effect_script_0057.s runs
