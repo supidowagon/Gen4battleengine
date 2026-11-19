@@ -3,7 +3,9 @@
 subscript_pursuit.s runs FAINT_CHECK_DESTINY_BOND (:85) before TriggerAbilityOnHit (:86-87), so a
 KO'd switcher that holds Destiny Bond takes the pursuer down first and every contact ability then
 fails on the attacker's HP (battle_lib.c:4215-4363): no message, no reveal, no draw. Each case runs
-through ``assert_matches_reference``."""
+through ``assert_matches_reference``. SF2-roost: a lock that hits its own user after the foe
+roosted reads the user's own types (BasicTypeMulApplies tests turnFlags[defender].roosting,
+battle_lib.c:2540-2543)."""
 
 from __future__ import annotations
 
@@ -288,3 +290,30 @@ def test_surviving_foe_keeps_its_action_in_the_paused_view(tables, names, mirror
     _, viewed = pivot_view(tables, paused, _pick(pivot))
     assert int(viewed[other]) == int(paused.ts_actions[other]) == 0
     assert bool(np.asarray(_paused_rock(tables, paused))[pivot])
+
+
+@pytest.mark.parametrize(("user", "immune"), [("Pidgey", True), ("Sandshrew", False)])
+def test_dig_strike_at_its_user_after_a_foe_roost_reads_the_users_types(
+    tables, names, user, immune
+):
+    # turn 1: Dig (1 PP) is encored over a Swords Dance selection (the user is stored,
+    # bcp.c:4363-4367) and charges; the Encore ends at the turn's end (no PP). Turn 2: the faster
+    # Flying foe roosts (subscript_roost.s:12 sets its turnFlags.roosting), then the strike reads
+    # the stored user. The chart tests the defender's flag (battle_lib.c:2540-2543): the user's,
+    # never set, so a Flying user keeps its Ground immunity and the foe's Roost changes nothing.
+    s = make_state(
+        tables,
+        [_mon(names, user, ["Swords Dance", "Dig"], 30)],
+        [_mon(names, "Starly", ["Encore", "Roost"], 80)],
+    )
+    s = s._replace(last_move=s.last_move.at[0].set(names.move("Dig")))
+    s = s._replace(pp=s.pp.at[0, 0, 1].set(1))
+    s = s._replace(hp=s.hp.at[1, 0].set(int(s.max_hp[1, 0]) // 2))
+    one = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(one.locked_move[0]) == names.move("Dig")
+    assert int(one.chosen_target[0]) == 0
+    assert int(one.encore_move[0]) == 0
+    two = assert_matches_reference(tables, one, (0, 1), O)
+    assert int(two.hp[1, 0]) > int(one.hp[1, 0])  # the Roost healed
+    assert (int(two.hp[0, 0]) == int(one.hp[0, 0])) == immune
+    assert int(two.locked_move[0]) == 0

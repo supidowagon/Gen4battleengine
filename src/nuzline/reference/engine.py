@@ -248,6 +248,8 @@ class _Turn:
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
     # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
     roosting: list[bool] = field(default_factory=lambda: [False, False])
+    # The action's roosting defender while its Flying rows are skipped: (battler, mon, its types).
+    roost_strip: tuple | None = None
     # turnFlags damage taken per side this turn, [physical, special, last] and their attackers
     # as 1 + battler (bcp.c:3413-3434), and the current Counter / Mirror Coat / Metal Burst
     # damage (battleCtx->damage).
@@ -4962,6 +4964,30 @@ def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
     return False
 
 
+def _strip_roost(turn: _Turn, s: RefState, defender: int) -> None:
+    """BasicTypeMulApplies (battle_lib.c:2540-2543) skips the chart's Flying rows when
+    ``turnFlags[defender].roosting`` (set by subscript_roost.s:12 for the Roost user, cleared at
+    the turn's end): the move's defender reads its types without Flying until the action ends
+    (``_unstrip_roost``). Only the chart reads a defender's types for Flying. The user never
+    roosts before its own action's chart, so a lock that hits its user reads its own types. A new
+    defender (redirection, Counter) gives the previous one its types back first."""
+    _unstrip_roost(turn, s)
+    if turn.roosting[defender]:
+        mon = _active(s, defender)
+        turn.roost_strip = (defender, mon, list(mon.types))
+        mon.types = [Type.MYSTERY if t == Type.FLYING else t for t in mon.types]
+
+
+def _unstrip_roost(turn: _Turn, s: RefState) -> None:
+    """The stripped defender's own types again, if it is still active (a Pokemon dragged out
+    took its party types on the way out)."""
+    if turn.roost_strip is not None:
+        defender, mon, types = turn.roost_strip
+        if _active(s, defender) is mon:
+            mon.types = types
+        turn.roost_strip = None
+
+
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
            struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -4989,6 +5015,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         o.target_draw[side],
     )  # fmt: skip
     foe_defender = turn.defender is not None and turn.defender != side
+    _strip_roost(turn, s, turn.target_side)
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
     # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
     turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
@@ -5055,6 +5082,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         )
     if redirected:
         turn.defender = turn.target_side = redirect_to
+        _strip_roost(turn, s, turn.target_side)
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
@@ -5161,8 +5189,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     ):
         s.battlers[side].micle = 0
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:3271-3277, after the script, hit or miss): a move
-    # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the foe sets the
-    # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
+    # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the defender
+    # (BattleSystem_ApplyTypeChart on battleCtx->defender, bcp.c:2358-2365: the user for a lock
+    # that reads its stored user) sets the attacker's moveFailFlags.noEffect (bcp.c:2350-2370),
+    # which the Uproar check reads.
     if (
         _t(tables, "move_power", move) != 0
         and not _targets_user(tables, move, _ghost(s, side))
@@ -5174,8 +5204,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
-            _active(s, _foe(side)).types,
-            _identified(tables, s, side, _foe(side)),
+            _active(s, turn.target_side).types,
+            _identified(tables, s, side, turn.target_side),
         )
         == 0
     ):
@@ -5262,6 +5292,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # D2-14: the defender is the living Follow Me user of the attacker's side, else the attacker.
         picked = counter_defender(s, side, attacker)
         turn.defender = turn.target_side = picked
+        _strip_roost(turn, s, picked)
         # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
         # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
         # the move), while it has PP left, ruling G-9.
@@ -7027,12 +7058,6 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                     esd.encore_move = esd.encore_slot = esd.encore_turns = 0
             turn.move_cur = move
             turn.shell_dealt = 0
-            # A foe that roosted this turn: the move's chart skips its Flying rows
-            # (lib.c:2540-2543); only the chart reads the target's types for Flying.
-            foe = _active(s, _foe(side))
-            saved = list(foe.types)
-            if turn.roosting[_foe(side)]:
-                foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
             turn.met_reached = turn.met_worked = turn.met_immune = False
             turn.charge_strike = turn.bide_ended = False
             rollout0 = s.battlers[side].rollout_count
@@ -7042,8 +7067,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                     target_moved=position == 1,
                 )  # fmt: skip
             finally:
-                if _active(s, _foe(side)) is foe:
-                    foe.types = saved
+                _unstrip_roost(turn, s)
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)
             last_of_multi = turn.charge_strike or turn.bide_ended
