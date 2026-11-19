@@ -108,6 +108,7 @@ def test_b2_no_write_without_a_target_menu(tables, names):
         assert _chosen_targets(to_numpy(tables), to_ref(case), acts, [0, 0]) == want
 
 
+@pytest.mark.slow  # a jitted step compile: over the fast tier's 4 GB
 def test_b2_u_turn_pause_and_resume_keep_the_selection(tables, names):
     n = names
     s = make_state(
