@@ -1066,7 +1066,7 @@ of them, :2107-2115).
   `test_invokers.py`, `test_kaizo_policy.py`, `test_coverage.py`.
 - G-68 Mimic (`EffectId.MIMIC`, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE 82), in both games; the party / battler
   split of the move and PP arrays. effect_script_0082.s:3 runs `subscript_mimic.s` on a hit that
-  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4523) fails
+  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4524) fails
   (subscript_mimic.s:16, MOVE_STATUS_FAILED) when `movePrevByBattler[defender]` is MOVE_NONE or not
   Mimic-able (`Move_CanBeMimicked`, battle_lib.c:7152-7158, :7182-7192: Metronome, Struggle, Sketch,
   Mimic, Chatter, `ids.MIMIC_FORBIDDEN`), the user is Transformed (:4482, G-69), the defender has a
@@ -1100,7 +1100,7 @@ of them, :2107-2115).
   Transformed (:6) defender; a Substitute is not tested. `BtlCmd_Transform` (battle_script.c:5330-5373)
   sets `VOLATILE_CONDITION_TRANSFORM`, ends Disable (:5335-5336), clears `mimickedMoveSlot` (:5339: the
   mimicked slot is NOT restored, the copy overwrites it) and Last Resort's count, and copies every byte of
-  the defender's BattleMon up to and including `ability` (:5342-5348; battle_mon.h:57-84): species, the
+  the defender's BattleMon up to and including `ability` (:5346-5348; battle_mon.h:57-84): species, the
   five stats as the BattleMon holds them (a Power-Tricked defender's swapped ones), the four moves, the IVs,
   all eight stat stages, both types, the form and the ability; not HP, max HP, level, friendship, PP Ups,
   status, volatiles, `moveEffectsMask`, the item, the gender (`transformedPID` / `transformedGender` are
@@ -1196,13 +1196,13 @@ of them, :2107-2115).
   FIELD_CONDITION_GRAVITY, read as `hitRate * 10 / 6` (battle_controller_player.c:2972-2974); Transform
   (`BtlCmd_Transform`, battle_script.c:5330-5373) copies the BattleMon up to `ability`, so `statBoosts`
   (battle_mon.h:75) and `ability` (:84): the target's evasion becomes the side's own (as Psych Up's), and
-  the target holds the side's ability (Sand Veil / Snow Cloak :2927-2933, Tangled Feet :2944-2947, Simple /
-  Unaware :2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags (:5350-5358) rerun
-  its switch-in checks, so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
+  the target holds the side's ability (Sand Veil / Snow Cloak bcp.c:2927-2933, Tangled Feet bcp.c:2944-2947,
+  Simple / Unaware bcp.c:2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags
+  (battle_script.c:5350-5358) let its switch-in checks rerun (bcp.c:3672-3673, :3973), so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
   `_threshold_grid`: the eva copy joins Psych Up's, and the second weather variant is now the foe's field
   move (weather move, Gravity, or Transform with its copied ability and weather); one move has one effect.
   `future_thresholds` keeps the Future Sight roll whole (`loose`) when a Gravity or Transform is used this
-  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1235, ends it before the hit
+  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1238, ends it before the hit
   :1758-1783). The reference engine's live check (`_hit_rate`, `_transform`) already read both; no change.
   Tests: `test_accuracy_classes.py` (registry, `test_gravity_and_transform_are_seen_by_hit_thresholds`).
 - Trial outcome laws: Transform, Mimic and Chatter in the damage registries and the laws (branch
@@ -1215,7 +1215,7 @@ of them, :2107-2115).
   whenever a Transform is used (the copied Spe, stage and speed ability); `shed_skin` for a copied Shed
   Skin. `outcome.armored` (laws `no_crit`, `sample_outcome`) drops a Battle Armor / Shell Armor the
   Transform replaces with the side's own ability (battle_lib.c:7135-7136). Mimic (`BtlCmd_TryMimic`,
-  :4476-4523) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
+  :4476-4524) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
   non-table. Chatter (effect_script_0267.s:5-7: CalcCrit, CalcDamage, then the ON_HIT confusion):
   input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
   reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
@@ -1434,3 +1434,92 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   party Pokemon is another): `CopyToParty` writes form 0 and the new ability into that party Pokemon, which the
   sheet and decomp do not make clear enough to model; `shaymin_land` skips a Transformed battler (stopped at
   subscript_check_shaymin_form.s:6-7 with `battle_script.c:5346-5348`).
+- F-17 A faster foe's Knock Off takes the side's Wide Lens before its accuracy check. `BtlCmd_TryKnockOff`
+  (battle_script.c:6608-6632) sets `heldItem = ITEM_NONE` (:6622-6624); the check reads the attacker's
+  `HOLD_EFFECT_ACCURACY_UP` (bcp.c:2955-2957). `outcome._threshold_grid` files Knock Off with Embargo (`foe_embargo`):
+  the grid's second half, the threshold without the lens, is possible for a Wide Lens holder whose foe can Knock Off
+  first (a Zoom Lens or Micle holder's lost item is the first half's, as for Embargo). `future_thresholds` keeps the
+  Future Sight roll whole (`loose`) when a Knock Off is used this turn, as for Embargo (the turn-end hit reads the
+  items then). Tests: `test_accuracy_classes.py::test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_
+  thresholds` (slow), `test_batch8.py::test_future_sight_roll_is_kept_whole_around_gravity_and_transform`.
+- F-18 `future_thresholds`' stage sum follows Haze, Psych Up and Acupressure (B12-31's writers): Haze
+  (battle_script.c:3534-3549) zeroes both stages, Psych Up (:6042-6053) copies them, Acupressure (:8932-8956) can
+  raise evasion, before the turn end's hit (bcp.c:1758-1783); such a move used this turn frees the sum (`free`), as a
+  stat move on accuracy or evasion does. Nothing else in enumerate marked them loose. Gravity at 1 keeps the roll
+  whole only where it ends (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1238): not under `Tables.gravity_rearm`
+  (Kaizo's sub_seq 238 sets it again, G-67), where it holds at the hit. Tests: `test_batch8.py::
+  test_future_sight_law_follows_a_haze_this_turn`, `::test_future_sight_roll_is_kept_whole_around_gravity_and_transform`.
+- F-19 Learn masks lift once the battle is over. `MoveEnd` runs `AnyExpPayout` before `CheckBattleOver`
+  (bcp.c:3965-3969): the payout that ends the battle runs no later turn end (the Disable / Encore checks,
+  bcp.c:1565-1576, :1591-1602) and no move (the pinned slot's re-read, :1891-1895). `levelup.learn_options` and the
+  reference's `ref_learn_options` mask the disabled, encored and pinned slots only while `state.over == 0`; the
+  converter's `_learn_refusal` follows (it asks `learn_options`), and its unreachable D10 message is gone (an HM is
+  never fitted, D10 is refused first by `_check_learned`). The end-of-turn Disable and Encore checks end on a move no
+  longer known in both engines (`step._disable_check`, `_encore_check`). Spite, Grudge and Last Resort have no engine
+  reader (their moves are unsupported); Mimic's `_masked` slot takes a learned move into the shadow (`levelup.learn`).
+  Test: `test_learn.py::test_no_mask_once_the_battle_is_over`.
+- F-20 A stale Choice lock is cleared at the command selection. For every battler whose command is FIGHT and that
+  picks one (`Battler_CanPickCommand`, bcp.c:335; battle_lib.c:6224-6235), `BattleSystem_CheckInvalidMoves`
+  (bcp.c:433) clears `choiceLockedMove` when the Choice holder no longer knows it (battle_lib.c:2307-2310).
+  `step._clear_stale_choice_locks` (called from `_action_phase` on the fresh, unpaused state) and the reference's
+  `_ref_step` prologue do the same, so a move forgotten and learned again later does not revive the lock. Test:
+  `test_damage_items.py::test_a_choice_lock_the_holder_no_longer_knows_is_cleared_at_selection`.
+- F-21 Ether / Elixir on a Transform or Mimic copy. `BattleSystem_UseBagItem` tests and restores the party Pokemon's
+  PP (`Pokemon_GetValue` / `Pokemon_IncreaseValue`, battle_system.c:631-632, :646-648) and adds to the battler's PP
+  only for a slot that is not mimicked and a battler not transformed (:634-639, :651-654). `bag.use_bag_item` and the
+  reference's `_use_item` read a copied slot (`mimic_slots`, all four while transformed) from the shadow
+  (`shadow_moves`, `shadow_pp`) and restore `shadow_pp`; the battler's PP stays. Test:
+  `test_e1_batch_a.py::test_elixir_restores_the_party_pp_of_a_copied_slot`.
+- F-22 `gravity_rearm` is read from the ROM diff, not the game id. `tools/build_tables._gravity_rearm`: 1 when
+  sub_seq 238 (subscript_gravity_end) is among the members the ROM diff changed (`rom/changed_scripts.json`, written
+  by `tools.extract_rom` from both ROMs) and `data/kaizo/rom_diff.toml` classifies it `modelled` (its note decodes
+  the re-arm); a changed member classified otherwise stops the build; 0 when unchanged (vanilla). Values unchanged
+  (0 vanilla, 1 Kaizo). Test: `tests/tools/test_build_tables_game.py::
+  test_gravity_rearm_reads_sub_seq_238_from_the_rom_diff`.
+- F-23 ROM confirmations from the repo's ROM diff (`tools/rom/diff.py`, read from both ROMs by `tools.extract_rom`;
+  `data/intermediate_kaizo/rom/changed_code.json`, `data/kaizo/rom_diff.toml`): (1) `sMovesAffectedByGravity`
+  (battle_lib.c:3385-3392, overlay16) is unpatched: the changed overlay16 keys are only
+  BattleControllerPlayer_CheckObedience, _CheckMoveHitAccuracy, _CheckMoveHitOverrides,
+  BattleSystem_TriggerEffectOnSwitch and sTrainerClassPrizeMul (rom_diff.toml:549-578), so the ban stays by id
+  (Kaizo move 150 Hidden Power Water is not on it; `ids.GRAVITY_MOVES`, G-67). (2) The Kaizo AI scripts match
+  vanilla's but one word: `tr_ai_seq.narc` is unchanged (rom_diff.toml:583) and the overlay14 script data
+  `gTrainerAITable` differs only at 0x022249CC (script.s:78, Dry Skin for Levitate, rom_diff.toml:543-546); none of
+  the script.s lines the E1 trial cites (G-63..G-70: :29, :62, :68, :112, :288-295, :438-443, :472, :534-536,
+  :720-723, :766, :853-871, :940, :1026-1029, :1461-1474, :1516, :3633-3649, :4336-4340, :4373-4377, :4441,
+  :5331-5334, :6511) is :78.
+- F-24 Cite fixes (reviews of bb24193 + 9a9b63e, a968143): Transform's copy loop is battle_script.c:5346-5348
+  (5342-5345 is pointer setup), the switch-in checks rerun at bcp.c:3672-3673 and :3973 (the announce flags are
+  cleared at battle_script.c:5350-5358), Sand Veil / Snow Cloak bcp.c:2927-2933, the Gravity countdown
+  bcp.c:1227-1238, `BtlCmd_TryMimic` ends at :4524; fixed in outcome.py (`armored`, `_threshold_grid`), enumerate.py,
+  effects.py, ids.py, state.py, STATE.md, tools/effect_map.py (comment only) and this ledger. Tests owed by 9a9b63e,
+  in F-17's test: copied Drizzle (Thunder in rain, bcp.c:3025-3027), copied Unaware (bcp.c:2882-2884), the foe's own
+  No Guard (bcp.c:3016-3021) and Cloud Nine lost by its Transform; the future Gravity / Transform `loose` flag in
+  F-18's.
+- F-25 A foe that loses its own Cloud Nine / Air Lock by its Transform (found by F-24's test, silently wrong before):
+  `NO_CLOUD_NINE` (bcp.c:2915, :3023) counts the battlers' abilities as `damage.decomp_abilities` reads them, from the
+  species row and ability slot, which `BtlCmd_Transform` copies (battle_script.c:5346-5348, battle_mon.h:57-84). The
+  grid's Transform variant (`_threshold_grid`'s `point`) copied only `ability`, so the transformed foe still
+  suppressed the weather: in sun the player's Thunder kept 70 where the live check reads 50 (bcp.c:2915-2917), and the
+  rolls 51-70 were one class with the hits. The variant now also copies the side's `species`, `ability_form` and
+  `ability_slot` onto the foe. Test: the sun case in `test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_
+  thresholds` (law {1: 50, 51: 20, 0: 30}).
+- Open (not modelled; cites where stopped):
+  - Sleep Talk's sealed set after a faster foe that already imprisons Transforms (copies every move) or Mimics (one
+    slot): the call reads the foe's moves when it runs (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290), but
+    `enumerate.call_laws` offers `CALL_SEALED` only when no foe imprisons at the turn start (`can_seal`,
+    enumerate.py:3701-3706) and `_split_events` sees only an Imprison landing (`sealed_at_move`, step.py:903). Needs a
+    hypothetical state of the foe's moves after the copy and a step event of the sealed set at the action: not a
+    bounded change, left for the next batch.
+  - Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups against Roar: both map to
+    `AbilityId.UNSUPPORTED`, so coverage refuses every holder (`IMPLEMENTED_ABILITIES`, coverage.py:194, :743).
+    Vanilla holders: 4 personal rows with Effect Spore, 3 with Suction Cups (`species_abilities_decomp` 27, 21); no
+    Kaizo species has either (`data/intermediate_kaizo/rom/species.json`), so the Kaizo backlog does not undercount.
+  - `test_transform_laws.py`: `assert_equals_bruteforce` in its four tests, a copied Cute Charm with the kept-gender
+    rule (battle_script.c:5732-5735), `present_guard` with a copied Wonder Guard, Transform through an invoker: not
+    written in this batch.
+- For E2 (doubles; not changed here):
+  - `chatot_cry` is per party (state.py:747); `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads it per
+    battler in 2vs2 and for a tag battle's enemy battlers, per side (`battler & 1`) in other doubles. Check that the
+    party index gives that in every format.
+  - `outcome._threshold_grid`'s "one move has one effect" (one foe move between the turn start and the side's check)
+    holds with one foe only; with two foes both moves can land before the check (the D-steps).
