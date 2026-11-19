@@ -515,6 +515,53 @@ def test_me_first_counter_arithmetic():
     assert int(calc(idle, 0, True).me_first[0]) == 1  # 2 - 1 < 2: stays
     later = _CounterState(2, 1, 1)
     assert not bool(me_first_active(later, 0)) and int(calc(later, 0, True).me_first[0]) == 0
+    # A cleared flag keeps no turn number (equal states stay equal).
+    for st in (nxt, later):
+        cleared = calc(st, 0, True)
+        assert (int(cleared.me_first[0]), int(cleared.me_first_turn[0])) == (0, 0)
+
+
+def _not_boosted_next_turn(t, n, after, foe_move):
+    """The user's Rock Throw on the turn after ``after`` deals what it deals with no Me First
+    counter at all, and leaves both fields 0."""
+    bare = after._replace(
+        me_first=after.me_first.at[0].set(0), me_first_turn=after.me_first_turn.at[0].set(0)
+    )
+    acts = A("Rock Throw", foe_move, after, n)
+    out = assert_matches_reference(t, after, acts, _hits())
+    plain = assert_matches_reference(t, bare, acts, _hits())
+    assert int(out.hp[1, 0]) == int(plain.hp[1, 0])
+    assert (int(out.me_first[0]), int(out.me_first_turn[0])) == (0, 0)
+
+
+def test_me_first_counter_moves_when_the_copy_misses(tables, names):
+    """CalcDamage runs in the copied move's script (effect_script_0000.s:5-6), which BeforeMove
+    loads before TRY_MOVE (battle_controller_player.c:3214-3216), so before the accuracy roll and
+    CheckMoveHitOverrides (:3254-3270): a copied Rock Throw that misses still lowers the number
+    (battle_script.c:1356-1358), and the next turn's Rock Throw is not boosted (:1360-1363)."""
+    s = _me_first_fight(tables, names, "Rock Throw")
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = assert_matches_reference(tables, s, A("Me First", "Rock Throw", s, names), miss)
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # the copy missed
+    assert (int(out.me_first[0]), int(out.me_first_turn[0])) == (1, 0)
+    _not_boosted_next_turn(tables, names, out, "Growl")
+
+
+def test_me_first_counter_moves_against_protect_and_a_semi_invulnerable_foe(tables, names):
+    """With the counter set this turn (number 1 at turn 0, as a Me First leaves it), a Rock Throw
+    into a Protect or a foe underground (Dig) runs its CalcDamage before CheckMoveHitOverrides
+    stops it (bcp.c:3001-3014, :3034-3041): the number drops, and the next turn's hit is plain."""
+    from nuzline.engine.ids import SemiKind
+
+    for foe_move in ("Protect", "Dig"):
+        s = _me_first_fight(tables, names, foe_move, fast=False)
+        s = s._replace(me_first=s.me_first.at[0].set(1), me_first_turn=s.me_first_turn.at[0].set(1))
+        out = assert_matches_reference(tables, s, A("Rock Throw", foe_move, s, names), _hits())
+        assert int(out.hp[1, 0]) == int(s.hp[1, 0]), foe_move  # blocked
+        if foe_move == "Dig":
+            assert int(out.semi_invulnerable[1]) == SemiKind.UNDERGROUND
+        assert (int(out.me_first[0]), int(out.me_first_turn[0])) == (1, 0), foe_move
+        _not_boosted_next_turn(tables, names, out, foe_move)
 
 
 # --- #259 Trick Room (E3-2-4) -----------------------------------------------------------------
@@ -660,7 +707,7 @@ def test_skill_swap_ends_with_the_battler(tables, names):
 
 
 def test_skill_swap_fails_on_its_listed_conditions_and_goes_through_a_substitute(tables, names):
-    """subscript_exchange_abilities.s:5-13: a miss, a semi-invulnerable defender, a raw Wonder
+    """subscript_exchange_abilities.s:5-13: a semi-invulnerable defender, a raw Wonder
     Guard (:6-7) or Multitype (:8-9) ability of either battler, a held Griseous Orb of either
     (:10-11), both abilities none (:12-13): nothing swaps and ``truant`` stays. The user's none
     alone is fine, and no Substitute test (a Substitute does not stop it)."""
@@ -683,9 +730,11 @@ def test_skill_swap_fails_on_its_listed_conditions_and_goes_through_a_substitute
         out = assert_matches_reference(tables, case, acts, _hits())
         assert out.ability[:, 0].tolist() == case.ability[:, 0].tolist(), label
         assert out.truant.tolist() == case.truant.tolist(), label
+    # Accuracy 0: CheckMoveHitAccuracy returns before its roll (bcp.c:2901), so no
+    # MOVE_STATUS_MISSED arises and a failing roll class still swaps.
     miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
     out = assert_matches_reference(tables, base, acts, miss)
-    assert out.ability[:, 0].tolist() == base.ability[:, 0].tolist()
+    assert out.ability[:, 0].tolist() == base.ability[::-1, 0].tolist()
     arceus = make_state(
         tables,
         [_spec(names, "Monferno", 20, ("Skill Swap",))],
@@ -707,6 +756,39 @@ def test_skill_swap_fails_on_its_listed_conditions_and_goes_through_a_substitute
     assert (
         int(out.ability[0, 0]) == AbilityId.ROCK_HEAD and int(out.ability[1, 0]) == AbilityId.BLAZE
     )
+
+
+def test_skill_swap_hits_a_flying_foe_under_lock_on_or_no_guard(tables, names):
+    """:5 reads the move status MISSED | SEMI_INVULNERABLE, not the defender's bit:
+    CheckMoveHitOverrides returns for a Lock-On on the defender or either side's No Guard
+    (battle_controller_player.c:3016-3021) before it sets MOVE_STATUS_SEMI_INVULNERABLE
+    (:3034-3041), so a Skill Swap into a foe in the air swaps; without either it fails."""
+    from nuzline.engine.ids import SemiKind
+
+    def airborne(mine, foe, **over):
+        s = _ss(tables, names, mine, foe, foe_moves=("Fly",), **over)
+        # The user outspeeds the foe, and the foe's Fly cannot KO it (Attack 1).
+        return s._replace(
+            stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, 0].set(1),
+            semi_invulnerable=s.semi_invulnerable.at[1].set(SemiKind.AIRBORNE),
+            locked_move=s.locked_move.at[1].set(names.move("Fly")),
+        )
+
+    plain = airborne(AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+    cases = {
+        "no guard user": airborne(AbilityId.NO_GUARD, AbilityId.ROCK_HEAD),
+        "no guard foe": airborne(AbilityId.BLAZE, AbilityId.NO_GUARD),
+        "lock-on": plain._replace(
+            lock_on=plain.lock_on.at[1].set(2), lock_on_target=plain.lock_on_target.at[1].set(1)
+        ),
+    }
+    acts = A("Skill Swap", "Fly", plain, names)
+    for label, case in cases.items():
+        out = assert_matches_reference(tables, case, acts, _hits())
+        assert out.ability[:, 0].tolist() == case.ability[::-1, 0].tolist(), label
+        assert out.truant.tolist() == [1, 1], label
+    out = assert_matches_reference(tables, plain, acts, _hits())
+    assert out.ability[:, 0].tolist() == plain.ability[:, 0].tolist()
 
 
 def test_skill_swap_gives_the_new_truant_holder_a_fresh_parity(tables, names):

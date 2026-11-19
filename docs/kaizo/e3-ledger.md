@@ -174,8 +174,9 @@ Each is open; close it with its ruling.
 1. Kaizo Magic Coat on Disable (E3-1-3): Disable carries CAN_MAGIC_COAT in Kaizo
    (data/intermediate_kaizo/moves.json). Magic Coat is unmodelled engine-wide (batch 2), so a
    Disable aimed at a Magic Coat user is not reflected today. Model it with Magic Coat. Torment
-   (E3-2-1) and Worry Seed (E3-2-2) carry CAN_MAGIC_COAT as well (Torment in Kaizo only, Worry
-   Seed in both games).
+   (E3-2-1), Worry Seed (E3-2-2) and Gastro Acid (E3-2-6) carry CAN_MAGIC_COAT as well (Torment
+   in Kaizo only; Worry Seed and Gastro Acid in both games: res/moves/gastro_acid/data.json,
+   data/intermediate_kaizo/moves.json).
 2. Mirror Move's AI table reads the player's last move by id (script.s:1959, MOVE_THIEF) and
    Me First's `sCannotMeFirstMoves` compares by effect (lib.c:7233-7251), so in Kaizo every
    effect-85 move is uncopyable (sheet e241): both belong to their own groups (Mirror Move
@@ -207,6 +208,17 @@ Each is open; close it with its ruling.
    the whole mask) should count like Gastro Acid's; found while adding the Gastro Acid bit, not
    changed here (the same one-line change in the tuple, the reference's `_ingrain_anchors` and
    a Roar test).
+8. Skill Swap's Slow Start lines (E3-2-5): subscript_exchange_abilities.s:25-38 reset
+   `slowStartTurnNumber` to totalTurns + 1 and clear `slowStartAnnounced` / `slowStartFinished`
+   for a battler that receives Slow Start (ability 112). Not modelled: Slow Start is an
+   unsupported ability, so no battler holds it. Model these lines with the Slow Start group.
+
+Checked, no change (batch 1 gate round): Trace retries at every move end (battle_lib.c:3718-3737,
+`hooks.move_end_switch_in`), so with two Trace holders a Worry Seed or Skill Swap can make one
+Trace succeed mid-turn. The enumeration covers it: the side's later hit is unclassified by the
+foe's Worry Seed / Skill Swap / Gastro Acid as a whole (`enumerate` worry-seed, skill-swap and
+gastro-acid clauses: `foe_effect`, not the ability it writes), and the turn end keeps the speed tie
+and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swap (`swap_used`).
 
 ## 3. Rulings
 
@@ -312,7 +324,11 @@ Each is open; close it with its ruling.
   `damage.me_first_boost` after the crit, Life Orb and Metronome item and before the variance
   (battle_script.c:1346-1364) on every CalcDamage of that battler while `me_first_active`; the
   counter writes (number - 1 when equal to the order, clear at 2 or more above, :1356-1363) run in
-  `effects.play_hit` where a hit calculated damage (reference `_me_first_after_calc`). Enumeration:
+  `effects.play_hit` where a hit calculated damage (reference `_me_first_after_calc`): hit 0 once
+  the script ran (`script_calc`: acted, a target, not failed, not charging; BeforeMove loads the
+  script before TryMove, bcp.c:3214-3216, so CalcDamage runs before the accuracy roll, Protect and
+  the semi-invulnerable test, :3254-3270), a later hit when it lands. A cleared `me_first` leaves
+  `me_first_turn` 0 (gate round). Enumeration:
   a Me First hit is never a damage class (the boost is not in the turn-start table); its calls
   are Copycat's two orders. Me First's own defender is its target (RANGE_SINGLE_TARGET_ME_FIRST),
   so it needs a living foe, unlike the self-targeting invokers. AI: Expert_MeFirst
@@ -340,7 +356,9 @@ Each is open; close it with its ruling.
   tests/ai/test_kaizo_policy.py, tests/engine/test_coverage.py `test_area_trick_room_is_modelled`.
 - E3-2-5 Skill Swap (#191): new `EffectId.SKILL_SWAP` (effect 191; no manifest bump: no array or
   key changed). `effects._skill_swap` (effect_script_0191.s:5; subscript_exchange_abilities.s):
-  fails on a miss or semi-invulnerable defender (:5), a raw Wonder Guard (:6-7) or Multitype
+  fails on MOVE_STATUS_MISSED | SEMI_INVULNERABLE (:5, the move status: Lock-On / Mind Reader
+  or either side's No Guard return before the semi test, bcp.c:3016-3021, so the swap goes
+  through; `h.landed` alone, gate round), a raw Wonder Guard (:6-7) or Multitype
   (:8-9) ability of either (`decomp_abilities`, so a written ability counts), a held Griseous Orb
   of either (:10-11, raw `state.item`), both abilities ABILITY_NONE (:12-13; the user's alone is
   fine); no Substitute test (it goes through one). Else `truant` of both = `turn & 1` (:17-20),

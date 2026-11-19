@@ -1741,10 +1741,13 @@ def _gastro_acid(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Skill Swap (effect_script_0191.s:5, a direct ``CHECK_HP | TO_DEFENDER``
-    ``subscript_exchange_abilities.s``; no ``CAN_PROTECT`` bit, so its ``Protect`` and
-    ``Substitute`` handling is the subscript's own: none for a Substitute, a Protect is a miss).
+    ``subscript_exchange_abilities.s``; ``MOVE_FLAG_CAN_PROTECT`` is set
+    (res/moves/skill_swap/data.json), so a Protect stops it; the subscript has no Substitute test).
     The script runs for a living defender (battle_lib.c:1492-1507); it fails (:5-13,
-    MOVE_STATUS_FAILED) on a miss or a semi-invulnerable defender (:5), on a raw Wonder Guard (:6-7)
+    MOVE_STATUS_FAILED) on ``MOVE_STATUS_MISSED | MOVE_STATUS_SEMI_INVULNERABLE`` (:5: the move
+    status, not the defender's bit, so Lock-On / Mind Reader or either side's No Guard, which
+    return before the semi-invulnerable test in CheckMoveHitOverrides, bcp.c:3016-3021, still
+    swap: ``h.landed``), on a raw Wonder Guard (:6-7)
     or Multitype (:8-9) ability of either battler, on a held Griseous Orb of either (:10-11), and
     when both abilities are ABILITY_NONE (:12-13; the user's alone is fine). Every test reads the
     raw ``BattleMon.ability`` / ``heldItem`` (``decomp_abilities``, ``state.item``), so a Gastro
@@ -1768,7 +1771,6 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         (h.effect == _E.SKILL_SWAP)
         & h.landed
         & _alive(state, foe, target)
-        & (state.semi_invulnerable[foe] == 0)
         & ~jnp.isin(mine, banned)
         & ~jnp.isin(theirs, banned)
         & (state.item[pu, user] != ITEM_GRISEOUS_ORB)
@@ -3294,6 +3296,7 @@ def play_hit(
     foe_enduring=False,
     in_power=0,
     gift=0,
+    script_calc=False,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -3342,6 +3345,11 @@ def play_hit(
     takes the substitute down only when it breaks (``substituteHP <= damage``) and otherwise
     leaves its HP as it was (no ``UpdateMonData`` on that path), sets no flag and skips the
     on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158).
+
+    ``script_calc``: the move's script ran for hit 0 (``step._use_move``: the user acted, had a
+    target, its script did not fail and it is not charging), so its CalcDamage ran before TryMove's
+    accuracy roll and CheckMoveHitOverrides (bcp.c:3214-3216, :3254-3270): the Me First counter
+    update (battle_script.c:1356-1363) happens on a miss, a Protect or a semi-invulnerable foe too.
     """
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
@@ -3384,10 +3392,11 @@ def play_hit(
         # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
         gift=gift,
     )
-    # CalcDamage ran for this hit (a landed hit of a move with a rolled table damage): the Me First
-    # counter update of the same script command (battle_script.c:1356-1363, E3-2-3).
+    # CalcDamage ran for this hit (a move with a rolled table damage whose script ran: hit 0 hit or
+    # miss, ``script_calc``; a later hit when it lands): the Me First counter update of the same
+    # script command (battle_script.c:1356-1363, E3-2-3).
     calc = (
-        landed
+        (landed | ((jnp.asarray(hit_index) == 0) & jnp.asarray(script_calc, bool)))
         & (tables.move_category[move] != STATUS)
         & (tables.move_power[move] != 0)
         & ~jnp.isin(tables.move_effect[move], jnp.asarray(UNROLLED_EFFECTS, _I32))

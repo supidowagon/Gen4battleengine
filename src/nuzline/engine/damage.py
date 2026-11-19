@@ -1295,14 +1295,15 @@ def me_first_boost(state: BattleState, atk_side, damage) -> jnp.ndarray:
 def me_first_after_calc(state: BattleState, atk_side, cond) -> BattleState:
     """The state change of the same CalcDamage (:1356-1363) where ``cond``: the stored turn number
     drops by 1 when it equals the order, and ``meFirst`` clears once the order is 2 or more above
-    it (E3-2-3)."""
+    it (E3-2-3). A cleared flag keeps no turn number (nothing reads it then; equal states stay
+    equal): ``me_first_turn`` is 0 whenever ``me_first`` is."""
     atk_side = _i32(atk_side)
     order = _i32(state.turn) + 1
     number = _i32(state.me_first_turn[atk_side])
     lowered = jnp.where(order == number, number - 1, number)
     on = jnp.asarray(cond) & (state.me_first[atk_side] != 0)
-    number_after = jnp.where(on, lowered, number)
     clear = on & (order - lowered >= 2)
+    number_after = jnp.where(clear, 0, jnp.where(on, lowered, number))
     return state._replace(
         me_first=state.me_first.at[atk_side].set(
             jnp.where(clear, 0, state.me_first[atk_side]).astype(state.me_first.dtype)

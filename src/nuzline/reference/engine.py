@@ -1622,13 +1622,14 @@ def _me_first_boost(s: RefState, side: int, damage: int) -> int:
 
 def _me_first_after_calc(s: RefState, side: int) -> None:
     """The counter writes of one CalcDamage (battle_script.c:1356-1363): the number drops by 1 when
-    it equals the order; ``meFirst`` clears once the order is 2 or more above it."""
+    it equals the order; ``meFirst`` clears once the order is 2 or more above it, and then keeps
+    no turn number (``me_first_turn`` is 0 whenever ``me_first`` is)."""
     sd = s.battlers[side]
     if not sd.me_first:
         return
     sd.me_first_turn = _me_first_number(s, side)
     if s.turn + 1 - sd.me_first_turn >= 2:
-        sd.me_first = 0
+        sd.me_first = sd.me_first_turn = 0
 
 
 def _move_damage(
@@ -3390,7 +3391,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         ):
             s.battlers[target].ability_suppressed = 1
     elif effect == EffectId.SKILL_SWAP and landed:
-        # subscript_exchange_abilities.s:5-24 (E3-2-5): fails on a semi-invulnerable defender (:5),
+        # subscript_exchange_abilities.s:5-24 (E3-2-5): fails on a miss or a semi-invulnerable miss
+        # (:5, the move status: Lock-On / No Guard skip it, bcp.c:3016-3021, so ``landed`` covers it),
         # a raw Wonder Guard (:6-7) or Multitype (:8-9) ability of either, a held Griseous Orb of
         # either (:10-11), or both abilities ABILITY_NONE (:12-13); else both truant parities become
         # totalTurns & 1 (:17-20) and the BattleMon abilities swap (:21-24); the AI tags both
@@ -3401,7 +3403,6 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         banned = (ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD], ABILITY_MULTITYPE)
         if (
             foe_mon.hp
-            and not s.battlers[target].semi_invulnerable
             and mine not in banned
             and theirs not in banned
             and ITEM_GRISEOUS_ORB not in (mon.item, foe_mon.item)
@@ -4903,6 +4904,16 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if effect == EffectId.SELF_DESTRUCT:
         mon.hp = 0
         turn.fainted.append((side, s.battlers[side].active))
+    # The script ran (BeforeMove loads it, then TRY_MOVE, bcp.c:3214-3216): its CalcDamage, before
+    # TryMove's accuracy roll and CheckMoveHitOverrides (:3254-3270), updates the Me First counter
+    # (battle_script.c:1356-1363) for hit 0 hit or miss, Protect or a semi-invulnerable foe (E3-2-3).
+    # ``_hit`` repeats it for each hit; the update leaves a second call this turn unchanged.
+    if (
+        _t(tables, "move_category", move) != STATUS_CLASS
+        and _t(tables, "move_power", move) != 0
+        and effect not in UNROLLED_EFFECTS
+    ):
+        _me_first_after_calc(s, side)
     # CheckMoveHitAccuracy (bcp.c:2865): accuracy 0 never misses; a multi-hit move
     # checks only its first hit (SYSCTL_MULTI_HIT_MOVE). The hit rate is computed here,
     # from the stages of this moment; o.hit[side][0] is the class of the roll

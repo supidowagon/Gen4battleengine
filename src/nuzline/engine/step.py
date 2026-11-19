@@ -1892,6 +1892,8 @@ def _use_move(
     # A loop, not unrolled: one copy of the effect code in the program, not MAX_HITS
     # (unrolled, it dominated trace and compile time). It also counts the hits that
     # landed ("Hit N times", battle_controller_player.c:3777-3812) and their crits.
+    script_calc = head_on & can_act & has_target & ~failed & ~charging
+
     def one_hit(hit_index, carry):
         state, hits, crits, contact, thaw, dealt, armed, struck, shell, barbed, record = carry[:11]
         # sub_hit: the defender's SELF_TURN_FLAG_SUBSTITUTE_HIT, set by an earlier hit of this
@@ -1962,6 +1964,9 @@ def _use_move(
             foe_enduring=foe_enduring,
             in_power=in_power,
             gift=gift_removed,
+            # The script ran (its CalcDamage before TryMove's checks, bcp.c:3214-3216): Me First's
+            # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
+            script_calc=script_calc,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
