@@ -11,11 +11,19 @@
 # (state R) at once, CPU-s (user + sys), wall s, CPU-s / wall, peak RSS MB and rc; then the verdict
 # THREADS=<eigen|taskset|none> into out/threads_probe.env and /work/_threads.env (the pod's default
 # for later runs, THREADS=auto in unit.sh): the first of eigen, taskset whose rc is 0, whose most
-# running threads are at most 4 and whose CPU-s are at most 5% above none's; else none.
+# running threads are at most 4, whose CPU-s are at most 5% above none's and whose equality run
+# passed; else none.
+# Equality run: the threading settings can change XLA's float summation order, and the player tests
+# assert exact float equality (tests/search/test_player_eval.py, test_player_learn.py). The files of
+# THREAD_PROBE_EQ (default those two and tests/search/test_player.py) run under -m "not slow"
+# (fullset included) once per setting, the three at once, each with its own empty caches; a
+# setting whose run fails is never the verdict, and a failure under none (the files themselves
+# fail) leaves the verdict at none. Lines "eq <setting> rc <rc> <pytest summary>".
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/meta.env"; R="$D/repo"; PB="$D/probe"
 export PATH="/root/.local/bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 read -r -a ids <<< "${THREAD_PROBE_IDS:-tests/engine/test_step_basic.py}"
+read -r -a eqids <<< "${THREAD_PROBE_EQ:-tests/search/test_player_eval.py tests/search/test_player_learn.py tests/search/test_player.py}"
 NC=$(nproc); K=$(( NC / ${MAXP:-10} )); [ "$K" -ge 1 ] || K=1
 rm -rf "$PB"; mkdir -p "$PB"
 # sample <pgid> <file>: one line per second, "<threads alive> <threads running>" over the group.
@@ -26,7 +34,7 @@ sample() { local g="$1" f="$2" p a r st
         [ "$(sed 's/^.*) //' "$st" 2>/dev/null | cut -c1)" = R ] && r=$((r + 1)); done; done
     echo "$a $r" >> "$f"; sleep 1; done; }
 run() { local c="$1"; shift; local P="$PB/$c"; mkdir -p "$P/cache"; : > "$P/samples"
-  ( cd "$R" && export NUZLINE_CACHE_DIR="$P/cache" && "$@" setsid /usr/bin/time -v -o "$P/time" \
+  ( cd "$R" && export NUZLINE_CACHE_DIR="$P/cache" NUZLINE_TEST_COMPILE_CACHE="$P/cache/jax-tests" && "$@" setsid /usr/bin/time -v -o "$P/time" \
       uv run --frozen pytest -m "not slow" -q -p no:cacheprovider "${ids[@]}" \
       > "$P/log" 2>&1; echo $? > "$P/rc" ) &
   local w=$! g=""; for _ in $(seq 1 50); do g=$(pgrep -n -f "^/usr/bin/time -v -o $P/time" || true); [ -n "$g" ] && break; sleep 0.2; done
@@ -40,13 +48,21 @@ run() { local c="$1"; shift; local P="$PB/$c"; mkdir -p "$P/cache"; : > "$P/samp
          printf "%s %d %d %.1f %.0f %.0f %.2f %d %s\n", c, a, r, (n ? s / n : 0), cpu, w, (w ? cpu / w : 0), rss, rc}' "$P/samples"; }
 { echo "# threads_probe: ${ids[*]}; mark not slow; $NC cores, taskset slice $K; other pytest processes on the pod at start: $(pgrep -c -f 'pytest' || true)"
   echo "setting threads_max running_max running_mean cpu_s wall_s cores rss_MB rc"
+  EIGEN=(env XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_cpu_multi_thread_eigen=false" OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1)
+  TASKSET=(taskset -c "0-$((K - 1))")
   run none env
-  run eigen env XLA_FLAGS="${XLA_FLAGS:+$XLA_FLAGS }--xla_cpu_multi_thread_eigen=false" OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-  run taskset taskset -c "0-$((K - 1))"
+  run eigen "${EIGEN[@]}"
+  run taskset "${TASKSET[@]}"
+  echo "# equality run: ${eqids[*]}; mark not slow"
+  eq() { local c="$1"; shift; local P="$PB/eq_$c"; mkdir -p "$P/cache"
+    ( cd "$R" && export NUZLINE_CACHE_DIR="$P/cache" NUZLINE_TEST_COMPILE_CACHE="$P/cache/jax-tests" && "$@"         uv run --frozen pytest -m "not slow" -q -p no:cacheprovider "${eqids[@]}" > "$P/log" 2>&1; echo $? > "$P/rc" ) & }
+  eq none env; eq eigen "${EIGEN[@]}"; eq taskset "${TASKSET[@]}"; wait
+  for c in none eigen taskset; do
+    echo "eq $c rc $(cat "$PB/eq_$c/rc") $(grep -E ' in [0-9.]+s' "$PB/eq_$c/log" | tail -1)"; done
 } > "$O/threads_probe.txt"
-V=$(awk 'NR > 2 {c[$1] = $5; r[$1] = $3; rc[$1] = $9}
+V=$(awk '$1 == "eq" {eq[$2] = $4; next} NF == 9 && $1 ~ /^(none|eigen|taskset)$/ {c[$1] = $5; r[$1] = $3; rc[$1] = $9}
   END {v = "none"; split("eigen taskset", o, " ");
-       for (i = 1; i <= 2; i++) {s = o[i]; if (rc[s] == "0" && rc["none"] == "0" && r[s] <= 4 && c[s] <= c["none"] * 1.05) {v = s; break}}
+       for (i = 1; i <= 2; i++) {s = o[i]; if (rc[s] == "0" && rc["none"] == "0" && eq[s] == "0" && eq["none"] == "0" && r[s] <= 4 && c[s] <= c["none"] * 1.05) {v = s; break}}
        print v}' "$O/threads_probe.txt")
 echo "THREADS=$V" | tee "$O/threads_probe.env" > /work/_threads.env
 echo "verdict THREADS=$V" >> "$O/threads_probe.txt"
