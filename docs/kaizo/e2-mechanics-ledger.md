@@ -521,6 +521,13 @@ Each is open; close it with its ruling.
     :7357-7374); refused at run time (acid_rain) in every format; owed: FCM.md (E1). Field
     conditions as the decomp mask (FCM.md section 4); then rule 8 is a subtraction and the
     refusal goes.
+20. A called move that finds no defender: BtlCmd_GoToMoveScript writes
+    `ATTACKER_ACTION[BATTLE_ACTION_CHOOSE_TARGET] = battleCtx->defender` (battle_script.c:2123)
+    before its BATTLER_NONE check (:2126), so the stored target becomes BATTLER_NONE (0xFF,
+    include/constants/battle.h:99). Both engines skip that write when the call finds none
+    (step.py `write = ... & (called_def != NO_DEFENDER)`; reference `_call_defender` returns
+    before `chosen_target = called`), in singles too. Owed: D3-5, else an SF2 follow-up: write
+    the no-target value into `chosen_target` and every reader of it (lock, Encore) handles it.
 
 ### Closes with its mechanic
 
