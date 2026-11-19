@@ -216,8 +216,9 @@ Group A status and decisions (commits 1-5):
     from it through the battler's party, and `_resume` maps a paused faint back to the party's
     battler whose active it is (`_fainted_battler`; singles: battler k).
   - reference/engine.py: Mud Sport / Water Sport read every battler
-    (`BattleSystem_AnyBattlersWithMoveEffect`, battle_lib.c:6812); `_faint_check`'s payout and
-    death branches test `side_of(b)`; `_Turn` takes `battler_count` and sizes its per-battler
+    (`BattleSystem_AnyBattlersWithMoveEffect`, battle_lib.c:6812); `_faint_check`'s payout branch
+    tests `side_of(b)`; its death and `player_faints` branch tests the battler's party
+    (`_party(fmt, b) == 0`, as step.py counts `fainted[0]`); `_Turn` takes `battler_count` and sizes its per-battler
     lists; the turn's items and the roosting clears are B long.
   - state.py: the field comments give [P] / [B] / [S] shapes; `initial_arrays` rejects two
     battlers of one party leading from one slot.
