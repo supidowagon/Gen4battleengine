@@ -29,7 +29,14 @@ TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
 # any test compiles. Keyed by the jax and jaxlib versions only (``jax_version``): JAX keys
 # each entry by the compiled program, so a commit keeps every program it leaves unchanged.
 # Other versions' directories are deleted, and the oldest entries past 20 GB.
-_COMPILE_CACHE = cache_root() / "jax-tests" / jax_version()
+# $NUZLINE_TEST_COMPILE_CACHE moves this cache alone (the folder that holds the <jax_version()>
+# folders; the pod sets a pod-wide one, tools/ops/day/pod/unit.sh) and keeps every other cache
+# under cache_root(). Outside cache_root() prune_other_versions does nothing, so a run on a jax
+# bump never deletes the folder of a run on the other version that shares the pod.
+_SHARED_COMPILE_CACHE = os.environ.get("NUZLINE_TEST_COMPILE_CACHE")
+_COMPILE_CACHE = (
+    Path(_SHARED_COMPILE_CACHE) if _SHARED_COMPILE_CACHE else cache_root() / "jax-tests"
+) / jax_version()
 prune_other_versions(_COMPILE_CACHE)
 cap_directory(_COMPILE_CACHE, 20 * 2**30)
 set_compile_cache_dir(_COMPILE_CACHE)

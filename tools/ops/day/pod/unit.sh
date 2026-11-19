@@ -4,9 +4,11 @@
 # without a -m filter, its files in out/warmup/ (not a unit: agg.sh reports it apart and never
 # counts its tests); runner.sh runs it before the first unit to fill the compile cache.
 # Env: DUR (pytest --durations, default 40); MARK comes from meta.env (pack.sh).
-# NUZLINE_CACHE_DIR (default /work/_jaxcache) is pod-wide: every unit of every run on the pod
-# shares it. tests/conftest.py keeps XLA's compile cache in <it>/jax-tests/<jax version>, whose
-# entries JAX keys by program, so a later run (same or other commit) loads every unchanged program.
+# NUZLINE_TEST_COMPILE_CACHE (default /work/_jaxcache/jax-tests) is pod-wide: tests/conftest.py
+# keeps XLA's compile cache in <it>/<16-hex hash of the jax and jaxlib versions>, whose entries JAX
+# keys by program, so a later run (same or other commit) loads every unchanged program. Every other
+# cache (cache_root(): the trace exports, the CLI's jax/ folders, each pruned to one code version)
+# stays in this run's repo/.cache, so runs of other commits never prune each other's.
 # Threads: threads.env (setup.sh) holds THREADS=none|eigen|taskset. eigen appends
 # --xla_cpu_multi_thread_eigen=false to XLA_FLAGS and sets OMP/MKL/OPENBLAS_NUM_THREADS=1;
 # taskset pins the process to a free slot of cores/MAXP cores (pod-wide flock on /work/_slots/<i>;
@@ -14,7 +16,7 @@
 # pod keeps the cache warm. Every 5 s the process group's threads, alive and running (state R),
 # go to <unit>.thr.
 export PATH="/root/.local/bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
-export NUZLINE_CACHE_DIR="${NUZLINE_CACHE_DIR:-/work/_jaxcache}"
+export NUZLINE_TEST_COMPILE_CACHE="${NUZLINE_TEST_COMPILE_CACHE:-/work/_jaxcache/jax-tests}"
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/meta.env"; cd "$D/repo"
 if [ "$1" = --warmup ]; then mkdir -p "$O/warmup"; P="$O/warmup/warmup"; args=("$2"); ma=()
 else u="$1"; P="$O/$u"; mapfile -t args < "$O/$u.ids"
