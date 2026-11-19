@@ -562,6 +562,12 @@ class EffectId(IntEnum):
     # unless the move missed, the defender is semi-invulnerable, has Wonder Guard, Multitype or no
     # ability, or the user has Multitype (``effects._role_play``); no random draw; E3-B2-5.
     ROLE_PLAY = 134
+    # Magic Coat (183, BATTLE_EFFECT_APPLY_MAGIC_COAT): zeros. effect_script_0183.s:5 TrySetMagicCoat
+    # (battle_script.c:6459-6478) fails (MOVE_STATUS_FAILED) when no other battler's action is
+    # pending, else ``BattleState.magic_coat`` = 1 + the user's move slot; the next move with
+    # ``MoveFlag.MAGIC_COAT`` aimed at the user is reflected (``step._use_move``,
+    # ``step._execute_actions``' reflect phase); no random draw; E3-B2-6.
+    MAGIC_COAT = 135
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1379,6 +1385,10 @@ class MoveFlag(IntFlag):
     # as the defender's ``moveCopied`` (battle_controller_player.c:4480-4486), which Mirror Move
     # copies (E3-B2-2).
     MIRROR_MOVE = 8388608
+    # MOVE_FLAG_CAN_MAGIC_COAT (generated move flags): a move with it aimed at a battler whose
+    # ``turnFlags.magicCoat`` is set is reflected by BattleControllerPlayer_MoveStolen
+    # (battle_controller_player.c:3064-3070), E3-B2-6.
+    MAGIC_COAT = 16777216
 
 
 class SemiKind(IntEnum):

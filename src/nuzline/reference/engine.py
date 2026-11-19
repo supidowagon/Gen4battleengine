@@ -316,6 +316,9 @@ class _Turn:
     # (the move's power): its CalcCrit / CalcDamage read the item as still held, E3-B2-1.
     fling: int = 0
     fling_power: int = 0
+    # The action's move was reflected by Magic Coat (E3-B2-6): SYSCTL_REUSE_LAST_MOVE, so no moveHit,
+    # moveCopied or conversion2 write (bcp.c:3077, :4481, :4498, :4509).
+    reflected: bool = False
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -1901,6 +1904,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "water_sport",
         "move_hit",
         "move_copied",  # moveCopied of the holder (lib.c:2125-2129), E3-B2-2
+        "magic_coat",  # turnFlags.magicCoat, cleared at the faint (lib.c:2190-2193), E3-B2-6
         "conv2_move",  # conversion2Move / Battler / Type (lib.c:2131-2133, :2209-2211), E3-B2-3
         "conv2_battler",
         "conv2_type",
@@ -3659,6 +3663,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
             if 0 in (side, target):
                 _know_ability(s, s.battlers[0].active)
+    elif effect == EffectId.MAGIC_COAT and landed and not target_moved:
+        # TrySetMagicCoat (battle_script.c:6459-6478), E3-B2-6: 1 + the user's moveSlot.
+        s.battlers[side].magic_coat = 1 + turn.move_slot
     elif effect == EffectId.ROLE_PLAY and landed:
         # subscript_copy_ability.s:5-15 (E3-B2-5): fails on a miss or a semi-invulnerable miss (:5,
         # ``landed`` covers it), the defender's raw Wonder Guard (:6), Multitype (:7) or no ability
@@ -4860,7 +4867,8 @@ def _pp_cost(tables, s: RefState, side: int, defender: int | None, move: int) ->
 
 
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
-           struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
+           struggling: bool, locked: bool, target_moved: bool,
+           reflect_pass: bool = False) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
     for ``side``'s active Pokemon; ``target`` is the battler whose speed the action's sort
     compared (monSpeedValues, Gyro Ball). Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
@@ -4885,27 +4893,34 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and not _curse_on_user(tables, move, _ghost(s, side))
         and (_active(s, _foe(side)).hp > 0 or target_range == MoveTarget.RANGE_OPPONENT_SIDE)
     )
-    # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
-    # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
-    turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
-    if turn.custap[side]:
-        turn.custap[side] = False
-        _remove_item(s, side)
-    s.battlers[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
-    # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
-    # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
-    s.battlers[side].last_move = 0
-    unleash = s.battlers[side].bide_turns == 1  # this check brings the Bide counter to 0
-    turn.bide_ended = unleash
-    disruption = _status_disrupted(turn, s, side, move)
-    if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
-        return None
-    if disruption == DISRUPTED:  # no attack message: moveHit = MOVE_NONE
-        return 0 if foe_defender else None
-    # From here every path prints the attack message (subscript_no_pp.s,
-    # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
-    record = move if foe_defender else None
-    turn.attack_message = True
+    # E3-B2-6, the holder's pass of a reflected move (``reflect_pass``: Magic Coat's user runs the
+    # mover's move on the mover): BeforeMove resumes at CHECK_STOLEN (bcp.c:3196-3200), so none of
+    # the checks before it run again and the attack message of the first pass stands.
+    if reflect_pass:
+        unleash, record = False, None
+        turn.bide_ended = False
+    else:
+        # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
+        # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
+        turn.claw[side] = False  # subscript_check_quick_claw.s:22-23 (B10-6)
+        if turn.custap[side]:
+            turn.custap[side] = False
+            _remove_item(s, side)
+        s.battlers[side].destiny_bond = 0  # CHECK_STATUS_START (bcp.c:2425)
+        # UpdateMoveBuffers (bcp.c:3945-3949), reached on every path of a battler that acts:
+        # movePrevByBattler is MOVE_NONE unless the move succeeded (below).
+        s.battlers[side].last_move = 0
+        unleash = s.battlers[side].bide_turns == 1  # this check brings the Bide counter to 0
+        turn.bide_ended = unleash
+        disruption = _status_disrupted(turn, s, side, move)
+        if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
+            return None
+        if disruption == DISRUPTED:  # no attack message: moveHit = MOVE_NONE
+            return 0 if foe_defender else None
+        # From here every path prints the attack message (subscript_no_pp.s,
+        # subscript_no_target.s, subscript_missed.s, the move script): moveHit = the move.
+        record = move if foe_defender else None
+        turn.attack_message = True
     # BattleControllerPlayer_DecrementPP (bcp.c:2235): PP from the move's slot;
     # none left fails the move (MOVE_STATUS_NO_PP). Struggle spends none, nor does a
     # battler that was locked at command selection (ppDecremented, bcp.c:335). The cost is
@@ -4921,7 +4936,18 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and not _defender_always(tables, move, _ghost(s, side))
         and _active(s, _foe(side)).hp == 0
     )
-    if not no_target0:
+    # BeforeMove's CHECK_STOLEN (bcp.c:3064-3085, E3-B2-6): the foe's Magic Coat against a move with
+    # MOVE_FLAG_CAN_MAGIC_COAT reflects it once the PP is spent and a target exists; the first
+    # pass returns there, before BeforeMove's end (bcp.c:3221: the Metronome count is the holder's
+    # pass's).
+    reflect = (
+        not reflect_pass
+        and bool(s.battlers[_foe(side)].magic_coat)
+        and bool(_t(tables, "move_flags", move) & MoveFlag.MAGIC_COAT)
+        and not no_target0
+        and (struggling or locked or mon.pp[action] != 0)
+    )
+    if not no_target0 and not reflect:
         _metronome_update(tables, s, side, move)
         turn.met_reached = True
     if not struggling and not locked:
@@ -4965,7 +4991,24 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
-    s.battlers[side].last_move = move
+    if not reflect_pass:
+        s.battlers[side].last_move = move
+    if reflect:
+        # The flag goes (:3071); moveProtect = 0 and movePrevByBattler = movePrev = moveTemp are the
+        # ordinary writes (_actions); REUSE_LAST_MOVE (:3077) is ``turn.reflected``; and
+        # BattleSystem_DecPPForPressure(attacker = the holder, defender = the mover) (:3083,
+        # lib.c:7390-7397) takes one PP from the holder's moveSlot while the MOVER has Pressure.
+        holder = _foe(side)
+        coat = s.battlers[holder].magic_coat
+        holder_mon = _active(s, holder)
+        if _ability(s, mon) == AbilityId.PRESSURE and holder_mon.pp[coat - 1] > 0:
+            holder_mon.pp[coat - 1] -= 1
+        s.battlers[holder].magic_coat = 0
+        turn.reflected = True
+        shown = turn.attack_message
+        _fight(turn, s, holder, side, 0, move, False, True, False, reflect_pass=True)
+        turn.attack_message = shown  # the first pass showed it; a failure in the second skips none
+        return None
     if nature_power:
         # effect_script_0173.s: GetTerrainMove, then GoToMoveScript (script.c:2111-2134):
         # moveCur is the called move from here on, and the defender is re-picked for it
@@ -5515,6 +5558,9 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, _foe(side), target_moved)
         )
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, _foe(side))[0])
+        # BtlCmd_TrySetMagicCoat (effect_script_0183.s:5, :10-12): no other action pending
+        # (waitingBattlers == 1, the user acts last), MOVE_STATUS_FAILED, E3-B2-6.
+        full = full or (effect == EffectId.MAGIC_COAT and target_moved)
         full = full or (
             effect == EffectId.CURSE
             and _ghost(s, side)
@@ -6738,6 +6784,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                     esd.encore_move = esd.encore_slot = esd.encore_turns = 0
             turn.move_cur = move
             turn.shell_dealt = 0
+            turn.reflected = False
             # A foe that roosted this turn: the move's chart skips its Flying rows
             # (lib.c:2540-2543); only the chart reads the target's types for Flying.
             foe = _active(s, _foe(side))
@@ -6780,14 +6827,14 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # UpdateFlagsWhenHit / UpdateMoveBuffers: the Choice lock (the foe is the defender
             # exactly when _fight returns its moveHit record); a Baton Pass that succeeded
             # (moveTemp, bcp.c:3928) never locks.
-            defender = _foe(side) if record is not None else None
+            defender = _foe(side) if record is not None or turn.reflected else None
             exempt = move == MOVE_BATON_PASS and turn.attack_message
             _update_choice_lock(turn, s, side, defender, move, exempt)
             # UpdateMoveBuffers (bcp.c:3936-3942) / UpdateFlagsWhenHit (:4499-4508): the
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
-            copied = _copied_writes(tables, turn, move, record)
-            conv2 = _conv2_writes(tables, s, turn, side, move, record)
+            copied = (0, 0) if turn.reflected else _copied_writes(tables, turn, move, record)
+            conv2 = None if turn.reflected else _conv2_writes(tables, s, turn, side, move, record)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
@@ -6880,6 +6927,7 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     # battler (lib.c:2240-2243).
     for b, sd in enumerate(s.battlers):
         sd.flinched = 0
+        sd.magic_coat = 0  # turnFlags.magicCoat (E3-B2-6)
         if _party_of(s, b).mons[sd.active].status == Status.SLEEP:
             _unlock(sd)
     s.turn += 1

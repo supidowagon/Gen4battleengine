@@ -450,6 +450,9 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.MIRROR_MOVE,  # an invoker (E3-B2-2): the copied move's own effect decides
     EffectId.CONVERSION_2,  # writes the user's types, no stage (E3-B2-3)
     EffectId.SPITE,  # writes the target's PP, no stage (E3-B2-4)
+    # sets a flag on its user, no stage; the move it reflects is read as the holder's own
+    # (order.used_moves, E3-B2-6)
+    EffectId.MAGIC_COAT,
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,

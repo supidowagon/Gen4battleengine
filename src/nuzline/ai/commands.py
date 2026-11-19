@@ -462,6 +462,7 @@ class BattleEffect(IntEnum):
     # E3 batch 2 (E3-B2-2).
     COPY_MOVE = 9  # Mirror Move: Expert_MirrorMove (:1632); Risky :6539; no Basic entry
     COPY_ABILITY = 178  # Role Play: Expert_ChangeUserAbility (:1733); no Basic entry
+    APPLY_MAGIC_COAT = 183  # Magic Coat: Expert_MagicCoat (:1736); no Basic entry (E3-B2-6)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a

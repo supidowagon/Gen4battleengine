@@ -290,7 +290,10 @@ _VOLATILE, _BATON_PASSED = VOLATILE_FIELDS, BATON_PASSED_FIELDS
 # ``_use_move``'s ``mode`` (E2 batch 6): the action from its start; its tail after the U-turn
 # user survived the Pursuit of subscript_attack_then_switch_out.s:54 (or died to it); the tail
 # after the party list, on the newcomer (``step``'s resume).
-MODE_FULL, MODE_PURSUIT, MODE_RESUME = 0, 1, 2
+# MODE_REFLECT (E3-B2-6): the Magic Coat user's own pass of the move it reflected
+# (_execute_actions' reflect phase): the mover's move script run with the holder as attacker and
+# the mover as defender, none of BeforeMove's checks (bcp.c:3196-3200 resumes at CHECK_STOLEN).
+MODE_FULL, MODE_PURSUIT, MODE_RESUME, MODE_REFLECT = 0, 1, 2, 3
 
 # BtlCmd_TryProtection caps protectSuccessTurns at NELEMS(sProtectSuccessRate) - 1
 # (battle_script.c:5182-5184; outcome.PROTECT_RATES).
@@ -861,7 +864,8 @@ def _use_move(
     fmt = format_of(state)
     state_in = state
     mode = jnp.asarray(mode, _I32)
-    head_on = mode == MODE_FULL
+    reflected_pass = mode == MODE_REFLECT
+    head_on = (mode == MODE_FULL) | reflected_pass
     resumed = mode == MODE_RESUME
     after_pursuit = mode == MODE_PURSUIT
     move, struggling, locked = choice
@@ -875,12 +879,15 @@ def _use_move(
     encore_holds = (state.encore_move[side] != 0) & (
         state.moves[party(fmt, side), user, encore_slot] == state.encore_move[side]
     )
-    encored_now = encore_holds & ~jnp.asarray(struggling, bool)
+    encored_now = encore_holds & ~jnp.asarray(struggling, bool) & ~reflected_pass
     move = jnp.where(encored_now, state.encore_move[side].astype(_I32), move)
     slot = jnp.where(encored_now, encore_slot, slot)
     target_side = _foe(side)
     target = state.active[target_side]
     ready = (state.over == 0) & (state.hp[party(fmt, side), user] > 0)
+    # The reflected pass (E3-B2-6) is the holder's second pass through the move: it runs none of
+    # BeforeMove's states before CHECK_STOLEN (bcp.c:3196-3200), so checks is False there.
+    checks = ready & ~reflected_pass
     # A move of the battler is disabled when its action starts (a faster foe's Disable this turn
     # included): the event the Sleep Talk call variants split on (enumerate.call_consistent).
     disabled_at_move = ready & (state.disabled_move[side] != 0)
@@ -904,18 +911,18 @@ def _use_move(
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143), before the status checks:
     # subscript_check_quick_claw.s:26-28 clears an activated Custap flag and removes the item
     # (RemoveItem BTLSCR_ATTACKER, kept in item_consumed), whether or not the battler acts last.
-    state = consume_item(state, side, ready & custap[side])
+    state = consume_item(state, side, checks & custap[side])
     # BattleControllerPlayer_FightCommand (bcp.c:1874-1883), B10-9: an encored battler whose
     # encored slot no longer holds the encored move uses the slot's move and its encore ends
     # (move, slot and count to 0); Struggle comes first (:1866-1868).
     slot_move = state.moves[party(fmt, side), user, state.encore_slot[side].astype(_I32)]
-    unheld = ready & ~jnp.asarray(choice[1], bool) & (state.encore_move[side] != 0)
+    unheld = checks & ~jnp.asarray(choice[1], bool) & (state.encore_move[side] != 0)
     unheld = unheld & (slot_move != state.encore_move[side])
     for name in ("encore_move", "encore_slot", "encore_turns"):
         state = _set_side(state, name, side, 0, unheld)
     # CHECK_STATUS_START (bcp.c:2425): the move attempt clears the user's Destiny Bond, whatever
     # the checks below find.
-    bond = jnp.where(ready, 0, state.destiny_bond[side]).astype(state.destiny_bond.dtype)
+    bond = jnp.where(checks, 0, state.destiny_bond[side]).astype(state.destiny_bond.dtype)
     state = state._replace(destiny_bond=state.destiny_bond.at[side].set(bond))
 
     # BattleControllerPlayer_CheckStatusDisruption (battle_controller_player.c:2417) runs
@@ -926,7 +933,7 @@ def _use_move(
     # a faster one of this turn included) a sleeper without Soundproof (unsupported) wakes
     # instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every sleep bit).
     status = state.status[party(fmt, side), user]
-    asleep = ready & (status == Status.SLEEP)
+    asleep = checks & (status == Status.SLEEP)
     roused = asleep & uproar_on(state)
     sleep_left = jnp.maximum(state.status_counter[party(fmt, side), user].astype(_I32) - 1, 0)
     sleep_left = jnp.where(roused, 0, sleep_left)
@@ -941,13 +948,13 @@ def _use_move(
         (tables.move_effect[move] == EffectId.SECONDARY_STATUS)
         | (tables.move_effect[move] == EffectId.RECOIL_STATUS)
     ) & (tables.move_param[move, 2] == 1)
-    frozen = ready & (status == Status.FREEZE)
+    frozen = checks & (status == Status.FREEZE)
     thawed = frozen & (outcome.thaw[side] != 0)
     still_frozen = frozen & ~thawed
     state = _set_mon(state, "status", side, user, Status.NONE, thawed)
     # :2455: a sleeping battler still uses Snore (moveCur) or Sleep Talk (moveTemp).
     sleep_move = (move == MOVE_SNORE) | (move == MOVE_SLEEP_TALK)
-    go = ready & ~(sleeping & ~sleep_move) & ~(still_frozen & ~thaw_move)
+    go = checks & ~(sleeping & ~sleep_move) & ~(still_frozen & ~thaw_move)
     # CHECK_STATUS_STATE_TRUANT (:2502-2510): a loafing Truant battler's move is disrupted;
     # subscript_loafing_around.s unlocks it (its message tags only the nickname).
     loafing = go & truant_loafs(state, side)
@@ -1042,13 +1049,13 @@ def _use_move(
     in_love = go & (state.infatuated[side] != 0)
     immobilized = in_love & (outcome.infatuation[side] != 0)
     state = _unlock(state, side, immobilized)
-    can_act = go & ~immobilized
+    can_act = jnp.where(reflected_pass, ready, go & ~immobilized)
     # CHECK_STATUS_STATE_BIDE (:2694): the Bide counter drops. On reaching 0 the unleash
     # deals 2 * storedDamage (damage.fixed_damage) at the last hitter, i.e. the foe's
     # active Pokemon, a replacement included. Nothing stored (subscript_bide_end.s:
     # "But it failed!") or the foe fainted (subscript_bide_no_target.s) ends the move
     # here; either way the lock is released after the move (below).
-    biding = can_act & (state.bide_turns[side] > 0)
+    biding = can_act & ~reflected_pass & (state.bide_turns[side] > 0)
     bide_left = jnp.maximum(state.bide_turns[side].astype(_I32) - 1, 0)
     state = state._replace(
         bide_turns=state.bide_turns.at[side].set(
@@ -1068,7 +1075,7 @@ def _use_move(
     # no-target check (:3190); Struggle has no PP to spend. It takes 1 plus the Pressure cost of
     # moveTemp (``move``, an invoker's own range) against the fight command's defender
     # (effects.pressure_pp_cost), at most the PP left (:2276-2280), ruling G-8.
-    spend = can_act & ~struggling & ~locked
+    spend = can_act & ~struggling & ~locked & ~reflected_pass
     # No PP left in the slot (bcp.c:2275-2285): MOVE_STATUS_NO_PP, the move fails after its attack
     # message. Only an encored move taken over this turn (B10-9; the selection offers no 0-PP
     # slot) or a slot a faster Spite emptied (``effects._spite``, E3-B2-4) can reach it.
@@ -1230,10 +1237,38 @@ def _use_move(
     # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
     succeeded = can_act & (has_target | nature_power | self_invoker | first_charge)
+    # BattleControllerPlayer_MoveStolen (bcp.c:3064-3085, BEFORE_MOVE_STATE_CHECK_STOLEN, after the
+    # PP decrement and the no-target check, before the script and every accuracy check): the foe's
+    # Magic Coat (magic_coat, 1 + its move slot) against a move with MOVE_FLAG_CAN_MAGIC_COAT
+    # reflects it. The flag is cleared (:3071); moveProtect = 0, movePrevByBattler = movePrev =
+    # moveTemp (:3072-3075: the ordinary writes below, the Protect chain reset folded into
+    # protect_count); SYSCTL_REUSE_LAST_MOVE (:3077) keeps UpdateMoveBuffers and
+    # UpdateFlagsWhenHit from writing moveHit, moveCopied and conversion2 (record below); and
+    # BattleSystem_DecPPForPressure(attacker = the holder, defender = the mover) (:3083,
+    # battle_lib.c:7390-7397) takes one PP from the holder's moveSlot (the Magic Coat's) while the
+    # MOVER has Pressure. The first pass ends here: no script, no BeforeMove end (so no Metronome
+    # count, bcp.c:3221), no accuracy; the holder's pass is _execute_actions' _REFLECT phase.
+    coat_slot = jnp.clip(state.magic_coat[target_side].astype(_I32) - 1, 0, MOVE_ACTIONS - 1)
+    reflect = (
+        (mode == MODE_FULL)
+        & can_act
+        & ~no_pp
+        & has_target
+        & (state.magic_coat[target_side] != 0)
+        & ((tables.move_flags[move] & MoveFlag.MAGIC_COAT) != 0)
+    )
+    holder_pp = state.pp[party(fmt, target_side), target, coat_slot]
+    drain = reflect & pressure_holder(state, side) & (holder_pp > 0)
+    state = state._replace(
+        pp=state.pp.at[party(fmt, target_side), target, coat_slot].add(
+            jnp.where(drain, -1, 0).astype(state.pp.dtype)
+        )
+    )
+    state = _set_side(state, "magic_coat", target_side, 0, reflect)
     # DecrementPP's MOVE_STATUS_NO_PP is a NO_EFFECTS status (bcp.c:2285, :3209): no
     # SYSCTL_MOVE_SUCCEEDED, so no last move (a Spite-emptied slot, E3-B2-4); the Metronome count
     # below still follows it.
-    state = _set_last_move(state, side, jnp.where(succeeded & ~no_pp, move, 0), ready)
+    state = _set_last_move(state, side, jnp.where(succeeded & ~no_pp, move, 0), checks)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
     # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
@@ -1241,7 +1276,7 @@ def _use_move(
     # charge move's second turn is still VOLATILE_CONDITION_MOVE_LOCKED (the script's
     # subscript_charge_move_cleanup.s:6 clears it later) and does not count; a Recycle (or a
     # Natural Gift, a Power Herb) changes the held item only after it (B13-34).
-    state = metronome_update(tables, state, side, move, head_on & succeeded)
+    state = metronome_update(tables, state, side, move, head_on & succeeded & ~reflect)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
     # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
@@ -1255,6 +1290,15 @@ def _use_move(
     )
     failed = failed | (snore & (state.status[party(fmt, side), user] != Status.SLEEP))
     failed = failed | (counter & ~counter_ok) | call_failed
+    # The mover's own script does not run in the first pass of a reflection (reflect above).
+    failed = failed | reflect
+    # Magic Coat (effect_script_0183.s:5, :10-12): TrySetMagicCoat jumps to MOVE_STATUS_FAILED when
+    # no other battler's action is pending (battle_script.c:6471, waitingBattlers == 1: in
+    # singles the user acts last, target_moved); else effects._magic_coat sets the flag
+    # (E3-B2-6).
+    failed = failed | (
+        (tables.move_effect[used] == EffectId.MAGIC_COAT) & jnp.asarray(target_moved, bool)
+    )
     # Ingrain and Aqua Ring (effect_script_0181.s:5, _0251.s:5) fail a user that has the effect
     # already: MOVE_STATUS_FAILED from the script, as Fake Out's (rulings B7-n).
     effect_used = tables.move_effect[used]
@@ -1543,7 +1587,7 @@ def _use_move(
     # without UpdateMoveBuffers, script.c:6931) leave it alone.
     chain = jnp.asarray(PROTECT_CHAIN_MOVES, _I32)
     keep = can_act & jnp.isin(jnp.asarray(used, _I32), chain)
-    count = jnp.where(ready & ~keep, 0, count)
+    count = jnp.where(checks & ~keep, 0, count)
     state = state._replace(
         protect_count=state.protect_count.at[side].set(count.astype(state.protect_count.dtype))
     )
@@ -1591,7 +1635,7 @@ def _use_move(
     )
     # subscript_no_target.s and subscript_missed.s unlock the attacker (a Rollout that
     # missed; a first use never locked, so this is then a no-op).
-    state = _unlock(state, side, can_act & ~connected & ~charging)
+    state = _unlock(state, side, can_act & ~connected & ~charging & ~reflect)
     # The charge (B10-12): the lock into moveCur (subscript_vanish_on_charge_turn.s:10), the
     # semi-invulnerable bit (effect_script_0155.s:7, _0255.s:7, _0256.s:7, _0263.s:7, _0272.s:8)
     # and Skull Bash's Defense +1 (effect_script_0145.s:8).
@@ -2034,6 +2078,7 @@ def _use_move(
             # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
             script_calc=script_calc,
             fling=fling_removed,
+            coat_slot=slot,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2300,6 +2345,13 @@ def _use_move(
     # The tail modes: the paused move showed its attack message and its defender is the foe
     # unless it is a self-defender (Baton Pass).
     record = jnp.where(head_on, record, ~self_defender(tables, used_t, ghost_user(state, side)))
+    # SYSCTL_REUSE_LAST_MOVE (a reflection, both passes, bcp.c:3077): UpdateFlagsWhenHit writes no
+    # moveHit, moveCopied or conversion2 (:4481, :4498, :4509; the holder's pass swaps the
+    # battlers back first, bcp.c:3831-3835).
+    # The Choice-lock clear of UpdateFlagsWhenHit (bcp.c:4489-4496) is outside the REUSE_LAST_MOVE
+    # gate (:4498), so it keeps the ungated test.
+    lock_record = record
+    record = record & ~(reflect | reflected_pass)
     # The charge turn shows no attack message (SYSCTL_SKIP_ATTACK_MESSAGE, and
     # subscript_use_move.s:5 skips subscript_attack_message_and_animation.s after a direct side
     # effect), so SYSCTL_ATTACK_MESSAGE_SHOWN stays clear: moveHit, movePrev and moveProtect get
@@ -2324,7 +2376,7 @@ def _use_move(
     # (``copy_self``). ``_move_end`` applies both after the faint check, as it keeps moveHit.
     flagged = (tables.move_flags[move] & MoveFlag.MIRROR_MOVE) != 0
     copy_foe = jnp.where(tail & record & shown_t & flagged, move, 0).astype(_I32)
-    own_defender = head_on & ready & ~self_hit & ~record & shown_t
+    own_defender = head_on & ready & ~self_hit & ~record & shown_t & ~(reflect | reflected_pass)
     own_defender = own_defender & self_defender(tables, used, ghost_user(state, side))
     copy_self = jnp.where(tail & own_defender & flagged, move, 0).astype(_I32)
     # TRIGGER_AFTER_HIT_EFFECTS (bcp.c:3897-3915, after LOOP_SPREAD_MOVES and
@@ -2341,7 +2393,7 @@ def _use_move(
     # newcomer after a switch), not for U-turn under SYSCTL_UTURN_ACTIVE (set at the list,
     # subscript_attack_then_switch_out.s:68, so on a resumed U-turn) nor a Baton Pass whose move
     # succeeded (bcp.c:3927-3928, by moveTemp).
-    ready_t = jnp.where(head_on, ready, True)
+    ready_t = jnp.where(head_on, ready & ~reflected_pass, True)
     exempt = ((move == MOVE_U_TURN) & resumed) | (
         (move == MOVE_BATON_PASS) & jnp.where(head_on, succeeded, True)
     )
@@ -2354,7 +2406,7 @@ def _use_move(
         target_side,
         move,
         ready_t & (shown_t | (charging & head_on)) & tail,
-        record,
+        lock_record,
         exempt,
     )
     # UpdateMoveBuffers writes movePrevByBattler / moveProtect onto the battler in the slot
@@ -2371,8 +2423,17 @@ def _use_move(
     # SYSCTL_LAST_OF_MULTI_TURN: every charge move's strike runs subscript_charge_move_cleanup.s:7
     # (the second turn, a Power Herb, SolarBeam in sun), and subscript_bide_end.s.
     last_of_multi = can_act & ((charge_move & ~charging) | bide_ends)
+    # A reflection's UpdateMoveBuffers runs once, after the swap back (bcp.c:3831-3835), for the
+    # MOVER with the reflected move's flags: the holder's pass verifies the mover's count.
     state = metronome_verify(
-        tables, state, side, move, no_effects, repeated, last_of_multi, head_on & ready
+        tables,
+        state,
+        jnp.where(reflected_pass, target_side, side),
+        move,
+        no_effects,
+        repeated,
+        last_of_multi,
+        head_on & ready & ~reflect,
     )
     # UpdateMoveBuffers (bcp.c:3936-3942) and UpdateFlagsWhenHit (:4499-4508), on every path of a
     # battler that acts: the battle's movePrev is moveTemp (``move``: the invoker, Nature Power,
@@ -2494,6 +2555,8 @@ def _use_move(
         "copy_foe": copy_foe,
         "copy_self": copy_self,
         "conv2": conv2,
+        "reflect": reflect,
+        "reflect_move": jnp.where(reflect, move, 0).astype(_I32),
     }
     return state, own, foe, ctl
 
@@ -2636,6 +2699,7 @@ def _act(
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,
         "conv2": jnp.where(runs_move, ctl["conv2"], 0),
+        "reflect": ctl["reflect"] & runs_move,
         "fbase": jnp.where(resumed, _alive_mask(listed), base),
     }
     return acted, own, foe_events, ctl
@@ -2897,7 +2961,7 @@ def execute_actions(
 
 # The phases of an action in ``_execute_actions``' loop: from its start, after U-turn's Pursuit
 # (``_use_move``'s ``MODE_PURSUIT``), resumed after the party list (``MODE_RESUME``).
-_START, _PURSUIT, _RESUME = MODE_FULL, MODE_PURSUIT, MODE_RESUME
+_START, _PURSUIT, _RESUME, _REFLECT = MODE_FULL, MODE_PURSUIT, MODE_RESUME, MODE_REFLECT
 # The turn-flag events later actors read (``_execute_actions``), kept in the scratch at a pause.
 _TAKEN = ("phys_taken", "spec_taken", "last_taken", "phys_from", "spec_from", "last_from")
 
@@ -2964,10 +3028,15 @@ def _execute_actions(
         return (position < 2) & (state.pivot_battler == 0)
 
     def body(carry):
-        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry
+        state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat = carry
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
+        # E3-B2-6: the pass after a reflection's first one (_use_move's reflect): the Magic Coat
+        # user (actor, the foe of side, the mover whose action this still is) runs the mover's
+        # move on the mover (MODE_REFLECT); coat is that move.
+        reflecting = phase == _REFLECT
+        actor = jnp.where(reflecting, _foe(side), side)
         # subscript_switch_pokemon.s:5-6: a first actor's switch gets its Natural Cure before
         # the Pursuit (:11).
         first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
@@ -3011,29 +3080,37 @@ def _execute_actions(
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
         pick_mul = jnp.where(ap, PURSUIT_POWER_MUL, pick_mul)
         # The faints handled so far: the action's faint check and payout start here.
-        base = jnp.where(resumed, base, _alive_mask(state))
+        base = jnp.where(resumed | reflecting, base, _alive_mask(state))
         # The foe's Protect this turn (turnFlags.protecting): only a first actor's succeeds.
-        foe_protecting = read["protect_ok"][_foe(side)] != 0
-        foe_enduring = read["endure_ok"][_foe(side)] != 0  # turnFlags.enduring (G-65)
-        foe_roosting = read["roosted"][_foe(side)] != 0  # turnFlags.roosting
-        # The side's turnFlags damage taken and its attackers (Counter, Metal Burst).
-        taken = jnp.stack([read[n][side] for n in _TAKEN])
+        foe_protecting = read["protect_ok"][_foe(actor)] != 0
+        foe_enduring = read["endure_ok"][_foe(actor)] != 0  # turnFlags.enduring (G-65)
+        foe_roosting = read["roosted"][_foe(actor)] != 0  # turnFlags.roosting
+        # The actor's turnFlags damage taken and its attackers (Counter, Metal Burst).
+        taken = jnp.stack([read[n][actor] for n in _TAKEN])
+        # The reflected pass runs the stolen move from the holder's slot: no switch, no item, the
+        # move chosen is the stolen one, not locked in, not Struggle (_use_move spends no PP there).
+        acts_r = acts.at[actor].set(jnp.where(reflecting, 0, acts[actor]))
+        choices_r = (
+            choices[0].at[actor].set(jnp.where(reflecting, coat, choices[0][actor])),
+            choices[1].at[actor].set(choices[1][actor] & ~reflecting),
+            choices[2].at[actor].set(choices[2][actor] | reflecting),
+        )
         acted, own, foe_events, ctl = _act(
             tables,
             state,
-            side,
-            acts,
-            choices,
+            actor,
+            acts_r,
+            choices_r,
             items,
             outcome,
-            second,
+            second & ~reflecting,
             foe_protecting,
             custap,
             foe_roosting,
             taken,
-            phase,
+            jnp.where(reflecting, _REFLECT, phase),
             base,
-            pursuer,
+            _foe(actor),
             claw=claw,
             pursuit_sync=pursuit_sync,
             foe_enduring=foe_enduring,
@@ -3055,8 +3132,10 @@ def _execute_actions(
         keep = ~skip & ~ap
         # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
         own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
-        read, shown = put((read, shown), side, own, keep)
-        foe = _foe(side)
+        # The reflected pass's own events are the holder's, not the mover's: dropped; what its move
+        # did to its target (the mover) is that target's foe events.
+        read, shown = put((read, shown), side, own, keep & ~reflecting)
+        foe = jnp.where(reflecting, side, _foe(side))
         merged = [
             {name: jnp.where(v != 0, v, ev[name][foe]) for name, v in foe_events.items()}
             for ev in (read, shown)
@@ -3064,6 +3143,9 @@ def _execute_actions(
         read = _put(read, foe, merged[0], keep)
         shown = _put(shown, foe, merged[1], keep)
         stop = ctl["pause"] | ctl["pursue"]
+        # E3-B2-6: a reflected move's first pass ends before the mover's move end and faint check:
+        # the holder's pass comes next, then both run (bcp.c:3831-3837, LoopSpreadMoves).
+        hold = ctl["reflect"] & ~reflecting
         done = _move_end(
             tables,
             _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
@@ -3078,14 +3160,15 @@ def _execute_actions(
         # and the player chose a move (design §3.3(a), ``learn_pin``).
         pending = (position == 0) & (side == 1) & (real[0] < MOVE_ACTIONS)
         done = pay_exp(tables, _with_alive(acted, base), done, pending, real[0])
-        state = _where(stop, acted, done)
-        position = jnp.where(stop, position, position + 1)
-        phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)
+        state = _where(stop | hold, acted, done)
+        position = jnp.where(stop | hold, position, position + 1)
+        phase = jnp.where(ctl["pursue"], _PURSUIT, jnp.where(hold, _REFLECT, _START)).astype(_I32)
+        coat = jnp.where(hold, ctl["reflect_move"], 0).astype(_I32)
         sync = (
             jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0]),
             jnp.where(ctl["pursue"], ctl["sync_sem"], sync[1]).astype(_I32),
         )
-        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync
+        return state, read, shown, position, phase, pursued, base, pick_mul, fired, sync, coat
 
     start = (
         state,
@@ -3098,11 +3181,16 @@ def _execute_actions(
         jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
         (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
+        _I32(0),  # the move a reflection's holder pass runs (E3-B2-6)
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _ = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
+    # turnFlags.magicCoat ends with the turn (SetupNextTurn, battle_lib.c:2231); a pause keeps it.
+    state = state._replace(
+        magic_coat=jnp.where(stopped, state.magic_coat, 0).astype(state.magic_coat.dtype)
+    )
     # Each battler whose action is still to come (after the paused one in ``order``): doubles
     # section 5 rule 5, a fact about the named battler, not "the second actor" (B10-17).
     to_come = jnp.stack([jnp.any((order == b) & (jnp.arange(2) > position)) for b in range(fmt.B)])

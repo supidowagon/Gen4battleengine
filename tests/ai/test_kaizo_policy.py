@@ -4770,6 +4770,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
         ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
         ("Role Play", "Spite", "Accelerock", ""),  # E3-B2-5
+        ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -5398,3 +5399,75 @@ def test_spite_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, kaizo_roa
         layout = layout_for(t, flags, s)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
+
+
+# --- #183 Magic Coat (E3-B2-6) ----------------------------------------------------------------
+
+
+def test_magic_coat_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Magic Coat is BATTLE_EFFECT_APPLY_MAGIC_COAT, 183, in Expert_Main (script.s:1736) only, with
+    Expert_MagicCoat at :4492 and its three reachable rolls at :4499 (100), :4505 (150) and :4511
+    (30); the 50 roll at :4508 follows a GoTo and is unreachable (E3-B2-6)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.APPLY_MAGIC_COAT == 183
+    assert KAIZO_EXPERT_LABELS[183] == ("Expert_MagicCoat", 1736) and 183 in KAIZO_TRANSCRIBED
+    assert (SITE_N[4499], SITE_N[4505], SITE_N[4511]) == (100, 150, 30) and 4508 not in SITE_N
+    assert int(t.move_ai_effect[n.move("Magic Coat")]) == 183
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert "BATTLE_EFFECT_APPLY_MAGIC_COAT" in lines[1735] and "Expert_MagicCoat" in lines[1735]
+    assert lines[4491] == "Expert_MagicCoat:"
+    assert (
+        lines[4497].strip()
+        == "IfHPPercentGreaterThan AI_BATTLER_DEFENDER, 30, Expert_MagicCoat_CheckUserFirstTurn"
+    )
+    assert lines[4498].strip() == "IfRandomLessThan 100, Expert_MagicCoat_CheckUserFirstTurn"
+    assert lines[4504].strip() == "IfRandomLessThan 150, Expert_MagicCoat_End"
+    assert lines[4506].strip() == "GoTo Expert_MagicCoat_End"
+    assert lines[4507].strip() == "IfRandomLessThan 50, Expert_MagicCoat_End"
+    assert lines[4510].strip() == "IfRandomLessThan 30, Expert_MagicCoat_End"
+    assert sum("BATTLE_EFFECT_APPLY_MAGIC_COAT" in line for line in lines) == 1
+
+
+@pytest.mark.parametrize(
+    ("hp", "turn", "jumps", "expected"),
+    [
+        # Expert_MagicCoat (script.s:4492-4515). The defender above 30 % HP skips the HP part.
+        # First turn in battle (LoadIsFirstTurnInBattle TRUE): +1 unless the 150 roll (:4505)
+        # jumps.
+        (100, 0, (), 1),
+        (100, 0, (4505,), 0),
+        # Not the first turn: -1 unless the 30 roll (:4511) jumps.
+        (100, 3, (), -1),
+        (100, 3, (4511,), 0),
+        # A defender at 30 % or less: -1 first unless the 100 roll (:4499) jumps, then the same.
+        (30, 0, (), 0),
+        (30, 0, (4499,), 1),
+        (30, 0, (4505,), -1),
+        (30, 3, (), -2),
+        (30, 3, (4499,), -1),
+        (30, 3, (4499, 4511), 0),
+    ],
+)
+def test_expert_magic_coat(kaizo_tables, kaizo_names, kaizo_roark_party, hp, turn, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magic Coat", "Accelerock", "", ""))
+    s = _turn(_hp(s, 0, hp), turn)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+    first_lines = next(iter(_path_lines(t, s, layout_for(t, 0x7, s))))
+    assert (4505 in first_lines) == (turn == 0)
+
+
+def test_magic_coat_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Magic Coat", "Accelerock", "", ""))
+    for flags in (0x27, 0x10F):
+        layout = layout_for(t, flags, s)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 0, 30), layout)

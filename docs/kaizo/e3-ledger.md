@@ -253,7 +253,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   the power of the player's `movePrevByBattler` (ai.c:1068-1076, :2526-2530; none reads 0): above
   0 +1, else -1 unless the 100 roll at :3089 jumps. One random read on the power-0 path
   (`outcome.SITE_N[3089] = 100`); read bounds regenerated. Kaizo's Thief has power 40, so a
-  player whose last move was Thief reads as damaging (+1). Kaizo Magic Coat: Owed 1.
+  player whose last move was Thief reads as damaging (+1). Kaizo Magic Coat: closed in E3-B2-6.
 - E3-1-4 Teleport (#153): new `EffectId.FLEE` (effect 153). effect_script_0153.s:5, :9-10 sets
   MOVE_STATUS_FAILED in a trainer battle (every Nuzline battle): `step._use_move` adds it to the
   failing scripts (reference `_script_fails`), PP is spent and `last_move` set (bcp.c:3178-3183,
@@ -291,7 +291,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   read from `torment`), `policy._basic_check_torment` (Basic :229 -> script.s:874-877: the player
   already tormented, -10); no Expert entry; 165 joins `KAIZO_TRANSCRIBED` (its SetupFirstTurn
   :6480 and Harrassment :8055 table entries, and the Encore table :3247, were already in
-  `commands`). Kaizo's CAN_MAGIC_COAT flag on Torment: Owed 1. Tests: tests/engine/test_e3_batch1.py,
+  `commands`). Kaizo's CAN_MAGIC_COAT flag on Torment: closed in E3-B2-6. Tests: tests/engine/test_e3_batch1.py,
   tests/ai/test_kaizo_policy.py `test_torment_basic`.
 - E3-2-2 Worry Seed (#247): new `EffectId.WORRY_SEED` (effect 247). `effects._worry_seed`
   (effect_script_0247.s:5; subscript_give_target_insomnia.s:5-11): fails on a miss or
@@ -306,7 +306,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   item; Battle/Shell Armor is another battler's hit, none follows in singles); the AI-roll
   `loose` flag; enumerate: INPUT_CLAUSE effect (the worry-seed clause: foe_move, end-speed tie).
   AI: Basic_CheckWorrySeed (script.s:1428-1443), Expert_WorrySeed (:5973-5993; rolls :5984, :5988);
-  read bounds regenerated. Kaizo and vanilla CAN_MAGIC_COAT: Owed 1. Tests:
+  read bounds regenerated. Kaizo and vanilla CAN_MAGIC_COAT: closed in E3-B2-6. Tests:
   tests/engine/test_e3_batch1.py, tests/ai/test_kaizo_policy.py.
 - E3-2-3 Me First (#241): new `EffectId.ME_FIRST` (effect 241) and `order.CALL_ME_FIRST`, an
   invoker ordered like Copycat (no draw: call value 0 = the target has not acted, 1 = it has, the
@@ -616,8 +616,8 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Rulings. (1) skipPressureCheck (bs.c:3521, set on a failed call) is not modelled: it is read only
   by DecrementPP (bcp.c:2238), which already ran in this action, and dies with selfTurnFlags at the
   next BattleContext_Init (bcp.c:3998). (2) SYSCTL_REUSE_LAST_MOVE (Magic Coat / Snatch, bcp.c:3077,
-  :3099) keeps their reuse of a move from recording; neither mechanic exists yet (Owed 1): when
-  they are built the write must skip that path. (3) The write's defender for a self-defended flagged
+  :3099) keeps their reuse of a move from recording; Magic Coat now skips the write (E3-B2-6,
+  `step` `record`, reference `_actions`); Snatch is owed (Owed 1) and must skip it too. (3) The write's defender for a self-defended flagged
   move records for the user, so a user's own Trick Room can be Mirror Moved by itself later.
   Not built: Tag Strategy and the doubles path of the enumeration (the doubles draw is in
   `mirror_copied` / `_draw_calls`, no doubles format runs `call_laws` yet). Tests:
@@ -670,7 +670,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Rulings. (1) Normalize (CalcCurrentMoveType, bcp.c:3612-3621) is an unsupported ability, refused by
   coverage, so the recorded type is `move_type_of`. (2) A confusion self-hit makes the user its own
   defender (bcp.c:2629): nothing is written for the foe. (3) SYSCTL_REUSE_LAST_MOVE (Magic Coat /
-  Snatch) would skip the write: neither mechanic exists (Owed 1). (4) Only a battler's own action
+  Snatch) skips the write: Magic Coat does (E3-B2-6, the Magic Coat pass writes no conversion2), Snatch is owed (Owed 1). (4) Only a battler's own action
   changes its types, so the law reads the turn-start types.
   Not built: doubles (the partner as `conv2_battler` is stored as a battler, the MOVE_LOCKED test
   reads it, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
@@ -708,10 +708,10 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   DiscourageAtLowHP (script.s:7960) and Harrassment_Effects (:8051), were already transcribed
   (commands.py). Read bounds and backlog regenerated.
   Rulings. (1) Kaizo's Magic Coat on Spite (a reflected Spite cuts the user's own Spite PP): Magic
-  Coat / Snatch do not exist in the engine (Owed 1 of E3-B2-3), so it is not modelled. (2) The
+  Coat is built (E3-B2-6, tested with Kaizo's Spite there); Snatch is still owed (Owed 1 of E3-B2-3). (2) The
   target's slot is read at the move's hit, after any faster move of this turn (`last_move` is
   written when the foe acts, bcp.c:3945-3949).
-  Not built: Magic Coat reflection; doubles (the defender is the chosen foe, `last_move[target_side]`
+  Not built: doubles (the defender is the chosen foe, `last_move[target_side]`
   is per battler, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
   (`test_spite_*`, `test_a_*` of the Spite section), tests/ai/test_kaizo_policy.py
   (`test_spite_has_no_basic_or_expert_label`); `fullset`-free.
@@ -754,3 +754,41 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Tests: tests/engine/test_e3_batch2.py (`test_role_play_*`, `test_the_copy_ends_with_the_battler`),
   tests/ai/test_kaizo_policy.py (`test_role_play_shares_the_change_user_ability_block`, the exact-equals-loose
   list), tests/engine/test_accuracy_classes.py (`_FOLLOWED`); `fullset`-free.
+
+- E3-B2-6 Magic Coat (#183, BATTLE_EFFECT_APPLY_MAGIC_COAT; the move of that name, priority +4): new
+  `EffectId.MAGIC_COAT` (135), `MoveFlag.MAGIC_COAT` (bit 16777216, MOVE_FLAG_CAN_MAGIC_COAT, a
+  `DECOMP_FLAG_BITS` entry; vanilla and Kaizo flags, Gastro Acid and Kaizo's Torment / Spite among
+  them) and the state `magic_coat` (per battler, int8, 1 + the user's move slot; STATE.md `turnFlags`
+  row, `magicCoatMon` reworded). Manifest bumped to 36 (the flag array changed; both tables rebuilt).
+  Script: `BtlCmd_TrySetMagicCoat` (battle_script.c:6459-6478) sets the flag and fails when
+  `waitingBattlers == 1` (the user acts last: `h.target_moved`); `effects._magic_coat`. A move aimed at
+  the holder with MOVE_FLAG_CAN_MAGIC_COAT is stolen in BEFORE_MOVE_STATE_CHECK_STOLEN
+  (bcp.c:3196-3200, `MoveStolen` :3064-3085): the flag clears, `movePrev` / `movePrevByBattler` take
+  the move, SYSCTL_REUSE_LAST_MOVE is set and `subscript_magic_coat` swaps attacker and defender
+  (bs.c:6487-6513); the move then runs as the holder's own on the mover, accuracy, damage and
+  effects included, and LoopSpreadMoves swaps back (bcp.c:3831-3835). Built as a loop phase
+  `_REFLECT` of `step._execute_actions` (`MODE_REFLECT`; the reference recurses with
+  `_fight(reflect_pass=True)`), so `_use_move` is traced once.
+  Rulings. (1) REUSE_LAST_MOVE skips the moveHit, moveCopied and conversion2 writes (bcp.c:4481, :4498,
+  :4509) and UpdateMoveBuffers' movePrev / moveProtect writes; the Choice-lock clear (:4489-4496) is
+  outside the gate and still runs (`lock_record`). Mirror Move's exemption (Owed 1 of E3-B2-2,
+  bcp.c:3077) is closed by the same flag. (2) `BattleSystem_DecPPForPressure(holder, mover)` takes
+  1 PP from the holder's slot when the mover has Pressure (bcp.c:3083, lib.c:7390-7397). (3) The
+  Metronome count updates in the holder's second pass only (bcp.c:3221) and verifies for the mover
+  after the swap back. (4) Draws: the holder's pass is the reflected move's, so
+  `order.used_moves` substitutes the mover's move for the holder's Magic Coat when it is stolen
+  (the hit classes come from the threshold grid, so the substitution keeps the draws exact).
+  (5) Kaizo's Spite reflected cuts the user's own Spite PP (Owed 1 of E3-B2-4, closed).
+  AI: Expert_MagicCoat (script.s:4492-4515, entry :1736), rolls at :4499 (100), :4505 (150), :4511
+  (30; the 50 at :4508 follows a GoTo, unreachable); `outcome.SITE_N`, KAIZO_TRANSCRIBED,
+  KAIZO_EXPERT_LABELS, `commands`, `policy._expert_magic_coat`; read bounds and backlog regenerated.
+  Enumeration: `INPUT_NEUTRAL_EFFECTS`, `NON_TABLE_DAMAGE_EFFECTS`; `test_accuracy_classes`
+  `_NO_ACC_EVA_WRITE`.
+  Owed 1 lines closed: CAN_MAGIC_COAT of Torment / Worry Seed / Thief-AI (E3-1-3, E3-2-2, E3-1-1),
+  Mirror Move's REUSE_LAST_MOVE exemption (E3-B2-2), Conversion 2's (E3-B2-3), Spite's Kaizo
+  reflection (E3-B2-4). Still owed: Snatch (REUSE_LAST_MOVE, bcp.c:3099).
+  Not built: doubles (the reflected move's target is the mover's side; the pass is per side).
+  Tests: tests/engine/test_e3_batch2.py (`test_magic_coat_*`, `test_a_reflect*`, `test_the_metronome_count_follows_the_passes`),
+  tests/ai/test_kaizo_policy.py (`test_magic_coat_*`, `test_expert_magic_coat`, the exact-equals-loose list),
+  tests/engine/test_state.py (`test_magic_coat_flag_maps_to_magic_coat`),
+  tests/engine/test_accuracy_classes.py; `fullset`-free.

@@ -3081,6 +3081,31 @@ def _expert_mirror_move(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | ctx.live))
 
 
+def _expert_magic_coat(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MagicCoat`` (script.s:4492-4515, entry :1736): a defender above 30 % HP (:4498) or the
+    100 roll (:4499) jumping goes to ``_CheckUserFirstTurn``, else -1 (:4500) first. There
+    (:4503-4504) a turn that is not the attacker's first goes to ``_TryScoreMinus1``; the first
+    turn ends when the 150 roll (:4505) jumps, else +1 (:4506) and ends (:4507; :4508 is
+    unreachable). ``_TryScoreMinus1`` (:4511): the 30 roll jumping ends, else -1 (E3-B2-6)."""
+    ctx = _at(ctx, mask)
+    ctx, check = _split(c.if_hp_percent_greater_than(ctx, _D, 30))
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 4499))
+    check = check | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_MagicCoat_CheckUserFirstTurn (:4503)
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, check | ctx.live), _A)
+    ctx, minus1 = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, end = _split(c.if_random_less_than(ctx, 150, 4505))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # Expert_MagicCoat_TryScoreMinus1 (:4511)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, minus1), 30, 4511))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _status_stat_trick(label: str, lines: dict[str, int], first, hp_check):
     """``Expert_StatusAccuracyDown`` (script.s:2431-2498) and ``Expert_StatusEvasionUp``
     (:2184-2253), one shape after their first round (``first``): the attacker's own
@@ -3938,6 +3963,7 @@ _EXPERT_LABELS = (
     (BattleEffect.COPY_ABILITY, _expert_change_user_ability),  # :1733 (E3-B2-5)
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _expert_ingrain),  # :1734
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
+    (BattleEffect.APPLY_MAGIC_COAT, _expert_magic_coat),  # :1736 (E3-B2-6)
     (BattleEffect.RECYCLE, _expert_recycle),  # :1737 (B13-23)
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740

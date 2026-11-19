@@ -151,6 +151,13 @@ three structs has a row.
   entry and row (`VOLATILE_FIELDS`) and, through `state.clear_copied`, every foe's `move_copied`
   and every holder's column of it (battle_lib.c:2125-2149, :2203-2220; `step._reset_battler`).
   Nothing counts them down; Baton Pass clears them too.
+- **turnFlags.magicCoat -> `magic_coat`** (E3-B2-6): per battler `[B]`, int8, `1 + moveSlot` of the
+  Magic Coat user (0 = down). `TrySetMagicCoat` (battle_script.c:6459-6478) sets it
+  (`effects._magic_coat`; it fails when the user acts last, `waitingBattlers == 1`); the first
+  reflectable move aimed at the holder clears it (bcp.c:3071, `step._use_move`) and runs as the
+  holder's own move on the mover in a second pass (`step._execute_actions`' `_REFLECT` phase,
+  `MODE_REFLECT`). It is a turn flag: cleared at the holder's faint (`VOLATILE_FIELDS`) and at the
+  end of the turn's actions (`SetupNextTurn`, battle_lib.c:2231); kept at a pivot's pause.
 - **conversion2Move / conversion2Battler / conversion2Type -> `conv2_move` / `conv2_battler` /
   `conv2_type`** (E3-B2-3): per battler `[B]` (the defender), int16 move id (0 = none), int8
   `1 + attacking battler` (0 = none) and int8 type id. `UpdateFlagsWhenHit` writes them for the
@@ -623,7 +630,7 @@ three structs has a row.
 | `BattleContext.switchedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.switchedMonTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.abilityMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.magicCoatMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.magicCoatMon` | — | not needed because it is per-action scratch: `step._execute_actions`' reflect phase (E3-B2-6) knows the reflected move's user as the actor whose pass it resumes |
 | `BattleContext.sideEffectType` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectParam` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -663,7 +670,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `magic_coat` | mapped |
 | `BattleContext.selfTurnFlags` | — | not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`) |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |

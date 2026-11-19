@@ -444,6 +444,9 @@ SITE_N: dict[int, int] = {
     5276: 64,  # Expert_Fling_TryScorePlus1 (+1 when it does NOT jump)
     1915: 128,  # Expert_MirrorMove (faster, last move in the table: to _End when it jumps, else +2)
     1922: 80,  # Expert_MirrorMove_TryScoreMinus1 (to _End when it jumps, else -1)
+    4499: 100,  # Expert_MagicCoat (to _CheckUserFirstTurn when it jumps, else -1), E3-B2-6
+    4505: 150,  # Expert_MagicCoat_CheckUserFirstTurn (first turn: to _End when it jumps, else +1)
+    4511: 30,  # Expert_MagicCoat_TryScoreMinus1 (to _End when it jumps, else -1)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -726,6 +729,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
         178,  # COPY_ABILITY (Role Play): Expert_ChangeUserAbility (:1733), :4429 (E3-B2-5)
+        183,  # APPLY_MAGIC_COAT: no Basic entry; Expert_MagicCoat (:1736), :4499, :4505, :4511
+        # (E3-B2-6)
         233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
         # (E3-B2-1)
         9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
@@ -885,6 +890,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     178: ("Expert_ChangeUserAbility", 1733),
     233: ("Expert_Fling", 1776),
     9: ("Expert_MirrorMove", 1632),
+    183: ("Expert_MagicCoat", 1736),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -1023,6 +1029,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         178,  # COPY_ABILITY: Expert_ChangeUserAbility (E3-B2-5)
         233,  # FLING: Expert_Fling (E3-B2-1)
         9,  # COPY_MOVE: Expert_MirrorMove (E3-B2-2)
+        183,  # APPLY_MAGIC_COAT: Expert_MagicCoat (E3-B2-6)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

@@ -170,6 +170,8 @@ DECOMP_FLAG_BITS = {
     "MOVE_FLAG_TRIGGERS_KINGS_ROCK": MoveFlag.KINGS_ROCK,
     # UpdateFlagsWhenHit's moveCopied write (bcp.c:4480-4486), E3-B2-2.
     "MOVE_FLAG_CAN_MIRROR_MOVE": MoveFlag.MIRROR_MOVE,
+    # BattleControllerPlayer_MoveStolen (bcp.c:3064-3070), E3-B2-6.
+    "MOVE_FLAG_CAN_MAGIC_COAT": MoveFlag.MAGIC_COAT,
 }
 SECONDARY = (
     EffectId.SECONDARY_STAT_SELF,

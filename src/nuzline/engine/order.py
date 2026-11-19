@@ -615,9 +615,14 @@ def used_moves(
         invoked = invoked_move(
             tables, state, side, chosen[side], call[side], prev, first, copied=held
         )
-        out.append(
-            jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
-        )
+        run = jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked))
+        # A Magic Coat user acting before a foe whose move it can reflect runs that move on the foe
+        # (``step._execute_actions``' reflect phase draws it from the holder's own slots): its
+        # accuracy, crit odds, duration and secondary roll are the reflected move's (E3-B2-6;
+        # over-approximate where the Magic Coat fails: the draw is then unread).
+        coat = (tables.move_effect[chosen[side]] == EffectId.MAGIC_COAT) & fights & ~after_foe[side]
+        reflected = coat & ((tables.move_flags[chosen[foe]] & MoveFlag.MAGIC_COAT) != 0)
+        out.append(jnp.where(reflected, chosen[foe], run).astype(_I32))
     return jnp.stack(out)
 
 

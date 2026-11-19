@@ -214,6 +214,16 @@ def test_conversion_2_record_maps_to_conv2_fields():
         assert rows[f"BattleContext.conversion2{part}"] == (name, "mapped")
 
 
+def test_magic_coat_flag_maps_to_magic_coat():
+    # E3-B2-6: turnFlags.magicCoat is the per-battler `magic_coat` (1 + the user's move slot);
+    # magicCoatMon is the reflect phase's actor, per-action scratch.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    pytree, status = rows["BattleContext.turnFlags"]
+    assert status == "mapped" and "magic_coat" in re.findall(r"\w+", pytree)
+    assert "magic_coat" in BattleState._fields
+    assert rows["BattleContext.magicCoatMon"][1].startswith("not needed because")
+
+
 def test_attract_bits_map_to_infatuated():
     # docs/kaizo/k3b2-rules.md §12: statusVolatile's ATTRACT bits are `infatuated`.
     rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}

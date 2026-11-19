@@ -349,6 +349,12 @@ class BattleState(NamedTuple):
     # holder's column of that battler (battle_lib.c:2125-2149, :2203-2220: ``step._reset_battler``).
     move_copied: jnp.ndarray
     move_copied_hit: jnp.ndarray
+    # int8, BattleContext.turnFlags[b].magicCoat as ``1 + the user's moveSlot`` (0 = down): set by
+    # TrySetMagicCoat (battle_script.c:6459-6478), consumed by the first reflection (bcp.c:3071),
+    # cleared at the holder's faint (``VOLATILE_FIELDS``) and at the turn's end
+    # (``step._execute_actions``, battle_lib.c:2231); the slot is the PP of the reflection's Pressure
+    # drain (bcp.c:3083, lib.c:7390-7397: ``moveSlot[holder]``); E3-B2-6.
+    magic_coat: jnp.ndarray
     # BattleContext.conversion2Move (int16 decomp move id, 0 = none), conversion2Battler (int8,
     # 1 + the attacking battler, 0 = none) and conversion2Type (int8 type id), per battler: the last
     # move that landed on it (battle_controller_player.c:4498-4536), read by Conversion 2
@@ -612,6 +618,7 @@ VOLATILE_FIELDS = (
     "move_hit",
     "move_copied",
     "move_copied_hit",
+    "magic_coat",
     "conv2_move",
     "conv2_battler",
     "conv2_type",
@@ -747,6 +754,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "move_hit": (_BATTLER, np.int16),
     "move_copied": (_BATTLER, np.int16),
     "move_copied_hit": ((*_BATTLER, "B"), np.int16),
+    "magic_coat": (_BATTLER, np.int8),
     "conv2_move": (_BATTLER, np.int16),
     "conv2_battler": (_BATTLER, np.int8),
     "conv2_type": (_BATTLER, np.int8),

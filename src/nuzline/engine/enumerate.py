@@ -831,6 +831,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
+    _E.MAGIC_COAT,  # E3-B2-6: sets a flag on its user (order.used_moves: a reflection's move is read)
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -1370,6 +1371,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
+    _E.MAGIC_COAT,  # E3-B2-6: sets a flag on its user (order.used_moves: a reflection's move is read)
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage

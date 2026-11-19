@@ -381,6 +381,9 @@ class _Hit(NamedTuple):
     # The item Fling's script removed this action (``step._use_move``), else 0: the item whose
     # fling effect ``_fling`` applies to the defender (E3-B2-1).
     fling_item: jnp.ndarray
+    # The user's chosen move slot (``moveSlot``): Magic Coat's flag keeps it for the reflection's
+    # Pressure drain (``_magic_coat``, E3-B2-6).
+    coat_slot: jnp.ndarray
 
 
 # Triple Kick's ``SetMultiHit 3`` (effect_script_0104.s:5; Kaizo's be_seq 104 and 88), B13-5.
@@ -2001,6 +2004,17 @@ def _role_play(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return know_ability(state, side, user, cond)
 
 
+def _magic_coat(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Magic Coat (effect_script_0183.s:5, ``BtlCmd_TrySetMagicCoat``, battle_script.c:6459-6478):
+    unless its user acts last (``waitingBattlers == 1``: no other battler's action is pending, which
+    ``step._use_move`` fails as MOVE_STATUS_FAILED), ``turnFlags[user].magicCoat`` is set at script
+    time, before TryMove, so a Magic Coat that then went wrong still stands. The flag keeps ``1 +
+    the user's moveSlot`` (the Pressure drain of its reflection, bcp.c:3083). The :8 message is
+    cosmetic. E3-B2-6."""
+    cond = (h.effect == _E.MAGIC_COAT) & h.landed & ~h.target_moved
+    return _set(state, "magic_coat", h.side, 1 + h.coat_slot, cond)
+
+
 def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Disable (``BtlCmd_TryDisable``, battle_script.c:4581; the script skips it when the
     move missed): the target's last move must sit in one of its slots with PP left, and
@@ -3507,6 +3521,7 @@ def play_hit(
     gift=0,
     script_calc=False,
     fling=0,
+    coat_slot=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -3755,6 +3770,7 @@ def play_hit(
         sub_hit=sub_hit | (sub_take & pursuit_switch),
         shielded=sub_hit | sub_take | (state.substitute_hp[target_side] != 0),
         fling_item=jnp.asarray(fling, _I32),
+        coat_slot=jnp.asarray(coat_slot, _I32),
     )
     for fn in (
         _stat_self,
@@ -3788,6 +3804,7 @@ def play_hit(
         _trick_room,
         _skill_swap,
         _role_play,
+        _magic_coat,
         _disable,
         _confuse_foe,
         _secondary_confuse,

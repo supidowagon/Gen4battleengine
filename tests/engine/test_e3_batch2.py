@@ -1071,3 +1071,206 @@ def test_role_play_is_seen_by_hit_thresholds_and_armor(tables, names):
     s2 = s._replace(ability=s.ability.at[0, mon].set(AbilityId.BATTLE_ARMOR))
     acts = A("Rock Throw", "Role Play", s2, n)
     assert bool(armored(t, s2, acts)[0]) is False
+
+
+# --- Magic Coat (#183, E3-B2-6) ----------------------------------------------------------------
+# effect_script_0183.s -> BtlCmd_TrySetMagicCoat (battle_script.c:6459-6478); the reflection is
+# BattleControllerPlayer_MoveStolen (battle_controller_player.c:3064-3085) at BeforeMove's
+# CHECK_STOLEN, then BtlCmd_MagicCoat (battle_script.c:6487-6513): the mover's move runs with the
+# Magic Coat user as attacker (``step._execute_actions``' reflect phase, ``MODE_REFLECT``).
+
+
+def _coat(t, n, foe="Toxic", foe_moves=None, mine=("Magic Coat", "Tackle"), item="", foe_item=""):
+    """Monferno (side 0, Magic Coat) against a faster Geodude (``foe``), no abilities: priority +4
+    puts the Monferno first whatever the speeds."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 20, mine, item)],
+        [_spec(n, "Geodude", 40, foe_moves or (foe,), foe_item)],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(1).at[1, 0, SPE].set(500))
+
+
+def _cgo(t, n, s, foe="Toxic", out=None, me="Magic Coat"):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def test_magic_coat_is_mapped_and_flags_the_listed_moves(tables, names, kaizo_tables, kaizo_names):
+    """Effect 183 is EffectId.MAGIC_COAT (priority +4, no flags of its own); the moves with
+    MOVE_FLAG_CAN_MAGIC_COAT carry ``MoveFlag.MAGIC_COAT``: Gastro Acid and Worry Seed in both
+    games, Kaizo's Disable, Encore, Spikes, Spite, Stealth Rock, Torment and Toxic Spikes only
+    there (moves.json)."""
+    assert DECOMP_EFFECT_TO_ID[183] == (EffectId.MAGIC_COAT, (0, 0, 0))
+    both = ("Toxic", "Will-O-Wisp", "Gastro Acid", "Worry Seed", "Growl", "Leech Seed")
+    kaizo_only = ("Disable", "Encore", "Spikes", "Spite", "Stealth Rock", "Torment", "Toxic Spikes")
+    for t, nn, kaizo in ((tables, names, False), (kaizo_tables, kaizo_names, True)):
+        coat = nn.move("Magic Coat")
+        assert int(t.move_effect[coat]) == EffectId.MAGIC_COAT
+        assert (
+            int(t.move_flags[coat]) & MoveFlag.MAGIC_COAT == 0 and int(t.move_priority[coat]) == 4
+        )
+        for move in both:
+            assert int(t.move_flags[nn.move(move)]) & MoveFlag.MAGIC_COAT, move
+        for move in kaizo_only:
+            flagged = bool(int(t.move_flags[nn.move(move)]) & MoveFlag.MAGIC_COAT)
+            assert flagged == kaizo, move
+        assert not int(t.move_flags[nn.move("Tackle")]) & MoveFlag.MAGIC_COAT
+
+
+def test_magic_coat_reflects_a_move_aimed_at_its_user(tables, names):
+    """bcp.c:3064-3085: Toxic aimed at the Magic Coat user, who went first, runs with the user as
+    attacker (Toxic's accuracy, effect and target): the Geodude is badly poisoned, the Monferno
+    is not. The flag is consumed (:3071) and gone at the turn's end; the Geodude's Toxic cost its
+    PP (the first pass's DecrementPP) and is its last move (:3073-3075), the battle's movePrev."""
+    t, n = tables, names
+    toxic = n.move("Toxic")
+    s = _coat(t, n)
+    out = _cgo(t, n, s)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.status[1, 0]) == Status.TOXIC
+    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+    assert int(out.last_move[1]) == toxic and int(out.move_prev) == toxic
+    assert out.magic_coat.tolist() == [0, 0]
+    # Without the Magic Coat the Toxic poisons the Monferno.
+    plain = _cgo(t, n, s, me="Tackle")
+    assert int(plain.status[0, 0]) == Status.TOXIC and int(plain.status[1, 0]) == Status.NONE
+
+
+def _misses(side):
+    """Every roll class hits (``_hits``) except ``side``'s own, which misses."""
+    return empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8).at[side].set(0))
+
+
+def test_magic_coat_reflects_only_flagged_moves_and_only_when_it_goes_first(tables, names):
+    """MoveStolen tests MOVE_FLAG_CAN_MAGIC_COAT (:3070): a Tackle hits the user; a switch or a
+    move of higher priority leaves nothing to reflect; the flag never outlives the turn."""
+    t, n = tables, names
+    s = _coat(t, n, "Tackle")
+    out = _cgo(t, n, s, "Tackle")
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0]) and int(out.hp[1, 0]) == int(s.hp[1, 0])
+    assert out.magic_coat.tolist() == [0, 0]
+    # TrySetMagicCoat fails when no other battler's action is pending (:6471): the Helping Hand
+    # (priority +5) goes first, so the user acts last and a Toxic could not be reflected.
+    last = _coat(t, n, "Helping Hand")
+    assert _cgo(t, n, last, "Helping Hand").magic_coat.tolist() == [0, 0]
+    two = make_state(
+        t,
+        [_spec(n, "Monferno", 20, ("Magic Coat",))],
+        [_spec(n, "Geodude", 40, ("Toxic",)), _spec(n, "Geodude", 40, ("Tackle",))],
+    )
+    out = assert_matches_reference(t, two, jnp.array([0, 4 + 1], jnp.int32), _hits())
+    assert int(out.active[1]) == 1 and out.magic_coat.tolist() == [0, 0]
+
+
+def test_a_reflected_move_rolls_the_holders_accuracy_not_the_movers(tables, names):
+    """The move runs with the holder as attacker (BtlCmd_MagicCoat swaps them, :6487-6513): the
+    holder's roll decides it, whatever the mover would have rolled."""
+    t, n = tables, names
+    s = _coat(t, n)
+    assert int(_cgo(t, n, s, out=_misses(0)).status[1, 0]) == Status.NONE
+    assert int(_cgo(t, n, s, out=_misses(1)).status[1, 0]) == Status.TOXIC
+
+
+def test_a_reflected_move_meets_the_movers_defences(tables, names):
+    """The reflected move is an ordinary move against the mover: its Substitute stops Toxic."""
+    t, n = tables, names
+    s = _coat(t, n)
+    s = s._replace(substitute_hp=s.substitute_hp.at[1].set(30))
+    out = _cgo(t, n, s)
+    assert int(out.status[1, 0]) == Status.NONE and int(out.status[0, 0]) == Status.NONE
+
+
+def test_a_reflection_costs_the_holder_a_pp_when_the_mover_has_pressure(tables, names):
+    """BattleSystem_DecPPForPressure(attacker = the holder, defender = the mover) (bcp.c:3083,
+    battle_lib.c:7390-7397): one PP from the holder's Magic Coat slot while the MOVER has
+    Pressure; the mover's own Toxic costs 1 (the holder has none), and a holder's Pressure costs
+    the mover's Toxic 2 and the holder nothing more."""
+    t, n = tables, names
+    s = _coat(t, n, mine=("Tackle", "Magic Coat"))
+    pressure = s._replace(ability=s.ability.at[1, 0].set(AbilityId.PRESSURE))
+    out = _cgo(t, n, pressure, me="Magic Coat")
+    assert int(out.pp[0, 0, 1]) == int(s.pp[0, 0, 1]) - 2 and int(out.pp[0, 0, 0]) == int(
+        s.pp[0, 0, 0]
+    )
+    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 1
+    base = _cgo(t, n, s, me="Magic Coat")
+    assert int(base.pp[0, 0, 1]) == int(s.pp[0, 0, 1]) - 1
+    holder = s._replace(ability=s.ability.at[0, 0].set(AbilityId.PRESSURE))
+    out = _cgo(t, n, holder, me="Magic Coat")
+    assert int(out.pp[1, 0, 0]) == int(s.pp[1, 0, 0]) - 2
+    assert int(out.pp[0, 0, 1]) == int(s.pp[0, 0, 1]) - 1
+
+
+def test_a_reflection_writes_no_move_records_but_the_movers_own(tables, names):
+    """SYSCTL_REUSE_LAST_MOVE (bcp.c:3077) keeps UpdateFlagsWhenHit from writing the holder's
+    moveHit, moveCopied and conversion2 (:4481, :4498, :4509); the mover's movePrevByBattler and
+    movePrev are written (:3073-3075) and its Choice lock stays. Unreflected, Toxic writes all."""
+    t, n = tables, names
+    toxic = n.move("Toxic")
+    s = _coat(t, n, foe_item="Choice Band")
+    out = _cgo(t, n, s)
+    assert int(out.move_hit[0]) == 0 and int(out.move_copied[0]) == 0
+    assert not np.asarray(out.move_copied_hit[0]).any() and int(out.conv2_move[0]) == 0
+    assert int(out.last_move[1]) == toxic and int(out.choice_lock[1]) == toxic
+    plain = _cgo(t, n, s, me="Tackle")
+    assert int(plain.move_copied[0]) == toxic and int(plain.move_copied_hit[0, 1]) == toxic
+
+
+def test_the_metronome_count_follows_the_passes(tables, names):
+    """BeforeMove's end (bcp.c:3221) runs in the holder's pass only: the Metronome item holder
+    counts the reflected move (moveTemp), the mover (whose first pass returned) counts nothing."""
+    t, n = tables, names
+    toxic = n.move("Toxic")
+    s = _coat(t, n, item="Metronome", foe_item="Metronome")
+    out = _cgo(t, n, s)
+    assert int(out.metronome_move[0]) == toxic and int(out.metronome_move[1]) == 0
+
+
+def test_magic_coat_reflects_the_effects_that_land_on_the_mover(tables, names):
+    """Both games' flagged moves land on the MOVER when reflected (the holder is the attacker):
+    Growl (a spread range: the defender is the mover, :6499-6500), Leech Seed, Swagger, Worry Seed
+    (Insomnia), Gastro Acid (E3-2-2, E3-2-6: Owed 1)."""
+    t, n = tables, names
+    out = _cgo(t, n, _coat(t, n, "Growl"), "Growl")
+    assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
+    out = _cgo(t, n, _coat(t, n, "Leech Seed"), "Leech Seed")
+    assert int(out.leech_seed[1]) != 0 and int(out.leech_seed[0]) == 0
+    out = _cgo(t, n, _coat(t, n, "Swagger"), "Swagger")
+    assert int(out.stages[1, Stat.ATK]) == 2 and int(out.confusion[1]) > 0
+    assert int(out.stages[0, Stat.ATK]) == 0 and int(out.confusion[0]) == 0
+    out = _cgo(t, n, _coat(t, n, "Worry Seed"), "Worry Seed")
+    assert int(out.ability[1, 0]) == AbilityId.INSOMNIA and int(out.ability[0, 0]) == AbilityId.NONE
+    out = _cgo(t, n, _coat(t, n, "Gastro Acid"), "Gastro Acid")
+    assert int(out.ability_suppressed[1]) == 1 and int(out.ability_suppressed[0]) == 0
+
+
+def test_kaizos_reflectable_moves_are_reflected_too(kaizo_tables, kaizo_names):
+    """Owed 1 (E3-1-3, E3-2-1) and E3-B2-4's ruling 1: Kaizo's Disable, Encore, Spite, Torment and
+    the hazards carry CAN_MAGIC_COAT and meet the Magic Coat with the holder as attacker (the
+    mover is the defender, the hazards' range included): the mover's Disable disables its own
+    Disable (bs.c:4581-4600), its Encore fails (``Move_CanBeEncored``, lib.c:7221-7231: Encore is
+    its own banned move), its Spite cuts its own Spite's PP by 4, Torment torments it and the
+    hazards land on its own side."""
+    t, n = kaizo_tables, kaizo_names
+    s = _coat(t, n, foe_moves=("Disable", "Tackle"))
+    out = _cgo(t, n, s, "Disable")
+    assert int(out.disabled_move[1]) == n.move("Disable") and int(out.disabled_move[0]) == 0
+    s = _coat(t, n, foe_moves=("Encore", "Tackle"))
+    out = _cgo(t, n, s, "Encore")
+    assert out.encore_move.tolist() == [0, 0]
+    s = _coat(t, n, foe_moves=("Spite", "Tackle"))
+    s = s._replace(pp=s.pp.at[1, 0, 0].set(10))  # Kaizo's Spite has 3 PP
+    out = _cgo(t, n, s, "Spite")
+    assert int(out.pp[1, 0, 0]) == 10 - 1 - 4
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+    out = _cgo(t, n, _coat(t, n, foe_moves=("Torment", "Tackle")), "Torment")
+    assert out.torment.tolist() == [0, 1]
+    for move, field in (
+        ("Spikes", "spikes"),
+        ("Stealth Rock", "stealth_rock"),
+        ("Toxic Spikes", "toxic_spikes"),
+    ):
+        out = _cgo(t, n, _coat(t, n, foe_moves=(move, "Tackle")), move)
+        assert int(getattr(out, field)[1]) == 1 and int(getattr(out, field)[0]) == 0, move
+    # Vanilla has none of them flagged: the Spite of the foe is no reflected move there.
