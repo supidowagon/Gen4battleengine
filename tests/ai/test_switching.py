@@ -200,6 +200,17 @@ def test_too_many_sites_are_refused(tables, names):
     assert int(jax.jit(switch_action)(tables, s, jnp.int8(SWITCH_NONE))) == REFUSED_ACTION
 
 
+def _as_species(tables, s, side, slot, species):
+    """``s`` with party ``slot`` made ``species`` in ability slot 0, its engine ability the species
+    row's: a different one reads as a script's write (``damage.decomp_abilities``)."""
+    own = int(np.asarray(tables.species_abilities)[species, 0])
+    return s._replace(
+        species=s.species.at[side, slot].set(species),
+        ability_slot=s.ability_slot.at[side, slot].set(0),
+        ability=s.ability.at[side, slot].set(own),
+    )
+
+
 @pytest.mark.parametrize(
     ("change", "missing"),
     [
@@ -217,9 +228,9 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Gastly's only ability is Levitate
-        s = s._replace(species=s.species.at[0, 5].set(names.species("Gastly")))
+        s = _as_species(tables, s, 0, 5, names.species("Gastly"))
     else:  # Poliwag (Water Absorb) on Roark's bench: AI_HasAbsorbAbilityInParty
-        s = s._replace(species=s.species.at[1, 1].set(names.species("Poliwag")))
+        s = _as_species(tables, s, 1, 1, names.species("Poliwag"))
     refusals = switching_refusals(tables, s)
     assert any(missing in r for r in refusals), refusals
     with pytest.raises(UnsupportedSwitching, match=missing):
