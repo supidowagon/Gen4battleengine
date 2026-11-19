@@ -16,8 +16,7 @@ import pytest
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import damage_table
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
-from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
 PROC = empty_outcome()._replace(secondary=jnp.ones((2, MAX_HITS), jnp.int8))
 DURATION_3 = PROC._replace(duration=jnp.array([3, 3], jnp.int8))
@@ -37,10 +36,9 @@ def venonat(tables, names):
 
 
 def confuse(tables, names, s, outcome):
-    return step(tables, s, A("Confusion", "Leer", s, names), outcome)
+    return jit_step(tables, s, A("Confusion", "Leer", s, names), outcome)
 
 
-@pytest.mark.slow
 def test_confusion_confuses_on_proc(tables, names, venonat):
     assert int(confuse(tables, names, venonat, DURATION_3).confusion[1]) == 3
     # No proc: Confusion deals its damage only.
@@ -57,18 +55,17 @@ def test_confusion_confuses_on_proc(tables, names, venonat):
     assert int(ko.hp[1, 0]) == 0 and int(ko.confusion[1]) == 0
 
 
-@pytest.mark.slow
 def test_mud_sport_halves_electric_until_switch(tables, names):
     s = roark_state(
         tables, names, player_species="Geodude", player_moves=("Mud Sport",), opp_species="Monferno"
     )
     acts = A("Mud Sport", "Leer", s, names)
-    once = step(tables, s, acts, empty_outcome())
+    once = jit_step(tables, s, acts, empty_outcome())
     assert int(once.mud_sport[0]) == 1 and int(once.mud_sport[1]) == 0
     assert int(once.hp[1, 0]) == int(s.hp[1, 0])
     # A second use fails: the flag and every other effect field are unchanged (turn
     # bookkeeping, Leer's stage drop and the AI's memory aside), only the PP drops.
-    twice = step(tables, once, A("Mud Sport", "Leer", once, names), empty_outcome())
+    twice = jit_step(tables, once, A("Mud Sport", "Leer", once, names), empty_outcome())
     for name in ("mud_sport", "hp", "status", "confusion", "item", "water_sport", "foresight"):
         assert (getattr(twice, name) == getattr(once, name)).all(), name
     assert int(twice.pp[0, 0, 0]) == int(once.pp[0, 0, 0]) - 1
@@ -86,7 +83,7 @@ def test_mud_sport_halves_electric_until_switch(tables, names):
         assert 0 < int(halved[-1]) < int(full[-1])
     # The flag holder switches out (to Cranidos): the flag is gone and Spark is full again.
     sport = s._replace(mud_sport=s.mud_sport.at[1].set(1))
-    out = step(tables, sport, jnp.array([names.move_slot(sport, 0, "Spark"), MOVE_ACTIONS + 2]),
+    out = jit_step(tables, sport, jnp.array([names.move_slot(sport, 0, "Spark"), MOVE_ACTIONS + 2]),
                empty_outcome())  # fmt: skip
     assert int(out.mud_sport[1]) == 0
     fresh = damage_table(tables, out, 0, spark, False)
@@ -112,10 +109,9 @@ def kricketot(tables, names):
 
 
 def bite(tables, names, s):
-    return step(tables, s, A("Bug Bite", "Leer", s, names), empty_outcome())
+    return jit_step(tables, s, A("Bug Bite", "Leer", s, names), empty_outcome())
 
 
-@pytest.mark.slow
 def test_bug_bite_eats_berry(tables, names, kricketot):
     oran, sitrus = names.item("Oran Berry"), names.item("Sitrus Berry")
     s = kricketot
@@ -147,7 +143,6 @@ def test_bug_bite_eats_berry(tables, names, kricketot):
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) and int(out.item_consumed[1, 0]) == 0
 
 
-@pytest.mark.slow
 def test_side_effects_match_reference(tables, names, venonat, kricketot):
     for outcome in (DURATION_3, empty_outcome()):
         assert_matches_reference(tables, venonat, A("Confusion", "Leer", venonat, names), outcome)

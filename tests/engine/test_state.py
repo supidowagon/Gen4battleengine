@@ -11,9 +11,8 @@ from nuzline.data.party import load_party
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import LAYOUT, BattleState, make_state
-from nuzline.engine.step import step
 from nuzline.reference.convert import from_ref, to_ref
-from tests.engine.helpers import A, roark_state
+from tests.engine.helpers import A, jit_step, roark_state
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -318,12 +317,12 @@ def test_new_volatiles_reset_on_switch_and_faint(tables, names):
     # A switch-out clears side 0's battler (BattleSystem_UpdateAfterSwitch zeroes
     # statusVolatile, moveEffectsMask and moveEffectsData); side 1 is untouched.
     both = _with_new_volatiles(_with_new_volatiles(s, 0), 1)
-    out = step(tables, both, A(4 + 1, "Tackle", both, names), empty_outcome())
+    out = jit_step(tables, both, A(4 + 1, "Tackle", both, names), empty_outcome())
     assert _new_volatiles(out, 0) == [0] * len(NEW_VOLATILES)
     assert _new_volatiles(out, 1) == _ticked(_new_volatiles(both, 1)) != [0] * len(NEW_VOLATILES)
     # A KO'd active (CleanupFaintedMon) clears its own fields, not the attacker's.
     ko = _with_new_volatiles(_with_new_volatiles(s.replace_hp(1, 0, 1), 0), 1)
-    out = step(tables, ko, A("Scratch", "Leer", ko, names), empty_outcome())
+    out = jit_step(tables, ko, A("Scratch", "Leer", ko, names), empty_outcome())
     assert int(out.hp[1, 0]) == 0
     assert _new_volatiles(out, 1) == [0] * len(NEW_VOLATILES)
     assert _new_volatiles(out, 0) == _ticked(_new_volatiles(ko, 0))

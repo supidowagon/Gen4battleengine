@@ -51,19 +51,21 @@ from nuzline.engine.enumerate import (
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, MoveFlag, Status
 from nuzline.engine.observe import observe
 from nuzline.engine.order import MOVE_ACTIONS
-from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, sample_outcome
+from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import _source_leaves, replace, step, step_events
+from nuzline.engine.step import _source_leaves, replace, step_events
 from nuzline.prep.pool import Candidate, check_pool
 from nuzline.prep.problem import _ability_refusal, _item_refusal
 from nuzline.search.plan_tree import _FLAG_TEXT
 from tests.engine.helpers import (
     A,
     assert_matches_reference,
+    jit_step,
     roark_party,
     roark_state,
     roark_trainer,
     sample_party,
+    sample_rows,
 )
 from tests.engine.test_enumerate import (
     _kaizo_spec,
@@ -243,7 +245,7 @@ def test_law_is_a_fair_coin(tables, names):
     assert dict(zip(values, (w / den for w in weights), strict=True)) == {0: 0.5, 1: 0.5}
     n = 4000
     keys = jax.random.split(jax.random.key(7), n)
-    draws = jax.vmap(lambda k: sample_outcome(k, tables, s, acts).infatuation)(keys)
+    draws = sample_rows(keys, tables, s, acts).infatuation  # jitted, BATCH-padded
     mean = float(np.mean(np.asarray(draws)[:, 0]))
     assert abs(mean - 0.5) < 5 * math.sqrt(0.25 / n)
 
@@ -472,7 +474,7 @@ def test_observation_and_labels(tables, names):
     obs = []
     for k in (0, 1):
         o = _o((k, 0))
-        obs.append(np.asarray(observe(tables, s, acts, o, step(tables, s, acts, o))))
+        obs.append(np.asarray(observe(tables, s, acts, o, jit_step(tables, s, acts, o))))
     assert (obs[0] != obs[1]).any()
     # The infatuation itself is seen ("fell in love"): Attract against a same-gender foe
     # (fails) and an opposite-gender one differ only in it.
@@ -480,7 +482,7 @@ def test_observation_and_labels(tables, names):
     for genders in ((MALE, MALE), (MALE, FEMALE)):
         t = _state(tables, names, genders=genders, opp="Leer")
         a = A("Attract", "Leer", t, names)
-        seen.append(np.asarray(observe(tables, t, a, _o(), step(tables, t, a, _o()))))
+        seen.append(np.asarray(observe(tables, t, a, _o(), jit_step(tables, t, a, _o()))))
     assert (seen[0] != seen[1]).any()
     texts = dict(_FLAG_TEXT)
     assert texts["in_love"] == "is in love"
@@ -660,7 +662,7 @@ def test_cute_charm_then_the_infatuated_attacker_bruteforce(tables, names):
         assert not np.asarray(laws.relevant.infatuation).any()
         proc = [[0] * MAX_HITS, [0] * MAX_HITS]
         proc[1 - side][0] = 1
-        t2 = step(tables, s, acts, _o(contact_proc=proc))
+        t2 = jit_step(tables, s, acts, _o(contact_proc=proc))
         assert _inf(t2)[side] == 1
         assert np.asarray(laws_of(tables, t2, acts).relevant.infatuation)[side]
         assert_equals_bruteforce(tables, t2, acts)

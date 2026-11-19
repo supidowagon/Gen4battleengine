@@ -32,19 +32,29 @@ from nuzline.engine.outcome import (
     hit_threshold,
     sample_outcome,
 )
-from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
+from tests.engine.helpers import (
+    BATCH,
+    A,
+    assert_matches_reference,
+    jit_step,
+    roark_state,
+    sample_rows,
+    step_batch,
+)
 from tests.strategies import legal_action_pair, outcome_law_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
-CHUNK = 1024
+CHUNK = BATCH  # the suite's one padded row count (tests.engine.helpers)
 HYPOTHESIS = {
     "deadline": None,
     "suppress_health_check": [HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 }
 _laws = jax.jit(outcome_laws)
-_step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
+_step = step_batch
 _sample = sample_rows
+# One compiled program for every example (an eager sample_outcome dispatches op by op and
+# compiles its control flow anew on each call, so memory grew over the examples).
+_sample_one = jax.jit(sample_outcome)
 
 
 def laws_of(tables, state, actions):
@@ -118,7 +128,7 @@ def test_sand_attack_lowers_a_later_move_this_turn(tables, names):
     assert hit_law(tables, s, acts, 0) == {1: 75, 76: 25}
     assert abs(hit_probability(tables, s, acts, 0) - 0.75) < 1e-12
     # The stage drop is there after the turn (the move hit: Sand-Attack has accuracy 100).
-    out = step(tables, s, acts, empty_outcome())
+    out = jit_step(tables, s, acts, empty_outcome())
     assert int(out.stages[0, Stat.ACC]) == -1
 
     # A slower Sand-Attack comes after Scratch: the turn-start rate stands.
@@ -171,12 +181,12 @@ def test_class_values_against_live_threshold(tables, names):
     s, acts = sand_attack_first(tables, names)
     for value, connects in ((1, True), (75, True), (76, False), (0, False)):
         o = empty_outcome()._replace(hit=empty_outcome().hit.at[0, 0].set(value))
-        out = step(tables, s, acts, o)
+        out = jit_step(tables, s, acts, o)
         assert (int(out.hp[1, 0]) < int(s.hp[1, 0])) == connects, value
     # Without the Sand-Attack, 76 is a hit at 100.
     plain = roark_state(tables, names, opp_faster=True)
     o = empty_outcome()._replace(hit=empty_outcome().hit.at[0, 0].set(76))
-    out = step(tables, plain, A("Scratch", "Leer", plain, names), o)
+    out = jit_step(tables, plain, A("Scratch", "Leer", plain, names), o)
     assert int(out.hp[1, 0]) < int(plain.hp[1, 0])
 
 
@@ -301,7 +311,7 @@ def test_accuracy_classes_equal_raw_rolls(tables, names, data):
     laws = laws_of(tables, s, acts)
     assume(laws.relevant.hit[:, 0].any())
     base = jax.tree.map(
-        np.asarray, sample_outcome(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
+        np.asarray, _sample_one(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
     )
 
     def rows(values0, values1):
