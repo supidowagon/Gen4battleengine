@@ -2871,7 +2871,7 @@ def _download(s: RefState, side: int) -> None:
         _change_stage(s, side, Stat.SPA if sum_def >= sum_spd else Stat.ATK, 1)
 
 
-def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
+def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int = -1) -> None:
     """``BattleSystem_TriggerEffectOnSwitch`` (lib.c:3649) after ``side``'s battler
     entered: ``SWITCH_IN_CHECK_STATE_INTIMIDATE`` (lib.c:3795; only the newcomer has
     not announced its Intimidate) then ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
@@ -2904,8 +2904,10 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     # script.c:2884-2902 (B9-6; White Smoke, G-46).
-    # The flag a hit of the paused action set on a battler (subscript_intimidate.s:13, F-4).
-    flagged = turn.sub_hit_mon if turn.sub_hit else -1
+    # ``flagged``: the battler whose substitute the paused action's hit struck
+    # (subscript_intimidate.s:13, F-4). Only the resumed U-turn passes it: BattleContext_Init
+    # clears selfTurnFlags (battle_lib.c:2013-2015, bcp.c:3998), as the engine's
+    # ``entry_sub_hit`` (step.py) does.
     for target_battler in opposing(s, side):  # every opposing battler (D2-16 rule 7)
         _intimidate(s, side, target_battler, flagged)
     if traced:
@@ -7551,7 +7553,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # subscript_attack_then_switch_out.s:69 cleared it; a Baton Pass's defender is the user),
     # the switch-in effects, the item checks, the thaw.
     _synchronize(turn, s, side, side if _move_target(tables, used) in SELF_DEFENDER else foe)
-    _switch_in_effects(turn, s, side)
+    _switch_in_effects(turn, s, side, turn.sub_hit_mon if turn.sub_hit else -1)
     for battler in (side, foe):
         _held_item(turn, s, battler)
     _thaw_target(turn, s, side, used, dealt)
