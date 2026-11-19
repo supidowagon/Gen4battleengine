@@ -609,6 +609,11 @@ SNORE_PARAM = 1
 # ``minimized`` first (:5). E2 batch 9, B9-10.
 STOMP_PARAM = 2
 MINIMIZE_PARAM = 2
+# Charge (effect_script_0174.s, an indirect ON_HIT subscript_charge.s) is ``STAT_SELF`` (Sp. Def
+# +1) with ``move_param[m, 2] == CHARGE_PARAM``: it sets the user's MOVE_EFFECT_CHARGE bit and
+# ``chargedTurns`` = ``CHARGE_TURNS`` first (:5-6), the stage after (:11-13); E3-B2-8.
+CHARGE_PARAM = 3
+CHARGE_TURNS = 2
 # subscript_tailwind_start.s:11 sets both SIDE_CONDITION_TAILWIND bits: a 2-bit counter at 3.
 TAILWIND_TURNS = 3
 # subscript_lucky_chant_start.s:5 ORs 0x5000 into the side conditions: the 3-bit counter at bits

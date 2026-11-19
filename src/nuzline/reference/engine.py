@@ -45,6 +45,8 @@ from nuzline.engine.ids import (
     ACUPRESSURE_STATS,
     CALL_GRAVITY,
     CANNOT_ENCORE_MOVES,
+    CHARGE_PARAM,
+    CHARGE_TURNS,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     FLAIL_FALLOFF,
@@ -1326,6 +1328,10 @@ def _calc_move_damage(
         power = _t(tables, "item_gift_power", _gift_item(s, attacker, gift))
     move_type = _move_type(tables, s, attacker, move, gift)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
+    if s.battlers[attacker].charged_turns and move_type == Type.ELECTRIC:
+        power *= (
+            2  # lib.c:6690-6692: MOVE_EFFECT_CHARGE, after powerMul, before Technician (E3-B2-8)
+        )
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
     if a_ability == AbilityId.TECHNICIAN and move != MOVE_STRUGGLE and power <= 60:
         power = power * 15 // 10
@@ -1957,6 +1963,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "power_trick_desync",  # a Baton Pass newcomer is swapped by the bit (lib.c:2137-2141)
         "magnet_rise",  # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns (G-66)
         "magnet_rise_turns",
+        "charged_turns",  # chargedTurns with MOVE_EFFECT_CHARGE, not Baton-passed (E3-B2-8)
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
         "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, Baton-passed (E3-2-6a)
     ):
@@ -3468,6 +3475,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         p2 = _t(tables, "move_param", move, 2)
         if p2 == MINIMIZE_PARAM and p0 == Stat.EVA:  # subscript_minimize.s:5 (B9-10)
             s.battlers[side].minimized = 1
+        if p2 == CHARGE_PARAM and p0 == Stat.SPD:  # subscript_charge.s:5-6, then :11-13 (E3-B2-8)
+            s.battlers[side].charged_turns = CHARGE_TURNS
         _change_stage(s, side, p0, p1)
         if p2 == 1 and p0 == Stat.DEF:  # Defense Curl (effect_script_0156.s)
             s.battlers[side].curled = 1
@@ -6119,6 +6128,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _disable_check,  # MON_COND_CHECK_STATE_DISABLE, bcp.c:1565
             _encore_check,  # MON_COND_CHECK_STATE_ENCORE, bcp.c:1591 (B10-9)
             _lock_on_check,  # MON_COND_CHECK_STATE_LOCK_ON, bcp.c:1618
+            _charge_check,  # MON_COND_CHECK_STATE_CHARGE, bcp.c:1626 (E3-B2-8)
             _taunt_check,  # MON_COND_CHECK_STATE_TAUNT, bcp.c:1635
             _embargo_check,  # MON_COND_CHECK_STATE_EMBARGO, bcp.c:1671 (B13-31)
             _yawn_check,  # MON_COND_CHECK_STATE_YAWN, bcp.c:1684
@@ -6293,6 +6303,13 @@ def _lock_on_check(turn: _Turn, s: RefState, side: int) -> None:
     """``MON_COND_CHECK_STATE_LOCK_ON`` (bcp.c:1618-1624): the counter drops by 1."""
     if s.battlers[side].lock_on:
         s.battlers[side].lock_on -= 1
+
+
+def _charge_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_CHARGE`` (bcp.c:1626-1632): a nonzero chargedTurns drops by 1 and
+    the MOVE_EFFECT_CHARGE bit goes at 0 (``charged_turns`` holds both), E3-B2-8."""
+    if s.battlers[side].charged_turns:
+        s.battlers[side].charged_turns -= 1
 
 
 def _locked_onto(s: RefState, attacker: int, defender: int) -> bool:
@@ -6632,7 +6649,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
     others = (
         sd.leech_seed, sd.lock_on, sd.perish_song, sd.yawn, sd.imprison, sd.imprisoned,
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
-        sd.power_trick, sd.ability_suppressed,
+        sd.power_trick, sd.ability_suppressed, sd.charged_turns,
     )  # fmt: skip
     row = _t(tables, "species_form_row", mon.species, mon.form)
     party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]

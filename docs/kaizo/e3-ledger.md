@@ -834,3 +834,46 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/ai/test_kaizo_policy.py (`test_lucky_chant_*`, `test_expert_lucky_chant`, the exact-equals-loose
   list), tests/engine/test_accuracy_classes.py, tests/engine/test_damage_classes.py (two `slow` EXACT_CASES:
   a faster and a slower foe Lucky Chant, brute force); `fullset`-free.
+
+- E3-B2-8 Charge (#174, BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER; move 268, the only move with effect
+  174 in either game, acc 0, RANGE_USER, CAN_SNATCH; PP 20 vanilla, 1 Kaizo): no new `EffectId`: Charge is
+  `STAT_SELF` (Sp. Def +1) with `move_param[m, 2] = ids.CHARGE_PARAM` (3), beside Defense Curl (1) and Minimize
+  (2); `tools/effect_map.py` entry 174. New per-battler `charged_turns [B]` int8 (0-2: `chargedTurns`, 2 bits,
+  battle_mon.h:11, with its `MOVE_EFFECT_CHARGE` bit, moves.h:17, set and cleared together) in
+  `VOLATILE_FIELDS`, not in `BATON_PASSED_FIELDS`; no `Outcome` field and no draw. Tables: `move_effect` and
+  `move_param` values of Charge only; no manifest bump (no array or key changed).
+  Script: effect_script_0174.s:5 an indirect ON_HIT `subscript_charge.s`: :5-6 MOVE_EFFECT_CHARGE and
+  chargedTurns = 2 on the attacker (`ids.CHARGE_TURNS`, `effects._stat_self`), then :11-13 Sp. Def +1 through
+  UPDATE_STAT_STAGE (a +6 stage fails with a message only; the counter was set first and the move does not
+  fail: no `primary_effect_fails` entry). No fail condition, no Substitute or Shield Dust relevance (the
+  target is the user).
+  Turn end: `MON_COND_CHECK_STATE_CHARGE` (bcp.c:1626-1632; enum :1276-1278: after Lock-On, before Taunt):
+  chargedTurns above 0 drops by 1 and the bit goes at 0 (`step._charge_check`, in `_uproar_then_disable`
+  after `_lock_on_check`; reference `_charge_check` at the same place in its list). Set on turn T: 2 -> 1 at
+  T's end, up for T + 1, 0 at T + 1's end.
+  Power: `BattleSystem_CalcMoveDamage` (battle_lib.c:6690-6692) doubles `movePower` when the attacker has the
+  bit and `moveType` is Electric, after powerMul (:6688), before Helping Hand (:6694) and Technician (:6698):
+  `damage._pre_random` (move type now resolved before powerMul; the AI's estimate, `ai=True`, reads the same
+  `charged_turns` with `ai_case_type`) and the reference's `_calc_move_damage`. The hit does not consume it.
+  Cleared at switch and faint (lib.c:2071, :2101-2104, :2166, :2185-2188); not Baton Passed (moves.h:46-48).
+  `effects.MOVE_EFFECT_MASK_FIELDS` (Roar's whole-mask Ingrain test, subscript_force_target_to_switch_or_flee.s:7)
+  and the reference's `_ingrain_anchors` include it. Observation: `observe._NONZERO_SIDE` "charged_turns"
+  ("{0} began charging power!", subscript_charge.s:7), `plan_tree._COND_TEXT`.
+  Enumeration: no new clause. A user's own Electric move that turn is its one action, so the counter is a
+  turn-start damage input (the turn-start tables read it), and the foe's Charge changes the side's Sp. Def
+  stage through the existing `STAT_SELF` clauses. No `INPUT_CLAUSE_EFFECTS`, `NON_TABLE_DAMAGE_EFFECTS` or
+  `CRIT_ODDS_EFFECTS` entry; no accuracy / evasion write (`STAT_SELF` with Sp. Def).
+  AI: no Basic or Expert label for 174 (script.s names it once, in Expert_Encore_EncouragedMoveEffects, :3250,
+  already transcribed: `commands.ENCORE_ENCOURAGED_EFFECTS`); no roll; no read-bounds row (regenerated: no
+  change). Backlog regenerated: the row "move effect #174: Charge" (Roark Split) closes.
+  Rulings. (1) STAT_SELF with a param, not a new `EffectId`: the stat step, the Metronome call
+  and every STAT_SELF clause are shared, and the two decomp commands (flag set, then stage) are the
+  same order as Minimize's. (2) The doubling reads the engine's `move_type_of` (Normalize is unsupported, as
+  everywhere in the engine and reference). (3) Doubles: the field is per battler, the doubling reads the
+  attacking battler's own `charged_turns`, and the countdown runs in the per-battler end-of-turn loop.
+  Not built: Owed lines naming Charge: none. Snatch (CAN_SNATCH) is not modelled in the engine (nothing
+  steals a stat-raising move yet). Not modelled, message only: "{0} began charging power!".
+  Tests: tests/engine/test_e3_batch2.py (`test_charge_*`, `test_a_charged_*`, `test_a_faster_foe_hits_before_
+  the_charge_lands`, `test_the_ai_estimate_reads_the_charge`, `test_a_switch_clears_the_charge`),
+  tests/ai/test_kaizo_policy.py (`test_charge_has_no_ai_label_and_one_table_entry`,
+  `test_expert_encore_encourages_a_players_last_charge`); `fullset`-free.

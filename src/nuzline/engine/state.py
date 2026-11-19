@@ -242,6 +242,12 @@ Encodings:
   makes through ``Battler_Ability``, ``Battler_IgnorableAbility``, ``BattleSystem_CountAbility``
   or ``BtlCmd_CheckAbility`` goes through one of them; a raw ``BattleMon.ability`` read stays on
   ``ability`` with a comment naming its decomp line.
+* E3-B2-8 (Charge). ``charged_turns`` is the active battler's ``MoveEffectsData.chargedTurns``
+  (battle_mon.h:11, 2 bits), 0 = none; its ``MOVE_EFFECT_CHARGE`` bit (moves.h:17) is set and
+  cleared with it (subscript_charge.s:5-6, bcp.c:1626-1630), so one field holds both. A volatile
+  (switch-out and faint clear the mask and the data, battle_lib.c:2071, :2101-2104) that Baton
+  Pass drops (moves.h:46-48). ``damage`` doubles the user's Electric move power while it is up
+  (battle_lib.c:6690).
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -411,6 +417,9 @@ class BattleState(NamedTuple):
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
     magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
+    # int8, MoveEffectsData.chargedTurns (2 bits, battle_mon.h:11), 0 = none; MOVE_EFFECT_CHARGE
+    # (moves.h:17) is set and cleared with it (subscript_charge.s:5-6, bcp.c:1626-1630), E3-B2-8.
+    charged_turns: jnp.ndarray
     # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
     # active slot are the BattleMon's, and these hold the party's values of the slots the battler
     # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
@@ -663,6 +672,7 @@ VOLATILE_FIELDS = (
     "power_trick_desync",
     "magnet_rise",
     "magnet_rise_turns",
+    "charged_turns",
     "embargo",
     "ability_suppressed",
 )
@@ -801,6 +811,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "power_trick_desync": (_BATTLER, np.int8),
     "magnet_rise": (_BATTLER, np.int8),
     "magnet_rise_turns": (_BATTLER, np.int8),
+    "charged_turns": (_BATTLER, np.int8),
     "mimic_slots": (_BATTLER, np.int8),
     "shadow_moves": ((*_BATTLER, MOVES), np.int16),
     "shadow_pp": ((*_BATTLER, MOVES), np.int8),

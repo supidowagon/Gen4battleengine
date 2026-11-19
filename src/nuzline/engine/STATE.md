@@ -110,8 +110,12 @@ three structs has a row.
   battle_lib.c:3088-3093, and by the AI's LoadBattlerAbility / CheckBattlerAbility,
   trainer_ai.c:1177-1178, :1221-1222). Gastro Acid (E3-2-6, `effects._gastro_acid`) sets it
   (subscript_suppress_target_ability.s:10); it is in `effects.MOVE_EFFECT_MASK_FIELDS`, so a
-  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). The rest
-  (Charge, Grudge, Miracle Eye, Heal Block) are later (M6).
+  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). Charge ->
+  `charged_turns` (E3-B2-8: `MoveEffectsData.chargedTurns`, 2 bits, with its `MOVE_EFFECT_CHARGE`
+  bit, set to 2 by subscript_charge.s:5-6, counted down at the turn end, bcp.c:1626-1630; cleared
+  with the volatiles, not Baton-passed, moves.h:46-48; in `effects.MOVE_EFFECT_MASK_FIELDS`;
+  doubles the user's Electric power, battle_lib.c:6690). The rest (Grudge, Miracle Eye, Heal
+  Block) are later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -511,7 +515,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -521,7 +525,7 @@ three structs has a row.
 |---|---|---|
 | `MoveEffectsData.disabledTurns` | `disable_turns` | mapped |
 | `MoveEffectsData.encoredTurns` | `encore_turns` | mapped |
-| `MoveEffectsData.chargedTurns` | — | later (M6) |
+| `MoveEffectsData.chargedTurns` | `charged_turns` | mapped |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
 | `MoveEffectsData.protectSuccessTurns` | `protect_count` | mapped |
 | `MoveEffectsData.perishSongTurns` | `perish_song_turns` | mapped |

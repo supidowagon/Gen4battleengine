@@ -1564,14 +1564,6 @@ def _pre_random(
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
     power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
-    power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
-    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul (Charge
-    # and Helping Hand, between them, are unsupported), never Struggle (the self-hit's move).
-    technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
-        power <= 60
-    )
-    technician = technician & (move != MOVE_STRUGGLE)
-    power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
     # the AI passes its case's type (trainer_ai.c:3074-3097; ai_case_type): Hidden Power's IV
     # type, Natural Gift's and Judgment's item types, else 0 (the table's).
@@ -1580,6 +1572,19 @@ def _pre_random(
         if ai
         else move_type_of(tables, s, atk_side, move, gift)
     )
+    power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
+    # :6690-6692 MOVE_EFFECT_CHARGE on the attacker doubles an Electric move's power (moveType as
+    # above; Normalize is unsupported), after powerMul and before Helping Hand (a doubles flag) and
+    # Technician; the hit does not consume it (E3-B2-8).
+    charged = (s.charged_turns[atk_side] != 0) & (move_type == Type.ELECTRIC)
+    power = jnp.where(charged, power * 2, power)
+    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul and Charge,
+    # never Struggle (the self-hit's move).
+    technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
+        power <= 60
+    )
+    technician = technician & (move != MOVE_STRUGGLE)
+    power = jnp.where(technician, power * 15 // 10, power)
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[party(fmt, atk_side), a_slot])
     # :6653-6654 attackerParams / defenderParams.ability: Battler_Ability.

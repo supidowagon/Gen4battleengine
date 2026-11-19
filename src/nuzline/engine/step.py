@@ -3482,6 +3482,15 @@ def _lock_on_check(state: BattleState, side) -> BattleState:
     return _set_side(state, "lock_on", side, state.lock_on[side] - 1, on)
 
 
+def _charge_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_CHARGE`` (bcp.c:1626-1632), after Lock-On and before Taunt: a
+    nonzero chargedTurns drops by 1; at 0 the MOVE_EFFECT_CHARGE bit goes (``charged_turns``
+    holds both). Set to 2 on turn T, it is 1 after T's end and 0 after T + 1's, so the user's
+    Electric moves of turn T + 1 are doubled (E3-B2-8)."""
+    on = state.charged_turns[side] != 0
+    return _set_side(state, "charged_turns", side, state.charged_turns[side] - 1, on)
+
+
 def _stale_known_item(before: BattleState, after: BattleState, fought) -> BattleState:
     """B10-6: Knock Off's BtlCmd_TryKnockOff runs no CopyToParty, so the AI's record of the
     player's knocked item (``ai_item_known``) stays until the battler's next
@@ -3528,10 +3537,10 @@ def _encore_check(state: BattleState, side) -> BattleState:
 
 def _uproar_then_disable(tables: Tables, state: BattleState, side, failed) -> BattleState:
     """``MON_COND_CHECK_STATE_UPROAR``, then (``_THRASH``, unsupported, between)
-    ``MON_COND_CHECK_STATE_DISABLE``, ``_ENCORE`` (B10-9) and ``_LOCK_ON``: none changes HP, so
-    they share one faint check."""
+    ``MON_COND_CHECK_STATE_DISABLE``, ``_ENCORE`` (B10-9), ``_LOCK_ON`` and ``_CHARGE``
+    (E3-B2-8): none changes HP, so they share one faint check."""
     state = _disable_check(tables, _uproar_check(tables, state, side, failed), side)
-    return _lock_on_check(_encore_check(state, side), side)
+    return _charge_check(_lock_on_check(_encore_check(state, side), side), side)
 
 
 def _taunt_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -3736,7 +3745,7 @@ END_OF_TURN_ORDER = (
     # (``_bind_then_bad_dreams``)
     ("bind", _bind_then_bad_dreams),
     # MON_COND_CHECK_STATE_UPROAR, battle_controller_player.c:1505, then
-    # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618 (``_uproar_then_disable``; the
+    # MON_COND_CHECK_STATE_DISABLE, :1565, then _LOCK_ON, :1618, _CHARGE, :1626 (``_uproar_then_disable``; the
     # only check that reads the turn's moveFailFlags)
     ("uproar_disable", _uproar_then_disable),
     # MON_COND_CHECK_STATE_TAUNT, battle_controller_player.c:1635, then MAGNET_RISE (:1647, in

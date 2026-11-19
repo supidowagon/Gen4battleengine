@@ -49,6 +49,7 @@ reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) i
 from __future__ import annotations
 
 from nuzline.engine.ids import (
+    CHARGE_PARAM,
     COUNTER_ANY,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
@@ -568,6 +569,10 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     178: ("BATTLE_EFFECT_COPY_ABILITY", _E.ROLE_PLAY, (0, 0, 0)),
     # Magic Coat: effect_script_0183.s -> BtlCmd_TrySetMagicCoat (E3-B2-6).
     183: ("BATTLE_EFFECT_APPLY_MAGIC_COAT", _E.MAGIC_COAT, (0, 0, 0)),
+    # Charge: effect_script_0174.s, an indirect ON_HIT subscript_charge.s: the user's
+    # MOVE_EFFECT_CHARGE and chargedTurns = 2, then Sp. Def +1 (STAT_SELF with
+    # move_param[m, 2] = CHARGE_PARAM), E3-B2-8.
+    174: ("BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER", _E.STAT_SELF, (_SPD, 1, CHARGE_PARAM)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

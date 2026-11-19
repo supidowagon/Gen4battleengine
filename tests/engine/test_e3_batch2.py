@@ -1411,3 +1411,209 @@ def test_a_lucky_chant_in_the_turn_changes_the_damage_inputs_of_the_foes_hit(tab
     assert not bool(damage_inputs_can_change(t, up, acts, foe_first)[1, 0])
     assert bool(outcome_laws(t, up, acts).no_crit[1])
     assert not bool(outcome_laws(t, s, acts).no_crit[1])
+
+
+# --- Charge (#174, E3-B2-8) ---------------------------------------------------------------------
+# effect_script_0174.s: an indirect ON_HIT subscript_charge.s: MOVE_EFFECT_CHARGE and chargedTurns
+# = 2 on the user (:5-6), then Sp. Def +1 (:11-13); the turn-end pass drops the counter by 1 and
+# the bit goes at 0 (battle_controller_player.c:1626-1630); the user's Electric movePower doubles
+# while it is set (battle_lib.c:6690-6692).
+
+
+def _ch(t, n, mine=("Charge", "Thunderbolt", "Tackle"), foe_moves=("Tackle",), fast=True):
+    """Monferno (side 0, ``mine``) against a Bidoof (``foe_moves``) with 1000 HP, no abilities; the
+    Monferno is the faster one only if ``fast``."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 30, mine)],
+        [_spec(n, "Bidoof", 20, foe_moves)],
+    )
+    s = s._replace(
+        ability=s.ability.at[:, 0].set(AbilityId.NONE),
+        hp=s.hp.at[1, 0].set(1000),
+        max_hp=s.max_hp.at[1, 0].set(1000),
+    )
+    fast_spe, slow_spe = (500, 1) if fast else (1, 500)
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(fast_spe).at[1, 0, SPE].set(slow_spe))
+
+
+def _chgo(t, n, s, me="Charge", foe="Tackle", out=None):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def _charged(s, turns):
+    return s._replace(charged_turns=s.charged_turns.at[0].set(turns))
+
+
+def _roll(value):
+    return _hits()._replace(roll=jnp.full((2, MAX_HITS), value, jnp.int8))
+
+
+def test_charge_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 174 (effect_script_0174.s) is ``STAT_SELF`` (Sp. Def +1) with ``CHARGE_PARAM``; Charge
+    (move 268) is the only move with it; accuracy 0; PP 20 in vanilla and 1 in Kaizo (moves.json);
+    the field is a volatile that Baton Pass drops and the Ingrain test reads."""
+    from nuzline.engine.effects import MOVE_EFFECT_MASK_FIELDS
+    from nuzline.engine.ids import CHARGE_PARAM
+    from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS
+
+    assert DECOMP_EFFECT_TO_ID[174] == (EffectId.STAT_SELF, (Stat.SPD, 1, CHARGE_PARAM))
+    for t, nn, pp in ((tables, names, 20), (kaizo_tables, kaizo_names, 1)):
+        move = nn.move("Charge")
+        assert int(t.move_effect[move]) == EffectId.STAT_SELF
+        assert np.asarray(t.move_param[move]).tolist() == [Stat.SPD, 1, CHARGE_PARAM]
+        assert int((np.asarray(t.move_param)[:, 2] == CHARGE_PARAM).sum()) == 1
+        assert int(t.move_accuracy[move]) == 0
+        assert int(t.move_pp[move]) == pp
+    assert "charged_turns" in VOLATILE_FIELDS and "charged_turns" not in BATON_PASSED_FIELDS
+    assert "charged_turns" in MOVE_EFFECT_MASK_FIELDS
+
+
+def test_charge_sets_two_turns_and_raises_sp_def_and_the_pass_counts_it_down(tables, names):
+    """subscript_charge.s:5-6, :11-13: chargedTurns = 2 and Sp. Def +1 on the user only; the turn's
+    pass (bcp.c:1626-1630) leaves 1, the next turn's pass 0 (the bit goes), so a Charge used on
+    turn T is up for T + 1 and gone for T + 2."""
+    t, n = tables, names
+    s = _ch(t, n)
+    one = _chgo(t, n, s)
+    assert one.charged_turns.tolist() == [1, 0]
+    assert one.stages[:, Stat.SPD].tolist() == [1, 0]
+    two = _chgo(t, n, one, me="Tackle")
+    assert two.charged_turns.tolist() == [0, 0]
+    assert two.stages[:, Stat.SPD].tolist() == [1, 0]
+    # A second Charge while up sets the counter to 2 again (the script has no fail test).
+    again = _chgo(t, n, one)
+    assert again.charged_turns.tolist() == [1, 0]
+    assert again.stages[:, Stat.SPD].tolist() == [2, 0]
+
+
+def test_charge_sets_the_counter_even_when_sp_def_cannot_rise(tables, names):
+    """UPDATE_STAT_STAGE fails with a message at +6 (:11-13) but the counter was set first (:5-6)
+    and the move is not a failure."""
+    t, n = tables, names
+    s = _ch(t, n)
+    s = s._replace(stages=s.stages.at[0, Stat.SPD].set(6))
+    out = _chgo(t, n, s)
+    assert out.charged_turns.tolist() == [1, 0]
+    assert int(out.stages[0, Stat.SPD]) == 6
+
+
+def test_charge_raises_sp_def_before_a_slower_foes_special_move(tables, names):
+    """The same-turn case: the +1 lands before the slower foe's Water Gun, so it deals less than
+    against a user that used a move that raises nothing (Leer lowers the foe's Defense)."""
+    t, n = tables, names
+    s = _ch(t, n, mine=("Charge", "Leer"), foe_moves=("Water Gun",))
+    charged = _chgo(t, n, s, foe="Water Gun")
+    plain = _chgo(t, n, s, me="Leer", foe="Water Gun")
+    assert _lost(s, charged, 0) < _lost(s, plain, 0)
+    assert int(charged.stages[0, Stat.SPD]) == 1
+
+
+def test_a_faster_foe_hits_before_the_charge_lands(tables, names):
+    """A faster foe's special move meets the unraised Sp. Def (the same damage as against a user
+    that did nothing); the counter is set all the same."""
+    t, n = tables, names
+    s = _ch(t, n, mine=("Charge", "Leer"), foe_moves=("Water Gun",), fast=False)
+    charged = _chgo(t, n, s, foe="Water Gun")
+    plain = _chgo(t, n, s, me="Leer", foe="Water Gun")
+    assert _lost(s, charged, 0) == _lost(s, plain, 0) > 0
+    assert charged.charged_turns.tolist() == [1, 0]
+
+
+def test_a_charged_electric_move_deals_double_power_and_is_not_consumed(tables, names):
+    """battle_lib.c:6690-6692: the user's Electric movePower x2 after powerMul (so the same as
+    ``power_mul=20`` here), at either counter value; the hit does not consume it (the pass does)."""
+    from nuzline.engine.damage import damage_for_roll
+
+    t, n = tables, names
+    s = _ch(t, n)
+    move = n.move("Thunderbolt")
+    base = int(damage_for_roll(t, s, 0, move, False, 7))
+    doubled = int(damage_for_roll(t, s, 0, move, False, 7, power_mul=20))
+    assert doubled > base
+    for left in (1, 2):
+        assert int(damage_for_roll(t, _charged(s, left), 0, move, False, 7)) == doubled
+    out = _chgo(t, n, _charged(s, 1), me="Thunderbolt", out=_roll(7))
+    assert _lost(s, out, 1) == doubled
+    assert out.charged_turns.tolist() == [0, 0]  # the pass, not the hit, ended it
+    plain = _chgo(t, n, s, me="Thunderbolt", out=_roll(7))
+    assert _lost(s, plain, 1) == base
+
+
+def test_charge_doubles_electric_only_and_only_the_chargers_own_moves(tables, names):
+    """Only a move whose type is Electric (``moveType``): Tackle is unchanged, a charged foe's
+    counter changes nothing of the user's damage, and the foe's own Electric move is doubled by
+    its own counter."""
+    from nuzline.engine.damage import damage_for_roll
+
+    t, n = tables, names
+    s = _ch(t, n)
+    tackle = n.move("Tackle")
+    assert int(damage_for_roll(t, _charged(s, 2), 0, tackle, False, 7)) == int(
+        damage_for_roll(t, s, 0, tackle, False, 7)
+    )
+    foe_charged = s._replace(charged_turns=s.charged_turns.at[1].set(2))
+    bolt = n.move("Thunderbolt")
+    assert int(damage_for_roll(t, foe_charged, 0, bolt, False, 7)) == int(
+        damage_for_roll(t, s, 0, bolt, False, 7)
+    )
+    shock = n.move("ThunderShock")
+    assert int(damage_for_roll(t, foe_charged, 1, shock, False, 7)) > int(
+        damage_for_roll(t, s, 1, shock, False, 7)
+    )
+
+
+def test_charge_comes_before_technician(tables, names):
+    """battle_lib.c:6690-6702: Charge doubles Thunder Shock's 40 to 80 and Technician (power <= 60)
+    then no longer applies: the damage is that of an 80-power hit, not 120."""
+    from nuzline.engine.damage import damage_for_roll
+
+    t, n = tables, names
+    s = _ch(t, n)
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.TECHNICIAN))
+    shock = n.move("ThunderShock")
+    assert int(t.move_power[shock]) == 40
+    got = int(damage_for_roll(t, _charged(s, 1), 0, shock, False, 7))
+    assert got == int(damage_for_roll(t, s, 0, shock, False, 7, in_power=80))
+    assert got > int(damage_for_roll(t, s, 0, shock, False, 7))  # 40 x 1.5 = 60 alone
+
+
+def test_the_ai_estimate_reads_the_charge(tables, names):
+    """TrainerAI_CalcDamage -> BattleSystem_CalcMoveDamage (trainer_ai.c:3082-3091) reads the
+    attacker's mask like the hit does."""
+    from nuzline.engine.damage import ai_damage_for_roll
+
+    t, n = tables, names
+    s = _ch(t, n)
+    move = n.move("Thunderbolt")
+    base = int(ai_damage_for_roll(t, s, 0, move, 7))
+    assert int(ai_damage_for_roll(t, _charged(s, 1), 0, move, 7)) > base
+
+
+def test_a_switch_clears_the_charge(tables, names):
+    """The mask and the data are zeroed with the volatiles (battle_lib.c:2071, :2101-2104;
+    moves.h:46-48 does not list MOVE_EFFECT_CHARGE): a plain switch drops it."""
+    t, n = tables, names
+    two = make_state(
+        t,
+        [_spec(n, "Monferno", 30, ("Charge", "Tackle")), _spec(n, "Geodude", 30, ("Tackle",))],
+        [_spec(n, "Bidoof", 20, ("Tackle",))],
+    )
+    two = two._replace(
+        stats=two.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1),
+        charged_turns=two.charged_turns.at[0].set(2),
+    )
+    out = assert_matches_reference(t, two, jnp.array([4 + 1, 0], jnp.int32), empty_outcome())
+    assert int(out.charged_turns[0]) == 0
+
+
+def test_a_charged_ingrain_user_no_longer_anchors_against_roar(tables, names):
+    """subscript_force_target_to_switch_or_flee.s:7 compares the whole mask: MOVE_EFFECT_CHARGE
+    next to Ingrain is not exactly Ingrain (``effects.ingrain_anchors``)."""
+    from nuzline.engine.effects import ingrain_anchors
+
+    t, n = tables, names
+    s = _ch(t, n)
+    rooted = s._replace(ingrain=s.ingrain.at[0].set(1))
+    assert bool(ingrain_anchors(t, rooted, 0))
+    assert not bool(ingrain_anchors(t, _charged(rooted, 1), 0))

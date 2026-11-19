@@ -283,6 +283,8 @@ from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
+    CHARGE_PARAM,
+    CHARGE_TURNS,
     GENDER_NONE,
     GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
@@ -457,6 +459,9 @@ def _stat_self(tables, state, h: _Hit) -> BattleState:
     cond = (h.effect == _E.STAT_SELF) & h.landed
     # Minimize (subscript_minimize.s:5) sets MOVE_EFFECT_MINIMIZE before its Evasion +1 (B9-10).
     state = _set(state, "minimized", h.side, 1, cond & (h.param[2] == MINIMIZE_PARAM))
+    # Charge (subscript_charge.s:5-6): MOVE_EFFECT_CHARGE and chargedTurns = 2 before the Sp. Def
+    # stage (:11-13), whatever the stage does (E3-B2-8).
+    state = _set(state, "charged_turns", h.side, CHARGE_TURNS, cond & (h.param[2] == CHARGE_PARAM))
     state = change_stage(state, h.side, h.param[0], h.param[1], cond)
     # Defense Curl (move_param[m, 2] = 1) sets the flag whatever the stage change does.
     return _set(state, "curled", h.side, 1, cond & (h.param[2] == 1) & (h.param[0] == Stat.DEF))
@@ -2386,6 +2391,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "semi_invulnerable",  # B10-12
     "power_trick",  # B12-10
     "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, E3-2-6
+    "charged_turns",  # MOVE_EFFECT_CHARGE, E3-B2-8
 )
 
 
@@ -2394,7 +2400,7 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
     Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Charge, Grudge, Miracle Eye,
+    (``camouflaged``). The other bits come from unsupported moves (Grudge, Miracle Eye,
     Heal Block); each joins the tuple with its move."""
     other = camouflaged(tables, state, side)
     for name in MOVE_EFFECT_MASK_FIELDS:

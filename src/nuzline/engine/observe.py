@@ -216,6 +216,8 @@ _NONZERO_SIDE = (
     # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it
     # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
     "ability_suppressed",
+    # E3 batch 2: "{0} began charging power!" (subscript_charge.s:7) until its count runs out.
+    "charged_turns",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

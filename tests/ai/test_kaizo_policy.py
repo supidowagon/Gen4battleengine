@@ -5595,3 +5595,44 @@ def test_lucky_chant_is_scored_not_refused_and_exact_equals_loose(
         layout = layout_for(t, flags, s)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)
+
+
+# --- #174 Charge (E3-B2-8) --------------------------------------------------------------------
+
+
+def test_charge_has_no_ai_label_and_one_table_entry(kaizo_tables, kaizo_names):
+    """Charge is BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER, 174, named once in script.s, in
+    Expert_Encore_EncouragedMoveEffects (:3250); no Basic_ScoreMoveEffect or Expert_Main entry and
+    no roll, so ``policy`` has no label for it (E3-B2-8)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS
+
+    t, n = kaizo_tables, kaizo_names
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(174) == 1
+    assert 174 not in KAIZO_EXPERT_LABELS
+    assert int(t.move_ai_effect[n.move("Charge")]) == 174
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    named = [
+        i + 1
+        for i, line in enumerate(lines)
+        if "BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER" in line
+    ]
+    assert named == [3250]
+
+
+def test_expert_encore_encourages_a_players_last_charge(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """Expert_Encore (script.s:3177-3200) with the player's last move Charge, which is in the
+    table (:3250): +3 (the faster AI, :3192 not jumping), 0 when :3192 jumps; Tackle is not in it:
+    -2 (E3-B2-8)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Encore", "Accelerock", "", ""))
+    s = _speeds(s, player=1, opp=500)
+    charge = s._replace(last_move=s.last_move.at[0].set(n.move("Charge")))
+    assert _delta(t, charge, 0x3, 0x7)[0] == 3
+    assert _delta(t, charge, 0x3, 0x7, ((0, 3192),))[0] == 0
+    tackle = s._replace(last_move=s.last_move.at[0].set(n.move("Tackle")))
+    assert _delta(t, tackle, 0x3, 0x7)[0] == -2
