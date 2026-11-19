@@ -14,7 +14,12 @@
 # in line (lost.txt); after two requeues (kills and losses together) it gets rc 98 (overkilled.txt).
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of the exec-pod body that starts setup.sh): GATE_GB (default 88), MAXP (10),
-# RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118).
+# RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118), WARMUP, WARMUP_S (900).
+# Warm-up: when queue.txt has a tests/engine unit, one pytest process over the node id WARMUP
+# (default tests/engine/test_step_basic.py::test_miss_deals_no_damage, which compiles step; none
+# turns it off) runs alone first (unit.sh --warmup, files in out/warmup/), so step is compiled once
+# into the pod-wide compile cache instead of by every early unit at once. It waits for the memory
+# gate, is killed after WARMUP_S s, and its result never fails the run; a restarted runner skips it.
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"
 GATE_GB="${GATE_GB:-88}"; MAXP="${MAXP:-10}"; RUNMAXP="${RUNMAXP:-$MAXP}"; SPACING="${SPACING:-15}"; KILL_GB="${KILL_GB:-118}"
@@ -37,6 +42,16 @@ largest() {  # this run's live unit with the largest RSS (summed over its proces
 [ -f pending.txt ] || cp queue.txt pending.txt
 [ -f ALL.start ] || date +%s > ALL.start
 ( while [ ! -f DONE ]; do echo "$(date +%s) $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 ))" >> mem_mb.txt; sleep 15; done ) &
+WARMUP="${WARMUP:-tests/engine/test_step_basic.py::test_miss_deals_no_damage}"
+if [ "$WARMUP" != none ] && [ ! -f warmup/warmup.rc ] && grep -q ' tests/engine/' queue.txt; then
+  while [ "$(memgb)" -ge "$GATE_GB" ]; do sleep 10; done
+  setsid bash "$D/bin/unit.sh" --warmup "$WARMUP" < /dev/null > /dev/null 2>&1 &
+  wpg=$!; sleep 2; echo "$(date +%s) warm-up start $WARMUP"; wend=$(( $(date +%s) + ${WARMUP_S:-900} ))
+  while okpg "$wpg" && [ "$(date +%s)" -lt "$wend" ]; do sleep 5; done
+  if okpg "$wpg"; then kill -TERM -- "-$wpg" 2>/dev/null; sleep 5; okpg "$wpg" && kill -KILL -- "-$wpg" 2>/dev/null
+    mkdir -p warmup; echo 124 > warmup/warmup.rc; echo "$(date +%s) warm-up killed after ${WARMUP_S:-900} s"
+  else echo "$(date +%s) warm-up end rc=$(cat warmup/warmup.rc 2>/dev/null || echo none)"; fi
+fi
 while :; do
   for r in run/*; do [ -e "$r" ] || continue; u=$(basename "$r")
     if [ -f "$u.rc" ]; then rm -f "$r"; echo "$(date +%s) done $u rc=$(cat "$u.rc")"
