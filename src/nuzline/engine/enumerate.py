@@ -1052,6 +1052,8 @@ INPUT_NEUTRAL_ABILITIES = (
     # F-3: Multitype's types are fixed by the held plate, which nothing can swap or remove
     # (Transform's copy has its own clause).
     AbilityId.MULTITYPE,
+    # F-5: Hydration cures in the turn-end weather step, after every hit.
+    AbilityId.HYDRATION,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -1077,6 +1079,9 @@ INPUT_CLAUSE_ABILITIES = (
     AbilityId.SAND_STREAM,
     AbilityId.DROUGHT,
     AbilityId.SNOW_WARNING,
+    # F-6: Castform's types follow the weather, which changes mid-turn only by an earlier foe
+    # weather move (weather clause) or a switch-in weather ability or Cloud Nine (switch clause).
+    AbilityId.FORECAST,
 )
 INPUT_NEUTRAL_ITEMS = (
     ItemId.NONE,
