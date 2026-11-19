@@ -4,6 +4,7 @@ no jit."""
 
 import jax
 import numpy as np
+import pytest
 from hypothesis import HealthCheck, given, seed, settings
 from hypothesis import strategies as st
 
@@ -56,7 +57,10 @@ def test_a_zero_hp_active_has_no_replacement(tables, names, data):
         # rule 3: the party's only other living Pokemon are the actives of the battlers
         # sending from it
         actives = {int(s.active[c]) for c in _owners(fmt, p)}
-        living = {int(k) for k in np.flatnonzero((np.asarray(s.species[p]) > 0) & (np.asarray(s.hp[p]) > 0))}
+        living = {
+            int(k)
+            for k in np.flatnonzero((np.asarray(s.species[p]) > 0) & (np.asarray(s.hp[p]) > 0))
+        }
         assert living <= actives, (fmt, b, living, actives)
 
 
@@ -96,24 +100,24 @@ def test_legal_actions_four_pairs_are_legal(tables, names, data):
         assert len(picks) == len(set(picks)), (fmt, p, picks)
 
 
-def test_any_outcome_shapes_equal_empty_outcome_for_every_format():
-    for fmt in FORMATS:
-        @seed(0)
-        @settings(max_examples=3, deadline=None, database=None, suppress_health_check=list(HealthCheck))
-        @given(o=any_outcome(fmt))
-        def check(o, fmt=fmt):
-            ref = empty_outcome(fmt)
-            for name, got, want in zip(o._fields, o, ref, strict=True):
-                assert np.asarray(got).shape == np.asarray(want).shape, (fmt, name)
-
-        check()
+@pytest.mark.parametrize("fmt", FORMATS, ids=("singles", "doubles", "two_trainers", "multi"))
+@seed(0)
+@settings(max_examples=3, deadline=None, database=None, suppress_health_check=list(HealthCheck))
+@given(data=st.data())
+def test_any_outcome_shapes_equal_empty_outcome_for_every_format(fmt, data):
+    o = data.draw(any_outcome(fmt))
+    ref = empty_outcome(fmt)
+    for name, got, want in zip(o._fields, o, ref, strict=True):
+        assert np.asarray(got).shape == np.asarray(want).shape, (fmt, name)
 
 
 def _collect(strategy, value):
     drawn = []
 
     @seed(value)
-    @settings(max_examples=25, deadline=None, database=None, suppress_health_check=list(HealthCheck))
+    @settings(
+        max_examples=25, deadline=None, database=None, suppress_health_check=list(HealthCheck)
+    )
     @given(o=strategy)
     def run(o):
         drawn.append(jax.tree_util.tree_map(lambda x: np.asarray(x).tolist(), o))

@@ -104,7 +104,12 @@ def test_record_both_player_battlers(tables, names):
     seen = _record(tables, s, [0, MOVE_ACTIONS + 2, 0, 0])  # 1 switches, 3 fights
     assert seen[int(s.active[0]), 0] == names.move("Tackle")
     assert seen[int(s.active[2]), 0] == names.move("Curse")
-    assert not seen[int(s.active[1])].any()
+    # the record is keyed by the player's party slot; battler 1 is the enemy, so its last move
+    # lands nowhere: only the two player rows hold anything, one move each
+    rows = {int(s.active[0]), int(s.active[2])}
+    assert len(rows) == 2
+    assert all(not seen[i].any() for i in range(seen.shape[0]) if i not in rows)
+    assert all(int((seen[i] != 0).sum()) == 1 for i in rows)
 
 
 def test_record_skips_a_battler_without_hp(tables, names):
