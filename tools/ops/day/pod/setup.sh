@@ -67,13 +67,6 @@ for k, line in enumerate((D / "col" / "list.txt").read_text().splitlines(), 1):
 print("units", n, "ids", len(seen))
 PY
 cat collected.txt
-# Thread setting of this run's units (unit.sh): THREADS=none|eigen|taskset, or auto (default): the
-# verdict of the pod's last bin/threads_probe.sh (/work/_threads.env), none before any probe.
-# THREAD_PROBE=1 runs the probe here first, so this run already uses its verdict under auto.
-if [ "${THREAD_PROBE:-}" = 1 ]; then bash "$D/bin/threads_probe.sh" || echo "THREAD_PROBE_FAILED rc=$?"; fi
-if [ "${THREADS:-auto}" != auto ]; then echo "THREADS=$THREADS" > threads.env
-elif [ -f /work/_threads.env ]; then cp /work/_threads.env threads.env; else echo THREADS=none > threads.env; fi
-cat threads.env
 echo "SETUP_END $(date +%s)"
 nohup bash "$D/bin/runner.sh" > "$D/runner.log" 2>&1 < /dev/null &
 echo $! > "$D/runner.pid"; SETUP_DONE=1

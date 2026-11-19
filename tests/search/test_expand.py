@@ -275,8 +275,7 @@ def _expand_on_devices(devices: int) -> dict:
     root = Path(__file__).resolve().parents[2]
     env = {
         **os.environ,
-        # Appended: the unit's own flags (tools/ops/day/pod/unit.sh, THREADS) carry over.
-        "XLA_FLAGS": f"{os.environ.get('XLA_FLAGS', '')} --xla_force_host_platform_device_count={devices}".strip(),
+        "XLA_FLAGS": f"--xla_force_host_platform_device_count={devices}",
         "PYTHONPATH": os.pathsep.join([str(root / "src"), str(root)]),
     }
     done = subprocess.run(
