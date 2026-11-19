@@ -4,6 +4,7 @@
 # in docs/process.md section 5); then collection failures, crashed units (rc 97), units killed a
 # third time (rc 98), units with any other rc but 0, 1 or 5 (a failure even with complete counts),
 # wall time, container peak, CPU-s (user + sys) of the units and of the warm-up (out/warmup/),
+# the thread setting (threads.env) and the units' threads (<unit>.thr, unit.sh's 5 s samples),
 # largest process, per unit its peak RSS and wall time (finished units), the 15 slowest tests, the count over 60 s, every FAILED/ERROR and SKIPPED line,
 # and a last line RESULT: PASS or RESULT: FAIL (<reasons>).
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; mkdir -p "$O"; cd "$O"
@@ -32,6 +33,7 @@ PK=n/a; [ -r /sys/fs/cgroup/memory.peak ] && PK="$(( $(cat /sys/fs/cgroup/memory
 echo "--- wall $(( $(cat ALL.end 2>/dev/null || date +%s) - $(cat ALL.start 2>/dev/null || cat ALL.end 2>/dev/null || date +%s) )) s; container peak (incl. other runs) $PK"
 cpus() { awk '/User time \(seconds\)|System time \(seconds\)/ {s += $NF} END {printf "%.0f", s}' "$@" /dev/null; }
 echo "--- CPU-s (user+sys) units $(cpus $(cut -d' ' -f1 queue.txt | sed 's/$/.time/' | while read -r t; do [ -f "$t" ] && echo "$t"; done))"
+echo "--- threads: $(cat "$D/threads.env" 2>/dev/null || echo THREADS=unset); per unit (5 s samples) $(for u in $(cut -d' ' -f1 queue.txt); do [ -s "$u.thr" ] && awk '{if ($1 > a) a = $1; if ($2 > r) r = $2; s += $2; n++} END {print a, r, s / n}' "$u.thr"; done | sort -k2,2n | awk '{a[NR] = $1; r[NR] = $2; m += $3; if ($1 > am) am = $1} END {if (!NR) {print "none"; exit}; printf "units %d, running max: median %d, max %d; mean running %.2f; alive max %d", NR, r[int((NR + 1) / 2)], r[NR], m / NR, am}')"
 [ -f warmup/warmup.rc ] && echo "--- warm-up rc $(cat warmup/warmup.rc) wall $(( $(cat warmup/warmup.end 2>/dev/null || date +%s) - $(cat warmup/warmup.start 2>/dev/null || date +%s) )) s CPU-s $(cpus warmup/warmup.time 2>/dev/null) max_rss_MB $(awk '/Maximum resident/ {print int($6/1024)}' warmup/warmup.time 2>/dev/null)"
 for u in $(cut -d' ' -f1 queue.txt); do awk -v u=$u '/Maximum resident/ {print int($6/1024), u}' $u.time 2>/dev/null; done | sort -n | tail -1 | while read -r m u; do echo "largest process ${m} MB: $u $(head -1 $u.ids)"; done
 echo "--- per unit: unit ids max_rss_MB wall_s rc first_id"
