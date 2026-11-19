@@ -45,6 +45,9 @@ HYPOTHESIS = {
 _laws = jax.jit(outcome_laws)
 _step = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
 _sample = sample_rows
+# One compiled program for every example (an eager sample_outcome dispatches op by op and
+# compiles its control flow anew on each call, so memory grew over the examples).
+_sample_one = jax.jit(sample_outcome)
 
 
 def laws_of(tables, state, actions):
@@ -301,7 +304,7 @@ def test_accuracy_classes_equal_raw_rolls(tables, names, data):
     laws = laws_of(tables, s, acts)
     assume(laws.relevant.hit[:, 0].any())
     base = jax.tree.map(
-        np.asarray, sample_outcome(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
+        np.asarray, _sample_one(jax.random.key(data.draw(st.integers(0, 99))), tables, s, acts)
     )
 
     def rows(values0, values1):
