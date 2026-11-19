@@ -4,16 +4,19 @@ and Intimidate's substitute skip, each case checked against the reference engine
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, personal_types
-from nuzline.engine.ids import AbilityId, Status, Type
+from nuzline.engine.ids import AbilityId, Stat, Status, Type
 from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
 from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _state
 
 O = empty_outcome()
@@ -187,3 +190,32 @@ def test_a_transform_into_another_species_still_copies_its_types(tables, names):
     s = s._replace(types=s.types.at[1, 0].set(jnp.asarray([Type.WATER] * 2, s.types.dtype)))
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), O)
     assert out.types[0, 0].tolist() == [Type.WATER] * 2
+
+
+# --- Intimidate and a substitute the action hit (F-4) --------------------------------------
+
+
+def _u_turn_into_intimidate(tables, names, substitute):
+    """Scyther's U-turn hits Bulbasaur (a 1 HP substitute up, or none), then Gyarados comes in."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 30), _mon(n, "Gyarados", ["Tackle"], 30)],
+        [_mon(n, "Bulbasaur", ["Tackle"], 35)],
+    )
+    if substitute:
+        s = s._replace(substitute_hp=s.substitute_hp.at[1].set(1))
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    return _resume(tables, paused, 1)
+
+
+def test_a_u_turn_newcomer_skips_a_foe_whose_substitute_the_action_hit(tables, names):
+    """subscript_intimidate.s:13 / BtlCmd_CheckSubstitute (battle_script.c:9172-9184): the flag
+    SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3359-3371) outlives the broken substitute until the
+    action ends, so the foe keeps its Attack; with no substitute it drops one stage."""
+    ATK = Stat.ATK
+    plain = _u_turn_into_intimidate(tables, names, substitute=False)
+    assert int(plain.stages[1, ATK]) == -1
+    broken = _u_turn_into_intimidate(tables, names, substitute=True)
+    assert int(broken.substitute_hp[1]) == 0 and int(broken.stages[1, ATK]) == 0
+    assert np.asarray(broken.ts_sub_hit).tolist() == [0, 0]  # the action ended

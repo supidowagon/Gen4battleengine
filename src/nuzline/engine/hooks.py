@@ -785,10 +785,13 @@ def pluck_berry(
     return state, eaten & ~healed & ~cured & ~raised
 
 
-def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
+def intimidate(state: BattleState, side, cond=True, foe=None, sub_hit=None) -> BattleState:
     """Where ``cond``, ``side``'s active Pokemon, alive with Intimidate, lowers the living
-    ``foe``'s Attack by 1 (clamped at -6; by default the other side). ``on_switch_in`` runs it
-    for a newcomer and for a battler that just traced Intimidate;
+    ``foe``'s Attack by 1 (clamped at -6; by default the other side). ``sub_hit`` (``bool[B]`` or
+    None): each battler's ``SELF_TURN_FLAG_SUBSTITUTE_HIT`` of the action this runs in
+    (``BtlCmd_CheckSubstitute``, battle_script.c:9180-9181; ``step._use_move``'s resumed U-turn),
+    which skips a foe whose substitute that action hit even when it broke (F-4). ``on_switch_in``
+    runs it for a newcomer and for a battler that just traced Intimidate;
     ``playout.replacement_pass`` runs it again for a player newcomer that entered while the
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
     foe = _foe(side) if foe is None else foe
@@ -806,14 +809,18 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
         | (state.ability[foe_row, target] == AbilityId.HYPER_CUTTER)
     )
     blocks = blocks | mist_blocks_drop(state, foe, -1)
+    flagged = jnp.bool_(False) if sub_hit is None else (jnp.asarray(sub_hit)[foe] != 0)
     on = (
         jnp.asarray(cond)
         & (state.ability[row, mon] == AbilityId.INTIMIDATE)
         & (state.hp[row, mon] > 0)
         & (state.hp[foe_row, target] > 0)
-        # subscript_intimidate.s:13: a foe behind a substitute is skipped (B10-4); outside an
-        # action no flag is set, so its bit.
+        # subscript_intimidate.s:13 CheckSubstitute (battle_script.c:9172-9184): a foe with the
+        # substitute bit, or the flag a hit of this action set on it (it stays set when that hit
+        # broke the substitute, bcp.c:3359-3371), is skipped (B10-4); outside an action no flag
+        # is set, so its bit.
         & (state.substitute_hp[foe] == 0)
+        & ~flagged
         & ~blocks
     )
     return change_stage(state, foe, Stat.ATK, -1, on)
@@ -839,8 +846,8 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
-def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
-    """``on_switch_in`` after the entry hazards: ``BattleSystem_TriggerEffectOnSwitch``'s states
+def switch_in_effects(tables: Tables, state: BattleState, side, sub_hit=None) -> BattleState:
+    """``on_switch_in`` after the entry hazards (``sub_hit``: ``intimidate``'s per-battler flags): ``BattleSystem_TriggerEffectOnSwitch``'s states
     for ``side``'s newcomer. A U-turn or Baton Pass newcomer meets them apart from its hazards: the
     party list runs only the hazards and a faint check (subscript_show_party_list.s:22-24), and the
     rest comes at ``AfterMoveEffects``' ``TRIGGER_SWITCH_IN_EFFECTS`` (bcp.c:3672-3682;
@@ -851,8 +858,8 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     state, traced = trace(tables, state, foe, side)
     state = weather_ability(state, side)
     state = weather_ability(state, foe, traced)
-    state = intimidate(state, side, foe=foe)
-    state = intimidate(state, foe, traced, foe=side)
+    state = intimidate(state, side, foe=foe, sub_hit=sub_hit)
+    state = intimidate(state, foe, traced, foe=side, sub_hit=sub_hit)
     state = download(state, side, (foe,))
     state = download(state, foe, (side,), traced)
     mon, other = state.active[side], state.active[foe]

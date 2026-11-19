@@ -1277,3 +1277,13 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   parser's Arceus-form refusal (`saves/pkm.py`) is gone: the form's row is the species' and the types follow the
   plate. AI: type loads read `state.types` (`BattleMon_Get`); the Fling / Gastro Acid / Worry Seed Multitype
   scores belong to those moves.
+- F-4 Intimidate and a substitute the action hit. `subscript_intimidate.s:13` `CheckSubstitute` skips a foe with
+  the substitute bit or `selfTurnFlags[foe] & SELF_TURN_FLAG_SUBSTITUTE_HIT` (`BtlCmd_CheckSubstitute`,
+  battle_script.c:9172-9184), which every hit that lands on a substitute sets, the breaking one included
+  (bcp.c:3359-3371), until `BattleContext_Init` (battle_lib.c:2013-2015; every action's end, bcp.c:3998, and the
+  turn end, :1855). A U-turn's newcomer enters inside that action, so its Intimidate skips a foe whose substitute
+  the U-turn hit even with `substitute_hp` 0. New per-battler scratch `ts_sub_hit` (written at the pause beside
+  `ts_damaged`, read at the resumed `switch_in_effects`, `hooks.intimidate(sub_hit=)`); reference
+  `_Turn.sub_hit_mon`. An end-of-turn replacement or a turn-start switch finds the flag clear (unchanged). The other
+  `CheckSubstitute` users reachable from a switch-in: none (grep: `CheckSubstitute` in `res/battle/scripts`
+  switch-in subscripts is Intimidate's alone; the move subscripts that call it are not switch-ins).

@@ -1835,7 +1835,10 @@ def _use_move(
     )
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
-    state = _where(entering, switch_in_effects(tables, state, fx_side), state)
+    # subscript_intimidate.s:13: the resumed U-turn's newcomer skips a foe whose substitute the
+    # paused action's hit struck (the flag stays through the party list), F-4.
+    entry_sub_hit = state_in.ts_sub_hit != 0
+    state = _where(entering, switch_in_effects(tables, state, fx_side, entry_sub_hit), state)
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
     # the hits below), G-69.
@@ -2152,6 +2155,7 @@ def _use_move(
     looped = jax.lax.fori_loop(0, MAX_HITS, one_hit, init)
     state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
     paused, pursue, damaged0, dealt0 = looped[11:15]
+    sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -2161,6 +2165,11 @@ def _use_move(
         ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
+        ts_sub_hit=jnp.where(
+            note,
+            (jnp.arange(fmt.B) == target_side) & sub_hit_now,
+            state.ts_sub_hit,
+        ).astype(state.ts_sub_hit.dtype),
         pivot_battler=jnp.where(paused, side + 1, state.pivot_battler).astype(
             state.pivot_battler.dtype
         ),
@@ -2954,6 +2963,7 @@ def _execute_actions(
         "ts_used": state.ts_used,
         "ts_damaged": state.ts_damaged,
         "ts_dealt": state.ts_dealt,
+        "ts_sub_hit": state.ts_sub_hit,
         "ts_alive": base,
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
         "ts_switched": is_switch(real),

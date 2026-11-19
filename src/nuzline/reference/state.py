@@ -157,6 +157,7 @@ class RefBattler:
     ts_move_failed: int
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
+    ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
 
 
 @dataclass

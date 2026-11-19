@@ -236,6 +236,7 @@ class _Turn:
     pluck_flag: bool = False
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), cleared with the others (B10-4).
     sub_hit: bool = False
+    sub_hit_mon: int = -1  # the battler the flag is set on, while ``sub_hit`` (F-4)
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
     # turnFlags.enduring (Endure, G-65): TryProtection succeeded for effect 116, same lifetime.
@@ -2669,6 +2670,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         and mon.ability == AbilityId.INTIMIDATE
         and foe.hp
         and not s.battlers[other].substitute_hp
+        and not (turn.sub_hit and turn.sub_hit_mon == other)  # the flag set on it (:13, F-4)
         and not _mist_blocks_drop(s, other, -1)
         and foe.ability not in blockers
     ):
@@ -3972,7 +3974,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         sub_dealt = min(damage, target_sd.substitute_hp)
         target_sd.substitute_hp -= sub_dealt
         turn.shell_dealt += sub_dealt
-        turn.sub_hit = True
+        turn.sub_hit, turn.sub_hit_mon = True, target
         update_hp = False
     if update_hp:
         turn.move_hit = True  # BattleControllerPlayer_UpdateHP: SYSCTL_MOVE_HIT (bcp.c:3441)
@@ -6378,6 +6380,8 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_used = turn.move_cur
     s.ts_damaged = int(turn.damaged)
     s.ts_dealt = turn.pivot_dealt
+    # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
+    _put(s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)])
     fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
     for k, pt in enumerate(s.parties):
         pt.ts_alive = sum(1 << i for i, m in enumerate(pt.mons) if m.hp > 0 or (k, i) in fainted)
@@ -6435,6 +6439,8 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     turn.move_failed = [bool(f) for f in _get(s, "ts_move_failed")]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
+    flagged = [k for k, sd in enumerate(s.battlers) if sd.ts_sub_hit]  # the paused action's (F-4)
+    turn.sub_hit, turn.sub_hit_mon = bool(flagged), flagged[0] if flagged else -1
     turn.fainted = [
         (_fainted_battler(s, k, i), i)
         for k, pt in enumerate(s.parties)

@@ -468,6 +468,9 @@ class BattleState(NamedTuple):
     ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
     ts_pick_mul: jnp.ndarray  # int8, powerMul at the party list (20 after U-turn's Pursuit)
     ts_assurance: jnp.ndarray  # int8[B], turnFlags.assuranceDamageMask != 0 (per battler, B13-17)
+    # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
+    # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
+    ts_sub_hit: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -806,6 +809,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_switched": (_BATTLER, np.int8),
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
+    "ts_sub_hit": (_BATTLER, np.int8),
 }
 
 
