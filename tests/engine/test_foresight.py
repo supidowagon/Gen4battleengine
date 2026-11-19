@@ -13,8 +13,7 @@ import pytest
 
 from nuzline.engine.damage import damage_table, effectiveness
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
-from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
 MOVES = ("Foresight", "Scratch", "Mach Punch", "Tackle")
 
@@ -38,16 +37,16 @@ def identify(s):
 @pytest.mark.slow
 def test_foresight_sets_flag(tables, names, state):
     assert int(state.foresight[1]) == 0
-    out = step(tables, state, A("Foresight", "Tackle", state, names), empty_outcome())
+    out = jit_step(tables, state, A("Foresight", "Tackle", state, names), empty_outcome())
     assert int(out.foresight[1]) == 1 and int(out.foresight[0]) == 0
     # A second use leaves it set.
-    again = step(tables, out, A("Foresight", "Tackle", out, names), empty_outcome())
+    again = jit_step(tables, out, A("Foresight", "Tackle", out, names), empty_outcome())
     assert int(again.foresight[1]) == 1
 
 
 def test_foresight_needs_a_living_target(tables, names, state):
     s = state.replace_hp(1, 0, 0)
-    out = step(tables, s, A("Foresight", "Tackle", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Foresight", "Tackle", s, names), empty_outcome())
     assert int(out.foresight[1]) == 0
 
 

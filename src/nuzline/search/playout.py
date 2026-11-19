@@ -100,7 +100,7 @@ from nuzline.engine.outcome import (
     hit_threshold,
     sample_outcome,
 )
-from nuzline.engine.state import SLOTS, BattleState
+from nuzline.engine.state import SLOTS, BattleState, battler_ability
 from nuzline.engine.step import (
     NORMAL_POWER_MUL,
     WINNER_PLAYER,
@@ -383,7 +383,7 @@ def replacement_pass(tables: Tables, state: BattleState, slot) -> tuple[BattleSt
     )
     entered = _select(meet, met, entered)
     opp_down = state.hp[1, state.active[1]] == 0
-    own = entered.ability[0, entered.active[0]]
+    own = battler_ability(entered, 0)  # the switch-in checks' Battler_Ability (lib.c:3801, :3821)
     unannounced = opp_down & (own == AbilityId.INTIMIDATE)
     download_unannounced = opp_down & (own == AbilityId.DOWNLOAD)
     kept = entered.stages[0]

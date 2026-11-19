@@ -30,7 +30,7 @@ from nuzline.engine.ids import WEATHER_ABILITY_IDS, AbilityId, Stat, Status, Wea
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import step
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import as_species, roark_state
 from tests.engine.test_enumerate import assert_equals_bruteforce, laws_of
 
 X = 40  # the Swift Swim holder's Spe stat: 2X in rain without a lock
@@ -56,6 +56,8 @@ def _setup(tables, names, case):
     a["status"][0, 0], a["hp"][0, 0] = Status.POISON, 1
     a["level"][0, 0] = 50  # Roar's level check passes without a draw
     a["level"][1, :2] = 5
+    # Written abilities (``damage.decomp_abilities``), deliberately: the player's Pokemon reads
+    # Swift Swim and Roark's other Pokemon no ability; Psyduck gets its row's (``as_species``).
     a["ability"][1, :2] = AbilityId.NONE
     a["stealth_rock"][:] = 0
     a["weather"][...], a["weather_timer"][...] = Weather.RAIN, 0
@@ -67,9 +69,7 @@ def _setup(tables, names, case):
         "switch_out": (0, 3 * X, 2 * X, 1),  # the opponent switches Psyduck out: 2X vs 2X
         "faint": (0, 2 * X, 3 * X, 0),  # the player's Tackle faints Psyduck: 2X vs 2X
     }[case]
-    a["species"][1, lock], a["form"][1, lock] = psyduck, 0
-    a["ability_form"][1, lock] = 0
-    a["ability_slot"][1, lock], a["ability_slot"][1, 1 - lock] = slot, 0
+    a["ability_slot"][1, 1 - lock] = 0
     a["stats"][1, lock, Stat.SPE - 1] = lock_spe
     a["stats"][1, 1 - lock, Stat.SPE - 1] = other_spe
     # The opponent's Pokemon on the field at the end: poisoned at 1 HP (the faint case:
@@ -77,6 +77,7 @@ def _setup(tables, names, case):
     a["hp"][1, end] = 1
     a["status"][1, end] = Status.NONE if case == "faint" else Status.POISON
     s = s._replace(**{n: jnp.asarray(a[n]) for n in s._fields})
+    s = as_species(tables, s, 1, lock, psyduck, slot)
     switch = case in ("switch_in", "switch_out")
     opp = MOVE_ACTIONS + 1 if switch else names.move_slot(s, 1, "Leer")
     return s, jnp.asarray([names.move_slot(s, 0, move), opp], jnp.int32)
@@ -115,5 +116,5 @@ def test_no_lock_holder_no_widening(tables, names):
     # Without a living Cloud Nine / Air Lock holder in either party the lock cannot change:
     # the drag-in case with Psyduck's other ability is not relevant (speeds X vs 2X).
     s, acts = _setup(tables, names, "drag_in")
-    s = s._replace(ability_slot=s.ability_slot.at[1, 1].set(1 - int(s.ability_slot[1, 1])))
+    s = as_species(tables, s, 1, 1, int(s.species[1, 1]), 1 - int(s.ability_slot[1, 1]))
     assert not bool(laws_of(tables, s, acts).relevant.end_speed_tie)

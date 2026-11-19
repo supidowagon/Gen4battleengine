@@ -65,9 +65,9 @@ from nuzline.engine.ids import (
 from nuzline.engine.observe import observe
 from nuzline.engine.outcome import MAX_HITS, PROTECT_RATES, Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import replace, step, step_events
+from nuzline.engine.step import replace, step_events
 from nuzline.search.plan_tree import _FLAG_TEXT
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -485,7 +485,7 @@ def test_observation_and_labels(tables, names):
     obs = []
     for roll in (0, 1):
         o = _o((roll, 1))
-        after = step(tables, s, acts, o)
+        after = jit_step(tables, s, acts, o)
         obs.append(np.asarray(observe(tables, s, acts, o, after)))
     # Leer's stage drop would differ anyway; the flags differ too.
     assert (obs[0] != obs[1]).any()

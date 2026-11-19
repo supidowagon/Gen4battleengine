@@ -10,6 +10,8 @@
 # kill records rc 98 and lists the unit in overkilled.txt. Each kill line names the largest of
 # this run's live units and its RSS at the time of the kill.
 # A unit whose process group is gone without an .rc is a crash: rc 97, listed in crashed.txt.
+# DONE is written only when every unit of queue.txt has an .rc: a unit left without one goes back
+# in line (lost.txt); after two requeues (kills and losses together) it gets rc 98 (overkilled.txt).
 # Signals only process groups this runner started and that are alive; never PID 1.
 # Knobs (env of the exec-pod body that starts setup.sh): GATE_GB (default 88), MAXP (10),
 # RUNMAXP (MAXP), SPACING s between starts (15), KILL_GB (118).
@@ -45,14 +47,26 @@ while :; do
     fi
   done
   nrun=$(ls run | wc -l); npend=$(grep -c . pending.txt || true)
-  [ "$nrun" -eq 0 ] && [ "$npend" -eq 0 ] && break
+  if [ "$nrun" -eq 0 ] && [ "$npend" -eq 0 ]; then
+    # DONE only when every unit of queue.txt has an .rc. A unit without one (a lost requeue) goes
+    # back in line; its requeues (kills and losses) count together, and after two it gets rc 98.
+    lost=0
+    for v in $(cut -d' ' -f1 queue.txt); do [ -f "$v.rc" ] && continue; lost=1
+      nk=$(cat killed.txt lost.txt 2>/dev/null | grep -c "^$v " || true); echo "$v -" >> lost.txt
+      if [ "${nk:-0}" -ge 2 ]; then
+        echo 98 > "$v.rc"; date +%s > "$v.end"; echo "$v" >> overkilled.txt
+        echo "$(date +%s) LOST $v: no result after two requeues: rc 98"
+      else grep "^$v " queue.txt >> pending.txt; echo "$(date +%s) LOST $v: no result, requeued"; fi
+    done
+    [ "$lost" = 0 ] && break; continue
+  fi
   mem=$(memgb)
   if [ "$mem" -ge "$KILL_GB" ] && [ "$nrun" -gt 0 ]; then
     v=$(ls -t run | head -1); pg=$(cat "run/$v")
     if okpg "$pg"; then
       big=$(largest)   # measured before the kill
       kill -TERM -- "-$pg" 2>/dev/null; sleep 5; okpg "$pg" && kill -KILL -- "-$pg" 2>/dev/null; sleep 1
-      nk=$(grep -c "^$v " killed.txt 2>/dev/null || true); echo "$v $mem" >> killed.txt
+      nk=$(cat killed.txt lost.txt 2>/dev/null | grep -c "^$v " || true); echo "$v $mem" >> killed.txt
       if [ "${nk:-0}" -ge 2 ]; then   # third kill: no more requeues; rc 98, a failure in agg.sh
         echo 98 > "$v.rc"; date +%s > "$v.end"; echo "$v" >> overkilled.txt; rm -f "run/$v"
         echo "$(date +%s) KILLED $v at ${mem}GB, third kill: rc 98, not requeued; largest of this run's live units then: $big"

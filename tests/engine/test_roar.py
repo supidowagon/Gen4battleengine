@@ -56,11 +56,12 @@ from nuzline.engine.outcome import (
     sample_outcome,
 )
 from nuzline.engine.state import make_state
-from nuzline.engine.step import _VOLATILE, needs_replacement, replace, step, step_events
+from nuzline.engine.step import _VOLATILE, needs_replacement, replace, step_events
 from nuzline.search.plan_tree import label
 from tests.engine.helpers import (
     A,
     assert_matches_reference,
+    jit_step,
     roark_party,
     roark_state,
     roark_trainer,
@@ -391,7 +392,7 @@ def test_observation_and_label(tables, names):
     s = _state(tables, names)
     acts = A("Roar", "Tackle", s, names)
     o = _o(target=(1, 0))
-    after = step(tables, s, acts, o)
+    after = jit_step(tables, s, acts, o)
     obs = np.asarray(observe(tables, s, acts, o, after))
     sl = dict(OBS_FIELDS)["dragged"]
     assert obs[sl].tolist() == [0, 3]
@@ -410,7 +411,7 @@ def test_label_names_the_actor_and_tells_a_drag_from_a_send_out(tables, names):
     s = _state(tables, names)
     acts = A("Roar", "Tackle", s, names)
     o = _o(target=(1, 0))
-    after = step(tables, s, acts, o)
+    after = jit_step(tables, s, acts, o)
     obs = np.asarray(observe(tables, s, acts, o, after)).tobytes()
     geodude, cranidos = _sp(names, s, 1, 0), _sp(names, s, 1, 2)
     text = label(obs, names, prev_opp=0, prev_mine=0)
@@ -421,7 +422,7 @@ def test_label_names_the_actor_and_tells_a_drag_from_a_send_out(tables, names):
     s = _state(tables, names, mine="Tackle", opp="Roar", order="player")
     acts = A("Tackle", "Roar", s, names)
     o = _o()
-    after = step(tables, s, acts, o)
+    after = jit_step(tables, s, acts, o)
     obs = np.asarray(observe(tables, s, acts, o, after)).tobytes()
     text = label(obs, names, prev_opp=0, prev_mine=0)
     assert f"{_sp(names, s, 0, 1)} was dragged out" in text and "sent in" not in text
@@ -430,7 +431,7 @@ def test_label_names_the_actor_and_tells_a_drag_from_a_send_out(tables, names):
     s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1), hp=s.hp.at[1, 1].set(1))
     acts = A("Roar", "Tackle", s, names)
     o = _o()
-    after = step(tables, s, acts, o)
+    after = jit_step(tables, s, acts, o)
     shown = replace(tables, after, 1, 2)
     obs = np.asarray(observe(tables, s, acts, o, shown)).tobytes()
     text = label(obs, names, prev_opp=0, prev_mine=0)

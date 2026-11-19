@@ -43,7 +43,7 @@ from nuzline.engine.outcome import (
     live_hit_threshold,
 )
 from nuzline.engine.state import held_item, make_state
-from tests.engine.helpers import A, assert_matches_reference
+from tests.engine.helpers import A, as_species, assert_matches_reference
 from tests.engine.test_enumerate import (
     assert_equals_bruteforce,
     check_frequencies,
@@ -235,7 +235,7 @@ def _hurricane(t, n, weather=Weather.NONE, theirs=("Snorlax", "Growl")):
 def _cloud_nine(t, s, side: int):
     """``s`` with ``side``'s active Pokemon on the first personal row and ability slot whose
     decomp ability is Cloud Nine or Air Lock (``damage.weather_suppressed`` reads the decomp
-    ability; Kaizo has no Cloud Nine species)."""
+    ability; Kaizo has no Cloud Nine species), its engine ability the row's."""
     from nuzline.engine.ids import WEATHER_ABILITY_IDS
 
     grid = np.asarray(t.species_abilities_decomp)
@@ -247,11 +247,7 @@ def _cloud_nine(t, s, side: int):
         for k in range(grid.shape[1])
         if grid[row, k] in (WEATHER_ABILITY_IDS["Cloud Nine"], WEATHER_ABILITY_IDS["Air Lock"])
     )
-    return s._replace(
-        species=s.species.at[side, 0].set(species),
-        form=s.form.at[side, 0].set(0),
-        ability_slot=s.ability_slot.at[side, 0].set(slot),
-    )
+    return as_species(t, s, side, 0, species, slot)
 
 
 def test_kaizo_hurricane_tables(kaizo_tables, kaizo_names):

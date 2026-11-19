@@ -18,7 +18,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables, load_names, load_tables
-from nuzline.engine.coverage import start_gravity
+from nuzline.engine.coverage import start_gravity, start_trick_room
 from nuzline.engine.damage import FLAIL_BOUNDS
 from nuzline.engine.ids import (
     FLAIL_FALLOFF,
@@ -316,6 +316,7 @@ def ai_kill_damage(
     start_condition: int = Weather.NONE,
     opp_items: Sequence[int] = (),
     gravity: int = 0,
+    trick_room: int = 0,
 ) -> tuple[int, ...]:
     """The AI's kill-check damages against ``spec`` (ruling 5 b): for each opponent slot ``j``
     and each damaging move of it, ``ai_damage`` at ``SIM_ROLL_MAX`` on the turn-0 matchup
@@ -324,7 +325,14 @@ def ai_kill_damage(
     out: set[int] = set()
     for j, mon in enumerate(opp):
         state = make_state(
-            tables, [spec], list(opp), start_condition, opp_items, leads=(0, j), gravity=gravity
+            tables,
+            [spec],
+            list(opp),
+            start_condition,
+            opp_items,
+            leads=(0, j),
+            gravity=gravity,
+            trick_room=trick_room,
         )
         for move in mon.moves:
             if move and bool(is_damaging(tables, move)):
@@ -559,6 +567,7 @@ def single_changes(
             problem.start_condition,
             problem.trainer.items,
             gravity=start_gravity(problem.trainer),
+            trick_room=start_trick_room(problem.trainer),
         )
         for top in hp_regions(tables, spec, max_hp_of(tables, spec), kill)[1:]:
             add(dataclasses.replace(base, hp=top))
