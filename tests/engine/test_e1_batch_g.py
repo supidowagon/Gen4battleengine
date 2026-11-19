@@ -294,3 +294,83 @@ def test_mixed_battle_terrain_is_a_run_input(kaizo_trainers, kaizo_tables, kaizo
     other = TERRAIN_NAMES[grass if single.terrain != grass else snow]
     with pytest.raises(ValueError, match="start tiles give"):
         fight_terrain(single, other)
+
+
+def test_script_weather_before_a_battle_is_the_start_condition(kaizo_trainers):
+    """gFieldScriptCommands 0x9C (rom_diff.md:292; G-23): scr_seq 329 sets VAR_0x4016 = 4 and
+    runs 0x9C at 0x01df before StartTagBattle 609, 835, 836 at 0x0202 (no 0C3 / 0C4 / Warp
+    between), so Triton #2 and Neptune #2 start in the overworld weather 4, rain in the Kaizo
+    switch (battle_lib.c:3665-3669; field_battle_data_transfer.c:267), as PKCalc says
+    (manager ruling 5). The tag partner is not an opponent: Riley keeps the header's none."""
+    from nuzline.engine.coverage import start_weather
+    from nuzline.engine.ids import Weather
+
+    for tid in (835, 836):
+        t = kaizo_trainers[tid]
+        assert t.start_condition == "rain" and start_weather(t) == Weather.RAIN, tid
+        assert "scr_seq 329 script weather at 0x01df" in t.sources["start_condition"], tid
+    assert kaizo_trainers[609].start_condition == "none"
+
+
+def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
+    """scr_seq 459 entry 12 (coord event VAR 0x40FA == 7) sets overworld weather 4 at 0x0264,
+    then VAR 0x40FA := 8; the rain lasts until ScrCmd_0C4 after the Chelle win (0x02b7,
+    scrcmd.c:3667-3674) or a map change (field_map_change.c:272-280). G-24, manager ruling 3:
+    the trainers that can meet it start in it or not (--script-weather), the start condition
+    the default; a save past VAR 0x40FA = 8 decides (off the map: none; on it: its overworld
+    weather). Coord battles at VAR 0x40FA 3-5 (692-695, 466) come before the rain."""
+    from types import SimpleNamespace
+
+    from nuzline.cli import fight_start
+    from nuzline.engine.ids import Weather
+
+    names = kaizo_names
+    sheltin, chelle = kaizo_trainers[103], kaizo_trainers[491]
+    window = (373, 4, 0x40FA, 8)
+    for t in (sheltin, chelle):
+        assert t.area_condition.script_weather == "rain"
+        assert t.area_condition.script_window == window
+    for tid in (466, 692, 693, 694, 695, 835):
+        assert not kaizo_trainers[tid].area_condition.script_window, tid
+
+    def save(var, header=0, weather=0):
+        vars_ = [0] * 288
+        vars_[0xFA] = var
+        return SimpleNamespace(
+            map_header=header, overworld_weather=weather, badges=0, var=lambda v: vars_[v - 0x4000]
+        )
+
+    def start(t, s=None, flag=None):
+        return fight_start(t, names, s, script_weather=flag)[0]
+
+    assert start(sheltin) == Weather.RAIN  # the user's answer (2026-11-07) is the default
+    assert start(sheltin, flag=False) == Weather.NONE
+    assert start(sheltin, save(5), False) == Weather.NONE  # before the cutscene: the route
+    assert start(sheltin, save(7)) == Weather.RAIN
+    assert start(sheltin, save(8)) == Weather.NONE  # left Route 213 after the rain
+    assert start(chelle, save(8, 373, 4)) == Weather.RAIN
+    assert start(chelle, save(9, 373, 0)) == Weather.NONE
+    with pytest.raises(ValueError, match="the save says otherwise"):
+        start(sheltin, save(8), True)
+    with pytest.raises(ValueError, match="overworld weather 2"):
+        start(sheltin, save(8, 373, 2))
+    with pytest.raises(ValueError, match="no map script sets the weather"):
+        start(kaizo_trainers[466], flag=True)
+
+
+def test_a_status_word_with_several_conditions_is_refused():
+    """0x3F (rom_diff.md:292; G-25): scr_seq 363 writes 0x7B to party slot 0 before the Lady
+    Emi battle (sleep 3 | poison | burn | freeze | paralysis, condition.h:7-13); the battle
+    tests each bit and clears them one by one (battle_controller_player.c:2449,
+    subscript_thaw_out.s), so the word reaches later fights. The engine keeps one status:
+    the save's Pokemon is refused for a fight, and prep (which heals) takes it."""
+    from types import SimpleNamespace
+
+    from nuzline.saves.pkm import RecordError, SaveMon
+    from nuzline.saves.status import status_conditions
+
+    assert status_conditions(0x7B) == ["sleep 3", "poison", "burn", "freeze", "paralysis"]
+    assert status_conditions(0x10) == ["burn"] and status_conditions(0) == []
+    mon = SimpleNamespace(location=("party", 0, 0), status_raw=0x7B)
+    with pytest.raises(RecordError, match="sleep 3, poison, burn, freeze, paralysis"):
+        SaveMon.to_spec(mon, None)

@@ -94,6 +94,9 @@ UNRESOLVED_FILE = "rom_unresolved.json"
 FIELD_EFFECTS_FILE = "rom_field_effects.json"
 TRAINER_MAPS_FILE = "rom_trainer_maps.json"  # Kaizo: trainer id -> map headers (sight pairs)
 MAP_WEATHER_FILE = "rom_map_weather.json"  # Kaizo: weather byte of each map header, by header id
+# Kaizo: the script weather (command 0x9C) before a battle and left on a map (ledger G-23, G-24;
+# maps.script_weathers): {"battles": {...}, "windows": {...}}.
+SCRIPT_WEATHER_FILE = "rom_script_weather.json"
 CHANGED_SCRIPTS_FILE = "changed_scripts.json"
 SCRIPT_COUNTS_FILE = "rom_script_counts.json"  # Kaizo: member count of each SCRIPT_NARCS path
 CHANGED_CODE_FILE = "changed_code.json"  # Kaizo: every changed (module, symbol-or-range)
@@ -353,8 +356,15 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         unresolved = []
         effects: dict[int, dict[str, list[int]]] = {}
         where: dict[int, list[int]] = {}
+        scripted: dict[str, dict] = {}
         starts = trainer_start_conditions(
-            rom, decomp, smap, unresolved=unresolved, field_effects=effects, maps=where
+            rom,
+            decomp,
+            smap,
+            unresolved=unresolved,
+            field_effects=effects,
+            maps=where,
+            script_weather=scripted,
         )
         rows = _unresolved_rows(unresolved, decomp)
         for r in rows:
@@ -399,6 +409,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             _write(stage / FIELD_EFFECTS_FILE, _report_kaizo(tables["trainers"], effects))
             _write(stage / TRAINER_MAPS_FILE, {str(t): h for t, h in where.items()})
             _write(stage / MAP_WEATHER_FILE, [w for _, _, w in map_header_rows(rom, smap)])
+            _write(stage / SCRIPT_WEATHER_FILE, scripted)
         fresh = stage / "decomp"
         extract_static(decomp, fresh)
         for name in (*REUSED_FILES, *DECOMP_FILES):
@@ -421,6 +432,7 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             sources[FIELD_EFFECTS_FILE] = "rom: map weather through the battle weather switch"
             sources[TRAINER_MAPS_FILE] = "rom: trainer -> map header join (map scripts, events)"
             sources[MAP_WEATHER_FILE] = "rom: map header weather byte (the raw id, per header)"
+            sources[SCRIPT_WEATHER_FILE] = "rom: script weather command 0x9C over the map scripts"
             sources[INPUTS_KEY] = kaizo_input_hashes(move_lists)
         _write(stage / "rom_sources.json", sources)
         _write(stage / UNRESOLVED_FILE, rows)

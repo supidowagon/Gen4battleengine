@@ -99,6 +99,10 @@ The same commands take ``--terrain NAME``: the battle terrain of a fight whose s
 give several (``fight_terrain``: the tile under the player when the battle starts, one of
 ``Trainer.terrains``); a mixed fight without it is refused when a move reads the terrain,
 and a single-terrain fight needs none (ledger G-18).
+They also take ``--script-weather`` / ``--no-script-weather``: a fight a Kaizo map script's
+weather can reach (``AreaCondition.script_weather``, the Route 213 rain) starts in it or not;
+without either the save decides when it can (``script_weather_state``), else the start
+condition stands (ledger G-24).
 All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
@@ -309,6 +313,13 @@ def _parser() -> argparse.ArgumentParser:
             "--terrain",
             help="the battle terrain of a fight whose start tiles give several (e.g. SNOW): "
             "the tile the player stands on when the battle starts",
+        )
+        cmd.add_argument(
+            "--script-weather",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="the fight starts while a map script's weather is on (the Route 213 rain, "
+            "from its cutscene until the Chelle win or a map change), or not (--no-...)",
         )
 
     def fight(cmd: argparse.ArgumentParser) -> None:
@@ -632,7 +643,57 @@ def _check_buildable(tables, names, trainer: Trainer, inter) -> None:
 RELIC_BADGE = 4
 
 
-def fight_start(trainer: Trainer, names, save=None, field_defog: bool = False, team=None):
+def script_weather_state(trainer: Trainer, save=None, script_weather: bool | None = None):
+    """Whether ``trainer``'s fight starts in its map script's weather (ledger G-24): True,
+    False, or None (the start condition stands). ``AreaCondition.script_window`` = (header,
+    overworld weather, var, value): the script sets that overworld weather and then the
+    saved var to the value, and the weather lasts until ScrCmd_0C4 (scrcmd.c:3667-3674) or a
+    map change rewrites it from the header (field_map_change.c:272-280), which Continue does
+    not (:521-525). A save whose var has reached the value settles it: on the header, its
+    overworld weather is the start (that id: True; clear: False); elsewhere the weather was
+    left behind and no script sets it again: False. Before that the route decides, so
+    ``script_weather`` (the run input) or None. ``ValueError`` for an input on a fight no
+    script weather reaches, an input the save contradicts, or another overworld weather."""
+    from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR
+
+    area = trainer.area_condition
+    if not area.script_window:
+        if script_weather is not None:
+            raise ValueError(
+                f"--script-weather: no map script sets the weather where trainer {trainer.id} "
+                "is met (rom_script_weather.json)"
+            )
+        return None
+    header, weather, var, value = area.script_window
+    state = None
+    if save is not None and save.var(var) >= value:
+        if save.map_header != header:
+            state = False
+        elif save.overworld_weather in (weather, OVERWORLD_WEATHER_CLEAR):
+            state = save.overworld_weather == weather
+        else:
+            raise ValueError(
+                f"the save stands on map header {header} in overworld weather "
+                f"{save.overworld_weather}: this map's script gives {weather} or clear (0)"
+            )
+    if script_weather is not None and state is not None and script_weather != state:
+        raise ValueError(
+            f"--{'' if script_weather else 'no-'}script-weather: the save says otherwise "
+            f"(var {var:#x} = {save.var(var)} >= {value}, map header {save.map_header}, "
+            f"overworld weather {save.overworld_weather}: the fight starts "
+            f"{'in' if state else 'without'} the map script's weather)"
+        )
+    return state if script_weather is None else script_weather
+
+
+def fight_start(
+    trainer: Trainer,
+    names,
+    save=None,
+    field_defog: bool = False,
+    team=None,
+    script_weather: bool | None = None,
+):
     """(the start weather, the field move the team must know: 0 or Defog's id) of a fight,
     ledger G-15. A save standing on one of the fight's fog headers
     (``AreaCondition.fog_headers``) gives the weather itself: the battle starts in the
@@ -643,10 +704,17 @@ def fight_start(trainer: Trainer, names, save=None, field_defog: bool = False, t
     which needs the Relic Badge (field_move_tasks.c:504; ``save.badges``) and a party
     member that knows Defog, so the team must hold one (``team``: the specs brought; None
     when prep picks the team, which then keeps a Defog holder, ``PrepProblem.field_move``).
+    A fight a map script's weather reaches starts as ``script_weather_state`` says (the run
+    input ``script_weather``, else the save, else the start condition; ledger G-24).
     ``ValueError`` names what is missing."""
     from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR, OVERWORLD_WEATHER_FOG
     from nuzline.engine.coverage import start_weather
 
+    scripted = script_weather_state(trainer, save, script_weather)
+    if scripted is not None:
+        if field_defog:
+            raise ValueError("--field-defog: this fight's map has no fog to clear")
+        return start_weather(trainer, script_weather=scripted), 0
     if save is not None and save.map_header in trainer.area_condition.fog_headers:
         if save.overworld_weather == OVERWORLD_WEATHER_CLEAR:
             return start_weather(trainer, field_defog=True), 0
@@ -745,7 +813,7 @@ def _fight(args):
     tables = fight_tables(tables, trainer, opp, foe_moves=lambda: foe_moves(tables, player, opp))
     if 0 <= args.lead < len(player) and player[args.lead].current_hp == 0:
         raise ValueError(f"--lead {args.lead}: that Pokemon has fainted")
-    weather, _ = fight_start(trainer, names, save, args.field_defog, player)
+    weather, _ = fight_start(trainer, names, save, args.field_defog, player, args.script_weather)
     return game, tables, names, trainer, player, opp, weather, save
 
 
@@ -1060,7 +1128,9 @@ def _prep(args) -> int:
         return foe_moves(tables, [c.spec for c in pool], opp, out)
 
     tables = fight_tables(tables, trainer, opp, foe_moves=pool_moves)
-    weather, field_move = fight_start(trainer, names, save, args.field_defog)
+    weather, field_move = fight_start(
+        trainer, names, save, args.field_defog, script_weather=args.script_weather
+    )
     # A refused fight exits 2 before the cap, the pool or the team space can fail it. No
     # player party here: the team is not chosen yet, so build_problem's usable_pool checks
     # each candidate's side of the Kaizo ROM-change conditions instead.
@@ -1178,13 +1248,14 @@ def line_setup(
     allow_corrupt: bool = False,
     field_defog: bool = False,
     terrain: str | None = None,
+    script_weather: bool | None = None,
 ) -> LineSetup:
     """The fight of ``nuzline line`` (module docstring) without argparse: the team from
     ``party_path``, or from ``save_path`` with the line file's ``[[team]]``; the trainer's
     built party; the file's rules resolved; ``require_coverage`` with both slot-0 leads
     (raising ``UnsupportedMechanics``); the turn-0 state with ``deaths`` and the
-    ``protect``ed team members; the start weather is ``fight_start``'s (``field_defog``),
-    the battle terrain ``fight_terrain``'s (``terrain``).
+    ``protect``ed team members; the start weather is ``fight_start``'s (``field_defog``,
+    ``script_weather``), the battle terrain ``fight_terrain``'s (``terrain``).
     ``ValueError`` for a bad file, name or value;
     ``FightRefused`` (with ``trainer`` and the coverage ``report``) for a fight that cannot
     be built (``_check_buildable``)."""
@@ -1237,7 +1308,7 @@ def line_setup(
         raise ValueError("the lead (team slot 0) has fainted")
     rules = resolve_rules(file, names, player, opp)
     slots = protected_slots(player, names, protect, member="team")
-    weather, _ = fight_start(trainer, names, save, field_defog, player)
+    weather, _ = fight_start(trainer, names, save, field_defog, player, script_weather)
     require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
     from nuzline.engine.coverage import start_gravity, start_trick_room
 
@@ -1385,6 +1456,7 @@ def _line_command(args, run) -> int:
             allow_corrupt=args.allow_corrupt,
             field_defog=args.field_defog,
             terrain=args.terrain,
+            script_weather=args.script_weather,
         )
     except UnsupportedMechanics as e:
         print(_trainer_line(trainer))

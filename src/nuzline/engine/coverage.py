@@ -306,7 +306,9 @@ def start_trick_room(trainer: Trainer) -> int:
     return TRICK_ROOM_TURNS if trainer.area_condition.trick_room else 0
 
 
-def start_weather(trainer: Trainer, field_defog: bool = False) -> Weather:
+def start_weather(
+    trainer: Trainer, field_defog: bool = False, script_weather: bool | None = None
+) -> Weather:
     """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
     condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
     other unknown value; ``check_opponent`` refuses it instead.
@@ -316,7 +318,22 @@ def start_weather(trainer: Trainer, field_defog: bool = False) -> Weather:
     (14) clear (field_map_change.c:275-280; ScrCmd_0C4 at once, scrcmd.c:3667-3674), and
     the battle starts in the overworld weather (field_battle_data_transfer.c:267), so in no
     weather. ``ValueError`` for a fight that is not on such a header
-    (``AreaCondition.fog_headers``): its fog, if any, is deep fog (15) or not map fog."""
+    (``AreaCondition.fog_headers``): its fog, if any, is deep fog (15) or not map fog.
+
+    ``script_weather`` (ledger G-24): True, the fight starts while a map script's weather is
+    on (``AreaCondition.script_weather``: the Kaizo command 0x9C set the overworld weather,
+    field_battle_data_transfer.c:267); False, after it ended or before it began (the map's
+    own weather, clear: ScrCmd_0C4, scrcmd.c:3667-3674; a map change,
+    field_map_change.c:272-280); None, the start condition. ``ValueError`` for True or
+    False on a fight no script weather reaches (``AreaCondition.script_window`` empty)."""
+    if script_weather is not None:
+        area = trainer.area_condition
+        if area.script_weather is None:
+            raise ValueError(
+                f"trainer {trainer.id}: no map script sets the weather where this fight is met "
+                "(rom_script_weather.json)"
+            )
+        return START_CONDITIONS[area.script_weather] if script_weather else Weather.NONE
     if field_defog:
         if not trainer.area_condition.fog_clearable:
             raise ValueError(

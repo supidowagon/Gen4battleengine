@@ -170,6 +170,9 @@ class Sources:
     # Each map header's weather byte (rom/rom_map_weather.json, by header id): the fog
     # headers a fog fight can clear with field Defog (``fog_headers``, ledger G-15).
     map_weather: tuple[int, ...] = ()
+    # rom/rom_script_weather.json (maps.script_weathers, ledger G-23, G-24): the script
+    # weather before a battle ("battles") and the one a script leaves on a map ("windows").
+    script_weather: Mapping[str, Any] | None = None
 
 
 def load_sources(inter: Path) -> Sources:
@@ -197,6 +200,7 @@ def load_sources(inter: Path) -> Sources:
         pkcalc=pkcalc,
         docs=docs,
         map_weather=tuple(_read(rom_dir / "rom_map_weather.json")),
+        script_weather=_read(rom_dir / "rom_script_weather.json"),
     )
 
 
@@ -650,8 +654,45 @@ def trainer_record(
     if tid in overrides.area_exceptions:
         e = overrides.area_exceptions[tid]
         sources["area_condition"] += f"; area_exception ({e.reason}; {e.source})"
+    _script_weather(tid, t["start_condition"], src.script_weather or {}, out, sources)
     out["sources"] = sources
     return out
+
+
+def _script_weather(
+    tid: int, rom_start: str, scripted: Mapping[str, Any], out: dict, sources: dict
+) -> None:
+    """Kaizo's script weather on ``out`` (ledger G-23, G-24; ``rom_script_weather.json``).
+    A battle the script runs in a weather it set (835, 836: rain) already has that start
+    condition from the ROM; its sources cite the script. A trainer that can meet a weather a
+    script leaves on its map (Route 213's rain) gets ``area_condition.script_weather`` and
+    ``script_window`` (header, overworld weather, var, value): its start is a run input
+    (``cli.script_weather_state``), the start condition the default. The header's own
+    condition must be none, the weather the fight has outside the window; else
+    ``ResolveError``."""
+    for header, row in sorted(scripted.get("battles", {}).get(str(tid), {}).items()):
+        cite = f"; script weather {row['weather']} on header {header} ({row['source']})"
+        sources["start_condition"] += cite
+        sources["area_condition"] += cite
+    row = scripted.get("windows", {}).get(str(tid))
+    if row is None:
+        return
+    if rom_start != "none":
+        raise ResolveError(
+            f"trainer {tid}: a script weather window on header {row['header']}, but the ROM "
+            f"start condition is {rom_start!r}, not none"
+        )
+    out["area_condition"]["script_weather"] = row["condition"]
+    out["area_condition"]["script_window"] = [
+        row["header"],
+        row["weather"],
+        row["var"],
+        row["value"],
+    ]
+    sources["area_condition"] += (
+        f"; script weather {row['condition']} on header {row['header']} ({row['source']}): "
+        "a run input (--script-weather), the start condition the default"
+    )
 
 
 def _header_fields(

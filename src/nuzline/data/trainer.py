@@ -141,7 +141,17 @@ class AreaCondition:
     src/field_map_change.c:275-280), and field Defog sets the flag and the overworld weather
     clear at once (res/field/scripts/scripts_field_moves.s:385-387; scrcmd.c:3667-3674), so
     on these headers the fog start is a run input (ledger G-15): the battle reads the
-    overworld weather (src/field_battle_data_transfer.c:267). Deep fog (15) is never cleared."""
+    overworld weather (src/field_battle_data_transfer.c:267). Deep fog (15) is never cleared.
+
+    ``script_weather`` / ``script_window`` (Kaizo, ledger G-24): a map script the fight can
+    meet leaves this weather (one of ``AREA_WEATHERS``) on the map: ``script_window`` =
+    (map header, overworld weather id it sets, saved var, value) from
+    ``rom_script_weather.json``. The Kaizo command 0x9C sets the overworld weather and the
+    script then sets the var to the value (Route 213: scr_seq 459 entry 12, rain, VAR 0x40FA
+    := 8); the rain lasts until ScrCmd_0C4 after the Chelle win (src/scrcmd.c:3667-3674) or a
+    map change (src/field_map_change.c:272-280), and the header's own weather is clear, so
+    the fight starts in this weather or in none: a run input (``cli.fight_start``), with
+    ``weather`` the default."""
 
     weather: str | None = None
     fog: bool = False
@@ -149,6 +159,8 @@ class AreaCondition:
     gravity: bool = False
     permanent: bool = True
     fog_headers: tuple[int, ...] = ()
+    script_weather: str | None = None
+    script_window: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.weather is not None and self.weather not in (*AREA_WEATHERS, UNKNOWN_CONDITION):
@@ -156,6 +168,16 @@ class AreaCondition:
         object.__setattr__(self, "fog_headers", tuple(sorted(self.fog_headers)))
         if self.fog_headers and not self.fog:
             raise ValueError(f"fog headers {self.fog_headers} on a fight without fog")
+        object.__setattr__(self, "script_window", tuple(self.script_window))
+        if (self.script_weather is None) != (not self.script_window) or (
+            self.script_window and len(self.script_window) != 4
+        ):
+            raise ValueError(
+                f"script weather {self.script_weather!r} needs a window (header, overworld "
+                f"weather, var, value), got {self.script_window}"
+            )
+        if self.script_weather is not None and self.script_weather not in AREA_WEATHERS:
+            raise ValueError(f"script weather {self.script_weather!r} is not an area weather")
 
     @property
     def fog_clearable(self) -> bool:

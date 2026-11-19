@@ -22,6 +22,7 @@ __all__ = [
     "MAP_HEADER",
     "NORMAL_PAGES",
     "NORMAL_SIZE",
+    "NUM_VARS",
     "OVERWORLD_WEATHER",
     "PARTY_COUNT",
     "PARTY_MAX",
@@ -36,6 +37,7 @@ __all__ = [
     "TRAINER_NAME",
     "TRAINER_NAME_LEN",
     "VARS",
+    "VARS_START",
     "VAR_PLAYER_STARTER_INDEX",
     "page_body_size",
     "page_offset",
@@ -98,6 +100,10 @@ VARS = 0xDAC
 # lines such as MAP_LOCAL_VARS_END = VAR_MAP_LOCAL_0x1F do not advance); the next line,
 # VAR_UNUSED_0x4031, confirms it. Holds the starter's species id, 0 before the choice.
 VAR_PLAYER_STARTER_INDEX = 48
+# NUM_VARS = VARS_END - VARS_START (include/constants/savedata/vars_flags.h:6): VARS_END is
+# 0x4120 (generated/vars_flags.txt:4399, counted as above), so the page holds 288 vars.
+NUM_VARS = 288
+VARS_START = 0x4000  # the first saved variable's id (generated/vars_flags.txt: VARS_START)
 
 # --- the normal block's pages (gSaveTable, src/savedata/save_table.c:49-86) -------------
 # Each page's ``sizeFunc`` result in table order (SavePageInfo_Init, src/savedata.c:826-850:

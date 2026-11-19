@@ -28,7 +28,7 @@ def level_to_cap(
     the base exp of the cap (``exp_table[rate(species)][cap]``, the rate by species as
     ``Pokemon_GetSpeciesBaseExpAt`` reads it, pokemon.c:2327-2330). One not raised keeps
     the save's exp."""
-    spec = mon.to_spec(tables, trainer)
+    spec = mon.to_spec(tables, trainer, healed=True)  # its status is dropped below
     move_pp = _as_np(tables.move_pp)
     pp = tuple(
         int(move_pp[m]) * (5 + ups) // 5 if m else 0

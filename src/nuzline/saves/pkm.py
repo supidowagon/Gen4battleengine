@@ -22,7 +22,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats
 from nuzline.saves.crypto import decrypt_record, record_checksum
-from nuzline.saves.status import decode_status
+from nuzline.saves.status import decode_status, status_conditions
 
 __all__ = [
     "ITEM_LUXURY_BALL",
@@ -87,7 +87,7 @@ class SaveMon:
     pokeball: int  # the ball's item id, block D 0x1B
     egg_location: int  # MON_DATA_EGG_LOCATION (src/pokemon.c:1159-1166)
 
-    def to_spec(self, tables, trainer=None) -> PokemonSpec:
+    def to_spec(self, tables, trainer=None, healed: bool = False) -> PokemonSpec:
         """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, a form
         beyond the species' form count, an ability the form cannot have, PP above the move's maximum, or
         (party) a stored stat outside the band the current EVs allow. Base stats and
@@ -98,8 +98,20 @@ class SaveMon:
         that can gain exp. ``exp`` is the stored experience, ``pokerus`` 1 for a nonzero
         Pokerus byte (``Pokemon_HasPokerus``, src/pokemon.c:4184-4199) and
         ``friend_bonus`` 1 for a Luxury Ball (src/pokemon.c:2664-2666). ``egg_location`` and
-        ``pp_ups`` are copied for coverage (``PokemonSpec``)."""
+        ``pp_ups`` are copied for coverage (``PokemonSpec``).
+
+        A status word holding several conditions (ledger G-25: the Kaizo script command 0x3F
+        writes 0x7B, sleep 3 + poison + burn + freeze + paralysis, at Newmoon Island, scr_seq
+        363 0x00f2) is a ``RecordError``: the engine's status is one condition
+        (``decode_status``), and the battle keeps every bit (``status_conditions``).
+        ``healed``: the caller replaces the status (prep heals, ``level_to_cap``)."""
         label = location_label(self.location)
+        held = status_conditions(self.status_raw)
+        if len(held) > 1 and not healed:
+            raise RecordError(
+                f"{label}: status word {self.status_raw:#x} holds {', '.join(held)} at once; "
+                "the engine models one status condition: heal it before this fight"
+            )
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
         row = self._row(tables, label)

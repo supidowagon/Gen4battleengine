@@ -1929,6 +1929,57 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Secret Power's own chance (`move_effect_chance`, 30). Tests: SNOW freeze, none through a substitute;
   BRIDGE evasion -1 (engine == reference).
 
+- G-23 Kaizo script weather before a battle (rom_diff.md:292 gFieldScriptCommands; sheet
+  rom-field-script-commands; manager ruling 5). Command 0x9C (scrcmd.h:164, ScrCmd_Unused_09C) runs the
+  injected code at 0x023C8345: VAR_0x4015 != 0 -> FieldOverworldState_SetWeather(VAR_0x4016); the battle
+  starts in the overworld weather (field_battle_data_transfer.c:267; Kaizo switch, battle_lib.c:3665-3669:
+  4 THUNDERSTORM -> rain); ScrCmd_0C3 / 0C4 set clear (scrcmd.c:3657-3674), a warp rewrites it
+  (field_map_change.c:272-280). `maps._walk` carries the weather command a path last ran
+  (`ScriptWeatherWalk`; resets: 0C3, 0C4, Warp) and `maps.script_weathers` records the opponents of a
+  battle reached after it: scr_seq 329 (header 293) 0x01df -> StartTagBattle 609, 835, 836 at 0x0202, so
+  835 Triton #2 and 836 Neptune #2 start in rain (the partner 609 is not an opponent and keeps none).
+  `trainer_start_conditions` replaces the header's condition for that placement;
+  `rom/rom_script_weather.json` ("battles") and the trainer's sources cite it. PKCalc's rain list agrees, so
+  the resolutions.toml ROM-vs-PKCalc row for 835/836 and its "User calls" line are gone. scr_seq 182 sets 18
+  (Trick Room) before 666 (0x00d5 -> 0x0101, 0x01a3 -> 0x01cf): field effects are left to overrides
+  area.666 (sheet Elite Four Split:206), which now cites the script; 666 stays refused as every Trick Room
+  fight. scr_seq 1056 sets 16 (no battle effect, battle_lib.c:3700) and starts no battle; 1117 runs only the
+  wild branch. No other Kaizo trainer's ROM start condition changes (835, 836 only).
+- G-24 Route 213 script rain is a start-condition input (manager ruling 3). scr_seq 459 entry 12 runs from
+  coord event VAR 0x40FA == 7 (vanilla VAR_UNUSED_0x40FA; zone_event 359 coord #3; trigger test
+  src/unk_0203C954.c:218), sets overworld weather 4 at 0x0264, then VAR 0x40FA := 8 (0x0283) and ends; the
+  rain lasts until 0C4 after the Chelle win (0x02b7, 0x02ff) or a map change. `script_weathers` gives the
+  window to the header's object trainers (103-108, 110, 111, 696) and to the battles of entries an object
+  runs or a coord event at VAR 0x40FA >= 7 (491 Chelle, entries 13 and 14); the coord battles at 3, 4, 5
+  (692-695, 466; entries 9-11) run before it and get none. Data: `AreaCondition.script_weather` ("rain")
+  and `script_window` (373, 4, 0x40FA, 8). The start: `cli.script_weather_state` -- the run input
+  `--script-weather` / `--no-script-weather` (coverage, rank, solve, prep, both line commands, beside
+  `--field-defog` and `--terrain`, `run_inputs`); a save with VAR 0x40FA >= 8 decides (off header 373:
+  none, the map change cleared it and nothing sets it again; on it: its overworld weather, 4 rain, 0
+  clear; any other refused), and an input it contradicts is refused; before that the route decides, so the
+  default is the start condition (the user's rain, overrides area.103-111/491, 2026-11-07; none for 104
+  and 696). `SaveFile.vars` / `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
+  `coverage.start_weather(script_weather=)` turns the state into the weather.
+- G-25 Status 0x3F (manager ruling 2): a real battle of a split can start under Newmoon's 0x7B. scr_seq 363
+  entry 4 (header 321, an init-script entry) writes party[0] := 0x7B (sleep 3 | poison | burn | freeze |
+  paralysis, condition.h:7-13) when it has no status, then StartFirstBattle 674 (Lady Emi, no split) and
+  warps to header 415. Header 321 is reached mid-story: Kaizo's Pokemon Center 2F bed script (scr_seq 213
+  entry 20, common script 9019) runs once trainer flag 882 is set (scr_seq 278 0x011d, the Floaroma Meadow
+  house), and with trainer flag 823 set always (0x0199 -> 0x0b18: GetRandom 100 <= 100, GoToIf 3 is
+  "<=", scrcmd.c:744-752, :1069 -> 0x09d6), else on some maps by a GetRandom roll, `Warp 320` (0x09dc); scr_seq 362 0x00f8 warps 320 -> 321. (Vanilla's way in needs
+  FLAG_GAME_COMPLETED, scripts_canalave_city_harbor_inn.s:16-17, kept by Kaizo's scr_seq 47.) The battle
+  keeps every bit (wake: `status &= ~MON_CONDITION_SLEEP`, battle_controller_player.c:2449; thaw clears
+  only freeze, subscript_thaw_out.s; each reader tests its own bit, e.g. battle_lib.c:4479), so the word
+  reaches the next fight unless healed. NOT modelled here: the engine's status is one condition plus a
+  counter (`ids.Status`, STATE.md "Status"; saves/status.py decode_status kept only the first), and the full
+  word is a state change through every status reader (engine, reference, AI). What is done: a party
+  Pokemon whose word holds several conditions is refused at the save (`SaveMon.to_spec` RecordError,
+  `status.status_conditions` names them) instead of being silently cut to one; prep heals (`level_to_cap`,
+  `healed=True`). The full-word model is left for its own batch. Floaroma's (scr_seq 278) and the beds'
+  0x3F write 1 (sleep 1), one condition, read from the save as any status.
+- G-26 gFieldScriptCommands is `modelled` in rom_diff.toml / rom_diff.md (its `when` dropped): the weather by
+  G-23 / G-24, the status and exp (0x1CE) through the save's party, a multi-condition word refused (G-25).
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

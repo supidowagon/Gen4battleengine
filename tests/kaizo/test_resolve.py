@@ -627,9 +627,8 @@ def test_report_lists_user_calls():
     lines = [ln for ln in calls.splitlines() if ln.startswith("- ")]
     assert [ln.split(":", 1)[0] for ln in lines] == [
         "- no map placement found",
-        # Iron Island (E3 batch 4 mapped Byron Split:662): sheet and PKCalc say rain, the
-        # ROM map header none; the ROM is used and the user is asked.
-        "- area weather 835 Galactic Triton #2",
+        # Iron Island 835/836 left this list (ledger G-23): the ROM's script weather (scr_seq
+        # 329 0x01df) starts them in rain, as the sheet and PKCalc say.
         f"- {_unclassified()} ROM changes unclassified in data/kaizo/rom_diff.toml",
     ]
     unplaced = {int(i) for i in lines[0].rsplit(": ", 1)[1].split(", ")}
