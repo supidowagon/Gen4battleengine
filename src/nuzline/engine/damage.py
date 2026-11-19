@@ -1528,12 +1528,17 @@ def _pre_random(
         power = jnp.where(assured, base_power * 2, power)
         # CalcGyroBallPower (:7123-7131) and CalcTrumpCardPower (:7233-7245) from ``s`` unless
         # the caller passes the action's value (``in_power``): the turn-start tables read the
-        # speeds now and the first slot holding the move after one PP.
+        # speeds now and the first slot holding the move after its PP cost, Pressure's included
+        # (BattleControllerPlayer_DecrementPP, battle_controller_player.c:2237-2280;
+        # effects.pressure_pp_cost with the defender as the fight command's).
+        from nuzline.engine.effects import pressure_pp_cost  # effects imports this module
+
         gyro = gyro_ball_speeds_power(tables, s, atk_side, def_side)
         power = jnp.where(effect == EffectId.GYRO_BALL, gyro, power)
         holding = s.moves[party(fmt, atk_side), a_slot] == move
         first = jnp.argmax(holding)
-        pp_left = jnp.maximum(_i32(s.pp[party(fmt, atk_side), a_slot, first]) - 1, 0)
+        cost = pressure_pp_cost(tables, s, atk_side, def_side, move)
+        pp_left = jnp.maximum(_i32(s.pp[party(fmt, atk_side), a_slot, first]) - cost, 0)
         power = jnp.where(effect == EffectId.TRUMP_CARD, trump_card_power(pp_left), power)
         # BtlCmd_CalcNaturalGiftParams (:8088-8102): the item's naturalGiftPower (B13-20).
         gift_power = natural_gift_params(tables, gift_item(s, atk_side, gift))[0]
