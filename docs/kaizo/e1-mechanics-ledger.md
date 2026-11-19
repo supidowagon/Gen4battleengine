@@ -1254,8 +1254,10 @@ Read this section first after a clear, then `docs/process.md` section 2.
    "announced" flags in `_reset_battler`.
 4. Next mechanics batch: send the family list to the manager first. Kaizo abilities (5 groups,
    13 battles; Hydration covers 8), held items (8 groups, 6 battles), Weather Ball AI typeless
-   refusal, Poke Ball friendship wrapping past 255, Sky Forme reverting when frozen, Effect Spore
-   and Suction Cups (check whether `tools/kaizo/backlog.py` undercounts). Owed items below first.
+   refusal, Poke Ball friendship wrapping past 255, Sky Forme reverting when frozen. Effect Spore
+   and Suction Cups are dropped (no Kaizo species has them). Owed items below first. Order: send
+   the family list, then Opus rule sheets by the pipeline; builders wait until the manager
+   announces the doubles re-index (c6c44b6) on main.
 
 ### Frozen files (E2 D1 group B, until the manager says merged)
 `engine/hooks.py`, `engine/bag.py`, `ai/commands.py`, `ai/switching.py`, `ai/policy.py`,
@@ -1292,5 +1294,3 @@ chunk, only with more than 6 GB free; everything else on the pod (send tip plus 
 - G. Tests: `assert_equals_bruteforce` in test_transform_laws.py; copied Cute Charm with the kept
   gender (battle_script.c:5732-5735); copied Wonder Guard; Transform through an invoker.
 - H. Cites: copy loop battle_script.c:5346-5348; switch-in re-trigger bcp.c:3672-3673 and 3973.
-- I. Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups vs Roar: confirm
-  coverage refuses their holders, then build them.
