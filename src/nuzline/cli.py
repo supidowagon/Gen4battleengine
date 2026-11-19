@@ -721,7 +721,7 @@ def _rank(args) -> int:
     except UnsupportedMechanics as e:
         _print_report(e.report)
         return EXIT_REFUSED
-    from nuzline.engine.coverage import start_gravity
+    from nuzline.engine.coverage import start_gravity, start_trick_room
 
     state = make_state(
         tables,
@@ -732,6 +732,7 @@ def _rank(args) -> int:
         leads=leads,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        trick_room=start_trick_room(trainer),
         chatot_cry=cry or 0,
     )
     state = state.with_budget(args.deaths, slots)
@@ -818,7 +819,7 @@ def _solve(args) -> int:
         _say(f"refused: {e}")
         _print_report(e.report)
         return EXIT_REFUSED
-    from nuzline.engine.coverage import start_gravity
+    from nuzline.engine.coverage import start_gravity, start_trick_room
 
     state = make_state(
         tables,
@@ -829,6 +830,7 @@ def _solve(args) -> int:
         leads=leads,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        trick_room=start_trick_room(trainer),
         chatot_cry=cry or 0,
     )
     state = state.with_budget(args.deaths, slots)
@@ -1126,7 +1128,7 @@ def line_setup(
     slots = protected_slots(player, names, protect, member="team")
     weather = start_weather(trainer)
     require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
-    from nuzline.engine.coverage import start_gravity
+    from nuzline.engine.coverage import start_gravity, start_trick_room
 
     state = make_state(
         tables,
@@ -1136,6 +1138,7 @@ def line_setup(
         opp_items=trainer.items,
         terrain=trainer.terrain,
         gravity=start_gravity(trainer),
+        trick_room=start_trick_room(trainer),
         chatot_cry=cry or 0,
     ).with_budget(deaths, slots)
     return LineSetup(tables, names, trainer, player, opp, state, file, rules, rules_to_line(rules))

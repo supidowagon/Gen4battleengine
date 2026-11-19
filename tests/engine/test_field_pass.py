@@ -9,8 +9,8 @@ import pytest
 
 from nuzline.engine.ids import Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
-from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER, step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
 _SIDE_TIMERS = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
 
@@ -40,7 +40,7 @@ def _max_hp(s, side, value, hp=None):
 
 
 def _leer(tables, names, s, o=None):
-    return step(tables, s, A("Leer", "Leer", s, names), o or empty_outcome())
+    return jit_step(tables, s, A("Leer", "Leer", s, names), o or empty_outcome())
 
 
 def _lost(before, after, side):
@@ -226,7 +226,7 @@ def test_fainted_cloud_nine_holder_does_not_stop_the_chip(tables, names):
     s = roark_state(tables, names, player_species="Psyduck", player_moves=["Leer"],
                     player_ability="Cloud Nine")  # fmt: skip
     s = _normal_foe(_weather(s, Weather.SANDSTORM)).replace_hp(0, 0, 1)
-    out = step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
+    out = jit_step(tables, s, A("Leer", "Tackle", s, names), empty_outcome())
     assert int(out.hp[0, 0]) == 0
     assert _lost(s, out, 1) == max(int(s.max_hp[1, 0]) // 16, 1)
 

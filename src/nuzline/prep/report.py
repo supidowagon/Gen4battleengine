@@ -16,7 +16,7 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.tables import Names, Tables
-from nuzline.engine.coverage import start_gravity
+from nuzline.engine.coverage import start_gravity, start_trick_room
 from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
 from nuzline.jaxcache import code_version
@@ -98,6 +98,7 @@ def _hp_why(problem: PrepProblem, names: Names, member: Member, tables: Tables) 
         problem.start_condition,
         problem.trainer.items,
         gravity=start_gravity(problem.trainer),
+        trick_room=start_trick_room(problem.trainer),
     )
     if hp in kill:
         return f"at most {hp}: the trainer AI sees a kill"
@@ -287,6 +288,7 @@ def _root(problem: PrepProblem, setup: Setup, tables: Tables) -> BattleState:
         problem.trainer.items,
         terrain=problem.trainer.terrain,
         gravity=start_gravity(problem.trainer),
+        trick_room=start_trick_room(problem.trainer),
         chatot_cry=problem.chatot_cry,
     )
 

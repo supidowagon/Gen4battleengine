@@ -498,6 +498,44 @@ class EffectId(IntEnum):
     # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
     # subscript_confuse.s (``effects._chatter``, G-70).
     CHATTER = 121
+    # E3 batch 1. Splash (85, BATTLE_EFFECT_DO_NOTHING; Kaizo's Thief carries the effect at power 40):
+    # zeros. effect_script_0085.s:5 sets only MOVE_STATUS_SPLASH: no CalcCrit, no CalcDamage, so
+    # ``battleCtx->damage`` stays 0 (battle_lib.c:1974-1976) while the accuracy, Protect and type
+    # chart steps run as for any move with power (battle_controller_player.c:2350-2370); no HP
+    # change (UpdateHP skips damage 0, :3347) (``damage.fixed_damage``, E3-1-1).
+    DO_NOTHING = 122
+    # Teleport (153, BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE): zeros. effect_script_0153.s:5, :9-10: in a
+    # trainer battle MOVE_STATUS_FAILED (``step._use_move``, E3-1-4); the wild-only flee is not
+    # modelled (every Nuzline battle is a trainer battle).
+    FLEE = 123
+    # E3 batch 1 round 2. Torment (165, BATTLE_EFFECT_TORMENT): zeros. effect_script_0165.s:5 runs
+    # subscript_torment_start.s: VOLATILE_CONDITION_TORMENT on the defender, through a Substitute,
+    # unless it has the bit already or the move missed (``effects._torment``, E3-2-1).
+    TORMENT = 124
+    # Worry Seed (247, BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA): zeros. effect_script_0247.s:5 runs
+    # subscript_give_target_insomnia.s: the defender's ``BattleMon.ability`` becomes Insomnia
+    # unless the move missed, the defender is semi-invulnerable, behind a Substitute, or holds
+    # Truant, Multitype or a Griseous Orb (``effects._worry_seed``, E3-2-2).
+    WORRY_SEED = 125
+    # Me First (241, BATTLE_EFFECT_USE_MOVE_FIRST): zeros. effect_script_0241.s: BtlCmd_TryMeFirst
+    # (battle_script.c:7286-7312) then GoToMoveScript: an invoker (``order.CALL_ME_FIRST``) of its
+    # target's chosen move, x1.5 on its user's later CalcDamage (``damage.me_first_boost``), E3-2-3.
+    ME_FIRST = 126
+    # Trick Room (259, BATTLE_EFFECT_TRICK_ROOM): zeros. effect_script_0259.s:5-12: with any
+    # FIELD_CONDITION_TRICK_ROOM bit up it clears them, else sets FIELD_CONDITION_TRICK_ROOM_INIT
+    # (``effects._trick_room``, E3-2-4); it never fails.
+    TRICK_ROOM = 127
+    # Skill Swap (191, BATTLE_EFFECT_SWITCH_ABILITIES): zeros. effect_script_0191.s:5 runs
+    # subscript_exchange_abilities.s: the user's and the defender's ``BattleMon.ability`` swap and
+    # both ``truant`` become ``totalTurns & 1``, unless the move missed or the defender is
+    # semi-invulnerable, either has Wonder Guard or Multitype or holds a Griseous Orb, or both
+    # have no ability (``effects._skill_swap``, E3-2-5). No Substitute test.
+    SKILL_SWAP = 128
+    # Gastro Acid (239, BATTLE_EFFECT_SUPRESS_ABILITY): zeros. effect_script_0239.s:5 runs
+    # subscript_suppress_target_ability.s: MOVE_EFFECT_ABILITY_SUPPRESSED on the defender unless
+    # it is behind a Substitute, already has the bit, the move missed, the defender is
+    # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
+    GASTRO_ACID = 129
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -505,6 +543,10 @@ MAGNET_RISE_TURNS = 5
 # FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
 # (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
 GRAVITY_TURNS = 5
+# FIELD_CONDITION_TRICK_ROOM_INIT (condition.h:145): bits 16 and 18 of the 3-bit counter = 5, set
+# by effect_script_0259.s:6 and subscript_overworld_trick_room.s:14, counted down by
+# SIDE_COND_CHECK_STATE_TRICK_ROOM (battle_controller_player.c:1822-1830; ``step._trick_room_check``).
+TRICK_ROOM_TURNS = 5
 # The effects whose script sets only ``MOVE_SIDE_EFFECT_ON_HIT`` in its indirect flags and rolls
 # nothing through ``effectChance``: BattleSystem_TriggerSecondaryEffect's ON_HIT branch
 # (battle_lib.c:1524-1529) runs the subscript with no ``RandNext() % 100 < effectChance`` (only
@@ -560,6 +602,7 @@ UNROLLED_EFFECTS = (
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
     EffectId.ENDEAVOR,  # effect_script_0189.s: the HP difference (B10-5)
+    EffectId.DO_NOTHING,  # effect_script_0085.s:5: no CalcCrit, no CalcDamage (E3-1-1)
 )
 # BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
 FUTURE_SIGHT_TURNS = 3
@@ -1414,6 +1457,11 @@ MOVE_KNOCK_OFF = 282
 # (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
 # Encore, Struggle (generated/moves.txt), B10-9.
 CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
+# ``sCannotMeFirstMoves`` (battle_lib.c:7233-7240): Counter, Mirror Coat, Thief, Covet, Focus Punch,
+# Chatter. ``Move_MeFirstCanCopy`` (:7242-7252) compares their battle EFFECTS with the move's
+# (``tables.move_ai_effect``), so a move sharing any of them is refused: in Kaizo Covet's slot
+# (343) has effect 0, so every plain hit is (E3-2-3).
+ME_FIRST_BANNED_MOVES = (68, 243, 168, 343, 264, 448)
 # Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
 # Mirror Move, Metronome (generated/moves.txt), B10-11.
 INVOKER_MOVES = (0, 214, 383, 274, 382, 119, 118)
@@ -1449,9 +1497,11 @@ MOVE_CHATTER = 448
 CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
 MIMIC_PP_CAP = 5
-# Trace fires per slot in one step (D2-5, D2-16): its turn-start occupant's armed Trace, one entry
-# by its own action, and one drag per other battler's Roar / Whirlwind; the width of
-# ``Outcome.trace_pick`` and the bound of ``BattleState.ts_trace_fires``.
+# Trace fires per slot in one step (D2-5, D2-16): its turn-start occupant's armed Trace, then at most
+# one per action of the step's four: its own (an entry, or a Skill Swap that hands it Trace, which
+# acts at the move's end, ``hooks.move_end_switch_in``) and each other battler's (a Roar /
+# Whirlwind drag, or a Skill Swap with it); the width of ``Outcome.trace_pick`` and the bound of
+# ``BattleState.ts_trace_fires``.
 TRACE_FIRES = 5
 # sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
 # 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``

@@ -48,8 +48,8 @@ from nuzline.engine.ids import AbilityId, EffectId, Type
 from nuzline.engine.observe import observe
 from nuzline.engine.outcome import PRESENT_HEAL, Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step, step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_rows
+from nuzline.engine.step import step_events
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state, sample_rows
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -268,7 +268,7 @@ def test_heal_path_heals_a_quarter_of_the_targets_max_hp(tables, names):
 def test_heal_reads_no_crit_or_roll(tables, names):
     s = _hurt(_state(tables, names))
     acts = A(PRESENT, "Leer", s, names)
-    base = step(tables, s, acts, _o(PRESENT_HEAL, 0, 15))
+    base = jit_step(tables, s, acts, _o(PRESENT_HEAL, 0, 15))
     for crit, roll in itertools.product((0, 1), (0, 9)):
         out = assert_matches_reference(tables, s, acts, _o(PRESENT_HEAL, crit, roll))
         for x, y in zip(base, out, strict=True):
@@ -397,7 +397,7 @@ def test_observation_tells_the_paths_apart(tables, names):
     acts = A(PRESENT, "Leer", ghost, names)
     obs = []
     for k in (0, PRESENT_HEAL):
-        after = step(tables, ghost, acts, _o(k))
+        after = jit_step(tables, ghost, acts, _o(k))
         obs.append(np.asarray(observe(tables, ghost, acts, _o(k), after)))
     assert (obs[0] != obs[1]).any()
 

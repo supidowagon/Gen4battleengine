@@ -76,6 +76,11 @@ def _resident_bytes() -> int:
 # Above this resident size, JAX's in-memory programs are dropped after the current test
 # ($NUZLINE_CLEAR_ABOVE_GB overrides it). Each clear is recorded and summarised at the end.
 _CLEAR_ABOVE = int(float(os.environ.get("NUZLINE_CLEAR_ABOVE_GB", "6")) * 2**30)
+# At a module boundary the programs are kept while the process is at most this resident size
+# ($NUZLINE_KEEP_BELOW_GB overrides it), so the next module reuses the shared programs
+# (``tests.engine.helpers.jit_step``, ``step_rows``, ``sample_rows``) instead of re-tracing and
+# reloading them; above it they are dropped as before.
+_KEEP_BELOW = int(float(os.environ.get("NUZLINE_KEEP_BELOW_GB", "4")) * 2**30)
 _CLEAR_GROWTH = 2 * 2**30
 _LAST_AFTER = [0]  # the resident size the last clear left
 _CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
@@ -106,7 +111,8 @@ class _PeakSampler:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
-    """Drop JAX's in-memory compiled programs after each test module, and after any test that
+    """Drop JAX's in-memory compiled programs after a test module that leaves the process above
+    ``_KEEP_BELOW`` (4 GB; below it the next module reuses them), and after any test that
     leaves the process above max(6 GB, the last clear's resident + 2 GB). One process running the whole suite otherwise
     keeps every module's executables and reached 38 GB of commit (29 GB for tests/engine
     alone; 6 GB peak with this). The trainer-AI modules compile a program per layout (flag
@@ -131,7 +137,7 @@ def pytest_runtest_protocol(item, nextitem):
     # otherwise keep the process above the threshold and clear after every later test, each
     # next test re-tracing its programs for nothing.
     grown = before > _CLEAR_ABOVE and before > _LAST_AFTER[0] + _CLEAR_GROWTH
-    if "jax" in sys.modules and (next_module or grown):
+    if "jax" in sys.modules and ((next_module and before > _KEEP_BELOW) or grown):
         sys.modules["jax"].clear_caches()
         gc.collect()
         _LAST_AFTER[0] = _resident_bytes()

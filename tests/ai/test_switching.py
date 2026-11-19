@@ -24,7 +24,7 @@ from nuzline.ai.switching import (
     switch_sites,
     switching_refusals,
 )
-from tests.engine.helpers import roark_real_state, roark_state
+from tests.engine.helpers import as_species, roark_real_state, roark_state
 
 K = SwitchSite
 CRANIDOS, ONIX = 2, 1  # Roark's party slots (roark.md section 4)
@@ -217,9 +217,9 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Gastly's only ability is Levitate
-        s = s._replace(species=s.species.at[0, 5].set(names.species("Gastly")))
+        s = as_species(tables, s, 0, 5, names.species("Gastly"))
     else:  # Poliwag (Water Absorb) on Roark's bench: AI_HasAbsorbAbilityInParty
-        s = s._replace(species=s.species.at[1, 1].set(names.species("Poliwag")))
+        s = as_species(tables, s, 1, 1, names.species("Poliwag"))
     refusals = switching_refusals(tables, s)
     assert any(missing in r for r in refusals), refusals
     with pytest.raises(UnsupportedSwitching, match=missing):
@@ -268,10 +268,7 @@ def test_shadow_tag_and_arena_trap_block_the_switch(tables, names):
         slot = names.species_abilities(names.species(species)).index(
             names.ability("Shadow Tag" if species == "Wobbuffet" else "Arena Trap")
         )
-        t = s._replace(
-            species=s.species.at[0, 0].set(names.species(species)),
-            ability_slot=s.ability_slot.at[0, 0].set(slot),
-        )
+        t = as_species(tables, s, 0, 0, names.species(species), slot)
         assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES, species
 
 

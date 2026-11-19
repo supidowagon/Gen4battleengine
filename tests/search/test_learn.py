@@ -125,6 +125,8 @@ def _window_c(tables, names):
     return s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
 
 
+# Fast after the module's other tests compile its program; under -m fullset alone it pays
+# that compile (pod 172-190 s), which only the fullset run sees.
 @pytest.mark.fullset
 def test_window_c_refuses_finish_turn(tables, names):
     s = _window_c(tables, names)
