@@ -1789,6 +1789,65 @@ def _clear_copied(s: RefState, side: int) -> None:
         sd.move_copied_hit[side] = 0
 
 
+# UpdateFlagsWhenHit records no conversion2 fields for these ranges (bcp.c:4511-4521).
+CONV2_CLEARING = TARGETS_USER | {MoveTarget.RANGE_OPPONENT_SIDE}
+
+
+def _conv2_rows(tables, atk_type: int, own_types: list[int]) -> list[tuple[int, int]]:
+    """``BtlCmd_TryConversion2``'s eligible rows (battle_script.c:4789-4796) for the recorded
+    type ``atk_type`` as ``(row, defending type)`` in table order: the pair is listed, its
+    multiplier is at most TYPE_MULTI_NOT_VERY_EFF (5 tenths) and the defending type is neither of
+    ``own_types``. The decomp row counts the 0xFE separator at 108 (``type_chart_order`` does
+    not), so the Foresight rows after it sit one later. E3-B2-3."""
+    rows = []
+    for d in range(tables.type_chart.shape[1]):
+        order = int(tables.type_chart_order[atk_type, d])
+        if order >= 0 and _t(tables, "type_chart", atk_type, d) <= 5 and d not in own_types:
+            rows.append((order + int(tables.type_chart_foresight[atk_type, d]), d))
+    return sorted(rows)
+
+
+def _conv2_fails(tables, s: RefState, side: int) -> bool:
+    """``BtlCmd_TryConversion2``'s failure jump (battle_script.c:4770-4817, E3-B2-3): a raw
+    Multitype ability, no recorded move or attacker, a recorded multi-turn move
+    (``Move_IsMultiTurn``: Bide and the charge moves) whose attacker is still locked into it, or
+    no eligible row."""
+    sd, mon = s.battlers[side], _active(s, side)
+    if _battler_decomp_ability(tables, s, mon) == ABILITY_MULTITYPE:
+        return True
+    if not sd.conv2_move or not sd.conv2_battler:
+        return True
+    move = sd.conv2_move
+    multi_turn = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) or (
+        _t(tables, "move_effect", move) == EffectId.BIDE
+    )
+    if multi_turn and s.battlers[sd.conv2_battler - 1].locked_move:
+        return True
+    return not _conv2_rows(tables, sd.conv2_type, mon.types)
+
+
+def _conv2_type(tables, s: RefState, side: int, o) -> int:
+    """The type ``BtlCmd_TryConversion2`` gives ``side``'s battler (not ``_conv2_fails``):
+    ``o.conv2[side][recorded type]`` when that row is eligible, else the linear scan's first one."""
+    sd, mon = s.battlers[side], _active(s, side)
+    rows = _conv2_rows(tables, sd.conv2_type, mon.types)
+    picked = int(o.conv2[side][sd.conv2_type])
+    return picked if picked in [d for _, d in rows] else rows[0][1]
+
+
+def _conv2_writes(tables, s: RefState, turn: _Turn, side: int, move: int, record):
+    """``UpdateFlagsWhenHit``'s conversion2 fields for the foe defender (bcp.c:4509-4533, E3-B2-3):
+    ``None`` when the foe is not the defender (the user's own record is cleared by MoveEnd), else
+    ``(moveCur, attacker + 1, type)``, all zero where the move did not succeed or had no effects
+    (a charge turn counts as having them) or its range clears the record."""
+    if record is None:
+        return None
+    worked = turn.charging or (turn.met_worked and not turn.met_immune)
+    if not (turn.met_reached and worked) or _move_target(tables, turn.move_cur) in CONV2_CLEARING:
+        return 0, 0, 0
+    return turn.move_cur, side + 1, _move_type(tables, s, side, turn.move_cur, turn.gift)
+
+
 def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
     """The volatile state of a side's active battler back to a fresh battler's; a Baton Pass
     keeps ``BATON_PASSED`` and the stages. ``move_copied_hit`` and the foes' ``moveCopied`` are
@@ -1816,6 +1875,9 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "water_sport",
         "move_hit",
         "move_copied",  # moveCopied of the holder (lib.c:2125-2129), E3-B2-2
+        "conv2_move",  # conversion2Move / Battler / Type (lib.c:2131-2133, :2209-2211), E3-B2-3
+        "conv2_battler",
+        "conv2_type",
         "foresight",
         "disabled_move",
         "disable_turns",
@@ -3403,6 +3465,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             new = int(TERRAIN_TYPES[row])
             if new not in user.types:
                 user.types = [new] * len(user.types)
+    elif effect == EffectId.CONVERSION_2 and landed:
+        # effect_script_0093.s -> subscript_conversion_2.s -> BtlCmd_TryConversion2 (script.c:
+        # 4765-4820): both types become the picked defending type (E3-B2-3).
+        if not _conv2_fails(tables, s, side):
+            _active(s, side).types = [_conv2_type(tables, s, side, o)] * len(_active(s, side).types)
     elif effect == EffectId.FANG_PARALYZE_FLINCH and effective:
         # effect_script_0275.s -> subscript_paralyze_or_flinch.s: CheckEffectActivation
         # (the roll, then the target's HP; script.c:8377-8378) and the indirect paralysis,
@@ -5352,6 +5419,11 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
                 bool(s.battlers[side].substitute_hp) or all(own[x] >= 6 for x in ACUPRESSURE_STATS)
             )
         )
+        # BtlCmd_TryConversion2's failure (subscript_conversion_2.s:12-14, MOVE_STATUS_FAILED): the
+        # attack message is skipped too (E3-B2-3).
+        if effect == EffectId.CONVERSION_2 and _conv2_fails(tables, s, side):
+            full = True
+            turn.attack_message = False
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         full = full or (effect == EffectId.ENCORE and _encore_fails(tables, s, _foe(side))[0])
         # BtlCmd_TrySafeguard (script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
@@ -6587,6 +6659,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             continue
         record = None
         copied = (0, 0)
+        conv2 = None
         if commands[side] == ITEM:
             _use_item(tables, s, side, items[side])
         elif commands[side] == SWITCH:
@@ -6650,6 +6723,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # battle's movePrev is moveTemp (the chosen move) when the attack message showed.
             s.move_prev = move if turn.attack_message else 0
             copied = _copied_writes(tables, turn, move, record)
+            conv2 = _conv2_writes(tables, s, turn, side, move, record)
             # UpdateMoveBuffers (bcp.c:3936-3942): moveProtect = the move if its attack
             # message showed, else MOVE_NONE; the next TryProtection keeps the chain only for
             # Protect, Detect or Endure (script.c:5154-5158). Folded into protect_count here.
@@ -6657,7 +6731,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 s.battlers[side].protect_count = 0
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
         _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
-        _finish_action(turn, s, side, position, record, copied)
+        _finish_action(turn, s, side, position, record, copied, conv2)
 
 
 def _copied_writes(tables, turn: _Turn, move: int, record) -> tuple[int, int]:
@@ -6675,7 +6749,7 @@ def _copied_writes(tables, turn: _Turn, move: int, record) -> tuple[int, int]:
 
 
 def _finish_action(
-    turn: _Turn, s: RefState, side: int, position: int, record, copied=(0, 0)
+    turn: _Turn, s: RefState, side: int, position: int, record, copied=(0, 0), conv2=None
 ) -> None:
     """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
     turn.done[side] = True
@@ -6690,10 +6764,16 @@ def _finish_action(
         if value:
             s.battlers[holder].move_copied = value
             s.battlers[holder].move_copied_hit[side] = value
+    # conversion2Move / Battler / Type likewise (bcp.c:4509-4533), E3-B2-3.
+    if conv2 is not None:
+        foe_sd = s.battlers[_foe(side)]
+        foe_sd.conv2_move, foe_sd.conv2_battler, foe_sd.conv2_type = conv2
     # BattleControllerPlayer_MoveEnd -> ClearFlags (bcp.c:3986, :4389) clears the
-    # actor's own moveHit, unless CheckBattleOver ended the battle first (:3969).
+    # actor's own moveHit and conversion2Move, unless CheckBattleOver ended the battle first
+    # (:3969).
     if not s.over:
         s.battlers[side].move_hit = 0
+        s.battlers[side].conv2_move = 0
         # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
         # defender (bcp.c:3965-3967).
         _recover_status_by_ability(s, side)
@@ -6931,7 +7011,12 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     s.battlers[side].last_move = move
     s.battlers[side].protect_count = 0
     copied = (_copied_writes(tables, turn, move, record)[0], 0)  # a pivot is never self-ranged
-    _finish_action(turn, s, side, position, record, copied)
+    # The pivot's hit landed (it paused): the foe records it for Conversion 2 (E3-B2-3).
+    conv2 = None
+    if record is not None:
+        clears = _move_target(tables, used) in CONV2_CLEARING
+        conv2 = (0, 0, 0) if clears else (used, side + 1, _move_type(tables, s, side, used))
+    _finish_action(turn, s, side, position, record, copied, conv2)
     try:
         _actions(turn, s, position + 1)
     except _Pause:

@@ -545,6 +545,12 @@ class EffectId(IntEnum):
     # (battle_script.c:3483-3525) then GoToMoveScript on the defender's last Mirror-Move-able move
     # at it (``BattleState.move_copied``): an invoker (``order.CALL_MIRROR_MOVE``), E3-B2-2.
     MIRROR_MOVE = 131
+    # Conversion 2 (93, BATTLE_EFFECT_CONVERSION2): zeros. effect_script_0093.s: a direct ON_HIT
+    # ``subscript_conversion_2.s``: BtlCmd_TryConversion2 (battle_script.c:4765-4820) turns the user
+    # into a type that resists the type of the last move that landed on it
+    # (``BattleState.conv2_move`` / ``conv2_battler`` / ``conv2_type``), the row drawn by
+    # ``Outcome.conv2``; E3-B2-3.
+    CONVERSION_2 = 132
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

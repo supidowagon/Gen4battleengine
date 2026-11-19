@@ -15,7 +15,15 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
-from nuzline.engine.ids import AbilityId, EffectId, FlingEffect, MoveFlag, Stat, Status
+from nuzline.engine.ids import (
+    AbilityId,
+    EffectId,
+    FlingEffect,
+    MoveFlag,
+    Stat,
+    Status,
+    Weather,
+)
 from nuzline.engine.order import CALL_MIRROR_MOVE, call_kind
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
@@ -418,3 +426,331 @@ def test_mirror_move_is_an_ordered_invoker_in_the_enumeration(tables, names):
     quiet = _mirror_fight(tables, names, fast=False, copied="Rock Throw", foe=("Swords Dance",))
     laws = jax.tree.map(np.asarray, call_laws(tables, quiet, A("Mirror Move", 0, quiet, names)))
     assert list(laws.called[0][:2]) == [names.move("Rock Throw")] * 2
+
+
+# --- #93 Conversion 2 (E3-B2-3) ---------------------------------------------------------------
+#
+# effect_script_0093.s -> subscript_conversion_2.s -> BtlCmd_TryConversion2 (battle_script.c:4765-
+# 4820): the user's types both become a type that resists the type of the last move that landed
+# on it (``conv2_move`` / ``conv2_battler`` / ``conv2_type``, written by UpdateFlagsWhenHit,
+# battle_controller_player.c:4498-4536). The row is the first eligible one of a
+# ``BattleSystem_RandNext() % 112`` retry loop (battle_lib.c:2994-3007), drawn as
+# ``Outcome.conv2[user, recorded type]``.
+
+NORMAL, FLYING, ROCK, GHOST, STEEL, FIRE, WATER, DARK = 0, 2, 5, 7, 8, 10, 11, 17
+
+
+def _c2_fight(
+    t, n, foe=("Tackle",), mine=("Conversion 2", "Swords Dance"), user="Monferno", fast=False,
+    foe_species="Geodude",
+):  # fmt: skip
+    """A level 50 ``user`` (``mine``) against a level 50 ``foe_species`` (``foe``), no abilities;
+    the user is slower unless ``fast``."""
+    s = make_state(t, [_spec(n, user, 50, mine)], [_spec(n, foe_species, 50, foe)])
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(500 if fast else 1))
+
+
+def _c2_out(user_pick=None, kind=NORMAL, hits=True):
+    """No crits; ``conv2[0, kind]`` = ``user_pick`` when given."""
+    out = empty_outcome()._replace(hit=jnp.full((2, MAX_HITS), 1 if hits else 0, jnp.int8))
+    if user_pick is not None:
+        out = out._replace(conv2=out.conv2.at[0, kind].set(user_pick))
+    return out
+
+
+def _c2_go(t, n, s, foe="Tackle", out=None, me="Conversion 2"):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _c2_out())
+
+
+def _record(s, side, move, attacker, kind):
+    return s._replace(
+        conv2_move=s.conv2_move.at[side].set(move),
+        conv2_battler=s.conv2_battler.at[side].set(attacker + 1),
+        conv2_type=s.conv2_type.at[side].set(kind),
+    )
+
+
+def _types(s, side=0):
+    return np.asarray(s.types[side, 0]).tolist()
+
+
+def test_conversion_2_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 93 (BATTLE_EFFECT_CONVERSION2) is EffectId.CONVERSION_2 in both games and the only
+    move with it; it is an input clause of the damage classes (it rewrites the user's types like
+    Camouflage) and a status move for the damage tables."""
+    assert DECOMP_EFFECT_TO_ID[93] == (EffectId.CONVERSION_2, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        effect = np.asarray(t.move_effect)
+        assert list(np.flatnonzero(effect == EffectId.CONVERSION_2)) == [n.move("Conversion 2")]
+    assert EffectId.CONVERSION_2 in INPUT_CLAUSE_EFFECTS
+    assert EffectId.CONVERSION_2 in NON_TABLE_DAMAGE_EFFECTS
+
+
+def test_the_row_table_is_the_decomps(tables):
+    """``damage.conv2_pairs``: the decomp's 112 rows of ``sTypeMatchupMultipliers``
+    (battle_lib.c:2399-2517), with the 0xFE separator at 108, the two Foresight rows after it and
+    the 0xFF end; a pair is eligible when its multiplier is 0 or 5 and it weighs 586 (rows 0-15) or
+    585 of the 65536 u16 values (65536 = 112 * 585 + 16)."""
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    from nuzline.engine.damage import CONV2_ROWS, conv2_pairs
+    from nuzline.engine.ids import Type
+
+    weight, row = (np.asarray(x) for x in conv2_pairs(tables))
+    assert CONV2_ROWS == 112 and 112 * 585 + 16 == 65536
+    source = Path(__file__).resolve().parents[2] / "external/pokeplatinum/src/battle/battle_lib.c"
+    if not source.exists():
+        pytest.skip("decomp not present")
+    text = source.read_text(encoding="utf-8")
+    body = text.split("sTypeMatchupMultipliers[][3] = {")[1].split("};")[0]
+    rows = re.findall(r"\{\s*(\w+),\s*(\w+),\s*(\w+)\s*\}", body)
+    assert len(rows) == 112 and rows[108][0] == "0xFE" and rows[111][0] == "0xFF"
+    kinds = {f"TYPE_{x.name}": int(x) for x in Type}
+    multi = {"TYPE_MULTI_IMMUNE": 0, "TYPE_MULTI_NOT_VERY_EFF": 5, "TYPE_MULTI_SUPER_EFF": 20}
+    eligible = {}
+    for index, (a, d, m) in enumerate(rows):
+        if a in kinds and multi[m] <= 5:
+            eligible[(kinds[a], kinds[d])] = index
+    got = {(int(a), int(d)): int(row[a, d]) for a, d in zip(*np.nonzero(weight), strict=True)}
+    assert got == eligible
+    for (a, d), index in eligible.items():
+        assert int(weight[a, d]) == (586 if index < 16 else 585), (a, d)
+
+
+def test_the_pick_law_is_the_retry_loop(tables, names):
+    """``enumerate._conv2`` (the law the enumeration draws) is the 1000-try loop of
+    BtlCmd_TryConversion2 followed by the linear scan, computed here try by try with fractions:
+    a Rock / Ground user against a recorded Normal move has Steel and Ghost left, a Fire / Fighting
+    one the Fire rows (Fire, Water, Rock, Dragon). The values are on the 2**-52 grid."""
+    from fractions import Fraction
+
+    from nuzline.engine.damage import conv2_pairs
+    from nuzline.engine.enumerate import CONV2_DENOMINATOR, _conv2, outcome_laws
+
+    weight, row = (np.asarray(x) for x in conv2_pairs(tables))
+    for user, kind, foe in (("Geodude", NORMAL, "Tackle"), ("Monferno", FIRE, "Ember")):
+        s = _c2_fight(tables, names, foe=(foe,), user=user)
+        s = _record(s, 0, names.move(foe), 1, kind)
+        acts = A("Conversion 2", foe, s, names)
+        laws = jax.tree.map(np.asarray, jax.jit(outcome_laws)(tables, s, acts))
+        values, weights, den = _conv2(laws, 0, kind)
+        assert den == CONV2_DENOMINATOR and sum(weights) == den
+        own = {int(x) for x in np.asarray(s.types[0, 0])}
+        rows = sorted((int(row[kind, d]), d) for d in range(18) if weight[kind, d] and d not in own)
+        w = {d: int(weight[kind, d]) for _, d in rows}
+        # The loop, 1000 times: a try wins with its row's weight, else the next try; then the scan.
+        mass, left = {d: Fraction(0) for d in w}, Fraction(1)
+        for _ in range(1000):
+            for d, x in w.items():
+                mass[d] += left * Fraction(x, 65536)
+            left *= 1 - Fraction(sum(w.values()), 65536)
+        mass[rows[0][1]] += left
+        for d, x in zip(values, weights, strict=True):
+            assert abs(Fraction(x, den) - mass[d]) < Fraction(1, 2**50), (user, d)
+        assert set(values) == set(w)
+    # The ??? type has no rows at all: one value, the move fails.
+    assert _conv2(laws, 0, 9) == ([0], [1], 1)
+
+
+def test_the_user_becomes_the_drawn_resistor_of_the_last_move(tables, names):
+    """A slower user is Tackled first (Normal, recorded on it), then Conversion 2 turns it into the
+    drawn defending type of the Normal rows: Rock, Steel or the Foresight row's Ghost (both
+    types)."""
+    s = _c2_fight(tables, names)
+    for pick in (ROCK, STEEL, GHOST):
+        out = _c2_go(tables, names, s, out=_c2_out(pick))
+        assert _types(out) == [pick, pick], pick
+        assert _hp(out, 0) < int(s.hp[0, 0])  # the Tackle landed
+
+
+def test_a_user_never_picks_one_of_its_own_types(tables, names):
+    """MON_IS_NOT_TYPE (battle_script.c:4789-4796): a Rock / Ground user against a Normal move has
+    Rock excluded (Steel and Ghost only); and a draw that is not eligible falls to the linear
+    scan's first row."""
+    from nuzline.engine.damage import conv2_eligible
+
+    s = _c2_fight(tables, names, user="Geodude", foe_species="Monferno")
+    assert set(np.flatnonzero(np.asarray(conv2_eligible(tables, s, 0, NORMAL)))) == {STEEL, GHOST}
+    out = _c2_go(tables, names, s, out=_c2_out(ROCK))  # an ineligible draw: the first row (Steel)
+    assert _types(out) == [STEEL, STEEL]
+
+
+def test_a_record_is_written_for_every_landing_move_and_cleared_otherwise(tables, names):
+    """UpdateFlagsWhenHit (bcp.c:4509-4533), seen through a slower user's Conversion 2: a landed
+    move records (move, attacker, type); a miss, a range that clears (opponent side: Spikes) and
+    a type immunity clear it (the user's Conversion 2 then fails), a self-range foe move (Swords
+    Dance) leaves a stale record. Hidden Power records its IV type (``moveType``), Weather Ball the
+    weather's."""
+    t, n = tables, names
+
+    def types_after(
+        foe, species="Geodude", picks=(), stale=True, hits=True, weather=None, user="Monferno"
+    ):
+        s = _c2_fight(t, n, foe=(foe,), foe_species=species, user=user)
+        if stale:
+            s = _record(s, 0, n.move("Growl"), 1, NORMAL)
+        if weather is not None:
+            s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        out = _c2_out(hits=hits)
+        for kind, pick in picks:
+            out = out._replace(conv2=out.conv2.at[0, kind].set(pick))
+        return s, _c2_go(t, n, s, foe, out=out)
+
+    # A landed Tackle: recorded Normal, the user was hit and its Conversion 2 reads Normal (Rock).
+    s, out = types_after("Tackle", picks=((NORMAL, ROCK),))
+    assert _types(out) == [ROCK, ROCK] and _hp(out, 0) < int(s.hp[0, 0])
+    # A miss clears the stale record: Conversion 2 fails.
+    s, out = types_after("Tackle", hits=False, picks=((NORMAL, ROCK),))
+    assert _types(out) == _types(s)
+    # Swords Dance (RANGE_USER) leaves the stale Normal record: Conversion 2 works on it.
+    s, out = types_after("Swords Dance", picks=((NORMAL, ROCK),))
+    assert _types(out) == [ROCK, ROCK]
+    # Spikes (RANGE_OPPONENT_SIDE) clears it.
+    s, out = types_after("Spikes", picks=((NORMAL, ROCK),))
+    assert _types(out) == _types(s)
+    # Hidden Power (all IVs 15: Dark): the Dark rows, drawn as Steel.
+    s, out = types_after("Hidden Power", stale=False, picks=((DARK, STEEL),))
+    assert _types(out) == [STEEL, STEEL]
+    # Weather Ball in rain: Water, drawn as Grass.
+    s, out = types_after(
+        "Weather Ball",
+        "Castform",
+        stale=False,
+        weather=Weather.RAIN,
+        picks=((WATER, 12),),
+        user="Snorlax",
+    )
+    assert _types(out) == [12, 12]
+    # An Earthquake into a Flying user is a type immunity: nothing is recorded.
+    s = _c2_fight(t, n, foe=("Earthquake",), user="Pidgeot")
+    s = _record(s, 0, n.move("Growl"), 1, NORMAL)
+    out = _c2_go(t, n, s, "Earthquake", out=_c2_out(STEEL))
+    assert _types(out) == _types(s)
+
+
+def test_the_users_own_move_end_clears_its_record(tables, names):
+    """ClearFlags (bcp.c:4390) clears ``conv2_move`` at the holder's own MoveEnd: a record from an
+    earlier turn is gone once the user acted (a faster Swords Dance against a foe that leaves
+    nothing), but its battler and type stay."""
+    s = _c2_fight(tables, names, foe=("Swords Dance",), mine=("Swords Dance",), fast=True)
+    s = _record(s, 0, names.move("Tackle"), 1, NORMAL)
+    out = _c2_go(tables, names, s, "Swords Dance", me="Swords Dance")
+    assert int(out.conv2_move[0]) == 0 and int(out.conv2_battler[0]) == 2
+
+
+def test_conversion_2_fails_without_a_record_and_skips_the_attack_message(tables, names):
+    """BtlCmd_TryConversion2 (:4775-4776) with no recorded move jumps to subscript_conversion_2.s:12
+    (MOVE_STATUS_FAILED) before the attack message: the types stay and movePrev is 0 (the foe's
+    Swords Dance, a self-range move, left no record and the user acts last), while a success shows
+    it (movePrev is Conversion 2)."""
+    t, n = tables, names
+    s = _c2_fight(t, n, foe=("Swords Dance",))
+    failed = _c2_go(t, n, s, "Swords Dance")
+    assert _types(failed) == _types(s)
+    assert int(failed.move_prev) == 0
+    s = _record(s, 0, n.move("Tackle"), 1, NORMAL)
+    worked = _c2_go(t, n, s, "Swords Dance", out=_c2_out(ROCK))
+    assert int(worked.move_prev) == n.move("Conversion 2")
+    assert _types(worked) == [ROCK, ROCK]
+
+
+def test_conversion_2_fails_for_multitype_and_for_a_locked_multi_turn_move(tables, names):
+    """Multitype (:4770) fails it; a recorded multi-turn move whose attacker is still locked into
+    it (:4778-4782: Fly's charge turn) fails it, and an attacker that is not locked (Fly's strike
+    done) lets it work (``Move_IsMultiTurn``, battle_lib.c:2975-2992)."""
+    t, n = tables, names
+    arceus = make_state(
+        t, [_spec(n, "Arceus", 50, ("Conversion 2",))], [_spec(n, "Geodude", 50, ("Tackle",))]
+    )
+    arceus = _record(arceus, 0, n.move("Tackle"), 1, NORMAL)
+    arceus = arceus._replace(stats=arceus.stats.at[0, 0, SPE].set(1))
+    out = _c2_go(t, n, arceus, "Tackle", out=_c2_out(ROCK))
+    assert _types(out) == _types(arceus)
+    fly = n.move("Fly")
+    s = _c2_fight(t, n, foe=("Swords Dance",), fast=True)
+    s = _record(s, 0, fly, 1, FLYING)
+    locked = s._replace(locked_move=s.locked_move.at[1].set(fly))
+    held = _c2_go(t, n, locked, "Swords Dance", out=_c2_out(ROCK, FLYING))
+    assert _types(held) == _types(s)
+    free = _c2_go(t, n, s, "Swords Dance", out=_c2_out(ROCK, FLYING))
+    assert _types(free) == [ROCK, ROCK]
+
+
+def test_a_foes_charge_turn_records_and_locks(tables, names):
+    """Fly's charge turn (a move that got past BeforeMove without MOVE_STATUS_NO_EFFECTS) records
+    Fly for its target, and the foe is locked into it: the slower user's Conversion 2 fails."""
+    t, n = tables, names
+    s = _c2_fight(t, n, foe=("Fly",), foe_species="Pidgeot")
+    out = _c2_go(t, n, s, "Fly", out=_c2_out(ROCK, FLYING))
+    assert int(out.conv2_move[0]) == 0  # the user's own MoveEnd cleared it
+    assert int(out.conv2_battler[0]) == 2 and int(out.conv2_type[0]) == FLYING
+    assert _types(out) == _types(s)
+    assert int(out.locked_move[1]) == n.move("Fly")
+
+
+def test_the_types_last_until_the_battler_leaves(tables, names):
+    """The new types are the battler's (``BattleMon`` types) until it leaves the field: after a
+    switch out the party Pokemon has its own types again."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 50, ("Conversion 2",)), _spec(n, "Bidoof", 50, ("Tackle",))],
+        [_spec(n, "Geodude", 50, ("Tackle",))],
+    )
+    s = s._replace(ability=s.ability.at[:, :].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(1))
+    own = _types(s)
+    after = _c2_go(t, n, s, out=_c2_out(ROCK))
+    assert _types(after) == [ROCK, ROCK]
+    acts = jnp.asarray([4 + 1, n.move_slot(after, 1, "Tackle")], jnp.int32)
+    away = assert_matches_reference(t, after, acts, _c2_out())
+    assert int(away.active[0]) == 1 and _types(away) == own
+
+
+def test_a_faster_user_reads_the_turn_start_record_and_a_slower_one_the_foes_move(tables, names):
+    """The enumeration: ``outcome_laws`` makes ``conv2[user, t]`` relevant for the recorded type
+    ``t`` the user meets: the turn-start record when it moves first, the type of the foe's move
+    (which overwrites the record) when the foe moves first. The enumerated values carry the exact
+    law."""
+    from nuzline.engine.enumerate import _conv2, enumerate_outcomes, outcome_laws
+
+    t, n = tables, names
+    for fast, kind in ((True, NORMAL), (False, FIRE)):
+        s = _c2_fight(t, n, foe=("Ember",), fast=fast, foe_species="Monferno")
+        s = _record(s, 0, n.move("Tackle"), 1, NORMAL)
+        acts = A("Conversion 2", "Ember", s, n)
+        laws = jax.tree.map(np.asarray, jax.jit(outcome_laws)(t, s, acts))
+        relevant = np.asarray(laws.relevant.conv2)
+        assert relevant[0].nonzero()[0].tolist() == [kind], fast
+        assert not relevant[1].any()
+        outcomes, probs = enumerate_outcomes(laws)
+        values, weights, den = _conv2(laws, 0, kind)
+        assert abs(probs.sum() - 1) < 1e-12
+        got = {}
+        for row, p in zip(np.asarray(outcomes.conv2)[:, 0, kind], probs, strict=True):
+            got[int(row)] = got.get(int(row), 0.0) + float(p)
+        for v, w in zip(values, weights, strict=True):
+            assert abs(got[v] - w / den) < 1e-9
+
+
+def test_the_draw_is_sampled_from_the_law(tables, names):
+    """``outcome.sample_outcome`` draws ``conv2`` from ``damage.conv2_probs`` per battler and type:
+    over many keys the Rock user's picks are Steel (row 1, 586 u16 values) and Ghost (the Foresight
+    row 110, 585) only, in the law's proportion."""
+    from nuzline.engine.damage import conv2_probs
+    from nuzline.engine.outcome import sample_outcome
+
+    t, n = tables, names
+    s = _c2_fight(t, n, user="Geodude", foe_species="Monferno")
+    law = np.asarray(conv2_probs(t, s, 0, NORMAL))
+    assert set(np.flatnonzero(law)) == {STEEL, GHOST}
+    assert abs(law.sum() - 1) < 1e-6 and law[STEEL] > law[GHOST]
+    acts = A("Conversion 2", "Tackle", s, n)
+    draw = jax.jit(jax.vmap(lambda k: sample_outcome(k, t, s, acts, False).conv2[0, NORMAL]))
+    picks = np.asarray(draw(jax.random.split(jax.random.PRNGKey(0), 4000)))
+    assert set(np.unique(picks)) == {STEEL, GHOST}
+    assert abs((picks == STEEL).mean() - law[STEEL]) < 0.04

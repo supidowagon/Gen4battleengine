@@ -251,12 +251,15 @@ import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
+    NUM_TYPES,
     PHYSICAL,
     PRESENT_HEAL,
     STATUS,
     battle_stats,
     battler_decomp_ability,
     beat_up_slots,
+    conv2_choice,
+    conv2_eligible,
     damage_for_roll,
     decomp_abilities,
     decomp_ability_id,
@@ -632,6 +635,57 @@ def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & ~jnp.any(types.astype(_I32) == new)
     )
     value = jnp.where(cond, new, types.astype(_I32)).astype(types.dtype)
+    return state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+
+
+# The ranges for which UpdateFlagsWhenHit clears the defender's conversion2 fields instead of
+# recording the move (battle_controller_player.c:4511-4521).
+CONV2_CLEARING_RANGES = (
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_OPPONENT_SIDE,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+
+def conv2_fails(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``BtlCmd_TryConversion2`` (battle_script.c:4765-4820) takes its failure jump for
+    ``side``'s battler (``subscript_conversion_2.s:5, :12-14``: ``MOVE_STATUS_FAILED``, and the
+    attack message after it is skipped): a raw Multitype ability (:4770, ``Battler_Ability``), no
+    recorded move (``conv2_move`` 0, ``conv2_battler`` none: :4775-4776), a recorded multi-turn
+    move (``Move_IsMultiTurn``, battle_lib.c:2975-2992: Bide and the charge moves,
+    ``MoveFlag.CHARGE``) whose attacker is ``VOLATILE_CONDITION_MOVE_LOCKED`` (``locked_move``,
+    :4778-4782), or no eligible row for the recorded type (:4783-4817; ``damage.conv2_eligible``).
+    E3-B2-3."""
+    fmt = format_of(state)
+    user = state.active[side]
+    multitype = battler_decomp_ability(tables, state, side, user) == ABILITY_MULTITYPE
+    move = state.conv2_move[side].astype(_I32)
+    source = state.conv2_battler[side].astype(_I32)
+    multi_turn = ((tables.move_flags[move] & MoveFlag.CHARGE) != 0) | (
+        tables.move_effect[move] == _E.BIDE
+    )
+    locked = state.locked_move[jnp.clip(source - 1, 0, fmt.B - 1)] != 0
+    kind = jnp.clip(state.conv2_type[side].astype(_I32), 0, NUM_TYPES - 1)
+    eligible = jnp.any(conv2_eligible(tables, state, side, kind))
+    recorded = (move != 0) & (source != 0)
+    return multitype | ~recorded | (multi_turn & locked) | ~eligible
+
+
+def _conversion_2(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``CONVERSION_2`` (effect_script_0093.s:5, a direct ON_HIT ``subscript_conversion_2.s``):
+    unless ``conv2_fails``, the user's two types both become the defending type ``BtlCmd_
+    TryConversion2`` picked (battle_script.c:4795-4797, ``Outcome.conv2[user, recorded type]``,
+    ``damage.conv2_choice``). The types stay until the battler leaves the field (its party row is
+    restored at the switch-in, like Camouflage's). E3-B2-3."""
+    fmt = format_of(state)
+    kind = jnp.clip(state.conv2_type[h.side].astype(_I32), 0, NUM_TYPES - 1)
+    _, picked = conv2_choice(tables, state, h.side, kind, outcome.conv2[h.side, kind])
+    cond = (h.effect == _E.CONVERSION_2) & h.landed & ~conv2_fails(tables, state, h.side)
+    types = state.types[party(fmt, h.side), h.user]
+    value = jnp.where(cond, picked, types.astype(_I32)).astype(types.dtype)
     return state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
 
 
@@ -3630,6 +3684,7 @@ def play_hit(
         _fang,
         _present,
         _camouflage,
+        _conversion_2,
         _stealth_rock,
         _trap,
         _taunt,

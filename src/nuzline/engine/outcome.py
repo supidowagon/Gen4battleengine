@@ -45,8 +45,10 @@ import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.damage import (
+    NUM_TYPES,
     PRESENT_HEAL,
     ability_weather,
+    conv2_probs,
     entry_ability,
     entry_weather,
     hazards_loss,
@@ -177,6 +179,12 @@ class Outcome(NamedTuple):
     # int8[B], 1 = Chatter's roll passes (``RandNext() % 100 <= effectChance``, battle_script.c:
     # 8428-8430; the chance is ``ids.CHATTER_CHANCES`` of the user's ``chatot_cry``), G-70.
     chatter: jnp.ndarray
+    # int8[B, NUM_TYPES], Conversion 2's pick (BtlCmd_TryConversion2, battle_script.c:4783-4817):
+    # ``[b, t]`` the defending type battler ``b`` becomes when the type it resists is ``t`` (the
+    # recorded move's type, ``BattleState.conv2_type``): the first eligible row of a
+    # ``RandNext() % 112`` retry loop. Its law depends on ``t`` and ``b``'s types
+    # (``damage.conv2_probs``), so every ``t`` the move can meet is its own element (E3-B2-3).
+    conv2: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -214,6 +222,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         future_band=sides,
         berry_confusion=sides + 2,
         chatter=sides,
+        conv2=jnp.zeros((fmt.B, NUM_TYPES), _I8),
     )
 
 
@@ -1721,6 +1730,21 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     }
 
 
+def _conv2_draw(key, tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[B, NUM_TYPES]``: ``Outcome.conv2`` drawn from ``damage.conv2_probs`` of each battler
+    and recorded type (0 where no row is eligible: the move then fails)."""
+    fmt = format_of(state)
+    kinds = jnp.arange(NUM_TYPES, dtype=_I32)
+
+    def law(b, t):
+        return conv2_probs(tables, state, b, t)
+
+    probs = jax.vmap(lambda b: jax.vmap(lambda t: law(b, t))(kinds))(jnp.arange(fmt.B))
+    logits = jnp.where(probs > 0, jnp.log(jnp.maximum(probs, 1e-30)), -jnp.inf)
+    pick = jax.random.categorical(key, logits, axis=-1)
+    return jnp.where(jnp.any(probs > 0, axis=-1), pick, 0).astype(_I32)
+
+
 def replacement_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
     """``bool``: ``side``'s move can be replaced within the turn by ``foe``'s action (ruling
     B11-1): a Sleep Talk user whose foe uses a move (a faster Disable or Imprison can change its
@@ -1910,6 +1934,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         <= jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        # Conversion 2's pick (battle_script.c:4783-4817): for each battler and recorded type the
+        # first eligible row of the ``% 112`` retry loop, its law ``damage.conv2_probs`` read at the
+        # turn-start types (a battler's types change only by its own action: E3-B2-3). From a
+        # fold_in key.
+        conv2=_conv2_draw(jax.random.fold_in(key, 45), tables, state),
     )
     outcome = _cast(outcome)
 

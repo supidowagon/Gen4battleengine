@@ -349,6 +349,14 @@ class BattleState(NamedTuple):
     # holder's column of that battler (battle_lib.c:2125-2149, :2203-2220: ``step._reset_battler``).
     move_copied: jnp.ndarray
     move_copied_hit: jnp.ndarray
+    # BattleContext.conversion2Move (int16 decomp move id, 0 = none), conversion2Battler (int8,
+    # 1 + the attacking battler, 0 = none) and conversion2Type (int8 type id), per battler: the last
+    # move that landed on it (battle_controller_player.c:4498-4536), read by Conversion 2
+    # (battle_script.c:4765-4820); E3-B2-3. Cleared with the volatiles of the holder; the move alone
+    # at the holder's own MoveEnd (``step._move_end``).
+    conv2_move: jnp.ndarray
+    conv2_battler: jnp.ndarray
+    conv2_type: jnp.ndarray
     foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
     disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
     disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
@@ -604,6 +612,9 @@ VOLATILE_FIELDS = (
     "move_hit",
     "move_copied",
     "move_copied_hit",
+    "conv2_move",
+    "conv2_battler",
+    "conv2_type",
     "foresight",
     "disabled_move",
     "disable_turns",
@@ -736,6 +747,9 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "move_hit": (_BATTLER, np.int16),
     "move_copied": (_BATTLER, np.int16),
     "move_copied_hit": ((*_BATTLER, "B"), np.int16),
+    "conv2_move": (_BATTLER, np.int16),
+    "conv2_battler": (_BATTLER, np.int8),
+    "conv2_type": (_BATTLER, np.int8),
     "foresight": (_BATTLER, np.int8),
     "disabled_move": (_BATTLER, np.int16),
     "disable_turns": (_BATTLER, np.int8),

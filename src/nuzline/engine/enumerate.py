@@ -187,6 +187,7 @@ force never compresses.
 from __future__ import annotations
 
 import collections
+import fractions
 import itertools
 import math
 from collections.abc import Callable
@@ -200,12 +201,18 @@ import numpy as np
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import imprisoning_foe
 from nuzline.engine.damage import (
+    CONV2_RAND,
+    CONV2_ROWS,
+    CONV2_TRIES,
+    NUM_TYPES,
     PHYSICAL,
     ROLLS,
     SPECIAL,
     STATUS,
     beat_up_damage,
     beat_up_slots,
+    conv2_eligible,
+    conv2_pairs,
     decomp_abilities,
     entry_ability,
     hit_damage_table,
@@ -218,10 +225,12 @@ from nuzline.engine.effects import (
     acupressure_valid,
     can_have_status,
     defender_side,
+    ghost_user,
     ingrain_anchors,
     metronome_update,
     protect_blocks,
     psycho_shift_status,
+    self_defender,
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
@@ -424,6 +433,11 @@ class OutcomeLaws(NamedTuple):
     acupressure_loose: jnp.ndarray  # bool[B]
     # int32[B]: ids.CHATTER_CHANCES of each battler's party's Chatot cry (G-70)
     chatter_chance: jnp.ndarray
+    # E3-B2-3, Conversion 2's pick (``_conv2``): ``conv2_weight[b, t, d]`` the u16 weight of the row
+    # (t, d) when it is eligible for battler b's types (``damage.conv2_eligible``), else 0, and
+    # ``conv2_first[b, t]`` the defending type of the first eligible row of the linear scan (-1: none).
+    conv2_weight: jnp.ndarray  # int32[B, NUM_TYPES, NUM_TYPES]
+    conv2_first: jnp.ndarray  # int32[B, NUM_TYPES]
 
 
 class SamplingOnly(Exception):
@@ -705,6 +719,9 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "berry_confusion": b["pending"] | berry_by_foe,
         "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
+        # E3-B2-3: Conversion 2's pick for each recorded type the move can meet in this order.
+        "conv2": b["conv2_use"][:, None]
+        & jnp.where(foe_first[:, None], b["conv2_foe"], b["conv2_own"]),
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
         "full_para": b["para_own"] | para_by_foe,
@@ -914,6 +931,8 @@ INPUT_CLAUSE_EFFECTS = (
     # The foe's own types (effects._camouflage): the type chart of the side's later hit
     # (damage._finish) and the Rock Sp. Def boost in sand: the camouflage clause.
     _E.CAMOUFLAGE,
+    # E3-B2-3: Conversion 2 rewrites the user's types the same way (the camouflage clause).
+    _E.CONVERSION_2,
     # Takes the side's berry: a stat pinch berry raises the eater's stat (hooks.pluck_berry),
     # the defending one of the side's later hit: the pluck clause. Taking any other berry
     # changes no input of the side's hit, and only removes a later cure.
@@ -1316,6 +1335,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENDURE,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
+    _E.CONVERSION_2,  # a status move: no damage
     _E.ROAR,  # a status move: no damage
     _E.WEATHER,  # a status move: no damage
     # Power from the defender's HP or status, or the user's status, at the hit: not the
@@ -1561,6 +1581,7 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
+        | (foe_effect == _E.CONVERSION_2)  # E3-B2-3: the same clause
         | (foe_effect == _E.ROAR)
         | (foe_effect == _E.WEATHER)
         | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
@@ -1931,7 +1952,48 @@ def outcome_laws(
     fling_confuses = (fling_kind >= FlingEffect.HP_RESTORE_SPICY) & (
         fling_kind <= FlingEffect.HP_RESTORE_SOUR
     )
+    # E3-B2-3: Conversion 2 reads the type its user's last-hit record holds when it runs:
+    # the turn-start record (``conv2_own``), or, with the foe's move before it, what that move
+    # leaves (``conv2_foe``: a move aimed at its foe overwrites or clears the record, so its type;
+    # any other move leaves the record). Over-approximate: the foe's move may miss or be ineffective
+    # (the record is then cleared and Conversion 2 draws nothing).
+    type_ids = jnp.arange(NUM_TYPES, dtype=_I32)[None, :]
+    record_now = jnp.where(state.conv2_move != 0, state.conv2_type.astype(_I32), -1)
+    conv2_own = type_ids == record_now[:, None]
+    foe_type = foes(
+        jnp.stack([move_type_of(tables, state, b, moves[b]) for b in range(fmt.B)]).astype(_I32)
+    )
+    foe_aims = foes(
+        jnp.stack(
+            [
+                uses_move[b] & ~self_defender(tables, moves[b], ghost_user(state, b))
+                for b in range(fmt.B)
+            ]
+        )
+    )
+    conv2_foe = jnp.where(foe_aims[:, None], type_ids == foe_type[:, None], conv2_own)
+    conv2_use = uses_move & (effect == _E.CONVERSION_2)
+    if loose:
+        conv2_own = conv2_foe = jnp.ones((fmt.B, NUM_TYPES), bool)
+    # The law's inputs (``_conv2``): each battler's eligible rows per recorded type, at the
+    # turn-start types (only a battler's own action changes its types).
+    pair_weight, pair_row = conv2_pairs(tables)
+    eligible = jnp.stack(
+        [
+            jax.vmap(lambda t, b=b: conv2_eligible(tables, state, b, t))(jnp.arange(NUM_TYPES))
+            for b in range(fmt.B)
+        ]
+    )
+    conv2_weight = jnp.where(eligible, pair_weight[None], 0).astype(_I32)
+    conv2_first = jnp.where(
+        jnp.any(eligible, axis=-1),
+        jnp.argmin(jnp.where(eligible, pair_row[None], CONV2_ROWS + 1), axis=-1),
+        -1,
+    ).astype(_I32)
     base = {
+        "conv2_use": conv2_use,
+        "conv2_own": conv2_own,
+        "conv2_foe": conv2_foe,
         "uses_move": uses_move,
         "effect": effect,
         "hit_index": hit_index,
@@ -2321,6 +2383,7 @@ def outcome_laws(
             future_band=live & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
+            conv2=m["conv2"],
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2565,6 +2628,8 @@ def outcome_laws(
         chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        conv2_weight=conv2_weight,
+        conv2_first=conv2_first,
     )
 
 
@@ -2737,6 +2802,37 @@ def _chatter(laws: OutcomeLaws, side: int) -> _Law:
     # 1 with weight chance + 1 of 100 (G-70).
     chance = min(max(int(laws.chatter_chance[side]), 0), 99)
     return [0, 1], [99 - chance, chance + 1], 100
+
+
+CONV2_DENOMINATOR = 2**52  # the exact law's rounding grid (below)
+
+
+def _conv2(laws: OutcomeLaws, side: int, kind: int) -> _Law:
+    """BtlCmd_TryConversion2 (battle_script.c:4783-4817) for battler ``side`` against the recorded
+    type ``kind``: the value is the defending type picked. Each of up to 1000 tries draws a u16
+    ``% 112`` rows (``damage.conv2_pairs``: rows 0-15 weigh 586, the others 585 of 65536) and the
+    first eligible row wins; with none in 1000 tries the linear scan takes the first eligible
+    row. With ``W`` the eligible weights and ``p0 = (1 - W / 65536) ** 1000``:
+    ``P(type) = (1 - p0) * w / W + p0 * [it is the first eligible row]``, computed exactly with
+    fractions and written on a 2**-52 grid (the largest weight takes the rounding residue), which
+    is float64's own resolution: the weights do not fit an int64 over their exact denominator
+    (``65536 ** 1000 * W``). No eligible row: the move fails, one value."""
+    weights = [int(w) for w in np.asarray(laws.conv2_weight[side, kind])]
+    total = sum(weights)
+    first = int(laws.conv2_first[side, kind])
+    if total == 0 or first < 0:
+        return [0], [1], 1
+    p0 = fractions.Fraction(CONV2_RAND - total, CONV2_RAND) ** CONV2_TRIES
+    probs = {
+        d: (1 - p0) * fractions.Fraction(w, total) + (p0 if d == first else 0)
+        for d, w in enumerate(weights)
+        if w > 0
+    }
+    scaled = {d: round(p * CONV2_DENOMINATOR) for d, p in probs.items()}
+    biggest = max(scaled, key=lambda d: scaled[d])
+    scaled[biggest] += CONV2_DENOMINATOR - sum(scaled.values())
+    values = sorted(scaled)
+    return values, [scaled[d] for d in values], CONV2_DENOMINATOR
 
 
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
@@ -3360,6 +3456,8 @@ def _law(laws: OutcomeLaws, elem: Elem) -> _Law:
     name, index = elem
     if name == "hit":  # B13-6: a later Triple Kick hit's own thresholds
         values, weights, den = _hit(laws, index[0], index[1])
+    elif name == "conv2":  # E3-B2-3: the pick against recorded type index[1]
+        values, weights, den = _conv2(laws, index[0], index[1])
     else:
         values, weights, den = _LAWS[name](laws, index[0] if index else 0)
     kept = [(v, w) for v, w in zip(values, weights) if w > 0]

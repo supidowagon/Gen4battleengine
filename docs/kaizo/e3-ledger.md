@@ -622,3 +622,56 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_a_self_defended_*`, `test_a_switch_clears_*`), tests/ai/test_kaizo_policy.py
   (`test_mirror_move_tables_*`, `test_expert_mirror_move`); test_accuracy_classes' `_FOLLOWED` list
   and the state strategy (`move_copied`, `_draw_mirror_move`) carry it.
+
+- E3-B2-3 Conversion 2 (#93, BATTLE_EFFECT_CONVERSION2; move 176, the only move with effect 93 in
+  either game): new `EffectId.CONVERSION_2` (132), state `conv2_move` / `conv2_battler` (`1 +
+  battler`) / `conv2_type` `[B]` (`VOLATILE_FIELDS`; STATE.md rows mapped), `Outcome.conv2`
+  `int8[B, 18]`. No manifest bump: no array or key changed. The 112 rows of
+  `sTypeMatchupMultipliers` come from `type_chart_order` / `type_chart_foresight` (decomp row =
+  order, +1 for the Foresight rows after the 0xFE separator at 108); `damage.conv2_pairs`, checked
+  against the decomp source by `test_the_row_table_is_the_decomps`.
+  Script: effect_script_0093.s:5 direct ON_HIT (lib.c:1485-1491), subscript_conversion_2.s:5
+  TryConversion2, failure -> :12-14 MOVE_STATUS_FAILED with the attack message skipped.
+  `BtlCmd_TryConversion2` (bs.c:4765-4820): `effects.conv2_fails` = raw-ability Multitype (:4770,
+  `battler_decomp_ability`), no record (:4775-4776), a recorded `Move_IsMultiTurn` move (lib.c:2975-2992:
+  Bide and `MoveFlag.CHARGE`) whose attacker has `locked_move` (:4778-4782), or no eligible row.
+  Eligible row: pair listed, multiplier 0 or 5, defending type not the user's type 1 or 2
+  (`damage.conv2_eligible`). Draw law (lib.c:2994-3007; `RandNext` is a u16): up to 1000 tries of
+  `% 112`, rows 0-15 weigh 586 and the rest 585 of 65536; first eligible try wins; after 1000 misses the
+  linear scan takes the first eligible row. So `P(d) = (1 - p0) w_d / W + p0 [d is the first row]`,
+  `p0 = (1 - W/65536)^1000`. `enumerate._conv2` computes it with fractions and writes it on a 2^-52
+  grid (the largest weight takes the rounding residue): the exact denominator `65536^1000 * W` does
+  not fit int64 weights; the error is below float64's resolution. `outcome._conv2_draw` samples
+  `damage.conv2_probs` (float32). The value is the picked defending type, one element per (battler,
+  recorded type) because the law depends on both; the handler reads `conv2[user, conv2_type]`; a
+  draw not eligible in the live state (an outcome built for another state) takes the first row.
+  Relevance (`outcome_laws`, `_branch_masks`): with the user first, the turn-start record's type; with
+  the foe first, the type of the foe's move when it is aimed at the user (`not self_defender`: it
+  overwrites or clears the record), else the turn-start one; loose: every type. Over-approximate
+  (the foe's move may miss: Conversion 2 then draws nothing).
+  Writer (UpdateFlagsWhenHit, bcp.c:4498-4536, not SYSCTL_REUSE_LAST_MOVE): for the foe defender
+  (`record`), where `succeeded` and no NO_EFFECTS (`~no_effects`: a charge turn counts as working) and
+  the range of moveCur (the called move) is not user / user side / field / opponent side / ally /
+  user-or-ally, `(moveCur, attacker + 1, move_type_of)`; every other case clears all three.
+  `step._use_move` computes it (`ctl["conv2"]`, masked by `runs_move`), `step._move_end` applies it
+  after the faint check like `move_hit`, then clears the actor's own `conv2_move` (ClearFlags
+  :4390). A switch-in or faint clears all three (lib.c:2131-2133, :2209-2211). A pivot's resumed tail
+  writes for its landed hit. Reference engine: `_conv2_writes`, `_conv2_fails`, `_conv2_type`,
+  `_finish_action`. A failed Conversion 2 joins `items_full` (no AfterMoveEffects, as
+  `weather_failed`) and `shown_t` (no attack message: no movePrev, no Choice lock).
+  Hit chance: none (accuracy 0, RANGE_USER). Damage and crit: none of its own; the new types are
+  the foe's later chart (`INPUT_CLAUSE_EFFECTS`, the foe-effect camouflage clause, and
+  `NON_TABLE_DAMAGE_EFFECTS`). Held items: none.
+  AI: no Basic or Expert label; 93 in `KAIZO_TRANSCRIBED` (label-less list); the tables naming it
+  (script.s:3223, :7798, :7847, :7958) were already transcribed. Read bounds and backlog regenerated.
+  Rulings. (1) Normalize (CalcCurrentMoveType, bcp.c:3612-3621) is an unsupported ability, refused by
+  coverage, so the recorded type is `move_type_of`. (2) A confusion self-hit makes the user its own
+  defender (bcp.c:2629): nothing is written for the foe. (3) SYSCTL_REUSE_LAST_MOVE (Magic Coat /
+  Snatch) would skip the write: neither mechanic exists (Owed 1). (4) Only a battler's own action
+  changes its types, so the law reads the turn-start types.
+  Not built: doubles (the partner as `conv2_battler` is stored as a battler, the MOVE_LOCKED test
+  reads it, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
+  (`test_conversion_2_*`, `test_the_*`, `test_a_*` of the Conversion 2 section), tests/ai/
+  test_kaizo_policy.py (`test_conversion_2_has_no_basic_or_expert_label`), tests/engine/test_state.py
+  (`test_conversion_2_record_maps_to_conv2_fields`); `fullset`-free; pod: test_enumerate's marginals
+  need a `conv2` oracle clause (not added: the law is checked by the retry-loop test).

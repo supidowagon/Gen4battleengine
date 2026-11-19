@@ -118,6 +118,7 @@ from nuzline.engine.damage import (
     STATUS as STATUS_CATEGORY,
 )
 from nuzline.engine.effects import (
+    CONV2_CLEARING_RANGES,
     LOCK_ON_TURNS,
     NO_DEFENDER,
     armored,
@@ -126,6 +127,7 @@ from nuzline.engine.effects import (
     captivate_fails,
     change_stage,
     consume_item,
+    conv2_fails,
     copy_stat_stages,
     defender_always,
     entry_hazards,
@@ -1821,6 +1823,15 @@ def _use_move(
     state = kings_rock_flinch(tables, state, side, target_side, used_t, rock & ~target_moved)
     items_full = connected & ~no_more_work & ~protect_failed & ~roar_failed & ~weather_failed
     items_full = items_full & ~baton_failed & ~guarded
+    # Conversion 2 (subscript_conversion_2.s:5, :12-14): TryConversion2's failure jump sets
+    # MOVE_STATUS_FAILED at the ON_HIT, so no AfterMoveEffects, and skips the attack message
+    # (``shown_t`` below): E3-B2-3.
+    conv2_failed = (
+        connected
+        & (tables.move_effect[used] == EffectId.CONVERSION_2)
+        & conv2_fails(tables, state, side)
+    )
+    items_full = items_full & ~conv2_failed
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -2273,7 +2284,7 @@ def _use_move(
     # MOVE_NONE (bcp.c:3936-3942, :4499-4508). Skull Bash's indirect Defense +1 runs
     # subscript_update_stat_stage.s, whose PrintAttackMessage (:6-7, shown or not) sets it
     # (battle_script.c:1431-1432), B10-12.
-    shown_t = jnp.where(head_on, can_act & ~(charging & ~def_up), True)
+    shown_t = jnp.where(head_on, can_act & ~(charging & ~def_up) & ~conv2_failed, True)
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
     hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])
     state = state._replace(
@@ -2346,6 +2357,26 @@ def _use_move(
     prev = jnp.where(ready_t, jnp.where(shown_t, move, 0), state.move_prev)
     prev = jnp.where(tail, prev, state.move_prev)
     state = state._replace(move_prev=prev.astype(state.move_prev.dtype))
+    # UpdateFlagsWhenHit's conversion2 fields (bcp.c:4509-4533, E3-B2-3) for the foe defender
+    # (``record``): where SYSCTL_MOVE_SUCCEEDED is set and the move has no MOVE_STATUS_NO_EFFECTS
+    # (``succeeded`` and ``worked``: a hit that connected; the tail modes' U-turn landed) and its
+    # range is not one of CONV2_CLEARING_RANGES, the defender records moveCur (``used_t``, the
+    # called move), the attacker (1 + battler) and ``CalcCurrentMoveType`` (``move_type_of``, the
+    # type its script set else the move's: Normalize is an unsupported ability); every other case
+    # clears all three. ``ctl["conv2"]`` = (write, move, battler, type); ``_move_end`` applies it
+    # after the faint check like moveHit. A defender that is the user is cleared at its own MoveEnd.
+    c2_ok = jnp.where(head_on, succeeded & ~no_effects, True)
+    c2_range = ~jnp.isin(tables.move_target[used_t], jnp.asarray(CONV2_CLEARING_RANGES, _I32))
+    c2_set = c2_ok & c2_range
+    c2_type = move_type_of(tables, state, side, used_t, gift_removed)
+    conv2 = jnp.stack(
+        [
+            (tail & record).astype(_I32),
+            jnp.where(c2_set, used_t, 0),
+            jnp.where(c2_set, side + 1, 0),
+            jnp.where(c2_set, c2_type, 0).astype(_I32),
+        ]
+    )
     own = {
         "act_kind": jnp.where(
             can_act,
@@ -2436,6 +2467,7 @@ def _use_move(
         "sync_sem": looped[17],
         "copy_foe": copy_foe,
         "copy_self": copy_self,
+        "conv2": conv2,
     }
     return state, own, foe, ctl
 
@@ -2577,6 +2609,7 @@ def _act(
         **ctl,
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,
+        "conv2": jnp.where(runs_move, ctl["conv2"], 0),
         "fbase": jnp.where(resumed, _alive_mask(listed), base),
     }
     return acted, own, foe_events, ctl
@@ -2772,7 +2805,7 @@ def _faint_check(
 
 
 def _move_end(
-    tables: Tables, state: BattleState, acted: BattleState, side, ran, copied=(0, 0)
+    tables: Tables, state: BattleState, acted: BattleState, side, ran, copied=(0, 0), conv2=None
 ) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
@@ -2804,6 +2837,19 @@ def _move_end(
                 )
             ),
         )
+    # conversion2Move / Battler / Type (UpdateFlagsWhenHit, bcp.c:4509-4533, after LOOP_FAINTED):
+    # ``conv2`` = (write, move, battler, type) of ``_use_move`` for the foe defender, E3-B2-3; then
+    # ClearFlags (bcp.c:4390) clears the actor's own conversion2Move with its moveHit.
+    if conv2 is not None:
+        write = (jnp.asarray(conv2[0]) != 0) & ran
+        for name, value in zip(
+            ("conv2_move", "conv2_battler", "conv2_type"), conv2[1:], strict=True
+        ):
+            old = getattr(state, name)
+            new = jnp.where(write, jnp.asarray(value, _I32), old[foe]).astype(old.dtype)
+            state = state._replace(**{name: old.at[foe].set(new)})
+    cleared = jnp.where(clear, 0, state.conv2_move[side]).astype(state.conv2_move.dtype)
+    state = state._replace(conv2_move=state.conv2_move.at[side].set(cleared))
     # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
@@ -2999,6 +3045,7 @@ def _execute_actions(
             side,
             ran,
             (ctl["copy_foe"], ctl["copy_self"]),
+            ctl["conv2"],
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first

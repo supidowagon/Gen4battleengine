@@ -680,6 +680,10 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
         267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
+        # E3-B2-3. No Basic_ScoreMoveEffect (:133-286), Expert_Main (:1623-1811) or other flag
+        # entry names it: its move takes the generic paths (the tables that list it, Expert_
+        # Encore's :3223 and the CheckHP ones :7798, :7847, :7958, are transcribed).
+        93,  # CONVERSION2
         # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
         # (:1623-1811) or other flag entry names these: their moves take the generic paths.
         77,  # POISON_MULTI_HIT (Twineedle)

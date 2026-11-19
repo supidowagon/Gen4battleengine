@@ -203,6 +203,17 @@ def test_move_protect_is_folded_into_protect_count():
     assert rows["MoveEffectsData.protectSuccessTurns"] == ("protect_count", "mapped")
 
 
+def test_conversion_2_record_maps_to_conv2_fields():
+    # E3-B2-3: UpdateFlagsWhenHit's conversion2Move / Battler / Type, read by Conversion 2.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    for part, name in (
+        ("Move", "conv2_move"),
+        ("Battler", "conv2_battler"),
+        ("Type", "conv2_type"),
+    ):
+        assert rows[f"BattleContext.conversion2{part}"] == (name, "mapped")
+
+
 def test_attract_bits_map_to_infatuated():
     # docs/kaizo/k3b2-rules.md §12: statusVolatile's ATTRACT bits are `infatuated`.
     rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}

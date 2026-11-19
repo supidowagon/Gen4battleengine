@@ -151,6 +151,16 @@ three structs has a row.
   entry and row (`VOLATILE_FIELDS`) and, through `state.clear_copied`, every foe's `move_copied`
   and every holder's column of it (battle_lib.c:2125-2149, :2203-2220; `step._reset_battler`).
   Nothing counts them down; Baton Pass clears them too.
+- **conversion2Move / conversion2Battler / conversion2Type -> `conv2_move` / `conv2_battler` /
+  `conv2_type`** (E3-B2-3): per battler `[B]` (the defender), int16 move id (0 = none), int8
+  `1 + attacking battler` (0 = none) and int8 type id. `UpdateFlagsWhenHit` writes them for the
+  defender of every move (battle_controller_player.c:4509-4533): moveCur (the called move), the
+  attacker and `CalcCurrentMoveType` where the move succeeded without `MOVE_STATUS_NO_EFFECTS` and
+  its range is not user / user side / field / opponent side / ally / user-or-ally, else clears all
+  three (`step._use_move` computes the write, `step._move_end` applies it after the faint check like
+  `move_hit`). `ClearFlags` clears the actor's own `conv2_move` at its MoveEnd (:4390). A battler's
+  switch-in or faint clears its own three (battle_lib.c:2131-2133, :2209-2211: `VOLATILE_FIELDS`).
+  Conversion 2 (`effects._conversion_2`) reads them.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout, Uproar, and since E2 batch 10 the
   charge-up moves: subscript_vanish_on_charge_turn.s:10 locks into moveCur, B10-12), and
@@ -705,9 +715,9 @@ three structs has a row.
 | `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.conversion2Move` | — | later (M6) |
-| `BattleContext.conversion2Battler` | — | later (M6) |
-| `BattleContext.conversion2Type` | — | later (M6) |
+| `BattleContext.conversion2Move` | `conv2_move` | mapped |
+| `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
+| `BattleContext.conversion2Type` | `conv2_type` | mapped |
 | `BattleContext.metronomeMove` | `metronome_move` | mapped |
 | `BattleContext.storedDamage` | `bide_damage` | mapped |
 | `BattleContext.lastHitByBattler` | — | later (M6) |

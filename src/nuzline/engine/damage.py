@@ -2053,3 +2053,75 @@ def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndar
         tables, state, side, MOVE_STRUGGLE, False, self_hit=True, def_side=side
     )
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
+
+
+# --- Conversion 2 (BtlCmd_TryConversion2, battle_script.c:4765-4820; E3-B2-3) -----------------
+#
+# BattleSystem_TypeMatchup (battle_lib.c:2994-3007) with an index of 0xFFFF draws
+# ``BattleSystem_RandNext() % NELEMS(sTypeMatchupMultipliers)`` (a u16 modulo 112 rows,
+# battle_lib.c:2399-2517). TryConversion2 repeats it up to 1000 times, taking the first row whose
+# attacking type is the recorded move's, whose multiplier is at most TYPE_MULTI_NOT_VERY_EFF (0 or
+# 5) and whose defending type is neither of the user's; then, with none after 1000 tries, scans the
+# table from row 0 (the call at index 112 draws once more and ends the scan).
+CONV2_ROWS = (
+    112  # NELEMS(sTypeMatchupMultipliers): 108 rows, the 0xFE separator, 2 Foresight rows, 0xFF
+)
+CONV2_RAND = 65536  # BattleSystem_RandNext() is a u16
+CONV2_TRIES = 1000
+CONV2_NOT_VERY_EFFECTIVE = 5  # TYPE_MULTI_NOT_VERY_EFF (include/constants/battle.h:145)
+NUM_TYPES = 18  # the axes of tables.type_chart (Type.NORMAL .. Type.DARK, MYSTERY included)
+
+
+def conv2_pairs(tables: Tables) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(weight, row)`` ``int32[T, T]`` by (attacking type, defending type): ``row`` the pair's
+    decomp row of ``sTypeMatchupMultipliers`` (``type_chart_order`` skips the 0xFE separator at
+    row 108, so the Foresight rows after it, ``type_chart_foresight``, sit one row later), and
+    ``weight`` how many u16 values ``% 112`` picks it: ``65536 = 112 * 585 + 16``, so rows 0-15 weigh
+    586 and the others 585; 0 for a pair that is not listed or whose multiplier is above
+    TYPE_MULTI_NOT_VERY_EFF (neutral and super effective rows never qualify)."""
+    order = _i32(tables.type_chart_order)
+    row = order + _i32(tables.type_chart_foresight)
+    listed = (order >= 0) & (_i32(tables.type_chart) <= CONV2_NOT_VERY_EFFECTIVE)
+    base = CONV2_RAND // CONV2_ROWS
+    weight = jnp.where(listed, base + (row < CONV2_RAND % CONV2_ROWS), 0)
+    return _i32(weight), jnp.where(listed, row, CONV2_ROWS)
+
+
+def conv2_eligible(tables: Tables, state: BattleState, side, atk_type) -> jnp.ndarray:
+    """``bool[T]``: the defending types ``MON_IS_NOT_TYPE(attacker, defType)`` accepts
+    (battle_script.c:4789-4796) among the rows whose attacking type is ``atk_type``: not the first
+    or the second type of ``side``'s battler (``BattleMon`` types, ``state.types``)."""
+    fmt = format_of(state)
+    weight, _ = conv2_pairs(tables)
+    own = state.types[party(fmt, side), state.active[side]]
+    kinds = jnp.arange(NUM_TYPES, dtype=jnp.int32)
+    return (weight[_i32(atk_type)] > 0) & (kinds != _i32(own[0])) & (kinds != _i32(own[1]))
+
+
+def conv2_probs(tables: Tables, state: BattleState, side, atk_type) -> jnp.ndarray:
+    """``float32[T]``: the law of the type ``BtlCmd_TryConversion2`` picks for ``side``'s battler
+    against ``atk_type``. With ``W`` the weights of the eligible rows and ``p0 = (1 - W / 65536) **
+    1000`` the chance that every try misses: ``P(type) = (1 - p0) * w / W``, plus ``p0`` for the
+    first eligible row of the linear scan. Zeros when no row is eligible (the move fails). The
+    exact form is ``enumerate._conv2``'s."""
+    weight, row = conv2_pairs(tables)
+    elig = conv2_eligible(tables, state, side, atk_type)
+    w = jnp.where(elig, weight[_i32(atk_type)], 0).astype(jnp.float32)
+    total = jnp.sum(w)
+    p0 = jnp.exp(CONV2_TRIES * jnp.log1p(-total / CONV2_RAND))
+    first = jnp.argmin(jnp.where(elig, row[_i32(atk_type)], CONV2_ROWS + 1))
+    probs = (1 - p0) * w / jnp.maximum(total, 1.0) + p0 * (jnp.arange(NUM_TYPES) == first)
+    return jnp.where(total > 0, probs, 0.0)
+
+
+def conv2_choice(tables: Tables, state: BattleState, side, atk_type, draw):
+    """``(ok, type)``: the type ``BtlCmd_TryConversion2`` gives ``side``'s battler, ``draw`` being
+    ``Outcome.conv2[side, atk_type]`` (the picked defending type), and whether any row was
+    eligible. A ``draw`` that is not eligible in this state (an outcome built for another state)
+    takes the linear scan's first eligible row."""
+    _, row = conv2_pairs(tables)
+    elig = conv2_eligible(tables, state, side, atk_type)
+    first = jnp.argmin(jnp.where(elig, row[_i32(atk_type)], CONV2_ROWS + 1))
+    picked = _i32(draw)
+    kind = jnp.where(elig[jnp.clip(picked, 0, NUM_TYPES - 1)], picked, first)
+    return jnp.any(elig), _i32(kind)

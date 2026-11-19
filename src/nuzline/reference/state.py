@@ -86,6 +86,9 @@ class RefBattler:
     move_hit: int
     move_copied: int  # BattleContext.moveCopied (E3-B2-2)
     move_copied_hit: list[int]  # moveCopiedHit[holder][attacker] (E3-B2-2)
+    conv2_move: int  # BattleContext.conversion2Move (E3-B2-3)
+    conv2_battler: int  # conversion2Battler, 1 + battler, 0 = none
+    conv2_type: int  # conversion2Type
     foresight: int
     disabled_move: int
     disable_turns: int

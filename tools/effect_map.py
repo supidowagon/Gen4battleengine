@@ -560,6 +560,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     233: ("BATTLE_EFFECT_FLING", _E.FLING, (0, 0, 0)),
     # Mirror Move: effect_script_0009.s -> BtlCmd_SetMirrorMove, then GoToMoveScript (E3-B2-2).
     9: ("BATTLE_EFFECT_COPY_MOVE", _E.MIRROR_MOVE, (0, 0, 0)),
+    # Conversion 2: effect_script_0093.s -> subscript_conversion_2.s, BtlCmd_TryConversion2 (E3-B2-3).
+    93: ("BATTLE_EFFECT_CONVERSION2", _E.CONVERSION_2, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

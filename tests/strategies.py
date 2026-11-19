@@ -1647,6 +1647,16 @@ def _draw_mirror_move(draw, tables: Tables, a: dict, side: int, active: int, nam
             a["taunt"][side] = 0
 
 
+def _draw_conversion_2(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-3: maybe (1 in 6) Conversion 2 taught to the active Pokemon (``_teach``), untaunted
+    like the other status invokers."""
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Conversion 2")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+            a["taunt"][side] = 0
+
+
 def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
     2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
@@ -2056,6 +2066,13 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         # entry in singles).
         a["move_copied"][side] = draw(st.sampled_from([0, *foe_moves]))
         a["move_copied_hit"][side, 1 - side] = a["move_copied"][side]
+        # E3-B2-3: the record of the last landed move (conversion2Move / Battler / Type): the foe's
+        # move, its battler and its table type, or none.
+        record = int(draw(st.sampled_from([0, *foe_moves])))
+        a["conv2_move"][side] = record
+        if record:
+            a["conv2_battler"][side] = 2 - side
+            a["conv2_type"][side] = int(tables.move_type[record])
         own_moves = [int(m) for m in a["moves"][side, active] if m]
         a["last_move"][side] = draw(st.sampled_from([0, *own_moves, MOVE_STRUGGLE]))
         disabled = draw(st.sampled_from([0, *own_moves]))
@@ -2073,6 +2090,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         if invokers:
             _draw_batch5(draw, tables, a, side, active, names)
             _draw_mirror_move(draw, tables, a, side, active, names)
+            _draw_conversion_2(draw, tables, a, side, active, names)
         _draw_uproar(draw, tables, a, side, active, names)
         _draw_future_sight(draw, tables, a, side, active, names)
         _draw_pivot(draw, tables, a, side, active, names)
@@ -2388,6 +2406,9 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
+        # Conversion 2's pick per battler and recorded type: any type id (``damage.conv2_choice``
+        # falls back to the first eligible row for a draw that is not eligible).
+        conv2=_ints(0, 17, (2, 18)),
     )
 
 

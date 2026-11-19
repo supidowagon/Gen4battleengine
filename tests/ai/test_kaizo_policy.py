@@ -5321,3 +5321,27 @@ def test_expert_mirror_move(
     if last:
         s = s._replace(last_move=s.last_move.at[0].set(n.move_names.index(last)))
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+# --- #93 Conversion 2 (E3-B2-3) ---------------------------------------------------------------
+
+
+def test_conversion_2_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """BATTLE_EFFECT_CONVERSION2 (93) is named by no Basic_ScoreMoveEffect or Expert_Main entry
+    (script.s lists it only in the tables Expert_Encore_EncouragedMoveEffects :3223 and the CheckHP
+    ones :7798, :7847, :7958, which are transcribed): it is a label-less transcribed effect, scored
+    through the generic paths only, so Expert adds nothing and nothing is refused (E3-B2-3)."""
+    from nuzline.ai.layout import ALLIN
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+
+    t, n = kaizo_tables, kaizo_names
+    assert 93 in KAIZO_TRANSCRIBED and 93 not in KAIZO_EXPERT_LABELS
+    assert int(t.move_ai_effect[n.move("Conversion 2")]) == 93
+    assert policy.opponent_move_refusals(t, n.move("Conversion 2"), ALLIN) == []
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Conversion 2", "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 0
+    assert not bool(c.is_damaging(t, n.move("Conversion 2")))
+    for flags in (0x27, 0x10F):
+        layout = layout_for(t, flags, s)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
