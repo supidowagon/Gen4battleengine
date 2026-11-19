@@ -73,6 +73,7 @@ from nuzline.engine.ids import (
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
+    MOVE_LAST_RESORT,
     MOVE_MIMIC,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -679,6 +680,7 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     mon.pp = [min(MIMIC_PP_CAP, _t(tables, "move_pp", m)) for m in mon.moves]
     sd.stages = list(foe.stages)
     sd.disabled_move = sd.disable_turns = 0
+    sd.last_resort_count = 0  # battle_script.c:5340 (E3-B2-11)
     sd.mimic_slots = (1 << len(mon.moves)) - 1
     sd.transformed = 1
     sd.power_trick_desync = sd.power_trick
@@ -1969,11 +1971,13 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "magnet_rise",  # MOVE_EFFECT_MAGNET_RISE and magnetRiseTurns (G-66)
         "magnet_rise_turns",
         "charged_turns",  # chargedTurns with MOVE_EFFECT_CHARGE, not Baton-passed (E3-B2-8)
+        "last_resort_count",  # moveEffectsData, never Baton-passed (lib.c:2100-2115), E3-B2-11
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
         "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, Baton-passed (E3-2-6a)
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
+    sd.last_resort_moves = [0] * len(sd.last_resort_moves)  # lastResortMoves, with its count
 
 
 def _unlock(sd: RefBattler) -> None:
@@ -2544,6 +2548,19 @@ def _max_pp(tables, mon: RefPokemon, k: int) -> int:
     """``MoveTable_CalcMaxPP`` (move_table.c:25-34) of slot ``k``."""
     base = _t(tables, "move_pp", mon.moves[k])
     return (base + base * 20 * min(mon.pp_ups[k], 3) // 100) & 0xFF
+
+
+def _update_last_resort(s: RefState, side: int, move: int) -> None:
+    """``BattleSystem_UpdateLastResort`` (lib.c:3443-3459): ``moveTemp`` joins the first
+    ``lastResortCount`` entries of ``lastResortMoves`` unless it is Last Resort, the list holds 4
+    already or it is listed (E3-B2-11)."""
+    sd = s.battlers[side]
+    if move == MOVE_LAST_RESORT or sd.last_resort_count == len(sd.last_resort_moves):
+        return
+    if move in sd.last_resort_moves[: sd.last_resort_count]:
+        return
+    sd.last_resort_moves[sd.last_resort_count] = move
+    sd.last_resort_count += 1
 
 
 def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
@@ -4989,6 +5006,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if not no_target0 and not reflect:
         _metronome_update(tables, s, side, move)
         turn.met_reached = True
+        # BattleSystem_UpdateLastResort (bcp.c:3218) is in the tail's not-NO_EFFECTS branch: not
+        # after DecrementPP's MOVE_STATUS_NO_PP (below; E3-B2-11).
+        if struggling or locked or mon.pp[action] != 0:
+            _update_last_resort(s, side, move)
     if not struggling and not locked:
         slot = action
         if mon.pp[slot] == 0:
@@ -6644,6 +6665,8 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
     mon.moves[j] = last
     mon.pp[j] = min(MIMIC_PP_CAP, _t(tables, "move_pp", last))
     sd.mimic_slots |= 1 << j
+    if last == MOVE_LAST_RESORT:  # :4514-4516 (E3-B2-11)
+        sd.last_resort_count = 0
 
 
 def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> bool:
@@ -6661,6 +6684,11 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         return bool(s.battlers[_foe(side)].substitute_hp)
     if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-7, :13-14 (B10-5)
         return _active(s, _foe(side)).hp <= _active(s, side).hp
+    if effect == EffectId.LAST_RESORT:  # effect_script_0246.s:5, BtlCmd_TryLastResort (E3-B2-11)
+        # numMoves = Battler_CountMoves: the first empty slot (lib.c:3461-3471).
+        moves = _active(s, side).moves
+        known = next((k for k, m in enumerate(moves) if not m), len(moves))
+        return sd.last_resort_count < known - 1 or known < 2
     if effect == EffectId.IMPRISON:
         own = [m for m in _active(s, side).moves if m]
         shared = any(m in _active(s, b).moves for b in range(_fmt(s).B) if b != side for m in own)

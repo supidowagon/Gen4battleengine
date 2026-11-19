@@ -474,6 +474,8 @@ class BattleEffect(IntEnum):
     )
     # Miracle Eye: Basic_CheckMiracleEye (:255); Expert_MiracleEye (:1760), E3-B2-10
     IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
+    # Last Resort: Basic_CheckLastResort (:275); Expert_LastResort (:1789), E3-B2-11
+    FAIL_IF_NOT_USED_ALL_OTHER_MOVES = 246
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -2622,6 +2624,19 @@ def if_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     one ``MoveEffectMask`` (refused at trace time otherwise), read from its field."""
     field = _MOVE_EFFECT_FIELDS[MoveEffectMask(int(mask))]
     return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfCanUseLastResort`` (trainer_ai.c:2030-2042): jumps when the battler's
+    ``moveEffectsData.lastResortCount`` is at least ``numKnownMoves - 1`` and it knows more than
+    one move, ``numKnownMoves`` being ``Battler_CountMoves`` (battle_lib.c:3461-3471) of its true
+    moves (the index of the first empty slot), the test ``BtlCmd_TryLastResort`` makes
+    (battle_script.c:7573-7574; ``BattleState.last_resort_count``, E3-B2-11)."""
+    state, side = ctx.state, _side(battler)
+    moves = state.moves[_row(state, side), state.active[side]]
+    known = jnp.sum(jnp.cumprod((moves != 0).astype(_I32)))
+    count = state.last_resort_count[side].astype(_I32)
+    return _jump(ctx, (count >= known - 1) & (known > 1))
 
 
 def load_gender(ctx: AiContext, battler: Battler) -> AiContext:

@@ -351,6 +351,8 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.engine.ids.Type", "type", _E, _TYPES),
     # MOVE_STRUGGLE (generated/moves.txt line 166).
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
+    # MOVE_LAST_RESORT (generated/moves.txt line 388): battle_lib.c:3445, battle_script.c:4514, :4876.
+    Constant("nuzline.engine.ids.MOVE_LAST_RESORT", "move", 387, "Last Resort", _E),
     # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
     Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
     # MOVE_SNORE, MOVE_SLEEP_TALK (generated/moves.txt lines 174, 215): the sleep check's

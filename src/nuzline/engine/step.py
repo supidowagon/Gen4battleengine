@@ -142,6 +142,8 @@ from nuzline.engine.effects import (
     ingrain_anchors,
     kings_rock_flinch,
     know_ability,
+    last_resort_fails,
+    last_resort_update,
     life_orb_recoil,
     locked_onto,
     magnet_rise_fails,
@@ -1282,6 +1284,11 @@ def _use_move(
     # subscript_charge_move_cleanup.s:6 clears it later) and does not count; a Recycle (or a
     # Natural Gift, a Power Herb) changes the held item only after it (B13-34).
     state = metronome_update(tables, state, side, move, head_on & succeeded & ~reflect)
+    # BattleSystem_UpdateLastResort (bcp.c:3218, battle_lib.c:3443-3459): in the same tail, but in
+    # its not-NO_EFFECTS branch (bcp.c:3209-3218), so not after DecrementPP's MOVE_STATUS_NO_PP;
+    # moveTemp (``move``) is recorded, before the move's script, so a Last Resort tests the count
+    # with its own turn's earlier moves in (E3-B2-11).
+    state = last_resort_update(state, side, move, head_on & succeeded & ~reflect & ~no_pp)
     # The move script runs next (BATTLE_CONTROL_EXEC_SCRIPT, :3214): Fake Out's
     # (effect_script_0158.s) sets MOVE_STATUS_FAILED unless fakeOutTurnNumber == totalTurns.
     # The accuracy roll still happens, but subscript_missed.s prints "But it failed!" (:97)
@@ -1332,6 +1339,10 @@ def _use_move(
     ].astype(_I32)
     failed = failed | ((effect_used == EffectId.ENDEAVOR) & (gap <= 0))
     failed = failed | no_pp  # B10-9: the encored move had no PP
+    # Last Resort (effect_script_0246.s:5, :10-11): TryLastResort (battle_script.c:7567-7579)
+    # fails the move with MOVE_STATUS_FAILED unless the user has used every other move it knows
+    # (``last_resort_fails``), read after the recording above (E3-B2-11).
+    failed = failed | ((effect_used == EffectId.LAST_RESORT) & last_resort_fails(state, side))
     # Focus Punch (effect_script_0170.s:5-6, :12-16): MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status
     # (subscript_missed.s), when the user's physical / specialDamageAttackerMask is set: a hit on
     # its HP this turn (``foe_taken``'s attackers; a substitute hit sets none), B10-8.

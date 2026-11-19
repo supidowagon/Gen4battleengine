@@ -1018,3 +1018,73 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `fullset` edits only: tests/ai/test_switching.py (the Miracle Eye refusal case dropped),
   tests/prep/test_pool.py (`test_player_move_refusal`), tests/data/test_game_constants.py (the three emptied
   tables out of `LISTED`).
+- E3-B2-11 Last Resort (#246, BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES; move 387, the only move with effect
+  246 in either game, 130 BP Normal physical, acc 100, PP 5, flags CONTACT, PROTECT, MIRROR_MOVE, KINGS_ROCK; no
+  Kaizo trainer knows it; player-only, Metronome-callable): new `EffectId.LAST_RESORT` (139, `tools/effect_map.py`
+  entry 246), `ids.MOVE_LAST_RESORT` (387, also in `data/game_constants.py`); new per-battler `last_resort_count [B]`
+  int8 (`lastResortCount`, 3 bits, battle_mon.h:27) and `last_resort_moves [B, 4]` int16 (`lastResortMoves`,
+  battle_mon.h:50), both in `VOLATILE_FIELDS` (the whole `moveEffectsData` is zeroed at a switch and a faint,
+  lib.c:2100-2104, :2166), not in `BATON_PASSED_FIELDS` (the list at :2107-2115 has neither), not in
+  `effects.MOVE_EFFECT_MASK_FIELDS` (they are not `moveEffectsMask` bits: no Roar-anchor read). No `Outcome` field,
+  no draw. Tables: `move_effect` of Last Resort only; no manifest bump (no array or key changed); vanilla and Kaizo
+  tables rebuilt.
+  Script: effect_script_0246.s:5 `TryLastResort` (fail to :10-11 MOVE_STATUS_FAILED), then :6-7 CalcCrit,
+  CalcDamage: a plain hit behind one test. `BtlCmd_TryLastResort` (bs.c:7567-7579) fails when
+  `lastResortCount < numMoves - 1 || numMoves < 2`, `numMoves = Battler_CountMoves` (lib.c:3461-3471: the index of
+  the first empty slot of the BattleMon's own moves, so a Mimic copy counts as its slot and Last Resort itself need
+  not be in a slot when Metronome calls it). `effects.last_resort_fails` (step's `failed`, the Focus Punch place;
+  reference `_script_fails`), read after the recording below, so the user's own earlier moves count.
+  Recording: `BattleSystem_UpdateLastResort` (lib.c:3443-3459), called at BeforeMove's tail only on the
+  not-`MOVE_STATUS_NO_EFFECTS` branch (bcp.c:3209-3218). `effects.last_resort_update` at the Metronome count's site in
+  `step._use_move` (`head_on & succeeded & ~reflect`) with `& ~no_pp` (DecrementPP's MOVE_STATUS_NO_PP is a NO_EFFECTS
+  status, bcp.c:2285, so a no-PP move records nothing while the Metronome count still follows it, G-60); the
+  reference at its `_metronome_update` site (`_update_last_resort`, guarded by `struggling or locked or pp[action]`).
+  It records `moveTemp` (`move`: the chosen or encored move, an invoker itself, never the move it calls; Struggle's
+  id, bcp.c:1867, and a locked move's own id) unless it is Last Resort, the count is 4 (:3445-3448) or the id is among
+  the first `count` entries (:3451-3455); a miss or a Protect later in the action still counts (the tail comes before
+  the accuracy check). Disrupted moves (sleep, freeze, flinch, paralysis, confusion self-hit, Truant, Taunt, Imprison,
+  Disable, Gravity, infatuation, a Bide that fails to unleash), a no-target move and a Magic Coat first pass (bcp.c:
+  3064-3085) return before the tail and record nothing. The holder's reflected pass reaches the tail with the mover's
+  move as moveTemp (the same site and moveTemp the Metronome count uses), so the holder lists the reflected move.
+  Zeroing the count: `effects._transform` (bs.c:5340, whenever Transform lands) and `effects._mimic` when the copied
+  move is Last Resort (bs.c:4514-4516; the Mimic was recorded before its script, so a Mimic of Last Resort ends at
+  0, any other copy keeps the +1). The ids of `last_resort_moves` stay after a zeroing, as in the decomp: only the
+  first `count` entries are read.
+  Enumeration: `enumerate.INPUT_NEUTRAL_EFFECTS` and `TABLE_DAMAGE_EFFECTS` (a plain hit that can fail, like Focus
+  Punch: its failure reads only the user's own count and moves, which nothing the foe does within a turn changes: a
+  foe's Mimic, Transform and Sketch change the foe's moves only); `test_accuracy_classes._NO_ACC_EVA_WRITE`;
+  `tests/strategies.py` draws the move and a history (`_draw_last_resort`, `RARE_EFFECTS`). No observation entry (no
+  message of its own: the failure is the ordinary "But it failed!").
+  AI: Basic_CheckLastResort (script.s:1420-1426, entry :275): `IfCanUseLastResort ATTACKER` (new
+  `commands.if_can_use_last_resort`, trainer_ai.c:2030-2042: `lastResortCount >= numKnownMoves - 1 &&
+  numKnownMoves > 1` on the battler's true moves, the mechanic's test negated) to the end when it can, else -10
+  (`policy._basic_check_last_resort`). Expert_LastResort (:5953-5971, entry :1789; `policy._expert_last_resort`):
+  immune, half or quarter damage -1 (the move's chart class, `_not_resisted`), else +1 when the AI can use it, else
+  0; no roll, so no `SITE_N` entry. 246 joins `KAIZO_TRANSCRIBED`, `KAIZO_EXPERT_LABELS`
+  (`("Expert_LastResort", 1789)`), `KAIZO_EXPERT_TRANSCRIBED`; `commands.BattleEffect.
+  FAIL_IF_NOT_USED_ALL_OTHER_MOVES`. No table names 246 (script.s has the effect at :275 and :1789 only). Read bounds
+  regenerated (246: 1 read; four rows and four drawn rows); backlog regenerated: the row "move effect #246: Last
+  Resort" (Roark Split) closes and the Metronome row's unmodelled count drops from 2 to 1.
+  Rulings. (1) The sheet's section 7 "missing entirely" is closed by the entry, the state and both labels. (2) The
+  no-PP exclusion is the one difference from the Metronome count's condition (above); the encored move with no PP
+  (B10-9) and a Spite-emptied slot (E3-B2-4) are the ways to reach it. (3) Struggle records MOVE_STRUGGLE (165), which
+  counts toward `numMoves - 1` like any id, so a user that struggled enough times (a history of 4 distinct ids) can use
+  Last Resort without having used every move it knows. (4) Doubles (docs/doubles-state-design.md section 5): both
+  fields are per battler (`[B]`, leading axis the battler); `last_resort_update`, `last_resort_fails` and
+  `if_can_use_last_resort` take the battler (`side` here, the battler's index) as an argument and no code computes
+  `1 - side`; nothing is side-wide; the target is chosen data and plays no part.
+  Not built: Owed 1 (added): Sketch's zeroing (bs.c:4876-4878, `msgMoveTemp == MOVE_LAST_RESORT` after the learned
+  move is written) needs the Sketch move (backlog row "move effect #95: Sketch"), which is not modelled: when it is
+  built it must zero `last_resort_count` when the learned move is Last Resort. Owed 2 (added): Snatch (still owed,
+  Owed 1 of E3-B2-3): a stolen move returns from BeforeMove at the Snatch pass (bcp.c:3086-3112) before the tail, so
+  `last_resort_update` must be skipped there like the Metronome count. Owed lines naming Last Resort before: none in
+  this ledger; the G-69 line of e1-mechanics-ledger.md ("Transform ... clears Last Resort's count") is built here.
+  Not modelled, message only: the failure text.
+  Tests: tests/engine/test_e3_batch2.py (`test_last_resort_*`, `test_a_miss_still_counts`, `test_struggle_is_recorded_
+  by_its_own_id`, `test_a_full_list_records_nothing_more`, `test_no_pp_and_a_sleepers_move_record_nothing`,
+  `test_an_invoker_is_recorded_not_the_move_it_calls`, `test_mimic_copying_last_resort_and_transform_zero_the_count`,
+  `test_a_reflected_move_is_recorded_for_the_magic_coat_holder_only`, `test_a_switch_clears_the_history_and_baton_pass_
+  does_not_keep_it`, `test_the_history_is_per_battler_and_indexed_by_the_battler`, each stepped through both engines),
+  tests/ai/test_kaizo_policy.py (`test_last_resort_tables_are_the_decomps`, `test_if_can_use_last_resort_is_the_
+  mechanics_test`, `test_last_resort_basic`, `test_expert_last_resort`, `test_last_resort_is_scored_not_refused_and_
+  exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).

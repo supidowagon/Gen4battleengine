@@ -1669,6 +1669,23 @@ def _draw_miracle_eye(draw, tables: Tables, a: dict, side: int, active: int, nam
     a["miracle_eye"][side] = int(draw(st.integers(0, 5)) == 0)
 
 
+def _draw_last_resort(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-11: maybe (1 in 6) Last Resort taught to the active Pokemon (``_teach``), and maybe
+    (1 in 3) a use history under way: up to 4 distinct ids it knows (or Struggle's), never Last
+    Resort itself, with ``last_resort_count`` their number."""
+    move = names.move("Last Resort")
+    if draw(st.integers(0, 5)) == 0 and tables.move_effect[move] != EffectId.UNSUPPORTED:
+        _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+        a["taunt"][side] = 0
+    a["last_resort_count"][side] = 0
+    a["last_resort_moves"][side] = 0
+    if draw(st.integers(0, 2)) == 0:
+        known = [int(m) for m in a["moves"][side, active] if m and m != move]
+        used = draw(st.lists(st.sampled_from([*known, MOVE_STRUGGLE]), max_size=4, unique=True))
+        a["last_resort_count"][side] = len(used)
+        a["last_resort_moves"][side, : len(used)] = used
+
+
 def _draw_uproar(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E2 batch 5: maybe (1 in 3) give the active Pokemon Uproar (full PP), and then maybe (1 in
     2) an uproar under way: 1-5 turns left (subscript_uproar.s's 3-6, counted down at every turn
@@ -2111,6 +2128,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch10(draw, tables, a, side, active, names)
         _draw_batch12(draw, tables, a, side, active, names)
         _draw_miracle_eye(draw, tables, a, side, active, names)
+        _draw_last_resort(draw, tables, a, side, active, names)
         _draw_mimic(draw, a, side, active)
         _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
@@ -2306,6 +2324,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
 
 # The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
 RARE_EFFECTS = (
+    EffectId.LAST_RESORT,  # E3-B2-11
     EffectId.MIRACLE_EYE,  # E3-B2-10
     EffectId.ENCORE,
     EffectId.ASSIST,

@@ -592,6 +592,13 @@ class EffectId(IntEnum):
     # bcp.c:2888) and skips the Dark rows with multiplier 0 of ``BasicTypeMulApplies`` (battle_lib.c:
     # 2551-2555); no random draw; E3-B2-10.
     MIRACLE_EYE = 138
+    # Last Resort (246, BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES): zeros. A plain hit
+    # (effect_script_0246.s:6-7 CalcCrit, CalcDamage) behind BtlCmd_TryLastResort (:5, MOVE_STATUS_
+    # FAILED at :10-11 when ``BattleState.last_resort_count`` is under the user's move count minus
+    # 1, or the user knows fewer than 2 moves). The count is written at the end of BeforeMove
+    # (``BattleSystem_UpdateLastResort``, battle_lib.c:3443-3459, ``step._use_move``); no random
+    # draw; E3-B2-11.
+    LAST_RESORT = 139
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1522,6 +1529,10 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# Last Resort (``generated/moves.txt`` line 388): ``BattleSystem_UpdateLastResort`` never records
+# it (battle_lib.c:3445), and a Mimic or Sketch that copies it zeroes the count (battle_script.c:
+# 4514-4516, :4876-4878), E3-B2-11.
+MOVE_LAST_RESORT = 387
 # Snore and Sleep Talk (``generated/moves.txt`` lines 174, 215): the sleep check lets a sleeping
 # battler use them (bcp.c:2455).
 MOVE_SNORE = 173

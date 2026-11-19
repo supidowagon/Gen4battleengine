@@ -58,6 +58,15 @@ Encodings:
   end-of-turn count. It identifies the battler (``MON_IS_IDENTIFIED``, common.h:48-49: a positive
   evasion stage counts as 0, bcp.c:2888-2890) and makes ``BasicTypeMulApplies`` skip its Dark
   immunity rows (battle_lib.c:2551-2555), for every attacker of it.
+* E3-B2-11 (Last Resort). ``last_resort_count`` / ``last_resort_moves`` are the active battler's
+  ``MoveEffectsData.lastResortCount`` (3 bits, battle_mon.h:27, 0-4) and ``lastResortMoves[4]``
+  (battle_mon.h:50): the move ids (not slots: Mimic and Struggle make id and slot differ) it has
+  used since it entered, the first ``count`` of them valid. ``step._use_move`` writes them where
+  BeforeMove ends without ``MOVE_STATUS_NO_EFFECTS`` (``BattleSystem_UpdateLastResort``,
+  battle_lib.c:3443-3459, called at bcp.c:3218); a Mimic or Sketch that copies Last Resort and a
+  Transform zero the count (battle_script.c:4514-4516, :4876-4878, :5340). Per battler, cleared
+  with the other volatiles at a switch or faint (the whole ``moveEffectsData``, battle_lib.c:
+  2100-2104, :2166), not Baton-passed (:2107-2115).
 * ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
   ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
   (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
@@ -398,6 +407,10 @@ class BattleState(NamedTuple):
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
     grudge: jnp.ndarray  # int8, MOVE_EFFECT_GRUDGE in moveEffectsMask (E3-B2-9)
     miracle_eye: jnp.ndarray  # int8, MOVE_EFFECT_MIRACLE_EYE in moveEffectsMask (E3-B2-10)
+    # int8, MoveEffectsData.lastResortCount (0-4) and int16[B,4] lastResortMoves: the move ids the
+    # battler used since it entered, the first ``count`` valid (E3-B2-11).
+    last_resort_count: jnp.ndarray
+    last_resort_moves: jnp.ndarray
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
@@ -661,6 +674,8 @@ VOLATILE_FIELDS = (
     "destiny_bond",
     "grudge",
     "miracle_eye",
+    "last_resort_count",
+    "last_resort_moves",
     "uproar",
     "ingrain",
     "mean_look",
@@ -800,6 +815,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "destiny_bond": (_BATTLER, np.int8),
     "grudge": (_BATTLER, np.int8),
     "miracle_eye": (_BATTLER, np.int8),
+    "last_resort_count": (_BATTLER, np.int8),
+    "last_resort_moves": ((*_BATTLER, MOVES), np.int16),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),

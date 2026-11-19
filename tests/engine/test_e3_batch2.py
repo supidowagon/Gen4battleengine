@@ -2081,3 +2081,285 @@ def test_a_switch_clears_miracle_eye_and_the_ingrain_test_reads_it(tables, names
     rooted = _eyed(s, 0)._replace(ingrain=s.ingrain.at[0].set(1))
     assert not bool(ingrain_anchors(t, rooted, 0))
     assert bool(ingrain_anchors(t, rooted._replace(miracle_eye=rooted.miracle_eye * 0), 0))
+
+
+# --- Last Resort (#246, E3-B2-11) --------------------------------------------------------------
+# effect_script_0246.s: TryLastResort (:5; MOVE_STATUS_FAILED at :10-11), then CalcCrit and
+# CalcDamage (:6-7). BtlCmd_TryLastResort (battle_script.c:7567-7579) fails the move when the
+# user's lastResortCount is under numMoves - 1 or it knows fewer than 2 moves (numMoves =
+# Battler_CountMoves, battle_lib.c:3461-3471). BattleSystem_UpdateLastResort (battle_lib.c:3443-3459)
+# records moveTemp at the end of BeforeMove (battle_controller_player.c:3209-3218).
+
+MOVE_LAST_RESORT = 387
+
+
+def _lr(t, n, moves=("Last Resort", "Tackle"), used=(), sleeping=False, count=None):
+    """Monferno (side 0, ``moves``) against a slower Geodude that only curls up (it never hurts
+    the Monferno), no abilities; the Monferno's use history is ``used`` (move names; ``count``
+    overrides the length). ``sleeping`` puts the Monferno to sleep (counter 3)."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 30, moves)],
+        [_spec(n, "Geodude", 40, ("Defense Curl",))],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+    ids = [n.move(m) for m in used]
+    s = s._replace(
+        last_resort_count=s.last_resort_count.at[0].set(len(ids) if count is None else count),
+        last_resort_moves=s.last_resort_moves.at[0].set(
+            jnp.asarray(ids + [0] * (4 - len(ids)), jnp.int16)
+        ),
+    )
+    if sleeping:
+        s = s._replace(
+            status=s.status.at[0, 0].set(Status.SLEEP),
+            status_counter=s.status_counter.at[0, 0].set(3),
+        )
+    return s
+
+
+def _lrgo(t, n, s, me="Last Resort", foe="Defense Curl", out=None):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def _history(s, side=0):
+    """``(count, listed ids)`` of ``side``'s Last Resort history."""
+    count = int(s.last_resort_count[side])
+    return count, np.asarray(s.last_resort_moves[side]).tolist()[:count]
+
+
+def _foe_hp(s):
+    return int(s.hp[1, 0])
+
+
+def test_last_resort_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 246 (effect_script_0246.s) is EffectId.LAST_RESORT in both games and Last Resort
+    (move 387, 130 BP Normal, accuracy 100, PP 5) the only move with it; it is a plain hit that can
+    fail, classed as Focus Punch is (enumerate's two allowlists); Struggle is 165."""
+    from nuzline.engine.enumerate import INPUT_NEUTRAL_EFFECTS, TABLE_DAMAGE_EFFECTS
+
+    assert DECOMP_EFFECT_TO_ID[246] == (EffectId.LAST_RESORT, (0, 0, 0))
+    for t, nn in ((tables, names), (kaizo_tables, kaizo_names)):
+        move = nn.move("Last Resort")
+        assert move == MOVE_LAST_RESORT
+        assert int(t.move_effect[move]) == EffectId.LAST_RESORT
+        assert int((np.asarray(t.move_effect) == EffectId.LAST_RESORT).sum()) == 1
+        assert int(t.move_power[move]) == 130 and int(t.move_accuracy[move]) == 100
+        assert int(t.move_pp[move]) == 5 and int(t.move_type[move]) == nn.type("Normal")
+        assert nn.move("Struggle") == MOVE_STRUGGLE
+    assert EffectId.LAST_RESORT in INPUT_NEUTRAL_EFFECTS
+    assert EffectId.LAST_RESORT in TABLE_DAMAGE_EFFECTS
+
+
+def test_last_resort_fails_until_the_other_move_was_used(tables, names):
+    """TryLastResort (battle_script.c:7573-7574), two moves: the count must reach 1. The first use
+    fails (no damage) but spends its PP (DecrementPP precedes the script) and records nothing
+    (battle_lib.c:3445: Last Resort itself); the Tackle records itself; then Last Resort hits and
+    still records nothing."""
+    t, n = tables, names
+    s = _lr(t, n)
+    first = _lrgo(t, n, s)
+    assert _foe_hp(first) == _foe_hp(s)
+    assert int(first.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+    assert _history(first) == (0, [])
+    tackled = _lrgo(t, n, first, me="Tackle")
+    assert _history(tackled) == (1, [n.move("Tackle")])
+    hit = _lrgo(t, n, tackled)
+    assert _foe_hp(hit) < _foe_hp(tackled)
+    assert _history(hit) == (1, [n.move("Tackle")])
+
+
+def test_last_resort_alone_never_works(tables, names):
+    """numMoves < 2 fails (:7574) whatever the count: the count of 3 is set by hand (a one-move
+    user's history cannot reach it, Last Resort not being recorded)."""
+    t, n = tables, names
+    for count in (0, 3):
+        s = _lr(t, n, moves=("Last Resort",), count=count)
+        assert _foe_hp(_lrgo(t, n, s)) == _foe_hp(s), count
+
+
+def test_last_resort_counts_each_other_move_once_and_needs_all_of_them(tables, names):
+    """Four moves need a count of 3 (:7573). Ids are counted, not uses (:3451-3455): a repeated
+    Tackle records nothing; Leer makes 2 (the Last Resort still fails), Growl 3 (it works)."""
+    t, n = tables, names
+    s = _lr(t, n, moves=("Last Resort", "Tackle", "Leer", "Growl"))
+    again = _lrgo(t, n, _lrgo(t, n, s, me="Tackle"), me="Tackle")
+    assert _history(again) == (1, [n.move("Tackle")])
+    two = _lrgo(t, n, again, me="Leer")
+    assert _history(two) == (2, [n.move("Tackle"), n.move("Leer")])
+    assert _foe_hp(_lrgo(t, n, two)) == _foe_hp(two)
+    three = _lrgo(t, n, two, me="Growl")
+    assert _history(three)[0] == 3
+    assert _foe_hp(_lrgo(t, n, three)) < _foe_hp(three)
+
+
+def test_a_miss_still_counts(tables, names):
+    """The record is made before the accuracy check (BeforeMove's tail, bcp.c:3209-3218): a Tackle
+    that misses counts."""
+    t, n = tables, names
+    s = _lr(t, n)
+    off = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    miss = _lrgo(t, n, s, me="Tackle", out=off)
+    assert _foe_hp(miss) == _foe_hp(s)
+    assert _history(miss) == (1, [n.move("Tackle")])
+
+
+def test_struggle_is_recorded_by_its_own_id(tables, names):
+    """A user with no PP left struggles: moveTemp is MOVE_STRUGGLE (bcp.c:1867), which the list
+    takes (it is not Last Resort)."""
+    t, n = tables, names
+    s = _lr(t, n)
+    dry = s._replace(pp=s.pp.at[0, 0].set(0))
+    out = _lrgo(t, n, dry, me=0)
+    assert _history(out) == (1, [MOVE_STRUGGLE])
+
+
+def test_a_full_list_records_nothing_more(tables, names):
+    """lastResortCount == 4 returns first (battle_lib.c:3446-3447): the list and the count stay;
+    and 4 >= 3 lets a Last Resort through."""
+    t, n = tables, names
+    full = _lr(t, n, moves=("Last Resort", "Tackle", "Leer", "Growl"))
+    ids = [n.move("Tackle"), n.move("Leer"), n.move("Growl"), MOVE_STRUGGLE]
+    full = full._replace(
+        last_resort_count=full.last_resort_count.at[0].set(4),
+        last_resort_moves=full.last_resort_moves.at[0].set(jnp.asarray(ids, jnp.int16)),
+    )
+    out = _lrgo(t, n, full, me="Tackle")
+    assert _history(out) == (4, ids)
+    assert _foe_hp(_lrgo(t, n, full)) < _foe_hp(full)
+
+
+def test_no_pp_and_a_sleepers_move_record_nothing(tables, names):
+    """Only a move that gets through BeforeMove records: one with no PP (MOVE_STATUS_NO_PP is a
+    NO_EFFECTS status, bcp.c:2285, :3209) and a sleeper's disrupted move (CheckStatusDisruption
+    returns first) do not."""
+    t, n = tables, names
+    s = _lr(t, n)
+    empty = s._replace(pp=s.pp.at[0, 0, 1].set(0))
+    out = _lrgo(t, n, empty, me=1)
+    assert _history(out) == (0, [])
+    asleep = _lr(t, n, sleeping=True)
+    out = _lrgo(t, n, asleep, me="Tackle")
+    assert _history(out) == (0, []) and int(out.status[0, 0]) == Status.SLEEP
+
+
+def test_an_invoker_is_recorded_not_the_move_it_calls(tables, names):
+    """Sleep Talk calls Last Resort (moveTemp stays Sleep Talk, :3445-3458): the history holds
+    Sleep Talk, so the called Last Resort (two moves, count 1) works and is not recorded."""
+    t, n = tables, names
+    s = _lr(t, n, moves=("Sleep Talk", "Last Resort"), sleeping=True)
+    out = _lrgo(t, n, s, me="Sleep Talk", out=_hits()._replace(call=jnp.zeros(2, jnp.int16)))
+    assert _history(out) == (1, [n.move("Sleep Talk")])
+    assert _foe_hp(out) < _foe_hp(s)
+
+
+def test_mimic_copying_last_resort_and_transform_zero_the_count(tables, names):
+    """battle_script.c:4514-4516: a Mimic that copies Last Resort zeroes the count (Mimic itself
+    was recorded before its script); a Mimic of another move does not; BtlCmd_Transform zeroes it
+    (:5340)."""
+    t, n = tables, names
+    s = _lr(t, n, moves=("Mimic", "Tackle"), used=("Tackle",))
+    copies = s._replace(last_move=s.last_move.at[1].set(MOVE_LAST_RESORT))
+    out = _lrgo(t, n, copies, me="Mimic")
+    assert int(out.moves[0, 0, 0]) == MOVE_LAST_RESORT  # the copy landed
+    assert _history(out)[0] == 0
+    other = s._replace(last_move=s.last_move.at[1].set(n.move("Leer")))
+    out = _lrgo(t, n, other, me="Mimic")
+    assert int(out.moves[0, 0, 0]) == n.move("Leer")
+    assert _history(out) == (2, [n.move("Tackle"), n.move("Mimic")])
+    trans = _lr(t, n, moves=("Transform", "Tackle"), used=("Tackle",))
+    out = _lrgo(t, n, trans, me="Transform")
+    assert int(out.transformed[0]) == 1 and _history(out)[0] == 0
+
+
+def test_a_reflected_move_is_recorded_for_the_magic_coat_holder_only(tables, names):
+    """The holder's second pass reaches BeforeMove's tail with moveTemp the mover's move
+    (bcp.c:3196-3221, as the Metronome count does): the holder lists Magic Coat, then the Toxic;
+    the mover's first pass returned at CHECK_STOLEN (:3064-3085), so its history stays empty."""
+    t, n = tables, names
+    out = _cgo(t, n, _coat(t, n))
+    assert _history(out, 0) == (2, [n.move("Magic Coat"), n.move("Toxic")])
+    assert _history(out, 1) == (0, [])
+
+
+def test_a_switch_clears_the_history_and_baton_pass_does_not_keep_it(tables, names):
+    """moveEffectsData is zeroed whole at a switch and a faint (battle_lib.c:2100-2104, :2166) and
+    Baton Pass keeps only the fields listed at :2107-2115: the fields are ``VOLATILE_FIELDS``
+    members, not ``BATON_PASSED_FIELDS``."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+    from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS
+
+    t, n = tables, names
+    for field in ("last_resort_count", "last_resort_moves"):
+        assert field in VOLATILE_FIELDS and field not in BATON_PASSED_FIELDS
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 30, ("Last Resort", "Tackle")), _spec(n, "Geodude", 30, ("Tackle",))],
+        [_spec(n, "Geodude", 40, ("Defense Curl",))],
+    )
+    s = s._replace(ability=s.ability.at[:, :].set(AbilityId.NONE))
+    s = s._replace(
+        last_resort_count=s.last_resort_count.at[0].set(1),
+        last_resort_moves=s.last_resort_moves.at[0].set(
+            jnp.asarray([n.move("Tackle"), 0, 0, 0], jnp.int16)
+        ),
+    )
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 0), _hits())
+    assert _history(out) == (0, []) and np.asarray(out.last_resort_moves[0]).tolist() == [0] * 4
+
+
+def test_the_history_is_per_battler_and_indexed_by_the_battler(tables, names):
+    """Doubles-ready (docs/doubles-state-design.md section 5): both fields lead with the battler
+    axis, ``last_resort_update`` and ``last_resort_fails`` take the battler as an argument, and a
+    write for side 1 leaves side 0's history alone."""
+    from nuzline.engine.effects import last_resort_fails, last_resort_update
+    from nuzline.engine.state import _BATTLER, _KEYS
+
+    t, n = tables, names
+    assert _KEYS["last_resort_count"][0] == _BATTLER
+    assert _KEYS["last_resort_moves"][0] == (*_BATTLER, 4)
+    s = _lr(t, n, used=("Tackle",))
+    two = jnp.asarray([n.move("Defense Curl"), 5, 0, 0], s.moves.dtype)
+    s = s._replace(moves=s.moves.at[1, 0].set(two))
+    out = last_resort_update(s, 1, n.move("Defense Curl"), True)
+    assert _history(out, 0) == (1, [n.move("Tackle")])
+    assert _history(out, 1) == (1, [n.move("Defense Curl")])
+    assert not bool(last_resort_fails(out, 1)) and bool(last_resort_fails(s, 1))
+    # Last Resort itself, the cap and a repeat: nothing is written (battle_lib.c:3445-3455).
+    same = last_resort_update(out, 1, MOVE_LAST_RESORT, True)
+    assert _history(same, 1) == _history(out, 1)
+    for other in (2, 3, 4, 6):
+        out = last_resort_update(out, 1, other, True)
+    assert _history(out, 1) == (4, [n.move("Defense Curl"), 2, 3, 4])
+    assert _history(last_resort_update(out, 1, 6, True), 1) == _history(out, 1)
+
+
+def test_last_resort_decomp_lines_are_as_cited():
+    """The lines the ledger and the code cite for Last Resort (E3-B2-11): the script's order, the
+    command's test, the recorder, its call at BeforeMove's tail, and the three zeroing sites."""
+    if not _ME_DECOMP.exists():
+        pytest.skip("decomp not present")
+    effect = (_ME_DECOMP / "res/battle/scripts/effects/effect_script_0246.s").read_text("utf-8")
+    body = [line.strip() for line in effect.splitlines() if line.strip()]
+    assert body[1:6] == ["_000:", "TryLastResort _004", "CalcCrit", "CalcDamage", "End"]
+    assert "MOVE_STATUS_FAILED" in body[-2]
+    bs = (_ME_DECOMP / "src/battle/battle_script.c").read_text("utf-8").splitlines()
+    assert "BtlCmd_TryLastResort" in bs[7566]
+    assert "Battler_CountMoves" in bs[7570]
+    assert "lastResortCount < numMoves - 1" in bs[7572] and "numMoves < 2" in bs[7573]
+    assert "BattleScript_Iter(battleCtx, jumpOnFail)" in bs[7574]
+    for number in (4514, 4876):  # Mimic and Sketch learning Last Resort
+        assert "msgMoveTemp == MOVE_LAST_RESORT" in bs[number - 1], number
+        assert "lastResortCount = 0" in bs[number], number
+    assert "lastResortCount = 0" in bs[5339]  # BtlCmd_Transform
+    lib = (_ME_DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "BattleSystem_UpdateLastResort" in lib[3442]
+    assert "moveTemp == MOVE_LAST_RESORT" in lib[3444] and "lastResortCount == 4" in lib[3445]
+    assert "lastResortMoves[i] == battleCtx->moveTemp" in lib[3451]
+    assert "lastResortMoves[i] = battleCtx->moveTemp" in lib[3456]
+    assert "lastResortCount++" in lib[3457]
+    assert "Battler_CountMoves" in lib[3460] and "MOVE_NONE" in lib[3464]
+    bcp = (_ME_DECOMP / "src/battle/battle_controller_player.c").read_text("utf-8").splitlines()
+    assert "MOVE_STATUS_NO_EFFECTS" in bcp[3208] and "BattleSystem_UpdateLastResort" in bcp[3217]
+    assert "battleCtx->moveTemp = MOVE_STRUGGLE" in bcp[1866]

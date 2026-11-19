@@ -123,7 +123,14 @@ three structs has a row.
   Substitute test; cleared with the volatiles, not Baton-passed, moves.h:46-48; in
   `effects.MOVE_EFFECT_MASK_FIELDS`; read as `MON_IS_IDENTIFIED`, common.h:48-49: a positive evasion
   stage counts as 0, bcp.c:2888-2890, and `BasicTypeMulApplies` skips its Dark immunity rows,
-  battle_lib.c:2551-2555). The rest (Heal Block) is later (M6).
+  battle_lib.c:2551-2555). Last Resort -> `last_resort_count` (3 bits, battle_mon.h:27) and
+  `last_resort_moves` (`[B, 4]` move ids, battle_mon.h:50) (E3-B2-11: both per battler,
+  written by `step._use_move` at BeforeMove's tail through `effects.last_resort_update`, battle_lib.c:
+  3443-3459 / bcp.c:3218; zeroed with the volatiles at a switch or faint, battle_lib.c:2100-2104,
+  and not Baton-passed, :2107-2115; zeroed by Transform, battle_script.c:5340, and a Mimic that
+  copies Last Resort, :4514-4516; `effects.last_resort_fails` is BtlCmd_TryLastResort,
+  battle_script.c:7567-7579; the Sketch zeroing, :4876-4878, waits for Sketch). The rest (Heal
+  Block) is later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
   permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
@@ -548,7 +555,7 @@ three structs has a row.
 | `MoveEffectsData.mimickedMoveSlot` | `mimic_slots` | mapped |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |
 | `MoveEffectsData.meanLookTarget` | `mean_look_target` | mapped |
-| `MoveEffectsData.lastResortCount` | — | later (M6) |
+| `MoveEffectsData.lastResortCount` | `last_resort_count` | mapped |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
 | `MoveEffectsData.embargoTurns` | `embargo` | mapped |
@@ -569,7 +576,7 @@ three structs has a row.
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
 | `MoveEffectsData.encoredMove` | `encore_move` | mapped |
 | `MoveEffectsData.encoredMoveSlot` | `encore_slot` | mapped |
-| `MoveEffectsData.lastResortMoves` | — | later (M6) |
+| `MoveEffectsData.lastResortMoves` | `last_resort_moves` | mapped |
 | `MoveEffectsData.choiceLockedMove` | `choice_lock` | mapped |
 | `MoveEffectsData.transformedGender` | — | not needed because it is cosmetic (sprites and messages): Attract, Captivate and Rivalry keep the user's own `gender` (battle_script.c:5337-5338) |
 | `MoveEffectsData.itemHPRecovery` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

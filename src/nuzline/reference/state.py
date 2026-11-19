@@ -106,6 +106,8 @@ class RefBattler:
     destiny_bond: int
     grudge: int  # MOVE_EFFECT_GRUDGE (E3-B2-9)
     miracle_eye: int  # MOVE_EFFECT_MIRACLE_EYE (E3-B2-10)
+    last_resort_count: int  # MoveEffectsData.lastResortCount (E3-B2-11)
+    last_resort_moves: list[int]  # MoveEffectsData.lastResortMoves[4] (E3-B2-11)
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
     perish_song: int

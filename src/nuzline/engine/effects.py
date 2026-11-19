@@ -302,6 +302,7 @@ from nuzline.engine.ids import (
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
     MOVE_KNOCK_OFF,
+    MOVE_LAST_RESORT,
     MOVE_MIMIC,
     MOVE_STRUGGLE,
     POWER_IF_TARGET_ASLEEP,
@@ -2196,6 +2197,12 @@ def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return state._replace(
         moves=put(state.moves, (own, user, j), last),
         pp=put(state.pp, (own, user, j), copy_pp),
+        # :4514-4516 a copied Last Resort zeroes lastResortCount (E3-B2-11).
+        last_resort_count=put(
+            state.last_resort_count,
+            side,
+            jnp.where(last == MOVE_LAST_RESORT, 0, state.last_resort_count[side]),
+        ),
         shadow_moves=put(state.shadow_moves, (side, j), moves[j]),
         shadow_pp=put(state.shadow_pp, (side, j), live_pp),
         mimic_slots=put(state.mimic_slots, side, state.mimic_slots[side].astype(_I32) | (1 << j)),
@@ -2286,6 +2293,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         stages=put(state.stages, side, state.stages[foe]),
         disabled_move=put(state.disabled_move, side, 0),
         disable_turns=put(state.disable_turns, side, 0),
+        last_resort_count=put(state.last_resort_count, side, 0),  # :5340 (E3-B2-11)
         mimic_slots=put(state.mimic_slots, side, (1 << MOVES) - 1),
         transformed=put(state.transformed, side, 1),
         power_trick_desync=put(state.power_trick_desync, side, state.power_trick[side]),
@@ -3433,6 +3441,46 @@ def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleSta
 
 
 METRONOME_MAX_TURNS = 10  # BattleSystem_UpdateMetronomeCount's cap (battle_lib.c:6168)
+
+
+LAST_RESORT_MAX = 4  # lastResortMoves[4] (battle_mon.h:50): BattleSystem_UpdateLastResort's cap
+
+
+def last_resort_update(state: BattleState, side, move, cond) -> BattleState:
+    """``BattleSystem_UpdateLastResort`` (battle_lib.c:3443-3459) for ``side``'s battler where
+    ``cond`` (the end of ``BattleControllerPlayer_BeforeMove`` without ``MOVE_STATUS_NO_EFFECTS``,
+    bcp.c:3209-3218, the point ``metronome_update`` reads, but past DecrementPP's no-PP flag).
+    ``move`` is ``moveTemp``: the chosen or encored move, Struggle, an invoker itself (never the
+    move it calls). Last Resort itself and a full list (4) record nothing (:3445-3448), nor does a
+    move already among the first ``lastResortCount`` entries (:3451-3455); else it takes the next
+    entry and the count rises (:3457-3458). The ids are kept, not slots: a Mimic-ed slot keeps
+    Mimic's id counted and Struggle's counts too. E3-B2-11."""
+    side = jnp.asarray(side, _I32)
+    move = jnp.asarray(move, _I32)
+    count = state.last_resort_count[side].astype(_I32)
+    listed = state.last_resort_moves[side].astype(_I32)
+    place = jnp.arange(LAST_RESORT_MAX)
+    seen = jnp.any((listed == move) & (place < count))
+    record = jnp.asarray(cond) & (move != MOVE_LAST_RESORT) & (count < LAST_RESORT_MAX) & ~seen
+    moves = jnp.where(record & (place == count), move, listed)
+    state = state._replace(
+        last_resort_moves=state.last_resort_moves.at[side].set(
+            moves.astype(state.last_resort_moves.dtype)
+        )
+    )
+    return _set(state, "last_resort_count", side, count + 1, record)
+
+
+def last_resort_fails(state: BattleState, side) -> jnp.ndarray:
+    """``bool``: ``BtlCmd_TryLastResort`` (battle_script.c:7567-7579) jumps to
+    ``MOVE_STATUS_FAILED`` (effect_script_0246.s:5, :10-11) for ``side``'s battler: its
+    ``lastResortCount`` is under ``numMoves - 1`` or it knows fewer than 2 moves, ``numMoves``
+    being ``Battler_CountMoves`` (battle_lib.c:3461-3471): the index of the first empty slot of
+    the battler's own moves. E3-B2-11."""
+    fmt = format_of(state)
+    moves = state.moves[party(fmt, side), state.active[side]]
+    known = jnp.sum(jnp.cumprod((moves != 0).astype(_I32)))
+    return (state.last_resort_count[side].astype(_I32) < known - 1) | (known < 2)
 
 
 def metronome_update(tables: Tables, state: BattleState, side, move, cond) -> BattleState:

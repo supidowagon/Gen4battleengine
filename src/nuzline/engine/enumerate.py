@@ -871,6 +871,9 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.MIST,
     # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
     _E.FOCUS_PUNCH,
+    # E3-B2-11: a plain hit, or none while the user has not used its other moves (its own count and
+    # moves, no input of the foe's hit).
+    _E.LAST_RESORT,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
     _E.ENCORE,
     # B12-4: its user's own crit stages (another battler's crit odds are crit_variants').
@@ -1307,6 +1310,9 @@ TABLE_DAMAGE_EFFECTS = (
     _E.KNOCK_OFF,
     # B10-8: CalcCrit, CalcDamage (effect_script_0170.s:8-9) unless the focus is lost first.
     _E.FOCUS_PUNCH,
+    # E3-B2-11: CalcCrit, CalcDamage (effect_script_0246.s:6-7) unless TryLastResort fails first
+    # (the user's own count and moves, nothing the foe changes within the turn).
+    _E.LAST_RESORT,
     # B13-5, B13-10: their per-hit tables (``OutcomeLaws.damage[side, hit]``: Triple Kick's
     # k x step power, Beat Up's member), each its damage for the hit's (crit, roll).
     _E.TRIPLE_KICK,

@@ -552,6 +552,14 @@ def _basic_check_lucky_chant(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_last_resort(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLastResort`` (script.s:1420-1426): the AI's battler that cannot use Last Resort
+    yet (``IfCanUseLastResort``, trainer_ai.c:2030-2042, to the terminating label when it can) -10;
+    E3-B2-11."""
+    ctx, _ = _split(c.if_can_use_last_resort(_at(ctx, mask), _A))
+    return c.pop_or_end(c.add_to_move_score(ctx, -10))
+
+
 def _basic_check_miracle_eye(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckMiracleEye`` (script.s:1031-1034): the player's battler already under
     MOVE_EFFECT_MIRACLE_EYE (``IfMoveEffect``, trainer_ai.c:704-714), -10; E3-B2-10."""
@@ -2109,6 +2117,15 @@ def _expert_lucky_chant(ctx: AiContext, mask) -> AiContext:
     ctx = c.add_to_move_score(_at(ctx, plus1), 1)
     ctx = c.add_to_move_score(_at(ctx, minus1), -1)
     return c.pop_or_end(ctx)
+
+
+def _expert_last_resort(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LastResort`` (script.s:5953-5971): resisted (immune, quarter, half) -1; else the AI
+    able to use Last Resort now (``IfCanUseLastResort``) +1; else nothing; no roll (E3-B2-11)."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, plus1 = _split(c.if_can_use_last_resort(ctx, _A))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:5963)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))  # _ScorePlus1 (:5967)
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3928,6 +3945,7 @@ _BASIC_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _basic_check_non_standard_damage),  # :274
+    (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _basic_check_last_resort),  # :275 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
@@ -4062,6 +4080,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _expert_punishment),  # :1788
+    (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _expert_last_resort),  # :1789 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _expert_worry_seed),  # :1790 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
     (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795

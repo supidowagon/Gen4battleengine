@@ -579,6 +579,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Miracle Eye: effect_script_0216.s, an indirect ON_HIT subscript_miracle_eye.s (the
     # defender's MOVE_EFFECT_MIRACLE_EYE) and SYSCTL_IGNORE_IMMUNITIES (E3-B2-10).
     216: ("BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE", _E.MIRACLE_EYE, (0, 0, 0)),
+    # Last Resort: effect_script_0246.s, BtlCmd_TryLastResort then a plain hit (E3-B2-11).
+    246: ("BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES", _E.LAST_RESORT, (0, 0, 0)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

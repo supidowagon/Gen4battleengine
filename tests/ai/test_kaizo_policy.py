@@ -4773,6 +4773,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Lucky Chant", "Mist", "Accelerock", ""),  # E3-B2-7
         ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
         ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
+        ("Last Resort", "Accelerock", "Mist", ""),  # E3-B2-11
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -5821,3 +5822,133 @@ def test_miracle_eye_is_scored_not_refused_and_exact_equals_loose(
             layout = layout_for(t, flags, state)
             assert policy.ai_refusals(t, state, n, layout) == []
             _assert_exact_equals_loose(t, _hp(state, 1, 50), layout)
+
+
+# --- #246 Last Resort (E3-B2-11) ---------------------------------------------------------------
+
+
+def _used_moves(s, count: int):
+    """``s`` with the AI's battler (side 1) at ``count`` moves used (ids 1..count)."""
+    ids = list(range(1, count + 1)) + [0] * (4 - count)
+    return s._replace(
+        last_resort_count=s.last_resort_count.at[1].set(count),
+        last_resort_moves=s.last_resort_moves.at[1].set(jnp.asarray(ids, jnp.int16)),
+    )
+
+
+def test_last_resort_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Last Resort is BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES, 246, in Basic_ScoreMoveEffect
+    (script.s:275) and Expert_Main (:1789) only (no table, no roll); its AI command is
+    IfCanUseLastResort (trainer_ai.c:2030-2042) (E3-B2-11)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES == 246
+    assert KAIZO_EXPERT_LABELS[246] == ("Expert_LastResort", 1789) and 246 in KAIZO_TRANSCRIBED
+    assert 246 in KAIZO_EXPERT_TRANSCRIBED
+    assert int(t.move_ai_effect[n.move("Last Resort")]) == 246
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    ai = DECOMP / "src/battle/trainer_ai/trainer_ai.c"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    for number in (275, 1789):
+        assert "BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES" in lines[number - 1], number
+    assert sum("BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES" in line for line in lines) == 2
+    assert lines[1419] == "Basic_CheckLastResort:"
+    assert (
+        lines[1421].strip()
+        == "IfCanUseLastResort AI_BATTLER_ATTACKER, Basic_CheckLastResort_Terminate"
+    )
+    assert lines[1422].strip() == "AddToMoveScore -10"
+    assert lines[5952] == "Expert_LastResort:"
+    assert [line.strip() for line in lines[5956:5960]] == [
+        "IfMoveEffectivenessEquals TYPE_MULTI_IMMUNE, Expert_LastResort_ScoreMinus1",
+        "IfMoveEffectivenessEquals TYPE_MULTI_HALF_DAMAGE, Expert_LastResort_ScoreMinus1",
+        "IfMoveEffectivenessEquals TYPE_MULTI_QUARTER_DAMAGE, Expert_LastResort_ScoreMinus1",
+        "IfCanUseLastResort AI_BATTLER_ATTACKER, Expert_LastResort_ScorePlus1",
+    ]
+    assert not any("IfRandomLessThan" in line for line in lines[5952:5972])
+    body = ai.read_text(encoding="utf-8")
+    assert "lastResortCount >= (numKnownMoves - 1) && numKnownMoves > 1" in body
+
+
+@pytest.mark.parametrize(
+    ("moves", "count", "can"),
+    [
+        # IfCanUseLastResort (trainer_ai.c:2039): count >= known - 1 and known > 1.
+        (("Last Resort", "", "", ""), 0, False),  # one move: never
+        (("Last Resort", "", "", ""), 3, False),
+        (("Last Resort", "Accelerock", "", ""), 0, False),
+        (("Last Resort", "Accelerock", "", ""), 1, True),
+        (("Last Resort", "Accelerock", "Mist", ""), 1, False),
+        (("Last Resort", "Accelerock", "Mist", ""), 2, True),
+        (("Last Resort", "Accelerock", "Mist", "Mist Ball"), 2, False),
+        (("Last Resort", "Accelerock", "Mist", "Mist Ball"), 3, True),
+        (("Last Resort", "Accelerock", "Mist", "Mist Ball"), 4, True),
+    ],
+)
+def test_if_can_use_last_resort_is_the_mechanics_test(
+    kaizo_tables, kaizo_names, kaizo_roark_party, moves, count, can
+):
+    """The command jumps exactly where TryLastResort does not fail (battle_script.c:7573-7574):
+    ``effects.last_resort_fails`` is its complement, for either side."""
+    from nuzline.engine.effects import last_resort_fails
+
+    t, n = kaizo_tables, kaizo_names
+    s = _used_moves(_state(t, kaizo_roark_party, BONSLY, _ids(n, *moves)), count)
+    ctx = c.new_context(t, s, _outcome(t, s))
+    assert bool(c.if_can_use_last_resort(ctx, c.Battler.ATTACKER).jump) == can
+    assert bool(last_resort_fails(s, 1)) == (not can)
+    # The command reads the named battler's own moves and count (the player's here).
+    jump = bool(c.if_can_use_last_resort(ctx, c.Battler.DEFENDER).jump)
+    assert jump == (not bool(last_resort_fails(s, 0)))
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [(0, -10), (1, 0)],
+)
+def test_last_resort_basic(kaizo_tables, kaizo_names, kaizo_roark_party, count, expected):
+    """Basic_CheckLastResort (script.s:1420-1426): -10 for the AI's battler that cannot use it
+    yet (two moves, count under 1), nothing once it can; the player's count is not read."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Last Resort", "Accelerock", "", ""))
+    s = _used_moves(s, count)
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+    player = s._replace(last_resort_count=s.last_resort_count.at[0].set(4))
+    assert _delta(t, player, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("typing", "count", "expected"),
+    [
+        # Expert_LastResort (script.s:5953-5971): immune, half or quarter damage -1 (whether or
+        # not it can be used); else +1 when IfCanUseLastResort jumps; else nothing. No roll.
+        (None, 0, 0),
+        (None, 1, 1),
+        ((5, 5), 1, -1),  # Rock: half
+        ((5, 8), 0, -1),  # Rock / Steel: quarter
+        ((7, 7), 1, -1),  # Ghost: immune
+        ((7, 7), 0, -1),
+    ],
+)
+def test_expert_last_resort(kaizo_tables, kaizo_names, kaizo_roark_party, typing, count, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Last Resort", "Accelerock", "", ""))
+    s = _used_moves(s, count)
+    if typing:
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray(typing, s.types.dtype)))
+    assert _delta(t, s, 0x3, 0x7)[0] == expected
+
+
+def test_last_resort_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Last Resort", "Accelerock", "", ""))
+    for count in (0, 1):
+        for flags in (0x27, 0x10F):
+            layout = layout_for(t, flags, s)
+            assert policy.ai_refusals(t, s, n, layout) == []
+            _assert_exact_equals_loose(t, _hp(_used_moves(s, count), 1, 50), layout)
