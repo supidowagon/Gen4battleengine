@@ -214,10 +214,14 @@ Group B status (E1 files, re-index only):
 - Not re-indexed (party axis, not battler): policy.py `_refused` and switching.py `_layout`
   build `[2, SLOTS]` refusals over parties 0 / 1 (`jnp.arange(2)`, `enumerate` of two ability
   lists): at P > 2 the shapes do not broadcast. Owed to D8 (which parties an AI scores).
+- Group B review = MERGE.
 
 ### D2-D12
 
 - D2: targets, the action space and redirection.
+  - Owed: hooks.py `show_battle_mon` / `switch_in_effects`: Intimidate, Download and Trace use
+    `foe(side)`, a single target; in doubles Intimidate and Download act on both foes. Model them
+    as multi-target hits, not a defender choice.
 - D3: the four-actor turn.
   - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
     TWO_TRAINERS/MULTI a side is out only when all its parties are empty.
@@ -229,9 +233,13 @@ Group B status (E1 files, re-index only):
     together at B=4.
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
 - D10: the multi format, with partner teams from the calc repo.
+  - Nit: `initial_arrays` accepts an `opp2_items` that differs from `opp_items` in a plain DOUBLES
+    battle (the game copies one trainer's bag); reject it there.
 - D11: search, prep, the line player and the CLI with two actives.
   - Owed (D11 or tool note): tools/trace_to_state.py calls empty_outcome() without a format (B=2
     traces only); search/playout.py ~484 battler clip to 1 is outside D1 scope (search/ is D11).
+  - Owed (R7): reference/engine.py ~6050 `items = [0, 0]` while the loop runs `range(B)`:
+    `ref_step` raises IndexError on an item action from battler 2 or 3.
 - D12: a golden trace of a recorded Gardenia multi fight.
 - Later: two-trainer battles.
 
