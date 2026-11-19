@@ -1238,6 +1238,39 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it under any weather). A player's own
   Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any battle. Trigger: a real-game check
   (memory dump per caller) when the user next does real-game checks.
+- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch.** Ruling
+  (manager, merge gate of batch F): kept as ordinary backlog in this batch, built as the next batch's first group. The
+  decomp path: a frozen Transformed copy passes `subscript_check_shaymin_form.s:5-9` (species 492, form not 0, no
+  Substitute, Freeze); :10 sets the form to 0; :12-19 load Land's ability by the copy's own personality bit 0; :22-23
+  write it under `SYSCTL_RECALC_MON_STATS`, so `BtlCmd_UpdateMonDataFromVar`'s `BattleMon_CopyToParty`
+  (battle_script.c:3401-3407) has `BtlIOCmd_UpdatePartyMon` set `MON_DATA_ABILITY` on the Transform user's own party
+  Pokemon and recalculate its stats (battle_io_command.c:601-604); :24-27 write Land's types; :30 `RefreshMonData`
+  reloads the stats, level, friendship and HP from that party Pokemon (`BattleSystem_ReloadPokemon`, battle_lib.c:
+  169-193; the moves stay while transformed, :183); every later switch-in reads the written ability
+  (`BattleSystem_InitBattleMon`, battle_lib.c:124). To build: a per-party ability override (per party slot, both
+  sides), written by `hooks.shaymin_land` (and the reference's) for a Transformed defender together with the party
+  stats recomputed on its own species, and read wherever the engine takes a party Pokemon's ability
+  (`damage.decomp_abilities` at switch-in / InitBattleMon, the Transform end's `_restore_ability`, the AI's
+  `MON_DATA_ABILITY` reads); then drop `coverage.transform_sky_refusals` and the backlog's F-26 rows. Kaizo: one
+  battle, Champion Cynthia (trainer 870, Elite Four Split, a level-100 Sky Shaymin), refused only when your side can
+  run Transform; `check_opponent` without your party counts none, so `tools/kaizo/backlog.py` adds the row with your
+  Transform user assumed (`mechanics_backlog.md`, "form change").
+- **F-O3 Two Starf Berry eats on one side in one turn share one draw.** The game draws `RandNext() % 5` per eat
+  (battle_lib.c:4864-4866); the engine has one turn draw per side (`Outcome.starf[side, 0]` -> `starf_roll`,
+  `step._action_phase`), so a holder that eats at its pinch and then U-turns / Baton Passes into a second holder that
+  eats on entry (the same `BattleSystem_TriggerHeldItem` path, :5273-5294) repeats the first rank, as F-10's Recycled
+  berry eaten twice. Needs a third draw column (`starf[side, 2]`) for the pivot newcomer's check with its own law in
+  `enumerate._starf_reads`. Not built in this fix round.
+- **F-O4 The AI's absorb switch under its shared gate draw, and Water / Volt Absorb on its bench.**
+  `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640) draws one `RandNext() % 3` when the AI has a super-effective move
+  and returns FALSE unless it is 0 (:3651), and only then the bench's `RandNext() & 1` draws (:3706): one sequence the
+  independent switch sites cannot express, refused (`switching._Layout.absorb_gate`, raises). The same function's
+  Water (:3668-3669) and Electric (:3670-3671) cases are refused outright (`switching._AI_SIDE_ABILITIES`). Both
+  raise; to build: the gate as a conditioning draw of the absorb sites, and `checkAbility` by `moveHit`'s type for the
+  bench test.
+- **F-O5 Hydration's Nightmare clear waits for Nightmare.** `subscript_ability_restore_status.s:6` clears
+  `VOLATILE_CONDITION_NIGHTMARE` with the status (F-5); Nightmare is not modelled, so this is part of the Nightmare
+  group: when it is built, Hydration's (and every `subscript_ability_restore_status` caller's) cure clears it.
 
 ### Rulings
 - F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
@@ -1487,7 +1520,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   sub_seq 238 (subscript_gravity_end) is among the members the ROM diff changed (`rom/changed_scripts.json`, written
   by `tools.extract_rom` from both ROMs) and `data/kaizo/rom_diff.toml` classifies it `modelled` (its note decodes
   the re-arm); a changed member classified otherwise stops the build; 0 when unchanged (vanilla). Values unchanged
-  (0 vanilla, 1 Kaizo). Test: `tests/tools/test_build_tables_game.py::
+  (0 vanilla, 1 Kaizo). The build's one game branch (`tools/build_tables.py:730`, `_gravity_rearm(inter) if kaizo
+  else 0`) is vanilla being the diff's baseline: it has no `rom/` diff to read. Test: `tests/tools/test_build_tables_game.py::
   test_gravity_rearm_reads_sub_seq_238_from_the_rom_diff`.
 - F-23 ROM confirmations from the repo's ROM diff (`tools/rom/diff.py`, read from both ROMs by `tools.extract_rom`;
   `data/intermediate_kaizo/rom/changed_code.json`, `data/kaizo/rom_diff.toml`): (1) `sMovesAffectedByGravity`
@@ -1532,7 +1566,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   ability slot (`damage.decomp_abilities`), so modelling it needs a new per-party mechanic: refused instead.
   `coverage.transform_sky_refusals` (called by `check_opponent`): one side can run Transform (its moves, a player's
   learnable moves, Metronome's calls, or Mimic / Copycat while the fight has Transform) and the other has a Shaymin
-  with a nonzero form. Test: `test_e1_batch_f.py::test_a_transform_user_facing_a_sky_shaymin_is_refused`.
+  with a nonzero form. Test: `test_e1_batch_f.py::test_a_transform_user_facing_a_sky_shaymin_is_refused`
+  (`fullset`). Open item F-O2: the next batch's first group.
 - F-27 The end-of-turn speed grid takes Shaymin's Land Speed (review F item 6). The revert recalculates the stats on
   Land's row (base Speed 127 -> 100; F-16) mid-turn, before `SortMonSpeedOrder` at the turn's end, so
   `enumerate._end_speeds` takes every grid point also with a Sky Shaymin's Land stats (`hooks.land_stats`, shared
@@ -1546,6 +1581,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `_SWITCH_LO` / `_SWITCH_HI` 1, 2). Brute-force checks of the batch's laws: `test_the_starf_laws_equal_the_
   bruteforce`, `test_the_lansat_crit_variant_equals_the_bruteforce`, `test_the_flash_fire_foe_move_clause_equals_
   the_bruteforce`, `test_the_shaymin_sky_clauses_equal_the_bruteforce`.
+- F-29 Merge-gate fixes. JAX healed a Flash Fire holder below full HP by a quarter on an absorbed Fire move (the heal's
+  gate took every absorb); the heal is now Volt / Water Absorb's only (`hpCalcTemp`, battle_lib.c:3503, :3510; Flash
+  Fire's branch :3515-3521 sets none, `subscript_absorb_and_boost_fire_type_moves.s` changes no HP), as the
+  reference. Test: `test_a_holder_below_full_hp_is_not_healed`. F-26's test carries `fullset`. Open items F-O2..F-O5.
 - Open (not modelled; cites where stopped):
   - Sleep Talk's sealed set after a faster foe that already imprisons Transforms (copies every move) or Mimics (one
     slot): the call reads the foe's moves when it runs (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290), but
