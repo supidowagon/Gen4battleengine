@@ -734,7 +734,7 @@ def compare_speed(
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]
     lag1, lag2 = lag[battler1], lag[other]
-    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | ((state.trick_room != 0) & ~lag1 & ~lag2))
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | (fcm.trick_room_on(state) & ~lag1 & ~lag2))
     slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
     tie = (speed1 == speed2) & (jnp.asarray(tie_roll) != 0)
     by_speed = jnp.where(

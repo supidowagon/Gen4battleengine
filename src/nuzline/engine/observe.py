@@ -221,9 +221,8 @@ _NONZERO_SIDE = (
     # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
     "ability_suppressed",
 )
-# Trick Room / Gravity up: the views the observation reads (Gravity: the mask's counter bits,
-# FCM step 2).
-_FIELD_VIEWS = (("trick_room", lambda s: s.trick_room), ("gravity", fcm.gravity_count))
+# Trick Room / Gravity up: the views the observation reads (the mask's counter bits, FCM step 2).
+_FIELD_VIEWS = (("trick_room", fcm.trick_room_on), ("gravity", fcm.gravity_on))
 _NONZERO_FIELD = tuple(name for name, _ in _FIELD_VIEWS)
 
 _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (

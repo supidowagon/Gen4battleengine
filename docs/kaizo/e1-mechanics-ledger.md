@@ -1735,6 +1735,21 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   No hand-built test state sets `uproar` (tests.strategies derives the bits), so no prerequisite commit: the
   snap base is the Gravity commit. Tests: `tests/engine/test_field_mask.py::
   test_spurious_uproar_bits_keep_everyone_awake_until_their_battler_leaves` (0xFFF; engine = reference).
+- G-10 FCM step 2, Trick Room family (FCM.md 4.4 (2), 4.7 Trick Room; fcm-verify (a); manager ruling 8): the
+  Trick Room bits are a real model (E3's Kaizo re-arm, sub_seq 251), not "carried, refused". Every reader tests
+  any `FIELD_CONDITION_TRICK_ROOM` bit (bits 16-18, condition.h:123-125, :144) through `field.trick_room_on`,
+  the reference the same: `CompareBattlerSpeed`'s reversal (battle_lib.c:1432; `order.compare_speed`, which
+  the AI's speed compare also takes), the move's toggle (effect_script_0259.s:5, `field.trick_room_toggle`),
+  the countdown (bcp.c:1822-1827, `field.trick_room_tick` inside E3's one `step._trick_room_check`, which
+  stays the one implementation), `IfFieldConditionsMask` (trainer_ai.c:1936-1946; script.s:364, :439,
+  :1004, :1131), now `field_mask & operand` for both supported operands, and the observation
+  (`observe._FIELD_VIEWS`). `trick_room` is written only (step 3 drops it). A borrowed counter t (FCM 3.1)
+  runs t turns; t = 1 ends silently in vanilla and re-arms in Kaizo. `field.with_trick_room` writes the bits
+  and the old field for hand-built test states (prerequisite commit ff665e3, the snap base). Clean masks read
+  as before (4.4). Tests: `tests/engine/test_field_mask.py` (0x40000 - 3 reverses the order, 0xFFFF does not;
+  the toggle under a borrow; 0x1FFFF ends / re-arms; engine = reference),
+  `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_trick_room_reads_the_mask`. Acid Rain
+  (subscript_pursuit.s:115) is not part of step 2 and is not built here.
 
 ## Stream state (restart point, 2026-11-19)
 

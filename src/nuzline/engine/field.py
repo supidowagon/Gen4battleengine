@@ -9,8 +9,8 @@ deep fog 15) and ``weather_turns`` through the views below (``weather_bits``, ``
 ``fog``, ``weather_ball_type``, ``weather_state``), each as its decomp test reads the mask, so a
 mask with several groups (FCM 3.2) reads as the game reads it; the Gravity readers read bits
 12-14 (``gravity_on``, ``gravity_count``), the Uproar readers bits 8-11 (``uproar_any``; the
-battler's ``uproar`` count stays its VOLATILE_CONDITION_UPROAR); the Trick Room readers still
-read the old field. On every state the engine
+battler's ``uproar`` count stays its VOLATILE_CONDITION_UPROAR) and the Trick Room readers
+bits 16-18 (``trick_room_on``); the old fields are written only, until step 3 drops them. On every state the engine
 reaches the mask is clean: at most one weather group, TEMP-only with ``weather_turns ==
 weather_timer`` or PERM-only; the Gravity / Trick Room bits are ``gravity`` / ``trick_room``;
 Uproar bit ``8 + b`` is ``uproar[b] != 0``. ``weather_turns`` is written only by the weather
@@ -258,6 +258,14 @@ def gravity_tick(state: BattleState, live, rearm) -> BattleState:
     mask = jnp.where(on, mask - (1 << FIELD_CONDITION_GRAVITY_SHIFT), mask)
     again = on & ((mask & _GRAVITY) == 0) & jnp.asarray(rearm)
     return _put(state, jnp.where(again, mask | int(FieldCondition.GRAVITY_INIT), mask), True)
+
+
+def trick_room_on(state: BattleState) -> jnp.ndarray:
+    """``bool``: any ``FIELD_CONDITION_TRICK_ROOM`` bit set (bits 16-18, condition.h:123-125,
+    :144), the test of every Trick Room reader: the speed order (CompareBattlerSpeed,
+    battle_lib.c:1432), the move's toggle (effect_script_0259.s:5), the countdown (bcp.c:1822)
+    and the AI's IfFieldConditionsMask (trainer_ai script.s:364, :439, :1004, :1131)."""
+    return (_mask(state) & _TRICK_ROOM) != 0
 
 
 def trick_room_toggle(state: BattleState, cond) -> BattleState:

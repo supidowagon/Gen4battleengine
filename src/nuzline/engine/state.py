@@ -31,7 +31,8 @@ Encodings:
   step 1). The weather readers read the mask's weather bits and ``weather_turns`` (step 2,
   ``engine.field`` views) and the Gravity readers its bits 12-14; ``weather`` / ``weather_timer``
   and ``gravity`` are written only (until step 3); the field's Uproar readers read bits 8-11
-  (``uproar`` stays the volatile count) and ``trick_room`` is still read. A clean mask equals them: at most one weather group, TEMP-only with
+  (``uproar`` stays the volatile count) and the Trick Room readers its bits 16-18; ``trick_room``
+  is written only. A clean mask equals them: at most one weather group, TEMP-only with
   ``weather_turns == weather_timer`` or PERM-only (``weather_timer == 0``); Gravity bits 12-14 =
   ``gravity``, Trick Room bits 16-18 = ``trick_room``; Uproar bit ``8 + b`` = ``uproar[b] != 0``.
   ``weather_turns`` is stale outside a TEMP-only weather (only the weather moves and the countdown

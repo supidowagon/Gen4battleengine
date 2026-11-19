@@ -4148,6 +4148,7 @@ def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
     Trick Room ends (started at 5 on turn T it is up through T + 4); Kaizo's (sub_seq 251, byte
     for byte the Trick Room move's script, ``Tables.trick_room_rearm``) finds the bits clear and
     sets ``FIELD_CONDITION_TRICK_ROOM_INIT`` again: it never ends. E3-2-4."""
+    # The old field, written until FCM step 3 drops it; ``field.trick_room_tick`` reads the bits.
     counted = _count_down(state.trick_room)
     running = live & (state.trick_room != 0)
     rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)

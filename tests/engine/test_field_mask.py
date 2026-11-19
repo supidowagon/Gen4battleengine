@@ -4,7 +4,8 @@ writer path the mask is clean (4.4: it equals the old fields) and the engine equ
 reference. Step 2 (4.6): the weather readers read the mask, so a corrupted mask (3.1: 0x7F, 0x5,
 0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference; the Gravity
 readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3); the Uproar
-readers read bits 8-11 (0xFFF: a bit of every battler, none uproaring)."""
+readers read bits 8-11 (0xFFF: a bit of every battler, none uproaring); the Trick Room readers
+bits 16-18 (0x40000 - 3: Trick Room 3; 0x1FFFF: a counter of 1, Kaizo re-arm)."""
 
 from __future__ import annotations
 
@@ -324,3 +325,37 @@ def test_spurious_uproar_bits_keep_everyone_awake_until_their_battler_leaves(tab
     )
     assert int(out.status[0, 1]) == Status.NONE  # Chimchar: Hypnosis still fails
     assert int(out.field_mask) == 0xEFF
+
+
+# --- FCM step 2, Trick Room readers (FCM 3.2 "Trick Room", 4.6) --------------------------------
+
+
+@pytest.mark.parametrize("mask, up", [(0x40000 - 3, True), (0xFFFF, False)])
+def test_trick_room_bits_reverse_the_order(tables, names, mask, up):
+    """Any FIELD_CONDITION_TRICK_ROOM bit (16-18) reverses CompareBattlerSpeed (battle_lib.c:1432):
+    the slower Geodude hits the 1 HP Monferno first, which never moves; 0xFFFF (every bit below
+    them) has none."""
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    s = s._replace(hp=s.hp.at[0, 0].set(1), stats=s.stats.at[0, 0, 4].set(500))
+    s = _masked(s, mask, 0)
+    out = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), _hits())
+    assert (int(out.hp[1, 0]) == int(s.hp[1, 0])) is up
+
+
+@pytest.mark.parametrize(
+    "mask, move, rearm, after",
+    [
+        # (bits 12-14 hold Gravity 7 in each: the field pass takes it to 6, bcp.c:1229)
+        (0x40000 - 3, "Trick Room", False, 0xEFFD),  # any bit: the move clears them all
+        (0x1FFFF, "Growl", False, 0xEFFF),  # a counter of 1 ends at the turn end
+        (0x1FFFF, "Growl", True, 0x5EFFF),  # Kaizo's sub_seq 251 sets it again
+    ],
+)
+def test_trick_room_bits_toggle_and_count_down(tables, names, mask, move, rearm, after):
+    """effect_script_0259.s:5 tests any Trick Room bit (:12 clears them, a borrowed counter's
+    too); bcp.c:1824 takes 1 << 16 a turn and at 0 Kaizo's sub_seq 251 ORs TRICK_ROOM_INIT
+    (fcm-verify (a), ruling 8: E3's one ``_trick_room_check``)."""
+    t = _rearming(tables, "trick_room_rearm") if rearm else tables
+    s = _masked(_fight(t, names, ("Trick Room", "Growl")), mask, 0)
+    out = assert_matches_reference(t, s, A(move, "Growl", s, names), _hits())
+    assert int(out.field_mask) == after

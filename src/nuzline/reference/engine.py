@@ -1284,7 +1284,7 @@ def _player_second(
     # Stall (lib.c:1422-1431) is unsupported.
     if speed0 == speed1:
         return tie_roll != 0  # RandNext() & 1
-    if s.trick_room:
+    if s.field_mask & FieldCondition.TRICK_ROOM:  # lib.c:1432, bits 16-18
         return speed0 > speed1
     return speed0 < speed1
 
@@ -6552,7 +6552,7 @@ def _trick_room_check(turn: _Turn, s: RefState) -> None:
         s.field_mask -= 1 << FIELD_CONDITION_TRICK_ROOM_SHIFT  # :1824
         if not s.field_mask & FieldCondition.TRICK_ROOM and _t(turn.tables, "trick_room_rearm"):
             s.field_mask |= FieldCondition.TRICK_ROOM_INIT  # sub_seq 251 = effect_script_0259.s:6
-    if s.trick_room:
+    if s.trick_room:  # the old field, written until FCM step 3 drops it
         s.trick_room -= 1
         if not s.trick_room and _t(turn.tables, "trick_room_rearm"):
             s.trick_room = TRICK_ROOM_TURNS

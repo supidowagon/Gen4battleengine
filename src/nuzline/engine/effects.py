@@ -1687,6 +1687,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
     (battle_lib.c:1432-1439). E3-2-4."""
     cond = (h.effect == _E.TRICK_ROOM) & h.landed
+    # The old field, written until FCM step 3 drops it (the toggle reads the bits).
     value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
     state = fcm.trick_room_toggle(state, cond)
     return state._replace(

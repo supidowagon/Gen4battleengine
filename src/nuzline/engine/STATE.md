@@ -132,7 +132,9 @@ three structs has a row.
   reader reads bits 12-14 (`field.gravity_on`, `field.gravity_count`); `gravity` is written
   only. Step 2, uproar: the field's Uproar readers (sleep, Rest, Yawn, the wake at a move) read
   bits 8-11 (`field.uproar_any`); `uproar[b]` stays the battler's VOLATILE_CONDITION_UPROAR count
-  (the lock, its end check, Metronome). The Trick Room readers still read `trick_room`. A clean
+  (the lock, its end check, Metronome). Step 2, trick room: the readers (the speed order, the
+  move's toggle, the countdown, the AI's IfFieldConditionsMask, the observation) read bits 16-18
+  (`field.trick_room_on`); `trick_room` is written only. A clean
   mask equals the old fields: at most one weather group, TEMP-only with `weather_turns ==
   weather_timer` or PERM-only; bits 12-14 = `gravity`, 16-18 = `trick_room`; bit `8 + b` =
   `uproar[b] != 0`.

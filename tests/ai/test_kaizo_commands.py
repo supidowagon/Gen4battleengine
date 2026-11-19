@@ -281,6 +281,15 @@ def test_if_field_conditions_mask_trick_room(tables, names):
     assert _jump(c.if_field_conditions_mask(_ctx(tables, tr), FieldCondition.TRICK_ROOM))
 
 
+@pytest.mark.parametrize("mask, up", [(0x40000 - 3, True), (0xFFFF, False)])
+def test_if_field_conditions_mask_trick_room_reads_the_mask(tables, names, mask, up):
+    # script.s:364 etc.: fieldConditionsMask & FIELD_CONDITION_TRICK_ROOM (trainer_ai.c:
+    # 1936-1946), any of bits 16-18, a borrowed counter's too (FCM 3.1).
+    s = versus(tables, names, GEODUDE)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
+    assert _jump(c.if_field_conditions_mask(_ctx(tables, s), FieldCondition.TRICK_ROOM)) is up
+
+
 @pytest.mark.parametrize("mask, up", [(0x7FFF, True), (0x5000 - 3, True), (0xFFF, False)])
 def test_if_field_conditions_mask_gravity_reads_the_mask(tables, names, mask, up):
     # Basic_CheckGravityActive (script.s:1028): fieldConditionsMask & FIELD_CONDITION_GRAVITY
