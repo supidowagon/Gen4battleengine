@@ -22,7 +22,7 @@ from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 
 SPD, SPE = Stat.SPD - 1, Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
 
@@ -65,7 +65,7 @@ def test_cloud_nine_suppresses_sand_boost_and_chip(tables, names):
     assert int(out.hp[0, 0]) == int(sand.hp[0, 0])  # Water-type Psyduck takes no chip
     # A fainted holder no longer counts (COUNT_ALIVE_BATTLERS): with no Cloud Nine the
     # boost applies and rain raises Water Gun.
-    bare = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0))  # Damp
+    bare = as_species(tables, s, 0, 0, int(s.species[0, 0]))  # Damp
     assert _table(tables, _weather(bare, Weather.SANDSTORM), gun) != plain
     assert _table(tables, _weather(bare, Weather.RAIN), gun) != plain
 
@@ -123,7 +123,7 @@ def test_fog_is_gated_on_cloud_nine(tables, names):
     s = _weather(_psyduck(tables, names, ["Leer"]), Weather.FOG)
     leer = A("Leer", "Leer", s, names)
     assert hit_threshold(tables, s, leer).tolist() == [100, 100]
-    bare = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0))  # Damp
+    bare = as_species(tables, s, 0, 0, int(s.species[0, 0]))  # Damp
     assert hit_threshold(tables, bare, leer).tolist() == [60, 60]
 
 
@@ -144,11 +144,8 @@ def test_swift_swim_doubles_speed_in_rain_unless_cloud_nine(tables, names):
     assert int(effective_speed(tables, rain.with_status(0, 0, Status.PARALYSIS), 0)) == 3
     # Cloud Nine on the foe (Psyduck's second slot) turns rain off for the speed check.
     psyduck = names.species("Psyduck")
-    cloudy = rain._replace(
-        species=rain.species.at[1, 0].set(psyduck),
-        ability_slot=rain.ability_slot.at[1, 0].set(1),
-        ability=rain.ability.at[1, 0].set(AbilityId.CLOUD_NINE),
-    )
+    cloudy = as_species(tables, rain, 1, 0, psyduck, 1)
+    assert int(cloudy.ability[1, 0]) == AbilityId.CLOUD_NINE
     assert int(effective_speed(tables, cloudy, 0)) == 7
     # A fainted Cloud Nine holder does not count.
     assert int(effective_speed(tables, cloudy.replace_hp(1, 0, 0), 0)) == 14
@@ -177,11 +174,7 @@ def _fixed_states(tables, names):
             yield s, (moves[1], "Rock Throw")
             yield s.with_status(0, 0, Status.PARALYSIS), (moves[1], "Tackle")
             # Cloud Nine on the foe's side too (Psyduck's second slot).
-            cloudy = s._replace(
-                species=s.species.at[1, 0].set(names.species("Psyduck")),
-                ability_slot=s.ability_slot.at[1, 0].set(1),
-                ability=s.ability.at[1, 0].set(AbilityId.CLOUD_NINE),
-            )
+            cloudy = as_species(tables, s, 1, 0, names.species("Psyduck"), 1)
             yield cloudy, (moves[1], "Tackle")
 
 
@@ -203,16 +196,11 @@ def _freeze_case(tables, names, holder):
     s = roark_state(tables, names, player_species="Psyduck", player_moves=["Powder Snow"],
                     player_ability="Cloud Nine")  # fmt: skip
     if holder != "user":
-        s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0))  # Damp
+        s = as_species(tables, s, 0, 0, int(s.species[0, 0]))  # Damp
     if holder == "target":
         psyduck, slot = int(s.species[0, 0]), 1  # Psyduck's Cloud Nine slot
-        s = s._replace(
-            species=s.species.at[1, 0].set(psyduck),
-            form=s.form.at[1, 0].set(0),
-            ability_form=s.ability_form.at[1, 0].set(0),
-            ability_slot=s.ability_slot.at[1, 0].set(slot),
-            types=s.types.at[1, 0].set(s.types[0, 0]),
-        )
+        s = as_species(tables, s, 1, 0, psyduck, slot)
+        s = s._replace(types=s.types.at[1, 0].set(s.types[0, 0]))
     # Enough HP that the hit never faints the target before its secondary effect.
     s = s._replace(max_hp=s.max_hp.at[1, 0].set(999), hp=s.hp.at[1, 0].set(999))
     return _weather(s, Weather.SUN)

@@ -673,6 +673,12 @@ def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, na
     species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
     sid = names.species(species)
     a["species"][side, active] = sid
+    # Its own form, ability slot 0 and that row's engine ability: the old Pokemon's would read
+    # as a script's write (``damage.decomp_abilities``).
+    a["form"][side, active] = a["ability_form"][side, active] = a["ability_slot"][side, active] = 0
+    a["ability"][side, active] = int(
+        tables.species_abilities[int(tables.species_form_row[sid, 0]), 0]
+    )
     a["item"][side, active] = names.item(item)
     recalc_stats(tables, a, side, active)
     if moves:

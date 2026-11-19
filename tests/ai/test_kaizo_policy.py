@@ -53,6 +53,7 @@ from tests.ai.test_kaizo_outcome import (
     _with_player,
     layout_for,
 )
+from tests.engine.helpers import as_species
 
 DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 
@@ -1766,9 +1767,7 @@ def test_basic_high_stat_stage(
             for sp in range(1, rows.shape[0])
             if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
         )
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
@@ -2022,10 +2021,7 @@ def test_flare_blitz_recoil_move(
         name, slot, ability = attacker
         species = n.species(name)
         assert int(abilities[species, slot]) == c.ABILITY_IDS[ability]
-        s = s._replace(
-            species=s.species.at[1, 0].set(species),
-            ability_slot=s.ability_slot.at[1, 0].set(slot),
-        )
+        s = as_species(t, s, 1, 0, species, slot)
     else:
         bonsly = kaizo_roark_party[BONSLY]
         assert int(abilities[bonsly.species, bonsly.ability_slot]) == ROCK_HEAD
@@ -2078,9 +2074,7 @@ def test_paralyze_absorb_branches(
     s = _with_player(t, s, volt, 0, known=True)
     if attacker:
         species = _species_with(t, c.ABILITY_IDS[attacker])
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == expected
 
 
@@ -2223,9 +2217,7 @@ def test_basic_double_stat_stage_simple(
     species = next(
         sp for sp in range(1, rows.shape[0]) if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
     )
-    s = s._replace(
-        species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-    )
+    s = as_species(t, s, 1, 0, species)
     for stat, stage in stages.items():
         s = s._replace(stages=s.stages.at[1, stat].set(stage))
     assert _delta(t, s, 0x2, 0x3)[0] == expected
@@ -3504,9 +3496,7 @@ def test_evasion_up(
             for sp in range(1, rows.shape[0])
             if abilities[rows[sp], 0] == c.ABILITY_IDS["Simple"]
         )
-        s = s._replace(
-            species=s.species.at[1, 0].set(species), ability_slot=s.ability_slot.at[1, 0].set(0)
-        )
+        s = as_species(t, s, 1, 0, species)
     assert _delta(t, s, 0x2, 0x3)[0] == basic
     if expert is not None:
         assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expert
@@ -4459,10 +4449,7 @@ def test_magnet_rise_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
     if case == "bit":
         s = s._replace(magnet_rise=s.magnet_rise.at[1].set(1))
     if case == "levitate":
-        s = s._replace(
-            species=s.species.at[1, 0].set(_levitate_species(t)),
-            ability_slot=s.ability_slot.at[1, 0].set(0),
-        )
+        s = as_species(t, s, 1, 0, _levitate_species(t))
     if case == "flying":
         s = s._replace(types=s.types.at[1, 0, 1].set(2))  # TYPE_FLYING
     assert _delta(t, s, 0x2, 0x3)[0] == (0 if case == "plain" else -10)
