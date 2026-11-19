@@ -386,8 +386,7 @@ def gravity_state(state: BattleState) -> BattleState:
     subscript_gravity_start.s), which then bans ``GRAVITY_MOVES`` from the invokers' calls
     (``Move_CanBeMetronomed``, battle_lib.c:7198-7201; Sleep Talk's CHECK_INVALID_GRAVITY,
     :2292-2295). Only the count is set: the call sets read nothing else of it (G-67)."""
-    state = fcm.with_gravity(state, GRAVITY_TURNS)
-    return state._replace(gravity=jnp.asarray(GRAVITY_TURNS, state.gravity.dtype))
+    return fcm.with_gravity(state, GRAVITY_TURNS)
 
 
 def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
@@ -405,7 +404,7 @@ def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> 
     calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
     foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
     foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
-    return (state.gravity == 0) & uses_move[side] & calls & foe_can
+    return ~fcm.gravity_on(state) & uses_move[side] & calls & foe_can
 
 
 def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:

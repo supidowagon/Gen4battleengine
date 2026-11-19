@@ -112,6 +112,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     AI_JUDGMENT,
@@ -380,7 +381,15 @@ def apply_type_chart(
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
     identified, grounded, roosting, magnet = defender_chart_flags(tables, state, def_side)
     for mul in chart_multipliers(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
+        tables,
+        move,
+        d_types,
+        fcm.gravity_count(state),
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
     ):
         out = divide(out * mul, 10)
     return jnp.where(move == MOVE_STRUGGLE, value, out)
@@ -509,7 +518,7 @@ class _Layout(NamedTuple):
 def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     a = state.active[1].astype(_I32)
     d = state.active[0].astype(_I32)
-    gravity = state.gravity
+    gravity = fcm.gravity_count(state)
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
     # The engine's current abilities, raw: the refusal scan below is over every party slot, and

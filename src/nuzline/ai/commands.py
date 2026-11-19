@@ -175,7 +175,7 @@ class FieldCondition(IntEnum):
     include/constants/battle/condition.h:123-125, :144)."""
 
     TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
-    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; BattleState.gravity (G-67)
+    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; field.gravity_on (G-67)
 
 
 class VolatileCondition(IntEnum):
@@ -1524,7 +1524,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
             tables,
             m,
             d_types,
-            state.gravity,
+            fcm.gravity_count(state),
             identified,
             ai_move_type(tables, state, a, m),
             grounded,
@@ -1681,7 +1681,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         tables,
         move,
         d_types,
-        state.gravity,
+        fcm.gravity_count(state),
         identified,
         ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
         grounded,
@@ -2421,14 +2421,15 @@ def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value:
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
     ``FieldCondition.TRICK_ROOM`` and ``FieldCondition.GRAVITY`` are supported (static; refused
-    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while
-    ``BattleState.gravity`` is."""
+    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while a
+    Gravity bit of ``field_mask`` is set (``field.gravity_on``)."""
     assert int(mask) in (
         FieldCondition.TRICK_ROOM,
         FieldCondition.GRAVITY,
     ), f"unsupported field mask {int(mask):#x}"
-    field = ctx.state.gravity if int(mask) == FieldCondition.GRAVITY else ctx.state.trick_room
-    return _jump(ctx, field != 0)
+    if int(mask) == FieldCondition.GRAVITY:
+        return _jump(ctx, fcm.gravity_on(ctx.state))
+    return _jump(ctx, ctx.state.trick_room != 0)
 
 
 def load_current_weather(ctx: AiContext) -> AiContext:

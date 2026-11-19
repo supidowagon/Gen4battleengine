@@ -393,7 +393,7 @@ def _rate(
 
     def finish(rate, micle):
         rate = jnp.where(micle, rate * 120 // 100, rate)
-        return jnp.where(state.gravity != 0, rate * 10 // 6, rate)
+        return jnp.where(fcm.gravity_on(state), rate * 10 // 6, rate)
 
     before_micle = rate
     rate = finish(before_micle, micle)
@@ -678,7 +678,7 @@ def future_thresholds(
     # ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
     # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
-    ends = (state.gravity == 1) & (tables.gravity_rearm == 0)
+    ends = (fcm.gravity_count(state) == 1) & (tables.gravity_rearm == 0)
     field_change = (
         jnp.any(
             uses
@@ -1108,7 +1108,6 @@ def _threshold_grid(
             # Transform copies the side's ability onto the foe; Skill Swap also gives the side
             # the foe's (below). Raw writes of BattleMon.ability.
             ability = jnp.where(f & (xf | sw), copied, state.ability[party(fmt, foe), foe_mon])
-            gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
             # The copy also holds the side's species and ability row and slot, which
             # NO_CLOUD_NINE reads (damage.decomp_abilities): a foe that loses its own Cloud
             # Nine / Air Lock by its Transform no longer suppresses the weather (F-25).
@@ -1123,7 +1122,7 @@ def _threshold_grid(
                 AbilityId.INSOMNIA,
                 jnp.where(f & sw, foe_old, state.ability[party(fmt, side), side_mon]),
             )
-            hidden = fcm.with_gravity(state, gravity, f & grav)._replace(
+            hidden = fcm.with_gravity(state, GRAVITY_TURNS, f & grav)._replace(
                 embargo=state.embargo.at[side].set(embargo),
                 ability=state.ability.at[party(fmt, foe), foe_mon]
                 .set(ability.astype(state.ability.dtype))
@@ -1132,7 +1131,6 @@ def _threshold_grid(
                 species=take(state.species),
                 ability_form=take(state.ability_form),
                 ability_slot=take(state.ability_slot),
-                gravity=gravity.astype(state.gravity.dtype),
                 # Gastro Acid's bit (MOVE_EFFECT_ABILITY_SUPPRESSED), the side's own.
                 ability_suppressed=state.ability_suppressed.at[side].set(
                     jnp.where(f & ga, 1, state.ability_suppressed[side]).astype(

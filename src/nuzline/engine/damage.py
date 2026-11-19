@@ -377,7 +377,7 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
         # 3098, G-67) and for an ingrained battler (:3100-3103). Only the active battler's: a
         # party slot being read is a switch action's newcomer (the laws), which carries no Ingrain
         # (only Baton Pass keeps it).
-        rooted = ((state.ingrain[def_side] != 0) | (state.gravity != 0)) & (
+        rooted = ((state.ingrain[def_side] != 0) | fcm.gravity_on(state)) & (
             ability == AbilityId.LEVITATE
         )
         ability = jnp.where(rooted, AbilityId.NONE, ability)
@@ -552,7 +552,7 @@ def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.nd
     scrappy = battler_ability(state, atk_side) == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
     rooted = (
-        (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | (state.gravity != 0)
+        (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | fcm.gravity_on(state)
     )
     return seen | rooted.astype(_I32) * CHART_GROUNDED
 
@@ -627,7 +627,7 @@ def grounded(
     magnet = state.magnet_rise[side] != 0 if magnet is None else jnp.asarray(magnet)
     levitate = (battler_ability(state, side, slot) == AbilityId.LEVITATE) & ~ingrained
     airborne = levitate | jnp.any(state.types[party(fmt, side), slot] == Type.FLYING) | magnet
-    return (state.gravity != 0) | iron_ball(tables, state, side, slot) | ~airborne
+    return fcm.gravity_on(state) | iron_ball(tables, state, side, slot) | ~airborne
 
 
 def spikes_loss(

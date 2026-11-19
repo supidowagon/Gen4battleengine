@@ -963,7 +963,7 @@ def _use_move(
     sealed_at_move = ready & imprisoning_foe(state, side)
     # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
     # invokers' sets (G-67), the event their Gravity call variants split on.
-    gravity_at_move = ready & (state.gravity != 0)
+    gravity_at_move = ready & fcm.gravity_on(state)
     # The encored move replaced the chosen one when the action started (FightCommand above): the
     # event the takeover variants split on (enumerate.call_consistent, ruling B11-1).
     encored_at_move = ready & encored_now & (state.encore_move[side] != jnp.asarray(choice[0]))
@@ -1406,7 +1406,7 @@ def _use_move(
     # Magnet Rise (effect_script_0252.s:5-7, :16): the turns, Levitate or Ingrain (G-66).
     failed = failed | ((effect_used == EffectId.MAGNET_RISE) & magnet_rise_fails(state, side))
     # Gravity (effect_script_0215.s:3, :9-10): MOVE_STATUS_FAILED with Gravity already up (G-67).
-    failed = failed | ((effect_used == EffectId.GRAVITY) & (state.gravity != 0))
+    failed = failed | ((effect_used == EffectId.GRAVITY) & fcm.gravity_on(state))
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
@@ -3977,11 +3977,14 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
     # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the
     # counter to GRAVITY_TURNS again and runs the grounding loop (``gravity_ground``): Gravity
-    # never ends (G-67).
-    counted = _count_down(state.gravity)
-    rearm = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0) & (state.over == 0)
-    gravity = jnp.where(rearm, GRAVITY_TURNS, counted)
+    # never ends (G-67). The re-arm and its loop run where the tick takes the counter bits from 1
+    # to 0 (a borrowed counter of 7 runs 7 turns first, FCM 3.2).
+    rearm = (tables.gravity_rearm != 0) & (fcm.gravity_count(state) == 1) & (state.over == 0)
     state = fcm.gravity_tick(state, state.over == 0, tables.gravity_rearm != 0)
+    # The old field, written until FCM step 3 drops it.
+    counted = _count_down(state.gravity)
+    again = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0)
+    gravity = jnp.where(again, GRAVITY_TURNS, counted)
     state = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
     return gravity_ground(state, rearm)
 

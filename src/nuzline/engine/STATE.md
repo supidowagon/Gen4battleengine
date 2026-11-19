@@ -128,8 +128,9 @@ three structs has a row.
   (`engine.field`; reference: the same writes). Step 2, weather: every weather reader reads the
   weather bits (0-7, 15) and `weather_turns` (`engine.field` views; the reference the same), so
   a mask with several groups reads as the decomp reads it (FCM 3.2); `weather` /
-  `weather_timer` are written only, until step 3 drops them. The Gravity, Trick Room and Uproar
-  readers still read the old fields. A clean
+  `weather_timer` are written only, until step 3 drops them. Step 2, gravity: every Gravity
+  reader reads bits 12-14 (`field.gravity_on`, `field.gravity_count`); `gravity` is written
+  only. The Trick Room and Uproar readers still read the old fields. A clean
   mask equals the old fields: at most one weather group, TEMP-only with `weather_turns ==
   weather_timer` or PERM-only; bits 12-14 = `gravity`, 16-18 = `trick_room`; bit `8 + b` =
   `uproar[b] != 0`.

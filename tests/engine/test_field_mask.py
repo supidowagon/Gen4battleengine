@@ -1,8 +1,9 @@
 """FCM step 1 (FCM.md 4.4): ``field_mask`` (fieldConditionsMask) and ``weather_turns``
 (FieldConditions.weatherTurns) written beside the old field fields by every writer. On each cited
 writer path the mask is clean (4.4: it equals the old fields) and the engine equals the
-reference. Step 2, weather (4.6): the weather readers read the mask, so a corrupted mask (3.1:
-0x7F, 0x5, 0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference."""
+reference. Step 2 (4.6): the weather readers read the mask, so a corrupted mask (3.1: 0x7F, 0x5,
+0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference; the Gravity
+readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3)."""
 
 from __future__ import annotations
 
@@ -10,8 +11,8 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.data.spec import PokemonSpec
-from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.damage import weather_ball_params
+from nuzline.engine.actions import MOVE_ACTIONS, gravity_banned
+from nuzline.engine.damage import grounded, weather_ball_params
 from nuzline.engine.effects import weather_fails, weather_heal_amount
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
@@ -269,3 +270,32 @@ def test_rain_dance_fails_under_0x7f_and_hail_succeeds_under_0x3f(tables, names)
     out = assert_matches_reference(tables, s, A("Hail", "Growl", s, names), _hits())
     assert int(out.field_mask) == FieldCondition.HAILING_TEMP
     assert int(out.weather_turns) == WEATHER_TURNS - 1
+
+
+# --- FCM step 2, Gravity readers (FCM 3.2 "Gravity", 4.6) -------------------------------------
+
+
+@pytest.mark.parametrize("mask, after", [(0x7FFF, 0x6FFF), (0x5000 - 3, 0x3FFD), (0xFFF, 0x4FFF)])
+def test_gravity_readers_read_the_counter_bits(tables, names, mask, after):
+    """Any FIELD_CONDITION_GRAVITY bit (12-14) is Gravity up for every reader: the move ban
+    (Move_FailsInHighGravity, battle_lib.c:3398), a Flying type grounded (BattlerIsGrounded,
+    :5506), accuracy x10/6 (bcp.c:2972); 0xFFF (every weather and Uproar bit) has none. The
+    Gravity move fails while one is set (effect_script_0215.s:5), else ORs GRAVITY_INIT
+    (subscript_gravity_start.s:9); the turn end takes 1 << 12 (bcp.c:1229)."""
+    s = _masked(_fight(tables, names, ("Gravity", "Scratch"), foe="Pidgey"), mask, 0)
+    up = bool(mask & FieldCondition.GRAVITY)
+    assert bool(gravity_banned(s, jnp.asarray([names.move("Fly")]))[0]) is up
+    assert bool(grounded(tables, s, 1, 0)) is up  # Pidgey: Normal / Flying
+    assert int(live_hit_threshold(tables, s, 0, names.move("Scratch"))) == (166 if up else 100)
+    out = assert_matches_reference(tables, s, A("Gravity", "Growl", s, names), _hits())
+    assert int(out.field_mask) == after
+
+
+def test_a_borrowed_gravity_counter_runs_seven_turns_and_kaizo_rearms_it(tables, names):
+    """0x7000 (FCM 3.1: a borrow leaves Gravity 7): bcp.c:1229 takes 1 << 12 a turn, and at 0
+    Kaizo's sub_seq 238 ORs GRAVITY_INIT back in (G-67): Gravity never ends."""
+    t = _rearming(tables, "gravity_rearm")
+    s = _masked(_fight(t, names, ("Growl",)), 7 << 12, 0)
+    for left in (6, 5, 4, 3, 2, 1, GRAVITY_TURNS):
+        s = assert_matches_reference(t, s, A("Growl", "Growl", s, names), _hits())
+        assert int(s.field_mask) == left << 12

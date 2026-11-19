@@ -7,8 +7,9 @@ the decomp writes ``fieldConditionsMask`` (bits ``ids.FieldCondition``, include/
 battle/condition.h:110-149). Step 2 (4.4): the weather readers read the weather bits (bits 0-7,
 deep fog 15) and ``weather_turns`` through the views below (``weather_bits``, ``rain`` ..
 ``fog``, ``weather_ball_type``, ``weather_state``), each as its decomp test reads the mask, so a
-mask with several groups (FCM 3.2) reads as the game reads it; the Gravity, Uproar and Trick
-Room readers still read the old fields. On every state the engine
+mask with several groups (FCM 3.2) reads as the game reads it; the Gravity readers read bits
+12-14 (``gravity_on``, ``gravity_count``); the Uproar and Trick Room readers still read the old
+fields. On every state the engine
 reaches the mask is clean: at most one weather group, TEMP-only with ``weather_turns ==
 weather_timer`` or PERM-only; the Gravity / Trick Room bits are ``gravity`` / ``trick_room``;
 Uproar bit ``8 + b`` is ``uproar[b] != 0``. ``weather_turns`` is written only by the weather
@@ -217,6 +218,19 @@ def weather_text(seen) -> str:
     if seen < 8:
         return names[Weather(seen)]
     return " + ".join(names[w] for w in Weather if w and (seen - 8) >> (w - 1) & 1)
+
+
+def gravity_count(state: BattleState) -> jnp.ndarray:
+    """``int32``: the Gravity counter, the mask's bits 12-14 (``FIELD_CONDITION_GRAVITY``,
+    condition.h:119-121, :142-143), which bcp.c:1229 counts down."""
+    return (_mask(state) & _GRAVITY) >> FIELD_CONDITION_GRAVITY_SHIFT
+
+
+def gravity_on(state: BattleState) -> jnp.ndarray:
+    """``bool``: any ``FIELD_CONDITION_GRAVITY`` bit set, the test of every Gravity reader
+    (bcp.c:1227, :2972; battle_lib.c:2545, :2701, :2766, :3095, :3215, :3398, :5506;
+    effect_script_0215.s:5; subscript_hazards_check.s:6; trainer_ai script.s:1028, :6920)."""
+    return (_mask(state) & _GRAVITY) != 0
 
 
 def gravity_start(state: BattleState, cond) -> BattleState:

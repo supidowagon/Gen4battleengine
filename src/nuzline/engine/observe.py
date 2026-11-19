@@ -221,7 +221,10 @@ _NONZERO_SIDE = (
     # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
     "ability_suppressed",
 )
-_NONZERO_FIELD = ("trick_room", "gravity")
+# Trick Room / Gravity up: the views the observation reads (Gravity: the mask's counter bits,
+# FCM step 2).
+_FIELD_VIEWS = (("trick_room", lambda s: s.trick_room), ("gravity", fcm.gravity_count))
+_NONZERO_FIELD = tuple(name for name, _ in _FIELD_VIEWS)
 
 _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("order", ()),
@@ -346,7 +349,7 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         "perish_count": jnp.where(after.perish_song != 0, 1 + after.perish_song_turns, 0),
         # The weather the player sees (one message per set group): field.weather_seen.
         "weather": fcm.weather_seen(fcm.weather_bits(after)),
-        **{name: _nonzero(getattr(after, name)) for name in _NONZERO_FIELD},
+        **{name: _nonzero(view(after)) for name, view in _FIELD_VIEWS},
         "over": after.over,
         "winner": after.winner,
     }

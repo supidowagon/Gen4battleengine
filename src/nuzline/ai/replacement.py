@@ -56,6 +56,7 @@ from nuzline.ai.switching import (
     wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     AI_WEATHER_BALL,
     ai_weather_ball_typed,
@@ -98,7 +99,15 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
+        tables,
+        move,
+        d_types,
+        fcm.gravity_count(state),
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
     )
     immune = wonder_guard_bit(tables, state, 1, 0, move, flags) | ((flags & MAGNET_RISE) != 0)
     return jnp.where(immune, 0, score)
@@ -121,7 +130,9 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
     # Battler_HeldItemEffect(defender) (battle_lib.c:8006): the player's Iron Ball (G-56).
     d_iron = iron_ball(tables, state, 0)
     flags = jax.vmap(
-        lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k, d_iron)
+        lambda m, k: calc_effectiveness_flags(
+            tables, m, d_types, fcm.gravity_count(state), k, d_iron
+        )
     )(moves.reshape(-1), types.reshape(-1)).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)

@@ -1704,6 +1704,23 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   19 Nov). Its fog clear is one more weather writer for the field mask: it must clear the fog bit in
   `field_mask` (engine.field writers, G-4) and Defog's readers read the mask (G-6). Whichever of batch G and
   E3 batch 2 reaches main second converts it on its merge of main.
+- G-8 FCM step 2, Gravity family (FCM.md 4.4 (2), 4.7 Gravity): every Gravity reader reads the mask's bits
+  12-14 through `engine.field` (`gravity_on`: any `FIELD_CONDITION_GRAVITY` bit; `gravity_count`: the counter),
+  the reference the same (`_gravity_on`); `gravity` is written only (step 3 drops it). Readers: the move ban
+  `Move_FailsInHighGravity` (battle_lib.c:3398; selection, the status check, the invokers' calls), Levitate as
+  none (`Battler_Ability`, :3095), the chart's grounded flag (:2545, :2701, :2766), `BattlerIsGrounded` (:5506:
+  `damage.grounded`, Arena Trap's `actions.trapped`, :3215), accuracy x10/6 (bcp.c:2972), the Gravity move's fail
+  test (effect_script_0215.s:5), Magnet Rise's Levitate test, the hazards check (subscript_hazards_check.s:6),
+  the AI's chart flags (trainer_ai type-chart, `replacement.post_ko_switch_in`, `switching`) and
+  `IfFieldConditionsMask` (trainer_ai.c:1936-1946, script.s:1028, :6920); the views: the `gravity_at_move`
+  event and `enumerate.gravity_events`, `order.gravity_possible`, outcome's Future Sight `ends` (a count of 1),
+  the observation (`observe._FIELD_VIEWS`). The countdown (bcp.c:1227-1238) re-arms and runs the grounding
+  loop where the tick takes the bits from 1 to 0 (`field.gravity_tick`; Kaizo sub_seq 238, G-67), so a borrowed
+  counter of 7 (FCM 3.1) runs 7 turns and then never ends in Kaizo. `field.with_gravity` writes the bits and
+  the old field (the views `order.gravity_state`, outcome's foe Gravity; hand-built test states,
+  prerequisite commit a397bce, the snap base). Clean masks read as before (4.4). Tests:
+  `tests/engine/test_field_mask.py` (0x7FFF, 0x5000 - 3, 0xFFF readers; 0x7000 to the Kaizo re-arm; engine =
+  reference), `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_gravity_reads_the_mask`.
 
 ## Stream state (restart point, 2026-11-19)
 

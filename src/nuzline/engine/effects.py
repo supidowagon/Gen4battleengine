@@ -1863,7 +1863,7 @@ def magnet_rise_fails(state: BattleState, side) -> jnp.ndarray:
     levitate = (
         (battler_ability(state, side) == AbilityId.LEVITATE)
         & (state.ingrain[side] == 0)
-        & (state.gravity == 0)
+        & ~fcm.gravity_on(state)
     )
     return (state.magnet_rise_turns[side] != 0) | levitate | (state.ingrain[side] != 0)
 
@@ -1897,7 +1897,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Gravity (effect_script_0215.s, the indirect subscript_gravity_start.s): the field
     condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
     the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
-    cond = (h.effect == _E.GRAVITY) & h.landed & (state.gravity == 0)
+    cond = (h.effect == _E.GRAVITY) & h.landed & ~fcm.gravity_on(state)
     state = fcm.gravity_start(state, cond)
     state = state._replace(
         gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)

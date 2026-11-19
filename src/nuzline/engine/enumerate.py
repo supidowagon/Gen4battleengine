@@ -3792,7 +3792,7 @@ def gravity_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[B]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
     of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
     invoker call (G-67)."""
-    return (jnp.asarray(events["gravity_at_move"]) != 0) & (state.gravity == 0)
+    return (jnp.asarray(events["gravity_at_move"]) != 0) & ~fcm.gravity_on(state)
 
 
 def taken_events(state: BattleState, events) -> jnp.ndarray:

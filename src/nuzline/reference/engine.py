@@ -500,10 +500,15 @@ def _gravity_ground(s: RefState) -> None:
             _unlock(sd)
 
 
+def _gravity_on(s: RefState) -> bool:
+    """Any FIELD_CONDITION_GRAVITY bit (bits 12-14, ``engine.field.gravity_on``)."""
+    return bool(s.field_mask & FieldCondition.GRAVITY)
+
+
 def _gravity_banned(s: RefState, move: int) -> bool:
     """``Move_FailsInHighGravity`` (lib.c:3394-3407): Gravity is up and ``move`` is one of
     ``GRAVITY_MOVES`` (G-67)."""
-    return bool(s.gravity) and move in GRAVITY_MOVES
+    return _gravity_on(s) and move in GRAVITY_MOVES
 
 
 def _me_first_copy(tables, s: RefState, target: int, pick: int, fights: bool) -> int:
@@ -902,7 +907,9 @@ def _identified(tables, s: RefState, attacker: int, defender: int) -> int:
         or _ability(s, _active(s, attacker)) == AbilityId.SCRAPPY
     )
     rooted = (
-        s.battlers[defender].ingrain or _iron_ball(tables, s, _active(s, defender)) or s.gravity
+        s.battlers[defender].ingrain
+        or _iron_ball(tables, s, _active(s, defender))
+        or _gravity_on(s)
     )
     return int(seen) | (2 if rooted else 0)
 
@@ -1129,7 +1136,7 @@ def _ignorable(s: RefState, attacker: int, defender: int) -> int:
     ability = _ability(s, _active(s, defender))
     # Battler_Ability (lib.c:3095-3103): Levitate is ABILITY_NONE under Gravity and for an
     # ingrained battler (G-67).
-    if (s.battlers[defender].ingrain or s.gravity) and ability == AbilityId.LEVITATE:
+    if (s.battlers[defender].ingrain or _gravity_on(s)) and ability == AbilityId.LEVITATE:
         return AbilityId.NONE
     return ability
 
@@ -2731,7 +2738,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
     # :11 the mask bit of Magnet Rise keeps it off the ground too (a Baton Pass newcomer, G-66).
     airborne = levitate or Type.FLYING in mon.types or bool(sd.magnet_rise)
     # :7 an Iron Ball grounds it too (CheckItemHoldEffect), G-56.
-    if s.gravity or _iron_ball(tables, s, mon) or not airborne:
+    if _gravity_on(s) or _iron_ball(tables, s, mon) or not airborne:
         if sd_sc.toxic_spikes:
             if Type.POISON in mon.types:
                 sd_sc.toxic_spikes = 0
@@ -3748,7 +3755,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.AQUA_RING and landed and not s.battlers[side].aqua_ring:
         # effect_script_0251.s: fails when the user already has it.
         s.battlers[side].aqua_ring = 1
-    elif effect == EffectId.GRAVITY and landed and not s.gravity:
+    elif effect == EffectId.GRAVITY and landed and not _gravity_on(s):
         # effect_script_0215.s (the failure is ``_script_fails``), subscript_gravity_start.s:9.
         s.gravity = GRAVITY_TURNS
         s.field_mask |= FieldCondition.GRAVITY_INIT
@@ -4934,7 +4941,7 @@ def _hit_rate(
     micle = s.battlers[attacker].micle if micle is None else micle
     if micle:  # :2967-2970, the Micle Berry's flag (G-59)
         rate = rate * 120 // 100
-    if s.gravity:  # FIELD_CONDITION_GRAVITY, :2972
+    if _gravity_on(s):  # FIELD_CONDITION_GRAVITY, :2972
         rate = rate * 10 // 6
     no_guard = AbilityId.NO_GUARD in (_ability(s, atk), _ability(s, _active(s, defender)))
     # MON_IS_LOCKED_ONTO beside No Guard (bcp.c:3016-3018; TryOHKOMove, script.c:4343-4361).
@@ -6416,11 +6423,11 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
         s.field_mask -= 1 << FIELD_CONDITION_GRAVITY_SHIFT  # :1229
         if not s.field_mask & FieldCondition.GRAVITY and _t(turn.tables, "gravity_rearm"):
             s.field_mask |= FieldCondition.GRAVITY_INIT
-    if s.gravity:
+            _gravity_ground(s)
+    if s.gravity:  # the old field, written until FCM step 3 drops it
         s.gravity -= 1
         if not s.gravity and _t(turn.tables, "gravity_rearm"):
             s.gravity = GRAVITY_TURNS
-            _gravity_ground(s)
 
 
 def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -6945,11 +6952,13 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         shared = any(m in _active(s, b).moves for b in range(_fmt(s).B) if b != side for m in own)
         return bool(sd.imprison) or not shared
     if effect == EffectId.GRAVITY:  # effect_script_0215.s:3, :9-10 (G-67)
-        return bool(s.gravity)
+        return _gravity_on(s)
     if effect == EffectId.MAGNET_RISE:  # effect_script_0252.s:5-7 (G-66)
         # Battler_Ability reads Levitate as none for an ingrained holder and under Gravity.
         levitate = (
-            _ability(s, _active(s, side)) == AbilityId.LEVITATE and not sd.ingrain and not s.gravity
+            _ability(s, _active(s, side)) == AbilityId.LEVITATE
+            and not sd.ingrain
+            and not _gravity_on(s)
         )
         return bool(sd.magnet_rise_turns) or levitate or bool(sd.ingrain)
     flags = {
@@ -7081,7 +7090,7 @@ def _trapped(tables, s: RefState, b: int) -> bool:
             and Type.FLYING not in mon.types
         )
         or _iron_ball(tables, s, mon)
-        or bool(s.gravity)
+        or _gravity_on(s)
     )
     if sd.trapped or sd.mean_look or sd.ingrain:
         return True
