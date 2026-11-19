@@ -13,7 +13,7 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
-from nuzline.engine.coverage import start_gravity
+from nuzline.engine.coverage import start_gravity, start_trick_room
 from nuzline.engine.state import BattleState
 from nuzline.prep.problem import PrepProblem
 from nuzline.prep.states import make_states
@@ -179,6 +179,7 @@ def _member_changes(
             problem.start_condition,
             problem.trainer.items,
             gravity=start_gravity(problem.trainer),
+            trick_room=start_trick_room(problem.trainer),
         )
         out.extend(
             dataclasses.replace(member, hp=top)
@@ -249,6 +250,7 @@ def setup_states(tables: Tables, problem: PrepProblem, setups: Sequence[Setup]) 
         protected=[protected_slots(problem, s) for s in setups],
         terrain=problem.trainer.terrain,
         gravity=start_gravity(problem.trainer),
+        trick_room=start_trick_room(problem.trainer),
         chatot_cry=problem.chatot_cry,
     )
 

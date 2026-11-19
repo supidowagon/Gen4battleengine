@@ -25,7 +25,7 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 from tools.build_tables import _move_flags
 from tools.effect_map import KAIZO_THUNDER_EFFECTS, THUNDER_EFFECT
 
@@ -327,7 +327,6 @@ def test_vital_spirit_blocks_yawn(tables, names):
     out = assert_matches_reference(tables, s, A("Leer", "Yawn", s, names), O)
     assert int(out.yawn[0]) == 0
     # Yawn reads the decomp ability (effects.yawn_blocks): Mankey's other slot, Anger Point.
-    bare = _ability(s, 0, 0, AbilityId.NONE)
-    bare = bare._replace(ability_slot=bare.ability_slot.at[0, 0].set(1))
+    bare = as_species(tables, s, 0, 0, int(s.species[0, 0]), 1)
     out = assert_matches_reference(tables, bare, A("Leer", "Yawn", bare, names), O)
     assert int(out.yawn[0]) != 0

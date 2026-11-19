@@ -270,8 +270,11 @@ class EffectId(IntEnum):
     # E2 batch 9 (B9-5). Follow Me (effect_script_0172.s): BtlCmd_FollowMe sets the user side's
     # followMe and followMeUser (battle_script.c:6261-6270), which BattleSystem_Defender
     # (battle_lib.c:1714-1717), the redirection abilities (:1743) and Counter (battle_script.c:
-    # 4628) read for the foe's moves: in singles they name the side's one battler, the target
-    # anyway, so the move only shows its message. Helping Hand (effect_script_0176.s):
+    # 4628) read for the foe's moves; the one per-side field is ``BattleState.ts_follow_me``
+    # (1 + followMeUser) and its reader ``targets.follow_me_target`` (D2-11): the single-target
+    # branch of BattleSystem_Defender at any B, the random-opponent branch at B = 4, the
+    # redirection abilities, Counter, Mirror Coat, Metal Burst and Magic Coat. In singles the
+    # user is the target anyway, so the move only shows its message. Helping Hand (effect_script_0176.s):
     # BtlCmd_TryHelpingHand (:6291-6314) needs a double battle and a partner; in singles it jumps
     # to MOVE_STATUS_FAILED (:6309-6311, effect_script_0176.s:15-17).
     FOLLOW_ME = 77
@@ -495,6 +498,44 @@ class EffectId(IntEnum):
     # indirect ``subscript_chatter.s``: ``CheckChatterActivation`` (battle_script.c:8397-8436) then
     # subscript_confuse.s (``effects._chatter``, G-70).
     CHATTER = 121
+    # E3 batch 1. Splash (85, BATTLE_EFFECT_DO_NOTHING; Kaizo's Thief carries the effect at power 40):
+    # zeros. effect_script_0085.s:5 sets only MOVE_STATUS_SPLASH: no CalcCrit, no CalcDamage, so
+    # ``battleCtx->damage`` stays 0 (battle_lib.c:1974-1976) while the accuracy, Protect and type
+    # chart steps run as for any move with power (battle_controller_player.c:2350-2370); no HP
+    # change (UpdateHP skips damage 0, :3347) (``damage.fixed_damage``, E3-1-1).
+    DO_NOTHING = 122
+    # Teleport (153, BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE): zeros. effect_script_0153.s:5, :9-10: in a
+    # trainer battle MOVE_STATUS_FAILED (``step._use_move``, E3-1-4); the wild-only flee is not
+    # modelled (every Nuzline battle is a trainer battle).
+    FLEE = 123
+    # E3 batch 1 round 2. Torment (165, BATTLE_EFFECT_TORMENT): zeros. effect_script_0165.s:5 runs
+    # subscript_torment_start.s: VOLATILE_CONDITION_TORMENT on the defender, through a Substitute,
+    # unless it has the bit already or the move missed (``effects._torment``, E3-2-1).
+    TORMENT = 124
+    # Worry Seed (247, BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA): zeros. effect_script_0247.s:5 runs
+    # subscript_give_target_insomnia.s: the defender's ``BattleMon.ability`` becomes Insomnia
+    # unless the move missed, the defender is semi-invulnerable, behind a Substitute, or holds
+    # Truant, Multitype or a Griseous Orb (``effects._worry_seed``, E3-2-2).
+    WORRY_SEED = 125
+    # Me First (241, BATTLE_EFFECT_USE_MOVE_FIRST): zeros. effect_script_0241.s: BtlCmd_TryMeFirst
+    # (battle_script.c:7286-7312) then GoToMoveScript: an invoker (``order.CALL_ME_FIRST``) of its
+    # target's chosen move, x1.5 on its user's later CalcDamage (``damage.me_first_boost``), E3-2-3.
+    ME_FIRST = 126
+    # Trick Room (259, BATTLE_EFFECT_TRICK_ROOM): zeros. effect_script_0259.s:5-12: with any
+    # FIELD_CONDITION_TRICK_ROOM bit up it clears them, else sets FIELD_CONDITION_TRICK_ROOM_INIT
+    # (``effects._trick_room``, E3-2-4); it never fails.
+    TRICK_ROOM = 127
+    # Skill Swap (191, BATTLE_EFFECT_SWITCH_ABILITIES): zeros. effect_script_0191.s:5 runs
+    # subscript_exchange_abilities.s: the user's and the defender's ``BattleMon.ability`` swap and
+    # both ``truant`` become ``totalTurns & 1``, unless the move missed or the defender is
+    # semi-invulnerable, either has Wonder Guard or Multitype or holds a Griseous Orb, or both
+    # have no ability (``effects._skill_swap``, E3-2-5). No Substitute test.
+    SKILL_SWAP = 128
+    # Gastro Acid (239, BATTLE_EFFECT_SUPRESS_ABILITY): zeros. effect_script_0239.s:5 runs
+    # subscript_suppress_target_ability.s: MOVE_EFFECT_ABILITY_SUPPRESSED on the defender unless
+    # it is behind a Substitute, already has the bit, the move missed, the defender is
+    # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
+    GASTRO_ACID = 129
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -502,6 +543,10 @@ MAGNET_RISE_TURNS = 5
 # FIELD_CONDITION_GRAVITY_INIT (condition.h:143): Gravity's turns, set by subscript_gravity_start.s:9
 # (and, in Kaizo, again at 0 by subscript_gravity_end, sub_seq 238: ``Tables.gravity_rearm``).
 GRAVITY_TURNS = 5
+# FIELD_CONDITION_TRICK_ROOM_INIT (condition.h:145): bits 16 and 18 of the 3-bit counter = 5, set
+# by effect_script_0259.s:6 and subscript_overworld_trick_room.s:14, counted down by
+# SIDE_COND_CHECK_STATE_TRICK_ROOM (battle_controller_player.c:1822-1830; ``step._trick_room_check``).
+TRICK_ROOM_TURNS = 5
 # The effects whose script sets only ``MOVE_SIDE_EFFECT_ON_HIT`` in its indirect flags and rolls
 # nothing through ``effectChance``: BattleSystem_TriggerSecondaryEffect's ON_HIT branch
 # (battle_lib.c:1524-1529) runs the subscript with no ``RandNext() % 100 < effectChance`` (only
@@ -557,6 +602,7 @@ UNROLLED_EFFECTS = (
     EffectId.COUNTER,
     EffectId.FUTURE_SIGHT,
     EffectId.ENDEAVOR,  # effect_script_0189.s: the HP difference (B10-5)
+    EffectId.DO_NOTHING,  # effect_script_0085.s:5: no CalcCrit, no CalcDamage (E3-1-1)
 )
 # BtlCmd_TryFutureSight (battle_script.c:6074): futureSightTurns = 3.
 FUTURE_SIGHT_TURNS = 3
@@ -607,8 +653,9 @@ class AbilityId(IntEnum):
     # (outcome.secondary_chance): Serene Grace; effects.py: Shield Dust, Dry Skin's Water
     # absorb (step._use_move); step.py: Truant, the weather abilities' turn-end HP (Dry Skin,
     # Solar Power); hooks.on_switch_in: Trace, Drought, Drizzle, Sand Stream, Snow Warning.
-    # Lightningrod (BattleSystem_TriggerRedirectionAbilities, battle_lib.c:1756-1772) only
-    # redirects to a battler other than the defender, which singles never has; Honey Gather
+    # Lightningrod and Storm Drain (BattleSystem_CheckRedirectionAbilities, battle_lib.c:1732-1790;
+    # message by ..._TriggerRedirectionAbilities, :1792-1817) only redirect to a battler other
+    # than the defender, which singles never has (engine/targets.redirect); Honey Gather
     # acts only after the battle (battle_script.c:7825).
     RECKLESS = 33
     TECHNICIAN = 34
@@ -708,20 +755,22 @@ class AbilityId(IntEnum):
     # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
     PLUS = 88
     MINUS = 89
+    # D2-12: redirection only (battle_lib.c:1771-1789; engine/targets.redirect).
+    STORM_DRAIN = 90
     # E1 batch F, ruling F-1: Heatproof (BattleSystem_CalcMoveDamage, battle_lib.c:6841-6844;
     # subscript_burn_damage.s:8-9; damage._pre_random, step._burn_check).
-    HEATPROOF = 90
+    HEATPROOF = 91
     # F-2: Flash Fire (BattleSystem_TriggerImmunityAbility, battle_lib.c:3515-3521; step._use_move
     # beside Dry Skin; the flag boost in damage._pre_random, :7074-7076).
-    FLASH_FIRE = 91
+    FLASH_FIRE = 92
     # F-3: Multitype (Battler_MonType, battle_lib.c:7629-7699): Arceus' types are its raw held
     # plate's (``damage.multitype_plate``); the failure tests of the moves it protects against
     # read the decomp id (``ABILITY_MULTITYPE``).
-    MULTITYPE = 92
+    MULTITYPE = 93
     # F-5: Hydration (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:5626-5639; ``step._weather_effect``).
-    HYDRATION = 93
+    HYDRATION = 94
     # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
-    FORECAST = 94
+    FORECAST = 95
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -767,6 +816,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.TRUANT: 54,
     AbilityId.DRY_SKIN: 87,
     AbilityId.LIGHTNINGROD: 31,
+    AbilityId.STORM_DRAIN: 114,  # generated/abilities.txt:115
     AbilityId.NO_GUARD: 99,
     AbilityId.SERENE_GRACE: 32,
     AbilityId.DROUGHT: 70,
@@ -1412,9 +1462,17 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# D2-12: the moves ``CalcMoveType`` keys on (generated/moves.txt line N is id N - 1).
+MOVE_HIDDEN_POWER = 237
+MOVE_WEATHER_BALL = 311
+MOVE_NATURAL_GIFT = 363
+MOVE_JUDGMENT = 449
 # Snore and Sleep Talk (``generated/moves.txt`` lines 174, 215): the sleep check lets a sleeping
 # battler use them (bcp.c:2455).
 MOVE_SNORE = 173
+# Curse (``generated/moves.txt`` line 175): a non-Ghost user's range is RANGE_USER at selection
+# (bcp.c:4344-4349).
+MOVE_CURSE = 174
 MOVE_SLEEP_TALK = 214
 # BtlCmd_Metronome (battle_script.c:4540): ``RandNext() % NUM_VALID_MOVES + 1`` with
 # NUM_VALID_MOVES = MAX_MOVES - 1 (include/constants/moves.h:12; MAX_MOVES 468,
@@ -1444,6 +1502,11 @@ MOVE_KNOCK_OFF = 282
 # (MOVE_DATA(move).effect, :7225) with the last move's: Transform, Mimic, Sketch, Mirror Move,
 # Encore, Struggle (generated/moves.txt), B10-9.
 CANNOT_ENCORE_MOVES = (144, 102, 166, 119, 227, 165)
+# ``sCannotMeFirstMoves`` (battle_lib.c:7233-7240): Counter, Mirror Coat, Thief, Covet, Focus Punch,
+# Chatter. ``Move_MeFirstCanCopy`` (:7242-7252) compares their battle EFFECTS with the move's
+# (``tables.move_ai_effect``), so a move sharing any of them is refused: in Kaizo Covet's slot
+# (343) has effect 0, so every plain hit is (E3-2-3).
+ME_FIRST_BANNED_MOVES = (68, 243, 168, 343, 264, 448)
 # Move_IsInvoker (battle_lib.c:3032-3045): MOVE_NONE, Sleep Talk, Copycat, Assist, Me First,
 # Mirror Move, Metronome (generated/moves.txt), B10-11.
 INVOKER_MOVES = (0, 214, 383, 274, 382, 119, 118)
@@ -1485,6 +1548,12 @@ MOVE_CHATTER = 448
 CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
 MIMIC_PP_CAP = 5
+# Trace fires per slot in one step (D2-5, D2-16): its turn-start occupant's armed Trace, then at most
+# one per action of the step's four: its own (an entry, or a Skill Swap that hands it Trace, which
+# acts at the move's end, ``hooks.move_end_switch_in``) and each other battler's (a Roar /
+# Whirlwind drag, or a Skill Swap with it); the width of ``Outcome.trace_pick`` and the bound of
+# ``BattleState.ts_trace_fires``.
+TRACE_FIRES = 5
 # sMovesAffectedByGravity (battle_lib.c:3385-3392; generated/moves.txt lines 20, 341, 27, 137, 151,
 # 394): Fly, Bounce, Jump Kick, Hi Jump Kick, Splash, Magnet Rise. ``Move_FailsInHighGravity``
 # (:3394-3407) bans them at selection (CHECK_INVALID_GRAVITY, :2292), at the status check

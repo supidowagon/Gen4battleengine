@@ -34,7 +34,13 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import ACT_GRAVITY, replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_damage_table, ref_replace
-from tests.engine.helpers import A, assert_matches_reference, drop_programs, roark_state
+from tests.engine.helpers import (
+    A,
+    as_species,
+    assert_matches_reference,
+    drop_programs,
+    roark_state,
+)
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
 
@@ -929,11 +935,19 @@ def test_transform_passes_a_substitute_and_protect_does_not_stop_it(tables, name
 def test_transform_runs_the_copied_abilitys_switch_in_checks(tables, names):
     """Intimidate copied: the foe's Attack drops right after the move; Drizzle copied: rain."""
     s = _ditto(tables, names)
-    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.INTIMIDATE))
+    # The foe's own Intimidate is part of the setup, announced at its entry (E3-2-5: the move-end
+    # switch-in pass acts for a battler whose flag is clear).
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.INTIMIDATE),
+        intimidate_announced=s.intimidate_announced.at[1].set(1),
+    )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
     assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
     s = _ditto(tables, names)
-    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.DRIZZLE))
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.DRIZZLE),
+        weather_announced=s.weather_announced.at[1].set(1),
+    )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
     assert int(out.weather) == Weather.RAIN
 
@@ -994,12 +1008,11 @@ def test_transform_exp_payout_reads_the_copied_species_of_a_transformed_foe(tabl
         [_mon(n, "Ditto", ["Transform"], 30), _mon(n, "Geodude", ["Tackle"], 12)],
     )
     bonsly = n.species("Bonsly")
-    copy = s._replace(
-        species=s.species.at[1, 0].set(bonsly),
+    copy = as_species(tables, s, 1, 0, bonsly)._replace(
         transformed=s.transformed.at[1].set(1),
         shadow_species=s.shadow_species.at[1].set(n.species("Ditto")),
     )
-    plain = s._replace(species=s.species.at[1, 0].set(bonsly))
+    plain = as_species(tables, s, 1, 0, bonsly)
     assert int(_ko(tables, copy).exp[0]) == int(_ko(tables, plain).exp[0])
     assert int(_ko(tables, copy).exp[0]) != int(_ko(tables, s).exp[0])
 
@@ -1014,8 +1027,7 @@ def test_a_level_up_while_transformed_gives_its_own_stats(tables, names):
         [_mon(n, "Bonsly", ["Tackle"], 15)],
     )
     s = _with(s, exp={0: int(s.exp[0])})
-    t = s._replace(
-        species=s.species.at[0, 0].set(n.species("Geodude")),
+    t = as_species(tables, s, 0, 0, n.species("Geodude"))._replace(
         stats=s.stats.at[0, 0].set(s.stats[0, 1]),
         transformed=s.transformed.at[0].set(1),
         shadow_species=s.shadow_species.at[0].set(n.species("Ditto")),
@@ -1064,7 +1076,7 @@ def test_a_transformed_player_is_guessed_from_the_copied_species(tables, names):
     shinx, geodude = n.species("Shinx"), n.species("Geodude")
     two = [int(a) for a in base[shinx] if a]
     assert len(two) == 2
-    copy = s._replace(species=s.species.at[0, 0].set(shinx))
+    copy = as_species(tables, s, 0, 0, shinx)
     for guess in (0, 1):  # unknown: the coin picks one of the copied species' two abilities
         assert int(defender_ability(tables, copy, guess)) == two[guess]
     revealed = copy._replace(ai_ability_known=copy.ai_ability_known.at[0].set(two[0]))

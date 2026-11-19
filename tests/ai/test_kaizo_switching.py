@@ -57,6 +57,7 @@ from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import move_type_of
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
 from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
+from tests.engine.helpers import as_species
 
 K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).
@@ -405,12 +406,10 @@ def _switch_states(draw, t, n, party):
     # the drawn ones: only its ability matters here).
     shedinja = n.species("Shedinja")
     if draw(st.integers(0, 3)) == 0:
-        s = s._replace(species=s.species.at[0, 0].set(shedinja))
-        s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+        s = as_species(t, s, 0, 0, shedinja)
     if draw(st.integers(0, 3)) == 0:
         j = draw(st.sampled_from(bench))
-        s = s._replace(species=s.species.at[1, j].set(shedinja))
-        s = s._replace(ability_slot=s.ability_slot.at[1, j].set(0), form=s.form.at[1, j].set(0))
+        s = as_species(t, s, 1, j, shedinja)
     return s._replace(
         hp=hp,
         move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
@@ -490,8 +489,7 @@ def test_wonder_guard_layout_matches_loose(kaizo_tables, kaizo_names, kaizo_roar
     moves each), before the passes; exact against loose."""
     t, n = kaizo_tables, kaizo_names
     s = _small_six_bench(t, n, kaizo_roark_party, alive)
-    s = s._replace(species=s.species.at[0, 0].set(n.species("Shedinja")))
-    s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    s = as_species(t, s, 0, 0, n.species("Shedinja"))
     reads = _loose_reads(t, s)
     assert [p for p, _ in reads[: 4 * alive]] == [P_GUARD] * (4 * alive)
     sites = switch_sites(t, s, KAIZO.switch_sites).tolist()

@@ -539,6 +539,23 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     232: ("BATTLE_EFFECT_PREVENT_ITEM_USE", _E.EMBARGO, (0, 0, 0)),
     # Judgment: effect_script_0268.s, the held plate's type (B13-12).
     268: ("BATTLE_EFFECT_JUDGEMENT", _E.JUDGMENT, (0, 0, 0)),
+    # Splash (Kaizo: Thief, power 40): effect_script_0085.s:5 sets MOVE_STATUS_SPLASH only: no
+    # CalcCrit, no CalcDamage (E3-1-1).
+    85: ("BATTLE_EFFECT_DO_NOTHING", _E.DO_NOTHING, (0, 0, 0)),
+    # Teleport: effect_script_0153.s:5, :9-10, MOVE_STATUS_FAILED in a trainer battle (E3-1-4).
+    153: ("BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE", _E.FLEE, (0, 0, 0)),
+    # Torment: effect_script_0165.s:5 -> subscript_torment_start.s (E3-2-1).
+    165: ("BATTLE_EFFECT_TORMENT", _E.TORMENT, (0, 0, 0)),
+    # Worry Seed: effect_script_0247.s:5 -> subscript_give_target_insomnia.s (E3-2-2).
+    247: ("BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA", _E.WORRY_SEED, (0, 0, 0)),
+    # Me First: effect_script_0241.s -> BtlCmd_TryMeFirst, then GoToMoveScript (E3-2-3).
+    241: ("BATTLE_EFFECT_USE_MOVE_FIRST", _E.ME_FIRST, (0, 0, 0)),
+    # Trick Room: effect_script_0259.s:5-12 toggles FIELD_CONDITION_TRICK_ROOM (E3-2-4).
+    259: ("BATTLE_EFFECT_TRICK_ROOM", _E.TRICK_ROOM, (0, 0, 0)),
+    # Skill Swap: effect_script_0191.s:5 -> subscript_exchange_abilities.s (E3-2-5).
+    191: ("BATTLE_EFFECT_SWITCH_ABILITIES", _E.SKILL_SWAP, (0, 0, 0)),
+    # Gastro Acid: effect_script_0239.s:5 -> subscript_suppress_target_ability.s (E3-2-6).
+    239: ("BATTLE_EFFECT_SUPRESS_ABILITY", _E.GASTRO_ACID, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -711,6 +728,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Truant": AbilityId.TRUANT,
     "Dry Skin": AbilityId.DRY_SKIN,
     "Lightningrod": AbilityId.LIGHTNINGROD,
+    "Storm Drain": AbilityId.STORM_DRAIN,
     "No Guard": AbilityId.NO_GUARD,
     "Serene Grace": AbilityId.SERENE_GRACE,
     "Drought": AbilityId.DROUGHT,

@@ -33,7 +33,7 @@ from nuzline.engine.outcome import CRIT_ODDS_EFFECTS, crit_variants, empty_outco
 from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 from tests.engine.test_e1_batch_e import _bag, _use_both
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _state
@@ -195,11 +195,8 @@ def _transform_into(tables, names, *, plate, foe_types=None):
     """Monferno (holding ``plate``) Transforms into a Multitype Arceus."""
     s = _state(tables, names, mine=["Transform"])
     s = _ability(s, 0, AbilityId.NONE)
-    s = s._replace(
-        species=s.species.at[1, 0].set(names.species("Arceus")),
-        ability=s.ability.at[1, 0].set(AbilityId.MULTITYPE),
-        item=s.item.at[0, 0].set(names.item(plate) if plate else 0),
-    )
+    s = as_species(tables, s, 1, 0, names.species("Arceus"))  # Multitype, its slot 0
+    s = s._replace(item=s.item.at[0, 0].set(names.item(plate) if plate else 0))
     if foe_types is not None:
         s = s._replace(types=s.types.at[1, 0].set(jnp.asarray(foe_types, s.types.dtype)))
     return assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), O)
@@ -269,11 +266,8 @@ def _become(tables, names, s, side, species, ability_slot=0):
     (the decomp ability is read from the species table, ``damage.decomp_abilities``)."""
     row = int(tables.species_form_row[names.species(species), 0])
     slot = int(s.active[side])
+    s = as_species(tables, s, side, slot, names.species(species), ability_slot)
     return s._replace(
-        species=s.species.at[side, slot].set(names.species(species)),
-        ability_slot=s.ability_slot.at[side, slot].set(ability_slot),
-        ability_form=s.ability_form.at[side, slot].set(0),
-        ability=s.ability.at[side, slot].set(int(tables.species_abilities[row, ability_slot])),
         types=s.types.at[side, slot].set(jnp.asarray(tables.species_types[row], s.types.dtype)),
     )
 

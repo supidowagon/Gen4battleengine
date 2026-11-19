@@ -248,7 +248,7 @@ green through the re-index. A recorded doubles fight becomes a golden trace, as 
    Example: `step.py:1089-1091` derive both from `position == 1`; new readers (Payback, Avalanche,
    Sucker Punch) should take the fact for their target as an input.
 6. **Read a move's range through the shared helpers only.** New effects use `targets_user`,
-   `self_defender`, `defender_always` (`effects.py:563-617`), never their own range test, so the
+   `self_defender`, `defender_always` (`effects.py:812-948`), never their own range test, so the
    milestone replaces one resolver. New chance fields are indexed by the acting battler like the
    existing `[2]` fields, never a scalar meaning "player versus opponent" like `speed_tie`
    (`outcome.py:63`).

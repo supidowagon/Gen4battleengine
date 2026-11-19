@@ -239,7 +239,7 @@ def _crit_inputs(state, side: int) -> tuple[int, ...]:
     """What BattleSystem_CalcCriticalMulti reads of ``side``'s battler (battle_lib.c:7105-7132):
     its Focus Energy, held item (Battler_HeldItem, :7117: ``state.held_item``, B13-29), species
     and ability."""
-    from nuzline.engine.state import held_item
+    from nuzline.engine.state import battler_ability, held_item
 
     mon = int(state.active[side])
     return (
@@ -247,6 +247,9 @@ def _crit_inputs(state, side: int) -> tuple[int, ...]:
         int(held_item(state, side)),
         int(state.species[side, mon]),
         int(state.ability[side, mon]),
+        # Battler_Ability (E3-2-6): Gastro Acid's bit changes the ability the held-item (Klutz) and
+        # armor reads see, not the raw ability CalcCrit's Super Luck reads.
+        int(battler_ability(state, side)),
     )
 
 

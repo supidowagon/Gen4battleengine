@@ -109,6 +109,18 @@ Encodings:
   whole MoveEffectsData after it, :2100-2104, Baton Pass included): ``hooks.battle_start`` sets
   it for every lead holding an item, whatever its ability (a lead that gains Unburden later
   keeps it). Nothing clears it but a switch (a volatile).
+* ``trace_announced``, ``weather_announced``, ``intimidate_announced`` and ``download_announced``
+  (E3-2-5, Skill Swap) are the active battler's ``BattleMon.traceAnnounced``,
+  ``weatherAbilityAnnounced``, ``intimidateAnnounced`` and ``downloadAnnounced``:
+  ``BattleSystem_InitBattleMon`` clears them (battle_lib.c:103-106), so a switch does (a volatile;
+  Baton Pass included); Transform clears them (battle_script.c:5350-5362); the switch-in state
+  of each ability sets its flag where it acts on a living holder (:3726-3733, :3748-3786,
+  :3799-3803, :3822-3836: ``hooks.trace``, ``weather_ability``, ``intimidate``, ``download``),
+  whatever the effect on the field. ``hooks.move_end_switch_in`` (MoveEnd's
+  ``BattleSystem_TriggerEffectOnSwitch``, battle_controller_player.c:3973) acts for a battler
+  whose flag is still clear, i.e. one that gained the ability mid-battle (Skill Swap). Anticipation,
+  Forewarn and Slow Start have no ability id in the engine (coverage refuses their holders), so
+  they have no flag.
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
 * ``recycle_item`` is ``BattleContext.recycleItem[battler]`` (battle_context.h:307; E2 batch 13,
   B13-19): ``BtlCmd_RemoveItem`` writes the item it removes (battle_script.c:8977; every
@@ -238,6 +250,14 @@ Encodings:
   left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
   ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
   from ``Outcome.starf[:, 0]``); else 0.
+* E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
+  ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
+  mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
+  ``battler_ability`` is ``Battler_Ability`` (battle_lib.c:3088-3093) in the ``ability``
+  encoding and ``damage.battler_decomp_ability`` the same in decomp ids: every read the decomp
+  makes through ``Battler_Ability``, ``Battler_IgnorableAbility``, ``BattleSystem_CountAbility``
+  or ``BtlCmd_CheckAbility`` goes through one of them; a raw ``BattleMon.ability`` read stays on
+  ``ability`` with a comment naming its decomp line.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -245,7 +265,7 @@ Encodings:
   inside one action and its flag clears at the switch, battle_script.c:2511, or the faint,
   battle_lib.c:2222), else 0. While it is set, the ``ts_*`` fields hold the turn's scratch
   (``BattleContext``: the order and its counter, the picks of command selection, the turn flags
-  later actors read, the paused action's own inputs, and the search's ``powerMul`` reads), which
+  later actors read (Follow Me, ``ts_follow_me``, included), the paused action's own inputs, and the search's ``powerMul`` reads), which
   ``step`` resumes from (``step.step``'s docstring); otherwise every ``ts_*`` is 0, so states
   between turns merge. ``qc_roll`` is 0 at a pause: the order read it, and the next read is the
   next turn's, from the resumed half's draw.
@@ -264,7 +284,14 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
 from nuzline.engine.format import SINGLES, Format, format_of, party, side_of
-from nuzline.engine.ids import CHATTER_CHANCES, GRAVITY_TURNS, AbilityId, Stat, Weather
+from nuzline.engine.ids import (
+    CHATTER_CHANCES,
+    GRAVITY_TURNS,
+    TRICK_ROOM_TURNS,
+    AbilityId,
+    Stat,
+    Weather,
+)
 from nuzline.engine.stats import calc_stats
 
 SIDES, SLOTS, MOVES = 2, 6, 4
@@ -319,6 +346,11 @@ class BattleState(NamedTuple):
     leech_seed: jnp.ndarray  # int8
     substitute_hp: jnp.ndarray  # int16
     taunt: jnp.ndarray  # int8, turns left
+    torment: jnp.ndarray  # int8, VOLATILE_CONDITION_TORMENT (bit 31; no turn count), E3-2-1
+    # int8 / int16, MoveEffectsData.meFirst and meFirstTurnNumber (the turn order of the Me First,
+    # battle_script.c:7303-7304; E3-2-3), per battler, zeroed with the volatiles
+    me_first: jnp.ndarray
+    me_first_turn: jnp.ndarray
     trapped: jnp.ndarray  # int8, turns left
     trap_move: jnp.ndarray  # int16
     flinched: jnp.ndarray  # int8
@@ -361,6 +393,14 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    # int8[B], BattleMon's per-battler announced flags (battle_lib.c:103-108: cleared at
+    # InitBattleMon, so ``VOLATILE_FIELDS``; set where the switch-in state acts, :3726-3851):
+    # ``traceAnnounced``, ``weatherAbilityAnnounced``, ``intimidateAnnounced``,
+    # ``downloadAnnounced``. Read by ``hooks.move_end_switch_in`` (E3-2-5, Skill Swap).
+    trace_announced: jnp.ndarray
+    weather_announced: jnp.ndarray
+    intimidate_announced: jnp.ndarray
+    download_announced: jnp.ndarray
     recycle_item: jnp.ndarray  # int16[B], BattleContext.recycleItem per battler (B13-19)
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
@@ -402,6 +442,7 @@ class BattleState(NamedTuple):
     chatot_cry: jnp.ndarray
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     flash_fire: jnp.ndarray  # int8, MoveEffectsData.flashFire (F-2)
+    ability_suppressed: jnp.ndarray  # int8, MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -490,6 +531,17 @@ class BattleState(NamedTuple):
     # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
     # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
     ts_sub_hit: jnp.ndarray
+    # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
+    # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
+    ts_follow_me: jnp.ndarray
+    # int8[B], the Trace fires of the battler's slot in this step (D2-16, ruling D2-5): the index
+    # into ``Outcome.trace_pick``; written at B = 4 only, 0 between turns
+    ts_trace_fires: jnp.ndarray
+    # int8[B], battlerActions[b][1] (D2-1): the battler chosen as the target, kept across turns
+    chosen_target: jnp.ndarray
+    # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
+    # last dealt damage to b's slot, 0 = none yet; never cleared (not by a switch or a faint)
+    last_hit_by: jnp.ndarray
 
     def replace_hp(self, side: int, slot: int, hp: int) -> BattleState:
         return self._replace(hp=self.hp.at[party(format_of(self), side), slot].set(hp))
@@ -567,6 +619,9 @@ VOLATILE_FIELDS = (
     "leech_seed",
     "substitute_hp",
     "taunt",
+    "torment",
+    "me_first",
+    "me_first_turn",
     "trapped",
     "trap_move",
     "flinched",
@@ -606,6 +661,10 @@ VOLATILE_FIELDS = (
     "yawn",
     "curse",
     "can_unburden",
+    "trace_announced",
+    "weather_announced",
+    "intimidate_announced",
+    "download_announced",
     "minimized",
     "semi_invulnerable",
     "micle",
@@ -618,6 +677,7 @@ VOLATILE_FIELDS = (
     "magnet_rise_turns",
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
+    "ability_suppressed",
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
 # faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
@@ -626,8 +686,8 @@ VOLATILE_FIELDS = (
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
 # confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``), Focus Energy (B12-4)),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66); the rest from
-# unsupported moves), and magnetRiseTurns (:2112), the
+# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66), Gastro Acid's
+# ABILITY_SUPPRESSED (E3-2-6a); the rest from unsupported moves), and magnetRiseTurns (:2112), the
 # substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
 # Rulings B6-3, B7-n.
@@ -651,6 +711,7 @@ BATON_PASSED_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "embargo",
+    "ability_suppressed",
 )
 
 
@@ -689,6 +750,9 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "leech_seed": (_BATTLER, np.int8),
     "substitute_hp": (_BATTLER, np.int16),
     "taunt": (_BATTLER, np.int8),
+    "torment": (_BATTLER, np.int8),
+    "me_first": (_BATTLER, np.int8),
+    "me_first_turn": (_BATTLER, np.int16),
     "trapped": (_BATTLER, np.int8),
     "trap_move": (_BATTLER, np.int16),
     "flinched": (_BATTLER, np.int8),
@@ -730,6 +794,10 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "imprisoned": (_BATTLER, np.int8),
     "roosting": (_BATTLER, np.int8),
     "can_unburden": (_BATTLER, np.int8),
+    "trace_announced": (_BATTLER, np.int8),
+    "weather_announced": (_BATTLER, np.int8),
+    "intimidate_announced": (_BATTLER, np.int8),
+    "download_announced": (_BATTLER, np.int8),
     "recycle_item": (_BATTLER, np.int16),
     "minimized": (_BATTLER, np.int8),
     "semi_invulnerable": (_BATTLER, np.int8),
@@ -755,6 +823,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "chatot_cry": (_PARTY, np.int8),
     "embargo": (_BATTLER, np.int8),
     "flash_fire": (_BATTLER, np.int8),
+    "ability_suppressed": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -832,6 +901,10 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_sub_hit": (_BATTLER, np.int8),
+    "ts_follow_me": (_SIDE, np.int8),
+    "ts_trace_fires": (_BATTLER, np.int8),
+    "chosen_target": (_BATTLER, np.int8),
+    "last_hit_by": (_BATTLER, np.int8),
 }
 
 
@@ -850,11 +923,42 @@ LAYOUT = layout(SINGLES)  # the singles shapes: what every caller outside the fo
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
 
 
+def ability_is_suppressed(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``bool``: battler ``b``'s ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29,
+    ``ability_suppressed``) applies to its party ``slot`` (default: its active one). The bit is
+    the BattleMon's, so a bench ``slot`` (a newcomer read before it is in) is never suppressed,
+    which is what a plain switch gives it (battle_lib.c:2071, ``VOLATILE_FIELDS``); a Baton Pass
+    newcomer keeps it (:2076) and is read after the pass, as the active battler. Read by both
+    ``Battler_Ability`` accessors (``battler_ability``, ``damage.battler_decomp_ability``)."""
+    b = jnp.asarray(b, jnp.int32)
+    active = state.active[b]
+    slot = active if slot is None else jnp.asarray(slot, jnp.int32)
+    return (state.ability_suppressed[b] != 0) & (slot == active)
+
+
+def battler_ability(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``Battler_Ability`` (battle_lib.c:3088-3093) of battler ``b``'s party ``slot`` (default:
+    its active one) as an ``ids.AbilityId``, in ``ability``'s dtype: ``AbilityId.NONE`` while
+    ``ability_is_suppressed`` and the raw ``BattleMon.ability`` is not Multitype (:3090-3091),
+    else the raw ``ability``. Multitype has no ``AbilityId`` (``ids.ABILITY_MULTITYPE``: it is
+    ``UNSUPPORTED`` here), so a raw ``UNSUPPORTED`` is kept: exact for Multitype, and for any other
+    unnamed ability NONE and UNSUPPORTED differ only to a reader that names NONE (enumerate's
+    input-neutral list, where UNSUPPORTED is the cautious reading); ``damage.
+    battler_decomp_ability`` is exact for both. The Gravity / Ingrain Levitate lines (:3095-3103)
+    stay at the Levitate readers (``damage.ignorable``, ``damage.grounded``,
+    ``effects.magnet_rise_fails``), which apply them to this value. ``b`` is a battler (or
+    an array of them, with ``slot`` broadcast), never a side alone (doubles convention 1). With
+    ``ability_suppressed[b] == 0`` it is ``ability[party(b), slot]`` exactly."""
+    b = jnp.asarray(b, jnp.int32)
+    raw = state.ability[party(format_of(state), b), state.active[b] if slot is None else slot]
+    off = ability_is_suppressed(state, b, slot) & (raw != AbilityId.UNSUPPORTED)
+    return jnp.where(off, jnp.asarray(AbilityId.NONE, raw.dtype), raw)
+
+
 def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     """``int32``: ``Battler_HeldItem`` (battle_lib.c:5352-5363) of ``side``'s active battler, or
-    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` is Klutz (:5354-5356; no
-    supported mechanic makes ``Battler_Ability`` differ from the held ability for Klutz:
-    Gastro Acid is unsupported, :3088-3106) or its ``embargoTurns`` is nonzero (:5358-5360),
+    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` (``battler_ability``: none
+    under Gastro Acid, :3088-3093) is Klutz (:5354-5356) or its ``embargoTurns`` is nonzero (:5358-5360),
     else its ``heldItem``. Every ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower(...,
     ITEM_POWER_CHECK_ALL)`` / ``Battler_NaturalGift*`` read goes through it (:5438-5481); the
     reads of ``battleMons[b].heldItem`` itself (the speed-halving items, :1240-1246, Unburden's
@@ -867,7 +971,7 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     row = party(format_of(state), side)
     active = state.active[side]
     slot = active if slot is None else jnp.asarray(slot, jnp.int32)
-    hidden = (state.ability[row, slot] == AbilityId.KLUTZ) | (
+    hidden = (battler_ability(state, side, slot) == AbilityId.KLUTZ) | (
         (state.embargo[side] != 0) & (slot == active)
     )
     return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))
@@ -998,6 +1102,7 @@ def initial_arrays(
     gravity: int = 0,
     chatot_cry: int = 0,
     opp2_items: Sequence[int] | None = None,
+    trick_room: int = 0,
 ) -> dict[str, np.ndarray]:
     """Every ``layout(fmt)`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start`` for singles): ``parties`` holds the
@@ -1060,6 +1165,9 @@ def initial_arrays(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"
             )
     a["exp_mask"][...] = 1 << leads[0]
+    # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
+    # a hand-built state's lock on today's defender.
+    a["chosen_target"][...] = np.arange(fmt.B) ^ 1
     bags = {1: opp_items}
     if fmt.B == 4:
         if opp2_items is None:
@@ -1078,6 +1186,9 @@ def initial_arrays(
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
     a["gravity"][...] = gravity
+    if not 0 <= trick_room <= TRICK_ROOM_TURNS:
+        raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
+    a["trick_room"][...] = trick_room
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).
@@ -1097,6 +1208,7 @@ def make_state(
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
     chatot_cry: int = 0,
+    trick_room: int = 0,
 ) -> BattleState:
     """Build the turn-0 state (``initial_arrays``), then run the leads' switch-in
     effects (``hooks.battle_start``). Singles: ``initial_arrays`` with ``SINGLES``."""
@@ -1112,6 +1224,7 @@ def make_state(
         terrain,
         gravity,
         chatot_cry,
+        trick_room=trick_room,
     )
     state = BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
     return battle_start(tables, state)

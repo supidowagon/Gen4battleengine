@@ -621,9 +621,8 @@ note = "decoded: subscript_gravity_end (prints Gravity returned to normal!) -> F
 [[member]]
 narc = "battle/skill/sub_seq.narc"
 index = 251
-status = "not_reached"
-note = "decoded: subscript_trick_room_end (prints The twisted dimensions returned to normal!) -> byte-identical to be_seq 259, the Trick Room move script: Trick Room being off when its counter ran out, it sets FIELD_CONDITION_TRICK_ROOM_INIT (5 more turns), buffers {attacker} twisted the dimensions!, sets the print-and-animate side effect and runs TrickRoom, so Trick Room, once started, never ends; res/battle/scripts/subscripts/subscript_trick_room_end.s:6; res/battle/scripts/effects/effect_script_0259.s:5; it runs when the Trick Room counter reaches 0 (src/battle/battle_controller_player.c:1826); Trick Room starts only from effect 259 (Kaizo move 433 Trick Room) or subscript_overworld_trick_room (Kaizo map weather 18, whose trainers carry the area condition trick_room)"
-when = { area_condition = ["trick_room"], move_effect = [259], map_weather = [18] }
+status = "modelled"
+note = "decoded: subscript_trick_room_end (prints The twisted dimensions returned to normal!) -> byte-identical to be_seq 259, the Trick Room move script: Trick Room being off when its counter ran out, it sets FIELD_CONDITION_TRICK_ROOM_INIT (5 more turns), buffers {attacker} twisted the dimensions!, sets the print-and-animate side effect and runs TrickRoom, so Trick Room, once started, never ends; res/battle/scripts/subscripts/subscript_trick_room_end.s:6; res/battle/scripts/effects/effect_script_0259.s:5; it runs when the Trick Room counter reaches 0 (src/battle/battle_controller_player.c:1826); Trick Room starts only from effect 259 (Kaizo move 433 Trick Room) or subscript_overworld_trick_room (Kaizo map weather 18, whose trainers carry the area condition trick_room); modelled by E3 (E3-2-4): Tables.trick_room_rearm (tools/build_tables.py), step._trick_room_check and the reference engine's countdown, the area start coverage.start_trick_room"
 
 [[member]]
 narc = "battle/skill/sub_seq.narc"

@@ -253,7 +253,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 | Fights blocked | Group |
 |---|---|
-| 3 | move effect #83: Metronome; 17 of 442 callable moves unmodelled |
+| 3 | move effect #83: Metronome; 11 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Oreburgh Mine (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Oreburgh Mine (position 2; rules not recorded) |
 
@@ -268,7 +268,7 @@ Groups by kind: battle format 2, move effect 1
 | 18 | battle format: a multi battle |
 | 13 | AI: AI_FLAG_TAG_STRATEGY |
 | 5 | battle format: a double battle |
-| 4 | move effect #83: Metronome; 17 of 442 callable moves unmodelled |
+| 4 | move effect #83: Metronome; 11 of 442 callable moves unmodelled |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) |
@@ -291,8 +291,6 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 129 | AI: AI_FLAG_TAG_STRATEGY |
 | 82 | battle format: a multi battle |
 | 64 | battle format: a double_two_trainer battle |
-| 58 | ROM change: battle/skill/sub_seq.narc#251 is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 52 | field condition: permanent Trick Room |
 | 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 37 | battle format: a double battle |
@@ -305,7 +303,6 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 9 | move effect #239: Gastro Acid |
 | 7 | AI move effect #86 DISABLE not transcribed (Basic_CheckCannotDisable / Expert_Disable): Disable |
 | 6 | AI move effect #233 FLING not transcribed (Basic_CheckFling / Expert_Fling): Fling |
-| 6 | AI move effect #259 TRICK_ROOM not transcribed (Basic_CheckTrickRoom / Expert_TrickRoom): Trick Room |
 | 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it |
 | 6 | move effect #233: Fling |
 | 6 | move effect #259: Trick Room |

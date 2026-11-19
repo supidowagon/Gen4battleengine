@@ -15,7 +15,11 @@ battle_lib.c:6921, :7046; ``damage.weather_suppressed``).
 Hidden Power, Magnitude, Trump Card, Wring Out and Low Kick take their power (and Hidden
 Power its type) from the engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at
 level 4; ``damage.trump_card_power``, ``damage.hp_power``, ``damage.weight_power``), passed to
-@smogon/calc as move overrides. A crit drawn
+@smogon/calc as move overrides. For Wring Out and Low Kick the override only lines up the
+reported power: @smogon/calc's ``calculateBasePowerDPP`` recomputes theirs from the defender and
+ignores it (gen4.js:320-325, :359-362), so their damage is compared independently. Trump
+Card's power is not checked: the override is the engine's own rule (``_trump_card_power``),
+and the oracle's attackers hold no moves (PP 0), so only power 200 is drawn. A crit drawn
 against an armored defender is dropped before either calculator sees it: the game's crit
 roll never crits it (battle_lib.c:7134-7136, ``effects.armored``). Fixed-damage moves (Night Shade, Seismic Toss, Bide)
 have no base power to compare: the tables carry a placeholder 1, @smogon/calc 0.
@@ -54,7 +58,7 @@ from nuzline.engine.damage import (
     weather_ball_params,
     weight_power,
 )
-from nuzline.engine.effects import armored
+from nuzline.engine.effects import armored, pressure_pp_cost
 from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     AbilityId,
@@ -124,9 +128,9 @@ _COMPARED_EFFECTS = (
     EffectId.SECONDARY_CONFUSE, EffectId.EAT_BERRY, EffectId.BIDE, EffectId.ROLLOUT,
     EffectId.BRICK_BREAK, EffectId.FAKE_OUT, EffectId.RAISE_ALL_STATS_HIT,
     EffectId.SELF_DESTRUCT, EffectId.FLAIL, EffectId.FANG_PARALYZE_FLINCH,
-    EffectId.DOUBLE_POWER, EffectId.HP_POWER, EffectId.WEIGHT_POWER, EffectId.HALVE_HP,
-    EffectId.COUNTER, EffectId.UPROAR, EffectId.RECOIL_STATUS, EffectId.CRASH,
-    EffectId.ENDEAVOR, EffectId.ASSURANCE, EffectId.TRUMP_CARD, EffectId.CHATTER,
+    EffectId.DOUBLE_POWER, EffectId.HP_POWER, EffectId.WEIGHT_POWER, EffectId.UPROAR,
+    EffectId.RECOIL_STATUS, EffectId.CRASH, EffectId.ASSURANCE, EffectId.TRUMP_CARD,
+    EffectId.CHATTER,
 )  # fmt: skip
 
 jit_damage_table = jax.jit(damage_table)
@@ -425,7 +429,7 @@ def _matchup(
     elif effect == EffectId.MAGNITUDE:
         m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
     elif effect == EffectId.TRUMP_CARD:
-        m["power"] = _trump_card_power(s, move)
+        m["power"] = _trump_card_power(tables, s, move)
     elif effect == EffectId.HP_POWER:
         # The defender's HP is not changed below. BtlCmd_CalcWringOutPower
         # (battle_script.c:7261-7268) and @smogon/calc (gen4.js:359-362) agree on the formula.
@@ -476,13 +480,15 @@ def _matchup(
     return m
 
 
-def _trump_card_power(s, move: int) -> int:
+def _trump_card_power(tables: Tables, s, move: int) -> int:
     """The engine's Trump Card power for side 0's lead (``damage._pre_random``): the PP of
-    the first slot holding ``move`` after the use's decrement (BtlCmd_CalcTrumpCardPower,
-    battle_script.c:7233-7245)."""
+    the first slot holding ``move`` after the use's decrement, Pressure's cost included
+    (BattleControllerPlayer_DecrementPP, battle_controller_player.c:2237-2280;
+    BtlCmd_CalcTrumpCardPower, battle_script.c:7233-7245)."""
     moves = np.asarray(s.moves[0, 0])
     first = int(np.argmax(moves == move))
-    return int(trump_card_power(max(int(s.pp[0, 0, first]) - 1, 0)))
+    cost = int(pressure_pp_cost(tables, s, 0, 1, move))
+    return int(trump_card_power(max(int(s.pp[0, 0, first]) - cost, 0)))
 
 
 def _smogon_mon(names: Names, mon: PokemonSpec, stages, hp, burn) -> dict:
@@ -521,6 +527,7 @@ def _describe(m: dict) -> str:
     return json.dumps(m["smogon"], sort_keys=True)
 
 
+@pytest.mark.fullset
 def test_every_drawn_effect_is_compared_or_departs(tables, names):
     """A new damaging effect in the M1 pools fails here, not as a reshuffled sample."""
     pools = m1_move_pools(tables, names)

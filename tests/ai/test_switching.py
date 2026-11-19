@@ -24,7 +24,7 @@ from nuzline.ai.switching import (
     switch_sites,
     switching_refusals,
 )
-from tests.engine.helpers import roark_real_state, roark_state
+from tests.engine.helpers import as_species, roark_real_state, roark_state
 
 K = SwitchSite
 CRANIDOS, ONIX = 2, 1  # Roark's party slots (roark.md section 4)
@@ -217,9 +217,9 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     elif change == "opp_move":
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Gastly's only ability is Levitate
-        s = s._replace(species=s.species.at[0, 5].set(names.species("Gastly")))
+        s = as_species(tables, s, 0, 5, names.species("Gastly"))
     else:  # Poliwag (Water Absorb) on Roark's bench: AI_HasAbsorbAbilityInParty
-        s = s._replace(species=s.species.at[1, 1].set(names.species("Poliwag")))
+        s = as_species(tables, s, 1, 1, names.species("Poliwag"))
     refusals = switching_refusals(tables, s)
     assert any(missing in r for r in refusals), refusals
     with pytest.raises(UnsupportedSwitching, match=missing):
@@ -268,10 +268,7 @@ def test_shadow_tag_and_arena_trap_block_the_switch(tables, names):
         slot = names.species_abilities(names.species(species)).index(
             names.ability("Shadow Tag" if species == "Wobbuffet" else "Arena Trap")
         )
-        t = s._replace(
-            species=s.species.at[0, 0].set(names.species(species)),
-            ability_slot=s.ability_slot.at[0, 0].set(slot),
-        )
+        t = as_species(tables, s, 0, 0, names.species(species), slot)
         assert switch_sites(tables, t).tolist() == [K.NONE] * SWITCH_SITES, species
 
 
@@ -433,7 +430,7 @@ def _flash_fire_bench(tables, names, *, player="Monferno"):
     """Roark's Geodude (active) with a Flash Fire holder on the bench (Vulpix in Onix's slot 1) after the
     player's Ember (moveHit, Fire with power)."""
     s = roark_real_state(tables, names, player_species=player)
-    s = s._replace(species=s.species.at[1, ONIX].set(names.species("Vulpix")))  # Flash Fire
+    s = as_species(tables, s, 1, ONIX, names.species("Vulpix"))  # Flash Fire
     return s._replace(move_hit=s.move_hit.at[1].set(names.move("Ember")))
 
 
@@ -448,7 +445,7 @@ def test_flash_fire_bench_draws_one_absorb_site(tables, names):
     stop = kinds.index(K.ABSORB)
     assert int(switch_action(tables, s, jnp.int8(stop))) == 4 + ONIX
     # Its own Flash Fire holds the switch (:3678): no site.
-    own = s._replace(species=s.species.at[1, 0].set(names.species("Vulpix")))
+    own = as_species(tables, s, 1, 0, names.species("Vulpix"))
     assert K.ABSORB not in switch_sites(tables, own).tolist()
     # A Water moveHit is another case (Water Absorb's), a status moveHit has no power (:3657).
     water = s._replace(move_hit=s.move_hit.at[1].set(names.move("Water Gun")))

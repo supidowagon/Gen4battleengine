@@ -58,7 +58,7 @@ from nuzline.engine.order import called_move
 from nuzline.engine.outcome import Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import ACT_MOVE, ACT_TAUNTED, replace, step_events
-from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
+from tests.engine.helpers import A, as_species, assert_matches_reference, jit_step, roark_state
 from tests.engine.test_enumerate import _kaizo_spec, assert_equals_bruteforce, laws_of
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
@@ -412,10 +412,10 @@ def test_camouflage_fails_for_multitype(tables, names):
     # so that the type test (Arceus is Normal) is not what fails it.
     s = _state(tables, names, player=(CAMO,), opp=("Leer",), terrain=GRASS)
     arceus = names.species("Arceus")
-    s = s._replace(species=s.species.at[0, 0].set(arceus), form=s.form.at[0, 0].set(0))
+    s = as_species(tables, s, 0, 0, arceus)
     out = assert_matches_reference(tables, s, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == _types(s, 0)
-    plain = s._replace(species=s.species.at[0, 0].set(names.species("Kecleon")))
+    plain = as_species(tables, s, 0, 0, names.species("Kecleon"))
     out = assert_matches_reference(tables, plain, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == [Type.GRASS, Type.GRASS]
 

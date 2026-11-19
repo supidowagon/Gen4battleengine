@@ -84,6 +84,9 @@ Encodings:
 * ``gravity_rearm`` (int8 scalar): 1 where the ROM's sub_seq 238 differs from vanilla's and
   ``rom_diff.toml`` classifies it modelled (Kaizo: it sets Gravity again when its counter runs
   out, so Gravity never ends; ``_gravity_rearm``), 0 in vanilla (E1 trial batch, G-67).
+* ``trick_room_rearm`` (int8 scalar): 1 in Kaizo, where the patched sub_seq 251 is the Trick Room
+  move's own script and sets Trick Room again when its counter runs out (it never ends), 0 in
+  vanilla (E3-2-4).
 * ``ai_policy`` (int8 scalar): the game's trainer-AI policy, the index of
   ``game_constants.POLICY[game]`` in ``game_constants.AI_POLICIES`` (0 vanilla, 1 kaizo;
   ``nuzline.ai.layout.layout_of`` reads it). A game without a policy is a ``BuildError``.
@@ -728,6 +731,8 @@ def build_arrays(inter: Path, game: str = "platinum_us") -> tuple[dict[str, np.n
         "ai_policy": _arr(_ai_policy(game), np.int8, "ai policy"),
         # sub_seq 238 (subscript_gravity_end) as the ROM diff finds it (G-67).
         "gravity_rearm": _arr(_gravity_rearm(inter) if kaizo else 0, np.int8, "gravity rearm"),
+        # sub_seq 251 (subscript_trick_room_end) is replaced in Kaizo only (E3-2-4).
+        "trick_room_rearm": _arr(int(kaizo), np.int8, "trick room rearm"),
     }
     manifest = {
         "version": MANIFEST_VERSION,

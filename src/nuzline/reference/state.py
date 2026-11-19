@@ -69,6 +69,9 @@ class RefBattler:
     leech_seed: int
     substitute_hp: int
     taunt: int
+    torment: int  # VOLATILE_CONDITION_TORMENT (E3-2-1)
+    me_first: int  # MoveEffectsData.meFirst (E3-2-3)
+    me_first_turn: int  # MoveEffectsData.meFirstTurnNumber (E3-2-3)
     trapped: int
     trap_move: int
     flinched: int
@@ -110,6 +113,10 @@ class RefBattler:
     imprisoned: int  # MOVE_EFFECT_IMPRISONED
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     can_unburden: int  # MoveEffectsData.canUnburden
+    trace_announced: int  # BattleMon.traceAnnounced (E3-2-5)
+    weather_announced: int  # BattleMon.weatherAbilityAnnounced
+    intimidate_announced: int  # BattleMon.intimidateAnnounced
+    download_announced: int  # BattleMon.downloadAnnounced
     recycle_item: int  # BattleContext.recycleItem[battler]: never cleared by a switch (B13-19)
     minimized: int  # MOVE_EFFECT_MINIMIZE
     semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)
@@ -134,6 +141,7 @@ class RefBattler:
     truant: int  # MoveEffectsData.truant (G-69)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
     flash_fire: int  # MoveEffectsData.flashFire (F-2)
+    ability_suppressed: int  # MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     wish_timer: int
     wish_hp: int
     future_timer: int
@@ -161,6 +169,9 @@ class RefBattler:
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
+    chosen_target: int  # battlerActions[b][1] (D2-1)
+    last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
 
 
 @dataclass
@@ -175,6 +186,7 @@ class RefSideConds:
     lucky_chant: int
     tailwind: int
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
+    ts_follow_me: int  # 1 + followMeUser while followMe is set, else 0 (D2-11)
 
 
 @dataclass

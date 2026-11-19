@@ -4,10 +4,12 @@ check a later commit gives the same bytes.
 Usage:
 
     uv run python tools/snap_compare.py capture DIR A-B [--chunk 10] [--repo PATH]
-        [--commit SHA] [--no-roark] [--parts G,...] [--allow-all-raise F,...] [--dirty-ok] [-v]
+        [--commit SHA] [--no-roark] [--parts G,...] [--allow-all-raise F,...] [--dirty-ok]
+        [--raise-warn R] [--raise-fail R] [-v]
     uv run python tools/snap_compare.py compare DIR A-B [--chunk 10] [--repo PATH]
         [--commit SHA] [--no-roark] [--parts G,...] [--allow-new NAME,...]
-        [--allow-all-raise F,...] [--subset-ok] [--same-ok] [--dirty-ok] [-v]
+        [--allow-all-raise F,...] [--subset-ok] [--same-ok] [--dirty-ok]
+        [--raise-warn R] [--raise-fail R] [-v]
 
     DIR      the snapshot folder (capture writes it, compare reads it).
     A-B      the seed range, inclusive (one seed: A); B >= A.
@@ -27,9 +29,13 @@ Usage:
     --allow-all-raise  function names (e.g. ``enumerate_turn``) allowed to raise on every call
              of a part; default none.
     --subset-ok  compare may run a strict subset of the captured parts.
-    --same-ok  allow compare at the capture's own commit.
-    --dirty-ok  allow a dirty checkout (tracked changes, or untracked files under src/ or
-             tools/) on either side.
+    --same-ok  allow compare at the capture's own commit, or against a checkout whose content
+             hash (see capture.json below) equals the capture's.
+    --dirty-ok  allow a dirty checkout (tracked changes, or untracked files under src/, tools/,
+             tests/strategies*, tests/engine/helpers.py or tests/ai/) on either side.
+    --raise-warn, --raise-fail  a part whose outputs raised in more than this share of its
+             calls (functions named by --allow-all-raise left out) prints a warning (default
+             0.5) or fails (default 0.95).
     -v       print each part's timings per output.
 
 A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list) exits 2.
@@ -45,23 +51,37 @@ that pauses at a party list (the pick and a fresh outcome drawn as tests/test_di
 _step_both draws them). Per segment: jit(step_events), jit(step), ref_step via from_ref,
 jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), jit(decision_actions),
 root_belief. Per drawn turn also one state the vanilla AI accepts (tests.ai.test_ai_legality's
-gated_states: Roark's real party and bag against the sample party, random HP, stages, trap and
-AI knowledge; the random segments' opponents mostly hold moves whose AI script paths are not
-transcribed, so the AI refuses them): ai_action_distribution. Roark: the golden replay of
+gated_states: Roark's real party against the sample party, with random HP, stages, trap,
+0..BAG_SLOTS Potions in the bag and AI knowledge; the random segments' opponents mostly hold
+moves whose AI script paths are not transcribed, so the AI refuses them):
+ai_action_distribution. Roark: the golden replay of
 tests/golden/kaizo_roark_02.json (its converted states, replay_turn and the reference replay of
 each turn) and rank_actions at tests.engine.helpers.roark_real_state, N = 256, PRNGKey(0).
 
-DIR/capture.json records the commit (git HEAD or --commit), whether the checkout was dirty,
-each captured part with its status (ok / failed / pending) and each seed run [A, B, chunk].
-capture refuses a non-empty DIR unless its capture.json names the same commit (a partial
-re-capture then adds or replaces parts); it fails before running on a dirty checkout (unless
---dirty-ok) or when no commit is known.
+DIR/capture.json records its ``format`` (CAPTURE_FORMAT), the commit (git HEAD or --commit),
+whether the checkout was dirty (null without git: "not checkable"), ``content_hash``, each
+captured part with its status (ok / failed / pending) and each seed run [A, B, chunk].
+``content_hash`` is a sha256 over everything the child imports or reads, by content: the
+running snap_compare.py (``__file__``, not --repo's copy), src/nuzline/**/*.py, tools/*.py,
+tests/__init__.py, tests/strategies*.py, tests/ai_legality.py, tests/engine/__init__.py,
+tests/engine/helpers.py, tests/ai/*.py, tests/fixtures/sample_party.toml, the golden trace and
+every built file a part reads (both tables.npz and manifest.json, and learnsets, trainers,
+species, forms and form_rows .json of data/intermediate and data/intermediate_kaizo). A .npz
+counts by its arrays (names, dtypes, shapes, bytes; not the zip's timestamps), a .json by its
+parsed value, any other file by its bytes with CRLF read as LF; so two builds of the same tables
+hash equal. capture refuses a non-empty DIR unless its capture.json names the same commit (a
+partial re-capture then adds or replaces parts); it fails before running on a dirty checkout
+(unless --dirty-ok), when no commit is known, when the folder's earlier parts were captured from
+other code (another content hash), or by an older snap_compare (see compare).
 
 compare: reruns every output from the saved inputs (no redraw); its "gen" part redraws the
 generator and checks it still draws the saved inputs (on capture, "gen" records them). Before
 running it fails when: capture.json records no commit or no part list; a part to run was not
 captured or is not "ok"; it runs a strict subset of the captured parts (unless --subset-ok);
-both commits are the same (unless --same-ok); either side is dirty (unless --dirty-ok); or this
+both commits, or both content hashes, are the same (unless --same-ok; both hashes are
+printed, so a checkout without git is tied to its code, not only to --commit); capture.json
+was written by an older snap_compare (no ``content_hash`` or ``dirty`` key, or another
+``format``: it says to re-capture); either side is dirty (unless --dirty-ok); or this
 checkout's commit is unknown.
 
 Parts: each seed chunk runs as six processes ("step": the draw on capture, jit(step_events),
@@ -74,20 +94,27 @@ Version independence: inputs are saved as plain {field: array} dicts, not pickle
 A later commit rebuilds them by field name: a field it has that the capture lacks starts at the
 singles zero (BattleState: ``state.LAYOUT``'s shape and dtype) or at ``empty_outcome()``'s value
 (Outcome); a captured field it lacks is dropped; a saved BattleState field whose shape or dtype
-differs from ``LAYOUT`` is an error. Each one-sided input field is reported
+differs from ``LAYOUT``, a saved Outcome field whose shape or dtype differs from
+``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an error (the part
+fails). Each one-sided input field is reported
 (``in_state.NAME`` / ``in_outcome.NAME``). Outputs (states, Outcomes, events, reference
 outputs) are flattened to "path" -> (kind, dtype, shape, bytes) entries keyed by name. compare
 checks the entries present on both sides byte for byte (dtype, shape and bytes) and lists, per
 part, the entries present on one side only (indices folded to []).
 
 An output that raised is stored as its exception (a refusal is an output) and compared like
-one: a raise against a result is a divergence. Each part prints its raise count and, per
+one: a raise against a result (a value or a structure) is a divergence, never a one-sided entry
+that --allow-new could pass. Floats (Python, np.float64) compare by their IEEE-754 bytes, as
+arrays do: a float and an np.float64 of one value are equal; -0.0 against 0.0, or two NaN
+payloads, differ. Each part prints its raise count and, per
 function, count/calls and the first error.
 
 Pass: compare prints "compare: ok" and exits 0 only when every precondition above holds, every
 listed part ran (no skip, no error), no entry diverged, every one-sided input field or output
 entry is named by --allow-new, and no function raised on every one of its calls in a part
-(unless named by --allow-all-raise). Anything else exits 1 (2 for a usage error). capture exits
+(unless named by --allow-all-raise), no part ran zero steps or (but "gen") zero calls, and no
+part's raise share is over --raise-fail. The final line names the groups compared and the seed
+range with its count. Anything else exits 1 (2 for a usage error). capture exits
 0 ("capture: ok") only when every part ran with no skip, no error and no all-raise function.
 
 Pod (``git archive`` checkouts, no .git; one snapshot folder SNAP):
@@ -107,6 +134,7 @@ import json
 import os
 import pickle
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -124,23 +152,51 @@ ROARK_PARTS = ("roark.trace", "roark.rank")
 KNOWN_PARTS = (*SEED_GROUPS, *ROARK_PARTS)
 SHA = re.compile(r"[0-9a-f]{40}")
 LIST_SHOWN = 8  # one-sided field names printed per part
+RAISE_WARN = 0.5  # a part's raise share above which it warns
+RAISE_FAIL = 0.95  # ... and fails
+NO_CALLS_OK = ("gen",)  # groups with no timed call (the generator check)
+# Beyond src/nuzline/**/*.py, the running script and the built files in NEEDS, what the child
+# imports or reads (traced by its imports and opens): the content hash covers these. The
+# checkout's own tools/snap_compare.py is left out: the script that runs is hashed instead.
+HASHED = (
+    "tests/__init__.py",
+    "tests/strategies*.py",
+    "tests/ai_legality.py",
+    "tests/engine/__init__.py",
+    "tests/engine/helpers.py",
+    "tests/ai/*.py",
+    "tests/fixtures/sample_party.toml",
+    "tools/*.py",
+)
+# Paths whose untracked files make a git checkout dirty (tracked changes count anywhere).
+WATCHED = (
+    "src",
+    "tools",
+    "tests/__init__.py",
+    "tests/strategies*",
+    "tests/ai_legality.py",
+    "tests/engine/__init__.py",
+    "tests/engine/helpers.py",
+    "tests/ai",
+    "tests/fixtures/sample_party.toml",
+)
+CAPTURE_FORMAT = 2  # capture.json / the saved entries; older captures must be re-captured
 
 # Built files each part reads (relative to the checkout).
 VANILLA_TABLES = ("data/gen4_platinum/tables.npz", "data/gen4_platinum/manifest.json")
+INTERMEDIATE = ("learnsets", "trainers", "species", "forms", "form_rows")  # IntermediateData
+VANILLA_INTERMEDIATE = tuple(f"data/intermediate/{n}.json" for n in INTERMEDIATE)
 NEEDS = {
-    "seed": (
-        *VANILLA_TABLES,
-        "data/intermediate/learnsets.json",
-        "data/intermediate/trainers.json",
-    ),
+    "seed": (*VANILLA_TABLES, *VANILLA_INTERMEDIATE),
     "roark.trace": (
         *VANILLA_TABLES,
+        *VANILLA_INTERMEDIATE,
         "data/gen4_platinum_kaizo/tables.npz",
         "data/gen4_platinum_kaizo/manifest.json",
-        "data/intermediate_kaizo/trainers.json",
+        *(f"data/intermediate_kaizo/{n}.json" for n in INTERMEDIATE),
         "tests/golden/kaizo_roark_02.json",
     ),
-    "roark.rank": (*VANILLA_TABLES, "data/intermediate/trainers.json"),
+    "roark.rank": (*VANILLA_TABLES, *VANILLA_INTERMEDIATE),
 }
 
 
@@ -182,7 +238,9 @@ def canon(x, path: str = "", out: dict | None = None) -> dict:
             canon(v, f"{path}[{i}]", out)
         for k in sorted(getattr(x, "__dict__", {})):  # Ranking.all_zero
             canon(vars(x)[k], f"{path}.{k}", out)
-    elif isinstance(x, (str, bool, int, float)) or x is None:
+    elif isinstance(x, float):  # Python and np.float64: by bytes, as arrays (NaN payloads too)
+        out[path] = ("py", "float", "", struct.pack("<d", float(x)))
+    elif isinstance(x, (str, bool, int)) or x is None:
         out[path] = ("py", type(x).__name__, "", repr(x).encode())
     else:
         a = np.ascontiguousarray(np.asarray(x))
@@ -219,8 +277,41 @@ def first_diff(want: dict, got: dict) -> str | None:
             x = np.frombuffer(a[3], dt).reshape(shape)
             y = np.frombuffer(b[3], dt).reshape(shape)
             return f"{k}{list(idx)}: {x[idx]!r} -> {y[idx]!r}"
+        if a[:2] == b[:2] == ("py", "float"):
+            x, y = (struct.unpack("<d", e[3])[0] for e in (a, b))
+            return f"{k}: {x!r} ({a[3].hex()}) -> {y!r} ({b[3].hex()})"
         return f"{k}: {a[:3]} {a[3][:80]!r} -> {b[:3]} {b[3][:80]!r}"
     return None
+
+
+def raise_mismatch(want: dict, got: dict) -> str | None:
+    """A path where one side raised and the other returned something (a value, or a structure
+    whose entries lie under the path), or None. Never a one-sided entry: --allow-new cannot
+    pass it."""
+    for side, (a, b) in (("capture", (want, got)), ("this checkout", (got, want))):
+        for k in sorted(a):
+            if a[k][0] != "raise" or (k in b and b[k][0] == "raise"):
+                continue
+            under = any(o.startswith((f"{k}.", f"{k}[", f"{k}#")) for o in b)
+            if k in b or under:
+                other = "this checkout" if side == "capture" else "the capture"
+                return f"{k}: raised on the {side} ({a[k][1]}), {other} returned a result"
+    return None
+
+
+def compare_dumps(record: list, dump: list) -> tuple[str | None, set[str], set[str]]:
+    """``(first divergence or None, only_base, only_new)`` of the captured ``record``
+    ``[(key, digest, entries)]`` against the rerun ``dump`` ``[(key, entries)]``."""
+    if [k for k, _, _ in record] != [k for k, _ in dump]:
+        return f"step list differs: {len(record)} captured, {len(dump)} rerun", set(), set()
+    diverged, only_base, only_new = None, set(), set()
+    for (key, _, want), (_, got) in zip(record, dump, strict=True):
+        only_base |= {fold(k) for k in set(want) - set(got)}
+        only_new |= {fold(k) for k in set(got) - set(want)}
+        diff = raise_mismatch(want, got) or first_diff(want, got)
+        if diff and not diverged:
+            diverged = f"{key}: {diff}"
+    return diverged, only_base, only_new
 
 
 def fold(key: str) -> str:
@@ -246,7 +337,9 @@ def _note_input_fields(kind: str, saved: dict, fields: tuple[str, ...]) -> None:
     INPUT_ONE_SIDED["new"] |= {f"{kind}.{n}" for n in set(fields) - set(saved)}
 
 
-def check_layout(saved: dict, layout: dict) -> None:
+def check_layout(
+    saved: dict, layout: dict, what: str = "state fields", ref: str = "LAYOUT"
+) -> None:
     """Raise unless every saved field ``layout`` names has its shape and dtype."""
     import numpy as np
 
@@ -257,7 +350,16 @@ def check_layout(saved: dict, layout: dict) -> None:
         if a.shape != tuple(shape) or a.dtype != np.dtype(dtype):
             bad.append(f"{name} {a.dtype}{a.shape} != {np.dtype(dtype)}{tuple(shape)}")
     if bad:
-        raise ValueError("saved state fields differ from LAYOUT: " + "; ".join(bad))
+        raise ValueError(f"saved {what} differ from {ref}: " + "; ".join(bad))
+
+
+def check_actions(saved, battlers: int) -> None:
+    """Raise unless the saved actions are ``int32[battlers]`` (the legal_action_pair form)."""
+    import numpy as np
+
+    a = np.asarray(saved)
+    if a.shape != (battlers,) or a.dtype != np.dtype(np.int32):
+        raise ValueError(f"saved actions {a.dtype}{a.shape} != int32({battlers},)")
 
 
 def rebuild_state(saved: dict):
@@ -279,10 +381,20 @@ def rebuild_state(saved: dict):
 def rebuild_outcome(saved: dict):
     """An ``Outcome`` of this checkout from a saved field dict (see the docstring)."""
     import jax
+    import numpy as np
 
     from nuzline.engine.outcome import Outcome, empty_outcome
 
     empty = jax.device_get(empty_outcome())
+    check_layout(
+        saved,
+        {
+            n: (np.shape(getattr(empty, n)), np.asarray(getattr(empty, n)).dtype)
+            for n in Outcome._fields
+        },
+        "outcome fields",
+        "empty_outcome()",
+    )
     _note_input_fields("in_outcome", saved, Outcome._fields)
     return Outcome(**{n: saved.get(n, getattr(empty, n)) for n in Outcome._fields})
 
@@ -390,7 +502,9 @@ def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tu
     """``[(key, {in_state, in_actions, in_outcome})]`` (plain dicts) drawn as
     tools/differential.py draws a seed (TURNS examples, no shrink), each pause resumed as
     _step_both resumes it, then per example ``(key, {in_ai_state})``: a state the vanilla AI
-    accepts (``gated_states``), drawn last so the segments draw as before. With ``saved``
+    accepts (``gated_states``), drawn after the segments: the segments of a seed's first example
+    draw as without it, later examples do not (Hypothesis shares one random across the examples
+    of a seed, so the extra draw shifts them). With ``saved``
     (compare's generator check) a pause and its state are read from the saved inputs instead of
     stepping, so the check loads no step program."""
     import jax
@@ -446,6 +560,8 @@ def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tu
 
 
 def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: str):
+    import numpy as np
+
     inputs_path = directory / f"{lo}-{hi}.inputs.pkl.gz"
     if mode == "capture" and group == "gen":
         with gzip.open(inputs_path, "rb") as f:
@@ -470,6 +586,7 @@ def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: st
             continue
         seed_value = int(key.split()[1])
         s, o = rebuild_state(inp["in_state"]), rebuild_outcome(inp["in_outcome"])
+        check_actions(inp["in_actions"], np.asarray(s.active).shape[0])
         outs = group_outputs(ctx, group, seed_value, s, inp["in_actions"], o)
         if group == "step":
             outs = {**inp, **outs}
@@ -613,17 +730,7 @@ def child(mode: str, directory: Path, part: str) -> int:
     else:
         with gzip.open(path, "rb") as f:
             record = pickle.load(f)
-        only_base: set[str] = set()
-        only_new: set[str] = set()
-        if [k for k, _, _ in record] != [k for k, _ in dump]:
-            result["diverged"] = f"step list differs: {len(record)} captured, {len(dump)} rerun"
-        else:
-            for (key, _, want), (_, got) in zip(record, dump, strict=True):
-                only_base |= {fold(k) for k in set(want) - set(got)}
-                only_new |= {fold(k) for k in set(got) - set(want)}
-                diff = first_diff(want, got)
-                if diff and not result["diverged"]:
-                    result["diverged"] = f"{key}: {diff}"
+        result["diverged"], only_base, only_new = compare_dumps(record, dump)
         only_base |= INPUT_ONE_SIDED["base"]
         only_new |= INPUT_ONE_SIDED["new"]
         result["only_base"], result["only_new"] = sorted(only_base), sorted(only_new)
@@ -698,10 +805,51 @@ def plan_parts(seeds: str, chunk: int, parts_arg: str | None, no_roark: bool):
     return lo, hi, parts
 
 
+def content_hash(repo: Path) -> str:
+    """sha256 over the code the child runs and the files it reads (see the docstring): each
+    file's relative path and content, in path order, then the running script (``__file__``,
+    which is not ``repo``'s own tools/snap_compare.py when it captures another checkout);
+    missing built files are skipped (the part is SKIPPED anyway). Content, so that two builds
+    of the same tables hash equal: a .npz file is its arrays (sorted names, dtype, shape,
+    bytes; np.savez_compressed stamps the zip with the build time), a .json file its parsed
+    value re-dumped in its own order (whitespace and line endings left out), any other file its
+    bytes with CRLF read as LF."""
+    files = set((repo / "src" / "nuzline").rglob("*.py"))
+    for pattern in HASHED:
+        files |= set(repo.glob(pattern))
+    files.discard(repo / "tools" / "snap_compare.py")
+    files |= {repo / f for fs in NEEDS.values() for f in fs}
+    named = [(p.relative_to(repo).as_posix(), p) for p in files if p.is_file()]
+    h = hashlib.sha256()
+    for name, p in [*sorted(named), ("<running>/snap_compare.py", Path(__file__).resolve())]:
+        data = file_content(p)
+        h.update(f"{name}\0{len(data)}\0".encode())
+        h.update(data)
+    return h.hexdigest()
+
+
+def file_content(p: Path) -> bytes:
+    """``p``'s content as content_hash reads it."""
+    if p.suffix == ".npz":
+        import numpy as np
+
+        h = hashlib.sha256()
+        with np.load(p, allow_pickle=False) as z:
+            for name in sorted(z.files):
+                a = np.ascontiguousarray(z[name])
+                h.update(f"{name}\0{a.dtype.str}\0{a.shape}\0".encode())
+                h.update(a.tobytes())
+        return h.digest()
+    if p.suffix == ".json":
+        value = json.loads(p.read_text(encoding="utf-8"))
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    return p.read_bytes().replace(b"\r\n", b"\n")
+
+
 def git_info(repo: Path) -> dict | None:
     """``{"commit", "dirty", "changes"}`` when ``repo`` is the top of a git checkout, else None
     (no git, or a folder inside some other repository). Dirty: a tracked change anywhere or an
-    untracked file under src/ or tools/."""
+    untracked file under src/, tools/, tests/strategies*, tests/engine/helpers.py or tests/ai/."""
 
     def git(*a):
         try:
@@ -719,7 +867,7 @@ def git_info(repo: Path) -> dict | None:
         return None
     commit = git("rev-parse", "HEAD")
     tracked = git("status", "--porcelain", "--untracked-files=no")
-    untracked = git("status", "--porcelain", "--untracked-files=all", "--", "src", "tools")
+    untracked = git("status", "--porcelain", "--untracked-files=all", "--", *WATCHED)
     if commit is None or tracked is None or untracked is None:
         return None
     changes = sorted(set(tracked.splitlines()) | set(untracked.splitlines()))
@@ -727,9 +875,9 @@ def git_info(repo: Path) -> dict | None:
 
 
 def identify(repo: Path, given: str | None) -> tuple[dict, list[str]]:
-    """This checkout's ``{"commit", "dirty", "source"}`` and its problems: an invalid --commit,
-    a --commit git contradicts, no commit at all, or ``dirty: ...``. ``dirty`` is None (not
-    checkable) without git."""
+    """This checkout's ``{"commit", "dirty", "source", "content_hash"}`` and its problems: an
+    invalid --commit, a --commit git contradicts, no commit at all, or ``dirty: ...``.
+    ``dirty`` is None (not checkable) without git."""
     problems = []
     if given is not None and not SHA.fullmatch(given):
         problems.append(f"--commit {given!r} is not a full 40-hex commit")
@@ -739,14 +887,17 @@ def identify(repo: Path, given: str | None) -> tuple[dict, list[str]]:
             problems.append(f"--commit {given} but git HEAD of {repo} is {g['commit']}")
         if g["dirty"]:
             problems.append(f"dirty: {repo}: {_names(g['changes'])} (--dirty-ok to allow)")
-        return {"commit": g["commit"], "dirty": g["dirty"], "source": "git"}, problems
+        here = {"commit": g["commit"], "dirty": g["dirty"], "source": "git"}
+        return {**here, "content_hash": content_hash(repo)}, problems
     if given is None:
         problems.append(f"{repo} has no git and no --commit was given: the commit is unknown")
-    return {"commit": given, "dirty": None, "source": "--commit"}, problems
+    here = {"commit": given, "dirty": None, "source": "--commit"}
+    return {**here, "content_hash": content_hash(repo)}, problems
 
 
 def _show(c: dict) -> str:
-    dirty = {True: " (dirty)", None: " (dirty: not checkable)"}.get(c.get("dirty"), "")
+    marks = {True: " (dirty)", None: " (dirty: not checkable)"}
+    dirty = marks.get(c["dirty"], "") if "dirty" in c else ""  # no key: an older capture
     return f"{c.get('commit')}{dirty}"
 
 
@@ -777,7 +928,29 @@ def capture_problems(args, directory: Path, here: dict, problems: list[str]) -> 
                 f"{directory} holds a capture of {old['commit']}, not {here['commit']}: "
                 "use an empty folder"
             )
+        elif why := old_capture(old):
+            out.append(f"{directory}: {why}")
+        elif old["content_hash"] != here["content_hash"]:
+            out.append(
+                f"{directory} holds parts captured from other code (content hash "
+                f"{old['content_hash']}, this checkout {here['content_hash']}): "
+                "use an empty folder"
+            )
     return out
+
+
+def old_capture(c: dict) -> str | None:
+    """Why capture.json ``c`` was written by an older snap_compare (no ``content_hash`` or
+    ``dirty`` key, or another ``format``), or None. Its hash, dirty state or saved floats
+    cannot be checked: it is refused, never read as "not checkable"."""
+    lacks = [k for k in ("content_hash", "dirty") if k not in c]
+    if not lacks and c.get("format") == CAPTURE_FORMAT:
+        return None
+    what = f"no {' / '.join(lacks)}" if lacks else f"format {c.get('format')}"
+    return (
+        f"the capture was made by an older snap_compare (capture.json: {what}; this script "
+        f"writes format {CAPTURE_FORMAT}): re-capture it with this script into an empty folder"
+    )
 
 
 def compare_problems(args, base: dict | None, here: dict, problems, parts) -> list[str]:
@@ -785,10 +958,19 @@ def compare_problems(args, base: dict | None, here: dict, problems, parts) -> li
     out = _keep(problems, args.dirty_ok)
     if base is None or not base.get("commit"):
         return [*out, "the capture records no commit (capture.json)"]
-    if base.get("dirty") and not args.dirty_ok:
+    why = old_capture(base)
+    if why:
+        return [*out, why]
+    if base["dirty"] and not args.dirty_ok:
         out.append(f"the capture's checkout was dirty ({base['commit']}; --dirty-ok to allow)")
+    if base["dirty"] is None:  # the key is there (old_capture): recorded without git
+        print("the capture's checkout: dirty state not checkable (no git)", flush=True)
     if base["commit"] == here["commit"] and not args.same_ok:
         out.append("same commit on both sides (--same-ok to allow)")
+    if not base["content_hash"]:
+        out.append("the capture records no content hash (capture.json)")
+    elif base["content_hash"] == here["content_hash"] and not args.same_ok:
+        out.append(f"same content hash on both sides ({here['content_hash']}; --same-ok to allow)")
     captured = base.get("parts")
     if not isinstance(captured, dict) or not captured:
         return [*out, "the capture records no part list (capture.json)"]
@@ -831,11 +1013,16 @@ def parent(args) -> int:
     print(f"{args.mode}: checkout {ROOT}, snapshot {directory}, {len(parts)} parts", flush=True)
     here, problems = identify(ROOT, args.commit)
     if args.mode == "capture":
-        print(f"capture commit {_show(here)}", flush=True)
+        print(f"capture commit {_show(here)}; content hash {here['content_hash']}", flush=True)
         stop = capture_problems(args, directory, here, problems)
     else:
         base = read_capture(directory)
         print(f"capture commit {_show(base or {})}; this checkout {_show(here)}", flush=True)
+        print(
+            f"content hash: capture {(base or {}).get('content_hash')}; "
+            f"this checkout {here['content_hash']}",
+            flush=True,
+        )
         stop = compare_problems(args, base, here, problems, parts)
     if stop:
         for p in stop:
@@ -846,7 +1033,13 @@ def parent(args) -> int:
     if args.mode == "capture":
         directory.mkdir(parents=True, exist_ok=True)
         record = read_capture(directory) or {"commit": here["commit"], "parts": {}, "seeds": []}
-        record.update(source=here["source"], dirty=bool(record.get("dirty") or here["dirty"]))
+        dirties = [record.get("dirty", False), here["dirty"]]
+        record.update(
+            format=CAPTURE_FORMAT,
+            source=here["source"],
+            dirty=True if True in dirties else (None if None in dirties else False),
+            content_hash=here["content_hash"],
+        )
         record["parts"].update({p: "pending" for p in parts})
         record["seeds"].append([lo, hi, args.chunk])
         write_capture(directory, record)
@@ -875,8 +1068,10 @@ def parent(args) -> int:
             record["parts"][part] = "failed" if failed else "ok"
             write_capture(directory, record)
     verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
+    groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] for p in parts))
     print(
         f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); "
+        f"groups: {groups}; seeds {lo}-{hi} ({hi - lo + 1}); "
         f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
         f"skipped (each a failure): {', '.join(skipped) or 'none'}"
     )
@@ -906,8 +1101,24 @@ def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr
             failed = True
         if ok:
             print(f"  {label} (--allow-new): {_names(ok)}", flush=True)
+    group = part.rsplit(".", 1)[-1]
+    if res["steps"] == 0:
+        print("  FAIL zero steps", flush=True)
+        failed = True
+    if res["calls"] == 0 and group not in NO_CALLS_OK:
+        print("  FAIL zero calls (nothing was run)", flush=True)
+        failed = True
     n_raised = sum(r[0] for r in res["raised"].values())
     print(f"  raised: {n_raised}/{res['calls']} outputs", flush=True)
+    counted = sum(r[0] for k, r in res["raised"].items() if k not in allow_raise)
+    calls = sum(r[1] for k, r in res["raised"].items() if k not in allow_raise)
+    calls += res["calls"] - sum(r[1] for r in res["raised"].values())
+    rate = counted / calls if calls else 0.0
+    if rate > args.raise_fail:
+        print(f"  FAIL raise share {rate:.2f} > --raise-fail {args.raise_fail}", flush=True)
+        failed = True
+    elif rate > args.raise_warn:
+        print(f"  WARN raise share {rate:.2f} > --raise-warn {args.raise_warn}", flush=True)
     for name, (count, calls, first) in res["raised"].items():
         every = calls > 0 and count == calls
         if every and name not in allow_raise:
@@ -938,6 +1149,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--subset-ok", action="store_true", help="compare a subset of the capture")
     p.add_argument("--same-ok", action="store_true", help="allow the capture's own commit")
     p.add_argument("--dirty-ok", action="store_true", help="allow a dirty checkout")
+    p.add_argument("--raise-warn", type=float, default=RAISE_WARN, help="warn above this share")
+    p.add_argument("--raise-fail", type=float, default=RAISE_FAIL, help="fail above this share")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 

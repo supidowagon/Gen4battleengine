@@ -446,6 +446,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.METRONOME,
     EffectId.COPYCAT,
     EffectId.ASSIST,  # an invoker (B10-11)
+    EffectId.ME_FIRST,  # an invoker (E3-2-3): the copied move's own effect decides
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -529,6 +530,12 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # Chatter (effect_script_0267.s:5-7) is a hit whose subscript_chatter (:5-6) confuses the
     # defender through subscript_confuse: a volatile status, no stage.
     EffectId.CHATTER,
+    # E3 batch 1: Splash / Kaizo Thief (effect_script_0085.s:5) and Teleport (effect_script_0153.s)
+    # write no stage: a used move's last_move and PP only.
+    EffectId.DO_NOTHING,
+    EffectId.FLEE,
+    EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
+    EffectId.TRICK_ROOM,  # E3-2-4: a field condition bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,
@@ -538,7 +545,12 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # Gravity (effects._gravity) sets FIELD_CONDITION_GRAVITY, whose x10/6 the check applies
 # (battle_controller_player.c:2972-2974); Transform (BtlCmd_Transform, battle_script.c:5330-5373) copies the
 # defender's statBoosts and ability (battle_mon.h:75, :84) and reruns its switch-in checks:
-# test_gravity_and_transform_are_seen_by_hit_thresholds.
+# test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
+# ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
+# test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds. Skill Swap (E3-2-5) swaps the two
+# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Gastro Acid (E3-2-6) suppresses the target's
+# ability (Compoundeyes, Hustle, ... read NONE at its check):
+# tests/engine/test_e3_batch1.py test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds.
 _FOLLOWED = frozenset(
     {
         EffectId.HAZE,
@@ -546,6 +558,9 @@ _FOLLOWED = frozenset(
         EffectId.ACUPRESSURE,
         EffectId.GRAVITY,
         EffectId.TRANSFORM,
+        EffectId.WORRY_SEED,
+        EffectId.SKILL_SWAP,
+        EffectId.GASTRO_ACID,
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.

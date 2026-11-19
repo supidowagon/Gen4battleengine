@@ -33,6 +33,7 @@ from tests.strategies import (
     possible_genders,
     recalc_stats,
     supported_state,
+    targets_for,
 )
 
 # Compiled once: every generated state has the same shapes and dtypes (plan ruling).
@@ -61,9 +62,16 @@ def _step_both(tables, s, acts, o, data):
     Pass's party list (E2 batch 6) is resumed with a drawn pick and a fresh outcome (each half
     reads its own draws), again for a second pause in the same turn."""
     for _ in range(3):
-        jax_out = jit_step(tables, s, acts, o)
+        targets = data.draw(targets_for(s))  # D2-1: ignored at B = 2 but for chosen_target
+        jax_out = jit_step(tables, s, acts, o, targets)
         ref_out = from_ref(
-            ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
+            ref_step(
+                to_numpy(tables),
+                to_ref(s),
+                tuple(int(x) for x in acts),
+                outcome_to_py(o),
+                [int(x) for x in targets],
+            )
         )
         for name, a, b in zip(jax_out._fields, jax_out, ref_out, strict=True):
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
@@ -333,11 +341,17 @@ def _transformed_learner(tables, names, cursor: int):
 @example(data=None, pinned=13)  # the Transformed active's own terminator (G-69)
 @example(data=None, pinned=1)  # the same learner one row in: Sand Attack at level 5
 def test_learn_resolve_matches_reference(tables, names, data, pinned):
-    np_tables = to_numpy(tables)
     if pinned is None:
         s = _learn_party(data.draw, tables, data.draw(supported_state(tables, names)))
+        _learns_match_reference(tables, s, lambda: data.draw(st.integers(0, 4)))
     else:
-        s = _transformed_learner(tables, names, pinned)
+        _learns_match_reference(tables, _transformed_learner(tables, names, pinned))
+
+
+def _learns_match_reference(tables, s, option=lambda: 4):
+    """Advance ``s``'s learns and resolve each (``option()``: the pick) on jit and reference;
+    both sides and the options offered must agree (tests/test_pinned_cases.py runs it too)."""
+    np_tables = to_numpy(tables)
     got = jit_advance(tables, s)
     _assert_same(got, from_ref(ref_advance_learns(np_tables, to_ref(s))))
     for _ in range(6):
@@ -345,7 +359,7 @@ def test_learn_resolve_matches_reference(tables, names, data, pinned):
             break
         options = [bool(x) for x in np.asarray(jit_options(tables, got))]
         assert options == ref_learn_options(np_tables, to_ref(got)) and options[4]
-        option = 4 if data is None else data.draw(st.integers(0, 4))
-        want = from_ref(ref_learn(np_tables, to_ref(got), option))
-        got = jit_learn(tables, got, jnp.int32(option))
+        pick = option()
+        want = from_ref(ref_learn(np_tables, to_ref(got), pick))
+        got = jit_learn(tables, got, jnp.int32(pick))
         _assert_same(got, want)

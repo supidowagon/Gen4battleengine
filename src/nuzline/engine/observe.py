@@ -214,6 +214,11 @@ _NONZERO_SIDE = (
     # F-2: "{0}'s {1} raised the power of its Fire-type moves!" (subscript_absorb_and_boost_
     # fire_type_moves.s:10) until the battler leaves.
     "flash_fire",
+    # E3 batch 1: "{0} was subjected to torment!" (subscript_torment_start.s) until it leaves.
+    "torment",
+    # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it
+    # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
+    "ability_suppressed",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

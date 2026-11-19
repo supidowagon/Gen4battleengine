@@ -84,11 +84,16 @@ def _species_with(tables, s, side: int, species: int, ability: int):
     Its stats and types stay as they were."""
     a = int(s.active[side])
     slots = [int(x) for x in np.asarray(tables.species_abilities_decomp)[species]]
+    slot = slots.index(ability)
+    # The engine ability too: one that differs from the species row reads as a script's write
+    # (``decomp_abilities``), which no Pokemon sent out has.
+    own = int(np.asarray(tables.species_abilities)[species, slot])
     return s._replace(
+        ability=s.ability.at[side, a].set(own),
         species=s.species.at[side, a].set(species),
         form=s.form.at[side, a].set(0),
         ability_form=s.ability_form.at[side, a].set(0),
-        ability_slot=s.ability_slot.at[side, a].set(slots.index(ability)),
+        ability_slot=s.ability_slot.at[side, a].set(slot),
     )
 
 

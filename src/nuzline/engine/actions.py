@@ -16,12 +16,13 @@ Move legality follows ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2255) for
 checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 (``CHECK_INVALID_NO_PP``), Disable (``CHECK_INVALID_DISABLED``: the slot holding
 ``disabled_move``), Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
-cannot pick a move whose power is 0) and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
+cannot pick a move whose power is 0), Torment (``CHECK_INVALID_TORMENTED``: the move used last)
+and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
 :2307-2315: a holder of a Choice item whose ``choice_lock`` is a move it knows can pick
 only that move; a lock it does not know is cleared there, which the engine reads as no
 lock), Imprison (``CHECK_INVALID_IMPRISONED``, :2287-2290: ``move_imprisoned``) and Gravity
-(``CHECK_INVALID_GRAVITY``, :2292-2295: ``gravity_banned``, G-67). Torment, Heal Block and
-Encore come with their mechanics. The
+(``CHECK_INVALID_GRAVITY``, :2292-2295: ``gravity_banned``, G-67). Torment (:2275-2279, E3-2-1),
+Heal Block and Encore come with their mechanics. The
 trainer AI scores the same mask (``TrainerAI_Init``, trainer_ai.c:234,
 ``CHECK_INVALID_ALL``). When every slot is invalid the decomp sets ``struggling`` instead
 of letting the player pick a move (battle_controller_player.c:433); here action 0 stays legal and means Struggle
@@ -43,16 +44,54 @@ subscript_uproar.s:5) is still a lock: ``FightCommand`` runs ``moveLockedInto``
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.format import format_of, party
-from nuzline.engine.ids import CHOICE_ITEMS, GRAVITY_MOVES, AbilityId, ItemId, Type
-from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, held_item
+from nuzline.engine.ids import (
+    CHOICE_ITEMS,
+    GRAVITY_MOVES,
+    MOVE_CURSE,
+    AbilityId,
+    ItemId,
+    MoveTarget,
+    Type,
+)
+from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, battler_ability, held_item
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 NUM_ACTIONS = MOVE_ACTIONS + SLOTS
 FIRST_ITEM_ACTION = NUM_ACTIONS  # opponent actions 10-13 use bag slot action - 10
 NUM_OPP_ACTIONS = FIRST_ITEM_ACTION + BAG_SLOTS
+
+# RANGE_MY_SIDE (include/constants/battle/moves.h:91): the ranges whose B = 2 target is the user
+# (BattleControllerPlayer_MustSelectTarget, bcp.c:4363-4367).
+MY_SIDE_RANGES = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+# The target menu's legal set per range (D2-2 rule 5, GetTargetSelectLayout / sMoveTargetSlotFlags,
+# battle_subscreen.c:1336-1364, :797-810), as relations of the user: columns user, partner
+# (b ^ 2), foe b ^ 1, foe b ^ 3; rows by ``MoveTarget``.
+_RELATIONS = np.zeros((len(MoveTarget), 4), bool)
+for _range, _row in {
+    MoveTarget.RANGE_SINGLE_TARGET: (0, 1, 1, 1),
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL: (1, 0, 0, 0),
+    MoveTarget.RANGE_RANDOM_OPPONENT: (1, 0, 0, 0),
+    MoveTarget.RANGE_ADJACENT_OPPONENTS: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALL_ADJACENT: (0, 1, 1, 1),
+    MoveTarget.RANGE_USER: (1, 0, 0, 0),
+    MoveTarget.RANGE_USER_SIDE: (1, 1, 0, 0),
+    MoveTarget.RANGE_FIELD: (1, 1, 1, 1),
+    MoveTarget.RANGE_OPPONENT_SIDE: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALLY: (0, 1, 0, 0),
+    MoveTarget.RANGE_USER_OR_ALLY: (1, 1, 0, 0),
+    MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST: (0, 0, 1, 1),
+}.items():
+    _RELATIONS[_range] = _row
 
 
 def locked_slot(state: BattleState, side) -> jnp.ndarray:
@@ -123,6 +162,10 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     )
     taunted = state.taunt[side] > 0
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
+    # CHECK_INVALID_TORMENTED (battle_lib.c:2275-2279): the slot holding ``movePrevByBattler``
+    # (``last_move``, 0 after a move that did not succeed: no slot then), E3-2-1.
+    tormented = (state.torment[side] > 0) & (moves == state.last_move[side])
+    usable = usable & ~tormented
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
     usable = usable & ~move_imprisoned(state, side, moves)  # CHECK_INVALID_IMPRISONED, :2287
     # CHECK_INVALID_GRAVITY (battle_lib.c:2292-2295): Move_FailsInHighGravity (G-67).
@@ -162,7 +205,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
     fmt = format_of(state)
     mon = state.active[side]
-    own = state.ability[party(fmt, side), mon]
+    own = battler_ability(state, side)
     types = state.types[party(fmt, side), mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
     iron = tables.item_effect[held_item(state, side, mon)] == ItemId.IRON_BALL
@@ -180,7 +223,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):
         other = state.active[foe]
-        theirs = state.ability[party(fmt, foe), other]
+        theirs = battler_ability(state, foe)
         live = (jnp.asarray(side) != foe) & (state.hp[party(fmt, foe), other] > 0)
         abilities = (
             ((theirs == AbilityId.SHADOW_TAG) & (own != AbilityId.SHADOW_TAG))
@@ -244,3 +287,147 @@ def decision_actions(tables: Tables, state: BattleState) -> jnp.ndarray:
     pivot_side = state.pivot_battler.astype(jnp.int32) - 1
     out = jnp.where(paused & (pivot_side != 0), wait, out)
     return jnp.where(paused & (pivot_side == 0), forced, out)
+
+
+def _present(state: BattleState, b) -> jnp.ndarray:
+    """``bool``: battler ``b``'s active Pokemon has HP (the engine's form of "not in
+    ``battlersSwitchingMask``" at a command point, bcp.c:4108-4111, :4132-4135; D2-1 rule 5)."""
+    fmt = format_of(state)
+    return state.hp[party(fmt, b), state.active[b]] > 0
+
+
+def selection_range(tables: Tables, state: BattleState, b, slot) -> jnp.ndarray:
+    """``int32``: the range ``BattleControllerPlayer_MustSelectTarget`` uses for battler ``b``'s
+    move slot ``slot`` (bcp.c:4344-4349): ``RANGE_USER`` for Curse (the move id, not its effect)
+    on a non-Ghost user, else the move's data range (D2-1 rule 3)."""
+    from nuzline.engine.effects import ghost_user  # effects imports this module
+
+    fmt = format_of(state)
+    move = state.moves[party(fmt, b), state.active[b], jnp.minimum(slot, MOVE_ACTIONS - 1)]
+    own = (move == MOVE_CURSE) & ~ghost_user(state, b)
+    return jnp.where(own, MoveTarget.RANGE_USER, tables.move_target[move]).astype(jnp.int32)
+
+
+def selects_target(tables: Tables, state: BattleState, b, action) -> jnp.ndarray:
+    """``bool``: battler ``b`` reaches ``COMMAND_SELECTION_TARGET_SELECT_INIT`` with ``action``
+    and writes ``battlerActions[b][1]`` (D2-1 rule 5): a move action of a present battler that
+    picks a command (not locked, bcp.c:334-338), has a usable move (not Struggle, :433-441), is
+    not encored (:442-453) and, at B = 4, is not using RANGE_ALLY with the partner absent
+    (bcp.c:4351-4357)."""
+    fmt = format_of(state)
+    action = jnp.asarray(action)
+    ok = (
+        (action < MOVE_ACTIONS)
+        & (locked_slot(state, b) < 0)
+        & jnp.any(usable_moves(tables, state, b))
+        & (state.encore_move[b] == 0)
+        & _present(state, b)
+    )
+    if fmt.B == 4:
+        ally_alone = (selection_range(tables, state, b, action) == MoveTarget.RANGE_ALLY) & ~(
+            _present(state, b ^ 2)
+        )
+        ok = ok & ~ally_alone
+    return ok
+
+
+def chosen_targets(tables: Tables, state: BattleState, actions, targets) -> jnp.ndarray:
+    """``int8[B]``: ``battlerActions[b][1]`` after the turn's command selection (D2-1): per
+    battler the new target when it ``selects_target``, else the stored ``chosen_target``. At
+    B = 2 the new target follows from the range (bcp.c:4363-4367: the user for a RANGE_MY_SIDE
+    range or a non-Ghost Curse, else ``b ^ 1``) and ``targets`` is ignored; at B = 4 it is
+    ``targets[b]`` (the menu's pick, bcp.c:548). ``step`` stores it at B = 4 only (ruling D2-28:
+    nothing reads it at B = 2; singles follow-up (ii) turns that write on)."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions)
+    out = []
+    for b in range(fmt.B):
+        if fmt.B == 2:
+            own = jnp.isin(
+                selection_range(tables, state, b, actions[b]), jnp.asarray(MY_SIDE_RANGES)
+            )
+            new = jnp.where(own, b, b ^ 1)
+        else:
+            new = jnp.asarray(targets)[b]
+        out.append(
+            jnp.where(selects_target(tables, state, b, actions[b]), new, state.chosen_target[b])
+        )
+    return jnp.stack(out).astype(state.chosen_target.dtype)
+
+
+def legal_targets(tables: Tables, state: BattleState, b, slot) -> jnp.ndarray:
+    """``bool[B]``: the battlers battler ``b`` may choose as the target of move slot ``slot``
+    (D2-2). B = 2: the one target ``MustSelectTarget`` writes (the user for a RANGE_MY_SIDE
+    range, else ``b ^ 1``, bcp.c:4363-4369). B = 4: the menu's row for the range
+    (``_RELATIONS``: user ``b``, partner ``b ^ 2``, foes ``b ^ 1`` and ``b ^ 3``), only the
+    battlers whose active Pokemon has HP (battle_controller.c:810-833, battle_subscreen.c:2575);
+    RANGE_ALLY with the partner absent gives none (bcp.c:4352-4357). Battlers 1 and 3 get the
+    same relations: the AI's real pick is D8's."""
+    fmt = format_of(state)
+    rng = selection_range(tables, state, b, slot)
+    if fmt.B == 2:
+        own = jnp.isin(rng, jnp.asarray(MY_SIDE_RANGES))
+        return jnp.arange(2) == jnp.where(own, b, b ^ 1)
+    flags = jnp.asarray(_RELATIONS)[rng]
+    who = jnp.stack([jnp.asarray(b), jnp.asarray(b) ^ 2, jnp.asarray(b) ^ 1, jnp.asarray(b) ^ 3])
+    out = jnp.zeros(fmt.B, bool).at[who].set(flags)
+    present = jnp.stack([_present(state, x) for x in range(fmt.B)])
+    return out & present
+
+
+def switch_targets(tables: Tables, state: BattleState, b) -> jnp.ndarray:
+    """``bool[SLOTS]``: the party slots battler ``b`` may switch to (D2-3 rule 7): today's
+    ``legal_replacements``, not the active slot of a partner that sends from the same party
+    (``CheckCanSwitchPokemon``, party.c:1640-1646), not while trapped, not while locked. At
+    B = 2 it is today's switch mask."""
+    fmt = format_of(state)
+    out = legal_replacements(state, b) & ~trapped(tables, state, b) & (locked_slot(state, b) < 0)
+    if fmt.B == 4:
+        same = party(fmt, b ^ 2) == party(fmt, b)
+        taken = (jnp.arange(SLOTS) == state.active[b ^ 2]) & same
+        out = out & ~taken
+    return out
+
+
+def legal_choices(tables: Tables, state: BattleState, b) -> jnp.ndarray:
+    """``bool[NUM_ACTIONS, B]``: battler ``b``'s legal (action, target) pairs (D2-3). An absent
+    battler has only ``[0, b]``; a move that selects a target (D2-1 ``selects_target``) takes any
+    row of ``legal_targets``, one that does not (Struggle, Encore, a lock, RANGE_ALLY with no
+    partner) writes none, so ``[action, b]`` is its one placeholder; a switch is ``[action, b]``
+    when its slot is in ``switch_targets``. Every selectable target stays: the stored value is
+    read later by a move lock (D2-3 rule 6)."""
+    fmt = format_of(state)
+    legal = legal_actions(tables, state, b)
+    placeholder = jnp.arange(fmt.B) == b
+    rows = []
+    for a in range(MOVE_ACTIONS):
+        picks = jnp.where(
+            selects_target(tables, state, b, a), legal_targets(tables, state, b, a), placeholder
+        )
+        rows.append(picks & legal[a])
+    switches = switch_targets(tables, state, b)
+    for k in range(SLOTS):
+        rows.append(placeholder & switches[k])
+    out = jnp.stack(rows)
+    absent = jnp.zeros_like(out).at[0, :].set(placeholder)
+    return jnp.where(_present(state, b), out, absent)
+
+
+def decision_pairs(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[NUM_ACTIONS, B, NUM_ACTIONS, B]``: the player's joint decision at B = 4 in DOUBLES
+    and TWO_TRAINERS, where it commands battlers 0 and 2 (D2-3 rules 1, 2, 8):
+    ``legal_choices`` of each, and not two switches to one slot (battler 2's party menu refuses
+    battler 0's pending slot, party.c:1653-1661). MULTI commands battler 0 alone
+    (``legal_choices(tables, state, 0)``): ValueError there and at B = 2."""
+    fmt = format_of(state)
+    if fmt.B != 4 or fmt.party_of[0] != fmt.party_of[2]:
+        raise ValueError("decision_pairs is the joint decision of DOUBLES and TWO_TRAINERS")
+    first = legal_choices(tables, state, 0)
+    second = legal_choices(tables, state, 2)
+    acts = jnp.arange(NUM_ACTIONS)
+    same_slot = (
+        (acts[:, None] >= MOVE_ACTIONS)
+        & (acts[None, :] >= MOVE_ACTIONS)
+        & (acts[:, None] == acts[None, :])
+    )
+    return first[:, :, None, None] & second[None, None, :, :] & ~same_slot[:, None, :, None]

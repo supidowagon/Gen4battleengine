@@ -277,6 +277,7 @@ _COND_TEXT = {
     "power_trick": "Power Trick",
     "embargo": "under Embargo",
     "flash_fire": "Flash Fire boost",
+    "ability_suppressed": "ability suppressed",
     "curse": "cursed",
     "spikes": "Spikes",
     "toxic_spikes": "Toxic Spikes",

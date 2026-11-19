@@ -274,6 +274,7 @@ BATCH3_ABILITIES = (
     AbilityId.TRUANT,
     AbilityId.DRY_SKIN,
     AbilityId.LIGHTNINGROD,
+    AbilityId.STORM_DRAIN,
     AbilityId.NO_GUARD,
     AbilityId.SERENE_GRACE,
     AbilityId.HONEY_GATHER,
@@ -673,6 +674,12 @@ def _draw_species_item(draw, tables: Tables, a: dict, side: int, active: int, na
     species, item, moves = draw(st.sampled_from(SPECIES_ITEMS))
     sid = names.species(species)
     a["species"][side, active] = sid
+    # Its own form, ability slot 0 and that row's engine ability: the old Pokemon's would read
+    # as a script's write (``damage.decomp_abilities``).
+    a["form"][side, active] = a["ability_form"][side, active] = a["ability_slot"][side, active] = 0
+    a["ability"][side, active] = int(
+        tables.species_abilities[int(tables.species_form_row[sid, 0]), 0]
+    )
     a["item"][side, active] = names.item(item)
     recalc_stats(tables, a, side, active)
     if moves:
@@ -1867,6 +1874,15 @@ def _draw_klutz(draw, tables: Tables, a: dict, side: int, active: int, names: Na
     Embargo count 1-5 on the active battler, and maybe (1 in 6) Embargo taught to it."""
     if draw(st.integers(0, 5)) == 0:
         a["embargo"][side] = draw(st.integers(1, 5))
+    # E3-2-6: maybe (1 in 6) Gastro Acid's bit on the active battler (``battler_ability`` then
+    # reads NONE for every ability the draws gave it, Klutz included), and maybe (1 in 6) Gastro
+    # Acid taught to it.
+    if draw(st.integers(0, 5)) == 0:
+        a["ability_suppressed"][side] = 1
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Gastro Acid")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
     if draw(st.integers(0, 5)) == 0:
         move = names.move("Embargo")
         if tables.move_effect[move] != EffectId.UNSUPPORTED:
@@ -2330,6 +2346,14 @@ def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
     return _ints(0, 1, shape)
 
 
+@st.composite
+def targets_for(draw, state: BattleState) -> jnp.ndarray:
+    """``int8[B]``: each battler's chosen target (D2-1), a battler 0..B-1. At B = 2 ``step``
+    ignores it (the range decides), so the draw only exercises that."""
+    count = state.active.shape[0]
+    return jnp.asarray([draw(st.integers(0, count - 1)) for _ in range(count)], jnp.int8)
+
+
 def any_outcome() -> st.SearchStrategy[Outcome]:
     """Every ``Outcome`` field uniform over its range (``hit``: either flag-only or any
     class value)."""
@@ -2378,6 +2402,10 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
         starf=_ints(0, 59, (2, 2)),
+        target_draw=_flag(sides),
+        call_target_draw=_flag(sides),
+        bide_target_draw=_flag(sides),
+        trace_pick=_flag((2, 5)),
     )
 
 

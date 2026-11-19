@@ -67,6 +67,7 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
     STARF_DRAWS,
+    TRACE_FIRES,
     AbilityId,
     EffectId,
     ItemId,
@@ -104,6 +105,7 @@ from nuzline.engine.state import (
     STAGE_MIN,
     VOLATILE_FIELDS,
     BattleState,
+    battler_ability,
     held_item,
     held_items,
 )
@@ -184,6 +186,21 @@ class Outcome(NamedTuple):
     # checks and Pluck), ``[b, 1]`` the faint replacement's switch-in check after it (kept in
     # ``BattleState.starf_roll`` between the turn and ``step.replace``, ``step.starf_kept``).
     starf: jnp.ndarray
+    # int8[B], the low bit of the one RandNext() a fight command's BattleSystem_Defender call may
+    # draw (bcp.c:1900; lib.c:1653, :1700, :4187), indexed by the acting battler; read only at
+    # B = 4 (``targets.resolve``), D2-4. Its sample key is 44.
+    target_draw: jnp.ndarray
+    # int8[B], the low bit of the RandNext() of GoToMoveScript's BattleSystem_Defender call for the
+    # called move (script.c:2121; SetMirrorMove's :3511), by the invoking battler; read only at
+    # B = 4 (``targets.called_defender``), D2-13. Its sample key is 45.
+    call_target_draw: jnp.ndarray
+    # int8[B], the low bit of the Bide release's BattleSystem_RandomOpponent RandNext (bcp.c:2707;
+    # lib.c:4187), by the Bide user; read only at B = 4 (``targets.bide_defender``), D2-14. Key 46.
+    bide_target_draw: jnp.ndarray
+    # int8[B, TRACE_FIRES]: the low bit of ChooseTraceTarget's RandNext (lib.c:7763), by the Trace
+    # holder and its fire number this step (``BattleState.ts_trace_fires``); read only at B = 4
+    # (``targets.trace_target``), D2-16 / ruling D2-5. Its sample key is 47.
+    trace_pick: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -222,6 +239,10 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         berry_confusion=sides + 2,
         chatter=sides,
         starf=jnp.zeros((fmt.B, 2), _I8),
+        target_draw=sides,
+        call_target_draw=sides,
+        bide_target_draw=sides,
+        trace_pick=jnp.zeros((fmt.B, TRACE_FIRES), _I8),
     )
 
 
@@ -288,11 +309,11 @@ def _rate(
     if target_confused is None:
         target_confused = ~fresh & (state.confusion[target] > 0)
     accuracy = tables.move_accuracy[move].astype(_I32)
-    a_ability = state.ability[party(fmt, side), state.active[side]]
+    a_ability = battler_ability(state, side)
     own = jnp.where(
         jnp.asarray(target_switches, bool),
         entry_ability(tables, state, target, target_mon, side),
-        state.ability[party(fmt, target), target_mon],
+        battler_ability(state, target, target_mon),
     )
     d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, own)
 
@@ -443,9 +464,8 @@ def stage_total(tables: Tables, state: BattleState, side, target, target_mon, ac
     """``int32``: the clamped stage sum ``6 + evaStages + accStages`` of
     ``CheckMoveHitAccuracy`` (bcp.c:2873-2898) for ``side``'s active battler against side
     ``target``'s ``target_mon`` on the field (``_rate``'s, with ``acc`` / ``eva_stage``)."""
-    fmt = format_of(state)
-    a_ability = state.ability[party(fmt, side), state.active[side]]
-    own = state.ability[party(fmt, target), target_mon]
+    a_ability = battler_ability(state, side)
+    own = battler_ability(state, target, target_mon)
     d_ability = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, own)
     acc = jnp.asarray(acc, _I32)
     eva = -jnp.asarray(eva_stage, _I32)
@@ -551,6 +571,7 @@ def future_thresholds(
         | (effect == EffectId.ACUPRESSURE)
     )
     free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
+    # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     weathers = jnp.stack(
         [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
@@ -631,11 +652,23 @@ def future_thresholds(
     # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238) ends a count of 1 before the
     # side-condition pass's hit (:1758-1783), except in Kaizo, whose sub_seq 238 sets it again
     # (``Tables.gravity_rearm``, G-67). A Transform used this turn copies a battler's ability and
-    # stages (BtlCmd_Transform, battle_script.c:5330-5373). Either way the roll is kept whole,
-    # rare and sound.
+    # stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its target's
+    # ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
+    # (subscript_exchange_abilities.s:21-24); a Gastro Acid suppresses its target's
+    # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
     ends = (state.gravity == 1) & (tables.gravity_rearm == 0)
     field_change = (
-        jnp.any(uses & ((effect == EffectId.GRAVITY) | (effect == EffectId.TRANSFORM))) | ends
+        jnp.any(
+            uses
+            & (
+                (effect == EffectId.GRAVITY)
+                | (effect == EffectId.TRANSFORM)
+                | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
+                | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
+                | (effect == EffectId.GASTRO_ACID)  # the target's ability is suppressed (E3-2-6)
+            )
+        )
+        | ends
     )
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
@@ -796,7 +829,10 @@ def _threshold_grid(
       Cloud Nine as the target, :2876-2947, bcp.c:3016-3021) and runs its switch-in checks again
       (step._use_move: the announce flags cleared, battle_script.c:5350-5358, rerun at
       bcp.c:3672-3673 and :3973), so a copied weather ability sets
-      its weather (``hooks.weather_ability``, battle_lib.c:3740-3790);
+      its weather (``hooks.weather_ability``, battle_lib.c:3740-3790); its Skill Swap (E3-2-5):
+      the foe holds the side's ability and the side the foe's
+      (subscript_exchange_abilities.s:21-24), and a weather ability one of them gained acts at the
+      move's end (``hooks.move_end_switch_in``);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
@@ -853,6 +889,24 @@ def _threshold_grid(
         & (stat == Stat.EVA)
     )
     held = tables.item_effect[held_items(state)]
+    # A foe's Worry Seed takes a Klutz holder's ability, so its item (hidden at the turn start,
+    # ``state.held_item``) is live at the check: the flags below read the raw item then
+    # (subscript_give_target_insomnia.s:11; battle_lib.c:5352-5356), E3-2-2.
+    mons = jnp.arange(fmt.B)
+    mon_ability = battler_ability(state, mons)  # Battler_HeldItem's Klutz (battle_lib.c:5354)
+    # The swap moves the raw BattleMon.ability (subscript_exchange_abilities.s:21-24).
+    raw_ability = state.ability[party(fmt, mons), state.active]
+    # A foe's Skill Swap does the same to a Klutz holder that does not get Klutz back
+    # (subscript_exchange_abilities.s:21-24; the foe's ability is the side's after it), and a
+    # foe's Gastro Acid to any Klutz holder (:10; Battler_Ability reads NONE, lib.c:3088-3093).
+    klutz_lost = (
+        foes(changes & (effect == EffectId.WORRY_SEED))
+        | foes(changes & (effect == EffectId.GASTRO_ACID))
+        | (foes(changes & (effect == EffectId.SKILL_SWAP)) & (foes(raw_ability) != AbilityId.KLUTZ))
+    ) & (mon_ability == AbilityId.KLUTZ)
+    held = jnp.where(
+        klutz_lost, tables.item_effect[state.item[party(fmt, mons), state.active]], held
+    )
     herb = held == ItemId.WHITE_HERB
     firsts = [
         action_order(tables, state, actions, empty_outcome(fmt)._replace(speed_tie=jnp.int8(t)))[0]
@@ -926,16 +980,50 @@ def _threshold_grid(
         # The foe's field move (the second variant): a weather move's weather (another move's
         # param 0 is no weather); a Transform's copied weather ability, which its switch-in checks
         # set (hooks.weather_ability); Gravity; the side's ability on the transformed foe.
+        # Raw: Transform and Skill Swap copy BattleMon.ability (battle_script.c:5342-5348;
+        # subscript_exchange_abilities.s:21-24).
         side_ability = state.ability[party(fmt, side), state.active[side]]
         copied_weather = ability_weather(side_ability)
+        # E3-2-5: a Skill Swap gives each battler the other's ability. An entry weather ability
+        # acts at the move's end (hooks.move_end_switch_in) for the battler whose flag is clear:
+        # the foe gaining the side's, else the side gaining the foe's (the weather abilities in
+        # the swap one battler already announced do not act again).
+        swap_move = effect[foe] == EffectId.SKILL_SWAP
+        foe_ability = state.ability[party(fmt, foe), state.active[foe]]  # raw, as side_ability
+        foe_weather = ability_weather(foe_ability)
+        swap_weather = jnp.where(
+            (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
+            copied_weather,
+            jnp.where(
+                (foe_weather != Weather.NONE) & (state.weather_announced[side] == 0),
+                foe_weather,
+                weather0,
+            ),
+        )
         moved_weather = jnp.where(
             effect[foe] == EffectId.WEATHER,
             stat[foe],
-            jnp.where(xform & (copied_weather != Weather.NONE), copied_weather, weather0),
+            jnp.where(
+                xform & (copied_weather != Weather.NONE),
+                copied_weather,
+                jnp.where(swap_move, swap_weather, weather0),
+            ),
         )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         gravity_move = effect[foe] == EffectId.GRAVITY
-        field_move = weather_move[foe] | (changes[foe] & (gravity_move | xform))
+        # E3-2-2: the foe's Worry Seed makes the side's own ability Insomnia before the check
+        # (subscript_give_target_insomnia.s:11; the side loses Compoundeyes, Hustle, Simple,
+        # Unaware, No Guard, ...). The foe's own accuracy check (Worry Seed's, 100) came first.
+        worry_move = effect[foe] == EffectId.WORRY_SEED
+        # E3-2-6: the foe's Gastro Acid suppresses the side's ability before the check
+        # (subscript_suppress_target_ability.s:10; Battler_Ability reads NONE, so the side
+        # loses Compoundeyes, Hustle, Simple, Unaware, No Guard, ... as attacker, bcp.c:2876-2947).
+        # In singles the user's own ability is the foe's, and it is not the defender of the
+        # side's later check; a doubles Gastro Acid on a defender is the doubles milestone's.
+        gastro_move = effect[foe] == EffectId.GASTRO_ACID
+        field_move = weather_move[foe] | (
+            changes[foe] & (gravity_move | xform | worry_move | swap_move | gastro_move)
+        )
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
@@ -981,29 +1069,48 @@ def _threshold_grid(
             foe=foe,
             xf=xform,
             grav=gravity_move,
+            wk=worry_move,
+            sw=swap_move,
+            ga=gastro_move,
+            foe_old=foe_ability,
             copied=side_ability,
         ):
             embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
             foe_mon = state.active[foe]
-            ability = jnp.where(f & xf, copied, state.ability[party(fmt, foe), foe_mon])
+            # Transform copies the side's ability onto the foe; Skill Swap also gives the side
+            # the foe's (below). Raw writes of BattleMon.ability.
+            ability = jnp.where(f & (xf | sw), copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
             # The copy also holds the side's species and ability row and slot, which
             # NO_CLOUD_NINE reads (damage.decomp_abilities): a foe that loses its own Cloud
             # Nine / Air Lock by its Transform no longer suppresses the weather (F-25).
-            mine, theirs = (party(fmt, side), state.active[side]), (party(fmt, foe), foe_mon)
+            side_mon = state.active[side]
+            mine, theirs = (party(fmt, side), side_mon), (party(fmt, foe), foe_mon)
 
             def take(arr):
                 return arr.at[theirs].set(jnp.where(f & xf, arr[mine], arr[theirs]))
 
+            insomnia = jnp.where(
+                f & wk,
+                AbilityId.INSOMNIA,
+                jnp.where(f & sw, foe_old, state.ability[party(fmt, side), side_mon]),
+            )
             hidden = state._replace(
                 embargo=state.embargo.at[side].set(embargo),
-                ability=state.ability.at[party(fmt, foe), foe_mon].set(
-                    ability.astype(state.ability.dtype)
-                ),
+                ability=state.ability.at[party(fmt, foe), foe_mon]
+                .set(ability.astype(state.ability.dtype))
+                .at[party(fmt, side), side_mon]
+                .set(insomnia.astype(state.ability.dtype)),
                 species=take(state.species),
                 ability_form=take(state.ability_form),
                 ability_slot=take(state.ability_slot),
                 gravity=gravity.astype(state.gravity.dtype),
+                # Gastro Acid's bit (MOVE_EFFECT_ABILITY_SUPPRESSED), the side's own.
+                ability_suppressed=state.ability_suppressed.at[side].set(
+                    jnp.where(f & ga, 1, state.ability_suppressed[side]).astype(
+                        state.ability_suppressed.dtype
+                    )
+                ),
             )
             return _hit_threshold(
                 tables, hidden, actions, side, a, e, m, w, c, moves[side], overrides, k, lk
@@ -1056,7 +1163,8 @@ def side_crit_odds(tables: Tables, state: BattleState, side, move) -> jnp.ndarra
     # _0209.s:5), B13-2.
     stage = stage + ((tables.move_flags[move].astype(_I32) & MoveFlag.CRIT_UP) != 0).astype(_I32)
     mon = state.active[side]
-    # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability.
+    # battle_lib.c:7126: + (attackerAbility == ABILITY_SUPER_LUCK), the battler's own ability:
+    # raw BattleMon.ability (:7122), not Battler_Ability, so Gastro Acid leaves it.
     stage = stage + (state.ability[party(fmt, side), mon] == AbilityId.SUPER_LUCK).astype(_I32)
     # :7123: + 2 for the attacker's VOLATILE_CONDITION_FOCUS_ENERGY (B12-4).
     stage = stage + 2 * (state.focus_energy[side] != 0).astype(_I32)
@@ -1108,6 +1216,45 @@ def _remove_held_item(state: BattleState) -> BattleState:
     return state._replace(item=state.item.at[party(fmt, battlers), state.active].set(0))
 
 
+def _insomnia_all(state: BattleState) -> BattleState:
+    """Worry Seed's write to the crit inputs: subscript_give_target_insomnia.s:11 sets the
+    defender's ``BattleMon.ability`` to Insomnia, which removes Super Luck (battle_lib.c:7126)
+    and a Klutz holder's hidden crit item (:7117), here every battler's own. A Battle Armor or
+    Shell Armor target (``armored``) is the defender of another battler's hit: the Worry Seed
+    user's own action is no hit, so no such hit follows in singles."""
+    fmt = format_of(state)
+    battlers = jnp.arange(state.active.shape[0])
+    return state._replace(
+        ability=state.ability.at[party(fmt, battlers), state.active].set(
+            jnp.asarray(AbilityId.INSOMNIA, state.ability.dtype)
+        )
+    )
+
+
+def _suppress_all(state: BattleState) -> BattleState:
+    """Gastro Acid's write to the crit inputs: subscript_suppress_target_ability.s:10 sets the
+    defender's MOVE_EFFECT_ABILITY_SUPPRESSED, here every battler's own. CalcCrit's own-ability
+    read is raw (battle_lib.c:7122, :7126: Super Luck stays), but a Klutz holder's crit item
+    becomes live (``Battler_HeldItem``, :7117, :5352-5356: ``Battler_Ability``); the defender's
+    Battle Armor / Shell Armor read (:7135-7136, ``Battler_IgnorableAbility``) is ``armored``'s,
+    another battler's hit, which in singles no Gastro Acid user's own action precedes."""
+    return state._replace(ability_suppressed=jnp.ones_like(state.ability_suppressed))
+
+
+def _swap_abilities_all(state: BattleState) -> BattleState:
+    """Skill Swap's write to the crit inputs: subscript_exchange_abilities.s:21-24 swaps the user's
+    and the defender's ``BattleMon.ability``, which moves Super Luck (battle_lib.c:7126) and a
+    Klutz holder's hidden crit item (:7117), here every battler's own becoming its foe's. A Battle
+    Armor or Shell Armor target is another battler's hit, ``armored``'s (a Skill Swap user counts
+    as a Transform user there)."""
+    fmt = format_of(state)
+    battlers = jnp.arange(state.active.shape[0])
+    ability = state.ability[party(fmt, battlers), state.active]  # raw: the swap's own read
+    return state._replace(
+        ability=state.ability.at[party(fmt, battlers), state.active].set(foes(ability))
+    )
+
+
 def _embargo_all(state: BattleState) -> BattleState:
     """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
     embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
@@ -1125,6 +1272,9 @@ CRIT_ODDS_EFFECTS = {
     EffectId.HAZE: _clear_focus_energy,
     EffectId.KNOCK_OFF: _remove_held_item,
     EffectId.EMBARGO: _embargo_all,
+    EffectId.WORRY_SEED: _insomnia_all,
+    EffectId.SKILL_SWAP: _swap_abilities_all,
+    EffectId.GASTRO_ACID: _suppress_all,
 }
 
 
@@ -1232,19 +1382,22 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    xform = uses & (tables.move_effect[jnp.asarray(moves, _I32)] == EffectId.TRANSFORM)
+    # A foe's Skill Swap (E3-2-5) likewise gives the foe the side's ability.
+    foe_effect = tables.move_effect[jnp.asarray(moves, _I32)]
+    xform = uses & ((foe_effect == EffectId.TRANSFORM) | (foe_effect == EffectId.SKILL_SWAP))
     out = []
     for side in range(fmt.B):
         target, switches, target_mon = _target_mon(state, actions, side)
-        own_ability = state.ability[party(fmt, side), state.active[side]]
-        mold = own_ability == AbilityId.MOLD_BREAKER
+        mold = battler_ability(state, side) == AbilityId.MOLD_BREAKER
         # A newcomer holds its entry ability, the traced copy included (ruling B3-19).
         own = jnp.where(
             switches,
             entry_ability(tables, state, target, target_mon, side),
-            state.ability[party(fmt, target), target_mon],
+            battler_ability(state, target, target_mon),
         )
         armor = (own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)
+        # Raw: the foe's Transform / Skill Swap copies BattleMon.ability (battle_script.c:5342-5348).
+        own_ability = state.ability[party(fmt, side), state.active[side]]
         copied = (own_ability == AbilityId.SHELL_ARMOR) | (own_ability == AbilityId.BATTLE_ARMOR)
         out.append(~mold & armor & (~xform[_foe(side)] | copied))
     return jnp.stack(out)
@@ -1267,7 +1420,7 @@ def secondary_chance(tables: Tables, state: BattleState, moves) -> jnp.ndarray:
     ``RandNext() % 100 < chance``."""
     fmt = format_of(state)
     chance = read_chance(tables, moves)
-    grace = state.ability[party(fmt, jnp.arange(fmt.B)), state.active] == AbilityId.SERENE_GRACE
+    grace = battler_ability(state, jnp.arange(fmt.B)) == AbilityId.SERENE_GRACE
     return jnp.where(grace, chance * 2, chance)
 
 
@@ -1450,6 +1603,7 @@ def _armed_trace(tables: Tables, state: BattleState, actions, paused, pivot) -> 
             & trace_copy(tables, state, side, foe, target=slot)
         )
         mon = state.active[side]
+        # Raw: subscript_trace.s:6-7 copies BATTLEMON_ABILITY.
         new = jnp.where(
             copies, state.ability[party(fmt, foe), slot], ability[party(fmt, side), mon]
         )
@@ -1802,11 +1956,25 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         <= jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        # BattleSystem_Defender's one RandNext() & 1 (lib.c:1653, :1700, :4187), read at B = 4 only
+        # (D2-4, ledger D2-4 section R8). From a fold_in key: every field above keeps its samples.
+        target_draw=jax.random.randint(jax.random.fold_in(key, 44), per_side, 0, 2, dtype=_I32),
+        # GoToMoveScript's / the Bide release's / ChooseTraceTarget's one RandNext() & 1 (D2-13,
+        # D2-14, D2-16; keys 45-47, read at B = 4 only).
+        call_target_draw=jax.random.randint(
+            jax.random.fold_in(key, 45), per_side, 0, 2, dtype=_I32
+        ),
+        bide_target_draw=jax.random.randint(
+            jax.random.fold_in(key, 46), per_side, 0, 2, dtype=_I32
+        ),
+        trace_pick=jax.random.randint(
+            jax.random.fold_in(key, 47), (fmt.B, TRACE_FIRES), 0, 2, dtype=_I32
+        ),
         # Starf Berry (battle_lib.c:4864-4866): RandNext() % 5 until the stat is below +6, uniform
         # over the eligible stats by the % n convention; one value in [0, 60) serves every count 1-5
-        # (F-10): the turn's and the faint replacement's.
+        # (F-10): the turn's and the faint replacement's. Key 48 (main's D2 draws hold 44-47).
         starf=jax.random.randint(
-            jax.random.fold_in(key, 47), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
+            jax.random.fold_in(key, 48), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
         ),
     )
     outcome = _cast(outcome)

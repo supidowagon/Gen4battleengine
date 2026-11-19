@@ -120,6 +120,7 @@ from nuzline.engine.damage import (
     AI_WEATHER_BALL,
     ai_move_type,
     ai_weather_ball_typed,
+    battler_decomp_ability,
     decomp_abilities,
     divide,
     hidden_power,
@@ -467,9 +468,9 @@ def wonder_guard_bit(
     atk_side = jnp.asarray(atk_side, _I32)
     def_side = jnp.asarray(def_side, _I32)
     move = jnp.asarray(move, _I32)
-    ability = decomp_abilities(tables, state)
-    attacker = ability[atk_side, state.active[atk_side]]
-    defender = ability[def_side, state.active[def_side]]
+    # Battler_IgnorableAbility (battle_lib.c:2649): Battler_Ability of both.
+    attacker = battler_decomp_ability(tables, state, atk_side)
+    defender = battler_decomp_ability(tables, state, def_side)
     return (
         (attacker != _MOLD_BREAKER)
         & (defender == _WONDER_GUARD)
@@ -511,7 +512,9 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     gravity = state.gravity
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
-    ability = decomp_abilities(tables, state)  # the engine's current abilities
+    # The engine's current abilities, raw: the refusal scan below is over every party slot, and
+    # AI_CannotDamageWonderGuard reads battleMons[].ability (trainer_ai.c:3298).
+    ability = decomp_abilities(tables, state)
     d_ability = ability[0, d]
     present = species > 0
 
