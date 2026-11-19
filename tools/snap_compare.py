@@ -52,28 +52,36 @@ _step_both draws them). Per segment: jit(step_events), jit(step), ref_step via f
 jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), jit(decision_actions),
 root_belief. Per drawn turn also one state the vanilla AI accepts (tests.ai.test_ai_legality's
 gated_states: Roark's real party against the sample party, with random HP, stages, trap,
-0..BAG_SLOTS Potions in the bag and AI knowledge; the random segments' opponents mostly hold moves whose AI script paths are not
-transcribed, so the AI refuses them): ai_action_distribution. Roark: the golden replay of
+0..BAG_SLOTS Potions in the bag and AI knowledge; the random segments' opponents mostly hold
+moves whose AI script paths are not transcribed, so the AI refuses them):
+ai_action_distribution. Roark: the golden replay of
 tests/golden/kaizo_roark_02.json (its converted states, replay_turn and the reference replay of
 each turn) and rank_actions at tests.engine.helpers.roark_real_state, N = 256, PRNGKey(0).
 
-DIR/capture.json records the commit (git HEAD or --commit), whether the checkout was dirty
-(null without git: "not checkable"), ``content_hash`` (sha256 over everything the child runs:
-src/nuzline/**/*.py, tools/*.py, tests/strategies*.py, tests/engine/helpers.py, tests/ai/*.py,
-the golden trace and every built table file a part reads; CRLF read as LF in text files), each
+DIR/capture.json records its ``format`` (CAPTURE_FORMAT), the commit (git HEAD or --commit),
+whether the checkout was dirty (null without git: "not checkable"), ``content_hash``, each
 captured part with its status (ok / failed / pending) and each seed run [A, B, chunk].
-capture refuses a non-empty DIR unless its capture.json names the same commit (a partial
-re-capture then adds or replaces parts); it fails before running on a dirty checkout (unless
---dirty-ok), when no commit is known, or when the folder's earlier parts were captured from other
-code (another content hash).
+``content_hash`` is a sha256 over everything the child imports or reads, by content: the
+running snap_compare.py (``__file__``, not --repo's copy), src/nuzline/**/*.py, tools/*.py,
+tests/__init__.py, tests/strategies*.py, tests/ai_legality.py, tests/engine/__init__.py,
+tests/engine/helpers.py, tests/ai/*.py, tests/fixtures/sample_party.toml, the golden trace and
+every built file a part reads (both tables.npz and manifest.json, and learnsets, trainers,
+species, forms and form_rows .json of data/intermediate and data/intermediate_kaizo). A .npz
+counts by its arrays (names, dtypes, shapes, bytes; not the zip's timestamps), a .json by its
+parsed value, any other file by its bytes with CRLF read as LF; so two builds of the same tables
+hash equal. capture refuses a non-empty DIR unless its capture.json names the same commit (a
+partial re-capture then adds or replaces parts); it fails before running on a dirty checkout
+(unless --dirty-ok), when no commit is known, when the folder's earlier parts were captured from
+other code (another content hash), or by an older snap_compare (see compare).
 
 compare: reruns every output from the saved inputs (no redraw); its "gen" part redraws the
 generator and checks it still draws the saved inputs (on capture, "gen" records them). Before
 running it fails when: capture.json records no commit or no part list; a part to run was not
 captured or is not "ok"; it runs a strict subset of the captured parts (unless --subset-ok);
 both commits, or both content hashes, are the same (unless --same-ok; both hashes are
-printed, so a checkout without git is tied to its code, not only to --commit); the capture
-records no content hash; either side is dirty (unless --dirty-ok); or this
+printed, so a checkout without git is tied to its code, not only to --commit); capture.json
+was written by an older snap_compare (no ``content_hash`` or ``dirty`` key, or another
+``format``: it says to re-capture); either side is dirty (unless --dirty-ok); or this
 checkout's commit is unknown.
 
 Parts: each seed chunk runs as six processes ("step": the draw on capture, jit(step_events),
@@ -87,7 +95,8 @@ A later commit rebuilds them by field name: a field it has that the capture lack
 singles zero (BattleState: ``state.LAYOUT``'s shape and dtype) or at ``empty_outcome()``'s value
 (Outcome); a captured field it lacks is dropped; a saved BattleState field whose shape or dtype
 differs from ``LAYOUT``, a saved Outcome field whose shape or dtype differs from
-``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an error (the part fails). Each one-sided input field is reported
+``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an error (the part
+fails). Each one-sided input field is reported
 (``in_state.NAME`` / ``in_outcome.NAME``). Outputs (states, Outcomes, events, reference
 outputs) are flattened to "path" -> (kind, dtype, shape, bytes) entries keyed by name. compare
 checks the entries present on both sides byte for byte (dtype, shape and bytes) and lists, per
@@ -95,8 +104,9 @@ part, the entries present on one side only (indices folded to []).
 
 An output that raised is stored as its exception (a refusal is an output) and compared like
 one: a raise against a result (a value or a structure) is a divergence, never a one-sided entry
-that --allow-new could pass. Floats (Python, np.float64) compare by value with every NaN equal;
-arrays compare by bytes. Each part prints its raise count and, per
+that --allow-new could pass. Floats (Python, np.float64) compare by their IEEE-754 bytes, as
+arrays do: a float and an np.float64 of one value are equal; -0.0 against 0.0, or two NaN
+payloads, differ. Each part prints its raise count and, per
 function, count/calls and the first error.
 
 Pass: compare prints "compare: ok" and exits 0 only when every precondition above holds, every
@@ -121,10 +131,10 @@ import dataclasses
 import gzip
 import hashlib
 import json
-import math
 import os
 import pickle
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -145,27 +155,48 @@ LIST_SHOWN = 8  # one-sided field names printed per part
 RAISE_WARN = 0.5  # a part's raise share above which it warns
 RAISE_FAIL = 0.95  # ... and fails
 NO_CALLS_OK = ("gen",)  # groups with no timed call (the generator check)
-# Beyond the built files in NEEDS, what the child runs: the content hash covers these.
-HASHED = ("tests/strategies*.py", "tests/engine/helpers.py", "tests/ai/*.py", "tools/*.py")
+# Beyond src/nuzline/**/*.py, the running script and the built files in NEEDS, what the child
+# imports or reads (traced by its imports and opens): the content hash covers these. The
+# checkout's own tools/snap_compare.py is left out: the script that runs is hashed instead.
+HASHED = (
+    "tests/__init__.py",
+    "tests/strategies*.py",
+    "tests/ai_legality.py",
+    "tests/engine/__init__.py",
+    "tests/engine/helpers.py",
+    "tests/ai/*.py",
+    "tests/fixtures/sample_party.toml",
+    "tools/*.py",
+)
 # Paths whose untracked files make a git checkout dirty (tracked changes count anywhere).
-WATCHED = ("src", "tools", "tests/strategies*", "tests/engine/helpers.py", "tests/ai")
+WATCHED = (
+    "src",
+    "tools",
+    "tests/__init__.py",
+    "tests/strategies*",
+    "tests/ai_legality.py",
+    "tests/engine/__init__.py",
+    "tests/engine/helpers.py",
+    "tests/ai",
+    "tests/fixtures/sample_party.toml",
+)
+CAPTURE_FORMAT = 2  # capture.json / the saved entries; older captures must be re-captured
 
 # Built files each part reads (relative to the checkout).
 VANILLA_TABLES = ("data/gen4_platinum/tables.npz", "data/gen4_platinum/manifest.json")
+INTERMEDIATE = ("learnsets", "trainers", "species", "forms", "form_rows")  # IntermediateData
+VANILLA_INTERMEDIATE = tuple(f"data/intermediate/{n}.json" for n in INTERMEDIATE)
 NEEDS = {
-    "seed": (
-        *VANILLA_TABLES,
-        "data/intermediate/learnsets.json",
-        "data/intermediate/trainers.json",
-    ),
+    "seed": (*VANILLA_TABLES, *VANILLA_INTERMEDIATE),
     "roark.trace": (
         *VANILLA_TABLES,
+        *VANILLA_INTERMEDIATE,
         "data/gen4_platinum_kaizo/tables.npz",
         "data/gen4_platinum_kaizo/manifest.json",
-        "data/intermediate_kaizo/trainers.json",
+        *(f"data/intermediate_kaizo/{n}.json" for n in INTERMEDIATE),
         "tests/golden/kaizo_roark_02.json",
     ),
-    "roark.rank": (*VANILLA_TABLES, "data/intermediate/trainers.json"),
+    "roark.rank": (*VANILLA_TABLES, *VANILLA_INTERMEDIATE),
 }
 
 
@@ -207,9 +238,8 @@ def canon(x, path: str = "", out: dict | None = None) -> dict:
             canon(v, f"{path}[{i}]", out)
         for k in sorted(getattr(x, "__dict__", {})):  # Ranking.all_zero
             canon(vars(x)[k], f"{path}.{k}", out)
-    elif isinstance(x, float):  # Python and np.float64: by value, every NaN one value
-        v = float(x)
-        out[path] = ("py", "float", "", b"nan" if math.isnan(v) else repr(v).encode())
+    elif isinstance(x, float):  # Python and np.float64: by bytes, as arrays (NaN payloads too)
+        out[path] = ("py", "float", "", struct.pack("<d", float(x)))
     elif isinstance(x, (str, bool, int)) or x is None:
         out[path] = ("py", type(x).__name__, "", repr(x).encode())
     else:
@@ -247,6 +277,9 @@ def first_diff(want: dict, got: dict) -> str | None:
             x = np.frombuffer(a[3], dt).reshape(shape)
             y = np.frombuffer(b[3], dt).reshape(shape)
             return f"{k}{list(idx)}: {x[idx]!r} -> {y[idx]!r}"
+        if a[:2] == b[:2] == ("py", "float"):
+            x, y = (struct.unpack("<d", e[3])[0] for e in (a, b))
+            return f"{k}: {x!r} ({a[3].hex()}) -> {y!r} ({b[3].hex()})"
         return f"{k}: {a[:3]} {a[3][:80]!r} -> {b[:3]} {b[3][:80]!r}"
     return None
 
@@ -773,23 +806,44 @@ def plan_parts(seeds: str, chunk: int, parts_arg: str | None, no_roark: bool):
 
 
 def content_hash(repo: Path) -> str:
-    """sha256 over the code the child runs and the built files it reads (see the docstring):
-    each file's relative path and bytes, in path order; missing built files are skipped (the
-    part is SKIPPED anyway); CRLF is read as LF in .py and .json files."""
+    """sha256 over the code the child runs and the files it reads (see the docstring): each
+    file's relative path and content, in path order, then the running script (``__file__``,
+    which is not ``repo``'s own tools/snap_compare.py when it captures another checkout);
+    missing built files are skipped (the part is SKIPPED anyway). Content, so that two builds
+    of the same tables hash equal: a .npz file is its arrays (sorted names, dtype, shape,
+    bytes; np.savez_compressed stamps the zip with the build time), a .json file its parsed
+    value re-dumped in its own order (whitespace and line endings left out), any other file its
+    bytes with CRLF read as LF."""
     files = set((repo / "src" / "nuzline").rglob("*.py"))
     for pattern in HASHED:
         files |= set(repo.glob(pattern))
+    files.discard(repo / "tools" / "snap_compare.py")
     files |= {repo / f for fs in NEEDS.values() for f in fs}
+    named = [(p.relative_to(repo).as_posix(), p) for p in files if p.is_file()]
     h = hashlib.sha256()
-    for p in sorted(files, key=lambda q: q.relative_to(repo).as_posix()):
-        if not p.is_file():
-            continue
-        data = p.read_bytes()
-        if p.suffix in (".py", ".json"):
-            data = data.replace(b"\r\n", b"\n")
-        h.update(f"{p.relative_to(repo).as_posix()}\0{len(data)}\0".encode())
+    for name, p in [*sorted(named), ("<running>/snap_compare.py", Path(__file__).resolve())]:
+        data = file_content(p)
+        h.update(f"{name}\0{len(data)}\0".encode())
         h.update(data)
     return h.hexdigest()
+
+
+def file_content(p: Path) -> bytes:
+    """``p``'s content as content_hash reads it."""
+    if p.suffix == ".npz":
+        import numpy as np
+
+        h = hashlib.sha256()
+        with np.load(p, allow_pickle=False) as z:
+            for name in sorted(z.files):
+                a = np.ascontiguousarray(z[name])
+                h.update(f"{name}\0{a.dtype.str}\0{a.shape}\0".encode())
+                h.update(a.tobytes())
+        return h.digest()
+    if p.suffix == ".json":
+        value = json.loads(p.read_text(encoding="utf-8"))
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+    return p.read_bytes().replace(b"\r\n", b"\n")
 
 
 def git_info(repo: Path) -> dict | None:
@@ -821,9 +875,9 @@ def git_info(repo: Path) -> dict | None:
 
 
 def identify(repo: Path, given: str | None) -> tuple[dict, list[str]]:
-    """This checkout's ``{"commit", "dirty", "source", "content_hash"}`` and its problems: an invalid --commit,
-    a --commit git contradicts, no commit at all, or ``dirty: ...``. ``dirty`` is None (not
-    checkable) without git."""
+    """This checkout's ``{"commit", "dirty", "source", "content_hash"}`` and its problems: an
+    invalid --commit, a --commit git contradicts, no commit at all, or ``dirty: ...``.
+    ``dirty`` is None (not checkable) without git."""
     problems = []
     if given is not None and not SHA.fullmatch(given):
         problems.append(f"--commit {given!r} is not a full 40-hex commit")
@@ -842,7 +896,8 @@ def identify(repo: Path, given: str | None) -> tuple[dict, list[str]]:
 
 
 def _show(c: dict) -> str:
-    dirty = {True: " (dirty)", None: " (dirty: not checkable)"}.get(c.get("dirty"), "")
+    marks = {True: " (dirty)", None: " (dirty: not checkable)"}
+    dirty = marks.get(c["dirty"], "") if "dirty" in c else ""  # no key: an older capture
     return f"{c.get('commit')}{dirty}"
 
 
@@ -873,7 +928,9 @@ def capture_problems(args, directory: Path, here: dict, problems: list[str]) -> 
                 f"{directory} holds a capture of {old['commit']}, not {here['commit']}: "
                 "use an empty folder"
             )
-        elif old.get("content_hash") not in (None, here["content_hash"]):
+        elif why := old_capture(old):
+            out.append(f"{directory}: {why}")
+        elif old["content_hash"] != here["content_hash"]:
             out.append(
                 f"{directory} holds parts captured from other code (content hash "
                 f"{old['content_hash']}, this checkout {here['content_hash']}): "
@@ -882,18 +939,35 @@ def capture_problems(args, directory: Path, here: dict, problems: list[str]) -> 
     return out
 
 
+def old_capture(c: dict) -> str | None:
+    """Why capture.json ``c`` was written by an older snap_compare (no ``content_hash`` or
+    ``dirty`` key, or another ``format``), or None. Its hash, dirty state or saved floats
+    cannot be checked: it is refused, never read as "not checkable"."""
+    lacks = [k for k in ("content_hash", "dirty") if k not in c]
+    if not lacks and c.get("format") == CAPTURE_FORMAT:
+        return None
+    what = f"no {' / '.join(lacks)}" if lacks else f"format {c.get('format')}"
+    return (
+        f"the capture was made by an older snap_compare (capture.json: {what}; this script "
+        f"writes format {CAPTURE_FORMAT}): re-capture it with this script into an empty folder"
+    )
+
+
 def compare_problems(args, base: dict | None, here: dict, problems, parts) -> list[str]:
     """Why compare must not start (the docstring's list)."""
     out = _keep(problems, args.dirty_ok)
     if base is None or not base.get("commit"):
         return [*out, "the capture records no commit (capture.json)"]
-    if base.get("dirty") and not args.dirty_ok:
+    why = old_capture(base)
+    if why:
+        return [*out, why]
+    if base["dirty"] and not args.dirty_ok:
         out.append(f"the capture's checkout was dirty ({base['commit']}; --dirty-ok to allow)")
-    if base.get("dirty") is None:
+    if base["dirty"] is None:  # the key is there (old_capture): recorded without git
         print("the capture's checkout: dirty state not checkable (no git)", flush=True)
     if base["commit"] == here["commit"] and not args.same_ok:
         out.append("same commit on both sides (--same-ok to allow)")
-    if not base.get("content_hash"):
+    if not base["content_hash"]:
         out.append("the capture records no content hash (capture.json)")
     elif base["content_hash"] == here["content_hash"] and not args.same_ok:
         out.append(f"same content hash on both sides ({here['content_hash']}; --same-ok to allow)")
@@ -961,6 +1035,7 @@ def parent(args) -> int:
         record = read_capture(directory) or {"commit": here["commit"], "parts": {}, "seeds": []}
         dirties = [record.get("dirty", False), here["dirty"]]
         record.update(
+            format=CAPTURE_FORMAT,
             source=here["source"],
             dirty=True if True in dirties else (None if None in dirties else False),
             content_hash=here["content_hash"],

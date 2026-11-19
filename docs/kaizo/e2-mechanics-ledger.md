@@ -419,7 +419,7 @@ Files E2 touches that another stream owns (send with the family list):
 
 - D2: targets, the action space and redirection (plan above).
 - D3: the four-actor turn.
-  - Owed (D3/D6): step.py `_faint_check` (~2504) reads species[0]/species[1] as the two sides; for
+  - Owed (D3/D6): step.py `_faint_check` (~2733) reads species[0]/species[1] as the two sides; for
     TWO_TRAINERS/MULTI a side is out only when all its parties are empty. The same in
     reference/engine.py `_faint_check` (`s.parties[0]` / `s.parties[1]`), and its payout of a side-1
     faint indexes `s.parties[1]` (`_grant_exp`): party 2's slot in TWO_TRAINERS (D10 with exp).
