@@ -12,9 +12,10 @@ decomp are not generated; each such case is logged in docs/discrepancies.md
 is generated: both calculators drop the weather modifiers (``NO_CLOUD_NINE``,
 battle_lib.c:6921, :7046; ``damage.weather_suppressed``).
 
-Hidden Power, Magnitude and Trump Card take their power (and Hidden Power its type) from
-the engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at level 4;
-``damage.trump_card_power``), passed to @smogon/calc as move overrides. A crit drawn
+Hidden Power, Magnitude, Trump Card, Wring Out and Low Kick take their power (and Hidden
+Power its type) from the engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at
+level 4; ``damage.trump_card_power``, ``damage.hp_power``, ``damage.weight_power``), passed to
+@smogon/calc as move overrides. A crit drawn
 against an armored defender is dropped before either calculator sees it: the game's crit
 roll never crits it (battle_lib.c:7134-7136, ``effects.armored``). Fixed-damage moves (Night Shade, Seismic Toss, Bide)
 have no base power to compare: the tables carry a placeholder 1, @smogon/calc 0.
@@ -47,10 +48,21 @@ from nuzline.engine.damage import (
     effectiveness,
     fixed_damage,
     hidden_power,
+    hp_power,
     trump_card_power,
+    weight_power,
 )
 from nuzline.engine.effects import armored
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.ids import (
+    POWER_IF_TARGET_MOVED,
+    AbilityId,
+    EffectId,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
+from nuzline.engine.order import effective_speed
 from nuzline.engine.state import make_state
 from tests.strategies import m1_move_pools, possible_genders
 
@@ -58,6 +70,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SMOGON_DIR = ROOT / "tools" / "smogon_calc"
 MATCHUPS = 300
 ABILITY_ROWS = 60
+SELF_DESTRUCT_ROWS = 4
 SEED = 20261029
 
 _STAT_KEYS = ("hp", "atk", "def", "spa", "spd", "spe")  # ids.Stat order
@@ -86,7 +99,20 @@ _DEPARTED_EFFECTS = (
     # Power 1 + 25 x defender speed / attacker speed, at most 150 (BtlCmd_CalcGyroBallPower,
     # battle_script.c:7127-7129); @smogon/calc leaves out the 1 (gen4.js:326-328).
     EffectId.GYRO_BALL,
+    # Super Fang deals Divide(defender curHP, 2) (effect_script_0040.s:5-8), Endeavor the
+    # defender's curHP minus the attacker's (effect_script_0189.s:5-9), Counter twice the
+    # physical damage taken this turn (effect_script_0089.s; BtlCmd_Counter,
+    # battle_script.c:4615-4627); @smogon/calc has no fixed-damage case for them
+    # (util.js:683-694) and deals 0 at power 0 (gen4.js:171-174).
+    EffectId.HALVE_HP,
+    EffectId.ENDEAVOR,
+    EffectId.COUNTER,
 )
+# sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
+# (hectograms) is at least the defender's (BtlCmd_CalcWeightBasedPower,
+# battle_script.c:6808-6826); @smogon/calc's Low Kick takes the next row at a bound
+# (``w >= 10`` kg, gen4.js:320-325).
+_WEIGHT_BOUNDS = (100, 250, 500, 1000, 2000)
 # Every other damaging effect of the M1 move pools: compared (``_matchups``).
 _COMPARED_EFFECTS = (
     EffectId.PLAIN, EffectId.SECONDARY_STAT_SELF, EffectId.SECONDARY_STAT_FOE,
@@ -164,7 +190,19 @@ def _smogon_departs(
     halved = int(tables.move_effect[move]) == EffectId.SELF_DESTRUCT and physical
     if halved and d_stage != 0:
         return True
-    # 4. The type chart rounding at low damage (_chart_rounding_departs).
+    # 4. Payback doubles when the defender has acted this turn (BtlCmd_CalcPaybackPower,
+    #    battle_script.c:7198-7209), which ``damage_table`` never sees; @smogon/calc doubles
+    #    whenever the attacker is not the faster (gen4.js:290, :330-335).
+    payback = int(tables.move_effect[move]) == EffectId.DOUBLE_POWER and (
+        int(tables.move_param[move, 0]) == POWER_IF_TARGET_MOVED
+    )
+    if payback and int(effective_speed(tables, s, 0)) <= int(effective_speed(tables, s, 1)):
+        return True
+    # 5. Low Kick against a defender whose weight is a row bound (_WEIGHT_BOUNDS).
+    weight = int(tables.species_weight[m["def_species"]])
+    if int(tables.move_effect[move]) == EffectId.WEIGHT_POWER and weight in _WEIGHT_BOUNDS:
+        return True
+    # 6. The type chart rounding at low damage (_chart_rounding_departs).
     return _chart_rounding_departs(tables, names, s, move, m["crit"])
 
 
@@ -253,6 +291,28 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
         m = _matchup(rng, tables, names, atk_species, def_species, move)
         if m is not None:
             out.append(m)
+    return out + _self_destruct_rows(tables, names)
+
+
+def _self_destruct_rows(tables: Tables, names: Names) -> list[dict]:
+    """``SELF_DESTRUCT_ROWS`` seeded Selfdestruct / Explosion matchups (their halved Defense),
+    which the draw above can lose: a defender Defense stage other than 0 departs
+    (``_smogon_departs`` 3), 12 draws in 13."""
+    rng = np.random.default_rng(SEED + 2)
+    pools = m1_move_pools(tables, names)
+    users = [
+        (species, m)
+        for species, moves in sorted(pools.items())
+        for m in moves
+        if int(tables.move_effect[m]) == EffectId.SELF_DESTRUCT
+    ]
+    species_ids = sorted(pools)
+    out: list[dict] = []
+    while len(out) < SELF_DESTRUCT_ROWS:
+        atk, move = (int(x) for x in users[int(rng.integers(len(users)))])
+        m = _matchup(rng, tables, names, atk, int(rng.choice(species_ids)), move)
+        if m is not None:
+            out.append(m)
     return out
 
 
@@ -338,9 +398,22 @@ def _matchup(
         m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
     elif effect == EffectId.TRUMP_CARD:
         m["power"] = _trump_card_power(s, move)
+    elif effect == EffectId.HP_POWER:
+        # The defender's HP is not changed below. BtlCmd_CalcWringOutPower
+        # (battle_script.c:7261-7268) and @smogon/calc (gen4.js:359-362) agree on the formula.
+        m["power"] = int(hp_power(s, 1))
+    elif effect == EffectId.WEIGHT_POWER:
+        m["power"] = int(weight_power(tables, s, 1))
     m["no_power"] = effect in _NO_POWER
     overrides = {}
-    if effect in (EffectId.HIDDEN_POWER, EffectId.MAGNITUDE, EffectId.TRUMP_CARD):
+    overridden = (
+        EffectId.HIDDEN_POWER,
+        EffectId.MAGNITUDE,
+        EffectId.TRUMP_CARD,
+        EffectId.HP_POWER,
+        EffectId.WEIGHT_POWER,
+    )
+    if effect in overridden:
         overrides = {
             "basePower": m["power"],
             "type": names.type_names[m["type"]].capitalize(),

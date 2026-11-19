@@ -127,7 +127,7 @@ does not generate those matchups (`_smogon_departs`).
   the engine's pre-chart damage and skips a matchup only when they differ. Test:
   `tests/engine/test_damage.py::test_type_rows_lift_to_one_in_chart_order`.
 
-### 11. The test fed crits, OHKO, Future Sight, Gyro Ball and Trump Card wrong (merge 4fb3548)
+### 11. The test fed crits, OHKO, Future Sight, Gyro Ball, Trump Card and the variable-power moves wrong (merge 4fb3548)
 
 New effects reshuffled the seeded sample, which then drew these. The engine is unchanged in
 each; the test is fixed.
@@ -148,6 +148,27 @@ each; the test is fixed.
 - **Trump Card:** power from the move slot's PP after the use (`BtlCmd_CalcTrumpCardPower`,
   `battle_script.c:7233-7245`). @smogon/calc has power 0. Ruling: the engine's power
   (`damage.trump_card_power`) goes to @smogon/calc as a move override.
+- **Wring Out, Low Kick:** power from the defender's HP (`BtlCmd_CalcWringOutPower`,
+  `battle_script.c:7261-7268`) or weight (`BtlCmd_CalcWeightBasedPower`, `:6808-6826`).
+  @smogon/calc reports power 0 and computes it in `calculateBasePowerDPP` (`gen4.js:320-325`,
+  `:359-362`). Ruling: the engine's power (`damage.hp_power`, `damage.weight_power`) goes as
+  a move override. Low Kick against a weight equal to a `sWeightToPower` bound
+  (`include/data/battle/weight_to_power.h`) is not generated: the game takes that row,
+  @smogon/calc the next (`w >= 10`).
+- **Super Fang, Endeavor, Counter:** fixed damage: `Divide(defender curHP, 2)`
+  (`effect_script_0040.s:5-8`), defender curHP minus attacker curHP
+  (`effect_script_0189.s:5-9`), twice the physical damage taken this turn
+  (`effect_script_0089.s`; `BtlCmd_Counter`, `battle_script.c:4615-4627`). @smogon/calc has
+  no fixed-damage case for them (`util.js:683-694`) and deals 0 at power 0
+  (`gen4.js:171-174`). Ruling: not generated.
+- **Payback:** doubles when the defender has acted this turn (`BtlCmd_CalcPaybackPower`,
+  `battle_script.c:7198-7209`); `damage_table` has no turn. @smogon/calc doubles whenever the
+  attacker is not faster (`gen4.js:290`, `:330-335`). Ruling: a Payback whose attacker's
+  `order.effective_speed` is not above the defender's is not generated.
+- **Selfdestruct coverage:** the reshuffled sample drew Selfdestruct / Explosion 15 times and
+  departure 7 (a defender Defense stage other than 0) dropped all 15. Ruling:
+  `_self_destruct_rows` appends 4 seeded Selfdestruct / Explosion rows (seed + 2) after the
+  300; the 300 are unchanged.
 - **Guard:** `test_every_drawn_effect_is_compared_or_departs` fails on a damaging effect of
   the M1 pools listed in neither `_COMPARED_EFFECTS` nor `_DEPARTED_EFFECTS`.
 
