@@ -3,8 +3,8 @@
 # `runpodctl send` and prints the exec-pod body that receives it into a fresh /work/_bin/new,
 # runs it there (log /work/_bin/new/bootstrap.log) and, only after BOOTSTRAP_OK, moves the script
 # to /work/_bin/bootstrap.sh and the log to /work/bootstrap.log and removes /work/_bin/new. A
-# failed bootstrap leaves the earlier install and log untouched, so the step is safe to repeat on
-# a pod that is already up. Per-run scripts (tools/ops/day/pod/) travel inside each payload
+# failed bootstrap leaves the earlier script and log in place (a runpodctl checksum mismatch still
+# deletes /work/_bin/runpodctl). Never send it while an earlier bootstrap is still running. Per-run scripts (tools/ops/day/pod/) travel inside each payload
 # (pack.sh), not here.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); . "$HERE/../common.sh"
