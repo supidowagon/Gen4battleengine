@@ -72,7 +72,8 @@ def test_part_list():
         14,
         ["0-9.step", "10-14.step", "roark.rank"],
     )
-    assert len(sc.plan_parts("3", 10, None, False)[2]) == 7
+    assert len(sc.plan_parts("3", 10, None, False)[2]) == 8
+    assert sc.plan_parts("0-14", 10, "ai", True) == (0, 14, ["0-9.ai", "10-14.ai"])
 
 
 def test_usage_error_exits_2(run):

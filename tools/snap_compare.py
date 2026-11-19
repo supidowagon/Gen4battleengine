@@ -19,7 +19,7 @@ Usage:
     --commit the full 40-hex commit of --repo. Required when --repo is not the top of a git
              checkout (a ``git archive`` checkout on the pod); when git is there it must agree.
     --no-roark  leave out the two Roark parts.
-    --parts  run only these groups/parts: step, jitstep, sample, rest, gen, roark.trace,
+    --parts  run only these groups/parts: step, jitstep, sample, rest, ai, gen, roark.trace,
              roark.rank (any other name is a usage error); a left-out part is neither run nor
              counted.
     --allow-new  field names (any segment of an entry path, e.g. ``new_field``) whose presence
@@ -43,10 +43,13 @@ capture: per seed of tools/differential.py's generator (tests.strategies, Hypoth
 shrink), 5 drawn turns: the drawn input state, actions and outcome, and each segment of a turn
 that pauses at a party list (the pick and a fresh outcome drawn as tests/test_differential.py's
 _step_both draws them). Per segment: jit(step_events), jit(step), ref_step via from_ref,
-jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), ai_action_distribution,
-jit(decision_actions), root_belief. Roark: the golden replay of tests/golden/kaizo_roark_02.json
-(its converted states, replay_turn and the reference replay of each turn) and rank_actions at
-tests.engine.helpers.roark_real_state, N = 256, PRNGKey(0).
+jit(sample_outcome)(PRNGKey(seed)), enumerate_turn (or its refusal), jit(decision_actions),
+root_belief. Per drawn turn also one state the vanilla AI accepts (tests.ai.test_ai_legality's
+gated_states: Roark's real party and bag against the sample party, random HP, stages, trap and
+AI knowledge; the random segments' opponents mostly hold moves whose AI script paths are not
+transcribed, so the AI refuses them): ai_action_distribution. Roark: the golden replay of
+tests/golden/kaizo_roark_02.json (its converted states, replay_turn and the reference replay of
+each turn) and rank_actions at tests.engine.helpers.roark_real_state, N = 256, PRNGKey(0).
 
 DIR/capture.json records the commit (git HEAD or --commit), whether the checkout was dirty,
 each captured part with its status (ok / failed / pending) and each seed run [A, B, chunk].
@@ -61,11 +64,11 @@ captured or is not "ok"; it runs a strict subset of the captured parts (unless -
 both commits are the same (unless --same-ok); either side is dirty (unless --dirty-ok); or this
 checkout's commit is unknown.
 
-Parts: each seed chunk runs as five processes ("step": the draw on capture, jit(step_events),
+Parts: each seed chunk runs as six processes ("step": the draw on capture, jit(step_events),
 ref_step; "jitstep": jit(step); "sample": jit(sample_outcome); "rest": enumerate_turn,
-ai_action_distribution, decision_actions, root_belief; "gen": the generator check), then
-"roark.trace" and "roark.rank", one process each. The parent prints each part's wall time and
-peak memory and flags a part over 60 s or 4 GB (OVER LIMIT).
+decision_actions, root_belief; "ai": ai_action_distribution on the AI states; "gen": the
+generator check), then "roark.trace" and "roark.rank", one process each. The parent prints each
+part's wall time and peak memory and flags a part over 60 s or 4 GB (OVER LIMIT).
 
 Version independence: inputs are saved as plain {field: array} dicts, not pickled NamedTuples.
 A later commit rebuilds them by field name: a field it has that the capture lacks starts at the
@@ -116,7 +119,7 @@ TURNS = 5
 RANK_N = 256
 LIMIT_S = 60.0
 LIMIT_BYTES = 4 * 2**30
-SEED_GROUPS = ("step", "jitstep", "sample", "rest", "gen")
+SEED_GROUPS = ("step", "jitstep", "sample", "rest", "ai", "gen")
 ROARK_PARTS = ("roark.trace", "roark.rank")
 KNOWN_PARTS = (*SEED_GROUPS, *ROARK_PARTS)
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -125,7 +128,11 @@ LIST_SHOWN = 8  # one-sided field names printed per part
 # Built files each part reads (relative to the checkout).
 VANILLA_TABLES = ("data/gen4_platinum/tables.npz", "data/gen4_platinum/manifest.json")
 NEEDS = {
-    "seed": (*VANILLA_TABLES, "data/intermediate/learnsets.json"),
+    "seed": (
+        *VANILLA_TABLES,
+        "data/intermediate/learnsets.json",
+        "data/intermediate/trainers.json",
+    ),
     "roark.trace": (
         *VANILLA_TABLES,
         "data/gen4_platinum_kaizo/tables.npz",
@@ -357,31 +364,41 @@ def group_outputs(ctx: Ctx, group: str, seed: int, s, acts, o) -> dict:
                 "sample_outcome", lambda: ctx.jit(sample_outcome)(key, t, s, acts)
             )
         }
-    from nuzline.ai.policy import ai_action_distribution
     from nuzline.engine.actions import decision_actions
     from nuzline.engine.enumerate import enumerate_turn
     from nuzline.engine.step import root_belief
 
     return {
         "enumerate_turn": timed("enumerate_turn", lambda: enumerate_turn(t, s, acts)),
-        "ai_action_distribution": timed(
-            "ai_action_distribution", lambda: ai_action_distribution(t, s)
-        ),
         "decision_actions": timed("decision_actions", lambda: ctx.jit(decision_actions)(t, s)),
         "root_belief": timed("root_belief", lambda: root_belief(t, s)),
+    }
+
+
+def ai_outputs(ctx: Ctx, s) -> dict:
+    """The "ai" group's output on one AI state."""
+    from nuzline.ai.policy import ai_action_distribution
+
+    return {
+        "ai_action_distribution": timed(
+            "ai_action_distribution", lambda: ai_action_distribution(ctx.tables, s)
+        )
     }
 
 
 def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tuple[str, dict]]:
     """``[(key, {in_state, in_actions, in_outcome})]`` (plain dicts) drawn as
     tools/differential.py draws a seed (TURNS examples, no shrink), each pause resumed as
-    _step_both resumes it. With ``saved`` (compare's generator check) a pause and its state are
-    read from the saved inputs instead of stepping, so the check loads no step program."""
+    _step_both resumes it, then per example ``(key, {in_ai_state})``: a state the vanilla AI
+    accepts (``gated_states``), drawn last so the segments draw as before. With ``saved``
+    (compare's generator check) a pause and its state are read from the saved inputs instead of
+    stepping, so the check loads no step program."""
     import jax
     from hypothesis import HealthCheck, Phase, given, seed, settings
     from hypothesis import strategies as st
 
     from nuzline.engine.step import step_events
+    from tests.ai.test_ai_legality import gated_states
     from tests.strategies import any_outcome, legal_action_pair, pivot_actions, supported_state
 
     out: list[tuple[str, dict]] = []
@@ -417,6 +434,9 @@ def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tu
                 s = nxt
             acts = data.draw(pivot_actions(s, acts))
             o = data.draw(any_outcome())
+        ai_s = data.draw(gated_states(ctx.tables, ctx.names))
+        ai_inputs = {"in_ai_state": ai_s}
+        out.append((f"seed {seed_value} turn {turn[0]} ai", plain(jax.device_get(ai_inputs))))
         turn[0] += 1
 
     start = time.monotonic()
@@ -442,6 +462,12 @@ def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: st
         return [kv for v in range(lo, hi + 1) for kv in draw_inputs(ctx, v, saved)]
     steps = []
     for key, inp in inputs:
+        if "in_ai_state" in inp:  # an AI state: the "ai" group's only input
+            if group == "ai":
+                steps.append((key, ai_outputs(ctx, rebuild_state(inp["in_ai_state"]))))
+            continue
+        if group == "ai":
+            continue
         seed_value = int(key.split()[1])
         s, o = rebuild_state(inp["in_state"]), rebuild_outcome(inp["in_outcome"])
         outs = group_outputs(ctx, group, seed_value, s, inp["in_actions"], o)
