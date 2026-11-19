@@ -19,7 +19,7 @@ from nuzline.engine import enumerate as enum_mod
 from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import _paused_rock, enumerate_turn
-from nuzline.engine.ids import AbilityId, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
@@ -572,3 +572,67 @@ def test_paused_state_has_no_pursuit_chase(tables, names):
     assert not np.any(np.asarray(outcome_mod.pursuit_chase(tables, paused, acts)[0]))
     view, view_acts = pivot_view(tables, paused, acts)
     assert not np.any(np.asarray(outcome_mod.pursuit_chase(tables, view, view_acts)[0]))
+
+
+# SF2 (b): Intimidate and a substitute the action hit, across the party-list pause and U-turn's
+# Pursuit, and on the next turn. A hit on a substitute sets the defender's
+# SELF_TURN_FLAG_SUBSTITUTE_HIT, broken or not (bcp.c:3359-3371); CheckSubstitute skips a foe
+# with a substitute up or that flag (battle_script.c:9179-9182; subscript_intimidate.s:13). The
+# flag clears at BattleContext_Init (battle_lib.c:2013-2016, bcp.c:3998), after the U-turn
+# newcomer's switch-in states (AfterMoveEffects, bcp.c:3672-3682); U-turn's :70 clears only the
+# attacker's flags (subscript_attack_then_switch_out.s:70). Built by E1 (F-4).
+
+
+def _sub_u_turn(tables, n, substitute, foe=("Bulbasaur", "Tackle")):
+    """Scyther's U-turn hits ``foe`` behind a ``substitute``-HP substitute; an Intimidate
+    Gyarados waits on the bench (party slot 1)."""
+    s = make_state(
+        tables,
+        [
+            _mon(n, "Scyther", ["U-turn", "Quick Attack"], 30),
+            _mon(n, "Gyarados", ["Tackle"], 30, ability="Intimidate"),
+        ],
+        [_mon(n, foe[0], [foe[1]], 35)],
+    )
+    return s._replace(substitute_hp=s.substitute_hp.at[1].set(_i8(s.substitute_hp, substitute)))
+
+
+def _resume_slot1(tables, paused):
+    acts = np.asarray(paused.ts_actions).astype(int).tolist()
+    acts[int(paused.pivot_battler) - 1] = SWITCH
+    return assert_matches_reference(tables, paused, tuple(acts), O)
+
+
+def test_broken_substitute_flag_waits_through_the_pause(tables, names):
+    paused = assert_matches_reference(tables, _sub_u_turn(tables, names, 1), (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.substitute_hp[1]) == 0
+    assert np.asarray(paused.ts_sub_hit).tolist() == [0, 1]
+    out = _resume_slot1(tables, paused)
+    assert int(out.active[0]) == 1
+    assert np.asarray(out.ts_sub_hit).tolist() == [0, 0]
+    assert int(out.stages[1, Stat.ATK]) == 0  # skipped
+
+
+def test_substitute_that_holds_keeps_the_foes_attack(tables, names):
+    paused = assert_matches_reference(tables, _sub_u_turn(tables, names, 200), (0, 0), O)
+    assert int(paused.substitute_hp[1]) > 0
+    out = _resume_slot1(tables, paused)
+    assert int(out.substitute_hp[1]) > 0 and int(out.stages[1, Stat.ATK]) == 0
+
+
+def test_broken_substitute_flag_survives_the_pursuit_chase(tables, names):
+    s = _sub_u_turn(tables, names, 1, foe=("Houndour", "Pursuit"))
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_pursued) == 2
+    assert int(paused.hp[0, 0]) > 0 and int(paused.substitute_hp[1]) == 0
+    assert int(paused.ts_sub_hit[1]) == 1
+    out = _resume_slot1(tables, paused)
+    assert int(out.active[0]) == 1 and int(out.stages[1, Stat.ATK]) == 0
+
+
+def test_next_turns_switch_in_finds_the_flag_clear(tables, names):
+    s = _sub_u_turn(tables, names, 1)
+    hit = assert_matches_reference(tables, s, (1, 0), O)  # Quick Attack breaks it
+    assert int(hit.substitute_hp[1]) == 0 and np.asarray(hit.ts_sub_hit).tolist() == [0, 0]
+    out = assert_matches_reference(tables, hit, (SWITCH, 0), O)
+    assert int(out.active[0]) == 1 and int(out.stages[1, Stat.ATK]) == -1
