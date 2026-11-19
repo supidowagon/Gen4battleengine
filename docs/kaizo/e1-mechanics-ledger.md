@@ -1354,7 +1354,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   no effect, :5839-5844). `hooks._pinch_effects` (called by `held_item_check` and `pluck_berry`), reference
   `_pinch_effect`. Its crit effect is the existing `focus_energy` (+2, `outcome.side_crit_odds`). The pinch can arrive
   from a foe's hit before the holder's own CalcCrit, so `outcome.crit_variants` has one more variant bit
-  (`_lansat_pinch`: a Lansat holder has Focus Energy, used by any non-status move of another battler; over-
+  (`_lansat_pinch`: a Lansat holder has Focus Energy, used by any non-status move of another battler and by Pain
+  Split, the one modelled status move that lowers its target's HP (`effects._pain_split`,
+  subscript_pain_split.s:12-22; the defender's item check follows every move, bcp.c:3691-3696); over-
   approximate): `CRIT_VARIANTS` is 16. AI: `Basic_CheckAlreadyPumpedUp` already reads the volatile (ai.s:592-594);
   the Natural Gift and Recycle tables already list the berry (items 149-212).
 - F-10 Starf Berry (hold 42, param 4; `ItemId.STARF_BERRY`). At the same pinch (lib:4850-4872, :5273-5294) it raises
@@ -1364,15 +1366,28 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `RandNext() % 5` until the drawn stat is below +6 (lib:4864-4866; Pluck :5798-5817, eaten even with all five at +6).
   Ruling: by the project's `% n` convention (`RandNext() % n` uniform, as `Outcome.acupressure`, B12-9) it is uniform
   over the eligible stats, not the exact 13108 / 13107 split the sheet notes (Attack's extra 1 in 65536): the draw is
-  `Outcome.starf[side]`, one value in [0, `STARF_DRAWS` = 60), and the stat is the eligible one of rank `value %
+  `Outcome.starf[side, k]`, one value in [0, `STARF_DRAWS` = 60), and the stat is the eligible one of rank `value %
   eligible` (`hooks.starf_stat`). The draw reaches the item checks, which take no outcome, through
-  `BattleState.starf_roll` (STATE.md): `step._action_phase` copies `Outcome.starf` into it, `step_events` zeroes it
-  at the turn's end or pause; reference `ref_step` does the same. **Not exact:** a check outside a turn (the battle
-  start, a faint replacement's switch-in, `search.playout.replacement_pass`) reads 0, the first eligible stat in
-  decomp order; it matters only for a Starf holder that enters at or below a quarter of its HP. One draw serves a
-  turn: a Recycled berry eaten twice in a turn repeats the pick (outcome-variable limit). Enumerate: `starf` is read
-  when a living holder is in the side's party (`outcome_laws`), law uniform over 60; an item clause on any of the five
-  stats (own and foe's), a Speed +2 grid point for a Roar's drag. AI: the Recycle and Natural Gift tables list it.
+  `BattleState.starf_roll` (STATE.md). Each check outside the turn's actions draws its own (lib:5273-5294 via
+  `BattleSystem_TriggerHeldItem`, review F item 5): k = 0 the turn's (`step._action_phase` loads it); k = 1 a faint
+  replacement's switch-in check (ShowBattleMon :4151 after `subscript_show_party_list.s:22-24`), kept by
+  `step_events` in `starf_roll` (modulo 5: a fresh battler's count) where `step.starf_kept` (the side awaits a
+  replacement and a living bench holder is at its pinch or Spikes / Stealth Rock lie on its side) and read by
+  `step.replace` (so `search.playout.replacement_pass` and the tree's replacement children), then cleared; hidden,
+  like `qc_roll`. The battle start's checks (`hooks.battle_start`) run with `starf_roll` = `STARF_UNDRAWN`: a lead's
+  berry is eaten there and its stat waits in `starf_open` for the root's chance node (`step.root_belief`: one state
+  per eligible stat at 1 / count, visible, so separate root outcomes; `step.sample_root` for playouts;
+  `hooks.resolve_starf`); a `step` given a state still open draws it first from `starf[:, 0]`. Reference: `ref_step`
+  and `ref_replace` the same (`_resolve_starf`, `_starf_kept`). The turn-end `_turn_start_items` check (the next
+  ShowBattleMon) still reads the turn's draw, and a Recycled berry eaten twice in a turn repeats the pick
+  (outcome-variable limit). Enumerate (`_starf_reads`): `starf[d, 0]` only where a holder can eat this turn (the
+  active or switched-in one, or any living holder of the party when its U-turn / Baton Pass or a foe's Roar can
+  bring it in, at its pinch or able to lose HP: a move, a residual damage source, hazards; a Pluck / Bug Bite of a
+  foe holder; a Recycle of one; an open berry); its law the five values while the count stays 5 (the five stages'
+  highest plus this turn's bounded gains below +6, none of Belly Drum, Psych Up, the stage swaps, Transform, Baton
+  Pass, Recycle), else all 60. `starf[d, 1]`: five values where a holder can enter at its pinch after the turn. An item
+  clause on any of the five stats (own and foe's), a Speed +2 grid point for a Roar's drag. AI: the Recycle and
+  Natural Gift tables list it.
 - F-11 Leek (Kaizo item 259, vanilla Stick; hold 92 `FARFETCHD_CRITRATE_UP`, param 0). Identical bytes in both ROMs
   except the name: `KAIZO_ITEM_IDS` maps the slot to `ItemId.CRIT_ITEM` (+2 crit stages for a Farfetch'd,
   `BattleSystem_CalcCriticalMulti`, battle_lib.c:7128, `outcome.side_crit_odds`).
@@ -1429,11 +1444,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   U-turn the decomp runs the form change after the party list; the engine runs it before the pivot (nothing between
   reads form-dependent state, F-4's skip aside). Enumerate: a foe's freezing move on a Sky Shaymin side and a hit on
   a Sky Shaymin frozen at the turn start are input clauses (`enumerate.py`, `sky`, `foe_freezes`, `sky_frozen`).
-  Coverage: the "Sky Forme reverts when frozen" refusal is removed; `SPECIES_SHAYMIN` moved to `engine.ids`. **Not
-  settled:** a Shaymin the defender Transformed into (its battler holds species 492 and form 1 as a copy while the
-  party Pokemon is another): `CopyToParty` writes form 0 and the new ability into that party Pokemon, which the
-  sheet and decomp do not make clear enough to model; `shaymin_land` skips a Transformed battler (stopped at
-  subscript_check_shaymin_form.s:6-7 with `battle_script.c:5346-5348`).
+  Coverage: the "Sky Forme reverts when frozen" refusal is removed; `SPECIES_SHAYMIN` moved to `engine.ids`. A
+  Transformed copy of a Sky Shaymin is refused (F-26); `shaymin_land` skips a Transformed battler. The end-of-turn
+  speed grid takes the reverted Speed (F-27).
 - F-17 A faster foe's Knock Off takes the side's Wide Lens before its accuracy check. `BtlCmd_TryKnockOff`
   (battle_script.c:6608-6632) sets `heldItem = ITEM_NONE` (:6622-6624); the check reads the attacker's
   `HOLD_EFFECT_ACCURACY_UP` (bcp.c:2955-2957). `outcome._threshold_grid` files Knock Off with Embargo (`foe_embargo`):
@@ -1503,6 +1516,36 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   rolls 51-70 were one class with the hits. The variant now also copies the side's `species`, `ability_form` and
   `ability_slot` onto the foe. Test: the sun case in `test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_
   thresholds` (law {1: 50, 51: 20, 0: 30}).
+- F-26 A Transform user facing a Sky Shaymin is refused (review F item 4). `subscript_check_shaymin_form.s:6-9` tests
+  only the defender's `BATTLEMON_SPECIES` 492, a nonzero `BATTLEMON_FORM_NUM`, no Substitute and Freeze, all of which
+  a Transform copy holds (`BtlCmd_Transform` copies the BattleMon up to `ability`, battle_script.c:5346-5348,
+  battle_mon.h:57-84). For such a copy the script then: sets the battler's form to 0 (:10); takes Land's ability by
+  `BATTLEMON_PERSONALITY` bit 0, the user's own personality (not in the copied range); writes it with
+  `UpdateMonDataFromVar` under `SYSCTL_RECALC_MON_STATS` (:22-23), whose `BattleMon_CopyToParty`
+  (battle_script.c:3401-3407) sends `updateStats` (battle_controller.c:1496-1499), so `BtlIOCmd_UpdatePartyMon`
+  writes that ability into the Transform user's **own party Pokemon** and recalculates its stats on its own species
+  (battle_io_command.c:597-604); writes Land's types (:24-27); and `RefreshMonData` (:30, battle_script.c:9438-9447)
+  reloads Attack, Defense, Speed, Sp. Atk, Sp. Def, level, friendship and HP from that party Pokemon
+  (`BattleSystem_ReloadPokemon`, battle_lib.c:169-193: the copied stats are lost, the moves kept while
+  transformed). The party Pokemon keeps the written ability for every later switch-in (`BattleSystem_InitBattleMon`
+  reads `MON_DATA_ABILITY`, battle_lib.c:124). The engine has no party ability apart from the species row and
+  ability slot (`damage.decomp_abilities`), so modelling it needs a new per-party mechanic: refused instead.
+  `coverage.transform_sky_refusals` (called by `check_opponent`): one side can run Transform (its moves, a player's
+  learnable moves, Metronome's calls, or Mimic / Copycat while the fight has Transform) and the other has a Shaymin
+  with a nonzero form. Test: `test_e1_batch_f.py::test_a_transform_user_facing_a_sky_shaymin_is_refused`.
+- F-27 The end-of-turn speed grid takes Shaymin's Land Speed (review F item 6). The revert recalculates the stats on
+  Land's row (base Speed 127 -> 100; F-16) mid-turn, before `SortMonSpeedOrder` at the turn's end, so
+  `enumerate._end_speeds` takes every grid point also with a Sky Shaymin's Land stats (`hooks.land_stats`, shared
+  with `shaymin_land`) where `land_free`: a living Sky Shaymin of the side and a foe's move this turn, with the
+  Shaymin frozen at the turn start or the foe's move able to freeze. Test: `test_the_shaymin_sky_clauses_equal_the_
+  bruteforce`.
+- F-28 Review F fixes: F-4's flag is read by the resumed action only (`resumed & ts_sub_hit`) and cleared at that
+  action's end (`BattleContext_Init`, battle_lib.c:2013-2015, bcp.c:3998), so a later drag's Intimidate in the same
+  turn meets a clear flag, as the reference's `turn.sub_hit` (test: `test_a_later_drag_in_the_same_turn_finds_the_
+  substitute_flag_clear`). F-2's AI absorb switch takes residue 1 of `RandNext() & 1` (trainer_ai.c:3706:
+  `_SWITCH_LO` / `_SWITCH_HI` 1, 2). Brute-force checks of the batch's laws: `test_the_starf_laws_equal_the_
+  bruteforce`, `test_the_lansat_crit_variant_equals_the_bruteforce`, `test_the_flash_fire_foe_move_clause_equals_
+  the_bruteforce`, `test_the_shaymin_sky_clauses_equal_the_bruteforce`.
 - Open (not modelled; cites where stopped):
   - Sleep Talk's sealed set after a faster foe that already imprisons Transforms (copies every move) or Mimics (one
     slot): the call reads the foe's moves when it runs (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290), but

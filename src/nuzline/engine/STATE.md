@@ -250,12 +250,16 @@ three structs has a row.
   is never read).
 - **Starf Berry draw -> `starf_roll`** (E1 batch F, F-10): `BattleSystem_TriggerHeldItem`
   (`battle_lib.c:4864-4866`) and `BattleSystem_PluckBerry` (:5805-5810) draw `RandNext() % 5` until
-  the stat is below +6. `Outcome.starf[side]` holds that draw as one value in [0, 60) (the stat is
-  rank `value % eligible` among Attack, Defense, Speed, Sp. Atk, Sp. Def below +6: uniform, the
-  project's `% n` convention); `step_events` copies it into `starf_roll` when the turn starts, so
-  `hooks.held_item_check` and `hooks.pluck_berry` read it, and zeroes it when the turn ends or
-  pauses (states between turns merge). Checks outside a turn (the battle start, a replacement's
-  switch-in) read 0: the first eligible stat in decomp order.
+  the stat is below +6. `Outcome.starf[side, k]` holds a draw as one value in [0, 60) (the stat
+  is rank `value % eligible` among Attack, Defense, Speed, Sp. Atk, Sp. Def below +6: uniform,
+  the project's `% n` convention): k = 0 the turn's, which `step._action_phase` copies into
+  `starf_roll` so `hooks.held_item_check` and `hooks.pluck_berry` read it; k = 1 a faint
+  replacement's, which `step_events` keeps in `starf_roll` at the turn's end where a replacement
+  can send in a living Starf holder (`step.starf_kept`; `step.replace` reads it, then clears it),
+  else 0, and 0 at a pause (states merge). Per battler, hidden. The battle start's checks run with
+  `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
+  (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
+  the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and

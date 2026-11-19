@@ -520,8 +520,8 @@ def _starf(tables, names, roll, stages=None, side=0):
     s = _hold(_state(tables, names, mine=["Protect"]), side, names.item("Starf Berry"), hp_div=4)
     for stat, stage in (stages or {}).items():
         s = s._replace(stages=s.stages.at[side, stat].set(stage))
-    draw = np.zeros(2, np.int8)
-    draw[side] = roll
+    draw = np.zeros((2, 2), np.int8)
+    draw[side, 0] = roll
     o = O._replace(starf=jnp.asarray(draw))
     return assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), o)
 
@@ -556,7 +556,7 @@ def test_a_plucked_starf_berry_gives_its_eater_the_same_draw(tables, names):
     """PLUCK_EFFECT_RANDOM_UP2 (battle_lib.c:5798-5817): the eater's stat, at any HP; eaten even
     with every stat at +6."""
     s = _hold(_state(tables, names, mine=["Pluck"]), 1, names.item("Starf Berry"))
-    o = O._replace(starf=jnp.asarray([2, 0], jnp.int8))
+    o = O._replace(starf=jnp.asarray([[2, 0], [0, 0]], jnp.int8))
     acts = A("Pluck", "Tackle", s, names)
     out = assert_matches_reference(tables, s, acts, o)
     assert int(out.stages[0, Stat.SPE]) == 2 and int(out.item[1, 0]) == 0
@@ -565,18 +565,162 @@ def test_a_plucked_starf_berry_gives_its_eater_the_same_draw(tables, names):
     assert out.stages[0].tolist()[1:6] == [6] * 5 and int(out.item[1, 0]) == 0
 
 
-def test_the_starf_draw_is_an_outcome_variable_with_a_uniform_law(tables, names):
-    """``Outcome.starf`` is read when a living Starf holder is in a party; its law is uniform over
-    ``STARF_DRAWS`` values (every count 1-5 divides them)."""
-    from nuzline.engine.enumerate import _LAWS
+def _laws(tables, s, acts):
+    return jax.tree.map(np.asarray, outcome_laws(tables, s, jnp.asarray(acts)))
 
-    s = _hold(_state(tables, names, mine=["Protect"]), 0, names.item("Starf Berry"))
-    acts = jnp.asarray(A("Protect", "Tackle", s, names))
-    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
-    assert np.asarray(laws.relevant.starf).tolist() == [True, False]
-    values, weights, total = _LAWS["starf"](laws, 0)
-    assert len(values) == total == STARF_DRAWS and set(weights) == {1}
+
+@pytest.mark.slow
+def test_the_starf_draws_have_count_classes_and_need_a_reachable_pinch(tables, names):
+    """``Outcome.starf[d, 0]`` (the turn's) is read where a holder can eat its berry this turn;
+    its law is the five values of a count of 5 (every stat below +6, no stage write this turn can
+    reach +6 first) or all ``STARF_DRAWS`` (every count 1-5 divides them). ``[d, 1]`` (a faint
+    replacement's) only for a holder that can enter at its pinch; a bench holder that cannot enter
+    this turn draws no turn value (``enumerate._starf_reads``, F-10)."""
+    from nuzline.engine.enumerate import _starf
+
+    starf = names.item("Starf Berry")
+    s = _hold(_state(tables, names, mine=["Protect"]), 0, starf)
+    acts = A("Protect", "Tackle", s, names)
+    laws = _laws(tables, s, acts)
+    assert laws.relevant.starf.tolist() == [[True, False], [False, False]]
+    assert _starf(laws, 0, 0) == (list(range(5)), [1] * 5, 5)
+    high = s._replace(stages=s.stages.at[0, Stat.ATK].set(4))
+    assert _starf(_laws(tables, high, acts), 0, 0)[2] == STARF_DRAWS
     assert all(STARF_DRAWS % c == 0 for c in range(1, 6))
+    bench = s._replace(item=s.item.at[0, 0].set(0).at[0, 1].set(starf))
+    assert _laws(tables, bench, acts).relevant.starf.tolist() == [[False, False]] * 2
+    low = bench._replace(hp=bench.hp.at[0, 1].set(max(int(bench.max_hp[0, 1]) // 4, 1)))
+    laws = _laws(tables, low, acts)
+    assert laws.relevant.starf.tolist() == [[False, True], [False, False]]
+    assert _starf(laws, 0, 1) == (list(range(5)), [1] * 5, 5)
+
+
+def _starf_replacement(tables, names, kept=7):
+    """Monferno (1 HP) Tackles, Geodude's Tackle faints it; party slot 1 holds a Starf Berry at a
+    quarter HP; the replacement's draw is ``kept``."""
+    s = _state(tables, names, mine=["Tackle"])
+    s = s._replace(hp=s.hp.at[0, 0].set(1), item=s.item.at[0, 1].set(names.item("Starf Berry")))
+    s = s._replace(hp=s.hp.at[0, 1].set(max(int(s.max_hp[0, 1]) // 4, 1)))
+    o = O._replace(starf=jnp.asarray([[0, kept], [0, 0]], jnp.int8))
+    return assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), o)
+
+
+def test_a_faint_replacement_eats_its_starf_berry_with_the_kept_draw(tables, names):
+    """The replacement's switch-in item check draws its own RandNext() % 5 (battle_lib.c:
+    5273-5294; ``step.replace``, ShowBattleMon :4151): ``Outcome.starf[0, 1]`` kept in
+    ``starf_roll`` (modulo 5) until ``replace`` reads it, then cleared (F-10)."""
+    from nuzline.engine.step import replace
+    from nuzline.reference.convert import from_ref
+    from nuzline.reference.engine import ref_replace
+
+    out = _starf_replacement(tables, names)
+    assert int(out.hp[0, 0]) == 0 and np.asarray(out.starf_roll).tolist() == [2, 0]
+    got = jax.jit(replace, static_argnums=(2, 3))(tables, out, 0, 1)
+    ref = from_ref(ref_replace(to_numpy(tables), to_ref(out), 0, 1))
+    for name, x, y in zip(got._fields, got, ref, strict=True):
+        np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+    assert int(got.stages[0, Stat.SPE]) == 2 and int(got.item[0, 1]) == 0
+    assert np.asarray(got.starf_roll).tolist() == [0, 0]
+
+
+def test_a_battle_start_starf_berry_waits_for_the_root_draw(tables, names):
+    """A lead at its pinch eats its Starf Berry at ShowBattleMon's held-item check (battle_lib.c:
+    5273-5294, :4151) before any turn: the stat stays open (``starf_open``) for the root's draw,
+    one stat in five at 1/5 (``step.root_belief``); a ``step`` given the open state draws it from
+    ``Outcome.starf[:, 0]`` first, as the reference does (F-10)."""
+    from nuzline.engine.step import root_belief
+
+    s = _hold(_state(tables, names, mine=["Protect"]), 0, names.item("Starf Berry"), hp_div=4)
+    started = battle_start(tables, s)
+    assert int(started.starf_open[0]) == 1 and int(started.item[0, 0]) == 0
+    assert started.stages[0].tolist() == s.stages[0].tolist()
+    assert np.asarray(started.starf_roll).tolist() == [0, 0]
+    belief = root_belief(tables, started)
+    raised = sorted(int(np.argmax(np.asarray(b.stages[0]))) for b, _ in belief)
+    assert raised == sorted(int(x) for x in (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD))
+    assert all(abs(p - 0.2) < 1e-12 and int(b.starf_open[0]) == 0 for b, p in belief)
+    o = O._replace(starf=jnp.asarray([[3, 0], [0, 0]], jnp.int8))
+    out = assert_matches_reference(tables, started, A("Protect", "Tackle", started, names), o)
+    assert int(out.stages[0, Stat.SPA]) == 2 and int(out.starf_open[0]) == 0
+
+
+# --- The batch's laws against the brute force (review F, item 7) ------------------------------
+
+
+def _duel(tables, names, mine, theirs, *, mine_item="", bench_item="", mine_species="Abra"):
+    """Side 0: ``mine_species`` (``mine``, ``mine_item``) and an Abra (``bench_item``); side 1: a
+    Rattata (``theirs``)."""
+    n = names
+    return make_state(
+        tables,
+        [
+            _mon(n, mine_species, mine, 30, mine_item),
+            _mon(n, "Abra", ["Growl"], 30, bench_item),
+        ],
+        [_mon(n, "Rattata", theirs, 30)],
+    )
+
+
+def _bruteforce(tables, s, acts):
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    return assert_equals_bruteforce(tables, s, acts)
+
+
+@pytest.mark.slow
+def test_the_starf_laws_equal_the_bruteforce(tables, names):
+    """F-10: the turn's draw at a fixed count (five values) and at a loose one (60), and a faint
+    replacement's draw (``starf_kept``), against the brute force's 60-value product."""
+    n = names
+    s = _duel(tables, n, ["Growl"], ["Growl"], mine_item="Starf Berry")
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4)
+    acts = A("Growl", "Growl", s, n)
+    exact, brute = _bruteforce(tables, s, acts)
+    assert exact < brute
+    _bruteforce(tables, s._replace(stages=s.stages.at[0, Stat.SPA].set(5)), acts)
+    # A bench holder at its pinch; Night Shade faints the 1 HP active.
+    r = _duel(tables, n, ["Growl"], ["Night Shade"], bench_item="Starf Berry")
+    r = r.replace_hp(0, 0, 1).replace_hp(0, 1, int(r.max_hp[0, 1]) // 4)
+    _bruteforce(tables, r, A("Growl", "Night Shade", r, n))
+
+
+@pytest.mark.slow
+def test_the_lansat_crit_variant_equals_the_bruteforce(tables, names):
+    """F-9: the foe's Night Shade can bring a Lansat holder to its pinch before its own Tackle's
+    CalcCrit (``outcome.crit_variants``' last bit)."""
+    n = names
+    s = _duel(tables, n, ["Tackle"], ["Night Shade"], mine_item="Lansat Berry")
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + 5)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE].set(500))  # the foe moves first
+    _bruteforce(tables, s, A("Tackle", "Night Shade", s, n))
+
+
+@pytest.mark.slow
+def test_the_flash_fire_foe_move_clause_equals_the_bruteforce(tables, names):
+    """F-2: a faster foe's Ember sets a Flash Fire holder's flag, which its own Ember's damage
+    then reads (``foe_move`` clause: no damage classes from the turn start)."""
+    n = names
+    s = _duel(tables, n, ["Ember"], ["Ember"], mine_species="Vulpix")
+    s = _ability(s, 0, AbilityId.FLASH_FIRE)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE].set(500))
+    _bruteforce(tables, s, A("Ember", "Ember", s, n))
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", ["foe freezes", "frozen at the start"], ids=lambda c: c)
+def test_the_shaymin_sky_clauses_equal_the_bruteforce(tables, names, case):
+    """F-16: a faster foe's freezing move on a Sky Shaymin (``sky`` / ``foe_freezes``: its own hit
+    then meets Land Forme's stats, types and ability) and the foe's hits on a Sky Shaymin frozen
+    at the turn start (``sky_frozen``: the first hit reverts it); the end speeds include Land's."""
+    n = names
+    theirs = ["Ice Beam"] if case == "foe freezes" else ["Double Kick"]
+    mine = ["Air Slash"] if case == "foe freezes" else ["Growl"]
+    sky = dataclasses.replace(_mon(n, "Shaymin", mine, 50), form=1)
+    s = make_state(tables, [sky], [_mon(n, "Rattata", theirs, 30)])
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE].set(500))
+    if case != "foe freezes":
+        s = s.with_status(0, 0, Status.FREEZE)
+    _bruteforce(tables, s, A(mine[0], theirs[0], s, n))
 
 
 def test_a_lava_cookie_cures_like_a_lum_berry_and_pluck_leaves_it(tables, names):

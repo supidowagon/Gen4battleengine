@@ -227,12 +227,17 @@ Encodings:
   ``BattleSystem_CalcMoveDamage`` (battle_lib.c:7074-7076) for the attacker's Fire moves
   (the flag, not the ability: it outlives a lost ability), cleared on a switch and a faint
   (battle_lib.c:2101-2104, :2185-2188) and not passed by Baton Pass (:2107-2115).
-* E1 batch F (F-10). ``starf_roll`` is ``Outcome.starf``, the Starf Berry's ``RandNext() % 5``
-  draws as one value in [0, ``ids.STARF_DRAWS``): ``step_events`` loads it when the turn starts so
-  the held-item checks (``hooks.held_item_check`` and ``pluck_berry``, which have no outcome
-  argument) read it, and clears it when the turn ends or pauses; it is 0 between turns, so states
-  merge. A check outside a turn (the battle start, a faint replacement's switch-in) reads 0:
-  the first stat below +6 in decomp order.
+* E1 batch F (F-10). ``starf_roll`` holds a Starf Berry's ``RandNext() % 5`` draw as one value in
+  [0, ``ids.STARF_DRAWS``) for the held-item checks (``hooks.held_item_check`` and
+  ``pluck_berry``, which have no outcome argument): ``step._action_phase`` loads the turn's
+  (``Outcome.starf[:, 0]``); at the turn's end ``step_events`` keeps the faint replacement's
+  (``Outcome.starf[:, 1]``) where a replacement can send in a living Starf holder
+  (``step.starf_kept``; ``step.replace`` reads it, then clears it), else 0, and 0 at a pause, so
+  states merge. Hidden from the player, like ``qc_roll``. ``STARF_UNDRAWN`` while the battle
+  start's checks run (``hooks.battle_start``): a lead's Starf Berry is eaten there with its stat
+  left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
+  ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
+  from ``Outcome.starf[:, 0]``); else 0.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -266,6 +271,8 @@ SIDES, SLOTS, MOVES = 2, 6, 4
 MAX_DEATH_BUDGET = 3  # the ladder's range: k = 0..3 deaths allowed (spec §4)
 BAG_SLOTS = 4  # MAX_TRAINER_ITEMS: trainer_items[battler] holds the AI's bag (D1-5)
 STAGE_MIN, STAGE_MAX = -6, 6
+# ``starf_roll`` while no draw is loaded (the battle start's checks): the berry's stat stays open.
+STARF_UNDRAWN = -1
 _STAGE_KEYWORDS = {
     "atk": Stat.ATK,
     "def_": Stat.DEF,
@@ -415,7 +422,8 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
-    starf_roll: jnp.ndarray  # int8, the turn's Starf Berry draw (``Outcome.starf``), F-10
+    starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
+    starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -767,6 +775,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
     "starf_roll": (_BATTLER, np.int8),
+    "starf_open": (_BATTLER, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),

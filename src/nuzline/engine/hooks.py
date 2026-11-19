@@ -102,7 +102,7 @@ from nuzline.engine.ids import (
     sleepless,
 )
 from nuzline.engine.order import dislikes_berry, pinch_divisor, pinch_limit, player_second
-from nuzline.engine.state import STAGE_MAX, BattleState, held_item
+from nuzline.engine.state import STAGE_MAX, STARF_UNDRAWN, BattleState, held_item
 from nuzline.engine.stats import calc_stats_jnp
 
 _I32 = jnp.int32
@@ -547,6 +547,33 @@ def starf_stat(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
     return jnp.sum(jnp.where(pick, idx, 0)), count > 0
 
 
+def starf_holders(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(holds, pinched)``, ``bool[P, SLOTS]``: a living Pokemon holds a Starf Berry (the raw
+    item), and such a holder is at its pinch now: ``curHP <= maxHP / param``, the param halved
+    for Gluttony (battle_lib.c:5273-5279; ``order.pinch_limit``), F-10."""
+    item = state.item
+    holds = (tables.item_effect[item] == ItemId.STARF_BERRY) & (state.species != 0)
+    holds = holds & (state.hp > 0)
+    power = tables.item_param[item, 0].astype(_I32)
+    divisor = jnp.where(state.ability == AbilityId.GLUTTONY, power // 2, power)
+    limit = pinch_limit(state.max_hp, divisor)
+    return holds, holds & (state.hp.astype(_I32) <= limit)
+
+
+def entry_damage_up(state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: Spikes or Stealth Rock lie on the battler's side, so a newcomer loses HP at
+    its entry before its held-item check (``effects.entry_hazards``)."""
+    sides = side_of(jnp.arange(state.active.shape[0]))
+    return (state.spikes[sides] != 0) | (state.stealth_rock[sides] != 0)
+
+
+def starf_count(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: how many of the five ``STARF_STATS`` of ``side``'s battler are below +6 (the
+    values a Starf Berry's draw is read modulo, ``starf_stat``)."""
+    idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    return jnp.sum((state.stages[side][idx] < STAGE_MAX).astype(_I32))
+
+
 def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
     """``(state, triggered)``: the Lansat Berry (``HOLD_EFFECT_PINCH_CRITRATE_UP``: the holder's
     Focus Energy, ``subscript_held_item_raise_crit.s:11``, only without it, battle_lib.c:4838-4848,
@@ -562,7 +589,31 @@ def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
     )
     stat, some = starf_stat(state, side)
     starf = cond & (effect == ItemId.STARF_BERRY) & some
-    return change_stage(state, side, stat, 2, starf), lansat | starf
+    # A check with no draw loaded (``starf_roll`` STARF_UNDRAWN: the battle start) eats the berry
+    # and leaves the stat open for the root's draw (``resolve_starf``, F-10).
+    drawn = state.starf_roll[side] != STARF_UNDRAWN
+    state = state._replace(
+        starf_open=state.starf_open.at[side].set(
+            jnp.where(starf & ~drawn, 1, state.starf_open[side]).astype(state.starf_open.dtype)
+        )
+    )
+    return change_stage(state, side, stat, 2, starf & drawn), lansat | starf
+
+
+def resolve_starf(state: BattleState, draws) -> BattleState:
+    """``state`` with every open Starf Berry stat (``starf_open``: a berry eaten at the battle
+    start, before any draw) raised by 2: the stat of rank ``draws[b] % eligible`` among the five
+    below +6 (``starf_stat``), the decomp's ``RandNext() % 5`` rejection loop (battle_lib.c:
+    4864-4866) under the ``% n`` convention; ``starf_open`` is then 0 (F-10)."""
+    draws = jnp.asarray(draws)
+    for side in range(state.active.shape[0]):
+        on = state.starf_open[side] != 0
+        drawn = state._replace(
+            starf_roll=state.starf_roll.at[side].set(draws[side].astype(state.starf_roll.dtype))
+        )
+        stat, some = starf_stat(drawn, side)
+        state = change_stage(state, side, stat, 2, on & some)
+    return state._replace(starf_open=jnp.zeros_like(state.starf_open))
 
 
 def max_pp(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
@@ -943,6 +994,21 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
     return state
 
 
+def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:
+    """``int32[6]``: party ``row``'s ``mon`` recalculated on Shaymin Land Forme's personal row
+    with its IVs, EVs, level and nature (``Pokemon_CalcLevelAndStats``, battle_io_command.c:
+    601-604), the stats ``shaymin_land`` gives it (HP first, ``ids.Stat`` order)."""
+    land = tables.species_form_row[SPECIES_SHAYMIN, 0]
+    return calc_stats_jnp(
+        tables.species_base_stats[land],
+        state.ivs[row, mon],
+        state.evs[row, mon],
+        state.level[row, mon],
+        tables.nature_mods[state.nature[row, mon]],
+        SPECIES_SHAYMIN,
+    )
+
+
 def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
     """``subscript_check_shaymin_form.s`` (``AfterMoveMessage``'s ``*_FORM_CHANGE`` states,
     battle_controller_player.c:3497-3505, :3557-3565; F-16) for ``side``'s active battler, the
@@ -975,14 +1041,7 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
     abilities = tables.species_abilities[land].astype(_I32)
     slot = state.ability_slot[row, mon].astype(_I32)
     slot = jnp.where(abilities[slot] != 0, slot, 0)
-    stats = calc_stats_jnp(
-        tables.species_base_stats[land],
-        state.ivs[row, mon],
-        state.evs[row, mon],
-        state.level[row, mon],
-        tables.nature_mods[state.nature[row, mon]],
-        SPECIES_SHAYMIN,
-    )
+    stats = land_stats(tables, state, row, mon)
     old_max, hp = state.max_hp[row, mon].astype(_I32), state.hp[row, mon].astype(_I32)
 
     def put(arr, value):
@@ -1072,7 +1131,11 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
             weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
         ),
     )
-    return show_battle_mon(tables, state, swaps)
+    # A lead's Starf Berry eaten here draws at the root (``starf_open``, ``step.root_belief``,
+    # ``step.sample_root``), F-10.
+    state = state._replace(starf_roll=jnp.full_like(state.starf_roll, STARF_UNDRAWN))
+    state = show_battle_mon(tables, state, swaps)
+    return state._replace(starf_roll=jnp.zeros_like(state.starf_roll))
 
 
 def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> BattleState:

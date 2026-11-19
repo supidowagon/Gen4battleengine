@@ -512,8 +512,12 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         return {v: Fraction(1, max(count, 1)) for v in range(max(count, 1))}
     if name == "starf":
         # BattleSystem_TriggerHeldItem (battle_lib.c:4864-4866): RandNext() % 5 until the stat is
-        # below +6, uniform over the eligible stats by the % n convention (F-10): one value of 60.
-        return {v: Fraction(1, 60) for v in range(60)}
+        # below +6, uniform over the eligible stats by the % n convention (F-10): one value of 60,
+        # or one of 5 where the count at the eating is 5 (a replacement's fresh battler, or a
+        # count no stage change this turn can move: enumerate._starf_reads).
+        loose = bool(np.asarray(laws_of(tables, state, actions).starf_loose)[index])
+        n = 60 if loose else 5
+        return {v: Fraction(1, n) for v in range(n)}
     raise AssertionError(name)
 
 

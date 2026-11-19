@@ -146,6 +146,7 @@ FIGHT, SWITCH, ITEM = "fight", "switch", "item"  # the decomp's PLAYER_INPUT_* c
 PHYSICAL, SPECIAL, STATUS_CLASS = 0, 1, 2  # tables.move_category (the decomp's CLASS_*)
 WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 STAGE_MIN, STAGE_MAX = -6, 6
+STARF_UNDRAWN = -1  # engine.state.STARF_UNDRAWN: no Starf Berry draw loaded (F-10)
 # sStatStageBoosts (lib.c:6550), indexed by stage + 6.
 STAGE_RATIO = [
     (10, 40), (10, 35), (10, 30), (10, 25), (10, 20), (10, 15), (10, 10),
@@ -2278,9 +2279,45 @@ def _pinch_effect(s: RefState, side: int, effect: int) -> bool:
         eligible = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
         if not eligible:
             return False
-        _change_stage(s, side, eligible[sd.starf_roll % len(eligible)], 2)
+        if sd.starf_roll == STARF_UNDRAWN:  # no draw yet (the battle start): the root draws it
+            sd.starf_open = 1
+        else:
+            _change_stage(s, side, eligible[sd.starf_roll % len(eligible)], 2)
         return True
     return False
+
+
+def _resolve_starf(s: RefState, draws) -> None:
+    """``hooks.resolve_starf``: each open Starf Berry stat (``starf_open``) raised by 2, the stat
+    of rank ``draws[b] % eligible`` (battle_lib.c:4864-4866), F-10."""
+    for side, sd in enumerate(s.battlers):
+        if sd.starf_open:
+            eligible = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
+            if eligible:
+                _change_stage(s, side, eligible[int(draws[side]) % len(eligible)], 2)
+            sd.starf_open = 0
+
+
+def _starf_kept(tables, s: RefState) -> list[bool]:
+    """``step.starf_kept``: the side awaits a replacement and a living Pokemon other than its
+    active holds a Starf Berry (the raw item) at its pinch (Gluttony halving the param), or
+    Spikes / Stealth Rock lie on its side, F-10."""
+    out = []
+    for b, sd in enumerate(s.battlers):
+        cond = s.sides[side_of(b)]
+        hazards = bool(cond.spikes or cond.stealth_rock)
+
+        def can(mon, hazards=hazards):
+            if not (mon.species and mon.hp):
+                return False
+            if _item_effect(tables, mon, None) != ItemId.STARF_BERRY:
+                return False
+            return hazards or mon.hp <= _pinch_limit(tables, mon)
+
+        mons = _party_of(s, b).mons
+        holder = any(i != sd.active and can(m) for i, m in enumerate(mons))
+        out.append(not s.over and _awaits_replacement(s, b) and holder)
+    return out
 
 
 def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
@@ -6216,12 +6253,18 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     """``_ref_step`` with the turn's Starf Berry draws (``Outcome.starf``) loaded into
     ``RefBattler.starf_roll`` for its held-item checks and cleared after it (F-10), as
     ``step.step_events`` does."""
+    if state.over:
+        return copy.deepcopy(state)
     loaded = copy.deepcopy(state)
-    for sd, roll in zip(loaded.battlers, outcome.starf, strict=True):
-        sd.starf_roll = int(roll)
+    # A battle-start Starf Berry still open draws first (``step._action_phase``).
+    _resolve_starf(loaded, [draw[0] for draw in outcome.starf])
+    for sd, draw in zip(loaded.battlers, outcome.starf, strict=True):
+        sd.starf_roll = int(draw[0])
     out = _ref_step(tables, loaded, actions, outcome, copied=True)
-    for sd in out.battlers:
-        sd.starf_roll = 0
+    # The faint replacement's draw is kept where ``ref_replace`` can read it; 0 at a pause.
+    kept = _starf_kept(tables, out)
+    for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
+        sd.starf_roll = int(draw[1]) % len(STARF_STATS) if keep and not out.pivot_battler else 0
     return out
 
 
@@ -6736,6 +6779,10 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
         _switch_in_effects(turn, s, side)
     s.battlers[side].entry_pending = int(not effects and not s.over and _active(s, side).hp > 0)
     _keep_qc(tables, s, _qc_rolls(s))  # the slot's speedRand stays while it can be read
+    # The kept Starf Berry draw stays for a later replacement or a waiting newcomer (F-10).
+    for sd, keep in zip(s.battlers, _starf_kept(tables, s), strict=True):
+        if not (keep or sd.entry_pending):
+            sd.starf_roll = 0
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)

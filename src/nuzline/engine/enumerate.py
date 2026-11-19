@@ -144,6 +144,13 @@ of the turn:
   first hit lands: ``RandNext() % 100 <= chance`` (``chatter_chance``, 0 / 10 / 30 by its Chatot
   cry). The confusion counter ``duration[s]`` is then read only when it is 1
   (``_chatter_reads``), and the foe's self-hit reads through it need it too (``inflicted``).
+* ``starf[d, 0]`` (F-10): the turn's Starf Berry draw, where side ``d`` can eat one this turn:
+  its active Pokemon or the one it switches in holds one, or a holder of its party can enter
+  (its own U-turn / Baton Pass, a foe's Roar), at its pinch or able to lose HP this turn; or ``d``
+  Plucks / Bug Bites a foe holding one, or Recycles one; or a battle-start berry is still open
+  (``starf_open``). Five values while the count of stats below +6 stays 5, else all 60
+  (``_starf_reads``). ``starf[d, 1]``: a faint replacement's draw (five values), where a holder
+  can enter at its pinch after the turn (``step.starf_kept`` keeps it).
 * ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
   at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
@@ -225,6 +232,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
+from nuzline.engine.hooks import entry_damage_up, land_stats, starf_holders
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -238,6 +246,7 @@ from nuzline.engine.ids import (
     SPECIES_CHATOT,
     SPECIES_SHAYMIN,
     STARF_DRAWS,
+    STARF_STATS,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -419,6 +428,9 @@ class OutcomeLaws(NamedTuple):
     acupressure_loose: jnp.ndarray  # bool[B]
     # int32[B]: ids.CHATTER_CHANCES of each battler's party's Chatot cry (G-70)
     chatter_chance: jnp.ndarray
+    # bool[B, 2]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
+    # change before the eating: all STARF_DRAWS values; else the five of a fixed count of 5.
+    starf_loose: jnp.ndarray
 
 
 class SamplingOnly(Exception):
@@ -507,6 +519,7 @@ def _end_speeds(
     weather_free=False,
     tailwind_free=False,
     unburden_free=False,
+    land_free=False,
 ):
     """``(int32[3 * (27 + 6 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
@@ -535,7 +548,10 @@ def _end_speeds(
     effects._side_layers), every point is also taken with Tailwind's x2 (battle_lib.c:1274-1276).
     Where ``unburden_free`` (an Unburden holder of the side can be on the field having lost its
     item, E2 batch 9, or get one back through Recycle, B13-19), every point is also taken with
-    Unburden's state toggled (:1268-1272)."""
+    Unburden's state toggled (:1268-1272). Where ``land_free`` (a Sky Shaymin of the side can be
+    frozen and hit this turn, F-16), every point is also taken with a Sky Shaymin's stats
+    recalculated on Land Forme's row (``hooks.land_stats``: base Speed 127 -> 100,
+    subscript_check_shaymin_form.s:22-30, battle_io_command.c:601-604, battle_lib.c:169-193)."""
     fmt = format_of(state)
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
@@ -610,9 +626,19 @@ def _end_speeds(
     possible = jnp.concatenate(
         [possible, possible & wind_ok, possible & unburden_ok, possible & wind_ok & unburden_ok]
     )
+    # Bit 2: Shaymin-Sky's stats as on the field, or reverted to Land Forme's (F-16).
+    winds = jnp.concatenate([winds, winds + 4])
+    mons, stages, paras, locks = (jnp.tile(x, 2) for x in (mons, stages, paras, locks))
+    possible = jnp.concatenate([possible, possible & jnp.asarray(land_free, bool)])
+    row = party(fmt, side)
 
     def speed(mon, stage, para, lock, wind):
         unburdened = (wind & 2) != 0
+        sky = (state.species[row, mon] == SPECIES_SHAYMIN) & (state.form[row, mon] != 0)
+        land = ((wind & 4) != 0) & sky
+        reverted = jnp.where(
+            land, land_stats(tables, state, row, mon)[Stat.ATK :], state.stats[row, mon]
+        )
         # A Pokemon other than the active one comes in fresh: UpdateAfterSwitch zeroes its
         # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
         # for an Unburden holder that still holds an item (:4433-4437); B9-13.
@@ -644,6 +670,7 @@ def _end_speeds(
         )
         s = s._replace(
             active=state.active.at[side].set(mon),
+            stats=s.stats.at[row, mon].set(reverted.astype(s.stats.dtype)),
             stages=s.stages.at[side, Stat.SPE].set(stage.astype(s.stages.dtype)),
             status=s.status.at[party(fmt, side), mon].set(
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
@@ -2106,6 +2133,23 @@ def outcome_laws(
     weather_free = live & jnp.any(
         (uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter)
     )
+    # F-16: a Sky Shaymin of the side, frozen now or by a foe's move, that a foe's move hits
+    # becomes Land Forme mid-turn (hooks.shaymin_land): its end speed may be Land's.
+    sky_mon = (
+        (state.species == SPECIES_SHAYMIN)
+        & (state.form != 0)
+        & (state.species != 0)
+        & (state.hp > 0)
+    )[party(fmt, jnp.arange(fmt.B))]
+    frozen_sky = jnp.any(
+        sky_mon & (state.status[party(fmt, jnp.arange(fmt.B))] == Status.FREEZE), axis=1
+    )
+    freezes = _inflicts(
+        tables, state, foes(moves), Status.FREEZE, users=tuple(_foe(b) for b in range(fmt.B))
+    )
+    land_free = live & foes(uses_move) & ((jnp.any(sky_mon, axis=1) & freezes) | frozen_sky)
+    if loose:
+        land_free = live & jnp.any(sky_mon, axis=1)
     speeds = [
         _end_speeds(
             tables,
@@ -2126,6 +2170,7 @@ def outcome_laws(
                 & (state.species[party(fmt, side)] != 0)
                 & (state.hp[party(fmt, side)] > 0)
             ),
+            land_free[side],
         )
         for side in range(fmt.B)
     ]
@@ -2205,15 +2250,9 @@ def outcome_laws(
         # would only multiply every other brute force past the width cap.
         quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (fmt.B,))
 
-    # Starf Berry (F-10): a living holder anywhere in the party can eat it at a pinch this turn (a
-    # hit, the turn's item checks, a switch-in): its stat draw. Over-approximate, as Quick Claw's.
-    starf_party = jnp.any(
-        (tables.item_effect[state.item] == ItemId.STARF_BERRY)
-        & (state.species != 0)
-        & (state.hp > 0),
-        axis=1,
-    )[party(fmt, jnp.arange(fmt.B))]
-    starf_draw = live & starf_party
+    starf_draw, starf_loose = _starf_reads(
+        tables, state, actions, uses_move, effect, params, dragged, loose
+    )
 
     band_party = jnp.any(
         (tables.item_effect[state.item] == ItemId.FOCUS_BAND)
@@ -2508,7 +2547,113 @@ def outcome_laws(
         chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        starf_loose=starf_loose,
     )
+
+
+# Effects whose stage writes are not bounded by a move's own stage param (``_starf_reads``): they
+# set, copy or swap whole stages, pass them on, or give a Starf Berry back for a second eating.
+_STARF_STAGE_JUMPS = (
+    _E.BELLY_DRUM,
+    _E.PSYCH_UP,
+    _E.STAGE_SWAP,
+    _E.TRANSFORM,
+    _E.BATON_PASS,
+    _E.RECYCLE,
+)
+
+
+def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loose):
+    """``(relevant bool[B, 2], loose bool[B, 2])`` of ``Outcome.starf`` (F-10). Index 0, the turn's
+    draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the one
+    it switches in holds one, or any living holder of its party can enter (its own U-turn or Baton
+    Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
+    residual damage source, entry hazards; over-approximate); or ``d`` Plucks / Bug Bites a foe
+    holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a battle-start berry is
+    still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of
+    the party can be at its pinch when a replacement sends it in: at its pinch now, on the field
+    this turn when it can leave, or with Spikes / Stealth Rock up or set this turn
+    (``step.starf_kept``).
+
+    The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
+    newcomer has all five below +6; an active one keeps that count when its highest of them plus
+    the most this turn can add stays below +6: the side's own stat move (its stage param, 1 for
+    Dragon Dance, AncientPower, Curse, 2 for Acupressure), a foe's Swagger / Flatter or raising
+    stat move (its param) and 2 for the rest (Steadfast, Speed Boost, a plucked pinch berry,
+    Download); no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
+    (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
+    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5)."""
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
+    rows = party(fmt, sides)
+    live = state.over == 0
+    switch = is_switch(actions)
+    holds, pinched = starf_holders(tables, state)
+    holds_b, pinched_b = holds[rows], pinched[rows]  # [B, SLOTS]
+    slots = jnp.arange(state.hp.shape[1])[None, :]
+    incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.hp.shape[1] - 1)
+    on_field = (slots == state.active[:, None]) | (switch[:, None] & (slots == incoming[:, None]))
+    pivots = uses_move & _any_of(effect, (_E.U_TURN, _E.BATON_PASS))
+    enters = pivots | jnp.asarray(dragged, bool)
+    candidates = (holds_b & on_field) | (enters[:, None] & holds_b)
+    recycled = (
+        uses_move
+        & (effect == _E.RECYCLE)
+        & (tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY)
+    )
+    plucked = uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1))
+    hazards = entry_damage_up(state)
+    residual = (
+        (state.weather != Weather.NONE)
+        | jnp.any((state.status != Status.NONE) & (state.hp > 0))
+        | jnp.any(state.leech_seed != 0)
+        | jnp.any(state.curse != 0)
+        | jnp.any(state.trapped != 0)
+        | jnp.any(state.future_timer != 0)
+        | jnp.any(hazards)
+    )
+    hp_drop = jnp.any(uses_move) | residual
+    pinch_reach = jnp.any(candidates & (pinched_b | hp_drop), axis=1)
+    open_ = state.starf_open != 0
+    turn = live & (pinch_reach | plucked | recycled | open_)
+    # Index 1: a holder at its pinch when a replacement sends it in: one off the field, or the
+    # active one if it can leave (a switch, its U-turn or Baton Pass, a foe's Roar), at its pinch
+    # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
+    setters = foes(uses_move & _any_of(effect, (_E.SPIKES, _E.STEALTH_ROCK)))
+    leaving = switch | enters
+    bench = (slots != state.active[:, None]) | leaving[:, None]
+    hurt = (hazards | setters | leaving)[:, None]
+    rep = live & jnp.any(bench & (pinched_b | (holds_b & hurt)), axis=1)
+    # The count: fixed at 5 unless a stat can reach +6 before the eating.
+    five = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    highest = jnp.maximum(jnp.max(state.stages[:, five].astype(_I32), axis=1), 0)
+    param1 = jnp.maximum(params[:, 1].astype(_I32), 0)
+    own_gain = jnp.where(
+        _any_of(effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF)),
+        param1,
+        jnp.where(
+            effect == _E.ACUPRESSURE,
+            2,
+            _any_of(effect, (_E.DRAGON_DANCE, _E.RAISE_ALL_STATS_HIT, _E.CURSE)).astype(_I32),
+        ),
+    )
+    foe_gain = jnp.where(
+        _any_of(effect, (_E.SWAGGER, _E.STAT_FOE, _E.SECONDARY_STAT_FOE)), param1, 0
+    )
+    gain = jnp.where(uses_move, own_gain, 0) + foes(jnp.where(uses_move, foe_gain, 0)) + 2
+    jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
+    turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
+    relevant = jnp.stack([turn, rep], axis=1)
+    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn_loose)], axis=1)
+    if loose:
+        # The brute force: the turn's draw, all STARF_DRAWS values, wherever a living holder is
+        # in the side's party (or its foe's, for a Pluck / Bug Bite) or a berry is open, and the
+        # replacement's (five values: a fresh battler's count) wherever one is in the party.
+        anyone = jnp.any(holds_b, axis=1)
+        eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone)
+        relevant = jnp.stack([live & (anyone | eats | open_ | recycled), live & anyone], axis=1)
+        loose_out = jnp.stack([jnp.ones_like(live & anyone), jnp.zeros_like(anyone)], axis=1)
+    return relevant, loose_out
 
 
 # Host laws: ``(values, numerators, denominator)`` of one element, all integers, the
@@ -2729,10 +2874,17 @@ _LAWS = {
     "future_band": _focus_band,
     # subscript_confuse.s:34 Random 3, 2 (G-5): 2-5, uniform.
     "berry_confusion": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
-    # battle_lib.c:4864-4866: RandNext() % 5 until the stat is below +6, uniform over the eligible
-    # stats by the % n convention: one value in [0, 60), read modulo their count (F-10).
-    "starf": lambda laws, side: (list(range(STARF_DRAWS)), [1] * STARF_DRAWS, STARF_DRAWS),
 }
+
+
+def _starf(laws: OutcomeLaws, side: int, k: int) -> _Law:
+    """battle_lib.c:4864-4866: RandNext() % 5 until the stat is below +6, uniform over the
+    eligible stats by the % n convention, one value in [0, 60) read modulo their count (F-10):
+    the five values of a count fixed at 5, or all 60 where it can change (``_starf_reads``)."""
+    if bool(laws.starf_loose[side, k]):
+        return list(range(STARF_DRAWS)), [1] * STARF_DRAWS, STARF_DRAWS
+    n = len(STARF_STATS)
+    return list(range(n)), [1] * n, n
 
 
 @cache
@@ -3306,6 +3458,8 @@ def _law(laws: OutcomeLaws, elem: Elem) -> _Law:
     name, index = elem
     if name == "hit":  # B13-6: a later Triple Kick hit's own thresholds
         values, weights, den = _hit(laws, index[0], index[1])
+    elif name == "starf":  # F-10: the turn's draw or the faint replacement's
+        values, weights, den = _starf(laws, index[0], index[1])
     else:
         values, weights, den = _LAWS[name](laws, index[0] if index else 0)
     kept = [(v, w) for v, w in zip(values, weights) if w > 0]

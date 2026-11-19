@@ -178,9 +178,11 @@ class Outcome(NamedTuple):
     # int8[B], 1 = Chatter's roll passes (``RandNext() % 100 <= effectChance``, battle_script.c:
     # 8428-8430; the chance is ``ids.CHATTER_CHANCES`` of the user's ``chatot_cry``), G-70.
     chatter: jnp.ndarray
-    # int8[B], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866): a value
-    # in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among the five stats below +6
-    # (``hooks.starf_stat``), F-10. Held by ``BattleState.starf_roll`` while the turn plays.
+    # int8[B, 2], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866,
+    # :5286-5288): a value in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among
+    # the five stats below +6 (``hooks.starf_stat``), F-10. ``[b, 0]`` the turn's (its held-item
+    # checks and Pluck), ``[b, 1]`` the faint replacement's switch-in check after it (kept in
+    # ``BattleState.starf_roll`` between the turn and ``step.replace``, ``step.starf_kept``).
     starf: jnp.ndarray
 
 
@@ -219,7 +221,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         future_band=sides,
         berry_confusion=sides + 2,
         chatter=sides,
-        starf=sides,
+        starf=jnp.zeros((fmt.B, 2), _I8),
     )
 
 
@@ -1802,8 +1804,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         ],
         # Starf Berry (battle_lib.c:4864-4866): RandNext() % 5 until the stat is below +6, uniform
         # over the eligible stats by the % n convention; one value in [0, 60) serves every count 1-5
-        # (F-10).
-        starf=jax.random.randint(jax.random.fold_in(key, 47), per_side, 0, STARF_DRAWS, dtype=_I32),
+        # (F-10): the turn's and the faint replacement's.
+        starf=jax.random.randint(
+            jax.random.fold_in(key, 47), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
+        ),
     )
     outcome = _cast(outcome)
 

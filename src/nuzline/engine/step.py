@@ -74,6 +74,7 @@ Not implemented: the Trick Room countdown of the turn end's side-condition pass
 from __future__ import annotations
 
 import itertools
+import math
 
 import jax
 import jax.numpy as jnp
@@ -182,10 +183,14 @@ from nuzline.engine.hooks import (
     TORMENT,
     WEATHER_HP,
     after_damage_items,
+    entry_damage_up,
     forecast,
     held_item_check,
     recover_status_by_ability,
+    resolve_starf,
     reveal_ability,
+    starf_count,
+    starf_holders,
     swap_war,
     switch_in_effects,
 )
@@ -208,6 +213,8 @@ from nuzline.engine.ids import (
     QUICK_CLAW_MODULUS,
     SEMI_SET_FLAGS,
     SNORE_PARAM,
+    STARF_DRAWS,
+    STARF_STATS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -3945,8 +3952,11 @@ def _action_phase(
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
     Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch."""
     paused = state.pivot_battler != 0
-    # The turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events clears them.
-    state = state._replace(starf_roll=jnp.asarray(outcome.starf, state.starf_roll.dtype))
+    # A battle-start Starf Berry still open (a state no root drew for) draws here first; then the
+    # turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events replaces them.
+    turn_draw = jnp.asarray(outcome.starf)[:, 0]
+    state = resolve_starf(state, turn_draw)
+    state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
     fresh = _clear_stale_choice_locks(tables, fresh, actions)
     fresh = _record_last_move(tables, fresh, actions)
@@ -3995,8 +4005,31 @@ def step_events(
         roosting=jnp.where(pending, roosting_now(e, read["roosted"]), 0).astype(e.roosting.dtype)
     )
     s = _where(halted, s, e)
-    s = s._replace(starf_roll=jnp.zeros_like(s.starf_roll))  # 0 between turns, so states merge
+    # The faint replacement's Starf Berry draw, kept for ``replace`` where it can be read; 0 at a
+    # pause and elsewhere, so states merge (F-10).
+    # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
+    # at most an Intimidate or Download stage before it), so states that read alike merge.
+    kept = starf_kept(tables, s) & ~halted
+    replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
+    s = s._replace(starf_roll=jnp.where(kept, replacement_draw, 0).astype(s.starf_roll.dtype))
     return _where(state.over != 0, state, s), events
+
+
+def starf_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the side's faint replacement can eat a Starf Berry before the next turn's draw:
+    its active Pokemon is down with one to send in (``needs_replacement``) and a living Pokemon
+    of its party other than the active holds one (the raw item: Klutz and Embargo are read at the
+    check) at its pinch, or Spikes / Stealth Rock can take it there at the entry
+    (``hooks.starf_holders``, ``entry_damage_up``). The replacement's switch-in item check
+    (``step.replace``: ``hooks.on_switch_in``, ``subscript_show_party_list.s:22-24`` then
+    ``ShowBattleMon``, battle_lib.c:4151) draws ``RandNext() % 5`` (battle_lib.c:5273-5294), held
+    in ``starf_roll`` (F-10)."""
+    fmt = format_of(state)
+    rows = party(fmt, jnp.arange(fmt.B))
+    holds, pinched = starf_holders(tables, state)
+    can = pinched[rows] | (holds[rows] & entry_damage_up(state)[:, None])
+    bench = jnp.arange(state.hp.shape[1])[None, :] != state.active[:, None]
+    return (needs_replacement(state) != 0) & jnp.any(can & bench, axis=1)
 
 
 def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
@@ -4059,6 +4092,10 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (format_of(state).B,), 0, QUICK_CLAW_MODULUS) == 0
     state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
+    # A lead's battle-start Starf Berry (``starf_open``): its RandNext() % 5 (battle_lib.c:
+    # 5273-5294), uniform over the eligible stats (F-10).
+    starf = jax.random.randint(jax.random.fold_in(key, 2), (format_of(state).B,), 0, STARF_DRAWS)
+    state = resolve_starf(state, starf)
     return sample_war(jax.random.fold_in(key, 1), state)
 
 
@@ -4076,6 +4113,12 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
     state = jax.tree.map(jnp.asarray, state)
     kept = [bool(k) for k in jax.device_get(qc_kept(tables, state))]
     n = QUICK_CLAW_MODULUS
+    # A lead's battle-start Starf Berry (``starf_open``): one value per eligible stat, uniform
+    # (``hooks.resolve_starf``, F-10); visible, so its outcomes are separate groups.
+    counts = [
+        int(jax.device_get(starf_count(state, b))) if int(state.starf_open[b]) else 1
+        for b in range(len(kept))
+    ]
     out = []
     for bits in itertools.product(*((0, 1) if k else (0,) for k in kept)):
         prob = 1.0
@@ -4083,10 +4126,13 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
             if k:
                 prob *= 1 / n if b else (n - 1) / n
         drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
-        if bool(war_split(drawn)):
-            out.extend((resolve_war(drawn, tie), prob / 2) for tie in (0, 1))
-        else:
-            out.append((resolve_war(drawn, 0), prob))
+        for picks in itertools.product(*(range(max(c, 1)) for c in counts)):
+            p = prob / math.prod(max(c, 1) for c in counts)
+            picked = resolve_starf(drawn, jnp.asarray(picks, jnp.int32))
+            if bool(war_split(picked)):
+                out.extend((resolve_war(picked, tie), p / 2) for tie in (0, 1))
+            else:
+                out.append((resolve_war(picked, 0), p))
     return out
 
 
@@ -4177,6 +4223,11 @@ def replace(tables: Tables, state: BattleState, side, slot, effects=True) -> Bat
             out.exp_refused.dtype
         )
     )
+    # The kept Starf Berry draw (F-10) is read; kept on for a side whose next replacement can
+    # still eat one (a newcomer that the hazards fainted) or whose newcomer's checks wait for
+    # ShowBattleMon (``entry_pending``, G-32), else 0.
+    keep = starf_kept(tables, out) | (out.entry_pending != 0)
+    out = out._replace(starf_roll=jnp.where(keep, out.starf_roll, 0).astype(out.starf_roll.dtype))
     # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
