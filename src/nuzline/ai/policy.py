@@ -596,6 +596,20 @@ def _basic_check_miracle_eye(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_lock_on(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLockOn`` (script.s:665-672): the player's battler already under
+    MOVE_EFFECT_LOCK_ON (``IfMoveEffect``, trainer_ai.c:704-714; any locker's bit), -10; else
+    either battler with No Guard (``LoadBattlerAbility``, the defender's read a coin flip when it
+    guesses), -10; E3-B2-17."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.LOCK_ON))
+    ctx = _score(ctx, t, -10)
+    for battler in (_A, _D):
+        ctx = c.load_battler_ability(ctx, battler)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -2244,6 +2258,14 @@ def _expert_defog(ctx: AiContext, mask) -> AiContext:
     # Expert_Defog_CheckOpponentHP (:6183)
     ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, check_hp | skip | ctx.live), _D, 70))
     return c.pop_or_end(c.add_to_move_score(ctx, -2))
+
+
+def _expert_lock_on(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LockOn`` (script.s:3319-3325): the 128 roll (:3321) jumping to the end, else
+    +2 (E3-B2-17)."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 3321))
+    ctx = c.add_to_move_score(ctx, 2)
+    return c.pop_or_end(ctx)
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3999,6 +4021,7 @@ _BASIC_LABELS = (
     (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
     (BattleEffect.ENCORE, _basic_check_cannot_encore),  # :188
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
+    (BattleEffect.NEXT_ATTACK_ALWAYS_HITS, _basic_check_lock_on),  # :190 (E3-B2-17)
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
     (BattleEffect.PREVENT_ESCAPE, _basic_check_mean_look),  # :193
@@ -4123,6 +4146,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ENCORE, _expert_encore),  # :1689
     (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_nightmare),  # :1691
+    (BattleEffect.NEXT_ATTACK_ALWAYS_HITS, _expert_lock_on),  # :1692 (E3-B2-17)
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695

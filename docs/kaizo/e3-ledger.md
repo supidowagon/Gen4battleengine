@@ -1297,3 +1297,23 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   row "AI move effect #34 INCREASE_PRIZE_MONEY" closes. Hit chance, damage, crit, held items: as any plain hit.
   Doubles (section 5): nothing stored or indexed. Owed lines closed: none. Owed lines added: none. Not built: none.
   Tests: tests/ai/test_kaizo_policy.py (`test_pay_day_has_no_ai_entry_and_scores_as_a_plain_hit`).
+- E3-B2-17 Lock-On / Mind Reader AI (#94 BATTLE_EFFECT_NEXT_ATTACK_ALWAYS_HITS; moves 199 and 170 in both games; sheet
+  e094_lock_on.md). The mechanic was modelled by B8-1 / B8-2 and is unchanged (effect-map 94 -> `LOCK_ON`,
+  `lock_on` / `lock_on_target`, `effects.LOCK_ON_TURNS`); this group is the AI's transcription only. No new state, no
+  `Outcome` field, no table array or key, no manifest bump.
+  AI: Basic_ScoreMoveEffect script.s:190 -> Basic_CheckLockOn (:665-672): `IfMoveEffect DEFENDER MOVE_EFFECT_LOCK_ON`
+  (`commands.MoveEffectMask.LOCK_ON`, bits 3-4, moves.h:11-12, :41: any locker's bit on the player's battler, either counter
+  value, reads `lock_on[t]`; the AI's own battler locked does not count) -10; then `LoadBattlerAbility ATTACKER` ==
+  ABILITY_NO_GUARD (99, generated/abilities.txt:100) -10; then `LoadBattlerAbility DEFENDER` == No Guard -10 (the defender
+  read is the coin-flip read when the AI guesses, so it is made only on the lanes that reached it: the earlier jumps leave
+  the live mask, `_score`). Expert_Main :1692 -> Expert_LockOn (:3319-3325): the 128 roll (:3321, `SITE_N[3321]`) jumping to
+  the end, else +2. `policy._basic_check_lock_on`, `_expert_lock_on`; 94 joins `KAIZO_TRANSCRIBED`, `KAIZO_EXPERT_LABELS`
+  (`("Expert_LockOn", 1692)`) and `KAIZO_EXPERT_TRANSCRIBED`; entries in `_BASIC_LABELS` and `_EXPERT_LABELS`. The other
+  reads were transcribed already: Expert_Encore table (:3224), CheckHP_DiscourageAtLowHP (:7848) and
+  CheckHP_Target_DiscourageAtLowHP (:7959), Expert_ChargeTurnWithInvuln (:4054, policy). Read bounds and the backlog
+  regenerated (the row "AI move effect #94 NEXT_ATTACK_ALWAYS_HITS" closes).
+  Hit chance, damage inputs, crit inputs, held items: none (AI only). Doubles (section 5): nothing stored or indexed
+  here; `lock_on` is per battler and the AI's reads go through `_side(Battler.DEFENDER)` as every Basic check.
+  Owed lines closed: none. Owed lines added: none. Not built: none. Message-only: none.
+  Tests: tests/ai/test_kaizo_policy.py (`test_lock_on_tables_are_the_decomps`, `test_lock_on_basic`, `test_expert_lock_on`,
+  `test_lock_on_is_scored_not_refused_and_exact_equals_loose`).

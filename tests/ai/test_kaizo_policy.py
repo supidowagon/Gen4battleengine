@@ -6606,3 +6606,84 @@ def test_pay_day_has_no_ai_entry_and_scores_as_a_plain_hit(
     layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
     assert policy.ai_refusals(t, s, n, layout) == []
     _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
+
+
+# --- #94 Lock-On, Mind Reader (E3-B2-17) -------------------------------------------------------
+
+
+def test_lock_on_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Lock-On (199) and Mind Reader (170) are BATTLE_EFFECT_NEXT_ATTACK_ALWAYS_HITS, 94, named in
+    Basic_ScoreMoveEffect (script.s:190), Expert_Main (:1692), Expert_Encore (:3224) and the two
+    CheckHP tables (:7848, :7959); the one roll is :3321 (128); MOVE_EFFECT_LOCK_ON is bits 3-4
+    (moves.h:11-12, :41); ABILITY_NO_GUARD is 99 (generated/abilities.txt:100) (E3-B2-17)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.NEXT_ATTACK_ALWAYS_HITS == 94
+    assert c.MoveEffectMask.LOCK_ON == (1 << 3) | (1 << 4)
+    assert c.ABILITY_IDS["No Guard"] == 99
+    assert KAIZO_EXPERT_LABELS[94] == ("Expert_LockOn", 1692) and 94 in KAIZO_TRANSCRIBED
+    assert SITE_N[3321] == 128
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(94) == 1
+    for move in ("Lock-On", "Mind Reader"):
+        assert int(t.move_ai_effect[n.move(move)]) == 94, move
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    named = [
+        i + 1 for i, line in enumerate(lines) if "BATTLE_EFFECT_NEXT_ATTACK_ALWAYS_HITS" in line
+    ]
+    assert named == [190, 1692, 3224, 4054, 7848, 7959]
+    assert lines[664] == "Basic_CheckLockOn:"
+    assert (
+        lines[666].strip() == "IfMoveEffect AI_BATTLER_DEFENDER, MOVE_EFFECT_LOCK_ON, ScoreMinus10"
+    )
+    assert lines[667].strip() == "LoadBattlerAbility AI_BATTLER_ATTACKER"
+    assert lines[668].strip() == "IfLoadedEqualTo ABILITY_NO_GUARD, ScoreMinus10"
+    assert lines[669].strip() == "LoadBattlerAbility AI_BATTLER_DEFENDER"
+    assert lines[670].strip() == "IfLoadedEqualTo ABILITY_NO_GUARD, ScoreMinus10"
+    assert lines[3318] == "Expert_LockOn:"
+    assert lines[3320].strip() == "IfRandomLessThan 128, Expert_LockOn_End"
+    assert lines[3321].strip() == "AddToMoveScore 2"
+
+
+@pytest.mark.parametrize("move", ["Lock-On", "Mind Reader"])
+def test_lock_on_basic(kaizo_tables, kaizo_names, kaizo_roark_party, move):
+    """Basic_CheckLockOn (script.s:665-672): the player's battler under a lock (any locker's bit
+    of ``lock_on``, either counter value) -10; the AI's own battler locked does not count; No Guard
+    on the AI's battler or on a known player -10 (E3-B2-17)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    for turns in (1, 2):
+        locked = s._replace(lock_on=s.lock_on.at[0].set(turns))
+        assert _delta(t, locked, 0x2, 0x3)[0] == -10
+    own = s._replace(lock_on=s.lock_on.at[1].set(2))
+    assert _delta(t, own, 0x2, 0x3)[0] == 0
+    no_guard = c.ABILITY_IDS["No Guard"]
+    assert _delta(t, _known_ability(t, s, no_guard), 0x2, 0x3)[0] == -10
+    species = kaizo_roark_party[BONSLY].species
+    ai = _with_abilities(t, species, [no_guard, no_guard])
+    assert _delta(ai, s, 0x2, 0x3)[0] == -10
+
+
+@pytest.mark.parametrize("move", ["Lock-On", "Mind Reader"])
+def test_expert_lock_on(kaizo_tables, kaizo_names, kaizo_roark_party, move):
+    """Expert_LockOn (script.s:3319-3325): the 128 roll (:3321) jumping to the end scores nothing,
+    else +2 (E3-B2-17)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+    assert _delta(t, s, 0x3, 0x7)[0] == 2
+    assert _delta(t, s, 0x3, 0x7, jumps=((0, 3321),))[0] == 0
+
+
+def test_lock_on_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    for move in ("Lock-On", "Mind Reader"):
+        s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
+        layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)
