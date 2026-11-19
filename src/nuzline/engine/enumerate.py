@@ -2461,7 +2461,8 @@ def outcome_laws(
         hit_whole=lock,
         crit_variants=odds_variants,
         crit_possible=odds_possible,
-        # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored).
+        # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
+        # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
         no_crit=((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
         | armored(tables, state, actions, moves))
         & ~lock,

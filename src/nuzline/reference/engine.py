@@ -689,6 +689,13 @@ def _armored(s: RefState, attacker: int, defender: int) -> bool:
     return _ignorable(s, attacker, defender) in (AbilityId.SHELL_ARMOR, AbilityId.BATTLE_ARMOR)
 
 
+def _crit_blocked(s: RefState, attacker: int, defender: int) -> bool:
+    """``BattleSystem_CalcCriticalMulti`` (lib.c:7134-7137): no crit on the defender's Battle
+    Armor / Shell Armor (``_armored``) or with Lucky Chant on the defender's side (the mask of
+    ``battleCtx->defender``, script.c:2158-2163), read at the hit on the hit's own defender."""
+    return _armored(s, attacker, defender) or bool(s.sides[side_of(defender)].lucky_chant)
+
+
 def _iron_ball(tables, s: RefState, mon: RefPokemon) -> bool:
     """``HOLD_EFFECT_SPEED_DOWN_GROUNDED`` (``Battler_HeldItemEffect``), G-56, B13-29."""
     return _item_effect(tables, mon, s) == ItemId.IRON_BALL
@@ -4009,7 +4016,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             s,
             side,
             move,
-            _crits(tables, s, side, move, o.crit[side][hit]) and not _armored(s, side, target),
+            _crits(tables, s, side, move, o.crit[side][hit]) and not _crit_blocked(s, side, target),
             o.roll[side][hit],
             # Payback: movePower x2 once the target acted (script.c:7198-7209, B9-12).
             power_mul=20
@@ -5142,8 +5149,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # script's damage (hit 0's crit and roll, the type chart run hit or miss), B10-2.
         would = _move_damage(
             tables, s, side, move,
-            _crits(tables, s, side, move, o.crit[side][0]) and not _armored(s, side, tgt),
-            o.roll[side][0], wonder_guard=False,
+            _crits(tables, s, side, move, o.crit[side][0]) and not _crit_blocked(s, side, tgt),
+            o.roll[side][0], wonder_guard=False, defender=tgt,
         )  # fmt: skip
         cap = _divide(_active(s, tgt).max_hp, 2)
         _lose_hp(turn, s, side, min(_divide(would, 2), cap))
@@ -5545,7 +5552,9 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     kind = _move_type(tables, s, pursuer, move)
     if side == 0 and _wonder_guarded(tables, s, pursuer, side, move, kind):
         _know_ability(s, s.battlers[0].active)
-    crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _armored(s, pursuer, side)
+    crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _crit_blocked(
+        s, pursuer, side
+    )
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
     target_sd = s.battlers[side]

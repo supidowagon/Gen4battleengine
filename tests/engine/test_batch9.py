@@ -128,10 +128,11 @@ def test_helping_hand_fails_and_follow_me_redirects_only_a_curse_in_singles(tabl
         out = assert_matches_reference(tables, s, (slot, 0), O)
         assert int(out.hp[1, 0]) == int(s.hp[1, 0])
     # the Curse a non-Ghost foe aims at the Follow Me user: its user's stages as ever, the PP and
-    # the record of the Togepi's side change (``test_singles_followup``)
+    # the record of the Togepi's side change (``test_singles_followup``); the levels differ, so
+    # the order reads no speed tie.
     c = make_state(
         tables,
-        [_mon(n, "Togepi", ["Follow Me"], 30)],
+        [_mon(n, "Togepi", ["Follow Me"], 40)],
         [_mon(n, "Geodude", ["Curse"], 30)],
     )
     out = assert_matches_reference(tables, c, (0, 0), O)

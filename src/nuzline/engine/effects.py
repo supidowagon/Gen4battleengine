@@ -2234,6 +2234,16 @@ def armored(state: BattleState, side, target_side) -> jnp.ndarray:
     return (seen == AbilityId.SHELL_ARMOR) | (seen == AbilityId.BATTLE_ARMOR)
 
 
+def crit_blocked(state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_CalcCriticalMulti`` (battle_lib.c:7134-7137) gives no crit to
+    ``side``'s hit on ``target_side``, whatever the roll: the defender's Battle Armor / Shell
+    Armor (``armored``) or Lucky Chant on the defender's side (``sideConditions`` is
+    ``BATTLECTX_SIDE_CONDITIONS_MASK`` of ``battleCtx->defender``, battle_script.c:2158-2163).
+    The defender is the hit's own: the user for a lock reading its stored target (singles
+    follow-up (ii)), so the turn-start cut (``Outcome.crit``, the foe's side) cannot stand in."""
+    return armored(state, side, target_side) | (state.lucky_chant[side_of(target_side)] != 0)
+
+
 def _eat_berry(
     tables, state, h: _Hit, outcome: Outcome, foe_custap
 ) -> tuple[BattleState, jnp.ndarray]:
@@ -3247,7 +3257,7 @@ def play_hit(
         move,
         # The crit draw read with the odds at this hit (battle_lib.c:7105-7132).
         crit_lands(tables, state, side, move, outcome.crit[side, hit_index])
-        & ~armored(state, side, target_side),
+        & ~crit_blocked(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
@@ -3295,7 +3305,10 @@ def play_hit(
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
     # lastHitByBattler[defender] = the attacker on every UpdateHP with damage, before the
     # Substitute branch (bcp.c:3347, :3357; D2-14): a partner's hit and a Substitute's count, and
-    # nothing clears it. Written at B = 4 only: at B = 2 it would always be the foe.
+    # nothing clears it. Written at B = 4 only. At B = 2 it is the foe, or the user after a lock
+    # hit itself (singles follow-up (ii)); its one reader, Bide's release (bcp.c:2700-2705), needs
+    # storedDamage, which subscript_bide_start.s zeroes and only the foe's hits during Bide add to
+    # (bcp.c:3357, :3407, each also setting lastHitByBattler), so it reads the foe either way.
     if fmt.B == 4:
         state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and

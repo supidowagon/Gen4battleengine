@@ -1546,16 +1546,20 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     hit = hit_class(rolls, thresholds[:, None, :], possible[:, None, :])
     later_hit = hit_class(rolls, later[:, None, :], possible[:, None, :])
     # A lock aimed at its user (self_lock) keeps the roll whole: its threshold reads either battler.
-    lock = self_lock(tables, state)[:, None]
+    # Gated by a move action as the law is (enumerate.outcome_laws ``lock``).
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    lock = (uses_move & self_lock(tables, state))[:, None]
     hit = jnp.where(lock, rolls, hit)
     later_hit = jnp.where(lock, rolls, later_hit)
     hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
-    # Battle Armor / Shell Armor (:7135-7136).
+    # Battle Armor / Shell Armor (:7135-7136). A lock aimed at its user is not cut: its defender
+    # may be the user or the foe, and step reads both on the hit's own defender
+    # (effects.crit_blocked); for every other move this cut makes that read a no-op.
     no_crit = (
         (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
         | armored(tables, state, actions, moves)
-    )[:, None] & ~lock  # a lock aimed at its user: the foe's armor may not be its defender's
+    )[:, None] & ~lock
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
     # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can

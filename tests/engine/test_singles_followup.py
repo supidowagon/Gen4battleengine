@@ -12,12 +12,11 @@ import numpy as np
 import pytest
 
 from nuzline.engine.enumerate import enumerate_outcomes, outcome_laws
-from nuzline.engine.step import step
-
 from nuzline.engine.ids import AbilityId, SemiKind, Stat, Status
 from nuzline.engine.order import metronome_candidates
 from nuzline.engine.outcome import empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
+from nuzline.engine.step import step
 from tests.engine.d2_states import as_ghost, with_ability
 from tests.engine.helpers import assert_matches_reference
 from tests.engine.test_pivot import _mon
@@ -42,7 +41,9 @@ def _with_hit(outcome, side, value):
     return outcome._replace(hit=outcome.hit.at[side, 0].set(value))
 
 
-def _curse_state(tables, names, user_level=50, foe="Togepi", foe_moves=("Follow Me",), foe_level=50):
+def _curse_state(
+    tables, names, user_level=50, foe="Togepi", foe_moves=("Follow Me",), foe_level=50
+):
     return make_state(
         tables,
         [_mon(names, "Bulbasaur", ["Curse", "Swords Dance"], user_level)],
@@ -330,7 +331,7 @@ def test_a_self_lock_keeps_its_accuracy_roll_whole_in_the_laws(tables, names):
     for start in range(0, len(probs), chunk):
         idx = np.arange(start, min(start + chunk, len(probs)))
         pad = np.concatenate([idx, np.full(chunk - len(idx), idx[0])])
-        part = jax.tree.map(lambda f: jnp.asarray(np.asarray(f)[pad]), rows)
+        part = jax.tree.map(lambda f, pad=pad: jnp.asarray(np.asarray(f)[pad]), rows)
         out = fn(tables, s, acts, part)
         hurt.append(np.asarray(out.hp[:, 0, 0] < s.hp[0, 0])[: len(idx)])
     hurt = np.concatenate(hurt)
@@ -338,3 +339,41 @@ def test_a_self_lock_keeps_its_accuracy_roll_whole_in_the_laws(tables, names):
     rate = int(live_hit_threshold(tables, s, 0, names.move("Rollout"), target=0))
     assert 0 < rate < 90
     assert abs(float(np.sum(np.asarray(probs)[hurt])) - rate / 100) < 1e-9
+
+
+# --- Lucky Chant on the hit's own defender (review of D2-33) --------------------------------
+
+
+def _with_crit(outcome, side):
+    # crit value 1 crits at any odds ((1 - 1) % odds == 0, outcome.crit_lands)
+    return outcome._replace(crit=outcome.crit.at[side, 0].set(1))
+
+
+def test_lucky_chant_on_the_users_side_blocks_a_lock_that_hits_its_user(tables, names):
+    # CalcCrit passes the defender's side conditions (battle_script.c:2158-2163) and
+    # BattleSystem_CalcCriticalMulti blocks a crit under Lucky Chant (battle_lib.c:7137): the
+    # lock's defender is its user, so the user's side's Lucky Chant counts, read at the hit
+    s = _locked_rollout(tables, names)
+    plain = assert_matches_reference(tables, s, (0, 0), O)
+    crit = assert_matches_reference(tables, s, (0, 0), _with_crit(O, 0))
+    assert _hp(crit, 0) < _hp(plain, 0)  # the control: the crit lands without Lucky Chant
+    chant = _set(s, "lucky_chant", 0, 5)
+    blocked = assert_matches_reference(tables, chant, (0, 0), _with_crit(O, 0))
+    assert _hp(blocked, 0) == _hp(plain, 0)
+    # the foe's side's Lucky Chant is not the defender's: the crit lands
+    foe_chant = _set(s, "lucky_chant", 1, 5)
+    lands = assert_matches_reference(tables, foe_chant, (0, 0), _with_crit(O, 0))
+    assert _hp(lands, 0) == _hp(crit, 0)
+
+
+def test_lucky_chant_on_the_foes_side_blocks_a_lock_turned_to_the_foe(tables, names):
+    # a faster Follow Me turns the lock to the foe (lib.c:1714-1717): the foe's side's Lucky
+    # Chant blocks the crit (battle_lib.c:7137), which the turn-start cut left in (self_lock)
+    s = _locked_rollout(tables, names, foe="Togepi", foe_moves=("Follow Me",))
+    plain = assert_matches_reference(tables, s, (0, 0), O)
+    crit = assert_matches_reference(tables, s, (0, 0), _with_crit(O, 0))
+    assert _hp(crit, 1) < _hp(plain, 1)
+    chant = _set(s, "lucky_chant", 1, 5)
+    blocked = assert_matches_reference(tables, chant, (0, 0), _with_crit(O, 0))
+    assert _hp(blocked, 1) == _hp(plain, 1)
+    assert _hp(blocked, 0) == _hp(s, 0)

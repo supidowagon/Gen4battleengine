@@ -15,10 +15,12 @@ Orders for a restart after a clear, in this order:
    (e2-payexp-pin) with `git worktree remove`.
 3. Queue, each on its own branch cut from f5f1508 in its own worktree under _scratch/e2/:
    a. The snap_compare follow-up (Owed 14): tool and test only. Source: _scratch/e2/snap_followup.md.
-   b. Done (ruling D2-33, branch e2-singles-fix): the singles follow-up commit with the three
-      approved decomp fixes: (i) Follow Me / non-Ghost Curse (lib.c:1714-1717), (ii) Encore
-      ending under a Rollout lock (bcp.c:1861-1903; the B = 2 chosen_target write on), (iii)
-      randomized non-Ghost Curse. Merge it after D2.
+   b. Open (ruling D2-33, branch e2-singles-fix): the singles follow-up commit with the three
+      approved decomp fixes is built and its review fixes are in: (i) Follow Me / non-Ghost Curse
+      (lib.c:1714-1717), (ii) Encore ending under a Rollout lock (bcp.c:1861-1903; the B = 2
+      chosen_target write on), (iii) randomized non-Ghost Curse. Still owed: the snap_compare
+      diff against base aaa65a3, limited to those states with each diff explained; pending on the
+      pod. Merge it after D2 once that diff is in.
 4. Next milestone after D2: D3 (four-actor turn order, action loop, faints and replacement). It
    owes: the speed order before each action (bcp.c:888), resuming an action after U-turn or
    Pursuit with the action's defender, the format draw in the differential, and rulings D2-17,
@@ -502,6 +504,18 @@ Each is open; close it with its ruling.
 13. tests/engine/test_accuracy_classes.py (45.8 GB in one process): moved to E1's speed pass by
     the managing session, 18 Nov. Cause: the unjitted `sample_outcome` in
     `test_accuracy_classes_equal_raw_rolls` (slow-marked).
+15. Singles (E3), found by the follow-up (D2-33): `step._move_end` runs RecoverStatusByAbility on
+    the foe after every action (step.py `_move_end`), the decomp on the defender
+    (battle_controller_player.c:3965-3967): the user itself for a self-defender move or a lock
+    that hit its user. They differ only when the foe holds a status its ability forbids (Limber,
+    Insomnia, ... gained mid-battle). Fix with the defender (`ctl["target"]`).
+16. Owed to D11 (or whoever owns tests/strategies.py), found by the D2-33 review: the strategies
+    draw neither `chosen_target == b` (a stored user) nor a set `ts_follow_me`, so
+    tests/test_differential.py does not cover D2-33 (i) or (ii); the stream lead decided
+    strategies stay untouched in D2-33 (Q3). Add both draws.
+17. Cost of D2-33, unmeasured: the B = 2 `chosen_target` and `ts_follow_me` writes may split rows
+    that were equal before (`search/rows.row_bytes`, as D2-28 and D2-32 found). Measure the
+    row-merge counts and the prep time on a fixed split before and after.
 
 ### Closes with its mechanic
 
@@ -535,6 +549,12 @@ Rules left out because another mechanic is missing; each closes when that mechan
 - Rest and Yawn read `FIELD_CONDITION_UPROAR` (subscript_rest.s, subscript_yawn.s): test
   `effects.uproar_on` there (B5-6).
 - The status orbs vs Safeguard (subscript_badly_poison.s, subscript_burn.s).
+- Color Change (unsupported, `effects.py:238`): with it a non-Ghost Curse selector can
+  turn Ghost before acting. Its stored target is then the user, so `targets.resolve` gives the
+  user and the Ghost path of effect_script_0109.s runs `SetRandomTarget BTLSCR_ATTACKER` when
+  attacker == defender (:11-12; battle_script.c:9218-9224, `BattleSystem_RandomOpponent`, lib.c:4177-4198: the
+  foe at B = 2, a RandNext draw at B = 4). Model the re-pick (and its draw and law at B = 4) with
+  Color Change; today the engine would curse the user, unreachable.
 - Kaizo's Ganlon and Apicot Berries (param 0) stay refused by `effect_map.DIVISOR_PARAM_MIN`
   (B2-3): `curHP <= maxHP / itemPower` (battle_lib.c:4778, :1294) calls the SDK's signed-divide
   helper, not in the decomp; read its divide-by-zero branch from the ROM's arm9, then model.
@@ -559,12 +579,6 @@ Rules left out because another mechanic is missing; each closes when that mechan
   at :7949) is a chance node in doubles: a new Outcome element per battler.
 - Mid-turn takeover: a short list of alternatives per battler, each keyed by its event (two foes
   can Disable and Encore one battler in a turn).
-
-15. Singles (E3), found by the follow-up (D2-33): `step._move_end` runs RecoverStatusByAbility on
-    the foe after every action (step.py `_move_end`), the decomp on the defender
-    (battle_controller_player.c:3965-3967): the user itself for a self-defender move or a lock
-    that hit its user. They differ only when the foe holds a status its ability forbids (Limber,
-    Insomnia, ... gained mid-battle). Fix with the defender (`ctl["target"]`).
 
 ### Notes for E1 (AI owner)
 
@@ -2484,3 +2498,4 @@ docs/doubles-state-design.md.
   - (ii) The selection's `chosen_target` write (bcp.c:534-542, :4363-4367) and GoToMoveScript's (script.c:2123) are on at B = 2 (`step._action_phase`, `_use_move`; reference `ref_step`, `_call_defender`): a RANGE_MY_SIDE or non-Ghost Curse selection stores the user, a called move stores its defender. A locked battler (Rollout, Ice Ball, a charge move's strike) not encored reads it (lib.c:1709-1719), so after an Encore that ended inside the lock the defender is the user. `resolve` returns `target_side` = the defender also when it is the user for a move that aims at it (a `self_defender` move keeps the foe). `step._use_move` then reads the user as the defender: its own evasion and accuracy stages, abilities and items (`live_hit_threshold(..., target=)`, `damage_for_roll(..., def_side=)`, `effects.play_hit`), no Protect / Endure / Roost of the defender, `Battler_MovedThisTurn(defender)` false (no Zoom Lens, flinch not blocked, no Quick Claw / Custap flag), Volt Absorb not (attacker != defender, lib.c:3500-3502) but Water Absorb / Dry Skin yes (:3507-3512, :3538-3544), the defender's events at the user (`ctl["target"]`, `_hit_events`); the charge strike clears the user's semi-invulnerable bit before the accuracy test (effect_script_0156.s:19-25, already so). The reference reads the target through `tgt` in `_fight` and `target` arguments of its helpers.
   - Enumeration (outcome.self_lock: locked, not encored, stored target the side itself, a RANGE_SINGLE_TARGET locked move): such a side may hit the user or, after a faster Encore or Follow Me, the foe, so its accuracy roll is kept whole (`OutcomeLaws.hit_whole`; the sampler draws the raw roll), its crit is not cut by the foe's armor, and the foe-keyed cuts are lifted for it (damage classes, sure flinch, Protect gate, status / confusion eligibility, order gate of a flinch, King's Rock, contact and Focus Band reads on its own side): over-approximate, sound.
   - Not modelled (no engine field): `conversion2*` and `moveCopied` writes on the defender (bcp.c:4488-4525); a Bide release's `lastHitByBattler` stays B = 4 only. The batch 9 note "Follow Me changes no defender" at `enumerate.py` is replaced.
+- D2-34 (D2-33 review fixes) 1. Lucky Chant at the hit: CalcCrit passes `BATTLECTX_SIDE_CONDITIONS_MASK` of `battleCtx->defender` (battle_script.c:2158-2163) and `BattleSystem_CalcCriticalMulti` blocks under Lucky Chant (battle_lib.c:7137). The turn-start cut (`no_crit`, the foe's side) is lifted for a self lock, so step now reads it on the hit's own defender: `effects.crit_blocked` (armor or Lucky Chant on `side_of(target_side)`) at every crit site (`play_hit`, the hit loop's events, the crash, Pursuit), reference `_crit_blocked` likewise. For every other move the cut already zeroes the crit on the same side (Lucky Chant changes only at the turn's end; the move is unsupported), so the read is a no-op there. 2. The Ghost Curse re-pick (effect_script_0109.s:11-12) is logged under "Closes with its mechanic" with Color Change, its only source. 3. Queue 3b stays open for the snap_compare diff (pod, base aaa65a3); Owed 15 moved into the Owed list, Owed 16 (strategies), 17 (row-split cost) added. 4. Audit of the hit path for a defender that is the user: `play_hit` and its helpers read `target_side` (stat, status, flinch, Fang, King's Rock, Pluck, Knock Off, Embargo, contact, Focus Band / Sash, Substitute), step's hit loop reads `target_side` / `acc_target` (Synchronize, the defender's items, Sticky Barb, Jaboca / Rowap / Enigma, thaw, Destiny Bond, `move_hit`); `recovers_at_full_hp` reads the foe for Present only (not a lock move); the defender's Choice-lock clear on the user (bcp.c:4488-4496) is overwritten by UpdateMoveBuffers' own (bcp.c:3921-3934), and its `moveHit` by ClearFlags at its MoveEnd (:4389); `last_hit_by` stays B = 4 only, as its one reader (Bide's release, bcp.c:2700-2705) needs storedDamage, zeroed by subscript_bide_start.s and added only by the foe's hits during Bide (bcp.c:3357, :3407). No other foe-hardwired read found. Nits: the sampler's `lock` is gated by a move action as the law's; the crash damage passes its defender (`def_side=` / `defender=`); the batch 9 Curse case has distinct levels.
