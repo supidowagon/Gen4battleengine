@@ -209,7 +209,6 @@ def test_target_draw_field(samples):
     assert np.asarray(empty_outcome().target_draw).tolist() == [0, 0]
 
 
-@pytest.mark.fullset
 def test_d2_draw_fields(samples):
     """D2-13, D2-14, D2-16: ``call_target_draw`` / ``bide_target_draw`` int8[B] and ``trace_pick``
     int8[B, 5], fair bits from fold_in keys 45 / 46 / 47; ``empty_outcome`` zeroes them."""

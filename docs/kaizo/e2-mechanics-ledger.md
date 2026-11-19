@@ -24,7 +24,7 @@ Orders for a restart after a clear, in this order:
 4. Next milestone after D2: D3 (four-actor turn order, action loop, faints and replacement). It
    owes: the speed order before each action (bcp.c:888), resuming an action after U-turn or
    Pursuit with the action's defender, the format draw in the differential, and rulings D2-17,
-   D2-31. Send the D3 family list to the manager before starting.
+   D2-31, D2-32. Send the D3 family list to the manager before starting.
 5. Pod tips: three lines (branch and sha; table inputs changed yes/no; the pod list path
    _scratch/e2/podlist.txt in the main checkout). One pod run at a time per stream. Prose only
    for a ruling or a finding the manager must act on.

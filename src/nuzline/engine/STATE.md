@@ -411,11 +411,13 @@ three structs has a row.
   `battlerActions` values it persists across turns and switches (no code clears it,
   battle_controller_player.c:180-182) and is written at selection (`actions.chosen_targets`, in
   `step._action_phase`) only by a battler that reaches the target menu (bcp.c:507-531); D2-9 and
-  D2-13 overwrite it later. Not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`.
+  D2-13 overwrite it later. Not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Written at B = 4
+  only (ruling D2-28).
 - The last hitter (D2-14): `last_hit_by` (per battler, `1 + BattleContext.lastHitByBattler[b]`, 0 =
   no hit yet), written by every damaging `UpdateHP` on `b` (a Substitute hit and a partner's hit
   included, bcp.c:3347, :3357) and never cleared: not by a switch or a faint (lib.c:2110-2225), so
-  it is not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Bide's release reads it.
+  it is not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`. Bide's release reads it. Written at
+  B = 4 only (ruling D2-24).
 - The Trace fires (D2-16, ruling D2-5): `ts_trace_fires` (per battler, turn scratch, 0 between turns)
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.

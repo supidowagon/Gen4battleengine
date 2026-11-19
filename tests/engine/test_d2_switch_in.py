@@ -58,8 +58,8 @@ def _def_spd(s, b, defense, sp_def):
 def test_download_sums_both_foes(tables, names):
     """SWITCH_IN_CHECK_STATE_DOWNLOAD (battle_lib.c:3815-3851): Defense and Sp. Def summed, each
     through its stage, over every opposing battler with HP and no substitute; sumDef >= sumSpDef
-    raises Sp. Atk, else Attack, through subscript_update_stat_stage. Each case's sum disagrees
-    with one foe alone: a one-foe Download fails one of the two."""
+    raises Sp. Atk, else Attack, through subscript_update_stat_stage. A Download reading only
+    foe 3 fails cases 1 and 2, only foe 1 fails case 3, one ignoring stages fails case 1."""
     base = with_ability(four(tables, names), 0, AbilityId.DOWNLOAD)
     # (RIGHT foe 3, LEFT foe 1) as (Defense, Sp. Def), foe 1's Defense stage, the stat raised
     cases = (
@@ -68,6 +68,9 @@ def test_download_sums_both_foes(tables, names):
         (((100, 60), (160, 100)), -6, Stat.ATK),
         # 60 + 100 = 160 >= 100 + 40 = 140: Sp. Atk; foe 3 alone (60 < 100) gives Attack
         (((60, 100), (100, 40)), 0, Stat.SPA),
+        # 100 + 40 = 140 >= 40 + 100 = 140: a tie gives Sp. Atk (sumDef >= sumSpDef, :3840);
+        # foe 1 alone (40 < 100) gives Attack
+        (((100, 40), (40, 100)), 0, Stat.SPA),
     )
     for ((d3, s3), (d1, s1)), stage, raised in cases:
         s = _def_spd(_def_spd(base, 3, d3, s3), 1, d1, s1)
