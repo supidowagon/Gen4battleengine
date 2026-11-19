@@ -29,7 +29,8 @@ three structs has a row.
   traced data the engine never reads. `replace_mul` is the decomp's `powerMul` kept
   for a pending player replacement (it persists until `BattleContext_Init`,
   battle_controller_player.c:1855), 0 otherwise.
-  `acid_rain` (int8, after `replace_mul`, outside the experience block; sticky to the
+  `acid_rain` (int8, after `gravity` with the field conditions, outside the experience
+  block and the turn scratch after `replace_mul`; sticky to the
   battle's end) is not decomp state either: the operand of Pursuit's
   `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
   battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a

@@ -470,6 +470,7 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    acid_rain: jnp.ndarray  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
@@ -501,7 +502,6 @@ class BattleState(NamedTuple):
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
     protected: jnp.ndarray  # int8[6], 1 where the player's slot must not faint
     replace_mul: jnp.ndarray  # int8, the turn's powerMul while a player replacement is pending
-    acid_rain: jnp.ndarray  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
     # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
@@ -855,6 +855,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "acid_rain": (_FIELD, np.int8),
     "war_swaps": (_FIELD, np.int16),
     "entry_pending": (_BATTLER, np.int8),
     "move_prev": (_FIELD, np.int16),
@@ -881,7 +882,6 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
     "replace_mul": (_FIELD, np.int8),
-    "acid_rain": (_FIELD, np.int8),
     "pivot_battler": (_FIELD, np.int8),
     "ts_cursor": (_FIELD, np.int8),
     "ts_acted": (_BATTLER, np.int8),

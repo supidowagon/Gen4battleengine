@@ -198,6 +198,7 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    acid_rain: int
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
     move_prev: int
     terrain: int
@@ -222,7 +223,6 @@ class RefState:
     faint_budget: int
     protected: list[int]
     replace_mul: int
-    acid_rain: int
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int
