@@ -4613,8 +4613,10 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             _life_orb_recoil(turn, s, side)
     if holder.hp == 0 and s.battlers[foe].destiny_bond and user.hp > 0:
         _lose_hp(turn, s, side, user.hp)
+    owed: list[int] = []
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
+        p_alive = holder.hp > 0
         _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
             # The Synchronize flag goes on: a user that falls to it ends the script at :55,
@@ -4622,7 +4624,10 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             # BattleMon.status (G-24).
             turn.pursued = foe + 1
             turn.pick_mul = PURSUIT_POWER_MUL
-            _faint_check(turn, s)
+            # No battle-over check until MoveEnd (SF2 (a2) R1); a recoil-felled pursuer's exp
+            # waits for it too (R3), and a U-turn user has no Destiny Bond (bcp.c:2425).
+            _faint_check(turn, s, decide=False)
+            owed = _owed_pursuer(turn, s, foe, p_alive)
             _pay_exp(turn, s)
     if user.hp > 0 and not s.over:
         # TryRestoreStatusOnSwitch, script.c:9139: raw BattleMon.ability (:9151).
@@ -4630,7 +4635,8 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             user.status = Status.NONE
             user.status_counter = 0
         turn.pivot_dealt = dealt
-        raise _Pause
+        raise _Pause  # the resumed pass finds the owed pursuer again (``_resume``)
+    turn.payout.extend(owed)
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
     rock = (
         turn.damaged
@@ -5971,28 +5977,29 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
     return True
 
 
-def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
+def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> bool:
     """``side`` is switching: ``BtlCmd_TryPursuit`` (script.c:6884, from
     ``subscript_switch_pokemon.s:11``): a foe that has not acted, chose Pursuit with
     PP left, alive and neither asleep nor frozen, spends the PP and hits with
     ``powerMul = 20``; ``subscript_pursuit.s`` runs crit, damage and the type chart
     (no accuracy check, no secondary effect), then the contact ability. The
-    pursuer's action is over."""
+    pursuer's action is over. Returns whether Destiny Bond took the pursuer down (its exp is
+    paid at the Pursuit, a recoil-felled pursuer's at the action's MoveEnd: SF2 (a2) R3)."""
     tables = turn.tables
     pursuer = _foe(side)
     if turn.done[pursuer] or actions[pursuer] >= MOVE_ACTIONS:
-        return
+        return False
     move, struggling, _ = choices[pursuer]
     mon = _active(s, pursuer)
     if struggling or _t(tables, "move_effect", move) != EffectId.PURSUIT:
-        return
+        return False
     if mon.hp == 0 or mon.status in (Status.SLEEP, Status.FREEZE):
-        return
+        return False
     if _truant_loafs(s, pursuer):  # script.c:6903
-        return
+        return False
     slot = actions[pursuer]
     if mon.pp[slot] == 0:
-        return
+        return False
     mon.pp[slot] -= 1
     # script.c:6919-6922: one more while PP is left when the switching battler has Pressure
     # (ruling G-9).
@@ -6026,7 +6033,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         # the ability, the items and SYSCTL_MOVE_HIT.
         if target_sd.substitute_hp <= damage:
             target_sd.substitute_hp = 0
-        return
+        return False
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
     armed = armed or _band_rolls(turn, s, side, o.focus_band[pursuer][0])  # G-1
@@ -6042,7 +6049,13 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the living
     # pursuer down (subscript_faint_check_destiny_bond.s), before the contact ability (:86-87)
     # and the items (:90, :94-95).
-    if target_hp > 0 and _active(s, side).hp == 0 and s.battlers[side].destiny_bond and mon.hp > 0:
+    took = (
+        target_hp > 0
+        and _active(s, side).hp == 0
+        and bool(s.battlers[side].destiny_bond)
+        and mon.hp > 0
+    )
+    if took:
         _lose_hp(turn, s, pursuer, mon.hp)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
@@ -6072,6 +6085,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
         )
         if fm and mask_up:
             s.acid_rain = fm
+    return took
 
 
 def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) -> None:
@@ -6083,12 +6097,17 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     if mon.hp and mon.ability == AbilityId.NATURAL_CURE:
         mon.status = Status.NONE
         mon.status_counter = 0
-    # :11 Pursuit, then its own faint check (the battle may end here).
-    _pursuit(turn, s, side, actions, choices)
-    _faint_check(turn, s)
-    _pay_exp(turn, s)  # subscript_pursuit.s:106-108: Pursuit's own payout
-    if s.over:
-        return
+    # :11 Pursuit, then its faint flags: nothing up to the action's MoveEnd checks for a battle
+    # end (SF2 (a2) R1), so the switch goes on. subscript_pursuit.s:100-113 pays the switcher's KO
+    # and a Destiny-Bond pursuer; a pursuer felled by a recoil is paid at MoveEnd, after the
+    # hazards (R3).
+    pursuer = _foe(side)
+    p_alive = _active(s, pursuer).hp > 0
+    bonded = _pursuit(turn, s, side, actions, choices)
+    _faint_check(turn, s, decide=False)
+    owed = _owed_pursuer(turn, s, pursuer, p_alive and not bonded)
+    _pay_exp(turn, s)
+    turn.payout.extend(owed)
     # The outgoing Pokemon goes back to the party: battle_controller.c:1482 writes its
     # status back without MON_CONDITION_TOXIC_COUNTER.
     if mon.status == Status.TOXIC:
@@ -6096,7 +6115,22 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _enter(turn, s, side, slot)
     _send_out_exp(s, side)  # subscript_switch_pokemon.s:39
     _entry_hazards(turn, s, side)  # :43
-    _switch_in_effects(turn, s, side)
+    # MoveEnd's CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
+    # that leaves a side out runs no switch-in effects (R2).
+    if not any(all(m.species == 0 or m.hp == 0 for m in p.mons) for p in s.parties):
+        _switch_in_effects(turn, s, side)
+
+
+def _owed_pursuer(turn: _Turn, s: RefState, pursuer: int, fell: bool) -> list[int]:
+    """The pursuer's active slot when a recoil felled it in the Pursuit chain (``fell``: it was
+    alive before, and Destiny Bond did not take it) and it is the foe: its payout flag leaves
+    ``turn.payout`` for the caller to hand back at the action's MoveEnd (SF2 (a2) R3)."""
+    slot = s.battlers[pursuer].active
+    if not (fell and _active(s, pursuer).hp == 0 and side_of(pursuer) == 1):
+        return []
+    if slot in turn.payout:
+        turn.payout.remove(slot)
+    return [slot]
 
 
 def _item_branch(tables, s: RefState, side: int, item: int) -> tuple[int, int, bool]:
@@ -7596,7 +7630,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
     _entry_hazards(turn, s, side)  # :22
-    _faint_check(turn, s)  # :23-24
+    _faint_check(turn, s, decide=False)  # :23-24: no CheckBattleOver until MoveEnd (SF2 (a2))
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
     holder = _active(s, foe)
@@ -7642,6 +7676,10 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     s.move_prev = move
     s.battlers[side].last_move = move
     s.battlers[side].protect_count = 0
+    # SF2 (a2) R3, R4: the pursuer the Pursuit's recoil felled in the paused pass (a U-turn user
+    # has no Destiny Bond) is paid at this MoveEnd.
+    if turn.pursued == foe + 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
+        turn.payout.append(s.battlers[foe].active)
     _finish_action(turn, s, side, position, record)
     try:
         _actions(turn, s, position + 1)

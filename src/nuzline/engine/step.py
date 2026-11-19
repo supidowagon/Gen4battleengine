@@ -2724,17 +2724,28 @@ def _act(
     mode = jnp.asarray(mode, _I32)
     resumed = mode == MODE_RESUME
     baton = resumed & (tables.move_effect[state.ts_used] == EffectId.BATON_PASS)
-    switched = _send_out(
+    entered = _send_out(
         tables,
         state,
         side,
         jnp.clip(action - MOVE_ACTIONS, 0, 5),
-        effects=~resumed,
+        effects=False,
         baton=baton,
         trace_pick=outcome.trace_pick,
     )
+    # subscript_switch_pokemon.s:43 (the hazards) is followed by the faint (:44-48) and MoveEnd,
+    # whose CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
+    # that leaves a side out runs no switch-in effects (SF2 (a2) R2). The party list's run in
+    # the resumed tail (R4).
+    decided = jnp.any(jnp.all((entered.species == 0) | (entered.hp == 0), axis=1))
+    switched = _where(
+        ~resumed & ~decided,
+        switch_in_effects(tables, entered, side, outcome.trace_pick),
+        entered,
+    )
     base = _alive_mask(state) if base is None else base
-    listed = _faint_check(tables, _with_alive(state, base), switched)
+    # subscript_show_party_list.s:23-24: the faint alone, no CheckBattleOver (R1).
+    listed = _faint_check(tables, _with_alive(state, base), switched, decide=False)
     # The list's Toxic Spikes poisoned the newcomer (subscript_show_party_list.s:22, before its
     # faint check): the resumed tail's Synchronize flag (rulings G-12, G-13).
     newcomer = jnp.clip(action - MOVE_ACTIONS, 0, 5)
@@ -3018,7 +3029,8 @@ def _move_end(
     # UpdateMonData, which copies to the party, battle_script.c:3077-3078). The attacker under
     # ``ran``; while the battle goes on the foe call stands for TriggerEffectOnSwitch's
     # FORBIDDEN_STATUS pass over every battler (bcp.c:3973, lib.c:4135-4148); at the battle's
-    # end only the FIGHT's defender (:3966-3967). The switch-MoveEnd case is SF2 (a2).
+    # end only the FIGHT's defender (:3966-3967). A switch's attacker is its newcomer, cured under
+    # ``ran`` (SF2 (a2)).
     # The cures read the battle abilities: ``_faint_check``'s battle-end ``_restore_ability`` (the
     # party's own, a modelling step after the battle) is put back after them (Owed 20).
     ended = ran & (state.over != 0)
@@ -3044,7 +3056,8 @@ def execute_actions(
     tables: Tables, state: BattleState, actions, outcome: Outcome, order
 ) -> BattleState:
     """Phase 3: both actors in order, each followed by a faint check. A switch facing
-    Pursuit is hit first (with its own faint check), and the pursuer does not act again.
+    Pursuit is hit first (its faints are flagged, none decides the battle: SF2 (a2)), and the
+    pursuer does not act again.
     An item action's bag slot is spent first (``_consume_trainer_items``)."""
     actions = jnp.asarray(actions, _I32)
     return _execute_actions(tables, state, actions, outcome, order, jnp.bool_(False), _I32(10))[0]
@@ -3145,7 +3158,10 @@ def _execute_actions(
         read, shown = put((read, shown), pursuer, pursuer_events, fire)
         read, shown = put((read, shown), side, {"contact_ability": seen["contact"]}, fire)
         struck = _where(fire, hit, pre)
-        state = _faint_check(tables, pre, struck)
+        # R1 (SF2 (a2)): nothing between the Pursuit and the action's MoveEnd checks for a
+        # battle end; the faints are only flagged (script.c:1769-1772) and the action's own
+        # faint check at its MoveEnd decides (bcp.c:3969).
+        state = _faint_check(tables, pre, struck, decide=False)
         # U-turn's head stopped with its Synchronize flag and sideEffectMon (``sync``); the
         # Pursuit's contact ability (subscript_pursuit.s:40, :86, TriggerAbilityOnHit: the
         # pursuer becomes the sideEffectMon) toggles the flag, and its faint check zeroes only
@@ -3158,9 +3174,23 @@ def _execute_actions(
             jnp.where(chased, pursuer, sync[1]),
             struck.status[party(fmt, sides), struck.active].astype(_I32),
         )
-        # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
-        # action is over, and a switcher's or a U-turn's reads no move list).
-        state = pay_exp(tables, pre, state)
+        # subscript_pursuit.s:100-113: Pursuit's own payout (no pending move: the pursuer's
+        # action is over, and a switcher's or a U-turn's reads no move list) pays the switcher's
+        # KO and a Destiny-Bond pursuer's faint (:85). A pursuer felled by a recoil (Rough Skin,
+        # Aftermath, Jaboca Berry, its Life Orb) is only flagged: AnyExpPayout pays it at the
+        # action's MoveEnd (bcp.c:3968), after the newcomer's hazards (``owed``). A U-turn user
+        # cleared its Destiny Bond (bcp.c:2425); the resumed pass finds its fallen pursuer by
+        # ``ts_pursued`` (SF2 (a2) R3, R4).
+        ko = fire & (_active_hp(fmt, pre, side) > 0) & (_active_hp(fmt, hit, side) == 0)
+        bonded_ko = ko & (pre.destiny_bond[side] != 0)
+        pp, pm = party(fmt, pursuer), pre.active[pursuer]
+        p_fell = fire & (pre.hp[pp, pm] > 0) & (struck.hp[pp, pm] == 0)
+        owed_site = p_fell & ~bonded_ko
+        owed_res = resumed & (pursued == 1 + pursuer) & (state.hp[pp, state.active[pursuer]] == 0)
+        bit = jnp.left_shift(jnp.int32(1), pm.astype(_I32))
+        owed_bit = jnp.where(jnp.where(resumed, owed_res, owed_site), bit, 0)
+        owed = jnp.zeros_like(base).at[pp].set(owed_bit.astype(base.dtype))
+        state = pay_exp(tables, _with_alive(pre, _alive_mask(pre) & ~owed), state)
         # moveStatusFlags & SUPER_EFFECTIVE: the U-turn chase's Pursuit overwrites the paused
         # hit's (lib.c:3359); the tail (MODE_PURSUIT, a later MODE_RESUME) reads it (SF2 (i)). A
         # switch's Pursuit has no tail.
@@ -3175,8 +3205,6 @@ def _execute_actions(
         # own flag (not ``_pursuit_hit``'s ``bonded``). A Destiny Bond faint clears the
         # pursuer's Uproar bit before :115 (battle_lib.c:2213), a recoil faint keeps it; the
         # switcher's bit is gone too.
-        ko = fire & (_active_hp(fmt, pre, side) > 0) & (_active_hp(fmt, hit, side) == 0)
-        bonded_ko = ko & (pre.destiny_bond[side] != 0)
         operand = jnp.where(
             (_active_hp(fmt, hit, pursuer) == 0) & ~bonded_ko, pursuer, side
         ).astype(_I32)
@@ -3230,7 +3258,9 @@ def _execute_actions(
             foe_enduring=foe_enduring,
         )
         # The action ran: its battler was alive at its start (a resumed or pursued one was).
-        ran = (state.over == 0) & ((state.hp[party(fmt, side), state.active[side]] > 0) | ~start)
+        # A switcher the Pursuit KO'd still runs its switch's MoveEnd (bcp.c:1984, :4008), so
+        # the test reads the HP before the Pursuit hit (SF2 (a2)).
+        ran = (pre.over == 0) & ((pre.hp[party(fmt, side), pre.active[side]] > 0) | ~start)
         # The pursuer does not act again; a Pokemon the first actor's Roar dragged in does not
         # act this turn (UpdateAfterSwitch, battle_lib.c:2053: its action is MOVE_END, so
         # BranchActions runs only MoveEnd for it, bcp.c:893, whose checks repeat the first
@@ -3271,7 +3301,7 @@ def _execute_actions(
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
         # and the player chose a move (design §3.3(a), ``learn_pin``).
         pending = (position == 0) & (side == 1) & (real[0] < MOVE_ACTIONS)
-        done = pay_exp(tables, _with_alive(acted, base), done, pending, real[0])
+        done = pay_exp(tables, _with_alive(acted, base | owed), done, pending, real[0])
         state = _where(stop, acted, done)
         position = jnp.where(stop, position, position + 1)
         phase = jnp.where(ctl["pursue"], _PURSUIT, _START).astype(_I32)

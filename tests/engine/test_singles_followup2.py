@@ -776,3 +776,166 @@ def test_baton_pass_pause_leaves_the_flag_clear_and_the_newcomer_untouched(table
     out = _resume_slot1(tables, paused)
     assert int(out.item[1, 0]) == names.item("Enigma Berry")
     assert int(out.hp[1, 0]) == int(paused.hp[1, 0])
+
+
+# SF2 (a2): the switch / U-turn goes on after a Pursuit that empties a side. Nothing between the
+# Pursuit and the action's MoveEnd checks for a battle end (subscript_switch_pokemon.s:12-48,
+# subscript_show_party_list.s:23-24); MoveEnd decides (bcp.c:3965-3969), after the cure, the exp
+# payout and before TriggerEffectOnSwitch (:3973). A recoil-felled pursuer's exp is paid there too
+# (AnyExpPayout), after the newcomer's hazards; a Destiny-Bond pursuer's at the Pursuit (R3).
+
+
+def _a2_mon(n, species, ability=None, item="", level=50, moves=("Tackle",)):
+    return _mon(n, species, list(moves), level, item=item, ability=ability)
+
+
+def _a2_duel(tables, n, *, a=("Geodude", None, ""), b=("Geodude", None, ""), foe_hp=1,
+             foe_item="Life Orb", foe_bench=False, rock=True, spikes=0, toxic=0, mask=None,
+             b_hp=None, a_hp=None):  # fmt: skip
+    """The foe's last Pokemon (Houndour, Pursuit, ``foe_hp``) against the player's A (slot 0) and
+    B (slot 1); Stealth Rock, ``spikes`` layers and ``toxic`` layers on the player's side."""
+    s = make_state(
+        tables,
+        [_a2_mon(n, *a), _a2_mon(n, *b)],
+        [_mon(n, "Houndour", ["Pursuit"], 5, item=foe_item)] + ([_bench(n)] if foe_bench else []),
+        Weather.NONE,
+    )
+    if foe_hp is not None:
+        s = s.replace_hp(1, 0, foe_hp)
+    if a_hp is not None:
+        s = s.replace_hp(0, 0, a_hp)
+    if b_hp is not None:
+        s = s.replace_hp(0, 1, b_hp)
+    s = s._replace(
+        stealth_rock=s.stealth_rock.at[0].set(int(rock)),
+        spikes=s.spikes.at[0].set(spikes),
+        toxic_spikes=s.toxic_spikes.at[0].set(toxic),
+    )
+    if mask is not None:
+        s = s._replace(exp_mask=_i8(s.exp_mask, mask))
+    return s
+
+
+def test_switch_goes_on_after_a_pursuit_recoil_empties_the_foe(tables, names):
+    s = _a2_duel(tables, names)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.hp[1, 0]) == 0
+    assert int(out.over) == 1 and int(out.winner) == 2
+    assert int(out.active[0]) == 1
+    assert int(out.hp[0, 1]) < int(s.hp[0, 1])  # Stealth Rock
+    assert int(out.hp[0, 0]) > 0 and int(out.deaths[0]) == 0
+    assert int(out.exp[0]) > int(s.exp[0])  # A, in the mask, is paid at MoveEnd
+
+
+def test_destiny_bond_draw_is_a_loss(tables, names):
+    # A holds Destiny Bond, the pursuer KOs it and is taken; B, the last other Pokemon, falls to
+    # Stealth Rock: both sides are out = a draw = a loss (bcp.c:4255-4260, :4015-4016).
+    s = _bond(_a2_duel(tables, names, foe_hp=None, a_hp=1, b_hp=1), 0)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 0]) == 0 and int(out.hp[0, 1]) == 0
+    assert int(out.over) == 1 and int(out.winner) == 1
+    assert np.asarray(out.deaths).tolist()[:2] == [1, 1] and int(out.player_faints) == 2
+    assert int(out.exp[0]) == int(s.exp[0])  # n = 0: nothing paid
+
+
+def test_hazard_kill_of_the_newcomer_leaves_the_exp_to_the_switcher(tables, names):
+    s = _a2_duel(tables, names, spikes=3, mask=3, b_hp=1)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.over) == 1 and int(out.winner) == 2
+    assert int(out.hp[0, 1]) == 0 and int(out.deaths[1]) == 1 and int(out.player_faints) == 1
+    assert int(out.exp[0]) > int(s.exp[0]) and int(out.exp[1]) == int(s.exp[1])
+    # n = 1 (the dead newcomer is not in the divisor): A alone gets the whole share.
+    alone = assert_matches_reference(
+        tables, _a2_duel(tables, names, spikes=3, mask=1, b_hp=1), (SWITCH, 0), O
+    )
+    assert int(alone.exp[0]) == int(out.exp[0])
+
+
+def test_no_switch_in_effects_for_the_newcomer_at_the_battles_end(tables, names):
+    # Toxic Spikes poison B; its Pecha Berry (TriggerEffectOnSwitch's HELD_ITEM_STATUS) and its
+    # Intimidate never run (bcp.c:3969 returns before :3973).
+    s = _a2_duel(tables, names, b=("Growlithe", "Intimidate", "Pecha Berry"), toxic=1, rock=False)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.over) == 1 and int(out.active[0]) == 1
+    assert int(out.status[0, 1]) == Status.POISON
+    assert int(out.item[0, 1]) == names.item("Pecha Berry")
+    assert int(out.stages[1, Stat.ATK]) == 0
+
+
+def test_the_newcomer_is_cured_by_move_end_at_the_battles_end(tables, names):
+    s = _a2_duel(tables, names, b=("Persian", "Limber", ""), rock=False)
+    s = s.with_status(0, 1, Status.PARALYSIS)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.over) == 1 and int(out.active[0]) == 1
+    assert int(out.status[0, 1]) == Status.NONE
+
+
+def test_recoil_felled_pursuer_pays_after_the_newcomers_hazards(tables, names):
+    # A (Rough Skin) falls to the Pursuit; the pursuer, at 1 HP, falls to Rough Skin (the KO
+    # path); B, in the mask, levels up after its Stealth Rock damage (subscript_pursuit.s:86,
+    # bcp.c:3968).
+    a = ("Carvanha", "Rough Skin", "")
+    base = _a2_duel(tables, names, a=a, a_hp=1, mask=2)
+    plain = assert_matches_reference(tables, base, (SWITCH, 0), _proc(1))
+    assert int(plain.over) == 1 and int(plain.winner) == 2 and int(plain.hp[0, 0]) == 0
+    assert int(plain.hp[1, 0]) == 0 and int(plain.active[0]) == 1
+    assert int(plain.exp[1]) > int(base.exp[1]) and int(plain.level[0, 1]) == 50
+    rate = int(tables.species_exp_rate[int(base.species[0, 1])])
+    near = base._replace(exp=base.exp.at[1].set(int(tables.exp_table[rate, 51]) - 1))
+    out = assert_matches_reference(tables, near, (SWITCH, 0), _proc(1))
+    assert int(out.level[0, 1]) == 51
+    rock = int(base.max_hp[0, 1]) - int(plain.hp[0, 1])
+    assert rock > 0 and int(out.hp[0, 1]) == int(out.max_hp[0, 1]) - rock
+
+
+def _u_turn_duel(tables, n, *, spikes=0):
+    """The player's Scyther (U-turn) and a Growlithe (Intimidate) vs the foe's last Pokemon:
+    Tyranitar with Pursuit and a Life Orb, left with 1 HP by the U-turn."""
+    s = make_state(
+        tables,
+        [
+            _a2_mon(n, "Scyther", moves=("U-turn",), level=50),
+            _a2_mon(n, "Growlithe", "Intimidate"),
+        ],
+        [_mon(n, "Tyranitar", ["Pursuit"], 50, item="Life Orb")],
+        Weather.NONE,
+    )
+    full = assert_matches_reference(tables, s, (0, 0), O)
+    # The full-HP run lost the U-turn's damage and the Life Orb's recoil (max / 10).
+    taken = int(s.hp[1, 0]) - int(full.hp[1, 0]) - int(s.max_hp[1, 0]) // 10
+    s = s.replace_hp(1, 0, taken + 1)
+    return s._replace(spikes=s.spikes.at[0].set(spikes))
+
+
+def test_u_turn_pauses_after_a_pursuit_that_empties_the_foe(tables, names):
+    s = _u_turn_duel(tables, names, spikes=1)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.hp[1, 0]) == 0 and int(paused.hp[0, 0]) > 0
+    assert int(paused.pivot_battler) == 1 and int(paused.over) == 0
+    assert int(paused.exp[0]) == int(s.exp[0])  # the recoil-felled pursuer waits for MoveEnd
+    out = _resume_slot1(tables, paused)
+    assert int(out.over) == 1 and int(out.winner) == 2 and int(out.active[0]) == 1
+    assert int(out.hp[0, 1]) < int(paused.hp[0, 1])  # Spikes
+    assert int(out.exp[0]) > int(s.exp[0])
+
+
+def test_foe_switch_into_the_players_last_pursuer_is_a_loss(tables, names):
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Houndour", ["Pursuit"], 5, item="Life Orb")],
+        [_a2_mon(n, "Geodude"), _a2_mon(n, "Geodude")],
+        Weather.NONE,
+    )
+    s = s.replace_hp(0, 0, 1)
+    out = assert_matches_reference(tables, s, (0, SWITCH), O)
+    assert int(out.over) == 1 and int(out.winner) == 1
+    assert int(out.active[1]) == 1 and int(out.deaths[0]) == 1 and int(out.hp[0, 0]) == 0
+
+
+def test_the_battle_goes_on_with_a_foe_bench(tables, names):
+    s = _a2_duel(tables, names, foe_bench=True, rock=False)
+    out = assert_matches_reference(tables, s, (SWITCH, 0), O)
+    assert int(out.over) == 0 and int(out.active[0]) == 1
+    assert int(out.hp[1, 0]) == 0 and int(out.hp[0, 1]) == int(s.hp[0, 1])
+    assert int(out.exp[0]) > int(s.exp[0])
