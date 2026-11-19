@@ -1799,6 +1799,19 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
   kind and tests/engine/test_acid_rain_guard.py) and its B = 4 Pursuit site calls `step.first_pursuer` and
   `step._acid_rain` instead (G-12).
+- G-14 Air Lock (ability 76) counts exactly as Cloud Nine: `AbilityId.AIR_LOCK` = 96 (`ABILITY_DECOMP_IDS` 76,
+  `tools/effect_map.py` name map, `enumerate.INPUT_NEUTRAL_ABILITIES` beside Cloud Nine, the
+  `ids.ABILITY_DECOMP_IDS` table in `data/game_constants.py`). The rule was already modelled: every decomp read of the
+  ability pairs it with Cloud Nine (`ABILITY_AIR_LOCK`: include/battle/common.h:64, :67, battle_controller.c:2073,
+  battle_script.c:9201; no other C, script or AI-script read), and both engines read the lock as a count of living
+  battlers with decomp ability 13 or 76 (`damage.weather_suppressed`, the reference `_weather_suppressed`,
+  `ids.WEATHER_ABILITY_IDS`), so the missing `AbilityId` was the only gap (coverage refused it,
+  `IMPLEMENTED_ABILITIES`). No hook, reveal or switch-in message (battle_lib.c:3649-4170 has no case). The weather
+  countdown, the weather moves' fail tests, the weather abilities' PERM test and the AI's `LoadCurrentWeather` /
+  `IfFieldConditionsMask` stay ungated (the mask read raw, G-6). MANIFEST_VERSION 36 (table inputs changed: the
+  ability id numbering). Backlog: the Roark Split's "ability: Air Lock" row is gone (regenerated). Trainer 745's
+  Rayquaza still waits on its other groups. Tests: `tests/engine/test_e1_batch_g.py` (rain / sun damage equals Cloud
+  Nine's and the no-weather value; no sand chip).
 
 ## Stream state (restart point, 2026-11-19)
 

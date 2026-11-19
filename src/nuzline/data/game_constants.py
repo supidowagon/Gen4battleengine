@@ -515,6 +515,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hydration": 93,
             "Forecast": 59,
             "Storm Drain": 114,
+            "Air Lock": 76,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.

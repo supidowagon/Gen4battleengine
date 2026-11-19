@@ -155,3 +155,62 @@ def test_the_ais_bench_ditto_with_the_override_is_seen_as_natural_cure(tables, n
     )
     assert int(decomp_abilities(tables, s)[1, 1]) == ABILITY_DECOMP_IDS[AbilityId.NATURAL_CURE]
     assert any("Natural Cure" in line for line in switching_refusals(tables, s))
+
+
+# --- G-14: Air Lock is Cloud Nine's lock (include/battle/common.h:63-67) ----------------------
+
+
+def _weather_state(tables, names, weather, lock_ability):
+    """Roark's lead (side 1) with ``lock_ability`` written as its ability, under ``weather``;
+    the player's lead knows Ember and Leer."""
+    from nuzline.engine.field import with_weather
+    from tests.engine.helpers import roark_state
+
+    s = roark_state(tables, names, player_count=1, opp_count=1, player_moves=("Ember", "Leer"))
+    s = s._replace(ability=s.ability.at[1, 0].set(lock_ability))
+    return with_weather(s, weather)
+
+
+def test_air_lock_is_supported_and_maps_to_decomp_76():
+    from nuzline.engine.coverage import IMPLEMENTED_ABILITIES
+
+    assert AbilityId.AIR_LOCK in IMPLEMENTED_ABILITIES
+    assert ABILITY_DECOMP_IDS[AbilityId.AIR_LOCK] == 76  # generated/abilities.txt:77
+
+
+@pytest.mark.parametrize("weather", ["RAIN", "SUN"], ids=["rain", "sun"])
+def test_air_lock_cancels_the_weather_damage_boost_like_cloud_nine(tables, names, weather):
+    """lib.c:7046-7072 sits inside NO_CLOUD_NINE: Ember is halved in rain / x1.5 in sun only
+    without a living Cloud Nine / Air Lock holder; Air Lock and Cloud Nine read alike."""
+    from nuzline.engine.damage import damage_for_roll
+    from nuzline.engine.ids import Weather
+
+    w = getattr(Weather, weather)
+    ember = names.move("Ember")
+
+    def dmg(weather_id, ability):
+        s = _weather_state(tables, names, weather_id, ability)
+        return int(damage_for_roll(tables, s, 0, ember, False, 15))
+
+    free = dmg(Weather.NONE, AbilityId.NONE)
+    open_weather = dmg(w, AbilityId.NONE)
+    assert open_weather != free
+    assert dmg(w, AbilityId.AIR_LOCK) == free
+    assert dmg(w, AbilityId.CLOUD_NINE) == free
+
+
+def test_air_lock_stops_the_sand_chip_and_matches_the_reference(tables, names):
+    """EndOfTurnWeatherEffect (battle_script.c:5573-5645) is gated by NO_CLOUD_NINE: the
+    player's lead takes the sand chip only with no Air Lock holder on the field."""
+    from nuzline.engine.ids import Weather
+
+    def player_hp(ability):
+        s = _weather_state(tables, names, Weather.SANDSTORM, ability)
+        acts = [names.move_slot(s, 0, "Leer"), names.move_slot(s, 1, "Leer")]
+        out = assert_matches_reference(tables, s, acts, O)
+        return int(s.hp[0, 0]), int(out.hp[0, 0])
+
+    before, after = player_hp(AbilityId.NONE)
+    assert after < before
+    before, after = player_hp(AbilityId.AIR_LOCK)
+    assert after == before

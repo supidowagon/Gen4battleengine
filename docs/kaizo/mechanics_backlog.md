@@ -159,25 +159,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 35 | 27 | 27 |
-| Gardenia Split | 28 | 410 (65) | 35 | 27 | 0 |
-| Fantina Split | 38 | 463 (69) | 35 | 27 | 0 |
-| Maylene Split | 47 | 480 (73) | 35 | 27 | 0 |
-| Wake Split | 54 | 482 (71) | 35 | 27 | 0 |
-| Byron Split | 65 | 486 (72) | 35 | 27 | 0 |
-| Candice Split | 74 | 486 (72) | 35 | 27 | 0 |
-| Galactic Split | 100 | 493 (73) | 35 | 27 | 0 |
-| Volkner Split | 84 | 487 (73) | 35 | 27 | 0 |
-| Elite Four Split | 100 | 493 (73) | 35 | 27 | 0 |
-| **Whole game** | | | 35 | 27 | 27 |
+| Roark Split | 16 | 358 (64) | 34 | 26 | 26 |
+| Gardenia Split | 28 | 410 (65) | 34 | 26 | 0 |
+| Fantina Split | 38 | 463 (69) | 34 | 26 | 0 |
+| Maylene Split | 47 | 480 (73) | 34 | 26 | 0 |
+| Wake Split | 54 | 482 (71) | 34 | 26 | 0 |
+| Byron Split | 65 | 486 (72) | 34 | 26 | 0 |
+| Candice Split | 74 | 486 (72) | 34 | 26 | 0 |
+| Galactic Split | 100 | 493 (73) | 34 | 26 | 0 |
+| Volkner Split | 84 | 487 (73) | 34 | 26 | 0 |
+| Elite Four Split | 100 | 493 (73) | 34 | 26 | 0 |
+| **Whole game** | | | 34 | 26 | 26 |
 
-Of your 35 groups, 8 are also needed by opposing trainers and 27 are player-only.
+Of your 34 groups, 8 are also needed by opposing trainers and 26 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 5 | 7 | 9 | 6 | 0 | 0 | 27 |
+| Roark Split | 0 | 5 | 7 | 9 | 5 | 0 | 0 | 26 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -187,7 +187,7 @@ Of your 35 groups, 8 are also needed by opposing trainers and 27 are player-only
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **5** | **7** | **9** | **6** | **0** | **0** | **27** |
+| **Whole game** | **0** | **5** | **7** | **9** | **5** | **0** | **0** | **26** |
 
 ### Player-only groups
 
@@ -214,7 +214,6 @@ Of your 35 groups, 8 are also needed by opposing trainers and 27 are player-only
 | held items | held item effect #54: Mental Herb | Roark Split |
 | held items | held item effect #63: Smoke Ball | Roark Split |
 | held items | held item effect #66: Lucky Egg | Roark Split |
-| abilities | ability: Air Lock | Roark Split |
 | abilities | ability: Color Change | Roark Split |
 | abilities | ability: Immunity | Roark Split |
 | abilities | ability: Marvel Scale | Roark Split |

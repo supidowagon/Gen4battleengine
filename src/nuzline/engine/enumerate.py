@@ -1041,6 +1041,7 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.STEADFAST,  # Speed
     AbilityId.INSOMNIA,
     AbilityId.CLOUD_NINE,  # changes only when its holder faints: no hit follows
+    AbilityId.AIR_LOCK,  # the same lock (G-14)
     AbilityId.COMPOUNDEYES,
     AbilityId.SHED_SKIN,  # turn end
     AbilityId.SAND_VEIL,

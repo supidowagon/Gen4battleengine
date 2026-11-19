@@ -771,6 +771,9 @@ class AbilityId(IntEnum):
     HYDRATION = 94
     # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
     FORECAST = 95
+    # G-14: Air Lock shares Cloud Nine's lock (include/battle/common.h:63-67); read by decomp id
+    # (``WEATHER_ABILITY_IDS``) in ``damage.weather_suppressed``, so no new reader.
+    AIR_LOCK = 96
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -874,6 +877,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.MULTITYPE: 121,
     AbilityId.HYDRATION: 93,
     AbilityId.FORECAST: 59,
+    AbilityId.AIR_LOCK: 76,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
