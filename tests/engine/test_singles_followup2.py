@@ -317,3 +317,76 @@ def test_dig_strike_at_its_user_after_a_foe_roost_reads_the_users_types(
     assert int(two.hp[1, 0]) > int(one.hp[1, 0])  # the Roost healed
     assert (int(two.hp[0, 0]) == int(one.hp[0, 0])) == immune
     assert int(two.locked_move[0]) == 0
+
+
+# SF2 (g): the `quick_claw` event is a bit field: bit 0 the held-item animation, bit 1 Custap's
+# "let it move first!" message (subscript_check_quick_claw.s:12-19; the foe has not acted yet).
+
+
+def _held_duel(tables, n, item, holder_hp, foe_moves, holder_level=40, foe_level=5):
+    s = make_state(
+        tables,
+        [_mon(n, "Houndour", ["Tackle"], holder_level, item)],
+        [_mon(n, "Rattata", foe_moves, foe_level)],
+    )
+    return s if holder_hp is None else s.replace_hp(0, 0, holder_hp)
+
+
+def _claw_event(tables, s, acts=(0, 0)):
+    return int(_events(tables, s, acts, O)["quick_claw"][0])
+
+
+def test_custap_holder_acting_first_shows_animation_and_message(tables, names):
+    s = _held_duel(tables, names, "Custap Berry", 20, ["Tackle"])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.item[0, 0]) == 0
+    assert _claw_event(tables, s) == 3
+
+
+def test_custap_holder_acting_second_shows_animation_only(tables, names):
+    s = _held_duel(tables, names, "Custap Berry", 20, ["Quick Attack"])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.item[0, 0]) == 0
+    assert _claw_event(tables, s) == 1
+
+
+def test_quick_claw_holder_first_shows_the_animation(tables, names):
+    s = _held_duel(tables, names, "Quick Claw", None, ["Tackle"])
+    s = s._replace(qc_roll=s.qc_roll.at[0].set(1))
+    assert_matches_reference(tables, s, (0, 0), O)
+    assert _claw_event(tables, s) == 1
+
+
+def test_quick_claw_holder_second_shows_nothing(tables, names):
+    s = _held_duel(tables, names, "Quick Claw", None, ["Quick Attack"])
+    s = s._replace(qc_roll=s.qc_roll.at[0].set(1))
+    assert_matches_reference(tables, s, (0, 0), O)
+    assert _claw_event(tables, s) == 0
+
+
+def test_custap_holder_knocked_out_before_its_move_shows_nothing(tables, names):
+    s = _held_duel(tables, names, "Custap Berry", 1, ["Quick Attack"])
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.hp[0, 0]) == 0
+    assert int(out.item[0, 0]) != 0  # the berry stays: the holder never reached its move
+    assert _claw_event(tables, s) == 0
+
+
+def test_custap_holders_u_turn_shows_its_events_at_the_head_only(tables, names):
+    # The flag moves a Custap holder first (order.custap_flags), so the holder's own U-turn
+    # pauses the turn at its head: bits 0 and 1 there (the foe has not acted); its resumed
+    # step carries no flag of its own (``ts_custap & to_come``). A Custap holder acting after
+    # a pause is unreachable: no pivot move has priority.
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Scyther", ["U-turn"], 25, "Custap Berry"), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Houndour", ["Tackle"], 35)],
+    )
+    s = s.replace_hp(0, 0, 5)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1
+    assert int(_events(tables, s, (0, 0), O)["quick_claw"][0]) == 3
+    acts = (MOVE_ACTIONS + 1, 0)
+    assert int(_events(tables, paused, acts, O)["quick_claw"][0]) == 0
+    assert_matches_reference(tables, paused, acts, O)

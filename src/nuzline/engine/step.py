@@ -2470,6 +2470,16 @@ def _use_move(
         ),
         "act_id": jnp.where(can_act | taunted | disabled | imprisoned | gravity_ban, move, 0),
         "shown": ready,
+        # subscript_check_quick_claw.s:5 -> :12-13: a Custap flag plays the held-item animation
+        # (bit 0) always, and prints "let it move first!" (:16-19, bit 1) unless
+        # waitingBattlers == 1 (:15; bcp.c:881-886, itself counted): at B = 2 the foe has acted
+        # (``target_moved``). The same term as the removal above; Quick Claw's bit 0 comes from
+        # ``_quick_claw_shown`` (one battler holds one item).
+        "quick_claw": jnp.where(
+            ready & custap[side],
+            1 + 2 * (~jnp.asarray(target_moved, bool)).astype(_I32),
+            0,
+        ),
         # subscript_missed.s tests PROTECTED before MISSED (:18, :157): a miss into a
         # Protect shows "protected itself"; a failed Fake Out prints "But it failed!" (:58).
         "missed": can_act & has_target & ~hit & ~failed & ~blocked,
@@ -4118,7 +4128,8 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
     (``ignoreQuickClaw = FALSE``, bcp.c:772-786; battle_lib.c:1281-1284), whatever the
     priorities, from the turn's starting ``speedRand`` (``state.qc_roll``); the script plays
     the held-item animation (no text) only when the battler is not the last to act
-    (``WAITING_BATTLERS != 1``): in singles, when it acts first."""
+    (``WAITING_BATTLERS != 1``): in singles, when it acts first. Bit 0 of the ``quick_claw``
+    event; the Custap part comes from ``_use_move``."""
     fmt = format_of(state)
     fight = ~is_switch(actions) & ~is_item(actions)
     claw = quick_claw_active(tables, state, state.qc_roll)
@@ -4150,7 +4161,7 @@ def _action_phase(
     power_mul = replacement_power_mul(tables, state, actions)
     s = _where(paused, state, fresh)
     s, read, shown = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
-    return s, {**shown, "order": order, "quick_claw": claw}, read, order
+    return s, {**shown, "order": order, "quick_claw": claw | shown["quick_claw"]}, read, order
 
 
 def turn_events(
