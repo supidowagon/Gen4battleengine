@@ -283,7 +283,6 @@ from nuzline.engine.ids import (
     ABILITY_MULTITYPE,
     ACUPRESSURE_STATS,
     GENDER_NONE,
-    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
@@ -309,7 +308,6 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
-    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
@@ -1686,13 +1684,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     accuracy roll (RANGE_FIELD, accuracy 0). ``step._trick_room_check`` counts it down
     (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
     (battle_lib.c:1432-1439). E3-2-4."""
-    cond = (h.effect == _E.TRICK_ROOM) & h.landed
-    # The old field, written until FCM step 3 drops it (the toggle reads the bits).
-    value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
-    state = fcm.trick_room_toggle(state, cond)
-    return state._replace(
-        trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
-    )
+    return fcm.trick_room_toggle(state, (h.effect == _E.TRICK_ROOM) & h.landed)
 
 
 def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -1893,11 +1885,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
     the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
     cond = (h.effect == _E.GRAVITY) & h.landed & ~fcm.gravity_on(state)
-    state = fcm.gravity_start(state, cond)
-    state = state._replace(
-        gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
-    )
-    return gravity_ground(state, cond)
+    return gravity_ground(fcm.gravity_start(state, cond), cond)
 
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2382,11 +2370,7 @@ def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     turns = WEATHER_TURNS + jnp.where(rock, tables.item_param[item, 0].astype(_I32), 0)
     cond = (h.effect == _E.WEATHER) & h.landed & ~weather_fails(state, h.param)
-    state = fcm.weather_move(state, weather, turns, cond)
-    return state._replace(
-        weather=jnp.where(cond, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(cond, turns, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_move(state, weather, turns, cond)
 
 
 def weather_fails(state: BattleState, param) -> jnp.ndarray:

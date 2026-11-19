@@ -24,19 +24,13 @@ Encodings:
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
-* ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
 * ``field_mask`` is ``BattleContext.fieldConditionsMask`` bit for bit (``ids.FieldCondition``,
   condition.h:110-149) and ``weather_turns`` is ``FieldConditions.weatherTurns``
-  (battle_context.h:29), written beside the old fields by every writer (``engine.field``; FCM
-  step 1). The weather readers read the mask's weather bits and ``weather_turns`` (step 2,
-  ``engine.field`` views) and the Gravity readers its bits 12-14; ``weather`` / ``weather_timer``
-  and ``gravity`` are written only (until step 3); the field's Uproar readers read bits 8-11
-  (``uproar`` stays the volatile count) and the Trick Room readers its bits 16-18; ``trick_room``
-  is written only. A clean mask equals them: at most one weather group, TEMP-only with
-  ``weather_turns == weather_timer`` or PERM-only (``weather_timer == 0``); Gravity bits 12-14 =
-  ``gravity``, Trick Room bits 16-18 = ``trick_room``; Uproar bit ``8 + b`` = ``uproar[b] != 0``.
-  ``weather_turns`` is stale outside a TEMP-only weather (only the weather moves and the countdown
-  write it).
+  (battle_context.h:29); every writer and reader goes through ``engine.field`` (FCM steps 1-3):
+  the weather bits 0-7 and deep fog 15, the field's Uproar bits 8-11 (battler ``b``'s bit
+  ``8 + b``; ``uproar[b]`` stays the battler's VOLATILE_CONDITION_UPROAR count), the Gravity
+  counter bits 12-14 and the Trick Room counter bits 16-18. ``weather_turns`` is stale outside a
+  TEMP-only weather (only the weather moves and the countdown write it).
 * ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
   double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
@@ -486,10 +480,6 @@ class BattleState(NamedTuple):
     starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
     starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
-    weather: jnp.ndarray  # int8, ids.Weather
-    weather_timer: jnp.ndarray  # int8, 0 = permanent
-    trick_room: jnp.ndarray  # int8
-    gravity: jnp.ndarray  # int8
     field_mask: jnp.ndarray  # int32, BattleContext.fieldConditionsMask (engine.field)
     weather_turns: jnp.ndarray  # int32, FieldConditions.weatherTurns
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
@@ -868,10 +858,6 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "qc_roll": (_BATTLER, np.int8),
     "starf_roll": (_BATTLER, np.int8),
     "starf_open": (_BATTLER, np.int8),
-    "weather": (_FIELD, np.int8),
-    "weather_timer": (_FIELD, np.int8),
-    "trick_room": (_FIELD, np.int8),
-    "gravity": (_FIELD, np.int8),
     "field_mask": (_FIELD, np.int32),
     "weather_turns": (_FIELD, np.int32),
     "war_swaps": (_FIELD, np.int16),
@@ -1134,11 +1120,12 @@ def initial_arrays(
     ``fmt.P`` parties (party 0 the player's, 1 the opponent's), stats via ``calc_stats``, empty
     slots all zero (``species = 0, hp = 0``), battler ``b``'s lead in party slot ``leads[b]``
     (default: the battlers of one party take slots 0, 1, ... in battler order),
-    no volatiles, hazards or screens, and
-    ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
-    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default) and ``gravity``
+    no volatiles, hazards or screens, and ``field_mask`` = ``ids.start_field_mask``: the
+    ``start_condition``'s PERM bit (deep fog: bit 15), the ``gravity`` counter
     (``ids.GRAVITY_TURNS`` for a trainer whose area condition is Gravity, Kaizo's sub_seq 297, 0
-    otherwise; the grounding loop it runs at battle start is a no-op, G-67). The leads'
+    otherwise; the grounding loop it runs at battle start is a no-op, G-67) and the
+    ``trick_room`` counter (subscript_overworld_trick_room.s:14); and ``terrain`` (a decomp
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
     switch-in effects then run (``hooks.battle_start``: each switch-in state over both
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
@@ -1204,18 +1191,15 @@ def initial_arrays(
             raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
         a["trainer_items"][b, : len(bag)] = bag
         a["trainer_item_count"][b] = len(bag)
-    a["weather"][...] = Weather(start_condition)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
-    a["gravity"][...] = gravity
     if not 0 <= trick_room <= TRICK_ROOM_TURNS:
         raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
-    a["trick_room"][...] = trick_room
-    # fieldConditionsMask of the same start (``ids.start_field_mask``); weatherTurns 0.
-    a["field_mask"][...] = start_field_mask(start_condition, gravity, trick_room)
+    # fieldConditionsMask of the start (``ids.start_field_mask``); weatherTurns 0.
+    a["field_mask"][...] = start_field_mask(Weather(start_condition), gravity, trick_room)
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).

@@ -36,10 +36,12 @@ from nuzline.engine.ids import AbilityId, ItemId, Weather
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
+    gravity_of,
     kaizo_names_with,
     roark_party,
     roark_trainer,
     sample_party,
+    trick_room_of,
 )
 
 
@@ -346,8 +348,8 @@ def test_area_trick_room_is_modelled(tables, names):
     assert start_trick_room(trainer) == TRICK_ROOM_TURNS and start_trick_room(roark_trainer()) == 0
     party = roark_party(names)
     state = make_state(tables, party, party, trick_room=start_trick_room(trainer))
-    assert int(state.trick_room) == TRICK_ROOM_TURNS
-    assert int(make_state(tables, party, party).trick_room) == 0
+    assert int(trick_room_of(state)) == TRICK_ROOM_TURNS
+    assert int(trick_room_of(make_state(tables, party, party))) == 0
 
 
 def test_area_gravity_is_modelled(tables, names):
@@ -363,8 +365,8 @@ def test_area_gravity_is_modelled(tables, names):
     assert start_gravity(trainer) == GRAVITY_TURNS and start_gravity(roark_trainer()) == 0
     party = roark_party(names)
     state = make_state(tables, party, party, gravity=start_gravity(trainer))
-    assert int(state.gravity) == GRAVITY_TURNS
-    assert int(make_state(tables, party, party).gravity) == 0
+    assert int(gravity_of(state)) == GRAVITY_TURNS
+    assert int(gravity_of(make_state(tables, party, party))) == 0
 
 
 @pytest.mark.fullset

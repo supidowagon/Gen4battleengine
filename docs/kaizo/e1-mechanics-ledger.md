@@ -1750,6 +1750,18 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   the toggle under a borrow; 0x1FFFF ends / re-arms; engine = reference),
   `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_trick_room_reads_the_mask`. Acid Rain
   (subscript_pursuit.s:115) is not part of step 2 and is not built here.
+- G-11 FCM step 3 (FCM.md 4.2, 4.4 (3)): `weather`, `weather_timer`, `gravity` and `trick_room` are dropped
+  from `BattleState`, `RefState`, `layout` and STATE.md; `field_mask` / `weather_turns` are the only
+  field-condition state (`fieldConditionsMask`, battle_context.h:210; `weatherTurns`, :29). `uproar[b]` stays
+  the battler's VOLATILE_CONDITION_UPROAR count (G-9: read where the decomp reads the volatile); no field-wide
+  Uproar read of it was left. `make_state` keeps its `start_condition`, `gravity`, `trick_room` inputs and
+  writes only `ids.start_field_mask` of them. `field.with_weather` / `with_gravity` / `with_trick_room` write
+  the mask only. The golden-trace converter (`tools/trace_to_state.py`) compares and carries the traced
+  `fieldConditionsMask` bit for bit as `field_mask` (was: one decoded `weather`; `decode_weather` is gone).
+  Test reads of the dropped fields go through `tests.engine.helpers.weather_of`, `weather_timer_of` (FCM
+  4.4's `where(temp_only, weather_turns, 0)`), `gravity_of`, `trick_room_of`; `tests.strategies` draws the
+  field into the mask (`_set_weather`, `_drawn_weather`, `ids.clean_field_mask`). Snap diff: the four
+  dropped fields only.
 
 ## Stream state (restart point, 2026-11-19)
 

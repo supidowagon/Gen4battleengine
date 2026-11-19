@@ -29,7 +29,14 @@ from nuzline.engine.step import step_events
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import _usable as ref_usable
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import (
+    A,
+    assert_matches_reference,
+    roark_state,
+    trick_room_of,
+    weather_of,
+    weather_timer_of,
+)
 from tools.effect_map import CERTAIN_SECONDARY_EFFECTS, DECOMP_EFFECT_TO_ID
 
 SPE = 4  # stats[..., 0..4] are Atk..Spe
@@ -589,10 +596,10 @@ def test_trick_room_toggles_and_the_turn_pass_counts_it_once(tables, names):
     s = _trick(tables, names)
     out = assert_matches_reference(tables, s, A("Trick Room", "Growl", s, names), _hits())
     # Set to 5 by the move, then the turn's pass counts it once (up through turn T + 4).
-    assert int(out.trick_room) == TRICK_ROOM_TURNS - 1
+    assert int(trick_room_of(out)) == TRICK_ROOM_TURNS - 1
     up = _trick(tables, names, turns=3)
     out = assert_matches_reference(tables, up, A("Trick Room", "Growl", up, names), _hits())
-    assert int(out.trick_room) == 0  # a second use ends it (the pass has nothing left to count)
+    assert int(trick_room_of(out)) == 0  # a second use ends it (the pass has nothing left to count)
 
 
 def test_trick_room_ends_in_vanilla_and_is_rearmed_in_kaizo(
@@ -603,10 +610,10 @@ def test_trick_room_ends_in_vanilla_and_is_rearmed_in_kaizo(
     for t, n, after in ((tables, names, 0), (kaizo_tables, kaizo_names, TRICK_ROOM_TURNS)):
         s = _trick(t, n, turns=1, mine=("Growl",))
         out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
-        assert int(out.trick_room) == after
+        assert int(trick_room_of(out)) == after
         s = _trick(t, n, turns=2, mine=("Growl",))
         out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
-        assert int(out.trick_room) == 1
+        assert int(trick_room_of(out)) == 1
 
 
 def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names):
@@ -622,7 +629,7 @@ def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names
         [_spec(names, "Geodude", 40, ("Tackle",))],
         trick_room=TRICK_ROOM_TURNS,
     )
-    assert int(started.trick_room) == TRICK_ROOM_TURNS
+    assert int(trick_room_of(started)) == TRICK_ROOM_TURNS
     reversed_ = with_trick_room(s, 3)
     out = assert_matches_reference(tables, reversed_, acts, _hits())
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
@@ -826,7 +833,7 @@ def test_skill_swap_hands_over_an_entry_ability_that_acts_once_at_the_move_end(t
     rain = _ss(tables, names, AbilityId.BLAZE, AbilityId.DROUGHT)
     rain = rain._replace(weather_announced=_flags(rain, "weather_announced", [0, 1]))
     out = assert_matches_reference(tables, rain, acts, _hits())
-    assert int(out.weather) == Weather.SUN and int(out.weather_timer) == 0
+    assert int(weather_of(out)) == Weather.SUN and int(weather_timer_of(out)) == 0
     assert out.weather_announced.tolist() == [1, 1]
 
 

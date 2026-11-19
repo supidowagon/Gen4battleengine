@@ -40,7 +40,13 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import (
+    A,
+    assert_matches_reference,
+    roark_state,
+    weather_of,
+    weather_timer_of,
+)
 from tests.engine.test_pivot import _mon
 
 DECOMP = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum"
@@ -1128,10 +1134,10 @@ def test_weather_war_at_the_battle_start_leaves_the_slower_leads_weather(tables,
     TrainerMessage (battle_controller_player.c:251, battle_lib.c:3364-3382): the second lead's
     weather stays. A slower player's Drought runs its script last (the AI learns it)."""
     fast = _war(tables, names, (50, 40))
-    assert int(fast.weather) == Weather.RAIN and int(fast.war_swaps) == 0
+    assert int(weather_of(fast)) == Weather.RAIN and int(fast.war_swaps) == 0
     assert int(fast.ai_ability_known[0]) != 0  # its own script ran first
     slow = _war(tables, names, (40, 50))
-    assert int(slow.weather) == Weather.SUN and int(slow.weather_timer) == 0
+    assert int(weather_of(slow)) == Weather.SUN and int(weather_timer_of(slow)) == 0
     assert int(slow.war_swaps) == 0 and int(slow.ai_ability_known[0]) != 0
 
 
@@ -1144,19 +1150,19 @@ def test_weather_war_tie_and_quick_claw_are_root_draws(tables, names):
     from nuzline.engine.step import root_belief, sample_root
 
     tie = _war(tables, names, (50, 50))
-    assert int(tie.war_swaps) == 0b10101010 and int(tie.weather) == Weather.RAIN
+    assert int(tie.war_swaps) == 0b10101010 and int(weather_of(tie)) == Weather.RAIN
     belief = root_belief(tables, tie)
-    assert sorted((int(b.weather), p) for b, p in belief) == sorted(
+    assert sorted((int(weather_of(b)), p) for b, p in belief) == sorted(
         [(int(Weather.SUN), 0.5), (int(Weather.RAIN), 0.5)]
     )
     assert all(int(b.war_swaps) == 0 for b, _ in belief)
     keys = jax.random.split(jax.random.PRNGKey(0), 32)
-    drawn = {int(sample_root(k, tables, tie).weather) for k in keys}
+    drawn = {int(weather_of(sample_root(k, tables, tie))) for k in keys}
     assert drawn == {Weather.SUN, Weather.RAIN}
     # The slower player's Quick Claw: activated (1/5) it sorts first and the rain stays.
     claw = _war(tables, names, (40, 50), ("Quick Claw", ""))
     assert int(claw.war_swaps) != 0
-    belief = {(int(b.qc_roll[0]), int(b.weather)): p for b, p in root_belief(tables, claw)}
+    belief = {(int(b.qc_roll[0]), int(weather_of(b))): p for b, p in root_belief(tables, claw)}
     assert belief == pytest.approx({(1, Weather.RAIN): 0.2, (0, Weather.SUN): 0.8})
 
 
@@ -1175,11 +1181,13 @@ def test_root_draws_take_a_host_state(tables, names):
 
     def outcomes(state):
         belief = root_belief(tables, state)
-        return sorted((int(b.weather), int(b.ai_ability_known[0]), p) for b, p in belief)
+        return sorted((int(weather_of(b)), int(b.ai_ability_known[0]), p) for b, p in belief)
 
     assert outcomes(host) == outcomes(tie) and len(outcomes(tie)) == 2
     key = jax.random.PRNGKey(3)
-    assert int(sample_root(key, tables, host).weather) == int(sample_root(key, tables, tie).weather)
+    assert int(weather_of(sample_root(key, tables, host))) == int(
+        weather_of(sample_root(key, tables, tie))
+    )
 
 
 def _double_ko(tables, names, levels):
@@ -1211,19 +1219,19 @@ def test_weather_war_at_a_double_ko(tables, names):
     for levels, weather in (((50, 40), Weather.RAIN), ((40, 50), Weather.SUN)):
         after, refused = replacement_pass(tables, _double_ko(tables, names, levels), 1)
         assert not bool(refused) and int(after.active[1]) == 1
-        assert int(after.weather) == weather and int(after.war_swaps) == 0
+        assert int(weather_of(after)) == weather and int(after.war_swaps) == 0
     s = _double_ko(tables, names, (50, 50))
     after, _ = replacement_pass(tables, s, 1)
-    assert int(after.war_swaps) != 0 and int(after.weather) == Weather.RAIN
-    assert int(resolve_war(after, 1).weather) == Weather.SUN
-    assert int(resolve_war(after, 0).weather) == Weather.RAIN
+    assert int(after.war_swaps) != 0 and int(weather_of(after)) == Weather.RAIN
+    assert int(weather_of(resolve_war(after, 1))) == Weather.SUN
+    assert int(weather_of(resolve_war(after, 0))) == Weather.RAIN
     keys = jax.random.split(jax.random.PRNGKey(1), 32)
-    assert {int(settle_war(after, k).weather) for k in keys} == {Weather.SUN, Weather.RAIN}
+    assert {int(weather_of(settle_war(after, k))) for k in keys} == {Weather.SUN, Weather.RAIN}
     batch = jax.tree.map(lambda f: np.asarray(f)[None], s)
     store, children = expand_replacements(tables, batch, [(0, MOVE_ACTIONS + 1)])
     kids = children[0]
     assert [k.prob for k in kids] == [0.5, 0.5]
-    weathers = {int(take(store, np.asarray([k.state_row])).weather[0]) for k in kids}
+    weathers = {int(weather_of(take(store, np.asarray([k.state_row])))[0]) for k in kids}
     assert weathers == {Weather.SUN, Weather.RAIN}
 
 
@@ -1470,12 +1478,12 @@ def test_double_ko_newcomer_felled_by_hazards_leaves_the_foes_states_waiting(tab
         first, refused = replacement_pass(tables, s, 1)
         assert not bool(refused)
         assert int(first.hp[0, 1]) == 0 and int(first.active[1]) == 1
-        assert int(first.weather) == Weather.NONE
+        assert int(weather_of(first)) == Weather.NONE
         assert np.asarray(first.entry_pending).tolist() == [0, 1]
         assert int(needs_replacement(first)[0]) == 1
         second, refused = replacement_pass(tables, first, 2)
         assert not bool(refused) and int(second.active[0]) == 2
-        assert int(second.weather) == weather and int(second.weather_timer) == 0
+        assert int(weather_of(second)) == weather and int(weather_timer_of(second)) == 0
         assert np.asarray(second.entry_pending).tolist() == [0, 0]
     # A tie (Groudon and Kyogre, both Speed 102 at level 50): the sort at TrainerMessage
     # (battle_controller_player.c:251) swaps on RandNext() & 1 (battle_lib.c:1445), so the war
@@ -1485,8 +1493,8 @@ def test_double_ko_newcomer_felled_by_hazards_leaves_the_foes_states_waiting(tab
     first, _ = replacement_pass(tables, _hazard_double_ko(tables, names, (50, 50)), 1)
     second, refused = replacement_pass(tables, first, 2)
     assert not bool(refused) and int(second.war_swaps) == 0b10101010
-    assert int(resolve_war(second, 1).weather) == Weather.SUN
-    assert int(resolve_war(second, 0).weather) == Weather.RAIN
+    assert int(weather_of(resolve_war(second, 1))) == Weather.SUN
+    assert int(weather_of(resolve_war(second, 0))) == Weather.RAIN
 
 
 def test_double_ko_waiting_intimidate_meets_the_next_newcomer(tables, names):
@@ -1514,7 +1522,7 @@ def test_replace_without_effects_matches_the_reference(tables, names):
     for name in out._fields:
         mine, theirs = np.asarray(getattr(out, name)), np.asarray(getattr(ref, name))
         np.testing.assert_array_equal(mine, theirs, name)
-    assert int(out.entry_pending[1]) == 1 and int(out.weather) == Weather.NONE
+    assert int(out.entry_pending[1]) == 1 and int(weather_of(out)) == Weather.NONE
     assert int(out.hp[1, 1]) < int(s.hp[1, 1])  # Stealth Rock hit it
 
 
@@ -1551,7 +1559,7 @@ def test_weather_war_tie_is_a_root_chance_node_the_player_sees(tables, names, mo
     full = int(s.pp[0, 0, tackle])
 
     def leaf(states, weights, pairs=None):
-        sun = np.asarray(states.weather) == Weather.SUN
+        sun = weather_of(states) == Weather.SUN
         tackled = np.asarray(states.pp)[:, 0, 0, tackle] < full
         return [LeafValue(10 * int(w), 10, 10 * int(w), 10, False) for w in sun == tackled]
 

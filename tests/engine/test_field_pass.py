@@ -11,7 +11,16 @@ from nuzline.engine.field import with_gravity, with_trick_room, with_weather
 from nuzline.engine.ids import Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER
-from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
+from tests.engine.helpers import (
+    A,
+    assert_matches_reference,
+    gravity_of,
+    jit_step,
+    roark_state,
+    trick_room_of,
+    weather_of,
+    weather_timer_of,
+)
 
 _SIDE_TIMERS = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
 
@@ -57,15 +66,15 @@ def test_screens_count_down_and_end(tables, names):
     out = _leer(tables, names, s)
     for name in _SIDE_TIMERS:
         assert getattr(out, name).tolist() == [0, 4], name
-    assert int(out.gravity) == 1
-    assert int(_leer(tables, names, out).gravity) == 0
+    assert int(gravity_of(out)) == 1
+    assert int(gravity_of(_leer(tables, names, out))) == 0
 
 
 def test_trick_room_counts_down_once_per_turn(tables, names):
     # The field pass (bcp.c:932-1254) has no Trick Room step; the side-condition pass after it
     # counts it down once (SIDE_COND_CHECK_STATE_TRICK_ROOM, bcp.c:1822-1830; ruling D2-38).
     s = with_trick_room(roark_state(tables, names), 3)
-    assert int(_leer(tables, names, s).trick_room) == 2
+    assert int(trick_room_of(_leer(tables, names, s))) == 2
 
 
 @pytest.mark.slow
@@ -73,7 +82,7 @@ def test_permanent_sand_never_ends(tables, names):
     s = _weather(roark_state(tables, names), Weather.SANDSTORM)
     for _ in range(3):
         s = _leer(tables, names, s)
-        assert int(s.weather) == Weather.SANDSTORM and int(s.weather_timer) == 0
+        assert int(weather_of(s)) == Weather.SANDSTORM and int(weather_timer_of(s)) == 0
 
 
 @pytest.mark.slow
@@ -82,10 +91,10 @@ def test_temporary_sand_ends_at_zero(tables, names):
     # and no chip runs that turn (only subscript_weather_continues.s chips).
     s = _weather(roark_state(tables, names), Weather.SANDSTORM, timer=2)
     mid = _leer(tables, names, s)
-    assert int(mid.weather) == Weather.SANDSTORM and int(mid.weather_timer) == 1
+    assert int(weather_of(mid)) == Weather.SANDSTORM and int(weather_timer_of(mid)) == 1
     assert _lost(s, mid, 0) == max(int(s.max_hp[0, 0]) // 16, 1)
     end = _leer(tables, names, mid)
-    assert int(end.weather) == Weather.NONE and int(end.weather_timer) == 0
+    assert int(weather_of(end)) == Weather.NONE and int(weather_timer_of(end)) == 0
     assert _lost(mid, end, 0) == 0
 
 
@@ -94,14 +103,15 @@ def test_temporary_sand_ends_at_zero(tables, names):
 def test_temporary_weather_counts_down(tables, names, weather):
     s = _weather(roark_state(tables, names), weather, timer=1)
     out = _leer(tables, names, s)
-    assert int(out.weather) == Weather.NONE and int(out.weather_timer) == 0
+    assert int(weather_of(out)) == Weather.NONE and int(weather_timer_of(out)) == 0
 
 
 def test_fog_never_counts_down(tables, names):
-    # FIELD_COND_CHECK_STATE_DEEP_FOG (bcp.c:1213-1225) only prints a message.
+    # FIELD_COND_CHECK_STATE_DEEP_FOG (bcp.c:1213-1225) only prints a message: weatherTurns
+    # stays.
     s = _weather(roark_state(tables, names), Weather.FOG, timer=1)
     out = _leer(tables, names, s)
-    assert int(out.weather) == Weather.FOG and int(out.weather_timer) == 1
+    assert int(weather_of(out)) == Weather.FOG and int(out.weather_turns) == 1
 
 
 @pytest.mark.slow
@@ -144,7 +154,7 @@ def test_cloud_nine_alive_stops_the_chip_but_not_the_countdown(tables, names):
     s = _normal_foe(_weather(s, Weather.SANDSTORM, timer=3))
     out = _leer(tables, names, s)
     assert _lost(s, out, 0) == 0 and _lost(s, out, 1) == 0
-    assert int(out.weather_timer) == 2
+    assert int(weather_timer_of(out)) == 2
 
 
 @pytest.mark.slow
@@ -182,7 +192,7 @@ def test_sand_double_faint_is_a_loss(tables, names, tie):
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), o)
     assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
     assert int(out.over) == 1 and int(out.winner) == WINNER_OPPONENT
-    assert int(out.player_faints) == 1 and int(out.gravity) == 3
+    assert int(out.player_faints) == 1 and int(gravity_of(out)) == 3
 
 
 def _fixed_states(tables, names):

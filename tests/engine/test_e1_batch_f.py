@@ -34,7 +34,7 @@ from nuzline.engine.outcome import CRIT_ODDS_EFFECTS, crit_variants, empty_outco
 from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
+from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state, weather_of
 from tests.engine.test_e1_batch_e import _bag, _use_both
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _state
@@ -349,7 +349,7 @@ def test_a_weather_move_changes_forecast_before_the_next_battler_acts(tables, na
     s = _state(tables, names, mine=["Rain Dance"], order="player")
     s = _become(tables, names, s, 1, "Castform")
     out = assert_matches_reference(tables, s, A("Rain Dance", "Tackle", s, names), O)
-    assert out.types[1, 0].tolist() == [Type.WATER] * 2 and int(out.weather) == Weather.RAIN
+    assert out.types[1, 0].tolist() == [Type.WATER] * 2 and int(weather_of(out)) == Weather.RAIN
 
 
 def test_an_alive_cloud_nine_forces_normal_and_a_lead_castform_changes_at_battle_start(

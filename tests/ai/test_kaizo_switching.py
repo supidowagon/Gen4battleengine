@@ -58,7 +58,7 @@ from nuzline.engine.damage import move_type_of
 from nuzline.engine.field import with_gravity
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
 from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
-from tests.engine.helpers import as_species
+from tests.engine.helpers import as_species, gravity_of
 
 K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).
@@ -276,7 +276,7 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     row = np.asarray(t.species_form_row)[species, np.asarray(s.form)]
     ability = np.asarray(t.species_abilities_decomp)[row, np.asarray(s.ability_slot)]
     d_types = s.types[0, d]
-    gravity = int(s.gravity)
+    gravity = int(gravity_of(s))
     reads: list[tuple[float, int | None]] = []  # (P(the read's branch), action or None)
 
     # :3906-3913: trapped (Bind, Mean Look), ingrained, Shadow Tag / Arena Trap on the player's
@@ -411,17 +411,18 @@ def _switch_states(draw, t, n, party):
     if draw(st.integers(0, 3)) == 0:
         j = draw(st.sampled_from(bench))
         s = as_species(t, s, 1, j, shedinja)
+    hit = n.move(draw(st.sampled_from(hits)))
+    gravity = draw(st.sampled_from((0, 0, 0, 5)))
     s = s._replace(
         hp=hp,
-        move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
-        gravity=jnp.asarray(draw(st.sampled_from((0, 0, 0, 5))), s.gravity.dtype),
+        move_hit=s.move_hit.at[1].set(hit),
         foresight=s.foresight.at[0].set(draw(st.sampled_from((0, 0, 1)))),
         trapped=s.trapped.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 2)))),
         mean_look=s.mean_look.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         ingrain=s.ingrain.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         stages=s.stages.at[1, 1].set(draw(st.sampled_from((0, 0, 0, 2, 4)))),
     )
-    return with_gravity(s, s.gravity)  # its field_mask bits too (FCM 4.4)
+    return with_gravity(s, gravity)
 
 
 def _assert_switch_equals_loose(t, s: BattleState) -> None:

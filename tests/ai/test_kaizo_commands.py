@@ -416,11 +416,9 @@ def test_compare_speed_constants_are_the_decomps():
     assert (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE) == (0, 1, 2)
 
 
-def _speed_state(tables, names, player: int, opp: int, **fields):
+def _speed_state(tables, names, player: int, opp: int, trick_room: int = 0):
     s = versus(tables, names, GEODUDE)
-    s = _speeds(s, player, opp)
-    s = s._replace(**{k: jnp.asarray(v, getattr(s, k).dtype) for k, v in fields.items()})
-    return with_trick_room(s, s.trick_room)  # its field_mask bits too (FCM 4.4)
+    return with_trick_room(_speeds(s, player, opp), trick_room)
 
 
 def _slower(tables, s) -> bool:

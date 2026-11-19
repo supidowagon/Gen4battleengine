@@ -40,7 +40,9 @@ from tests.engine.helpers import (
     as_species,
     assert_matches_reference,
     drop_programs,
+    gravity_of,
     roark_state,
+    weather_of,
 )
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
@@ -436,10 +438,10 @@ def test_gravity_starts_for_five_turns_and_fails_when_up(tables, names):
     s = _gravity(tables, names)
     out = assert_matches_reference(tables, s, A("Gravity", "Leer", s, names), _o())
     # Set to 5 by the move, then the turn's field-condition pass counts it once.
-    assert int(out.gravity) == GRAVITY_TURNS - 1
+    assert int(gravity_of(out)) == GRAVITY_TURNS - 1
     up = _gravity(tables, names, turns=3)
     out = assert_matches_reference(tables, up, A("Gravity", "Leer", up, names), _o())
-    assert int(out.gravity) == 2  # failed: only the countdown ran (not reset to 4)
+    assert int(gravity_of(out)) == 2  # failed: only the countdown ran (not reset to 4)
 
 
 def test_gravity_lifts_the_flying_and_levitate_immunities(tables, names):
@@ -484,7 +486,7 @@ def test_gravity_grounds_a_magnet_rise_user_and_unlocks_a_fly_user(tables, names
         magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(4)
     )
     out = assert_matches_reference(tables, s, A("Scratch", "Gravity", s, names), _o())
-    assert int(out.gravity) == GRAVITY_TURNS - 1
+    assert int(gravity_of(out)) == GRAVITY_TURNS - 1
     assert (int(out.magnet_rise[0]), int(out.magnet_rise_turns[0])) == (1, 0)
     fly = names.move("Fly")
     f = _gravity(tables, names, opp="Gravity", order="opp")
@@ -534,7 +536,7 @@ def test_vanilla_gravity_ends_after_five_turn_ends(tables, names):
     s = _gravity(tables, names, turns=GRAVITY_TURNS, mine=PLAIN)
     for left in (4, 3, 2, 1, 0, 0):
         s = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), _o())
-        assert int(s.gravity) == left
+        assert int(gravity_of(s)) == left
 
 
 def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
@@ -549,14 +551,14 @@ def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
         [_kaizo_spec(n, "Skitty", "Growl", 20)],
         gravity=GRAVITY_TURNS,
     )
-    assert int(s.gravity) == GRAVITY_TURNS  # sub_seq 297: the fight starts with Gravity up
+    assert int(gravity_of(s)) == GRAVITY_TURNS  # sub_seq 297: the fight starts with Gravity up
     s = s._replace(
         magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(9)
     )
     seen = []
     for _turn in range(6):
         s = assert_matches_reference(t, s, A("Leer", "Growl", s, n), _o())
-        seen.append(int(s.gravity))
+        seen.append(int(gravity_of(s)))
     assert seen == [4, 3, 2, 1, GRAVITY_TURNS, 4]
     assert int(s.magnet_rise_turns[0]) == 0  # zeroed by the first start at 0 or the loop
 
@@ -950,7 +952,7 @@ def test_transform_runs_the_copied_abilitys_switch_in_checks(tables, names):
         weather_announced=s.weather_announced.at[1].set(1),
     )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
-    assert int(out.weather) == Weather.RAIN
+    assert int(weather_of(out)) == Weather.RAIN
 
 
 def test_a_transformed_ditto_loses_metal_powder(tables, names):

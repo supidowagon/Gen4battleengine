@@ -363,7 +363,7 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     """``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` (battle_lib.c:3740-3790) for ``side``'s
     active battler where ``cond`` (it has not announced: it entered, or it just traced): with
     HP left and Drizzle, Sand Stream, Drought or Snow Warning (``Battler_Ability``), the weather
-    becomes that one, permanently (``weather_timer`` 0; subscript_drizzle.s etc.:
+    becomes that one, permanently (subscript_drizzle.s etc.:
     ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless its own PERM bit is set
     already (:3749, :3758, :3767, :3776: no script, no reveal). Cloud Nine does not stop it."""
     mon, row = state.active[side], party(format_of(state), side)
@@ -373,11 +373,7 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     already = fcm.ability_bits(w, weather) == w
     state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
-    state = fcm.weather_ability(state, weather, on)
-    return state._replace(
-        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_ability(state, weather, on)
 
 
 # Every bit of ``order_swaps``: the three draws a sort of two battlers reads (a tie, two speedRand).
@@ -431,11 +427,7 @@ def swap_war(state: BattleState, swapped) -> BattleState:
     mon = state.active[0]
     weather = ability_weather(battler_ability(state, 0))
     state = reveal_ability(state, 0, mon, WEATHER_SET, on)
-    state = fcm.weather_ability(state, weather, on)
-    return state._replace(
-        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_ability(state, weather, on)
 
 
 def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
@@ -1292,12 +1284,7 @@ def battle_start(tables: Tables, state: BattleState, trace_pick=None) -> BattleS
     # on the leads as sent out, no weather yet (SWITCH_IN_CHECK_STATE_FIELD_WEATHER sets the
     # start condition inside TriggerEffectOnSwitch), with the battle-start speedRand
     # (BattleContext_InitCounters, battle_lib.c:2024), a root draw (ruling G-26).
-    swaps = order_swaps(
-        tables,
-        fcm.without_weather(state)._replace(
-            weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
-        ),
-    )
+    swaps = order_swaps(tables, fcm.without_weather(state))
     # A lead's Starf Berry eaten here draws at the root (``starf_open``, ``step.root_belief``,
     # ``step.sample_root``), F-10.
     state = state._replace(starf_roll=jnp.full_like(state.starf_roll, STARF_UNDRAWN))

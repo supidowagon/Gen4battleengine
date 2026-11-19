@@ -1409,7 +1409,8 @@ class MoveTarget(IntEnum):
 
 
 class Weather(IntEnum):
-    """``BattleState.weather``; also a battle's start condition (``make_state``)."""
+    """A weather: a battle's start condition (``make_state``) and the index of its mask bits
+    (``WEATHER_TEMP_BIT``, ``WEATHER_PERM_BIT``); ``engine.field.weather_seen`` reads one."""
 
     NONE = 0
     SUN = 1

@@ -112,32 +112,20 @@ three structs has a row.
   (subscript_suppress_target_ability.s:10); it is in `effects.MOVE_EFFECT_MASK_FIELDS`, so a
   suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). The rest
   (Charge, Grudge, Miracle Eye, Heal Block) are later (M6).
-- **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
-  sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
-  permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
-  Uproar battler mask (`FIELD_CONDITION_UPROAR`, one bit per battler) is `uproar != 0`: the
-  bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
-  together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
-  `CleanupFaintedMon`, :2213, with the volatiles).
-- **`field_mask`** (int32, `_FIELD`): `BattleContext.fieldConditionsMask` (battle_context.h:210)
-  bit for bit, bits condition.h:110-149 (`ids.FieldCondition`). **`weather_turns`** (int32,
-  `_FIELD`): `FieldConditions.weatherTurns` (battle_context.h:29); stale outside a TEMP-only
-  weather (only the weather moves, effect_script_0115/0136/0137/0164.s :10-14, and the TEMP-only
-  countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM step 1 (FCM.md 4.4): every writer of
-  `weather`, `weather_timer`, `gravity`, `trick_room` and `uproar` also writes these
-  (`engine.field`; reference: the same writes). Step 2, weather: every weather reader reads the
-  weather bits (0-7, 15) and `weather_turns` (`engine.field` views; the reference the same), so
-  a mask with several groups reads as the decomp reads it (FCM 3.2); `weather` /
-  `weather_timer` are written only, until step 3 drops them. Step 2, gravity: every Gravity
-  reader reads bits 12-14 (`field.gravity_on`, `field.gravity_count`); `gravity` is written
-  only. Step 2, uproar: the field's Uproar readers (sleep, Rest, Yawn, the wake at a move) read
-  bits 8-11 (`field.uproar_any`); `uproar[b]` stays the battler's VOLATILE_CONDITION_UPROAR count
-  (the lock, its end check, Metronome). Step 2, trick room: the readers (the speed order, the
-  move's toggle, the countdown, the AI's IfFieldConditionsMask, the observation) read bits 16-18
-  (`field.trick_room_on`); `trick_room` is written only. A clean
-  mask equals the old fields: at most one weather group, TEMP-only with `weather_turns ==
-  weather_timer` or PERM-only; bits 12-14 = `gravity`, 16-18 = `trick_room`; bit `8 + b` =
-  `uproar[b] != 0`.
+- **fieldConditionsMask -> `field_mask`** (int32, `_FIELD`, one per battle: BattleContext state,
+  doubles-state-design section 5 convention 2): `BattleContext.fieldConditionsMask`
+  (battle_context.h:210) bit for bit, bits condition.h:110-149 (`ids.FieldCondition`): the
+  weather bits 0-7 (TEMP / PERM of rain, sand, sun, hail) and deep fog 15, the Uproar bits 8-11
+  (bit `8 + b` of battler `b`), the Gravity counter 12-14 and the Trick Room counter 16-18.
+  **`weather_turns`** (int32, `_FIELD`): `FieldConditions.weatherTurns` (battle_context.h:29);
+  stale outside a TEMP-only weather (only the weather moves, effect_script_0115/0136/0137/0164.s
+  :10-14, and the TEMP-only countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM (FCM.md
+  section 4, steps 1-3): every writer and reader goes through `engine.field` (the reference the
+  same), so a mask with several groups or a borrowed counter (FCM 3.1, Acid Rain) reads as the
+  decomp reads it (FCM 3.2). `uproar[b]` is the battler's VOLATILE_CONDITION_UPROAR count only
+  (the lock, its end check, Metronome): the field's Uproar readers read bits 8-11
+  (`field.uproar_any`). The old `weather`, `weather_timer`, `gravity` and `trick_room` fields
+  are gone (step 3).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
   `tailwind`, Lucky Chant turns -> `lucky_chant`, Future Sight -> `future_sight` (E2 batch 5:
   per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
@@ -152,10 +140,11 @@ three structs has a row.
 - **The field-condition pass** (`step.field_conditions`,
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
-  a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
-  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) is not counted
-  down yet. `trick_room` is counted down by the turn end's side-condition pass
-  (`step._trick_room_check`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
+  `weather_turns` once per TEMP-only weather group (the group's TEMP bit clears at 0,
+  `field.weather_state`) and the Gravity bits (`field.gravity_tick`); a turn count of 0 is the
+  condition's mask bit clear. `wish_timer` (Wish's heal) is not counted down yet. The Trick
+  Room bits are counted down by the turn end's side-condition pass (`step._trick_room_check`,
+  `field.trick_room_tick`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
 - **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
@@ -636,7 +625,7 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `FieldConditions.weatherTurns` | `weather_timer`, `weather_turns` | mapped |
+| `FieldConditions.weatherTurns` | `weather_turns` | mapped |
 | `FieldConditions.futureSightTurns` | `future_timer` | mapped |
 | `FieldConditions.wishTurns` | `wish_timer` | mapped |
 | `FieldConditions.futureSightMove` | `future_move` | mapped |
@@ -717,8 +706,8 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `field_mask`, `weather`, `trick_room`, `gravity`, `uproar` | mapped |
-| `BattleContext.fieldConditions` | `weather_timer`, `weather_turns`, `future_timer`, `future_damage`, `wish_timer` | mapped |
+| `BattleContext.fieldConditionsMask` | `field_mask` | mapped |
+| `BattleContext.fieldConditions` | `weather_turns`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |

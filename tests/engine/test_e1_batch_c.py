@@ -26,7 +26,14 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace
-from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
+from tests.engine.helpers import (
+    A,
+    as_species,
+    assert_matches_reference,
+    roark_state,
+    weather_of,
+    weather_timer_of,
+)
 from tools.build_tables import _move_flags
 from tools.effect_map import KAIZO_THUNDER_EFFECTS, THUNDER_EFFECT
 
@@ -76,7 +83,7 @@ def test_fog_cuts_the_hit_rate_and_never_ends(tables, names):
     foggy = assert_matches_reference(tables, fog, leer, o)
     assert int(clear.stages[1, Stat.DEF]) == -1  # the player's Leer lands
     assert int(foggy.stages[1, Stat.DEF]) == 0  # and misses in fog
-    assert int(foggy.weather) == Weather.FOG and int(foggy.weather_timer) == 0
+    assert int(weather_of(foggy)) == Weather.FOG and int(weather_timer_of(foggy)) == 0
     assert foggy.hp.tolist() == fog.hp.tolist()
 
 
@@ -85,10 +92,10 @@ def test_a_weather_move_and_a_weather_ability_replace_fog(tables, names):
     included, condition.h:131-135) before they set their own weather."""
     s = _weather(roark_state(tables, names, player_moves=["Rain Dance"]), Weather.FOG)
     out = assert_matches_reference(tables, s, A("Rain Dance", "Leer", s, names), O)
-    assert int(out.weather) == Weather.RAIN and int(out.weather_timer) > 0
+    assert int(weather_of(out)) == Weather.RAIN and int(weather_timer_of(out)) > 0
     s = _ability(_weather(roark_state(tables, names), Weather.FOG), 1, 1, AbilityId.DRIZZLE)
     out = assert_matches_reference(tables, s, A("Leer", MOVE_ACTIONS + 1, s, names), O)
-    assert int(out.weather) == Weather.RAIN and int(out.weather_timer) == 0
+    assert int(weather_of(out)) == Weather.RAIN and int(weather_timer_of(out)) == 0
 
 
 # --- G-45 Ice Body ------------------------------------------------------------------------

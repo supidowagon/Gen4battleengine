@@ -1,20 +1,16 @@
 """``fieldConditionsMask`` and ``FieldConditions.weatherTurns`` as ``BattleState.field_mask`` and
-``BattleState.weather_turns`` (FCM build sheet, step 1 of section 4.4): the writers, pure ``jnp``.
+``BattleState.weather_turns`` (FCM build sheet, section 4): the writers and views, pure ``jnp``.
 
-Every writer of the old field fields (``weather``, ``weather_timer``, ``gravity``,
-``trick_room``, the per-battler ``uproar``) also writes the mask through these, bit for bit as
-the decomp writes ``fieldConditionsMask`` (bits ``ids.FieldCondition``, include/constants/
-battle/condition.h:110-149). Step 2 (4.4): the weather readers read the weather bits (bits 0-7,
-deep fog 15) and ``weather_turns`` through the views below (``weather_bits``, ``rain`` ..
-``fog``, ``weather_ball_type``, ``weather_state``), each as its decomp test reads the mask, so a
-mask with several groups (FCM 3.2) reads as the game reads it; the Gravity readers read bits
-12-14 (``gravity_on``, ``gravity_count``), the Uproar readers bits 8-11 (``uproar_any``; the
-battler's ``uproar`` count stays its VOLATILE_CONDITION_UPROAR) and the Trick Room readers
-bits 16-18 (``trick_room_on``); the old fields are written only, until step 3 drops them. On every state the engine
-reaches the mask is clean: at most one weather group, TEMP-only with ``weather_turns ==
-weather_timer`` or PERM-only; the Gravity / Trick Room bits are ``gravity`` / ``trick_room``;
-Uproar bit ``8 + b`` is ``uproar[b] != 0``. ``weather_turns`` is written only by the weather
-moves and the TEMP-only countdown (stale outside a TEMP-only weather, as the decomp's).
+Every field-condition writer writes the mask through these, bit for bit as the decomp writes
+``fieldConditionsMask`` (bits ``ids.FieldCondition``, include/constants/battle/condition.h:
+110-149), and every reader reads it through the views below, each as its decomp test reads the
+mask, so a mask with several groups (FCM 3.2) reads as the game reads it: the weather bits 0-7
+and deep fog 15 with ``weather_turns`` (``weather_bits``, ``rain`` .. ``fog``,
+``weather_ball_type``, ``weather_state``), the Uproar bits 8-11 (``uproar_any``; the battler's
+``uproar`` count stays its VOLATILE_CONDITION_UPROAR), the Gravity counter bits 12-14
+(``gravity_on``, ``gravity_count``) and the Trick Room counter bits 16-18 (``trick_room_on``).
+``weather_turns`` is written only by the weather moves and the TEMP-only countdown (stale
+outside a TEMP-only weather, as the decomp's).
 
 Each writer takes a ``cond`` (``bool``) and leaves the state where it is false. Battlers are
 passed in (doubles-state-design section 5): the Uproar bit is ``8 + b`` of battler ``b``."""
@@ -303,24 +299,17 @@ def uproar_end(state: BattleState, b, cond) -> BattleState:
 
 
 def with_gravity(state: BattleState, count, cond=True) -> BattleState:
-    """The Gravity counter bits set to ``count`` where ``cond``, clean (FCM 4.4), and the old
-    ``gravity`` field with them until FCM step 3 drops it (a view that puts Gravity up: ``order.
-    gravity_state``, ``outcome``'s foe-Gravity variant; a state set by hand: a test)."""
-    count = jnp.asarray(count, _I32)
-    bits = jnp.left_shift(count, FIELD_CONDITION_GRAVITY_SHIFT)
-    state = _put(state, (_mask(state) & ~_GRAVITY) | bits, cond)
-    value = jnp.where(jnp.asarray(cond), count, state.gravity)
-    return state._replace(gravity=value.astype(state.gravity.dtype))
+    """The Gravity counter bits set to ``count`` where ``cond`` (a view that puts Gravity up:
+    ``order.gravity_state``, ``outcome``'s foe-Gravity variant; a state set by hand: a test)."""
+    bits = jnp.left_shift(jnp.asarray(count, _I32), FIELD_CONDITION_GRAVITY_SHIFT)
+    return _put(state, (_mask(state) & ~_GRAVITY) | bits, cond)
 
 
 def with_trick_room(state: BattleState, count, cond=True) -> BattleState:
-    """The Trick Room counter bits set to ``count`` where ``cond``, clean (FCM 4.4), and the old
-    ``trick_room`` field with them until FCM step 3 drops it (a state set by hand: a test)."""
-    count = jnp.asarray(count, _I32)
-    bits = jnp.left_shift(count, FIELD_CONDITION_TRICK_ROOM_SHIFT)
-    state = _put(state, (_mask(state) & ~_TRICK_ROOM) | bits, cond)
-    value = jnp.where(jnp.asarray(cond), count, state.trick_room)
-    return state._replace(trick_room=value.astype(state.trick_room.dtype))
+    """The Trick Room counter bits set to ``count`` where ``cond`` (a state set by hand: a
+    test)."""
+    bits = jnp.left_shift(jnp.asarray(count, _I32), FIELD_CONDITION_TRICK_ROOM_SHIFT)
+    return _put(state, (_mask(state) & ~_TRICK_ROOM) | bits, cond)
 
 
 def with_weather_of(state: BattleState, source: BattleState) -> BattleState:
@@ -331,20 +320,15 @@ def with_weather_of(state: BattleState, source: BattleState) -> BattleState:
 
 
 def with_weather(state: BattleState, weather, timer=0) -> BattleState:
-    """``state`` holding the one ``Weather`` ``weather`` (an int), clean (FCM 4.4): a weather
-    move's TEMP bit with ``timer`` turns left (``weather_turns``), or with ``timer`` 0 a
-    permanent PERM bit (deep fog: bit 15; ``weather_turns`` kept). The old ``weather`` /
-    ``weather_timer`` fields too, until FCM step 3 drops them. For a state set by hand: a test,
-    a what-if view."""
+    """``state`` holding the one ``Weather`` ``weather`` (an int): a weather move's TEMP bit with
+    ``timer`` turns left (``weather_turns``), or with ``timer`` 0 a permanent PERM bit (deep
+    fog: bit 15; ``weather_turns`` kept). For a state set by hand: a test, a what-if view."""
     timer = jnp.asarray(timer, _I32)
     temp = timer != 0
     bits = jnp.where(temp, _bit(WEATHER_TEMP_BIT, weather), _bit(WEATHER_PERM_BIT, weather))
     state = _put(state, (_mask(state) & ~_WEATHER) | bits, True)
-    return state._replace(
-        weather=jnp.asarray(weather).astype(state.weather.dtype),
-        weather_timer=timer.astype(state.weather_timer.dtype),
-        weather_turns=jnp.where(temp, timer, state.weather_turns).astype(state.weather_turns.dtype),
-    )
+    turns = jnp.where(temp, timer, state.weather_turns)
+    return state._replace(weather_turns=turns.astype(state.weather_turns.dtype))
 
 
 def without_weather(state: BattleState) -> BattleState:

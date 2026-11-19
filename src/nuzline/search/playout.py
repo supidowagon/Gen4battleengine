@@ -163,8 +163,6 @@ def _sort_view(before: BattleState, after: BattleState) -> BattleState:
         status=after.status.at[sides, mons].set(before.status[sides, mons]),
         item=after.item.at[sides, mons].set(before.item[sides, mons]),
         stages=after.stages.at[:, Stat.SPE].set(0),
-        weather=before.weather,
-        weather_timer=before.weather_timer,
     )
 
 

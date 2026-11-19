@@ -205,7 +205,6 @@ from nuzline.engine.ids import (
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
-    GRAVITY_TURNS,
     ITEM_ABILITY_IDS,
     MOVE_BATON_PASS,
     MOVE_SLEEP_TALK,
@@ -219,7 +218,6 @@ from nuzline.engine.ids import (
     SNORE_PARAM,
     STARF_DRAWS,
     STARF_STATS,
-    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -230,7 +228,6 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
 from nuzline.engine.levelup import pay_exp, pay_exp_leveled
@@ -3796,9 +3793,6 @@ def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> j
 # The side conditions FIELD_COND_CHECK_STATE_REFLECT .. _LUCKY_CHANT count down, in this
 # order (battle_controller_player.c:947-1083).
 FIELD_SIDE_TIMERS = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
-# The weathers with a countdown (FIELD_COND_CHECK_STATE_RAINING .. _HAILING, :1113-1211);
-# deep fog (:1213-1225) only prints a message.
-_TIMED_WEATHERS = (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL)
 
 
 def _count_down(x: jnp.ndarray) -> jnp.ndarray:
@@ -3938,20 +3932,11 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
        two last Pokemon down at once is a draw, a loss.
     4. Gravity (:1227-1238) drops by 1.
 
-    Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
-    and is not implemented."""
+    Trick Room counts down in the turn end's side-condition pass (:1823-1826,
+    ``_trick_room_check``), not here."""
     live = state.over == 0
     counted = state._replace(
         **{name: _count_down(getattr(state, name)) for name in FIELD_SIDE_TIMERS}
-    )
-    weather = state.weather
-    timed = jnp.isin(weather, jnp.array(_TIMED_WEATHERS, weather.dtype))
-    countdown = timed & (state.weather_timer != 0)
-    timer = jnp.where(countdown, state.weather_timer - 1, state.weather_timer)
-    ended = countdown & (timer == 0)
-    counted = counted._replace(
-        weather=jnp.where(ended, Weather.NONE, weather).astype(weather.dtype),
-        weather_timer=timer.astype(state.weather_timer.dtype),
     )
     state = _where(live, counted, state)
     for position in (0, 1):
@@ -3980,11 +3965,6 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     # to 0 (a borrowed counter of 7 runs 7 turns first, FCM 3.2).
     rearm = (tables.gravity_rearm != 0) & (fcm.gravity_count(state) == 1) & (state.over == 0)
     state = fcm.gravity_tick(state, state.over == 0, tables.gravity_rearm != 0)
-    # The old field, written until FCM step 3 drops it.
-    counted = _count_down(state.gravity)
-    again = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0)
-    gravity = jnp.where(again, GRAVITY_TURNS, counted)
-    state = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
     return gravity_ground(state, rearm)
 
 
@@ -4148,15 +4128,7 @@ def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
     Trick Room ends (started at 5 on turn T it is up through T + 4); Kaizo's (sub_seq 251, byte
     for byte the Trick Room move's script, ``Tables.trick_room_rearm``) finds the bits clear and
     sets ``FIELD_CONDITION_TRICK_ROOM_INIT`` again: it never ends. E3-2-4."""
-    # The old field, written until FCM step 3 drops it; ``field.trick_room_tick`` reads the bits.
-    counted = _count_down(state.trick_room)
-    running = live & (state.trick_room != 0)
-    rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)
-    value = jnp.where(rearm, TRICK_ROOM_TURNS, counted)
-    state = fcm.trick_room_tick(state, live, tables.trick_room_rearm != 0)
-    return state._replace(
-        trick_room=jnp.where(running, value, state.trick_room).astype(state.trick_room.dtype)
-    )
+    return fcm.trick_room_tick(state, live, tables.trick_room_rearm != 0)
 
 
 def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> BattleState:

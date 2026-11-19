@@ -22,7 +22,7 @@ import pytest
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -51,7 +51,6 @@ from tools.trace_to_state import (
     convert,
     convert_bundle,
     decode_status,
-    decode_weather,
     initial_state,
     main,
     resolve_roll,
@@ -1411,22 +1410,6 @@ def test_resolve_roll_refuses_when_a_crit_and_a_non_crit_both_fit():
 )
 def test_decode_status(raw, expected):
     assert decode_status(raw) == expected
-
-
-@pytest.mark.parametrize(
-    ("mask", "expected"),
-    [
-        (0, Weather.NONE),
-        (1, Weather.RAIN),
-        (1 << 3, Weather.SANDSTORM),
-        (1 << 4, Weather.SUN),
-        (1 << 7, Weather.HAIL),
-        (1 << 15, Weather.FOG),
-        (1 << 12, Weather.NONE),
-    ],
-)
-def test_decode_weather(mask, expected):
-    assert decode_weather(mask) == expected
 
 
 def test_initial_state_uses_the_trainers_party_and_bag(tables, names):

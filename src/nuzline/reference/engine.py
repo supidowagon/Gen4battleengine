@@ -54,7 +54,6 @@ from nuzline.engine.ids import (
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
     GRAVITY_MOVES,
-    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     HP_RESTORED_ALL,
     HP_RESTORED_HALF,
@@ -127,7 +126,6 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
-    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
@@ -150,7 +148,6 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
-    Weather,
 )
 from nuzline.reference.state import BATTLER_FIELDS, RefBattler, RefPokemon, RefState, format_of_ref
 
@@ -2939,7 +2936,6 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int = -1) -
             if not s.field_mask & WEATHER_PERM_BIT[weather] and battler == 0:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
             _weather_ability_bits(s, weather)
-            s.weather, s.weather_timer = weather, 0
             s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
     # B10-4), the holder as the attacker (:8): the foe side's Mist blocks it
@@ -3092,7 +3088,6 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
             if not s.field_mask & WEATHER_PERM_BIT[weather] and b == 0:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
             _weather_ability_bits(s, weather)
-            s.weather, s.weather_timer = weather, 0
             sd.weather_announced = 1
     for b in battlers:
         if not s.battlers[b].intimidate_announced:
@@ -3352,8 +3347,8 @@ def _uproar_on(s: RefState) -> bool:
     return bool(s.field_mask & FieldCondition.UPROAR)
 
 
-# fieldConditionsMask (``field_mask``) and weatherTurns (``weather_turns``), written beside the old
-# fields (FCM step 1; ``engine.field``); the readers read the old fields.
+# fieldConditionsMask (``field_mask``) and weatherTurns (``weather_turns``) as ``engine.field``
+# writes and reads them (FCM section 4).
 
 
 def _uproar_bit_off(s: RefState, b: int) -> None:
@@ -3758,13 +3753,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         s.battlers[side].aqua_ring = 1
     elif effect == EffectId.GRAVITY and landed and not _gravity_on(s):
         # effect_script_0215.s (the failure is ``_script_fails``), subscript_gravity_start.s:9.
-        s.gravity = GRAVITY_TURNS
         s.field_mask |= FieldCondition.GRAVITY_INIT
         _gravity_ground(s)
     elif effect == EffectId.TRICK_ROOM and landed:
         # effect_script_0259.s:5-12: any Trick Room bit up -> cleared, else FIELD_CONDITION_
         # TRICK_ROOM_INIT (5); it never fails (E3-2-4).
-        s.trick_room = 0 if s.trick_room else TRICK_ROOM_TURNS
         if s.field_mask & FieldCondition.TRICK_ROOM:
             s.field_mask &= ~FieldCondition.TRICK_ROOM
         else:
@@ -3903,7 +3896,6 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
                 and _t(tables, "item_param", user.item, 1) == p0
             ):
                 extra = _t(tables, "item_param", user.item, 0)
-            s.weather, s.weather_timer = p0, WEATHER_TURNS + extra
             # :8-10: WEATHER off, the TEMP bit on, weatherTurns.
             s.field_mask = (s.field_mask & ~FieldCondition.WEATHER) | int(WEATHER_TEMP_BIT[p0])
             s.weather_turns = WEATHER_TURNS + extra
@@ -6388,14 +6380,7 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
             mon = _active(s, side)
             if sd.wish_timer == 0 and mon.hp and mon.hp != mon.max_hp:
                 _gain_hp(s, side, _divide(mon.max_hp, 2))
-    # The old fields (until FCM step 3): a temporary weather ends when its count reaches 0.
-    if (
-        s.weather in (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL)
-        and s.weather_timer
-    ):
-        s.weather_timer -= 1
-        if s.weather_timer == 0:
-            s.weather = Weather.NONE
+
     # RAINING, SANDSTORM, SUNNY, HAILING, DEEP_FOG (:1113-1225), one state per set group of the
     # mask: a PERM group and fog go on; a TEMP-only one counts weatherTurns down (:1121, :1146,
     # :1171, :1196) and at 0 its end script clears its TEMP bit (subscript_*_end.s :5: no effect
@@ -6425,10 +6410,6 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
         if not s.field_mask & FieldCondition.GRAVITY and _t(turn.tables, "gravity_rearm"):
             s.field_mask |= FieldCondition.GRAVITY_INIT
             _gravity_ground(s)
-    if s.gravity:  # the old field, written until FCM step 3 drops it
-        s.gravity -= 1
-        if not s.gravity and _t(turn.tables, "gravity_rearm"):
-            s.gravity = GRAVITY_TURNS
 
 
 def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -6552,10 +6533,6 @@ def _trick_room_check(turn: _Turn, s: RefState) -> None:
         s.field_mask -= 1 << FIELD_CONDITION_TRICK_ROOM_SHIFT  # :1824
         if not s.field_mask & FieldCondition.TRICK_ROOM and _t(turn.tables, "trick_room_rearm"):
             s.field_mask |= FieldCondition.TRICK_ROOM_INIT  # sub_seq 251 = effect_script_0259.s:6
-    if s.trick_room:  # the old field, written until FCM step 3 drops it
-        s.trick_room -= 1
-        if not s.trick_room and _t(turn.tables, "trick_room_rearm"):
-            s.trick_room = TRICK_ROOM_TURNS
 
 
 def _perish_song_check(turn: _Turn, s: RefState, order: list[int]) -> None:

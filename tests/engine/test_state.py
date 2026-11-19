@@ -12,7 +12,7 @@ from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import LAYOUT, BattleState, make_state
 from nuzline.reference.convert import from_ref, to_ref
-from tests.engine.helpers import A, jit_step, roark_state
+from tests.engine.helpers import A, jit_step, roark_state, weather_of, weather_timer_of
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -37,7 +37,7 @@ def test_shapes_dtypes_and_no_64bit(state):
     assert s.stats.shape == (2, 6, 5) and s.moves.shape == (2, 6, 4)
     assert s.ivs.shape == (2, 6, 6) and s.ivs.dtype == jnp.int8
     assert s.stages.shape == (2, 8) and s.trainer_items.shape == (2, 4)
-    assert s.ai_seen_moves.shape == (6, 4) and s.weather.shape == ()
+    assert s.ai_seen_moves.shape == (6, 4) and s.field_mask.shape == ()
     assert all(x.dtype.itemsize <= 4 for x in s)
 
 
@@ -52,7 +52,7 @@ def test_fainted_member_and_start_weather(tables, names):
     p = load_party(FIXTURES / "sample_party_fainted.toml", names)
     s = make_state(tables, p, p[:2], start_condition=Weather.HAIL)
     assert int(s.hp[0, 5]) == 0 and int(s.max_hp[0, 5]) > 0
-    assert int(s.weather) == Weather.HAIL and int(s.weather_timer) == 0
+    assert int(weather_of(s)) == Weather.HAIL and int(weather_timer_of(s)) == 0
 
 
 def test_state_is_a_valid_pytree_for_vmap(state):

@@ -1,7 +1,6 @@
-"""FCM step 1 (FCM.md 4.4): ``field_mask`` (fieldConditionsMask) and ``weather_turns``
-(FieldConditions.weatherTurns) written beside the old field fields by every writer. On each cited
-writer path the mask is clean (4.4: it equals the old fields) and the engine equals the
-reference. Step 2 (4.6): the weather readers read the mask, so a corrupted mask (3.1: 0x7F, 0x5,
+"""FCM (FCM.md section 4): ``field_mask`` (fieldConditionsMask) and ``weather_turns``
+(FieldConditions.weatherTurns), the only field-condition state since step 3. On each cited
+writer path the mask holds the decomp's bits and the engine equals the reference. Step 2 (4.6): the weather readers read the mask, so a corrupted mask (3.1: 0x7F, 0x5,
 0x1 with a stale count) reads as the game reads it (3.2), engine equal to reference; the Gravity
 readers read bits 12-14 (0x7FFF: Gravity 7, Kaizo re-arm -> permanent; 0x5000 - 3); the Uproar
 readers read bits 8-11 (0xFFF: a bit of every battler, none uproaring); the Trick Room readers
@@ -23,7 +22,6 @@ from nuzline.engine.ids import (
     FieldCondition,
     Status,
     Weather,
-    clean_field_mask,
 )
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
@@ -55,13 +53,10 @@ def _fight(t, n, mine, opp=("Growl",), foe="Geodude", bench=(), foes=(), **start
 
 
 def _masked(s, mask, turns):
-    """``s`` with a corrupted fieldConditionsMask ``mask`` and weatherTurns ``turns`` (FCM 3.1);
-    the old weather fields cleared (no weather reader reads them since step 2)."""
+    """``s`` with a corrupted fieldConditionsMask ``mask`` and weatherTurns ``turns`` (FCM 3.1)."""
     return s._replace(
         field_mask=jnp.asarray(mask, s.field_mask.dtype),
         weather_turns=jnp.asarray(turns, s.weather_turns.dtype),
-        weather=jnp.zeros_like(s.weather),
-        weather_timer=jnp.zeros_like(s.weather_timer),
     )
 
 
@@ -69,20 +64,9 @@ def _hits():
     return empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8))
 
 
-def clean_mask(s) -> int:
-    """fieldConditionsMask of the old fields (FCM 4.4, ``ids.clean_field_mask``)."""
-    return clean_field_mask(
-        int(s.weather), int(s.weather_timer), int(s.gravity), int(s.trick_room), s.uproar.tolist()
-    )
-
-
 def _step(t, s, acts, outcome=None):
-    """One turn, engine equal to reference (every field), then the clean-mask invariant."""
-    out = assert_matches_reference(t, s, acts, _hits() if outcome is None else outcome)
-    assert int(out.field_mask) == clean_mask(out)
-    if int(out.weather_timer):
-        assert int(out.weather_turns) == int(out.weather_timer)
-    return out
+    """One turn, engine equal to reference (every field)."""
+    return assert_matches_reference(t, s, acts, _hits() if outcome is None else outcome)
 
 
 def test_the_start_conditions_set_their_bits(tables, names):
@@ -98,7 +82,6 @@ def test_the_start_conditions_set_their_bits(tables, names):
     for start, mask in cases:
         s = _fight(tables, names, ("Growl",), **start)
         assert (int(s.field_mask), int(s.weather_turns)) == (mask, 0)
-        assert int(s.field_mask) == clean_mask(s)
 
 
 def test_a_weather_move_sets_its_temp_bit_and_the_countdown_ends_it(tables, names):
@@ -112,7 +95,7 @@ def test_a_weather_move_sets_its_temp_bit_and_the_countdown_ends_it(tables, name
     for left in range(WEATHER_TURNS - 2, -1, -1):
         s = _step(tables, s, A("Growl", "Growl", s, names))
         assert int(s.weather_turns) == left
-    assert (int(s.field_mask), int(s.weather)) == (0, Weather.NONE)
+    assert int(s.field_mask) == 0
 
 
 def test_a_weather_ability_sets_its_perm_bit_and_a_move_replaces_it(tables, names):
