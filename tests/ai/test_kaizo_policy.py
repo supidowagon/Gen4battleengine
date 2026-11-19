@@ -36,7 +36,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_gravity, with_weather
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -4556,7 +4556,7 @@ def test_gravity_basic(kaizo_tables, kaizo_names, kaizo_roark_party, up):
     """Basic_CheckGravityActive (script.s:1026-1029): Gravity already up, -10."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Gravity", "Accelerock", "", ""))
-    s = s._replace(gravity=jnp.asarray(3 if up else 0, s.gravity.dtype))
+    s = with_gravity(s, 3 if up else 0)
     assert _delta(t, s, 0x2, 0x3)[0] == (-10 if up else 0)
 
 

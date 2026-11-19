@@ -271,10 +271,14 @@ def uproar_end(state: BattleState, b, cond) -> BattleState:
 
 
 def with_gravity(state: BattleState, count, cond=True) -> BattleState:
-    """The Gravity counter bits set to ``count`` (a view that puts Gravity up: ``order.
-    gravity_state``, ``outcome``'s foe-Gravity variant)."""
-    bits = jnp.left_shift(jnp.asarray(count, _I32), FIELD_CONDITION_GRAVITY_SHIFT)
-    return _put(state, (_mask(state) & ~_GRAVITY) | bits, cond)
+    """The Gravity counter bits set to ``count`` where ``cond``, clean (FCM 4.4), and the old
+    ``gravity`` field with them until FCM step 3 drops it (a view that puts Gravity up: ``order.
+    gravity_state``, ``outcome``'s foe-Gravity variant; a state set by hand: a test)."""
+    count = jnp.asarray(count, _I32)
+    bits = jnp.left_shift(count, FIELD_CONDITION_GRAVITY_SHIFT)
+    state = _put(state, (_mask(state) & ~_GRAVITY) | bits, cond)
+    value = jnp.where(jnp.asarray(cond), count, state.gravity)
+    return state._replace(gravity=value.astype(state.gravity.dtype))
 
 
 def with_weather_of(state: BattleState, source: BattleState) -> BattleState:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_gravity, with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
@@ -303,7 +303,7 @@ def test_trapping_abilities(tables, names):
     assert not bool(trapped(tables, _set_ability(arena, 0, AbilityId.LEVITATE), 0))
     bird = pair("Pidgey", AbilityId.ARENA_TRAP)
     assert not bool(trapped(tables, bird, 0))
-    assert bool(trapped(tables, bird._replace(gravity=jnp.int8(5)), 0))
+    assert bool(trapped(tables, with_gravity(bird, 5), 0))
     # E1 Batch D (G-56): BattlerIsGrounded's Iron Ball (:5505).
     ball = bird._replace(item=bird.item.at[0, 0].set(n.item("Iron Ball")))
     assert bool(trapped(tables, ball, 0))

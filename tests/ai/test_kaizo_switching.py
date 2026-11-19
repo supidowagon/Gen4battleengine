@@ -55,6 +55,7 @@ from nuzline.ai.switching import (
 )
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import move_type_of
+from nuzline.engine.field import with_gravity
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
 from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
 from tests.engine.helpers import as_species
@@ -410,7 +411,7 @@ def _switch_states(draw, t, n, party):
     if draw(st.integers(0, 3)) == 0:
         j = draw(st.sampled_from(bench))
         s = as_species(t, s, 1, j, shedinja)
-    return s._replace(
+    s = s._replace(
         hp=hp,
         move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
         gravity=jnp.asarray(draw(st.sampled_from((0, 0, 0, 5))), s.gravity.dtype),
@@ -420,6 +421,7 @@ def _switch_states(draw, t, n, party):
         ingrain=s.ingrain.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         stages=s.stages.at[1, 1].set(draw(st.sampled_from((0, 0, 0, 2, 4)))),
     )
+    return with_gravity(s, s.gravity)  # its field_mask bits too (FCM 4.4)
 
 
 def _assert_switch_equals_loose(t, s: BattleState) -> None:

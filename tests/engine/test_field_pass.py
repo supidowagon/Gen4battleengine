@@ -7,7 +7,7 @@ Gravity."""
 import jax.numpy as jnp
 import pytest
 
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_gravity, with_weather
 from nuzline.engine.ids import Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER
@@ -53,7 +53,7 @@ def test_screens_count_down_and_end(tables, names):
     s = roark_state(tables, names)
     for name in _SIDE_TIMERS:
         s = s._replace(**{name: jnp.array([1, 5], jnp.int8)})
-    s = s._replace(gravity=jnp.asarray(2, s.gravity.dtype))
+    s = with_gravity(s, 2)
     out = _leer(tables, names, s)
     for name in _SIDE_TIMERS:
         assert getattr(out, name).tolist() == [0, 4], name
@@ -176,7 +176,7 @@ def test_sand_double_faint_is_a_loss(tables, names, tie):
     s = roark_state(tables, names, player_count=1, opp_count=1)
     s = _normal_foe(_weather(s, Weather.SANDSTORM))
     s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
-    s = s._replace(gravity=jnp.asarray(3, s.gravity.dtype))
+    s = with_gravity(s, 3)
     o = empty_outcome()._replace(end_speed_tie=jnp.asarray(tie, jnp.int8))
     s = s._replace(stats=s.stats.at[1, 0, 4].set(s.stats[0, 0, 4]))  # equal speed
     out = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), o)
@@ -194,7 +194,7 @@ def _fixed_states(tables, names):
             s = _normal_foe(_weather(base, weather, timer))
             for name in _SIDE_TIMERS:
                 s = s._replace(**{name: jnp.array([timer, 1], jnp.int8)})
-            yield s._replace(gravity=jnp.asarray(timer, jnp.int8)), leer
+            yield with_gravity(s, timer), leer
             yield _max_hp(s, 0, 17, hp=1), leer  # the chip faints the player lead
             yield _types(s, 0, Type.ICE, Type.STEEL), leer
     for species, ability in (
