@@ -429,6 +429,25 @@ def test_final_line_names_groups_and_seed_count(run, capsys):
     assert "seeds 0-24 (25)" in last
 
 
+def test_final_line_without_a_seed_part_names_no_seeds(run, capsys):
+    roark = ["--parts", "roark.trace,roark.rank"]
+    assert run(["capture", str(run.snap), "0-199", "--commit", BASE, *roark]) == 0
+    last = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "groups: roark.trace, roark.rank;" in last and "seeds: none" in last
+    assert "0-199" not in last and "(200)" not in last
+
+
+@pytest.mark.parametrize(
+    "warn, fail", [("nan", "0.9"), ("0.5", "nan"), ("0.5", "1"), ("0.5", "1.5"), ("0.9", "0.5"),
+                   ("-0.1", "0.5")]
+)  # fmt: skip
+def test_bad_raise_shares_are_usage_errors(run, warn, fail):
+    argv = ["capture", str(run.snap), "0-1", "--commit", BASE]
+    assert run([*argv, "--raise-warn", warn, "--raise-fail", fail]) == 2
+    assert not run.snap.exists()
+    assert run([*argv, "--raise-warn", "0", "--raise-fail", "0"]) == 0
+
+
 # --- N2, R5, N3: a part that ran nothing, a high raise share ----------------------------------
 
 

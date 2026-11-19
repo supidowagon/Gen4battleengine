@@ -504,27 +504,6 @@ Each is open; close it with its ruling.
 13. tests/engine/test_accuracy_classes.py (45.8 GB in one process): moved to E1's speed pass by
     the managing session, 18 Nov. Cause: the unjitted `sample_outcome` in
     `test_accuracy_classes_equal_raw_rolls` (slow-marked).
-14. snap_compare follow-up (tools/snap_compare.py and its test only; own branch off main after
-    the D1 merge; low priority; source _scratch/e2/snap_followup.md):
-    - M1 Record in capture.json a content hash of everything the child runs (src/nuzline/**/*.py,
-      tools/*.py, tests/strategies.py, tests/engine/helpers.py, the golden trace, table files);
-      compare fails on equal hashes unless --same-ok and prints both; no git: `dirty: null`,
-      print "not checkable" (today nothing ties code to --commit: git_info :795, identify :823, _keep :860, parent :931 as of this commit).
-    - N1 The final line names the compared groups and the seed count.
-    - N2 Fail on steps == 0 or calls == 0. R5 Flag a part with zero calls.
-    - N3 Warn or fail above a raise-rate threshold.
-    - N4 Shape/dtype check for Outcome and the action inputs.
-    - N5 NaN payload in Python / np.float64 scalars.
-    - N6 Raise-vs-structure is an explicit divergence, not one-sided keys --allow-new passes.
-    - N7 The dirty check also covers tests/strategies*, tests/engine/helpers.py.
-    - N8 Tests: a crashing child, a SKIPPED part, a NaN payload, a one-sided input field, the
-      escape-flag defaults.
-    - N9 Fix the stale line number in the ledger near :231 (as at 80ee4a9).
-    - R1 snap_compare and draw_inputs docstrings: "drawn last so the segments draw as before"
-      holds only for each seed's first example (Hypothesis shares one random); fix the wording.
-    - R2 "Roark's real party and bag": roark_states draws 0-BAG_SLOTS Potions; fix the wording.
-    - R3 Put the pinned G-69 learn cases (cursor 13 and 1) in a separate fast test.
-    - R4 Test the raise when opp2_items is None (choosing the start path is D11's).
 
 ### Closes with its mechanic
 
@@ -2479,3 +2458,19 @@ docs/doubles-state-design.md.
 - D2-30 (D2 review, finding 3) Owed to D6 / D11: at B = 4 Trace outside a step, at battle start (`state.py` `make_state` -> `hooks.battle_start`) and on faint replacement (`playout` -> `replace` / `show_battle_mon`), never receives a `trace_pick`, so a Trace lead facing two eligible foes always copies the same one (ChooseTraceTarget, battle_lib.c:7750-7781, picks one by the random draw). The entry points that create those draws (D6, D11) pass it.
 - D2-31 (D2 review, finding 5) Owed to D3 step tests: the redirect message's failure gate at B = 4 (`step._use_move` reveal `~failed` vs the reference reveal in `_fight`; the C's TryMove skips the Lightning Rod / Storm Drain message under MOVE_STATUS_NO_EFFECTS, battle_lib.c:1796, :1806) is unreachable until D3's four-actor step; D3 tests it there (with D2-17 and D2-21).
 - D2-32 (D2 gate review fix, finding 2) Follow Me's `ts_follow_me` write (D2-11, script.c:6261-6270) is made at B = 4 only, in both engines (`step._use_move`, reference `_fight`), as D2-28: at B = 2 nothing reads it (`targets.resolve` and redirection are B = 4 only; `counter_defender` gives the foe either way) and, kept over a U-turn / Baton Pass pause, it split equal singles states. The D2-11 singles step tests assert it stays clear; the B = 4 step write is tested with D3's four-actor step (with D2-31). Singles follow-up (i) turns the B = 2 write on. Finding 1: `test_download_sums_both_foes` pins the stat raised in two cases whose sum disagrees with one foe alone (battle_lib.c:3815-3851).
+- Owed 14 closed (snap_compare follow-up; 9b3ec99, review fixes 6502a00, gate notes on
+  e2-snap-notes): M1 capture.json records `content_hash` (`snap_compare.content_hash`: the
+  running script, src/nuzline, tools, the test modules the child imports, the golden trace and
+  every built file a part reads, each by content: a .npz by its arrays, a .json by its parsed
+  value) and its `format`; compare fails on equal hashes unless --same-ok and prints both; no
+  git: `dirty: null`, printed "not checkable"; a capture.json without `content_hash` / `dirty`
+  or of another format is refused with "re-capture". N1 the final line names the groups (Roark
+  parts in full) and the seed count, "seeds: none" without a seed part. N2/R5 a part with zero
+  steps or (but "gen") zero calls fails. N3 --raise-warn 0.5 / --raise-fail 0.95, a usage error
+  unless 0 <= warn <= fail < 1 (local runs peak at 0.33, 0-0.rest). N4 saved Outcome and
+  action shape/dtype checks (`check_layout`, `check_actions`). N5 Python / np.float64 scalars
+  compare by IEEE bytes, as arrays. N6 a raise against a value or structure is a divergence.
+  N7 the dirty check covers the test modules the child imports. N8 tests in
+  tests/tools/test_snap_compare.py. N9 ledger line numbers updated. R1/R2 docstring wording.
+  R3 tests/test_pinned_cases.py (shares `_learns_match_reference` with the slow differential
+  test). R4 `test_four_battler_fight_needs_battler_3s_bag`.

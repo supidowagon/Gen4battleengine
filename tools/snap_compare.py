@@ -35,10 +35,11 @@ Usage:
              tests/strategies*, tests/engine/helpers.py or tests/ai/) on either side.
     --raise-warn, --raise-fail  a part whose outputs raised in more than this share of its
              calls (functions named by --allow-all-raise left out) prints a warning (default
-             0.5) or fails (default 0.95).
+             0.5) or fails (default 0.95); 0 <= warn <= fail < 1.
     -v       print each part's timings per output.
 
-A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list) exits 2.
+A usage error (unknown --parts name, B < A, --chunk < 1, an empty part list, raise shares
+outside 0 <= --raise-warn <= --raise-fail < 1) exits 2.
 
 Needs a checkout and its built tables only (tools/ops/build_tables.sh: ``data/gen4_platinum``,
 ``data/gen4_platinum_kaizo``, ``data/intermediate``, ``data/intermediate_kaizo``); never the
@@ -113,8 +114,9 @@ Pass: compare prints "compare: ok" and exits 0 only when every precondition abov
 listed part ran (no skip, no error), no entry diverged, every one-sided input field or output
 entry is named by --allow-new, and no function raised on every one of its calls in a part
 (unless named by --allow-all-raise), no part ran zero steps or (but "gen") zero calls, and no
-part's raise share is over --raise-fail. The final line names the groups compared and the seed
-range with its count. Anything else exits 1 (2 for a usage error). capture exits
+part's raise share is over --raise-fail. The final line names the groups compared (a seed
+group by its name, a Roark part by its full name) and the seed range with its count, or
+"seeds: none" when no seed part ran. Anything else exits 1 (2 for a usage error). capture exits
 0 ("capture: ok") only when every part ran with no skip, no error and no all-raise function.
 
 Pod (``git archive`` checkouts, no .git; one snapshot folder SNAP):
@@ -1002,9 +1004,17 @@ def run_part(mode: str, directory: Path, part: str) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def check_shares(warn: float, fail: float) -> None:
+    """A UsageError unless 0 <= warn <= fail < 1 (NaN, or a share of 1 or more, would turn the
+    raise-share check off)."""
+    if not 0 <= warn <= fail < 1:
+        raise UsageError(f"--raise-warn {warn} / --raise-fail {fail}: need 0 <= warn <= fail < 1")
+
+
 def parent(args) -> int:
     try:
         lo, hi, parts = plan_parts(args.seeds, args.chunk, args.parts, args.no_roark)
+        check_shares(args.raise_warn, args.raise_fail)
     except UsageError as e:
         print(f"{args.mode}: usage error: {e}", flush=True)
         return 2
@@ -1068,10 +1078,12 @@ def parent(args) -> int:
             record["parts"][part] = "failed" if failed else "ok"
             write_capture(directory, record)
     verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
-    groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] for p in parts))
+    seeded = [p for p in parts if not p.startswith("roark.")]
+    groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
+    seeds = f"seeds {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
     print(
         f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); "
-        f"groups: {groups}; seeds {lo}-{hi} ({hi - lo + 1}); "
+        f"groups: {groups}; {seeds}; "
         f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
         f"skipped (each a failure): {', '.join(skipped) or 'none'}"
     )
