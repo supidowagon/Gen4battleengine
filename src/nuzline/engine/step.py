@@ -96,8 +96,10 @@ from nuzline.engine.damage import (
     chart_types,
     confusion_damage,
     damage_for_roll,
+    decomp_abilities,
     divide,
     effectiveness,
+    flung_view,
     ground_immune,
     gyro_ball_speeds_power,
     hits_semi,
@@ -180,6 +182,7 @@ from nuzline.engine.hooks import (
     TORMENT,
     WEATHER_HP,
     after_damage_items,
+    fling_try,
     held_item_check,
     move_end_switch_in,
     recover_status_by_ability,
@@ -188,6 +191,7 @@ from nuzline.engine.hooks import (
     switch_in_effects,
 )
 from nuzline.engine.ids import (
+    ABILITY_MULTITYPE,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     COUNTER_PHYSICAL,
@@ -195,6 +199,7 @@ from nuzline.engine.ids import (
     FUTURE_SIGHT_TURNS,
     GRAVITY_TURNS,
     ITEM_ABILITY_IDS,
+    ITEM_GRISEOUS_ORB,
     MOVE_BATON_PASS,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
@@ -1302,6 +1307,30 @@ def _use_move(
     gift_on = script_on & gift & ~gift_fails
     gift_removed = jnp.where(gift_on, held_item(state, side, user).astype(jnp.int32), 0)
     state = consume_item(state, side, gift_on)
+    # Fling (effect_script_0233.s): fails (MOVE_STATUS_FAILED, :21-23) for a raw Multitype ability or
+    # a raw Griseous Orb of its user (:5-6; BATTLEMON_ABILITY / _HELD_ITEM) and, through TryFling
+    # (BattleSystem_FlingItem, battle_lib.c:5857-5865), for a fling power of 0
+    # (Battler_ItemFlingPower: no item, a power-0 item, Embargo on the user; Klutz is not read).
+    # Otherwise TryFling's writes on the defender (``fling_try``: PP restore, White Herb) come
+    # first, then CalcCrit and CalcDamage with the item still held (``fling_removed`` through
+    # ``damage.flung_view``; the power is the fling power, ``in_power``), then RemoveItem
+    # BTLSCR_ATTACKER (:18) before TryMove: a miss or Protect still loses the item. E3-B2-1.
+    fling = effect_used == EffectId.FLING
+    fling_item = state.item[party(fmt, side), user].astype(_I32)
+    fling_power = jnp.where(
+        state.embargo[side] != 0, 0, tables.item_fling_power[fling_item].astype(_I32)
+    )
+    fling_ability = decomp_abilities(tables, state)[party(fmt, side), user]
+    fling_fails = (
+        (fling_ability == ABILITY_MULTITYPE)
+        | (fling_item == ITEM_GRISEOUS_ORB)
+        | (fling_power == 0)
+    )
+    failed = failed | (fling & fling_fails)
+    fling_on = script_on & fling & ~fling_fails
+    state = fling_try(tables, state, target_side, state.active[target_side], fling_item, fling_on)
+    fling_removed = jnp.where(fling_on, fling_item, 0)
+    state = consume_item(state, side, fling_on)
     # Embargo (effect_script_0232.s:5, :7-8): CheckSubstitute on the defender, MOVE_STATUS_FAILED
     # before TryMove (its subscript's own failures come at the hit: effects._embargo), B13-31.
     failed = failed | ((effect_used == EffectId.EMBARGO) & (state.substitute_hp[target_side] != 0))
@@ -1885,7 +1914,8 @@ def _use_move(
         jnp.where(
             used_effect == EffectId.TRUMP_CARD,
             trump_card_power(state.pp[party(fmt, side), user, slot]),
-            0,
+            # Fling's movePower is the flung item's power (BattleSystem_FlingItem, lib.c:5859).
+            jnp.where(used_effect == EffectId.FLING, fling_power, 0),
         ),
     )
 
@@ -1967,6 +1997,7 @@ def _use_move(
             # The script ran (its CalcDamage before TryMove's checks, bcp.c:3214-3216): Me First's
             # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
             script_calc=script_calc,
+            fling=fling_removed,
         )
         first = hit_index == 0
         # U-turn's secondary effect (ONE_HIT_TRIGGER_SECONDARY, bcp.c:3484-3494: an ON_HIT effect
@@ -2021,7 +2052,13 @@ def _use_move(
         # A move whose script runs no CalcCrit (ids.UNROLLED_EFFECTS): no crit message.
         unrolled = jnp.isin(tables.move_effect[used], jnp.asarray(UNROLLED_EFFECTS, _I32))
         # The crit draw read with the odds at this hit (outcome.crit_lands, battle_lib.c:7105-7132).
-        crit = crit_lands(tables, state, side, used, outcome.crit[side, hit_index])
+        crit = crit_lands(
+            tables,
+            flung_view(state, side, fling_removed),
+            side,
+            used,
+            outcome.crit[side, hit_index],
+        )
         crit = crit & ~armored(state, side, target_side) & ~unrolled
         seen = _hit_events(state, hit_state, side, landed, crit)
         # BattleControllerPlayer_AfterMoveEffects (battle_controller_player.c:3638) runs

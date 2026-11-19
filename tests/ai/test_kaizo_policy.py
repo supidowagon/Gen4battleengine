@@ -5131,3 +5131,129 @@ def test_gastro_acid_expert(kaizo_tables, kaizo_names, kaizo_roark_party, percen
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5484),))[0] == skipped
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481),))[0] == 0
     assert _delta(t, s, 0x3, 0x7, jumps=((0, 5481), (0, 5484)))[0] == 0
+
+
+# --- #233 Fling (E3-B2-1) ---------------------------------------------------------------------
+
+
+def _fling_state(t, n, party, item="", foe="Gible"):
+    """Roark's Bonsly with Fling holding ``item`` against ``foe`` (as the player's party)."""
+    s = _state(t, party, BONSLY, _ids(n, "Fling", "Accelerock", "", ""))
+    if foe != "Gible":
+        spec = replace(party[GIBLE], species=n.species(foe))
+        opp = [replace(party[BONSLY], moves=_ids(n, "Fling", "Accelerock", "", ""), pp=None)]
+        s = _bulky(make_state(t, [spec] * 2, opp + [party[CRANIDOS]]), 400)
+    return s._replace(item=s.item.at[1, 0].set(n.item(item) if item else 0))
+
+
+def test_fling_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Fling is BATTLE_EFFECT_FLING, 233 (generated/move_battle_effects.txt line 234), in
+    Basic_ScoreMoveEffect (script.s:263) and Expert_Main (:1776); the hold-effect tables are the
+    decomp's hold-effect ids by name (generated/item_hold_effects.txt, line N is id N-1); the two
+    ability ids are the decomp's (E3-B2-1)."""
+    assert BattleEffect.FLING == 233
+    names = kaizo_names.ability_names
+    for name in ("Klutz", "Guts"):
+        assert names[c.ABILITY_IDS[name]].upper() == name.upper()
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    effects = DECOMP / "generated/item_hold_effects.txt"
+    if not script.exists() or not effects.exists():
+        pytest.skip("decomp not present")
+    hold = [x.strip() for x in effects.read_text(encoding="utf-8").splitlines()]
+
+    def ids(*suffixes):
+        return tuple(hold.index("HOLD_EFFECT_" + s) for s in suffixes)
+
+    assert c.FLING_ITEMS_POISON == ids("PSN_USER", "STRENGTHEN_POISON")
+    assert c.FLING_ITEMS_BURN == ids("BRN_USER")
+    assert c.FLING_ITEMS_PARALYZE == ids("PIKA_SPATK_UP")
+    assert c.FLING_DESIRABLE_EFFECTS == ids(
+        "SOMETIMES_FLINCH", "STRENGTHEN_POISON", "PSN_USER", "BRN_USER", "PIKA_SPATK_UP"
+    )
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert "BATTLE_EFFECT_FLING" in lines[262] and "Basic_CheckFling" in lines[262]
+    assert "BATTLE_EFFECT_FLING" in lines[1775] and "Expert_Fling" in lines[1775]
+    assert lines[5256].strip() == "IfRandomLessThan 128, Expert_Fling_End"
+    assert lines[5267].strip() == "IfRandomLessThan 128, Expert_Fling_TryScorePlus1"
+    assert lines[5275].strip() == "IfRandomLessThan 64, Expert_Fling_End"
+
+
+def test_fling_basic_power_and_ability(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckFling (script.s:1199-1216): no item (power 0, below 10) -10; a held item that no
+    status block names scores nothing (``PopOrEnd``)."""
+    t, n = kaizo_tables, kaizo_names
+    assert _delta(t, _fling_state(t, n, kaizo_roark_party), 0x2, 0x3)[0] == -10
+    iron = _fling_state(t, n, kaizo_roark_party, "Iron Ball")
+    assert _delta(t, iron, 0x2, 0x3)[0] == 0
+    # Embargo (the AI's own) makes the power 0 (Battler_ItemFlingPower, battle_lib.c:5491-5498).
+    emb = iron._replace(embargo=iron.embargo.at[1].set(3))
+    assert _delta(t, emb, 0x2, 0x3)[0] == -10
+
+
+def test_fling_basic_status_items(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_FlingPoison / _FlingBurn / _FlingParalyze (script.s:1218-1286): a status item scores
+    nothing when it can land on the player; when it cannot (a type or ability immunity), the
+    AttackerChecks give +3 for an AI the item cannot hurt and -5 for one it would."""
+    t, n, party = kaizo_tables, kaizo_names, kaizo_roark_party
+    toxic = _fling_state(t, n, party, "Toxic Orb")
+    assert _delta(t, toxic, 0x2, 0x3)[0] == 0  # Gible takes poison
+    steel = _fling_state(t, n, party, "Toxic Orb", foe="Bronzor")  # a poison-immune Steel type
+    assert _delta(t, steel, 0x2, 0x3)[0] == 3
+    sick = steel._replace(status=steel.status.at[1, 0].set(Status.BURN))
+    assert _delta(t, sick, 0x2, 0x3)[0] == -5
+    flame = _fling_state(t, n, party, "Flame Orb")
+    assert _delta(t, flame, 0x2, 0x3)[0] == 0
+    fire = _fling_state(t, n, party, "Flame Orb", foe="Charmander")
+    assert _delta(t, fire, 0x2, 0x3)[0] == 3
+    ball = _fling_state(t, n, party, "Light Ball")
+    assert _delta(t, ball, 0x2, 0x3)[0] == 0
+    para = ball._replace(status=ball.status.at[0, 0].set(Status.PARALYSIS))
+    assert _delta(t, para, 0x2, 0x3)[0] == -5
+
+
+@pytest.mark.parametrize(
+    ("item", "foe", "jumps", "expected"),
+    [
+        # Expert_Fling (script.s:5231-5286). Power 30-60 (Toxic Orb 30): the 128 roll (:5257)
+        # jumping ends, else -1.
+        ("Toxic Orb", "Gible", (), -1),
+        ("Toxic Orb", "Gible", (5257,), 0),
+        # Power above 60 and up to 90 (Black Sludge is 30; use the table, below).
+        # Power above 90 (Iron Ball 130): the weakness check; a neutral target takes the 128
+        # roll (:5268) jumping to the 64 roll, else +1 first; the 64 roll (:5276) jumping ends,
+        # else +1.
+        ("Iron Ball", "Gible", (), 2),
+        ("Iron Ball", "Gible", (5268,), 1),
+        ("Iron Ball", "Gible", (5276,), 1),
+        ("Iron Ball", "Gible", (5268, 5276), 0),
+        # A weak target: +4, then the 64 roll.
+        ("Iron Ball", "Abra", (), 5),
+        ("Iron Ball", "Abra", (5276,), 4),
+        # A resisting target: -1 unless the held item's hold effect is one of the desirable ones.
+        ("Iron Ball", "Scizor", (), -1),
+        ("Toxic Orb", "Scizor", (), 0),
+        ("Flame Orb", "Scizor", (), 0),
+        ("Light Ball", "Scizor", (), 0),
+        ("King’s Rock", "Scizor", (), 0),
+    ],
+)
+def test_fling_expert(kaizo_tables, kaizo_names, kaizo_roark_party, item, foe, jumps, expected):
+    """Expert_Fling with the named rolls jumping and no other (E3-B2-1)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _fling_state(t, n, kaizo_roark_party, item, foe=foe)
+    got = _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))
+    assert got[0] == expected
+
+
+def test_fling_expert_power_bands(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Below 30 -2 (no roll), 61-90 the 64 roll (:5276) only (+1 unless it jumps), by the item's
+    ``item_fling_power`` (E3-B2-1)."""
+    t, n, party = kaizo_tables, kaizo_names, kaizo_roark_party
+    powers = np.asarray(t.item_fling_power)
+    low = next(i for i in range(1, powers.shape[0]) if 10 <= powers[i] < 30)
+    mid = next(i for i in range(1, powers.shape[0]) if 60 < powers[i] <= 90)
+    for item, plain, jumped in ((low, -2, -2), (mid, 1, 0)):
+        s = _fling_state(t, n, party)
+        s = s._replace(item=s.item.at[1, 0].set(item))
+        assert _delta(t, s, 0x3, 0x7)[0] == plain, item
+        assert _delta(t, s, 0x3, 0x7, ((0, 5276),))[0] == jumped, item

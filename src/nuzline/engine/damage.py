@@ -229,6 +229,21 @@ def gift_item(state, side, gift=0) -> jnp.ndarray:
     return jnp.where(gift != 0, gift, held_item(state, _i32(side)))
 
 
+def flung_view(state: BattleState, atk_side, fling=0) -> BattleState:
+    """``state`` with ``atk_side``'s active Pokemon holding ``fling`` (> 0) again: the item Fling's
+    own script removed before TryMove (effect_script_0233.s:18, ``step._use_move``). CalcCrit and
+    CalcDamage ran on it (:9-10, before the removal), so the move's crit odds and
+    ``BattleSystem_CalcMoveDamage`` (the power items, Choice Band, Life Orb, the Metronome item)
+    read this view, through ``Battler_HeldItem`` (Klutz and Embargo hide it as for any held item);
+    ApplyTypeChart (Expert Belt, battle_lib.c:2577, :2663), the accuracy check and everything after
+    read the real state (E3-B2-1). ``fling`` 0 returns ``state``."""
+    fmt = format_of(state)
+    side = _i32(atk_side)
+    row, slot = party(fmt, side), state.active[side]
+    item = jnp.where(_i32(fling) != 0, _i32(fling), _i32(state.item[row, slot]))
+    return state._replace(item=state.item.at[row, slot].set(item.astype(state.item.dtype)))
+
+
 def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(power, type)``: ``item``'s ``naturalGiftPower`` and ``naturalGiftType``
     (``Tables.item_gift_power`` / ``item_gift_type``); power 0 fails the move
@@ -1903,6 +1918,7 @@ def damage_for_roll(
     hit=0,
     in_power=0,
     gift=0,
+    fling=0,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
@@ -1911,8 +1927,12 @@ def damage_for_roll(
     ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
     power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
     ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
-    ``gift``: its Natural Gift berry removed this action (B13-37)."""
+    ``gift``: its Natural Gift berry removed this action (B13-37). ``fling`` (> 0): the item Fling's
+    script removed this action (``flung_view``): CalcMoveDamage and the item boosts after it read
+    the attacker as still holding it, ApplyTypeChart (``_finish``) as holding nothing."""
     def_side = _foe(_i32(atk_side))  # the other side's active Pokemon (this function's contract)
+    real = state
+    state = flung_view(state, atk_side, fling)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1931,6 +1951,7 @@ def damage_for_roll(
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     damage = me_first_boost(state, atk_side, damage)  # :1354-1364 (E3-2-3)
+    state = real  # ApplyTypeChart runs in TryMove, after Fling's RemoveItem (E3-B2-1)
     rolled = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard, def_side=def_side,

@@ -64,6 +64,7 @@ from nuzline.engine.ids import (
     SLEEP_TALK_VALUES,
     AbilityId,
     EffectId,
+    FlingEffect,
     ItemId,
     MoveFlag,
     Stat,
@@ -342,7 +343,10 @@ def _rate(
     d_power = tables.item_param[d_item, 0].astype(_I32)
     reduce = tables.item_effect[d_item] == ItemId.BRIGHT_POWDER
     rate = jnp.where(reduce, rate * (100 - d_power) // 100, rate)
-    a_item = held_item(state, side)
+    # A Fling's script removes its user's item before TryMove (effect_script_0233.s:18), so the
+    # check meets no Wide Lens / Zoom Lens (E3-B2-1); the live state (``step``) has it gone
+    # already, the turn-start grids read this.
+    a_item = jnp.where(tables.move_effect[move] == EffectId.FLING, 0, held_item(state, side))
     a_effect = tables.item_effect[a_item]
     a_power = tables.item_param[a_item, 0].astype(_I32)
     lens = (a_effect == ItemId.WIDE_LENS) | (
@@ -854,6 +858,14 @@ def _threshold_grid(
         klutz_lost, tables.item_effect[state.item[party(fmt, mons), state.active]], held
     )
     herb = held == ItemId.WHITE_HERB
+    # E3-B2-1: a foe's Fling of its White Herb resets the side's lowered stages at TryFling, hit or
+    # miss (battle_lib.c:6029-6036), and of its Micle Berry sets the side's micleBerry flag at the
+    # hit (subscript_held_item_temp_acc_up.s:11), before the side's later check. The flung item is
+    # the foe's raw item (BATTLEMON_HELD_ITEM), whatever Klutz hides.
+    fling_kind = tables.item_fling_effect[state.item[party(fmt, mons), state.active]]
+    flinging = changes & (effect == EffectId.FLING)
+    foe_herb = foes(flinging & (fling_kind == FlingEffect.STATDOWN_RESTORE))
+    foe_micle = foes(flinging & (fling_kind == FlingEffect.TEMP_ACC_UP))
     firsts = [
         action_order(tables, state, actions, empty_outcome(fmt)._replace(speed_tie=jnp.int8(t)))[0]
         for t in (0, 1)
@@ -900,7 +912,7 @@ def _threshold_grid(
             jnp.where(haze, 0, jnp.clip(acc0 + delta[foe], STAGE_MIN, STAGE_MAX)),
             jnp.where(haze, 0, acc_delta),
             on_foe_acc[foe] | (changes[foe] & haze),
-            herb[side],
+            herb[side] | foe_herb[side],
         )
         eva_delta = jnp.where(acup, 2, delta[foe]).astype(_I32)
         copied = state.stages[side, Stat.EVA].astype(_I32)
@@ -993,7 +1005,7 @@ def _threshold_grid(
         # reads the flag as at the start; the second half, the target moved, also the flag a
         # Micle holder's berry can set before the check.
         holder = held[side] == ItemId.MICLE_BERRY
-        micle_grid = (state.micle[side] != 0) | (moved_grid & holder)
+        micle_grid = (state.micle[side] != 0) | (moved_grid & (holder | foe_micle[side]))
         # A later Triple Kick hit ("both"'s second column): the first hit's check cleared the
         # flag (bcp.c:2968), so only the holder's berry eaten since sets it (B13-6, G-59).
         later_grid = moved_grid & holder if overrides == "both" else None
@@ -1065,7 +1077,12 @@ def _threshold_grid(
         stage_ok = jnp.repeat(acc_ok, _STAGE_VARIANTS) & jnp.tile(eva_ok, _STAGE_VARIANTS)
         field_ok = jnp.repeat(weather_ok, 2) & jnp.tile(confused_ok, 2)
         grid_ok = (field_ok[:, None] & stage_ok[None, :]).reshape(-1)
-        second = zoom[side] | micle_free[side] | (uses_move[side] & wide[side] & foe_embargo[side])
+        second = (
+            zoom[side]
+            | micle_free[side]
+            | foe_micle[side]
+            | (uses_move[side] & wide[side] & foe_embargo[side])
+        )
         possible.append(jnp.concatenate([grid_ok, grid_ok & second]))
     return jnp.stack(thresholds).astype(_I32), jnp.stack(possible)
 
@@ -1188,6 +1205,13 @@ def _swap_abilities_all(state: BattleState) -> BattleState:
     )
 
 
+def _focus_energy_all(state: BattleState) -> BattleState:
+    """Fling's write to the crit inputs: a flung Lansat Berry sets the defender's
+    VOLATILE_CONDITION_FOCUS_ENERGY (subscript_held_item_raise_crit.s:11; ``hooks.fling_effect``,
+    E3-B2-1), here every battler's own."""
+    return state._replace(focus_energy=jnp.ones_like(state.focus_energy))
+
+
 def _embargo_all(state: BattleState) -> BattleState:
     """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
     embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
@@ -1208,6 +1232,7 @@ CRIT_ODDS_EFFECTS = {
     EffectId.WORRY_SEED: _insomnia_all,
     EffectId.SKILL_SWAP: _swap_abilities_all,
     EffectId.GASTRO_ACID: _suppress_all,
+    EffectId.FLING: _focus_energy_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
@@ -1535,8 +1560,9 @@ def kings_rock_chance(tables: Tables, state: BattleState) -> jnp.ndarray:
     (``HOLD_EFFECT_SOMETIMES_FLINCH``, ``Battler_HeldItemPower(attacker, 0)``,
     battle_controller_player.c:4633), else 0. The attacker's item cannot become one during the
     turn (no implemented path gives a King's Rock: Recycle gives back only an item a RemoveItem
-    took, never a King's Rock while Fling is unsupported, and only to its user, whose move has
-    run)."""
+    took, and only to its user, whose move has run). A Fling of the item (E3-B2-1) removes it
+    before the hit, so the roll is drawn and never read (over-approximate); the flung King's Rock's
+    own effect is the target's flinch (``effects._fling``)."""
     item = held_items(state)  # Battler_HeldItemEffect (B13-29)
     holder = tables.item_effect[item] == ItemId.KINGS_ROCK
     return jnp.where(holder, tables.item_param[item, 0].astype(_I32), 0)

@@ -124,6 +124,7 @@ from nuzline.engine.ids import (
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FlingEffect,
     ItemAiCategory,
     ItemId,
     ItemParam,
@@ -311,6 +312,10 @@ class _Turn:
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
+    # The item Fling's RemoveItem took this action (effect_script_0233.s:18) and its fling power
+    # (the move's power): its CalcCrit / CalcDamage read the item as still held, E3-B2-1.
+    fling: int = 0
+    fling_power: int = 0
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -752,6 +757,19 @@ def _crits(tables, s: RefState, side: int, move: int, value: int) -> bool:
         needs = _t(tables, "item_param", mon.item, 1)
         stage += 1 if needs == 0 else 2 if needs == mon.species else 0
     return value > 0 and (value - 1) % _CRIT_RATES[min(stage, 4)] == 0
+
+
+def _crits_flung(turn: _Turn, s: RefState, side: int, move: int, value: int) -> bool:
+    """``_crits`` for ``side``'s hit: a Fling's CalcCrit ran before its RemoveItem, so the user
+    still holds the flung item (``turn.fling``) for it (E3-B2-1)."""
+    mon = _active(s, side)
+    kept = mon.item
+    if turn.fling:
+        mon.item = turn.fling
+    try:
+        return _crits(turn.tables, s, side, move, value)
+    finally:
+        mon.item = kept
 
 
 def _levitated(tables, s: RefState, attacker: int, defender: int, move_type: int) -> bool:
@@ -1638,7 +1656,7 @@ def _me_first_after_calc(s: RefState, side: int) -> None:
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
-    in_power: int = 0, gift: int = 0,
+    in_power: int = 0, gift: int = 0, fling: int = 0,
 ):  # fmt: skip
     """One hit's damage: the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
@@ -1679,27 +1697,35 @@ def _move_damage(
         tables, move, s.battlers[defender].semi_invulnerable
     ):
         power_mul = 20
-    damage = _calc_move_damage(
-        tables,
-        s,
-        attacker,
-        defender,
-        move,
-        crit,
-        power_mul=power_mul,
-        magnitude=magnitude,
-        present=present,
-        hit=hit,
-        in_power=in_power,
-        gift=gift,
-    )
-    # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
-    if _item_effect(tables, atk, s) == ItemId.LIFE_ORB:
-        damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
-    # script.c:1350-1352: the Metronome item, (10 + metronomeTurns) / 10 (G-60).
-    if _item_effect(tables, atk, s) == ItemId.METRONOME_ITEM:
-        damage = damage * (10 + s.battlers[attacker].metronome_turns) // 10
+    # Fling's CalcDamage ran before its RemoveItem (effect_script_0233.s:10, :18): the attacker
+    # holds the flung item through the script's damage and its item boosts, not ApplyTypeChart's.
+    kept = atk.item
+    if fling:
+        atk.item = fling
+    try:
+        damage = _calc_move_damage(
+            tables,
+            s,
+            attacker,
+            defender,
+            move,
+            crit,
+            power_mul=power_mul,
+            magnitude=magnitude,
+            present=present,
+            hit=hit,
+            in_power=in_power,
+            gift=gift,
+        )
+        # script.c:1346-1348: Life Orb, after criticalMul.
+        if _item_effect(tables, atk, s) == ItemId.LIFE_ORB:
+            damage = damage * (100 + _t(tables, "item_param", atk.item, 0)) // 100
+        # script.c:1350-1352: the Metronome item, (10 + metronomeTurns) / 10 (G-60).
+        if _item_effect(tables, atk, s) == ItemId.METRONOME_ITEM:
+            damage = damage * (10 + s.battlers[attacker].metronome_turns) // 10
+    finally:
+        atk.item = kept
     damage = _me_first_boost(s, attacker, damage)  # script.c:1354-1364 (E3-2-3)
     damage = _variance(damage, roll)
     kind = _move_type(tables, s, attacker, move, gift)
@@ -3196,6 +3222,95 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
     turn.pluck_flag = not did
 
 
+def _fling_try(turn: _Turn, s: RefState, side: int, item: int) -> None:
+    """``BattleSystem_FlingItem``'s writes at TryFling time on the defender (lib.c:5857-6158; the
+    engine's ``hooks.fling_try``): ``FLING_EFFECT_PP_RESTORE`` (:5908-5933) adds the item's hold
+    param to the first slot with the largest ``maxPP - ppCur`` above 0, capped;
+    ``FLING_EFFECT_STATDOWN_RESTORE`` (:6029-6036) sets every stage below neutral to neutral."""
+    tables = turn.tables
+    kind, power = _t(tables, "item_fling_effect", item), _t(tables, "item_hold_param", item)
+    foe, foe_sd = _active(s, _foe(side)), s.battlers[_foe(side)]
+    if kind == FlingEffect.PP_RESTORE:
+        diffs = [_max_pp(tables, foe, k) - foe.pp[k] if m else 0 for k, m in enumerate(foe.moves)]
+        if max(diffs) > 0:
+            k = diffs.index(max(diffs))
+            foe.pp[k] = min(foe.pp[k] + power, _max_pp(tables, foe, k))
+    elif kind == FlingEffect.STATDOWN_RESTORE:
+        foe_sd.stages = [max(x, 0) for x in foe_sd.stages]
+
+
+# The item a Fling's cure acts like (``_cure``) and the stat a Fling stat item raises.
+_FLING_CURES = {
+    FlingEffect.PRZ_RESTORE: ItemId.CHERI_BERRY,
+    FlingEffect.SLP_RESTORE: ItemId.CHESTO_BERRY,
+    FlingEffect.PSN_RESTORE: ItemId.PECHA_BERRY,
+    FlingEffect.BRN_RESTORE: ItemId.RAWST_BERRY,
+    FlingEffect.FRZ_RESTORE: ItemId.ASPEAR_BERRY,
+    FlingEffect.CNF_RESTORE: ItemId.PERSIM_BERRY,
+    FlingEffect.ALL_RESTORE: ItemId.LUM_BERRY,
+}
+_FLING_STAT_UP = {
+    FlingEffect.ATK_UP: Stat.ATK,
+    FlingEffect.DEF_UP: Stat.DEF,
+    FlingEffect.SPEED_UP: Stat.SPE,
+    FlingEffect.SPATK_UP: Stat.SPA,
+    FlingEffect.SPDEF_UP: Stat.SPD,
+}
+_FLING_STATUSES = {
+    FlingEffect.PARALYZE: Status.PARALYSIS,
+    FlingEffect.POISON: Status.POISON,
+    FlingEffect.BADLY_POISON: Status.TOXIC,
+    FlingEffect.BURN: Status.BURN,
+}
+
+
+def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: bool) -> None:
+    """``subscript_fling.s``, run as the hit's ON_HIT effect (lib.c:1524-1529; the engine's
+    ``effects._fling``): nothing for a defender at 0 HP or behind a Substitute (:5-7), nor for one
+    with MOVE_EFFECT_EMBARGO (lib.c:6145-6146); else the flung item's fling effect acts on it:
+    the heals (UPDATE_HP, capped; a flavor its nature dislikes confuses it), the cures
+    (``_cure``), heal infatuation, the stat items (+1 below +6; Starf +2 on the drawn one of the
+    five stats below +6, ``Outcome.acupressure``), Lansat's Focus Energy, Micle's flag, the flinch
+    and the INDIRECT statuses (``_inflict``). PP restore and White Herb acted at TryFling
+    (``_fling_try``). The restore subscripts' PLUCK_CHECK keeps the defender's own item (the
+    flag TryFling set), so none is removed. E3-B2-1."""
+    tables, o = turn.tables, turn.outcome
+    item = turn.fling
+    foe, sd = _active(s, target), s.battlers[target]
+    if not item or not turn.fling_power or foe.hp == 0 or _shielded(turn, s, target) or sd.embargo:
+        return
+    kind, power = _t(tables, "item_fling_effect", item), _t(tables, "item_hold_param", item)
+    if kind == FlingEffect.HP_RESTORE:
+        _gain_hp(s, target, power)
+    elif kind == FlingEffect.HP_PCT_RESTORE:
+        _gain_hp(s, target, _divide(foe.max_hp * power, 100))
+    elif FlingEffect.HP_RESTORE_SPICY <= kind <= FlingEffect.HP_RESTORE_SOUR:
+        _gain_hp(s, target, _divide(foe.max_hp, max(power, 1)))
+        if NATURE_DISLIKED_FLAVOR[foe.nature] == kind - FlingEffect.HP_RESTORE_SPICY:
+            _berry_confuse(turn, s, target)  # subscript_held_item_dislike_flavor.s
+    elif kind in _FLING_CURES:
+        _cure(s, target, _FLING_CURES[kind])
+    elif kind == FlingEffect.HEAL_INFATUATION:
+        sd.infatuated = 0
+    elif kind in _FLING_STAT_UP:
+        if sd.stages[_FLING_STAT_UP[kind]] < STAGE_MAX:
+            _change_stage(s, target, _FLING_STAT_UP[kind], 1)
+    elif kind == FlingEffect.RANDOM_UP2:
+        valid = [x for x in ACUPRESSURE_STATS[:5] if sd.stages[x] < STAGE_MAX]
+        if valid:
+            _change_stage(s, target, valid[o.acupressure[side] % len(valid)], 2)
+    elif kind == FlingEffect.CRIT_UP:
+        sd.focus_energy = 1
+    elif kind == FlingEffect.TEMP_ACC_UP:
+        sd.micle = 1
+    elif kind == FlingEffect.FLINCH:
+        seen = _ignorable(s, side, target)
+        if not target_moved and seen not in (AbilityId.INNER_FOCUS, AbilityId.SHIELD_DUST):
+            sd.flinched = 1
+    elif kind in _FLING_STATUSES:
+        _inflict(turn, s, side, target, _FLING_STATUSES[kind], False)
+
+
 def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, landed: bool,
                  effective: bool, dealt: int, target_moved: bool) -> None:  # fmt: skip
     """The move's own effect for one hit. Status and stat moves are primary effects
@@ -3381,6 +3496,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             mon.ability = AbilityId.INSOMNIA
             if target == 0:
                 _know_ability(s, s.battlers[0].active)
+    elif effect == EffectId.FLING and effective:
+        _fling_hit(turn, s, side, target, target_moved)
     elif effect == EffectId.GASTRO_ACID and effective:
         # subscript_suppress_target_ability.s:5-10: fails behind a substitute (:5), on a target
         # that has the bit (:6), on a raw Multitype ability (:8); else the bit is set (:10), E3-2-6.
@@ -4087,6 +4204,8 @@ def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int)
         return turn.gyro_power
     if effect == EffectId.TRUMP_CARD:
         return TRUMP_CARD_POWER[min(_active(s, side).pp[turn.move_slot], 4)]
+    if effect == EffectId.FLING:  # BattleSystem_FlingItem's movePower (lib.c:5859)
+        return turn.fling_power
     if effect == EffectId.ASSURANCE:
         power = _t(turn.tables, "move_power", move)
         # BTLVAR_DEFENDER_ASSURANCE_DAMAGE_MASK (effect_script_0231.s:7), B13-38.
@@ -4132,7 +4251,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             s,
             side,
             move,
-            _crits(tables, s, side, move, o.crit[side][hit]) and not _armored(s, side, target),
+            _crits_flung(turn, s, side, move, o.crit[side][hit]) and not _armored(s, side, target),
             o.roll[side][hit],
             # Payback: movePower x2 once the target acted (script.c:7198-7209, B9-12).
             power_mul=20
@@ -4145,6 +4264,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             hit=hit,
             in_power=_script_power(turn, s, side, target, move),
             gift=turn.gift,
+            fling=turn.fling,
         )
     # The same CalcDamage's Me First counter update (battle_script.c:1356-1363, E3-2-3).
     if (
@@ -4613,6 +4733,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     turn.gyro_power = _gyro_power(tables, s, side, target) if _active(s, target).hp else 0
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
     turn.gift = 0
+    turn.fling = turn.fling_power = 0
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
     # action's end (G-13).
     turn.sync_flag, turn.sync_mon = False, -1
@@ -4876,6 +4997,23 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             _unlock(s.battlers[side])
             return record
         turn.gift = _held(s, mon)
+        _remove_item(s, side)
+    # Fling (effect_script_0233.s): fails for a raw Multitype ability or Griseous Orb of its user
+    # (:5-6) and, through TryFling (BattleSystem_FlingItem, lib.c:5857-5865), a fling power of 0
+    # (Battler_ItemFlingPower: no item, a power-0 item, Embargo on the user); else TryFling's
+    # writes on the defender (``_fling_try``), CalcCrit / CalcDamage with the item held, then
+    # RemoveItem (:18) before TryMove, E3-B2-1.
+    if effect == EffectId.FLING:
+        power = 0 if s.battlers[side].embargo else _t(tables, "item_fling_power", mon.item)
+        if (
+            _decomp_ability(tables, mon) == ABILITY_MULTITYPE
+            or mon.item == ITEM_GRISEOUS_ORB
+            or not power
+        ):
+            _unlock(s.battlers[side])
+            return record
+        _fling_try(turn, s, side, mon.item)
+        turn.fling, turn.fling_power = mon.item, power
         _remove_item(s, side)
     # Snore (effect_script_0092.s:5): MOVE_STATUS_FAILED unless the user is asleep.
     if counter:

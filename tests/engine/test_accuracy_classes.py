@@ -560,6 +560,7 @@ _FOLLOWED = frozenset(
         EffectId.WORRY_SEED,
         EffectId.SKILL_SWAP,
         EffectId.GASTRO_ACID,
+        EffectId.FLING,
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.

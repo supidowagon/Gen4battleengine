@@ -533,6 +533,14 @@ class EffectId(IntEnum):
     # it is behind a Substitute, already has the bit, the move missed, the defender is
     # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
     GASTRO_ACID = 129
+    # Fling (233, BATTLE_EFFECT_FLING): zeros. effect_script_0233.s: fails (MOVE_STATUS_FAILED) for
+    # a raw Multitype ability or Griseous Orb of its user or a fling power of 0
+    # (``Battler_ItemFlingPower``: no item, a power-0 item, Embargo); else the held item's fling
+    # power is the move's power (CalcCrit and CalcDamage read the item still held), the item is
+    # removed before TryMove (a miss or Protect still loses it), and ``subscript_fling.s`` applies
+    # the item's fling effect to the defender after the hit (``effects._fling``, ``step._use_move``,
+    # E3-B2-1).
+    FLING = 130
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -1174,6 +1182,43 @@ QUICK_CLAW_MODULUS = 100 // QUICK_CLAW_PARAM  # % 5
 # ``Outcome.future_band``), exact only while every holder has this param: ``game_constants``
 # asserts it for every game (ruling G-1).
 FOCUS_BAND_PARAM = 10
+
+
+class FlingEffect(IntEnum):
+    """``FLING_EFFECT_*`` (include/constants/items.h:86-116): ``tables.item_fling_effect``, which
+    ``battle_lib.c:5857-6158`` (``BattleSystem_FlingItem``) reads for a Fling (E3-B2-1)."""
+
+    NONE = 0
+    PRZ_RESTORE = 1
+    SLP_RESTORE = 2
+    PSN_RESTORE = 3
+    BRN_RESTORE = 4
+    FRZ_RESTORE = 5
+    PP_RESTORE = 6
+    HP_RESTORE = 7
+    CNF_RESTORE = 8
+    ALL_RESTORE = 9
+    HP_PCT_RESTORE = 10
+    HP_RESTORE_SPICY = 11
+    HP_RESTORE_DRY = 12
+    HP_RESTORE_SWEET = 13
+    HP_RESTORE_BITTER = 14
+    HP_RESTORE_SOUR = 15
+    ATK_UP = 16
+    DEF_UP = 17
+    SPEED_UP = 18
+    SPATK_UP = 19
+    SPDEF_UP = 20
+    CRIT_UP = 21
+    RANDOM_UP2 = 22
+    TEMP_ACC_UP = 23
+    STATDOWN_RESTORE = 24
+    HEAL_INFATUATION = 25
+    FLINCH = 26
+    PARALYZE = 27
+    POISON = 28
+    BADLY_POISON = 29
+    BURN = 30
 
 
 class Flavor(IntEnum):

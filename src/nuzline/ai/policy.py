@@ -924,6 +924,93 @@ def _basic_check_gastro_acid(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _basic_check_fling(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckFling`` (script.s:1199-1216): the chart immune -10; the AI's own fling power
+    (``LoadFlingPower``, 0 under Embargo) below 10 -10; its raw ability Multitype -10; then by its
+    held item's hold effect (``LoadHeldItemEffect``): a poison item (Toxic Orb, Poison Barb), a
+    burn item (Flame Orb) or Light Ball. The poison and burn blocks (:1218-1278) go to their
+    AttackerChecks when the status cannot land on the player (Safeguard, a status, a type or
+    ability immunity; the poison block also on the AI's own Poison Heal, the code reads the
+    attacker, :1221-1222) and end otherwise; the AttackerChecks score -5 for an AI the item would
+    hurt or that cannot hold it, else +3. Light Ball: -5 for a player that cannot be paralyzed,
+    else nothing (E3-B2-1)."""
+    ctx, t = _split(c.if_move_effectiveness_equals(_at(ctx, mask), TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_loaded_less_than(c.load_fling_power(ctx, _A), 10))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _A), _ABILITY["Multitype"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_held_item_effect(ctx, _A)
+    ctx, poison = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_POISON))
+    ctx, burn = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_BURN))
+    ctx, para = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_PARALYZE))
+    ctx = c.pop_or_end(ctx)
+
+    def attacker_checks(ctx, mask, types, abilities):
+        """Basic_Fling*_AttackerChecks (:1235-1251, :1265-1278): -5 per test, else +3."""
+        ctx = _at(ctx, mask)
+        ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.SAFEGUARD))
+        ctx = _score(ctx, t, -5)
+        ctx, t = _split(c.if_status(ctx, _A, c.MonCondition.ANY))
+        ctx = _score(ctx, t, -5)
+        for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+            ctx = c.load_type_from(ctx, target)
+            for type_name in types:
+                ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+                ctx = _score(ctx, t, -5)
+        ctx = c.load_battler_ability(ctx, _A)
+        for name in abilities:
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+            ctx = _score(ctx, t, -5)
+        return c.pop_or_end(c.add_to_move_score(ctx, 3))
+
+    # Basic_FlingPoison (:1218)
+    ctx = _at(ctx, poison)
+    ctx, blocked = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    blocked = blocked | t
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _A), _ABILITY["Poison Heal"]))
+    blocked = blocked | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        for type_name in ("Poison", "Steel"):
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+            blocked = blocked | t
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Immunity", "Poison Heal", "Magic Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        blocked = blocked | t
+    ctx = c.pop_or_end(ctx)  # the poison cannot be stopped: nothing to score
+    ctx = attacker_checks(
+        ctx,
+        blocked,
+        ("Poison", "Steel"),
+        ("Klutz", "Immunity", "Poison Heal", "Magic Guard", "Guts"),
+    )
+    # Basic_FlingBurn (:1253)
+    ctx = _at(ctx, burn)
+    ctx, blocked = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    blocked = blocked | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+        blocked = blocked | t
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Magic Guard", "Water Veil"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        blocked = blocked | t
+    ctx = c.pop_or_end(ctx)
+    ctx = attacker_checks(ctx, blocked, ("Fire",), ("Klutz", "Magic Guard", "Water Veil", "Guts"))
+    # Basic_FlingParalyze (:1280)
+    ctx, t = _split(c.if_side_condition(_at(ctx, para), _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -5)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -5)
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _D), _ABILITY["Limber"]))
+    return c.pop_or_end(_score(ctx, t, -5))
+
+
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
     """``ScoreMinus10`` (Basic_ScoreMoveEffect, script.s:221: ``IfCurrentMoveEffectEqualTo
     BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE``): Teleport, -10 with no further test (E3-1-4)."""
@@ -1909,6 +1996,47 @@ def _expert_trick_room(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_random_less_than(_at(ctx, slower), 64, 6210))  # -> _End
     ctx = c.add_to_move_score(ctx, 3)
     return c.pop_or_end(ctx)
+
+
+def _expert_fling(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Fling`` (script.s:5231-5286): a move the player resists or is immune to goes to
+    the item check (-1 unless the AI's hold effect is King's Rock, Razor Fang, a poison or burn
+    item or Light Ball); else by the AI's fling power: below 30 -2 and end, above 90 the
+    weakness check (a double or quadruple hit +4 then the 64 roll; else the 128 roll jumping to
+    the 64 roll, else +1 first), above 60 the 64 roll (:5276, +1 unless it jumps), else the 128
+    roll (:5257) jumping ends, else -1. The target of every jump is _End or the _TryScorePlus1
+    block (:5275); the power below 30 ends (:5263) and does not fall into the weakness check
+    (E3-B2-1)."""
+    ctx = _at(ctx, mask)
+    ctx, item = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.HALF))
+    item = item | t
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUARTER))
+    item = item | t
+    ctx = c.load_fling_power(ctx, _A)
+    ctx, minus2 = _split(c.if_loaded_less_than(ctx, 30))
+    ctx, weak = _split(c.if_loaded_greater_than(ctx, 90))
+    ctx, try1 = _split(c.if_loaded_greater_than(ctx, 60))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 5257))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)  # then GoTo _End
+    # Expert_Fling_ScoreMinus2 (:5261)
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)
+    # Expert_Fling_CheckWeakness (:5265)
+    ctx, plus4 = _split(c.if_move_effectiveness_equals(_at(ctx, weak), TypeMulti.DOUBLE))
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
+    plus4 = plus4 | t
+    ctx, skip = _split(c.if_random_less_than(ctx, 128, 5268))  # -> _TryScorePlus1
+    ctx = c.add_to_move_score(ctx, 1)
+    plus1 = ctx.live
+    # Expert_Fling_ScorePlus4 (:5272), then _TryScorePlus1 (:5275)
+    ctx = c.add_to_move_score(_at(ctx, plus4), 4)
+    ctx = _at(ctx, try1 | skip | plus1 | plus4)
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 5276))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Fling_CheckAttackerItem (:5280)
+    ctx = c.load_held_item_effect(_at(ctx, item), _A)
+    ctx, _ = _split(c.if_loaded_in_table(ctx, c.FLING_DESIRABLE_EFFECTS))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
 
 
 def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
@@ -3685,6 +3813,7 @@ _BASIC_LABELS = (
     (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
     (BattleEffect.PREVENT_ITEM_USE, _basic_check_embargo),  # :262 (B13-32)
+    (BattleEffect.FLING, _basic_check_fling),  # :263 (E3-B2-1)
     (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
@@ -3812,6 +3941,7 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.DOUBLE_POWER_IF_TARGET_HIT, _expert_assurance),  # :1774 (B13-23)
     (BattleEffect.PREVENT_ITEM_USE, _expert_embargo),  # :1775 (B13-32)
+    (BattleEffect.FLING, _expert_fling),  # :1776 (E3-B2-1)
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)

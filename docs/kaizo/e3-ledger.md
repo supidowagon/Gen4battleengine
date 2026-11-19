@@ -498,3 +498,69 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/ai/test_kaizo_policy.py `test_gastro_acid_*`. Local check: ruff clean, the id-table scan
   and constants (16), test_state (24) passed; the step-running tests (a jitted `step` passes the
   4 GB local cap) and the AI scoring tests: pod.
+
+## Batch 2 (rulings E3-B2-n)
+
+- E3-B2-1 Fling (#233): new `EffectId.FLING` (effect 233, BATTLE_EFFECT_FLING; no manifest bump: no
+  array or key changed, only the move row's effect value; `item_fling_power`, `item_fling_effect`
+  and `item_hold_param` already carry every item) and `ids.FlingEffect` (FLING_EFFECT_*,
+  items.h:86-116). Order, from effect_script_0233.s: `step._use_move` fails the move on the raw
+  Multitype ability or a raw Griseous Orb of the user (:5-6, `decomp_abilities`, `state.item`), then
+  TryFling (bs.c:8144-8154, `BattleSystem_FlingItem`, lib.c:5857-6158): the power is
+  `Battler_ItemFlingPower` (0 under the user's Embargo, no Klutz, :5491-5498) and 0 fails
+  (:5863-5865); the power feeds `in_power`. The TryFling-time writes land even on a miss:
+  `hooks.fling_try` restores the foe's most depleted PP slot (Leppa, :5908-5933) and resets the
+  foe's lowered stages (White Herb, :6029-6036). CalcCrit and CalcDamage (:9-10) read the item
+  still held (`damage.flung_view`: the Dark boosters, Choice Band, Life Orb, the Metronome item,
+  Scope Lens and the crit odds), `consume_item` is RemoveItem (:18), before TryMove, so a miss or
+  Protect still loses it (Unburden arms); ApplyTypeChart (Expert Belt) and the accuracy check (Wide
+  Lens, Zoom Lens) see it gone (`outcome._rate`). The hit-time half, `effects._fling` (second
+  dispatch tuple), is subscript_fling.s: skipped for a defender at 0 HP or behind a Substitute
+  (:5-7), and for a defender with MOVE_EFFECT_EMBARGO (lib.c:6145-6146); then `hooks.fling_effect`
+  (HP and percent heals, the flavor berries' heal and dislike confusion, status and confusion cures,
+  infatuation, Atk to Sp. Def +1, Starf +2, Lansat's Focus Energy, Micle's flag) and the INDIRECT
+  flinch (King's Rock, Razor Fang: not before the foe's move, Inner Focus, Shield Dust) and
+  statuses (`_inflict`: Substitute, Safeguard, immunities, Shield Dust, Limber, Water Veil...). The
+  reference engine has the same blocks (`_fling_try`, `_fling_hit`, `_Turn.fling`).
+  Rulings. (1) Starf's draw is the `acupressure` rank among the foe's five stats below +6 (value %
+  count, the "uniform by the % n convention"): the decomp draws `RandNext() % 5` until the stat is
+  not 12 (lib.c:6110-6129), whose per-stat weights are not exactly uniform (the redraw of a
+  maxed stat); the engine uses 1/count (the convention of Acupressure, B12-9), no new outcome
+  field. (2) The PLUCK flag Fling sets on the user (lib.c:6150-6152) is not modelled: it dies with
+  selfTurnFlags at the next BattleContext_Init (bcp.c:3998) and is read only by a PLUCK_CHECK,
+  which only a restore subscript of this same hit runs; the user's item is gone and the foe's items
+  cannot newly trigger when the script is skipped, so no read of it is reachable. (3) The flung
+  item is the raw item (BATTLEMON_HELD_ITEM), whatever Klutz hides, and the effect param is the raw
+  hold param.
+  Hit chance: `outcome._threshold_grid` adds the foe's Fling as a variant: a flung White Herb
+  resets the side's accuracy stage before its check (`foe_herb`), a flung Micle sets its micle flag
+  (`foe_micle`, bcp.c:2967-2970); the user's own Wide Lens is not applied. Crit:
+  `CRIT_ODDS_EFFECTS[FLING]` = `_focus_energy_all` (a flung Lansat; test_batch12's writer scan
+  plays Fling with a Lansat user and a foe without Focus Energy). Enumerate: INPUT_CLAUSE effect
+  (fling clause), NON_TABLE_DAMAGE (power and item read at the hit), `damage_inputs_can_change`
+  (foe Fling), Starf joins the acupressure relevance (the draw needs two or more stats), the end
+  speed tie, and the flung paralysis and confusion join `para_inflict` / `confuse_inflict`.
+  `outcome.kings_rock_chance` is over-approximate for a flung King's Rock.
+  AI: Basic_CheckFling (script.s:1199-1286, dispatch :263): the chart immune -10 (:1201), the AI's
+  `LoadFlingPower` (new `commands.load_fling_power`, trainer_ai.c:2014) below 10 -10, its own
+  Multitype -10, then by its held item's hold effect (`commands.FLING_ITEMS_POISON` = PSN_USER,
+  STRENGTHEN_POISON; `_BURN` = BRN_USER; `_PARALYZE` = PIKA_SPATK_UP, :1288-1299): poison and burn
+  go to their AttackerChecks (-5 per test, else +3) when the status cannot land on the player
+  (Safeguard, a status, a type or ability immunity; the poison block also on the AI's own Poison
+  Heal, :1221-1222) and end otherwise; Light Ball -5 for a player that cannot be paralyzed
+  (:1280-1286). `commands.ABILITY_IDS` gains Klutz 103 and Guts 62 (listed in game_constants).
+  Expert_Fling (:5231-5286, dispatch :1776; the code, not the comment): a resisted or immune
+  chart class goes to the item check (-1 unless the AI's hold effect is SOMETIMES_FLINCH,
+  STRENGTHEN_POISON, PSN_USER, BRN_USER or PIKA_SPATK_UP, `FLING_DESIRABLE_EFFECTS`, :5288-5294);
+  else by the fling power: below 30 -2 and end; above 90 the weakness check (a double or
+  quadruple hit +4 then the 64 roll; else the 128 roll (:5268) jumping to the 64 roll, else +1
+  first); above 60 the 64 roll (:5276, +1 unless it jumps); else the 128 roll (:5257) jumping
+  ends, else -1 (`SITE_N` 5257: 128, 5268: 128, 5276: 64). `KAIZO_TRANSCRIBED`,
+  `KAIZO_EXPERT_LABELS` (:1776) and `KAIZO_EXPERT_TRANSCRIBED` carry 233; the Encore table already
+  had it. Read bounds and the backlog regenerated (the two #233 rows, "move effect #233: Fling" and
+  "AI move effect #233", close). STATE.md: flingTemp and flingScript are "not needed" (one hit).
+  Not built: Tag Strategy's partner paths (:7454, :7624-7645) for Fling: doubles only (Owed 5);
+  `coverage.ITEM_MOVING_EFFECTS` keeps 233 (the exp-item party read, a separate reason).
+  Tests: tests/engine/test_e3_batch2.py (`test_fling_*`, `test_flung_*`), tests/ai/test_kaizo_policy.py
+  (`test_fling_*`); test_batch12's crit-writer scan and test_accuracy_classes' `_FOLLOWED` list
+  carry Fling.

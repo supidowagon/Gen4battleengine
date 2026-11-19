@@ -98,6 +98,7 @@ LISTED = [
     "nuzline.engine.ids.ItemParam",
     "nuzline.engine.ids.ItemAiCategory",
     "nuzline.engine.ids.AbilityId",
+    "nuzline.engine.ids.FlingEffect",
     "nuzline.engine.ids.GRAVITY_MOVES",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     "nuzline.engine.ids.MIMIC_FORBIDDEN",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     "nuzline.ai.layout.COPIER_EFFECTS",  # EXEMPT: keyed by decomp effect id
@@ -119,6 +120,10 @@ LISTED = [
     "nuzline.ai.commands.RISKY_EFFECTS",
     "nuzline.ai.commands.SETUP_FIRST_TURN_EFFECTS",
     "nuzline.ai.commands.HARRASSMENT_EFFECTS",
+    "nuzline.ai.commands.FLING_ITEMS_POISON",
+    "nuzline.ai.commands.FLING_ITEMS_BURN",
+    "nuzline.ai.commands.FLING_ITEMS_PARALYZE",
+    "nuzline.ai.commands.FLING_DESIRABLE_EFFECTS",
     "nuzline.ai.commands.CHECK_HP_TABLES",
     "nuzline.ai.outcome.KAIZO_TRANSCRIBED",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",

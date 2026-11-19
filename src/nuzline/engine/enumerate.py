@@ -243,6 +243,7 @@ from nuzline.engine.ids import (
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FlingEffect,
     ItemId,
     MoveFlag,
     Stat,
@@ -975,6 +976,13 @@ INPUT_CLAUSE_EFFECTS = (
     # 3093): every ability factor of that hit, its accuracy and crit odds, a Klutz holder's item,
     # the speed abilities of the turn's end: the gastro-acid clause.
     _E.GASTRO_ACID,
+    # E3-B2-1: a foe's Fling acts on the side before its later hit: the flung item's effect
+    # (``hooks.fling_effect``: a heal, a cure, a raised Attack / Sp. Atk or Defense stage, Starf's
+    # draw, a burn for the Attack, a paralysis, poison or flinch, Lansat's Focus Energy, Micle's
+    # flag), TryFling's White Herb reset of the side's stages (``hooks.fling_try``) and the foe's
+    # own item gone (the defender's item the side's hit reads, ``damage._item_modifiers``): the
+    # fling clause, any foe Fling.
+    _E.FLING,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1382,6 +1390,9 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
     _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
     _E.GASTRO_ACID,  # a status move: no damage (E3-2-6)
+    # E3-B2-1: Fling's power is its item's fling power and its attacker's item is read with the
+    # item still held (``damage.flung_view``), neither of ``hit_damage_table``'s turn-start reads.
+    _E.FLING,
 )
 
 
@@ -1533,6 +1544,9 @@ def damage_inputs_can_change(
         | (foe_effect == _E.SKILL_SWAP)
         # E3-2-6: the foe's Gastro Acid suppresses the side's ability (the gastro-acid clause).
         | (foe_effect == _E.GASTRO_ACID)
+        # E3-B2-1: the foe's Fling (the fling clause): its item's effect on the side, TryFling's
+        # White Herb reset, its own item gone before the side's hit.
+        | (foe_effect == _E.FLING)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1896,6 +1910,18 @@ def outcome_laws(
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
     kings_rock = outcome_kings_rock_chance(tables, state)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
+    # E3-B2-1: a Fling inflicts what its item's fling effect says on the foe (effects._fling): a
+    # paralysis (Light Ball), a confusion (a flavor berry: it confuses the foe whose nature
+    # dislikes it, over-approximate: any flavor berry), both before the foe's later move.
+    fling_kind = jnp.where(
+        uses_move & (effect == _E.FLING),
+        tables.item_fling_effect[state.item[party(fmt, sides), mons]],
+        0,
+    )
+    fling_paralyzes = fling_kind == FlingEffect.PARALYZE
+    fling_confuses = (fling_kind >= FlingEffect.HP_RESTORE_SPICY) & (
+        fling_kind <= FlingEffect.HP_RESTORE_SOUR
+    )
     base = {
         "uses_move": uses_move,
         "effect": effect,
@@ -1929,11 +1955,12 @@ def outcome_laws(
                 & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
                 & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
             )
+            | fling_paralyzes
         ),
         "freeze_inflict": uses_move
         & _inflicts(tables, state, moves, Status.FREEZE, users=tuple(range(fmt.B)))
         & ~status_blocked,
-        "confuse_inflict": uses_move & confuses & ~confused_blocked,
+        "confuse_inflict": uses_move & (confuses | fling_confuses) & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
         "focus_band": band_move,
@@ -2157,8 +2184,12 @@ def outcome_laws(
     # E3-2-6: a Gastro Acid suppresses its target's speed ability (Swift Swim, Chlorophyll, Quick
     # Feet, Unburden) and Shed Skin likewise (Battler_Ability reads NONE, battle_lib.c:3088-3093).
     gastro_used = uses_move & (effect == _E.GASTRO_ACID)
+    # E3-B2-1: a Fling takes its user's item (a Choice Scarf, an Iron Ball: the end-of-turn sort
+    # reads Battler_HeldItemEffect, battle_lib.c:1248) and raises, burns or paralyzes its
+    # defender's Speed (a Speed or Starf item, a status): neither is in the grid either.
+    fling_used = uses_move & (effect == _E.FLING)
     end_speed_tie = end_speed_tie | (
-        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used)
+        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used | fling_used)
     )
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
@@ -2208,8 +2239,23 @@ def outcome_laws(
     )
     acu_loose = foes(live & (uses_move | switch))
     acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
+    # E3-B2-1: a Fling of Starf draws the same kind of value (BattleSystem_FlingItem,
+    # battle_lib.c:6110-6129: ``RandNext() % 5`` redrawn while the stage is 12, which is the
+    # ``acupressure_stat`` ranking, uniform by the % n convention) among the five stats of its
+    # DEFENDER (the foe) below +6: Atk to Sp. Def. It is read at TryFling and acts at the hit, so
+    # it needs the same two or more stats (or a foe action that can change them first).
+    starf = (
+        uses_move
+        & (effect == _E.FLING)
+        & (tables.item_fling_effect[state.item[party(fmt, sides), mons]] == FlingEffect.RANDOM_UP2)
+    )
+    fling_count = jnp.stack(
+        [jnp.sum(acupressure_valid(state, _foe(b))[:5].astype(_I32)) for b in range(fmt.B)]
+    )
+    acu_count = jnp.where(starf, fling_count, acu_count)
+    acupressure = acupressure | (starf & (acu_loose | (fling_count >= 2)))
     if loose:
-        acupressure = uses_move & (effect == _E.ACUPRESSURE)
+        acupressure = uses_move & ((effect == _E.ACUPRESSURE) | starf)
         acu_loose = jnp.ones_like(acu_loose)
     if loose:
         # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle

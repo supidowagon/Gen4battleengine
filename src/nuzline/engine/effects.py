@@ -262,6 +262,7 @@ from nuzline.engine.damage import (
     decomp_ability_id,
     divide,
     effectiveness,
+    flung_view,
     ground_immune,
     grounded,
     identified,
@@ -314,6 +315,7 @@ from nuzline.engine.ids import (
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FlingEffect,
     ItemId,
     MoveFlag,
     MoveTarget,
@@ -372,6 +374,9 @@ class _Hit(NamedTuple):
     # ``BtlCmd_CheckSubstitute`` on the defender after this hit (battle_script.c:9173-9186):
     # its substitute is up or ``sub_hit``.
     shielded: jnp.ndarray
+    # The item Fling's script removed this action (``step._use_move``), else 0: the item whose
+    # fling effect ``_fling`` applies to the defender (E3-B2-1).
+    fling_item: jnp.ndarray
 
 
 # Triple Kick's ``SetMultiHit 3`` (effect_script_0104.s:5; Kaizo's be_seq 104 and 88), B13-5.
@@ -1737,6 +1742,64 @@ def _gastro_acid(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (raw != ABILITY_MULTITYPE)
     )
     return _set(state, "ability_suppressed", h.target_side, 1, cond)
+
+
+FLING_STATUSES = (
+    (FlingEffect.PARALYZE, Status.PARALYSIS),
+    (FlingEffect.POISON, Status.POISON),
+    (FlingEffect.BADLY_POISON, Status.TOXIC),
+    (FlingEffect.BURN, Status.BURN),
+)
+
+
+def _fling(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Fling's hit-time half (effect_script_0233.s:8 ``MOVE_SIDE_EFFECT_ON_HIT | TO_DEFENDER``
+    ``MOVE_SUBSCRIPT_PTR_FLING``; the TryFling-time half and the removal are ``step._use_move``'s,
+    ``hooks.fling_try``): ``BattleSystem_TriggerSecondaryEffect`` runs it after a hit that is not
+    MOVE_STATUS_NO_EFFECTS / DID_NOT_HIT (battle_lib.c:1524-1529, ``h.effective``);
+    ``subscript_fling.s:5-7`` ends it for a defender at 0 HP or behind a Substitute
+    (``h.shielded``: CheckSubstitute), and ``BattleSystem_FlingItem`` zeroes ``flingScript`` for a
+    defender with MOVE_EFFECT_EMBARGO (battle_lib.c:6145-6146). The script is the one
+    ``flingScript`` named at TryFling, which the defender's state at the hit still selects (the
+    hit changes none of its status, confusion, attraction, stages, Focus Energy or movesets
+    before this runs). The flung item's effect then acts on the defender: ``hooks.fling_effect``
+    (the heals, cures, stat raises, Starf's draw ``Outcome.acupressure``, Lansat, Micle), and the
+    INDIRECT flinch and status subscripts here, with the secondary-effect checks they share
+    (Shield Dust, Inner Focus, Substitute, Safeguard, immunities, ``_inflict``; the flinch needs
+    a target that has not moved, subscript_flinch_mon.s:5). The attacker's item is gone: the
+    restore subscripts' ``PLUCK_CHECK`` keeps the defender's own item (the flag set,
+    battle_lib.c:6150-6152), which is why nothing here removes one. E3-B2-1."""
+    from nuzline.engine.hooks import fling_effect  # hooks imports this module
+
+    item = h.fling_item
+    kind = tables.item_fling_effect[item].astype(_I32)
+    reached = (
+        (h.effect == _E.FLING)
+        & h.effective
+        & ~h.shielded
+        & _alive(state, h.target_side, h.target)
+        & (state.embargo[h.target_side] == 0)
+        & (item != 0)
+        & (tables.item_fling_power[item] != 0)
+    )
+    state = fling_effect(
+        tables, state, h.target_side, h.target, item, reached, outcome.acupressure[h.side]
+    )
+    flinch = (
+        reached
+        & (kind == FlingEffect.FLINCH)
+        & ~h.target_moved
+        & (h.target_ignorable != AbilityId.INNER_FOCUS)
+        & ~_shield_dust(h)
+    )
+    old = state.flinched[h.target_side]
+    state = state._replace(
+        flinched=state.flinched.at[h.target_side].set(jnp.where(flinch, 1, old).astype(old.dtype))
+    )
+    for fling_kind, status in FLING_STATUSES:
+        inflict = h._replace(param=h.param.at[0].set(int(status)))
+        state = _inflict(tables, state, inflict, outcome, reached & (kind == fling_kind), False)
+    return state
 
 
 def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3297,6 +3360,7 @@ def play_hit(
     in_power=0,
     gift=0,
     script_calc=False,
+    fling=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
     this hit's crit and roll, then the move's effect.
@@ -3378,8 +3442,11 @@ def play_hit(
         state,
         side,
         move,
-        # The crit draw read with the odds at this hit (battle_lib.c:7105-7132).
-        crit_lands(tables, state, side, move, outcome.crit[side, hit_index])
+        # The crit draw read with the odds at this hit (battle_lib.c:7105-7132); Fling's CalcCrit
+        # ran before its RemoveItem (``flung_view``).
+        crit_lands(
+            tables, flung_view(state, side, fling), side, move, outcome.crit[side, hit_index]
+        )
         & ~armored(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
@@ -3391,6 +3458,8 @@ def play_hit(
         in_power=in_power,
         # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
         gift=gift,
+        # Fling's item, removed by its script this action after CalcDamage (damage.flung_view).
+        fling=fling,
     )
     # CalcDamage ran for this hit (a move with a rolled table damage whose script ran: hit 0 hit or
     # miss, ``script_calc``; a later hit when it lands): the Me First counter update of the same
@@ -3539,6 +3608,7 @@ def play_hit(
         # Pursuit's switch path sets no flag but skips the on-hit ability all the same (:108).
         sub_hit=sub_hit | (sub_take & pursuit_switch),
         shielded=sub_hit | sub_take | (state.substitute_hp[target_side] != 0),
+        fling_item=jnp.asarray(fling, _I32),
     )
     for fn in (
         _stat_self,
@@ -3566,6 +3636,7 @@ def play_hit(
         _torment,
         _worry_seed,
         _gastro_acid,
+        _fling,
         _trick_room,
         _skill_swap,
         _disable,

@@ -458,6 +458,7 @@ class BattleEffect(IntEnum):
     TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
     SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
     SUPRESS_ABILITY = 239  # Gastro Acid: Basic_CheckGastroAcid (:269); Expert_GastroAcid (:1782)
+    FLING = 233  # Basic_CheckFling (:263); Expert_Fling (:1776)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -1014,6 +1015,16 @@ CHANGE_USER_ABILITY_DESIRABLE = (
     116, 120,
 )  # fmt: skip
 
+# Basic_FlingItems_Poison / _Burn / _Paralyze and Expert_Fling_DesirableFlingEffects
+# (script.s:1288-1299, :5288-5294): decomp hold-effect ids (generated/item_hold_effects.txt, line
+# N is id N-1: HOLD_EFFECT_PSN_USER 100, _STRENGTHEN_POISON 80, _BRN_USER 101, _PIKA_SPATK_UP 71,
+# _SOMETIMES_FLINCH 56), compared with ``LoadHeldItemEffect`` (Tables.item_hold_effect); checked
+# against the decomp's names by tests/engine/test_e3_batch2.py (E3-B2-1).
+FLING_ITEMS_POISON = (100, 80)
+FLING_ITEMS_BURN = (101,)
+FLING_ITEMS_PARALYZE = (71,)
+FLING_DESIRABLE_EFFECTS = (56, 80, 100, 101, 71)
+
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
     "Mold Breaker": 104,
@@ -1088,6 +1099,10 @@ ABILITY_IDS = {
     "Run Away": 50,
     "Pickup": 53,
     "Honey Gather": 118,
+    # E3-B2-1: Basic_FlingPoison / _FlingBurn AttackerChecks (script.s:1235-1278; Poison Heal,
+    # Immunity, Magic Guard and Water Veil above).
+    "Klutz": 103,
+    "Guts": 62,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -2055,6 +2070,16 @@ def _held_item(ctx: AiContext, battler: Battler) -> jnp.ndarray:
 def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiContext:
     """``IfHeldItemEqualTo`` (trainer_ai.c:1915-1934): ``_held_item == item``."""
     return _jump(ctx, _held_item(ctx, battler) == item)
+
+
+def load_fling_power(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadFlingPower`` (trainer_ai.c:2014-2022): ``Battler_ItemFlingPower`` of the battler
+    (battle_lib.c:5491-5498): 0 under its Embargo, else the true ``heldItem``'s ``flingPower``
+    (``Tables.item_fling_power``), whichever side (E3-B2-1)."""
+    state, side = ctx.state, _side(battler)
+    item = state.item[_row(state, side), state.active[side]]
+    power = jnp.where(state.embargo[side] != 0, 0, ctx.tables.item_fling_power[item])
+    return ctx._replace(calc_temp=power.astype(_I32))
 
 
 def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:

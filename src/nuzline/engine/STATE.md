@@ -706,8 +706,8 @@ three structs has a row.
 | `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |
 | `BattleContext.padding310A` | — | not needed because it is padding |
 | `BattleContext.speedRand` | `qc_roll` | mapped |
-| `BattleContext.flingTemp` | — | later (M6) |
-| `BattleContext.flingScript` | — | later (M6) |
+| `BattleContext.flingTemp` | — | not needed because Fling's flung item (`_Hit.fling_item`) and its script run inside the one hit (`effects._fling`, `hooks.fling_effect`, E3-B2-1) and nothing reads it after |
+| `BattleContext.flingScript` | — | not needed because the item's script is chosen from `tables.item_fling_effect` inside the hit (`effects._fling`, E3-B2-1) and nothing reads it after |
 | `BattleContext.safariCatchStage` | — | not needed because trainer battles have no Safari Zone |
 | `BattleContext.safariEscapeCount` | — | not needed because trainer battles have no Safari Zone |
 | `BattleContext.runAttempts` | — | not needed because the player cannot flee a trainer battle |

@@ -82,13 +82,22 @@ from nuzline.engine.damage import (
     divide,
     trace_copy,
 )
-from nuzline.engine.effects import change_stage, entry_hazards, forget_item, mist_blocks_drop
+from nuzline.engine.effects import (
+    change_stage,
+    entry_hazards,
+    forget_item,
+    hp_update,
+    mist_blocks_drop,
+)
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
+    ACUPRESSURE_STATS,
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
+    NATURE_DISLIKED_FLAVOR,
     AbilityId,
+    FlingEffect,
     ItemId,
     Stat,
     Status,
@@ -985,3 +994,120 @@ def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> Battl
     for side in sides:
         state = after_damage_items(tables, state, side)
     return state
+
+
+# The item a Fling's cure effect acts like (``_restore``): FLING_EFFECT_*_RESTORE are the held
+# berries' own restore subscripts (battle_lib.c:5878-5972).
+_FLING_CURES = {
+    FlingEffect.PRZ_RESTORE: ItemId.CHERI_BERRY,
+    FlingEffect.SLP_RESTORE: ItemId.CHESTO_BERRY,
+    FlingEffect.PSN_RESTORE: ItemId.PECHA_BERRY,
+    FlingEffect.BRN_RESTORE: ItemId.RAWST_BERRY,
+    FlingEffect.FRZ_RESTORE: ItemId.ASPEAR_BERRY,
+    FlingEffect.CNF_RESTORE: ItemId.PERSIM_BERRY,
+    FlingEffect.ALL_RESTORE: ItemId.LUM_BERRY,
+}
+# FLING_EFFECT_*_UP's stat (battle_lib.c:6075-6108), as ``Stat``.
+_FLING_STAT_UP = {
+    FlingEffect.ATK_UP: Stat.ATK,
+    FlingEffect.DEF_UP: Stat.DEF,
+    FlingEffect.SPEED_UP: Stat.SPE,
+    FlingEffect.SPATK_UP: Stat.SPA,
+    FlingEffect.SPDEF_UP: Stat.SPD,
+}
+
+
+def _fling_lookup(table: dict, default) -> jnp.ndarray:
+    out = [int(default)] * len(FlingEffect)
+    for kind, value in table.items():
+        out[int(kind)] = int(value)
+    return jnp.asarray(out, _I32)
+
+
+def fling_try(tables: Tables, state: BattleState, side, mon, item, cond) -> BattleState:
+    """``BattleSystem_FlingItem``'s writes at TryFling time (battle_lib.c:5857-6158), on ``side``'s
+    party ``mon`` (the Fling's defender) where ``cond`` (the move got to its script and did not
+    fail): they land whether or not the Fling then hits, misses or is Protected, and before the
+    script's CalcDamage. ``FLING_EFFECT_PP_RESTORE`` (:5908-5933): the first slot with the largest
+    ``maxPP - ppCur`` above 0 gains the item's hold param, capped (``_leppa``'s pluck path); none
+    below its maximum, nothing. ``FLING_EFFECT_STATDOWN_RESTORE`` (White Herb, :6029-6036): every
+    stage below neutral goes back to neutral, Embargo on the defender or not. E3-B2-1."""
+    kind = tables.item_fling_effect[item].astype(_I32)
+    power = tables.item_hold_param[item].astype(_I32)
+    state, _ = _leppa(
+        tables,
+        state,
+        side,
+        mon,
+        power,
+        jnp.asarray(cond) & (kind == FlingEffect.PP_RESTORE),
+        pluck=True,
+    )
+    herb = jnp.asarray(cond) & (kind == FlingEffect.STATDOWN_RESTORE)
+    stages = state.stages[side]
+    reset = jnp.where(herb & (stages < 0), 0, stages).astype(stages.dtype)
+    return state._replace(stages=state.stages.at[side].set(reset))
+
+
+def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, draw) -> BattleState:
+    """The flung ``item``'s effect on ``side``'s party ``mon`` (the Fling's defender) where
+    ``cond`` (``effects._fling``: ``subscript_fling.s`` ran the script ``BattleSystem_FlingItem``
+    chose, battle_lib.c:5857-6158). The restore subscripts (``subscript_held_item_*.s``) act on
+    the defender (``msgBattlerTemp``, :6153): ``FLING_EFFECT_HP_RESTORE`` / ``_HP_PCT_RESTORE`` /
+    the flavor berries heal ``flingTemp`` through UPDATE_HP, capped (the param, ``Divide(maxHP *
+    param, 100)``, ``Divide(maxHP, param)``), and a flavor the defender's nature dislikes then
+    confuses it (``berry_confuse``, subscript_held_item_dislike_flavor.s); the status restores cure
+    what the defender has (``_restore``: Cheri, Chesto, Pecha, Rawst, Aspear, Persim, Lum); heal
+    infatuation clears its attraction; the stat items raise one stage below +6, Starf two on the
+    stat of ``draw`` among the five below +6 (``RandNext() % 5`` redrawn while the stage is 12,
+    ranked as ``effects.acupressure_stat`` does); Lansat sets Focus Energy; Micle its
+    ``micleBerry``. ``FLING_EFFECT_PP_RESTORE`` and ``_STATDOWN_RESTORE`` already acted
+    (``fling_try``). Statuses and the flinch are ``effects._fling``'s. E3-B2-1."""
+    cond = jnp.asarray(cond)
+    row = party(format_of(state), side)
+    kind = tables.item_fling_effect[item].astype(_I32)
+    power = tables.item_hold_param[item].astype(_I32)
+    max_hp = state.max_hp[row, mon].astype(_I32)
+    flavor = (kind >= FlingEffect.HP_RESTORE_SPICY) & (kind <= FlingEffect.HP_RESTORE_SOUR)
+    heal = jnp.where(
+        kind == FlingEffect.HP_RESTORE,
+        power,
+        jnp.where(
+            kind == FlingEffect.HP_PCT_RESTORE,
+            divide(max_hp * power, 100),
+            jnp.where(flavor, divide(max_hp, jnp.maximum(power, 1)), 0),
+        ),
+    )
+    state = hp_update(state, side, mon, heal, cond & (heal > 0))
+    disliked = jnp.asarray(NATURE_DISLIKED_FLAVOR, _I32)[state.nature[row, mon].astype(_I32)]
+    state = berry_confuse(
+        tables, state, side, mon, cond & flavor & (disliked == kind - FlingEffect.HP_RESTORE_SPICY)
+    )
+    state, _ = _restore(state, side, mon, _fling_lookup(_FLING_CURES, ItemId.NONE)[kind], cond)
+    cured = cond & (kind == FlingEffect.HEAL_INFATUATION)
+    state = state._replace(
+        infatuated=state.infatuated.at[side].set(
+            jnp.where(cured, 0, state.infatuated[side]).astype(state.infatuated.dtype)
+        )
+    )
+    up = _fling_lookup(_FLING_STAT_UP, Stat.ATK)[kind]
+    raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32))
+    state = change_stage(state, side, up, 1, raises & (state.stages[side, up] < STAGE_MAX))
+    order = jnp.asarray([int(x) for x in ACUPRESSURE_STATS[:5]], _I32)
+    valid = state.stages[side][order] < STAGE_MAX
+    count = jnp.maximum(jnp.sum(valid.astype(_I32)), 1)
+    pick = valid & (jnp.cumsum(valid.astype(_I32)) - 1 == jnp.asarray(draw, _I32) % count)
+    stat = jnp.sum(jnp.where(pick, order, 0))
+    state = change_stage(
+        state, side, stat, 2, cond & (kind == FlingEffect.RANDOM_UP2) & jnp.any(valid)
+    )
+    crit = cond & (kind == FlingEffect.CRIT_UP)
+    acc = cond & (kind == FlingEffect.TEMP_ACC_UP)
+    return state._replace(
+        focus_energy=state.focus_energy.at[side].set(
+            jnp.where(crit, 1, state.focus_energy[side]).astype(state.focus_energy.dtype)
+        ),
+        micle=state.micle.at[side].set(
+            jnp.where(acc, 1, state.micle[side]).astype(state.micle.dtype)
+        ),
+    )

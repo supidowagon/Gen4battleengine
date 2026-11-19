@@ -439,6 +439,9 @@ SITE_N: dict[int, int] = {
     5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
     6210: 64,  # Expert_TrickRoom_TryScorePlus3 (+3 when it does NOT jump)
     4429: 50,  # Expert_ChangeUserAbility_TryScorePlus2 (+2 when it does NOT jump)
+    5257: 128,  # Expert_Fling (power 30-60: to _End when it jumps, else -1)
+    5268: 128,  # Expert_Fling_CheckWeakness (to _TryScorePlus1 when it jumps, else +1 first)
+    5276: 64,  # Expert_Fling_TryScorePlus1 (+1 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -712,6 +715,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (:1790), :5984, :5988 (E3-2-2)
         259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
+        233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
+        # (E3-B2-1)
         239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
         # (:1782), :5481, :5484 (E3-2-6)
     }
@@ -864,6 +869,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     239: ("Expert_GastroAcid", 1782),
     259: ("Expert_TrickRoom", 1800),
     191: ("Expert_ChangeUserAbility", 1743),
+    233: ("Expert_Fling", 1776),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -999,6 +1005,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         239,  # SUPRESS_ABILITY: Expert_GastroAcid (E3-2-6)
         259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
         191,  # SWITCH_ABILITIES: Expert_ChangeUserAbility (E3-2-5)
+        233,  # FLING: Expert_Fling (E3-B2-1)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

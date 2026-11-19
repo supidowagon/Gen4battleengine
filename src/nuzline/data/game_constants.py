@@ -318,6 +318,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Run Away": 50,
             "Pickup": 53,
             "Honey Gather": 118,
+            # E3-B2-1: Basic_FlingPoison / _FlingBurn AttackerChecks (script.s:1235-1278).
+            "Klutz": 103,
+            "Guts": 62,
         },
     ),
     *_table(
@@ -751,6 +754,10 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.ItemParam": "columns of tables.item_party_param; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemAiCategory": _ENGINE_ENCODING,
     "nuzline.engine.ids.AbilityId": _ENGINE_ENCODING,
+    "nuzline.engine.ids.FlingEffect": (
+        "engine index order of the decomp's FLING_EFFECT_* (BattleSystem_FlingItem, "
+        "battle_lib.c:5857-6158); " + _ENGINE_ENCODING
+    ),
     "nuzline.ai.commands.Battler": _AI_ENCODING + " (AI_BATTLER_*)",
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
@@ -891,6 +898,26 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
         "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
         "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_POISON": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Poison, script.s:1288), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_BURN": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Burn, script.s:1293), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_PARALYZE": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Paralyze, script.s:1297), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_DESIRABLE_EFFECTS": (
+        "decomp hold effect ids of the AI script's table (Expert_Fling_DesirableFlingEffects, script.s:5288), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
     ),
     "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
         "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "
