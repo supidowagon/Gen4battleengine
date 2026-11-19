@@ -185,10 +185,11 @@ _I8, _I32, _F32 = jnp.int8, jnp.int32, jnp.float32
 # RandNext() % m over a uniform u16 per SwitchSite (NONE, KEEP, PASS_INEFFECTIVE,
 # PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD, ABSORB): (modulus, the residues lo <= r < hi that
 # stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1, so the
-# residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691).
+# residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691). ABSORB
+# switches when ``RandNext() & 1`` is set (trainer_ai.c:3706): residue 1 of 2.
 _SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3, 2], _I32)
-_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 0], _I32)
-_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 1], _I32)
+_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 1], _I32)
+_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 2], _I32)
 _SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691, 32768], _F32) / 65536
 
 # IfRandomLessThan sites per move (decomp move id), transcribed from roark.md 5.2-5.3

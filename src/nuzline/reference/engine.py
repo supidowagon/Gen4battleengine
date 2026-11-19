@@ -6219,18 +6219,21 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     loaded = copy.deepcopy(state)
     for sd, roll in zip(loaded.battlers, outcome.starf, strict=True):
         sd.starf_roll = int(roll)
-    out = _ref_step(tables, loaded, actions, outcome)
+    out = _ref_step(tables, loaded, actions, outcome, copied=True)
     for sd in out.battlers:
         sd.starf_roll = 0
     return out
 
 
-def _ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
+def _ref_step(
+    tables, state: RefState, actions: tuple[int, int], outcome, copied: bool = False
+) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
     picked slot (``_resume``); a turn that reaches such a list stops there and writes the
-    scratch (``_write_scratch``)."""
-    s = copy.deepcopy(state)
+    scratch (``_write_scratch``). ``copied``: ``state`` is already the caller's own copy
+    (``ref_step``), played in place."""
+    s = state if copied else copy.deepcopy(state)
     if s.over:
         return s
     actions = (int(actions[0]), int(actions[1]))
