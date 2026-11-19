@@ -974,10 +974,14 @@ def initial_arrays(
     ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796-4811) does, its
     non-empty items fill ``trainer_items[1]`` from slot 0 in order and their number is
     ``trainer_item_count[1]``; the player's battlers' bags stay empty (only ``battler &
-    BATTLER_THEM`` is filled, :4803). With four battlers, battler 3's bag is ``opp2_items``,
-    the second opposing trainer's (``trainers[3]``; ``TWO_TRAINERS`` / ``MULTI`` must give
-    it), by default ``opp_items`` again: a plain double loads the one trainer into both
-    enemy slots (encounter.c:736, :751-752; trainer_data.c:31-37), so each holds a copy
+    BATTLER_THEM`` is filled, :4803). With four battlers, battler 3's bag is ``opp2_items``
+    (``trainers[3]``), which every four-battler fight must give (``ValueError`` otherwise):
+    ``TWO_TRAINERS`` / ``MULTI`` the second opposing trainer's bag; a plain ``DOUBLES`` either
+    ``opp_items`` again, when both trainer ids are the trainer's (a scripted
+    ``StartTrainerBattle t, t`` or the spotted pair, scripts_battles.s:156-173 with
+    trainer_encounter.c:356-371; encounter.c:736, :751-752), or ``()`` when the player talks
+    to the trainer (scripts_battles.s:37, enemyTrainer2 = 0, asm/macros/scrcmd.inc:1427:
+    ``trainers[3]`` stays cleared, field_battle_data_transfer.c:74-77, trainer_data.c:31-33)
     (ruling D1-5). The leads'
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
@@ -1016,9 +1020,9 @@ def initial_arrays(
     a["exp_mask"][...] = 1 << leads[0]
     bags = {1: opp_items}
     if fmt.B == 4:
-        if opp2_items is None and fmt.P > 2:
-            raise ValueError("a fight of two opposing trainers needs the second one's bag")
-        bags[3] = opp_items if opp2_items is None else opp2_items
+        if opp2_items is None:
+            raise ValueError("a four-battler fight needs battler 3's bag (opp2_items; D1-5)")
+        bags[3] = opp2_items
     for b, items in bags.items():
         bag = [item for item in items if item]
         if len(bag) > BAG_SLOTS:
