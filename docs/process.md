@@ -67,7 +67,7 @@ per day is the rate used for estimates.
   listed by `TABLE_ALLOW` in `tools/ops/common.sh`. Never the ROM, save files, the calc
   archive or its extraction, the docs sheet or its extraction, or anything personal.
 - **Nightly:** brief `tools/ops/nightly_brief.md`. Run it on `ci-day-big` when that pod is
-  up; and when its run ends the nightly
+  up; when its run ends the nightly
   agent deletes `ci-day-big` if no other run is active on it. Otherwise it rents `ci-nightly`:
   at most $6 per run; the nightly agent itself deletes it within 4.5 hours of creation.
   A tip that equals the last nightly's tip does not run again.
