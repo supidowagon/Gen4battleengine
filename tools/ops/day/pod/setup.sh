@@ -14,7 +14,7 @@ set -euxo pipefail
 export PATH="/root/.local/bin:/work/_bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
 # meta.env holds the beacon codes: sourced with the trace off, so setup.log never shows them.
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; set +x; . ./meta.env; unset WATCH_F WATCH_D; set -x
-MARK="${MARK:-not slow}"
+MARK="${MARK:-not slow and not fullset}"   # pack.sh writes MARK into meta.env; this default is the same
 echo $$ > "$D/setup.pid"; SETUP_DONE=0
 trap 'rc=$?; [ "$SETUP_DONE" = 1 ] || echo "SETUP_FAILED rc=$rc $(date +%s)"' EXIT
 echo "SETUP_START $(date +%s)"

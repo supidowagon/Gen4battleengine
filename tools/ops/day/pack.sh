@@ -9,7 +9,8 @@
 # (tools/ops/day/pod/setup.sh); forbidden files; table entries (directories included) with '..'
 # or a leading '/' or './'; table entries outside TABLE_ALLOW or in TABLE_DENY; a grep error in
 # any check (the checks fail closed). Any failure after $RENT/out/<run> is created removes it.
-# Env: MARK (pytest -m for lines without A; default "not slow"), runner knobs go in the exec body.
+# Env: MARK (pytest -m for lines without A; default "not slow and not fullset": the per-tip run;
+# MARK=fullset for the merge-candidate run, DAYBOX.md "Merge candidate"), runner knobs go in the exec body.
 # meta.env also gets WATCH_F and WATCH_D (fresh, random beacon codes) for bin/notify.sh and
 # tools/ops/day/wait.sh.
 set -euo pipefail
@@ -69,7 +70,7 @@ draw() { local a=abcdefghijklmnopqrstuvwxyz l="" b
 WF=$(draw); WD=$(draw)
 while [ "${WD:0:3}" = "${WF:0:3}" ]; do WD=$(draw); done
 for w in "$WF" "$WD"; do echo "$w" | grep -qE '^[a-z]{3}[0-9a-f]{30}$' || refuse "could not draw a random beacon code" "${#w} characters"; done
-printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow}" "$WF" "$WD" > "$P/meta.env"
+printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\nWATCH_F=%s\nWATCH_D=%s\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow and not fullset}" "$WF" "$WD" > "$P/meta.env"
 CT=$(tar -tf "$P/code.tar"); TALL=$(tar -tJf "$P/tables.tar.xz")   # TALL: directories included
 T=$(printf '%s\n' "$TALL" | pick -v '/$') || exit 3                  # T: files only
 deny "tables entry with '..', a leading '/' or './'" "$TALL" -E "$BADPATH"
