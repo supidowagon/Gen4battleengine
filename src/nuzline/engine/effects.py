@@ -1682,6 +1682,11 @@ def _torment(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "torment", h.target_side, 1, cond)
 
 
+def trick_room_runs(h: _Hit) -> jnp.ndarray:
+    """``bool``: Trick Room's script runs on this hit (``_trick_room``; ``MoveHit.trick_room``)."""
+    return (h.effect == _E.TRICK_ROOM) & h.landed
+
+
 def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Trick Room (effect_script_0259.s:5-12): with any FIELD_CONDITION_TRICK_ROOM bit up the move
     clears them (:12, "restored the twisted dimensions"), else it sets FIELD_CONDITION_TRICK_ROOM_INIT
@@ -1689,7 +1694,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     accuracy roll (RANGE_FIELD, accuracy 0). ``step._trick_room_check`` counts it down
     (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
     (battle_lib.c:1432-1439). E3-2-4."""
-    cond = (h.effect == _E.TRICK_ROOM) & h.landed
+    cond = trick_room_runs(h)
     value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
     return state._replace(
         trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
@@ -3081,6 +3086,10 @@ class MoveHit(NamedTuple):
     sub_hit: jnp.ndarray
     # MOVE_STATUS_SUPER_EFFECTIVE after the hit's type chart (the Enigma Berry, on_hit_berry).
     super_effective: jnp.ndarray
+    # Trick Room's script ran on this hit (``_trick_room``'s condition, set or restore): it sets
+    # trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), so the action's
+    # MoveEnd re-sorts the order (bcp.c:3989-3994; battle_lib.c:7276-7300), SF2 (k).
+    trick_room: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -3564,9 +3573,7 @@ def play_hit(
         # engine has no Destiny Bond event (step.EVENT_FLAGS), here or for a FIGHT's take-down.
         ko = (target_hp > 0) & (state.hp[party(fmt, target_side), target] == 0)
         bonded = (
-            ko
-            & (state.destiny_bond[target_side] != 0)
-            & (state.hp[party(fmt, side), user] > 0)
+            ko & (state.destiny_bond[target_side] != 0) & (state.hp[party(fmt, side), user] > 0)
         )
         state = _set(state, "hp", (side, user), 0, bonded)
     # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
@@ -3735,4 +3742,5 @@ def play_hit(
         super_effective=super_effective
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
+        trick_room=trick_room_runs(h),
     )

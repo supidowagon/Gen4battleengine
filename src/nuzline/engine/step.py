@@ -2131,7 +2131,7 @@ def _use_move(
         # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
         # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
         # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
-        sync_flag, sync_sem, disrupted, se0 = carry[16:]
+        sync_flag, sync_sem, disrupted, se0, tr_ran = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -2392,6 +2392,7 @@ def _use_move(
             sync_sem,
             disrupted | kick_miss,
             jnp.where(first, info.super_effective & info.effective, se0),
+            tr_ran | info.trick_room,
         )
 
     init = (
@@ -2415,6 +2416,7 @@ def _use_move(
         jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
         jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
         jnp.bool_(False),  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``, SF2 (i))
+        jnp.bool_(False),  # trickRoomActivated: Trick Room's script ran (SF2 (k))
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[party(fmt, target_side), target]
@@ -2423,6 +2425,7 @@ def _use_move(
     paused, pursue, damaged0, dealt0 = looped[11:15]
     sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
     se_now = looped[19]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
+    trick_room_ran = looped[20]  # MoveHit.trick_room over the hits
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -2661,10 +2664,11 @@ def _use_move(
         # user after a confusion self-hit (bcp.c:2629).
         "defender": jnp.where(self_hit, side, resolved.defender).astype(_I32),
         "started": started,
-        # Trick Room's script ran (set or restore, direct or called): the field's counter toggled
-        # (effects._trick_room is the only writer inside an action), so the action's MoveEnd
-        # re-sorts (effect_script_0259.s:18, bcp.c:3991; ``order.resort_claw_flags``).
-        "trick_room": (state.trick_room != 0) != (state_in.trick_room != 0),
+        # Trick Room's script ran (set or restore, direct or called; ``MoveHit.trick_room``):
+        # it sets trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), and
+        # the action's MoveEnd re-sorts on it (bcp.c:3989-3994; battle_lib.c:7276-7300;
+        # ``order.resort_claw_flags``). The reference keys on ``turn.trick_room_ran``.
+        "trick_room": trick_room_ran,
     }
     return state, own, foe, ctl
 
