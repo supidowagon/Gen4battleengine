@@ -16,11 +16,14 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.engine.actions import MOVE_ACTIONS, decision_actions
 from nuzline.engine.outcome import sample_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step
 from nuzline.search import expand as expand_mod
 from nuzline.search.expand import expand
 from nuzline.search.stage_b import SolveSettings, solve
+from tests.engine.helpers import step_rows
 from tests.search.test_stage_b import ZERO, batch
+
+# Compiled once: an eager vmapped ``sample_outcome`` runs op by op over every key.
+_sample = jax.jit(jax.vmap(sample_outcome, in_axes=(0, None, None, None)))
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -87,8 +90,8 @@ def test_expand_pauses_then_resumes(tables, names):
     count = 2000
     acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
     keys = jax.random.split(jax.random.key(3), count)
-    outcomes = jax.vmap(sample_outcome, in_axes=(0, None, None, None))(keys, tables, state, acts)
-    stepped = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))(tables, state, acts, outcomes)
+    outcomes = _sample(keys, tables, state, acts)
+    stepped = step_rows(tables, state, acts, outcomes)
     got = Counter(b"".join(np.asarray(f)[i].tobytes() for f in stepped) for i in range(count))
     assert set(got) <= set(expected)
     for key, p in expected.items():

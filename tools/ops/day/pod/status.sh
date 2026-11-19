@@ -3,7 +3,9 @@
 # (always printed), collection failures, unit counts, memory, killed and crashed units, running
 # units with F/E marks so far, every failing finished unit with its FAILED/ERROR lines, and the
 # other runs still active on the pod (/work/*/ and /work/*/*/) plus the count of live pytest
-# processes outside this run; "other active runs: none" only when both are empty.
+# processes outside this run; "other active runs: none" only when both are empty. A run whose
+# bin/notify.sh (notify.pid) is alive and whose results are not taken yet (no notify/taken_d) is
+# listed as <name>(beacon): its results are still on offer.
 # setup=alive|done|gone: setup.pid's process alive | dead with runner.pid written | dead (or no
 # setup.pid) without runner.pid, a failed setup whether or not the log says SETUP_FAILED.
 # runner=alive|gone|starting|none: runner.pid's process alive | dead | not alive yet while setup
@@ -15,9 +17,10 @@ grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null | sed 's/^/COLLECT F
 # A run is active only while its setup or runner process (setup.pid, runner.pid) is alive, runs
 # a runner*.sh or setup*.sh script and has its working folder inside that run; log text alone
 # never counts. A zombie has an empty cmdline, so it fails the script test.
+# alive <pid file> <run folder> [<cmdline pattern>, default the runner or setup script]
 alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; case "$p" in ''|*[!0-9]*) return 1;; esac
   kill -0 "$p" 2>/dev/null || return 1
-  tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE 'runner[0-9]*\.sh|setup[_a-z0-9]*\.sh' || return 1
+  tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -qE "${3:-runner[0-9]*\.sh|setup[_a-z0-9]*\.sh}" || return 1
   case "$(readlink "/proc/$p/cwd" 2>/dev/null)" in "$2"|"$2"/*) return 0;; esac; return 1; }
 if alive "$D/setup.pid" "$D"; then SETUP=alive; elif [ -f "$D/runner.pid" ]; then SETUP=done; else SETUP=gone; fi
 if [ -f "$D/runner.pid" ]; then
@@ -27,7 +30,8 @@ echo "setup=$SETUP runner=$RUNNER DONE=$([ -f "$O/DONE" ] && echo y || echo n)"
 active=""; for d in /work/*/ /work/*/*/; do r=${d%/}
   case "$r" in "$D"|"$D"/*|/work/_*) continue;; esac; n=${r#/work/}
   if alive "$r/runner.pid" "$r"; then active="$active $n"
-  elif alive "$r/setup.pid" "$r"; then active="$active $n(setup)"; fi; done
+  elif alive "$r/setup.pid" "$r"; then active="$active $n(setup)"
+  elif [ ! -f "$r/notify/taken_d" ] && alive "$r/notify.pid" "$r" 'notify\.sh'; then active="$active $n(beacon)"; fi; done
 # Live pytest processes whose working folder is outside this run (pgrep skips zombies: no cmdline).
 np=0; for p in $(pgrep -f '/\.venv/bin/pytest'); do
   case "$(readlink "/proc/$p/cwd" 2>/dev/null)" in "$D"|"$D"/*) ;; *) np=$((np + 1));; esac; done

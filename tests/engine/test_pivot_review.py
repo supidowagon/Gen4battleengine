@@ -15,7 +15,7 @@ from nuzline.engine.enumerate import enumerate_turn
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, live_hit_threshold
 from nuzline.engine.state import make_state
-from tests.engine.helpers import assert_matches_reference
+from tests.engine.helpers import assert_matches_reference, step_rows
 from tests.engine.test_pivot import _mon
 
 O = empty_outcome()
@@ -43,11 +43,7 @@ def test_resumed_hit_law_reads_the_newcomers_evasion(tables, names, move):
     assert int(paused.pivot_battler) == 1
     acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
     outcomes, probs = enumerate_turn(tables, paused, acts)
-    import jax
-
-    from nuzline.engine.step import step
-
-    after = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))(tables, paused, acts, outcomes)
+    after = step_rows(tables, paused, acts, outcomes)
     hit = np.asarray(after.hp)[:, 0, 1] < int(paused.hp[0, 1])
     newcomer = paused._replace(active=paused.active.at[0].set(1))
     eva = 2 if move == "Baton Pass" else 0

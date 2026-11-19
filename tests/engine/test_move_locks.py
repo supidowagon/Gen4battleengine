@@ -18,8 +18,7 @@ import pytest
 from nuzline.engine.actions import legal_actions, legal_opponent_actions, locked_slot
 from nuzline.engine.ids import Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
-from nuzline.engine.step import step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 
 BIG = 400
 SPE = 4  # stats[..., 0..4] are Atk..Spe
@@ -262,7 +261,7 @@ def single_use_damage(tables, names, s, move, power):
     mid = names.move(move)
     t = tables._replace(move_power=tables.move_power.at[mid].set(power))
     fresh = s._replace(curled=s.curled * 0, locked_move=s.locked_move * 0)
-    out = step(t, fresh, A(move, "Leer", fresh, names), empty_outcome())
+    out = jit_step(t, fresh, A(move, "Leer", fresh, names), empty_outcome())
     return int(s.hp[1, 0]) - int(out.hp[1, 0])
 
 

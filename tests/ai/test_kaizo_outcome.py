@@ -850,9 +850,12 @@ def _check_fight_reads(t, party, every: int, moves, rng, species, n: int = 4):
 
 @pytest.mark.slow
 @pytest.mark.fullset
-def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party):
+@pytest.mark.parametrize("fight", [0, 1, 2, 3, 4, "roark"])
+def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party, fight):
     """E1 Ruling R6 against the data, the fast version: one fight per flag piece (the full
-    sweep is ``test_slot_reads_fit_every_transcribed_effect_full``, slow). The proof that no
+    sweep is ``test_slot_reads_fit_every_transcribed_effect_full``, slow). One test per fight
+    (each compiles its own loose program; together they ran 291 s, past the fast tier's 60 s),
+    and one for Roark's bound by hand. The proof that no
     path makes more reads than its fight's bound is the walk of script.s
     (tests/ai/test_read_bounds.py regenerates its table); this checks it on the transcription.
 
@@ -891,17 +894,21 @@ def test_slot_reads_fit_every_transcribed_effect(kaizo_tables, kaizo_roark_party
         (0x241, [lead(0x241, first), ACCELEROCK, HEADBUTT, 0]),
     ]
     assert {every for every, _ in fights} >= set(pieces)
-    rng = np.random.default_rng(11)
-    species = _two_ability_species(t)
-    reached = [
-        _check_fight_reads(
-            t, kaizo_roark_party, every, moves, rng, species, 1 if PSYWAVE_ID in moves else 4
+    if fight != "roark":
+        every, moves = fights[fight]
+        rng = np.random.default_rng(11 + fight)
+        species = _two_ability_species(t)
+        n_states = 1 if PSYWAVE_ID in moves else 4
+        lines, kinds = _check_fight_reads(
+            t, kaizo_roark_party, every, moves, rng, species, n_states
         )
-        for every, moves in fights
-    ]
-    assert 8030 in reached[1][0]
-    assert ReadKind.CALC_MAGNITUDE in reached[2][1]
-    assert ReadKind.CALC_PSYWAVE in reached[3][1]
+        if fight == 1:
+            assert 8030 in lines
+        if fight == 2:
+            assert ReadKind.CALC_MAGNITUDE in kinds
+        if fight == 3:
+            assert ReadKind.CALC_PSYWAVE in kinds
+        return
     # Roark's bound by hand: Selfdestruct, a guessed two-ability player, evasion +4 (decomp
     # stage 10, script.s:1857), Bonsly at 10 % HP.
     assert fight_slot_reads(move_read_rows(t, t.ai_moves), KAIZO.flags) == KAIZO.slot_reads == 7

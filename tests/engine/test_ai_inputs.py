@@ -23,10 +23,10 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.ids import AbilityId, Status
 from nuzline.engine.outcome import empty_outcome, hit_threshold, outcome_to_py
-from nuzline.engine.step import replace, step
+from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace, ref_step
-from tests.engine.helpers import roark_state
+from tests.engine.helpers import jit_step, roark_state
 
 POTION = 17  # decomp ITEM_POTION
 USE_SLOT_0, USE_SLOT_1 = FIRST_ITEM_ACTION, FIRST_ITEM_ACTION + 1
@@ -42,7 +42,7 @@ def _same(a, b):
 def _both(tables, s, acts, o=None):
     """``step`` and ``ref_step`` agree; returns the JAX result."""
     o = empty_outcome() if o is None else o
-    out = step(tables, s, jnp.asarray(acts, jnp.int32), o)
+    out = jit_step(tables, s, jnp.asarray(acts, jnp.int32), o)
     ref = ref_step(to_numpy(tables), to_ref(s), tuple(int(a) for a in acts), outcome_to_py(o))
     _same(out, from_ref(ref))
     return out
