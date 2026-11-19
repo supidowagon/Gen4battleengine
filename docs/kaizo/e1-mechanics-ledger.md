@@ -1700,6 +1700,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `tests/engine/test_field_mask.py` (readers on 0x7F, 0x5, 0x1, 0x3F, fog; turn end on 0x7F stale 3; 0x5 twice
   and the wrap; Snow Warning cleaning 0x7F; Rain Dance failing under 0x7F, Hail under 0x3F; engine = reference),
   `tests/ai/test_kaizo_commands.py::test_load_current_weather_takes_the_last_set_group`.
+- G-7 Defog (#258, fog clear and side-condition clears) is E3's (claude/e3-batch2 400c898; manager ruling
+  19 Nov). Its fog clear is one more weather writer for the field mask: it must clear the fog bit in
+  `field_mask` (engine.field writers, G-4) and Defog's readers read the mask (G-6). Whichever of batch G and
+  E3 batch 2 reaches main second converts it on its merge of main.
 
 ## Stream state (restart point, 2026-11-19)
 
