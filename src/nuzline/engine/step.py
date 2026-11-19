@@ -3915,6 +3915,8 @@ def _action_phase(
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
     Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch."""
     paused = state.pivot_battler != 0
+    # The turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events clears them.
+    state = state._replace(starf_roll=jnp.asarray(outcome.starf, state.starf_roll.dtype))
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
@@ -3962,6 +3964,7 @@ def step_events(
         roosting=jnp.where(pending, roosting_now(e, read["roosted"]), 0).astype(e.roosting.dtype)
     )
     s = _where(halted, s, e)
+    s = s._replace(starf_roll=jnp.zeros_like(s.starf_roll))  # 0 between turns, so states merge
     return _where(state.over != 0, state, s), events
 
 

@@ -823,6 +823,9 @@ DECOMP_ITEM_TO_ID: dict[str, ItemId] = {
     "Micle Berry": ItemId.MICLE_BERRY,  # HOLD_EFFECT_PINCH_ACC_UP (44), PLUCK_EFFECT_TEMP_ACC_UP
     "Jaboca Berry": ItemId.JABOCA_BERRY,  # HOLD_EFFECT_RECOIL_PHYSICAL (46), PLUCK_EFFECT_NONE
     "Rowap Berry": ItemId.ROWAP_BERRY,  # HOLD_EFFECT_RECOIL_SPECIAL (47), PLUCK_EFFECT_NONE
+    # E1 Batch F (F-9, F-10): the pinch berries with no stat of their own.
+    "Lansat Berry": ItemId.LANSAT_BERRY,  # HOLD_EFFECT_PINCH_CRITRATE_UP (41), PLUCK_EFFECT_CRIT_UP
+    "Starf Berry": ItemId.STARF_BERRY,  # HOLD_EFFECT_PINCH_RANDOM_UP (42), PLUCK_EFFECT_RANDOM_UP2
 }
 
 # The stat pinch berries' hold effects (BattleSystem_TriggerHeldItem, battle_lib.c:4773-4836,
@@ -840,7 +843,13 @@ PINCH_STAT_HOLD_EFFECTS: dict[int, tuple[str, int]] = {
 # battle_lib.c:4778, :1294, :4902): a param 0 (Kaizo's Ganlon and Apicot Berries), or 1 halved by
 # Gluttony, divides by zero, and the ROM's ``_u32_div_f`` returns the dividend then
 # (``order.pinch_limit``, ruling G-53), so every param is supported.
-PINCH_DIVISOR_ITEMS = (ItemId.PINCH_BERRY, ItemId.CUSTAP_BERRY)
+PINCH_DIVISOR_ITEMS = (
+    ItemId.PINCH_BERRY,
+    ItemId.CUSTAP_BERRY,
+    ItemId.BERSERK_GENE,  # Kaizo hold 36, param 0: maxHP / 0 -> maxHP (G-53), F-8
+    ItemId.LANSAT_BERRY,  # battle_lib.c:4838-4848
+    ItemId.STARF_BERRY,  # :4850-4872
+)
 # Every other item that divides by its hold param, and the smallest param that never divides by
 # zero: Sticky Barb's end-of-turn ``Divide(maxHP, param)`` (battle_lib.c:5330-5336) and Shell
 # Bell's ``Divide(dealt, param)`` (bcp.c:4736-4752, battle_lib.c:7345-7355) (1). build_tables
@@ -939,6 +948,57 @@ HOLD_EFFECT_TO_ID: dict[int, tuple[str, ItemId]] = {
     # Power Herb: a charge move hits on its first use (effect_script_0039.s:7, the other charge
     # scripts' CheckItemHoldEffect HOLD_EFFECT_CHARGE_SKIP), B10-12.
     99: ("HOLD_EFFECT_CHARGE_SKIP", ItemId.POWER_HERB),
+    # E1 Batch F (F-7): Macho Brace and the Power items (vanilla 117-122, Kaizo 50): Speed halved
+    # by sSpeedHalvingItemEffects (battle_lib.c:1160-1169, in CompareBattlerSpeed) and the EVs
+    # doubled / added at a level-up (BattleScript_CalcEffortValues, battle_script.c:10214-10307),
+    # both read off the raw hold effect: an id with no hook of its own.
+    50: ("HOLD_EFFECT_EVS_UP_SPEED_DOWN", ItemId.MACHO_BRACE),
+    **{
+        h: (name, ItemId.MACHO_BRACE)
+        for h, name in (
+            (117, "HOLD_EFFECT_LVLUP_ATK_EV_UP"),
+            (118, "HOLD_EFFECT_LVLUP_DEF_EV_UP"),
+            (119, "HOLD_EFFECT_LVLUP_SPATK_EV_UP"),
+            (120, "HOLD_EFFECT_LVLUP_SPDEF_EV_UP"),
+            (121, "HOLD_EFFECT_LVLUP_SPEED_EV_UP"),
+            (122, "HOLD_EFFECT_LVLUP_HP_EV_UP"),
+        )
+    },
+}
+
+# Kaizo's re-purposed and renamed items (docs/kaizo/discrepancies.md:31-34, :1336-1348, :2654-2657;
+# the ROM's item_data, hold effect and param decoded per item), by (spelling of the Kaizo name,
+# Kaizo hold effect). ``build_tables._item_maps`` gives a Kaizo slot that is not vanilla's (a new
+# name, or the same name with another hold effect) its entry here, else ``UNSUPPORTED``. Each
+# entry is the id whose hooks are exactly the slot's: the effect is the hold effect's with
+# the hold param read from the table; Pluck / Bug Bite and Natural Gift read the item itself
+# (its pluck effect, ``Item_IsBerry``, its Natural Gift data), so a non-berry never takes a
+# berry's id (``hooks.PLUCKABLE``).
+KAIZO_ITEM_IDS: dict[tuple[str, int], ItemId] = {
+    # Hold 36 (HOLD_EFFECT_PINCH_ATK_UP) on Shoal Salt's slot, F-8.
+    ("berserkgene", 36): ItemId.BERSERK_GENE,
+    # Hold 92 (HOLD_EFFECT_FARFETCHD_CRITRATE_UP, param 0) on Stick's slot: Stick's own effect, F-11.
+    ("leek", 92): ItemId.CRIT_ITEM,
+    # Hold 0 on Nugget's slot (only its Fling power differs), F-13.
+    ("bignugget", 0): ItemId.NONE,
+    # Hold 1 (HOLD_EFFECT_HP_RESTORE, param 100, no berry, PLUCK_EFFECT_NONE): Berry Juice's
+    # effect, F-14.
+    ("ragecandybar", 1): ItemId.BERRY_JUICE,
+    # Hold 12 (HOLD_EFFECT_STATUS_RESTORE) on non-berries, F-12.
+    ("lavacookie", 12): ItemId.LAVA_COOKIE,
+    ("oldgateau", 12): ItemId.LAVA_COOKIE,
+    # Kaizo's Power items: hold 50 (vanilla 117-122), param 0, F-7.
+    **{
+        (name, 50): ItemId.MACHO_BRACE
+        for name in (
+            "powerbracer",
+            "powerbelt",
+            "powerlens",
+            "powerband",
+            "poweranklet",
+            "powerweight",
+        )
+    },
 }
 
 # The weather rocks (effect_script_0115.s, _0136.s, _0137.s, _0164.s: the attacker's

@@ -227,6 +227,12 @@ Encodings:
   ``BattleSystem_CalcMoveDamage`` (battle_lib.c:7074-7076) for the attacker's Fire moves
   (the flag, not the ability: it outlives a lost ability), cleared on a switch and a faint
   (battle_lib.c:2101-2104, :2185-2188) and not passed by Baton Pass (:2107-2115).
+* E1 batch F (F-10). ``starf_roll`` is ``Outcome.starf``, the Starf Berry's ``RandNext() % 5``
+  draws as one value in [0, ``ids.STARF_DRAWS``): ``step_events`` loads it when the turn starts so
+  the held-item checks (``hooks.held_item_check`` and ``pluck_berry``, which have no outcome
+  argument) read it, and clears it when the turn ends or pauses; it is 0 between turns, so states
+  merge. A check outside a turn (the battle start, a faint replacement's switch-in) reads 0:
+  the first stat below +6 in decomp order.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -405,6 +411,7 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
+    starf_roll: jnp.ndarray  # int8, the turn's Starf Berry draw (``Outcome.starf``), F-10
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -754,6 +761,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
+    "starf_roll": (_BATTLER, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),

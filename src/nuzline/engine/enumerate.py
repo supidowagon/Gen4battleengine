@@ -236,6 +236,7 @@ from nuzline.engine.ids import (
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
     SPECIES_CHATOT,
+    STARF_DRAWS,
     STOMP_PARAM,
     TAILWIND_TURNS,
     TRI_ATTACK_STATUSES,
@@ -506,7 +507,7 @@ def _end_speeds(
     tailwind_free=False,
     unburden_free=False,
 ):
-    """``(int32[3 * (27 + 4 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
+    """``(int32[3 * (27 + 6 * SLOTS)], bool[...])``: the effective speeds ``side`` can have
     after the actions (``step.end_of_turn_order`` on the post-action state, step.py:1251-1261)
     and which of them are possible. Grid: Speed stage -6..6 x paralyzed or not of the
     Pokemon active after the actions, plus its neutral speed (a faint resets stages and
@@ -514,7 +515,7 @@ def _end_speeds(
     paralysis state other than the start one ``para_free``. Where ``dragged`` (the foe
     can Roar this side), every living party member at stage 0, paralyzed or not: the
     Pokemon the drag brings in (``InitBattleMon`` resets its stages), and a Salac Berry holder
-    at +1 too (its switch-in item check can raise its Speed).
+    at +1 and a Starf Berry holder at +2 too (their switch-in item checks can raise its Speed).
 
     The weather lock: every grid point is also evaluated with the lock on and with it off
     where ``lock_free`` (a Cloud Nine / Air Lock holder can enter, leave or faint this
@@ -561,17 +562,25 @@ def _end_speeds(
     salac = (tables.item_effect[held] == ItemId.PINCH_BERRY) & (
         tables.item_param[held, 1] == Stat.SPE
     )
+    # A Starf Berry holder at +2 too (its +2 on Speed, F-10).
+    starf = tables.item_effect[held] == ItemId.STARF_BERRY
     n_slots = slots.shape[0]
-    mons = jnp.concatenate([mons, jnp.tile(jnp.repeat(slots, 2), 2).astype(state.active.dtype)])
+    mons = jnp.concatenate([mons, jnp.tile(jnp.repeat(slots, 2), 3).astype(state.active.dtype)])
     stages = jnp.concatenate(
-        [stages, jnp.zeros((2 * n_slots,), _I32), jnp.ones((2 * n_slots,), _I32)]
+        [
+            stages,
+            jnp.zeros((2 * n_slots,), _I32),
+            jnp.ones((2 * n_slots,), _I32),
+            jnp.full((2 * n_slots,), 2, _I32),
+        ]
     )
-    paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), 2 * n_slots)])
+    paras = jnp.concatenate([paras, jnp.tile(jnp.array([False, True]), 3 * n_slots)])
     possible = jnp.concatenate(
         [
             possible,
             jnp.asarray(dragged) & jnp.repeat(living, 2),
             jnp.asarray(dragged) & jnp.repeat(living & salac, 2),
+            jnp.asarray(dragged) & jnp.repeat(living & starf, 2),
         ]
     )
     # The weather lock: 0 = as on the field of the grid point, 1 = on, 2 = off, 3 = off in rain.
@@ -1146,6 +1155,11 @@ INPUT_NEUTRAL_ITEMS = (
     # A fixed input of the type chart and Levitate (never consumed; Knock Off is its own clause)
     # and a speed factor of the order fixed at the turn's start (G-56).
     ItemId.IRON_BALL,
+    # E1 Batch F. Macho Brace and the Power items: the same speed factor of the order fixed at
+    # the turn's start (F-7). A Lansat Berry sets its holder's Focus Energy after a foe's hit:
+    # only the holder's crit odds, a variant bit of ``outcome.crit_variants`` (F-9).
+    ItemId.MACHO_BRACE,
+    ItemId.LANSAT_BERRY,
 )
 INPUT_CLAUSE_ITEMS = (
     ItemId.ORAN_BERRY,  # the attacker's HP: HP clause
@@ -1160,6 +1174,9 @@ INPUT_CLAUSE_ITEMS = (
     ItemId.ASPEAR_BERRY,
     ItemId.WHITE_HERB,  # item clause (a lowered stage restored)
     ItemId.PINCH_BERRY,  # item clause (a stage raised in a pinch); pluck clause
+    ItemId.BERSERK_GENE,  # the same item clause (F-8); not plucked
+    ItemId.STARF_BERRY,  # item clause: +2 on any of the five stats (F-10); pluck clause
+    ItemId.LAVA_COOKIE,  # a status cure, as Lum Berry's (F-12); not plucked
     # Its heal is the holder's HP (HP clause); its confusion is no damage input (G-4, G-5).
     ItemId.FLAVOR_BERRY,
     # The attacker's HP (G-54) and the holder's (G-55): HP clause.
@@ -1174,8 +1191,9 @@ _STATUS_CURES = (
     ItemId.RAWST_BERRY,
     ItemId.ASPEAR_BERRY,
     ItemId.LUM_BERRY,
+    ItemId.LAVA_COOKIE,
 )
-_BURN_CURES = (ItemId.RAWST_BERRY, ItemId.LUM_BERRY)
+_BURN_CURES = (ItemId.RAWST_BERRY, ItemId.LUM_BERRY, ItemId.LAVA_COOKIE)
 
 # The attacker's own move effect, for ``OutcomeLaws.compress``: a hit of a
 # ``TABLE_DAMAGE_EFFECTS`` move deals exactly ``hit_damage_table``'s entry for its
@@ -1438,7 +1456,9 @@ def damage_inputs_can_change(
     held = state.item[party(fmt, sides), mons]
     gated = held_items(state)  # state.held_item, B13-29
     pinch_stat = tables.item_param[held, 1]
-    pinch = item == ItemId.PINCH_BERRY
+    pinch_berry = item == ItemId.PINCH_BERRY
+    pinch = pinch_berry | (item == ItemId.BERSERK_GENE)
+    starf = item == ItemId.STARF_BERRY  # +2 on any of Attack, Defense, Speed, Sp. Atk, Sp. Def
     foe_effect, foe_param0, foe_param1 = foes(effect), foes(param0), foes(param1)
     own_flags = tables.move_flags[moves].astype(_I32)
     foe_flags = foes(own_flags)
@@ -1504,7 +1524,8 @@ def damage_inputs_can_change(
         )
         | (foe_effect == _E.ROAR)
         | (foe_effect == _E.WEATHER)
-        | ((foe_effect == _E.EAT_BERRY) & pinch & (pinch_stat == defense_stat))
+        | ((foe_effect == _E.EAT_BERRY) & pinch_berry & (pinch_stat == defense_stat))
+        | ((foe_effect == _E.EAT_BERRY) & starf)
         | ((foe_effect == _E.KNOCK_OFF) & (held != 0))  # B10-6
         # B13-19: the foe's Recycle restores an item it then holds through the side's hits.
         | (foe_effect == _E.RECYCLE)
@@ -1561,8 +1582,11 @@ def damage_inputs_can_change(
     # A stat pinch berry (hooks.held_item_check) raises its holder's stage after a hit or a
     # residual: the side's own on the stage its hit reads (Attack / Sp. Atk), or the foe's
     # on its defending one (Defense / Sp. Def).
-    pinch_inputs = (pinch & (pinch_stat == attack_stat)) | (
-        foes(pinch) & (foes(pinch_stat) == defense_stat)
+    pinch_inputs = (
+        (pinch & (pinch_stat == attack_stat))
+        | (foes(pinch) & (foes(pinch_stat) == defense_stat))
+        | starf  # attack_stat and defense_stat are among its five stats
+        | foes(starf)
     )
     items = (
         herb_inputs
@@ -1947,7 +1971,7 @@ def outcome_laws(
     # A White Herb restores a lowered Speed stage (hooks.held_item_check); a Salac Berry
     # raises it, held or plucked (hooks.pluck_berry: any Pluck / Bug Bite user, over-approx).
     herb = _holds_item(tables, state, actions, (ItemId.WHITE_HERB,))
-    pinch_held = _holds_item(tables, state, actions, (ItemId.PINCH_BERRY,))
+    pinch_held = _holds_item(tables, state, actions, (ItemId.PINCH_BERRY, ItemId.STARF_BERRY))
     plucks = uses_move & (effect == _E.EAT_BERRY)
     # B13-19: a Recycle gives its user back an item the move end's item check may use (a Salac
     # Berry, a White Herb, a Lum or Cheri Berry): free like a held one.
@@ -1965,7 +1989,9 @@ def outcome_laws(
     sync_foe = foes(_holds(tables, state, actions, (AbilityId.SYNCHRONIZE,)))
     # A Lum or Cheri Berry cures paralysis, held or plucked (hooks.held_item_check,
     # pluck_berry).
-    lum = _holds_item(tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY))
+    lum = _holds_item(
+        tables, state, actions, (ItemId.LUM_BERRY, ItemId.CHERI_BERRY, ItemId.LAVA_COOKIE)
+    )
     para_free = (
         (
             foe_moves
@@ -2023,7 +2049,7 @@ def outcome_laws(
     # The foe can drag this side's Pokemon out: its Roar with an eligible bench Pokemon here
     # (BtlCmd_TryWhirlwind fails at eligibleMons <= 1, battle_script.c:5285-5297, before
     # any drag).
-    dragged = foes((roar & (roar_bench >= 1)))
+    dragged = foes(roar & (roar_bench >= 1))
     if loose:
         # The brute force: both draws whenever the side uses Roar, whatever the levels and the
         # bench (the pick's law is then over max(bench, 1) values), and every living party
@@ -2087,7 +2113,7 @@ def outcome_laws(
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
     scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
-    embargo_speed = jnp.any(scarf & foes((uses_move & (effect == _E.EMBARGO))))
+    embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
     end_speed_tie = live & (
         jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed
     )
@@ -2146,7 +2172,7 @@ def outcome_laws(
             for side, target in ((b, _foe(b)) for b in range(fmt.B))
         ]
     )
-    acu_loose = foes((live & (uses_move | switch)))
+    acu_loose = foes(live & (uses_move | switch))
     acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
     if loose:
         acupressure = uses_move & (effect == _E.ACUPRESSURE)
@@ -2157,6 +2183,16 @@ def outcome_laws(
         # speedRand (battle_lib.c:1278 tests the item first), and drawing it there anyway
         # would only multiply every other brute force past the width cap.
         quick_claw = jnp.broadcast_to(live & jnp.any(claw & (state.species != 0)), (fmt.B,))
+
+    # Starf Berry (F-10): a living holder anywhere in the party can eat it at a pinch this turn (a
+    # hit, the turn's item checks, a switch-in): its stat draw. Over-approximate, as Quick Claw's.
+    starf_party = jnp.any(
+        (tables.item_effect[state.item] == ItemId.STARF_BERRY)
+        & (state.species != 0)
+        & (state.hp > 0),
+        axis=1,
+    )[party(fmt, jnp.arange(fmt.B))]
+    starf_draw = live & starf_party
 
     band_party = jnp.any(
         (tables.item_effect[state.item] == ItemId.FOCUS_BAND)
@@ -2206,6 +2242,7 @@ def outcome_laws(
             future_band=live & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
+            starf=starf_draw,
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -2671,6 +2708,9 @@ _LAWS = {
     "future_band": _focus_band,
     # subscript_confuse.s:34 Random 3, 2 (G-5): 2-5, uniform.
     "berry_confusion": lambda laws, side: ([2, 3, 4, 5], [1, 1, 1, 1], 4),
+    # battle_lib.c:4864-4866: RandNext() % 5 until the stat is below +6, uniform over the eligible
+    # stats by the % n convention: one value in [0, 60), read modulo their count (F-10).
+    "starf": lambda laws, side: (list(range(STARF_DRAWS)), [1] * STARF_DRAWS, STARF_DRAWS),
 }
 
 

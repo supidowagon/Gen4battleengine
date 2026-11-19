@@ -37,6 +37,7 @@ hand-built outcome forces a miss.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -53,6 +54,9 @@ from nuzline.engine.damage import (
     trace_copy,
     weather_suppressed,
 )
+from nuzline.engine.damage import (
+    STATUS as STATUS_CATEGORY,
+)
 from nuzline.engine.format import SINGLES, Format, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.ids import (
@@ -62,6 +66,7 @@ from nuzline.engine.ids import (
     ON_HIT_EFFECTS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    STARF_DRAWS,
     AbilityId,
     EffectId,
     ItemId,
@@ -173,6 +178,10 @@ class Outcome(NamedTuple):
     # int8[B], 1 = Chatter's roll passes (``RandNext() % 100 <= effectChance``, battle_script.c:
     # 8428-8430; the chance is ``ids.CHATTER_CHANCES`` of the user's ``chatot_cry``), G-70.
     chatter: jnp.ndarray
+    # int8[B], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866): a value
+    # in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among the five stats below +6
+    # (``hooks.starf_stat``), F-10. Held by ``BattleState.starf_roll`` while the turn plays.
+    starf: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -210,6 +219,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         future_band=sides,
         berry_confusion=sides + 2,
         chatter=sides,
+        starf=sides,
     )
 
 
@@ -1082,9 +1092,24 @@ CRIT_ODDS_EFFECTS = {
     EffectId.KNOCK_OFF: _remove_held_item,
     EffectId.EMBARGO: _embargo_all,
 }
+
+
+def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
+    """A Lansat Berry's write to the crit inputs (``HOLD_EFFECT_PINCH_CRITRATE_UP``,
+    battle_lib.c:4838-4848: the holder's Focus Energy, ``hooks._pinch_effects``): every
+    battler holding one has Focus Energy (its HP test is not judged: over-approximate). It is
+    another battler's damaging hit that brings the pinch before the holder's CalcCrit, so it is
+    the last variant bit, used by any non-status move (``crit_variants``), F-9."""
+    holds = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    return state._replace(
+        focus_energy=(state.focus_energy | holds).astype(state.focus_energy.dtype)
+    )
+
+
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
-# is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
-CRIT_VARIANTS = 2 ** len(CRIT_ODDS_EFFECTS)
+# is set in v (in ``CRIT_ODDS_EFFECTS`` order, then the Lansat pinch's); variant 0 is the turn
+# start.
+CRIT_VARIANTS = 2 ** (len(CRIT_ODDS_EFFECTS) + 1)
 
 
 def crit_variants(
@@ -1104,7 +1129,7 @@ def crit_variants(
     if before is None:
         before = ~jnp.eye(n, dtype=bool)
     before = jnp.asarray(before, bool)
-    writes = tuple(CRIT_ODDS_EFFECTS.values())
+    writes = (*CRIT_ODDS_EFFECTS.values(), partial(_lansat_pinch, tables))
     odds, singles = [], []
     for v in range(CRIT_VARIANTS):
         s = state
@@ -1115,8 +1140,11 @@ def crit_variants(
     base = odds[0]
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     effect = tables.move_effect[moves]
-    for e, eff in enumerate(CRIT_ODDS_EFFECTS):
-        used = uses_move & (effect == eff)  # [B], by the user
+    # Each write's user: the battlers that use its effect; the Lansat pinch's (the last entry), a
+    # non-status move (F-9).
+    users = [uses_move & (effect == eff) for eff in CRIT_ODDS_EFFECTS]
+    users.append(uses_move & (tables.move_category[moves] != STATUS_CATEGORY))
+    for e, used in enumerate(users):  # [B], by the user
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
         singles.append(reached & (odds[1 << e] != base))
     possible = []
@@ -1737,6 +1765,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         <= jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        # Starf Berry (battle_lib.c:4864-4866): RandNext() % 5 until the stat is below +6, uniform
+        # over the eligible stats by the % n convention; one value in [0, 60) serves every count 1-5
+        # (F-10).
+        starf=jax.random.randint(jax.random.fold_in(key, 47), per_side, 0, STARF_DRAWS, dtype=_I32),
     )
     outcome = _cast(outcome)
 

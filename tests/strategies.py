@@ -1891,6 +1891,10 @@ BATCH_D_ITEMS = (
     "Iron Ball",
     "Ganlon Berry",
     "Apicot Berry",
+    # E1 Batch F (F-7, F-9, F-10): Macho Brace, Lansat and Starf Berry.
+    "Macho Brace",
+    "Lansat Berry",
+    "Starf Berry",
 )
 BATCH_D_MOVES = {
     "Grip Claw": ("Wrap", "Bind", "Fire Spin", "Whirlpool", "Clamp"),
@@ -1898,6 +1902,8 @@ BATCH_D_MOVES = {
     "Jaboca Berry": ("Pluck", "Bug Bite"),
     "Micle Berry": ("Pluck", "Bug Bite"),
     "Leppa Berry": ("Pluck", "Bug Bite"),
+    "Lansat Berry": ("Pluck", "Bug Bite"),
+    "Starf Berry": ("Pluck", "Bug Bite"),
 }
 
 
@@ -1929,7 +1935,8 @@ def _draw_batch_d(draw, tables: Tables, a: dict, side: int, active: int, names: 
             _teach(tables, a, who, mon, move, rnd.randint(0, 3))
 
     max_hp = int(a["max_hp"][side, active])
-    if name in ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry"):
+    pinched = ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry")
+    if name in (*pinched, "Lansat Berry", "Starf Berry"):
         a["hp"][side, active] = rnd.randint(1, max(max_hp // 3, 1))
     if name == "Leppa Berry":
         move_pp = np.asarray(tables.move_pp)
@@ -2370,6 +2377,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
+        starf=_ints(0, 59, sides),
     )
 
 

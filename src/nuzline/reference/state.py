@@ -140,6 +140,7 @@ class RefBattler:
     future_move: int
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
+    starf_roll: int  # the turn's Starf Berry draw (Outcome.starf), 0 between turns (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
     ts_order: int

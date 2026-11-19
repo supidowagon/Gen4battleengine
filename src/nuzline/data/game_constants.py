@@ -900,6 +900,12 @@ EXEMPT: dict[str, str] = {
         "game's items carry their own hold effect (build_tables looks theirs up here), and a "
         "game's code changes are rom_diff.toml entries (Ruling 13)"
     ),
+    "tools.effect_map.KAIZO_ITEM_IDS": (
+        "keyed by (spelling of a Kaizo item's name, its Kaizo hold effect) for the slots the Kaizo "
+        "ROM renamed or re-purposed (docs/kaizo/discrepancies.md, items); used only for Kaizo, "
+        "where a slot that is not vanilla's takes the id of its own hold effect (E1 Batch F, "
+        "F-7 .. F-14)"
+    ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "
         "changes to it are rom_diff.toml entries (Ruling 13)"

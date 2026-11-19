@@ -130,6 +130,7 @@ from tools.effect_map import (
     INVOKER_MOVES,
     KAIZO_EFFECTS,
     KAIZO_FLAG_EFFECTS,
+    KAIZO_ITEM_IDS,
     KAIZO_THUNDER_EFFECTS,
     METRONOME_EXCLUDED_MOVES,
     MULTI_TURN_EFFECTS,
@@ -364,6 +365,7 @@ def _item_type(item: dict, item_id: int) -> int:
         ItemId.RESIST_BERRY: (RESIST_BERRY_HOLD_EFFECTS, "resists"),
         ItemId.TYPE_BOOST: (TYPE_BOOST_HOLD_EFFECTS, "boosts"),
         ItemId.PINCH_BERRY: (PINCH_STAT_HOLD_EFFECTS, "raises"),
+        ItemId.BERSERK_GENE: (PINCH_STAT_HOLD_EFFECTS, "raises"),
         ItemId.WEATHER_ROCK: (WEATHER_ROCK_HOLD_EFFECTS, "extends"),
         ItemId.CRIT_ITEM: (CRIT_HOLD_EFFECTS, "needs"),
         ItemId.FLAVOR_BERRY: (FLAVOR_HOLD_EFFECTS, "tastes of"),
@@ -393,7 +395,8 @@ def _pinch_divisor_ok(items: list[dict], ids: list[int]) -> list[int]:
 def _item_maps(items: list[dict], vanilla: list[dict] | None) -> list[int]:
     """``ItemId`` per item. Vanilla: the held item by ``effect_map.held_item_ids``. Kaizo
     (``vanilla`` given): vanilla's id of the slot, only when the slot keeps vanilla's name (up
-    to spelling) and hold effect; a renamed or re-purposed item is ``UNSUPPORTED``. The hold
+    to spelling) and hold effect; a renamed or re-purposed item has its ``effect_map.
+    KAIZO_ITEM_IDS`` entry (its name and Kaizo hold effect), else it is ``UNSUPPORTED``. The hold
     param is the game's own (``item_param``)."""
     if vanilla is None:
         return [int(i) for i in held_item_ids(items)]
@@ -406,7 +409,10 @@ def _item_maps(items: list[dict], vanilla: list[dict] | None) -> list[int]:
     for item, van, held in zip(items, vanilla, vanilla_held, strict=True):
         same_name = spelling(item["name"]) == spelling(van["name"])
         same_hold = same_name and item["hold_effect"] == van["hold_effect"]
-        hold.append(int(held if same_hold else ItemId.UNSUPPORTED))
+        repurposed = KAIZO_ITEM_IDS.get(
+            (spelling(item["name"]), item["hold_effect"]), ItemId.UNSUPPORTED
+        )
+        hold.append(int(held if same_hold else repurposed))
     return hold
 
 

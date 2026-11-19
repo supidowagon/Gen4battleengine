@@ -863,6 +863,11 @@ def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.
     # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
     # ``gift``: the action's removed berry (``gift_item``, B13-37).
     gift_power, gift_type = natural_gift_params(tables, gift_item(state, side, gift))
+    # Kaizo's RageCandyBar has Natural Gift power 250 and type 31 (F-14): no type id, so no chart
+    # row (battle_lib.c:2611-2645), no attacker type (:2592) and no type-keyed boost matches it, as
+    # TYPE_MYSTERY (no row, no battler has it) does (B13-26): clamped to it so every table read
+    # stays in range.
+    gift_type = jnp.where(gift_type > Type.DARK, Type.MYSTERY, gift_type)
     return jnp.where((effect == EffectId.NATURAL_GIFT) & (gift_power > 0), gift_type, out)
 
 

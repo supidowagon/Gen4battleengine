@@ -510,6 +510,10 @@ def decomp_law(tables, state, actions, name: str, index: tuple) -> dict[int, Fra
         stages = np.asarray(state.stages)[side]
         count = sum(int(stages[int(x)]) < 6 for x in ACUPRESSURE_STATS)
         return {v: Fraction(1, max(count, 1)) for v in range(max(count, 1))}
+    if name == "starf":
+        # BattleSystem_TriggerHeldItem (battle_lib.c:4864-4866): RandNext() % 5 until the stat is
+        # below +6, uniform over the eligible stats by the % n convention (F-10): one value of 60.
+        return {v: Fraction(1, 60) for v in range(60)}
     raise AssertionError(name)
 
 

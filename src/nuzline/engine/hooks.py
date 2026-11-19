@@ -91,6 +91,7 @@ from nuzline.engine.ids import (
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
     SPECIES_CASTFORM,
+    STARF_STATS,
     AbilityId,
     ItemId,
     Stat,
@@ -485,7 +486,7 @@ def _restore(state: BattleState, side, mon, effect, cond):
     any_status = status != Status.NONE
     confused = state.confusion[side] > 0
     lowered = state.stages[side] < 0
-    lum = effect == ItemId.LUM_BERRY
+    lum = (effect == ItemId.LUM_BERRY) | (effect == ItemId.LAVA_COOKIE)  # F-12: the same cure
     berry = jnp.zeros((), bool)
     for item, statuses in _STATUS_BERRIES:
         cures = jnp.zeros((), bool)
@@ -515,16 +516,51 @@ def _restore(state: BattleState, side, mon, effect, cond):
 
 
 def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
-    """``(state, raised)``: a ``PINCH_BERRY`` ``item`` raises ``side``'s stat
-    ``item_param[item, 1]`` by 1 where ``cond`` and that stage is below +6
+    """``(state, raised)``: a ``PINCH_BERRY`` or ``BERSERK_GENE`` (Kaizo's hold 36 on a non-berry,
+    F-8) ``item`` raises ``side``'s stat ``item_param[item, 1]`` by 1 where ``cond`` and that
+    stage is below +6
     (``statBoosts[stat] < MAX_STAT_STAGE``, battle_lib.c:4779 and :5754):
     ``subscript_held_item_raise_stat.s`` runs ``BtlCmd_ChangeStatStage`` with
     ``SIDE_EFFECT_TYPE_HELD_ITEM`` (battle_script.c:2841-2873; Simple applies where the stage
     is read, ``damage.simple_stage``)."""
     stat = tables.item_param[item, 1].astype(_I32)
-    on = jnp.asarray(cond) & (tables.item_effect[item] == ItemId.PINCH_BERRY)
+    effect = tables.item_effect[item]
+    on = jnp.asarray(cond) & ((effect == ItemId.PINCH_BERRY) | (effect == ItemId.BERSERK_GENE))
     on = on & (state.stages[side, stat] < STAGE_MAX)
     return change_stage(state, side, stat, 1, on), on
+
+
+def starf_stat(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(stat, any)``: the ``Stat`` a Starf Berry raises on ``side``'s battler and whether it can
+    raise one (BattleSystem_TriggerHeldItem, battle_lib.c:4850-4872; ``BattleSystem_PluckBerry``,
+    :5798-5817). The decomp scans Attack, Defense, Speed, Sp. Atk, Sp. Def (``STARF_STATS``) for
+    one below +6 and, if there is one, draws ``RandNext() % 5`` until the drawn stat is below +6:
+    uniform over the eligible stats by the project's ``% n`` convention, the rank
+    ``BattleState.starf_roll`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    eligible = state.stages[side][idx] < STAGE_MAX
+    count = jnp.sum(eligible.astype(_I32))
+    rank = jnp.cumsum(eligible.astype(_I32)) - 1
+    pick = eligible & (rank == state.starf_roll[side].astype(_I32) % jnp.maximum(count, 1))
+    return jnp.sum(jnp.where(pick, idx, 0)), count > 0
+
+
+def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
+    """``(state, triggered)``: the Lansat Berry (``HOLD_EFFECT_PINCH_CRITRATE_UP``: the holder's
+    Focus Energy, ``subscript_held_item_raise_crit.s:11``, only without it, battle_lib.c:4838-4848,
+    Pluck :5819-5825) and the Starf Berry (``HOLD_EFFECT_PINCH_RANDOM_UP``: +2 on ``starf_stat``,
+    ``subscript_held_item_sharply_raise_stat.s``, a direct stage write: ``change_stage``, with no
+    Mist or Simple) of ``side``'s battler where ``cond`` (the pinch test, or the Pluck's none)."""
+    cond = jnp.asarray(cond)
+    lansat = cond & (effect == ItemId.LANSAT_BERRY) & (state.focus_energy[side] == 0)
+    state = state._replace(
+        focus_energy=state.focus_energy.at[side].set(
+            jnp.where(lansat, 1, state.focus_energy[side]).astype(state.focus_energy.dtype)
+        )
+    )
+    stat, some = starf_stat(state, side)
+    starf = cond & (effect == ItemId.STARF_BERRY) & some
+    return change_stage(state, side, stat, 2, starf), lansat | starf
 
 
 def max_pp(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
@@ -645,6 +681,8 @@ def held_item_check(
     limit = pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
     pinch = live & (hp <= limit)
     state, raised = _raise_stat(tables, state, side, item, pinch)
+    state, pumped = _pinch_effects(tables, state, side, effect, pinch)
+    raised = raised | pumped
     leppa = live & (effect == ItemId.LEPPA_BERRY)
     state, restored = _leppa(tables, state, side, mon, power, leppa)
     # Micle Berry (HOLD_EFFECT_PINCH_ACC_UP, :4897-4906 / :5110-5119): at the pinch, sets
@@ -696,6 +734,8 @@ PLUCKABLE = (
     ItemId.PERSIM_BERRY,
     ItemId.LUM_BERRY,
     ItemId.PINCH_BERRY,
+    ItemId.LANSAT_BERRY,  # PLUCK_EFFECT_CRIT_UP (:5819-5825), F-9
+    ItemId.STARF_BERRY,  # PLUCK_EFFECT_RANDOM_UP2 (:5798-5817), F-10
     ItemId.FLAVOR_BERRY,  # PLUCK_EFFECT_HP_RESTORE_SPICY .. _SOUR (:5678-5751), G-4
     ItemId.LEPPA_BERRY,  # PLUCK_EFFECT_PP_RESTORE (:5609-5633), G-58
     ItemId.MICLE_BERRY,  # PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830), G-59
@@ -761,6 +801,8 @@ def pluck_berry(
     state = state._replace(hp=state.hp.at[row, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
     state, raised = _raise_stat(tables, state, side, item, on)
+    state, pumped = _pinch_effects(tables, state, side, effect, on)  # :5798-5825, no HP test
+    raised = raised | pumped
     state, restored = _leppa(
         tables, state, side, user, power, on & (effect == ItemId.LEPPA_BERRY), pluck=True
     )

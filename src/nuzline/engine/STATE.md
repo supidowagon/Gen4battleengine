@@ -248,6 +248,14 @@ three structs has a row.
   `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
   reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
   is never read).
+- **Starf Berry draw -> `starf_roll`** (E1 batch F, F-10): `BattleSystem_TriggerHeldItem`
+  (`battle_lib.c:4864-4866`) and `BattleSystem_PluckBerry` (:5805-5810) draw `RandNext() % 5` until
+  the stat is below +6. `Outcome.starf[side]` holds that draw as one value in [0, 60) (the stat is
+  rank `value % eligible` among Attack, Defense, Speed, Sp. Atk, Sp. Def below +6: uniform, the
+  project's `% n` convention); `step_events` copies it into `starf_roll` when the turn starts, so
+  `hooks.held_item_check` and `hooks.pluck_berry` read it, and zeroes it when the turn ends or
+  pauses (states between turns merge). Checks outside a turn (the battle start, a replacement's
+  switch-in) read 0: the first eligible stat in decomp order.
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and

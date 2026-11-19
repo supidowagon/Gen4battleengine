@@ -1319,3 +1319,70 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   and ability so a Castform copy follows the rule (the species test reads the battler's species). Trace cannot copy
   Forecast (`UNTRACEABLE_ABILITIES`, already). AI: no `script.s` read; type loads read `state.types`
   (`BattleMon_Get`), so the AI sees the changed types.
+
+Held items, hold effects 50, 36, 41, 42, 92, 0, 1, 12 (sheets `item-*.md`). Kaizo's renamed and re-purposed slots take
+the id of the hold effect they now have through `effect_map.KAIZO_ITEM_IDS` (keyed by the slot's `spelling()` name and
+Kaizo hold effect, used by `build_tables._item_maps` where the slot is not vanilla's); a non-berry never takes a
+berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_IsBerry` (`hooks.PLUCKABLE`).
+- F-7 Macho Brace and the Power items (hold 50 `EVS_UP_SPEED_DOWN`; `ItemId.MACHO_BRACE`, an id with no hook). Battle
+  Speed: `BattleSystem_CompareBattlerSpeed` halves a holder of `sSpeedHalvingItemEffects` (50, 106, 117-122,
+  battle_lib.c:1160-1169, :1240-1246, :1306-1312) read through `BattleSystem_GetItemData`, so Klutz and Embargo do not
+  stop it (`order.effective_speed`, reference `_speed`: both already read the raw hold effect). EVs:
+  `BattleScript_CalcEffortValues` doubles every yield for hold 50 (battle_script.c:10289-10291) and adds the item param
+  for 117-122 (:10243-10283); Kaizo's Power items 289-294 are hold 50 with param 0 (vanilla 117-122 with 4), so they act
+  as Macho Braces (`levelup`, which reads the party mon's raw hold effect and param; Knock Off keeps the party copy,
+  io:590-591). `effect_map.HOLD_EFFECT_TO_ID` maps 50 and 117-122 to the id (vanilla's Power items were UNSUPPORTED
+  for want of one) and `KAIZO_ITEM_IDS` the six Kaizo Power items (same name, other hold effect). Enumerate: neutral (a
+  speed factor of the order fixed at the turn's start, like Iron Ball). AI: `AICmd_IfSpeedCompare*` call
+  `CompareBattlerSpeed` (ai.c:1109, :1121), so the halving is seen; `Expert_Trick` and Fling are unsupported.
+- F-8 Berserk Gene (Kaizo item 70, hold 36 `PINCH_ATK_UP`, param 0; `ItemId.BERSERK_GENE`). The Liechi path:
+  `BattleSystem_TriggerHeldItem` / `_OnStatus` (battle_lib.c:4773-4784, :5196-5207): with param 0, `maxHP / 0` is
+  `maxHP` (ruling G-53), so it fires at any HP once Attack is below +6; +1 Attack by the stage routine
+  (`subscript_held_item_raise_stat.s:11`), then `PLUCK_CHECK` removes it. It is its own id because Pluck / Bug Bite
+  leave it (PLUCK_EFFECT_NONE, not a berry: lib:5832-5835): `hooks._raise_stat` and reference
+  `_held_item` take it with `PINCH_BERRY`, `PLUCKABLE` does not. `item_param[i, 1]` is Attack from
+  `PINCH_STAT_HOLD_EFFECTS[36]`; `PINCH_DIVISOR_ITEMS` takes any param. Enumerate: the pinch berry's item clause.
+- F-9 Lansat Berry (hold 41, param 4; `ItemId.LANSAT_BERRY`). Held: at `curHP <= maxHP / param` (Gluttony halves the
+  param) and no `VOLATILE_CONDITION_FOCUS_ENERGY`, the holder gets it (`subscript_held_item_raise_crit.s:11`) and the
+  berry is eaten (lib:4838-4848, :5261-5271); already focused: no trigger, the berry stays. Pluck / Bug Bite: the
+  eater gains it unless it has it, at any HP, the berry eaten either way (:5819-5825; Klutz / Embargo eater:
+  no effect, :5839-5844). `hooks._pinch_effects` (called by `held_item_check` and `pluck_berry`), reference
+  `_pinch_effect`. Its crit effect is the existing `focus_energy` (+2, `outcome.side_crit_odds`). The pinch can arrive
+  from a foe's hit before the holder's own CalcCrit, so `outcome.crit_variants` has one more variant bit
+  (`_lansat_pinch`: a Lansat holder has Focus Energy, used by any non-status move of another battler; over-
+  approximate): `CRIT_VARIANTS` is 16. AI: `Basic_CheckAlreadyPumpedUp` already reads the volatile (ai.s:592-594);
+  the Natural Gift and Recycle tables already list the berry (items 149-212).
+- F-10 Starf Berry (hold 42, param 4; `ItemId.STARF_BERRY`). At the same pinch (lib:4850-4872, :5273-5294) it raises
+  one of Attack, Defense, Speed, Sp. Atk, Sp. Def (`ids.STARF_STATS`: `BATTLE_STAT_ATTACK + i`, i < 5) by 2, capped at
+  +6, by a direct `UpdateMonData` write (`subscript_held_item_sharply_raise_stat.s:13-17`: no Mist, no Clear Body;
+  `hooks._pinch_effects` uses `change_stage`); with all five at +6 it does not trigger and is kept. The stat:
+  `RandNext() % 5` until the drawn stat is below +6 (lib:4864-4866; Pluck :5798-5817, eaten even with all five at +6).
+  Ruling: by the project's `% n` convention (`RandNext() % n` uniform, as `Outcome.acupressure`, B12-9) it is uniform
+  over the eligible stats, not the exact 13108 / 13107 split the sheet notes (Attack's extra 1 in 65536): the draw is
+  `Outcome.starf[side]`, one value in [0, `STARF_DRAWS` = 60), and the stat is the eligible one of rank `value %
+  eligible` (`hooks.starf_stat`). The draw reaches the item checks, which take no outcome, through
+  `BattleState.starf_roll` (STATE.md): `step._action_phase` copies `Outcome.starf` into it, `step_events` zeroes it
+  at the turn's end or pause; reference `ref_step` does the same. **Not exact:** a check outside a turn (the battle
+  start, a faint replacement's switch-in, `search.playout.replacement_pass`) reads 0, the first eligible stat in
+  decomp order; it matters only for a Starf holder that enters at or below a quarter of its HP. One draw serves a
+  turn: a Recycled berry eaten twice in a turn repeats the pick (outcome-variable limit). Enumerate: `starf` is read
+  when a living holder is in the side's party (`outcome_laws`), law uniform over 60; an item clause on any of the five
+  stats (own and foe's), a Speed +2 grid point for a Roar's drag. AI: the Recycle and Natural Gift tables list it.
+- F-11 Leek (Kaizo item 259, vanilla Stick; hold 92 `FARFETCHD_CRITRATE_UP`, param 0). Identical bytes in both ROMs
+  except the name: `KAIZO_ITEM_IDS` maps the slot to `ItemId.CRIT_ITEM` (+2 crit stages for a Farfetch'd,
+  `BattleSystem_CalcCriticalMulti`, battle_lib.c:7128, `outcome.side_crit_odds`).
+- F-12 Lava Cookie and Old Gateau (Kaizo hold 12 `STATUS_RESTORE`, param 0, non-berries; `ItemId.LAVA_COOKIE`). Lum's
+  trigger (lib:4662-4697, :5052-5087: any status or confusion, no HP test, no Gluttony), cured status and confusion
+  as `_restore` / `_cure` do for Lum, and the item removed; Pluck / Bug Bite leave it (PLUCK_EFFECT_NONE, no berry:
+  :5832-5835). Enumerate: a status cure (the burn and paralysis clauses of Lum).
+- F-13 Big Nugget (Kaizo item 92, vanilla Nugget; hold 0). Only the name and Fling power 250 differ: `KAIZO_ITEM_IDS`
+  maps it to `ItemId.NONE` (no hold effect, not a berry: `Item_IsBerry`, src/item.c:357-365; Pluck leaves it,
+  lib:5832-5835). Fling is unsupported.
+- F-14 RageCandyBar (Kaizo item 71, vanilla Shoal Shell; hold 1 `HP_RESTORE`, param 100, no berry): Berry Juice's
+  effect with 100 HP, `KAIZO_ITEM_IDS` maps it to `ItemId.BERRY_JUICE` (not pluckable: lib:5832-5835; trigger
+  `curHP <= maxHP / 2`, lib:4585-4591). Natural Gift power 250, type 31: `BtlCmd_CalcNaturalGiftParams`
+  (battle_script.c:8088-8102) sets `moveType` 31, a value that is no type id, so `BattleSystem_ApplyTypeChart` finds no
+  STAB (`MON_HAS_TYPE`, lib:2592) and no chart row (:2611-2645) and no type-keyed item, ability or weather case matches
+  it: `damage.move_type_of` and reference `_move_type` give a Natural Gift type above `Type.DARK` the value
+  `Type.MYSTERY` (no row, and no battler's `state.types` holds it: roost only reads Flying as Mystery in the defender's
+  chart), as ruling B13-26 does for the AI's estimate; the table reads stay in range.

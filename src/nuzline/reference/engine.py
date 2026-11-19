@@ -108,6 +108,7 @@ from nuzline.engine.ids import (
     SPECIES_PIKACHU,
     SPEED_HALVING_HOLD_EFFECTS,
     SPIKES_MAX,
+    STARF_STATS,
     STAT_MOVE_ABILITY_IDS,
     STOMP_PARAM,
     TAILWIND_TURNS,
@@ -845,7 +846,8 @@ def _move_type(tables, s: RefState, side: int, move: int, gift: int = 0) -> int:
         return PLATE_TYPES.get(hold, _t(tables, "move_type", move))
     # CalcNaturalGiftParams (script.c:8095-8096), B13-20: only with a gift power (else it fails).
     if effect == EffectId.NATURAL_GIFT and _t(tables, "item_gift_power", _gift_item(s, side, gift)):
-        return _t(tables, "item_gift_type", _gift_item(s, side, gift))
+        kind = _t(tables, "item_gift_type", _gift_item(s, side, gift))
+        return Type.MYSTERY if kind > Type.DARK else kind  # type 31: no row, no STAB (F-14)
     return _t(tables, "move_type", move)
 
 
@@ -2226,7 +2228,9 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
     elif effect == ItemId.PERSIM_BERRY and sd.confusion:  # lib.c:4655: confusion only
         sd.confusion = 0
         return True
-    elif effect == ItemId.LUM_BERRY and (mon.status != Status.NONE or sd.confusion):
+    elif effect in (ItemId.LUM_BERRY, ItemId.LAVA_COOKIE) and (  # F-12: the same cure
+        mon.status != Status.NONE or sd.confusion
+    ):
         cured = True
         sd.confusion = 0
     if cured:
@@ -2249,6 +2253,26 @@ def _raise_pinch_stat(turn: _Turn, s: RefState, side: int, item: int) -> bool:
         return False
     _change_stage(s, side, stat, 1)
     return True
+
+
+def _pinch_effect(s: RefState, side: int, effect: int) -> bool:
+    """The Lansat Berry's (``subscript_held_item_raise_crit.s:11``: Focus Energy, only without it,
+    lib.c:4838-4848, :5819-5825) or the Starf Berry's (``..._sharply_raise_stat.s``: +2 on
+    ``stats[starf_roll % eligible]`` of the five stats below +6, lib.c:4850-4872, :5798-5817,
+    F-10) effect on ``side``'s battler. Returns whether it acted."""
+    sd = s.battlers[side]
+    if effect == ItemId.LANSAT_BERRY:
+        if sd.focus_energy:
+            return False
+        sd.focus_energy = 1
+        return True
+    if effect == ItemId.STARF_BERRY:
+        eligible = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
+        if not eligible:
+            return False
+        _change_stage(s, side, eligible[sd.starf_roll % len(eligible)], 2)
+        return True
+    return False
 
 
 def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
@@ -2280,11 +2304,18 @@ def _held_item(turn: _Turn, s: RefState, side: int, keep: bool = False) -> bool:
             return False
         _gain_hp(s, side, _divide(mon.max_hp, power))
         disliked = _dislikes(tables, mon, mon.item)
-    elif effect == ItemId.PINCH_BERRY:
-        # HOLD_EFFECT_PINCH_*_UP (lib.c:4773-4836): curHP <= maxHP / param (Gluttony halves it).
+    elif effect in (ItemId.PINCH_BERRY, ItemId.BERSERK_GENE):
+        # HOLD_EFFECT_PINCH_*_UP (lib.c:4773-4836): curHP <= maxHP / param (Gluttony halves it);
+        # Kaizo's Berserk Gene is hold 36 with param 0 (F-8).
         if mon.hp > _pinch_limit(tables, mon):
             return False
         if not _raise_pinch_stat(turn, s, side, mon.item):
+            return False
+    elif effect in (ItemId.LANSAT_BERRY, ItemId.STARF_BERRY):
+        # HOLD_EFFECT_PINCH_CRITRATE_UP / _RANDOM_UP (lib.c:4838-4872), F-9, F-10.
+        if mon.hp > _pinch_limit(tables, mon):
+            return False
+        if not _pinch_effect(s, side, effect):
             return False
     elif effect == ItemId.MICLE_BERRY:
         # HOLD_EFFECT_PINCH_ACC_UP (lib.c:4897-4906): micleBerry at the pinch (G-59).
@@ -3064,6 +3095,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
         ItemId.PERSIM_BERRY,
         ItemId.LUM_BERRY,
         ItemId.PINCH_BERRY,
+        ItemId.LANSAT_BERRY,  # PLUCK_EFFECT_CRIT_UP (F-9)
+        ItemId.STARF_BERRY,  # PLUCK_EFFECT_RANDOM_UP2 (F-10)
         ItemId.RESIST_BERRY,
         ItemId.CUSTAP_BERRY,
         ItemId.NO_EFFECT_BERRY,
@@ -3091,6 +3124,8 @@ def _pluck_berry(turn: _Turn, s: RefState, side: int, target: int) -> None:
                 _berry_confuse(turn, s, side)
     elif effect == ItemId.PINCH_BERRY:
         did = _raise_pinch_stat(turn, s, side, item)
+    elif effect in (ItemId.LANSAT_BERRY, ItemId.STARF_BERRY):  # :5798-5825, no HP test
+        did = _pinch_effect(s, side, effect)
     elif effect == ItemId.MICLE_BERRY:  # lib.c:5827-5830, no HP test
         s.battlers[side].micle = 1
         did = True
@@ -6121,6 +6156,19 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
 
 
 def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
+    """``_ref_step`` with the turn's Starf Berry draws (``Outcome.starf``) loaded into
+    ``RefBattler.starf_roll`` for its held-item checks and cleared after it (F-10), as
+    ``step.step_events`` does."""
+    loaded = copy.deepcopy(state)
+    for sd, roll in zip(loaded.battlers, outcome.starf, strict=True):
+        sd.starf_roll = int(roll)
+    out = _ref_step(tables, loaded, actions, outcome)
+    for sd in out.battlers:
+        sd.starf_roll = 0
+    return out
+
+
+def _ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
     picked slot (``_resume``); a turn that reaches such a list stops there and writes the

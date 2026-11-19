@@ -1,8 +1,10 @@
 """E1 batch F (rulings F-n, docs/kaizo/e1-mechanics-ledger.md): Heatproof, Flash Fire, Multitype,
-Intimidate's substitute skip, Hydration and Forecast, each case checked against the reference engine."""
+Intimidate's substitute skip, Hydration, Forecast and the held items of hold effects 36, 41, 42, 50,
+92, 0, 1 and 12, each case checked against the reference engine."""
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -10,9 +12,20 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, personal_types
+from nuzline.engine.enumerate import outcome_laws
 from nuzline.engine.hooks import battle_start
-from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
-from nuzline.engine.outcome import empty_outcome
+from nuzline.engine.ids import (
+    SPECIES_FARFETCHD,
+    STARF_DRAWS,
+    AbilityId,
+    ItemId,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
+from nuzline.engine.order import effective_speed
+from nuzline.engine.outcome import CRIT_ODDS_EFFECTS, crit_variants, empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
@@ -332,3 +345,238 @@ def test_an_alive_cloud_nine_forces_normal_and_a_lead_castform_changes_at_battle
     assert started.types[1, 0].tolist() == [Type.WATER] * 2
     locked = battle_start(tables, _become(tables, names, s, 0, "Golduck", ability_slot=1))
     assert locked.types[1, 0].tolist() == [Type.NORMAL] * 2
+
+
+# --- Held-item hold effects (F-7 .. F-14) --------------------------------------------------
+
+
+def _slot_tables(tables, names, item, effect, param=(0, 0), gift=None):
+    """``tables`` with the vanilla slot ``item`` (a name) given ``effect`` and ``param``: the
+    Kaizo item the build maps to ``effect``, on a slot the vanilla state builders know."""
+    i = names.item(item)
+    out = tables._replace(
+        item_effect=jnp.asarray(tables.item_effect).at[i].set(int(effect)),
+        item_param=jnp.asarray(tables.item_param).at[i].set(jnp.asarray(param, jnp.int16)),
+    )
+    if gift is not None:
+        out = out._replace(
+            item_gift_power=jnp.asarray(out.item_gift_power).at[i].set(gift[0]),
+            item_gift_type=jnp.asarray(out.item_gift_type).at[i].set(gift[1]),
+        )
+    return out, i
+
+
+def _hold(s, side, item, hp_div=None):
+    """``side``'s active slot holds ``item``, at ``max_hp // hp_div`` HP when given."""
+    slot = int(s.active[side])
+    s = s._replace(item=s.item.at[side, slot].set(item))
+    if hp_div:
+        s = s._replace(hp=s.hp.at[side, slot].set(max(int(s.max_hp[side, slot]) // hp_div, 1)))
+    return s
+
+
+def test_every_item_of_the_group_is_covered_and_only_the_berries_are_pluckable():
+    from nuzline.engine.coverage import IMPLEMENTED_ITEMS
+    from nuzline.engine.hooks import PLUCKABLE
+
+    new = (
+        ItemId.MACHO_BRACE,
+        ItemId.BERSERK_GENE,
+        ItemId.LANSAT_BERRY,
+        ItemId.STARF_BERRY,
+        ItemId.LAVA_COOKIE,
+    )
+    assert all(IMPLEMENTED_ITEMS[i] == Support.EXACT for i in new)
+    # Item_IsBerry (src/item.c:357-365) and PLUCK_EFFECT_NONE: Lansat / Starf are berries with a
+    # pluck effect; the gene, the cookies and the brace are no berries (battle_lib.c:5832-5835).
+    assert {i for i in new if i in PLUCKABLE} == {ItemId.LANSAT_BERRY, ItemId.STARF_BERRY}
+
+
+def test_the_tables_map_each_game_to_its_hold_effect(tables, names, kaizo_tables, kaizo_names):
+    """Hold effects 41 / 42 are Lansat / Starf in both games; 50 is Macho Brace and, in Kaizo,
+    the six Power items (vanilla's 117-122); Kaizo's renamed or re-purposed slots take the id of
+    the hold effect they now have (docs/kaizo/discrepancies.md:31-34, :1336-1348)."""
+    both = {"Lansat Berry": ItemId.LANSAT_BERRY, "Starf Berry": ItemId.STARF_BERRY}
+    both |= {"Macho Brace": ItemId.MACHO_BRACE, "Power Weight": ItemId.MACHO_BRACE}
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        for name, want in both.items():
+            assert int(t.item_effect[n.item(name)]) == want, name
+    kaizo_only = {
+        "Berserk Gene": ItemId.BERSERK_GENE,
+        "Leek": ItemId.CRIT_ITEM,
+        "Big Nugget": ItemId.NONE,
+        "RageCandyBar": ItemId.BERRY_JUICE,
+        "Lava Cookie": ItemId.LAVA_COOKIE,
+        "Old Gateau": ItemId.LAVA_COOKIE,
+        "Power Bracer": ItemId.MACHO_BRACE,
+        "Power Anklet": ItemId.MACHO_BRACE,
+    }
+    for name, want in kaizo_only.items():
+        assert int(kaizo_tables.item_effect[kaizo_names.item(name)]) == want, name
+    k, n = kaizo_tables, kaizo_names
+    assert k.item_param[n.item("Berserk Gene")].tolist() == [0, Stat.ATK]
+    assert int(k.item_param[n.item("Leek"), 1]) == SPECIES_FARFETCHD
+    assert int(k.item_param[n.item("RageCandyBar"), 0]) == 100
+    assert int(k.item_gift_power[n.item("RageCandyBar")]) == 250
+    assert int(k.item_gift_type[n.item("RageCandyBar")]) == 31
+
+
+def test_macho_brace_halves_speed_from_the_raw_hold_effect(tables, names):
+    """sSpeedHalvingItemEffects (battle_lib.c:1160-1169, :1240-1246): hold effect 50 and the
+    Power items' 117-122 halve Speed, Klutz or not."""
+    s = _state(tables, names)
+    base = int(effective_speed(tables, s, 0))
+    for item in ("Macho Brace", "Power Bracer"):
+        held = _hold(s, 0, names.item(item))
+        assert int(effective_speed(tables, held, 0)) == base // 2, item
+        klutz = _ability(held, 0, AbilityId.KLUTZ)
+        assert int(effective_speed(tables, klutz, 0)) == base // 2, item
+
+
+def test_a_berserk_gene_raises_attack_at_the_first_check_and_pluck_leaves_it(tables, names):
+    """Hold 36 with param 0: ``maxHP / 0`` is ``maxHP`` (G-53), so it fires at full HP
+    (battle_lib.c:4773-4784); +1 Attack through the stage routine, then the item is gone
+    (subscript_held_item_raise_stat.s:11-12). Pluck: PLUCK_EFFECT_NONE and no berry
+    (:5832-5835): its user eats nothing and gets no Attack."""
+    t, gene = _slot_tables(tables, names, "Shoal Salt", ItemId.BERSERK_GENE, (0, Stat.ATK))
+    s = _hold(_state(t, names, mine=["Protect"]), 0, gene)
+    out = assert_matches_reference(t, s, A("Protect", "Tackle", s, names), O)
+    assert int(out.stages[0, Stat.ATK]) == 1 and int(out.item[0, 0]) == 0
+    s = _hold(_state(t, names, mine=["Pluck"]), 1, gene)
+    out = assert_matches_reference(t, s, A("Pluck", "Tackle", s, names), O)
+    assert int(out.stages[0, Stat.ATK]) == 0 and int(out.stages[1, Stat.ATK]) == 1
+
+
+def test_a_lansat_berry_sets_focus_energy_at_a_quarter_of_hp_unless_it_has_it(tables, names):
+    """battle_lib.c:4838-4848: curHP <= maxHP / 4 and no VOLATILE_CONDITION_FOCUS_ENERGY; the
+    subscript sets it (subscript_held_item_raise_crit.s:11) and the berry is eaten."""
+    lansat = names.item("Lansat Berry")
+    base = _state(tables, names, mine=["Protect"])
+    acts = A("Protect", "Tackle", base, names)
+    low = _hold(base, 0, lansat, hp_div=4)
+    out = assert_matches_reference(tables, low, acts, O)
+    assert int(out.focus_energy[0]) == 1 and int(out.item[0, 0]) == 0
+    high = _hold(base, 0, lansat, hp_div=2)
+    out = assert_matches_reference(tables, high, acts, O)
+    assert int(out.focus_energy[0]) == 0 and int(out.item[0, 0]) == lansat
+    focused = low._replace(focus_energy=low.focus_energy.at[0].set(1))
+    out = assert_matches_reference(tables, focused, acts, O)
+    assert int(out.item[0, 0]) == lansat  # already pumped: no trigger, the berry is kept
+
+
+def test_a_plucked_lansat_berry_gives_its_eater_focus_energy(tables, names):
+    """PLUCK_EFFECT_CRIT_UP (battle_lib.c:5819-5825): the eater gains the volatile unless it has
+    it, at any HP; the berry is eaten either way."""
+    lansat = names.item("Lansat Berry")
+    s = _hold(_state(tables, names, mine=["Pluck"]), 1, lansat)
+    acts = A("Pluck", "Tackle", s, names)
+    out = assert_matches_reference(tables, s, acts, O)
+    assert int(out.focus_energy[0]) == 1 and int(out.item[1, 0]) == 0
+    focused = s._replace(focus_energy=s.focus_energy.at[0].set(1))
+    out = assert_matches_reference(tables, focused, acts, O)
+    assert int(out.item[1, 0]) == 0
+
+
+def test_a_lansat_holder_can_have_focus_energy_before_its_own_hit_after_a_foes(tables, names):
+    """The crit odds of a Lansat holder's hit (outcome.crit_variants): the pinch can come from the
+    foe's damaging hit first (the last variant bit: 1 in 4 with +2 stages, not 1 in 16); a foe's
+    status move, or a holder with no berry, adds no variant."""
+    lansat = names.item("Lansat Berry")
+    s = _hold(_state(tables, names, mine=["Tackle"], opp="Tackle"), 0, lansat)
+    odds, possible = crit_variants(tables, s, A("Tackle", "Tackle", s, names))
+    bit = 1 << len(CRIT_ODDS_EFFECTS)
+    assert bool(possible[0, bit]) and int(odds[0, 0]) == 16 and int(odds[0, bit]) == 4
+    assert not bool(possible[1, bit])  # the foe holds nothing
+    calm = _hold(_state(tables, names, mine=["Tackle"], opp="Growl"), 0, lansat)
+    assert not bool(crit_variants(tables, calm, A("Tackle", "Growl", calm, names))[1][0, bit])
+    bare = _state(tables, names, mine=["Tackle"], opp="Tackle")
+    assert not bool(crit_variants(tables, bare, A("Tackle", "Tackle", bare, names))[1][0, bit])
+
+
+def _starf(tables, names, roll, stages=None, side=0):
+    """Side ``side``'s battler holds a Starf Berry at a quarter HP (``stages``: stat -> stage) and
+    the turn's draw is ``roll``; Protect makes the turn-start check the only trigger."""
+    s = _hold(_state(tables, names, mine=["Protect"]), side, names.item("Starf Berry"), hp_div=4)
+    for stat, stage in (stages or {}).items():
+        s = s._replace(stages=s.stages.at[side, stat].set(stage))
+    draw = np.zeros(2, np.int8)
+    draw[side] = roll
+    o = O._replace(starf=jnp.asarray(draw))
+    return assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), o)
+
+
+@pytest.mark.parametrize(
+    ("roll", "stat"),
+    [(0, Stat.ATK), (1, Stat.DEF), (2, Stat.SPE), (3, Stat.SPA), (4, Stat.SPD), (5, Stat.ATK)],
+)
+def test_a_starf_berry_raises_the_drawn_stat_by_two(tables, names, roll, stat):
+    """battle_lib.c:4850-4872: ``RandNext() % 5`` over Attack, Defense, Speed, Sp. Atk, Sp. Def
+    (never accuracy or evasion), +2 by a direct stage write; the berry is eaten (F-10)."""
+    out = _starf(tables, names, roll)
+    expected = np.zeros(8, np.int8)
+    expected[stat] = 2
+    assert out.stages[0].tolist() == expected.tolist() and int(out.item[0, 0]) == 0
+
+
+def test_a_starf_berry_redraws_past_stats_at_plus_six_and_keeps_when_all_are(tables, names):
+    """The rejection loop (:4864-4866): the draw is uniform over the stats below +6 (its rank
+    modulo their count); the +2 is capped at +6 (:14-18 of the subscript); with all five at +6
+    nothing triggers and the berry stays."""
+    out = _starf(tables, names, 0, {Stat.ATK: 6})
+    assert int(out.stages[0, Stat.DEF]) == 2 and int(out.stages[0, Stat.ATK]) == 6
+    out = _starf(tables, names, 3, {Stat.ATK: 6, Stat.DEF: 5})
+    assert out.stages[0].tolist()[1:6] == [6, 5, 0, 2, 0]  # rank 3 of Def, Spe, Spa, Spd: Spd
+    maxed = dict.fromkeys((Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD), 6)
+    out = _starf(tables, names, 1, maxed)
+    assert int(out.item[0, 0]) == names.item("Starf Berry")
+
+
+def test_a_plucked_starf_berry_gives_its_eater_the_same_draw(tables, names):
+    """PLUCK_EFFECT_RANDOM_UP2 (battle_lib.c:5798-5817): the eater's stat, at any HP; eaten even
+    with every stat at +6."""
+    s = _hold(_state(tables, names, mine=["Pluck"]), 1, names.item("Starf Berry"))
+    o = O._replace(starf=jnp.asarray([2, 0], jnp.int8))
+    acts = A("Pluck", "Tackle", s, names)
+    out = assert_matches_reference(tables, s, acts, o)
+    assert int(out.stages[0, Stat.SPE]) == 2 and int(out.item[1, 0]) == 0
+    maxed = s._replace(stages=s.stages.at[0, 1:6].set(6))
+    out = assert_matches_reference(tables, maxed, acts, o)
+    assert out.stages[0].tolist()[1:6] == [6] * 5 and int(out.item[1, 0]) == 0
+
+
+def test_the_starf_draw_is_an_outcome_variable_with_a_uniform_law(tables, names):
+    """``Outcome.starf`` is read when a living Starf holder is in a party; its law is uniform over
+    ``STARF_DRAWS`` values (every count 1-5 divides them)."""
+    from nuzline.engine.enumerate import _LAWS
+
+    s = _hold(_state(tables, names, mine=["Protect"]), 0, names.item("Starf Berry"))
+    acts = jnp.asarray(A("Protect", "Tackle", s, names))
+    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
+    assert np.asarray(laws.relevant.starf).tolist() == [True, False]
+    values, weights, total = _LAWS["starf"](laws, 0)
+    assert len(values) == total == STARF_DRAWS and set(weights) == {1}
+    assert all(STARF_DRAWS % c == 0 for c in range(1, 6))
+
+
+def test_a_lava_cookie_cures_like_a_lum_berry_and_pluck_leaves_it(tables, names):
+    """Hold 12 (battle_lib.c:4662-4697): any status or confusion cleared with no HP test, then
+    the item is gone. Pluck: PLUCK_EFFECT_NONE and no berry (:5832-5835), unlike Lum: its user
+    is not cured by it and the foe keeps it."""
+    t, cookie = _slot_tables(tables, names, "Lava Cookie", ItemId.LAVA_COOKIE)
+    s = _hold(_state(t, names, mine=["Protect"]), 0, cookie).with_status(0, 0, Status.BURN)
+    out = assert_matches_reference(t, s, A("Protect", "Tackle", s, names), O)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.item[0, 0]) == 0
+    s = _hold(_state(t, names, mine=["Pluck"]), 1, cookie).with_status(0, 0, Status.BURN)
+    out = assert_matches_reference(t, s, A("Pluck", "Tackle", s, names), O)
+    assert int(out.status[0, 0]) == Status.BURN and int(out.item[1, 0]) == cookie
+
+
+def test_natural_gift_with_type_31_is_neutral_and_typeless(tables, names):
+    """Kaizo's RageCandyBar: Natural Gift power 250, type 31 (no type id): no chart row, no STAB
+    (battle_lib.c:2592, :2611-2645), as a ??? hit; every table read stays in range (F-14)."""
+    t, cake = _slot_tables(tables, names, "Shoal Shell", ItemId.BERRY_JUICE, (100, 0), (250, 31))
+    ng = names.move("Natural Gift")
+    s = _hold(_state(t, names, mine=["Natural Gift"]), 0, cake)
+    got = _both(t, s, ng)
+    t9 = t._replace(item_gift_type=jnp.asarray(t.item_gift_type).at[cake].set(Type.MYSTERY))
+    assert got == _both(t9, s, ng) and max(got) > 0

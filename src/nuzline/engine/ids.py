@@ -1038,6 +1038,24 @@ class ItemId(IntEnum):
     # by the raw held item), grounds its holder (:2534, :2602-2607, :2702, :2760, :3215, :5505;
     # subscript_hazards_check.s:7), G-56.
     IRON_BALL = 61
+    # E1 Batch F, held items (F-7 ..). Hold effect 50 (HOLD_EFFECT_EVS_UP_SPEED_DOWN: Macho Brace;
+    # Kaizo's Power items, vanilla's HOLD_EFFECT_LVLUP_*_EV_UP 117-122): no hook of its own, the
+    # Speed halving and the EV doubling read the raw hold effect (``SPEED_HALVING_HOLD_EFFECTS``,
+    # ``levelup``): an id so the item is no coverage refusal (F-7).
+    MACHO_BRACE = 62
+    # Kaizo's Berserk Gene (hold 36, a Liechi's effect on a non-berry): ``PINCH_BERRY``'s held
+    # trigger and stat, but Pluck / Bug Bite leave it (PLUCK_EFFECT_NONE, no berry: F-8).
+    BERSERK_GENE = 63
+    # Lansat Berry (HOLD_EFFECT_PINCH_CRITRATE_UP): at ``curHP <= maxHP / param`` sets the
+    # holder's Focus Energy (battle_lib.c:4838-4848; Pluck :5819-5825), F-9.
+    LANSAT_BERRY = 64
+    # Starf Berry (HOLD_EFFECT_PINCH_RANDOM_UP): at the same pinch raises a random stat below +6
+    # of Attack, Defense, Speed, Sp. Atk, Sp. Def by 2 (battle_lib.c:4850-4872; Pluck :5798-5817,
+    # ``Outcome.starf``), F-10.
+    STARF_BERRY = 65
+    # Kaizo's Lava Cookie / Old Gateau (hold 12, a Lum Berry's effect on a non-berry): Lum's cure
+    # (``hooks._restore``), but Pluck / Bug Bite leave it (F-12).
+    LAVA_COOKIE = 66
 
 
 # subscript_bind_start.s:10-12: an attacker holding HOLD_EFFECT_EXTEND_TRAPPING (Grip Claw) sets
@@ -1050,6 +1068,12 @@ GRIP_CLAW_TURNS = 6
 # or Embargo: Macho Brace (EVS_UP_SPEED_DOWN), Iron Ball (SPEED_DOWN_GROUNDED), the Power items
 # (LVLUP_HP/ATK/DEF/SPEED/SPATK/SPDEF_EV_UP). Ruling G-56.
 SPEED_HALVING_HOLD_EFFECTS = (50, 106, 122, 117, 118, 121, 119, 120)
+
+# Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866): ``RandNext() % 5``
+# repeated until the stat (Attack, Defense, Speed, Sp. Atk, Sp. Def: ``BATTLE_STAT_ATTACK + i``,
+# generated/battle_stats.txt:2-6) is below +6. By the project's ``% n`` convention uniform over
+# the eligible stats: one value in [0, STARF_DRAWS) read modulo their count (1-5, lcm 60), F-10.
+STARF_DRAWS = 60
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
 # ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold
@@ -1543,6 +1567,8 @@ ACUPRESSURE_STATS = (
     Stat.ACC,
     Stat.EVA,
 )
+# Starf Berry's stats (battle_lib.c:4856-4866: BATTLE_STAT_ATTACK + i, i < 5), F-10.
+STARF_STATS = ACUPRESSURE_STATS[:5]
 
 ITEM_ABILITY_IDS = {
     "Immunity": 17,
