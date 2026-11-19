@@ -234,6 +234,14 @@ Encodings:
   1671-1677) and both are volatiles Baton Pass keeps (moves.h:46-48, battle_lib.c:2112), so one
   field holds both. ``held_item`` is ``Battler_HeldItem`` (battle_lib.c:5352-5363): the held item
   as every gated read sees it, none under Klutz or Embargo.
+* E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
+  ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
+  mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
+  ``battler_ability`` is ``Battler_Ability`` (battle_lib.c:3088-3093) in the ``ability``
+  encoding and ``damage.battler_decomp_ability`` the same in decomp ids: every read the decomp
+  makes through ``Battler_Ability``, ``Battler_IgnorableAbility``, ``BattleSystem_CountAbility``
+  or ``BtlCmd_CheckAbility`` goes through one of them; a raw ``BattleMon.ability`` read stays on
+  ``ability`` with a comment naming its decomp line.
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -411,6 +419,7 @@ class BattleState(NamedTuple):
     # ``initial_arrays``.
     chatot_cry: jnp.ndarray
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
+    ability_suppressed: jnp.ndarray  # int8, MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -628,6 +637,7 @@ VOLATILE_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "embargo",
+    "ability_suppressed",
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
 # faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
@@ -636,8 +646,8 @@ VOLATILE_FIELDS = (
 # keeps statusVolatile & VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2078; condition.h:72-76:
 # confusion, Mean Look, Curse, Substitute's bit (``substitute_hp != 0``), Focus Energy (B12-4)),
 # moveEffectsMask & MOVE_EFFECT_BATON_PASSED (:2079; moves.h:46-48: the Leech Seed recipient, Mud
-# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66); the rest from
-# unsupported moves), and magnetRiseTurns (:2112), the
+# and Water Sport, Aqua Ring, Ingrain, Power Trick (B12-10), Magnet Rise (G-66), Gastro Acid's
+# ABILITY_SUPPRESSED (E3-2-6a); the rest from unsupported moves), and magnetRiseTurns (:2112), the
 # substitute HP and the
 # meanLookTarget (:2107, :2111); BattleSystem_InitBattleMon keeps the stat stages (:97-101).
 # Rulings B6-3, B7-n.
@@ -661,6 +671,7 @@ BATON_PASSED_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "embargo",
+    "ability_suppressed",
 )
 
 
@@ -770,6 +781,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "truant": (_BATTLER, np.int8),
     "chatot_cry": (_PARTY, np.int8),
     "embargo": (_BATTLER, np.int8),
+    "ability_suppressed": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -862,11 +874,42 @@ LAYOUT = layout(SINGLES)  # the singles shapes: what every caller outside the fo
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
 
 
+def ability_is_suppressed(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``bool``: battler ``b``'s ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29,
+    ``ability_suppressed``) applies to its party ``slot`` (default: its active one). The bit is
+    the BattleMon's, so a bench ``slot`` (a newcomer read before it is in) is never suppressed,
+    which is what a plain switch gives it (battle_lib.c:2071, ``VOLATILE_FIELDS``); a Baton Pass
+    newcomer keeps it (:2076) and is read after the pass, as the active battler. Read by both
+    ``Battler_Ability`` accessors (``battler_ability``, ``damage.battler_decomp_ability``)."""
+    b = jnp.asarray(b, jnp.int32)
+    active = state.active[b]
+    slot = active if slot is None else jnp.asarray(slot, jnp.int32)
+    return (state.ability_suppressed[b] != 0) & (slot == active)
+
+
+def battler_ability(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``Battler_Ability`` (battle_lib.c:3088-3093) of battler ``b``'s party ``slot`` (default:
+    its active one) as an ``ids.AbilityId``, in ``ability``'s dtype: ``AbilityId.NONE`` while
+    ``ability_is_suppressed`` and the raw ``BattleMon.ability`` is not Multitype (:3090-3091),
+    else the raw ``ability``. Multitype has no ``AbilityId`` (``ids.ABILITY_MULTITYPE``: it is
+    ``UNSUPPORTED`` here), so a raw ``UNSUPPORTED`` is kept: exact for Multitype, and for any other
+    unnamed ability NONE and UNSUPPORTED differ only to a reader that names NONE (enumerate's
+    input-neutral list, where UNSUPPORTED is the cautious reading); ``damage.
+    battler_decomp_ability`` is exact for both. The Gravity / Ingrain Levitate lines (:3095-3103)
+    stay at the Levitate readers (``damage.ignorable``, ``damage.grounded``,
+    ``effects.magnet_rise_fails``), which apply them to this value. ``b`` is a battler (or
+    an array of them, with ``slot`` broadcast), never a side alone (doubles convention 1). With
+    ``ability_suppressed[b] == 0`` it is ``ability[party(b), slot]`` exactly."""
+    b = jnp.asarray(b, jnp.int32)
+    raw = state.ability[party(format_of(state), b), state.active[b] if slot is None else slot]
+    off = ability_is_suppressed(state, b, slot) & (raw != AbilityId.UNSUPPORTED)
+    return jnp.where(off, jnp.asarray(AbilityId.NONE, raw.dtype), raw)
+
+
 def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     """``int32``: ``Battler_HeldItem`` (battle_lib.c:5352-5363) of ``side``'s active battler, or
-    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` is Klutz (:5354-5356; no
-    supported mechanic makes ``Battler_Ability`` differ from the held ability for Klutz:
-    Gastro Acid is unsupported, :3088-3106) or its ``embargoTurns`` is nonzero (:5358-5360),
+    of its party ``slot``: ``ITEM_NONE`` when its ``Battler_Ability`` (``battler_ability``: none
+    under Gastro Acid, :3088-3093) is Klutz (:5354-5356) or its ``embargoTurns`` is nonzero (:5358-5360),
     else its ``heldItem``. Every ``Battler_HeldItemEffect`` / ``Battler_HeldItemPower(...,
     ITEM_POWER_CHECK_ALL)`` / ``Battler_NaturalGift*`` read goes through it (:5438-5481); the
     reads of ``battleMons[b].heldItem`` itself (the speed-halving items, :1240-1246, Unburden's
@@ -879,7 +922,7 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
     row = party(format_of(state), side)
     active = state.active[side]
     slot = active if slot is None else jnp.asarray(slot, jnp.int32)
-    hidden = (state.ability[row, slot] == AbilityId.KLUTZ) | (
+    hidden = (battler_ability(state, side, slot) == AbilityId.KLUTZ) | (
         (state.embargo[side] != 0) & (slot == active)
     )
     return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))

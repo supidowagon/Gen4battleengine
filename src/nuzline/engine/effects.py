@@ -255,6 +255,7 @@ from nuzline.engine.damage import (
     PRESENT_HEAL,
     STATUS,
     battle_stats,
+    battler_decomp_ability,
     beat_up_slots,
     damage_for_roll,
     decomp_abilities,
@@ -330,6 +331,7 @@ from nuzline.engine.state import (
     STAGE_MAX,
     STAGE_MIN,
     BattleState,
+    battler_ability,
     field_index,
     held_item,
 )
@@ -615,7 +617,8 @@ def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     fmt = format_of(state)
     new = jnp.asarray(TERRAIN_TYPES, _I32)[terrain_index(state)]
     types = state.types[party(fmt, h.side), h.user]
-    multitype = decomp_abilities(tables, state)[party(fmt, h.side), h.user] == ABILITY_MULTITYPE
+    # BtlCmd_TryCamouflage (battle_script.c:8001): Battler_Ability.
+    multitype = battler_decomp_ability(tables, state, h.side, h.user) == ABILITY_MULTITYPE
     cond = (
         (h.effect == _E.CAMOUFLAGE)
         & h.landed
@@ -787,9 +790,8 @@ def _drain(tables, state, h: _Hit) -> BattleState:
 
 def _recoil(tables, state, h: _Hit) -> BattleState:
     # Rock Head; Magic Guard skips the subscript (subscript_recoil_1_2.s, _1_4.s:6, CheckAbility).
-    fmt = format_of(state)
-    rock_head = state.ability[party(fmt, h.side), h.user] == AbilityId.ROCK_HEAD
-    magic_guard = state.ability[party(fmt, h.side), h.user] == AbilityId.MAGIC_GUARD
+    rock_head = battler_ability(state, h.side, h.user) == AbilityId.ROCK_HEAD
+    magic_guard = battler_ability(state, h.side, h.user) == AbilityId.MAGIC_GUARD
     # subscript_recoil_1_{2,3,4}.s: DivideVarByValue(hitDamage, 2 / 3 / 4), at least 1 (B9-4).
     # RECOIL_STATUS keeps its divisor in param 1 (subscript_recoil_1_3_chance_to_*.s:5 calls
     # BATTLE_SUBSCRIPT_RECOIL_1_3 first, on every hit that hit, B10-1).
@@ -882,10 +884,9 @@ NO_DEFENDER = -1
 
 
 def pressure_holder(state: BattleState, battler) -> jnp.ndarray:
-    """``Battler_Ability(battler) == ABILITY_PRESSURE`` (battle_lib.c:3088-3106: no supported
-    move suppresses an ability; ``battler`` is a side in singles, its active Pokemon)."""
-    fmt = format_of(state)
-    return state.ability[party(fmt, battler), state.active[battler]] == AbilityId.PRESSURE
+    """``Battler_Ability(battler) == ABILITY_PRESSURE`` (battle_lib.c:3088-3106,
+    ``state.battler_ability``; ``battler`` is a battler, its active Pokemon)."""
+    return battler_ability(state, battler) == AbilityId.PRESSURE
 
 
 def pressure_pp_cost(tables: Tables, state: BattleState, attacker, defender, move) -> jnp.ndarray:
@@ -1264,8 +1265,8 @@ def captivate_fails(tables, state: BattleState, side, target_side) -> tuple:
     the move with ``MOVE_STATUS_NO_MORE_WORK`` (:47, :56), B12-8."""
     fmt = format_of(state)
     mon = state.active[target_side]
-    own = decomp_abilities(tables, state)[party(fmt, target_side), mon]
-    mold = state.ability[party(fmt, side), state.active[side]] == AbilityId.MOLD_BREAKER
+    own = battler_decomp_ability(tables, state, target_side, mon)
+    mold = battler_ability(state, side) == AbilityId.MOLD_BREAKER
     by_ability = ~mold & (own == STAT_MOVE_ABILITY_IDS["Oblivious"])
     mine = state.gender[party(fmt, side), state.active[side]]
     theirs = state.gender[party(fmt, target_side), mon]
@@ -1343,7 +1344,7 @@ def rest_fails(tables, state: BattleState, side) -> tuple:
     B12-12."""
     fmt = format_of(state)
     mon = state.active[side]
-    own = decomp_abilities(tables, state)[party(fmt, side), mon]
+    own = battler_decomp_ability(tables, state, side, mon)
     ids = STAT_MOVE_ABILITY_IDS
     by_ability = (own == ids["Insomnia"]) | (own == ids["Vital Spirit"])
     asleep = state.status[party(fmt, side), mon] == Status.SLEEP
@@ -1405,12 +1406,16 @@ def heal_bell_spared(tables, state: BattleState, side, move) -> jnp.ndarray:
     5038-5043), any other party Pokemon with Soundproof unless the user has Mold Breaker
     (BtlIOCmd_RefreshPartyStatus, battle_io_command.c:645-653); Aromatherapy spares none."""
     fmt = format_of(state)
+    # The party Pokemon's own MON_DATA_ABILITY (battle_io_command.c:648): raw.
     abilities = decomp_abilities(tables, state)[party(fmt, side)]
     sound = abilities == STAT_MOVE_ABILITY_IDS["Soundproof"]
     user = state.active[side]
+    # Raw BattleMon.ability in the message (battle_controller.c:1539, battle_io_command.c:645).
     mold = state.ability[party(fmt, side), user] == AbilityId.MOLD_BREAKER
     slots = jnp.arange(abilities.shape[0])
-    spared = jnp.where(slots == user, sound, sound & ~mold)
+    # The user's own: Battler_Ability (battle_script.c:5038).
+    user_sound = battler_decomp_ability(tables, state, side) == STAT_MOVE_ABILITY_IDS["Soundproof"]
+    spared = jnp.where(slots == user, user_sound, sound & ~mold)
     return spared & (jnp.asarray(move, _I32) == MOVE_HEAL_BELL)
 
 
@@ -1695,7 +1700,7 @@ def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     battle_controller_player.c:3965-3967; battle_lib.c:4404-4410)."""
     fmt = format_of(state)
     pf, mon = party(fmt, h.target_side), h.target
-    raw = decomp_abilities(tables, state)[pf, mon]
+    raw = decomp_abilities(tables, state)[pf, mon]  # raw: subscript_give_target_insomnia.s:7-8
     cond = (
         (h.effect == _E.WORRY_SEED)
         & h.effective
@@ -1705,6 +1710,7 @@ def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (raw != ABILITY_MULTITYPE)
         & (state.item[pf, mon] != ITEM_GRISEOUS_ORB)
     )
+    # The write itself (:11): BattleMon.ability, raw.
     value = jnp.where(cond, AbilityId.INSOMNIA, state.ability[pf, mon]).astype(state.ability.dtype)
     state = state._replace(ability=state.ability.at[pf, mon].set(value))
     return know_ability(state, h.target_side, mon, cond)
@@ -1731,7 +1737,7 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     fmt = format_of(state)
     side, user, foe, target = h.side, h.user, h.target_side, h.target
     pu, pt = party(fmt, side), party(fmt, foe)
-    raw = decomp_abilities(tables, state)
+    raw = decomp_abilities(tables, state)  # raw: subscript_exchange_abilities.s:6-13
     mine, theirs = raw[pu, user], raw[pt, target]
     wonder = ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD]
     banned = jnp.asarray([wonder, ABILITY_MULTITYPE], raw.dtype)
@@ -1746,6 +1752,7 @@ def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (state.item[pt, target] != ITEM_GRISEOUS_ORB)
         & ((mine != 0) | (theirs != 0))
     )
+    # Raw: subscript_exchange_abilities.s:21-24 swaps BATTLEMON_ABILITY.
     a_user, a_target = state.ability[pu, user], state.ability[pt, target]
     parity = (state.turn.astype(_I32) & 1).astype(state.truant.dtype)
 
@@ -1813,10 +1820,8 @@ def magnet_rise_fails(state: BattleState, side) -> jnp.ndarray:
     ``magnetRiseTurns`` (the turns, not the mask bit), with Levitate (``CheckAbility
     CHECK_HAVE``, through ``Battler_Ability``: none for an ingrained holder and under Gravity,
     battle_lib.c:3095-3103) or with ``MOVE_EFFECT_INGRAIN`` (G-66)."""
-    fmt = format_of(state)
-    mon = state.active[side]
     levitate = (
-        (state.ability[party(fmt, side), mon] == AbilityId.LEVITATE)
+        (battler_ability(state, side) == AbilityId.LEVITATE)
         & (state.ingrain[side] == 0)
         & (state.gravity == 0)
     )
@@ -1933,6 +1938,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # The AI's record of the user's own ability settles to its id now: the copy changes what a
     # "known, unnamed" record (-1) would read (``decomp_ability_id``), G-69.
     record = state.ai_ability_known[user].astype(_I32)
+    # Raw: the record is BattleAI_SetAbility's BattleMon.ability (battle_script.c:11805-11806).
     own_id = decomp_abilities(tables, state)[party(fmt, side), user]
     settled = jnp.where(cond & (side == 0) & (record < 0), own_id, record)
 
@@ -1976,6 +1982,7 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         stats=put(state.stats, own, battle_stats(state, foe, target)),
         ivs=put(state.ivs, own, state.ivs[pf, target]),
         types=put(state.types, own, state.types[pf, target]),
+        # Raw: BtlCmd_Transform copies BattleMon.ability (battle_script.c:5342-5348).
         ability=put(state.ability, own, state.ability[pf, target]),
         ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
         ability_form=put(state.ability_form, own, state.ability_form[pf, target]),
@@ -2198,8 +2205,8 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
     Every one ends the move without AfterMoveEffects (MOVE_STATUS_FAILED or _NO_MORE_WORK)."""
     fmt = format_of(state)
     mon = state.active[target_side]
-    own = decomp_abilities(tables, state)[party(fmt, target_side), mon]
-    mold = state.ability[party(fmt, side), state.active[side]] == AbilityId.MOLD_BREAKER
+    own = battler_decomp_ability(tables, state, target_side, mon)
+    mold = battler_ability(state, side) == AbilityId.MOLD_BREAKER
     seen = jnp.where(mold, 0, own)  # Battler_IgnorableAbility
     ids = YAWN_ABILITY_IDS
     by_ability = (seen == ids["Insomnia"]) | (seen == ids["Vital Spirit"])
@@ -2219,6 +2226,7 @@ def know_ability(state: BattleState, side, slot, cond) -> BattleState:
     """A message tags the ability of ``side``'s party ``slot`` (``BattleAI_SetAbility``,
     battle_script.c:11806): the AI knows it, for the player's side."""
     on = jnp.asarray(cond) & (jnp.asarray(side) == 0)
+    # Raw: BattleMessage_AbilityTag reads BattleMon.ability (battle_script.c:11805).
     record = decomp_ability_id(
         state.ability[party(format_of(state), jnp.asarray(side, _I32)), slot]
     )
@@ -2251,7 +2259,7 @@ def yawn_sleep(tables, state: BattleState, side, outcome: Outcome) -> BattleStat
     left = state.yawn[side].astype(_I32) - 1
     state = _set(state, "yawn", side, left, on)
     falls = on & (left == 0)
-    own = decomp_abilities(tables, state)[party(fmt, side), mon]
+    own = battler_decomp_ability(tables, state, side, mon)
     ids = YAWN_ABILITY_IDS
     awake = (own == ids["Insomnia"]) | (own == ids["Vital Spirit"])
     awake = awake | (_sunny(tables, state) & (own == ids["Leaf Guard"]))
@@ -2368,9 +2376,14 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
     (ruling B10-6), and canUnburden stays as it was (an armed Unburden holder speeds up)."""
     fmt = format_of(state)
     item = state.item[party(fmt, h.target_side), h.target]
+    # Raw: subscript_knock_off.s:6 (BATTLEMON_ABILITY Multitype).
     raw = decomp_abilities(tables, state)[party(fmt, h.target_side), h.target]
-    mold_breaker = state.ability[party(fmt, h.side), h.user] == AbilityId.MOLD_BREAKER
-    sticky = (raw == ITEM_ABILITY_IDS["Sticky Hold"]) & ~mold_breaker
+    # BtlCmd_TryKnockOff's Sticky Hold: Battler_IgnorableAbility (battle_script.c:6608-6632).
+    mold_breaker = battler_ability(state, h.side, h.user) == AbilityId.MOLD_BREAKER
+    sticky = (
+        battler_decomp_ability(tables, state, h.target_side, h.target)
+        == ITEM_ABILITY_IDS["Sticky Hold"]
+    ) & ~mold_breaker
     cond = (
         (h.effect == _E.KNOCK_OFF)
         & h.effective
@@ -2399,7 +2412,7 @@ def embargo_fails(tables, state: BattleState, target_side, foe_claw=False, foe_c
     fmt = format_of(state)
     target_side = jnp.asarray(target_side, _I32)
     target = state.active[target_side]
-    raw = decomp_abilities(tables, state)[party(fmt, target_side), target]
+    raw = decomp_abilities(tables, state)[party(fmt, target_side), target]  # :7, raw
     return (
         (state.substitute_hp[target_side] != 0)
         | (raw == ABILITY_MULTITYPE)
@@ -2493,7 +2506,8 @@ def _struggle_recoil(state: BattleState, h: _Hit, struggling) -> BattleState:
 
 def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     fmt = format_of(state)
-    ability = state.ability[party(fmt, h.target_side), h.target]
+    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4200-4371): Battler_Ability.
+    ability = battler_ability(state, h.target_side, h.target)
     status = jnp.where(
         ability == AbilityId.STATIC,
         Status.PARALYSIS,
@@ -2512,13 +2526,11 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
     limber = (status == Status.PARALYSIS) & (
-        state.ability[party(fmt, h.side), h.user] == AbilityId.LIMBER
+        battler_ability(state, h.side, h.user) == AbilityId.LIMBER
     )
     # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
     # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
-    leaf = _sunny(tables, state) & (
-        state.ability[party(fmt, h.side), h.user] == AbilityId.LEAF_GUARD
-    )
+    leaf = _sunny(tables, state) & (battler_ability(state, h.side, h.user) == AbilityId.LEAF_GUARD)
     cond = (
         (status != Status.NONE)
         & hit
@@ -2533,7 +2545,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     rough = (
         (ability == AbilityId.ROUGH_SKIN)
         & hit
-        & (state.ability[party(fmt, h.side), h.user] != AbilityId.MAGIC_GUARD)
+        & (battler_ability(state, h.side, h.user) != AbilityId.MAGIC_GUARD)
     )
     # Aftermath (battle_lib.c:4358-4371): the defender is faintedMon (this hit's UPDATE_HP fainted
     # it: TryFaintMon, battle_script.c:1768-1770), a living attacker without Magic Guard, no Damp
@@ -2543,7 +2555,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         (ability == AbilityId.AFTERMATH)
         & hit
         & ~_alive(state, h.target_side, h.target)
-        & (state.ability[party(fmt, h.side), h.user] != AbilityId.MAGIC_GUARD)
+        & (battler_ability(state, h.side, h.user) != AbilityId.MAGIC_GUARD)
     )
     max_hp = state.max_hp[party(fmt, h.side), h.user].astype(_I32)
     cut = jnp.where(rough, jnp.maximum(max_hp // 8, 1), 0)
@@ -2628,14 +2640,12 @@ def synchronize(
     a_mon, d_mon = state.active[attacker], state.active[defender]
     on = jnp.asarray(cond, bool) & flag
     first = (
-        on
-        & (state.ability[party(fmt, defender), d_mon] == AbilityId.SYNCHRONIZE)
-        & (sem == defender)
+        on & (battler_ability(state, defender, d_mon) == AbilityId.SYNCHRONIZE) & (sem == defender)
     )
     second = (
         on
         & ~first
-        & (state.ability[party(fmt, attacker), a_mon] == AbilityId.SYNCHRONIZE)
+        & (battler_ability(state, attacker, a_mon) == AbilityId.SYNCHRONIZE)
         & (sem == attacker)
     )
     run = first | second
@@ -2658,8 +2668,8 @@ def synchronize(
             jnp.where(held == Status.PARALYSIS, Status.PARALYSIS, Status.NONE),
         ),
     )
-    own = decomp_abilities(tables, state)[party(fmt, receiver), r_mon]
-    ability = state.ability[party(fmt, receiver), r_mon]
+    own = battler_decomp_ability(tables, state, receiver, r_mon)
+    ability = battler_ability(state, receiver, r_mon)
     leaf = _sunny(tables, state) & (ability == AbilityId.LEAF_GUARD)
     shield = jnp.where(
         kind == Status.POISON,
@@ -2812,8 +2822,7 @@ def on_hit_berry(
     cond = jnp.asarray(cond)
     a_hp = state.hp[party(fmt, side), user].astype(_I32)
     magic_guard = (
-        decomp_abilities(tables, state)[party(fmt, side), user]
-        == WEATHER_ABILITY_IDS["Magic Guard"]
+        battler_decomp_ability(tables, state, side, user) == WEATHER_ABILITY_IDS["Magic Guard"]
     )
     recoil = (
         cond
@@ -2922,13 +2931,13 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
 
     side = jnp.asarray(side, _I32)
     mon = state.active[side]
-    guarded = state.ability[party(fmt, side), mon] == AbilityId.MAGIC_GUARD
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
     down = grounded(tables, state, side, mon) & ~guarded
     layers = state.toxic_spikes[side_of(side)].astype(_I32)
     poison_type = jnp.any(state.types[party(fmt, side), mon] == Type.POISON)
     absorbed = down & (layers > 0) & poison_type
     state = _set(state, "toxic_spikes", side, 0, absorbed)
-    ability = decomp_abilities(tables, state)[party(fmt, side), mon]
+    ability = battler_decomp_ability(tables, state, side, mon)
     sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
     status = jnp.where(layers >= 2, Status.TOXIC, Status.POISON)
     # subscript_poison.s:5-10 / subscript_badly_poison.s:5-10 (CheckAbility, before the status
@@ -3095,7 +3104,7 @@ def life_orb_recoil(tables: Tables, state: BattleState, side, cond) -> BattleSta
     mon = state.active[side]
     hp = state.hp[party(fmt, side), mon].astype(_I32)
     magic_guard = (
-        decomp_abilities(tables, state)[party(fmt, side), mon] == WEATHER_ABILITY_IDS["Magic Guard"]
+        battler_decomp_ability(tables, state, side, mon) == WEATHER_ABILITY_IDS["Magic Guard"]
     )
     on = jnp.asarray(cond) & holds(tables, state, side, ItemId.LIFE_ORB) & (hp > 0) & ~magic_guard
     loss = divide(state.max_hp[party(fmt, side), mon].astype(_I32), 10)

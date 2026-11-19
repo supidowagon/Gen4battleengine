@@ -217,6 +217,7 @@ class MoveEffectMask(IntEnum):
     POWER_TRICK = 1 << 23  # :31; BattleState.power_trick (B12-10)
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
+    ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -231,6 +232,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.POWER_TRICK: "power_trick",
     MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
+    MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -1558,6 +1560,7 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     mine = estimates(
         state.moves[_row(state, a), active], state.ivs[_row(state, a), active], held_item(state, a)
     )
+    # The bench's own MON_DATA_ABILITY (trainer_ai.c:2162): raw party data.
     member_items = jnp.where(
         state.ability[_row(state, a)] == AbilityId.KLUTZ, 0, state.item[_row(state, a)]
     )
@@ -1686,10 +1689,13 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
 
 
 def attacker_ability(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32``: the AI's active Pokemon's current ability (decomp id): ``battleMons[battler]
-    .ability`` (trainer_ai.c:1205): ``damage.decomp_abilities``, the engine's current ability
-    (a change in battle such as Trace's copy follows it once the engine models the change)."""
-    return decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
+    """``int32``: the AI's active Pokemon's current ability (decomp id): ``ABILITY_NONE`` (0)
+    while its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit is set (trainer_ai.c:1177-1178, :1221-1222:
+    the bit alone, no Multitype exception), else the raw ``battleMons[battler].ability``
+    (:1208, :1256): ``damage.decomp_abilities``, the engine's current ability (a change in
+    battle such as Trace's copy follows it once the engine models the change)."""
+    raw = decomp_abilities(tables, state)[1, state.active[1].astype(_I32)]
+    return jnp.where(state.ability_suppressed[1] != 0, 0, raw)
 
 
 def _defender_abilities(tables: Tables, state: BattleState):
@@ -1700,13 +1706,17 @@ def _defender_abilities(tables: Tables, state: BattleState):
     pre-Transform reveal stays the old ability after a Transform, G-69), else the battler's current
     ability when it is Shadow Tag, Magnet Pull or Arena Trap (trainer_ai.c:1181-1188;
     ``damage.decomp_abilities``: the form's, or a copy the engine models, Trace's or Transform's).
-    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192)."""
+    ``base`` follows the BattleMon's species, the copied one after a Transform (:1191-1192).
+    A battler with its ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit reads ``ABILITY_NONE`` (0), known,
+    before any of that (:1177-1178, :1221-1222: the bit alone, no Multitype exception; no coin)."""
     d = state.active[0].astype(_I32)
     species = state.species[0, d].astype(_I32)
+    # Raw battleMons[].ability (:1185-1188, :1230-1233), not Battler_Ability.
     current = decomp_abilities(tables, state)[0, d]
     recorded = state.ai_ability_known[d].astype(_I32)  # -1: known, not named by the engine
-    true = jnp.where(recorded > 0, recorded, current)
-    known = (recorded != 0) | jnp.isin(current, _TRAPPING)
+    suppressed = state.ability_suppressed[0] != 0
+    true = jnp.where(suppressed, 0, jnp.where(recorded > 0, recorded, current))
+    known = suppressed | (recorded != 0) | jnp.isin(current, _TRAPPING)
     base = tables.species_abilities_decomp[species].astype(_I32)
     return true, known, base
 
@@ -1725,8 +1735,8 @@ def defender_ability(tables: Tables, state: BattleState, ability_guess) -> jnp.n
     """``int32``: ``LoadBattlerAbility DEFENDER`` (trainer_ai.c:1170; roark.md 9.2): the
     true ability when the AI has learned it or when it is Shadow Tag, Magnet Pull or
     Arena Trap; else the guessed species slot ``ability_guess`` when the species has two
-    abilities; else its only one. The engine has no ability suppression (Gastro Acid),
-    so the ``ABILITY_NONE`` case never applies.
+    abilities; else its only one. ``ABILITY_NONE`` for a suppressed battler (Gastro Acid,
+    :1177-1178; ``_defender_abilities``).
 
     The true ability is the form's (its personal row: ``BoxPokemon_SetGiratinaForm``
     recomputes it, ``src/pokemon.c:4391-4400``); the guess is the base species' two
@@ -2162,7 +2172,8 @@ def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
 def check_battler_ability(ctx: AiContext, battler: Battler, expected: int) -> AiContext:
     """``CheckBattlerAbility`` (trainer_ai.c:1212-1265): ``AI_HAVE`` when the battler's
     ability as the AI sees it is ``expected``, ``AI_NOT_HAVE`` when it is another, and
-    ``AI_UNKNOWN`` when the AI does not know it. The AI's own Pokemon: its current ability.
+    ``AI_UNKNOWN`` when the AI does not know it, or the battler's ability is suppressed
+    (:1221-1222: ``ABILITY_NONE``). The AI's own Pokemon: its current ability.
     The player's: the one the AI knows (learned, or a trapping ability, :1224-1233); else, for
     a species of two abilities, ability 1 when neither is ``expected`` and unknown when one
     is (:1238-1246), for a species of one, that one (:1247-1251). No draw."""

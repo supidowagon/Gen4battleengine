@@ -306,7 +306,7 @@ from nuzline.engine.outcome import (
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
 )
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, held_items
+from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, battler_ability, held_items
 
 _I32 = jnp.int32
 _E = EffectId
@@ -476,8 +476,8 @@ def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarra
     fmt = format_of(state)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
     sides = jnp.arange(fmt.B)
-    now = _any_of(state.ability[party(fmt, sides), state.active], abilities)
-    entry = _any_of(state.ability[party(fmt, sides), incoming], abilities) | _any_of(
+    now = _any_of(battler_ability(state, sides), abilities)
+    entry = _any_of(battler_ability(state, sides, incoming), abilities) | _any_of(
         _entry_abilities(tables, state, actions), abilities
     )
     return now | (entry & is_switch(actions))
@@ -542,7 +542,7 @@ def _end_speeds(
         state.active.dtype
     )
     stage0 = jnp.where(switching, 0, state.stages[side, Stat.SPE].astype(_I32))
-    quick_feet = state.ability[party(fmt, side), mon] == AbilityId.QUICK_FEET
+    quick_feet = battler_ability(state, side, mon) == AbilityId.QUICK_FEET
     para0 = jnp.where(
         quick_feet,
         state.status[party(fmt, side), mon] != Status.NONE,
@@ -609,7 +609,7 @@ def _end_speeds(
         # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
         # for an Unburden holder that still holds an item (:4433-4437); B9-13.
         incoming = mon != state.active[side]
-        armed = (state.ability[party(fmt, side), mon] == AbilityId.UNBURDEN) & (
+        armed = (battler_ability(state, side, mon) == AbilityId.UNBURDEN) & (
             state.item[party(fmt, side), mon] != 0
         )
         base = jnp.where(incoming, armed.astype(_I32), state.can_unburden[side].astype(_I32))
@@ -636,13 +636,19 @@ def _end_speeds(
         )
         s = s._replace(
             active=state.active.at[side].set(mon),
+            # A newcomer's mask starts clear (battle_lib.c:2071): no Gastro Acid bit.
+            ability_suppressed=state.ability_suppressed.at[side].set(
+                jnp.where(incoming, 0, state.ability_suppressed[side]).astype(
+                    state.ability_suppressed.dtype
+                )
+            ),
             stages=s.stages.at[side, Stat.SPE].set(stage.astype(s.stages.dtype)),
             status=s.status.at[party(fmt, side), mon].set(
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
             ),
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
-        chlorophyll = s.ability[party(fmt, side), mon] == AbilityId.CHLOROPHYLL
+        chlorophyll = battler_ability(s, side, mon) == AbilityId.CHLOROPHYLL
         doubling = jnp.where(chlorophyll, Weather.SUN, Weather.RAIN)
         weather = jnp.where(lock == 3, doubling, s.weather).astype(s.weather.dtype)
         return effective_speed(tables, s, side, suppressed, weather)
@@ -1449,7 +1455,7 @@ def damage_inputs_can_change(
     param0, param1 = params[:, 0], params[:, 1]
     category = tables.move_category[moves]
     move_type = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in range(fmt.B)])
-    ability = state.ability[party(fmt, sides), mons]
+    ability = battler_ability(state, sides, mons)
     item = tables.item_effect[state.item[party(fmt, sides), mons]]
     status = state.status[party(fmt, sides), mons]
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
@@ -1774,21 +1780,22 @@ def outcome_laws(
     # The attacker is not in love at the start, or the holder's side switches: the source
     # leaves first (step._source_leaves) and a Cute Charm switch-in can then infatuate it.
     calm = (foes(state.infatuated) == 0) | switch
-    charm_now = (state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM) & lovers(
+    charm_now = (battler_ability(state, sides, mons) == AbilityId.CUTE_CHARM) & lovers(
         gender[sides, mons], attacker_gender
     )
-    entering = (state.ability[party(fmt, sides), incoming] == AbilityId.CUTE_CHARM) | (
+    entering = (battler_ability(state, sides, incoming) == AbilityId.CUTE_CHARM) | (
         _entry_abilities(tables, state, actions) == AbilityId.CUTE_CHARM
     )
     charm_later = switch & entering & lovers(gender[sides, incoming], attacker_gender)
-    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender.
+    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender. Raw: the
+    # copy is BattleMon.ability's (battle_script.c:5342-5348).
     foe_charm = foes(state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM)
     charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
     charm = (charm_now | charm_later | charm_copied) & calm
     if loose:
         charm = _holds(tables, state, actions, (AbilityId.CUTE_CHARM,)) | (xform & foe_charm)
     holders = holders | charm
-    contact_proc = foes((lands & (damaging & contact & foes(holders))[:, None]))
+    contact_proc = foes(lands & (damaging & contact & foes(holders))[:, None])
     # Chatter (G-70): a Chatot that is not Transformed confuses (effects._chatter; over-approximate:
     # the roll may fail, the target may be confused already or behind a Substitute).
     chatot = (state.species[party(fmt, sides), mons] == SPECIES_CHATOT) & (state.transformed == 0)
@@ -1814,7 +1821,7 @@ def outcome_laws(
     # berry could cure the target). Insomnia is never a block: its "stayed awake" reveal
     # (ai_ability_known) runs on a proc; Limber's runs only for a direct status move.
     param0 = params[:, 0]
-    attacker_ability = state.ability[party(fmt, sides), mons]
+    attacker_ability = battler_ability(state, sides, mons)
     ignorable = jnp.where(
         attacker_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, foes(attacker_ability)
     )
@@ -1911,8 +1918,8 @@ def outcome_laws(
             | (
                 damaging
                 & contact
-                & (state.ability[party(fmt, sides), mons] == AbilityId.SYNCHRONIZE)
-                & (foes(state.ability[party(fmt, sides), mons]) == AbilityId.STATIC)
+                & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
+                & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
             )
         ),
         "freeze_inflict": uses_move
@@ -2050,7 +2057,7 @@ def outcome_laws(
     # The foe can drag this side's Pokemon out: its Roar with an eligible bench Pokemon here
     # (BtlCmd_TryWhirlwind fails at eligibleMons <= 1, battle_script.c:5285-5297, before
     # any drag).
-    dragged = foes((roar & (roar_bench >= 1)))
+    dragged = foes(roar & (roar_bench >= 1))
     if loose:
         # The brute force: both draws whenever the side uses Roar, whatever the levels and the
         # bench (the pick's law is then over max(bench, 1) values), and every living party
@@ -2062,7 +2069,7 @@ def outcome_laws(
     # (COUNT_ALIVE_BATTLERS, battle_lib.c:2951-2957). A living holder anywhere in either
     # party can change it this turn: by a switch in or out, a Roar's drag in or out, or a
     # faint (over-approximate; nothing in the engine revives, so a fainted holder never
-    # counts again).
+    # counts again). Raw over the whole party: a superset of every Battler_Ability it can show.
     abilities = decomp_abilities(tables, state)
     lock_holder = (abilities == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
         abilities == WEATHER_ABILITY_IDS["Air Lock"]
@@ -2079,7 +2086,8 @@ def outcome_laws(
         AbilityId.TRACE,
     )
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
-    switch_setter = switch & _any_of(state.ability[party(fmt, sides), incoming], setters)
+    switch_setter = switch & _any_of(battler_ability(state, sides, incoming), setters)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     alive_setter = jnp.any(
         _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
     )[party(fmt, jnp.arange(fmt.B))]
@@ -2099,7 +2107,8 @@ def outcome_laws(
             weather_free,
             # The side's own Tailwind when none blows yet (effects._side_layers).
             uses_move[side] & (effect[side] == _E.TAILWIND) & (state.tailwind[side_of(side)] == 0),
-            # A living Unburden holder of the side (over-approximate: it may lose its item).
+            # A living Unburden holder of the side (over-approximate: it may lose its item; raw
+            # over the party, a superset of every Battler_Ability it can show).
             live
             & jnp.any(
                 (state.ability[party(fmt, side)] == AbilityId.UNBURDEN)
@@ -2114,7 +2123,7 @@ def outcome_laws(
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
     scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
-    embargo_speed = jnp.any(scarf & foes((uses_move & (effect == _E.EMBARGO))))
+    embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
     end_speed_tie = live & (
         jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed
     )
@@ -2122,6 +2131,7 @@ def outcome_laws(
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
     # follow, or Shed Skin: both reads are kept (over-approximate).
     living_now = (state.species != 0) & (state.hp > 0)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)[
         party(fmt, jnp.arange(fmt.B))
     ]
@@ -2144,6 +2154,7 @@ def outcome_laws(
     # Shed Skin of the Pokemon on the field at the turn's end: the active or incoming one, or
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)[
         party(fmt, jnp.arange(fmt.B))
     ]
@@ -2182,7 +2193,7 @@ def outcome_laws(
             for side, target in ((b, _foe(b)) for b in range(fmt.B))
         ]
     )
-    acu_loose = foes((live & (uses_move | switch)))
+    acu_loose = foes(live & (uses_move | switch))
     acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
     if loose:
         acupressure = uses_move & (effect == _E.ACUPRESSURE)
@@ -2396,10 +2407,12 @@ def outcome_laws(
         else uses_move
         & (effect == _E.PRESENT)
         & (
+            # Raw over the foe's party: a superset of every Battler_Ability it can show.
             jnp.any(
                 state.ability[party(fmt, _foe(jnp.arange(fmt.B)))] == AbilityId.WONDER_GUARD, axis=1
             )
-            # A foe whose Transform copies the side's own Wonder Guard (G-69).
+            # A foe whose Transform copies the side's own Wonder Guard (G-69): the raw
+            # BattleMon.ability (battle_script.c:5342-5348).
             | (foes(xform) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
         ),
     )

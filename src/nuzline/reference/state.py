@@ -139,6 +139,7 @@ class RefBattler:
     shadow_ability_form: int
     truant: int  # MoveEffectsData.truant (G-69)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
+    ability_suppressed: int  # MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     wish_timer: int
     wish_hp: int
     future_timer: int

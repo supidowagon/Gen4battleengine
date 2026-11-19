@@ -363,3 +363,65 @@ Each is open; close it with its ruling.
   Tag Strategy's entry: Owed 4; read bounds regenerated; backlog regenerated (the two #191 rows
   close). Tests: tests/engine/test_e3_batch1.py `test_skill_swap_*`,
   `test_the_announced_flags_*`, tests/ai/test_kaizo_policy.py `test_change_user_ability_*`.
+- E3-2-6a Gastro Acid 1/2 (#239), refactor, no mechanic: one suppressed-ability reader. New
+  per-battler `[B]` int8 `ability_suppressed` = MOVE_EFFECT_ABILITY_SUPPRESSED (moves.h:29),
+  STATE.md `mapped`, in `VOLATILE_FIELDS` (switch-out clears the mask, battle_lib.c:2071) and
+  `BATON_PASSED_FIELDS` (moves.h:46-48, :2076); reference `RefBattler.ability_suppressed`,
+  `BATON_PASSED`, `_reset_battler`. Nothing sets it yet. Accessors: `state.battler_ability(state,
+  b, slot=None)` (AbilityId), `damage.battler_decomp_ability(tables, state, b, slot=None)`
+  (decomp ids), both through `state.ability_is_suppressed` (the bit applies to the battler's
+  active slot only); NONE when the bit is set and the raw ability is not Multitype (lib.c:3088-
+  3093). Multitype has no AbilityId (`UNSUPPORTED`), so the AbilityId accessor keeps a raw
+  `UNSUPPORTED`; the decomp-id one tests `ABILITY_MULTITYPE` exactly. Reference twins
+  `_ability(s, mon)`, `_battler_decomp_ability(tables, s, mon)` via `_suppressed(s, mon)` (the
+  battler whose active Pokemon `mon` is). The Gravity / Ingrain Levitate lines (lib.c:3095-3103)
+  stay where they were (`damage.ignorable`, `damage.grounded`, `effects.magnet_rise_fails`,
+  `actions` BattlerIsGrounded's Gravity term; reference `_ignorable`, `_entry_hazards`,
+  `_script_fails`), applied to the routed value. AI: `commands.MoveEffectMask.ABILITY_SUPPRESSED
+  = 1 << 21` (IfMoveEffect); `attacker_ability` and `_defender_abilities` (LoadBattlerAbility /
+  CheckBattlerAbility) give ABILITY_NONE, known, no coin, for a set bit (trainer_ai.c:1177-1178,
+  :1221-1222: the bit alone, no Multitype test). With every bit 0 each accessor is the raw read,
+  so singles outputs are unchanged by construction.
+  Routed (Battler_Ability / IgnorableAbility / CountAbility / CheckAbility): `state.held_item`
+  Klutz (lib.c:5352-5356); damage: `ignorable`, `identified` Scrappy, `trace_copy`'s holder,
+  `grounded` Levitate, `hazards_loss` Magic Guard, `entry_ability` own, `script_power_mul`
+  Reckless, `weather_suppressed` (CountAbility), `beat_up_damage` Sniper (:7144),
+  `side_ability_count`, `_pre_random` attacker / defender / Technician / Flower Gift (:6653-
+  6654), `_finish` attacker; actions `trapped` (BattlerIsGrounded, Shadow Tag, Magnet Pull, Arena
+  Trap, :5500-5536); order `effective_speed` (:1213-1214), `pinch_divisor` Gluttony, `truant_loafs`
+  (:3308); effects: Camouflage (script.c:8001), recoil Rock Head / Magic Guard, `pressure_holder`,
+  `captivate_fails`, `rest_fails`, Heal Bell user (script.c:5038), `magnet_rise_fails`,
+  `yawn_blocks`, `yawn_sleep`, Knock Off Mold Breaker and Sticky Hold, `_contact_ability`
+  (TriggerAbilityOnHit and the attacker's Limber / Leaf Guard / Magic Guard), `synchronize`, the
+  on-hit berry, entry Toxic Spikes, Life Orb; hooks: Download, `reveal_ability`'s trigger,
+  `weather_ability`, `weather_war`, `swap_war`, `arm_unburden`, `recover_status_by_ability`,
+  berry Own Tempo, Pluck Klutz (lib.c:5840), Intimidate and its blockers (script.c:2883);
+  step: Steadfast, full paralysis Magic Guard, No Guard (bcp.c:3018-3019, the Future Sight hit),
+  crash Magic Guard, leech seed / poison / Poison Heal / curse / bind / Bad Dreams (bcp.c:1485),
+  Leftovers, the status orbs, Speed Boost / Shed Skin, `_weather_effect` (int32[B] decomp ids);
+  enumerate: `_holds`, `_end_speeds` (Quick Feet, Unburden, Chlorophyll; the newcomer view clears
+  the bit), the outcome-law reads of the active battlers (Guts, Cute Charm, Mold Breaker / Limber
+  / Insomnia, Synchronize / Static, incoming setters); outcome: `_rate`, `stage_total`, Klutz
+  holder, `armored` Mold Breaker and target, `secondary_chance` Serene Grace (lib.c:1552);
+  search.playout the newcomer's Intimidate / Download; ai.switching `wonder_guard_bit`
+  (lib.c:2649). Reference: every matching site of `engine.py` (103 lines).
+  Left raw, each with a comment: Super Luck (`outcome.side_crit_odds`, ref `_crits`; lib.c:7122);
+  Trace target choice and copy (`damage.trace_copy` foe, `entry_ability` traced value,
+  `hooks.trace`, `outcome._armed_trace`, coverage `trace_copy_refusals`, ref `_trace`;
+  lib.c:7754-7776, subscript_trace.s:6-7); Natural Cure on switch-out (`step._natural_cure`,
+  ref `_u_turn`, Baton Pass, `_roar`, `_switch`; script.c:9151); the party ability restore
+  (`step._restore_ability`, ref `_restore_ability`; lib.c:124); Worry Seed's checks and write
+  (subscript_give_target_insomnia.s:7-8, :11), Skill Swap's checks and swap
+  (subscript_exchange_abilities.s:6-13, :21-24), Knock Off's Multitype (subscript_knock_off.s:6),
+  Embargo's Multitype (subscript_embargo_start.s:7), Transform's copy (script.c:5342-5348;
+  also outcome's field variant, `armored`'s copied armor, enumerate's Transform Cute Charm /
+  Wonder Guard); the AI record of a tagged ability (`effects.know_ability`, `hooks._know`,
+  `reveal_ability`'s record, the Transform record settle, ref `_know_ability`; script.c:11805);
+  Heal Bell's Mold Breaker in the IO message (battle_controller.c:1539, battle_io_command.c:645)
+  and the bench's party Soundproof (:648); the AI's own raw reads (trainer_ai.c:1185-1188,
+  :1208, :1256; AI_CannotDamageWonderGuard :3298; the bench's MON_DATA_ABILITY :2162); the
+  whole-party scans (enumerate's lock / setter / Unburden / Trace / Shed Skin / Wonder Guard
+  over-approximations, outcome's tracer, the AI refusal scans): raw is a superset of every
+  Battler_Ability they stand for. Not done here: observation of the bit (`observe`) and its
+  test strategy, with the mechanic in 2/2. Local check: ruff clean; the byte-identity run did
+  not fit the 4 GB local cap (a jitted or eager `step` passes 3.8 GB): pod.

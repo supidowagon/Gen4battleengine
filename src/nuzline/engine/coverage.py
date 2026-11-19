@@ -665,6 +665,8 @@ def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> lis
     out: list[str] = []
     for side, slot in holders:
         foe = _foe(side)
+        # Raw BattleMon.ability: ChooseTraceTarget (battle_lib.c:7754-7776) and the copy
+        # (subscript_trace.s:6-7) read it, not Battler_Ability.
         copies = {
             (int(armed.ability[foe, s]), int(decomp[foe, s]))
             for s in range(species.shape[1])

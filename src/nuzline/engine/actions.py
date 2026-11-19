@@ -48,7 +48,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.format import format_of, party
 from nuzline.engine.ids import CHOICE_ITEMS, GRAVITY_MOVES, AbilityId, ItemId, Type
-from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, held_item
+from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, battler_ability, held_item
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 NUM_ACTIONS = MOVE_ACTIONS + SLOTS
@@ -167,7 +167,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
     fmt = format_of(state)
     mon = state.active[side]
-    own = state.ability[party(fmt, side), mon]
+    own = battler_ability(state, side)
     types = state.types[party(fmt, side), mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
     iron = tables.item_effect[held_item(state, side, mon)] == ItemId.IRON_BALL
@@ -185,7 +185,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):
         other = state.active[foe]
-        theirs = state.ability[party(fmt, foe), other]
+        theirs = battler_ability(state, foe)
         live = (jnp.asarray(side) != foe) & (state.hp[party(fmt, foe), other] > 0)
         abilities = (
             ((theirs == AbilityId.SHADOW_TAG) & (own != AbilityId.SHADOW_TAG))

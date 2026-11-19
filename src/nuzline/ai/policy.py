@@ -4087,7 +4087,8 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         sites = jnp.zeros_like(present[1])
     else:
         sites = present[1] & (jax.vmap(script_roll_count)(moves[1]) > MAX_SCRIPT_ROLLS)
-    ability = decomp_abilities(tables, state)  # current abilities (trainer_ai.c:1205)
+    # Raw over every party slot: a refusal of what any Pokemon holds (trainer_ai.c:1205).
+    ability = decomp_abilities(tables, state)
     side_abilities = (_DEFENDER_ABILITIES, _ATTACKER_ABILITIES)
     ability_bad = jnp.stack(
         [

@@ -73,7 +73,7 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.state import BattleState, held_item
+from nuzline.engine.state import BattleState, battler_ability, held_item
 
 _I32 = jnp.int32
 
@@ -565,7 +565,7 @@ def effective_speed(
         suppressed = weather_suppressed(tables, state)
     weather = state.weather if weather is None else weather
     mon = state.active[side]
-    ability = state.ability[party(fmt, side), mon]
+    ability = battler_ability(state, side)  # CompareBattlerSpeed (battle_lib.c:1213-1214)
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[party(fmt, side), mon, Stat.SPE - 1].astype(_I32), stage)
@@ -615,9 +615,8 @@ def pinch_divisor(tables: Tables, state: BattleState, side, mon, item) -> jnp.nd
     party ``mon``, halved (``itemPower /= 2``) when the holder's own ability is Gluttony
     (``Battler_Ability``: battle_lib.c:4774-4776, :1289-1291). The berry triggers at
     ``curHP <= maxHP / divisor`` (``pinch_limit``)."""
-    fmt = format_of(state)
     power = tables.item_param[item, 0].astype(_I32)
-    gluttony = state.ability[party(fmt, side), mon] == AbilityId.GLUTTONY
+    gluttony = battler_ability(state, side, mon) == AbilityId.GLUTTONY
     return jnp.where(gluttony, power // 2, power)
 
 
@@ -794,7 +793,5 @@ def truant_loafs(state: BattleState, side) -> jnp.ndarray:
     (battle_lib.c:2119, :2197; ``step._entered``), 0 for a lead (the zeroed context), and
     ``totalTurns & 1`` after a Transform (battle_script.c:5359, G-69). So a Truant battler loafs on
     every other turn from its entry or its Transform, whatever it did."""
-    fmt = format_of(state)
-    mon = state.active[side]
     parity = state.truant[side].astype(_I32) != (state.turn.astype(_I32) & 1)
-    return (state.ability[party(fmt, side), mon] == AbilityId.TRUANT) & parity
+    return (battler_ability(state, side) == AbilityId.TRUANT) & parity
