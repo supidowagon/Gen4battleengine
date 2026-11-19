@@ -12,19 +12,23 @@ decomp are not generated; each such case is logged in docs/discrepancies.md
 is generated: both calculators drop the weather modifiers (``NO_CLOUD_NINE``,
 battle_lib.c:6921, :7046; ``damage.weather_suppressed``).
 
-Hidden Power and Magnitude take their power (and Hidden Power its type) from the
-engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at level 4), passed
-to @smogon/calc as move overrides. Fixed-damage moves (Night Shade, Seismic Toss, Bide)
+Hidden Power, Magnitude, Trump Card, Wring Out and Low Kick take their power (and Hidden
+Power its type) from the engine (``damage.hidden_power``; ``damage_table`` takes Magnitude at
+level 4; ``damage.trump_card_power``, ``damage.hp_power``, ``damage.weight_power``), passed to
+@smogon/calc as move overrides. A crit drawn
+against an armored defender is dropped before either calculator sees it: the game's crit
+roll never crits it (battle_lib.c:7134-7136, ``effects.armored``). Fixed-damage moves (Night Shade, Seismic Toss, Bide)
 have no base power to compare: the tables carry a placeholder 1, @smogon/calc 0.
 
-Skips when ``node`` or the npm package is missing
-(``npm install --prefix tools/smogon_calc``).
+Skips when ``node`` or the npm package is missing (``npm ci --prefix tools/smogon_calc``);
+fails instead when ``NUZLINE_REQUIRE_NODE=1``.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -44,8 +48,22 @@ from nuzline.engine.damage import (
     effectiveness,
     fixed_damage,
     hidden_power,
+    hp_power,
+    ignorable,
+    trump_card_power,
+    weight_power,
 )
-from nuzline.engine.ids import AbilityId, EffectId, Stat, Status, Type, Weather
+from nuzline.engine.effects import armored
+from nuzline.engine.ids import (
+    POWER_IF_TARGET_MOVED,
+    AbilityId,
+    EffectId,
+    Stat,
+    Status,
+    Type,
+    Weather,
+)
+from nuzline.engine.order import effective_speed
 from nuzline.engine.state import make_state
 from tests.strategies import m1_move_pools, possible_genders
 
@@ -53,6 +71,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SMOGON_DIR = ROOT / "tools" / "smogon_calc"
 MATCHUPS = 300
 ABILITY_ROWS = 60
+SELF_DESTRUCT_ROWS = 4
 SEED = 20261029
 
 _STAT_KEYS = ("hp", "atk", "def", "spa", "spd", "spe")  # ids.Stat order
@@ -69,17 +88,57 @@ _CATEGORY = {"Physical": 0, "Special": 1}
 # No table power to compare: fixed damage, and Flail (the table's 1 against @smogon/calc's 0;
 # both then take the power from the attacker's HP in 64ths, the same bands).
 _NO_POWER = (EffectId.LEVEL_DAMAGE, EffectId.BIDE, EffectId.FLAIL)
+# Effects whose damage @smogon/calc 0.12.0 computes against the decomp: never generated
+# (docs/discrepancies.md, "Damage oracle").
+_DEPARTED_EFFECTS = (
+    # The game deals the defender's max HP (BtlCmd_TryOHKOMove, battle_script.c:4334-4386;
+    # battle_controller_player.c:3343-3345); @smogon/calc gives power 0.
+    EffectId.OHKO,
+    # The use deals nothing: TryFutureSight only stores the damage (effect_script_0148.s;
+    # battle_script.c:6065-6094); @smogon/calc hits at once.
+    EffectId.FUTURE_SIGHT,
+    # Power 1 + 25 x defender speed / attacker speed, at most 150 (BtlCmd_CalcGyroBallPower,
+    # battle_script.c:7127-7129); @smogon/calc leaves out the 1 (gen4.js:326-328).
+    EffectId.GYRO_BALL,
+    # Super Fang deals Divide(defender curHP, 2) (effect_script_0040.s:5-8), Endeavor the
+    # defender's curHP minus the attacker's (effect_script_0189.s:5-9), Counter twice the
+    # physical damage taken this turn (effect_script_0089.s; BtlCmd_Counter,
+    # battle_script.c:4615-4627); @smogon/calc has no fixed-damage case for them
+    # (util.js:683-694) and deals 0 at power 0 (gen4.js:171-174).
+    EffectId.HALVE_HP,
+    EffectId.ENDEAVOR,
+    EffectId.COUNTER,
+)
+# sWeightToPower (include/data/battle/weight_to_power.h): the first row whose weight
+# (hectograms) is at least the defender's (BtlCmd_CalcWeightBasedPower,
+# battle_script.c:6808-6826); @smogon/calc's Low Kick takes the next row at a bound
+# (``w >= 10`` kg, gen4.js:320-325).
+_WEIGHT_BOUNDS = (100, 250, 500, 1000, 2000)
+# Every other damaging effect of the M1 move pools: compared (``_matchups``).
+_COMPARED_EFFECTS = (
+    EffectId.PLAIN, EffectId.SECONDARY_STAT_SELF, EffectId.SECONDARY_STAT_FOE,
+    EffectId.SECONDARY_STATUS, EffectId.FLINCH, EffectId.HIGH_CRIT, EffectId.DRAIN,
+    EffectId.TRAP, EffectId.PURSUIT, EffectId.MULTI_HIT, EffectId.RECOIL,
+    EffectId.LEVEL_DAMAGE, EffectId.HIDDEN_POWER, EffectId.MAGNITUDE,
+    EffectId.SECONDARY_CONFUSE, EffectId.EAT_BERRY, EffectId.BIDE, EffectId.ROLLOUT,
+    EffectId.BRICK_BREAK, EffectId.FAKE_OUT, EffectId.RAISE_ALL_STATS_HIT,
+    EffectId.SELF_DESTRUCT, EffectId.FLAIL, EffectId.FANG_PARALYZE_FLINCH,
+    EffectId.DOUBLE_POWER, EffectId.HP_POWER, EffectId.WEIGHT_POWER, EffectId.HALVE_HP,
+    EffectId.COUNTER, EffectId.UPROAR, EffectId.RECOIL_STATUS, EffectId.CRASH,
+    EffectId.ENDEAVOR, EffectId.ASSURANCE, EffectId.TRUMP_CARD, EffectId.CHATTER,
+)  # fmt: skip
 
 jit_damage_table = jax.jit(damage_table)
 
 
 @pytest.fixture(scope="module")
 def node() -> str:
+    missing = pytest.fail if os.environ.get("NUZLINE_REQUIRE_NODE") == "1" else pytest.skip
     exe = shutil.which("node")
     if exe is None:
-        pytest.skip("node is not installed")
+        missing("node is not installed")
     if not (SMOGON_DIR / "node_modules" / "@smogon" / "calc").is_dir():
-        pytest.skip("@smogon/calc is not installed (npm install --prefix tools/smogon_calc)")
+        missing("@smogon/calc is not installed (npm ci --prefix tools/smogon_calc)")
     return exe
 
 
@@ -108,6 +167,8 @@ def _smogon_departs(
     """Matchups where @smogon/calc 0.12.0 departs from the decomp (docs/discrepancies.md,
     "Damage oracle"); the engine follows the decomp in all. ``s`` is the matchup's state."""
     physical = int(tables.move_category[move]) == 0
+    if int(tables.move_effect[move]) in _DEPARTED_EFFECTS:
+        return True
     a_stage = m["atk_stages"][0 if physical else 2]  # [atk, def, spa, spd]
     d_stage = m["def_stages"][1 if physical else 3]
     # 1. Sandstorm raises a Rock-type defender's SpD before its stage applies
@@ -130,7 +191,31 @@ def _smogon_departs(
     halved = int(tables.move_effect[move]) == EffectId.SELF_DESTRUCT and physical
     if halved and d_stage != 0:
         return True
-    # 4. The type chart rounding at low damage (_chart_rounding_departs).
+    # 4. Payback doubles when the defender has acted this turn (BtlCmd_CalcPaybackPower,
+    #    battle_script.c:7198-7209), which ``damage_table`` never sees; @smogon/calc doubles
+    #    whenever the attacker is not the faster (gen4.js:290, :330-335).
+    payback = int(tables.move_effect[move]) == EffectId.DOUBLE_POWER and (
+        int(tables.move_param[move, 0]) == POWER_IF_TARGET_MOVED
+    )
+    if payback and int(effective_speed(tables, s, 0)) <= int(effective_speed(tables, s, 1)):
+        return True
+    # 5. Low Kick against a defender whose weight is a row bound (_WEIGHT_BOUNDS).
+    weight = int(tables.species_weight[m["def_species"]])
+    if int(tables.move_effect[move]) == EffectId.WEIGHT_POWER and weight in _WEIGHT_BOUNDS:
+        return True
+    # 6. A defender's Dry Skin or Water Absorb takes a Water move with power, its Volt Absorb an
+    #    Electric move, unless the attacker's Mold Breaker hides it (BattleSystem_TriggerImmunity-
+    #    Ability, battle_lib.c:3500-3512, :3538-3544): TRY_MOVE_STATE_TRIGGER_IMMUNITY_ABILITIES
+    #    (battle_controller_player.c:3281-3286, :2789-2798) ends the move with
+    #    MOVE_STATUS_NO_MORE_WORK before BattleSystem_CalcMoveDamage, which has no Water or
+    #    Electric case for them (its one Dry Skin factor is Fire's, :6845-6848). ``damage_table``
+    #    is that calculation; the absorb is ``step._use_move``'s. @smogon/calc returns 0.
+    seen = int(ignorable(s, 0, 1))
+    water = seen in (AbilityId.DRY_SKIN, AbilityId.WATER_ABSORB) and m["type"] == Type.WATER
+    volt = seen == AbilityId.VOLT_ABSORB and m["type"] == Type.ELECTRIC
+    if water or volt:
+        return True
+    # 7. The type chart rounding at low damage (_chart_rounding_departs).
     return _chart_rounding_departs(tables, names, s, move, m["crit"])
 
 
@@ -219,6 +304,28 @@ def _matchups(tables: Tables, names: Names) -> list[dict]:
         m = _matchup(rng, tables, names, atk_species, def_species, move)
         if m is not None:
             out.append(m)
+    return out + _self_destruct_rows(tables, names)
+
+
+def _self_destruct_rows(tables: Tables, names: Names) -> list[dict]:
+    """``SELF_DESTRUCT_ROWS`` seeded Selfdestruct / Explosion matchups (their halved Defense),
+    which the draw above can lose: a defender Defense stage other than 0 departs
+    (``_smogon_departs`` 3), 12 draws in 13."""
+    rng = np.random.default_rng(SEED + 2)
+    pools = m1_move_pools(tables, names)
+    users = [
+        (species, m)
+        for species, moves in sorted(pools.items())
+        for m in moves
+        if int(tables.move_effect[m]) == EffectId.SELF_DESTRUCT
+    ]
+    species_ids = sorted(pools)
+    out: list[dict] = []
+    while len(out) < SELF_DESTRUCT_ROWS:
+        atk, move = (int(x) for x in users[int(rng.integers(len(users)))])
+        m = _matchup(rng, tables, names, atk, int(rng.choice(species_ids)), move)
+        if m is not None:
+            out.append(m)
     return out
 
 
@@ -302,9 +409,24 @@ def _matchup(
         m["type"], m["power"] = (int(x) for x in hidden_power(np.asarray(a.ivs)))
     elif effect == EffectId.MAGNITUDE:
         m["power"] = int(MAGNITUDE_POWER[0])  # damage_table's default level 4
+    elif effect == EffectId.TRUMP_CARD:
+        m["power"] = _trump_card_power(s, move)
+    elif effect == EffectId.HP_POWER:
+        # The defender's HP is not changed below. BtlCmd_CalcWringOutPower
+        # (battle_script.c:7261-7268) and @smogon/calc (gen4.js:359-362) agree on the formula.
+        m["power"] = int(hp_power(s, 1))
+    elif effect == EffectId.WEIGHT_POWER:
+        m["power"] = int(weight_power(tables, s, 1))
     m["no_power"] = effect in _NO_POWER
     overrides = {}
-    if effect in (EffectId.HIDDEN_POWER, EffectId.MAGNITUDE):
+    overridden = (
+        EffectId.HIDDEN_POWER,
+        EffectId.MAGNITUDE,
+        EffectId.TRUMP_CARD,
+        EffectId.HP_POWER,
+        EffectId.WEIGHT_POWER,
+    )
+    if effect in overridden:
         overrides = {
             "basePower": m["power"],
             "type": names.type_names[m["type"]].capitalize(),
@@ -321,6 +443,9 @@ def _matchup(
         light_screen=s.light_screen.at[1].set(int(m["light_screen"])),
     )
     m["state"] = s
+    # The crit roll never crits an armored defender (battle_lib.c:7134-7136); the draw above
+    # stays, so the sample does not shift.
+    m["crit"] = m["crit"] and not bool(armored(s, 0, 1))
     if _smogon_departs(m, tables, names, ability, move, s):
         return None
     m["smogon"] = {
@@ -334,6 +459,15 @@ def _matchup(
         "lightScreen": m["light_screen"],
     }
     return m
+
+
+def _trump_card_power(s, move: int) -> int:
+    """The engine's Trump Card power for side 0's lead (``damage._pre_random``): the PP of
+    the first slot holding ``move`` after the use's decrement (BtlCmd_CalcTrumpCardPower,
+    battle_script.c:7233-7245)."""
+    moves = np.asarray(s.moves[0, 0])
+    first = int(np.argmax(moves == move))
+    return int(trump_card_power(max(int(s.pp[0, 0, first]) - 1, 0)))
 
 
 def _smogon_mon(names: Names, mon: PokemonSpec, stages, hp, burn) -> dict:
@@ -370,6 +504,23 @@ def oracle(tables, names, node):
 
 def _describe(m: dict) -> str:
     return json.dumps(m["smogon"], sort_keys=True)
+
+
+def test_every_drawn_effect_is_compared_or_departs(tables, names):
+    """A new damaging effect in the M1 pools fails here, not as a reshuffled sample."""
+    pools = m1_move_pools(tables, names)
+    drawn = {
+        int(tables.move_effect[m])
+        for moves in pools.values()
+        for m in moves
+        if int(tables.move_category[m]) != STATUS
+    }
+    unlisted = drawn - set(_COMPARED_EFFECTS) - set(_DEPARTED_EFFECTS)
+    assert not unlisted, (
+        f"effects in the M1 pools neither compared nor departed: "
+        f"{sorted(EffectId(e).name for e in unlisted)}; add each to _COMPARED_EFFECTS, or to "
+        f"_DEPARTED_EFFECTS with its decomp cite and a docs/discrepancies.md entry"
+    )
 
 
 @pytest.mark.slow

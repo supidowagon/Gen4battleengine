@@ -1871,10 +1871,9 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
             turn.payout.append(slot)
         if s.battlers[side].active == slot:
             _cleanup_fainted(turn, s, side)
-        if side_of(side) == 0:
+        if _party(_fmt(s), side) == 0:  # the player's party only (step._faint_check fainted[0])
             player_fainted += 1
-            if _party(_fmt(s), side) == 0:  # the player's party only (step._faint_check)
-                s.deaths[slot] = 1
+            s.deaths[slot] = 1
     turn.fainted.clear()
     s.player_faints += player_fainted
     if not decide:  # AnyFainted alone, no CheckBattleOver (the side-condition pass, bcp.c:1749)

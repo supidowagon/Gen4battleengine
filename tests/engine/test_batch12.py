@@ -7,6 +7,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.enumerate import enumerate_turn, outcome_laws
@@ -252,6 +253,8 @@ def _crit_inputs(state, side: int) -> tuple[int, ...]:
     )
 
 
+@pytest.mark.slow
+@pytest.mark.fullset
 def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_inputs(tables, names):
     """outcome.CRIT_ODDS_EFFECTS against the engine: every move effect in the tables is played
     (a whole turn, so effects run in step as well as in the effect handlers) on a foe whose

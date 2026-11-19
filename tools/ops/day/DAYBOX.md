@@ -1,40 +1,43 @@
-# DAYBOX: remote pytest runs on the daytime pod
+# DAYBOX: chunked pytest runs on the test pod
 
-Pod: name `ci-day`, ubuntu:24.04, 16 vCPU / 64 GB, about $0.64/h. Cap: $10 per day. Only the managing session creates and deletes it. Keep the pod id only in `$NUZLINE_SCRATCH/rent/day/POD_ID`; never commit it.
+Rules (pod shape, limits, what may leave the PC, chunk sizes, memory limits, completeness, exec-pod limits, dead pods, never signalling PID 1): `docs/process.md` section 5. This file holds the steps.
 
-Variables: `NUZLINE_REPO` (repo checkout), `NUZLINE_SCRATCH` (scratch folder; the helpers use `$NUZLINE_SCRATCH/rent/` for `bin/runpodctl-windows-amd64.exe`, `home/` and `day/`), `NUZLINE_REPO_URL` (git URL, only for runs that need a clone).
+Who handles a run: `docs/process.md` section 5, "Pod runs".
 
-## Start one run (Git Bash, then Runpod MCP `exec-pod`)
+Paths: the PC-side scripts run from any checkout or worktree; `tools/ops/common.sh` resolves the main checkout from `git rev-parse --git-common-dir` (override with `NUZLINE_REPO`) and the scratch folder `<scratch>` = `<main checkout>/_scratch` (override with `NUZLINE_SCRATCH`). PC-side state lives in `<scratch>/rent/`: `bin/runpodctl-windows-amd64.exe` (override with `RUNPODCTL`; download it by hand from the runpodctl GitHub releases page, the same version as the pod's, v3.1.1, into `<scratch>/rent/bin/`), `home/` (runpodctl config), `POD_ID` (the current pod id; never commit it), `tables_<short>.tar.xz`, `out/<run>/`. Pod side: `/work/_bin` (runpodctl, bootstrap; `/work/_bin/new` while a bootstrap runs), `/work/<run>` (one folder per run, its scripts in `/work/<run>/bin`). Run names: `[a-z0-9_-]`, a stream prefix plus a label (`e2-m26`, `nightly-20261118-235f2f8`), each used once.
 
-1. Rebuild the vanilla and Kaizo tables in the worktree. The helper refuses when `data/gen4_platinum_kaizo/manifest.json` or `data/gen4_platinum/tables.npz` is missing.
-2. PC: `bash "$NUZLINE_REPO/tools/ops/day/daybox.sh" "<worktree>" <commit> <run-name> -- <pytest args...>`, for example `... "<worktree>" <commit> e1c-merge1 -- tests/test_cli.py -m "not slow" -q`. A run name is used once and starts with the stream's prefix (`e1-...`, `e2-...`).
-3. The helper prints a transfer code and the exec-pod body. At once (the PC-side `runpodctl send` waits for this receive), call exec-pod with the id from `POD_ID`: `{"command": ["bash", "/work/_bin/start_run.sh", "<run-name>", "<code>"], "timeoutSeconds": 10}`.
-4. Return. Do not wait for the run.
+## Bring-up (once per pod, about 3 minutes)
 
-## Check a run (a later runner)
+1. MCP `list-cpu-types` (include availability, product POD, vcpuCount 32): `cpu3g` at about $1.28/h with a data center in stock.
+2. MCP `create-pod` with `<name>` = `ci-day-big` (test pod) or `ci-nightly` (own nightly pod): `{"name":"<name>","cloud":"SECURE","cpu":{"id":"cpu3g","vcpuCount":32},"dataCenterIds":["<in stock>"],"image":"ubuntu:24.04","args":"{\"entrypoint\":[\"/bin/bash\",\"-c\"],\"cmd\":[\"sleep infinity\"]}","disk":60}`. Write the id into `<scratch>/rent/POD_ID`. PID 1 is `sleep infinity`, which never reaps orphans: zombies pile up for the pod's life, and no script may count a zombie as alive (`runner.sh` and `status.sh` skip them).
+3. exec-pod, retrying on 409 while the container starts: `{"command":["sh","-c","mkdir -p /work/_bin && cd /work/_bin && nohup sh -c 'apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null && curl -LsSf -o runpodctl https://github.com/runpod/runpodctl/releases/download/v3.1.1/runpodctl-linux-amd64 && echo \"ae0a2e5ff723c8fceb609e7120dfcaa4d681bf3015adc74141812a21f2bb9486  runpodctl\" | sha256sum -c - && chmod +x runpodctl && echo RPC_OK' > /work/rpc.log 2>&1 < /dev/null & sleep 20; tail -1 /work/rpc.log"],"timeoutSeconds":25}`. Poll `tail -1 /work/rpc.log` until `RPC_OK`; a checksum mismatch stops here.
+4. PC: `bash tools/ops/day/push_bin.sh`, then send its exec-pod body. `bootstrap.sh` installs the apt tools, uv and Python 3.12, checks the runpodctl checksum again and clones the decomp. The body receives into a fresh `/work/_bin/new` and moves the script and its log into place only after `BOOTSTRAP_OK`; every bootstrap step skips what is installed. The step may be repeated on a pod that is already up, also while runs are active, with two limits: never send it while an earlier bootstrap is still running (the body removes `/work/_bin/new`), and a runpodctl checksum mismatch deletes `/work/_bin/runpodctl`, after which no run can be received until a bootstrap succeeds.
+5. Ready when exec `{"command":["sh","-c","tail -1 /work/_bin/new/bootstrap.log 2>/dev/null || tail -1 /work/bootstrap.log"],"timeoutSeconds":25}` prints `BOOTSTRAP_OK` (`/work/_bin/new` is removed after a success; a failure stays there with its log).
+6. Required on every pod (the nightly runs the damage-oracle test): exec-pod `{"command":["sh","-c","DEBIAN_FRONTEND=noninteractive nohup sh -c 'apt-get install -y -qq nodejs npm && echo NODE_OK' > /work/node_apt.log 2>&1 < /dev/null &"],"timeoutSeconds":25}`. Poll `tail -1 /work/node_apt.log` until `NODE_OK` before sending a run; `setup.sh` runs `npm ci` in `tools/smogon_calc` only when `npm` is present.
 
-- One run: exec-pod `{"command": ["bash", "/work/_bin/status.sh", "<run-name>", "30"]}` prints state, wall seconds, rc, peak RSS and the log tail.
-- All runs and free memory: `{"command": ["bash", "/work/_bin/status.sh"]}`.
-- Full log: exec-pod `{"command": ["bash", "/work/_bin/fetch.sh", "<run-name>"]}` prints a code; on the PC run the printed `receive` line, which writes `result_<run>.tgz` into `day/out/<run>/`.
+## Send a run (PC, Git Bash)
 
-`/work/<run>/STATE` is one of: LAUNCHING, RECEIVING, DECOMP, SYNCING, WAITING (another run is starting), QUEUED (memory guard), RUNNING, `DONE rc=N`, `FAILED: ...` (rc 99 = launch failed; read `launch.log`). `rc` is the pytest exit code. `time.txt` is GNU `time -v` output ("Maximum resident set size" = largest single process, KB). `pytest.log` is the full output. Tests that need the ROM, saves, `.cache`, the PKCalc zip or the docs sheet skip on the pod; a skip there is not a pass.
+1. Tables. Reuse `<scratch>/rent/tables_<A>.tar.xz` for commit `<B>` only when `git diff --stat <A> <B> -- src tools data pyproject.toml uv.lock` prints nothing, or when the only change it shows is inside the `[tool.pytest.ini_options]` table of `pyproject.toml` (check with `git diff <A> <B> -- pyproject.toml`). Otherwise `bash tools/ops/build_tables.sh <B>`.
+2. Test list, one line per entry, slowest first: `<test file, folder or node id> <ids per chunk> [A]`. `A` drops the `-m` filter (slow tests included). Every line without `A` runs with `-m "not slow"`, or with `-m "<expr>"` when the list is packed as `MARK='<expr>' bash tools/ops/day/pack.sh ...` (`MARK` replaces `not slow`; it is written into the payload's `meta.env`). One run has one mark: a list that needs two different marks is two runs. A folder is cut per test file; an id already queued by an earlier line is skipped, so a last line `tests 40` queues the rest. Nightly list: `tools/ops/day/nightly_files.txt`.
+3. `bash tools/ops/day/pack.sh <commit> <tables.tar.xz> <run> <files.txt>`. It takes the pod scripts from git at the checkout's HEAD (refused while `tools/ops/day/pod` has uncommitted changes), checks every list line against the format of step 2, lists the payload, refuses forbidden files and any table entry outside `TABLE_ALLOW` or inside `TABLE_DENY` (`tools/ops/common.sh`), starts the send detached and prints the exec-pod body.
+4. Send the printed body with exec-pod at once (the PC send waits for this receive). It receives into `/work/<run>`, runs `bin/setup.sh` (checkout, tables, env, collect, cut units) and starts `bin/runner.sh`. A setup that fails after it has started its own error trap ends `setup.log` with `SETUP_FAILED`; one that fails earlier (receive, unpack, `meta.env`) or is killed leaves no such line. The test is `status.sh`: `setup=gone` with `runner=none` (no `runner.pid`) is a failed run, with or without `SETUP_FAILED`.
 
-## Memory guard
+Runner knobs go in that exec-pod body's `"env":{...}` (the body's `env` field; setup, runner and units inherit it; a variable set on the PC does not reach the pod): `GATE_GB` (start no chunk at or above this container memory, default 88), `MAXP` (chunks at once across all runs on the pod, default 10), `RUNMAXP` (chunks at once of this run, default `MAXP`), `SPACING` (s between starts, default 15), `KILL_GB` (default 118), `DUR` (pytest `--durations`, default 40). `MARK` is the exception: it is set on the PC for `pack.sh` (step 2) and read from `meta.env`, which overrides an exec-pod `MARK`. Leave the knobs at their defaults unless the managing session says otherwise. The kill check runs once per runner loop (every 10 to 30 s), so the container can pass `KILL_GB` by a few GB before a chunk is killed.
 
-Before pytest starts, `inner_run.sh` takes a lock, reads free container memory (`freemem.sh`: cgroup max minus non-cache use; ignore `free`, which shows the host) and waits in state QUEUED until at least 12 GB is free. It keeps the lock 90 s after starting so the next run sees this run's growth. Runs queue; none is killed.
+## Status
+
+`{"command":["bash","/work/<run>/bin/status.sh","20"],"timeoutSeconds":25}`: setup log lines, the line `setup=alive|done|gone runner=alive|gone|starting|none DONE=y|n` (always printed, also before `queue.txt` exists), collection failures, the line `other active runs: ...`, units done/running/pending/killed/crashed, memory, running units with F/E marks, every failing unit (`BAD u_NNN`) with its FAILED/ERROR lines. The run is finished when it prints `DONE=y`. A failed run: `runner=gone` without `DONE=y` (the runner died), or `setup=gone` with `runner=none` (setup died before starting the runner). `runner=starting` means setup is still alive and the runner is not up yet; keep polling. `other active runs:` lists every other run under `/work/*/` or `/work/*/*/` whose setup or runner process (any `setup*.sh` or `runner*.sh`) is alive and not a zombie, plus `pytest_outside_this_run=<n>` for live pytest processes whose working folder is outside this run; it prints `none` only when both are empty. A chunk killed at the memory limit is requeued at most twice; a third kill gives rc 98 and counts as a failure.
+
+## Collect
+
+1. `{"command":["bash","/work/<run>/bin/agg.sh"],"timeoutSeconds":25}`: per-file totals with the completeness column, collection failures, crashed chunks, wall time, container peak, largest process, per chunk its peak RSS and wall time (single-test chunks show their own cost), the 15 slowest tests, the count over 60 s, every failure and skip, and `RESULT: PASS` or `RESULT: FAIL (<reasons>)`.
+2. `{"command":["bash","/work/<run>/bin/fetch.sh"],"timeoutSeconds":25}` prints a code. PC: `bash tools/ops/day/collect.sh <run> <code>` unpacks into `<scratch>/rent/out/<run>/results/`.
+3. Tests that need the ROM, saves, `.cache`, the PKCalc zip, the docs sheet or their extractions skip on the pod. A skip there is not a pass: run those tests locally, one process at a time (`CLAUDE.md`, "Where tests run").
+
+## Delete
+
+When nothing is queued and `status.sh` of the last run prints `DONE=y` (or shows a failed run as defined under Status) and exactly `other active runs: none` (any listed run or `pytest_outside_this_run` keeps the pod up): collect every run, MCP `delete-pod`, confirm with `list-pods`, clear `POD_ID`, log the hours and cost. Never stop the pod instead: a stopped CPU pod loses `/work` and saves nothing.
 
 ## Never upload
 
-Only the commit (`git archive`) and the built tables (git-ignored or modified `data/**.json|npz`) travel. Never the ROM (`*.nds`), `.cache/`, saves, the PKCalc zip, the docs sheet, anything from the Desktop, anything in a `backup` folder. Never add files to the payload by hand. Never push anything from the pod.
-
-## Morning bring-up (about 3 minutes of pod time)
-
-1. MCP `list-cpu-types` (include AVAILABILITY, product POD, vcpuCount 16): `cpu3g` at $0.04/vCPU = $0.64/h with a US data center in stock. Above $0.70/h, pick a smaller shape.
-2. MCP `create-pod` body: `{"name":"ci-day","cloud":"SECURE","cpu":{"id":"cpu3g","vcpuCount":16},"dataCenterIds":["US-CA-2"],"image":"ubuntu:24.04","args":"{\"entrypoint\":[\"/bin/bash\",\"-c\"],\"cmd\":[\"sleep infinity\"]}","disk":60}`. Write the new id into `$NUZLINE_SCRATCH/rent/day/POD_ID`.
-3. exec-pod, retrying on 409 while the pod starts: `{"command":["sh","-c","mkdir -p /work/_bin && apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null && curl -LsSf -o /work/_bin/runpodctl https://github.com/runpod/runpodctl/releases/download/v3.1.1/runpodctl-linux-amd64 && chmod +x /work/_bin/runpodctl"],"timeoutSeconds":25}`. On a timeout, re-run it; the first call continues in the background.
-4. PC: `bash "$NUZLINE_REPO/tools/ops/day/push_bin.sh"`, then run the exec-pod body it prints. It installs the scripts and starts `bootstrap.sh` (apt tools, uv, Python 3.12, runpodctl checksum, decomp clone).
-5. The pod is ready when `/work/bootstrap.log` ends with `BOOTSTRAP_OK` (about 2 minutes).
-
-## End of day
-
-Delete the pod; never stop it. A stopped CPU pod loses `/work` (env, decomp, runs) and has no persistent disk, so stopping saves nothing over a delete and a 3-minute bring-up.
+Only the `git archive` of a commit and the tables `TABLE_ALLOW` lists travel. Never the ROM (`*.nds`), saves (`*.sav`, `*.dsv`), `.cache/`, the PKCalc zip or its extraction (`data/intermediate_kaizo/pkcalc/`), the docs sheet or its extraction (`data/intermediate_kaizo/docs/`), `data/local.toml`, any file from the Desktop, anything in a `backup` folder. Never add files to a payload by hand. Never push from the pod.

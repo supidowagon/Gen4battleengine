@@ -16,6 +16,7 @@ from nuzline.ai.read_bounds import DRAWN_READ_BOUNDS, READ_BOUND_BITS, READ_BOUN
 DECOMP = Path(__file__).resolve().parents[2] / "external/pokeplatinum"
 
 
+@pytest.mark.fullset
 def test_read_bounds_are_the_decomps(kaizo_tables):
     """The committed table is the generator's output, row for row, and covers every
     transcribed effect in all four kinds (damaging or not, quadruple or not)."""

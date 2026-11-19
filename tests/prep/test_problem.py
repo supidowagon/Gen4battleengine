@@ -70,6 +70,7 @@ def test_resources_from_bag(tables, names, learnsets):
     assert bag_resources(bag, tables, names, learnsets, {oran})[0].held == ()
 
 
+@pytest.mark.fullset
 def test_bag_resources_warns_on_unsupported_item(tables, names, learnsets):
     # A held item still unsupported, picked from the coverage table at run time.
     (name,) = _refused_items(tables, names, 1)
@@ -103,6 +104,7 @@ def test_usable_pool_excludes_and_trims(tables, names, metronome_refused):
     assert not any(plain.label in line for line in lines)
 
 
+@pytest.mark.fullset
 def test_unsupported_item_is_taken_off(tables, names):
     (name,) = _refused_items(tables, names, 1)
     spec = replace(sample_party(names)[0], item=names.item(name))
@@ -476,6 +478,7 @@ def test_check_pool_grades_learnable_moves(tables, names):
     assert check_pool(tables, names, [full], geodude).level == Support.EXACT
 
 
+@pytest.mark.fullset
 def test_usable_pool_applies_the_exp_refusals(tables, names):
     """``coverage.exp_refusals`` per candidate: junk PP Ups in an empty slot (§4.6)."""
     base = sample_party(names)[0]

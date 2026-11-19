@@ -52,6 +52,7 @@ def _script(effect: int) -> str:
     return path.read_text(encoding="utf-8")
 
 
+@pytest.mark.fullset
 def test_effect_names_match_decomp_ids():
     lines = (DECOMP / "generated/move_battle_effects.txt").read_text().split()
     assert set(DECOMP_EFFECT_NAMES) == set(DECOMP_EFFECT_TO_ID)
@@ -59,6 +60,7 @@ def test_effect_names_match_decomp_ids():
         assert lines[effect] == name
 
 
+@pytest.mark.fullset
 def test_stat_effects_match_decomp_scripts():
     pattern = re.compile(
         r"BTLVAR_SIDE_EFFECT_FLAGS_(DIRECT|INDIRECT),.*MOVE_SIDE_EFFECT_(TO_ATTACKER|TO_DEFENDER)"
@@ -101,6 +103,7 @@ def _move_names(text: str) -> set[str]:
     return names
 
 
+@pytest.mark.fullset
 def test_type_checked_status_moves_are_flagged():
     """Status moves skip the type chart (power 0) except the moves the decomp names
     in BattleControllerPlayer_CheckTypeChart; exactly those are type-checked."""
@@ -127,6 +130,7 @@ def test_status_subscript_type_immunities():
         assert set(re.findall(r"BATTLEMON_TYPE_[12], TYPE_([A-Z]+)", text)) == types, name
 
 
+@pytest.mark.fullset
 def test_thaw_flag_matches_the_self_thaw_check():
     """The effects the decomp lets a frozen user move with and thaws
     (CHECK_STATUS_STATE_SELF_THAW in BattleControllerPlayer_CheckStatusDisruption) are
@@ -226,6 +230,7 @@ def test_semi_invulnerable_flags(tables, names, kaizo_tables, kaizo_names):
         assert not int(kaizo_tables.move_flags[kaizo_names.move(move)]) & MoveFlag.CHARGE
 
 
+@pytest.mark.fullset
 def test_script_flag_effects_match_every_script():
     """B13-1, B13-2: every effect script that adds BTLVAR_CRITICAL_BOOSTS is HIGH_CRIT or carries
     MoveFlag.CRIT_UP (CHARGE_FLAG_EFFECTS, SCRIPT_FLAG_EFFECTS), and every SetMultiHit 2 is
@@ -385,6 +390,7 @@ def test_flail_script_does_what_the_engine_does(tables, names, kaizo_tables, kai
             assert int(t.move_effect[n.move(move)]) == EffectId.FLAIL, move
 
 
+@pytest.mark.fullset
 def test_resist_berry_hold_effects_match_decomp():
     """Names against generated/item_hold_effects.txt (line N+1 is id N) and each type
     against subscript_type_resist_berry.s: the jump for the hold effect lands on a compare
@@ -413,6 +419,7 @@ def test_resist_berry_hold_effects_match_decomp():
     assert script.index(", 19, ") > script.index("MOVE_STATUS_SUPER_EFFECTIVE")
 
 
+@pytest.mark.fullset
 def test_ignore_type_checks_effects_match_decomp():
     """effects.IGNORES_TYPE_CHECKS (subscript_type_resist_berry.s:5 skips them) is every
     mapped effect whose script sets SYSCTL_IGNORE_TYPE_CHECKS or SYSCTL_IGNORE_IMMUNITIES.
@@ -432,6 +439,7 @@ def test_ignore_type_checks_effects_match_decomp():
         assert not (eid in heal_path_only and eid in IGNORES_TYPE_CHECKS)
 
 
+@pytest.mark.fullset
 def test_type_boost_hold_effects_match_decomp():
     """TYPE_BOOST_HOLD_EFFECTS is sTypeBoostingItems (battle_lib.c:6514-6549), hold effects by
     generated/item_hold_effects.txt and types by generated/pokemon_types.txt."""
@@ -449,6 +457,7 @@ def test_type_boost_hold_effects_match_decomp():
     assert {h: (n, int(t)) for h, (n, t) in TYPE_BOOST_HOLD_EFFECTS.items()} == want
 
 
+@pytest.mark.fullset
 def test_hold_effect_ids_name_their_hold_effects():
     from tools.effect_map import HOLD_EFFECT_TO_ID
 
@@ -457,6 +466,7 @@ def test_hold_effect_ids_name_their_hold_effects():
         assert holds[effect] == name
 
 
+@pytest.mark.fullset
 def test_held_item_ids_follow_the_data():
     """Every resist berry DECOMP_ITEM_TO_ID names has a resist hold effect, and every resist
     hold effect has its berry; the berries with no hold effect (NO_EFFECT_BERRY) are exactly
@@ -571,6 +581,7 @@ def _function(path: str, name: str) -> str:
     return src[start : src.index("\n}\n", start)]
 
 
+@pytest.mark.fullset
 def test_invoker_id_lists_match_the_decomp():
     """E2 batch 5: the move ids BtlCmd_TrySleepTalk, Move_IsInvoker, Move_IsMultiTurn and
     sCannotMetronomeMoves compare against (``tools.effect_map``)."""

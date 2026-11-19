@@ -855,6 +855,7 @@ def test_cli_prep_resume(prep_run, capsys):
     assert ckpt.read_bytes() == before  # a refused resume leaves the file alone
 
 
+@pytest.mark.fullset
 def test_cli_prep_unsupported_opponent(prep_runs, tmp_path, tables, names, capsys):
     save = _prep_save(tmp_path, tables, names)
     args = ["prep", "--save", save, "--trainer-id", "858", "--cap", "60", *SMALL]
@@ -1293,6 +1294,7 @@ def test_trainers_prints_on_a_cp1252_console():
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
     party = _kaizo_party(tmp_path, kaizo_names)
     done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")

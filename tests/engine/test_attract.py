@@ -148,6 +148,7 @@ def test_effect_120_maps_attract(tables, names, kaizo_tables, kaizo_names):
         assert flags & MoveFlag.PROTECT and not flags & MoveFlag.CONTACT
 
 
+@pytest.mark.fullset
 def test_cute_charm_maps_and_oblivious_stays_unsupported(tables, names, kaizo_tables, kaizo_names):
     assert DECOMP_ABILITY_TO_ID["Cute Charm"] == AbilityId.CUTE_CHARM
     assert "Oblivious" not in DECOMP_ABILITY_TO_ID
@@ -683,6 +684,7 @@ def test_kaizo_skitty_bruteforce(kaizo_tables, kaizo_names, order):
 # --- coverage: Oblivious --------------------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_oblivious_is_refused(tables, names):
     base = sample_party(names)
     slow = names.species("Slowpoke")
@@ -700,6 +702,7 @@ def test_oblivious_is_refused(tables, names):
 
 
 @pytest.mark.parametrize("item", ["Mental Herb", "Destiny Knot"])
+@pytest.mark.fullset
 def test_infatuation_items_are_refused(tables, names, item):
     # HOLD_EFFECT_HEAL_INFATUATION (battle_lib.c:4890, :5103) and HOLD_EFFECT_RECIPROCATE_INFAT
     # (:4545-4559) would change infatuation; neither is modelled, so the item is refused on

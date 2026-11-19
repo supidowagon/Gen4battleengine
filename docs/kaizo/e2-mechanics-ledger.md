@@ -133,11 +133,11 @@ report:
    keeps `aiContext.trainerItems[MAX_OPPONENTS][4]` (include/battle/ai_context.h:31), indexed by
    `battler >> 1` (battle_controller_player.c:4808, trainer_ai.c:4092-4093), filled from
    `trainers[battler]`; a plain double starts with enemyTrainer1ID == enemyTrainer2ID
-   (encounter.c:736, :751-752). Confirm from the decomp (Opus); make both per opponent [2]
-   indexed by `battler >> 1`. And state.py `initial_arrays` fills party 1's bag only (`opp_items`
+   (encounter.c:736, :751-752). Confirm from the decomp (Opus). ~~Make both per opponent [2]
+   indexed by `battler >> 1`.~~ (superseded by ruling D1-5: [B]). And state.py `initial_arrays` fills party 1's bag only (`opp_items`
    -> `trainer_items[1]`): the second opponent in TWO_TRAINERS / MULTI starts without items.
    Done in group B as ruling D1-5: per battler [B] (the opponent's `battler >> 1` bag), battler
-   3 filled from `initial_arrays`' `opp2_items`.
+   3 filled from `initial_arrays`' `opp2_items`, required for every four-battler fight.
 
 Test net (singles byte-identical):
 
@@ -216,8 +216,9 @@ Group A status and decisions (commits 1-5):
     from it through the battler's party, and `_resume` maps a paused faint back to the party's
     battler whose active it is (`_fainted_battler`; singles: battler k).
   - reference/engine.py: Mud Sport / Water Sport read every battler
-    (`BattleSystem_AnyBattlersWithMoveEffect`, battle_lib.c:6812); `_faint_check`'s payout and
-    death branches test `side_of(b)`; `_Turn` takes `battler_count` and sizes its per-battler
+    (`BattleSystem_AnyBattlersWithMoveEffect`, battle_lib.c:6812); `_faint_check`'s payout branch
+    tests `side_of(b)`; its death and `player_faints` branch tests the battler's party
+    (`_party(fmt, b) == 0`, as step.py counts `fainted[0]`); `_Turn` takes `battler_count` and sizes its per-battler
     lists; the turn's items and the roosting clears are B long.
   - state.py: the field comments give [P] / [B] / [S] shapes; `initial_arrays` rejects two
     battlers of one party leading from one slot.
@@ -255,6 +256,10 @@ Group B status (E1 files, re-index only):
     TWO_TRAINERS/MULTI a side is out only when all its parties are empty. The same in
     reference/engine.py `_faint_check` (`s.parties[0]` / `s.parties[1]`), and its payout of a side-1
     faint indexes `s.parties[1]` (`_grant_exp`): party 2's slot in TWO_TRAINERS (D10 with exp).
+  - Owed (D3): the switch-in abilities' order over four battlers. `BattleSystem_TriggerEffectOnSwitch`
+    runs each switch-in state over `monSpeedOrder` (battle_lib.c:3740-3790); hooks.py `weather_war`
+    and `order_swaps` (~336-362) read only battlers 0 and 1. Model the four-battler
+    `monSpeedOrder` and run the weather and other switch-in abilities over it.
 - D4: spread moves and the doubles modifiers.
 - D5: ally mechanics.
 - D6-D7: outcomes and enumeration at B=4.
@@ -262,19 +267,24 @@ Group B status (E1 files, re-index only):
     comment at ~390 still says int8[2]); step.py ~2762/~2768 use jnp.arange(2) against order: resize
     together at B=4.
 - D8-D9: AI per-target scoring, the TAG_STRATEGY script and partner arguments.
-  - Owed (D8): the reference's "player" checks before `_know_ability` test battler 0, not side 0,
-    and record `s.battlers[0].active` (reference/engine.py ~2562-2563, ~2882-2883, ~3141,
-    ~3469; 28 calls of `_know_ability(s, s.battlers[0].active)` in all), as JAX hooks.py `_know`
-    (~264) tests `side == 0` against the state's side-0 slot. Consistent today; at B=4 the
-    player's other battler and the partner's are not recorded: rework with per-battler AI knowledge.
+  - Owed (D8): per-battler AI knowledge. The decomp keeps the AI's record per battler
+    (`aiContext.battlerAbilities[MAX_BATTLERS]`, `battlerHeldItems[MAX_BATTLERS]`,
+    include/battle/ai_context.h:28-29); the engine keeps it on party 0 by slot, and three tests of
+    "the player" disagree at B=4: JAX hooks.py `_know` / `reveal_ability` (~258-268) test
+    `party(fmt, side) == 0` (battlers 0 and 2 in DOUBLES; 0 only in MULTI); the reference's checks
+    before `_know_ability` test battler 0 and record `s.battlers[0].active` (reference/engine.py
+    ~2562-2563, ~2882-2883, ~3141, ~3469; 28 calls of `_know_ability(s, s.battlers[0].active)`),
+    so battler 2 is never recorded; effects.py `forget_item` (~3090) tests battler `side == 0`.
+    Equal at B=2. Rework all three on a per-battler record.
+  - Owed (D8): the AI attacker as data. ai/policy.py, ai/replacement.py and ai/outcome.py read
+    literal battlers 0 / 1 (R5), and the bag refusals read only `trainer_items[1]`
+    (policy.py ~3950, ~4138, ~4359-4361; search/stage_b.py ~447; engine/actions.py
+    `legal_opponent_actions` ~218-222, `usable_trainer_items(..., 1)`): battler 3's bag
+    (`trainerItems[1]`) is never offered. Make the attacker (and its `battler >> 1` bag) an input.
 - D10: the multi format, with partner teams from the calc repo.
-  - Nit: `initial_arrays` accepts an `opp2_items` that differs from `opp_items` in a plain DOUBLES
-    battle (the game copies one trainer's bag); reject it there.
 - D11: search, prep, the line player and the CLI with two actives.
   - Owed (D11 or tool note): tools/trace_to_state.py calls empty_outcome() without a format (B=2
     traces only); search/playout.py ~484 battler clip to 1 is outside D1 scope (search/ is D11).
-  - Owed (R7): reference/engine.py ~6050 `items = [0, 0]` while the loop runs `range(B)`:
-    `ref_step` raises IndexError on an item action from battler 2 or 3.
 - D12: a golden trace of a recorded Gardenia multi fight.
 - Later: two-trainer battles.
 
@@ -2144,11 +2154,37 @@ docs/doubles-state-design.md.
   (battle_controller_player.c:4796-4811, :4803-4809; battle_system.c:1414-1417); `trainers[i]` is
   `dto->trainer[i]` (battle_main.c:1066), loaded per `dto->trainerIDs[i]`
   (trainer_data.c:31-37). The AI reads and spends `trainerItems[battler >> 1]`
-  (trainer_ai.c:4092-4093, :4193); an AI partner never uses items (:4068-4072). A plain double
-  has `enemyTrainer1ID == enemyTrainer2ID` (encounter.c:736) written to both enemy slots
-  (:751-752): each enemy battler holds a copy of the one trainer's bag. Engine:
+  (trainer_ai.c:4092-4093, :4193); an AI partner never uses items (:4068-4072).
+  `BattleSystem_GetTrainerItem` reads `trainers[battler]` directly (battle_system.c:1414-1416),
+  not through `BattleSystem_GetTrainer`'s `battler & 1` map for a plain double (:301-309), so
+  battler 3's bag is whatever `dto->trainer[3]` holds, and that depends on how the double starts:
+  - Spotted (`Battles_ApproachingTrainerDoubles`, res/field/scripts/scripts_battles.s:156-173):
+    the second approaching trainer is the twin map object `FindTrainerPartner` finds by the same
+    trainer id (src/trainer_encounter.c:118-123, :356-371; both objects' scripts give one id
+    through `Script_GetTrainerID`, script_manager.c:498-505), so `StartTrainerBattle VAR_0x8004,
+    VAR_0x8005` passes the id twice; `enemyTrainer1ID == enemyTrainer2ID` gives
+    `BATTLE_TYPE_TRAINER_DOUBLES` (encounter.c:736-737), both enemy ids are written (:751-752)
+    and `Trainer_Encounter` loads the trainer into both (trainer_data.c:31-37): battler 3 holds a
+    copy of the bag. A scripted `StartTrainerBattle t, t` is the same (tools/battle_scripts.py
+    "self" claims; Kaizo uses it).
+  - Talked to (`Battles_Trainer`, scripts_battles.s:8-37): `StartTrainerBattle VAR_0x8004` has
+    one operand, `enemyTrainer2` defaults to 0 (asm/macros/scrcmd.inc:1427-1430;
+    `ScrCmd_StartTrainerBattle`, src/scrcmd_trainer.c:124-142); 0 != id gives
+    `BATTLE_TYPE_TRAINER` (encounter.c:738-739), made a double only by the trainer header's
+    battle type (`dto->battleType |= trdata.header.battleType`, trainer_data.c:50);
+    `trainerIDs[3]` is 0, so `dto->trainer[3]` stays cleared (field_battle_data_transfer.c:74-77,
+    `Trainer_Encounter` skips id 0, trainer_data.c:31-33): battler 3's bag is EMPTY, and
+    `trainerItems[1]` stays empty.
+  - Kaizo: the common script file scripts_battles is scr_seq.narc member 1114
+    (res/field/scripts/scripts.order:1115), which the Kaizo patch leaves unchanged
+    (docs/kaizo/rom_diff.md:63 lists the changed members; 1114 is not one), so both paths hold
+    in Kaizo; Kaizo's scripted `StartTrainerBattle t, t` doubles always copy.
+  The start path of a map-object double is the player's choice at run time, not split data.
+  Engine:
   `trainer_items` [B, 4] and `trainer_item_count` [B] on the enemy battler (1 -> bag 0,
   3 -> bag 1; `b >> 1` is a bijection on enemy battlers), the player's rows empty, so singles
   keeps [2, 4] with the bag on row 1, byte-identical (a [2] array indexed by `b >> 1` would move
-  the singles bag to row 0). `initial_arrays` fills battler 3 from `opp2_items`, by default
-  `opp_items` (DOUBLES); TWO_TRAINERS / MULTI must pass it. RefBattler holds the bag.
+  the singles bag to row 0). `initial_arrays` fills battler 3 from `opp2_items`, which every
+  four-battler fight must pass (`ValueError` otherwise; no default): TWO_TRAINERS / MULTI the
+  second trainer's bag, DOUBLES `opp_items` when spotted or scripted `t, t`, `()` when talked to.
+  RefBattler holds the bag.

@@ -270,6 +270,7 @@ def test_time_budget_stops_deepening(tables, names):
     assert result.ranking
 
 
+@pytest.mark.fullset
 def test_refused_replacement_mass(tables, names):
     state = switch_refusal_root(tables, names)
     tackle = names.move_slot(state, 0, "Tackle")

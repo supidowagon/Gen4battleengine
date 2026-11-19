@@ -125,6 +125,7 @@ def _window_c(tables, names):
     return s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
 
 
+@pytest.mark.fullset
 def test_window_c_refuses_finish_turn(tables, names):
     s = _window_c(tables, names)
     played = _step(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())

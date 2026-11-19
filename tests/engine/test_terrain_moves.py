@@ -143,6 +143,7 @@ def _terrain_table(header: str, prefix: str) -> list[str]:
 
 
 @pytest.mark.skipif(not DECOMP.exists(), reason="decomp not cloned")
+@pytest.mark.fullset
 def test_terrain_tables_are_the_decomps():
     moves = _decomp_ids("moves", "MOVE_")
     assert [moves[m] for m in _terrain_table("to_move.h", "MOVE_")] == list(TERRAIN_MOVES)

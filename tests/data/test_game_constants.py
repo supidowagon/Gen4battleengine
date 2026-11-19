@@ -198,10 +198,12 @@ def scan_id_tables(modules: list[str]) -> set[str]:
     return found
 
 
+@pytest.mark.fullset
 def test_every_id_constant_is_classified():
     assert set(LISTED) <= {c.where for c in CONSTANTS} | set(GAME_DATA) | set(EXEMPT)
 
 
+@pytest.mark.fullset
 def test_no_unlisted_id_tables():
     found = scan_id_tables(MODULES)
     assert found - set(LISTED) - set(GAME_DATA) - set(EXEMPT) == set()

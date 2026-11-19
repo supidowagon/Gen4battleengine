@@ -47,6 +47,7 @@ def _actions(tables, s):
     return np.asarray(jax.vmap(lambda st: switch_action(tables, s, st))(stops)).tolist()
 
 
+@pytest.mark.fullset
 def test_decomp_ids_match_the_manifest(names):
     for name, ability in switching.ABILITY_IDS.items():
         assert names.ability(name) == ability, name
@@ -208,6 +209,7 @@ def test_too_many_sites_are_refused(tables, names):
         ("absorb", "Water Absorb"),
     ],
 )
+@pytest.mark.fullset
 def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
     s = roark_state(tables, names)
     if change == "player_move":
@@ -246,6 +248,7 @@ def test_hidden_power_move_hit_type(tables, names):
     assert switching_refusals(tables, own) == []
 
 
+@pytest.mark.fullset
 def test_only_ineffective_moves_is_refused(tables, names):
     """AI_OnlyIneffectiveMoves (trainer_ai.c:3361) can switch with draws not modelled."""
     s = roark_state(tables, names)
