@@ -81,7 +81,7 @@ tar -cf "$P/payload.tar" -C "$P" code.tar tables.tar.xz meta.env files.txt bin
 echo "== payload.tar"; tar -tvf "$P/payload.tar"
 echo "== code.tar $(echo "$CT" | wc -l) entries; tables $(echo "$T" | wc -l) files:"
 echo "$T" | sed 's/^/  /'; grep -v '^WATCH_' "$P/meta.env"
-cd "$P"; HOME="$RENT/home" USERPROFILE="$RENT/home" nohup "$RPC" send payload.tar > send.log 2>&1 < /dev/null &
+cd "$P"; HOME="$RENT/home" USERPROFILE="$RENT/home" nohup bash -c '"$0" send payload.tar & c=$!; trap "kill $c" TERM; wait "$c"; echo "SEND_RC=$?"' "$RPC"   > send.log 2>&1 < /dev/null &   # SEND_RC=<exit code of the send>: wait.sh reads it
 SPID=$!
 for i in $(seq 1 60); do grep -q "code is" send.log 2>/dev/null && break; sleep 0.5; done
 CODE=$(grep -o "code is: [^ ]*" send.log | head -1 | sed 's/code is: //' | tr -d '\r' || true)

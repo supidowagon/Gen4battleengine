@@ -19,12 +19,14 @@ set -u
 D=$(cd "$(dirname "$0")/.." && pwd); cd "$D"; . ./meta.env
 [ -n "${WATCH_F:-}" ] && [ -n "${WATCH_D:-}" ] || { echo "no WATCH_F/WATCH_D in meta.env"; exit 0; }
 RPC=/work/_bin/runpodctl; N="$D/notify"; mkdir -p "$N"; echo $$ > "$D/notify.pid"
-END=$(( $(date +%s) + ${WATCH_HOURS:-24} * 3600 ))
+END=$(( $(date +%s) + $(awk -v h="${WATCH_HOURS:-24}" 'BEGIN {print int(h * 3600)}') ))
 # offer <f|d> <file in $N or $D>: send it under WATCH_F or WATCH_D until taken, END, or (for f)
-# the stop file. Each send attempt lasts at most 600 s.
+# the stop file; d also ends once notify/taken_d exists (fetch.sh by hand). Each send attempt
+# lasts at most 600 s.
 offer() { local s="$1" f="$2" c="$WATCH_D" rc; [ "$1" = f ] && c="$WATCH_F"
   while [ "$(date +%s)" -lt "$END" ]; do
     [ "$s" = f ] && [ -f "$N/stop" ] && return 1
+    [ "$s" = d ] && [ -f "$N/taken_d" ] && { echo "$(date +%s) d collected by hand"; return 1; }   # fetch.sh
     ( cd "$(dirname "$f")" && timeout 600 "$RPC" send --code "$c" "$(basename "$f")" ) \
       > /dev/null 2> "$N/send_$s.err" < /dev/null; rc=$?
     sed "s/$c/<code>/g" "$N/send_$s.err" >> "$N/send_$s.log"; rm -f "$N/send_$s.err"

@@ -24,7 +24,7 @@ CF=$(grep -vE 'collect_rc=(0|5)$' "$D/collected.txt" 2>/dev/null); [ -n "$CF" ] 
 grep -hE '^ERROR ' "$D"/col/*.out 2>/dev/null | cut -c1-260
 NC=$( [ -n "$CF" ] && echo "$CF" | wc -l || echo 0)
 NK=$(cat crashed.txt 2>/dev/null | wc -l); [ "$NK" -gt 0 ] && echo "--- crashed units (rc 97): $(tr '\n' ' ' < crashed.txt)"
-NO=$(cat overkilled.txt 2>/dev/null | wc -l); [ "$NO" -gt 0 ] && echo "--- units killed a third time at the memory limit, or left without a result after two requeues (those are in lost.txt) (rc 98):$(tr '\n' ' ' < overkilled.txt)"
+NO=$(cat overkilled.txt 2>/dev/null | wc -l); [ "$NO" -gt 0 ] && echo "--- units killed a third time at the memory limit, or left without a result after two requeues (those are in lost.txt) (rc 98): $(tr '\n' ' ' < overkilled.txt)"
 BR=$(for u in $(cut -d' ' -f1 queue.txt); do [ -f $u.rc ] || continue; c=$(cat $u.rc)
   case $c in 0|1|5|97|98) ;; *) echo "$u rc=$c $(grep "^$u " queue.txt | cut -d' ' -f2)";; esac; done)
 NB=$( [ -n "$BR" ] && echo "$BR" | wc -l || echo 0); [ "$NB" -gt 0 ] && { echo "--- units with an rc other than 0, 1 or 5"; echo "$BR"; }

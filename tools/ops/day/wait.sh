@@ -10,8 +10,8 @@
 # the relay list ("relay index <i> not found") or when the relay list cannot be fetched ("could not
 # get list of relays", HTTP 429 included); any other answer (room not ready, an unreachable relay)
 # is logged unless it is "room not ready", and the sweep goes on to the next index.
-# Each round it also reads pack.sh's $RENT/out/<run>/send.log: a failed payload send ("croc: send:"
-# or an "error" line) before any beacon was taken exits 4.
+# Each round it also reads pack.sh's $RENT/out/<run>/send.log: a payload send that ended with
+# SEND_RC=<non-zero> before any beacon was taken exits 4.
 # Done: results.tgz is unpacked by collect.sh --local into $RENT/out/<run>/results/. A run already
 # collected (results/agg.txt with a RESULT line) is reported at once.
 # Prints one line WAIT: <state>, then the status text or the summary of agg.txt.
@@ -111,9 +111,9 @@ while [ "$(date +%s)" -lt "$END" ]; do
     echo "WAIT: FIRST FAILURE, run still going ($W/firstfail.txt)"; cat "$W/firstfail.txt"; exit 2
   fi
   # A payload that never reached the pod: no notify.sh runs there, so no beacon will come.
-  if [ ! -s "$W/firstfail.txt" ] && grep -qE 'croc: send:|"error"' "$P/send.log" 2>/dev/null; then
+  if [ ! -s "$W/firstfail.txt" ] && tr '\r' '\n' < "$P/send.log" 2>/dev/null | grep -qE '^SEND_RC=[1-9]'; then
     echo "WAIT: ERROR payload not delivered: pack.sh's send failed ($P/send.log); pack again under a new run name"
-    tr '\r' '\n' < "$P/send.log" | grep -E 'croc: send:|"error"' | tail -2; exit 4
+    tr '\r' '\n' < "$P/send.log" | grep -E 'croc: send:|"error"|^SEND_RC=' | tail -3; exit 4
   fi
   left=$(( END - $(date +%s) )); [ "$left" -gt 0 ] || break
   sleep $(( left < EVERY ? left : EVERY ))
