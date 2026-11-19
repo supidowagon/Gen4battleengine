@@ -3023,3 +3023,41 @@ def test_a_weather_war_at_the_start_writes_the_record_when_it_settles(tables, na
     later = resolve_war(s._replace(turn=jnp.asarray(1, s.turn.dtype)), 0, t)
     assert _rec(later) == _rec(s)
     assert _rec(resolve_war(s, 0)) == _rec(s)  # no tables: nothing to compute with
+
+
+# --- #251 Aqua Ring (E3-B2-20) ------------------------------------------------------------------
+
+
+def test_baton_pass_keeps_aqua_ring_and_the_newcomer_heals_at_the_turns_end(tables, names):
+    """MOVE_EFFECT_AQUA_RING is in MOVE_EFFECT_BATON_PASSED (moves.h:46-48), so battle_lib.c:2079
+    keeps it on the replacement, whose end-of-turn ``MON_COND_CHECK_STATE_AQUA_RING`` (bcp.c:1332)
+    heals ``Divide(maxHP, 16)``; a plain switch clears the bit (:2071)."""
+    from nuzline.engine.state import BATON_PASSED_FIELDS
+
+    assert "aqua_ring" in BATON_PASSED_FIELDS
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Ninjask", "Baton Pass", level=30), _sp(t, n, "Monferno", "Tackle", level=20)],
+        [_sp(t, n, "Geodude", "Tackle", level=20)],
+    )
+    s = s.replace_hp(0, 1, 20)
+
+    def baton(state):
+        acts = A("Baton Pass", "Tackle", state, n)
+        hits = empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8))
+        paused = assert_matches_reference(t, state, acts, hits)
+        assert int(paused.pivot_battler) == 1
+        resume = np.asarray(paused.ts_actions).astype(int).tolist()
+        resume[0] = MOVE_ACTIONS + 1
+        return assert_matches_reference(t, paused, tuple(resume), empty_outcome())
+
+    ringed = baton(s._replace(aqua_ring=s.aqua_ring.at[0].set(1)))
+    control = baton(s)
+    assert int(ringed.active[0]) == 1 and ringed.aqua_ring.tolist() == [1, 0]
+    assert control.aqua_ring.tolist() == [0, 0]
+    heal = max(int(s.max_hp[0, 1]) // 16, 1)
+    assert int(ringed.hp[0, 1]) - int(control.hp[0, 1]) == heal
+    plain = s._replace(aqua_ring=s.aqua_ring.at[0].set(1))
+    switch = jnp.array([MOVE_ACTIONS + 1, n.move_slot(s, 1, "Tackle")], jnp.int32)
+    assert assert_matches_reference(t, plain, switch, empty_outcome()).aqua_ring.tolist() == [0, 0]

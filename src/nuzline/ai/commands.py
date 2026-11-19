@@ -481,6 +481,8 @@ class BattleEffect(IntEnum):
     IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
     # Last Resort: Basic_CheckLastResort (:275); Expert_LastResort (:1789), E3-B2-11
     FAIL_IF_NOT_USED_ALL_OTHER_MOVES = 246
+    # Aqua Ring: Basic_CheckAquaRing (:279); Expert_AquaRing (:1794), E3-B2-20
+    RESTORE_HP_EVERY_TURN = 251
     # Feint: no Basic entry; Expert_Feint (:1766), E3-B2-13
     REMOVE_PROTECT = 223
     # Defog: Basic_CheckDefog (:281); Expert_Defog (:1799), E3-B2-14

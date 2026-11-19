@@ -617,6 +617,13 @@ def _basic_check_lock_on(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _basic_check_aqua_ring(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAquaRing`` (script.s:1456-1459): the AI's battler already under
+    MOVE_EFFECT_AQUA_RING (``IfMoveEffect``, trainer_ai.c:704-714), -10; E3-B2-20."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.AQUA_RING))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -2292,6 +2299,15 @@ def _expert_lock_on(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 3321))
     ctx = c.add_to_move_score(ctx, 2)
     return c.pop_or_end(ctx)
+
+
+def _expert_aqua_ring(ctx: AiContext, mask) -> AiContext:
+    """``Expert_AquaRing`` (script.s:6081-6088): the AI's battler below 30 % HP, or the 128 roll
+    (:6084) jumping, goes to the end; else +1 (E3-B2-20)."""
+    ctx, end = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 30))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 6084))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -4116,6 +4132,7 @@ _BASIC_LABELS = (
     (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _basic_check_last_resort),  # :275 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
+    (BattleEffect.RESTORE_HP_EVERY_TURN, _basic_check_aqua_ring),  # :279 (E3-B2-20)
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
     (BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN, _basic_check_defog),  # :281 (E3-B2-14)
     (BattleEffect.TRICK_ROOM, _basic_check_trick_room),  # :282 (E3-2-4)
@@ -4255,6 +4272,7 @@ _EXPERT_LABELS = (
     (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _expert_last_resort),  # :1789 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _expert_worry_seed),  # :1790 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.RESTORE_HP_EVERY_TURN, _expert_aqua_ring),  # :1794 (E3-B2-20)
     (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797

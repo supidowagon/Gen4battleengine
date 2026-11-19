@@ -6807,3 +6807,80 @@ def test_foresight_is_scored_not_refused_and_exact_equals_loose(
         layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)
+
+
+# --- #251 Aqua Ring (E3-B2-20) ------------------------------------------------------------------
+
+
+def test_aqua_ring_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Aqua Ring is BATTLE_EFFECT_RESTORE_HP_EVERY_TURN, 251, named in Basic_ScoreMoveEffect
+    (script.s:279), Expert_Main (:1794), Expert_Encore (:3282) and Expert_HealBlock (:5388) only;
+    its one roll is :6084 (128); MOVE_EFFECT_AQUA_RING is bit 24 (moves.h:33) (E3-B2-20)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.RESTORE_HP_EVERY_TURN == 251
+    assert c.MoveEffectMask.AQUA_RING == 1 << 24
+    assert KAIZO_EXPERT_LABELS[251] == ("Expert_AquaRing", 1794) and 251 in KAIZO_TRANSCRIBED
+    assert SITE_N[6084] == 128
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(251) == 1
+    assert sum(251 in table for table in c.CHECK_HP_TABLES.values()) == 0
+    assert int(t.move_ai_effect[n.move("Aqua Ring")]) == 251
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    named = [i + 1 for i, line in enumerate(lines) if "BATTLE_EFFECT_RESTORE_HP_EVERY_TURN" in line]
+    assert named == [279, 1794, 3282, 5388]
+    assert lines[1455] == "Basic_CheckAquaRing:"
+    assert (
+        lines[1457].strip()
+        == "IfMoveEffect AI_BATTLER_ATTACKER, MOVE_EFFECT_AQUA_RING, ScoreMinus10"
+    )
+    assert lines[6080] == "Expert_AquaRing:"
+    assert lines[6082].strip() == "IfHPPercentLessThan AI_BATTLER_ATTACKER, 30, Expert_AquaRing_End"
+    assert lines[6083].strip() == "IfRandomLessThan 128, Expert_AquaRing_End"
+    assert lines[6084].strip() == "AddToMoveScore 1"
+
+
+def test_aqua_ring_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckAquaRing (script.s:1456-1459): the AI's own battler under the ring -10; the
+    player's ring does not count (E3-B2-20)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Aqua Ring", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    own = s._replace(aqua_ring=s.aqua_ring.at[1].set(1))
+    assert _delta(t, own, 0x2, 0x3)[0] == -10
+    other = s._replace(aqua_ring=s.aqua_ring.at[0].set(1))
+    assert _delta(t, other, 0x2, 0x3)[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("hp", "jumps", "expected"),
+    [
+        (100, (), 1),  # the 128 roll (:6084) does not jump: +1
+        (100, (6084,), 0),
+        (30, (), 1),  # 30 % is not below 30 (trainer_ai.c:588-598)
+        (30, (6084,), 0),
+        (29, (), 0),  # below 30 %: to the end, no roll
+        (1, (), 0),
+    ],
+)
+def test_expert_aqua_ring(kaizo_tables, kaizo_names, kaizo_roark_party, hp, jumps, expected):
+    """Expert_AquaRing (script.s:6081-6088), keyed on the AI battler's own HP (E3-B2-20)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Aqua Ring", "Accelerock", "", ""))
+    s = _hp(s, 1, hp)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+    first_lines = next(iter(_path_lines(t, s, layout_for(t, 0x7, s))))
+    assert (6084 in first_lines) == (hp >= 30)
+
+
+def test_aqua_ring_is_scored_not_refused_and_exact_equals_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Aqua Ring", "Accelerock", "", ""))
+    layout = layout_for(t, 0x10F, s)  # one flag set: the fast tier stays under 4 GB
+    assert policy.ai_refusals(t, s, n, layout) == []
+    _assert_exact_equals_loose(t, _hp(s, 1, 50), layout)

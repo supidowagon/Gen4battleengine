@@ -452,6 +452,7 @@ SITE_N: dict[int, int] = {
     3624: 80,  # Expert_Foresight_FirstRoll (a Ghost AI battler: to _End when it jumps), E3-B2-18
     3627: 80,  # Expert_Foresight_SecondRoll (to _End when it jumps, else +2), E3-B2-18
     3321: 128,  # Expert_LockOn (to _End when it jumps, else +2), E3-B2-17
+    6084: 128,  # Expert_AquaRing (HP 30 % or more: to _End when it jumps, else +1), E3-B2-20
     5506: 64,  # Expert_LuckyChant (to _ScorePlus1 when it jumps: +1, else 0), E3-B2-7
     6171: 128,  # Expert_Defog_TryScoreMinus1 (to _CheckUserHPAndOpponentEvasion when it jumps), E3-B2-14
     6180: 50,  # Expert_Defog_TryScoreMinus2 (to _CheckOpponentHP when it jumps: no -2), E3-B2-14
@@ -754,6 +755,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Expert_Foresight (:1703), :3624, :3627 (E3-B2-18)
         94,  # NEXT_ATTACK_ALWAYS_HITS (Lock-On, Mind Reader): Basic_CheckLockOn (:190);
         # Expert_LockOn (:1692), :3321 (E3-B2-17)
+        251,  # RESTORE_HP_EVERY_TURN (Aqua Ring): Basic_CheckAquaRing (:279);
+        # Expert_AquaRing (:1794), :6084 (E3-B2-20)
         216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE (Miracle Eye): Basic_CheckMiracleEye (:255);
         # Expert_MiracleEye (:1760), :4820, :4823 (E3-B2-10)
         246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES (Last Resort): Basic_CheckLastResort (:275);
@@ -927,6 +930,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     183: ("Expert_MagicCoat", 1736),
     240: ("Expert_LuckyChant", 1783),
     94: ("Expert_LockOn", 1692),
+    251: ("Expert_AquaRing", 1794),
     113: ("Expert_Foresight", 1703),
     216: ("Expert_MiracleEye", 1760),
     246: ("Expert_LastResort", 1789),
@@ -1073,6 +1077,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         183,  # APPLY_MAGIC_COAT: Expert_MagicCoat (E3-B2-6)
         240,  # PREVENT_CRITS: Expert_LuckyChant (E3-B2-7)
         94,  # NEXT_ATTACK_ALWAYS_HITS: Expert_LockOn (E3-B2-17)
+        251,  # RESTORE_HP_EVERY_TURN: Expert_AquaRing (E3-B2-20)
         113,  # FORESIGHT: Expert_Foresight (E3-B2-18)
         216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE: Expert_MiracleEye (E3-B2-10)
         246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES: Expert_LastResort (E3-B2-11)

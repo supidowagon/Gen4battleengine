@@ -1343,3 +1343,33 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Tests: tests/ai/test_kaizo_policy.py (`test_foresight_tables_are_the_decomps`, `test_foresight_basic`,
   `test_expert_foresight`, `test_expert_foresight_reads_the_ais_type_not_the_players`,
   `test_foresight_is_scored_not_refused_and_exact_equals_loose`).
+- E3-B2-20 Aqua Ring (#251, BATTLE_EFFECT_RESTORE_HP_EVERY_TURN, move 392 in both games; sheet e251_aqua_ring.md). The
+  mechanic was modelled before this group and is unchanged: effect-map 251 -> `AQUA_RING` (effect_script_0251.s:5-9 sets
+  MOVE_EFFECT_AQUA_RING on the user, fails when set, `step` fail line), per-battler `aqua_ring` (`BATON_PASSED_FIELDS`:
+  MOVE_EFFECT_BATON_PASSED has it, moves.h:46-48; battle_lib.c:2079 keeps it, a plain switch clears it, :2071), the end-of-turn
+  heal `step._aqua_ring_check` / reference `_aqua_ring_check` (bcp.c:1332-1350: ringed, alive, below max HP; `Divide(maxHP, 16)`,
+  Big Root x(100 + param)/100, subscript_aqua_ring_heal.s:10-14) after Ingrain's (`_ingrain_then_aqua_ring`, bcp.c:1311). Heal
+  Block (`healBlockTurns`, bcp.c:1336-1338) is not modelled: Kaizo has no move with effect 236 and the vanilla game's Heal Block
+  is the second family (unchanged). This group is the AI's transcription and one Baton Pass test. No new state, no
+  `Outcome` field, no table array or key, no manifest bump, no draw in the engine.
+  AI: Basic_ScoreMoveEffect script.s:279 -> Basic_CheckAquaRing (:1456-1459): `IfMoveEffect ATTACKER
+  MOVE_EFFECT_AQUA_RING` (`commands.MoveEffectMask.AQUA_RING` = 1 << 24, moves.h:33, read from `aqua_ring[b]`) -10, the
+  AI's own battler only. Expert_Main :1794 -> Expert_AquaRing (:6081-6088): the AI battler below 30 % HP
+  (`IfHPPercentLessThan ATTACKER 30`, curHP * 100 / maxHP < 30, trainer_ai.c:588-598) goes to the end; else the 128 roll
+  (:6084) jumping goes to the end; else +1. `policy._basic_check_aqua_ring`, `_expert_aqua_ring`; `SITE_N` 6084 (128);
+  251 joins `KAIZO_TRANSCRIBED`, `KAIZO_EXPERT_LABELS` (`("Expert_AquaRing", 1794)`) and `KAIZO_EXPERT_TRANSCRIBED`;
+  `commands.BattleEffect.RESTORE_HP_EVERY_TURN`; entries in `_BASIC_LABELS` (after :277's Toxic Spikes) and `_EXPERT_LABELS`.
+  The other reads of the effect were transcribed already: Expert_StatusEvasionUp_CheckUserHasAquaRing (:2232-2236) and
+  Expert_StatusAccuracyDown_CheckUserHasAquaRing (:2477-2481), the Encore table (:3282, `ENCORE_ENCOURAGED_EFFECTS`), and
+  Expert_HealBlock (:5388, :5393; Heal Block is absent in Kaizo, and a Heal Block AI branch has no Kaizo caller). Read bounds
+  regenerated (251: one read, :6084; the two status paths' reads were counted already) and the backlog regenerated (the row
+  "AI move effect #251 RESTORE_HP_EVERY_TURN not transcribed" closes: Galactic Split, Aqua Ring).
+  Hit chance: none (RANGE_USER, accuracy 0). Damage inputs, crit inputs: none. Held items read later in the turn: Big Root at the
+  end-of-turn heal (modelled). Doubles (section 5): `aqua_ring` is per battler `[B]` and the heal runs over the battlers in the
+  end-of-turn loop; the AI's check reads `_side(Battler.ATTACKER)`, never `1 - side`.
+  Owed lines closed: none (no Owed line names Aqua Ring). Owed lines added: none. Not built: Heal Block (see above).
+  Message-only: none.
+  Tests: tests/engine/test_e3_batch2.py (`test_baton_pass_keeps_aqua_ring_and_the_newcomer_heals_at_the_turns_end`; the
+  existing tests/engine/test_aqua_ring.py covers the set, fail, heal, Big Root, order and switch), tests/ai/test_kaizo_policy.py
+  (`test_aqua_ring_tables_are_the_decomps`, `test_aqua_ring_basic`, `test_expert_aqua_ring`,
+  `test_aqua_ring_is_scored_not_refused_and_exact_equals_loose`).
