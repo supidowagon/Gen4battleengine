@@ -589,3 +589,206 @@ def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names
         except ValueError:
             continue
         raise AssertionError(bad)
+
+
+# --- #191 Skill Swap (E3-2-5) ---------------------------------------------------------------
+#
+# ``effect_script_0191.s:5`` runs ``subscript_exchange_abilities.s``: fails (:5-13) on a miss or a
+# semi-invulnerable defender, a raw Wonder Guard or Multitype ability of either battler, a held
+# Griseous Orb of either, or both abilities ABILITY_NONE; else (:17-24) both ``truant`` become
+# ``totalTurns & 1`` and the two ``BattleMon.ability`` swap. A gained entry ability acts at the
+# move's end (battle_controller_player.c:3973, battle_lib.c:3720-3851) once: its announced flag.
+
+
+def _ss(t, n, mine, foe, mine_moves=("Skill Swap", "Tackle"), foe_moves=("Tackle",), **over):
+    """Monferno (side 0) with ``mine`` against Geodude with ``foe``, at turn 1 (so a Truant write
+    of ``totalTurns & 1`` reads 1); ``over``: state fields."""
+    s = _fight(t, n, mine_moves, foe_moves)
+    s = s._replace(
+        ability=s.ability.at[0, 0].set(mine).at[1, 0].set(foe),
+        turn=jnp.asarray(1, s.turn.dtype),
+    )
+    return s._replace(**over) if over else s
+
+
+def _flags(s, field, values):
+    return jnp.asarray(values, getattr(s, field).dtype)
+
+
+def test_skill_swap_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 191 (effect_script_0191.s:5); Skill Swap is in both games' move tables."""
+    assert DECOMP_EFFECT_TO_ID[191] == (EffectId.SKILL_SWAP, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Skill Swap")]) == EffectId.SKILL_SWAP
+
+
+def test_skill_swap_swaps_abilities_sets_truant_and_the_ai_learns_both(
+    tables, names, kaizo_tables, kaizo_names
+):
+    """:21-24 swap the BattleMon abilities, :17-20 write ``totalTurns & 1`` (1 at turn 1) to both
+    ``truant``; both are tagged for the AI (battle_script.c:3402-3404): the player's new ability."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS
+
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = _ss(t, n, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+        out = assert_matches_reference(t, s, A("Skill Swap", "Tackle", s, n), _hits())
+        assert int(out.ability[0, 0]) == AbilityId.ROCK_HEAD
+        assert int(out.ability[1, 0]) == AbilityId.BLAZE
+        assert int(decomp_abilities(t, out)[0, 0]) == ABILITY_DECOMP_IDS[AbilityId.ROCK_HEAD]
+        assert int(decomp_abilities(t, out)[1, 0]) == ABILITY_DECOMP_IDS[AbilityId.BLAZE]
+        assert int(out.ai_ability_known[0]) == ABILITY_DECOMP_IDS[AbilityId.ROCK_HEAD]
+        assert out.truant.tolist() == [1, 1]
+
+
+def test_skill_swap_ends_with_the_battler(tables, names):
+    """The swap is the BattleMon's (battle_lib.c:124 reloads the party Pokemon's ability on the
+    next switch-in): ``_restore_ability`` puts the species' back when the user leaves; the
+    defender, which stays, keeps what it got."""
+    two = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Skill Swap",)), _spec(names, "Monferno", 20, ("Scratch",))],
+        [_spec(names, "Geodude", 40, ("Tackle",))],
+    )
+    two = two._replace(ability=two.ability.at[1, 0].set(AbilityId.ROCK_HEAD))
+    own = int(two.ability[0, 0])
+    out = assert_matches_reference(tables, two, A("Skill Swap", "Tackle", two, names), _hits())
+    assert int(out.ability[0, 0]) == AbilityId.ROCK_HEAD and int(out.ability[1, 0]) == own
+    switch = jnp.array([4 + 1, names.move_slot(out, 1, "Tackle")], jnp.int32)
+    out2 = assert_matches_reference(tables, out, switch, empty_outcome())
+    assert int(out2.ability[0, 0]) == own
+    assert int(out2.ability[1, 0]) == own  # the defender kept the user's ability
+
+
+def test_skill_swap_fails_on_its_listed_conditions_and_goes_through_a_substitute(tables, names):
+    """subscript_exchange_abilities.s:5-13: a miss, a semi-invulnerable defender, a raw Wonder
+    Guard (:6-7) or Multitype (:8-9) ability of either battler, a held Griseous Orb of either
+    (:10-11), both abilities none (:12-13): nothing swaps and ``truant`` stays. The user's none
+    alone is fine, and no Substitute test (a Substitute does not stop it)."""
+    orb = names.item("Griseous Orb")
+    base = _ss(tables, names, AbilityId.BLAZE, AbilityId.ROCK_HEAD)
+    acts = A("Skill Swap", "Tackle", base, names)
+    fails = {
+        "wonder guard foe": base._replace(
+            ability=base.ability.at[1, 0].set(AbilityId.WONDER_GUARD)
+        ),
+        "wonder guard user": base._replace(
+            ability=base.ability.at[0, 0].set(AbilityId.WONDER_GUARD)
+        ),
+        "orb user": base._replace(item=base.item.at[0, 0].set(orb)),
+        "orb foe": base._replace(item=base.item.at[1, 0].set(orb)),
+        "both none": base._replace(ability=base.ability.at[:, 0].set(AbilityId.NONE)),
+        "semi-invulnerable": base._replace(semi_invulnerable=base.semi_invulnerable.at[1].set(1)),
+    }
+    for label, case in fails.items():
+        out = assert_matches_reference(tables, case, acts, _hits())
+        assert out.ability[:, 0].tolist() == case.ability[:, 0].tolist(), label
+        assert out.truant.tolist() == case.truant.tolist(), label
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = assert_matches_reference(tables, base, acts, miss)
+    assert out.ability[:, 0].tolist() == base.ability[:, 0].tolist()
+    arceus = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Skill Swap",))],
+        [_spec(names, "Arceus", 40, ("Tackle",))],
+    )
+    out = assert_matches_reference(
+        tables, arceus, A("Skill Swap", "Tackle", arceus, names), _hits()
+    )
+    assert int(decomp_abilities(tables, out)[1, 0]) == 121  # ABILITY_MULTITYPE stays
+    assert int(out.ability[0, 0]) == int(arceus.ability[0, 0])
+    # The user's ABILITY_NONE alone, and behind a Substitute: both swap.
+    none_user = _ss(tables, names, AbilityId.NONE, AbilityId.ROCK_HEAD)
+    out = assert_matches_reference(tables, none_user, acts, _hits())
+    assert (
+        int(out.ability[0, 0]) == AbilityId.ROCK_HEAD and int(out.ability[1, 0]) == AbilityId.NONE
+    )
+    shielded = base._replace(substitute_hp=base.substitute_hp.at[1].set(30))
+    out = assert_matches_reference(tables, shielded, acts, _hits())
+    assert (
+        int(out.ability[0, 0]) == AbilityId.ROCK_HEAD and int(out.ability[1, 0]) == AbilityId.BLAZE
+    )
+
+
+def test_skill_swap_gives_the_new_truant_holder_a_fresh_parity(tables, names):
+    """:17-20: both ``truant`` are ``totalTurns & 1`` (1 at turn 1); the user, now Truant, loafs
+    on the next turn (0 != 1, ``order.truant_loafs``), the defender, now without it, never."""
+    from nuzline.engine.order import truant_loafs
+
+    s = _ss(tables, names, AbilityId.BLAZE, AbilityId.TRUANT)
+    out = assert_matches_reference(tables, s, A("Skill Swap", "Tackle", s, names), _hits())
+    assert int(out.ability[0, 0]) == AbilityId.TRUANT and int(out.turn) == 2
+    assert out.truant.tolist() == [1, 1]
+    assert bool(truant_loafs(out, 0)) and not bool(truant_loafs(out, 1))
+
+
+def test_skill_swap_hands_over_an_entry_ability_that_acts_once_at_the_move_end(tables, names):
+    """The Intimidate the defender announced at its entry (flag set) arrives at the user with the
+    flag clear: MoveEnd's TriggerEffectOnSwitch (bcp.c:3973) fires it at once (lib.c:3799-3803),
+    the foe's Attack -1; the next move end does not (the flag is set); an Intimidate the user had
+    announced already stays quiet. Drought acts the same way (:3740-3790: permanent sun)."""
+    from nuzline.engine.ids import Weather
+
+    s = _ss(tables, names, AbilityId.BLAZE, AbilityId.INTIMIDATE)
+    s = s._replace(intimidate_announced=_flags(s, "intimidate_announced", [0, 1]))
+    acts = A("Skill Swap", "Tackle", s, names)
+    out = assert_matches_reference(tables, s, acts, _hits())
+    assert int(out.ability[0, 0]) == AbilityId.INTIMIDATE
+    assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
+    assert out.intimidate_announced.tolist() == [1, 1]
+    again = assert_matches_reference(tables, out, A("Tackle", "Tackle", out, names), _hits())
+    assert int(again.stages[1, Stat.ATK]) == -1
+    spent = s._replace(intimidate_announced=_flags(s, "intimidate_announced", [1, 1]))
+    out = assert_matches_reference(tables, spent, acts, _hits())
+    assert int(out.stages[1, Stat.ATK]) == 0
+    rain = _ss(tables, names, AbilityId.BLAZE, AbilityId.DROUGHT)
+    rain = rain._replace(weather_announced=_flags(rain, "weather_announced", [0, 1]))
+    out = assert_matches_reference(tables, rain, acts, _hits())
+    assert int(out.weather) == Weather.SUN and int(out.weather_timer) == 0
+    assert out.weather_announced.tolist() == [1, 1]
+
+
+def test_the_announced_flags_are_set_at_entry_and_cleared_by_a_switch(tables, names):
+    """``make_state`` runs the leads' switch-in checks: an Intimidate lead has its flag set (the
+    foe's lead has no ability here), a switch clears the flags (``VOLATILE_FIELDS``,
+    battle_lib.c:103-106) before the newcomer's own entry sets its own."""
+    assert {"trace_announced", "weather_announced"} <= set(VOLATILE_FIELDS)
+    assert {"intimidate_announced", "download_announced"} <= set(VOLATILE_FIELDS)
+    assert not {"trace_announced", "intimidate_announced"} & set(BATON_PASSED_FIELDS)
+    shinx = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
+    assert shinx.intimidate_announced.tolist() == [1, 0]  # set by the lead's entry check
+    lead = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Tackle",)), _spec(names, "Monferno", 20, ("Tackle",))],
+        [_spec(names, "Geodude", 40, ("Tackle",))],
+    )
+    lead = lead._replace(
+        ability=lead.ability.at[0, 0].set(AbilityId.INTIMIDATE),
+        intimidate_announced=lead.intimidate_announced.at[0].set(1),
+    )
+    out = assert_matches_reference(tables, lead, A("Tackle", "Tackle", lead, names), _hits())
+    assert out.intimidate_announced.tolist() == [
+        1,
+        0,
+    ]  # the Intimidate that never fired for Geodude
+    switch = jnp.array([4 + 1, names.move_slot(out, 1, "Tackle")], jnp.int32)
+    out2 = assert_matches_reference(tables, out, switch, empty_outcome())
+    assert out2.intimidate_announced.tolist() == [0, 0]
+
+
+def test_skill_swap_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
+    """A faster foe's Skill Swap takes the side's Compoundeyes (the foe's own ability is the
+    side's after it) before its check (bcp.c:2876-2947): Rock Throw's 90 is 117 at the turn
+    start and 90 swapped; it also moves Super Luck (battle_lib.c:7126), so ``CRIT_ODDS_EFFECTS``
+    carries it (a swap of every battler's ability with its foe's)."""
+    from nuzline.engine.outcome import CRIT_ODDS_EFFECTS
+
+    s = roark_state(
+        tables, names, player_moves=["Rock Throw"], opp_moves=["Skill Swap"], opp_faster=True
+    )
+    s = s._replace(ability=s.ability.at[0, int(s.active[0])].set(AbilityId.COMPOUNDEYES))
+    acts = A("Rock Throw", "Skill Swap", s, names)
+    assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
+    assert EffectId.SKILL_SWAP in CRIT_ODDS_EFFECTS
+    swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](s)
+    assert int(swapped.ability[1, int(s.active[1])]) == AbilityId.COMPOUNDEYES
+    assert int(swapped.ability[0, int(s.active[0])]) == int(s.ability[1, int(s.active[1])])

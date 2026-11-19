@@ -631,6 +631,9 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     sd.transformed = 1
     sd.power_trick_desync = sd.power_trick
     sd.truant = s.turn & 1
+    # :5350-5362 clear the announce flags: the switch-in checks run again for the copy.
+    sd.trace_announced = sd.weather_announced = 0
+    sd.intimidate_announced = sd.download_announced = 0
     return True
 
 
@@ -1750,6 +1753,10 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "yawn",
         "curse",
         "can_unburden",
+        "trace_announced",  # BattleMon announce flags, cleared at InitBattleMon (lib.c:103-106)
+        "weather_announced",
+        "intimidate_announced",
+        "download_announced",
         "minimized",
         "semi_invulnerable",  # MOVE_EFFECT_SEMI_INVULNERABLE (B10-12)
         "micle",  # moveEffectsData / metronomeMove (E1 Batch D)
@@ -2653,6 +2660,7 @@ def _download(s: RefState, side: int) -> None:
     mon = _active(s, side)
     if not mon.hp or mon.ability != AbilityId.DOWNLOAD:
         return
+    s.battlers[side].download_announced = 1  # :3836, whatever the sums
     foe, foe_sd = _active(s, _foe(side)), s.battlers[_foe(side)]
     sum_def = sum_spd = 0
     if foe.hp and not foe_sd.substitute_hp:
@@ -2675,8 +2683,11 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     mon, foe = _active(s, side), _active(s, other)
     # SWITCH_IN_CHECK_STATE_TRACE (lib.c:3718-3737): the newcomer, then the battler facing it,
     # whose Trace stayed armed while its foe was down; no two Trace holders copy each other.
-    _trace(tables, s, side, other)
-    traced = _trace(tables, s, other, side)
+    # traceAnnounced gates it (:3726); only a holder that traced already and got Trace back (Skill
+    # Swap) has it set.
+    if not s.battlers[side].trace_announced:
+        _trace(tables, s, side, other)
+    traced = not s.battlers[other].trace_announced and _trace(tables, s, other, side)
     # SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES (lib.c:3740-3790).
     for battler in (side, other) if traced else (side,):
         weather = WEATHER_ABILITIES.get(_active(s, battler).ability)
@@ -2684,31 +2695,31 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
             if not (s.weather == weather and s.weather_timer == 0) and battler == 0:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
+            s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
     # B10-4), the holder as the attacker (:8): the foe side's Mist blocks it
     # (script.c:2876-2882, B12-23). Its "cuts" message is built in C
     # (BtlCmd_ChangeStatStage, script.c:2956): the AI learns nothing.
     # script.c:2884-2902 (B9-6; White Smoke, G-46).
     blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
-    if (
-        mon.hp
-        and mon.ability == AbilityId.INTIMIDATE
-        and foe.hp
-        and not s.battlers[other].substitute_hp
-        and not _mist_blocks_drop(s, other, -1)
-        and foe.ability not in blockers
-    ):
-        _change_stage(s, other, Stat.ATK, -1)
-    if (
-        traced
-        and foe.hp
-        and foe.ability == AbilityId.INTIMIDATE
-        and mon.hp
-        and not s.battlers[side].substitute_hp
-        and not _mist_blocks_drop(s, side, -1)
-        and mon.ability not in blockers
-    ):
-        _change_stage(s, side, Stat.ATK, -1)
+    if mon.hp and mon.ability == AbilityId.INTIMIDATE:
+        s.battlers[side].intimidate_announced = 1  # :3799-3803, whatever the foe
+        if (
+            foe.hp
+            and not s.battlers[other].substitute_hp
+            and not _mist_blocks_drop(s, other, -1)
+            and foe.ability not in blockers
+        ):
+            _change_stage(s, other, Stat.ATK, -1)
+    if traced and foe.hp and foe.ability == AbilityId.INTIMIDATE:
+        s.battlers[other].intimidate_announced = 1
+        if (
+            mon.hp
+            and not s.battlers[side].substitute_hp
+            and not _mist_blocks_drop(s, side, -1)
+            and mon.ability not in blockers
+        ):
+            _change_stage(s, side, Stat.ATK, -1)
     # SWITCH_IN_CHECK_STATE_DOWNLOAD (lib.c:3814-3851, G-21): the newcomer, then a battler that
     # just traced Download.
     _download(s, side)
@@ -2745,10 +2756,47 @@ def _trace(tables, s: RefState, side: int, foe: int) -> bool:
     ):
         return False
     mon.ability = target.ability
+    s.battlers[side].trace_announced = 1  # :3727
     for battler in (side, foe):
         if battler == 0:
             _know_ability(s, s.battlers[0].active)
     return True
+
+
+def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
+    """MoveEnd's ``BattleSystem_TriggerEffectOnSwitch`` (bcp.c:3973; lib.c:3718-3851, E3-2-5):
+    each state loops over every battler and acts for one whose announced flag is still clear:
+    Trace, the weather abilities, Intimidate, Download. A battler that gained the ability
+    mid-battle (Skill Swap) acts at once; nothing else is unannounced, so the pass changes
+    nothing otherwise. The battlers run in the order 0, 1 (``engine.hooks.move_end_switch_in``)."""
+    tables, battlers = turn.tables, range(_fmt(s).B)
+    for b in battlers:
+        if not s.battlers[b].trace_announced:
+            _trace(tables, s, b, _foe(b))
+    for b in battlers:
+        sd, mon = s.battlers[b], _active(s, b)
+        weather = WEATHER_ABILITIES.get(mon.ability)
+        if not sd.weather_announced and weather is not None and mon.hp:
+            if not (s.weather == weather and s.weather_timer == 0) and b == 0:
+                _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
+            s.weather, s.weather_timer = weather, 0
+            sd.weather_announced = 1
+    blockers = (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE, AbilityId.HYPER_CUTTER)
+    for b in battlers:
+        sd, mon, o = s.battlers[b], _active(s, b), _foe(b)
+        if not sd.intimidate_announced and mon.hp and mon.ability == AbilityId.INTIMIDATE:
+            sd.intimidate_announced = 1
+            foe = _active(s, o)
+            if (
+                foe.hp
+                and not s.battlers[o].substitute_hp
+                and not _mist_blocks_drop(s, o, -1)
+                and foe.ability not in blockers
+            ):
+                _change_stage(s, o, Stat.ATK, -1)
+    for b in battlers:
+        if not s.battlers[b].download_announced:
+            _download(s, b)
 
 
 def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) -> None:
@@ -3291,6 +3339,27 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         ):
             mon.ability = AbilityId.INSOMNIA
             if target == 0:
+                _know_ability(s, s.battlers[0].active)
+    elif effect == EffectId.SKILL_SWAP and landed:
+        # subscript_exchange_abilities.s:5-24 (E3-2-5): fails on a semi-invulnerable defender (:5),
+        # a raw Wonder Guard (:6-7) or Multitype (:8-9) ability of either, a held Griseous Orb of
+        # either (:10-11), or both abilities ABILITY_NONE (:12-13); else both truant parities become
+        # totalTurns & 1 (:17-20) and the BattleMon abilities swap (:21-24); the AI tags both
+        # (:3402-3404). No Substitute test. Slow Start (:25-38) is unsupported: no holder exists.
+        mon, foe_mon = _active(s, side), _active(s, target)
+        mine, theirs = _decomp_ability(tables, mon), _decomp_ability(tables, foe_mon)
+        banned = (ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD], ABILITY_MULTITYPE)
+        if (
+            foe_mon.hp
+            and not s.battlers[target].semi_invulnerable
+            and mine not in banned
+            and theirs not in banned
+            and ITEM_GRISEOUS_ORB not in (mon.item, foe_mon.item)
+            and (mine or theirs)
+        ):
+            s.battlers[side].truant = s.battlers[target].truant = s.turn & 1
+            mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
+            if 0 in (side, target):
                 _know_ability(s, s.battlers[0].active)
     elif effect == EffectId.DISABLE and effective:
         # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
@@ -6352,6 +6421,7 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         # defender (bcp.c:3965-3967).
         _recover_status_by_ability(s, side)
         _recover_status_by_ability(s, _foe(side))
+        _move_end_switch_in(turn, s)  # bcp.c:3973: an ability gained mid-battle acts now (E3-2-5)
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).

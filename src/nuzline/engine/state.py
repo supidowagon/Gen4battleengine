@@ -109,6 +109,18 @@ Encodings:
   whole MoveEffectsData after it, :2100-2104, Baton Pass included): ``hooks.battle_start`` sets
   it for every lead holding an item, whatever its ability (a lead that gains Unburden later
   keeps it). Nothing clears it but a switch (a volatile).
+* ``trace_announced``, ``weather_announced``, ``intimidate_announced`` and ``download_announced``
+  (E3-2-5, Skill Swap) are the active battler's ``BattleMon.traceAnnounced``,
+  ``weatherAbilityAnnounced``, ``intimidateAnnounced`` and ``downloadAnnounced``:
+  ``BattleSystem_InitBattleMon`` clears them (battle_lib.c:103-106), so a switch does (a volatile;
+  Baton Pass included); Transform clears them (battle_script.c:5350-5362); the switch-in state
+  of each ability sets its flag where it acts on a living holder (:3726-3733, :3748-3786,
+  :3799-3803, :3822-3836: ``hooks.trace``, ``weather_ability``, ``intimidate``, ``download``),
+  whatever the effect on the field. ``hooks.move_end_switch_in`` (MoveEnd's
+  ``BattleSystem_TriggerEffectOnSwitch``, battle_controller_player.c:3973) acts for a battler
+  whose flag is still clear, i.e. one that gained the ability mid-battle (Skill Swap). Anticipation,
+  Forewarn and Slow Start have no ability id in the engine (coverage refuses their holders), so
+  they have no flag.
   ``order.effective_speed`` doubles an Unburden holder with it and no item (:1268-1272).
 * ``recycle_item`` is ``BattleContext.recycleItem[battler]`` (battle_context.h:307; E2 batch 13,
   B13-19): ``BtlCmd_RemoveItem`` writes the item it removes (battle_script.c:8977; every
@@ -351,6 +363,14 @@ class BattleState(NamedTuple):
     imprisoned: jnp.ndarray  # int8, MOVE_EFFECT_IMPRISONED (a foe of an Imprison user)
     roosting: jnp.ndarray  # int8, turnFlags.roosting, kept only while it can be read
     can_unburden: jnp.ndarray  # int8, MoveEffectsData.canUnburden
+    # int8[B], BattleMon's per-battler announced flags (battle_lib.c:103-108: cleared at
+    # InitBattleMon, so ``VOLATILE_FIELDS``; set where the switch-in state acts, :3726-3851):
+    # ``traceAnnounced``, ``weatherAbilityAnnounced``, ``intimidateAnnounced``,
+    # ``downloadAnnounced``. Read by ``hooks.move_end_switch_in`` (E3-2-5, Skill Swap).
+    trace_announced: jnp.ndarray
+    weather_announced: jnp.ndarray
+    intimidate_announced: jnp.ndarray
+    download_announced: jnp.ndarray
     recycle_item: jnp.ndarray  # int16[B], BattleContext.recycleItem per battler (B13-19)
     minimized: jnp.ndarray  # int8, MOVE_EFFECT_MINIMIZE in moveEffectsMask
     semi_invulnerable: jnp.ndarray  # int8, ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit
@@ -593,6 +613,10 @@ VOLATILE_FIELDS = (
     "yawn",
     "curse",
     "can_unburden",
+    "trace_announced",
+    "weather_announced",
+    "intimidate_announced",
+    "download_announced",
     "minimized",
     "semi_invulnerable",
     "micle",
@@ -718,6 +742,10 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "imprisoned": (_BATTLER, np.int8),
     "roosting": (_BATTLER, np.int8),
     "can_unburden": (_BATTLER, np.int8),
+    "trace_announced": (_BATTLER, np.int8),
+    "weather_announced": (_BATTLER, np.int8),
+    "intimidate_announced": (_BATTLER, np.int8),
+    "download_announced": (_BATTLER, np.int8),
     "recycle_item": (_BATTLER, np.int16),
     "minimized": (_BATTLER, np.int8),
     "semi_invulnerable": (_BATTLER, np.int8),

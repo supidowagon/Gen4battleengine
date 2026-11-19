@@ -1832,6 +1832,26 @@ def _expert_me_first(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, minus2), -2))
 
 
+def _expert_change_user_ability(ctx: AiContext, mask) -> AiContext:
+    """``Expert_ChangeUserAbility`` (script.s:4415-4433, entry :1743, E3-2-5): the attacker's
+    ability (``LoadBattlerAbility``: its own true one, NONE when suppressed) in
+    ``CHANGE_USER_ABILITY_DESIRABLE`` -1; else the player's (its known one, else the species coin
+    flip, the draw of ``load_battler_ability``) in the table: the 50 roll (:4429) jumping ends, else
+    +2. An ability in neither table falls through to the -1 label (:4422-4425; the script's
+    comment saying "score +0" is wrong, sheet e191 section 6)."""
+    ctx = c.load_battler_ability(_at(ctx, mask), _A)
+    ctx, minus1 = _split(c.if_loaded_in_table(ctx, c.CHANGE_USER_ABILITY_DESIRABLE))
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, plus2 = _split(c.if_loaded_in_table(ctx, c.CHANGE_USER_ABILITY_DESIRABLE))
+    # Expert_ChangeUserAbility_ScoreMinus1 (:4422): the first table's jump and the fall-through
+    ctx = c.add_to_move_score(_at(ctx, minus1 | ctx.live), -1)
+    ctx, _ = _split(c.go_to(ctx))  # -> _End
+    # Expert_ChangeUserAbility_TryScorePlus2 (:4428)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, plus2), 50, 4429))  # -> _End
+    ctx = c.add_to_move_score(ctx, 2)
+    return c.pop_or_end(ctx)
+
+
 def _expert_worry_seed(ctx: AiContext, mask) -> AiContext:
     """``Expert_WorrySeed`` (script.s:5973-5993): the player knowing Rest +1; then the AI under
     50 % HP, or the 128 roll (:5984) jumping, goes straight to the 64 roll, else +1 first; the
@@ -3726,6 +3746,7 @@ _EXPERT_LABELS = (
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
     (BattleEffect.SET_HP_EQUAL_TO_USER, _expert_endeavor),  # :1741
     (BattleEffect.DECREASE_POWER_WITH_LESS_USER_HP, _expert_water_spout),  # :1742
+    (BattleEffect.SWITCH_ABILITIES, _expert_change_user_ability),  # :1743 (E3-2-5)
     (BattleEffect.MAKE_SHARED_MOVES_UNUSEABLE, _expert_imprison),  # :1744
     (BattleEffect.HEAL_STATUS, _expert_refresh),  # :1745 (B12-18)
     (BattleEffect.RECOIL_THIRD, _expert_recoil_move),  # :1747

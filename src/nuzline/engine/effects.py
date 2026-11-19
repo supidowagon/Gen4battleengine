@@ -1710,6 +1710,56 @@ def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return know_ability(state, h.target_side, mon, cond)
 
 
+def _skill_swap(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Skill Swap (effect_script_0191.s:5, a direct ``CHECK_HP | TO_DEFENDER``
+    ``subscript_exchange_abilities.s``; no ``CAN_PROTECT`` bit, so its ``Protect`` and
+    ``Substitute`` handling is the subscript's own: none for a Substitute, a Protect is a miss).
+    The script runs for a living defender (battle_lib.c:1492-1507); it fails (:5-13,
+    MOVE_STATUS_FAILED) on a miss or a semi-invulnerable defender (:5), on a raw Wonder Guard (:6-7)
+    or Multitype (:8-9) ability of either battler, on a held Griseous Orb of either (:10-11), and
+    when both abilities are ABILITY_NONE (:12-13; the user's alone is fine). Every test reads the
+    raw ``BattleMon.ability`` / ``heldItem`` (``decomp_abilities``, ``state.item``), so a Gastro
+    Acid suppression hides nothing. Otherwise (:17-24) ``truant`` of both becomes ``totalTurns &
+    1`` and the two battlers' ``BattleMon.ability`` swap; the suppression bit stays with its
+    battler. The user's or the defender's new Slow Start (:25-38) cannot arise: Slow Start is an
+    unsupported ability, which coverage refuses on any Pokemon, so no battler holds it to give.
+    ``UpdateMonDataFromVar`` tags both abilities for the AI (``BattleAI_SetAbility``,
+    battle_script.c:3402-3404, :12106-12109). The writes are the battlers': ``step._restore_ability``
+    puts each party Pokemon's own back when it leaves (battle_lib.c:124). An entry ability one
+    of them now holds acts at the move's end (``hooks.move_end_switch_in``: its announced flag is
+    still clear, battle_lib.c:3720-3851)."""
+    fmt = format_of(state)
+    side, user, foe, target = h.side, h.user, h.target_side, h.target
+    pu, pt = party(fmt, side), party(fmt, foe)
+    raw = decomp_abilities(tables, state)
+    mine, theirs = raw[pu, user], raw[pt, target]
+    wonder = ABILITY_DECOMP_IDS[AbilityId.WONDER_GUARD]
+    banned = jnp.asarray([wonder, ABILITY_MULTITYPE], raw.dtype)
+    cond = (
+        (h.effect == _E.SKILL_SWAP)
+        & h.landed
+        & _alive(state, foe, target)
+        & (state.semi_invulnerable[foe] == 0)
+        & ~jnp.isin(mine, banned)
+        & ~jnp.isin(theirs, banned)
+        & (state.item[pu, user] != ITEM_GRISEOUS_ORB)
+        & (state.item[pt, target] != ITEM_GRISEOUS_ORB)
+        & ((mine != 0) | (theirs != 0))
+    )
+    a_user, a_target = state.ability[pu, user], state.ability[pt, target]
+    parity = (state.turn.astype(_I32) & 1).astype(state.truant.dtype)
+
+    def put(arr, index, value):
+        return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
+
+    state = state._replace(
+        ability=put(put(state.ability, (pu, user), a_target), (pt, target), a_user),
+        truant=put(put(state.truant, side, parity), foe, parity),
+    )
+    state = know_ability(state, side, user, cond)
+    return know_ability(state, foe, target, cond)
+
+
 def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Disable (``BtlCmd_TryDisable``, battle_script.c:4581; the script skips it when the
     move missed): the target's last move must sit in one of its slots with PP left, and
@@ -1938,6 +1988,11 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         transformed=put(state.transformed, side, 1),
         power_trick_desync=put(state.power_trick_desync, side, state.power_trick[side]),
         truant=put(state.truant, side, state.turn.astype(_I32) & 1),
+        # :5350-5362 clear the announce flags: the switch-in checks run again for the copy.
+        trace_announced=put(state.trace_announced, side, 0),
+        weather_announced=put(state.weather_announced, side, 0),
+        intimidate_announced=put(state.intimidate_announced, side, 0),
+        download_announced=put(state.download_announced, side, 0),
         ai_ability_known=state.ai_ability_known.at[user].set(
             settled.astype(state.ai_ability_known.dtype)
         ),

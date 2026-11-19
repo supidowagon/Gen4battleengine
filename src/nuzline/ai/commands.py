@@ -454,6 +454,7 @@ class BattleEffect(IntEnum):
     USE_MOVE_FIRST = 241  # Me First: Expert_MeFirst (:1784); Risky :6560
     SET_ABILITY_TO_INSOMNIA = 247  # Worry Seed: Basic :276; Expert_WorrySeed (:1790)
     TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
+    SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -997,6 +998,17 @@ COPYCAT_ENCOURAGED_MOVES = (
     79, 142, 147, 95, 47, 320, 325, 28, 108, 92, 12, 32, 90, 329, 238, 177, 109, 186, 103,
     178, 184, 313, 319, 86, 137, 77, 247, 223, 63, 245, 168, 343, 213, 207, 259, 260, 271,
     276, 285, 375, 384, 385, 389, 391, 415, 445, 464,
+)  # fmt: skip
+
+# Expert_ChangeUserAbility_DesirableAbilities (script.s:4435-4461): ABILITY_SPEED_BOOST, _BATTLE_ARMOR,
+# _SAND_VEIL, _STATIC, _FLASH_FIRE, _WONDER_GUARD, _EFFECT_SPORE, _SWIFT_SWIM, _HUGE_POWER,
+# _RAIN_DISH, _CUTE_CHARM, _SHED_SKIN, _MARVEL_SCALE, _PURE_POWER, _CHLOROPHYLL, _SHIELD_DUST,
+# _ADAPTABILITY, _MAGIC_GUARD, _MOLD_BREAKER, _SUPER_LUCK, _UNAWARE, _TINTED_LENS, _FILTER,
+# _SOLID_ROCK, _RECKLESS (decomp ability ids, E3-2-5; checked against the manifest's names by
+# tests/engine/test_e3_batch1.py).
+CHANGE_USER_ABILITY_DESIRABLE = (
+    3, 4, 8, 9, 18, 25, 27, 33, 37, 44, 56, 61, 63, 74, 34, 19, 91, 98, 104, 105, 109, 110, 111,
+    116, 120,
 )  # fmt: skip
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.

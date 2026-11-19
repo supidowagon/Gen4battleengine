@@ -188,6 +188,11 @@ Each is open; close it with its ruling.
    and Expert (sheet e259, "Tag Strategy in singles"). The same 0/0 read shapes the other Tag
    Strategy entries (:6663, :6675, :6836, :6847, :7057-7071, :7156). Model the flag with
    empty slots as zeroed battlers when the Tag Strategy group is built; not modelled here.
+4. Tag Strategy's Skill Swap entry (E3-2-5): `IfMoveEqualTo MOVE_SKILL_SWAP` (script.s:6734) ->
+   TagStrategy_SkillSwap (:7195-7213: the AI's own Truant, Slow Start, Stall or Klutz +5; else
+   the player's Shadow Tag, Pure Power, Huge Power, Mold Breaker, Solid Rock, Filter or Flower
+   Gift +2) runs in singles for a trainer whose header sets the flag (ai.c:249-271), on top of
+   Expert_ChangeUserAbility. Not modelled, with the rest of the Tag Strategy flag (Owed 3).
 
 ## 3. Rulings
 
@@ -319,4 +324,42 @@ Each is open; close it with its ruling.
   "has acted" per battler). AI: Basic_CheckTrickRoom (script.s:1501-1506) and Expert_TrickRoom
   (:6190-6214; roll :6210); read bounds regenerated. Tests: tests/engine/test_e3_batch1.py,
   tests/ai/test_kaizo_policy.py, tests/engine/test_coverage.py `test_area_trick_room_is_modelled`.
-
+- E3-2-5 Skill Swap (#191): new `EffectId.SKILL_SWAP` (effect 191; no manifest bump: no array or
+  key changed). `effects._skill_swap` (effect_script_0191.s:5; subscript_exchange_abilities.s):
+  fails on a miss or semi-invulnerable defender (:5), a raw Wonder Guard (:6-7) or Multitype
+  (:8-9) ability of either (`decomp_abilities`, so a written ability counts), a held Griseous Orb
+  of either (:10-11, raw `state.item`), both abilities ABILITY_NONE (:12-13; the user's alone is
+  fine); no Substitute test (it goes through one). Else `truant` of both = `turn & 1` (:17-20),
+  `ability` swapped (:21-24: no new field, the per-battler written ability restored by
+  `step._restore_ability`, battle_lib.c:124; the Gastro Acid suppression stays with its
+  battler), both tagged for the AI (`know_ability`, battle_script.c:3402-3404). Slow Start
+  (:25-38): unsupported engine-wide (no ability id; coverage refuses a holder), and a battler
+  only receives it from one that has it, so no `slow_start_turn` / announced / finished field is
+  added. New per-battler `[B]` fields `trace_announced`, `weather_announced`,
+  `intimidate_announced`, `download_announced` (BattleMon, battle_lib.c:103-106: in
+  `VOLATILE_FIELDS`, cleared by Transform too, battle_script.c:5350-5362; set by the hook that
+  acts on a living holder: lib.c:3726-3733, :3748-3786, :3799-3803, :3822-3836); `hooks.
+  move_end_switch_in` is MoveEnd's TriggerEffectOnSwitch (bcp.c:3973) over every battler, called
+  from `step._move_end` after the two RecoverStatusByAbility calls (bcp.c:3965-3967) while the
+  battle goes on: trace, weather, Intimidate, Download for a battler whose flag is clear, a
+  no-op otherwise. The entry hooks (`switch_in_effects`, `show_battle_mon`) keep their explicit
+  conditions and read `trace_announced` for a Trace holder (a Trace that traced and got Trace
+  back does not copy twice, :3726). Rulings: the pass runs battlers in the engine's order
+  (player first), as `show_battle_mon`: two battlers gaining an ability of the same state in one
+  swap cannot happen (a swap gives each the other's ability, whose flag is set unless the
+  battler never held it); Anticipation, Forewarn, Frisk and Slow Start have no ability id (no
+  flag; their holders are refused), Pressure and Mold Breaker only print (their AI reveal is
+  the swap's own tag). A test that writes an entry ability into an ACTIVE battler after
+  `make_state` must set its flag (`tests/engine/test_e1_trial.py` does). Hit chance:
+  `outcome._threshold_grid`'s field variant (foe holds the side's ability, side the foe's; a weather
+  ability one gained acts at the move end: the one whose flag is clear; Klutz item live for a
+  side that loses it), `future_thresholds`' `loose` flag; crit: `CRIT_ODDS_EFFECTS` write (every
+  battler gets its foe's ability: Super Luck, Klutz item) and `armored` counts a foe's Skill Swap
+  like Transform; enumerate: INPUT_CLAUSE effect (skill-swap clause), NON_TABLE_DAMAGE, end-speed
+  tie and Shed Skin handover. AI: Expert_ChangeUserAbility (script.s:4415-4433, entry :1743)
+  with `commands.CHANGE_USER_ABILITY_DESIRABLE` (:4435-4461) and the 50 roll at :4429; a
+  defender ability in neither table falls through to -1 (the comment's "+0" is wrong, sheet
+  e191); no Basic entry; the Encore table entries (:3229, :3256) were already in `commands`;
+  Tag Strategy's entry: Owed 4; read bounds regenerated; backlog regenerated (the two #191 rows
+  close). Tests: tests/engine/test_e3_batch1.py `test_skill_swap_*`,
+  `test_the_announced_flags_*`, tests/ai/test_kaizo_policy.py `test_change_user_ability_*`.

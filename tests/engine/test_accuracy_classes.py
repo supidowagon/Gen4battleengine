@@ -536,7 +536,8 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # defender's statBoosts and ability (battle_mon.h:75, :84) and reruns its switch-in checks:
 # test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
 # ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
-# test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds.
+# test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds. Skill Swap (E3-2-5) swaps the two
+# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds.
 _FOLLOWED = frozenset(
     {
         EffectId.HAZE,
@@ -545,6 +546,7 @@ _FOLLOWED = frozenset(
         EffectId.GRAVITY,
         EffectId.TRANSFORM,
         EffectId.WORRY_SEED,
+        EffectId.SKILL_SWAP,
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.

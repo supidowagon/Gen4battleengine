@@ -112,6 +112,10 @@ class RefBattler:
     imprisoned: int  # MOVE_EFFECT_IMPRISONED
     roosting: int  # turnFlags.roosting while it can be read (engine.state docstring)
     can_unburden: int  # MoveEffectsData.canUnburden
+    trace_announced: int  # BattleMon.traceAnnounced (E3-2-5)
+    weather_announced: int  # BattleMon.weatherAbilityAnnounced
+    intimidate_announced: int  # BattleMon.intimidateAnnounced
+    download_announced: int  # BattleMon.downloadAnnounced
     recycle_item: int  # BattleContext.recycleItem[battler]: never cleared by a switch (B13-19)
     minimized: int  # MOVE_EFFECT_MINIMIZE
     semi_invulnerable: int  # ids.SemiKind: MOVE_EFFECT_SEMI_INVULNERABLE's bit (B10-12)

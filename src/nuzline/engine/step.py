@@ -181,6 +181,7 @@ from nuzline.engine.hooks import (
     WEATHER_HP,
     after_damage_items,
     held_item_check,
+    move_end_switch_in,
     recover_status_by_ability,
     reveal_ability,
     swap_war,
@@ -2704,7 +2705,7 @@ def _faint_check(
     return after
 
 
-def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
+def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
@@ -2721,7 +2722,10 @@ def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
     # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
-    return recover_status_by_ability(state, foe, clear)
+    state = recover_status_by_ability(state, foe, clear)
+    # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
+    # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
+    return move_end_switch_in(tables, state, clear)
 
 
 def execute_actions(
@@ -2904,7 +2908,11 @@ def _execute_actions(
         shown = _put(shown, foe, merged[1], keep)
         stop = ctl["pause"] | ctl["pursue"]
         done = _move_end(
-            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted), acted, side, ran
+            tables,
+            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
+            acted,
+            side,
+            ran,
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first

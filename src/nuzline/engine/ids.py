@@ -522,6 +522,12 @@ class EffectId(IntEnum):
     # FIELD_CONDITION_TRICK_ROOM bit up it clears them, else sets FIELD_CONDITION_TRICK_ROOM_INIT
     # (``effects._trick_room``, E3-2-4); it never fails.
     TRICK_ROOM = 127
+    # Skill Swap (191, BATTLE_EFFECT_SWITCH_ABILITIES): zeros. effect_script_0191.s:5 runs
+    # subscript_exchange_abilities.s: the user's and the defender's ``BattleMon.ability`` swap and
+    # both ``truant`` become ``totalTurns & 1``, unless the move missed or the defender is
+    # semi-invulnerable, either has Wonder Guard or Multitype or holds a Griseous Orb, or both
+    # have no ability (``effects._skill_swap``, E3-2-5). No Substitute test.
+    SKILL_SWAP = 128
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

@@ -926,11 +926,19 @@ def test_transform_passes_a_substitute_and_protect_does_not_stop_it(tables, name
 def test_transform_runs_the_copied_abilitys_switch_in_checks(tables, names):
     """Intimidate copied: the foe's Attack drops right after the move; Drizzle copied: rain."""
     s = _ditto(tables, names)
-    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.INTIMIDATE))
+    # The foe's own Intimidate is part of the setup, announced at its entry (E3-2-5: the move-end
+    # switch-in pass acts for a battler whose flag is clear).
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.INTIMIDATE),
+        intimidate_announced=s.intimidate_announced.at[1].set(1),
+    )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
     assert int(out.stages[1, Stat.ATK]) == -1 and int(out.stages[0, Stat.ATK]) == 0
     s = _ditto(tables, names)
-    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.DRIZZLE))
+    s = s._replace(
+        ability=s.ability.at[1, 0].set(AbilityId.DRIZZLE),
+        weather_announced=s.weather_announced.at[1].set(1),
+    )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
     assert int(out.weather) == Weather.RAIN
 

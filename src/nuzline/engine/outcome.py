@@ -607,14 +607,15 @@ def future_thresholds(
     # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1235) ends a count of 1 before the
     # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
     # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its
-    # target's ability (subscript_give_target_insomnia.s:11). Either way the roll is kept whole,
-    # rare and sound.
+    # target's ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
+    # (subscript_exchange_abilities.s:21-24). Either way the roll is kept whole, rare and sound.
     field_change = jnp.any(
         uses
         & (
             (effect == EffectId.GRAVITY)
             | (effect == EffectId.TRANSFORM)
             | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
+            | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
         )
     ) | (state.gravity == 1)
     loose = (
@@ -775,7 +776,10 @@ def _threshold_grid(
       holds the side's ability (Sand Veil, Snow Cloak, Tangled Feet, Simple, Unaware, No Guard,
       Cloud Nine as the target, :2876-2947, bcp.c:3016-3021) and runs its switch-in checks again
       (step._use_move, the announce flags cleared :5350-5358), so a copied weather ability sets
-      its weather (``hooks.weather_ability``, battle_lib.c:3740-3790);
+      its weather (``hooks.weather_ability``, battle_lib.c:3740-3790); its Skill Swap (E3-2-5):
+      the foe holds the side's ability and the side the foe's
+      (subscript_exchange_abilities.s:21-24), and a weather ability one of them gained acts at the
+      move's end (``hooks.move_end_switch_in``);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
@@ -832,9 +836,13 @@ def _threshold_grid(
     # ``state.held_item``) is live at the check: the flags below read the raw item then
     # (subscript_give_target_insomnia.s:11; battle_lib.c:5352-5356), E3-2-2.
     mons = jnp.arange(fmt.B)
-    klutz_lost = foes(changes & (effect == EffectId.WORRY_SEED)) & (
-        state.ability[party(fmt, mons), state.active] == AbilityId.KLUTZ
-    )
+    mon_ability = state.ability[party(fmt, mons), state.active]
+    # A foe's Skill Swap does the same to a Klutz holder that does not get Klutz back
+    # (subscript_exchange_abilities.s:21-24; the foe's ability is the side's after it).
+    klutz_lost = (
+        foes(changes & (effect == EffectId.WORRY_SEED))
+        | (foes(changes & (effect == EffectId.SKILL_SWAP)) & (foes(mon_ability) != AbilityId.KLUTZ))
+    ) & (mon_ability == AbilityId.KLUTZ)
     held = jnp.where(
         klutz_lost, tables.item_effect[state.item[party(fmt, mons), state.active]], held
     )
@@ -911,10 +919,30 @@ def _threshold_grid(
         # set (hooks.weather_ability); Gravity; the side's ability on the transformed foe.
         side_ability = state.ability[party(fmt, side), state.active[side]]
         copied_weather = ability_weather(side_ability)
+        # E3-2-5: a Skill Swap gives each battler the other's ability. An entry weather ability
+        # acts at the move's end (hooks.move_end_switch_in) for the battler whose flag is clear:
+        # the foe gaining the side's, else the side gaining the foe's (the weather abilities in
+        # the swap one battler already announced do not act again).
+        swap_move = effect[foe] == EffectId.SKILL_SWAP
+        foe_ability = state.ability[party(fmt, foe), state.active[foe]]
+        foe_weather = ability_weather(foe_ability)
+        swap_weather = jnp.where(
+            (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
+            copied_weather,
+            jnp.where(
+                (foe_weather != Weather.NONE) & (state.weather_announced[side] == 0),
+                foe_weather,
+                weather0,
+            ),
+        )
         moved_weather = jnp.where(
             effect[foe] == EffectId.WEATHER,
             stat[foe],
-            jnp.where(xform & (copied_weather != Weather.NONE), copied_weather, weather0),
+            jnp.where(
+                xform & (copied_weather != Weather.NONE),
+                copied_weather,
+                jnp.where(swap_move, swap_weather, weather0),
+            ),
         )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         gravity_move = effect[foe] == EffectId.GRAVITY
@@ -922,7 +950,9 @@ def _threshold_grid(
         # (subscript_give_target_insomnia.s:11; the side loses Compoundeyes, Hustle, Simple,
         # Unaware, No Guard, ...). The foe's own accuracy check (Worry Seed's, 100) came first.
         worry_move = effect[foe] == EffectId.WORRY_SEED
-        field_move = weather_move[foe] | (changes[foe] & (gravity_move | xform | worry_move))
+        field_move = weather_move[foe] | (
+            changes[foe] & (gravity_move | xform | worry_move | swap_move)
+        )
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)
         confused0 = ~foe_fresh & (state.confusion[foe] > 0)
@@ -969,15 +999,21 @@ def _threshold_grid(
             xf=xform,
             grav=gravity_move,
             wk=worry_move,
+            sw=swap_move,
+            foe_old=foe_ability,
             copied=side_ability,
         ):
             embargo = jnp.where(hide, 5, state.embargo[side]).astype(state.embargo.dtype)
             foe_mon = state.active[foe]
-            ability = jnp.where(f & xf, copied, state.ability[party(fmt, foe), foe_mon])
+            # Transform copies the side's ability onto the foe; Skill Swap also gives the side
+            # the foe's (below).
+            ability = jnp.where(f & (xf | sw), copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
             side_mon = state.active[side]
             insomnia = jnp.where(
-                f & wk, AbilityId.INSOMNIA, state.ability[party(fmt, side), side_mon]
+                f & wk,
+                AbilityId.INSOMNIA,
+                jnp.where(f & sw, foe_old, state.ability[party(fmt, side), side_mon]),
             )
             hidden = state._replace(
                 embargo=state.embargo.at[side].set(embargo),
@@ -1105,6 +1141,20 @@ def _insomnia_all(state: BattleState) -> BattleState:
     )
 
 
+def _swap_abilities_all(state: BattleState) -> BattleState:
+    """Skill Swap's write to the crit inputs: subscript_exchange_abilities.s:21-24 swaps the user's
+    and the defender's ``BattleMon.ability``, which moves Super Luck (battle_lib.c:7126) and a
+    Klutz holder's hidden crit item (:7117), here every battler's own becoming its foe's. A Battle
+    Armor or Shell Armor target is another battler's hit, ``armored``'s (a Skill Swap user counts
+    as a Transform user there)."""
+    fmt = format_of(state)
+    battlers = jnp.arange(state.active.shape[0])
+    ability = state.ability[party(fmt, battlers), state.active]
+    return state._replace(
+        ability=state.ability.at[party(fmt, battlers), state.active].set(foes(ability))
+    )
+
+
 def _embargo_all(state: BattleState) -> BattleState:
     """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
     embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
@@ -1123,6 +1173,7 @@ CRIT_ODDS_EFFECTS = {
     EffectId.KNOCK_OFF: _remove_held_item,
     EffectId.EMBARGO: _embargo_all,
     EffectId.WORRY_SEED: _insomnia_all,
+    EffectId.SKILL_SWAP: _swap_abilities_all,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
@@ -1209,7 +1260,9 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
     if moves is None:
         moves = jnp.stack([used_move(tables, state, side, actions[side]) for side in range(fmt.B)])
     uses = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
-    xform = uses & (tables.move_effect[jnp.asarray(moves, _I32)] == EffectId.TRANSFORM)
+    # A foe's Skill Swap (E3-2-5) likewise gives the foe the side's ability.
+    foe_effect = tables.move_effect[jnp.asarray(moves, _I32)]
+    xform = uses & ((foe_effect == EffectId.TRANSFORM) | (foe_effect == EffectId.SKILL_SWAP))
     out = []
     for side in range(fmt.B):
         target, switches, target_mon = _target_mon(state, actions, side)

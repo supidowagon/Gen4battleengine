@@ -4748,6 +4748,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Twineedle", "Triple Kick", "Beat Up", "Hurricane"),
         ("Embargo", "Recycle", "Natural Gift", "Assurance"),  # B13-32
         ("Disable", "Hammer Arm", "Thief", "Mist Ball"),  # E3-1-1..E3-1-5
+        ("Skill Swap", "Worry Seed", "Accelerock", ""),  # E3-2-5
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -4951,3 +4952,68 @@ def test_trick_room_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
     assert _delta(t, low, 0x3, 0x7)[0] == 3
     alone = low._replace(hp=low.hp.at[1, 1].set(0))
     assert _delta(t, alone, 0x3, 0x7)[0] == 0
+
+
+# --- E3-2-5 Skill Swap (#191) ----------------------------------------------------------------
+
+
+def _swap_delta(t, s, guess: int = 0, jumps=()) -> list[int]:
+    """The Expert flag's score change (0x7 over 0x3) per slot, as ``_delta`` with the defender
+    ability guess ``guess`` (the species coin, trainer_ai.c:1191-1198) taken."""
+    lo, hi = layout_for(t, 0x3, s), layout_for(t, 0x7, s)
+    before = _layout_scores(t, s, _outcome(t, s, guess=guess, layout=lo), lo)
+    after = _layout_scores(t, s, _outcome(t, s, guess=guess, jumps=jumps, layout=hi), hi)
+    return [int(b) - int(a) for a, b in zip(before, after, strict=True)]
+
+
+def test_change_user_ability_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """``commands.CHANGE_USER_ABILITY_DESIRABLE`` is Expert_ChangeUserAbility_DesirableAbilities
+    (script.s:4435-4461) entry by entry, and Skill Swap is in the Encore table twice
+    (script.s:3229, :3256)."""
+    names = kaizo_names.ability_names
+    spelled = [names[i].upper().replace(" ", "_") for i in c.CHANGE_USER_ABILITY_DESIRABLE]
+    assert len(set(c.CHANGE_USER_ABILITY_DESIRABLE)) == 25
+    assert c.ENCORE_ENCOURAGED_EFFECTS.count(BattleEffect.SWITCH_ABILITIES) == 2
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    start = lines.index("Expert_ChangeUserAbility_DesirableAbilities:")
+    entries = []
+    for line in lines[start + 1 :]:
+        name = line.split()[1]
+        if name == "TABLE_END":
+            break
+        entries.append(name.removeprefix("ABILITY_"))
+    assert spelled == entries
+
+
+def test_change_user_ability_expert(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Expert_ChangeUserAbility (script.s:4415-4433): the AI's own desirable ability -1; else the
+    player's desirable one +2 unless the 50 roll (:4429) jumps; neither falls through to -1
+    (the script's comment says +0, the code does not). An unknown player ability guesses its
+    species' slot (the coin): slot 0 desirable +2, slot 1 not -1 (E3-2-5)."""
+    from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId
+
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Skill Swap", "Accelerock", "", ""))
+
+    def known(state, ability):
+        return state._replace(
+            ability=state.ability.at[0, 0].set(ability),
+            ai_ability_known=state.ai_ability_known.at[0].set(ABILITY_DECOMP_IDS[ability]),
+        )
+
+    good, plain = known(s, AbilityId.SPEED_BOOST), known(s, AbilityId.KEEN_EYE)
+    assert _delta(t, good, 0x3, 0x7)[0] == 2
+    assert _delta(t, good, 0x3, 0x7, jumps=((0, 4429),))[0] == 0
+    assert _delta(t, plain, 0x3, 0x7)[0] == -1
+    # The AI's own desirable ability decides first, whatever the player holds.
+    own = s._replace(ability=s.ability.at[1, 0].set(AbilityId.HUGE_POWER))
+    assert _delta(t, known(own, AbilityId.SPEED_BOOST), 0x3, 0x7)[0] == -1
+    assert _delta(t, known(own, AbilityId.KEEN_EYE), 0x3, 0x7)[0] == -1
+    # The coin: the player's species has Speed Boost in slot 0 and Keen Eye in slot 1.
+    t2 = _with_abilities(t, int(s.species[0, 0]), [3, 51])
+    assert _swap_delta(t2, s, guess=0)[0] == 2
+    assert _swap_delta(t2, s, guess=0, jumps=((0, 4429),))[0] == 0
+    assert _swap_delta(t2, s, guess=1)[0] == -1

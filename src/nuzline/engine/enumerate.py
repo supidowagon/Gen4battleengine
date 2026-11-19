@@ -958,6 +958,12 @@ INPUT_CLAUSE_EFFECTS = (
     # (subscript_give_target_insomnia.s:11): every ability factor of that hit, its accuracy and
     # crit odds, and a Klutz holder's item: the worry-seed clause.
     _E.WORRY_SEED,
+    # E3-2-5: Skill Swap gives the side the foe's ability and the foe the side's
+    # (subscript_exchange_abilities.s:21-24) before the side's later hit, and the entry ability
+    # one gains acts at the move's end (``hooks.move_end_switch_in``): every ability factor of
+    # that hit, its accuracy and crit odds, a Klutz holder's item, an Intimidate or Download
+    # stage change of its stats: the skill-swap clause.
+    _E.SKILL_SWAP,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1363,6 +1369,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.TORMENT,  # a status move: no damage (E3-2-1)
     _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
+    _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
 )
 
 
@@ -1510,6 +1517,8 @@ def damage_inputs_can_change(
         | (foe_effect == _E.TRANSFORM)
         # E3-2-2: the foe's Worry Seed makes the side's ability Insomnia (the worry-seed clause).
         | (foe_effect == _E.WORRY_SEED)
+        # E3-2-5: the foe's Skill Swap gives the side the foe's ability (the skill-swap clause).
+        | (foe_effect == _E.SKILL_SWAP)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -2125,7 +2134,9 @@ def outcome_laws(
     # E3-2-2: a Worry Seed takes its target's speed ability (Swift Swim, Chlorophyll, Quick Feet,
     # Unburden, ...), which the grid does not follow either: the tie is kept.
     worry_used = uses_move & (effect == _E.WORRY_SEED)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used | worry_used))
+    # E3-2-5: a Skill Swap moves a speed ability (and Shed Skin) between the battlers likewise.
+    swap_used = uses_move & (effect == _E.SKILL_SWAP)
+    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used | worry_used | swap_used))
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).
@@ -2139,7 +2150,11 @@ def outcome_laws(
     # A Transform user copies its target's Shed Skin (G-69).
     shed_holder = _holds(tables, state, actions, (AbilityId.SHED_SKIN,))
     shed_skin = live & (
-        shed_holder | (dragged & shed_party) | tracer | (xform_used & foes(shed_holder))
+        shed_holder
+        | (dragged & shed_party)
+        | tracer
+        | (xform_used & foes(shed_holder))
+        | (jnp.any(swap_used) & foes(shed_holder))  # E3-2-5: Skill Swap hands it over
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))

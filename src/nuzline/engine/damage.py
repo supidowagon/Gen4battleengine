@@ -537,8 +537,8 @@ def trace_copy(
     """``bool``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3720-3735) copies ``foe``'s
     active battler's ability to ``side``'s battler (its active one, or party ``slot`` as it
     enters): that battler has HP, holds no Griseous Orb and has Trace (``Battler_Ability``;
-    one that traced has another ability now, so ``traceAnnounced`` is never read apart from
-    that), and ``ChooseTraceTarget`` (:7750-7775) finds the foe: alive, its
+    one that traced has another ability now; ``traceAnnounced``, ``BattleState.trace_announced``,
+    gates the callers: ``hooks.switch_in_effects`` and ``move_end_switch_in``), and ``ChooseTraceTarget`` (:7750-7775) finds the foe: alive, its
     ``BattleMon.ability`` not Forecast, Trace or Multitype (decomp ids). In singles both of
     the target's slots name the one foe. ``subscript_trace.s`` then writes the foe's ability
     (``hooks.trace``). ``target``: the foe's party slot to read (default its active one; the

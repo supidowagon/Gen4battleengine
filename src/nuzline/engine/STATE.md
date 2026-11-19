@@ -167,16 +167,20 @@ three structs has a row.
   `ability`, `step._restore_ability` puts the party's back when it leaves (as
   `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
   gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
-  `traceAnnounced` and `weatherAbilityAnnounced` stay without a field: of the implemented
-  mechanics only Trace gains an ability mid-battle, a battler that traced no longer has
-  Trace (so `ability == TRACE` is the unannounced state), and `hooks.on_switch_in` runs the
-  weather ability of the newcomer and of a battler that just traced; Skill Swap and Role
-  Play, which would need the flags, are unsupported. `downloadAnnounced` (E1 Gardenia batch,
-  ruling G-21) likewise stays without a field: `hooks.download` runs for the newcomer and for
-  a battler that just traced Download, the only times the flag is clear, and the one
-  newcomer that meets no living foe (the player's at a double KO) has it fired by
-  `search.playout.replacement_pass` once the opposing newcomer is in (G-22); the row stays
-  `later (M6)` for Skill Swap and Role Play. `MoveEffectsData.truant` is
+  `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and `downloadAnnounced` are
+  the per-battler fields `trace_announced`, `weather_announced`, `intimidate_announced` and
+  `download_announced` since E3-2-5 (Skill Swap gives a battler an ability mid-battle): cleared
+  by a switch (`VOLATILE_FIELDS`, `BattleSystem_InitBattleMon`, battle_lib.c:103-106) and by
+  Transform (battle_script.c:5350-5362), set by the hook that acts on a living holder
+  (`hooks.trace`, `weather_ability`, `intimidate`, `download`), and read by
+  `hooks.move_end_switch_in`, MoveEnd's `BattleSystem_TriggerEffectOnSwitch` pass over every
+  battler (battle_controller_player.c:3973), which fires an entry ability whose flag is still
+  clear. The entry hooks (`on_switch_in`, `show_battle_mon`) keep their explicit conditions
+  (newcomer, traced battler) but read `trace_announced` for a Trace holder. The one newcomer that
+  meets no living foe (the player's at a double KO) still has Intimidate and Download fired by
+  `search.playout.replacement_pass` once the opposing newcomer is in (G-22). Anticipation,
+  Forewarn and Slow Start have no ability id in the engine (coverage refuses their holders), so
+  they get no flag, and Skill Swap cannot hand a battler Slow Start (E3-2-5). `MoveEffectsData.truant` is
   `(totalTurns + 1) & 1` at the same writes as `fakeOutTurnNumber` (battle_lib.c:2117-2119,
   :2195-2197; 0 for a lead) and `totalTurns & 1` after a Transform (battle_script.c:5359): the
   field `truant` (`order.truant_loafs`; E1 trial batch, G-69).
@@ -232,7 +236,7 @@ three structs has a row.
   `step.resolve_war` makes it; else 0.
 - **The announced flags while a list newcomer waits -> `entry_pending`** (E1 Gardenia review,
   ruling G-32): `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and
-  `downloadAnnounced` stay `later (M6)` rows (Skill Swap, Role Play), but one span needs their
+  `downloadAnnounced` are fields since E3-2-5, but one span needs their
   "all still clear" state: a newcomer a replacement's party list sent in
   (subscript_show_party_list.s:22-24) while the player's newcomer of the same list fainted on
   its hazards, so `TurnEnd` re-enters `ReplaceFainted` (battle_controller_player.c:1846-1858)
@@ -436,10 +440,10 @@ three structs has a row.
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
-| `BattleMon.weatherAbilityAnnounced` | — | later (M6) |
-| `BattleMon.intimidateAnnounced` | — | later (M6) |
-| `BattleMon.traceAnnounced` | — | later (M6) |
-| `BattleMon.downloadAnnounced` | — | later (M6) |
+| `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped (E3-2-5) |
+| `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped (E3-2-5) |
+| `BattleMon.traceAnnounced` | `trace_announced` | mapped (E3-2-5) |
+| `BattleMon.downloadAnnounced` | `download_announced` | mapped (E3-2-5) |
 | `BattleMon.anticipationAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.forewarnAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.slowStartAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
