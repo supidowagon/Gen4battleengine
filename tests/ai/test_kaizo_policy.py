@@ -300,6 +300,7 @@ def _dispatched(t, s, flag, layout) -> set[int]:
     return seen
 
 
+@pytest.mark.slow
 @pytest.mark.fullset
 def test_expert_transcribed_is_the_dispatch(
     kaizo_tables, kaizo_names, kaizo_roark_party, monkeypatch

@@ -250,6 +250,7 @@ def _crit_inputs(state, side: int) -> tuple[int, ...]:
     )
 
 
+@pytest.mark.slow
 @pytest.mark.fullset
 def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_inputs(tables, names):
     """outcome.CRIT_ODDS_EFFECTS against the engine: every move effect in the tables is played
