@@ -301,6 +301,8 @@ from nuzline.engine.outcome import (
     hit_threshold_pair,
     moved_mask,
     pivot_view,
+    pursuit_armored,
+    pursuit_chase,
     read_chance,
     roar_inputs,
     roar_levels,
@@ -2542,8 +2544,14 @@ def outcome_laws(
         crit_possible=odds_possible,
         # Lucky Chant, or the target's Battle Armor / Shell Armor (outcome.armored); not for a
         # lock aimed at its user, whose step reads both on the hit's defender (effects.crit_blocked).
-        no_crit=((state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | armored(tables, state, actions, moves))
+        no_crit=(
+            (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
+            | jnp.where(
+                pursuit_chase(tables, state, actions)[0],
+                pursuit_armored(tables, state),
+                armored(tables, state, actions, moves),
+            )
+        )
         & ~lock,
         secondary_chance=secondary_chance(tables, state, moves),
         duration_kind=kind.astype(_I32),

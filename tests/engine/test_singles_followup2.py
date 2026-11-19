@@ -492,3 +492,83 @@ def test_battle_ending_move_end_cure_reads_the_battle_ability(tables, names, cha
     assert int(out.hp[1, 0]) == 0
     assert int(out.status[0, 0]) == Status.PARALYSIS
     assert int(out.ability[0, 0]) == AbilityId.LIMBER
+
+
+# SF2 (l): a Pursuit's crit armor is judged on the outgoing switcher (battle_lib.c:7135-7136;
+# battle_script.c:6927).
+
+
+_ARMOR_SPECIES = {"Battle Armor": "Kabuto", "Shell Armor": "Omanyte", None: "Geodude"}
+
+
+def _armor_duel(tables, n, out_ability, new_ability, chaser="Houndour"):
+    """Battler 1 FIGHTs Pursuit; the player's slot 0 (``out_ability``) is switched for slot 1."""
+
+    def holder(ability):
+        return _mon(n, _ARMOR_SPECIES[ability], ["Tackle"], 40, ability=ability)
+
+    foe = [_mon(n, chaser, ["Pursuit"], 35), _bench(n)]
+    return make_state(tables, [holder(out_ability), holder(new_ability)], foe)
+
+
+def _crit_out():
+    return O._replace(crit=jnp.ones((2, MAX_HITS), jnp.int8))
+
+
+def test_pursuit_crit_armor_is_the_newcomers_no_longer(tables, names):
+    from tests.engine.test_enumerate import (
+        assert_equals_bruteforce,
+        check_frequencies,
+        children,
+        enumerate_pair,
+        laws_of,
+        sampled,
+    )
+
+    s = _armor_duel(tables, names, None, "Battle Armor")
+    acts = (SWITCH, 0)
+    laws = laws_of(tables, s, acts)
+    assert not bool(laws.no_crit[1])
+    outcomes, probs = enumerate_pair(tables, s, acts)
+    crit = np.asarray(outcomes.crit)[:, 1, 0]
+    assert set(crit.tolist()) == {0, 1}
+    assert abs(float(np.asarray(probs)[crit == 1].sum()) - 1 / 16) < 1e-9
+    ev = _events(tables, s, acts, _crit_out())
+    assert int(ev["crit"][1][0]) == 1
+    assert_matches_reference(tables, s, acts, _crit_out())
+    check_frequencies(children(tables, s, acts), sampled(tables, s, acts, 4000), 4000)
+    assert_equals_bruteforce(tables, s, acts)
+
+
+def test_pursuit_crit_is_blocked_by_the_switchers_armor(tables, names):
+    s = _armor_duel(tables, names, "Shell Armor", None)
+    acts = (SWITCH, 0)
+    from tests.engine.test_enumerate import laws_of
+
+    assert bool(laws_of(tables, s, acts).no_crit[1])
+    ev = _events(tables, s, acts, _crit_out())
+    assert int(ev["crit"][1][0]) == 0
+    assert_matches_reference(tables, s, acts, _crit_out())
+
+
+def test_mold_breaker_pursuer_ignores_the_switchers_armor(tables, names):
+    from tests.engine.helpers import as_species
+    from tests.engine.test_enumerate import laws_of
+
+    n = names
+    s = _armor_duel(tables, n, "Battle Armor", None)
+    acts = (SWITCH, 0)
+    assert bool(laws_of(tables, s, acts).no_crit[1])
+    sp = n.species("Pinsir")
+    slot = n.species_abilities(sp).index(n.ability("Mold Breaker"))
+    s = as_species(tables, s, 1, 0, sp, slot)
+    assert not bool(laws_of(tables, s, acts).no_crit[1])
+
+
+def test_paused_state_has_no_pursuit_chase(tables, names):
+    paused = _paused_u_turn(tables, names, ["Pursuit"])
+    assert int(paused.ts_pursued) == 2
+    acts = jnp.asarray([SWITCH, 0], jnp.int32)
+    assert not np.any(np.asarray(outcome_mod.pursuit_chase(tables, paused, acts)[0]))
+    view, view_acts = pivot_view(tables, paused, acts)
+    assert not np.any(np.asarray(outcome_mod.pursuit_chase(tables, view, view_acts)[0]))

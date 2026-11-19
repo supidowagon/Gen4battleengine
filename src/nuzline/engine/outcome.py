@@ -1335,7 +1335,8 @@ def self_lock(tables: Tables, state: BattleState) -> jnp.ndarray:
 def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``bool[B]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
     (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
-    it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``).
+    it switches in, which goes first. No crit then (``BattleSystem_CalcCriticalMulti``). Not for a
+    Pursuit on a switch (``pursuit_armored``).
 
     A foe that uses Transform this turn (``moves``: the move each action runs, as
     ``crit_odds``') may hold the side's own ability at the side's CalcCrit: ``BtlCmd_Transform``
@@ -1681,11 +1682,42 @@ def _per_hit(fmt, key, field_key, field: str, low, high) -> jnp.ndarray:
     return jnp.concatenate([first, sixth], axis=1)
 
 
-def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict:
+def pursuit_chase(tables: Tables, state: BattleState, actions) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(bool[B], int32[B])``: battler p's Pursuit fires on its foe's switch
+    (``step.pursuit_fires``) and the move it hits with (the selected move); never in a paused
+    state (the paused U-turn's Pursuit already ran, ``pivot_view``; a list switch-in meets none)."""
+    from nuzline.engine.step import pursuit_fires  # step imports this module
+
+    fmt = format_of(state)
+    picks = [selected_move(tables, state, s, actions[s]) for s in range(fmt.B)]
+    choices = (jnp.stack([q[0] for q in picks]), jnp.stack([q[1] for q in picks]))
+    paused = state.pivot_battler != 0
+    fires = (
+        jnp.stack([pursuit_fires(tables, state, _foe(p), actions, choices) for p in range(fmt.B)])
+        & ~paused
+    )
+    return fires, choices[0]
+
+
+def pursuit_armored(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: p's Pursuit crit meets Battle / Shell Armor on its foe's battler as it is before
+    the switch (``Battler_IgnorableAbility``, battle_lib.c:7135-7136; the defender is
+    ``switchedMon``, battle_script.c:6927, the outgoing Pokemon); Mold Breaker ignores it."""
+    fmt = format_of(state)
+    out = []
+    for p in range(fmt.B):
+        own = battler_ability(state, _foe(p))
+        armor = (own == AbilityId.SHELL_ARMOR) | (own == AbilityId.BATTLE_ARMOR)
+        out.append(armor & (battler_ability(state, p) != AbilityId.MOLD_BREAKER))
+    return jnp.stack(out)
+
+
+def _move_draws(key, tables: Tables, state: BattleState, actions, moves, chase=None) -> dict:
     """The move-dependent fields (``MOVE_FIELDS`` but ``call``) for the moves the sides run
     (``moves``, ``int32[B]``), drawn from ``key`` (``sample_outcome``'s split indices 0, 1, 2, 10,
     13 and fold_ins 16, 28, 41: Fang flinch, the Future Sight hit, the crit-class draw)."""
     fmt = format_of(state)
+    chase = jnp.zeros(fmt.B, bool) if chase is None else chase
     k = jax.random.split(key, 14)
     per_side = (fmt.B,)
 
@@ -1715,7 +1747,7 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     # (effects.crit_blocked); for every other move this cut makes that read a no-op.
     no_crit = (
         (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
-        | armored(tables, state, actions, moves)
+        | jnp.where(chase, pursuit_armored(tables, state), armored(tables, state, actions, moves))
     )[:, None] & ~lock
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
@@ -1856,7 +1888,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == _foe(side)) & fight[_foe(side)] for side in range(fmt.B)])
     moves = used_moves(tables, state, actions, call, after_foe)
-    drawn = _move_draws(key, tables, state, actions, moves)
+    fires = pursuit_chase(tables, state, actions)[0]
+    drawn = _move_draws(key, tables, state, actions, moves, chase=fires)
     # BtlCmd_SetMultiHit (battle_script.c:2645): & 3 below 2 gives 2-3, else (& 3) + 2.
     first, second = draw(3, per_side, 4), draw(4, per_side, 4)
     n_hits = jnp.where(first < 2, first + 2, second + 2)
@@ -2021,7 +2054,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
                     ),
                 )
             )
-        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves))
+        fields = _move_draws(alt_key, tables, state, actions, jnp.stack(alt_moves), chase=fires)
         fields["call"] = alt_call
         replaced = jnp.any(which, axis=0)
         for name, value in fields.items():
