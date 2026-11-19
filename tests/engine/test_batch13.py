@@ -235,7 +235,7 @@ def _hurricane(t, n, weather=Weather.NONE, theirs=("Snorlax", "Growl")):
 def _cloud_nine(t, s, side: int):
     """``s`` with ``side``'s active Pokemon on the first personal row and ability slot whose
     decomp ability is Cloud Nine or Air Lock (``damage.weather_suppressed`` reads the decomp
-    ability; Kaizo has no Cloud Nine species)."""
+    ability; Kaizo has no Cloud Nine species), its engine ability the row's."""
     from nuzline.engine.ids import WEATHER_ABILITY_IDS
 
     grid = np.asarray(t.species_abilities_decomp)
@@ -247,10 +247,15 @@ def _cloud_nine(t, s, side: int):
         for k in range(grid.shape[1])
         if grid[row, k] in (WEATHER_ABILITY_IDS["Cloud Nine"], WEATHER_ABILITY_IDS["Air Lock"])
     )
+    # The engine ability is that row's too: a different one reads as a script's write
+    # (``damage.decomp_abilities``).
+    row = int(np.asarray(t.species_form_row)[species, int(s.ability_form[side, 0])])
+    own = int(np.asarray(t.species_abilities)[row, slot])
     return s._replace(
         species=s.species.at[side, 0].set(species),
         form=s.form.at[side, 0].set(0),
         ability_slot=s.ability_slot.at[side, 0].set(slot),
+        ability=s.ability.at[side, 0].set(own),
     )
 
 
