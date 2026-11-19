@@ -50,9 +50,9 @@ deny "files.txt lines outside the format '<tests path or id> <ids per chunk> [A]
 
 COMMIT=$(git -C "$REPO" rev-parse --verify "$C^{commit}")
 DECOMP=$(git -C "$REPO/external/pokeplatinum" rev-parse HEAD)
-git -C "$REPO" archive --format=tar -o "$P/code.tar" "$COMMIT"
+git -C "$REPO" -c core.autocrlf=false archive --format=tar -o "$P/code.tar" "$COMMIT"
 cp "$TB" "$P/tables.tar.xz"
-mkdir "$P/podsrc"; git -C "$TOP" archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
+mkdir "$P/podsrc"; git -C "$TOP" -c core.autocrlf=false archive --format=tar "$OPS" tools/ops/day/pod | tar -xf - -C "$P/podsrc"
 for f in "$P"/podsrc/tools/ops/day/pod/*.sh; do tr -d '\r' < "$f" > "$P/bin/$(basename "$f")"; done
 rm -rf "$P/podsrc"
 printf 'COMMIT=%s\nDECOMP=%s\nOPS=%s\nMARK="%s"\n' "$COMMIT" "$DECOMP" "$OPS" "${MARK:-not slow}" > "$P/meta.env"
