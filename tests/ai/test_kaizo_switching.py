@@ -492,6 +492,9 @@ def test_wonder_guard_layout_matches_loose(kaizo_tables, kaizo_names, kaizo_roar
     s = _small_six_bench(t, n, kaizo_roark_party, alive)
     s = s._replace(species=s.species.at[0, 0].set(n.species("Shedinja")))
     s = s._replace(ability_slot=s.ability_slot.at[0, 0].set(0), form=s.form.at[0, 0].set(0))
+    # Shedinja's own engine ability (Wonder Guard): a different one reads as a script's write.
+    wonder_guard = int(np.asarray(t.species_abilities)[n.species("Shedinja"), 0])
+    s = s._replace(ability=s.ability.at[0, 0].set(wonder_guard))
     reads = _loose_reads(t, s)
     assert [p for p, _ in reads[: 4 * alive]] == [P_GUARD] * (4 * alive)
     sites = switch_sites(t, s, KAIZO.switch_sites).tolist()

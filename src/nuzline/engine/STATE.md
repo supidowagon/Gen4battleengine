@@ -440,10 +440,10 @@ three structs has a row.
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
 | `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
-| `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped (E3-2-5) |
-| `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped (E3-2-5) |
-| `BattleMon.traceAnnounced` | `trace_announced` | mapped (E3-2-5) |
-| `BattleMon.downloadAnnounced` | `download_announced` | mapped (E3-2-5) |
+| `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped |
+| `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped |
+| `BattleMon.traceAnnounced` | `trace_announced` | mapped |
+| `BattleMon.downloadAnnounced` | `download_announced` | mapped |
 | `BattleMon.anticipationAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.forewarnAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
 | `BattleMon.slowStartAnnounced` | — | not needed because it only stops a switch-in message repeating; switch-in hooks run once per switch-in |
@@ -506,12 +506,12 @@ three structs has a row.
 | `MoveEffectsData.micleBerry` | `micle` | mapped |
 | `MoveEffectsData.custapBerry` | — | later (M6) |
 | `MoveEffectsData.quickClaw` | `ts_claw` | mapped |
-| `MoveEffectsData.meFirst` | `me_first` | mapped (E3-2-3: per battler `[B]` int8, set by `BtlCmd_TryMeFirst`, battle_script.c:7303; zeroed with the moveEffectsData on a switch, lib.c:2096-2100; not Baton-passed) |
+| `MoveEffectsData.meFirst` | `me_first` | mapped |
 | `MoveEffectsData.padding0004_1F` | — | not needed because it is padding |
 | `MoveEffectsData.rechargeTurnNumber` | `recharge` | mapped |
 | `MoveEffectsData.fakeOutTurnNumber` | `fake_out_turn` | mapped |
 | `MoveEffectsData.slowStartTurnNumber` | — | later (M6) |
-| `MoveEffectsData.meFirstTurnNumber` | `me_first_turn` | mapped (E3-2-3: per battler `[B]` int16, the `meFirstTurnOrder` of the Me First, :7304) |
+| `MoveEffectsData.meFirstTurnNumber` | `me_first_turn` | mapped |
 | `MoveEffectsData.substituteHP` | `substitute_hp` | mapped |
 | `MoveEffectsData.transformedPID` | — | not needed because it is cosmetic (the transformed sprite and name, messages): Transform copies no personality for any battle rule |
 | `MoveEffectsData.disabledMove` | `disabled_move` | mapped |

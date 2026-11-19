@@ -315,8 +315,11 @@ def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
     own = _i32(tables.species_abilities_decomp[row, slot])
     # A script wrote the battler's ``ability`` (Trace, ``hooks.trace``; Worry Seed,
     # ``effects._worry_seed``): it differs from the personal row's, and the decomp id is the
-    # written one's (``_restore_ability`` puts the row's back when the battler leaves).
-    written = _i32(state.ability) != _i32(tables.species_abilities[row, slot])
+    # written one's (``_restore_ability`` puts the row's back when the battler leaves). An empty
+    # slot (SPECIES_NONE) has no BattleMon and nothing written: its row is read as before.
+    written = (_i32(state.species) != 0) & (
+        _i32(state.ability) != _i32(tables.species_abilities[row, slot])
+    )
     return jnp.where(written, _ABILITY_DECOMP[_i32(state.ability)], own)
 
 
