@@ -121,6 +121,7 @@ from nuzline.engine.damage import (
     on_damaging_turn,
     weather_ball_params,
 )
+from nuzline.engine.format import foe, format_of, party
 from nuzline.engine.ids import ItemId
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 
@@ -309,10 +310,11 @@ def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.n
     ``damage.weather_ball_params``). Elsewhere Weather Ball's case assigns nothing and the
     function returns its uninitialized ``type``: refused (``weather_ball_refused``), the table
     type stands in. Any other move: its table type (B13-35)."""
-    moves = state.moves[side].astype(_I32)
+    row = party(format_of(state), side)
+    moves = state.moves[row].astype(_I32)
     table = tables.move_type[moves].astype(_I32)
-    iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[side])  # [SLOTS]
-    items = state.item[side].astype(_I32)[:, None]  # the party's own items
+    iv_types = jax.vmap(lambda ivs: hidden_power(ivs)[0])(state.ivs[row])  # [SLOTS]
+    items = state.item[row].astype(_I32)[:, None]  # the party's own items
     gift = tables.item_gift_type[items].astype(_I32)
     gift = jnp.where(gift == 0, table, gift)
     gift = jnp.where((gift < 0) | (gift > _TYPE_DARK), AI_TYPELESS, gift)
@@ -355,13 +357,14 @@ def apply_type_chart(
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
     atk_side = jnp.asarray(atk_side, _I32)
-    a_types = state.types[atk_side, state.active[atk_side]].astype(_I32)
-    d_types = state.types[1 - atk_side, state.active[1 - atk_side]]
+    fmt, def_side = format_of(state), foe(atk_side)
+    a_types = state.types[party(fmt, atk_side), state.active[atk_side]].astype(_I32)
+    d_types = state.types[party(fmt, def_side), state.active[def_side]]
     if move_type is None:
         move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 1 - atk_side)
+    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, def_side)
     for mul in chart_multipliers(
         tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
     ):

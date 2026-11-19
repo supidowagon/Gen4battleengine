@@ -45,6 +45,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.format import format_of, party
 from nuzline.engine.ids import CHOICE_ITEMS, GRAVITY_MOVES, AbilityId, ItemId, Type
 from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, held_item
 
@@ -58,7 +59,8 @@ def locked_slot(state: BattleState, side) -> jnp.ndarray:
     """``int32``: the move slot of ``side``'s active Pokemon holding ``locked_move``
     (``moveLockedInto``), 0 when it is locked into a move it does not know (module docstring),
     -1 when it is not locked."""
-    moves = state.moves[side, state.active[side]]
+    fmt = format_of(state)
+    moves = state.moves[party(fmt, side), state.active[side]]
     lock = state.locked_move[side]
     held = (moves == lock) & (lock != 0)
     return jnp.where(lock == 0, -1, jnp.where(jnp.any(held), jnp.argmax(held), 0)).astype(jnp.int32)
@@ -67,21 +69,23 @@ def locked_slot(state: BattleState, side) -> jnp.ndarray:
 def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool``: ``side``'s active Pokemon holds a Choice item and its ``choice_lock`` is a
     move it knows (``CHECK_INVALID_CHOICE_ITEM``, battle_lib.c:2307-2315)."""
+    fmt = format_of(state)
     mon = state.active[side]
     lock = state.choice_lock[side]
     # Battler_HeldItemEffect (:2309: ``held_item``, B13-29).
     held = jnp.isin(tables.item_effect[held_item(state, side, mon)], jnp.asarray(CHOICE_ITEMS))
-    return held & (lock != 0) & jnp.any(state.moves[side, mon] == lock)
+    return held & (lock != 0) & jnp.any(state.moves[party(fmt, side), mon] == lock)
 
 
 def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
     """``bool`` (the shape of ``move``): ``Move_Imprisoned`` (battle_lib.c:3316-3338): a battler
     of the other side has ``MOVE_EFFECT_IMPRISON`` and knows ``move`` (the loop over battlers,
     doubles convention 4; battler b is on side b in singles)."""
+    fmt = format_of(state)
     move = jnp.asarray(move, jnp.int32)
     out = jnp.zeros(move.shape, bool)
     for battler in range(state.active.shape[0]):
-        known = state.moves[battler, state.active[battler]].astype(jnp.int32)
+        known = state.moves[party(fmt, battler), state.active[battler]].astype(jnp.int32)
         holds = jnp.any(move[..., None] == known, axis=-1)
         sealing = (jnp.asarray(side) != battler) & (state.imprison[battler] != 0)
         out = out | (sealing & holds & (move != 0))
@@ -111,9 +115,12 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     move, PP left, not the disabled move, not power 0 while taunted, the Choice-locked move
     when locked). None usable means Struggle. A locked battler's only usable slot is the
     locked one (``locked_slot``): it never Struggles, even with no PP left."""
+    fmt = format_of(state)
     mon = state.active[side]
-    moves = state.moves[side, mon]
-    usable = (moves > 0) & (state.pp[side, mon] > 0) & (moves != state.disabled_move[side])
+    moves = state.moves[party(fmt, side), mon]
+    usable = (
+        (moves > 0) & (state.pp[party(fmt, side), mon] > 0) & (moves != state.disabled_move[side])
+    )
     taunted = state.taunt[side] > 0
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
@@ -135,8 +142,13 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 def legal_replacements(state: BattleState, side) -> jnp.ndarray:
     """``bool[6]``: party slots ``side`` may send in, non-active, non-empty and not
     fainted."""
+    fmt = format_of(state)
     slots = jnp.arange(SLOTS)
-    return (slots != state.active[side]) & (state.species[side] > 0) & (state.hp[side] > 0)
+    return (
+        (slots != state.active[side])
+        & (state.species[party(fmt, side)] > 0)
+        & (state.hp[party(fmt, side)] > 0)
+    )
 
 
 def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
@@ -148,9 +160,10 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     Flying, or Iron Ball, or Gravity), all by ``Battler_Ability`` over the other side's living
     battlers (``CountAbilityTheirSide``, :5509-5512; E2 batch 9, B9-11). Shed Shell
     (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
+    fmt = format_of(state)
     mon = state.active[side]
-    own = state.ability[side, mon]
-    types = state.types[side, mon]
+    own = state.ability[party(fmt, side), mon]
+    types = state.types[party(fmt, side), mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
     iron = tables.item_effect[held_item(state, side, mon)] == ItemId.IRON_BALL
     # BattlerIsGrounded reads the turns of Magnet Rise (:5503), not the mask bit (G-66).
@@ -167,8 +180,8 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):
         other = state.active[foe]
-        theirs = state.ability[foe, other]
-        live = (jnp.asarray(side) != foe) & (state.hp[foe, other] > 0)
+        theirs = state.ability[party(fmt, foe), other]
+        live = (jnp.asarray(side) != foe) & (state.hp[party(fmt, foe), other] > 0)
         abilities = (
             ((theirs == AbilityId.SHADOW_TAG) & (own != AbilityId.SHADOW_TAG))
             | ((theirs == AbilityId.MAGNET_PULL) & steel)
@@ -196,8 +209,9 @@ def legal_actions(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool[BAG_SLOTS]``: ``side``'s bag slots holding an item, while its active Pokemon
     has HP left and is not locked into a move."""
+    fmt = format_of(state)
     held = state.trainer_items[side] != 0
-    free = (state.hp[side, state.active[side]] > 0) & (locked_slot(state, side) < 0)
+    free = (state.hp[party(fmt, side), state.active[side]] > 0) & (locked_slot(state, side) < 0)
     return held & free
 
 

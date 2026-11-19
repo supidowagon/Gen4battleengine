@@ -1,26 +1,33 @@
 # Managing-session watchdog for the Nuzline engine streams. Read-only except for
 # removing a fast-tier lock whose owning process is dead (pass -FixLock).
-param([switch]$FixLock)
+# Streams come from a JSON file (default $NUZLINE_SCRATCH\manager\streams.json; format in README.md).
+param([switch]$FixLock, [string]$Streams = '')
 
-$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
-$scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '..\_scratch' }
+$repo = if ($env:NUZLINE_REPO) { $env:NUZLINE_REPO } else { Split-Path -Parent (git -C $PSScriptRoot rev-parse --path-format=absolute --git-common-dir) }
+$scratch = if ($env:NUZLINE_SCRATCH) { $env:NUZLINE_SCRATCH } else { Join-Path $repo '_scratch' }
+if (-not $Streams) { $Streams = Join-Path $scratch 'manager\streams.json' }
 $lock = Join-Path $scratch 'fast_tier.lock'
-$streams = @(
-    @{ name = 'E1'; branch = 'claude/e1-batch-c'; wt = '..\_scratch\e1\cwt' },
-    @{ name = 'E2'; branch = 'claude/engine-e2-mechanics-e737dd'; wt = '.claude\worktrees\engine-e2-mechanics-e737dd' }
-)
 $flags = @()
 $ages = @()
 $now = Get-Date
 "== watchdog $($now.ToString('ddd MM-dd HH:mm'))"
 
+$list = @()
+if (Test-Path $Streams) {
+    $list = @(Get-Content $Streams -Raw | ConvertFrom-Json | ForEach-Object { $_ })
+} else {
+    $flags += "no stream list at $Streams"
+}
+
 # 1. Commits per stream
-foreach ($s in $streams) {
-    $ts = git -C $repo log -1 --format=%ct $s.branch
+foreach ($s in $list) {
+    $ts = git -C $repo log -1 --format=%ct $s.branch 2>$null
+    if (-not $ts) { "{0}: branch {1} not found" -f $s.name, $s.branch; $flags += "$($s.name): branch $($s.branch) not found"; $ages += [int]::MaxValue; continue }  # counts as stopped
     $subj = git -C $repo log -1 --format='%h %s' $s.branch
     $age = [int](($now.ToUniversalTime() - [DateTimeOffset]::FromUnixTimeSeconds([int64]$ts).UtcDateTime).TotalMinutes)
-    $dirty = (git -C (Join-Path $repo $s.wt) status --short | Measure-Object).Count
-    $line = "{0}: last commit {1} min ago, {2} uncommitted files | {3}" -f $s.name, $age, $dirty, $subj
+    $wt = Join-Path $repo $s.worktree
+    $dirty = if (Test-Path $wt) { "{0} uncommitted files" -f (git -C $wt status --short | Measure-Object).Count } else { "worktree $($s.worktree) missing" }
+    $line = "{0}: last commit {1} min ago, {2} | {3}" -f $s.name, $age, $dirty, $subj
     if ($line.Length -gt 150) { $line = $line.Substring(0, 150) }
     $line
     $ages += $age
@@ -42,8 +49,8 @@ foreach ($p in $procs) {
 }
 
 # 2b. Everything stopped? (usage limit or sign-in expiry stops every session at once)
-if (-not $procs -and ($ages | Where-Object { $_ -gt 40 }).Count -eq $streams.Count) {
-    $flags += "no test or tool process is running and no stream has committed for 40+ min: streams may have stopped (usage limit or sign-in); check each session's last event and send a resume message"
+if ($list.Count -and -not $procs -and @($ages | Where-Object { $_ -gt 90 }).Count -eq $list.Count) {
+    $flags += "no test or tool process is running and no stream has committed for 90+ min: streams may have stopped (usage limit or sign-in); check each session's last event and send a resume message"
 }
 
 # 3. Memory

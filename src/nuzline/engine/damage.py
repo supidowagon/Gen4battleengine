@@ -46,6 +46,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.format import foe as _foe
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     FLAIL_FALLOFF,
@@ -302,7 +304,7 @@ def decomp_ability_id(ability) -> jnp.ndarray:
 
 
 def decomp_abilities(tables: Tables, state: BattleState) -> jnp.ndarray:
-    """``int32[2, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
+    """``int32[P, SLOTS]``: every slot's decomp ability id (``Battler_Ability``), from
     ``tables.species_abilities_decomp`` at the Pokemon's ability row (``ability_form``) and
     ability slot; for
     a Trace holder whose ``ability`` is no longer Trace (it traced, ``hooks.trace``), the
@@ -321,7 +323,8 @@ def battle_stats(state: BattleState, side, slot) -> jnp.ndarray:
     is on: MOVE_EFFECT_POWER_TRICK (subscript_user_swap_atk_and_def.s:6-9; battle_lib.c:2137-2141
     for a Baton Pass newcomer) unless a level-up's reload undid it (``power_trick_desync``,
     battle_lib.c:169-174), B12-10."""
-    stats = _i32(state.stats[side, slot])
+    fmt = format_of(state)
+    stats = _i32(state.stats[party(fmt, side), slot])
     on = (state.power_trick[side] != 0) != (state.power_trick_desync[side] != 0)
     swapped = on & (state.active[side] == slot)
     trick = (
@@ -334,10 +337,11 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
     """``int32``: ``def_side``'s ability (its active battler's, or party ``slot``'s) as
     ``atk_side``'s active battler sees it: ``Battler_IgnorableAbility`` (battle_lib.c:
     3108-3121) hides it behind the attacker's Mold Breaker."""
+    fmt = format_of(state)
     active = slot is None
     slot = state.active[def_side] if slot is None else slot
-    attacker = _i32(state.ability[atk_side, state.active[atk_side]])
-    ability = _i32(state.ability[def_side, slot])
+    attacker = _i32(state.ability[party(fmt, atk_side), state.active[atk_side]])
+    ability = _i32(state.ability[party(fmt, def_side), slot])
     if active:
         # Battler_Ability (battle_lib.c:3095-3103): Levitate is ABILITY_NONE under Gravity (:3095-
         # 3098, G-67) and for an ingrained battler (:3100-3103). Only the active battler's: a
@@ -458,7 +462,8 @@ def chart_walk(tables: Tables, state: BattleState, atk_side, def_side, move_type
     chart-row order (``tables.type_chart_order``); type 2 is skipped when it equals type 1
     (:2635). The walk's flags are ``identified``'s (Foresight, the attacker's Scrappy,
     Ingrain)."""
-    d_types = _i32(state.types[def_side, state.active[def_side]])
+    fmt = format_of(state)
+    d_types = _i32(state.types[party(fmt, def_side), state.active[def_side]])
     t1, t2 = d_types[0], d_types[1]
     seen = identified(tables, state, atk_side, def_side)
     move_type = _i32(move_type)
@@ -514,7 +519,8 @@ def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.nd
     (:2534-2537) skips the rows of an immune Flying defender for an ingrained one or one holding
     an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67). Only
     ``ApplyTypeChart`` walks the chart this way (:2626, :2636)."""
-    scrappy = state.ability[atk_side, state.active[atk_side]] == AbilityId.SCRAPPY
+    fmt = format_of(state)
+    scrappy = state.ability[party(fmt, atk_side), state.active[atk_side]] == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
     rooted = (
         (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | (state.gravity != 0)
@@ -534,15 +540,16 @@ def trace_copy(
     the target's slots name the one foe. ``subscript_trace.s`` then writes the foe's ability
     (``hooks.trace``). ``target``: the foe's party slot to read (default its active one; the
     one it switches in this turn, ``outcome.pivot_view``)."""
+    fmt = format_of(state)
     slot = state.active[side] if slot is None else slot
     target = state.active[foe] if target is None else target
-    foe_decomp = decomp_abilities(tables, state)[foe, target]
+    foe_decomp = decomp_abilities(tables, state)[party(fmt, foe), target]
     traceable = ~jnp.isin(foe_decomp, jnp.asarray(UNTRACEABLE_ABILITIES, foe_decomp.dtype))
     return (
-        (state.ability[side, slot] == AbilityId.TRACE)
-        & (state.hp[side, slot] > 0)
-        & (state.item[side, slot] != ITEM_GRISEOUS_ORB)
-        & (state.hp[foe, target] > 0)
+        (state.ability[party(fmt, side), slot] == AbilityId.TRACE)
+        & (state.hp[party(fmt, side), slot] > 0)
+        & (state.item[party(fmt, side), slot] != ITEM_GRISEOUS_ORB)
+        & (state.hp[party(fmt, foe), target] > 0)
         & traceable
     )
 
@@ -563,9 +570,12 @@ def stealth_rock_loss(tables: Tables, state: BattleState, side, slot) -> jnp.nda
     (``BattleSystem_TypeMatchupMultiplier``), i.e. ``maxHP * eff // 800`` in ``effectiveness``'s
     x100 encoding, at least 1; 0 when immune or without rocks. Not capped at the HP
     (``effects.stealth_rock_damage`` caps it)."""
-    eff = effectiveness(tables, Type.ROCK, state.types[side, slot])
-    rock = jnp.where(eff > 0, jnp.maximum(_i32(state.max_hp[side, slot]) * eff // 800, 1), 0)
-    return jnp.where(state.stealth_rock[side] != 0, rock, 0)
+    fmt = format_of(state)
+    eff = effectiveness(tables, Type.ROCK, state.types[party(fmt, side), slot])
+    rock = jnp.where(
+        eff > 0, jnp.maximum(_i32(state.max_hp[party(fmt, side), slot]) * eff // 800, 1), 0
+    )
+    return jnp.where(state.stealth_rock[side_of(side)] != 0, rock, 0)
 
 
 def grounded(
@@ -581,10 +591,11 @@ def grounded(
     ``ingrained``: the newcomer's ``MOVE_EFFECT_INGRAIN`` at the check, by default the side's
     battler's (``ingrain``: after the switch, where only a Baton Pass keeps it, battle_lib.c:2079;
     ruling B7-14); a switch action's newcomer, read before it switches, has none."""
+    fmt = format_of(state)
     ingrained = state.ingrain[side] != 0 if ingrained is None else jnp.asarray(ingrained)
     magnet = state.magnet_rise[side] != 0 if magnet is None else jnp.asarray(magnet)
-    levitate = (state.ability[side, slot] == AbilityId.LEVITATE) & ~ingrained
-    airborne = levitate | jnp.any(state.types[side, slot] == Type.FLYING) | magnet
+    levitate = (state.ability[party(fmt, side), slot] == AbilityId.LEVITATE) & ~ingrained
+    airborne = levitate | jnp.any(state.types[party(fmt, side), slot] == Type.FLYING) | magnet
     return (state.gravity != 0) | iron_ball(tables, state, side, slot) | ~airborne
 
 
@@ -594,9 +605,10 @@ def spikes_loss(
     """``int32``: what Spikes takes from ``side``'s party ``slot`` as it switches in
     (``BtlCmd_CheckSpikes``, battle_script.c:5434-5436): ``Divide(maxHP, (5 - layers) * 2)``, 1/8,
     1/6, 1/4, for a grounded newcomer (``grounded``); 0 without layers. Not capped."""
-    layers = _i32(state.spikes[side])
+    fmt = format_of(state)
+    layers = _i32(state.spikes[side_of(side)])
     divisor = jnp.maximum((5 - layers) * 2, 1)
-    loss = jnp.maximum(_i32(state.max_hp[side, slot]) // divisor, 1)
+    loss = jnp.maximum(_i32(state.max_hp[party(fmt, side), slot]) // divisor, 1)
     return jnp.where((layers > 0) & grounded(tables, state, side, slot, ingrained, magnet), loss, 0)
 
 
@@ -606,9 +618,10 @@ def hazards_loss(
     """``int32``: Spikes and Stealth Rock together on ``side``'s newcomer ``slot``
     (subscript_hazards_check.s:31, :41), 0 for a Magic Guard holder (:5); not capped (the
     newcomer survives when this is below its HP: Stealth Rock needs HP left, :41)."""
+    fmt = format_of(state)
     loss = spikes_loss(tables, state, side, slot, ingrained, magnet)
     loss = loss + stealth_rock_loss(tables, state, side, slot)
-    return jnp.where(state.ability[side, slot] == AbilityId.MAGIC_GUARD, 0, loss)
+    return jnp.where(state.ability[party(fmt, side), slot] == AbilityId.MAGIC_GUARD, 0, loss)
 
 
 def chart_types(state: BattleState, side, slot, roosting) -> jnp.ndarray:
@@ -617,7 +630,8 @@ def chart_types(state: BattleState, side, slot, roosting) -> jnp.ndarray:
     skips every chart row whose defending type is Flying (battle_lib.c:2540-2543), which is the
     chart of ``Type.MYSTERY`` (no row names it): Flying reads as Mystery. Only the chart reads
     this; STAB, grounding and the hazards see Flying (``Battler_MonType``, :367-369, :7618)."""
-    types = _i32(state.types[side, slot])
+    fmt = format_of(state)
+    types = _i32(state.types[party(fmt, side), slot])
     return jnp.where(jnp.asarray(roosting, bool) & (types == Type.FLYING), Type.MYSTERY, types)
 
 
@@ -627,8 +641,13 @@ def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
     side), else its own. For the turn-start laws of the foe's move (``outcome``,
     ``enumerate``): a switch goes first, and ``SWITCH_IN_CHECK_STATE_TRACE`` runs before the
     foe moves (ruling B3-19)."""
+    fmt = format_of(state)
     traced = trace_copy(tables, state, side, foe, slot)
-    return jnp.where(traced, state.ability[foe, state.active[foe]], state.ability[side, slot])
+    return jnp.where(
+        traced,
+        state.ability[party(fmt, foe), state.active[foe]],
+        state.ability[party(fmt, side), slot],
+    )
 
 
 def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
@@ -638,8 +657,13 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
     battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
     ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
     first."""
+    fmt = format_of(state)
     # A switch action's newcomer: no Ingrain, no Magnet Rise (only Baton Pass keeps them).
-    alive = _i32(state.hp[side, slot]) - hazards_loss(tables, state, side, slot, False, False) > 0
+    alive = (
+        _i32(state.hp[party(fmt, side), slot])
+        - hazards_loss(tables, state, side, slot, False, False)
+        > 0
+    )
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
     return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
 
@@ -663,17 +687,25 @@ def double_power(tables: Tables, state: BattleState, atk_side, def_side, move) -
     battle_script.c:2711-2712), Wake-Up Slap against a sleeping one (effect_script_0217.s:6).
     SmellingSalt's and Wake-Up Slap's ``CheckSubstitute`` (effect_script_0171.s:5) jumps
     past the x2 for a defender behind a substitute (its bit: no hit of the action came first)."""
+    fmt = format_of(state)
     move = _i32(move)
     cond = _i32(tables.move_param[move, 0])
     user, target = state.active[atk_side], state.active[def_side]
-    paralyzed = (state.status[def_side, target] == Status.PARALYSIS) & (
+    paralyzed = (state.status[party(fmt, def_side), target] == Status.PARALYSIS) & (
         state.substitute_hp[def_side] == 0
     )
-    statused = jnp.isin(state.status[atk_side, user], jnp.asarray(FACADE_STATUSES, jnp.int8))
-    half = _i32(state.hp[def_side, target]) <= _i32(state.max_hp[def_side, target]) // 2
+    statused = jnp.isin(
+        state.status[party(fmt, atk_side), user], jnp.asarray(FACADE_STATUSES, jnp.int8)
+    )
+    half = (
+        _i32(state.hp[party(fmt, def_side), target])
+        <= _i32(state.max_hp[party(fmt, def_side), target]) // 2
+    )
     # Wake-Up Slap (effect_script_0217.s:5-8): SmellingSalt's CheckSubstitute, then
     # MON_CONDITION_SLEEP (any sleep count), B13-16.
-    asleep = (state.status[def_side, target] == Status.SLEEP) & (state.substitute_hp[def_side] == 0)
+    asleep = (state.status[party(fmt, def_side), target] == Status.SLEEP) & (
+        state.substitute_hp[def_side] == 0
+    )
     holds = jnp.where(
         cond == POWER_IF_TARGET_PARALYZED,
         paralyzed,
@@ -708,8 +740,9 @@ def script_power_mul(
     ``DOUBLE_POWER`` move whose condition holds (``double_power``; those scripts set 10
     otherwise), else ``power_mul``. The trainer AI's estimate and the confusion self-hit run no
     move script."""
+    fmt = format_of(state)
     atk_side = _i32(atk_side)
-    reckless = state.ability[atk_side, state.active[atk_side]] == AbilityId.RECKLESS
+    reckless = state.ability[party(fmt, atk_side), state.active[atk_side]] == AbilityId.RECKLESS
     # effect_script_0045.s, _0253.s, _0262.s set it too (E2 batch 10, B10-1, B10-2).
     recoil = jnp.isin(tables.move_effect[_i32(move)], jnp.asarray(RECKLESS_EFFECTS, jnp.int32))
     doubled = double_power(tables, state, atk_side, def_side, move)
@@ -731,7 +764,10 @@ def weight_power(tables: Tables, state: BattleState, def_side) -> jnp.ndarray:
     """``int32``: Grass Knot's / Low Kick's power against ``def_side``'s active battler
     (``WEIGHT_BOUNDS``): ``BattleMon.weight`` is the species' Pokedex weight
     (``Pokedex_HeightWeightData_Weight``, battle_lib.c:150), ``tables.species_weight``."""
-    weight = _i32(tables.species_weight[state.species[def_side, state.active[def_side]]])
+    fmt = format_of(state)
+    weight = _i32(
+        tables.species_weight[state.species[party(fmt, def_side), state.active[def_side]]]
+    )
     index = jnp.sum(weight > jnp.asarray(WEIGHT_BOUNDS, _I32))
     return jnp.asarray(WEIGHT_POWER, _I32)[index]
 
@@ -739,9 +775,10 @@ def weight_power(tables: Tables, state: BattleState, def_side) -> jnp.ndarray:
 def hp_power(state: BattleState, def_side) -> jnp.ndarray:
     """``int32``: Wring Out's / Crush Grip's power, ``1 + 120 * curHP / maxHP`` of
     ``def_side``'s active battler (``BtlCmd_CalcWringOutPower``, battle_script.c:7265)."""
+    fmt = format_of(state)
     mon = state.active[def_side]
-    max_hp = jnp.maximum(_i32(state.max_hp[def_side, mon]), 1)
-    return 1 + 120 * _i32(state.hp[def_side, mon]) // max_hp
+    max_hp = jnp.maximum(_i32(state.max_hp[party(fmt, def_side), mon]), 1)
+    return 1 + 120 * _i32(state.hp[party(fmt, def_side), mon]) // max_hp
 
 
 def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.ndarray:
@@ -751,13 +788,14 @@ def weather_suppressed(tables: Tables, state: BattleState, active=None) -> jnp.n
     (``int[2]`` party slots, default ``state.active``) names the battlers on the field
     when that differs from the state's, as for a move that meets a Pokemon switched in
     this turn (``outcome.hit_threshold``)."""
-    sides = jnp.arange(2)
+    fmt = format_of(state)
+    sides = jnp.arange(fmt.B)
     active = state.active if active is None else active
-    ability = decomp_abilities(tables, state)[sides, active]
+    ability = decomp_abilities(tables, state)[party(fmt, sides), active]
     lock = (ability == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
         ability == WEATHER_ABILITY_IDS["Air Lock"]
     )
-    return jnp.any(lock & (state.hp[sides, active] > 0))
+    return jnp.any(lock & (state.hp[party(fmt, sides), active] > 0))
 
 
 def hidden_power(ivs) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -786,11 +824,12 @@ def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.
     accuracy check, the type chart and the absorbing abilities (bcp.c:3212-3216, the TryMove
     states), which all read it, and nothing in the action changes its inputs in between
     (B13-12)."""
+    fmt = format_of(state)
     move = _i32(move)
     side = _i32(side)
     base = _i32(tables.move_type[move])
     mon = state.active[side]
-    iv_type = hidden_power(state.ivs[side, mon])[0]
+    iv_type = hidden_power(state.ivs[party(fmt, side), mon])[0]
     effect = tables.move_effect[move]
     out = jnp.where(effect == EffectId.HIDDEN_POWER, iv_type, base)
     ball = weather_ball_params(tables, state, move)[2]
@@ -824,14 +863,15 @@ def fixed_damage(
     Wonder Guard (``wonder_guarded``, where ``wonder_guard``) stops them like an immunity: they
     have table power 1, so ``ApplyTypeChart`` flags any that is not super effective (ruling
     G-18)."""
+    fmt = format_of(state)
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side
+    def_side = _foe(atk_side)
     effect = tables.move_effect[_i32(move)]
     is_level = effect == EffectId.LEVEL_DAMAGE
     is_bide = effect == EffectId.BIDE
-    level = _i32(state.level[atk_side, state.active[atk_side]])
+    level = _i32(state.level[party(fmt, atk_side), state.active[atk_side]])
     kind = move_type_of(tables, state, atk_side, move)
-    d_types = state.types[def_side, state.active[def_side]]
+    d_types = state.types[party(fmt, def_side), state.active[def_side]]
     seen = identified(tables, state, atk_side, def_side)
     immune = effectiveness(tables, kind, d_types, seen) == 0
     immune = immune | ground_immune(tables, state, atk_side, def_side, kind)
@@ -845,14 +885,14 @@ def fixed_damage(
     # 7544-7552), so a Ghost takes 0.
     target = state.active[def_side]
     is_halve = effect == EffectId.HALVE_HP
-    halved = divide(_i32(state.hp[def_side, target]), 2)
+    halved = divide(_i32(state.hp[party(fmt, def_side), target]), 2)
     # Fissure / Guillotine / Horn Drill: BtlCmd_TryOHKOMove (battle_script.c:4334-4386) sets
     # MOVE_STATUS_ONE_HIT_KO and UpdateHP deals the defender's maxHP (bcp.c:3343-3345); the
     # chart (power 1, bcp.c:2352-2367: Ghost, Flying, Levitate) and an ignorable Sturdy
     # (MOVE_STATUS_STURDY, :4340-4341) stop it. Its hit test is outcome._rate's.
     is_ohko = effect == EffectId.OHKO
     sturdy = ignorable(state, atk_side, def_side) == AbilityId.STURDY
-    ohko = jnp.where(sturdy, 0, _i32(state.max_hp[def_side, target]))
+    ohko = jnp.where(sturdy, 0, _i32(state.max_hp[party(fmt, def_side), target]))
     # Dragon Rage / SonicBoom (effect_script_0041.s, _0130.s): the amount in param 0 (B9-9).
     flat = _i32(tables.move_param[_i32(move), 0])
     level = jnp.where(is_level & (flat > 0), flat, level)
@@ -860,7 +900,9 @@ def fixed_damage(
     # Endeavor (effect_script_0189.s:5-9): the defender's curHP minus the attacker's under
     # SYSCTL_IGNORE_TYPE_CHECKS; a difference <= 0 fails the move (step._use_move), B10-5.
     is_endeavor = effect == EffectId.ENDEAVOR
-    gap = _i32(state.hp[def_side, target]) - _i32(state.hp[atk_side, state.active[atk_side]])
+    gap = _i32(state.hp[party(fmt, def_side), target]) - _i32(
+        state.hp[party(fmt, atk_side), state.active[atk_side]]
+    )
     amount = jnp.where(is_endeavor, jnp.maximum(gap, 0), amount)
     # Future Sight / Doom Desire (effect_script_0148.s): no CalcDamage at the use, so no damage;
     # the stored hit is step._future_sight's.
@@ -935,15 +977,16 @@ def ai_case_power(
     ``state.held_item`` (none under either, which reads as the cases' power 0 and
     TYPE_NORMAL), and a caller passing another item (a party member's) passes 0 for a Klutz
     member (its ``embargoTurns`` argument is FALSE, :2163), B13-29."""
+    fmt = format_of(s)
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side if def_side is None else _i32(def_side)
+    def_side = _foe(atk_side) if def_side is None else _i32(def_side)
     move = _i32(move)
     item = held_item(s, atk_side) if item is None else item
     gift = natural_gift_params(tables, item)[0]
-    friendship = _i32(s.friendship[atk_side, s.active[atk_side]])
-    weight = _i32(tables.species_weight[s.species[def_side, s.active[def_side]]])
+    friendship = _i32(s.friendship[party(fmt, atk_side), s.active[atk_side]])
+    weight = _i32(tables.species_weight[s.species[party(fmt, def_side), s.active[def_side]]])
     by_weight = _WEIGHT_POWERS[jnp.sum(_WEIGHT_LIMITS < weight)]
-    ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
+    ivs = s.ivs[party(fmt, atk_side), s.active[atk_side]] if ivs is None else ivs
     hidden = hidden_power(ivs)[1]
     magnitude = AI_MAGNITUDE_POWER[jnp.clip(_i32(draw), 0, 6)]
     return jnp.select(
@@ -969,9 +1012,10 @@ def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, it
     type of ``item``'s ``HOLD_EFFECT_ARCEUS_*``, else ``TYPE_NORMAL`` (:2897-2971,
     ``judgment_type``); every other move ``TYPE_NORMAL``. ``item`` as ``ai_case_power``'s.
     Weather Ball takes the default case: its table power and type, whatever the weather."""
+    fmt = format_of(s)
     atk_side = _i32(atk_side)
     move = _i32(move)
-    ivs = s.ivs[atk_side, s.active[atk_side]] if ivs is None else ivs
+    ivs = s.ivs[party(fmt, atk_side), s.active[atk_side]] if ivs is None else ivs
     item = held_item(s, atk_side) if item is None else item
     table_type = _i32(tables.move_type[move])
     gift_power, gift_type = natural_gift_params(tables, item)
@@ -1007,9 +1051,10 @@ def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp
     Weather Ball's unassigned result is refused, ``ai_weather_ball_typed``). It reads ``ivs``, by default ``side``'s own;
     ``IfBattlerDealsMoreDamage`` (trainer_ai.c:2206-2237) types the player's move with the AI
     attacker's IVs (``TrainerAI_CalcDamage``'s Hidden Power case, :2973-2993)."""
+    fmt = format_of(s)
     side = _i32(side)
     move = _i32(move)
-    ivs = s.ivs[side, s.active[side]] if ivs is None else ivs
+    ivs = s.ivs[party(fmt, side), s.active[side]] if ivs is None else ivs
     iv_type = hidden_power(ivs)[0]
     table_type = _i32(tables.move_type[move])
     # E2 batch 13 (B13-26). Natural Gift: Battler_NaturalGiftType (battle_lib.c:5477-5481) of
@@ -1040,9 +1085,10 @@ def ai_case_fixed(s: BattleState, atk_side, move, draw=0) -> tuple[jnp.ndarray, 
     through the type chart with ``SYSCTL_IGNORE_TYPE_CHECKS`` (:3081-3104): no STAB or
     multiplier, an immunity still 0. A 0 (Psywave at level 1 with a draw below 5) is not
     fixed: ``damage == 0`` sends it to ``CalcMoveDamage`` with power 0, the table's (:3073)."""
+    fmt = format_of(s)
     atk_side = _i32(atk_side)
     move = _i32(move)
-    level = _i32(s.level[atk_side, s.active[atk_side]])
+    level = _i32(s.level[party(fmt, atk_side), s.active[atk_side]])
     psywave = level * (jnp.clip(_i32(draw), 0, AI_DRAW_CLASSES - 1) + 5) // 10
     damage = jnp.select(
         [
@@ -1108,12 +1154,16 @@ def _item_modifiers(
     engine reaches comes near 65536, so the stores never truncate. Soul Dew's Battle Frontier
     test (:6731, :6736) never holds for a trainer battle; the Griseous Orb's Transform test
     (:6770) never holds while Transform is an unsupported move."""
+    fmt = format_of(s)
     attack, sp_attack, defense, sp_defense = stats
     a_slot, d_slot = s.active[atk_side], s.active[def_side]
     a_item, d_item = held_item(s, atk_side), held_item(s, def_side)
     a_effect, d_effect = _i32(tables.item_effect[a_item]), _i32(tables.item_effect[d_item])
     a_param = _i32(tables.item_param[a_item, 0])  # attackerParams.heldItemPower (:6664)
-    a_species, d_species = _i32(s.species[atk_side, a_slot]), _i32(s.species[def_side, d_slot])
+    a_species, d_species = (
+        _i32(s.species[party(fmt, atk_side), a_slot]),
+        _i32(s.species[party(fmt, def_side), d_slot]),
+    )
 
     def boost(x):  # movePower * (100 + heldItemPower) / 100
         return x * (100 + a_param) // 100
@@ -1211,22 +1261,17 @@ def pinch_ability(move_type, ability) -> jnp.ndarray:
     )
 
 
-def side_active_slots(s: BattleState, side) -> tuple:
-    """The party slots of ``side``'s battlers on the field (the decomp's battleMons of the
-    side; the bench never counts). The state layout holds one active battler per side
-    (``active[side]``), so a doubles layout extends only this function."""
-    return (_i32(s.active[side]),)
-
-
 def side_ability_count(s: BattleState, side, ability) -> jnp.ndarray:
-    """``COUNT_ALIVE_BATTLERS_OUR_SIDE`` (battle_lib.c:2886-2893): the number of battlers of
-    ``side`` on the field, the asking battler included, with ``curHP != 0`` and
-    ``Battler_Ability == ability`` (``state.ability`` is the effective ability)."""
+    """``COUNT_ALIVE_BATTLERS_OUR_SIDE`` (battle_lib.c:2886-2893): the number of battlers on the
+    field of battler ``side``'s side, the asking battler included, with ``curHP != 0`` and
+    ``Battler_Ability == ability`` (``state.ability`` is the effective ability). Every battler is
+    read and the other side's masked out (ruling D1-4)."""
+    fmt = format_of(s)
     count = jnp.int32(0)
-    for slot in side_active_slots(s, side):
-        count += ((_i32(s.ability[side, slot]) == ability) & (_i32(s.hp[side, slot]) > 0)).astype(
-            _I32
-        )
+    for b in range(fmt.B):
+        slot = _i32(s.active[b])
+        hit = (side_of(b) == side_of(side)) & (_i32(s.ability[party(fmt, b), slot]) == ability)
+        count += (hit & (_i32(s.hp[party(fmt, b), slot]) > 0)).astype(_I32)
     return count
 
 
@@ -1251,10 +1296,13 @@ def beat_up_slots(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
     its HP or status, or one with HP, a species, no egg and ``MON_CONDITION_NONE``. Nothing
     changes a benched Pokemon's HP or status during the move, so the list at the move's start
     holds for every hit (B13-9). Slots past the count are ineligible ones."""
+    fmt = format_of(state)
     side = _i32(side)
     slots = jnp.arange(state.hp.shape[1], dtype=jnp.int32)
     eligible = (slots == _i32(state.active[side])) | (
-        (state.hp[side] > 0) & (state.species[side] != 0) & (state.status[side] == Status.NONE)
+        (state.hp[party(fmt, side)] > 0)
+        & (state.species[party(fmt, side)] != 0)
+        & (state.status[party(fmt, side)] == Status.NONE)
     )
     order = jnp.argsort(jnp.where(eligible, slots, slots + state.hp.shape[1]))
     return order.astype(jnp.int32), jnp.sum(eligible.astype(jnp.int32))
@@ -1274,20 +1322,25 @@ def beat_up_damage(
     flag. No CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
     SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
     or effectiveness (B13-10)."""
+    fmt = format_of(state)
     atk_side = _i32(atk_side)
     def_side = _i32(def_side)
     order, _ = beat_up_slots(state, atk_side)
     slot = order[jnp.clip(_i32(hit), 0, order.shape[0] - 1)]
     # SpeciesData_GetFormValue(species, form, ...): the personal row of the species and form.
-    row = tables.species_form_row[state.species[atk_side, slot], state.form[atk_side, slot]]
+    row = tables.species_form_row[
+        state.species[party(fmt, atk_side), slot], state.form[party(fmt, atk_side), slot]
+    ]
     base_atk = _i32(tables.species_base_stats[row, Stat.ATK])
-    level = _i32(state.level[atk_side, slot])
+    level = _i32(state.level[party(fmt, atk_side), slot])
     d_slot = state.active[def_side]
-    d_row = tables.species_form_row[state.species[def_side, d_slot], state.form[def_side, d_slot]]
+    d_row = tables.species_form_row[
+        state.species[party(fmt, def_side), d_slot], state.form[party(fmt, def_side), d_slot]
+    ]
     base_def = jnp.maximum(_i32(tables.species_base_stats[d_row, Stat.DEF]), 1)
     damage = base_atk * _i32(tables.move_power[_i32(move)]) * (level * 2 // 5 + 2)
     damage = damage // base_def // 50 + 2
-    user_ability = _i32(state.ability[atk_side, state.active[atk_side]])
+    user_ability = _i32(state.ability[party(fmt, atk_side), state.active[atk_side]])
     crit_mul = jnp.where(user_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
     damage = jnp.where(jnp.asarray(crit, jnp.bool_), damage * crit_mul, damage)
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
@@ -1305,7 +1358,7 @@ def _pre_random(
     magnitude=MAGNITUDE_MIN,
     present=PRESENT_TABLE,
     ai: bool = False,
-    def_side=None,
+    def_side,
     ai_ivs=None,
     ai_draw=0,
     ai_item=None,
@@ -1322,24 +1375,27 @@ def _pre_random(
     Magnitude's level (``Outcome.magnitude``); ``present`` is Present's draw
     (``Outcome.present``: 0-2 is the power 40/80/120, any other value keeps the table
     power). ``ai`` is ``TrainerAI_CalcDamage`` (trainer_ai.c:2868-3109), which has no Flail,
-    Rollout or Present case: they keep the move's table power. ``def_side`` (``ai`` only)
-    is ``AI_CONTEXT.defender``'s side, default the other side, and ``ai_ivs`` the IVs it
-    passes, default the attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
-    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and ``ai_draw`` the class of
+    Rollout or Present case: they keep the move's table power. ``def_side`` (required) is the
+    defender's battler: the engine's callers pass ``foe(atk_side)``, ``ai`` callers
+    ``AI_CONTEXT.defender`` (``ai_case_power``'s ``def_side``, default ``foe(atk_side)``); a
+    ``self_hit`` ignores it (the attacker). ``ai_ivs`` is the IVs the AI passes, default the
+    attacker's own (``ai_case_power``), ``ai_item`` the ``heldItem`` it
+    passes (Natural Gift's and Judgment's cases, ``ai_case_power`` / ``ai_case_type``), and
+    ``ai_draw`` the class of
     its ``RandNext`` draw (Magnitude's case). ``hit`` (0-based) is the hit of the move: a
     ``TRIPLE_KICK`` hit ``k`` has power ``(k + 1) x step`` (``triple_kick_power``).
     ``in_power`` (> 0) is the power a move script set from state this function does not see at
     the hit (CalcMoveDamage's ``inPower``, battle_lib.c:6673-6677): Gyro Ball's speeds at the
     action start, Trump Card's PP of the action's move slot (``step._use_move``); 0 computes
-    them from ``s`` (the turn-start tables). ``gift`` (> 0): the berry Natural Gift's script
+    them from ``s``. That fallback feeds the heuristics' damage tables only: every engine hit
+    passes ``in_power``, the trainer AI takes ``ai_case_power``, and the replacement AI skips
+    both moves (table power 1, battle_lib.c:8053). ``gift`` (> 0): the berry Natural Gift's script
     removed this action (``gift_item``, B13-37)."""
+    fmt = format_of(s)
     atk_side = _i32(atk_side)
     if self_hit:
         def_side = atk_side
-    elif def_side is None:
-        def_side = 1 - atk_side
     else:
-        assert ai, "a defender side is the AI damage's (IfBattlerDealsMoreDamage)"
         def_side = _i32(def_side)
     move = _i32(move)
     crit = jnp.asarray(crit, jnp.bool_)
@@ -1356,13 +1412,15 @@ def _pre_random(
     # Power's by id); it has none for Magnitude's effect, Rollout or Flail.
     variable = jnp.where(
         effect == EffectId.HIDDEN_POWER,
-        hidden_power(s.ivs[atk_side, a_slot])[1],
+        hidden_power(s.ivs[party(fmt, atk_side), a_slot])[1],
         jnp.where(
             effect == EffectId.ROLLOUT,
             base_power * rollout_mul,
             jnp.where(
                 effect == EffectId.FLAIL,
-                flail_power(s.hp[atk_side, a_slot], s.max_hp[atk_side, a_slot]),
+                flail_power(
+                    s.hp[party(fmt, atk_side), a_slot], s.max_hp[party(fmt, atk_side), a_slot]
+                ),
                 MAGNITUDE_POWER[jnp.clip(_i32(magnitude) - MAGNITUDE_MIN, 0, 6)],
             ),
         ),
@@ -1392,7 +1450,7 @@ def _pre_random(
         power = jnp.where(kick, triple_kick_power(tables, move, hit), power)
         # E2 batch 13. CalcHPFalloffPower (battle_script.c:6645-6657): FLAIL kind FLAIL_FALLOFF.
         falloff = (effect == EffectId.FLAIL) & (_i32(tables.move_param[move, 0]) == FLAIL_FALLOFF)
-        a_cur, a_max = s.hp[atk_side, a_slot], s.max_hp[atk_side, a_slot]
+        a_cur, a_max = s.hp[party(fmt, atk_side), a_slot], s.max_hp[party(fmt, atk_side), a_slot]
         power = jnp.where(falloff, falloff_power(base_power, a_cur, a_max), power)
         # CalcWeatherBallParams (:6843-6872).
         ball = weather_ball_params(tables, s, move)[1]
@@ -1409,9 +1467,9 @@ def _pre_random(
         # speeds now and the first slot holding the move after one PP.
         gyro = gyro_ball_speeds_power(tables, s, atk_side, def_side)
         power = jnp.where(effect == EffectId.GYRO_BALL, gyro, power)
-        holding = s.moves[atk_side, a_slot] == move
+        holding = s.moves[party(fmt, atk_side), a_slot] == move
         first = jnp.argmax(holding)
-        pp_left = jnp.maximum(_i32(s.pp[atk_side, a_slot, first]) - 1, 0)
+        pp_left = jnp.maximum(_i32(s.pp[party(fmt, atk_side), a_slot, first]) - 1, 0)
         power = jnp.where(effect == EffectId.TRUMP_CARD, trump_card_power(pp_left), power)
         # BtlCmd_CalcNaturalGiftParams (:8088-8102): the item's naturalGiftPower (B13-20).
         gift_power = natural_gift_params(tables, gift_item(s, atk_side, gift))[0]
@@ -1425,7 +1483,9 @@ def _pre_random(
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
     # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul (Charge
     # and Helping Hand, between them, are unsupported), never Struggle (the self-hit's move).
-    technician = (_i32(s.ability[atk_side, a_slot]) == AbilityId.TECHNICIAN) & (power <= 60)
+    technician = (_i32(s.ability[party(fmt, atk_side), a_slot]) == AbilityId.TECHNICIAN) & (
+        power <= 60
+    )
     technician = technician & (move != MOVE_STRUGGLE)
     power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
@@ -1437,15 +1497,21 @@ def _pre_random(
         else move_type_of(tables, s, atk_side, move, gift)
     )
     category = _i32(tables.move_category[move])  # :6704 moveClass
-    level = _i32(s.level[atk_side, a_slot])
-    a_ability = _i32(s.ability[atk_side, a_slot])
-    d_ability = _i32(s.ability[def_side, d_slot])
+    level = _i32(s.level[party(fmt, atk_side), a_slot])
+    a_ability = _i32(s.ability[party(fmt, atk_side), a_slot])
+    d_ability = _i32(s.ability[party(fmt, def_side), d_slot])
     # Battler_IgnorableAbility (:3108): Mold Breaker ignores the defender's ability.
     d_ability_eff = jnp.where(a_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, d_ability)
-    a_status = _i32(s.status[atk_side, a_slot])
-    a_hp, a_max_hp = _i32(s.hp[atk_side, a_slot]), _i32(s.max_hp[atk_side, a_slot])
-    a_gender, d_gender = _i32(s.gender[atk_side, a_slot]), _i32(s.gender[def_side, d_slot])
-    d_types = _i32(s.types[def_side, d_slot])
+    a_status = _i32(s.status[party(fmt, atk_side), a_slot])
+    a_hp, a_max_hp = (
+        _i32(s.hp[party(fmt, atk_side), a_slot]),
+        _i32(s.max_hp[party(fmt, atk_side), a_slot]),
+    )
+    a_gender, d_gender = (
+        _i32(s.gender[party(fmt, atk_side), a_slot]),
+        _i32(s.gender[party(fmt, def_side), d_slot]),
+    )
+    d_types = _i32(s.types[party(fmt, def_side), d_slot])
 
     a_stats = battle_stats(s, atk_side, a_slot)
     d_stats = battle_stats(s, def_side, d_slot)
@@ -1539,8 +1605,8 @@ def _pre_random(
     sunny = (weather == Weather.SUN) & (not self_hit)
     a_gift = (a_ability == AbilityId.FLOWER_GIFT) & (a_hp > 0)
     d_gift = (
-        (_i32(s.ability[def_side, d_slot]) == AbilityId.FLOWER_GIFT)
-        & (_i32(s.hp[def_side, d_slot]) > 0)
+        (_i32(s.ability[party(fmt, def_side), d_slot]) == AbilityId.FLOWER_GIFT)
+        & (_i32(s.hp[party(fmt, def_side), d_slot]) > 0)
         & (a_ability != AbilityId.MOLD_BREAKER)
     )
     attack = jnp.where(sunny & a_gift, attack * 15 // 10, attack)
@@ -1570,7 +1636,9 @@ def _pre_random(
     burned = is_physical & (a_status == Status.BURN) & (a_ability != AbilityId.GUTS)
     damage = jnp.where(burned, damage // 2, damage)
     # :6982 Reflect / :7023 Light Screen on the defender's side halve it, not on a crit.
-    screen = jnp.where(is_physical, s.reflect[def_side], s.light_screen[def_side]) != 0
+    screen = (
+        jnp.where(is_physical, s.reflect[side_of(def_side)], s.light_screen[side_of(def_side)]) != 0
+    )
     screen = screen & (not self_hit) & (effect != EffectId.BRICK_BREAK)  # :6984, :7025
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
@@ -1611,7 +1679,7 @@ def _finish(
     roll,
     *,
     variance_last: bool = False,
-    def_side=None,
+    def_side,
     wonder_guard=True,
 ):
     """Random roll, STAB and type chart; 0 for status moves and immunities. Struggle
@@ -1631,11 +1699,12 @@ def _finish(
     estimate zeroes a ``MOVE_STATUS_IMMUNE`` result (trainer_ai.c:3106). ``wonder_guard=False``
     keeps ``battleCtx->damage`` as ``ApplyTypeChart`` leaves it (it does not zero it): Jump
     Kick's crash reads that (``step._use_move``)."""
+    fmt = format_of(s)
     atk_side = _i32(atk_side)
-    def_side = 1 - atk_side if def_side is None else _i32(def_side)
-    a_types = _i32(s.types[atk_side, s.active[atk_side]])
-    d_types = _i32(s.types[def_side, s.active[def_side]])
-    a_ability = _i32(s.ability[atk_side, s.active[atk_side]])
+    def_side = _i32(def_side)
+    a_types = _i32(s.types[party(fmt, atk_side), s.active[atk_side]])
+    d_types = _i32(s.types[party(fmt, def_side), s.active[def_side]])
+    a_ability = _i32(s.ability[party(fmt, atk_side), s.active[atk_side]])
     # Battler_IgnorableAbility (:3108): Mold Breaker ignores the defender's ability.
     d_ability = ignorable(s, atk_side, def_side)
     variance = 85 + _i32(roll)
@@ -1714,17 +1783,17 @@ def damage_table(
     power (no draw: ``PRESENT_TABLE``). ``wonder_guard``: as ``_finish``'s. ``hit``: the hit
     of the move (0-based): Triple Kick's power, Beat Up's party member (B13-5, B13-10)."""
     # The defender is the other side's active Pokemon (this table's contract).
-    def_side = 1 - _i32(atk_side)
+    def_side = _foe(_i32(atk_side))
     power_mul = script_power_mul(tables, state, atk_side, def_side, move, 10)
     damage, move_type, category, power = _pre_random(
-        tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit
+        tables, state, atk_side, move, crit, power_mul=power_mul, hit=hit, def_side=def_side
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     rolls = jnp.arange(ROLLS, dtype=_I32)
     table = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, rolls,
-        wonder_guard=wonder_guard,
+        wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
     fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
@@ -1772,7 +1841,7 @@ def damage_for_roll(
     power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
     ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
     ``gift``: its Natural Gift berry removed this action (B13-37)."""
-    def_side = 1 - _i32(atk_side)  # the other side's active Pokemon (this function's contract)
+    def_side = _foe(_i32(atk_side))  # the other side's active Pokemon (this function's contract)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1786,12 +1855,13 @@ def damage_for_roll(
         hit=hit,
         in_power=in_power,
         gift=gift,
+        def_side=def_side,
     )
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     rolled = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
-        wonder_guard=wonder_guard,
+        wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
     fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
     # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
@@ -1814,7 +1884,9 @@ def calc_move_damage(
     ``criticalMul`` 1: step 1 above, ending with the ``+ 2`` (so a power-0 move gives 2).
     No variance, STAB, type chart or Life Orb. ``power_mul`` is ``battleCtx->powerMul`` in
     tenths."""
-    return _pre_random(tables, state, atk_side, move, False, power_mul=power_mul)[0]
+    return _pre_random(
+        tables, state, atk_side, move, False, power_mul=power_mul, def_side=_foe(_i32(atk_side))
+    )[0]
 
 
 def ai_damage_for_roll(
@@ -1840,6 +1912,8 @@ def ai_damage_for_roll(
     ``RandNext`` draw of Psywave's or Magnitude's case (``ai_case_fixed``, ``ai_case_power``;
     ignored for any other move). ``item`` is the ``heldItem`` argument (default the attacker's
     own; ``ai_case_power``)."""
+    fmt = format_of(state)
+    def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1867,8 +1941,7 @@ def ai_damage_for_roll(
     )
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
     fixed, amount = ai_case_fixed(state, atk_side, move, draw)
-    def_side = 1 - _i32(atk_side) if def_side is None else _i32(def_side)
-    d_types = state.types[def_side, state.active[def_side]]
+    d_types = state.types[party(fmt, def_side), state.active[def_side]]
     identified = state.foresight[def_side] != 0
     immune = effectiveness(tables, move_type, d_types, identified) == 0
     # :3106 MOVE_STATUS_IMMUNE includes MOVE_STATUS_WONDER_GUARD (ruling G-18).
@@ -1883,5 +1956,7 @@ def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndar
     Normal physical hit on itself with its own stats and stages and no crit, then
     ``BattleSystem_CalcDamageVariance`` with ``roll``. No STAB or type chart
     (``ApplyTypeChart`` is not called)."""
-    damage, _, _, _ = _pre_random(tables, state, side, MOVE_STRUGGLE, False, self_hit=True)
+    damage, _, _, _ = _pre_random(
+        tables, state, side, MOVE_STRUGGLE, False, self_hit=True, def_side=side
+    )
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)

@@ -121,6 +121,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.format import format_of
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
 from nuzline.engine.step import (
@@ -353,5 +354,9 @@ def replacement_observation(after: BattleState) -> jnp.ndarray:
     no-action value (``ACT_NONE``, flags 0, ``order`` -1, no Pursuit), and the visible
     projection is ``after``'s (both newcomers on screen). Built from the full event set
     ``step_events`` returns, so a new event field cannot be missed."""
-    events = {**_empty_events(), "order": jnp.full((2,), -1, _I32), "pursuit": jnp.int32(0)}
+    events = {
+        **_empty_events(format_of(after)),
+        "order": jnp.full((2,), -1, _I32),
+        "pursuit": jnp.int32(0),
+    }
     return observation(events, after)
