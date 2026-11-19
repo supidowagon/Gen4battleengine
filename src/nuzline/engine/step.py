@@ -1854,14 +1854,14 @@ def _use_move(
     volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
     # Flash Fire (:3515-3521): a Fire move whose holder is not frozen, with power or Will-O-Wisp;
     # no heal: the subscript sets flashFire (subscript_absorb_and_boost_fire_type_moves.s:13), F-2.
-    # Volt Absorb tests ``attacker != defender`` (:3500-3502); Water Absorb, Dry Skin and Flash
-    # Fire do not (:3507-3512, :3538-3544, :3515-3521): a Dive that hit its own user can heal it.
     flash = (
         (seen == AbilityId.FLASH_FIRE)
         & (move_type == Type.FIRE)
         & (state.status[party(fmt, target_side), target] != Status.FREEZE)
         & ((tables.move_power[used] != 0) | (used == MOVE_WILL_O_WISP))
     )
+    # Volt Absorb tests ``attacker != defender`` (:3500-3502); Water Absorb, Dry Skin and Flash
+    # Fire do not (:3507-3512, :3538-3544, :3515-3521): a Dive that hit its own user can heal it.
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))

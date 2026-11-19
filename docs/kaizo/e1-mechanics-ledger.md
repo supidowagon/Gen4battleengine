@@ -1664,6 +1664,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   the stated one). Tests: `tests/engine/test_field_mask.py` (clean mask = old fields on each writer path,
   engine = reference). Owed for step 2: `tests/strategies.py` and hand-built test states write the old
   fields only; they must set `field_mask` / `weather_turns` before the readers move.
+- G-5 Motor Drive also tests ``attacker != defender`` (battle_lib.c:3532-3536), as Volt Absorb does
+  (:3500-3502); Water Absorb, Dry Skin and Flash Fire do not. Whoever models Motor Drive gates it like
+  Volt Absorb (`volt & ~self_target`, step.py `absorbed`). Not modelled here (batch F gate note).
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
