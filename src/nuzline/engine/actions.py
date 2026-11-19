@@ -210,7 +210,7 @@ def usable_trainer_items(tables: Tables, state: BattleState, side) -> jnp.ndarra
     """``bool[BAG_SLOTS]``: ``side``'s bag slots holding an item, while its active Pokemon
     has HP left and is not locked into a move."""
     fmt = format_of(state)
-    held = state.trainer_items[party(fmt, side)] != 0
+    held = state.trainer_items[side] != 0
     free = (state.hp[party(fmt, side), state.active[side]] > 0) & (locked_slot(state, side) < 0)
     return held & free
 

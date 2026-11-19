@@ -2365,13 +2365,11 @@ def _consume_trainer_items(state: BattleState, actions) -> BattleState:
         alive = jnp.sum(
             ((state.species[party(fmt, side)] != 0) & (state.hp[party(fmt, side)] > 0)).astype(_I32)
         )
-        count = state.trainer_item_count[party(fmt, side)].astype(_I32)
+        count = state.trainer_item_count[side].astype(_I32)
         considered = (slots > k) & (alive <= count - slots + 1)
         spent = is_item(actions[side]) & ((slots == k) | considered)
-        bag = jnp.where(spent, 0, state.trainer_items[party(fmt, side)]).astype(
-            state.trainer_items.dtype
-        )
-        state = state._replace(trainer_items=state.trainer_items.at[party(fmt, side)].set(bag))
+        bag = jnp.where(spent, 0, state.trainer_items[side]).astype(state.trainer_items.dtype)
+        state = state._replace(trainer_items=state.trainer_items.at[side].set(bag))
     return state
 
 
@@ -2744,9 +2742,7 @@ def _execute_actions(
         jnp.where(paused, state.ts_struggling != 0, jnp.stack([p[1] for p in picks]) & ~locked),
         jnp.where(paused, state.ts_locked != 0, locked),
     )
-    items = jnp.stack(
-        [state.trainer_items[party(fmt, side), _bag_slot(real[side])] for side in range(fmt.B)]
-    )
+    items = jnp.stack([state.trainer_items[side, _bag_slot(real[side])] for side in range(fmt.B)])
     items = jnp.where(is_item(real), items, 0)
     items = jnp.where(paused, state.ts_item, items).astype(_I32)
     # CalcTurnOrder's moveEffectsData.custapBerry, from the state the order was fixed in.

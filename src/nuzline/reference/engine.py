@@ -6050,14 +6050,14 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     items = [0, 0]
     for side in range(_fmt(s).B):
         if commands[side] == ITEM:
-            sd = _party_of(s, side)
-            alive = sum(1 for m in sd.mons if m.species and m.hp)
+            bt = s.battlers[side]  # trainerItems[battler >> 1] (ruling D1-5)
+            alive = sum(1 for m in _party_of(s, side).mons if m.species and m.hp)
             used = actions[side] - FIRST_ITEM_ACTION
-            items[side] = sd.trainer_items[used]
-            sd.trainer_items[used] = 0
-            for i in range(used + 1, len(sd.trainer_items)):
-                if alive <= sd.trainer_item_count - i + 1:
-                    sd.trainer_items[i] = 0
+            items[side] = bt.trainer_items[used]
+            bt.trainer_items[used] = 0
+            for i in range(used + 1, len(bt.trainer_items)):
+                if alive <= bt.trainer_item_count - i + 1:
+                    bt.trainer_items[i] = 0
 
     # BattleControllerPlayer_CalcTurnOrder (bcp.c:707): items and switches first, in
     # battler order, then moves; two actions of one command are ordered by

@@ -170,8 +170,10 @@ Encodings:
   They are restored on leaving like the Mimic shadow (``step._restore_transform``), not volatile: a
   fainted battler keeps the copy until its replacement enters (the exp payout reads it). ``truant`` is
   ``MoveEffectsData.truant``. ``ai_ability_known`` is ``battlerAbilities`` as the decomp ability id.
-* ``trainer_item_count`` is ``aiContext.trainerItemCounts``: the bag's size at battle
-  start, never decremented.
+* ``trainer_items`` / ``trainer_item_count`` are ``aiContext.trainerItems[battler >> 1]`` /
+  ``trainerItemCounts[battler >> 1]`` (the bag's size at battle start, never decremented), held
+  on the opposing battler ``b`` whose ``b >> 1`` it is (1 -> bag 0, 3 -> bag 1): one bag per
+  opposing trainer slot, the player's battlers' rows empty (ruling D1-5).
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
   (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
   (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
@@ -394,7 +396,7 @@ class BattleState(NamedTuple):
     future_move: jnp.ndarray  # int16, futureSightMove (per battler)
     future_attacker: jnp.ndarray  # int8, 1 + futureSightAttacker (per battler), 0 = none
     future_sight: jnp.ndarray  # int8, SIDE_CONDITION_FUTURE_SIGHT (per side)
-    trainer_items: jnp.ndarray  # int16[2,4], bag item ids (aiContext.trainerItems)
+    trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8, bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
     # field (scalars)
@@ -736,8 +738,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "future_move": (_BATTLER, np.int16),
     "future_attacker": (_BATTLER, np.int8),
     "future_sight": (_SIDE, np.int8),
-    "trainer_items": ((*_PARTY, BAG_SLOTS), np.int16),
-    "trainer_item_count": (_PARTY, np.int8),
+    "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
+    "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
@@ -949,6 +951,7 @@ def initial_arrays(
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
     chatot_cry: int = 0,
+    opp2_items: Sequence[int] | None = None,
 ) -> dict[str, np.ndarray]:
     """Every ``layout(fmt)`` field of the turn-0 state, before the switch-in hooks, as numpy
     (``make_state`` is this plus ``hooks.battle_start`` for singles): ``parties`` holds the
@@ -964,9 +967,14 @@ def initial_arrays(
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
     ``opp_items`` is the trainer's bag (``Trainer.items``, decomp item ids). As
-    ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796) does, its
+    ``BattleControllerPlayer_InitAI`` (battle_controller_player.c:4796-4811) does, its
     non-empty items fill ``trainer_items[1]`` from slot 0 in order and their number is
-    ``trainer_item_count[1]``; the player's bag stays empty. The leads'
+    ``trainer_item_count[1]``; the player's battlers' bags stay empty (only ``battler &
+    BATTLER_THEM`` is filled, :4803). With four battlers, battler 3's bag is ``opp2_items``,
+    the second opposing trainer's (``trainers[3]``; ``TWO_TRAINERS`` / ``MULTI`` must give
+    it), by default ``opp_items`` again: a plain double loads the one trainer into both
+    enemy slots (encounter.c:736, :751-752; trainer_data.c:31-37), so each holds a copy
+    (ruling D1-5). The leads'
     ``fake_out_turn`` is 0: the battle-start send-out does not run
     ``BattleSystem_UpdateAfterSwitch``, and ``BattleContext`` starts zeroed
     (battle_controller_player.c:180-184).
@@ -997,11 +1005,17 @@ def initial_arrays(
                 )
             a["active"][b] = leads[b]
     a["exp_mask"][...] = 1 << leads[0]
-    bag = [item for item in opp_items if item]
-    if len(bag) > BAG_SLOTS:
-        raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
-    a["trainer_items"][1, : len(bag)] = bag
-    a["trainer_item_count"][1] = len(bag)
+    bags = {1: opp_items}
+    if fmt.B == 4:
+        if opp2_items is None and fmt.P > 2:
+            raise ValueError("a fight of two opposing trainers needs the second one's bag")
+        bags[3] = opp_items if opp2_items is None else opp2_items
+    for b, items in bags.items():
+        bag = [item for item in items if item]
+        if len(bag) > BAG_SLOTS:
+            raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
+        a["trainer_items"][b, : len(bag)] = bag
+        a["trainer_item_count"][b] = len(bag)
     a["weather"][...] = Weather(start_condition)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")

@@ -54,8 +54,6 @@ class RefPokemon:
 @dataclass
 class RefParty:
     mons: list[RefPokemon]
-    trainer_items: list[int]
-    trainer_item_count: int
     chatot_cry: int  # BattleSystem.chatotCries as Chatter's parameter 0 / 1 / 2 (G-70)
     ts_alive: int
 
@@ -63,6 +61,8 @@ class RefParty:
 @dataclass
 class RefBattler:
     active: int
+    trainer_items: list[int]  # aiContext.trainerItems[battler >> 1] (ruling D1-5)
+    trainer_item_count: int
     stages: list[int]  # index ids.Stat, 0 = neutral
     confusion: int
     leech_seed: int

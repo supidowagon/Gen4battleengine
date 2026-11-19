@@ -41,8 +41,9 @@ three structs has a row.
   keys (`state._MON` `[P,6]`, `_BATTLER` `[B]`, `_SIDE` `[2]`, `_PARTY` `[P]`) place every
   field, and `state.layout(fmt)` gives the shapes. Per side `[2]`: `spikes`, `toxic_spikes`,
   `stealth_rock`, `reflect`, `light_screen`, `safeguard`, `mist`, `lucky_chant`, `tailwind`,
-  `future_sight` (`SideConditions`). Per party `[P]`: `trainer_items`, `trainer_item_count`,
-  `ts_alive`. Every other `[2]` field of the singles state is per battler `[B]`, `stages`,
+  `future_sight` (`SideConditions`). Per party `[P]`: `ts_alive`. Every other `[2]` field of
+  the singles state is per battler `[B]`, `trainer_items` and `trainer_item_count` included
+  (the bag `trainerItems[battler >> 1]` sits on the opposing battler, ruling D1-5), `stages`,
   `ts_taken` and `entry_pending` included. The player-only fields (`ai_*`, the exp block,
   `deaths`, `protected`) stay on party 0. A field that names another battler stores
   `1 + battler` (docs/doubles-state-design.md section 5); `infatuated` is still 0/1 (D5).
