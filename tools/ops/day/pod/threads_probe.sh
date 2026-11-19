@@ -15,10 +15,13 @@
 # passed; else none.
 # Equality run: the threading settings can change XLA's float summation order, and the player tests
 # assert exact float equality (tests/search/test_player_eval.py, test_player_learn.py). The files of
-# THREAD_PROBE_EQ (default those two and tests/search/test_player.py) run under -m "not slow"
-# (fullset included) once per setting, the three at once, each with its own empty caches; a
-# setting whose run fails is never the verdict, and a failure under none (the files themselves
-# fail) leaves the verdict at none. Lines "eq <setting> rc <rc> <pytest summary>".
+# THREAD_PROBE_EQ (default those two and tests/search/test_player.py) run without a -m filter
+# (their float-comparing tests are marked slow; fullset included) once per setting, the three at
+# once, each with its own empty caches. Expected count: a --collect-only of the same files. A
+# setting's equality run is ok only with rc 0 and exactly that many passed (fails closed: a skip,
+# a deselect or a short run is a fail). A setting whose run is not ok is never the verdict, and a
+# fail under none (the files themselves fail) leaves the verdict at none.
+# Lines "eq <setting> ok|fail rc <rc> passed <n> of <expected> <pytest summary>".
 set -u
 D=$(cd "$(dirname "$0")/.." && pwd); O="$D/out"; . "$D/meta.env"; R="$D/repo"; PB="$D/probe"
 export PATH="/root/.local/bin:$PATH" UV_CACHE_DIR=/work/_uvcache UV_PYTHON_INSTALL_DIR=/work/_python
@@ -53,16 +56,21 @@ run() { local c="$1"; shift; local P="$PB/$c"; mkdir -p "$P/cache"; : > "$P/samp
   run none env
   run eigen "${EIGEN[@]}"
   run taskset "${TASKSET[@]}"
-  echo "# equality run: ${eqids[*]}; mark not slow"
+  NEQ=$(cd "$R" && uv run --frozen pytest --collect-only -q -p no:cacheprovider "${eqids[@]}" 2>/dev/null | grep -c '::')
+  echo "# equality run: ${eqids[*]}; no -m filter (slow tests included); expected $NEQ passed"
   eq() { local c="$1"; shift; local P="$PB/eq_$c"; mkdir -p "$P/cache"
-    ( cd "$R" && export NUZLINE_CACHE_DIR="$P/cache" NUZLINE_TEST_COMPILE_CACHE="$P/cache/jax-tests" && "$@"         uv run --frozen pytest -m "not slow" -q -p no:cacheprovider "${eqids[@]}" > "$P/log" 2>&1; echo $? > "$P/rc" ) & }
+    ( cd "$R" && export NUZLINE_CACHE_DIR="$P/cache" NUZLINE_TEST_COMPILE_CACHE="$P/cache/jax-tests" &&
+      "$@" uv run --frozen pytest -q -p no:cacheprovider "${eqids[@]}" > "$P/log" 2>&1; echo $? > "$P/rc" ) & }
   eq none env; eq eigen "${EIGEN[@]}"; eq taskset "${TASKSET[@]}"; wait
   for c in none eigen taskset; do
-    echo "eq $c rc $(cat "$PB/eq_$c/rc") $(grep -E ' in [0-9.]+s' "$PB/eq_$c/log" | tail -1)"; done
+    s=$(grep -E ' in [0-9.]+s' "$PB/eq_$c/log" | tail -1); rc=$(cat "$PB/eq_$c/rc")
+    n=$(echo "$s" | grep -oE '[0-9]+ passed' | cut -d' ' -f1); n=${n:-0}
+    ok=fail; [ "$rc" = 0 ] && [ "$NEQ" -gt 0 ] && [ "$n" = "$NEQ" ] && ok=ok
+    echo "eq $c $ok rc $rc passed $n of $NEQ $s"; done
 } > "$O/threads_probe.txt"
-V=$(awk '$1 == "eq" {eq[$2] = $4; next} NF == 9 && $1 ~ /^(none|eigen|taskset)$/ {c[$1] = $5; r[$1] = $3; rc[$1] = $9}
+V=$(awk '$1 == "eq" {eq[$2] = $3; next} NF == 9 && $1 ~ /^(none|eigen|taskset)$/ {c[$1] = $5; r[$1] = $3; rc[$1] = $9}
   END {v = "none"; split("eigen taskset", o, " ");
-       for (i = 1; i <= 2; i++) {s = o[i]; if (rc[s] == "0" && rc["none"] == "0" && eq[s] == "0" && eq["none"] == "0" && r[s] <= 4 && c[s] <= c["none"] * 1.05) {v = s; break}}
+       for (i = 1; i <= 2; i++) {s = o[i]; if (rc[s] == "0" && rc["none"] == "0" && eq[s] == "ok" && eq["none"] == "ok" && r[s] <= 4 && c[s] <= c["none"] * 1.05) {v = s; break}}
        print v}' "$O/threads_probe.txt")
 echo "THREADS=$V" | tee "$O/threads_probe.env" > /work/_threads.env
 echo "verdict THREADS=$V" >> "$O/threads_probe.txt"
