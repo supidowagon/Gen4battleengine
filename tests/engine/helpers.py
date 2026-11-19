@@ -340,6 +340,31 @@ def roark_real_state(
     return make_state(tables, player, list(_roark_party()), opp_items=_roark().items)
 
 
+def as_species(
+    tables: Tables,
+    state: BattleState,
+    side: int,
+    slot: int,
+    species: int,
+    ability_slot: int = 0,
+    form: int = 0,
+    ability_form: int | None = None,
+) -> BattleState:
+    """``state`` with ``side``'s party ``slot`` made ``species`` in ``form`` and ``ability_slot``
+    (``ability_form`` defaults to ``form``), its engine ``ability`` that personal row's: a
+    different one reads as a script's write (Trace, Worry Seed; ``damage.decomp_abilities``)."""
+    ability_form = form if ability_form is None else ability_form
+    row = int(np.asarray(tables.species_form_row)[species, ability_form])
+    own = int(np.asarray(tables.species_abilities)[row, ability_slot])
+    return state._replace(
+        species=state.species.at[side, slot].set(species),
+        form=state.form.at[side, slot].set(form),
+        ability_form=state.ability_form.at[side, slot].set(ability_form),
+        ability_slot=state.ability_slot.at[side, slot].set(ability_slot),
+        ability=state.ability.at[side, slot].set(own),
+    )
+
+
 def A(player, opp, state: BattleState, names: Names) -> jnp.ndarray:
     """``int32[2]`` actions: a move name becomes that move's slot on the side's
     active Pokemon (``Names.move_slot``); an int is used as the raw action."""

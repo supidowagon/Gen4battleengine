@@ -46,11 +46,13 @@ def make_states(
     terrain: int = TERRAIN_UNKNOWN,
     gravity: int = 0,
     chatot_cry: int = 0,
+    trick_room: int = 0,
 ) -> BattleState:
     """The turn-0 states of ``teams`` (each a player party, lead in slot 0) against
     ``opp``, as a numpy batch with leading axis ``len(teams)``. Row ``i`` equals
     ``make_state(tables, list(teams[i]), list(opp), start_condition, opp_items,
-    leads=(0, 0), terrain=terrain, gravity=gravity, chatot_cry=chatot_cry).with_budget(budget,
+    leads=(0, 0), terrain=terrain, gravity=gravity, chatot_cry=chatot_cry,
+    trick_room=trick_room).with_budget(budget,
     protected[i])`` byte
     for byte.
     ``ValueError`` as ``make_state`` / ``with_budget`` for a bad party, a bad budget or a protected slot
@@ -69,6 +71,7 @@ def make_states(
             terrain=terrain,
             gravity=gravity,
             chatot_cry=chatot_cry,
+            trick_room=trick_room,
         )
         a["faint_budget"][...] = budget
         a["protected"][...] = protected_mask(

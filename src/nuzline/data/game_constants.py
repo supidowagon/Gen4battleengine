@@ -157,6 +157,9 @@ _AI_MOVE_IDS = {
     # (:3536-3537).
     "Counter": 68,
     "Mirror Coat": 243,
+    # E3-2-2: Basic_CheckWorrySeed (script.s:1436-1437), Expert_WorrySeed (:5979).
+    "Sleep Talk": 214,
+    "Rest": 156,
     "Blizzard": 59,
     "Feint": 364,
     "Shadow Force": 467,
@@ -198,6 +201,16 @@ _BERRIES = (
 )  # fmt: skip
 _NATURAL_GIFT_BERRIES = {f"{name} Berry": 149 + i for i, name in enumerate(_BERRIES)}
 _RECYCLE_DESIRABLE_ITEMS = {"Chesto Berry": 150, "Lum Berry": 157, "Starf Berry": 207}
+# ai/commands.py CHANGE_USER_ABILITY_DESIRABLE: Expert_ChangeUserAbility's table
+# (script.s:4435-4461), E3-2-5.
+_CHANGE_USER_ABILITY_DESIRABLE = {
+    "Speed Boost": 3, "Battle Armor": 4, "Sand Veil": 8, "Static": 9, "Flash Fire": 18,
+    "Wonder Guard": 25, "Effect Spore": 27, "Swift Swim": 33, "Huge Power": 37,
+    "Rain Dish": 44, "Cute Charm": 56, "Shed Skin": 61, "Marvel Scale": 63,
+    "Pure Power": 74, "Chlorophyll": 34, "Shield Dust": 19, "Adaptability": 91,
+    "Magic Guard": 98, "Mold Breaker": 104, "Super Luck": 105, "Unaware": 109,
+    "Tinted Lens": 110, "Filter": 111, "Solid Rock": 116, "Reckless": 120,
+}  # fmt: skip
 _ASSURANCE_RECOIL_BERRIES = {"Jaboca Berry": 211, "Rowap Berry": 212}
 # ai/commands.py COPYCAT_ENCOURAGED_MOVES: Expert_Copycat_EncouragedMoves (script.s:5582-5630).
 _COPYCAT_ENCOURAGED_MOVES = {
@@ -296,6 +309,15 @@ CONSTANTS: tuple[Constant, ...] = (
             "Stall": 100,
             "Sticky Hold": 60,
             "Keen Eye": 51,
+            # E3-2-2: Basic_CheckWorrySeed (script.s:1430-1433).
+            "Truant": 54,
+            "Multitype": 121,
+            # E3-2-6: Basic_CheckGastroAcid (script.s:1371-1376).
+            "Slow Start": 112,
+            "Stench": 1,
+            "Run Away": 50,
+            "Pickup": 53,
+            "Honey Gather": 118,
         },
     ),
     *_table(
@@ -492,6 +514,13 @@ CONSTANTS: tuple[Constant, ...] = (
         "ability",
         _E,
         {"Forecast": 59, "Trace": 36, "Multitype": 121},
+    ),
+    # Expert_ChangeUserAbility's table (script.s:4435-4461), E3-2-5.
+    *_table(
+        "nuzline.ai.commands.CHANGE_USER_ABILITY_DESIRABLE",
+        "ability",
+        _E,
+        _CHANGE_USER_ABILITY_DESIRABLE,
     ),
     Constant("nuzline.engine.ids.ABILITY_FORECAST", "ability", 59, "Forecast", _E),
     # The weather code's decomp abilities (generated/abilities.txt line N is id N-1).
@@ -824,6 +853,9 @@ EXEMPT: dict[str, str] = {
     # B10-11).
     "nuzline.engine.ids.CANNOT_ENCORE_MOVES": _CODE_MOVE_IDS,
     "nuzline.engine.ids.INVOKER_MOVES": _CODE_MOVE_IDS,
+    # sCannotMeFirstMoves (battle_lib.c:7233-7240), compared by battle effect like
+    # sCannotEncoreMoves (E3-2-3).
+    "nuzline.engine.ids.ME_FIRST_BANNED_MOVES": _CODE_MOVE_IDS,
     # sMovesAffectedByGravity (battle_lib.c:3385-3392), E1 trial batch (G-67): Kaizo's id 150 is
     # "Hidden Power Water", not Splash; the ban is by id in both games.
     "nuzline.engine.ids.GRAVITY_MOVES": _CODE_MOVE_IDS,

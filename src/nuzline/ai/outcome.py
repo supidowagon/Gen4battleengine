@@ -424,10 +424,21 @@ SITE_N: dict[int, int] = {
     5333: 30,  # Expert_TrumpCard (the Pressure +1)
     5347: 100,  # Expert_TrumpCard_ScorePlus1
     5225: 128,  # Expert_Embargo (+1 when it does NOT jump), B13-32
+    3089: 100,  # Expert_Disable_TryScoreMinus1 (-1 when it does NOT jump), E3-1-3
     5935: 128,  # Expert_Punishment_TryScorePlus4
     5939: 128,  # Expert_Punishment_TryScorePlus3
     5943: 128,  # Expert_Punishment_TryScorePlus2
     5947: 128,  # Expert_Punishment_TryScorePlus1
+    # E3 batch 1 round 2.
+    5984: 128,  # Expert_WorrySeed_CheckUserHP (to _TryScorePlus1 when it jumps)
+    5988: 64,  # Expert_WorrySeed_TryScorePlus1 (+1 when it does NOT jump)
+    5481: 64,  # Expert_GastroAcid (to _End when it jumps: 0 for the whole script)
+    5484: 128,  # Expert_GastroAcid (to _ContinueHPCheck when it jumps: skips the -1)
+    5532: 32,  # Expert_MeFirst_TryScorePlus1 (jumps to _CheckLastUsedMove)
+    5538: 128,  # Expert_MeFirst_CheckLastUsedMove (+1 when it does NOT jump)
+    5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
+    6210: 64,  # Expert_TrickRoom_TryScorePlus3 (+3 when it does NOT jump)
+    4429: 50,  # Expert_ChangeUserAbility_TryScorePlus2 (+2 when it does NOT jump)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -687,6 +698,22 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # :5347
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: NonStandard (:274); Expert_Punishment (:1788)
         232,  # PREVENT_ITEM_USE: Basic_CheckEmbargo (:262); Expert_Embargo (:1775), :5225 (B13-32)
+        # E3 batch 1.
+        71,  # LOWER_SP_ATK_HIT (Mist Ball, Mystical Fire): no Basic or Expert entry (E3-1-1)
+        85,  # DO_NOTHING (Kaizo Thief): no Basic or Expert entry; Encore table :3220 (E3-1-2)
+        86,  # DISABLE: Basic_CheckCannotDisable (:184); Expert_Disable (:1687), :3089 (E3-1-3)
+        153,  # FLEE_FROM_WILD_BATTLE (Teleport): Basic :221 ScoreMinus10 (E3-1-4)
+        218,  # SPEED_DOWN_HIT (Hammer Arm): Expert_HammerArm (:1762), no roll (E3-1-5)
+        # E3 batch 1 round 2.
+        165,  # TORMENT: Basic_CheckTorment (:229); no Expert entry; tables :6480, :8055 (E3-2-1)
+        241,  # USE_MOVE_FIRST (Me First): no Basic entry; Expert_MeFirst (:1784), :5532, :5538, :5542;
+        # Risky :6560 (E3-2-3)
+        247,  # SET_ABILITY_TO_INSOMNIA (Worry Seed): Basic_CheckWorrySeed (:276); Expert_WorrySeed
+        # (:1790), :5984, :5988 (E3-2-2)
+        259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
+        191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
+        239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
+        # (:1782), :5481, :5484 (E3-2-6)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -828,6 +855,15 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     231: ("Expert_Assurance", 1774),
     235: ("Expert_TrumpCard", 1778),
     245: ("Expert_Punishment", 1788),
+    # E3 batch 1.
+    86: ("Expert_Disable", 1687),
+    218: ("Expert_HammerArm", 1762),
+    # E3 batch 1 round 2.
+    241: ("Expert_MeFirst", 1784),
+    247: ("Expert_WorrySeed", 1790),
+    239: ("Expert_GastroAcid", 1782),
+    259: ("Expert_TrickRoom", 1800),
+    191: ("Expert_ChangeUserAbility", 1743),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -956,6 +992,13 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         232,  # PREVENT_ITEM_USE: Expert_Embargo (B13-32)
         235,  # HIGHER_POWER_WHEN_LOW_PP: Expert_TrumpCard
         245,  # INCREASE_POWER_WITH_MORE_STAT_UP: Expert_Punishment
+        86,  # DISABLE: Expert_Disable (E3-1-3)
+        218,  # SPEED_DOWN_HIT: Expert_HammerArm (E3-1-5)
+        241,  # USE_MOVE_FIRST: Expert_MeFirst (E3-2-3)
+        247,  # SET_ABILITY_TO_INSOMNIA: Expert_WorrySeed (E3-2-2)
+        239,  # SUPRESS_ABILITY: Expert_GastroAcid (E3-2-6)
+        259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
+        191,  # SWITCH_ABILITIES: Expert_ChangeUserAbility (E3-2-5)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

@@ -16,12 +16,13 @@ Move legality follows ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2255) for
 checks M1 has state for: an empty slot (``CHECK_INVALID_NO_MOVE``), no PP
 (``CHECK_INVALID_NO_PP``), Disable (``CHECK_INVALID_DISABLED``: the slot holding
 ``disabled_move``), Taunt (``CHECK_INVALID_TAUNTED``: a taunted battler
-cannot pick a move whose power is 0) and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
+cannot pick a move whose power is 0), Torment (``CHECK_INVALID_TORMENTED``: the move used last)
+and the Choice lock (``CHECK_INVALID_CHOICE_ITEM``,
 :2307-2315: a holder of a Choice item whose ``choice_lock`` is a move it knows can pick
 only that move; a lock it does not know is cleared there, which the engine reads as no
 lock), Imprison (``CHECK_INVALID_IMPRISONED``, :2287-2290: ``move_imprisoned``) and Gravity
-(``CHECK_INVALID_GRAVITY``, :2292-2295: ``gravity_banned``, G-67). Torment, Heal Block and
-Encore come with their mechanics. The
+(``CHECK_INVALID_GRAVITY``, :2292-2295: ``gravity_banned``, G-67). Torment (:2275-2279, E3-2-1),
+Heal Block and Encore come with their mechanics. The
 trainer AI scores the same mask (``TrainerAI_Init``, trainer_ai.c:234,
 ``CHECK_INVALID_ALL``). When every slot is invalid the decomp sets ``struggling`` instead
 of letting the player pick a move (battle_controller_player.c:433); here action 0 stays legal and means Struggle
@@ -47,7 +48,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.format import format_of, party
 from nuzline.engine.ids import CHOICE_ITEMS, GRAVITY_MOVES, AbilityId, ItemId, Type
-from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, held_item
+from nuzline.engine.state import BAG_SLOTS, SLOTS, BattleState, battler_ability, held_item
 
 MOVE_ACTIONS = 4  # actions 0-3 use a move slot; 4-9 switch
 NUM_ACTIONS = MOVE_ACTIONS + SLOTS
@@ -123,6 +124,10 @@ def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     )
     taunted = state.taunt[side] > 0
     usable = usable & ~(taunted & (tables.move_power[moves] == 0))
+    # CHECK_INVALID_TORMENTED (battle_lib.c:2275-2279): the slot holding ``movePrevByBattler``
+    # (``last_move``, 0 after a move that did not succeed: no slot then), E3-2-1.
+    tormented = (state.torment[side] > 0) & (moves == state.last_move[side])
+    usable = usable & ~tormented
     usable = usable & (~choice_locked(tables, state, side) | (moves == state.choice_lock[side]))
     usable = usable & ~move_imprisoned(state, side, moves)  # CHECK_INVALID_IMPRISONED, :2287
     # CHECK_INVALID_GRAVITY (battle_lib.c:2292-2295): Move_FailsInHighGravity (G-67).
@@ -162,7 +167,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     (HOLD_EFFECT_SWITCH, :5518) is an unsupported item."""
     fmt = format_of(state)
     mon = state.active[side]
-    own = state.ability[party(fmt, side), mon]
+    own = battler_ability(state, side)
     types = state.types[party(fmt, side), mon]
     # BattlerIsGrounded's Iron Ball (Battler_HeldItemEffect, :5505), G-56.
     iron = tables.item_effect[held_item(state, side, mon)] == ItemId.IRON_BALL
@@ -180,7 +185,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     trapped_by = jnp.asarray(False)
     for foe in range(state.active.shape[0]):
         other = state.active[foe]
-        theirs = state.ability[party(fmt, foe), other]
+        theirs = battler_ability(state, foe)
         live = (jnp.asarray(side) != foe) & (state.hp[party(fmt, foe), other] > 0)
         abilities = (
             ((theirs == AbilityId.SHADOW_TAG) & (own != AbilityId.SHADOW_TAG))
