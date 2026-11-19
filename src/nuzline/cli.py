@@ -95,6 +95,10 @@ a fight on a fog map (weather 14) starts clear because the run uses field Defog 
 (``fight_start``: the Relic Badge, and a team member with Defog, which ``prep`` keeps in the
 team and lists as a prep step); without it the fog stays, unless the save stands on the
 fight's map, whose overworld weather is then the start (ledger G-15).
+The same commands take ``--terrain NAME``: the battle terrain of a fight whose start tiles
+give several (``fight_terrain``: the tile under the player when the battle starts, one of
+``Trainer.terrains``); a mixed fight without it is refused when a move reads the terrain,
+and a single-terrain fight needs none (ledger G-18).
 All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
@@ -107,7 +111,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -293,12 +297,18 @@ def _parser() -> argparse.ArgumentParser:
             help="the game's data set (default vanilla)",
         )
 
-    def field_defog(cmd: argparse.ArgumentParser) -> None:
+    def run_inputs(cmd: argparse.ArgumentParser) -> None:
+        """The fight-start run inputs (``fight_start``, ``fight_terrain``)."""
         cmd.add_argument(
             "--field-defog",
             action="store_true",
             help="a fog fight's fog was cleared with field Defog on that map visit "
             "(needs the Relic Badge and a team member that knows Defog)",
+        )
+        cmd.add_argument(
+            "--terrain",
+            help="the battle terrain of a fight whose start tiles give several (e.g. SNOW): "
+            "the tile the player stands on when the battle starts",
         )
 
     def fight(cmd: argparse.ArgumentParser) -> None:
@@ -314,7 +324,7 @@ def _parser() -> argparse.ArgumentParser:
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
         cmd.add_argument("--lead", type=int, default=0, help="the player's active party slot")
         cmd.add_argument("--opp-active", type=int, default=0, help="the opponent's active slot")
-        field_defog(cmd)
+        run_inputs(cmd)
 
     coverage = sub.add_parser("coverage", help="check that the engine supports a fight")
     fight(coverage)
@@ -382,7 +392,7 @@ def _parser() -> argparse.ArgumentParser:
         "--cap", type=int, default=None, help="level cap (default: config/level_caps.toml)"
     )
     prep.add_argument("--deaths", type=int, default=0, help="player faints allowed, 0..3")
-    field_defog(prep)
+    run_inputs(prep)
     for flag, what in (("--protect", "must not faint"), ("--exclude", "is not brought")):
         prep.add_argument(
             flag,
@@ -456,7 +466,7 @@ def _parser() -> argparse.ArgumentParser:
         who.add_argument("--trainer", help="trainer name (a Leader is preferred)")
         who.add_argument("--trainer-id", type=int, help="exact trainer id")
         cmd.add_argument("--line", type=Path, required=True, help="the line file (TOML)")
-        field_defog(cmd)
+        run_inputs(cmd)
         budget(
             cmd,
             "a team member that must not faint: species or 0-based team index; repeatable",
@@ -657,6 +667,43 @@ def fight_start(trainer: Trainer, names, save=None, field_defog: bool = False, t
     return weather, defog
 
 
+def terrain_id(name: str) -> int:
+    """The ``TERRAIN_NAMES`` id of ``name`` (``TERRAIN_SNOW``, ``snow``, ``great marsh``);
+    ``ValueError`` for any other."""
+    from nuzline.data.trainer import TERRAIN_NAMES
+
+    key = name.strip().upper().replace(" ", "_").replace("-", "_")
+    key = key if key.startswith("TERRAIN_") else f"TERRAIN_{key}"
+    if key not in TERRAIN_NAMES:
+        raise ValueError(f"--terrain {name}: not a battle terrain (generated/battle_terrains.txt)")
+    return TERRAIN_NAMES.index(key)
+
+
+def fight_terrain(trainer: Trainer, terrain: str | None = None) -> Trainer:
+    """``trainer`` with this fight's battle terrain (ledger G-18). The terrain is the tile
+    under the player when the battle starts: CalcTerrain (field_battle_data_transfer.c:467-494,
+    from SetBackgroundAndTerrain :496-505), copied to BattleSystem.terrain (battle_main.c:1052)
+    and never written in battle. ``Trainer.terrains`` is what the fight's start tiles give
+    (ROM, tools/terrain.py); one value is ``Trainer.terrain`` and needs no input. With several
+    the tile is the run's own route, which neither the calc repo (move texts only) nor the docs
+    sheet (no terrain field) records: a run input (manager ruling 1), ``terrain``, which must
+    be one of ``terrains``. Until it is given the terrain stays ``TERRAIN_UNKNOWN``, refused
+    when a move reads it (``coverage.terrain_refusal``). ``ValueError`` for a name that is no
+    terrain or none of the trainer's."""
+    from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
+
+    if terrain is None:
+        return trainer
+    value = terrain_id(terrain)
+    known = [t for t in trainer.terrains if t != TERRAIN_UNKNOWN]
+    if value not in known:
+        gives = ", ".join(TERRAIN_NAMES[t] for t in known) or "none (no map places it)"
+        raise ValueError(
+            f"--terrain {TERRAIN_NAMES[value]}: trainer {trainer.id}'s start tiles give {gives}"
+        )
+    return replace(trainer, terrain=value)
+
+
 def _fight(args):
     """(game, tables, names, trainer, player party, opponent party, start weather, save or
     None) for ``args.game``. Raises
@@ -685,6 +732,7 @@ def _fight(args):
     trainer = resolve_trainer(
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
+    trainer = fight_terrain(trainer, args.terrain)
     if save is None:
         player = load_party(args.party, names, tables)
     inter = IntermediateData(game.intermediate_dir, game.id)
@@ -992,6 +1040,7 @@ def _prep(args) -> int:
     trainer = resolve_trainer(
         trainers, name=args.trainer, trainer_id=args.trainer_id, player_starter=_starter(save)
     )
+    trainer = fight_terrain(trainer, args.terrain)
     inter = IntermediateData(game.intermediate_dir, game.id)
     _check_buildable(tables, names, trainer, inter)
     opp = build_trainer_party(trainer, inter)
@@ -1128,12 +1177,14 @@ def line_setup(
     protect: Sequence[str] = (),
     allow_corrupt: bool = False,
     field_defog: bool = False,
+    terrain: str | None = None,
 ) -> LineSetup:
     """The fight of ``nuzline line`` (module docstring) without argparse: the team from
     ``party_path``, or from ``save_path`` with the line file's ``[[team]]``; the trainer's
     built party; the file's rules resolved; ``require_coverage`` with both slot-0 leads
     (raising ``UnsupportedMechanics``); the turn-0 state with ``deaths`` and the
-    ``protect``ed team members; the start weather is ``fight_start``'s (``field_defog``).
+    ``protect``ed team members; the start weather is ``fight_start``'s (``field_defog``),
+    the battle terrain ``fight_terrain``'s (``terrain``).
     ``ValueError`` for a bad file, name or value;
     ``FightRefused`` (with ``trainer`` and the coverage ``report``) for a fight that cannot
     be built (``_check_buildable``)."""
@@ -1171,7 +1222,7 @@ def line_setup(
             )
         player = load_party(party_path, names, tables)
         cry = _chatot_cry(None, party_path)
-    trainer = resolve_trainer(trainers, trainer_id=trainer_id)
+    trainer = fight_terrain(resolve_trainer(trainers, trainer_id=trainer_id), terrain)
     from nuzline.ai.layout import fight_tables
 
     inter = IntermediateData(game.intermediate_dir, game.id)
@@ -1333,6 +1384,7 @@ def _line_command(args, run) -> int:
             protect=args.protect,
             allow_corrupt=args.allow_corrupt,
             field_defog=args.field_defog,
+            terrain=args.terrain,
         )
     except UnsupportedMechanics as e:
         print(_trainer_line(trainer))

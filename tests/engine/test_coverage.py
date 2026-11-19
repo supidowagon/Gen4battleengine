@@ -585,8 +585,8 @@ def test_terrain_moves_refused_only_for_an_unknown_terrain(tables, names):
     assert terrain_refusal(tables, names, roark, [nature_power]) is None
     mixed = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(0, 2, 7))
     line = terrain_refusal(tables, names, mixed, [tackle, nature_power, 0])
-    assert "varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER)" in line
-    assert line.endswith("and Nature Power would read it")
+    assert "start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc" in line
+    assert line.endswith("and Nature Power would read it: name it with --terrain")
     assert terrain_refusal(tables, names, mixed, [tackle]) is None
     unplaced = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=())
     assert "no map places the trainer" in terrain_refusal(tables, names, unplaced, [nature_power])
@@ -602,8 +602,9 @@ def test_fight_with_a_terrain_move_names_the_terrains(tables, names):
     report = check_coverage(tables, names, party, mixed, roark_party(names), 0)
     terrain = [m for m in report.missing if "battle terrain" in m]
     want = (
-        "Roark: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and "
-        "Camouflage would read it (battle terrain UNSUPPORTED)"
+        "Roark: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, "
+        "TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Camouflage would "
+        "read it: name it with --terrain (battle terrain UNSUPPORTED)"
     )
     assert terrain == [want]
     known = check_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)

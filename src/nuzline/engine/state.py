@@ -197,7 +197,8 @@ Encodings:
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
   (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
   (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
-  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's maps give several terrains or none
+  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's start tiles give several terrains and
+  the run names none (``cli.fight_terrain``, ledger G-18) or no map places it
   (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
   read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
 * ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a

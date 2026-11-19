@@ -113,8 +113,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
   (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
-  ``TERRAIN_UNKNOWN``: its maps give several terrains (the line names them) or none
-  (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
+  ``TERRAIN_UNKNOWN``: its start tiles give several terrains and the run has not named one
+  (``cli.fight_terrain``, ``--terrain``: a run input, ledger G-18; the line names the
+  choices) or its maps give none (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
   move it calls there (``terrain_call``, ``ids.TERRAIN_MOVES``) has an unsupported effect
   (Earthquake, Blizzard). Its call also counts as a move of the fight for the Kaizo ROM-change
   conditions (``rom_change_refusals``).
@@ -870,8 +871,10 @@ def terrain_refusal(
 ) -> str | None:
     """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
     battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
-    (the line names every terrain its maps give) or unplaced; or, on a known terrain, Nature
-    Power calls a move whose effect the engine does not implement; else None."""
+    and not named by the run (``cli.fight_terrain``; the line names every terrain its start
+    tiles give and the three sources checked, ledger G-18) or unplaced; or, on a known
+    terrain, Nature Power calls a move whose effect the engine does not implement; else
+    None."""
     effect = np.asarray(tables.move_ai_effect)
     hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
     if not hit:
@@ -890,11 +893,17 @@ def terrain_refusal(
         unread = (
             " and a map whose tiles cannot be read" if TERRAIN_UNKNOWN in trainer.terrains else ""
         )
-        why = f"the battle terrain varies over its maps ({', '.join(known)}{unread})"
+        # Manager ruling 1: the tile under the player is the run's route, so the terrain is
+        # a run input; the ROM gives the choices, the calc repo and the docs sheet none.
+        why = (
+            f"the battle terrain is a run input: its start tiles give {', '.join(known)}{unread} "
+            "(ROM; the calc repo and the docs sheet record none)"
+        )
+        ask = ": name it with --terrain"
     else:
-        why = "the battle terrain is unknown (no map places the trainer)"
+        why, ask = "the battle terrain is unknown (no map places the trainer)", ""
     moves_ = ", ".join(names.move_names[m] for m in hit)
-    return f"{display_name(trainer)}: {why}, and {moves_} would read it"
+    return f"{display_name(trainer)}: {why}, and {moves_} would read it{ask}"
 
 
 def rom_change_line(label: str) -> str:

@@ -252,3 +252,45 @@ def test_field_defog_start_is_a_run_input(kaizo_trainers, kaizo_names):
     assert hearthome.start_condition == "fog" and not hearthome.area_condition.fog_clearable
     with pytest.raises(ValueError, match="OVERWORLD_WEATHER_FOG"):
         fight_start(hearthome, names, None, True, [holder])
+
+
+def test_mixed_battle_terrain_is_a_run_input(kaizo_trainers, kaizo_tables, kaizo_names):
+    """Battle terrain per fight (G-18, manager ruling 1): the terrain is the tile under the
+    player at the start (CalcTerrain, field_battle_data_transfer.c:467-494; battle_main.c:1052),
+    so a trainer whose start tiles give several (Ace Trainer Laura 134, Route 217: GRASS / SNOW)
+    is refused while a terrain move would read it, until the run names one of them; the row
+    records the three sources (ROM several; calc repo, docs sheet none). Nature Power then
+    calls that terrain's move (to_move.h; battle_script.c:8036-8048). A single-terrain fight
+    needs no input."""
+    from nuzline.cli import fight_terrain, terrain_id
+    from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, run_terrain
+    from nuzline.engine.coverage import terrain_calls, terrain_refusal
+
+    tables, names = kaizo_tables, kaizo_names
+    nature_power = names.move("Nature Power")
+    laura = kaizo_trainers[134]
+    grass, snow = terrain_id("grass"), terrain_id("TERRAIN_SNOW")
+    assert (laura.terrain, laura.terrains) == (TERRAIN_UNKNOWN, (grass, snow))
+    assert any(nature_power in m.moves for m in laura.party)
+    assert "several: pkcalc none (move texts only), sheet none" in laura.sources["terrain"]
+    line = terrain_refusal(tables, names, laura, [nature_power])
+    assert "give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet" in line
+    assert line.endswith("would read it: name it with --terrain")
+    assert fight_terrain(laura) is laura and not run_terrain(laura)
+    on_snow = fight_terrain(laura, "snow")
+    assert on_snow.terrain == snow and run_terrain(on_snow)
+    assert terrain_refusal(tables, names, on_snow, [nature_power]) is None
+    assert terrain_calls(tables, on_snow, [nature_power]) == [names.move("Blizzard")]
+    on_grass = fight_terrain(laura, "Grass")
+    assert terrain_calls(tables, on_grass, [nature_power]) == [names.move("Seed Bomb")]
+    with pytest.raises(ValueError, match="start tiles give TERRAIN_GRASS, TERRAIN_SNOW"):
+        fight_terrain(laura, "water")
+    with pytest.raises(ValueError, match="not a battle terrain"):
+        terrain_id("lava")
+    single = next(t for t in kaizo_trainers if t.split and len(t.terrains) == 1)
+    assert fight_terrain(single) is single and not run_terrain(single)
+    named = TERRAIN_NAMES[single.terrain]
+    assert fight_terrain(single, named).terrain == single.terrain
+    other = TERRAIN_NAMES[grass if single.terrain != grass else snow]
+    with pytest.raises(ValueError, match="start tiles give"):
+        fight_terrain(single, other)

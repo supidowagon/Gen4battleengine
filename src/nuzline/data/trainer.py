@@ -241,6 +241,13 @@ class Trainer:
     terrains: tuple[int, ...] = ()
 
 
+def run_terrain(trainer: Trainer) -> bool:
+    """The fight's battle terrain was named by the run (``cli.fight_terrain``, ledger G-18):
+    its start tiles give several terrains and ``trainer.terrain`` is one of them."""
+    known = [t for t in trainer.terrains if t != TERRAIN_UNKNOWN]
+    return len(known) > 1 and trainer.terrain in known
+
+
 def _mon(d: dict) -> TrainerMon:
     moves = d["moves"]
     return TrainerMon(

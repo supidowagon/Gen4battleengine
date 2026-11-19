@@ -106,17 +106,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #2 (position 2; rules not recorded) | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #3 (position 1; rules not recorded) | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #3 (position 2; rules not recorded) | Fantina Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it | Fantina Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain | Fantina Split |
 | battle conditions | battle format: gauntlet Route 213 (position 1; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 2; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 3; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 4; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 5; rules not recorded) | Wake Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it | Wake Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_MOUNTAIN, TERRAIN_CAVE), and Nature Power would read it | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain | Wake Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_MOUNTAIN, TERRAIN_CAVE (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Candice Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 10; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 11; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 12; rules not recorded) | Galactic Split |
@@ -129,9 +129,9 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Wayward Cave (position 7; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 8; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 9; rules not recorded) | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Galactic Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain | Galactic Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain | Galactic Split |
 | other | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
 
 ## Your side (upper bound)
@@ -289,13 +289,13 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 37 | battle format: a double battle |
 | 16 | AI move-id case of TrainerAI_CalcDamage: Gyro Ball |
 | 15 | move effect #83: Metronome; 11 of 442 callable moves unmodelled |
-| 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
+| 9 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |
 | 6 | AI move effect #233 FLING not transcribed (Basic_CheckFling / Expert_Fling): Fling |
-| 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it |
+| 6 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain |
 | 6 | move effect #233: Fling |
 | 4 | AI move-id case of TrainerAI_MoveType where it assigns no type (open: real-game check, trainer_ai.c:3222-3240): Weather Ball |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it |
+| 2 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
+| 2 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain |
 | 1 | AI move effect #100 DECREASE_LAST_MOVE_PP not transcribed (no Basic or Expert label): Spite |
 | 1 | AI move effect #113 FORESIGHT not transcribed (Basic_CheckForesight / Expert_Foresight): Odor Sleuth |
 | 1 | AI move effect #178 COPY_ABILITY not transcribed (Expert_ChangeUserAbility): Role Play |
@@ -340,8 +340,8 @@ Groups by kind: battle format 12, AI 1, move effect 1
 | 1 | battle format: gauntlet Wayward Cave (position 7; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 8; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 9; rules not recorded) |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |
 
 Groups by kind: battle format 36, AI 15, battle terrain 9, move effect 8, ROM change 1
 

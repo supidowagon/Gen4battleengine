@@ -239,3 +239,32 @@ def test_team_count_and_the_team_space_limit():
         check_team_space(20, 6)
     assert "333,280" in str(e.value) and f"{MAX_TEAM_SETUPS:,}" in str(e.value)
     check_team_space(20, 6, limit=400_000)
+
+
+def test_run_terrain_is_a_prep_step_and_in_the_checkpoint(tables, names):
+    """A fight whose start tiles give several battle terrains runs on the one the run names
+    (G-18): the plan says to start on such a tile (CalcTerrain reads the tile under the player,
+    field_battle_data_transfer.c:467-494), and a checkpoint of another terrain does not resume
+    it. A fight with no named terrain keeps its digest."""
+    from nuzline.data.trainer import TERRAIN_UNKNOWN
+    from nuzline.prep.checkpoint import fingerprint
+    from nuzline.prep.report import prep_steps
+    from nuzline.prep.search import PrepSettings
+
+    pool = [candidate(names, sample_party(names)[0], 0)]
+    base = problem(tables, names, pool)
+    mixed = replace(base.trainer, terrain=TERRAIN_UNKNOWN, terrains=(2, 6))
+    unnamed = replace(base, trainer=mixed)
+    on = {t: replace(base, trainer=replace(mixed, terrain=t)) for t in (2, 6)}
+    setup = Setup((base_member(base, 0),))
+    assert prep_steps(on[6], names, setup, tables)[-1] == (
+        "Start the fight standing on a tile whose battle terrain is TERRAIN_SNOW (the tile "
+        "under the player decides it)."
+    )
+    assert not any("battle terrain" in s for s in prep_steps(base, names, setup, tables))
+    digest = {
+        k: fingerprint(p, PrepSettings(), 0, "t", "c")["problem"]
+        for k, p in (("base", base), ("unnamed", unnamed), *on.items())
+    }
+    assert digest["unnamed"] == digest["base"]
+    assert len({digest["base"], digest[2], digest[6]}) == 3

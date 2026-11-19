@@ -1856,6 +1856,36 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   329 + PKCalc) are the rom-field-script-commands group's (gFieldScriptCommands, sheet steps 1-2); its Route 213
   check of a save on header 373 can reuse `SaveFile.map_header` / `overworld_weather`. Ruling 1 (per-fight terrain)
   is terrain-per-map's.
+- G-18 Battle terrain per fight (sheet terrain-per-map; manager ruling 1): a run input, refused until set. A trainer
+  battle's terrain is the tile under the player at the start: Encounter_NewVsTrainer -> FieldBattleDTO_Init
+  (encounter.c:744) -> SetBackgroundAndTerrain (field_battle_data_transfer.c:496-505: background from the map header,
+  BACKGROUND_WATER while surfing) -> CalcTerrain (:467-494: the tile behaviour at location x, z,
+  terrain_collision_manager.c:229-240; else the background's row, :441-465), copied to BattleSystem.terrain
+  (battle_main.c:1052) and never written in battle. `Trainer.terrains` (tools/terrain.py trainer_terrains, the
+  start tiles) with one value is `Trainer.terrain`: no input. With several the tile is the run's route; sources
+  checked: ROM several, calc repo none (pkcalc raw/MOVES.json Nature Power / Secret Power texts only), docs sheet
+  none (docs.json has no terrain field). The row records them: Kaizo `sources.terrain` of each such trainer (tools/
+  kaizo/resolve.py: "several: pkcalc none (move texts only), sheet none (no terrain field): a run input
+  (--terrain)"); the coverage line (`coverage.terrain_refusal`) names the start-tile terrains and the three sources
+  and asks for `--terrain`. Input: `--terrain NAME` beside `--field-defog` (`cli.run_inputs`) on coverage, rank,
+  solve, prep and both line commands; `cli.fight_terrain(trainer, terrain)` (called by `_fight`, `_prep`,
+  `line_setup`) returns the trainer with `terrain` = the named value, which must be one of its known `terrains`
+  (`terrain_id` reads `TERRAIN_SNOW`, `snow`, `great marsh`); any other value, and any value for a trainer no map
+  places, is a `ValueError`. Every reader downstream already takes `trainer.terrain`: coverage, `make_state`
+  (`_FIELD` int8, one per battle, doubles convention 2), prep (`PrepProblem.trainer`). Prep: `report.prep_steps`
+  adds "Start the fight standing on a tile whose battle terrain is X"; the checkpoint digest carries the terrain
+  when the run named one (`data.trainer.run_terrain`), so a checkpoint of another terrain does not resume. Kaizo:
+  160 split rows have several start-tile terrains (none unread, none unplaced); vanilla none. MANIFEST_VERSION 38
+  (table inputs changed: trainers.json sources). Backlog regenerated: the 9 battle-terrain groups stay as run-input
+  rows with the new text. Tests: tests/engine/test_e1_batch_g.py (Laura 134 GRASS / SNOW: refusal, input, Nature
+  Power calls Blizzard / Seed Bomb, bad values, a single-terrain row), tests/prep/test_setups.py (step, digest),
+  tests/engine/test_coverage.py (line text).
+- G-19 Not built here, by ruling or by group: the sheet's per-terrain prep axis (evaluate every terrain, plan on the
+  worst) is replaced by ruling 1's refusal until set. A save does not give the terrain: its Location (header, x, z)
+  would, but CalcTerrain needs the ROM land data at run time, which no table carries; the user names the terrain
+  instead. `order.terrain_known` and the reference `_terrain_row` None paths stay: a mixed fight without a terrain
+  move still builds with TERRAIN_UNKNOWN (nothing reads it); dropping them is terrain-moves.md "Missing 1" (the
+  next group), which reads the state's `terrain` as set here.
 
 ## Stream state (restart point, 2026-11-19)
 

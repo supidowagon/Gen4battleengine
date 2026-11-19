@@ -290,8 +290,10 @@ three structs has a row.
   never written in battle. `BattleSystem_GetTerrain` (`src/battle/battle_system.c:375-382`)
   is read by Nature Power, Secret Power and Camouflage (`src/battle/battle_script.c:8007`,
   `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
-  it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
-  maps give several terrains or none, and coverage then refuses those three effects.
+  it from `Trainer.terrain` (`tools/terrain.py`), or for a trainer whose start tiles give
+  several, from the run's `--terrain` (`cli.fight_terrain`, ledger G-18); `TERRAIN_UNKNOWN`
+  (-1) while none is named or no map places the trainer, and coverage then refuses those
+  three effects.
   Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
   `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
   (`order.terrain_index`: those readers then do nothing).

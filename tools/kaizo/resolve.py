@@ -42,7 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
-from nuzline.data.trainer import OVERWORLD_WEATHER_FOG, AreaCondition, default_moves
+from nuzline.data.trainer import (
+    OVERWORLD_WEATHER_FOG,
+    TERRAIN_UNKNOWN,
+    AreaCondition,
+    default_moves,
+)
 from tools.kaizo.crosscheck import (
     DEFAULT_REPORT,
     DEFAULT_RESOLUTIONS,
@@ -630,6 +635,13 @@ def trainer_record(
         f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
         "tools/terrain.py)"
     )
+    if len([x for x in t.get("terrains", ()) if x != TERRAIN_UNKNOWN]) > 1:
+        # Manager ruling 1 (ledger G-18): several start-tile terrains are the run's route;
+        # the other two sources were checked and hold no terrain.
+        sources["terrain"] += (
+            "; several: pkcalc none (move texts only), sheet none (no terrain field): "
+            "a run input (--terrain)"
+        )
     a = overrides.area.get(tid)
     if a is not None:
         sources["area_condition"] += f"; overrides area.{tid} ({a.source})"
