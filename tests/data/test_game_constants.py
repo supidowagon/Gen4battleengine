@@ -52,7 +52,7 @@ LISTED = [
     "nuzline.ai.switching.MOVE_STRUGGLE",
     "nuzline.prep.problem.HEART_SCALE",
     "nuzline.engine.coverage.SPECIES_GIRATINA",
-    "nuzline.engine.coverage.SPECIES_SHAYMIN",
+    "nuzline.engine.ids.SPECIES_SHAYMIN",
     "nuzline.engine.coverage.ITEM_GRISEOUS_ORB",
     # engine, asserted by name and hold effect / hold param
     "nuzline.ai.commands.ITEM_EXPERT_BELT",

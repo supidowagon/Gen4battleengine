@@ -51,6 +51,7 @@ from nuzline.engine.damage import (
     hp_power,
     ignorable,
     trump_card_power,
+    weather_ball_params,
     weight_power,
 )
 from nuzline.engine.effects import armored
@@ -214,13 +215,19 @@ def _smogon_departs(
     #    (Motor Drive and Soundproof are not modelled abilities: no ``AbilityId``.)
     seen = int(ignorable(s, 0, 1))
     powered = int(tables.move_power[move]) != 0
-    water = seen in (AbilityId.DRY_SKIN, AbilityId.WATER_ABSORB) and m["type"] == Type.WATER
+    # The game's moveType, which Weather Ball's script sets from the weather
+    # (BtlCmd_CalcWeatherBallParams, battle_script.c:6843-6872) before TryMove reads it
+    # (battle_lib.c:3492-3498), not the table's (Normalize is not modelled).
+    kind = m["type"]
+    if int(tables.move_effect[move]) == EffectId.WEATHER_BALL:
+        kind = int(weather_ball_params(tables, s, move)[2])
+    water = seen in (AbilityId.DRY_SKIN, AbilityId.WATER_ABSORB) and kind == Type.WATER
     flash = (
         seen == AbilityId.FLASH_FIRE
-        and m["type"] == Type.FIRE
+        and kind == Type.FIRE
         and int(s.status[1, int(s.active[1])]) != Status.FREEZE
     )
-    volt = seen == AbilityId.VOLT_ABSORB and m["type"] == Type.ELECTRIC
+    volt = seen == AbilityId.VOLT_ABSORB and kind == Type.ELECTRIC
     if ((water or flash) and powered) or volt:
         return True
     # 7. The type chart rounding at low damage (_chart_rounding_departs).

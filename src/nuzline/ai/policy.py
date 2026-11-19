@@ -33,7 +33,7 @@ Roark since K3c Task 6), an opponent move the AI's damage estimate or move type 
 by a move-id case it does not model, a vanilla moveset with more script-roll sites than
 ``AiOutcome`` encodes, a per-slot path with more random reads than ``layout.slot_reads``
 (``ai_path_refusals``), the abilities, items and moves that change
-``effectiveness_class``, a bag item other than a Potion, and every refusal of the
+``effectiveness_class``, and every refusal of the
 voluntary-switch rule (``switching.switching_refusals``). On concrete inputs the public
 functions raise ``UnsupportedAi``; traced (jit, vmap) they cannot raise, so
 ``ai_scores`` gives -1 for every slot and ``ai_policy`` gives
@@ -107,7 +107,7 @@ from nuzline.ai.switching import (
 from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
-from nuzline.engine.bag import bag_item_category, refused_bag_items, refused_bag_params
+from nuzline.engine.bag import bag_item_category
 from nuzline.engine.damage import ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import ItemAiCategory, Stat
@@ -3885,7 +3885,6 @@ class _Refused(NamedTuple):
     item: jnp.ndarray  # bool[2, SLOTS]
     state_move: jnp.ndarray  # bool[2, SLOTS, MOVES]
     copied: jnp.ndarray  # bool[SLOTS, MOVES]: a player move Copycat's damage test calculates
-    bag: jnp.ndarray  # bool[BAG_SLOTS]: bag item other than a Potion
     scoring: jnp.ndarray  # bool: ai_scores is refused
     any: jnp.ndarray  # bool: ai_policy is refused (switching aside)
 
@@ -3947,8 +3946,6 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     copied = (
         present[0][:, None] & jnp.isin(moves[0], jnp.array(c.CALC_DAMAGE_MOVES, _I32)) & copycat
     )
-    bag_items = state.trainer_items[1].astype(_I32)
-    bag = (bag_items != 0) & refused_bag_items(tables, bag_items)
     scoring = (
         jnp.any(move)
         | jnp.any(expert)
@@ -3972,9 +3969,8 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         item_bad,
         state_move,
         copied,
-        bag,
         scoring,
-        scoring | jnp.any(bag),
+        scoring,
     )
 
 
@@ -4095,7 +4091,7 @@ def _scoring_refusals(
     for s, k in zip(*np.nonzero(np.asarray(r.move_type)), strict=True):
         out.append(
             f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
-            "takes TrainerAI_MoveType's Weather Ball case (trainer_ai.c:3209-3227), which "
+            "takes TrainerAI_MoveType's Weather Ball case (trainer_ai.c:3222-3240), which "
             "assigns no type outside rain, sand, sun and hail or under Cloud Nine / Air Lock: "
             "the ROM returns an unwritten register (B13-26)"
         )
@@ -4133,17 +4129,6 @@ def _scoring_refusals(
     return out
 
 
-def _item_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
-    names = _names_for(tables, names)
-    bag = np.asarray(state.trainer_items[1])
-    params = np.asarray(tables.item_party_param)
-    return [
-        f"item use: bag slot {k}: {_item_name(int(bag[k]), names)} "
-        + "; ".join(refused_bag_params(params[int(bag[k])], int(bag[k])))
-        for k in np.flatnonzero(np.asarray(_refused(tables, state, layout).bag))
-    ]
-
-
 def _layout(tables: Tables, layout: AiLayout | None) -> AiLayout:
     """``layout``, else ``layout_of(tables)`` on concrete tables, else (traced tables)
     ``VANILLA``, under which ``_Refused.policy`` refuses another policy's tables."""
@@ -4155,10 +4140,8 @@ def _layout(tables: Tables, layout: AiLayout | None) -> AiLayout:
 
 
 def _all_refusals(tables: Tables, state: BattleState, layout: AiLayout, names=None) -> list[str]:
-    return (
-        _scoring_refusals(tables, state, layout, names)
-        + _item_refusals(tables, state, layout, names)
-        + switching_refusals(tables, state, layout.switch_sites)
+    return _scoring_refusals(tables, state, layout, names) + switching_refusals(
+        tables, state, layout.switch_sites
     )
 
 
@@ -4372,7 +4355,6 @@ def maybe_use_item(
     """``int32``: ``TrainerAI_ShouldUseItem`` (trainer_ai.c:4056; roark.md 12): the item
     action ``10 + k`` of the first bag slot it uses, or ``NO_ITEM``. It draws nothing.
     Both engines empty the later slots the decomp's loop also zeroes."""
-    _check(tables, state, _layout(tables, layout), _item_refusals)
     return _use_item(tables, state)
 
 

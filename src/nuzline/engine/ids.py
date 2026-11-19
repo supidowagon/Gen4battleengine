@@ -1084,6 +1084,7 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
 SPECIES_CASTFORM = 351  # BattleSystem_TriggerFormChange (battle_lib.c:6314), F-6
+SPECIES_SHAYMIN = 492  # subscript_check_shaymin_form.s:6, F-16
 SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
 SPECIES_CHANSEY = 113  # :7127
 SPECIES_CUBONE = 104

@@ -342,7 +342,7 @@ def party_move_types(tables: Tables, state: BattleState, side: int = 1) -> jnp.n
 def weather_ball_refused(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool``: a type read of the voluntary-switch rule or the post-KO replacement meets
     Weather Ball where its case assigns no type (``damage.ai_weather_ball_typed``: no weather,
-    fog alone, or Cloud Nine / Air Lock): ``TrainerAI_MoveType`` (trainer_ai.c:3209-3227) of
+    fog alone, or Cloud Nine / Air Lock): ``TrainerAI_MoveType`` (trainer_ai.c:3222-3240) of
     the AI's active's moves (:3302, :3387, :3578, :3605) or of the player's ``moveHit`` (:3767),
     and ``Move_CalcVariableType`` (battle_lib.c:8177-8195) of an AI party member's (:3324,
     :3443, :3502, :3782; battle_lib.c:7998, :8051) return an uninitialized register, not
@@ -669,7 +669,7 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
     if bool(lay.weather_ball):
         out.append(
             "switching: Weather Ball's type case assigns nothing in this weather "
-            "(TrainerAI_MoveType, trainer_ai.c:3209-3227; Move_CalcVariableType, "
+            "(TrainerAI_MoveType, trainer_ai.c:3222-3240; Move_CalcVariableType, "
             "battle_lib.c:8177-8195): an uninitialized register"
         )
     if bool(lay.absorb_gate):

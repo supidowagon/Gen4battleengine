@@ -1227,12 +1227,17 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
 
 ### Open items
 - **F-O1 Weather Ball's AI type outside the typed weathers.** `TrainerAI_MoveType` (src/battle/trainer_ai/trainer_ai.c:
-  3222-3240) assigns a type only in rain, sand, sun and hail; with no weather, fog, or Cloud Nine / Air Lock out it
-  returns an uninitialised local. Ruling (manager, 2026-11-18): build the four typed weathers; keep the AI refusal
-  for the other states, its test carrying `fullset`. Blocks 4 Kaizo battles (opponent parties with Weather Ball,
-  `mechanics_backlog.md`); each can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it
-  under any weather). A player's own Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any
-  battle. Trigger: a real-game check (memory dump per caller) when the user next does real-game checks.
+  3222-3240) assigns a type only in rain, sand, sun and hail (each under `NO_CLOUD_NINE`); with no weather, fog, or
+  Cloud Nine / Air Lock out it returns an uninitialised local (`int result;`, :3129; no `default` for the move). Ruling
+  (manager, 2026-11-18), built: the four typed weathers are modelled (`damage.ai_move_type` via `weather_ball_params`,
+  `ai_weather_ball_typed`; the switch AI's and the replacement's reads share it); the AI refusal for the other states
+  stays (`policy._refused` `move_type`, `switching.weather_ball_refused`), and the tests of that refusal carry `fullset`
+  (`test_batch13_refusals_lifted`, `test_weather_ball_move_type_is_untyped_outside_the_four_weathers`,
+  `test_party_variable_types_follow_move_calc_variable_type`). The docstring cites now give :3222-3240 (they gave the
+  pre-re-index :3209-3227). Blocks 4 Kaizo battles (opponent parties with Weather Ball, `mechanics_backlog.md`); each
+  can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it under any weather). A player's own
+  Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any battle. Trigger: a real-game check
+  (memory dump per caller) when the user next does real-game checks.
 
 ### Rulings
 - F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
@@ -1386,3 +1391,46 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   it: `damage.move_type_of` and reference `_move_type` give a Natural Gift type above `Type.DARK` the value
   `Type.MYSTERY` (no row, and no battler's `state.types` holds it: roost only reads Flying as Mystery in the defender's
   chart), as ruling B13-26 does for the AI's estimate; the table reads stay in range.
+- F-15 Party friendship wraps apart from the battler's (trainer bag items; the Kaizo Poke Ball of #345 Christine).
+  `BattleSystem_UseBagItem` bands by `Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP)` of the **party** Pokemon (src/battle/
+  battle_system.c:716-733) and, when the item's amount is nonzero, adds it with `Pokemon_IncreaseValue` (:751) to the
+  party's u8 and with `Battler_AddVal` (:752-754) to the battler's. `BoxPokemon_IncreaseDataInternal` sets `newValue`
+  to 255 when `friendship + value > 255`, then adds `value` unless the sum is below 0 (src/pokemon.c:1859-1874): the u8
+  stores `(255 + value) & 0xFF`, so any gain that crosses 255 stores `value - 1` (254 + 3 -> 2), and a loss below 0
+  stores 0. `BattleMon_AddVal` clamps to 0-255 (battle_lib.c:1032-1043). The battler re-reads the party value in
+  `BattleSystem_InitBattleMon` (:136) and `BattleSystem_ReloadPokemon` (:179). New per-slot `party_friendship` beside
+  `friendship` (STATE.md): `bag.use_bag_item` bands by it and writes both; `step._switch_in` / reference `_enter` copy it
+  into `friendship`; a level-up reads it and writes both (`levelup.pay_exp_leveled`; the closed form needs no change,
+  a u8 never exceeds 255); `make_state` starts both equal. The refusal is removed (`bag.refused_bag_params`,
+  `refused_bag_items`, `AI_BRANCH_PARAMS`, `coverage` "trainer item", `policy._Refused.bag`, `_item_refusals`). Not
+  built: the Luxury Ball and egg-location +1 (:737-743), neither true of a trainer Pokemon (Poke Ball, egg location 0,
+  pokemon.c:441-442), and a player-side bag item; the save export of the player's party value is `party_friendship`
+  (no export path reads it yet). Kaizo's only wrapping trainer item is the Poke Ball of #345 Christine (Lv1 Sandshrew,
+  friendship 255): party 2, battler 255; the AI reads the battler value (Return / Frustration, trainer_ai.c:3018-3026).
+- F-16 Shaymin-Sky reverts to Land Forme when frozen (Kaizo #870 Cynthia; any side). `BattleControllerPlayer_
+  AfterMoveMessage` loads `subscript_check_shaymin_form` after the secondary effect of every hit and before Rage and
+  the contact ability (src/battle/battle_controller_player.c:3497-3505 one hit, :3557-3565 per multi-hit hit). The
+  script (res/battle/scripts/subscripts/subscript_check_shaymin_form.s:5-30) needs a defender whose species is 492,
+  form number nonzero, no Substitute and status exactly `MON_CONDITION_FREEZE`; it sets the form to 0, the ability to
+  Land's (personality bit 0 clear: ABILITY_1, else ABILITY_2 when nonzero, else ABILITY_1; `LoadArchivedMonData`
+  writes `calcTemp`, battle_script.c:9414-9425, which the following `UpdateMonDataFromVar` reads), raises
+  `SYSCTL_RECALC_MON_STATS`, sets the two types from Land's row and runs `RefreshMonData`. `BattleMon_CopyToParty`
+  sends `updateForm` / `updateStats` (battle_controller.c:1496-1499): the party form 0, ability, and
+  `Pokemon_CalcLevelAndStats` (battle_io_command.c:597-604); `BattleSystem_ReloadPokemon` then reloads the battler's
+  stats, HP, level and friendship (battle_lib.c:169-193). `hooks.shaymin_land` (JAX, called from `effects.play_hit`
+  right before `_contact_ability`, not for Pursuit's pre-switch hit, which loads no `AfterMoveMessage`) and reference
+  `_shaymin_land` (called from `_hit` at the same point): form 0, `ability_slot` kept when Land's row has an ability
+  there else 0 (Land's second slot is 0, so Natural Cure), `ability_form` 0, types from the Land row, stats and max HP
+  from `calc_stats_jnp` / `_calc_stats` on Land's row with the slot's IVs, EVs, nature and level (HP moves by the max
+  HP's change; both rows have base HP 100), `friendship` = `party_friendship`, `power_trick_desync` = `power_trick`
+  (the Atk / Def reload is unswapped, as a level-up's, B12-10), and the AI learns the ability (`BattleAI_SetAbility`,
+  battle_script.c:3402-3403: `hooks._know`). Stages, status, volatiles and the thaw stay: the freeze goes at the
+  later thaw checks. `landed` stands for "the hit reached `AfterMoveMessage`" (a miss or no target does not). For a
+  U-turn the decomp runs the form change after the party list; the engine runs it before the pivot (nothing between
+  reads form-dependent state, F-4's skip aside). Enumerate: a foe's freezing move on a Sky Shaymin side and a hit on
+  a Sky Shaymin frozen at the turn start are input clauses (`enumerate.py`, `sky`, `foe_freezes`, `sky_frozen`).
+  Coverage: the "Sky Forme reverts when frozen" refusal is removed; `SPECIES_SHAYMIN` moved to `engine.ids`. **Not
+  settled:** a Shaymin the defender Transformed into (its battler holds species 492 and form 1 as a copy while the
+  party Pokemon is another): `CopyToParty` writes form 0 and the new ability into that party Pokemon, which the
+  sheet and decomp do not make clear enough to model; `shaymin_land` skips a Transformed battler (stopped at
+  subscript_check_shaymin_form.s:6-7 with `battle_script.c:5346-5348`).

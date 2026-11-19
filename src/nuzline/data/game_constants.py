@@ -558,11 +558,11 @@ CONSTANTS: tuple[Constant, ...] = (
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).
     Constant("tools.effect_map.TYPE_CHART_STATUS_MOVES", "move", 86, "Thunder Wave", _E),
-    # SPECIES_SHEDINJA (src/pokemon.c:598, :634); SPECIES_GIRATINA, SPECIES_SHAYMIN
-    # (include/constants/forms.h:94, :98).
+    # SPECIES_SHEDINJA (src/pokemon.c:598, :634); SPECIES_GIRATINA (include/constants/forms.h:94);
+    # SPECIES_SHAYMIN (subscript_check_shaymin_form.s:6, F-16).
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
-    Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    Constant("nuzline.engine.ids.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
     # SPECIES_ARCEUS (generated/species.txt line 494): Battler_MonType's Multitype case
     # (battle_lib.c:7629-7630), F-3.
     Constant("nuzline.engine.ids.SPECIES_ARCEUS", "species", 493, "Arceus", _E),

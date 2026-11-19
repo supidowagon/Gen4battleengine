@@ -1,8 +1,11 @@
 """E1 batch F (rulings F-n, docs/kaizo/e1-mechanics-ledger.md): Heatproof, Flash Fire, Multitype,
-Intimidate's substitute skip, Hydration, Forecast and the held items of hold effects 36, 41, 42, 50,
-92, 0, 1 and 12, each case checked against the reference engine."""
+Intimidate's substitute skip, Hydration, Forecast, the held items of hold effects 36, 41, 42, 50,
+92, 0, 1 and 12, the party friendship wrap and Shaymin-Sky's revert, each case checked against the
+reference engine."""
 
 from __future__ import annotations
+
+import dataclasses
 
 import jax
 import jax.numpy as jnp
@@ -10,6 +13,7 @@ import numpy as np
 import pytest
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, personal_types
 from nuzline.engine.enumerate import outcome_laws
@@ -30,6 +34,7 @@ from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
 from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.test_e1_batch_e import _bag, _use_both
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _state
 
@@ -580,3 +585,116 @@ def test_natural_gift_with_type_31_is_neutral_and_typeless(tables, names):
     got = _both(t, s, ng)
     t9 = t._replace(item_gift_type=jnp.asarray(t.item_gift_type).at[cake].set(Type.MYSTERY))
     assert got == _both(t9, s, ng) and max(got) > 0
+
+
+# --- The party friendship wrap (F-15) ---------------------------------------------------------
+
+SWITCH = 4  # order.MOVE_ACTIONS + party slot
+
+
+@pytest.mark.parametrize(
+    ("party", "battler", "want_party", "want_battler"),
+    [
+        (254, 254, 2, 255),  # 254 + 3 > 255: (255 + 3) & 0xFF, pokemon.c:1859-1874
+        (255, 255, 2, 255),  # the sheet's Christine case: party 2, battler stays 255
+        (250, 250, 253, 253),  # no crossing: both add
+        (0, 0, 3, 3),  # a Frustration holder: the low band
+        (99, 255, 102, 255),  # the band is the party's (battle_system.c:716-720); battler clamps
+        (200, 10, 203, 13),  # the high band by the party value, though the battler reads low
+    ],
+)
+def test_a_poke_balls_friendship_wraps_the_party_value_not_the_battlers(
+    tables, names, party, battler, want_party, want_battler
+):
+    """UseBagItem bands by the party Pokemon's friendship and adds through
+    ``Pokemon_IncreaseValue`` (u8: a sum past 255 stores ``255 + gain - 256``, pokemon.c:1859-1874);
+    the battler's ``BattleMon_AddVal`` clamps (battle_lib.c:1032-1043). Item 4 has ``partyUse``
+    false, so every party param reads its dummy 3 (item.c:186-195, bs:716-755)."""
+    s = _bag(roark_state(tables, names), names, "Poké Ball")
+    s = s.replace_hp(1, 0, int(s.max_hp[1, 0]) // 5)
+    s = s._replace(
+        friendship=s.friendship.at[1, 0].set(battler),
+        party_friendship=s.party_friendship.at[1, 0].set(party),
+    )
+    out = _use_both(tables, s, names.item("Poké Ball"))
+    assert (int(out.party_friendship[1, 0]), int(out.friendship[1, 0])) == (
+        want_party,
+        want_battler,
+    )
+
+
+def test_a_switch_in_rereads_the_party_friendship(tables, names):
+    """``BattleSystem_InitBattleMon`` loads the battler's friendship from the party Pokemon
+    (battle_lib.c:136): the wrapped 2 replaces the battler's clamped 255 when it comes back."""
+    s = _bag(roark_state(tables, names), names, "Poké Ball")
+    s = s.replace_hp(1, 0, int(s.max_hp[1, 0]) // 5)
+    s = s._replace(
+        friendship=s.friendship.at[1, 0].set(255),
+        party_friendship=s.party_friendship.at[1, 0].set(255),
+    )
+    s = assert_matches_reference(tables, s, [SWITCH + 1, FIRST_ITEM_ACTION], O)
+    assert (int(s.party_friendship[1, 0]), int(s.friendship[1, 0])) == (2, 255)
+    s = assert_matches_reference(tables, s, [SWITCH, SWITCH + 1], O)
+    s = assert_matches_reference(tables, s, [SWITCH + 1, SWITCH], O)
+    assert int(s.active[1]) == 0
+    assert (int(s.party_friendship[1, 0]), int(s.friendship[1, 0])) == (2, 2)
+
+
+# --- Shaymin-Sky reverts to Land Forme when frozen (F-16) -------------------------------------
+
+
+def _shaymin_state(tables, names, *, status=Status.FREEZE, substitute=0):
+    """Side 0: a Shaymin-Sky (form 1) and a bench Geodude; side 1: a Geodude (Tackle), slower
+    than the Shaymin's frozen action."""
+    sky = dataclasses.replace(_mon(names, "Shaymin", ["Air Slash"], 50), form=1)
+    s = make_state(
+        tables,
+        [sky, _mon(names, "Geodude", ["Tackle"], 30)],
+        [_mon(names, "Geodude", ["Tackle"], 30)],
+    )
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE].set(500))  # the foe moves first
+    if status:
+        s = s.with_status(0, 0, status)
+    return s._replace(substitute_hp=s.substitute_hp.at[0].set(substitute))
+
+
+def test_a_frozen_shaymin_sky_becomes_land_forme_after_any_hit(tables, names):
+    """subscript_check_shaymin_form.s:5-30 after the secondary effect (bcp.c:3497-3505): form 0,
+    Land's ability slot (Natural Cure), types, recalculated stats and the AI's knowledge of the
+    new ability; HP, status and stages stay (the freeze goes at the thaw checks, not here)."""
+    sky = _shaymin_state(tables, names)
+    assert int(sky.form[0, 0]) == 1 and int(sky.ability[0, 0]) == AbilityId.SERENE_GRACE
+    out = assert_matches_reference(tables, sky, A("Air Slash", "Tackle", sky, names), O)
+    land = make_state(
+        tables,
+        [
+            dataclasses.replace(_mon(names, "Shaymin", ["Air Slash"], 50), form=0),
+            _mon(names, "Geodude", ["Tackle"], 30),
+        ],
+        [_mon(names, "Geodude", ["Tackle"], 30)],
+    )
+    assert int(out.form[0, 0]) == 0
+    assert int(out.ability[0, 0]) == int(land.ability[0, 0]) == AbilityId.NATURAL_CURE
+    assert int(out.ability_form[0, 0]) == 0
+    assert out.types[0, 0].tolist() == land.types[0, 0].tolist() == [Type.GRASS, Type.GRASS]
+    assert out.stats[0, 0].tolist() == land.stats[0, 0].tolist() != sky.stats[0, 0].tolist()
+    assert int(out.max_hp[0, 0]) == int(sky.max_hp[0, 0])
+    assert int(out.ai_ability_known[0]) != 0
+
+
+@pytest.mark.parametrize(
+    "case", ["not frozen", "substitute", "land forme already"], ids=lambda c: c
+)
+def test_the_revert_needs_a_frozen_sky_shaymin_without_a_substitute(tables, names, case):
+    """chk:6-9: the form is not 0, no Substitute, status exactly Freeze."""
+    s = _shaymin_state(
+        tables,
+        names,
+        status=Status.BURN if case == "not frozen" else Status.FREEZE,
+        substitute=40 if case == "substitute" else 0,
+    )
+    if case == "land forme already":
+        s = s._replace(form=s.form.at[0, 0].set(0))
+    out = assert_matches_reference(tables, s, A("Air Slash", "Tackle", s, names), O)
+    assert int(out.form[0, 0]) == int(s.form[0, 0])
+    assert int(out.ability[0, 0]) == int(s.ability[0, 0])

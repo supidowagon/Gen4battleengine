@@ -229,9 +229,10 @@ def level_from_exp(tables, species: int, exp: int) -> int:
 
 
 # Forms convert through the species' personal row: Deoxys, Wormadam, Rotom, Giratina and
-# Shaymin (coverage refuses Giratina-Origin without the Griseous Orb and Shaymin-Sky), Arceus
-# (every form's row is the species'; its types are its plate's, Multitype, ``damage.
-# multitype_plate``, F-3); Burmy, Shellos, Gastrodon, Unown and Cherrim forms are cosmetic.
+# Shaymin (coverage refuses Giratina-Origin without the Griseous Orb; a frozen Shaymin-Sky
+# reverts to Land, ``hooks.shaymin_land``, F-16), Arceus (every form's row is the species'; its
+# types are its plate's, Multitype, ``damage.multitype_plate``, F-3); Burmy, Shellos, Gastrodon,
+# Unown and Cherrim forms are cosmetic.
 
 
 def location_label(location: tuple[str, int, int]) -> str:

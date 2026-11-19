@@ -76,8 +76,9 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   changes, the halved Defense) runs over them too (``fight_calls``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
-  ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
-  (``battle_lib.c:4536``, ``battle_controller_player.c:3500``); the engine models neither.
+  ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
+  Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
+  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16).
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
   (``Tables.species_form_row``), like Giratina-Origin holding the Orb. A trainer Pokemon in
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
@@ -138,7 +139,6 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
-from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.ids import (
@@ -170,7 +170,6 @@ from nuzline.engine.state import make_state, spec_exp, spec_stats
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
-SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
 
 
@@ -757,8 +756,6 @@ def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
         and mon.item != ITEM_GRISEOUS_ORB
     ):
         c.add(Support.NONE, f"{where}: Origin Forme without the Griseous Orb", "form change")
-    if mon.species == SPECIES_SHAYMIN and mon.form == SHAYMIN_FORM_SKY:
-        c.add(Support.NONE, f"{where}: Sky Forme reverts when frozen", "form change")
 
 
 def rom_change_refusals(
@@ -895,17 +892,10 @@ def _check_trainer(
     moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
-    # A bag item acts by its party params (engine.bag, E1 ruling G-43); the ones that set a
-    # mechanic the engine does not build are refused by name (bag.refused_bag_params).
-    params = np.asarray(tables.item_party_param)
+    # A bag item acts by its party params (engine.bag, E1 rulings G-43, F-15).
     bag = [item for item in trainer.items if item]
     for item in sorted(set(bag)):
-        where = f"{display_name(trainer)}: {names.item_names[item]}"
-        reasons = refused_bag_params(params[item], item)
-        if not reasons:
-            c.add(Support.EXACT, where, "trainer item")
-        for reason in reasons:
-            c.add(Support.NONE, f"{where} {reason}", "trainer item")
+        c.add(Support.EXACT, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
         c.add(

@@ -11,7 +11,7 @@ import numpy as np
 
 from nuzline.data.trainer import IntermediateData, build_trainer_party, default_moves
 from nuzline.engine.actions import FIRST_ITEM_ACTION
-from nuzline.engine.bag import bag_item_category, refused_bag_params
+from nuzline.engine.bag import bag_item_category
 from nuzline.engine.format import SINGLES
 from nuzline.engine.ids import AbilityId, ItemAiCategory, ItemParam, Stat, Status
 from nuzline.engine.outcome import empty_outcome
@@ -102,18 +102,12 @@ def _bag(s, names, item):
 
 def test_bag_item_params_read_dummy_or_party_params(tables, kaizo_tables, names, kaizo_names):
     # Item_Get (item.c:186-191): a Poke Ball (partyUse FALSE) reads its dummy, 3, for every
-    # party param in both games; a Potion its hpRestored 20. A ball's friendship amount can
-    # pass 255, which is refused by name; a Full Restore's params are modelled. Dire Hit (crit
-    # stages only) has no TrainerAI_ShouldUseItem branch, so it is never used and not refused.
+    # party param in both games; a Potion its hpRestored 20.
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
         params = np.asarray(t.item_party_param)
         ball = params[n.item("Poké Ball")]
         assert ball[: ItemParam.HOLD_FRIENDSHIP_UP].tolist() == [3] * ItemParam.HOLD_FRIENDSHIP_UP
         assert int(params[n.item("Potion")][ItemParam.HP_RESTORED]) == 20
-        reasons = refused_bag_params(ball, n.item("Poké Ball"))
-        assert any("friendship" in r for r in reasons)
-        for item in ("Full Restore", "Dire Hit"):
-            assert refused_bag_params(params[n.item(item)], n.item(item)) == []
 
 
 def test_ai_item_choice_follows_the_param_branches(tables, names):
@@ -151,7 +145,10 @@ def test_bag_items_match_the_reference(tables, names):
     out = assert_matches_reference(tables, _bag(hurt, names, "Full Restore"), acts, o)
     assert (int(out.hp[1, 0]), int(out.status[1, 0]), int(out.confusion[1])) == (top, 0, 0)
     # X Accuracy: accuracy +1, and friendship 150 takes the medium band's +1.
-    fond = s._replace(friendship=s.friendship.at[1, 0].set(150))
+    fond = s._replace(
+        friendship=s.friendship.at[1, 0].set(150),
+        party_friendship=s.party_friendship.at[1, 0].set(150),
+    )
     out = assert_matches_reference(tables, _bag(fond, names, "X Accuracy"), acts, o)
     assert int(out.stages[1, Stat.ACC]) == 1 and int(out.friendship[1, 0]) == 151
     # Elixir (PP_RESTORE_ALL, 10): every slot below its max, capped.

@@ -3471,6 +3471,10 @@ def play_hit(
     state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _embargo(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
+    if not pursuit_switch:  # subscript_pursuit.s runs no AfterMoveMessage (F-16)
+        from nuzline.engine.hooks import shaymin_land  # hooks imports this module
+
+        state = shaymin_land(tables, state, target_side, h.landed)
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)

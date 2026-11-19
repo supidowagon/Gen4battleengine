@@ -641,6 +641,11 @@ def _switch_in(
     state = _restore_ability(tables, state, side, True)
     state = _restore_moves(state, side, True)
     state = _reset_battler(state, side, True, baton)
+    # BattleSystem_InitBattleMon re-reads the party's friendship (battle_lib.c:136, F-15).
+    row = party(format_of(state), side)
+    state = state._replace(
+        friendship=state.friendship.at[row, slot].set(state.party_friendship[row, slot])
+    )
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
@@ -2179,8 +2184,10 @@ def _use_move(
     state = _where(transform_ok, switch_in_effects(tables, state, side), state)
     # The roosting chart ends with the move: the target's own types again (if it is still the
     # active battler: a drag restored the outgoing one's from its personal row).
-    still = state.active[target_side] == target
-    back = jnp.where(still, target_types, state.types[party(fmt, target_side), target])
+    # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
+    now = state.types[party(fmt, target_side), target]
+    still = (state.active[target_side] == target) & jnp.all(now == roost_types)
+    back = jnp.where(still, target_types, now)
     state = state._replace(types=state.types.at[party(fmt, target_side), target].set(back))
     # BATTLE_CONTROL_LOOP_FAINTED (bcp.c:3820-3823, :4425-4426) after the hits:
     # subscript_faint_check_destiny_bond.s takes a living attacker of the other side down with a

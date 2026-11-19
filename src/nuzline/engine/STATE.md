@@ -341,6 +341,17 @@ three structs has a row.
     src/trainer_data.c:216-218), so it is 0 there; the player's is the form's row. It is
     the party Pokemon's stored ability that `BattleSystem_InitBattleMon` re-reads
     (battle_lib.c:124), so `step._restore_ability` reads it.
+  - `party_friendship` (F-15): the party Pokemon's u8 friendship (`include/struct_defs/pokemon.h:23`),
+    which `Pokemon_IncreaseValue` wraps past 255 (pokemon.c:1859-1874) while `friendship` is
+    `BattleMon.friendship`, clamped (battle_lib.c:1032-1043). A bag item's friendship band reads and
+    writes both (`engine.bag.use_bag_item`); every switch-in (`step._switch_in`, battle_lib.c:136),
+    a level-up and Shaymin-Sky's revert (`BattleSystem_ReloadPokemon`, :179) copy it into
+    `friendship`. It is the value a save returns for the player's Pokemon.
+  - `form` (F-16): a frozen Shaymin-Sky's form becomes 0 after a hit (`hooks.shaymin_land`;
+    `subscript_check_shaymin_form.s`), with `ability`, `ability_slot`, `ability_form`, `types`,
+    `stats`, `max_hp` / `hp` and `friendship` rewritten as `BattleSystem_ReloadPokemon` reloads them;
+    the player's Pokemon keeps form 0 after the battle (`BtlIOCmd_UpdatePartyMon`,
+    battle_io_command.c:597-604).
 - **Experience (K3d-exp, design §2.1).** One block between `ai_ability_known` and
   `deaths`. Experience changes the fight: the payout runs mid-turn and a level-up rewrites
   the level, stats, max HP, HP and moves of a live battler (design §0, §1.4).
@@ -458,7 +469,7 @@ three structs has a row.
 | `BattleMon.ppCur` | `pp`, `shadow_pp`, `mimic_slots` | mapped |
 | `BattleMon.ppUps` | `pp_ups` | mapped |
 | `BattleMon.level` | `level` | mapped |
-| `BattleMon.friendship` | `friendship` | mapped |
+| `BattleMon.friendship` | `friendship`, `party_friendship` | mapped |
 | `BattleMon.nickname` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.curHP` | `hp` | mapped |
 | `BattleMon.maxHP` | `max_hp` | mapped |

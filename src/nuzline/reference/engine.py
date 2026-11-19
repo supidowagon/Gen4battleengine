@@ -106,6 +106,7 @@ from nuzline.engine.ids import (
     SPECIES_MAROWAK,
     SPECIES_PALKIA,
     SPECIES_PIKACHU,
+    SPECIES_SHAYMIN,
     SPEED_HALVING_HOLD_EFFECTS,
     SPIKES_MAX,
     STARF_STATS,
@@ -1985,16 +1986,18 @@ def _level_up_friendship(tables, mon: RefPokemon, luxury_ball: int) -> None:
     (:2664-2666), ``* 150 / 100`` with Soothe Bell (:2672-2676), clamped (:2680-2686). The
     egg-location +1 (:2668-2670) is not modelled (refused where read, design §4.4)."""
     tier = 0
-    if mon.friendship >= LOW_FRIENDSHIP_LIMIT:
+    if mon.party_friendship >= LOW_FRIENDSHIP_LIMIT:
         tier += 1
-    if mon.friendship >= MED_FRIENDSHIP_LIMIT:
+    if mon.party_friendship >= MED_FRIENDSHIP_LIMIT:
         tier += 1
     change = LEVEL_UP_FRIENDSHIP[tier]
     if change > 0 and luxury_ball:
         change += 1
     if change > 0 and _hold_effect(tables, mon) == HOLD_EFFECT_FRIENDSHIP_UP:
         change = change * 150 // 100
-    mon.friendship = min(max(mon.friendship + change, 0), MAX_FRIENDSHIP_VALUE)
+    # The party's value, which ReloadPokemon then re-reads into the battler (F-15).
+    mon.party_friendship = min(max(mon.party_friendship + change, 0), MAX_FRIENDSHIP_VALUE)
+    mon.friendship = mon.party_friendship
 
 
 def _calc_stats(tables, mon: RefPokemon) -> None:
@@ -2799,6 +2802,9 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _restore_moves(s, side)  # and its Mimic copies (G-68)
     sd.active = slot
     _reset_battler(sd, baton)
+    # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
+    newcomer = _active(s, side)
+    newcomer.friendship = newcomer.party_friendship
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
     # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (it only
@@ -3973,6 +3979,38 @@ def _script_power(turn: _Turn, s: RefState, side: int, defender: int, move: int)
     return 0
 
 
+def _shaymin_land(tables, s: RefState, side: int) -> None:
+    """``subscript_check_shaymin_form.s`` for ``side``'s active battler, the hit's defender
+    (``hooks.shaymin_land``, F-16): a Shaymin with a form number, no Substitute and status
+    Freeze (:6-9) becomes Land Forme (:10): its ability slot in Land's row (slot 0 when the row
+    holds none there, :11-19), Land's types (:24-27), stats recalculated (``_calc_stats``,
+    ``BattleMon_CopyToParty``) and the battler's friendship re-read from the party
+    (``BattleSystem_ReloadPokemon``, :30); the AI learns the ability. A Transformed battler is
+    left out."""
+    mon, sd = _active(s, side), s.battlers[side]
+    if not (
+        mon.species == SPECIES_SHAYMIN
+        and mon.form
+        and not sd.substitute_hp
+        and mon.status == Status.FREEZE
+        and not sd.transformed
+    ):
+        return
+    land = _t(tables, "species_form_row", SPECIES_SHAYMIN, 0)
+    mon.form = 0
+    slot = mon.ability_slot
+    if not _t(tables, "species_abilities", land, slot):
+        slot = 0
+    mon.ability = _t(tables, "species_abilities", land, slot)
+    mon.ability_slot, mon.ability_form = slot, 0
+    mon.types = [_t(tables, "species_types", land, k) for k in range(len(mon.types))]
+    _calc_stats(tables, mon)
+    mon.friendship = mon.party_friendship
+    sd.power_trick_desync = sd.power_trick
+    if side == 0:
+        _know_ability(s, sd.active)
+
+
 def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: bool,
          target_moved: bool) -> tuple[int, bool]:  # fmt: skip
     """One hit: the move script (damage, ``BATTLE_SUBSCRIPT_UPDATE_HP``), then
@@ -4108,6 +4146,8 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
         # effect_script_0254.s: MOVE_SIDE_EFFECT_ON_HIT | subscript_struggle.s, a
         # secondary effect: Divide(maxHP, 4) recoil, before the contact ability.
         _lose_hp(turn, s, side, _divide(_active(s, side).max_hp, 4))
+    if landed:  # ONE_HIT_FORM_CHANGE / MULTI_HIT_FORM_CHANGE, before the contact ability (F-16)
+        _shaymin_land(tables, s, target)
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.U_TURN and effective and _u_turn(turn, s, side, move, hit, dealt):
         return dealt, update_hp
@@ -5453,11 +5493,14 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
             (ItemParam.GIVE_FRIENDSHIP_MED, ItemParam.FRIENDSHIP_MED, 100, 200),
             (ItemParam.GIVE_FRIENDSHIP_HIGH, ItemParam.FRIENDSHIP_HIGH, 200, 256),
         ):
-            if p[give] and low <= mon.friendship < top:
+            if p[give] and low <= mon.party_friendship < top:
                 gain = p[amount]
         if gain > 0 and p[ItemParam.HOLD_FRIENDSHIP_UP]:
             gain = gain * 150 // 100
-        mon.friendship = min(max(mon.friendship + gain, 0), 255)
+        if gain:  # Pokemon_IncreaseValue (pokemon.c:1859-1874): the party's u8 wraps
+            total = mon.party_friendship + gain
+            mon.party_friendship = (255 + gain) & 0xFF if total > 255 else max(total, 0)
+            mon.friendship = min(max(mon.friendship + gain, 0), 255)  # BattleMon_AddVal clamps
     if category in (ItemAiCategory.FULL_RESTORE, ItemAiCategory.RECOVER_HP) and recovery:
         _gain_hp(s, side, recovery)
     if category == ItemAiCategory.RECOVER_STATUS:
@@ -6306,6 +6349,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             saved = list(foe.types)
             if turn.roosting[_foe(side)]:
                 foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
+            chart_types = list(foe.types)
             turn.met_reached = turn.met_worked = turn.met_immune = False
             turn.charge_strike = turn.bide_ended = False
             rollout0 = s.battlers[side].rollout_count
@@ -6315,7 +6359,8 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                     target_moved=position == 1,
                 )  # fmt: skip
             finally:
-                if _active(s, _foe(side)) is foe:
+                # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
+                if _active(s, _foe(side)) is foe and foe.types == chart_types:
                     foe.types = saved
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)

@@ -91,6 +91,7 @@ from nuzline.engine.ids import (
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
     SPECIES_CASTFORM,
+    SPECIES_SHAYMIN,
     STARF_STATS,
     AbilityId,
     ItemId,
@@ -102,6 +103,7 @@ from nuzline.engine.ids import (
 )
 from nuzline.engine.order import dislikes_berry, pinch_divisor, pinch_limit, player_second
 from nuzline.engine.state import STAGE_MAX, BattleState, held_item
+from nuzline.engine.stats import calc_stats_jnp
 
 _I32 = jnp.int32
 
@@ -939,6 +941,68 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
         both = jnp.full(types.shape, new, state.types.dtype)
         state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
     return state
+
+
+def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
+    """``subscript_check_shaymin_form.s`` (``AfterMoveMessage``'s ``*_FORM_CHANGE`` states,
+    battle_controller_player.c:3497-3505, :3557-3565; F-16) for ``side``'s active battler, the
+    hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute and
+    status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its personality
+    picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds none there),
+    types Land's (:24-27), stats recalculated from Land's row (``SYSCTL_RECALC_MON_STATS``,
+    ``BattleMon_CopyToParty`` -> ``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604;
+    ``Pokemon_CalcStats``: the HP change moves the current HP, as ``levelup``), and
+    ``RefreshMonData`` reloads the battler from the party (:30): Attack, Defense, Speed, Special
+    stats, HP, and friendship (``BattleSystem_ReloadPokemon``, battle_lib.c:169-193; the Power
+    Trick swap stays, as ``levelup``). Stages, status and volatiles stay. The AI learns the
+    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403). A Transformed battler
+    is left out (its copy of the form is the party's to change, which the sheet does not
+    settle)."""
+    fmt = format_of(state)
+    side = jnp.asarray(side, _I32)
+    row, mon = party(fmt, side), state.active[side]
+    on = (
+        jnp.asarray(cond)
+        & (state.species[row, mon] == SPECIES_SHAYMIN)
+        & (state.form[row, mon] != 0)
+        & (state.substitute_hp[side] == 0)
+        & (state.status[row, mon] == Status.FREEZE)
+        & (state.transformed[side] == 0)
+    )
+    land = tables.species_form_row[SPECIES_SHAYMIN, 0]
+    abilities = tables.species_abilities[land].astype(_I32)
+    slot = state.ability_slot[row, mon].astype(_I32)
+    slot = jnp.where(abilities[slot] != 0, slot, 0)
+    stats = calc_stats_jnp(
+        tables.species_base_stats[land],
+        state.ivs[row, mon],
+        state.evs[row, mon],
+        state.level[row, mon],
+        tables.nature_mods[state.nature[row, mon]],
+        SPECIES_SHAYMIN,
+    )
+    old_max, hp = state.max_hp[row, mon].astype(_I32), state.hp[row, mon].astype(_I32)
+
+    def put(arr, value):
+        return arr.at[row, mon].set(jnp.where(on, value, arr[row, mon]).astype(arr.dtype))
+
+    state = state._replace(
+        form=put(state.form, 0),
+        ability=put(state.ability, abilities[slot]),
+        ability_slot=put(state.ability_slot, slot),
+        ability_form=put(state.ability_form, 0),
+        types=put(state.types, tables.species_types[land]),
+        stats=put(state.stats, stats[Stat.ATK :]),
+        max_hp=put(state.max_hp, stats[Stat.HP]),
+        hp=put(state.hp, jnp.where(hp != 0, hp + stats[Stat.HP] - old_max, hp)),
+        friendship=put(state.friendship, state.party_friendship[row, mon]),
+        power_trick_desync=state.power_trick_desync.at[side].set(
+            jnp.where(on, state.power_trick[side], state.power_trick_desync[side]).astype(
+                state.power_trick_desync.dtype
+            )
+        ),
+    )
+    return _know(state, side, mon, on)
 
 
 def switch_in_effects(tables: Tables, state: BattleState, side, sub_hit=None) -> BattleState:

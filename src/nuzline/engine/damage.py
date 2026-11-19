@@ -960,7 +960,7 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_HIDDEN_POWER = 237
 # E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
-# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3209-3227), B13-25..26.
+# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3222-3240), B13-25..26.
 AI_NATURAL_GIFT, AI_JUDGMENT, AI_WEATHER_BALL = 363, 449, 311
 # TYPE_MYSTERY: no sTypeMatchupMultipliers row and no species type (Tables.type_chart row 9 is
 # neutral). A TrainerAI_MoveType result that is no type id (a non-berry's naturalGiftType,
@@ -1058,7 +1058,7 @@ def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, it
 
 def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
     """``bool``: ``TrainerAI_MoveType``'s Weather Ball case assigns its result
-    (trainer_ai.c:3209-3227): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
+    (trainer_ai.c:3222-3240): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
     weather, fog alone, or Cloud Nine / Air Lock on the field) the case assigns nothing and the
     function returns an uninitialized register: the ROM's TrainerAI_MoveType (overlay14
     0x0222327C-0x022233E6) returns r5, which it never wrote on that path and which holds the
@@ -1071,7 +1071,7 @@ def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
-    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3222) of ``move`` used by
+    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3247) of ``move`` used by
     ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,

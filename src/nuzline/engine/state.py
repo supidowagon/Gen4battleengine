@@ -299,7 +299,11 @@ class BattleState(NamedTuple):
     status: jnp.ndarray  # int8, ids.Status
     status_counter: jnp.ndarray  # int8, sleep turns / toxic counter
     gender: jnp.ndarray  # int8, 0 male, 1 female, 2 none
-    friendship: jnp.ndarray  # int16
+    friendship: jnp.ndarray  # int16, the BattleMon's (clamped 0-255, lib.c:1032-1043)
+    # int16, the party Pokemon's u8 friendship (F-15): ``Pokemon_IncreaseValue`` wraps past 255
+    # (pokemon.c:1859-1874); every switch-in and ``BattleSystem_ReloadPokemon`` re-read it into
+    # ``friendship`` (lib.c:136, :179), and a bag item's band reads it (battle_system.c:716-733)
+    party_friendship: jnp.ndarray
     ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
@@ -669,6 +673,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "status_counter": (_MON, np.int8),
     "gender": (_MON, np.int8),
     "friendship": (_MON, np.int16),
+    "party_friendship": (_MON, np.int16),
     "ivs": ((*_MON, 6), np.int8),
     "active": (_BATTLER, np.int8),
     "stages": ((*_BATTLER, 8), np.int8),
@@ -961,6 +966,7 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["status_counter"][side, slot] = mon.status_counter
     a["gender"][side, slot] = mon.gender
     a["friendship"][side, slot] = mon.friendship
+    a["party_friendship"][side, slot] = mon.friendship
     a["ivs"][side, slot] = mon.ivs
     a["evs"][side, slot] = mon.evs
     a["nature"][side, slot] = mon.nature

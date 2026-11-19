@@ -46,6 +46,7 @@ class RefPokemon:
     status_counter: int
     gender: int
     friendship: int
+    party_friendship: int  # the party Pokemon's u8 friendship (F-15)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int

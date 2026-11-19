@@ -234,7 +234,7 @@ def pay_exp_leveled(
     leveled = new_level > level
 
     soothe = hold == HOLD_EFFECT_FRIENDSHIP_UP
-    f0 = after.friendship[0].astype(_I32)
+    f0 = after.party_friendship[0].astype(_I32)  # Pokemon_UpdateFriendship reads the party
     bonus = after.friend_bonus.astype(_I32)
     friendship = jnp.where(leveled, _friendship(f0, new_level - level, bonus, soothe), f0)
 
@@ -273,7 +273,9 @@ def pay_exp_leveled(
                 after.shadow_stats[0],
             ).astype(after.shadow_stats.dtype)
         ),
-        friendship=put("friendship", friendship),
+        # The level-up's ReloadPokemon re-reads the party value into the battler (F-15).
+        friendship=put("friendship", jnp.where(leveled, friendship, after.friendship[0])),
+        party_friendship=put("party_friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),
         exp_mask=jnp.where(paying, 0, after.exp_mask).astype(after.exp_mask.dtype),

@@ -236,6 +236,7 @@ from nuzline.engine.ids import (
     SLEEP_TALK_VALUES,
     SNORE_PARAM,
     SPECIES_CHATOT,
+    SPECIES_SHAYMIN,
     STARF_DRAWS,
     STOMP_PARAM,
     TAILWIND_TURNS,
@@ -1482,8 +1483,20 @@ def damage_inputs_can_change(
     foe_burns = _inflicts(
         tables, state, foes(moves), Status.BURN, users=tuple(_foe(b) for b in range(fmt.B))
     )
+    # F-16: a Shaymin-Sky that a hit freezes becomes Land Forme (hooks.shaymin_land): the foe's
+    # earlier freezing move changes the side's own stats, types and ability, and the hits of
+    # any move against a Sky Shaymin frozen at the turn start (the first hit reverts it).
+    sky = (
+        (state.species[party(fmt, sides), mons] == SPECIES_SHAYMIN)
+        & (state.form[party(fmt, sides), mons] != 0)
+        & (state.transformed == 0)
+    )
+    foe_freezes = _inflicts(
+        tables, state, foes(moves), Status.FREEZE, users=tuple(_foe(b) for b in range(fmt.B))
+    )
     foe_move = foes(uses_move) & (
         unclassified
+        | (sky & foe_freezes)
         | (_any_of(foe_effect, (_E.STAT_FOE, _E.SECONDARY_STAT_FOE)) & (foe_param0 == attack_stat))
         | (
             _any_of(foe_effect, (_E.STAT_SELF, _E.SECONDARY_STAT_SELF))
@@ -1621,7 +1634,9 @@ def damage_inputs_can_change(
     )
     foe_action = foe_action | (live & sync_contact)
     repeat = _any_of(effect, (_E.MULTI_HIT, _E.TRIPLE_KICK, _E.BEAT_UP))
-    own_hits = hp_sensitive | ~repeat | contact_status | sync_back
+    # F-16: a later hit against a Sky Shaymin frozen at the turn start meets Land Forme.
+    sky_frozen = foes(sky & (status == Status.FREEZE))
+    own_hits = hp_sensitive | ~repeat | contact_status | sync_back | sky_frozen
     own_pre_move = (guts & _any_of(status, (Status.SLEEP, Status.FREEZE))) | (
         effect == _E.SELF_DESTRUCT
     )

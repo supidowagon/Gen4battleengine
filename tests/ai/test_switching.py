@@ -388,6 +388,7 @@ def test_the_players_magnet_rise_removes_the_ground_keep_draw(tables, names):
     assert K.KEEP in switch_sites(tables, bit).tolist()
 
 
+@pytest.mark.fullset  # F-O1: asserts the refusal of Weather Ball outside the typed weathers
 def test_party_variable_types_follow_move_calc_variable_type(tables, names):
     """B13-35: Move_CalcVariableType (battle_lib.c:8097-8203) of a bench member: Natural Gift
     the naturalGiftType of its party item (:8102-8104; a non-berry's is no type id,
