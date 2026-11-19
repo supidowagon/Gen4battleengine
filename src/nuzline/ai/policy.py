@@ -888,8 +888,8 @@ def _basic_check_torment(ctx: AiContext, mask) -> AiContext:
 
 
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
-    """``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE, ScoreMinus10``
-    (script.s:221): Teleport, -10 with no further test (E3-1-4)."""
+    """``ScoreMinus10`` (Basic_ScoreMoveEffect, script.s:221: ``IfCurrentMoveEffectEqualTo
+    BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE``): Teleport, -10 with no further test (E3-1-4)."""
     return c.pop_or_end(c.add_to_move_score(_at(ctx, mask), -10))
 
 
