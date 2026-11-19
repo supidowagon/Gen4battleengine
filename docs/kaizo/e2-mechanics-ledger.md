@@ -67,7 +67,9 @@ Field decisions (engine/state.py and reference/state.py):
   ts_taken [B, 6].
 - [2] side: spikes, toxic_spikes, stealth_rock, reflect, light_screen, safeguard, mist,
   lucky_chant, tailwind, future_sight.
-- [P]: trainer_items [P, 4], trainer_item_count, ts_alive (a party's HP bitmask, D 4).
+- [P]: ts_alive (a party's HP bitmask, D 4).
+- [B]: trainer_items [B, 4], trainer_item_count: the bag of enemy battler b is
+  `trainerItems[b >> 1]` (ruling D1-5).
 - Party 0 only, unchanged: ai_seen_moves, ai_item_known, ai_ability_known, the exp block, deaths,
   protected (D 4). Scalars unchanged: weather..winner, speed_tie, war_swaps, ts_cursor, ts_used.
 - 1 + battler pointers: lock_on_target, mean_look_target, future_attacker, pivot_battler,
@@ -196,6 +198,22 @@ Group A status and decisions (commits 1-5):
 - Rule: tests run on the pod (send the manager the tip and the test-file list during a batch and
   for the final tip); locally one process, one file, more than 6 GB free.
 - Group A review 1 = FIX (fixed in 5c32327). Review 2 of 5c32327 = MERGE.
+
+Group B status (E1 files, re-index only):
+
+- Done: 1 hooks.py 7fba32b; 2 bag.py 1f7dc8c; 3 ai/commands.py e86ad54; 4
+  ai/switching.py 133dbac; 5 ai/policy.py, ai/replacement.py, ai/outcome.py: no edit (every
+  state read there is a literal battler 0 / 1, valid in every format: R5); trainer bag per
+  opposing battler 60f6f37 (ruling D1-5).
+- hooks.py: `reveal_ability` / `_know` test `party(fmt, side) == 0` (the AI tracks party 0);
+  `berry_confuse` reads Safeguard through side_of; `show_battle_mon` / `battle_start` loop
+  `range(fmt.B)` with `foe(side)`; `weather_war` / `order_swaps` keep their two-actor reads (R7).
+- bag.py `_set` writes through `state.field_index`.
+- ai/commands.py reads parties through `_row(state, b)` = `party(format_of(state), b)`; the
+  side-condition and Spikes reads through side_of.
+- Not re-indexed (party axis, not battler): policy.py `_refused` and switching.py `_layout`
+  build `[2, SLOTS]` refusals over parties 0 / 1 (`jnp.arange(2)`, `enumerate` of two ability
+  lists): at P > 2 the shapes do not broadcast. Owed to D8 (which parties an AI scores).
 
 ### D2-D12
 
@@ -2072,3 +2090,19 @@ docs/doubles-state-design.md.
   the other side masked out (`COUNT_ALIVE_BATTLERS_OUR_SIDE`, battle_lib.c:2886-2893).
   `damage.side_active_slots` is removed (its only caller was this count). Singles: the foe is
   masked out, the same count.
+- D1-5 The trainer AI's bag is per opposing trainer slot: `aiContext.trainerItems[MAX_OPPONENTS]
+  [MAX_TRAINER_ITEMS]` and `trainerItemCounts` (include/battle/ai_context.h:31, :36;
+  `MAX_OPPONENTS` 2, include/constants/battle.h:68). `BattleControllerPlayer_InitAI` fills
+  `trainerItems[battler >> 1]` for each `battler & BATTLER_THEM` from
+  `BattleSystem_GetTrainerItem(battler)` = `trainers[battler].header.items`
+  (battle_controller_player.c:4796-4811, :4803-4809; battle_system.c:1414-1417); `trainers[i]` is
+  `dto->trainer[i]` (battle_main.c:1066), loaded per `dto->trainerIDs[i]`
+  (trainer_data.c:31-37). The AI reads and spends `trainerItems[battler >> 1]`
+  (trainer_ai.c:4092-4093, :4193); an AI partner never uses items (:4068-4072). A plain double
+  has `enemyTrainer1ID == enemyTrainer2ID` (encounter.c:736) written to both enemy slots
+  (:751-752): each enemy battler holds a copy of the one trainer's bag. Engine:
+  `trainer_items` [B, 4] and `trainer_item_count` [B] on the enemy battler (1 -> bag 0,
+  3 -> bag 1; `b >> 1` is a bijection on enemy battlers), the player's rows empty, so singles
+  keeps [2, 4] with the bag on row 1, byte-identical (a [2] array indexed by `b >> 1` would move
+  the singles bag to row 0). `initial_arrays` fills battler 3 from `opp2_items`, by default
+  `opp_items` (DOUBLES); TWO_TRAINERS / MULTI must pass it. RefBattler holds the bag.
