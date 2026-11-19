@@ -32,6 +32,7 @@ Trigger: a stream message with the line `MERGE CANDIDATE <tip> fullset`, or a st
 1. Skip check: `bash tools/ops/day/fullset_done.sh <tip>`. `FULLSET DONE <run>` (exit 0): a collected run of that commit with `MARK="fullset"` passed; do not run it again. `FULLSET NOT DONE` (exit 1): run it.
 2. One run agent, right after the tip's targeted run and on the same pod (same commit: its programs load from the pod's compile cache): `MARK='fullset' bash tools/ops/day/pack.sh <tip> <tables> <stream>-fs-<short tip> <the stream's pod list>`, the same tables as the targeted run, then Send a run steps 4-5 and Wait. Drop the `A` from the list's lines first (an `A` line runs whole, slow tests included); a file without `fullset` tests collects nothing (`collect_rc=5`) and is not a failure.
 3. A `fullset` failure goes back to the stream before the merge-gate review.
+4. A merged `main` tip that differs from every stream tip with a passed `fullset` run (a merge of several batches, or a merge commit) has had no `fullset` check: its merge-gate run (`CLAUDE.md`, Merges) packs with `MARK='not slow'` instead of the default, so it runs the `fullset` tests too.
 
 ## Wait
 
