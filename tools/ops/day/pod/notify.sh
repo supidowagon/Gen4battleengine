@@ -34,7 +34,9 @@ while :; do
   esac
   if [ "$dead" = 1 ]; then DEAD=$((DEAD + 1)); [ "$DEAD" -ge 2 ] && over=1; else DEAD=0; fi
   bad=0
-  printf '%s\n' "$S" | grep -qE '^(BAD |COLLECT FAILED|running u_[0-9]+ has )|SETUP_FAILED' && bad=1
+  # setup.log runs under set -x: its trace of the trap also holds the text SETUP_FAILED, so only
+  # the echoed line (status.sh prints it as "setup: SETUP_FAILED rc=...") counts.
+  printf '%s\n' "$S" | grep -qE '^(BAD |COLLECT FAILED|running u_[0-9]+ has |setup: SETUP_FAILED rc=)' && bad=1
   [ "$over" = 1 ] && [ "$dead" = 1 ] && bad=1
   if [ "$bad" = 1 ] && [ "$FAILED" = 0 ]; then FAILED=1
     { echo "FIRST_FAILURE $(date +%s)"; printf '%s\n' "$S"; } > "$N/firstfail.txt"
