@@ -1223,50 +1223,15 @@ of them, :2107-2115).
 
 ## Stream state (restart point, 2026-11-18)
 
-Read this section first after a clear, then `docs/process.md` section 2.
+Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
+pod state are kept outside the repo (the stream's `_scratch/e1/` notes).
 
-### Branches and worktrees
-- `claude/e1-test-speed-p1` (worktree `_scratch/e1/sp1wt`): speed pass part 1, test-side only,
-  rebased on main 47a62e2. Tip carries this section. Last code commit 7c62f18: slow marks on
-  `search/test_learn.py::test_window_c_refuses_finish_turn` (pod 190 s / 5.38 GB) and
-  `search/test_stage_b_learn.py::test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`
-  (172 s / 6.00 GB), both kept `fullset`; `test_sheet_unmapped::test_ally_reasons_name_the_partner_rows_starter`
-  skips without `docs/docs.json`. Not run locally (under 6 GB free).
-- `claude/e1-test-speed` (worktree `_scratch/e1/speedwt`): WIP measurements only, never merge.
-  80cfb4b = change 1 (fixed-size batches for keep and turn_events), f2114f3 = change 2
-  (`_reset_battler` side mask). Source for part 2.
-- `claude/e1-fullset` (worktree `_scratch/e1/fswt`): merged into main (ad6504b). Remove the worktree.
-
-### Waiting on the manager
-- Pod run of the whole fast tier at part 1 (first at 2845c4d; rerun at the new tip). Fix any
-  failure, then one fresh review of part 1, then hand the tip over for merge.
-
-### Next steps, in order
-1. Part 1 to merge (above). After the merge remove `sp1wt` and `fswt` (unlink the `external`
-   and `.cache` junctions with `cmd /c rmdir` before `git worktree remove`).
-2. Small branch off main: a Water move into Croagunk's Dry Skin gives 6-8 in the damage table,
-   the calc gives 0. Decide from the decomp; fix, or record a cited departure in the
-   damage-oracle test's list.
-3. Part 2 (changes 1 and 2 from `claude/e1-test-speed`) only after E2's D1 group A merges (it
-   rewrites `engine/enumerate.py` keep step and `engine/step.py` `_reset_battler`). Change 1:
-   time a real prep search on the pod before and after; several bucket sizes if small turns
-   slow by more than 5%. Change 2: `test_differential` with slow tests, own review. Keep E3's
-   "announced" flags in `_reset_battler`.
-4. Next mechanics batch: send the family list to the manager first. Kaizo abilities (5 groups,
-   13 battles; Hydration covers 8), held items (8 groups, 6 battles), Weather Ball AI typeless
-   refusal, Poke Ball friendship wrapping past 255, Sky Forme reverting when frozen. Effect Spore
-   and Suction Cups are dropped (no Kaizo species has them). Owed items below first. Order: send
-   the family list, then Opus rule sheets by the pipeline; builders wait until the manager
-   announces the doubles re-index (c6c44b6) on main.
-
-### Frozen files (E2 D1 group B, until the manager says merged)
-`engine/hooks.py`, `engine/bag.py`, `ai/commands.py`, `ai/switching.py`, `ai/policy.py`,
-`ai/replacement.py`, `ai/outcome.py`.
-
-### After every merge of main into an E1 branch
-Rebuild tables, duplicate scan, the unsupported-asserting tests, `pytest -m "fullset and not slow"`
-locally; the pod list carries `-m fullset`. Locally one pytest process per stream, one file or
-chunk, only with more than 6 GB free; everything else on the pod (send tip plus file list).
+### Next mechanics batch (F)
+Kaizo abilities (Hydration, Forecast, Heatproof, Flash Fire, Multitype), held items (hold effects
+#50, #36, #41, #42, #92, #0, #1, #12), Weather Ball's AI type, the Poke Ball friendship wrap past
+255, Sky Forme reverting when frozen, and a U-turn newcomer's Intimidate against a foe whose
+substitute that U-turn hit. Effect Spore and Suction Cups are dropped (no Kaizo species has them).
+The owed items below go in first.
 
 ### Owed items (into the next mechanics batch)
 - `chatot_cry` is per side; the decomp keeps it per battler in tag/2vs2
