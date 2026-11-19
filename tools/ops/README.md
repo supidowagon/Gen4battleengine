@@ -32,7 +32,7 @@ Steps: `day/DAYBOX.md`. Pod shape, limits and chunk sizes: `docs/process.md` sec
 - `day/collect.sh <run> <code>`: receives a run's `results.tgz` and unpacks it.
 - `day/nightly_files.txt`: the nightly test list.
 - `day/pod/setup.sh`: checkout, tables, env, collection, chunked units; starts the runner.
-- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units.
+- `day/pod/runner.sh`: starts units under the pod-wide memory and process gate and the per-run cap `RUNMAXP`; kills and requeues the newest unit near the limit; records crashed units; writes `DONE` only when every unit has a result.
 - `day/pod/unit.sh`: one pytest process over one unit's ids.
 - `day/pod/status.sh`: progress, memory, collection failures, failing units, other active runs.
 - `day/pod/notify.sh`: started by the exec-pod body before `setup.sh`; offers the first-failure beacon and the results under the run's codes `WATCH_F` and `WATCH_D`.
