@@ -87,7 +87,10 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle format: only "single". The engine models one battler per side, so a trainer
   whose header is a double battle, who is fought beside a second enemy trainer
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``);
+  battles and walking partners) is refused (``Trainer.format``). A four-battler state is
+  stepped only where the decomp's turn is the two-battler turn: ``four_turn_refusals`` is the
+  per-turn refusal every four-battler caller runs before ``step`` (one clause per D3 group,
+  each deleted by its group);
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
   (``Trainer.area_condition``; both are modelled: Gravity since the E1 trial batch, G-67, Trick
   Room since E3-2-4, ``start_trick_room``), a gauntlet (a chain
@@ -121,7 +124,7 @@ switch sites are every draw a party of six can make, so only vanilla can exceed 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -142,6 +145,7 @@ from nuzline.data.trainer import (
 from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import (
     GRAVITY_TURNS,
     METRONOME_DRAW,
@@ -167,7 +171,7 @@ from nuzline.engine.levelup import (
     MAX_LEVEL,
     POWER_ITEM_HOLD_EFFECTS,
 )
-from nuzline.engine.state import make_state, spec_exp, spec_stats
+from nuzline.engine.state import BattleState, make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
@@ -250,6 +254,160 @@ IMPLEMENTED_FORMATS: dict[str, Support] = {
     # tools/battle_scripts.py UNKNOWN_FORMAT), refused explicitly.
     "unknown": Support.NONE,
 }
+
+
+@dataclass(frozen=True)
+class TurnClause:
+    """One refusal of the four-battler turn (``four_turn_refusals``): the D3 ``group`` that
+    models ``feature`` and deletes this clause in its commit; ``refuses(tables, state, actions)``
+    is true where the turn uses it. ``tables``, ``state`` and ``actions`` are the arguments of
+    ``step`` (``actions``: one int per battler)."""
+
+    group: str
+    feature: str
+    refuses: Callable[[Tables, BattleState, np.ndarray], bool]
+
+
+# The effects whose move runs another move: a caller may become any move at all.
+CALLERS = frozenset(
+    {
+        EffectId.SLEEP_TALK,
+        EffectId.METRONOME,
+        EffectId.COPYCAT,
+        EffectId.ASSIST,
+        EffectId.ME_FIRST,
+        EffectId.NATURE_POWER,
+    }
+)
+
+
+def _present(state: BattleState, b: int) -> bool:
+    """Battler ``b``'s active Pokemon has HP (an absent battler's slot sits at 0 HP)."""
+    fmt = format_of(state)
+    return bool(np.asarray(state.hp)[fmt.party_of[b], int(np.asarray(state.active)[b])] > 0)
+
+
+def _four(state: BattleState) -> bool:
+    """Four battlers with battler 2 or 3 present: the turn is not the two-battler turn."""
+    return format_of(state).B == 4 and (_present(state, 2) or _present(state, 3))
+
+
+def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
+    """A present battler whose move action selects a move whose effect is in ``effects`` or is a
+    caller (``CALLERS``; ``order.selected_move``)."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+    from nuzline.engine.order import selected_move
+
+    wanted = {int(e) for e in set(effects) | CALLERS}
+    effect = np.asarray(tables.move_effect)
+    for b in range(format_of(state).B):
+        if not _present(state, b) or int(actions[b]) >= MOVE_ACTIONS:
+            continue  # a switch or item action selects no move
+        move = int(selected_move(tables, state, b, int(actions[b]))[0])
+        if int(effect[move]) in wanted:
+            return True
+    return False
+
+
+def _split_side_alive(state: BattleState) -> bool:
+    """A side whose two battlers send from different parties (TWO_TRAINERS parties 1 and 2;
+    MULTI 0 and 2, or 1 and 3), each party with a living Pokemon."""
+    fmt = format_of(state)
+    if fmt.B != 4:
+        return False
+    hp, species = np.asarray(state.hp), np.asarray(state.species)
+    alive = [bool(np.any((species[p] != 0) & (hp[p] > 0))) for p in range(fmt.P)]
+    for side in (0, 1):
+        first, second = fmt.party_of[side], fmt.party_of[side + 2]
+        if first != second and alive[first] and alive[second]:
+            return True
+    return False
+
+
+def _pivot_pending(state: BattleState) -> bool:
+    return int(np.asarray(state.pivot_battler)) != 0
+
+
+def _replacement_point(state: BattleState) -> bool:
+    from nuzline.engine.step import needs_replacement
+
+    return format_of(state).B == 4 and bool(np.any(np.asarray(needs_replacement(state))))
+
+
+# Build order of the D3 groups; each group deletes its own clause, and the tuple is empty after
+# D3-16 (tests/engine/test_coverage_four.py::OWED). Battlers 2 and 3 absent (0 HP, nothing left
+# in their parties) is the supported turn: the decomp's turn is then the two-battler turn.
+FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
+    # D3-2: absent / non-choosing battlers; ref_step four actions in _actions; deleted by D3-2
+    TurnClause("D3-2", "absent and non-choosing battlers", lambda t, s, a: _four(s)),
+    # D3-6: moved-this-turn per battler (second = position == 1); deleted by D3-6
+    TurnClause("D3-6", "moved-this-turn per battler", lambda t, s, a: _four(s)),
+    # D3-5: four-position action loop (step.py `position < 2`); deleted by D3-5
+    TurnClause("D3-5", "four-position action loop", lambda t, s, a: _four(s)),
+    # D3-3: CalcTurnOrder over four (action_order int8[2]); deleted by D3-3
+    TurnClause("D3-3", "turn order over four battlers", lambda t, s, a: _four(s)),
+    # D3-4: monSpeedOrder before each action (identity speed_order); deleted by D3-4
+    TurnClause("D3-4", "speed order before each action", lambda t, s, a: _four(s)),
+    # D3-7: side-out per format (_faint_check species[0] / [1]); deleted by D3-7
+    TurnClause("D3-7", "side-out with two parties on a side", lambda t, s, a: _split_side_alive(s)),
+    # D3-8: faint and payout order over four; deleted by D3-8
+    TurnClause("D3-8", "faint and payout order over four", lambda t, s, a: _four(s)),
+    # D3-9: Pursuit scan over four (pursuit_fires, _pursues); deleted by D3-9
+    TurnClause(
+        "D3-9",
+        "Pursuit scan over four battlers",
+        lambda t, s, a: _four(s) and _selects(t, s, a, {EffectId.PURSUIT}),
+    ),
+    # D3-10: pause and resume with the action's defender (to_come over arange(2));
+    # deleted by D3-10
+    TurnClause(
+        "D3-10",
+        "pause and resume of a pivot turn over four battlers",
+        lambda t, s, a: (
+            _four(s)
+            and (_pivot_pending(s) or _selects(t, s, a, {EffectId.U_TURN, EffectId.BATON_PASS}))
+        ),
+    ),
+    # D3-11: end of turn over four (end_of_turn_order int32[2]); deleted by D3-11
+    TurnClause("D3-11", "end of turn over four battlers", lambda t, s, a: _four(s)),
+    # D3-12: turn-end replacement over four (needs_replacement, _awaits_replacement);
+    # deleted by D3-12
+    TurnClause(
+        "D3-12", "turn-end replacement over four battlers", lambda t, s, a: _replacement_point(s)
+    ),
+    # D3-15: MoveEnd over four (_move_end reads _foe(side)); deleted by D3-15
+    TurnClause("D3-15", "MoveEnd over four battlers", lambda t, s, a: _four(s)),
+    # D3-18: Trick Room's MoveEnd re-sort over four; deleted by D3-18
+    TurnClause(
+        "D3-18",
+        "Trick Room re-sort over four battlers",
+        lambda t, s, a: _four(s) and _selects(t, s, a, {EffectId.TRICK_ROOM}),
+    ),
+    # D3-13: switch-in effects over a four-battler sort (TriggerEffectOnSwitch at every MoveEnd);
+    # deleted by D3-13
+    TurnClause("D3-13", "switch-in effects over four battlers", lambda t, s, a: _four(s)),
+    # D3-14: turn start and reset over four (_quick_claw_shown reads fight[0] & fight[1]);
+    # deleted by D3-14
+    TurnClause("D3-14", "turn start and reset over four battlers", lambda t, s, a: _four(s)),
+    # D3-16: D2 step rules owed four-actor tests (D2-17, -20, -21/-31, -25, -32); deleted by D3-16
+    TurnClause("D3-16", "D2 step rules owed four-actor tests", lambda t, s, a: _four(s)),
+)
+
+
+def four_turn_refusals(tables: Tables, state: BattleState, actions) -> list[str]:
+    """The lines refusing a four-battler turn: ``[]`` at two battlers, else one line per
+    ``FOUR_TURN_CLAUSES`` entry the turn trips. Every four-battler caller of ``step`` runs it
+    first (the differential skips a draw that is refused)."""
+    if format_of(state).B == 2:
+        return []
+    actions = np.asarray(actions)
+    return [
+        f"{c.group}: {c.feature} (four-battler turn UNSUPPORTED)"
+        for c in FOUR_TURN_CLAUSES
+        if c.refuses(tables, state, actions)
+    ]
+
+
 # Trainer.start_condition (trainers.json) as a Weather.
 START_CONDITIONS = {
     "none": Weather.NONE,

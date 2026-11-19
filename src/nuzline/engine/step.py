@@ -484,27 +484,48 @@ def _record_last_move(tables: Tables, state: BattleState, actions) -> BattleStat
     """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717), at the start of the turn:
     the AI adds the player's ``movePrevByBattler`` to its list of the player's moves
     (``state.record_seen_move``). It runs only on the AI's FIGHT path (``TrainerAI_MainSingles``,
-    :295, after ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989), and not
+    :295, after ``TrainerAI_PickCommand`` chose neither a switch nor an item, :3989; at four
+    battlers ``TrainerAI_MainDoubles`` records for every living opposing battler, :362-375), and not
     when the opponent must Struggle: the move menu, and with it ``TrainerAI_Main``, is
     skipped for ``STRUGGLING_ALL`` (battle_controller_player.c:433) and for a locked
     opponent (:335). The list holds the moves by id (``ai_seen_moves``, G-68), so a Mimic copy, a
     level-up's replacement and the player's own Struggle (``MOVE_STRUGGLE``) are recorded as the
-    decomp does."""
-    mon = state.active[0]
-    pending = state.last_move[0]
-    _, struggling = selected_move(tables, state, 1, actions[1])
-    locked = locked_slot(state, 1) >= 0  # a locked battler picks no command (:335)
-    fight = (actions[1] < MOVE_ACTIONS) & ~struggling & ~locked
-    seen = state.ai_seen_moves
-    row = jnp.where(fight, record_seen_move(seen[mon], pending), seen[mon]).astype(seen.dtype)
-    return state._replace(ai_seen_moves=seen.at[mon].set(row))
+    decomp does.
+
+    Ruling D3-1a: the record is made when any enemy battler (1, or 1 and 3 at four battlers)
+    takes its FIGHT path, for every party-0 battler (keyed by ``active[b]``); at four battlers
+    the enemy and the recorded battler must have HP (:363), at two neither test applies
+    (:295)."""
+    fmt = format_of(state)
+    four = fmt.B == 4
+    enemies = (1,) if fmt.B == 2 else (1, 3)
+    fight = None
+    for e in enemies:
+        _, struggling = selected_move(tables, state, e, actions[e])
+        locked = locked_slot(state, e) >= 0  # a locked battler picks no command (:335)
+        fight_e = (actions[e] < MOVE_ACTIONS) & ~struggling & ~locked
+        if four:
+            fight_e = fight_e & (state.hp[party(fmt, e), state.active[e]] > 0)
+        fight = fight_e if fight is None else fight | fight_e
+    for b in range(fmt.B):
+        if fmt.party_of[b] != 0:
+            continue
+        mon = state.active[b]
+        pending = state.last_move[b]
+        on = fight
+        if four:
+            on = on & (state.hp[0, mon] > 0)
+        seen = state.ai_seen_moves
+        row = jnp.where(on, record_seen_move(seen[mon], pending), seen[mon]).astype(seen.dtype)
+        state = state._replace(ai_seen_moves=seen.at[mon].set(row))
+    return state
 
 
 def _forget(state: BattleState, side, slot) -> BattleState:
     """The AI forgets what it knew about the player's party ``slot`` when it enters
     (``BattleSystem_UpdateAfterSwitch`` clears the battler's known moves, ability and held
-    item, battle_lib.c:2151-2153); nothing for the opponent's side."""
-    on = jnp.asarray(side, _I32) == 0
+    item, battle_lib.c:2151-2153); nothing for a battler outside party 0 (ruling D3-1a)."""
+    on = party(format_of(state), jnp.asarray(side, _I32)) == 0
     return state._replace(
         ai_seen_moves=state.ai_seen_moves.at[slot].set(
             jnp.where(on, 0, state.ai_seen_moves[slot]).astype(state.ai_seen_moves.dtype)

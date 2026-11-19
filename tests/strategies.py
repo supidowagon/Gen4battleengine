@@ -2467,7 +2467,8 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
     screens, Tailwind and Stealth Rock, weather and its timer, Trick Room, Gravity, the turn,
     the enemy battlers' bags (``trainer_items[b]``, ruling D1-5; the player's are empty), the
     AI's knowledge of the player and the player's experience block, as ``supported_state``
-    draws them. With probability 1/4 per side one battler is absent (0 HP, D3-1 rule 3): only a
+    draws them. Per side, one battler is absent (0 HP, D3-1 rule 3) with probability 1/4 for
+    battler ``side``, 1/4 for battler ``side + 2``, and none with probability 1/2: only a
     battler whose party has no living Pokemon off the field, so the party's other living
     Pokemon are the actives of the battlers sending from it; every other battler is alive,
     so each side has a living battler (rule 4)."""
@@ -2493,8 +2494,9 @@ def four_state(draw, tables: Tables, names: Names, fmt: Format | None = None) ->
         parties.append(members)
     absent: list[int] = []
     for side in (0, 1):
-        if draw(st.integers(0, 3)) == 0:
-            b = draw(st.sampled_from([b for b in range(fmt.B) if b & 1 == side]))
+        absence = draw(st.sampled_from((None, "low", "high", "high")))
+        if absence is not None:
+            b = side if absence == "low" else side + 2
             p = fmt.party_of[b]
             held = {leads[c] for c in owners[p]}
             for slot, mon in enumerate(parties[p]):

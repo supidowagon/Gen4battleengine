@@ -429,16 +429,16 @@ def _reveal_item(s: RefState, side: int) -> None:
     """A message names ``side``'s active Pokemon's held item through an item tag of the
     attacker, defender or ``msgBattlerTemp`` (``BattleMessage_ItemTag``, script.c:11726-11745):
     ``BattleAI_SetHeldItem`` (:12119-12122). The AI reads the other side's only, so only the
-    player's is kept."""
-    if side == 0:
-        s.ai_item_known[s.battlers[0].active] = _active(s, 0).item
+    party-0 battler's is kept (ruling D3-1a)."""
+    if _party(_fmt(s), side) == 0:
+        s.ai_item_known[s.battlers[side].active] = _active(s, side).item
 
 
 def _forget_item(s: RefState, side: int) -> None:
     """``side``'s active Pokemon lost its item: the removal's ``BattleMon_CopyToParty``
     clears the AI's record (``BattleAI_ClearKnownItem``, lib.c:1819-1823)."""
-    if side == 0:
-        s.ai_item_known[s.battlers[0].active] = 0
+    if _party(_fmt(s), side) == 0:
+        s.ai_item_known[s.battlers[side].active] = 0
 
 
 def _remove_item(s: RefState, side: int) -> None:
@@ -587,10 +587,14 @@ def _restore_types(tables, s: RefState, side: int) -> None:
     mon.types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
 
 
-def _know_ability(s: RefState, slot: int) -> None:
-    """``BattleAI_SetAbility`` (battle_script.c:12106-12109): the AI records the decomp id of the
-    player's party ``slot``'s current ability (``ai_ability_known``), 0 for one the engine does
-    not name (G-69). Raw: BattleMessage_AbilityTag reads ``BattleMon.ability`` (script.c:11805)."""
+def _know_ability(s: RefState, b: int) -> None:
+    """``BattleAI_SetAbility`` (battle_script.c:12106-12109): the AI records the decomp id of
+    battler ``b``'s current ability (``ai_ability_known``, keyed by its party slot), 0 for one the
+    engine does not name (G-69); only for a party-0 battler (ruling D3-1a). Raw:
+    BattleMessage_AbilityTag reads ``BattleMon.ability`` (script.c:11805)."""
+    if _party(_fmt(s), b) != 0:
+        return
+    slot = s.battlers[b].active
     named = ABILITY_DECOMP_IDS.get(s.parties[0].mons[slot].ability, 0)
     s.ai_ability_known[slot] = named if named > 0 else -1
 
@@ -655,10 +659,10 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if not foe_mon.hp or foe.semi_invulnerable or foe.transformed:
         return False
     fresh = not sd.transformed
-    if side == 0 and s.ai_ability_known[s.battlers[0].active] < 0:
+    if _party(_fmt(s), side) == 0 and s.ai_ability_known[s.battlers[side].active] < 0:
         # the record of an ability the engine does not name settles to its id (effects._transform;
         # raw, the AI's record of BattleMon.ability, script.c:11805)
-        s.ai_ability_known[s.battlers[0].active] = _decomp_ability(tables, mon)
+        s.ai_ability_known[s.battlers[side].active] = _decomp_ability(tables, mon)
     keep = [not fresh or sd.mimic_slots >> k & 1 for k in range(len(mon.moves))]
     if fresh:
         sd.shadow_species, sd.shadow_form = mon.species, mon.form
@@ -2597,7 +2601,7 @@ def _entry_hazards(turn: _Turn, s: RefState, side: int) -> None:
                 if ability == ITEM_ABILITY_IDS["Immunity"] or leaf:
                     # "{0}'s {1} prevents poisoning!" (subscript_poison.s:80-82,
                     # _badly_poison.s:93-103): BattleAI_SetAbility (script.c:11806).
-                    if side == 0:
+                    if _party(_fmt(s), side) == 0:
                         s.ai_ability_known[sd.active] = ability  # the decomp id the message names
                 # subscript_poison.s:29 / _badly_poison.s:46: CheckSubstitute, silent (a Baton
                 # Pass newcomer keeps the substitute, B10-4).
@@ -2680,8 +2684,7 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
     if forbidden.get(_ability(s, mon)) == mon.status and mon.hp:
         mon.status = Status.NONE
         mon.status_counter = 0
-        if side == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, side)
 
 
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
@@ -2707,8 +2710,7 @@ def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
         mon.status = Status.NONE
         mon.status_counter = 0
         # subscript_ability_restore_status.s:8 tags the holder (script.c:11806).
-        if side == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, side)
 
 
 def _download(s: RefState, side: int) -> None:
@@ -2754,8 +2756,8 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     for battler in (side, other) if traced else (side,):
         weather = WEATHER_ABILITIES.get(_ability(s, _active(s, battler)))
         if weather is not None and _active(s, battler).hp:
-            if not (s.weather == weather and s.weather_timer == 0) and battler == 0:
-                _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
+            if not (s.weather == weather and s.weather_timer == 0):
+                _know_ability(s, battler)  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
             s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
@@ -2777,10 +2779,10 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
     # living newcomer's ability, BattleAI_SetAbility (script.c:11806).
     # SWITCH_IN_CHECK_STATE_PRESSURE (lib.c:4096-4110) likewise: subscript_pressure.s (G-10).
     announced = (AbilityId.MOLD_BREAKER, AbilityId.PRESSURE)
-    if side == 0 and mon.hp and _ability(s, mon) in announced:
-        _know_ability(s, s.battlers[0].active)
-    if traced and other == 0 and _ability(s, foe) in announced:
-        _know_ability(s, s.battlers[0].active)
+    if mon.hp and _ability(s, mon) in announced:
+        _know_ability(s, side)
+    if traced and _ability(s, foe) in announced:
+        _know_ability(s, other)
     _recover_status_by_ability(s, side)
     if traced:
         _recover_status_by_ability(s, other)
@@ -2854,8 +2856,7 @@ def _trace(tables, s: RefState, side: int, coin: int, count: bool = False,
     _active(s, side).ability = _active(s, foe).ability
     s.battlers[side].trace_announced = 1  # :3727
     for battler in (side, foe):
-        if _party(_fmt(s), battler) == 0:
-            _know_ability(s, s.battlers[battler].active)
+        _know_ability(s, battler)
     if count and turn is not None and len(s.battlers) == 4:
         turn.trace_fires[side] += 1
     return True
@@ -2899,8 +2900,8 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
         sd, mon = s.battlers[b], _active(s, b)
         weather = WEATHER_ABILITIES.get(_ability(s, mon))
         if not sd.weather_announced and weather is not None and mon.hp:
-            if not (s.weather == weather and s.weather_timer == 0) and b == 0:
-                _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
+            if not (s.weather == weather and s.weather_timer == 0):
+                _know_ability(s, b)  # subscript_drought.s etc.
             s.weather, s.weather_timer = weather, 0
             sd.weather_announced = 1
     for b in battlers:
@@ -2929,9 +2930,9 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _reset_battler(sd, baton)
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
-    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (it only
-    # tracks the player's).
-    if side == 0:
+    # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (a party-0
+    # battler's only, ruling D3-1a).
+    if _party(_fmt(s), side) == 0:
         s.ai_seen_moves[slot] = [0] * len(s.ai_seen_moves[slot])
         s.ai_ability_known[slot] = 0
         s.ai_item_known[slot] = 0
@@ -3081,8 +3082,7 @@ def _synchronize(turn: _Turn, s: RefState, attacker: int, defender: int) -> None
     if mon.hp:
         mon.status, mon.status_counter = status, 0
     turn.sync_flag = not turn.sync_flag
-    if passer == 0:
-        _know_ability(s, s.battlers[0].active)
+    _know_ability(s, passer)
 
 
 def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
@@ -3095,14 +3095,13 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
     # subscript_fall_asleep.s:_055/_202/_221: an ignorable Insomnia or Vital Spirit (:23-24,
     # G-47) stops the sleep before the other checks and its "stayed awake" message tags it.
     if mon.hp and status == Status.SLEEP and _ignorable(s, side, target) in SLEEPLESS_ABILITIES:
-        if target == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, target)
         return
     # subscript_paralyze.s:5/_170: an ignorable Limber stops the paralysis first; its
     # "prevents paralysis" message (TAG_NICKNAME_ABILITY) is shown for a direct effect only.
     if mon.hp and status == Status.PARALYSIS and _ignorable(s, side, target) == AbilityId.LIMBER:
-        if target == 0 and direct:
-            _know_ability(s, s.battlers[0].active)
+        if direct:
+            _know_ability(s, target)
         return
     # Leaf Guard in sun (ignorable; subscript_fall_asleep.s:23-25, _poison.s:14-16,
     # _badly_poison.s:32-34, _burn.s:21-23, _paralyze.s:6-8; none in subscript_freeze.s): a
@@ -3113,8 +3112,8 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
         and _ignorable(s, side, target) == AbilityId.LEAF_GUARD
         and _sunny(turn.tables, s)
     ):
-        if target == 0 and direct:
-            _know_ability(s, s.battlers[0].active)
+        if direct:
+            _know_ability(s, target)
         return
     # Shield Dust (ignorable) stops an indirect effect silently (subscript_paralyze.s:13,
     # subscript_burn.s:27, subscript_freeze.s:11, subscript_poison.s:20, ...).
@@ -3353,8 +3352,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # :6 CheckSubstitute first (B10-4).
         if target_alive and not target_moved and not _shielded(turn, s, target):
             if seen == AbilityId.INNER_FOCUS:
-                if move == MOVE_FAKE_OUT and target == 0:
-                    _know_ability(s, s.battlers[0].active)
+                if move == MOVE_FAKE_OUT:
+                    _know_ability(s, target)
             elif seen != AbilityId.SHIELD_DUST:  # subscript_flinch_mon.s:8-9, indirect
                 s.battlers[target].flinched = 1
     elif effect == EffectId.RAISE_ALL_STATS_HIT and effective and proc:
@@ -3452,8 +3451,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             and mon.item != ITEM_GRISEOUS_ORB
         ):
             mon.ability = AbilityId.INSOMNIA
-            if target == 0:
-                _know_ability(s, s.battlers[0].active)
+            _know_ability(s, target)
     elif effect == EffectId.GASTRO_ACID and effective:
         # subscript_suppress_target_ability.s:5-10: fails behind a substitute (:5), on a target
         # that has the bit (:6), on a raw Multitype ability (:8); else the bit is set (:10), E3-2-6.
@@ -3486,8 +3484,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         ):
             s.battlers[side].truant = s.battlers[target].truant = s.turn & 1
             mon.ability, foe_mon.ability = foe_mon.ability, mon.ability
-            if 0 in (side, target):
-                _know_ability(s, s.battlers[0].active)
+            _know_ability(s, side)
+            _know_ability(s, target)
     elif effect == EffectId.DISABLE and effective:
         # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
         # the target's movePrevByBattler is one of its moves with PP left; RandNext() % 4 + 3.
@@ -3563,8 +3561,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.YAWN and landed and _active(s, target).hp:
         # subscript_yawn.s: an ability that blocks it is tagged; else unless it fails the count 2.
         fails, by_ability = _yawn_blocks(tables, s, side, target)
-        if by_ability and target == 0:
-            _know_ability(s, s.battlers[0].active)
+        if by_ability:
+            _know_ability(s, target)
         if not fails:
             s.battlers[target].yawn = 2
     elif effect == EffectId.PERISH_SONG and landed:
@@ -3743,8 +3741,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.CAPTIVATE and landed and target_alive:
         # effect_script_0265.s (B12-8): Oblivious tagged, genders; then Sp. Atk -2 (:10).
         fails, by_ability = _captivate_fails(tables, s, side, target)
-        if by_ability and target == 0:
-            _know_ability(s, s.battlers[0].active)
+        if by_ability:
+            _know_ability(s, target)
         blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
         if not fails and not blocked and not _sub_blocks_drop(s, target, p1):
             _change_stage(s, target, p0, p1)
@@ -3761,8 +3759,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_rest.s (B12-12): the user's own Insomnia / Vital Spirit tagged; else asleep,
         # an uproar without Soundproof, full HP fail; else sleep REST_TURNS and maxHP regained.
         fails, by_ability = _rest_fails(tables, s, side)
-        if by_ability and side == 0:
-            _know_ability(s, s.battlers[0].active)
+        if by_ability:
+            _know_ability(s, side)
         if not fails:
             user = _active(s, side)
             user.status, user.status_counter = Status.SLEEP, REST_TURNS
@@ -3784,8 +3782,8 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # BtlCmd_TryPartyStatusRefresh (script.c:5030-5078) and BtlIOCmd_RefreshPartyStatus
         # (battle_io_command.c:634-656), B12-15.
         spared = _heal_bell_spared(tables, s, side, move)
-        if spared[s.battlers[side].active] and side == 0:
-            _know_ability(s, s.battlers[0].active)
+        if spared[s.battlers[side].active]:
+            _know_ability(s, side)
         for slot, mon in enumerate(_party_of(s, side).mons):
             if mon.species and not spared[slot]:
                 mon.status, mon.status_counter = Status.NONE, 0
@@ -3953,15 +3951,13 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         # Magic Guard: subscript_aftermath.s takes Divide(maxHP, 4) and tags the holder (B9-7).
         if _active(s, target).hp == 0 and _ability(s, attacker) != AbilityId.MAGIC_GUARD:
             _lose_hp(turn, s, side, _divide(attacker.max_hp, 4))
-            if target == 0:
-                _know_ability(s, s.battlers[0].active)
+            _know_ability(s, target)
         return
     if ability == AbilityId.ROUGH_SKIN:
         # lib.c:4259: no subscript (and no ability tag) for a Magic Guard attacker.
         if _ability(s, attacker) != AbilityId.MAGIC_GUARD:
             _lose_hp(turn, s, side, _divide(attacker.max_hp, 8))
-            if target == 0:
-                _know_ability(s, s.battlers[0].active)
+            _know_ability(s, target)
         return
     if ability == AbilityId.CUTE_CHARM:
         # lib.c:4339-4355: an attacker not in love, a living defender, then the roll;
@@ -3970,8 +3966,7 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         holder = _active(s, target)
         if holder.hp and turn.outcome.contact_proc[target][hit] and _attractable(s, side, target):
             s.battlers[side].infatuated = 1
-            if target == 0:
-                _know_ability(s, s.battlers[0].active)
+            _know_ability(s, target)
         return
     if ability == AbilityId.STATIC:
         status = Status.PARALYSIS
@@ -3992,8 +3987,7 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         _status_landed(turn, side, status)  # TriggerAbilityOnHit: sideEffectMon = attacker
         # subscript_paralyze.s:44 / subscript_poison.s:57 tag the holder's ability
         # (BattleAI_SetAbility, script.c:11806).
-        if target == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, target)
 
 
 def _thaw_target(turn: _Turn, s: RefState, side: int, move: int, dealt: int) -> None:
@@ -5294,7 +5288,6 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if (
         effect == EffectId.OHKO
         and not semi_miss  # subscript_missed.s:13 shows the miss first
-        and _foe(side) == 0
         and _ignorable(s, side, _foe(side)) == AbilityId.STURDY
         and not _protected(turn, s, side, move, unleash)
     ):
@@ -5303,7 +5296,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         if _matchup_x40(
             tables, kind, foe.types, _identified(tables, s, side, _foe(side))
         ) != 0 and not (_ground_immune(tables, s, side, _foe(side), kind)):
-            _know_ability(s, s.battlers[0].active)
+            _know_ability(s, _foe(side))
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:2350-2370, hit, miss or Protect alike): Wonder
     # Guard's MOVE_STATUS_WONDER_GUARD (G-18). subscript_missed.s:107-110 tags the defender's
     # ability unless it was protected first (:18); a miss reaches it (G-20).
@@ -5316,13 +5309,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     )
     # subscript_missed.s:11 sends a semi-invulnerable miss (B10-12) to the miss message (:157)
     # before the Wonder Guard one (:107), ruling G-28.
-    if (
-        guarded
-        and _foe(side) == 0
-        and not semi_miss
-        and not _protected(turn, s, side, move, unleash)
-    ):
-        _know_ability(s, s.battlers[0].active)
+    if guarded and not semi_miss and not _protected(turn, s, side, move, unleash):
+        _know_ability(s, _foe(side))
     if redirected:
         _reveal_redirect(s, tables, turn.defender)  # TryMove, bcp.c:3247-3252 (D2-12 rule 10)
     roll = o.hit[side][0]
@@ -5361,11 +5349,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             effect == EffectId.YAWN
             and semi_miss
             and not protected
-            and _foe(side) == 0
-            and _active(s, 0).hp
-            and _yawn_blocks(tables, s, side, 0)[1]
+            and _active(s, _foe(side)).hp
+            and _yawn_blocks(tables, s, side, _foe(side))[1]
         ):
-            _know_ability(s, s.battlers[0].active)
+            _know_ability(s, _foe(side))
         # The effect script ran before TryMove (bcp.c:3211-3213): Psych Up's CopyStatStages
         # (effect_script_0143.s:5) on a semi-invulnerable miss, B12-6; Captivate's
         # CheckIgnorableAbility (effect_script_0265.s:5) tags a blocking Oblivious, B12-8.
@@ -5374,11 +5361,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
             s.battlers[side].focus_energy |= s.battlers[_foe(side)].focus_energy
         if (
             effect == EffectId.CAPTIVATE
-            and _foe(side) == 0
-            and _active(s, 0).hp
-            and _captivate_fails(tables, s, side, 0)[1]
+            and _active(s, _foe(side)).hp
+            and _captivate_fails(tables, s, side, _foe(side))[1]
         ):
-            _know_ability(s, s.battlers[0].active)
+            _know_ability(s, _foe(side))
         _unlock(s.battlers[side])  # subscript_missed.s
         # Bide's unleash defender is the last hitter (bcp.c:2702-2706): its moveHit.
         return move if unleash else record
@@ -5447,8 +5433,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         foe = _active(s, foe_side)
         if foe.hp != foe.max_hp:
             _gain_hp(s, foe_side, _divide(foe.max_hp, 4))
-        if foe_side == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, foe_side)
         return record
     # BtlCmd_SetMultiHit (script.c:2634): SetMultiHit 2 (effect_script_0044.s) is fixed,
     # SetMultiHit 0 draws 2-5; Twineedle's SetMultiHit 2 (effect_script_0077.s:6) is
@@ -5742,8 +5727,8 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     # subscript_pursuit.s:11, :17, :154: a Wonder Guard block goes to subscript_missed.s, whose
     # :107-110 tags the switcher's ability (G-20); the hit deals nothing (_move_damage).
     kind = _move_type(tables, s, pursuer, move)
-    if side == 0 and _wonder_guarded(tables, s, pursuer, side, move, kind):
-        _know_ability(s, s.battlers[0].active)
+    if _wonder_guarded(tables, s, pursuer, side, move, kind):
+        _know_ability(s, side)
     crit = _crits(tables, s, pursuer, move, o.crit[pursuer][0]) and not _armored(s, pursuer, side)
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
                           PURSUIT_POWER_MUL)  # fmt: skip
@@ -6025,8 +6010,8 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
         _lose_hp(turn, s, side, -hp_calc)
     # :_045, :_057, :_076 tag the battler's ability (after the Magic Guard skip); :_076 every
     # heal, Ice Body's included (G-45).
-    if side == 0 and ((sun and not magic_guard) or hp_calc > 0):
-        _know_ability(s, s.battlers[0].active)
+    if (sun and not magic_guard) or hp_calc > 0:
+        _know_ability(s, side)
 
 
 def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -6260,8 +6245,7 @@ def _yawn_check(turn: _Turn, s: RefState, side: int) -> None:
     if own in (ids["Insomnia"], ids["Vital Spirit"]) or (
         _sunny(tables, s) and own == ids["Leaf Guard"]
     ):
-        if side == 0:
-            _know_ability(s, sd.active)
+        _know_ability(s, side)
         return
     if own != ids["Soundproof"] and _uproar_on(s):
         return
@@ -6334,8 +6318,7 @@ def _poison_heal(s: RefState, side: int) -> bool:
         return False
     if mon.hp != mon.max_hp:
         _gain_hp(s, side, _divide(mon.max_hp, 8))
-        if side == 0:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, side)
     return True
 
 
@@ -6351,8 +6334,7 @@ def _bad_dreams_check(turn: _Turn, s: RefState, side: int) -> None:
         and mon.hp
     ):
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
-        if side == 1:
-            _know_ability(s, s.battlers[0].active)
+        _know_ability(s, _foe(side))
 
 
 def _toxic_check(turn: _Turn, s: RefState, side: int) -> None:
@@ -6817,7 +6799,35 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
     return _active(s, side).moves[min(action, MOVE_ACTIONS - 1)], False, False
 
 
-def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets=None) -> RefState:
+def _record_last_moves(tables, s: RefState, actions, choices) -> None:
+    """``TrainerAI_RecordLastMove`` (trainer_ai.c:2705-2717) for the turn, as
+    ``engine.step._record_last_move`` (ruling D3-1a): when any enemy battler (1, or 1 and 3 at
+    four battlers, ``TrainerAI_MainDoubles`` :362-375) takes its FIGHT path (no forced Struggle,
+    bcp.c:433; no locked move, :335), the AI adds ``movePrevByBattler`` of every party-0 battler
+    to its list of that battler's moves. At four battlers the enemy and the recorded battler must
+    have HP (:363); at two neither test applies (:295). A first free entry unless the move is
+    listed or the list is full (:2705-2716; Struggle is recorded too, G-68)."""
+    four = _fmt(s).B == 4
+    enemies = (1,) if not four else (1, 3)
+    fight = False
+    for e in enemies:
+        if (
+            _command(actions[e]) == FIGHT
+            and not choices[e][1]
+            and not choices[e][2]
+            and (not four or _active(s, e).hp > 0)
+        ):
+            fight = True
+    if not fight:
+        return
+    for b in range(_fmt(s).B):
+        if _party(_fmt(s), b) != 0 or (four and _active(s, b).hp <= 0):
+            continue
+        player = s.battlers[b]
+        _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
+
+
+def ref_step(tables, state: RefState, actions: tuple[int, ...], outcome, targets=None) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
     picked slot (``_resume``); a turn that reaches such a list stops there and writes the
@@ -6826,7 +6836,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets
     if s.over:
         return s
     picked = [int(a) for a in actions]
-    actions = (int(actions[0]), int(actions[1]))
+    actions = tuple(int(a) for a in actions)  # one per battler (D3-1b, taken early from D3-2 4.2)
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
@@ -6843,9 +6853,7 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets
     # (TrainerAI_MainSingles, :295), which a forced Struggle skips (bcp.c:433): the
     # player's movePrevByBattler joins the AI's list of move ids: the first empty entry, unless
     # it is there already or the list is full (:2705-2716; Struggle is recorded too, G-68).
-    if commands[1] == FIGHT and not choices[1][1] and not choices[1][2]:
-        player = s.battlers[0]
-        _record_seen_move(s.ai_seen_moves[player.active], player.last_move)
+    _record_last_moves(tables, s, actions, choices)
     # The search's turn powerMul (step.replacement_power_mul): the player's switch meets the
     # opponent's Pursuit, judged on the turn-start state.
     turn.power_mul = PURSUIT_POWER_MUL if _pursues(tables, s, 0, actions, choices) else 10
@@ -7001,7 +7009,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             if not (turn.attack_message and turn.move_cur in PROTECT_CHAIN_MOVES):
                 s.battlers[side].protect_count = 0
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
-        _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
+        _stale_known_item(s, stale, side if commands[side] not in (ITEM, SWITCH) else -1)
         _finish_action(turn, s, side, position, record)
 
 
@@ -7029,21 +7037,27 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     _pay_exp(turn, s, pending, turn.actions[0])
 
 
-def _stale_snapshot(s: RefState) -> tuple[int, bool, int]:
-    """(the player's active slot, knocked off then, its HP) at a segment's start (B10-6)."""
-    slot = s.battlers[0].active
-    mon = s.parties[0].mons[slot]
-    return slot, bool(mon.knocked_off), mon.hp
+def _stale_snapshot(s: RefState) -> list[tuple[int, int, bool, int]]:
+    """``(battler, active slot, knocked off then, its HP)`` for each party-0 battler at a
+    segment's start (B10-6, ruling D3-1a)."""
+    snaps = []
+    for b in range(_fmt(s).B):
+        if _party(_fmt(s), b) == 0:
+            slot = s.battlers[b].active
+            mon = s.parties[0].mons[slot]
+            snaps.append((b, slot, bool(mon.knocked_off), mon.hp))
+    return snaps
 
 
-def _stale_known_item(s: RefState, snap: tuple[int, bool, int], fought: bool) -> None:
+def _stale_known_item(s: RefState, snaps: list[tuple[int, int, bool, int]], fought: int) -> None:
     """B10-6 (``step._stale_known_item``): a slot knocked off before the segment, holding
-    nothing, whose HP changed or that made a FIGHT attempt in it, has the AI's record of its
-    item cleared (its CopyToParty: battle_script.c:1720, bcp.c:2748; lib.c:1819-1823)."""
-    slot, knocked, hp = snap
-    mon = s.parties[0].mons[slot]
-    if knocked and mon.item == 0 and (mon.hp != hp or fought):
-        s.ai_item_known[slot] = 0
+    nothing, whose HP changed or whose battler (``fought``) made a FIGHT attempt in it, has the
+    AI's record of its item cleared (its CopyToParty: battle_script.c:1720, bcp.c:2748;
+    lib.c:1819-1823)."""
+    for b, slot, knocked, hp in snaps:
+        mon = s.parties[0].mons[slot]
+        if knocked and mon.item == 0 and (mon.hp != hp or b == fought):
+            s.ai_item_known[slot] = 0
 
 
 def _end_turn(turn: _Turn, s: RefState) -> RefState:
@@ -7054,7 +7068,7 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     _field_conditions(turn, s, order)
     _end_of_turn(turn, s, order)
     _future_sight(turn, s, order)
-    _stale_known_item(s, snap, False)  # B10-6
+    _stale_known_item(s, snap, -1)  # B10-6
     # BattleSystem_SetupNextTurn (lib.c:2234) clears every flinch and unlocks a sleeping
     # battler (lib.c:2240-2243).
     for b, sd in enumerate(s.battlers):

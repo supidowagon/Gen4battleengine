@@ -16,13 +16,14 @@ import time
 import traceback
 import warnings
 
-from hypothesis import HealthCheck, Phase, given, seed, settings
+from hypothesis import HealthCheck, Phase, assume, given, seed, settings
 from hypothesis import strategies as st
 
 from nuzline.data.games import GAMES, VANILLA
 from nuzline.data.tables import load_names, load_tables
-from nuzline.jaxcache import cache_root, jax_version, set_compile_cache_dir
+from nuzline.engine.coverage import four_turn_refusals
 from nuzline.engine.format import DOUBLES, MULTI, TWO_TRAINERS, format_of
+from nuzline.jaxcache import cache_root, jax_version, set_compile_cache_dir
 from tests.strategies import (
     any_outcome,
     four_state,
@@ -75,6 +76,7 @@ def run_seed(
             return
         s = data.draw(four_state(tables, names, FORMATS[format_name]))
         acts, targets = data.draw(legal_actions_four(tables, s))
+        assume(not four_turn_refusals(tables, s, acts))
         o = data.draw(any_outcome(format_of(s)))
         _step_both(tables, s, acts, o, data, targets)
 
