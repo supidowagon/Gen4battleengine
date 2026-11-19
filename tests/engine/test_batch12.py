@@ -299,7 +299,8 @@ def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_in
         if after != start:
             writers.add(effect)
             assert effect in CRIT_ODDS_EFFECTS, (effect, move, start, after)
-            assert _crit_inputs(CRIT_ODDS_EFFECTS[effect](state), 1) == after, (effect, move)
+            written = CRIT_ODDS_EFFECTS[effect](tables, state)
+            assert _crit_inputs(written, 1) == after, (effect, move)
     assert writers == set(CRIT_ODDS_EFFECTS), writers
 
 

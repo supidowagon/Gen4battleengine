@@ -535,7 +535,10 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   Hit chance: `outcome._threshold_grid` adds the foe's Fling as a variant: a flung White Herb
   resets the side's accuracy stage before its check (`foe_herb`), a flung Micle sets its micle flag
   (`foe_micle`, bcp.c:2967-2970); the user's own Wide Lens is not applied. Crit:
-  `CRIT_ODDS_EFFECTS[FLING]` = `_focus_energy_all` (a flung Lansat; test_batch12's writer scan
+  `CRIT_ODDS_EFFECTS[FLING]` = `_flung_focus_energy` (Focus Energy only on a battler another
+  active battler's FLING_EFFECT_CRIT_UP item can be flung at, battle_lib.c:6131-6134: with no
+  such item the write is a no-op, so a fight without one keeps its crit law and brute-force
+  width; the writes take `(tables, state)`; test_batch12's writer scan
   plays Fling with a Lansat user and a foe without Focus Energy). Enumerate: INPUT_CLAUSE effect
   (fling clause), NON_TABLE_DAMAGE (power and item read at the hit), `damage_inputs_can_change`
   (foe Fling), Starf joins the acupressure relevance (the draw needs two or more stats), the end

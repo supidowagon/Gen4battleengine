@@ -871,7 +871,7 @@ def test_skill_swap_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     acts = A("Rock Throw", "Skill Swap", s, names)
     assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
     assert EffectId.SKILL_SWAP in CRIT_ODDS_EFFECTS
-    swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](s)
+    swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](tables, s)
     assert int(swapped.ability[1, int(s.active[1])]) == AbilityId.COMPOUNDEYES
     assert int(swapped.ability[0, int(s.active[0])]) == int(s.ability[1, int(s.active[1])])
 
@@ -1120,7 +1120,7 @@ def test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     acts = A("Rock Throw", "Gastro Acid", s, names)
     assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
     assert EffectId.GASTRO_ACID in CRIT_ODDS_EFFECTS
-    assert CRIT_ODDS_EFFECTS[EffectId.GASTRO_ACID](s).ability_suppressed.tolist() == [1, 1]
+    assert CRIT_ODDS_EFFECTS[EffectId.GASTRO_ACID](tables, s).ability_suppressed.tolist() == [1, 1]
     bit = 1 << list(CRIT_ODDS_EFFECTS).index(EffectId.GASTRO_ACID)
     odds, possible = crit_variants(tables, s, acts)
     assert not bool(possible[0, bit])  # Super Luck / Compoundeyes: no crit input changes

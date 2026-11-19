@@ -1163,13 +1163,13 @@ def crit_odds(tables: Tables, state: BattleState, actions, moves=None) -> jnp.nd
 CRIT_DRAWS = 48
 
 
-def _clear_focus_energy(state: BattleState) -> BattleState:
+def _clear_focus_energy(tables: Tables, state: BattleState) -> BattleState:
     """Haze's write to the crit inputs: BtlCmd_ResetAllStatChanges clears every battler's
     VOLATILE_CONDITION_FOCUS_ENERGY (battle_script.c:3534-3549; ``effects._haze``)."""
     return state._replace(focus_energy=jnp.zeros_like(state.focus_energy))
 
 
-def _remove_held_item(state: BattleState) -> BattleState:
+def _remove_held_item(tables: Tables, state: BattleState) -> BattleState:
     """Knock Off's write to the crit inputs: BtlCmd_TryKnockOff sets the defender's heldItem to
     ITEM_NONE (battle_script.c:6608-6632; ``effects._knock_off``), here every battler's own."""
     fmt = format_of(state)
@@ -1177,7 +1177,7 @@ def _remove_held_item(state: BattleState) -> BattleState:
     return state._replace(item=state.item.at[party(fmt, battlers), state.active].set(0))
 
 
-def _insomnia_all(state: BattleState) -> BattleState:
+def _insomnia_all(tables: Tables, state: BattleState) -> BattleState:
     """Worry Seed's write to the crit inputs: subscript_give_target_insomnia.s:11 sets the
     defender's ``BattleMon.ability`` to Insomnia, which removes Super Luck (battle_lib.c:7126)
     and a Klutz holder's hidden crit item (:7117), here every battler's own. A Battle Armor or
@@ -1192,7 +1192,7 @@ def _insomnia_all(state: BattleState) -> BattleState:
     )
 
 
-def _suppress_all(state: BattleState) -> BattleState:
+def _suppress_all(tables: Tables, state: BattleState) -> BattleState:
     """Gastro Acid's write to the crit inputs: subscript_suppress_target_ability.s:10 sets the
     defender's MOVE_EFFECT_ABILITY_SUPPRESSED, here every battler's own. CalcCrit's own-ability
     read is raw (battle_lib.c:7122, :7126: Super Luck stays), but a Klutz holder's crit item
@@ -1202,7 +1202,7 @@ def _suppress_all(state: BattleState) -> BattleState:
     return state._replace(ability_suppressed=jnp.ones_like(state.ability_suppressed))
 
 
-def _swap_abilities_all(state: BattleState) -> BattleState:
+def _swap_abilities_all(tables: Tables, state: BattleState) -> BattleState:
     """Skill Swap's write to the crit inputs: subscript_exchange_abilities.s:21-24 swaps the user's
     and the defender's ``BattleMon.ability``, which moves Super Luck (battle_lib.c:7126) and a
     Klutz holder's hidden crit item (:7117), here every battler's own becoming its foe's. A Battle
@@ -1216,14 +1216,27 @@ def _swap_abilities_all(state: BattleState) -> BattleState:
     )
 
 
-def _focus_energy_all(state: BattleState) -> BattleState:
-    """Fling's write to the crit inputs: a flung Lansat Berry sets the defender's
-    VOLATILE_CONDITION_FOCUS_ENERGY (subscript_held_item_raise_crit.s:11; ``hooks.fling_effect``,
-    E3-B2-1), here every battler's own."""
-    return state._replace(focus_energy=jnp.ones_like(state.focus_energy))
+def _flung_focus_energy(tables: Tables, state: BattleState) -> BattleState:
+    """Fling's write to the crit inputs: a flung item of ``FLING_EFFECT_CRIT_UP`` (the Lansat
+    Berry) sets the defender's VOLATILE_CONDITION_FOCUS_ENERGY (BattleSystem_FlingItem,
+    battle_lib.c:6131-6134; subscript_held_item_raise_crit.s:11; ``hooks.fling_effect``,
+    E3-B2-1). The flung item is the user's raw ``BATTLEMON_HELD_ITEM`` at TryFling: its turn-start
+    item, as no implemented move gives another battler an item (Recycle restores its own user's,
+    whose action it is). Here every battler that another active battler's such item can be flung
+    at (any other battler: a doubles Fling may aim at an ally) gets it; with none on the field the
+    write changes nothing, as Knock Off's does with no item. A move that hands over an item (Trick,
+    Thief) widens this to the items it can give."""
+    fmt = format_of(state)
+    battlers = jnp.arange(state.active.shape[0])
+    raw = state.item[party(fmt, battlers), state.active]
+    lansat = tables.item_fling_effect[raw] == FlingEffect.CRIT_UP
+    flung_at = jnp.any(lansat[None, :] & ~jnp.eye(battlers.shape[0], dtype=bool), axis=1)
+    return state._replace(
+        focus_energy=jnp.where(flung_at, 1, state.focus_energy).astype(state.focus_energy.dtype)
+    )
 
 
-def _embargo_all(state: BattleState) -> BattleState:
+def _embargo_all(tables: Tables, state: BattleState) -> BattleState:
     """Embargo's write to the crit inputs: subscript_embargo_start.s:14 sets the defender's
     embargoTurns (5), which hides its held item from CalcCrit's Battler_HeldItem (battle_lib.c:
     7117; ``effects._embargo``, B13-31), here every battler's own."""
@@ -1243,7 +1256,7 @@ CRIT_ODDS_EFFECTS = {
     EffectId.WORRY_SEED: _insomnia_all,
     EffectId.SKILL_SWAP: _swap_abilities_all,
     EffectId.GASTRO_ACID: _suppress_all,
-    EffectId.FLING: _focus_energy_all,
+    EffectId.FLING: _flung_focus_energy,
 }
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
 # is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
@@ -1273,7 +1286,7 @@ def crit_variants(
         s = state
         for e, write in enumerate(writes):
             if v >> e & 1:
-                s = write(s)
+                s = write(tables, s)
         odds.append(crit_odds(tables, s, actions, moves))
     base = odds[0]
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
