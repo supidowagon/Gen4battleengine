@@ -305,6 +305,16 @@ def with_gravity(state: BattleState, count, cond=True) -> BattleState:
     return state._replace(gravity=value.astype(state.gravity.dtype))
 
 
+def with_trick_room(state: BattleState, count, cond=True) -> BattleState:
+    """The Trick Room counter bits set to ``count`` where ``cond``, clean (FCM 4.4), and the old
+    ``trick_room`` field with them until FCM step 3 drops it (a state set by hand: a test)."""
+    count = jnp.asarray(count, _I32)
+    bits = jnp.left_shift(count, FIELD_CONDITION_TRICK_ROOM_SHIFT)
+    state = _put(state, (_mask(state) & ~_TRICK_ROOM) | bits, cond)
+    value = jnp.where(jnp.asarray(cond), count, state.trick_room)
+    return state._replace(trick_room=value.astype(state.trick_room.dtype))
+
+
 def with_weather_of(state: BattleState, source: BattleState) -> BattleState:
     """``state`` with ``source``'s weather bits (deep fog included) and ``weatherTurns`` (a
     view: ``playout._sort_view``)."""

@@ -36,7 +36,7 @@ from nuzline.ai.outcome import (
 )
 from nuzline.engine import damage
 from nuzline.engine.damage import ai_damage_for_roll
-from nuzline.engine.field import with_gravity, with_weather
+from nuzline.engine.field import with_gravity, with_trick_room, with_weather
 from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -693,10 +693,7 @@ def test_rock_polish(kaizo_tables, kaizo_roark_party, speed, trick_room, expecte
     Crunch, Rock Polish]. Head Smash gets neither -1 nor a kill bonus (no-calc)."""
     t = kaizo_tables
     s = _cranidos(t, kaizo_roark_party)
-    s = s._replace(
-        stages=s.stages.at[1, Stat.SPE].set(speed),
-        trick_room=jnp.asarray(trick_room, s.trick_room.dtype),
-    )
+    s = with_trick_room(s._replace(stages=s.stages.at[1, Stat.SPE].set(speed)), trick_room)
     assert _two_flag_scores(t, s) == expected
 
 
@@ -1086,7 +1083,7 @@ def test_head_smash_and_rock_polish(
     if player != "Gible":
         s = _named(t, n, s, player)
     s = _speeds(s, player_speed)
-    s = s._replace(trick_room=jnp.asarray(trick_room, s.trick_room.dtype))
+    s = with_trick_room(s, trick_room)
     damage = _damage(t, s)
     assert damage[0] == 0 and damage[2] > damage[1] > 0 and max(damage) < 400
     for move in _CRANIDOS_MOVES:
@@ -2236,7 +2233,7 @@ def test_basic_dragon_dance_trick_room(kaizo_tables, kaizo_names, kaizo_roark_pa
     """Basic_CheckDragonDance gives -10 under Trick Room first (:1004)."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Dragon Dance", "Accelerock", "", ""))
-    s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    s = with_trick_room(s, 3)
     assert _delta(t, s, 0x2, 0x3)[0] == -10
 
 
@@ -2414,7 +2411,7 @@ def test_basic_drops_and_reflect(kaizo_tables, kaizo_roark_party, effect, case, 
     if case == "stage":
         s = s._replace(stages=s.stages.at[0, stat].set(-6))
     elif case == "trick_room":
-        s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+        s = with_trick_room(s, 3)
     elif case == "reflect":
         s = s._replace(reflect=s.reflect.at[1].set(5))
     elif case != "plain":
@@ -2537,7 +2534,7 @@ def test_basic_check_tailwind(kaizo_tables, kaizo_names, kaizo_roark_party, case
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Tailwind", "Accelerock", "", ""))
     if case == "trick_room":
-        s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+        s = with_trick_room(s, 3)
     elif case == "tailwind":
         s = s._replace(tailwind=s.tailwind.at[1].set(3))
     assert _delta(t, s, 0x2, 0x3)[0] == expected

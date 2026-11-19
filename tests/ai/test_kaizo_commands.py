@@ -34,7 +34,7 @@ from nuzline.ai.commands import (
     SideCondition,
 )
 from nuzline.engine.damage import ai_damage_for_roll, weather_suppressed
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import WEATHER_ABILITY_IDS, Stat, Status, Type, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -277,7 +277,7 @@ def test_if_field_conditions_mask_trick_room(tables, names):
     assert FieldCondition.TRICK_ROOM == (1 << 16) | (1 << 17) | (1 << 18)
     s = versus(tables, names, GEODUDE)
     assert not _jump(c.if_field_conditions_mask(_ctx(tables, s), FieldCondition.TRICK_ROOM))
-    tr = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    tr = with_trick_room(s, 3)
     assert _jump(c.if_field_conditions_mask(_ctx(tables, tr), FieldCondition.TRICK_ROOM))
 
 
@@ -410,7 +410,8 @@ def test_compare_speed_constants_are_the_decomps():
 def _speed_state(tables, names, player: int, opp: int, **fields):
     s = versus(tables, names, GEODUDE)
     s = _speeds(s, player, opp)
-    return s._replace(**{k: jnp.asarray(v, getattr(s, k).dtype) for k, v in fields.items()})
+    s = s._replace(**{k: jnp.asarray(v, getattr(s, k).dtype) for k, v in fields.items()})
+    return with_trick_room(s, s.trick_room)  # its field_mask bits too (FCM 4.4)
 
 
 def _slower(tables, s) -> bool:
@@ -468,7 +469,7 @@ def _tie_cases(tables, names):
     both = lambda item: base._replace(item=base.item.at[0, 0].set(item).at[1, GEODUDE].set(item))
     return {
         "plain": base,
-        "trick_room": base._replace(trick_room=jnp.asarray(3, base.trick_room.dtype)),
+        "trick_room": with_trick_room(base, 3),
         "quick_claws": both(claw)._replace(qc_roll=jnp.asarray([1, 1], base.qc_roll.dtype)),
         "lagging_tails": both(tail),
     }

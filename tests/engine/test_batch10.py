@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_for_roll
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import Stat, Status, Type
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
@@ -372,7 +372,7 @@ def test_laws_no_sure_flinch_through_a_substitute(tables, names):
     s = make_state(
         tables, [_mon(n, "Pikachu", ["Headbutt"], 12)], [_mon(n, "Starly", ["Tackle"], 30)]
     )
-    s = _subbed(s, 1, 1)._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    s = with_trick_room(_subbed(s, 1, 1), 3)
     s = s._replace(hp=s.hp.at[0, 0].set(3))
     assert_equals_bruteforce(tables, s, np.zeros(2, np.int32))
 

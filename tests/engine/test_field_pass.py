@@ -7,7 +7,7 @@ Gravity."""
 import jax.numpy as jnp
 import pytest
 
-from nuzline.engine.field import with_gravity, with_weather
+from nuzline.engine.field import with_gravity, with_trick_room, with_weather
 from nuzline.engine.ids import Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import WINNER_OPPONENT, WINNER_PLAYER
@@ -64,7 +64,7 @@ def test_screens_count_down_and_end(tables, names):
 def test_trick_room_counts_down_once_per_turn(tables, names):
     # The field pass (bcp.c:932-1254) has no Trick Room step; the side-condition pass after it
     # counts it down once (SIDE_COND_CHECK_STATE_TRICK_ROOM, bcp.c:1822-1830; ruling D2-38).
-    s = roark_state(tables, names)._replace(trick_room=jnp.asarray(3, jnp.int8))
+    s = with_trick_room(roark_state(tables, names), 3)
     assert int(_leer(tables, names, s).trick_room) == 2
 
 

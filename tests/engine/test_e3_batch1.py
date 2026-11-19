@@ -21,7 +21,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, damage_table, decomp_abilities
 from nuzline.engine.enumerate import hit_class_law, outcome_laws
-from nuzline.engine.field import with_weather
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
@@ -575,7 +575,7 @@ def test_me_first_counter_moves_against_protect_and_a_semi_invulnerable_foe(tabl
 
 def _trick(t, n, turns=0, mine=("Trick Room",), opp=("Growl",)):
     s = _fight(t, n, mine, opp)
-    return s._replace(trick_room=jnp.asarray(turns, s.trick_room.dtype))
+    return with_trick_room(s, turns)
 
 
 def test_trick_room_is_mapped_and_rearmed_only_in_kaizo(tables, names, kaizo_tables, kaizo_names):
@@ -623,7 +623,7 @@ def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names
         trick_room=TRICK_ROOM_TURNS,
     )
     assert int(started.trick_room) == TRICK_ROOM_TURNS
-    reversed_ = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    reversed_ = with_trick_room(s, 3)
     out = assert_matches_reference(tables, reversed_, acts, _hits())
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
     for bad in (-1, TRICK_ROOM_TURNS + 1):
