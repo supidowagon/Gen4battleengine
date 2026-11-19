@@ -1903,6 +1903,7 @@ def damage_for_roll(
     hit=0,
     in_power=0,
     gift=0,
+    def_side=None,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
@@ -1911,15 +1912,17 @@ def damage_for_roll(
     ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
     power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
     ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
-    ``gift``: its Natural Gift berry removed this action (B13-37)."""
-    def_side = _foe(_i32(atk_side))  # the other side's active Pokemon (this function's contract)
+    ``gift``: its Natural Gift berry removed this action (B13-37). ``def_side``: the defender's
+    battler (default the other side's active Pokemon; ``atk_side`` itself for a lock reading its
+    stored target, singles follow-up (ii))."""
+    def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
         atk_side,
         move,
         crit,
-        # Reckless, the DOUBLE_POWER scripts; the defender is the other side's active Pokemon.
+        # Reckless, the DOUBLE_POWER scripts.
         power_mul=script_power_mul(tables, state, atk_side, def_side, move, power_mul),
         magnitude=magnitude,
         present=present,

@@ -67,6 +67,7 @@ from nuzline.engine.ids import (
     EffectId,
     ItemId,
     MoveFlag,
+    MoveTarget,
     Stat,
     Weather,
 )
@@ -424,21 +425,30 @@ def _rate(
 
 
 def live_hit_threshold(
-    tables: Tables, state: BattleState, side, move, target_moved=False, overrides=True
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    target_moved=False,
+    overrides=True,
+    target=None,
 ) -> jnp.ndarray:
     """``int32``: the threshold of ``side``'s ``move`` at its accuracy check, read from
     ``state`` as it is at that moment (``step``): the stages, abilities, items, weather and
     HP of the two active battlers then; ``target_moved``: the target has acted this turn.
-    ``overrides``: as ``_rate``'s (False: a later Triple Kick hit, B13-6)."""
-    target_mon = state.active[_foe(side)]
-    eva = state.stages[_foe(side), Stat.EVA]
+    ``overrides``: as ``_rate``'s (False: a later Triple Kick hit, B13-6). ``target``: the
+    defender's battler (default the foe; ``side`` itself for a lock reading its stored target,
+    singles follow-up (ii), bcp.c:2865-2981 reading the one Pokemon twice)."""
+    target = _foe(side) if target is None else target
+    target_mon = state.active[target]
+    eva = state.stages[target, Stat.EVA]
     acc = state.stages[side, Stat.ACC]
     return _rate(
         tables,
         state,
         side,
         move,
-        _foe(side),
+        target,
         target_mon,
         jnp.asarray(False),
         acc,
@@ -1299,6 +1309,29 @@ def crit_lands(tables: Tables, state: BattleState, side, move, value) -> jnp.nda
     return (value > 0) & ((value - 1) % odds == 0)
 
 
+def self_lock(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the side's turn can start with its lock move aimed at itself (singles
+    follow-up (ii)): locked (a locked battler picks no command, bcp.c:334-338), not encored
+    (bcp.c:1869-1884 randomize), its stored target (``chosen_target``) the side itself, and the
+    locked move of ``RANGE_SINGLE_TARGET`` (Rollout, Ice Ball, a charge move's strike), whose
+    defender ``BattleSystem_Defender`` reads from the stored target (lib.c:1709-1719). A faster
+    Encore or Follow Me of the foe can still turn it to the foe (the Encore branch randomizes,
+    lib.c:1714-1717 comes first), so the laws cover both targets: this side's accuracy roll is
+    kept whole (every roll its own class, whatever the accuracy and evasion stages, items and
+    abilities of either battler), its crit and its damage are not cut by the foe's armor,
+    immunity or Protect, and its secondary, flinch, contact and Focus Band reads are kept for
+    either target."""
+    fmt = format_of(state)
+    locked = state.locked_move.astype(_I32)
+    return (
+        (state.over == 0)
+        & (locked != 0)
+        & (state.encore_move == 0)
+        & (state.chosen_target.astype(_I32) == jnp.arange(fmt.B))
+        & (tables.move_target[locked] == MoveTarget.RANGE_SINGLE_TARGET)
+    )
+
+
 def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``bool[B]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
     (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
@@ -1643,13 +1676,21 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     rolls = _per_hit(fmt, key, k[0], "hit", 0, 100) + 1
     hit = hit_class(rolls, thresholds[:, None, :], possible[:, None, :])
     later_hit = hit_class(rolls, later[:, None, :], possible[:, None, :])
+    # A lock aimed at its user (self_lock) keeps the roll whole: its threshold reads either battler.
+    # Gated by a move action as the law is (enumerate.outcome_laws ``lock``).
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    lock = (uses_move & self_lock(tables, state))[:, None]
+    hit = jnp.where(lock, rolls, hit)
+    later_hit = jnp.where(lock, rolls, later_hit)
     hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
-    # Battle Armor / Shell Armor (:7135-7136).
+    # Battle Armor / Shell Armor (:7135-7136). A lock aimed at its user is not cut: its defender
+    # may be the user or the foe, and step reads both on the hit's own defender
+    # (effects.crit_blocked); for every other move this cut makes that read a no-op.
     no_crit = (
         (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
         | armored(tables, state, actions, moves)
-    )[:, None]
+    )[:, None] & ~lock
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
     # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can

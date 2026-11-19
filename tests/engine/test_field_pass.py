@@ -65,7 +65,7 @@ def test_screens_count_down_and_end(tables, names):
 
 def test_trick_room_counts_down_once_per_turn(tables, names):
     # The field pass (bcp.c:932-1254) has no Trick Room step; the side-condition pass after it
-    # counts it down once (SIDE_COND_CHECK_STATE_TRICK_ROOM, bcp.c:1822-1830; ruling D2-34).
+    # counts it down once (SIDE_COND_CHECK_STATE_TRICK_ROOM, bcp.c:1822-1830; ruling D2-38).
     s = roark_state(tables, names)._replace(trick_room=jnp.asarray(3, jnp.int8))
     assert int(_leer(tables, names, s).trick_room) == 2
 

@@ -30,6 +30,7 @@ MOVE_PER_RANGE = {
     MoveTarget.RANGE_ALLY: "Helping Hand",
     MoveTarget.RANGE_USER_OR_ALLY: "Acupressure",
     MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST: "Me First",
+    "non-Ghost Curse": "Curse",  # RANGE_SINGLE_TARGET in the data, a self-defender move (bcp.c:4344)
 }
 ORDERS = ([0, 1, 2, 3], [3, 1, 0, 2])
 
