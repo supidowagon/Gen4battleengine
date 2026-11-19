@@ -28,12 +28,12 @@ LATER_FIELDS = tuple(
         BattleState._fields.index("replace_mul") + 1 : BattleState._fields.index("chosen_target")
     ]
 )
-# D2's fields after the scratch (ruling D2-34): `chosen_target` starts at b ^ 1 (D2-1; the
+# D2's fields after the scratch (ruling D2-38): `chosen_target` starts at b ^ 1 (D2-1; the
 # game's 0 is never read, every battler selects on turn 1, bcp.c:507-531), `last_hit_by` at 0.
 D2_FIELDS = ("chosen_target", "last_hit_by")
 
 
-def test_new_fields_default_to_zero(tables, names):
+def test_new_fields_start_values(tables, names):
     s = roark_state(tables, names)
     assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS + D2_FIELDS) :] == (
         LATER_FIELDS + D2_FIELDS

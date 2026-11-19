@@ -1,6 +1,7 @@
 """D2-11: Follow Me's per-side turn scratch ``ts_follow_me`` (1 + followMeUser; script.c:6261-6270,
 cleared by SetupNextTurn, lib.c:2251-2252) and its reader ``targets.follow_me_target``. The step
-writes it at B = 4 only (D2-32): the singles steps here assert it stays clear."""
+writes it in both formats (ruling D2-33): the singles steps here assert it is set for the rest of the
+turn (a pause keeps it) and clear at the turn's end."""
 
 from __future__ import annotations
 
@@ -36,10 +37,10 @@ def _pause_after_follow_me(tables, names, user_moves, asleep=False):
 
 
 @pytest.mark.slow  # a jitted step compile: over the fast tier's 4 GB
-def test_follow_me_is_not_written_in_singles(tables, names):
+def test_follow_me_is_written_in_singles(tables, names):
     _, paused = _pause_after_follow_me(tables, names, ["Follow Me"])
     assert int(paused.pivot_battler) == 2
-    assert np.asarray(paused.ts_follow_me).tolist() == [0, 0]  # B = 2: not written (D2-32)
+    assert np.asarray(paused.ts_follow_me).tolist() == [1, 0]  # 1 + its user, kept over the pause
     after = _resume(tables, paused, 1)  # the resumed half reads it back; the turn ends
     assert int(after.pivot_battler) == 0
     assert np.asarray(after.ts_follow_me).tolist() == [0, 0]
@@ -48,10 +49,10 @@ def test_follow_me_is_not_written_in_singles(tables, names):
 
 
 @pytest.mark.slow  # a jitted step compile: over the fast tier's 4 GB
-def test_a_called_follow_me_is_not_written_in_singles(tables, names):
+def test_a_called_follow_me_is_written_in_singles(tables, names):
     # Sleep Talk's only candidate is Follow Me (effect_used is the called move's)
     _, paused = _pause_after_follow_me(tables, names, ["Sleep Talk", "Follow Me"], asleep=True)
-    assert np.asarray(paused.ts_follow_me).tolist() == [0, 0]  # B = 2: not written (D2-32)
+    assert np.asarray(paused.ts_follow_me).tolist() == [1, 0]  # 1 + its user, kept over the pause
     after = _resume(tables, paused, 1)
     assert np.asarray(after.ts_follow_me).tolist() == [0, 0]
 
