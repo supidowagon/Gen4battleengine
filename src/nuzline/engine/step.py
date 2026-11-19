@@ -2923,7 +2923,7 @@ def _pursuit_hit(
         target_side=switcher,
         defender=switcher,
     )
-    # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``MoveHit.bonded``),
+    # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``pursuit_switch``),
     # before the contact ability (:86-87) and the items (:90, :94-95).
     state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the

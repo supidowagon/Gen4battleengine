@@ -3081,9 +3081,6 @@ class MoveHit(NamedTuple):
     sub_hit: jnp.ndarray
     # MOVE_STATUS_SUPER_EFFECTIVE after the hit's type chart (the Enigma Berry, on_hit_berry).
     super_effective: jnp.ndarray
-    # Pursuit's pre-switch hit KO'd a switcher holding Destiny Bond and took the pursuer down
-    # (subscript_pursuit.s:85, before the contact ability :86-87); False otherwise.
-    bonded: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -3559,12 +3556,12 @@ def play_hit(
     else:
         state = _set(state, "substitute_hp", target_side, sub_hp - to_sub, sub_take)
         sub_hit = jnp.asarray(sub_hit) | sub_take
-    bonded = jnp.zeros((), jnp.bool_)
     if pursuit_switch:
         # subscript_pursuit.s:85 FAINT_CHECK_DESTINY_BOND runs before TriggerAbilityOnHit (:86-87):
         # a KO'd switcher holding Destiny Bond takes the pursuer down while it has HP
         # (subscript_faint_check_destiny_bond.s:5-7, :11-16), so every contact-ability case
-        # then fails on the attacker's HP (battle_lib.c:4215-4363). No reveal, no draw.
+        # then fails on the attacker's HP (battle_lib.c:4215-4363). No reveal, no draw. The
+        # engine has no Destiny Bond event (step.EVENT_FLAGS), here or for a FIGHT's take-down.
         ko = (target_hp > 0) & (state.hp[party(fmt, target_side), target] == 0)
         bonded = (
             ko
@@ -3738,5 +3735,4 @@ def play_hit(
         super_effective=super_effective
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
-        bonded=bonded,
     )

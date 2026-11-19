@@ -89,49 +89,54 @@ def _player_pursuit(tables, n, ability, bond, pursuer_hp=None, species="Carvanha
     return _bond(s, 1) if bond else s
 
 
-@pytest.mark.parametrize("pursuer_hp", [None, 1])
-def test_bond_takes_the_pursuer_before_rough_skin(tables, names, pursuer_hp):
-    n = names
-    s = _player_pursuit(tables, n, "Rough Skin", True, pursuer_hp)
-    out = assert_matches_reference(tables, s, (0, SWITCH), _proc(1))
-    assert int(out.hp[0, 0]) == 0
-    assert int(out.hp[1, 0]) == 0
-    ev = _events(tables, s, (0, SWITCH), _proc(1))
-    assert int(ev["contact_ability"][1]) == 0
-
-
-@pytest.mark.parametrize("pursuer_hp", [None, 1])
-def test_bond_leaves_the_players_switcher_ability_unrevealed(tables, names, pursuer_hp):
-    # The AI tracks only the player's Pokemon: mirror the case with the foe chasing.
-    n = names
-    s = make_state(tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)])
-    s = _bond(s, 0)
+def _player_switcher(tables, n, species, ability, bond, pursuer_hp=None):
+    # The AI tracks only the player's Pokemon (hooks.reveal_ability): the player's switcher
+    # shows whether its contact ability ran.
+    s = make_state(tables, [_weak(n, species, ability), _bench(n)], [_chaser(n), _bench(n)])
     if pursuer_hp is not None:
         s = s.replace_hp(1, 0, pursuer_hp)
+    return _bond(s, 0) if bond else s
+
+
+@pytest.mark.parametrize("pursuer_hp", [None, 1])
+def test_bond_takes_the_pursuer_before_rough_skin(tables, names, pursuer_hp):
+    # The old order ran Rough Skin first: its message tagged the switcher's ability
+    # (subscript_rough_skin.s, ``hooks.CONTACT_DAMAGE``) and the AI learned it. Now the take-down
+    # (subscript_pursuit.s:85) leaves Rough Skin's attacker-HP test failing (battle_lib.c:4258).
+    n = names
+    s = _player_switcher(tables, n, "Carvanha", "Rough Skin", True, pursuer_hp)
     out = assert_matches_reference(tables, s, (SWITCH, 0), _proc(1))
+    assert int(out.hp[0, 0]) == 0
     assert int(out.hp[1, 0]) == 0
     assert int(out.ai_ability_known[0]) == 0
-    # Without the bond Rough Skin reveals itself (test 4's contrast).
-    s = make_state(tables, [_weak(n, "Carvanha", "Rough Skin"), _bench(n)], [_chaser(n), _bench(n)])
+    ev = _events(tables, s, (SWITCH, 0), _proc(1))
+    assert int(ev["contact_ability"][0]) == 0
+    # Without the bond Rough Skin reveals itself.
+    s = _player_switcher(tables, n, "Carvanha", "Rough Skin", False, pursuer_hp)
     out = assert_matches_reference(tables, s, (SWITCH, 0), _proc(1))
     assert int(out.ai_ability_known[0]) != 0
 
 
 def test_static_switcher_with_bond_paralyzes_nobody_for_either_draw(tables, names):
+    # The old order rolled Static first: on a proc it paralyzed the pursuer and revealed the
+    # switcher's ability (``hooks.CONTACT_STATUS``), so the two draws gave two states. Now the
+    # draw is never read. ``outcome_laws`` keeps ``contact_proc`` relevant (a superset: whether the
+    # Pursuit KOs depends on the crit and roll draws), so the check is that every row plays to one
+    # state.
     n = names
-    s = _player_pursuit(tables, n, "Static", True, species="Pikachu")
-    outs = [assert_matches_reference(tables, s, (0, SWITCH), _proc(v)) for v in (0, 1)]
+    s = _player_switcher(tables, n, "Pikachu", "Static", True)
+    outs = [assert_matches_reference(tables, s, (SWITCH, 0), _proc(v)) for v in (0, 1)]
     for out in outs:
-        assert int(out.hp[0, 0]) == 0
-        assert int(out.status[0, 0]) == Status.NONE
+        assert int(out.hp[1, 0]) == 0
+        assert int(out.status[1, 0]) == Status.NONE
+        assert int(out.ai_ability_known[0]) == 0
     for x, y in zip(outs[0], outs[1], strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y))
-    # The enumerator's rows all play to one state (the draw is merged away).
-    rows, _ = enumerate_turn(tables, s, (0, SWITCH))
+    rows, _ = enumerate_turn(tables, s, (SWITCH, 0))
     states = set()
     for i in range(len(rows.hit)):
         row = jax.tree.map(lambda f, i=i: f[i], rows)
-        out = jit_step(tables, s, jnp.asarray((0, SWITCH)), row)
+        out = jit_step(tables, s, jnp.asarray((SWITCH, 0)), row)
         states.add(tuple(np.asarray(f).tobytes() for f in out))
     assert len(states) == 1
 
