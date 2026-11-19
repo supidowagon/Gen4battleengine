@@ -670,8 +670,7 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     (``subscript_check_quick_claw.s:26-28``, ``step._use_move``); until then Pluck cannot take
     it (``hooks.pluck_berry``). ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300)
     writes it too, through the same compare with ``ignoreQuickClaw = FALSE``, when a Trick
-    Room activation re-sorts the turn (bcp.c:3990-3993); Trick Room is unsupported, and
-    whoever adds it must re-set the flag there."""
+    Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_claw_flags`` re-sets it there."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
     flags = custap_active(tables, state) & fight[0] & fight[1]
@@ -688,13 +687,36 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     (subscript_check_quick_claw.s:22-23), so it stands until the holder's move starts; only
     Knock Off reads it (subscript_knock_off.s:8), B10-6. The sort compares every pair of
     battlers whose commands are both FIGHT (bcp.c:766-778), so a FIGHT battler is compared when
-    any other battler fights (doubles design section 5 rule 4)."""
+    any other battler fights (doubles design section 5 rule 4). A Trick Room's MoveEnd re-sort
+    sets it again (``resort_claw_flags``)."""
     actions = jnp.asarray(actions, _I32)
     fight = ~is_switch(actions) & ~is_item(actions)
     if format_of(state).B == 4:  # battlers 2 and 3 absent (action_order): no compare with HP
         fight = fight & (jnp.arange(4) < 2)
     others = jnp.sum(fight.astype(_I32)) - fight.astype(_I32)
     return quick_claw_active(tables, state, state.qc_roll) & fight & (others > 0)
+
+
+def resort_claw_flags(tables: Tables, state: BattleState, actions, qc):
+    """``(bool[B] claw_set, bool[B] custap_set)``: what ``BattleSystem_SortMonActionOrder``
+    (battle_lib.c:7276-7300) sets at a Trick Room's MoveEnd (bcp.c:3991): every pair with equal
+    ``SELECTED_COMMAND`` is compared, a FIGHT pair with both alive with ``ignoreQuickClaw =
+    FALSE`` (:7289-7293; a dead battler short-circuits, :1204-1211), which sets
+    ``moveEffectsData.quickClaw`` for an activated Quick Claw (:1283, :1349; this turn's
+    ``speedRand``, ``qc`` = ``Outcome.quick_claw``) and ``.custapBerry`` for a Custap holder in
+    its pinch on the current HP (:1297, :1363). It never clears. ``state`` is the state at the
+    MoveEnd, ``actions`` the turn's commands."""
+    fmt = format_of(state)
+    actions = jnp.asarray(actions, _I32)
+    fight = ~is_switch(actions) & ~is_item(actions)
+    alive = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+    eligible = fight & alive
+    others = jnp.sum(eligible.astype(_I32)) - eligible.astype(_I32)
+    pair = eligible & (others > 0)
+    return (
+        quick_claw_active(tables, state, qc) & pair,
+        custap_active(tables, state) & pair,
+    )
 
 
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:

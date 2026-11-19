@@ -16,7 +16,6 @@ from nuzline.data.trainer import (
     build_trainer_party,
     load_trainers,
 )
-from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.coverage import (
     IMPLEMENTED_ABILITIES,
     IMPLEMENTED_AI_FLAGS,
@@ -145,19 +144,14 @@ def test_partner_trainer_is_not_refused_for_its_format(tables, names):
         assert not any("battle format" in m for m in r.missing)
 
 
-@pytest.mark.fullset
-def test_unsupported_trainer_item_and_mixed_bag(tables, names):
-    # E1 rulings G-43, G-62: Super Potion and Guard Spec. act by their params; a bag item
-    # still refused (bag.refused_bag_params, picked from the item table) is refused by name.
-    params = np.asarray(tables.item_party_param)
-    refused = next(i for i in range(1, len(params)) if refused_bag_params(params[i], i))
-    reason = refused_bag_params(params[refused], refused)[0]
-    items = [names.item(n) for n in ("Super Potion", "Guard Spec.")] + [refused]
+def test_trainer_items_are_modelled_and_a_mixed_bag_is_refused(tables, names):
+    # E1 rulings G-43, G-62, F-15: every bag item acts by its party params (the friendship wrap
+    # included, so even a Poke Ball is modelled); a bag of different items is refused.
+    items = [names.item(n) for n in ("Super Potion", "Guard Spec.", "Poké Ball")]
     trainer = replace(roark_trainer(), items=tuple(items))
     r = check_coverage(tables, names, sample_party(names), trainer, roark_party(names), 0)
-    for name in ("Super Potion", "Guard Spec."):
+    for name in ("Super Potion", "Guard Spec.", "Poké Ball"):
         assert not any(f"{name} " in m and "trainer item" in m for m in r.missing)
-    assert any(names.item_names[refused] in m and reason in m for m in r.missing)
     assert any("mixed items" in m for m in r.missing)
 
 
@@ -224,12 +218,6 @@ def test_check_opponent_matches_check_coverage(tables, names, monkeypatch, train
             1,
             "no item",
             "Giratina (slot 0): Origin Forme without the Griseous Orb (form change UNSUPPORTED)",
-        ),
-        (
-            492,
-            1,
-            "Griseous Orb",
-            "Shaymin (slot 0): Sky Forme reverts when frozen (form change UNSUPPORTED)",
         ),
     ],
 )
@@ -641,3 +629,28 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
+
+
+def test_acid_rain_note_scans_both_sides_moves(tables, names):
+    """SF2 gate 3: either side's Pursuit chases a switch (battle_script.c:6884-6935), so the Acid
+    Rain report line (subscript_pursuit.s:115) reads the player's party and learnable moves too."""
+    line = "field condition: Acid Rain (runtime refusal)"
+    pursuit = names.move("Pursuit")
+    real = roark_party(names)
+    # Roark's Cranidos knows Pursuit: the opponent's side alone raises the line.
+    assert line in check_opponent(tables, names, roark_trainer(), real, 0, []).runtime
+    # The control: Pursuit taken off Cranidos, and the sample party knows no Pursuit.
+    opp = [
+        replace(
+            mon, moves=tuple(m for m in mon.moves if m != pursuit) + (0,) * (pursuit in mon.moves)
+        )
+        for mon in real
+    ]
+    plain = sample_party(names)
+    assert not any(pursuit in mon.moves for mon in (*opp, *plain))
+    assert line not in check_opponent(tables, names, roark_trainer(), opp, 0, plain).runtime
+    party = sample_party(names, override_moves={0: ["Pursuit", "Scratch"]})
+    assert line in check_opponent(tables, names, roark_trainer(), opp, 0, party).runtime
+    learn = [pursuit]
+    r = check_opponent(tables, names, roark_trainer(), opp, 0, plain, learn)
+    assert line in r.runtime

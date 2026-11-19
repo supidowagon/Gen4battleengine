@@ -487,7 +487,7 @@ class EffectId(IntEnum):
     # ``GRAVITY_TURNS`` and its grounding loop (``effects._gravity``, G-67).
     GRAVITY = 118
     # Mimic (82, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE): zeros. effect_script_0082.s runs
-    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4523) copies the
+    # subscript_mimic.s on a hit: ``BtlCmd_TryMimic`` (battle_script.c:4476-4524) copies the
     # defender's last move into the user's first Mimic slot (``effects._mimic``, G-68).
     MIMIC = 119
     # Transform (57, BATTLE_EFFECT_TRANSFORM): zeros. effect_script_0057.s runs
@@ -757,6 +757,20 @@ class AbilityId(IntEnum):
     MINUS = 89
     # D2-12: redirection only (battle_lib.c:1771-1789; engine/targets.redirect).
     STORM_DRAIN = 90
+    # E1 batch F, ruling F-1: Heatproof (BattleSystem_CalcMoveDamage, battle_lib.c:6841-6844;
+    # subscript_burn_damage.s:8-9; damage._pre_random, step._burn_check).
+    HEATPROOF = 91
+    # F-2: Flash Fire (BattleSystem_TriggerImmunityAbility, battle_lib.c:3515-3521; step._use_move
+    # beside Dry Skin; the flag boost in damage._pre_random, :7074-7076).
+    FLASH_FIRE = 92
+    # F-3: Multitype (Battler_MonType, battle_lib.c:7629-7699): Arceus' types are its raw held
+    # plate's (``damage.multitype_plate``); the failure tests of the moves it protects against
+    # read the decomp id (``ABILITY_MULTITYPE``).
+    MULTITYPE = 93
+    # F-5: Hydration (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:5626-5639; ``step._weather_effect``).
+    HYDRATION = 94
+    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
+    FORECAST = 95
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -855,6 +869,11 @@ ABILITY_DECOMP_IDS = {
     AbilityId.KLUTZ: 103,
     AbilityId.PLUS: 57,
     AbilityId.MINUS: 58,
+    AbilityId.HEATPROOF: 85,
+    AbilityId.FLASH_FIRE: 18,
+    AbilityId.MULTITYPE: 121,
+    AbilityId.HYDRATION: 93,
+    AbilityId.FORECAST: 59,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1069,6 +1088,24 @@ class ItemId(IntEnum):
     # by the raw held item), grounds its holder (:2534, :2602-2607, :2702, :2760, :3215, :5505;
     # subscript_hazards_check.s:7), G-56.
     IRON_BALL = 61
+    # E1 Batch F, held items (F-7 ..). Hold effect 50 (HOLD_EFFECT_EVS_UP_SPEED_DOWN: Macho Brace;
+    # Kaizo's Power items, vanilla's HOLD_EFFECT_LVLUP_*_EV_UP 117-122): no hook of its own, the
+    # Speed halving and the EV doubling read the raw hold effect (``SPEED_HALVING_HOLD_EFFECTS``,
+    # ``levelup``): an id so the item is no coverage refusal (F-7).
+    MACHO_BRACE = 62
+    # Kaizo's Berserk Gene (hold 36, a Liechi's effect on a non-berry): ``PINCH_BERRY``'s held
+    # trigger and stat, but Pluck / Bug Bite leave it (PLUCK_EFFECT_NONE, no berry: F-8).
+    BERSERK_GENE = 63
+    # Lansat Berry (HOLD_EFFECT_PINCH_CRITRATE_UP): at ``curHP <= maxHP / param`` sets the
+    # holder's Focus Energy (battle_lib.c:4838-4848; Pluck :5819-5825), F-9.
+    LANSAT_BERRY = 64
+    # Starf Berry (HOLD_EFFECT_PINCH_RANDOM_UP): at the same pinch raises a random stat below +6
+    # of Attack, Defense, Speed, Sp. Atk, Sp. Def by 2 (battle_lib.c:4850-4872; Pluck :5798-5817,
+    # ``Outcome.starf``), F-10.
+    STARF_BERRY = 65
+    # Kaizo's Lava Cookie / Old Gateau (hold 12, a Lum Berry's effect on a non-berry): Lum's cure
+    # (``hooks._restore``), but Pluck / Bug Bite leave it (F-12).
+    LAVA_COOKIE = 66
 
 
 # subscript_bind_start.s:10-12: an attacker holding HOLD_EFFECT_EXTEND_TRAPPING (Grip Claw) sets
@@ -1082,6 +1119,12 @@ GRIP_CLAW_TURNS = 6
 # (LVLUP_HP/ATK/DEF/SPEED/SPATK/SPDEF_EV_UP). Ruling G-56.
 SPEED_HALVING_HOLD_EFFECTS = (50, 106, 122, 117, 118, 121, 119, 120)
 
+# Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866): ``RandNext() % 5``
+# repeated until the stat (Attack, Defense, Speed, Sp. Atk, Sp. Def: ``BATTLE_STAT_ATTACK + i``,
+# generated/battle_stats.txt:2-6) is below +6. By the project's ``% n`` convention uniform over
+# the eligible stats: one value in [0, STARF_DRAWS) read modulo their count (1-5, lcm 60), F-10.
+STARF_DRAWS = 60
+
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
 # ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold
 # effects.
@@ -1090,6 +1133,8 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # Decomp species ids the item code of ``BattleSystem_CalcMoveDamage`` names
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
+SPECIES_CASTFORM = 351  # BattleSystem_TriggerFormChange (battle_lib.c:6314), F-6
+SPECIES_SHAYMIN = 492  # subscript_check_shaymin_form.s:6, F-16
 SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
 SPECIES_CHANSEY = 113  # :7127
 SPECIES_CUBONE = 104
@@ -1487,12 +1532,18 @@ PROTECT_CHAIN_MOVES = (MOVE_PROTECT, MOVE_DETECT, MOVE_ENDURE)
 # ``FORBIDDEN_BY_MIMIC_DELIM`` (:7152-7158): Metronome, Struggle, Sketch, Mimic, Chatter
 # (generated/moves.txt lines 119, 166, 167, 103, 449), G-68.
 MOVE_MIMIC = 102
+# MOVE_WILL_O_WISP (generated/moves.txt line 262): Flash Fire absorbs it though it has no power
+# (BattleSystem_TriggerImmunityAbility, battle_lib.c:3519), F-2.
+MOVE_WILL_O_WISP = 261
 MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
 # Chatter's confusion (battle_script.c:8397-8436): the attacker must be a Chatot that is not
 # Transformed and the defender have HP; ``effectChance`` is 0 / 10 / 30 for the Chatot cry parameter
 # 0 / 1 / 2 (:8413-8426, sound_chatot.c:193-213) and the confusion comes on ``RandNext() % 100 <=
 # chance`` (:8428-8430), G-70. Species ids: generated/species.txt line 442.
 SPECIES_CHATOT = 441
+# SPECIES_ARCEUS (generated/species.txt line 494): Battler_MonType's Multitype case
+# (battle_lib.c:7629-7630), F-3.
+SPECIES_ARCEUS = 493
 MOVE_CHATTER = 448
 CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
@@ -1586,6 +1637,8 @@ ACUPRESSURE_STATS = (
     Stat.ACC,
     Stat.EVA,
 )
+# Starf Berry's stats (battle_lib.c:4856-4866: BATTLE_STAT_ATTACK + i, i < 5), F-10.
+STARF_STATS = ACUPRESSURE_STATS[:5]
 
 ITEM_ABILITY_IDS = {
     "Immunity": 17,

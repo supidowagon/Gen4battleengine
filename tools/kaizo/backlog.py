@@ -54,6 +54,32 @@ def group_kind(k):
     return _KIND_OF.get(kind, "other")
 
 
+RUNTIME_NOTE = "any fight is exposed when the player carries Pursuit"
+
+
+def runtime_section(entries):
+    """The lines of the "playable, lines hitting the glitch refused" section. ``entries``:
+    ``(battle label, runtime lines)`` of each runnable battle (no missing group) whose opponents
+    report ``CoverageReport.runtime`` lines (kind "field condition": a trainer move whose
+    effect is BATTLE_EFFECT_HIT_BEFORE_SWITCH, the Acid Rain guard). Such a fight stays
+    playable: only the play lines that reach the glitch are refused at run time."""
+    out = [
+        "",
+        "## Playable, lines hitting the glitch refused",
+        "",
+        "Runnable battles whose opponents report a runtime line (`CoverageReport.runtime`,",
+        "kind field condition): the fight is playable and only the lines that reach the",
+        f"glitch are refused ({RUNTIME_NOTE}).",
+        "",
+        f"{len(entries)} battles.",
+        "",
+        "| Battle | Runtime lines |",
+        "|---|---|",
+    ]
+    out += [f"| {label} | {'; '.join(sorted(set(lines)))} |" for label, lines in entries]
+    return out
+
+
 def battles(rows, by_id):
     """The battles of the split rows ``rows``, each a sorted tuple of trainer ids: a row joined
     with its ``opponent_2`` (both directions, transitively). A second opponent that is not a
@@ -546,7 +572,12 @@ def main(out_path):
     from nuzline.ai.policy import opponent_move_refusals
     from nuzline.data.games import load_game
     from nuzline.data.trainer import IntermediateData, build_trainer_party
-    from nuzline.engine.coverage import check_opponent, start_weather
+    from nuzline.engine.coverage import (
+        check_opponent,
+        display_name,
+        start_weather,
+        transform_sky_refusals,
+    )
 
     game = cli._game(argparse.Namespace(game="kaizo"))
     tables, names = load_game(game)
@@ -600,7 +631,13 @@ def main(out_path):
                         helper = "CalcDamage" if kind == "calc damage" else "MoveType"
                         # Weather Ball's MoveType case: refused where it assigns no type
                         # (outside rain, sand, sun and hail; B13-26).
-                        where = " where it assigns no type" if kind == "move type" else ""
+                        # Open item (E1 batch F ruling): the value it returns there needs a
+                        # real-game check (memory dump per caller), trainer_ai.c:3222-3240.
+                        where = (
+                            " where it assigns no type (open: real-game check, trainer_ai.c:3222-3240)"
+                            if kind == "move type"
+                            else ""
+                        )
                         k = ("AI", f"move-id case of TrainerAI_{helper}{where}")
                     else:
                         k = ("AI", f"move effect #{e} {name}: {kind}")
@@ -621,6 +658,8 @@ def main(out_path):
         return (kind, name), None
 
     errors = []
+    runtime_of = {}  # trainer id -> CoverageReport.runtime lines (refuse no fight)
+    transform = names.move("Transform")
 
     def check(t, mem=members, errs=errors):
         """The missing groups of trainer row ``t`` (its team, bag, AI and battle conditions)."""
@@ -628,7 +667,16 @@ def main(out_path):
             cli._check_buildable(tables, names, t, inter)
             party = build_trainer_party(t, inter)
             r = check_opponent(tables, names, t, party, start_weather(t))
+            runtime_of[t.id] = list(r.runtime)
             ks = ai_move_groups(t, party, mem)
+            # F-26 (open, E1's next batch): check_opponent runs without your party, so a
+            # trainer's Sky Shaymin is counted here as facing your Transform user (Ditto),
+            # whose freeze revert writes Land's ability into your party Pokemon
+            # (battle_script.c:3401-3407, battle_io_command.c:601-604).
+            for line in transform_sky_refusals(tables, names, (), party, (transform,)):
+                k = ("form change", f"{line} (F-26; your Transform user assumed)")
+                ks.add(k)
+                mem[k].add(display_name(t))
             for m in r.missing:
                 k, member = key(str(m))
                 ks.add(k)
@@ -691,7 +739,8 @@ def main(out_path):
         "opposing trainer row of every split.",
         "It counts only what the trainers' teams, bags, AI and battle conditions need.",
         "Your own Pokemon's moves, abilities and items are not counted, nor are the teams of",
-        "AI partners beside you in multi battles.",
+        "AI partners beside you in multi battles, except F-26: a trainer's Sky Shaymin is counted",
+        "as facing your Transform user (form change).",
         "Moves are grouped by the game's move-effect number and held items by hold-effect number,",
         "since one implementation covers the whole group.",
         "",
@@ -817,6 +866,18 @@ def main(out_path):
         L.extend(["", "Groups by kind: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common())])
         return cnt
 
+    L.extend(
+        runtime_section(
+            [
+                (
+                    ", ".join(f"{i} {by_id[i].label}" for i in b),
+                    [line for i in b for line in runtime_of.get(i, ())],
+                )
+                for b in bs
+                if not battle_groups[b] and any(runtime_of.get(i) for i in b)
+            ]
+        )
+    )
     table("Roark split", order[:1])
     table("Roark and Gardenia splits (up to the second gym)", order[:2])
     table("All ten splits (top 60)", order, 60)

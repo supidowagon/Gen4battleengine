@@ -86,3 +86,17 @@ def test_b4_locked_battler_whose_chosen_target_fainted_retargets(tables, names, 
     dead = with_hp(s, 3, 0)
     got = go(tables, names, dead, 0, "Rollout", chosen=3, bit=bit, randomize=False)
     assert got == (1, 1, 0, True)  # RandomOpponent steps to the living foe
+
+
+def test_b2_locked_rollout_reads_its_stored_user_unless_randomized(tables, names):
+    # singles follow-up (ii), ruling D2-33: the lock branch does not randomize (bcp.c:1885-1888),
+    # so branch 10 reads the stored target (lib.c:1711, :1718-1719): the user after a RANGE_MY_SIDE
+    # selection; an Encore (the randomizing branches) takes the foe
+    s = _b2(tables, names)
+    s = _with(s, locked_move=names.move("Rollout"))
+    assert not _flag(s)
+    assert go(tables, names, s, 0, "Rollout", chosen=0, randomize=False) == (0, 0, 0, False)
+    assert go(tables, names, s, 0, "Rollout", chosen=1, randomize=False) == (1, 1, 0, False)
+    encored = _with(s, encore_move=names.move("Rollout"), encore_slot=0)
+    assert _flag(encored)
+    assert go(tables, names, encored, 0, "Rollout", chosen=0, randomize=True) == (1, 1, 0, False)

@@ -1813,7 +1813,11 @@ BATCH_C_ABILITIES = (
 BATCH_C_FOE_MOVES = {
     AbilityId.WHITE_SMOKE: ("Growl", "Leer", "Sand-Attack", "Aurora Beam", "Tickle", "Charm"),
     AbilityId.VITAL_SPIRIT: ("Hypnosis", "Spore", "Sing", "Yawn", "Tackle"),
+    # E1 batch F (F-1, F-2): Fire moves into Heatproof / Flash Fire, Will-O-Wisp included.
+    AbilityId.HEATPROOF: ("Ember", "Flamethrower", "Will-O-Wisp", "Fire Fang"),
+    AbilityId.FLASH_FIRE: ("Ember", "Flamethrower", "Will-O-Wisp", "Fire Fang", "Water Gun"),
 }
+FLASH_HEAT = (AbilityId.HEATPROOF, AbilityId.FLASH_FIRE)
 # E1 trial batch (G-63): Plus / Minus act through a living ally on the side's field, so in
 # singles never; ``_draw_batch_c`` gives them a special move and the partner ability on the bench.
 PLUS_MINUS = (AbilityId.PLUS, AbilityId.MINUS)
@@ -1830,7 +1834,7 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
     if draw(st.integers(0, 2)) != 0:
         return
     rnd = draw(st.randoms(use_true_random=False))
-    ability = rnd.choice(BATCH_C_ABILITIES + PLUS_MINUS)
+    ability = rnd.choice(BATCH_C_ABILITIES + PLUS_MINUS + FLASH_HEAT)
     a["ability"][side, active] = ability
     if rnd.random() >= 0.75:
         return
@@ -1861,6 +1865,14 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
         a["stages"][side, Stat.SPE] = rnd.choice((0, 0, 5, 6, -1))
     if ability == AbilityId.IRON_FIST:
         teach(side, active, rnd.choice(PUNCH_MOVES))
+    if ability == AbilityId.HEATPROOF and rnd.random() < 0.5:
+        a["status"][side, active] = Status.BURN
+    if ability in FLASH_HEAT and rnd.random() < 0.5:
+        # The flag set (a Flash Fire holder that has absorbed) and a Fire move of its own.
+        a["flash_fire"][side] = int(ability == AbilityId.FLASH_FIRE)
+        teach(side, active, rnd.choice(("Ember", "Flamethrower", "Fire Fang")))
+        if rnd.random() < 0.25:
+            a["status"][side, active] = Status.FREEZE
     if ability in PLUS_MINUS:
         teach(side, active, rnd.choice(SPECIAL_MOVES))
         partner = AbilityId.MINUS if ability == AbilityId.PLUS else AbilityId.PLUS
@@ -1908,6 +1920,10 @@ BATCH_D_ITEMS = (
     "Iron Ball",
     "Ganlon Berry",
     "Apicot Berry",
+    # E1 Batch F (F-7, F-9, F-10): Macho Brace, Lansat and Starf Berry.
+    "Macho Brace",
+    "Lansat Berry",
+    "Starf Berry",
 )
 BATCH_D_MOVES = {
     "Grip Claw": ("Wrap", "Bind", "Fire Spin", "Whirlpool", "Clamp"),
@@ -1915,6 +1931,8 @@ BATCH_D_MOVES = {
     "Jaboca Berry": ("Pluck", "Bug Bite"),
     "Micle Berry": ("Pluck", "Bug Bite"),
     "Leppa Berry": ("Pluck", "Bug Bite"),
+    "Lansat Berry": ("Pluck", "Bug Bite"),
+    "Starf Berry": ("Pluck", "Bug Bite"),
 }
 
 
@@ -1946,7 +1964,8 @@ def _draw_batch_d(draw, tables: Tables, a: dict, side: int, active: int, names: 
             _teach(tables, a, who, mon, move, rnd.randint(0, 3))
 
     max_hp = int(a["max_hp"][side, active])
-    if name in ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry"):
+    pinched = ("Micle Berry", "Ganlon Berry", "Apicot Berry", "Enigma Berry")
+    if name in (*pinched, "Lansat Berry", "Starf Berry"):
         a["hp"][side, active] = rnd.randint(1, max(max_hp // 3, 1))
     if name == "Leppa Berry":
         move_pp = np.asarray(tables.move_pp)
@@ -2405,6 +2424,7 @@ def any_outcome(fmt: Format = SINGLES) -> st.SearchStrategy[Outcome]:
         future_band=_flag(sides),
         berry_confusion=_ints(2, 5, sides),
         chatter=_flag(sides),
+        starf=_ints(0, 59, (fmt.B, 2)),
         target_draw=_flag(sides),
         call_target_draw=_flag(sides),
         bide_target_draw=_flag(sides),

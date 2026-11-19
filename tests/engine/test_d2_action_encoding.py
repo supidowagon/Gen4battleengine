@@ -61,10 +61,11 @@ def test_b2_ghost_curse_targets_the_foe(tables, names):
 
 
 @pytest.mark.slow
-def test_b2_step_does_not_write_chosen_target(tables, names):
-    # Ruling D2-28: nothing reads it at B = 2, so the step keeps the stored b ^ 1 and a
-    # Swords Dance and a Tackle state stay equal. jit, not eager: an eager step peaks far above
-    # the jitted one's compile.
+def test_b2_step_canonicalizes_chosen_target(tables, names):
+    # Ruling D2-33: the selection writes it at B = 2 too (bcp.c:534-542, :4363-4367; the rule:
+    # test_b2_selecting_battler_writes_the_target_of_its_range); ruling D2-35: at the turn's end
+    # a battler neither locked nor encored, whose stored target nothing reads, holds b ^ 1
+    # (step.canonical_target). jit, not eager: an eager step peaks far above the jitted one's.
     fn = jax.jit(step)
     for move in ("Swords Dance", "Tackle"):
         s = _singles(tables, names, move)
@@ -73,10 +74,10 @@ def test_b2_step_does_not_write_chosen_target(tables, names):
     parked = _singles(tables, names, "Tackle")
     parked = parked._replace(chosen_target=jnp.asarray([0, 1], jnp.int8))
     out = fn(tables, parked, _np_actions(0, 0), empty_outcome())
-    assert out.chosen_target.tolist() == [0, 1]
+    assert out.chosen_target.tolist() == [1, 0]
 
 
-def test_b2_reference_step_does_not_write_chosen_target(tables, names):
+def test_b2_reference_step_canonicalizes_chosen_target(tables, names):
     for move in ("Swords Dance", "Tackle"):
         out = ref_step(
             to_numpy(tables), to_ref(_singles(tables, names, move)), (0, 0),

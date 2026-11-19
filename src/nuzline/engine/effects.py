@@ -268,6 +268,8 @@ from nuzline.engine.damage import (
     ignorable,
     me_first_after_calc,
     move_type_of,
+    multitype_plate,
+    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -1680,6 +1682,11 @@ def _torment(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "torment", h.target_side, 1, cond)
 
 
+def trick_room_runs(h: _Hit) -> jnp.ndarray:
+    """``bool``: Trick Room's script runs on this hit (``_trick_room``; ``MoveHit.trick_room``)."""
+    return (h.effect == _E.TRICK_ROOM) & h.landed
+
+
 def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Trick Room (effect_script_0259.s:5-12): with any FIELD_CONDITION_TRICK_ROOM bit up the move
     clears them (:12, "restored the twisted dimensions"), else it sets FIELD_CONDITION_TRICK_ROOM_INIT
@@ -1687,7 +1694,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     accuracy roll (RANGE_FIELD, accuracy 0). ``step._trick_room_check`` counts it down
     (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
     (battle_lib.c:1432-1439). E3-2-4."""
-    cond = (h.effect == _E.TRICK_ROOM) & h.landed
+    cond = trick_room_runs(h)
     value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
     return state._replace(
         trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
@@ -1900,7 +1907,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
-    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    (battle_script.c:4476-4524) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
     defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
     battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
     (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
@@ -2015,7 +2022,19 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         form=put(state.form, own, state.form[pf, target]),
         stats=put(state.stats, own, battle_stats(state, foe, target)),
         ivs=put(state.ivs, own, state.ivs[pf, target]),
-        types=put(state.types, own, state.types[pf, target]),
+        # A copied Multitype Arceus gives the user its own plate's types, not the target's
+        # (Battler_MonType reads the user's raw heldItem, battle_lib.c:7629-7699), F-3.
+        types=put(
+            state.types,
+            own,
+            multitype_plate(
+                tables,
+                state.species[pf, target],
+                state.ability[pf, target],
+                state.item[own],
+                state.types[pf, target],
+            ),
+        ),
         # Raw: BtlCmd_Transform copies BattleMon.ability (battle_script.c:5342-5348).
         ability=put(state.ability, own, state.ability[pf, target]),
         ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
@@ -2135,12 +2154,16 @@ def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     the bit is set exactly when the types differ from the personal row's."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    return jnp.any(
-        state.types[party(fmt, side), mon] != tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
     )
+    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
 
 
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
@@ -2383,6 +2406,16 @@ def armored(state: BattleState, side, target_side) -> jnp.ndarray:
     (battle_lib.c:7135-7136) never crits it, whatever the roll (``Outcome.crit``)."""
     seen = ignorable(state, side, target_side)
     return (seen == AbilityId.SHELL_ARMOR) | (seen == AbilityId.BATTLE_ARMOR)
+
+
+def crit_blocked(state: BattleState, side, target_side) -> jnp.ndarray:
+    """``bool``: ``BattleSystem_CalcCriticalMulti`` (battle_lib.c:7134-7137) gives no crit to
+    ``side``'s hit on ``target_side``, whatever the roll: the defender's Battle Armor / Shell
+    Armor (``armored``) or Lucky Chant on the defender's side (``sideConditions`` is
+    ``BATTLECTX_SIDE_CONDITIONS_MASK`` of ``battleCtx->defender``, battle_script.c:2158-2163).
+    The defender is the hit's own: the user for a lock reading its stored target (singles
+    follow-up (ii)), so the turn-start cut (``Outcome.crit``, the foe's side) cannot stand in."""
+    return armored(state, side, target_side) | (state.lucky_chant[side_of(target_side)] != 0)
 
 
 def _eat_berry(
@@ -3053,6 +3086,10 @@ class MoveHit(NamedTuple):
     sub_hit: jnp.ndarray
     # MOVE_STATUS_SUPER_EFFECTIVE after the hit's type chart (the Enigma Berry, on_hit_berry).
     super_effective: jnp.ndarray
+    # Trick Room's script ran on this hit (``_trick_room``'s condition, set or restore): it sets
+    # trickRoomActivated (effect_script_0259.s:18; battle_script.c:7859-7866), so the action's
+    # MoveEnd re-sorts the order (bcp.c:3989-3994; battle_lib.c:7276-7300), SF2 (k).
+    trick_room: jnp.ndarray
 
 
 def focus_sash_damage(state: BattleState, side, damage, armed) -> tuple:
@@ -3405,7 +3442,7 @@ def play_hit(
         move,
         # The crit draw read with the odds at this hit (battle_lib.c:7105-7132).
         crit_lands(tables, state, side, move, outcome.crit[side, hit_index])
-        & ~armored(state, side, target_side),
+        & ~crit_blocked(state, side, target_side),
         outcome.roll[side, hit_index],
         power_mul,
         outcome.magnitude[side].astype(_I32),
@@ -3416,6 +3453,9 @@ def play_hit(
         in_power=in_power,
         # Natural Gift's berry, removed by its script this action (damage.gift_item, B13-37).
         gift=gift,
+        # The defender (targets.resolve): at B = 2 the foe, or the user for a lock reading its
+        # stored target (follow-up (ii)).
+        def_side=target_side,
     )
     # CalcDamage ran for this hit (a move with a rolled table damage whose script ran: hit 0 hit or
     # miss, ``script_calc``; a later hit when it lands): the Me First counter update of the same
@@ -3461,7 +3501,10 @@ def play_hit(
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
     # lastHitByBattler[defender] = the attacker on every UpdateHP with damage, before the
     # Substitute branch (bcp.c:3347, :3357; D2-14): a partner's hit and a Substitute's count, and
-    # nothing clears it. Written at B = 4 only: at B = 2 it would always be the foe.
+    # nothing clears it. Written at B = 4 only. At B = 2 it is the foe, or the user after a lock
+    # hit itself (singles follow-up (ii)); its one reader, Bide's release (bcp.c:2700-2705), needs
+    # storedDamage, which subscript_bide_start.s zeroes and only the foe's hits during Bide add to
+    # (bcp.c:3357, :3407, each also setting lastHitByBattler), so it reads the foe either way.
     if fmt.B == 4:
         state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
@@ -3522,6 +3565,17 @@ def play_hit(
     else:
         state = _set(state, "substitute_hp", target_side, sub_hp - to_sub, sub_take)
         sub_hit = jnp.asarray(sub_hit) | sub_take
+    if pursuit_switch:
+        # subscript_pursuit.s:85 FAINT_CHECK_DESTINY_BOND runs before TriggerAbilityOnHit (:86-87):
+        # a KO'd switcher holding Destiny Bond takes the pursuer down while it has HP
+        # (subscript_faint_check_destiny_bond.s:5-7, :11-16), so every contact-ability case
+        # then fails on the attacker's HP (battle_lib.c:4215-4363). No reveal, no draw. The
+        # engine has no Destiny Bond event (step.EVENT_FLAGS), here or for a FIGHT's take-down.
+        ko = (target_hp > 0) & (state.hp[party(fmt, target_side), target] == 0)
+        bonded = (
+            ko & (state.destiny_bond[target_side] != 0) & (state.hp[party(fmt, side), user] > 0)
+        )
+        state = _set(state, "hp", (side, user), 0, bonded)
     # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
     # (BattleMessage_ItemTag, battle_script.c:11736-11739): the AI learns a Focus Band that stays.
     state = reveal_item(state, target_side, target, endured)
@@ -3657,6 +3711,13 @@ def play_hit(
     state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _embargo(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
+    if not pursuit_switch:  # subscript_pursuit.s runs no AfterMoveMessage (F-16)
+        from nuzline.engine.hooks import shaymin_land  # hooks imports this module
+
+        # The check reads BTLVAR_DEFENDER, the user itself for a self-targeted move
+        # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
+        on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
+        state = shaymin_land(tables, state, target_side, on_foe)
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)
@@ -3681,4 +3742,5 @@ def play_hit(
         super_effective=super_effective
         & ~jnp.isin(effect, jnp.asarray(IGNORES_TYPE_CHECKS, effect.dtype))
         & ~((effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)),
+        trick_room=trick_room_runs(h),
     )

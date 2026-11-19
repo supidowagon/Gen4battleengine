@@ -42,6 +42,7 @@ from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Tables
+from nuzline.engine.coverage import check_acid_rain
 from nuzline.engine.state import MAX_DEATH_BUDGET, BattleState
 from nuzline.jaxcache import cached_export, code_version
 from nuzline.search import deaths
@@ -220,6 +221,7 @@ def evaluate_players(
     is refused, ``"exclude"`` leaves refused playouts out of each entry's odds (an entry
     whose playouts are all refused still raises), ``"skip"`` is ``"exclude"`` but such an
     entry gets ``_all_refused`` odds (``n = 0``) instead of raising."""
+    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     if n <= 0:
         raise ValueError("evaluate_players needs n > 0")
     if refused not in REFUSED_MODES:

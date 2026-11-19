@@ -131,12 +131,10 @@ def test_data_form_converts(tables, names, species, form):
     assert spec.form == form and spec.species == names.species(species)
 
 
-def test_data_form_converts_arceus_form_raises(
-    tables, names
-):  # replaces test_alternate_form_raises
+def test_data_form_converts_arceus_form(tables, names):  # replaces test_alternate_form_raises
     assert _row_party(tables, names, "Rotom", 2).to_spec(tables).form == 2
-    with pytest.raises(RecordError, match="Arceus"):
-        _box(tables, names, species="Arceus", form=3).to_spec(tables)
+    # Multitype is modelled (F-3): an Arceus form (its plate's) converts like any other.
+    assert _box(tables, names, species="Arceus", form=3).to_spec(tables).form == 3
     assert _box(tables, names, species="Arceus", form=0).to_spec(tables).form == 0
     with pytest.raises(RecordError, match="party slot 0: species 479 has no form 6"):
         mon = dataclasses.replace(_row_party(tables, names, "Rotom", 0), form=6)

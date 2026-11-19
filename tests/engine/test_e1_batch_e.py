@@ -11,7 +11,7 @@ import numpy as np
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import FIRST_ITEM_ACTION
-from nuzline.engine.bag import bag_item_category, refused_bag_params, use_bag_item
+from nuzline.engine.bag import bag_item_category, use_bag_item
 from nuzline.engine.ids import ItemAiCategory, ItemParam
 from nuzline.engine.outcome import empty_outcome, side_crit_odds
 from nuzline.reference.convert import from_ref, to_ref
@@ -44,18 +44,12 @@ def _same(a, b):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
 
 
-def test_guard_spec_and_dire_hit_are_not_refused(tables, kaizo_tables, names, kaizo_names):
-    # G-62 lifts G-43's Mist and Focus Energy refusals. Vanilla's Guard Spec. and Dire Hit are
-    # modelled; a Poke Ball (every param its dummy 3) and Kaizo's Guard Spec. (every param its
-    # dummy 128) are still refused, only for the friendship wrap at 255.
-    params = np.asarray(tables.item_party_param)
-    for item in ("Guard Spec.", "Dire Hit"):
-        assert refused_bag_params(params[names.item(item)], names.item(item)) == []
+def test_kaizo_dummy_param_items_set_guard_spec(kaizo_tables, kaizo_names):
+    # Kaizo's Poke Ball (every param its dummy 3) and Guard Spec. (every param its dummy 128)
+    # read a nonzero Guard Spec param (item.c:186-195).
     params = np.asarray(kaizo_tables.item_party_param)
     for item in ("Poké Ball", "Guard Spec."):
         assert int(params[kaizo_names.item(item)][ItemParam.GUARD_SPEC]) != 0
-        reasons = refused_bag_params(params[kaizo_names.item(item)], kaizo_names.item(item))
-        assert reasons and all("friendship" in r for r in reasons)
 
 
 def test_ai_guard_spec_sets_mist_on_its_side(tables, names):

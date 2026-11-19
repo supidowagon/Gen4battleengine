@@ -4,7 +4,7 @@ resolver of ledger groups D2-4 .. D2-8 (rule sheets ``_scratch/e2/rules/d2/D2-4.
 ``resolve`` evaluates the ten branches of the decomp's range switch in its order and returns the
 defender, the battler the hit reads as its target, the spread loop's ``battlerCounter`` and
 whether the call consumed its one ``RandNext()``. At ``B = 2`` (a static fact of the state's
-shapes) every branch gives today's singles value and no branch reads ``bit``; the doubles-only
+shapes) no branch reads ``bit`` and Follow Me and the stored target act as in the decomp; the doubles-only
 arms sit under a Python ``if doubles:`` (docs/doubles-state-design.md section 5, rule 1).
 
 Battler geometry (D2-4 R2): side ``b & 1``, partner ``b ^ 2``, opponent slots
@@ -231,10 +231,11 @@ def resolve(
     ``bit``: the low bit of the one ``RandNext()`` the call may draw (``Outcome.target_draw``);
     not read at B = 2.
 
-    B = 2 keeps today's singles values (ledger D2-4 pending rulings (i), (ii)): ``chosen`` is
-    read only through a non-Ghost Curse (the user), every other single-target or randomized move
-    gives the foe when alive, else ``NO_DEFENDER``; Follow Me names the foe there (its user) so
-    its arm changes nothing."""
+    At B = 2 branch 9 gives the living foe (lib.c:1706-1707) and branch 10 the living Follow Me
+    user, else ``chosen`` while it has HP, else the foe when alive (lib.c:1714-1725). ``chosen``
+    is the user after a RANGE_MY_SIDE or non-Ghost Curse selection (ruling D2-33), so a locked
+    single-target move reads the user. ``target_side`` is the defender whenever the move aims at
+    it, also when that is the user (a ``self_defender`` move keeps the foe there)."""
     fmt = format_of(state)
     doubles = fmt.B == 4
     attacker = jnp.asarray(attacker, _I32)
@@ -303,12 +304,17 @@ def resolve(
         uoa_random = attacker
         ally = attacker
         uoa = attacker
-        # A non-Ghost Curse selected the user as its target (bcp.c:4344-4346, :4363-4364): today's
-        # self defender, kept for a randomized call too (ledger ruling D2-12).
-        curse_self = (tables.move_effect[move] == EffectId.CURSE) & ~_ghost(state, attacker)
+        # Branch 9 (randomized): the living foe (lib.c:1706-1707, no Follow Me arm outside doubles);
+        # branch 10: Follow Me's user, else the stored target while it has HP, else
+        # BattleSystem_RandomOpponent (lib.c:1714-1725, which is the foe at B = 2). The stored
+        # target is the user after a RANGE_MY_SIDE or non-Ghost Curse selection (bcp.c:4363-4367),
+        # so a battler locked into a single-target move reads itself (singles follow-up (ii)).
         live_foe = jnp.where(alive(state, foe), foe, none)
-        random_def = jnp.where(curse_self, attacker, live_foe)
-        single_def = random_def
+        fm = follow_me_target(state, attacker)
+        random_def = live_foe
+        single_def = jnp.where(
+            fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe)
+        )
         random_drew = single_drew = uoa_random_drew = jnp.asarray(False)
 
     is_ = lambda *ranges: jnp.isin(rng, jnp.asarray([int(r) for r in ranges], _I32))
@@ -353,7 +359,13 @@ def resolve(
     defender = _pick([(c, d) for c, d, _, _ in branches], single_def).astype(_I32)
     counter = _pick([(c, k) for c, _, k, _ in branches], jnp.zeros((), _I32)).astype(_I32)
     drew = _pick([(c, w) for c, _, _, w in branches], single_drew)
-    other = (defender != none) & (defender != attacker)
+    # A self-range move or a non-Ghost Curse names the user as its defender but its gates read the
+    # foe (``target_side``); every other move that names the user (a lock reading the stored
+    # target) aims at it.
+    from nuzline.engine.effects import self_defender
+
+    aims = ~self_defender(tables, move, _ghost(state, attacker))
+    other = (defender != none) & ((defender != attacker) | aims)
     target_side = jnp.where(other, defender, foe).astype(_I32)
     return Resolved(defender, target_side, counter, jnp.asarray(drew, bool))
 

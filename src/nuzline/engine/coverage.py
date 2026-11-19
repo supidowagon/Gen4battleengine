@@ -61,9 +61,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   switch-in weather abilities (Drizzle, Sand Stream, Drought, Snow Warning). The other
   decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
   E2 batch 9, Kaizo's Hurricane and Weather Ball since batch 13) are modelled too; the rest
-  belong to unsupported moves (SolarBeam, Moonlight) or abilities (Hydration, Forecast; Leaf Guard is modelled since
-  the E1 Gardenia batch, G-14), so they are
-  refused with their holder;
+  belong to unsupported moves (SolarBeam, Moonlight), refused with their holder (Leaf Guard is
+  modelled since the E1 Gardenia batch, G-14; Hydration and Forecast since E1 batch F, F-5, F-6);
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
   (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
   is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).
@@ -77,8 +76,17 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   changes, the halved Defense) runs over them too (``fight_calls``);
 * in-battle form changes (plan K2a Ruling 8), on either side: Giratina-Origin without the
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
-  ``subscript_form_change``) and Shaymin-Sky reverts to Land Forme when frozen
-  (``battle_lib.c:4536``, ``battle_controller_player.c:3500``); the engine models neither.
+  ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
+  Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
+  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), except for a Transformed
+  battler that copied a Sky Shaymin: the script tests only the copied species and form, then its
+  ``UpdateMonDataFromVar`` writes Land's ability into the Transform user's own party Pokemon
+  (``BattleMon_CopyToParty`` with ``updateStats``, battle_script.c:3401-3407,
+  battle_io_command.c:601-604), which keeps it for its later switch-ins (``InitBattleMon``,
+  battle_lib.c:124): a party ability apart from its species row, which the engine does not
+  model. A fight where one side can use Transform (its moves, a player's learnable moves,
+  Metronome's calls, or Mimic / Copycat while the fight has Transform) against a Sky Shaymin is
+  refused (``transform_sky_refusals``, F-26).
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
   (``Tables.species_form_row``), like Giratina-Origin holding the Orb. A trainer Pokemon in
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
@@ -142,7 +150,6 @@ from nuzline.data.trainer import (
     Trainer,
     missing_set_data,
 )
-from nuzline.engine.bag import refused_bag_params
 from nuzline.engine.damage import PHYSICAL, decomp_abilities
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of
@@ -151,6 +158,7 @@ from nuzline.engine.ids import (
     METRONOME_DRAW,
     MOVE_CHATTER,
     SPECIES_CHATOT,
+    SPECIES_SHAYMIN,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -176,7 +184,6 @@ from nuzline.engine.state import BattleState, make_state, spec_exp, spec_stats
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
 # Checked against each game's data at load (nuzline.data.game_constants).
 SPECIES_GIRATINA, GIRATINA_FORM_ORIGIN = 487, 1
-SPECIES_SHAYMIN, SHAYMIN_FORM_SKY = 492, 1
 ITEM_GRISEOUS_ORB = 112
 
 
@@ -424,11 +431,13 @@ START_CONDITIONS = {
 @dataclass
 class CoverageReport:
     """``missing``: one human-readable line per unsupported mechanic the fight uses;
-    ``sampling_only``: the same for ``SAMPLING_ONLY`` ones; ``level``: the lowest support
-    over everything present."""
+    ``sampling_only``: the same for ``SAMPLING_ONLY`` ones; ``runtime``: lines that refuse only
+    the play lines that reach them, ``level`` unchanged; ``level``: the lowest support over
+    everything present."""
 
     missing: list[str] = field(default_factory=list)
     sampling_only: list[str] = field(default_factory=list)
+    runtime: list[str] = field(default_factory=list)
     level: Support = Support.EXACT
 
 
@@ -440,6 +449,28 @@ class UnsupportedMechanics(ValueError):
         super().__init__(
             f"{len(report.missing)} unsupported mechanic(s): " + "; ".join(report.missing)
         )
+
+
+def acid_rain_reason(state) -> str | None:
+    """The refusal message of a concrete state's ``acid_rain`` (a Pursuit KO subtracted that
+    battler from ``fieldConditionsMask`` while a field condition was up: the engine cannot hold
+    the result), or ``None``."""
+    fm = int(state.acid_rain)
+    if not fm:
+        return None
+    return (
+        f"Acid Rain: a Pursuit KO subtracted battler {fm} from fieldConditionsMask "
+        "(subscript_pursuit.s:100, :115; script.c:3282-3287); field conditions as the mask "
+        "are not modelled"
+    )
+
+
+def check_acid_rain(state) -> None:
+    """Raise ``UnsupportedMechanics`` when ``state`` holds an Acid Rain (``acid_rain != 0``).
+    Host entry points call it; a state with no Acid Rain passes."""
+    reason = acid_rain_reason(state)
+    if reason is not None:
+        raise UnsupportedMechanics(CoverageReport(missing=[reason]))
 
 
 def start_gravity(trainer: Trainer) -> int:
@@ -921,6 +952,46 @@ def _check_party(
         _check_form(c, where, mon)
 
 
+def _transform_reach(tables: Tables, specs: Sequence[PokemonSpec], extra, fight_has: bool):
+    """``bool``: a Pokemon of ``specs`` can run Transform: its moves, ``extra`` (a player's
+    learnable moves) or its Metronome calls hold the effect, or Mimic / Copycat while
+    ``fight_has`` (the fight holds Transform, which they can copy)."""
+    effect = np.asarray(tables.move_effect)
+    moves = [m for s in specs for m in s.moves if m] + list(extra) + fight_calls(tables, specs)
+    kinds = {int(effect[m]) for m in moves if m}
+    copies = bool(kinds & {EffectId.MIMIC, EffectId.COPYCAT})
+    return EffectId.TRANSFORM in kinds or (copies and fight_has)
+
+
+def transform_sky_refusals(
+    tables: Tables,
+    names: Names,
+    player: Sequence[PokemonSpec],
+    opp: Sequence[PokemonSpec],
+    extra_moves: Sequence[int] = (),
+) -> list[str]:
+    """The fight's lines for a Transform user facing a Sky Shaymin (F-26): when a Transformed
+    copy of a Sky Shaymin is frozen, subscript_check_shaymin_form.s (:6-9: species and form, which
+    Transform copies, battle_script.c:5346-5348) writes Land's ability into the Transform user's
+    own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:601-604), which the engine
+    cannot hold (``hooks.shaymin_land`` leaves a Transformed battler out)."""
+    sides = ((player, tuple(extra_moves)), (opp, ()))
+    reach = [_transform_reach(tables, s, e, False) for s, e in sides]
+    fight_has = any(reach)
+    reach = [_transform_reach(tables, s, e, fight_has) for s, e in sides]
+    out = []
+    for i, (specs, _) in enumerate(sides):
+        if not reach[1 - i]:
+            continue
+        for mon in specs:
+            if mon.species == SPECIES_SHAYMIN and mon.form != 0:
+                out.append(
+                    f"a Transform user facing Sky Forme {names.species_names[mon.species]}: its "
+                    "freeze writes Land's ability into the user's party Pokemon"
+                )
+    return out
+
+
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
     """Ruling 8: a form the battle changes, which the engine does not model."""
     if (
@@ -929,8 +1000,6 @@ def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
         and mon.item != ITEM_GRISEOUS_ORB
     ):
         c.add(Support.NONE, f"{where}: Origin Forme without the Griseous Orb", "form change")
-    if mon.species == SPECIES_SHAYMIN and mon.form == SHAYMIN_FORM_SKY:
-        c.add(Support.NONE, f"{where}: Sky Forme reverts when frozen", "form change")
 
 
 def rom_change_refusals(
@@ -1067,17 +1136,10 @@ def _check_trainer(
     moves = [m for s in specs for m in s.moves] + list(extra_moves) + fight_calls(tables, specs)
     if (line := terrain_refusal(tables, names, trainer, moves)) is not None:
         c.add(Support.NONE, line, "battle terrain")
-    # A bag item acts by its party params (engine.bag, E1 ruling G-43); the ones that set a
-    # mechanic the engine does not build are refused by name (bag.refused_bag_params).
-    params = np.asarray(tables.item_party_param)
+    # A bag item acts by its party params (engine.bag, E1 rulings G-43, F-15).
     bag = [item for item in trainer.items if item]
     for item in sorted(set(bag)):
-        where = f"{display_name(trainer)}: {names.item_names[item]}"
-        reasons = refused_bag_params(params[item], item)
-        if not reasons:
-            c.add(Support.EXACT, where, "trainer item")
-        for reason in reasons:
-            c.add(Support.NONE, f"{where} {reason}", "trainer item")
+        c.add(Support.EXACT, f"{display_name(trainer)}: {names.item_names[item]}", "trainer item")
     if len(set(bag)) > 1:
         mixed = ", ".join(names.item_names[i] for i in bag)
         c.add(
@@ -1166,7 +1228,17 @@ def check_opponent(
     them per setup."""
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
+    # BATTLE_EFFECT_HIT_BEFORE_SWITCH (Pursuit): a KO of the switcher subtracts from
+    # fieldConditionsMask (subscript_pursuit.s:115); only those play lines are refused. Either
+    # side's Pursuit chases a switch (battle_script.c:6884-6935): the opponent's, the player's
+    # party's and the player's learnable moves (a report line only).
+    move_effect = np.asarray(tables.move_effect)
+    pool = [m for mon in (*opp, *player) for m in mon.moves if m] + [m for m in extra_moves if m]
+    if any(int(move_effect[m]) == EffectId.PURSUIT for m in pool):
+        c.report.runtime.append("field condition: Acid Rain (runtime refusal)")
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
+    for line in transform_sky_refusals(tables, names, player, opp, extra_moves):
+        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "form change")
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):
@@ -1259,6 +1331,7 @@ def check_coverage(
     theirs = check_opponent(tables, names, trainer, opp, start_condition, player, extra)
     c.report.missing.extend(theirs.missing)
     c.report.sampling_only.extend(theirs.sampling_only)
+    c.report.runtime.extend(theirs.runtime)
     c.report.level = min(c.report.level, theirs.level)
     fight_moves = [m for mon in (*player, *opp) for m in mon.moves if m] + extra
     for slot, mon in enumerate(player):

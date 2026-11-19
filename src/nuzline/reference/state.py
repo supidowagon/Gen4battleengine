@@ -46,6 +46,7 @@ class RefPokemon:
     status_counter: int
     gender: int
     friendship: int
+    party_friendship: int  # the party Pokemon's u8 friendship (F-15)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int
@@ -139,7 +140,10 @@ class RefBattler:
     shadow_ability_form: int
     truant: int  # MoveEffectsData.truant (G-69)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
+    flash_fire: int  # MoveEffectsData.flashFire (F-2)
     ability_suppressed: int  # MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
+    claw_flag: int  # MoveEffectsData.quickClaw between turns (SF2 (k))
+    custap_flag: int  # MoveEffectsData.custapBerry between turns (SF2 (k))
     wish_timer: int
     wish_hp: int
     future_timer: int
@@ -147,6 +151,8 @@ class RefBattler:
     future_move: int
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
+    starf_roll: int  # a Starf Berry draw (Outcome.starf; engine.state docstring, F-10)
+    starf_open: int  # a battle-start Starf Berry's stat waits for the root draw (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
     ts_order: int
@@ -164,6 +170,7 @@ class RefBattler:
     ts_move_failed: int
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
+    ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
@@ -193,6 +200,7 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    acid_rain: int
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
     move_prev: int
     terrain: int
@@ -224,6 +232,7 @@ class RefState:
     ts_used: int
     ts_damaged: int
     ts_dealt: int
+    ts_se: int
     ts_power_mul: int
     ts_pick_mul: int
 

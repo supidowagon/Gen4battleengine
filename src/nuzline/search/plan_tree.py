@@ -59,9 +59,15 @@ from nuzline.search.stage_b import PlanNode, SolveResult, learn_label
 __all__ = ["distribution_line", "label", "render", "to_json"]
 
 _FIELDS = dict(OBS_FIELDS)
-# (flag, text) in the order a message sequence reads; ``hits`` and ``crit`` are special.
+# ``quick_claw`` (engine.observe, values 0-3): bit 0 the held-item animation of a Quick Claw or a
+# Custap Berry, bit 1 the Custap Berry's "let it move first!" (subscript_check_quick_claw.s:5-19).
+_QUICK_TEXT = (
+    (1, "Quick Claw or Custap Berry activated"),
+    (2, "Custap Berry let it move first"),
+)
+# (flag, text) in the order a message sequence reads; ``hits``, ``crit`` and ``quick_claw`` (read
+# first, ``_QUICK_TEXT``) are special.
 _FLAG_TEXT = (
-    ("quick_claw", "Quick Claw activated"),
     ("missed", "missed"),
     ("no_target", "no target"),
     ("full_para", "fully paralyzed"),
@@ -121,7 +127,8 @@ def _side_text(f: dict, names: Names, side: int, who: str, trainer: str) -> str:
     """What ``side`` visibly did, e.g. ``Geodude used Rock Throw, crit``; empty when its
     action never showed."""
     kind, act = int(f["act_kind"][side]), int(f["act_id"][side])
-    details = []
+    quick = int(f["quick_claw"][side])
+    details = [text for bit, text in _QUICK_TEXT if quick & bit]
     for flag, text in _FLAG_TEXT:
         if int(f[flag][side]):
             details.append(text)
@@ -276,6 +283,7 @@ _COND_TEXT = {
     "focus_energy": "getting pumped",
     "power_trick": "Power Trick",
     "embargo": "under Embargo",
+    "flash_fire": "Flash Fire boost",
     "ability_suppressed": "ability suppressed",
     "curse": "cursed",
     "spikes": "Spikes",

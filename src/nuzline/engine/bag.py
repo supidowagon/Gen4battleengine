@@ -10,11 +10,11 @@ subscript ``BattleControllerPlayer_ItemCommand`` picks for it
 ``targetSlot`` is the user's own slot in singles, battle_system.c:443-454).
 
 Guard Spec sets Mist on the user's side (``BattleState.mist``, :563-573) and the crit-stages
-param sets Focus Energy (``BattleState.focus_energy``, :617-626), E1 ruling G-62. Not
-modelled (``refused_bag_params``, refused by coverage and the AI): an item whose friendship
-amount can take a band's friendship past 255, where ``Pokemon_IncreaseValue`` wraps the party's u8 friendship
-(pokemon.c:1859-1874) apart from the battler's clamped one (battle_lib.c:1032-1044) and a
-switch-in re-reads the party's (battle_lib.c ``BattleSystem_InitBattleMon``).
+param sets Focus Energy (``BattleState.focus_energy``, :617-626), E1 ruling G-62. The friendship
+gain raises the party Pokemon's u8 friendship, which wraps past 255
+(``Pokemon_IncreaseValue``, pokemon.c:1859-1874; ``BattleState.party_friendship``), and the
+battler's, clamped (battle_lib.c:1032-1044; ``BattleState.friendship``): a switch-in re-reads the
+party's (battle_lib.c ``BattleSystem_InitBattleMon``), E1 ruling F-15.
 """
 
 from __future__ import annotations
@@ -74,43 +74,6 @@ STATUS_CURES = (
     (ItemParam.HEAL_FREEZE, (Status.FREEZE,)),
     (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,)),
 )
-
-
-# The params TrainerAI_ShouldUseItem has a branch for, besides Full Restore's id
-# (trainer_ai.c:4105-4185): an item with none of them is never used (crit-stage-only, PP-only,
-# EV- or friendship-only items: Dire Hit, Ether, HP Up, Rare Candy, the EV berries).
-AI_BRANCH_PARAMS = (
-    ItemParam.HP_RESTORE,
-    ItemParam.HEAL_SLEEP,
-    ItemParam.HEAL_POISON,
-    ItemParam.HEAL_BURN,
-    ItemParam.HEAL_FREEZE,
-    ItemParam.HEAL_PARALYSIS,
-    ItemParam.HEAL_CONFUSION,
-    *(param for param, _ in STAGE_PARAMS),
-    ItemParam.GUARD_SPEC,
-)
-
-
-def refused_bag_params(params, item: int) -> list[str]:
-    """Why bag item ``item`` with party params ``params`` (its ``item_party_param`` row, any
-    int sequence) is not modelled: the mechanics ``BattleSystem_UseBagItem`` would apply that
-    the engine does not build: the friendship wrap (module docstring). Empty when it is modelled, and for an item
-    the AI never uses (no branch of ``AI_BRANCH_PARAMS`` nor Full Restore's id), whose
-    ``UseBagItem`` never runs."""
-    if int(item) != ITEM_FULL_RESTORE and not any(int(params[p]) for p in AI_BRANCH_PARAMS):
-        return []
-    out = []
-    for give, amount, top in FRIENDSHIP_BANDS:
-        gain = int(params[amount])
-        if gain > 0 and int(params[ItemParam.HOLD_FRIENDSHIP_UP]):
-            gain = gain * 150 // 100
-        if int(params[give]) and top - 1 + gain > FRIENDSHIP_MAX:
-            out.append(
-                f"can raise a friendship of {top - 1} past {FRIENDSHIP_MAX}, which wraps the "
-                "party's friendship (pokemon.c:1859-1874)"
-            )
-    return out
 
 
 def _params(tables: Tables, item) -> jnp.ndarray:
@@ -192,16 +155,20 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     its stage by 1 below +6 (:575-615); ``PP_RESTORE`` restores ``PP_RESTORED`` to move slot
     0 and ``PP_RESTORE_ALL`` to every slot whose PP is below its max (:628-661), capped at
     ``MoveTable_CalcMaxPP`` (pokemon.c ``Pokemon_IncreaseValue``; battle_lib.c ``Battler_AddVal``;
-    the battler's PP is skipped for a Transformed battler or a Mimicked slot, :636-641, never
-    the case here: coverage refuses Transform and Mimic, which the engine does not build),
+    the test and the restore read the party Pokemon, so a Transformed battler's or a Mimicked
+    slot's restore goes to the party's PP, ``shadow_pp``, and the battler's is skipped,
+    :634-639, :651-654; F-21),
     the move's base PP for a trainer Pokemon (no PP Ups: ``BoxPokemon_SetMoveSlot``); an HP
     item (:663-714) restores ``HP_RESTORED`` (``HP_RESTORED_*`` codes: all, half, a quarter,
     at least 1) to a living battler below max HP (to a fainted one with ``REVIVE``), set as the
     AI battler's ``ITEM_HP_RECOVERY``; then, when any of those applied, the friendship band's
     amount (:716-755): +1 more for a Luxury Ball or an egg met on this map (neither for a
     trainer Pokemon, caught in a Poke Ball, pokemon.c:441-442, with no egg location), times
-    1.5 for a ``HOLD_EFFECT_FRIENDSHIP_UP`` bag item, clamped to 0-255. Guard Spec (:563-573)
-    sets the user's side's Mist for ``MIST_TURNS`` when its Mist turns are 0, and the
+    1.5 for a ``HOLD_EFFECT_FRIENDSHIP_UP`` bag item; the band reads the party Pokemon's friendship
+    (``party_friendship``), which takes the amount as ``Pokemon_IncreaseValue`` does (a sum past
+    255 stores ``(255 + amount) & 0xFF``, below 0 stores 0, pokemon.c:1859-1874), the battler's
+    (``friendship``, the user's own slot: always) clamped to 0-255 (battle_lib.c:1032-1044;
+    F-15). Guard Spec (:563-573) sets the user's side's Mist for ``MIST_TURNS`` when its Mist turns are 0, and the
     crit-stages param (:617-626) sets the battler's Focus Energy when it is not set; each
     counts as applied for the friendship band (``result = TRUE``). The crit-stages param, like
     the stage params, needs ``selectedSlot == partySlot || targetSlot == partySlot``: the
@@ -242,19 +209,26 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     focus = run & (p[ItemParam.CRIT_STAGES] != 0) & (state.focus_energy[side] == 0)
     state = _set(state, "focus_energy", side, 1, focus)
     applied = applied | focus
-    moves = state.moves[row, mon].astype(_I32)
+    # The test and the restore read the party Pokemon's move and PP (Pokemon_IncreaseValue,
+    # :631-632); the battler's PP follows only for a slot that is no Transform or Mimic copy
+    # (:635-639, :651-654). A copied slot's party values are the shadow (``mimic_slots``: all
+    # four while transformed, G-68 / G-69; F-21).
+    slots = jnp.arange(state.moves.shape[-1])
+    copied = ((state.mimic_slots[side].astype(_I32) >> slots) & 1) == 1
+    battler_pp = state.pp[row, mon].astype(_I32)
+    moves = jnp.where(copied, state.shadow_moves[side], state.moves[row, mon]).astype(_I32)
     max_pp = tables.move_pp[moves].astype(_I32)
     gain = p[ItemParam.PP_RESTORED]
-    slots = jnp.arange(moves.shape[0])
     one = (p[ItemParam.PP_RESTORE] != 0) & (slots == 0)
     every = p[ItemParam.PP_RESTORE_ALL] != 0
     # PP_RESTORE then PP_RESTORE_ALL: slot 0 can take both (:628-661).
-    pp = state.pp[row, mon].astype(_I32)
+    pp = jnp.where(copied, state.shadow_pp[side], battler_pp).astype(_I32)
     for restore in (one, every & (slots >= 0)):
         restore = run & restore & (pp != max_pp)
         pp = jnp.where(restore, jnp.minimum(pp + gain, max_pp), pp)
         applied = applied | jnp.any(restore)
-    state = _set(state, "pp", (side, mon), pp, run)
+    state = _set(state, "pp", (side, mon), jnp.where(copied, battler_pp, pp), run)
+    state = _set(state, "shadow_pp", side, jnp.where(copied, pp, state.shadow_pp[side]), run)
 
     hp, max_hp = state.hp[row, mon].astype(_I32), state.max_hp[row, mon].astype(_I32)
     revive = p[ItemParam.REVIVE] != 0
@@ -273,17 +247,23 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     applied = applied | heal
     recovery = jnp.where(heal & ~revive, amount, 0)
 
-    friendship = state.friendship[row, mon].astype(_I32)
+    # The band is the party Pokemon's (battle_system.c:716-733); the party's u8 wraps and the
+    # battler's clamps (F-15).
+    party_value = state.party_friendship[row, mon].astype(_I32)
     gain = jnp.int32(0)
     low = 0
     for give, amt, top in FRIENDSHIP_BANDS:
-        band = (p[give] != 0) & (friendship >= low) & (friendship < top) & applied
+        band = (p[give] != 0) & (party_value >= low) & (party_value < top) & applied
         gain = jnp.where(band, p[amt], gain)
         low = top
     boosted = jnp.where(p[ItemParam.HOLD_FRIENDSHIP_UP] != 0, gain * 150 // 100, gain)
     gain = jnp.where(gain > 0, boosted, gain)
-    friendship = jnp.clip(friendship + gain, 0, FRIENDSHIP_MAX)
-    state = _set(state, "friendship", (side, mon), friendship, run & (gain != 0))
+    total = party_value + gain
+    wrapped = jnp.where(total > FRIENDSHIP_MAX, (FRIENDSHIP_MAX + gain) & 0xFF, total)
+    wrapped = jnp.where(total < 0, 0, wrapped)
+    battler = jnp.clip(state.friendship[row, mon].astype(_I32) + gain, 0, FRIENDSHIP_MAX)
+    state = _set(state, "party_friendship", (side, mon), wrapped, run & (gain != 0))
+    state = _set(state, "friendship", (side, mon), battler, run & (gain != 0))
 
     # The subscript after UseBagItem (module docstring).
     potion = (cat == ItemAiCategory.FULL_RESTORE) | (cat == ItemAiCategory.RECOVER_HP)
@@ -294,20 +274,3 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     clear = status_cat & (cond != CONFUSION_BIT)
     state = _set(state, "status", (side, mon), Status.NONE, clear)
     return _set(state, "status_counter", (side, mon), 0, clear)
-
-
-def refused_bag_items(tables: Tables, items) -> jnp.ndarray:
-    """``bool[...]``: ``refused_bag_params`` is not empty for each of the bag items ``items``
-    (the traced form, for the AI's refusals)."""
-    items = jnp.asarray(items).astype(_I32)
-    p = tables.item_party_param[items].astype(_I32)
-    used = items == ITEM_FULL_RESTORE
-    for param in AI_BRANCH_PARAMS:
-        used = used | (p[..., param] != 0)
-    out = jnp.zeros(items.shape, bool)
-    for give, amount, top in FRIENDSHIP_BANDS:
-        gain = p[..., amount]
-        boosted = (gain > 0) & (p[..., ItemParam.HOLD_FRIENDSHIP_UP] != 0)
-        gain = jnp.where(boosted, gain * 150 // 100, gain)
-        out = out | ((p[..., give] != 0) & (top - 1 + gain > FRIENDSHIP_MAX))
-    return used & out

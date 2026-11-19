@@ -66,11 +66,12 @@ Events, per side (``[side]``; 0 = player):
   ``self_hit`` (hurt itself in confusion), ``full_para`` (fully paralyzed), ``in_love``
   ("X is in love with Y!", subscript_infatuated.s: the attract check ran) and ``immobilized``
   ("X is immobilized by love!", subscript_immobilized_by_love.s).
-* ``quick_claw``: its Quick Claw's held-item animation played before its move (no text;
-  ``subscript_check_quick_claw.s``): both chose a move, its draw of the turn before
-  activated the claw (``state.qc_roll``) and it acts first (``step._quick_claw_shown``). The
-  turn's own draw (``Outcome.quick_claw``) shows only in the end-of-turn order, which is
-  not in the vector (below).
+* ``quick_claw``: bit 0 the held-item animation of its Quick Claw (its flag stands at its
+  move's start and the foe has not acted: the turn order set it from ``state.qc_roll``, or the
+  turn before left it, ``state.claw_flag``; ``step._use_move``) or its Custap Berry (its move started,
+  ``subscript_check_quick_claw.s:12-13``), bit 1 Custap's message "let it move first!" (another
+  battler had not acted yet, :15-19); values 0-3. The turn's own draw (``Outcome.quick_claw``)
+  shows only in the end-of-turn order, which is not in the vector (below).
 * ``thawed_by_hit``: a Fire hit thawed it (effects.py:368-375); ``contact_ability``:
   its Static / Poison Point / Flame Body gave its attacker a status, or its Cute Charm
   infatuated it (effects._contact_ability), the message that names the ability.
@@ -211,6 +212,9 @@ _NONZERO_SIDE = (
     # E2 batch 13: "{0} can't use items anymore!" (subscript_embargo_start.s:16) until "{0} can
     # use items again!" (subscript_embargo_end.s:6); the count is hidden (B13-31).
     "embargo",
+    # F-2: "{0}'s {1} raised the power of its Fire-type moves!" (subscript_absorb_and_boost_
+    # fire_type_moves.s:10) until the battler leaves.
+    "flash_fire",
     # E3 batch 1: "{0} was subjected to torment!" (subscript_torment_start.s) until it leaves.
     "torment",
     # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it

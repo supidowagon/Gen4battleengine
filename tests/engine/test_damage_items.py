@@ -14,6 +14,7 @@ import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.damage import damage_table
+from nuzline.engine.ids import Status
 from nuzline.engine.outcome import empty_outcome
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
@@ -51,3 +52,23 @@ def test_pursuit_on_a_switch_locks_and_recoils(tables, names, item):
         assert int(out.choice_lock[1]) == 0
         loss = max(int(s.max_hp[1, 0]) // 10, 1)
         assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - loss
+
+
+def test_a_choice_lock_the_holder_no_longer_knows_is_cleared_at_selection(tables, names):
+    # The command selection's CheckInvalidMoves (bcp.c:433) clears a Choice holder's lock on a
+    # move it does not know (battle_lib.c:2307-2310), so a later relearn cannot revive it
+    # (F-20). The sleeping holder's move sets no lock of its own (no attack message).
+    s = _item(roark_state(tables, names, player_moves=["Tackle"]), 0, "Choice Band", names)
+    s = s._replace(
+        choice_lock=s.choice_lock.at[0].set(names.move("Pursuit")),
+        status=s.status.at[0, 0].set(Status.SLEEP),
+        status_counter=s.status_counter.at[0, 0].set(3),
+    )
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), empty_outcome())
+    assert int(out.choice_lock[0]) == 0
+    # A lock on a move it knows stays.
+    known = s._replace(choice_lock=s.choice_lock.at[0].set(names.move("Tackle")))
+    out = assert_matches_reference(
+        tables, known, A("Tackle", "Leer", known, names), empty_outcome()
+    )
+    assert int(out.choice_lock[0]) == names.move("Tackle")

@@ -453,7 +453,7 @@ def finish_turn(
     state = resolve_learns(tables, state)
     state, refused = send_replacements(tables, state, ai_switched, power_mul)
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 1)
-    return state, refused | (state.exp_refused != 0)
+    return state, refused | (state.exp_refused != 0) | (state.acid_rain != 0)
 
 
 def _replace_while_needed(tables: Tables, state: BattleState, refused, passes):

@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
+import jax
 import numpy as np
 import pytest
 
@@ -28,7 +29,14 @@ TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
 # any test compiles. Keyed by the jax and jaxlib versions only (``jax_version``): JAX keys
 # each entry by the compiled program, so a commit keeps every program it leaves unchanged.
 # Other versions' directories are deleted, and the oldest entries past 20 GB.
-_COMPILE_CACHE = cache_root() / "jax-tests" / jax_version()
+# $NUZLINE_TEST_COMPILE_CACHE moves this cache alone (the folder that holds the <jax_version()>
+# folders; the pod sets a pod-wide one, tools/ops/day/pod/unit.sh) and keeps every other cache
+# under cache_root(). Outside cache_root() prune_other_versions does nothing, so a run on a jax
+# bump never deletes the folder of a run on the other version that shares the pod.
+_SHARED_COMPILE_CACHE = os.environ.get("NUZLINE_TEST_COMPILE_CACHE")
+_COMPILE_CACHE = (
+    Path(_SHARED_COMPILE_CACHE) if _SHARED_COMPILE_CACHE else cache_root() / "jax-tests"
+) / jax_version()
 prune_other_versions(_COMPILE_CACHE)
 cap_directory(_COMPILE_CACHE, 20 * 2**30)
 set_compile_cache_dir(_COMPILE_CACHE)
@@ -86,6 +94,36 @@ _LAST_AFTER = [0]  # the resident size the last clear left
 _CLEARS: list[tuple[str, int, int, bool]] = []  # (test, before, after, memory-driven)
 _GROWTH: list[tuple[int, str, int, int]] = []  # (growth over a test, test, after, peak)
 _PEAKS: list[tuple[int, str]] = []  # (sampled peak resident size during a test, test)
+# Persistent compile cache traffic, counted by a JAX event listener: hits (a program loaded from
+# the cache) and writes (a cold compile stored in it). Per test, the highest sampled peak of a test
+# that loaded a program and of one that only compiled cold: loading a cache hit peaks higher than
+# compiling cold (floor probe: 6.2 vs 5.0 GB), and the pod run's memtable reads both.
+_CACHE = {"hits": 0, "writes": 0}
+_CACHE_PEAKS: dict[str, tuple[int, str]] = {}  # "hit" / "cold" -> (peak, test)
+
+
+def _count_cache_event(event: str, **_: str | int) -> None:
+    if event == "/jax/compilation_cache/cache_hits":
+        _CACHE["hits"] += 1
+    elif event == "/jax/compilation_cache/cache_misses":  # recorded when the entry is written
+        _CACHE["writes"] += 1
+
+
+jax.monitoring.register_event_listener(_count_cache_event)
+
+
+def _malloc_trim() -> None:
+    """Hand the heap's free pages back to the OS (glibc ``malloc_trim(0)``), so the memory a
+    cache clear frees leaves the process's resident size; a no-op where there is no glibc
+    (Windows, macOS, musl)."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctypes
+
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 class _PeakSampler:
@@ -121,9 +159,13 @@ def pytest_runtest_protocol(item, nextitem):
     the clear follows memory instead, and only once the caches grew again since the last
     clear. The persistent compile cache keeps recompiles cheap."""
     start = _resident_bytes()
+    hits, writes = _CACHE["hits"], _CACHE["writes"]
     sampler = _PeakSampler()
     yield
     peak = sampler.stop()
+    kind = "hit" if _CACHE["hits"] > hits else "cold" if _CACHE["writes"] > writes else None
+    if kind and peak > _CACHE_PEAKS.get(kind, (0, ""))[0]:
+        _CACHE_PEAKS[kind] = (peak, item.nodeid)
     next_module = nextitem is None or nextitem.module is not item.module
     before = _resident_bytes()
     _GROWTH.append((before - start, item.nodeid, before, peak))
@@ -140,6 +182,7 @@ def pytest_runtest_protocol(item, nextitem):
     if "jax" in sys.modules and ((next_module and before > _KEEP_BELOW) or grown):
         sys.modules["jax"].clear_caches()
         gc.collect()
+        _malloc_trim()
         _LAST_AFTER[0] = _resident_bytes()
         _CLEARS.append((item.nodeid, before, _LAST_AFTER[0], not next_module))
 
@@ -162,6 +205,13 @@ def pytest_terminal_summary(terminalreporter):
         )
         for peak, nodeid in _PEAKS:
             terminalreporter.write_line(f"  {nodeid}: peak {peak / gb:.2f} GB")
+    if _CACHE["hits"] or _CACHE["writes"]:
+        hit, cold = (_CACHE_PEAKS.get(k, (0, "-")) for k in ("hit", "cold"))
+        terminalreporter.write_line(
+            f"compile cache: {_CACHE['hits']} hits, {_CACHE['writes']} writes; highest peak during "
+            f"a test with a hit {hit[0] / gb:.2f} GB ({hit[1]}), with cold compiles only "
+            f"{cold[0] / gb:.2f} GB ({cold[1]})"
+        )
     if not _CLEARS:
         return
     afters = [c[2] / gb for c in memory] or [0.0]

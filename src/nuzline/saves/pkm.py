@@ -88,9 +88,8 @@ class SaveMon:
     egg_location: int  # MON_DATA_EGG_LOCATION (src/pokemon.c:1159-1166)
 
     def to_spec(self, tables, trainer=None) -> PokemonSpec:
-        """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, an
-        Arceus form (its plate type; Multitype is unsupported), a form beyond the species'
-        form count, an ability the form cannot have, PP above the move's maximum, or
+        """The engine's :class:`PokemonSpec`. Raises :class:`RecordError` for an egg, a form
+        beyond the species' form count, an ability the form cannot have, PP above the move's maximum, or
         (party) a stored stat outside the band the current EVs allow. Base stats and
         abilities are the form's personal row (``nuzline.data.forms.form_row``).
 
@@ -103,10 +102,6 @@ class SaveMon:
         label = location_label(self.location)
         if self.is_egg:
             raise RecordError(f"{label}: is an egg")
-        if self.form != 0 and self.species in _REFUSED_FORM_SPECIES:
-            raise RecordError(
-                f"{label}: Arceus form {self.form} is unsupported (Multitype, plan Ruling 8)"
-            )
         row = self._row(tables, label)
         abilities = [int(a) for a in _as_np(tables.species_abilities_decomp)[row]]
         if self.ability == 0 or self.ability not in abilities:
@@ -233,13 +228,11 @@ def level_from_exp(tables, species: int, exp: int) -> int:
     return max(1, int(np.searchsorted(row[1:], exp, side="right")))
 
 
-# Species whose non-zero forms the save parser refuses (plan K2a Ruling 8), as decomp ids
-# (line N of generated/species.txt is id N-1): Arceus 493, whose form is its plate type
-# and whose Multitype the engine does not model. Deoxys, Wormadam, Rotom, Giratina and
-# Shaymin forms convert through their personal row (coverage refuses Giratina-Origin
-# without the Griseous Orb and Shaymin-Sky); Burmy, Shellos, Gastrodon, Unown and Cherrim
-# forms are cosmetic (their row is the species') and pass.
-_REFUSED_FORM_SPECIES = frozenset({493})
+# Forms convert through the species' personal row: Deoxys, Wormadam, Rotom, Giratina and
+# Shaymin (coverage refuses Giratina-Origin without the Griseous Orb; a frozen Shaymin-Sky
+# reverts to Land, ``hooks.shaymin_land``, F-16), Arceus (every form's row is the species'; its
+# types are its plate's, Multitype, ``damage.multitype_plate``, F-3); Burmy, Shellos, Gastrodon,
+# Unown and Cherrim forms are cosmetic.
 
 
 def location_label(location: tuple[str, int, int]) -> str:
