@@ -1,5 +1,5 @@
-"""E1 batch F (rulings F-n, docs/kaizo/e1-mechanics-ledger.md): Heatproof, Flash Fire, Multitype
-and Intimidate's substitute skip, each case checked against the reference engine."""
+"""E1 batch F (rulings F-n, docs/kaizo/e1-mechanics-ledger.md): Heatproof, Flash Fire, Multitype,
+Intimidate's substitute skip, Hydration and Forecast, each case checked against the reference engine."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ import pytest
 from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, personal_types
-from nuzline.engine.ids import AbilityId, Stat, Status, Type
+from nuzline.engine.hooks import battle_start
+from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.reference.convert import to_ref
@@ -219,3 +220,115 @@ def test_a_u_turn_newcomer_skips_a_foe_whose_substitute_the_action_hit(tables, n
     broken = _u_turn_into_intimidate(tables, names, substitute=True)
     assert int(broken.substitute_hp[1]) == 0 and int(broken.stages[1, ATK]) == 0
     assert np.asarray(broken.ts_sub_hit).tolist() == [0, 0]  # the action ended
+
+
+# --- Hydration (F-5) and Forecast (F-6) ----------------------------------------------------
+
+
+def _become(tables, names, s, side, species, ability_slot=0):
+    """``side``'s active slot is ``species`` with its ``ability_slot`` ability and personal types
+    (the decomp ability is read from the species table, ``damage.decomp_abilities``)."""
+    row = int(tables.species_form_row[names.species(species), 0])
+    slot = int(s.active[side])
+    return s._replace(
+        species=s.species.at[side, slot].set(names.species(species)),
+        ability_slot=s.ability_slot.at[side, slot].set(ability_slot),
+        ability_form=s.ability_form.at[side, slot].set(0),
+        ability=s.ability.at[side, slot].set(int(tables.species_abilities[row, ability_slot])),
+        types=s.types.at[side, slot].set(jnp.asarray(tables.species_types[row], s.types.dtype)),
+    )
+
+
+def _weather(s, weather, timer=0):
+    return s._replace(
+        weather=jnp.asarray(weather, s.weather.dtype),
+        weather_timer=jnp.asarray(timer, s.weather_timer.dtype),
+    )
+
+
+def _hydration(tables, names, status, weather=Weather.RAIN, timer=0, foe="Phione"):
+    """Monferno protects; ``foe`` (Phione: Hydration) has ``status``, in ``weather``."""
+    s = _state(tables, names, mine=["Protect"])
+    s = _become(tables, names, s, 1, foe)
+    s = s.with_status(1, 0, status)
+    if status in (Status.TOXIC, Status.SLEEP):
+        s = s._replace(status_counter=s.status_counter.at[1, 0].set(2))
+    s = _weather(s, weather, timer)
+    return s, assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), O)
+
+
+def test_hydration_and_forecast_are_covered_and_their_species_have_them(tables, names):
+    for ability, species in ((AbilityId.HYDRATION, "Phione"), (AbilityId.FORECAST, "Castform")):
+        assert IMPLEMENTED_ABILITIES[ability] == Support.EXACT
+        row = int(tables.species_form_row[names.species(species), 0])
+        assert int(tables.species_abilities[row, 0]) == ability
+
+
+@pytest.mark.parametrize("status", [Status.BURN, Status.POISON, Status.TOXIC, Status.SLEEP])
+def test_rain_cures_a_hydration_holders_status_before_the_turns_damage(tables, names, status):
+    """battle_script.c:5626-5639 + subscript_ability_restore_status.s:5: status and its counter
+    go at the end of turn; the weather step precedes the poison / burn damage (bcp.c:1113-1136,
+    :1252), so the holder takes none."""
+    s, out = _hydration(tables, names, status)
+    assert int(out.status[1, 0]) == Status.NONE and int(out.status_counter[1, 0]) == 0
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_hydration_needs_rain_that_goes_on_and_no_cloud_nine_and_the_ability(tables, names):
+    """The rain block (:5613) inside NO_CLOUD_NINE (:5573); timed rain that runs out this turn
+    cures nothing (bcp.c:1121-1128); other weathers and abilities do not cure."""
+    burn = Status.BURN
+    assert int(_hydration(tables, names, burn, Weather.SUN)[1].status[1, 0]) == burn
+    assert int(_hydration(tables, names, burn, Weather.RAIN, timer=1)[1].status[1, 0]) == burn
+    assert int(_hydration(tables, names, burn, Weather.RAIN, timer=2)[1].status[1, 0]) == 0
+    assert int(_hydration(tables, names, burn, foe="Geodude")[1].status[1, 0]) == burn
+    s = _hydration(tables, names, burn)[0]
+    s = _become(tables, names, s, 0, "Golduck", ability_slot=1)  # Cloud Nine
+    out = assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), O)
+    assert int(out.status[1, 0]) == burn
+
+
+@pytest.mark.parametrize(
+    ("weather", "kind"),
+    [
+        (Weather.SUN, Type.FIRE),
+        (Weather.RAIN, Type.WATER),
+        (Weather.HAIL, Type.ICE),
+        (Weather.SANDSTORM, Type.NORMAL),
+        (Weather.NONE, Type.NORMAL),
+    ],
+)
+def test_forecast_takes_the_weathers_type_at_the_turn_start(tables, names, weather, kind):
+    """battle_lib.c:6318-6352: Fire / Water / Ice for sun / rain / hail, Normal for none (sandstorm
+    counts as none); the turn start's ShowBattleMon runs it (bcp.c:256); types only."""
+    s = _state(tables, names, mine=["Protect"])
+    s = _become(tables, names, s, 1, "Castform")
+    start = Type.WATER if kind != Type.WATER else Type.FIRE
+    s = _weather(
+        s._replace(types=s.types.at[1, 0].set(jnp.asarray([start] * 2, s.types.dtype))), weather
+    )
+    out = assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), O)
+    assert out.types[1, 0].tolist() == [kind] * 2
+    assert int(out.form[1, 0]) == int(s.form[1, 0])  # the party's form is not written (:6446)
+
+
+def test_a_weather_move_changes_forecast_before_the_next_battler_acts(tables, names):
+    """AfterMoveEffects / MoveEnd's TriggerEffectOnSwitch (bcp.c:3672-3680, :3973): Rain Dance
+    makes a Castform Water at once (the type Ember then meets is resisted)."""
+    s = _state(tables, names, mine=["Rain Dance"], order="player")
+    s = _become(tables, names, s, 1, "Castform")
+    out = assert_matches_reference(tables, s, A("Rain Dance", "Tackle", s, names), O)
+    assert out.types[1, 0].tolist() == [Type.WATER] * 2 and int(out.weather) == Weather.RAIN
+
+
+def test_an_alive_cloud_nine_forces_normal_and_a_lead_castform_changes_at_battle_start(
+    tables, names
+):
+    """:6355-6363 (Cloud Nine / Air Lock: Normal whatever the weather); the battle start's
+    ShowBattleMon runs the form change after the weather (:3662, :3739; hooks.battle_start)."""
+    s = _state(tables, names, mine=["Protect"])
+    s = _weather(_become(tables, names, s, 1, "Castform"), Weather.RAIN)
+    started = battle_start(tables, s)
+    assert started.types[1, 0].tolist() == [Type.WATER] * 2
+    locked = battle_start(tables, _become(tables, names, s, 0, "Golduck", ability_slot=1))
+    assert locked.types[1, 0].tolist() == [Type.NORMAL] * 2

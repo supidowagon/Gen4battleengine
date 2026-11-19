@@ -81,17 +81,21 @@ from nuzline.engine.damage import (
     decomp_ability_id,
     divide,
     trace_copy,
+    weather_suppressed,
 )
 from nuzline.engine.effects import change_stage, entry_hazards, forget_item, mist_blocks_drop
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
+    SPECIES_CASTFORM,
     AbilityId,
     ItemId,
     Stat,
     Status,
+    Type,
     Weather,
     sleepless,
 )
@@ -193,6 +197,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.ICE_BODY: frozenset({WEATHER_HP}),
     AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
+    # F-5: subscript_ability_restore_status.s:8 tags the holder (BTLSCR_MSG_BATTLER_TEMP).
+    AbilityId.HYDRATION: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
     AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
     AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
@@ -846,6 +852,53 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
+def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE``'s Castform block (``BattleSystem_TriggerFormChange``,
+    battle_lib.c:6313-6364), F-6, for every battler (``monSpeedOrder``) that is a Castform with HP
+    and Forecast (``Battler_Ability``: the decomp id from ``damage.decomp_abilities``) where
+    ``cond``. With no alive Cloud Nine or Air Lock (``damage.weather_suppressed``): no rain, sun
+    or hail (``FIELD_CONDITION_CASTFORM``) and neither type Normal -> Normal/Normal; else sun and
+    neither type Fire -> Fire/Fire; else rain and neither Water -> Water/Water; else hail and
+    neither Ice -> Ice/Ice. With one alive: neither type Normal -> Normal/Normal (:6355-6363).
+    The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
+    repeats until none changes; each result is stable under its own test and no battler's change
+    feeds another's, so one pass reaches the same fixpoint whatever the order. Only ``types``
+    are written: ``formNum`` is read by the display only (``battle_controller.c``) and the party's
+    form, which the switch-in re-reads (battle_lib.c:113-114), is not updated (the change sets no
+    ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
+    fmt = format_of(state)
+    abilities = decomp_abilities(tables, state)
+    clear = ~weather_suppressed(tables, state)
+    rain, sun, hail = (state.weather == w for w in (Weather.RAIN, Weather.SUN, Weather.HAIL))
+    weathered = rain | sun | hail
+    for side in range(fmt.B):
+        row, mon = party(fmt, side), state.active[side]
+        types = state.types[row, mon]
+
+        def has(t, types=types):
+            return jnp.any(types == t)
+
+        is_castform = (
+            jnp.asarray(cond)
+            & (state.species[row, mon] == SPECIES_CASTFORM)
+            & (state.hp[row, mon] > 0)
+            & (abilities[row, mon] == ABILITY_DECOMP_IDS[AbilityId.FORECAST])
+        )
+        normal = jnp.where(clear, ~weathered, True) & ~has(Type.NORMAL)
+        fire = clear & sun & ~has(Type.FIRE)
+        water = clear & rain & ~has(Type.WATER)
+        ice = clear & hail & ~has(Type.ICE)
+        new = jnp.where(
+            normal,
+            Type.NORMAL,
+            jnp.where(fire, Type.FIRE, jnp.where(water, Type.WATER, Type.ICE)),
+        )
+        change = is_castform & (normal | fire | water | ice)
+        both = jnp.full(types.shape, new, state.types.dtype)
+        state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
+    return state
+
+
 def switch_in_effects(tables: Tables, state: BattleState, side, sub_hit=None) -> BattleState:
     """``on_switch_in`` after the entry hazards (``sub_hit``: ``intimidate``'s per-battler flags): ``BattleSystem_TriggerEffectOnSwitch``'s states
     for ``side``'s newcomer. A U-turn or Baton Pass newcomer meets them apart from its hazards: the
@@ -867,6 +920,7 @@ def switch_in_effects(tables: Tables, state: BattleState, side, sub_hit=None) ->
         state, side, mon, SWITCH_IN, state.hp[party(format_of(state), side), mon] > 0
     )
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
+    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
     # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS runs for every battler (battle_lib.c:4135-4145):
@@ -936,6 +990,7 @@ def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> Battl
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[party(fmt, side), mon] > 0)
+    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
     for side in sides:
         state = recover_status_by_ability(state, side)
     for side in sides:

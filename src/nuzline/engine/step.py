@@ -181,6 +181,7 @@ from nuzline.engine.hooks import (
     TORMENT,
     WEATHER_HP,
     after_damage_items,
+    forecast,
     held_item_check,
     recover_status_by_ability,
     reveal_ability,
@@ -188,6 +189,7 @@ from nuzline.engine.hooks import (
     switch_in_effects,
 )
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
     COUNTER_PHYSICAL,
@@ -2701,7 +2703,7 @@ def _faint_check(
     return after
 
 
-def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
+def _move_end(tables: Tables, state: BattleState, acted: BattleState, side, ran) -> BattleState:
     """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
     ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
@@ -2718,7 +2720,11 @@ def _move_end(state: BattleState, acted: BattleState, side, ran) -> BattleState:
     # RecoverStatusByAbility for the attacker, then the defender (bcp.c:3965-3967); a
     # battle that CheckBattleOver ended returns first.
     state = recover_status_by_ability(state, side, clear)
-    return recover_status_by_ability(state, foe, clear)
+    state = recover_status_by_ability(state, foe, clear)
+    # TriggerEffectOnSwitch (bcp.c:3973, and AfterMoveEffects' :3672-3680 before it): its Castform
+    # form change runs after every move, so a weather move or a type change takes effect before the
+    # next battler acts (F-6).
+    return forecast(tables, state, clear)
 
 
 def execute_actions(
@@ -2901,7 +2907,7 @@ def _execute_actions(
         shown = _put(shown, foe, merged[1], keep)
         stop = ctl["pause"] | ctl["pursue"]
         done = _move_end(
-            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted), acted, side, ran
+            tables, _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted), acted, side, ran
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
@@ -3533,7 +3539,10 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     Sun (:5585-5596): a Dry Skin or Solar Power holder loses ``Divide(maxHP, 8)``
     (``subscript_weather_continues.s`` :_045 / :_057, after its Magic Guard skip, tag the
     ability). Rain (:5613-5625): a Dry Skin holder below full HP regains ``Divide(maxHP, 8)``
-    (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45); Hydration is unsupported.
+    (:_076 tags it, as it tags Rain Dish's and Ice Body's heal, G-45). Rain, a Hydration holder
+    (``Battler_Ability``, the decomp id in ``ability``) with HP and any status loses it (:5626-5639
+    sets WEATHER_EFFECT_HYDRATION, ``subscript_weather_continues.s`` runs
+    ``subscript_ability_restore_status.s``: status := 0, counters with it, the ability tagged), F-5.
     Sand Veil, Snow Cloak, Ice Body, Dry Skin and Solar Power are read from ``state.ability``;
     Magic Guard by decomp id from ``ability`` (``damage.decomp_abilities``). The caller applies ``NO_CLOUD_NINE``.
     The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
@@ -3585,6 +3594,18 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     alive = hp > 0
     # :_076 tags every heal's battler, Ice Body's included (G-45).
     state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | heal))
+    # Hydration (:5626-5639): no weather-hidden test in the rain block (a Diving holder is cured);
+    # subscript_ability_restore_status.s:5 sets the status to 0, counter bits included (F-5).
+    row = party(fmt, side)
+    hydrate = (
+        alive
+        & (state.weather == Weather.RAIN)
+        & (ab == ABILITY_DECOMP_IDS[AbilityId.HYDRATION])
+        & (state.status[row, mon] != Status.NONE)
+    )
+    state = _set_mon(state, "status", side, mon, Status.NONE, hydrate)
+    state = _set_mon(state, "status_counter", side, mon, 0, hydrate)
+    state = reveal_ability(state, side, mon, STATUS_CURE, hydrate)
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
 
@@ -3845,7 +3866,7 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     """The next turn's ``ShowBattleMon`` (battle_controller_player.c:256-268) runs
     ``BattleSystem_TriggerEffectOnSwitch``, whose ``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``
     (battle_lib.c:4151-4165) checks every battler's held item before the commands are chosen
-    (``hooks.after_damage_items``). Its other states find nothing new at a turn start, and before
+    (``hooks.after_damage_items``). Its other states find nothing new at a turn start (Forecast's form change does, ``hooks.forecast``), and before
     a Future Sight hit (``_future_sight``, after the last item check of the turn's end,
     ``MON_COND_CHECK_STATE_ITEM_CONDITION``) the item check found nothing new either; a berry the
     hit brings into its range is eaten here. With a replacement pending, ``replace`` runs the
@@ -3853,6 +3874,9 @@ def _turn_start_items(tables: Tables, state: BattleState) -> BattleState:
     hazards (``TurnEnd``'s ``ReplaceFainted``, bcp.c:1848, comes before the next ``ShowBattleMon``)."""
     fmt = format_of(state)
     run = (state.over == 0) & ~jnp.any(needs_replacement(state) != 0)
+    # SWITCH_IN_CHECK_STATE_FORM_CHANGE comes first (battle_lib.c:3629-3640): a Castform whose
+    # weather ended this turn reverts before the commands are chosen (F-6).
+    state = forecast(tables, state, run)
     for side in range(fmt.B):
         state = after_damage_items(tables, state, side, run)
     return state

@@ -718,6 +718,10 @@ class AbilityId(IntEnum):
     # plate's (``damage.multitype_plate``); the failure tests of the moves it protects against
     # read the decomp id (``ABILITY_MULTITYPE``).
     MULTITYPE = 92
+    # F-5: Hydration (BtlCmd_EndOfTurnWeatherEffect, battle_script.c:5626-5639; ``step._weather_effect``).
+    HYDRATION = 93
+    # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
+    FORECAST = 94
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -818,6 +822,8 @@ ABILITY_DECOMP_IDS = {
     AbilityId.HEATPROOF: 85,
     AbilityId.FLASH_FIRE: 18,
     AbilityId.MULTITYPE: 121,
+    AbilityId.HYDRATION: 93,
+    AbilityId.FORECAST: 59,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1053,6 +1059,7 @@ CHOICE_ITEMS = (ItemId.CHOICE_BAND, ItemId.CHOICE_SPECS, ItemId.CHOICE_SCARF)
 # Decomp species ids the item code of ``BattleSystem_CalcMoveDamage`` names
 # (battle_lib.c:6730-6774; generated/species.txt line N is id N-1).
 SPECIES_PIKACHU = 25
+SPECIES_CASTFORM = 351  # BattleSystem_TriggerFormChange (battle_lib.c:6314), F-6
 SPECIES_FARFETCHD = 83  # BattleSystem_CalcCriticalMulti (battle_lib.c:7128)
 SPECIES_CHANSEY = 113  # :7127
 SPECIES_CUBONE = 104

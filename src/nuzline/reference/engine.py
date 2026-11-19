@@ -94,6 +94,7 @@ from nuzline.engine.ids import (
     SLEEPLESS_ABILITIES,
     SNORE_PARAM,
     SPECIES_ARCEUS,
+    SPECIES_CASTFORM,
     SPECIES_CHATOT,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -2593,6 +2594,30 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
             _know_ability(s, s.battlers[0].active)
 
 
+def _forecast(tables, s: RefState) -> None:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE`` (lib.c:4115-4121), ``BattleSystem_TriggerFormChange``'s
+    Castform block (lib.c:6313-6364), F-6, as ``hooks.forecast``: every battler that is a Castform
+    with HP and Forecast (``Battler_Ability``) takes the type of the weather (Fire in sun, Water
+    in rain, Ice in hail) or Normal (no such weather, or an alive Cloud Nine / Air Lock) unless it
+    has that type already, until none changes. Only the types are written (the form number is
+    display, the party's form is not updated, :6446)."""
+    clear = not _weather_suppressed(tables, s)
+    weather_type = {Weather.SUN: Type.FIRE, Weather.RAIN: Type.WATER, Weather.HAIL: Type.ICE}
+    for side in range(_fmt(s).B):
+        mon = _active(s, side)
+        if not (
+            mon.species == SPECIES_CASTFORM
+            and mon.hp
+            and _decomp_ability(tables, mon) == ABILITY_DECOMP_IDS[AbilityId.FORECAST]
+        ):
+            continue
+        target = weather_type.get(s.weather) if clear else None
+        if target is None:
+            target = Type.NORMAL
+        if target not in mon.types:
+            mon.types = [int(target)] * len(mon.types)
+
+
 def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
     """``MON_COND_CHECK_STATE_ABILITY`` (bcp.c:1355): Speed Boost (lib.c:3555-3564, G-48) raises
     the Speed of a holder with HP below +6 that did not enter this turn (``fakeOutTurnNumber !=
@@ -2698,6 +2723,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int) -> None:
         _know_ability(s, s.battlers[0].active)
     if traced and other == 0 and foe.ability in announced:
         _know_ability(s, s.battlers[0].active)
+    _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE, after Pressure (F-6)
     _recover_status_by_ability(s, side)
     if traced:
         _recover_status_by_ability(s, other)
@@ -5439,7 +5465,7 @@ def _weather_suppressed(tables, s: RefState) -> bool:
 def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     """``BtlCmd_EndOfTurnWeatherEffect`` (script.c:5561-5647) and
     ``subscript_weather_continues.s`` for one battler (``NO_CLOUD_NINE`` checked by the
-    caller). Rain and sun do something only through unmapped abilities (Dry Skin, Solar
+    caller). Rain and sun do something only through abilities (Dry Skin, Solar
     Power, Rain Dish, Hydration). MOVE_EFFECT_NO_WEATHER_DAMAGE (Dig, Dive: moves.h:50) skips the
     sandstorm, sun and hail branches (script.c:5580, :5587, :5600), B10-12."""
     mon = _active(s, side)
@@ -5480,6 +5506,17 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     # heal, Ice Body's included (G-45).
     if side == 0 and ((sun and not magic_guard) or hp_calc > 0):
         _know_ability(s, s.battlers[0].active)
+    # script.c:5626-5639, subscript_ability_restore_status.s:5, :8 (F-5): rain, a Hydration holder
+    # (Battler_Ability) with any status loses it; the status counter goes with it.
+    if (
+        s.weather == Weather.RAIN
+        and ability == ABILITY_DECOMP_IDS[AbilityId.HYDRATION]
+        and mon.status != Status.NONE
+    ):
+        mon.status = Status.NONE
+        mon.status_counter = 0
+        if side == 0:
+            _know_ability(s, s.battlers[0].active)
 
 
 def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
@@ -6280,6 +6317,7 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         # defender (bcp.c:3965-3967).
         _recover_status_by_ability(s, side)
         _recover_status_by_ability(s, _foe(side))
+        _forecast(turn.tables, s)  # MoveEnd's TriggerEffectOnSwitch (bcp.c:3973), F-6
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).
@@ -6325,6 +6363,7 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
     # replacement pending it comes after it (ref_replace's switch-in effects).
     waiting = any(_awaits_replacement(s, b) for b in range(_fmt(s).B))
     if not s.over and not waiting:
+        _forecast(tables, s)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE precedes the item check (F-6)
         for side in range(_fmt(s).B):
             _held_item(turn, s, side)
     # The turn's speedRand (bcp.c:853-857), kept only while it can be read (_qc_kept).

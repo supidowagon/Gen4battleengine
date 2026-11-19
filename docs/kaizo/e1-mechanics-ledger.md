@@ -1287,3 +1287,35 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   `_Turn.sub_hit_mon`. An end-of-turn replacement or a turn-start switch finds the flag clear (unchanged). The other
   `CheckSubstitute` users reachable from a switch-in: none (grep: `CheckSubstitute` in `res/battle/scripts`
   switch-in subscripts is Intimidate's alone; the move subscripts that call it are not switch-ins).
+- F-5 Hydration (`AbilityId.HYDRATION`, decomp 93). `BtlCmd_EndOfTurnWeatherEffect` (battle_script.c:5626-5639):
+  in rain, a battler with HP and any status (`MON_CONDITION_ANY`) whose `Battler_Ability` is Hydration sets
+  `scriptTemp = WEATHER_EFFECT_HYDRATION`; `subscript_weather_continues.s` then runs
+  `subscript_ability_restore_status.s`: status := `MON_CONDITION_NONE` (sleep and toxic counters live in the status
+  bits, so `status_counter` goes with it), Nightmare off (:6; Nightmare is not modelled), message tags the holder
+  (`hooks.REVEALS_ON` STATUS_CURE). No HP change; no `MOVE_EFFECT_NO_WEATHER_DAMAGE` test in the rain block, so a
+  Diving holder is cured. The whole body sits inside `NO_CLOUD_NINE`, the weather step's own gate
+  (`step.field_conditions`: `weather_suppressed`), and runs only when the rain continues (the turn it runs out
+  nothing is cured). It sits in `step._weather_effect` (reference `_weather_effect`), read by decomp id from
+  `damage.decomp_abilities` (carry 9); the weather step precedes every mon-condition step (bcp.c:900-912, :1252), so
+  the cure comes before the turn's poison/burn damage and the held-item status checks. Not a
+  `BattleSystem_RecoverStatusByAbility` case (:3966-3968). The AI side was modelled before (Basic_CheckCannotPoison,
+  Basic_CheckRainDance / SunnyDay, Expert_RainDance: `ai/policy.py`); coverage no longer refuses Hydration.
+- F-6 Forecast (`AbilityId.FORECAST`, decomp 59; `ids.SPECIES_CASTFORM` 351). `BattleSystem_TriggerFormChange`'s
+  Castform block (battle_lib.c:6313-6364): for a battler of species Castform with HP and `Battler_Ability` Forecast,
+  with no alive Cloud Nine / Air Lock: no rain, sun or hail (`FIELD_CONDITION_CASTFORM`, condition.h:140) and
+  neither type Normal -> Normal/Normal; else sun and neither type Fire -> Fire/Fire; else rain and neither Water ->
+  Water/Water; else hail and neither Ice -> Ice/Ice; with one alive: neither type Normal -> Normal/Normal
+  (:6355-6363). Sandstorm and fog count as none. Only `type1/type2` are written (`hooks.forecast`, reference
+  `_forecast`); `formNum` is read by the display only (grep `formNum` in src/battle: battle_controller.c, battle_display.c)
+  and the party's form is not updated (no `SYSCTL_FORM_CHANGE`, only Giratina sets it, :6446), so `state.form` stays
+  and the switch-in's re-read of the party types (:113-114) restores the personal types. The state is not advanced
+  while a change happened (:4115-4121); each result is stable under its own test and no battler's change feeds
+  another's, so one pass per call reaches the same fixpoint in any order. Called where
+  `BattleSystem_TriggerEffectOnSwitch` runs: `hooks.switch_in_effects` and `hooks.show_battle_mon` after Pressure's
+  announcement (FORM_CHANGE follows PRESSURE, :3629-3640), `step._move_end` (every move; bcp.c:3672-3680, :3973),
+  and `step._turn_start_items` before its item check (the next turn's ShowBattleMon, bcp.c:256, :1844-1858: a
+  weather that ended reverts Castform before commands). Reference: `_switch_in_effects`, `_finish_action`,
+  `_end_turn`. Skill Swap / Role Play / Worry Seed keep the current types (no revert code); Transform copies species
+  and ability so a Castform copy follows the rule (the species test reads the battler's species). Trace cannot copy
+  Forecast (`UNTRACEABLE_ABILITIES`, already). AI: no `script.s` read; type loads read `state.types`
+  (`BattleMon_Get`), so the AI sees the changed types.
