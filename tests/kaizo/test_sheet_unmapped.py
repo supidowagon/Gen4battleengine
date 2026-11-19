@@ -106,7 +106,10 @@ def test_ally_reasons_name_the_partner_rows_starter(kaizo_intermediate):
         t["id"]: t for t in json.loads((kaizo_intermediate / "trainers.json").read_text("utf-8"))
     }
     species = json.loads((kaizo_intermediate / "species.json").read_text("utf-8"))
-    docs = json.loads((kaizo_intermediate / "docs" / "docs.json").read_text("utf-8"))
+    docs_path = kaizo_intermediate / "docs" / "docs.json"
+    if not docs_path.exists():
+        pytest.skip("Kaizo docs not extracted")
+    docs = json.loads(docs_path.read_text("utf-8"))
     headers = {
         h["cite"]: h
         for sv in docs["splits"].values()

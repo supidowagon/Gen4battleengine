@@ -256,6 +256,7 @@ from nuzline.engine.ids import (
 from nuzline.engine.order import (
     CALL_ASSIST,
     CALL_COPYCAT,
+    CALL_ME_FIRST,
     CALL_METRONOME,
     CALL_NONE,
     CALL_SLEEP_TALK,
@@ -274,6 +275,7 @@ from nuzline.engine.order import (
     invoked_move,
     is_item,
     is_switch,
+    me_first_copy,
     metronome_weights,
     move_effects,
     sealed_state,
@@ -306,7 +308,7 @@ from nuzline.engine.outcome import (
 from nuzline.engine.outcome import (
     kings_rock_chance as outcome_kings_rock_chance,
 )
-from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, held_items
+from nuzline.engine.state import STAGE_MAX, STAGE_MIN, BattleState, battler_ability, held_items
 
 _I32 = jnp.int32
 _E = EffectId
@@ -476,8 +478,8 @@ def _holds(tables: Tables, state: BattleState, actions, abilities) -> jnp.ndarra
     fmt = format_of(state)
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
     sides = jnp.arange(fmt.B)
-    now = _any_of(state.ability[party(fmt, sides), state.active], abilities)
-    entry = _any_of(state.ability[party(fmt, sides), incoming], abilities) | _any_of(
+    now = _any_of(battler_ability(state, sides), abilities)
+    entry = _any_of(battler_ability(state, sides, incoming), abilities) | _any_of(
         _entry_abilities(tables, state, actions), abilities
     )
     return now | (entry & is_switch(actions))
@@ -542,7 +544,7 @@ def _end_speeds(
         state.active.dtype
     )
     stage0 = jnp.where(switching, 0, state.stages[side, Stat.SPE].astype(_I32))
-    quick_feet = state.ability[party(fmt, side), mon] == AbilityId.QUICK_FEET
+    quick_feet = battler_ability(state, side, mon) == AbilityId.QUICK_FEET
     para0 = jnp.where(
         quick_feet,
         state.status[party(fmt, side), mon] != Status.NONE,
@@ -609,7 +611,7 @@ def _end_speeds(
         # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
         # for an Unburden holder that still holds an item (:4433-4437); B9-13.
         incoming = mon != state.active[side]
-        armed = (state.ability[party(fmt, side), mon] == AbilityId.UNBURDEN) & (
+        armed = (battler_ability(state, side, mon) == AbilityId.UNBURDEN) & (
             state.item[party(fmt, side), mon] != 0
         )
         base = jnp.where(incoming, armed.astype(_I32), state.can_unburden[side].astype(_I32))
@@ -636,13 +638,19 @@ def _end_speeds(
         )
         s = s._replace(
             active=state.active.at[side].set(mon),
+            # A newcomer's mask starts clear (battle_lib.c:2071): no Gastro Acid bit.
+            ability_suppressed=state.ability_suppressed.at[side].set(
+                jnp.where(incoming, 0, state.ability_suppressed[side]).astype(
+                    state.ability_suppressed.dtype
+                )
+            ),
             stages=s.stages.at[side, Stat.SPE].set(stage.astype(s.stages.dtype)),
             status=s.status.at[party(fmt, side), mon].set(
                 jnp.where(para, Status.PARALYSIS, Status.NONE).astype(state.status.dtype)
             ),
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
-        chlorophyll = s.ability[party(fmt, side), mon] == AbilityId.CHLOROPHYLL
+        chlorophyll = battler_ability(s, side, mon) == AbilityId.CHLOROPHYLL
         doubling = jnp.where(chlorophyll, Weather.SUN, Weather.RAIN)
         weather = jnp.where(lock == 3, doubling, s.weather).astype(s.weather.dtype)
         return effective_speed(tables, s, side, suppressed, weather)
@@ -800,6 +808,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.METRONOME,
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
+    _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -853,6 +862,20 @@ INPUT_NEUTRAL_EFFECTS = (
     # whose ON_HIT subscript_chatter.s only confuses, which no damage input reads (G-70).
     _E.MIMIC,
     _E.CHATTER,
+    # E3 batch 1: Splash / Kaizo Thief deals no damage and writes no state but its user's
+    # last move (effect_script_0085.s:5), Teleport fails (effect_script_0153.s:9-10): neither
+    # changes an input of the side's hit (E3-1-1, E3-1-4).
+    _E.DO_NOTHING,
+    _E.FLEE,
+    # E3-2-1: Torment sets a bit read only at the target's next move selection
+    # (CHECK_INVALID_TORMENTED, battle_lib.c:2275-2279); no hit of this turn reads it.
+    _E.TORMENT,
+    # E3-2-4: Trick Room sets trickRoomActivated (battle_script.c:7863), which re-sorts the
+    # action order and restarts the turn counter (battle_controller_player.c:3990-3994); in
+    # singles the foe has either acted already or still acts next, and the move's user is
+    # marked done, so no action changes. Its flip of the order bit is read at the next turn's
+    # order (order.py), not by a hit of this one. A doubles partner's order is not a singles case.
+    _E.TRICK_ROOM,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -940,6 +963,21 @@ INPUT_CLAUSE_EFFECTS = (
     # (:5350-5358: a copied Intimidate or weather ability acts). Every input of the side's later
     # hit against it, and of its own stats the side's hit meets, can change: the transform clause.
     _E.TRANSFORM,
+    # E3-2-2: Worry Seed overwrites the side's ability with Insomnia before its later hit
+    # (subscript_give_target_insomnia.s:11): every ability factor of that hit, its accuracy and
+    # crit odds, and a Klutz holder's item: the worry-seed clause.
+    _E.WORRY_SEED,
+    # E3-2-5: Skill Swap gives the side the foe's ability and the foe the side's
+    # (subscript_exchange_abilities.s:21-24) before the side's later hit, and the entry ability
+    # one gains acts at the move's end (``hooks.move_end_switch_in``): every ability factor of
+    # that hit, its accuracy and crit odds, a Klutz holder's item, an Intimidate or Download
+    # stage change of its stats: the skill-swap clause.
+    _E.SKILL_SWAP,
+    # E3-2-6: Gastro Acid suppresses the side's ability before its later hit
+    # (subscript_suppress_target_ability.s:10; ``Battler_Ability`` reads NONE, battle_lib.c:3088-
+    # 3093): every ability factor of that hit, its accuracy and crit odds, a Klutz holder's item,
+    # the speed abilities of the turn's end: the gastro-acid clause.
+    _E.GASTRO_ACID,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1037,7 +1075,8 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.VITAL_SPIRIT,
     AbilityId.IRON_FIST,
     # B13-29: Klutz hides its holder's item from every gated read (state.held_item) from the
-    # start of the turn; nothing changes it mid-turn.
+    # start of the turn; nothing changes it mid-turn but a foe's Worry Seed (E3-2-2: the
+    # worry-seed clause) or Gastro Acid (E3-2-6: the gastro-acid clause).
     AbilityId.KLUTZ,
     # E1 trial batch (G-63): a fixed Sp. Atk factor of the hit's own side's active battlers
     # (the ally's ability and HP), whose inputs have their clauses.
@@ -1294,6 +1333,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.METRONOME,
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
+    _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -1340,6 +1380,13 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.EMBARGO,  # B13-31: a status move, no damage
     _E.MIMIC,  # G-68, G-69: status moves, no damage
     _E.TRANSFORM,
+    _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
+    _E.FLEE,  # a status move that fails: no damage (E3-1-4)
+    _E.TORMENT,  # a status move: no damage (E3-2-1)
+    _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
+    _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
+    _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
+    _E.GASTRO_ACID,  # a status move: no damage (E3-2-6)
 )
 
 
@@ -1419,7 +1466,7 @@ def damage_inputs_can_change(
     param0, param1 = params[:, 0], params[:, 1]
     category = tables.move_category[moves]
     move_type = jnp.stack([move_type_of(tables, state, side, moves[side]) for side in range(fmt.B)])
-    ability = state.ability[party(fmt, sides), mons]
+    ability = battler_ability(state, sides, mons)
     item = tables.item_effect[state.item[party(fmt, sides), mons]]
     status = state.status[party(fmt, sides), mons]
     contact = (tables.move_flags[moves] & MoveFlag.CONTACT) != 0
@@ -1485,6 +1532,12 @@ def damage_inputs_can_change(
         | (foe_effect == _E.GRAVITY)
         # G-69: the foe's Transform copies the side's stats, stages, types and ability onto it.
         | (foe_effect == _E.TRANSFORM)
+        # E3-2-2: the foe's Worry Seed makes the side's ability Insomnia (the worry-seed clause).
+        | (foe_effect == _E.WORRY_SEED)
+        # E3-2-5: the foe's Skill Swap gives the side the foe's ability (the skill-swap clause).
+        | (foe_effect == _E.SKILL_SWAP)
+        # E3-2-6: the foe's Gastro Acid suppresses the side's ability (the gastro-acid clause).
+        | (foe_effect == _E.GASTRO_ACID)
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1638,7 +1691,9 @@ def outcome_laws(
     took_state = encored_state(tables, state, taken)
     chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
     kinds = call_kind(tables, chosen)
-    copycat = uses_move & (kinds == CALL_COPYCAT)
+    # Copycat's and Me First's calls follow the order (the foe's move before them, or not).
+    copycat = uses_move & ((kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST))
+    me_first_used = uses_move & (kinds == CALL_ME_FIRST)
     if call is None:
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
         call = jnp.zeros((fmt.B,), _I32)
@@ -1738,14 +1793,15 @@ def outcome_laws(
     # The attacker is not in love at the start, or the holder's side switches: the source
     # leaves first (step._source_leaves) and a Cute Charm switch-in can then infatuate it.
     calm = (foes(state.infatuated) == 0) | switch
-    charm_now = (state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM) & lovers(
+    charm_now = (battler_ability(state, sides, mons) == AbilityId.CUTE_CHARM) & lovers(
         gender[sides, mons], attacker_gender
     )
-    entering = (state.ability[party(fmt, sides), incoming] == AbilityId.CUTE_CHARM) | (
+    entering = (battler_ability(state, sides, incoming) == AbilityId.CUTE_CHARM) | (
         _entry_abilities(tables, state, actions) == AbilityId.CUTE_CHARM
     )
     charm_later = switch & entering & lovers(gender[sides, incoming], attacker_gender)
-    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender.
+    # A Transform user copies the foe's Cute Charm (G-69) and keeps its own gender. Raw: the
+    # copy is BattleMon.ability's (battle_script.c:5342-5348).
     foe_charm = foes(state.ability[party(fmt, sides), mons] == AbilityId.CUTE_CHARM)
     charm_copied = xform & foe_charm & lovers(gender[sides, mons], attacker_gender)
     charm = (charm_now | charm_later | charm_copied) & calm
@@ -1778,7 +1834,7 @@ def outcome_laws(
     # berry could cure the target). Insomnia is never a block: its "stayed awake" reveal
     # (ai_ability_known) runs on a proc; Limber's runs only for a direct status move.
     param0 = params[:, 0]
-    attacker_ability = state.ability[party(fmt, sides), mons]
+    attacker_ability = battler_ability(state, sides, mons)
     ignorable = jnp.where(
         attacker_ability == AbilityId.MOLD_BREAKER, AbilityId.NONE, foes(attacker_ability)
     )
@@ -1875,8 +1931,8 @@ def outcome_laws(
             | (
                 damaging
                 & contact
-                & (state.ability[party(fmt, sides), mons] == AbilityId.SYNCHRONIZE)
-                & (foes(state.ability[party(fmt, sides), mons]) == AbilityId.STATIC)
+                & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
+                & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
             )
         ),
         "freeze_inflict": uses_move
@@ -2026,7 +2082,7 @@ def outcome_laws(
     # (COUNT_ALIVE_BATTLERS, battle_lib.c:2951-2957). A living holder anywhere in either
     # party can change it this turn: by a switch in or out, a Roar's drag in or out, or a
     # faint (over-approximate; nothing in the engine revives, so a fainted holder never
-    # counts again).
+    # counts again). Raw over the whole party: a superset of every Battler_Ability it can show.
     abilities = decomp_abilities(tables, state)
     lock_holder = (abilities == WEATHER_ABILITY_IDS["Cloud Nine"]) | (
         abilities == WEATHER_ABILITY_IDS["Air Lock"]
@@ -2043,7 +2099,8 @@ def outcome_laws(
         AbilityId.TRACE,
     )
     incoming = jnp.clip(actions - MOVE_ACTIONS, 0, state.ability.shape[1] - 1)
-    switch_setter = switch & _any_of(state.ability[party(fmt, sides), incoming], setters)
+    switch_setter = switch & _any_of(battler_ability(state, sides, incoming), setters)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     alive_setter = jnp.any(
         _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
     )[party(fmt, jnp.arange(fmt.B))]
@@ -2063,7 +2120,8 @@ def outcome_laws(
             weather_free,
             # The side's own Tailwind when none blows yet (effects._side_layers).
             uses_move[side] & (effect[side] == _E.TAILWIND) & (state.tailwind[side_of(side)] == 0),
-            # A living Unburden holder of the side (over-approximate: it may lose its item).
+            # A living Unburden holder of the side (over-approximate: it may lose its item; raw
+            # over the party, a superset of every Battler_Ability it can show).
             live
             & jnp.any(
                 (state.ability[party(fmt, side)] == AbilityId.UNBURDEN)
@@ -2086,6 +2144,7 @@ def outcome_laws(
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
     # follow, or Shed Skin: both reads are kept (over-approximate).
     living_now = (state.species != 0) & (state.hp > 0)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     trace_party = jnp.any(living_now & (state.ability == AbilityId.TRACE), axis=1)[
         party(fmt, jnp.arange(fmt.B))
     ]
@@ -2095,7 +2154,17 @@ def outcome_laws(
     # stats or by a copied speed ability or weather setter the grid does not follow. The tie is
     # kept (over-approximate).
     xform_used = uses_move & (effect == _E.TRANSFORM)
-    end_speed_tie = end_speed_tie | (live & jnp.any(tracer | xform_used))
+    # E3-2-2: a Worry Seed takes its target's speed ability (Swift Swim, Chlorophyll, Quick Feet,
+    # Unburden, ...), which the grid does not follow either: the tie is kept.
+    worry_used = uses_move & (effect == _E.WORRY_SEED)
+    # E3-2-5: a Skill Swap moves a speed ability (and Shed Skin) between the battlers likewise.
+    swap_used = uses_move & (effect == _E.SKILL_SWAP)
+    # E3-2-6: a Gastro Acid suppresses its target's speed ability (Swift Swim, Chlorophyll, Quick
+    # Feet, Unburden) and Shed Skin likewise (Battler_Ability reads NONE, battle_lib.c:3088-3093).
+    gastro_used = uses_move & (effect == _E.GASTRO_ACID)
+    end_speed_tie = end_speed_tie | (
+        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used)
+    )
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
         # speed gate (one binary element: at most x2).
@@ -2103,13 +2172,18 @@ def outcome_laws(
     # Shed Skin of the Pokemon on the field at the turn's end: the active or incoming one, or
     # any living one a foe's Roar can drag in.
     living = (state.species != 0) & (state.hp > 0)
+    # Raw over the whole party: a superset of every Battler_Ability it can show.
     shed_party = jnp.any(living & (state.ability == AbilityId.SHED_SKIN), axis=1)[
         party(fmt, jnp.arange(fmt.B))
     ]
     # A Transform user copies its target's Shed Skin (G-69).
     shed_holder = _holds(tables, state, actions, (AbilityId.SHED_SKIN,))
     shed_skin = live & (
-        shed_holder | (dragged & shed_party) | tracer | (xform_used & foes(shed_holder))
+        shed_holder
+        | (dragged & shed_party)
+        | tracer
+        | (xform_used & foes(shed_holder))
+        | (jnp.any(swap_used) & foes(shed_holder))  # E3-2-5: Skill Swap hands it over
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
@@ -2376,10 +2450,12 @@ def outcome_laws(
         else uses_move
         & (effect == _E.PRESENT)
         & (
+            # Raw over the foe's party: a superset of every Battler_Ability it can show.
             jnp.any(
                 state.ability[party(fmt, _foe(jnp.arange(fmt.B)))] == AbilityId.WONDER_GUARD, axis=1
             )
-            # A foe whose Transform copies the side's own Wonder Guard (G-69).
+            # A foe whose Transform copies the side's own Wonder Guard (G-69): the raw
+            # BattleMon.ability (battle_script.c:5342-5348).
             | (foes(xform) & (state.ability[party(fmt, sides), mons] == AbilityId.WONDER_GUARD))
         ),
     )
@@ -2398,7 +2474,9 @@ def outcome_laws(
     # whatever happened before it (damage_inputs_can_change), of a move whose table is
     # its damage (TABLE_DAMAGE_EFFECTS, an allowlist), and whose roll is not also a
     # confusion self-hit's.
-    tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS)
+    # A Me First user's hit carries the x1.5 its own move sets (``damage.me_first_boost``): the
+    # turn-start table does not hold it (E3-2-3).
+    tabled = rolled & _any_of(effect, TABLE_DAMAGE_EFFECTS) & ~me_first_used
     # The crit odds at the hit (outcome.crit_variants): a hit whose odds can change before its
     # CalcCrit draws its crit as a class of the CRIT_DRAWS values (_crit), not in damage classes.
     odds_variants, odds_possible = crit_variants(tables, state, actions, moves)
@@ -3560,10 +3638,11 @@ def _side_call_law(
     metro_w = jnp.where(values < n, metro_all[by_rank], 0)
     copy_w = ((values == 0) | ((values == 1) & foe_uses_move)).astype(_I32)
     # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
-    # the turn; position v calls the v-th valid entry.
+    # the turn; position v calls the v-th valid entry. An empty list draws nothing and fails
+    # (battle_script.c:6438-6442): value 0 alone, calling no move.
     listed, valid = assist_candidates(tables, state, side)
     n_listed = jnp.sum(valid.astype(_I32))
-    assist_w = (values < n_listed).astype(_I32)
+    assist_w = jnp.where(n_listed > 0, values < n_listed, values == 0).astype(_I32)
     listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
     assist_called = (
         jnp.zeros((CALL_VALUES,), _I32)
@@ -3575,6 +3654,11 @@ def _side_call_law(
         copycat_call(tables, state.move_prev, state),
         jnp.where(values == 1, copycat_call(tables, foe_chosen, state), 0),
     )
+    # Me First (E3-2-3): value 0, its target has not acted (it copies the target's chosen move),
+    # value 1, it has (the call fails).
+    first_called = jnp.where(
+        values == 0, me_first_copy(tables, state, _foe(side), foe_chosen, foe_uses_move), 0
+    )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
         talk_w,
@@ -3582,7 +3666,7 @@ def _side_call_law(
             kind == CALL_METRONOME,
             metro_w,
             jnp.where(
-                kind == CALL_COPYCAT,
+                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST),
                 copy_w,
                 jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
             ),
@@ -3597,7 +3681,11 @@ def _side_call_law(
             jnp.where(
                 kind == CALL_COPYCAT,
                 copy_called,
-                jnp.where(kind == CALL_ASSIST, assist_called, 0),
+                jnp.where(
+                    kind == CALL_ASSIST,
+                    assist_called,
+                    jnp.where(kind == CALL_ME_FIRST, first_called, 0),
+                ),
             ),
         ),
     )
@@ -3739,7 +3827,7 @@ def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tu
                 # its assumption (``call_consistent``).
                 out += [(v + off, w, den) for off in offsets]
         return out
-    if kind == CALL_COPYCAT:
+    if kind in (CALL_COPYCAT, CALL_ME_FIRST):
         return [(int(v), 1, 1) for v in np.flatnonzero(weight)]
     return [(0, 1, 1)]
 

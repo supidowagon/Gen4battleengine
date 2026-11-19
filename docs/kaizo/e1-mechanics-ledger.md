@@ -1220,3 +1220,42 @@ of them, :2107-2115).
   input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
   reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
   `test_damage_classes.py` (Chatter's exact case, Transform's compression case).
+
+## Stream state (restart point, 2026-11-18)
+
+Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
+pod state are kept outside the repo (the stream's `_scratch/e1/` notes).
+
+### Next mechanics batch (F)
+Kaizo abilities (Hydration, Forecast, Heatproof, Flash Fire, Multitype), held items (hold effects
+#50, #36, #41, #42, #92, #0, #1, #12), Weather Ball's AI type, the Poke Ball friendship wrap past
+255, Sky Forme reverting when frozen, and a U-turn newcomer's Intimidate against a foe whose
+substitute that U-turn hit. Effect Spore and Suction Cups are dropped (no Kaizo species has them).
+The owed items below go in first.
+
+### Owed items (into the next mechanics batch)
+- `chatot_cry` is per side; the decomp keeps it per battler in tag/2vs2
+  (battle_system.c:915-924). Tell E2 for doubles.
+- Confirm the Kaizo ROM leaves `sMovesAffectedByGravity` unpatched (Kaizo move 150 is Hidden
+  Power Water); confirm the Kaizo AI scripts match the vanilla script.s lines cited.
+- Bag Ether/Elixir on a Transformed/Mimic slot (battle_system.c:636-653).
+- `gravity_rearm`: read from ROM sub_seq 238, not the game id.
+- Learn masks (levelup.py:462-469, reference/engine.py:2079-2082) and `_learn_refusal` ignore
+  battle end: add `& (state.over == 0)` in both engines (learn_pin, step.py:2833-2834).
+- Stale Choice lock: the decomp clears `choiceLockedMove` at the next selection
+  (battle_lib.c:2307-2310); the engine reads it lazily (step.py:31, 436-456). Model the clear.
+- Nits: unreachable D10 fallback in `_learn_refusal`; STATE.md:349-352 "mid-turn learn"; end-of-turn
+  Disable/Encore on an unknown move; Spite, Grudge, Last Resort, Mimic `_masked` readers.
+- A. `hit_thresholds`: a faster foe's Knock Off removes Wide Lens before the hit
+  (battle_script.c:6608-6632); same-turn Knock Off vs Future Sight's items.
+- B. `future_thresholds` `free` (outcome.py:522) lacks Haze, Psych Up, Acupressure.
+- C. Tests for copied weather, copied No Guard / Unaware, losing the foe's own Cloud Nine /
+  No Guard, the Gravity/Transform loose flag.
+- D. outcome.py:595-599 Gravity "ends a count of 1" is wrong for Kaizo (`gravity_rearm`); cite
+  nits (Sand Veil/Snow Cloak are bcp.c lines; Gravity countdown to :1238; Mimic ends at :4524).
+- E. Doubles: `_threshold_grid`'s "one move has one effect" holds only with one foe. Tell E2.
+- F. Sleep Talk's call law (enumerate.py:3550-3555; order.py:316) uses the foe's turn-start moves
+  while it imprisons; a faster Transform/Mimic changes the sealed set (battle_lib.c:2287-2290).
+- G. Tests: `assert_equals_bruteforce` in test_transform_laws.py; copied Cute Charm with the kept
+  gender (battle_script.c:5732-5735); copied Wonder Guard; Transform through an invoker.
+- H. Cites: copy loop battle_script.c:5346-5348; switch-in re-trigger bcp.c:3672-3673 and 3973.

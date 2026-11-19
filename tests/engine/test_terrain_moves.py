@@ -57,8 +57,8 @@ from nuzline.engine.observe import OBS_FIELDS, observe
 from nuzline.engine.order import called_move
 from nuzline.engine.outcome import Outcome, empty_outcome, sample_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import ACT_MOVE, ACT_TAUNTED, replace, step, step_events
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from nuzline.engine.step import ACT_MOVE, ACT_TAUNTED, replace, step_events
+from tests.engine.helpers import A, as_species, assert_matches_reference, jit_step, roark_state
 from tests.engine.test_enumerate import _kaizo_spec, assert_equals_bruteforce, laws_of
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
@@ -247,7 +247,7 @@ def test_nature_power_is_tri_attack_from_its_script_on(tables, names):
     assert ev["called"][0] == names.move(TRI) and ev["called"][1] == 0
     # The foe's record before its own move ends: step a faster foe that has not acted.
     s2 = _state(tables, names, player=(NP,), opp=("Leer",), order="player")
-    out = step(tables, s2, A(NP, "Leer", s2, names), o)
+    out = jit_step(tables, s2, A(NP, "Leer", s2, names), o)
     assert int(out.last_move[0]) == names.move(NP)
 
 
@@ -412,10 +412,10 @@ def test_camouflage_fails_for_multitype(tables, names):
     # so that the type test (Arceus is Normal) is not what fails it.
     s = _state(tables, names, player=(CAMO,), opp=("Leer",), terrain=GRASS)
     arceus = names.species("Arceus")
-    s = s._replace(species=s.species.at[0, 0].set(arceus), form=s.form.at[0, 0].set(0))
+    s = as_species(tables, s, 0, 0, arceus)
     out = assert_matches_reference(tables, s, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == _types(s, 0)
-    plain = s._replace(species=s.species.at[0, 0].set(names.species("Kecleon")))
+    plain = as_species(tables, s, 0, 0, names.species("Kecleon"))
     out = assert_matches_reference(tables, plain, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == [Type.GRASS, Type.GRASS]
 
@@ -449,7 +449,7 @@ def test_camouflage_changes_the_foes_type_chart_and_its_own_stab(tables, names):
     after = assert_matches_reference(tables, out, A(NP, "Leer", out, names), _o())
     stab = int(out.hp[1, 0]) - int(after.hp[1, 0])
     base = int(out.hp[1, 0]) - int(
-        step(tables, ghost._replace(hp=out.hp), A(NP, "Leer", out, names), _o()).hp[1, 0]
+        jit_step(tables, ghost._replace(hp=out.hp), A(NP, "Leer", out, names), _o()).hp[1, 0]
     )
     assert stab > base
 
@@ -457,7 +457,7 @@ def test_camouflage_changes_the_foes_type_chart_and_its_own_stab(tables, names):
 @pytest.mark.slow
 def test_observation_shows_types_and_the_call(tables, names):
     s = _state(tables, names, player=(CAMO, NP), opp=("Leer",))
-    out = step(tables, s, A(CAMO, "Leer", s, names), _o())
+    out = jit_step(tables, s, A(CAMO, "Leer", s, names), _o())
     obs = np.asarray(observe(tables, s, A(CAMO, "Leer", s, names), _o(), out))
     fields = {name: obs[sl] for name, sl in OBS_FIELDS}
     assert fields["active_types"][:2].tolist() == [Type.NORMAL, Type.NORMAL]

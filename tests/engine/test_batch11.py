@@ -40,28 +40,19 @@ from nuzline.engine.outcome import (
     sample_outcome,
 )
 from nuzline.engine.state import make_state
-from nuzline.engine.step import step, turn_events
-from tests.engine.helpers import assert_matches_reference, sample_rows
+from nuzline.engine.step import turn_events
+from tests.engine.helpers import BATCH, assert_matches_reference, sample_rows, step_rows
 from tests.engine.test_pivot import _mon
 from tests.strategies import _teach, any_outcome, legal_action_pair, supported_state
 
-CHUNK = 256  # one compiled program per kind for every batch in this file (small: under 8 GB)
-_steps = jax.jit(jax.vmap(step, in_axes=(None, None, None, 0)))
-_samples = sample_rows
+CHUNK = BATCH  # the suite's one padded row count (tests.engine.helpers): shared programs
 
 
 def _stepped(tables, state, actions, outcomes):
-    """``step`` of every row of ``outcomes`` (numpy), in ``CHUNK`` batches (padding = row 0)."""
-    n = len(np.asarray(outcomes.speed_tie))
-    parts = []
-    for start in range(0, n, CHUNK):
-        idx = np.arange(start, min(start + CHUNK, n))
-        pad = np.concatenate([idx, np.full(CHUNK - len(idx), idx[0])])
-        rows = jax.tree.map(lambda f, pad=pad: np.asarray(f)[pad], outcomes)
-        out = _steps(tables, state, jnp.asarray(actions, jnp.int32), rows)
-        k = len(idx)
-        parts.append(jax.tree.map(lambda f, k=k: np.asarray(f)[:k], out))
-    return jax.tree.map(lambda *f: np.concatenate(f), *parts)
+    """``step`` of every row of ``outcomes`` (numpy), in the suite's shared ``BATCH``-row
+    program (``step_rows``)."""
+    out = step_rows(tables, state, jnp.asarray(actions, jnp.int32), outcomes)
+    return jax.tree.map(np.asarray, out)
 
 
 def _exact(tables, state, actions, pred) -> float:
@@ -73,12 +64,9 @@ def _exact(tables, state, actions, pred) -> float:
 
 def _sampled(tables, state, actions, pred, n=8 * CHUNK, seed=11) -> float:
     """The frequency of ``pred`` over ``n`` turns drawn by ``sample_outcome``."""
-    hits = 0
     keys = jax.random.split(jax.random.PRNGKey(seed), n)
-    for start in range(0, n, CHUNK):
-        o = _samples(keys[start : start + CHUNK], tables, state, jnp.asarray(actions, jnp.int32))
-        hits += int(np.sum(np.asarray(pred(_stepped(tables, state, actions, o)))))
-    return hits / n
+    o = sample_rows(keys, tables, state, jnp.asarray(actions, jnp.int32))
+    return int(np.sum(np.asarray(pred(_stepped(tables, state, actions, o))))) / n
 
 
 # Five standard deviations of a frequency of 8192 draws near p = 0.75 (0.0048 each).

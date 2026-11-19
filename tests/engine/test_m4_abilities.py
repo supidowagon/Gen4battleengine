@@ -24,7 +24,7 @@ from hypothesis import strategies as st
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from nuzline.engine.step import _turn_end_ability, step
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state
 from tests.strategies import any_outcome, legal_action_pair, supported_state
 
 DECOMP_BATTLE = Path(__file__).resolve().parents[2] / "external" / "pokeplatinum" / "src" / "battle"
@@ -59,12 +59,12 @@ def spinarak(tables, names):
 @pytest.mark.slow
 def test_insomnia_blocks_sleep(tables, names, spinarak):
     acts = A("Poison Sting", "Hypnosis", spinarak, names)
-    out = step(tables, spinarak, acts, empty_outcome())
+    out = jit_step(tables, spinarak, acts, empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE
     assert int(out.ai_ability_known[0]) != 0  # "stayed awake because of its Insomnia"
     # Without Insomnia the same move puts the Pokemon to sleep.
     bare = spinarak._replace(ability=spinarak.ability.at[0, 0].set(AbilityId.NONE))
-    slept = step(tables, bare, acts, empty_outcome())
+    slept = jit_step(tables, bare, acts, empty_outcome())
     assert int(slept.status[0, 0]) == SLEEP and int(slept.ai_ability_known[0]) == 0
 
 
@@ -85,7 +85,7 @@ def test_mold_breaker_pierces_insomnia(tables, names):
         )
         sting = names.move("Poison Sting")
         s = s._replace(locked_move=s.locked_move.at[0].set(sting))
-        return step(tables, s, A("Poison Sting", "Hypnosis", s, names), empty_outcome())
+        return jit_step(tables, s, A("Poison Sting", "Hypnosis", s, names), empty_outcome())
 
     blocked, pierced = run("Geodude"), run("Cranidos")
     assert int(blocked.locked_move[0]) != 0 and int(pierced.locked_move[0]) == 0
@@ -98,18 +98,18 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
     # A sleeping Insomnia Pokemon switched in wakes (SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS).
     bench = spinarak._replace(ability=spinarak.ability.at[0, 1].set(AbilityId.INSOMNIA))
     bench = bench.with_status(0, 1, SLEEP, counter=3)
-    out = step(tables, bench, A(SWITCH_TO_1, "Tackle", bench, names), empty_outcome())
+    out = jit_step(tables, bench, A(SWITCH_TO_1, "Tackle", bench, names), empty_outcome())
     assert int(out.status[0, 1]) == Status.NONE and int(out.status_counter[0, 1]) == 0
     assert int(out.ai_ability_known[1]) != 0
     # An asleep Insomnia active wakes at the end of its own action (MoveEnd).
     asleep = spinarak.with_status(0, 0, SLEEP, counter=3)
     leer = A("Poison Sting", "Tackle", asleep, names)
-    out = step(tables, asleep, leer, empty_outcome())
+    out = jit_step(tables, asleep, leer, empty_outcome())
     assert int(out.status[0, 0]) == Status.NONE and int(out.status_counter[0, 0]) == 0
     assert int(out.ai_ability_known[0]) != 0
     # Other abilities keep the sleep.
     bare = asleep._replace(ability=asleep.ability.at[0, 0].set(AbilityId.NONE))
-    assert int(step(tables, bare, leer, empty_outcome()).status[0, 0]) == SLEEP
+    assert int(jit_step(tables, bare, leer, empty_outcome()).status[0, 0]) == SLEEP
 
 
 # --- Cloud Nine ----------------------------------------------------------------------
@@ -219,12 +219,12 @@ def kricketot(tables, names):
 @pytest.mark.slow
 def test_shed_skin_cures_before_poison(tables, names, kricketot):
     acts = A("Growl", "Leer", kricketot, names)
-    out = step(tables, kricketot, acts, shed(p=1))
+    out = jit_step(tables, kricketot, acts, shed(p=1))
     assert int(out.status[0, 0]) == Status.NONE
     # no poison damage this turn: the cure is the first end-of-turn check
     assert int(out.hp[0, 0]) == int(kricketot.hp[0, 0])
     assert int(out.ai_ability_known[0]) != 0
-    kept = step(tables, kricketot, acts, shed(p=0))
+    kept = jit_step(tables, kricketot, acts, shed(p=0))
     assert int(kept.status[0, 0]) == POISON
     assert int(kept.hp[0, 0]) == int(kricketot.hp[0, 0]) - int(kricketot.max_hp[0, 0]) // 8
     assert int(kept.ai_ability_known[0]) == 0

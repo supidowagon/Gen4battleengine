@@ -9,10 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     PLATE_TYPES,
     damage_for_roll,
+    damage_table,
     falloff_power,
     gift_item,
     gyro_ball_power,
@@ -43,7 +45,9 @@ from nuzline.engine.outcome import (
     live_hit_threshold,
 )
 from nuzline.engine.state import held_item, make_state
-from tests.engine.helpers import A, assert_matches_reference
+from nuzline.reference.convert import to_ref
+from nuzline.reference.engine import ref_damage_table
+from tests.engine.helpers import A, as_species, assert_matches_reference
 from tests.engine.test_enumerate import (
     assert_equals_bruteforce,
     check_frequencies,
@@ -235,7 +239,7 @@ def _hurricane(t, n, weather=Weather.NONE, theirs=("Snorlax", "Growl")):
 def _cloud_nine(t, s, side: int):
     """``s`` with ``side``'s active Pokemon on the first personal row and ability slot whose
     decomp ability is Cloud Nine or Air Lock (``damage.weather_suppressed`` reads the decomp
-    ability; Kaizo has no Cloud Nine species)."""
+    ability; Kaizo has no Cloud Nine species), its engine ability the row's."""
     from nuzline.engine.ids import WEATHER_ABILITY_IDS
 
     grid = np.asarray(t.species_abilities_decomp)
@@ -247,11 +251,7 @@ def _cloud_nine(t, s, side: int):
         for k in range(grid.shape[1])
         if grid[row, k] in (WEATHER_ABILITY_IDS["Cloud Nine"], WEATHER_ABILITY_IDS["Air Lock"])
     )
-    return s._replace(
-        species=s.species.at[side, 0].set(species),
-        form=s.form.at[side, 0].set(0),
-        ability_slot=s.ability_slot.at[side, 0].set(slot),
-    )
+    return as_species(t, s, side, 0, species, slot)
 
 
 def test_kaizo_hurricane_tables(kaizo_tables, kaizo_names):
@@ -882,6 +882,29 @@ def test_trump_card_reads_the_pp_after_its_decrement(tables, names):
             h = _ability(h, 1, AbilityId.PRESSURE)
         out = assert_matches_reference(tables, h, A("Trump Card", "Tail Whip", h, names), O)
         assert _loss(h, out) == _dfr(tables, h, m, power), (pp, pressure)
+
+
+def test_trump_card_default_power_counts_pressure(tables, names):
+    """``damage_table`` without ``in_power`` (line search, playout) and the reference engine's
+    ``ref_damage_table`` take Trump Card's power from the PP left after
+    BattleControllerPlayer_DecrementPP (battle_controller_player.c:2235-2297): ``ppCost`` 1
+    (:2237) plus, with a defender (:2238), one when it is not the user and has Pressure (the
+    default case, :2261-2265; Trump Card is RANGE_SINGLE_TARGET,
+    res/moves/trump_card/data.json:18), ppCur taken down by it and floored at 0 (:2276-2281);
+    then CalcTrumpCardPower
+    (battle_script.c:7233-7245) reads that slot. 3 PP: 60 (2 left), 80 under Pressure (1 left);
+    2 PP: 80, 200 under Pressure (0 left); the attacker's own Pressure never counts."""
+    s = _plain(_state(tables, names, ("Eevee", "Trump Card"), ("Snorlax", "Tail Whip")))
+    m = names.move("Trump Card")
+    cases = ((3, None, 60), (3, 1, 80), (3, 0, 60), (2, None, 80), (2, 1, 200), (1, 1, 200))
+    for pp, holder, power in cases:
+        h = s.with_pp(0, 0, [pp, 0, 0, 0])
+        if holder is not None:
+            h = _ability(h, holder, AbilityId.PRESSURE)
+        rolls = [int(x) for x in damage_table(tables, h, 0, m, False)]
+        want = [int(damage_for_roll(tables, h, 0, m, False, r, in_power=power)) for r in range(16)]
+        assert rolls == want, (pp, holder)
+        assert ref_damage_table(to_numpy(tables), to_ref(h), 0, m, False) == want, (pp, holder)
 
 
 def test_punishment_counts_the_targets_raised_stages(tables, names):

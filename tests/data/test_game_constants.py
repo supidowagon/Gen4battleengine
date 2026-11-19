@@ -45,6 +45,7 @@ LISTED = [
     "nuzline.engine.ids.ABILITY_MULTITYPE",
     "nuzline.engine.ids.ABILITY_DECOMP_IDS",
     "nuzline.engine.ids.UNTRACEABLE_ABILITIES",
+    "nuzline.ai.commands.CHANGE_USER_ABILITY_DESIRABLE",
     "nuzline.engine.ids.ABILITY_FORECAST",
     "nuzline.engine.ids.ITEM_GRISEOUS_ORB",
     "nuzline.engine.ids.TERRAIN_MOVES",

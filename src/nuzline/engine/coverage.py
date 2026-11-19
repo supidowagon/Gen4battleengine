@@ -89,8 +89,8 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
   battles and walking partners) is refused (``Trainer.format``);
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
-  (``Trainer.area_condition``; Gravity is modelled since the E1 trial batch, G-67; the engine has
-  no Trick Room field effect), a gauntlet (a chain
+  (``Trainer.area_condition``; both are modelled: Gravity since the E1 trial batch, G-67, Trick
+  Room since E3-2-4, ``start_trick_room``), a gauntlet (a chain
   of fights, ``Trainer.gauntlet``), a start condition the extraction left to the user
   (``"unknown"``, never read as a weather), a party member with no nature, gender or
   ability data when the trainer has no PID routine (no PKCalc set; plan preflight #34)
@@ -150,6 +150,7 @@ from nuzline.engine.ids import (
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
+    TRICK_ROOM_TURNS,
     UNTRACEABLE_ABILITIES,
     AbilityId,
     EffectId,
@@ -286,6 +287,14 @@ def start_gravity(trainer: Trainer) -> int:
     condition Gravity (sub_seq 297 runs ``subscript_gravity_start`` at battle start; the Kaizo
     tables re-arm it for ever, ``Tables.gravity_rearm``), else 0 (G-67)."""
     return GRAVITY_TURNS if trainer.area_condition.gravity else 0
+
+
+def start_trick_room(trainer: Trainer) -> int:
+    """The Trick Room counter a trainer's fight starts with: ``ids.TRICK_ROOM_TURNS`` for the Kaizo
+    area condition Trick Room (map weather 18: ``subscript_overworld_trick_room.s:14`` sets
+    FIELD_CONDITION_TRICK_ROOM_INIT; the Kaizo tables re-arm it for ever,
+    ``Tables.trick_room_rearm``), else 0 (E3-2-4)."""
+    return TRICK_ROOM_TURNS if trainer.area_condition.trick_room else 0
 
 
 def start_weather(trainer: Trainer) -> Weather:
@@ -656,6 +665,8 @@ def trace_copy_refusals(fight: Tables, state, names: Names | None = None) -> lis
     out: list[str] = []
     for side, slot in holders:
         foe = _foe(side)
+        # Raw BattleMon.ability: ChooseTraceTarget (battle_lib.c:7754-7776) and the copy
+        # (subscript_trace.s:6-7) read it, not Battler_Ability.
         copies = {
             (int(armed.ability[foe, s]), int(decomp[foe, s]))
             for s in range(species.shape[1])
@@ -942,10 +953,6 @@ def _check_ai_flags(c: _Collector, policy: str | None, trainer: Trainer) -> None
 
 def _check_kaizo_fields(c: _Collector, names: Names, trainer: Trainer) -> None:
     """The Kaizo trainer fields the engine does not model (plan K2b Task 14)."""
-    area = trainer.area_condition
-    permanent = "permanent " if area.permanent else ""
-    if area.trick_room:
-        c.add(Support.NONE, f"Battle start: {permanent}Trick Room", "field condition")
     if unknown_start(trainer):
         c.add(Support.NONE, "Battle start: condition unknown (user call)", "start condition")
     if trainer.gauntlet is not None:
