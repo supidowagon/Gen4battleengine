@@ -585,6 +585,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # Feint: effect_script_0223.s, TryFeint, an ON_HIT subscript_feint.s (the defender's
     # turnFlags.protecting cleared) and a plain hit (E3-B2-13).
     223: ("BATTLE_EFFECT_REMOVE_PROTECT", _E.FEINT, (0, 0, 0)),
+    # Defog: effect_script_0258.s, a direct ON_HIT subscript_defog.s: the defender's evasion -1,
+    # then its side's screens and hazards and the field's deep fog cleared (E3-B2-14).
+    258: ("BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN", _E.DEFOG, (_EVA, -1, 0)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

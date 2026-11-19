@@ -449,6 +449,8 @@ SITE_N: dict[int, int] = {
     1915: 128,  # Expert_MirrorMove (faster, last move in the table: to _End when it jumps, else +2)
     1922: 80,  # Expert_MirrorMove_TryScoreMinus1 (to _End when it jumps, else -1)
     5506: 64,  # Expert_LuckyChant (to _ScorePlus1 when it jumps: +1, else 0), E3-B2-7
+    6171: 128,  # Expert_Defog_TryScoreMinus1 (to _CheckUserHPAndOpponentEvasion when it jumps), E3-B2-14
+    6180: 50,  # Expert_Defog_TryScoreMinus2 (to _CheckOpponentHP when it jumps: no -2), E3-B2-14
     4820: 80,  # Expert_MiracleEye_ExtraRandomGate (a Dark defender: to _End when it jumps), E3-B2-10
     4823: 80,  # Expert_MiracleEye_ScorePlus2 (to _End when it jumps, else +2), E3-B2-10
     4499: 100,  # Expert_MagicCoat (to _CheckUserFirstTurn when it jumps, else -1), E3-B2-6
@@ -750,6 +752,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Expert_LastResort (:1789), no roll (E3-B2-11)
         223,  # REMOVE_PROTECT (Feint): no Basic entry; Expert_Feint (:1766), :4912, :4927, :4937,
         # :4942 (E3-B2-13)
+        258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN (Defog): Basic_CheckDefog (:281); Expert_Defog
+        # (:1799), :6171, :6180 (E3-B2-14)
         233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
         # (E3-B2-1)
         9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
@@ -914,6 +918,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     216: ("Expert_MiracleEye", 1760),
     246: ("Expert_LastResort", 1789),
     223: ("Expert_Feint", 1766),
+    258: ("Expert_Defog", 1799),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -1057,6 +1062,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE: Expert_MiracleEye (E3-B2-10)
         246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES: Expert_LastResort (E3-B2-11)
         223,  # REMOVE_PROTECT: Expert_Feint (E3-B2-13)
+        258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN: Expert_Defog (E3-B2-14)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

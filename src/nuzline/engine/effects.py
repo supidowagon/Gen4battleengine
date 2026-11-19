@@ -1721,6 +1721,11 @@ def primary_effect_fails(
         | ((effect == _E.MIST) & (state.mist[side_of(side)] != 0))
         # effect_script_0240.s:5, :9-11 (MOVE_STATUS_FAILED), E3-B2-7.
         | ((effect == _E.LUCKY_CHANT) & (state.lucky_chant[side_of(side)] != 0))
+        # Defog's evasion drop behind a Substitute (subscript_update_stat_stage.s:60), E3-B2-14.
+        | (
+            (effect == _E.DEFOG)
+            & defog_stage_fails(state, target_side, ignorable(state, side, target_side), param[0])
+        )
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
         # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED), E3-B2-4.
@@ -2617,6 +2622,68 @@ def _brick_break(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     cond = (h.effect == _E.BRICK_BREAK) & h.landed
     state = _set(state, "reflect", h.target_side, 0, cond)
     return _set(state, "light_screen", h.target_side, 0, cond)
+
+
+def defog_stage_fails(state: BattleState, target_side, seen, stat) -> jnp.ndarray:
+    """``bool``: Defog's evasion drop ends in ``result == 2`` (``MOVE_STATUS_FAILED``,
+    subscript_update_stat_stage.s:60) at ``BtlCmd_ChangeStatStage`` (battle_script.c:2874-2923):
+    the target's side has no Mist (:2877), the target's ability as the attacker sees it
+    (``seen``) is not Clear Body or White Smoke (:2883-2884), its ``stat`` stage is above
+    -6 (:2904) and its Substitute is up (:2921-2923); a drop that meets one of the earlier
+    tests is ``result == 1`` (no failure; the else-if chain never reaches the substitute)."""
+    blocked = mist_blocks_drop(state, target_side, -1)
+    blocked = blocked | (seen == AbilityId.CLEAR_BODY)
+    blocked = blocked | (seen == AbilityId.WHITE_SMOKE)
+    blocked = blocked | (state.stages[target_side, stat] <= STAGE_MIN)
+    return ~blocked & (state.substitute_hp[target_side] != 0)
+
+
+def defog_silent_fail(state: BattleState, side, target_side, stat) -> jnp.ndarray:
+    """``bool``: Defog's evasion drop fails on the Substitute (``defog_stage_fails``) with nothing
+    to clear: subscript_defog.s:5-13 plays the attack message only when the target's side has
+    Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes or Stealth Rock, or the field
+    has deep fog, and the failure branch of subscript_update_stat_stage.s (:41-44 -> :60) prints
+    none, so ``SYSCTL_ATTACK_MESSAGE_SHOWN`` stays clear (moveHit, movePrev, Choice lock)."""
+    target = side_of(target_side)
+    clearable = (state.weather == Weather.FOG) | jnp.any(
+        jnp.stack(
+            [
+                getattr(state, field)[target] != 0
+                for field in (
+                    "reflect",
+                    "light_screen",
+                    "mist",
+                    "safeguard",
+                    "spikes",
+                    "toxic_spikes",
+                    "stealth_rock",
+                )
+            ]
+        )
+    )
+    return defog_stage_fails(state, target_side, ignorable(state, side, target_side), stat) & ~(
+        clearable
+    )
+
+
+def _defog(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Defog (effect_script_0258.s: a direct ON_HIT effect, ``BattleSystem_TriggerPrimaryEffect``
+    battle_lib.c:1481-1491, no HP test; subscript_defog.s): the defender's evasion -1 through
+    ``_foe_stage`` (:19-20: Mist, Clear Body / White Smoke, -6, Substitute; the subscript goes on
+    whatever it does), then on the defender's side Reflect, Light Screen, Mist (after the drop met
+    it), Safeguard, Spikes, Toxic Spikes and Stealth Rock cleared (:21-61) and the field's deep fog
+    (:64-69: ``FIELD_CONDITION_DEEP_FOG`` off, so the weather becomes none; fog has no timer). The
+    user's own side is never touched. E3-B2-14."""
+    cond = (h.effect == _E.DEFOG) & h.landed
+    state = _foe_stage(state, h, cond)
+    for field in ("reflect", "light_screen", "mist", "safeguard", "spikes", "toxic_spikes"):
+        state = _set(state, field, h.target_side, 0, cond)
+    state = _set(state, "stealth_rock", h.target_side, 0, cond)
+    fog = cond & (state.weather == Weather.FOG)
+    return state._replace(
+        weather=jnp.where(fog, Weather.NONE, state.weather).astype(state.weather.dtype),
+        weather_timer=jnp.where(fog, 0, state.weather_timer).astype(state.weather_timer.dtype),
+    )
 
 
 def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -3945,6 +4012,7 @@ def play_hit(
         _yawn,
         _screen,
         _brick_break,
+        _defog,
         _foresight,
         _attract,
         _bide,

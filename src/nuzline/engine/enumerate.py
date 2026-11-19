@@ -1029,6 +1029,11 @@ INPUT_CLAUSE_EFFECTS = (
     # later CalcCrit reads (battle_lib.c:7137): the crit draw it spends crits nothing: the
     # lucky-chant clause, a Lucky Chant not up at the turn start.
     _E.LUCKY_CHANT,
+    # E3-B2-14: a foe's Defog clears the field's deep fog (subscript_defog.s:64-69), which Weather
+    # Ball's power and SolarBeam's halving read (damage.weather_ball_params, damage._finish): the
+    # defog clause, fog up at the turn start. The screens and hazards it clears are the side's
+    # own, which only the foe's hits read, and its evasion drop is the side's own too.
+    _E.DEFOG,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1453,6 +1458,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     # item still held (``damage.flung_view``), neither of ``hit_damage_table``'s turn-start reads.
     _E.FLING,
     _E.LUCKY_CHANT,  # a status move: no damage (E3-B2-7)
+    _E.DEFOG,  # a status move: no damage (E3-B2-14)
 )
 
 
@@ -1612,6 +1618,9 @@ def damage_inputs_can_change(
         # E3-B2-7: the foe's Lucky Chant, when its side has none yet, blocks the side's crit at its
         # later CalcCrit (the lucky-chant clause; the turn-start ``no_crit`` is the case it is up).
         | ((foe_effect == _E.LUCKY_CHANT) & (state.lucky_chant[side_of(foes(sides))] == 0))
+        # E3-B2-14: the foe's Defog clears the deep fog Weather Ball and SolarBeam read (the defog
+        # clause; the turn-start fog is the case it clears).
+        | ((foe_effect == _E.DEFOG) & (state.weather == Weather.FOG))
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))

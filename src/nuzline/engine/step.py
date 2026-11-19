@@ -130,6 +130,7 @@ from nuzline.engine.effects import (
     copy_stat_stages,
     crit_blocked,
     defender_always,
+    defog_silent_fail,
     entry_hazards,
     focus_sash_damage,
     forget_item,
@@ -1926,6 +1927,14 @@ def _use_move(
         & role_play_fails(tables, state, side, target_side)
     )
     items_full = items_full & ~role_failed
+    # Defog behind a Substitute with nothing to clear (subscript_defog.s:5-13,
+    # subscript_update_stat_stage.s:60): no attack message (``shown_t``), E3-B2-14; its
+    # AfterMoveEffects are skipped by ``primary_effect_fails``.
+    defog_silent = (
+        connected
+        & (tables.move_effect[used] == EffectId.DEFOG)
+        & defog_silent_fail(state, side, target_side, tables.move_param[used, 0].astype(_I32))
+    )
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -2408,7 +2417,12 @@ def _use_move(
     # (battle_script.c:1431-1432), B10-12.
     shown_t = jnp.where(
         head_on,
-        can_act & ~(charging & ~def_up) & ~conv2_failed & ~spite_failed & ~role_failed,
+        can_act
+        & ~(charging & ~def_up)
+        & ~conv2_failed
+        & ~spite_failed
+        & ~role_failed
+        & ~defog_silent,
         True,
     )
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])

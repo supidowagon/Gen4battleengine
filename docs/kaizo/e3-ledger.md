@@ -1160,3 +1160,51 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_feint_enumeration_matches_the_brute_force` is slow), tests/ai/test_kaizo_policy.py
   (`test_feint_tables_are_the_decomps`, `test_expert_feint`, `test_feint_is_scored_not_refused`, the slow
   `test_feint_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
+- E3-B2-14 Defog (#258, BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN; move 432, the only move with effect 258 in either
+  game, Flying status, acc 0, PP 15 (Kaizo 1), flags PROTECT and MIRROR_MOVE, no Kaizo trainer knows it; player-only,
+  Metronome-callable) and the Metronome close-out (#83, E3-B2-14): new `EffectId.DEFOG` (141, `tools/effect_map.py`
+  entry 258 with params `(Stat.EVA, -1, 0)`). No new `BattleState` field, no `Outcome` field, no draw. Tables: `move_effect`
+  and `move_param` of Defog only; no manifest bump (no array or key changed); vanilla and Kaizo tables rebuilt.
+  The sheet e258_defog.md was built here by the same group because Metronome's close-out needs it: it was the last
+  Kaizo-callable move still refused (the probe over `coverage.move_effect_line` listed exactly Defog, 432).
+  Script: effect_script_0258.s:5 is a direct `ON_HIT | TO_DEFENDER | SUBSCRIPT_PTR_DEFOG`, a primary effect
+  (`BattleSystem_TriggerPrimaryEffect`, lib.c:1481-1491: no HP test, not `MOVE_STATUS_NO_EFFECTS`). subscript_defog.s:
+  :5-13 only picks whether the attack message plays first (a screen, Mist, Safeguard, hazard on `side_of(t)` or deep
+  fog); :19-20 evasion -1 on `t` through subscript_update_stat_stage.s (`effects._foe_stage`: Mist :2877, Clear Body /
+  White Smoke :2883-2884 (Mold Breaker pierces), -6 :2904, Substitute :2921-2923; Keen Eye / Hyper Cutter name other stats,
+  Shield Dust is indirect-only); then, whatever the drop did, Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic
+  Spikes and Stealth Rock of `side_of(t)` cleared (:21-61; Mist after the drop met it) and the field's deep fog
+  (:64-69, `weather` FOG -> none, timer 0). `effects._defog` (second dispatch tuple); the user's side is never touched.
+  Failure: a drop that reaches the Substitute test sets MOVE_STATUS_FAILED (subscript_update_stat_stage.s:60), which is in
+  `MOVE_STATUS_NO_EFFECTS` and skips AfterMoveEffects: `effects.defog_stage_fails` joins `primary_effect_fails` (Mist,
+  Clear Body / White Smoke and -6 are `result == 1` or a return: no failure). That failure branch prints no message, so
+  with nothing to clear the attack message is never shown and moveHit / movePrev / Choice lock are not updated
+  (`effects.defog_silent_fail`, `step._use_move`'s `shown_t`; reference `_defog_fails`, `turn.defog_failed`).
+  Hit chance: acc 0, no roll; a faster foe's Defog clears the fog before the side's check, so
+  `outcome._threshold_grid` has the foe-Defog fog variant (its own evasion drop is the side's, read only by the foe's
+  hit). Damage inputs: Defog never changes a hit's inputs but through the fog (Weather Ball power, SolarBeam halving):
+  `enumerate.INPUT_CLAUSE_EFFECTS` (clause `foe Defog & fog at the turn start`) and `NON_TABLE_DAMAGE_EFFECTS`.
+  AI: Basic_CheckDefog (:1476-1499, `policy._basic_check_defog`: evasion not -6, Light Screen / Reflect or deep fog end
+  it; no living party member for the player -10; no hazard -10) and Expert_Defog (:6125-6188, `policy._expert_defog`, the
+  code: screens -> _ScreenScrubbing, hazards -2, then the HP / evasion block; rolls :6171 (128) and :6180 (50)); new
+  `commands.BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN`, `commands.if_stat_stage_not_equal_to`, two `SITE_N` entries,
+  258 in `KAIZO_TRANSCRIBED`, `KAIZO_EXPERT_LABELS`, `KAIZO_EXPERT_TRANSCRIBED`; the SetupFirstTurn and Harrassment
+  tables already held it. Prep: Expert_Defog's `IfHPPercentGreaterThan DEFENDER 70` (:6184) is
+  `variants.AI_EFFECT_DEFENDER_HP_CHECKS[258]`. Read bounds regenerated; backlog regenerated.
+  Metronome close-out: no code of Metronome's own changes (`order.metronome_candidates`, `coverage.metronome_calls`).
+  With Defog the Kaizo callable set is fully modelled: `move_effect_line` passes every Kaizo Metronome holder
+  (`test_every_kaizo_metronome_call_is_modelled`, `test_a_kaizo_metronome_holder_passes_the_party_check`, both
+  `fullset`). The batch-1 and group 1-13 Owed lines naming Metronome's callable list close. Rulings: (1) the called
+  move's range is `RANGE_SINGLE_TARGET`; the call through `GoToMoveScript` is the existing invoker path. (2) Doubles
+  (docs/doubles-state-design.md section 5): clears index `side_of(target_side)`, the failure helpers take
+  `target_side`; the single-target call's random opponent draw (lib.c:1685ff) and the partner's loss of the side's
+  screens belong to the doubles milestone's `Outcome.call` form and its chosen-defender resolver, which replace
+  `_foe` where they exist; nothing in the mechanic computes `1 - side`.
+  Not built: vanilla's 55 callable unmodelled moves (the second family: Heal Block's `Move_CanBeMetronomed` test comes
+  with it, order.py note); not a Kaizo case. Message only: the "blew away" texts (subscript_defog.s).
+  Tests: tests/engine/test_e3_batch2.py (`test_defog_*`, `test_mist_stops_the_drop_but_is_cleared_after_it`,
+  `test_clear_body_and_stage_minimum_stop_the_drop_not_the_clears`, `test_metronome_calling_defog_*`,
+  `test_every_kaizo_metronome_call_is_modelled`, `test_a_kaizo_metronome_holder_passes_the_party_check`),
+  tests/engine/test_accuracy_classes.py (Defog in `_FOLLOWED`), tests/ai/test_kaizo_policy.py (`test_defog_*`,
+  `test_if_stat_stage_not_equal_to_negates_the_equal_command`, `test_expert_defog`, `test_defog_basic`, the slow
+  `test_defog_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).

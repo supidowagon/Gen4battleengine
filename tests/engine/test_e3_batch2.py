@@ -2580,3 +2580,289 @@ def test_feint_decomp_lines_are_as_cited():
     lib = (_ME_DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
     assert "BattleSystem_TriggerSecondaryEffect" in lib[1518]
     assert "MOVE_SIDE_EFFECT_ON_HIT" in lib[1523] and "MOVE_STATUS_NO_EFFECTS" in lib[1526]
+
+
+# --- Defog (#258, E3-B2-14) and the Metronome close-out (#83) ------------------------------------
+# effect_script_0258.s:5: a direct ON_HIT subscript_defog.s (``BattleSystem_TriggerPrimaryEffect``,
+# battle_lib.c:1481-1491): the defender's evasion -1 through subscript_update_stat_stage.s (:19-20),
+# then its side's Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes and Stealth Rock and
+# the field's deep fog cleared (:21-69).
+
+_SIDE_FIELDS = (
+    ("reflect", 5),
+    ("light_screen", 5),
+    ("mist", 5),
+    ("safeguard", 5),
+    ("spikes", 2),
+    ("toxic_spikes", 1),
+    ("stealth_rock", 1),
+)
+
+
+# Every condition but Mist, which stops the evasion drop (the tests that need a drop leave it out).
+_NO_MIST = tuple(f for f in _SIDE_FIELDS if f[0] != "mist")
+
+
+def _dg(t, n, *, fog=False, side=1, fields=_NO_MIST, mine=("Defog", "Tackle"), foe=("Tackle",)):
+    """Monferno (side 0, Defog) against a Geodude (``foe``), no abilities, the Monferno faster;
+    every condition of ``fields`` is up on ``side``'s side (its value), and the deep fog when
+    ``fog``."""
+    s = make_state(t, [_spec(n, "Monferno", 20, mine)], [_spec(n, "Geodude", 40, foe)])
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+    for field, value in fields:
+        s = s._replace(**{field: getattr(s, field).at[side].set(value)})
+    if fog:
+        s = s._replace(weather=jnp.asarray(Weather.FOG, s.weather.dtype))
+    return s
+
+
+def _slower(s):
+    """``s`` with the Defog user (side 0) slower than the foe."""
+    return s._replace(stats=s.stats.at[0, 0, SPE].set(1).at[1, 0, SPE].set(500))
+
+
+def _dgo(t, n, s, me="Defog", foe="Tackle", out=None):
+    return assert_matches_reference(t, s, A(me, foe, s, n), out if out is not None else _hits())
+
+
+def _no_conditions(s, side):
+    return all(int(getattr(s, field)[side]) == 0 for field, _ in _SIDE_FIELDS)
+
+
+def test_defog_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 258 (effect_script_0258.s) is EffectId.DEFOG with the evasion drop's params in both
+    games and Defog (move 432: Flying status, accuracy 0, PROTECT and MIRROR_MOVE) the only move
+    with it; PP 15 in vanilla, 1 in Kaizo (moves.json). It is a non-damaging clause effect: the
+    foe's earlier Defog can clear the fog Weather Ball and SolarBeam read."""
+    assert DECOMP_EFFECT_TO_ID[258] == (EffectId.DEFOG, (Stat.EVA, -1, 0))
+    for t, nn, pp in ((tables, names, 15), (kaizo_tables, kaizo_names, 1)):
+        move = nn.move("Defog")
+        assert move == 432
+        assert int(t.move_effect[move]) == EffectId.DEFOG
+        assert int((np.asarray(t.move_effect) == EffectId.DEFOG).sum()) == 1
+        assert int(t.move_accuracy[move]) == 0 and int(t.move_pp[move]) == pp
+        assert int(t.move_type[move]) == nn.type("Flying") and int(t.move_category[move]) == 2
+        flags = int(t.move_flags[move])
+        assert flags & MoveFlag.PROTECT and flags & MoveFlag.MIRROR_MOVE
+        assert not flags & MoveFlag.NO_METRONOME
+        assert tuple(int(x) for x in np.asarray(t.move_param[move])) == (Stat.EVA, -1, 0)
+    assert EffectId.DEFOG in INPUT_CLAUSE_EFFECTS and EffectId.DEFOG in NON_TABLE_DAMAGE_EFFECTS
+
+
+def test_defog_lowers_evasion_and_clears_the_targets_side_only(tables, names):
+    """subscript_defog.s:19-69: the foe's evasion -1 and its side's seven conditions and hazards
+    gone; the user's own side keeps every one (the clears name the defender's side) and the
+    user's evasion is unchanged."""
+    t, n = tables, names
+    theirs = _dgo(t, n, _dg(t, n))
+    assert _stage(theirs, 1, Stat.EVA) == -1 and _stage(theirs, 0, Stat.EVA) == 0
+    assert _no_conditions(theirs, 1)
+    out = _dgo(t, n, _dg(t, n, side=0, fields=_SIDE_FIELDS))
+    assert _stage(out, 1, Stat.EVA) == -1
+    # The turn's pass counts a screen down; the hazards (layers) stay as they were.
+    for field, value in _SIDE_FIELDS[4:]:
+        assert int(getattr(out, field)[0]) == value, field
+    for field, _ in _SIDE_FIELDS[:4]:
+        assert int(getattr(out, field)[0]) > 0, field
+
+
+def test_mist_stops_the_drop_but_is_cleared_after_it(tables, names):
+    """BtlCmd_ChangeStatStage (battle_script.c:2877-2882) meets Mist before the subscript clears it
+    (:33-36): the evasion stays 0 and the Mist is gone."""
+    t, n = tables, names
+    out = _dgo(t, n, _dg(t, n, fields=(("mist", 5),)))
+    assert _stage(out, 1, Stat.EVA) == 0 and int(out.mist[1]) == 0
+    assert _stage(_dgo(t, n, _dg(t, n, fields=())), 1, Stat.EVA) == -1
+
+
+def test_clear_body_and_stage_minimum_stop_the_drop_not_the_clears(tables, names):
+    """The drop is stopped by the target's Clear Body or White Smoke as the user sees it (:2883-
+    2884: a Mold Breaker user pierces it) and by a stage already at -6 (:2904); the subscript goes
+    on and clears the side either way."""
+    t, n = tables, names
+    s = _dg(t, n)
+    for ability in (AbilityId.CLEAR_BODY, AbilityId.WHITE_SMOKE):
+        held = s._replace(ability=s.ability.at[1, 0].set(ability))
+        out = _dgo(t, n, held)
+        assert _stage(out, 1, Stat.EVA) == 0 and _no_conditions(out, 1), ability
+        pierced = held._replace(ability=held.ability.at[0, 0].set(AbilityId.MOLD_BREAKER))
+        assert _stage(_dgo(t, n, pierced), 1, Stat.EVA) == -1, ability
+    low = s._replace(stages=s.stages.at[1, Stat.EVA].set(-6))
+    out = _dgo(t, n, low)
+    assert _stage(out, 1, Stat.EVA) == -6 and _no_conditions(out, 1)
+
+
+def test_defog_behind_a_substitute_fails_but_still_clears(tables, names):
+    """subscript_update_stat_stage.s:60: a drop stopped by the Substitute sets MOVE_STATUS_FAILED
+    (``defog_stage_fails``), yet the clears run (subscript_defog.s:21-69). With a condition to clear
+    the attack message was shown (:5-13: movePrev is Defog, the slower mover's); with nothing to
+    clear it never is, so movePrev stays 0; Mist stops the drop first (no failure, the message of
+    the stage subscript shows)."""
+    t, n = tables, names
+
+    def behind(s):
+        return s._replace(substitute_hp=s.substitute_hp.at[1].set(30))
+
+    out = _dgo(t, n, behind(_slower(_dg(t, n))))
+    assert _stage(out, 1, Stat.EVA) == 0 and _no_conditions(out, 1)
+    assert int(out.move_prev) == n.move("Defog")
+    bare = behind(_slower(_dg(t, n, fields=())))
+    assert int(_dgo(t, n, bare).move_prev) == 0  # the failure shows no message
+    open_ = bare._replace(substitute_hp=bare.substitute_hp.at[1].set(0))
+    assert int(_dgo(t, n, open_).move_prev) == n.move("Defog")
+    misted = behind(_slower(_dg(t, n, fields=(("mist", 5),))))
+    assert int(_dgo(t, n, misted).move_prev) == n.move("Defog")
+
+
+def test_defog_clears_the_deep_fog(tables, names):
+    """subscript_defog.s:64-69: FIELD_CONDITION_DEEP_FOG off, the field has no weather (a timer of
+    0: the fog is permanent); another weather is not touched."""
+    t, n = tables, names
+    out = _dgo(t, n, _dg(t, n, fog=True, fields=()))
+    assert int(out.weather) == Weather.NONE and int(out.weather_timer) == 0
+    rain = _dg(t, n, fields=())
+    rain = rain._replace(weather=jnp.asarray(Weather.RAIN, rain.weather.dtype))
+    assert int(_dgo(t, n, rain).weather) == Weather.RAIN
+
+
+def test_defog_is_seen_by_hit_thresholds_and_the_damage_clauses(tables, names):
+    """A faster foe's Defog clears the fog before the side's check: Rock Throw's 90 is 54 under
+    deep fog (x6/10, bcp.c:2935-2937) and 90 after, so the law has a second class
+    (``outcome._threshold_grid``); the foe's Defog under fog is a clause of
+    ``damage_inputs_can_change`` (Weather Ball, SolarBeam), not without fog."""
+    from nuzline.engine.enumerate import damage_inputs_can_change
+    from tests.engine.test_accuracy_classes import hit_law
+
+    t, n = tables, names
+    s = roark_state(t, n, player_moves=["Rock Throw"], opp_moves=["Defog"], opp_faster=True)
+    fog = s._replace(weather=jnp.asarray(Weather.FOG, s.weather.dtype))
+    acts = A("Rock Throw", "Defog", fog, n)
+    assert hit_law(t, fog, acts, 0) == {0: 10, 1: 54, 55: 36}
+    assert hit_law(t, s, acts, 0) == {0: 10, 1: 90}
+    # The Defog user is side 0 here, going before side 1's hit (the Lucky Chant case's layout).
+    d = roark_state(t, n, player_moves=["Defog"], opp_moves=["Rock Throw"])
+    dfog = d._replace(weather=jnp.asarray(Weather.FOG, d.weather.dtype))
+    dacts = A("Defog", "Rock Throw", dfog, n)
+    foe_first = jnp.array([False, True])
+    assert bool(damage_inputs_can_change(t, dfog, dacts, foe_first)[1, 0])
+    assert not bool(damage_inputs_can_change(t, d, dacts, foe_first)[1, 0])
+
+
+def test_defog_takes_its_target_side_as_an_argument(tables, names):
+    """Doubles-ready (docs/doubles-state-design.md section 5, rules 1, 2 and 6): the failure and
+    the silent-failure helpers take the defender's side, and the clears index ``side_of(target)``
+    for each field, never a computed foe: a Defog whose user's side holds every condition too
+    clears the target's only."""
+    import inspect
+
+    from nuzline.engine import effects as effects_module
+
+    for fn in (effects_module.defog_stage_fails, effects_module.defog_silent_fail):
+        assert "target_side" in inspect.signature(fn).parameters
+    t, n = tables, names
+    both = _dg(t, n)
+    for field, value in _SIDE_FIELDS:
+        both = both._replace(**{field: getattr(both, field).at[0].set(value)})
+    out = _dgo(t, n, both)
+    assert _no_conditions(out, 1)
+    assert int(out.spikes[0]) == 2 and int(out.stealth_rock[0]) == 1
+
+
+def test_defog_decomp_lines_are_as_cited():
+    """The lines the ledger and the code cite for Defog (E3-B2-14): the script, the clears in order,
+    the stat change's failure branch and the primary-effect trigger."""
+    if not _ME_DECOMP.exists():
+        pytest.skip("decomp not present")
+    effect = (_ME_DECOMP / "res/battle/scripts/effects/effect_script_0258.s").read_text("utf-8")
+    assert (
+        "UpdateVar OPCODE_SET, BTLVAR_SIDE_EFFECT_FLAGS_DIRECT, MOVE_SIDE_EFFECT_ON_HIT|"
+        "MOVE_SIDE_EFFECT_TO_DEFENDER|MOVE_SUBSCRIPT_PTR_DEFOG"
+    ) in effect
+    sub = (_ME_DECOMP / "res/battle/scripts/subscripts/subscript_defog.s").read_text("utf-8")
+    cleared = [
+        line.split(",")[2].strip() for line in sub.splitlines() if "CHECK_SIDE_COND_CLEAR" in line
+    ]
+    assert cleared == [
+        "SIDE_COND_REFLECT_TURNS",
+        "SIDE_COND_LIGHT_SCREEN_TURNS",
+        "SIDE_COND_MIST_TURNS",
+        "SIDE_COND_SAFEGUARD_TURNS",
+        "SIDE_COND_SPIKES_LAYERS",
+        "SIDE_COND_TOXIC_SPIKES_LAYERS",
+    ]
+    assert "BTLVAR_SIDE_CONDITIONS_DEFENDER, SIDE_CONDITION_STEALTH_ROCK" in sub
+    assert "UpdateVar OPCODE_FLAG_OFF, BTLVAR_FIELD_CONDITIONS, FIELD_CONDITION_DEEP_FOG" in sub
+    stat_call = sub.index("BATTLE_SUBSCRIPT_UPDATE_STAT_STAGE")
+    assert stat_call < sub.index("SIDE_COND_REFLECT_TURNS, _065")
+    update = (_ME_DECOMP / "res/battle/scripts/subscripts/subscript_update_stat_stage.s").read_text(
+        "utf-8"
+    )
+    assert "ChangeStatStage _041, _059, _060" in update
+    assert "BTLVAR_MOVE_STATUS_FLAGS, MOVE_STATUS_FAILED" in update.split("_060:")[1]
+    lib = (_ME_DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "BattleSystem_TriggerPrimaryEffect" in lib[1480]
+    assert "MOVE_SIDE_EFFECT_ON_HIT" in lib[1484] and "MOVE_STATUS_NO_EFFECTS" in lib[1488]
+
+
+# The Metronome close-out (#83, E3-B2-14): no code of Metronome's own changes; every move it can
+# call in Kaizo is modelled, so coverage no longer refuses its holder.
+
+
+@pytest.mark.fullset
+def test_every_kaizo_metronome_call_is_modelled(kaizo_tables, kaizo_names):
+    """BtlCmd_Metronome (battle_script.c:4535-4562) calls any of ids 1-467 that
+    ``Move_CanBeMetronomed`` allows and the user does not know: ``coverage.move_effect_line``
+    refuses a holder while one of them is refused, so with Kaizo's table every callable move
+    has a modelled effect and a Metronome holder passes the per-move check."""
+    from nuzline.engine.coverage import (
+        IMPLEMENTED_EFFECTS,
+        Support,
+        metronome_calls,
+        move_effect_line,
+    )
+
+    t, nn = kaizo_tables, kaizo_names
+    spec = _spec(nn, "Clefairy", 30, ("Metronome",))
+    calls = metronome_calls(t, spec)
+    assert len(calls) > 400
+    effect = np.asarray(t.move_effect)
+    unmodelled = [
+        nn.move_names[m]
+        for m in calls
+        if IMPLEMENTED_EFFECTS.get(EffectId(int(effect[m])), Support.NONE) == Support.NONE
+    ]
+    assert unmodelled == []
+    support, _ = move_effect_line(t, nn, nn.move("Metronome"), 0, spec.moves)
+    assert support != Support.NONE
+
+
+@pytest.mark.fullset
+def test_a_kaizo_metronome_holder_passes_the_party_check(kaizo_tables, kaizo_names):
+    """The per-party coverage check lists nothing for a Kaizo Metronome holder."""
+    from nuzline.engine.coverage import _check_party, _Collector
+
+    t, nn = kaizo_tables, kaizo_names
+    c = _Collector()
+    _check_party(c, t, nn, "Player", [_spec(nn, "Clefairy", 30, ("Metronome", "Tackle"))])
+    assert not any("Metronome" in line for line in c.report.missing)
+
+
+def test_metronome_calling_defog_runs_defogs_script_with_metronomes_pp(kaizo_tables, kaizo_names):
+    """Metronome's call of Defog (rank ``call % count`` among ``metronome_calls``) runs
+    subscript_defog.s on the foe's side; the PP stays Metronome's (``effects.metronome_update``);
+    both engines agree."""
+    from nuzline.engine.coverage import metronome_calls
+
+    t, nn = kaizo_tables, kaizo_names
+    spec = _spec(nn, "Clefairy", 30, ("Metronome", "Tackle"))
+    s = make_state(t, [spec], [_spec(nn, "Geodude", 40, ("Tackle",))])
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+    s = s._replace(reflect=s.reflect.at[1].set(5), stealth_rock=s.stealth_rock.at[1].set(1))
+    rank = metronome_calls(t, spec).index(nn.move("Defog"))
+    out = _hits()._replace(call=jnp.asarray([rank, 0], jnp.int16))
+    after = assert_matches_reference(t, s, A("Metronome", "Tackle", s, nn), out)
+    assert int(after.reflect[1]) == 0 and int(after.stealth_rock[1]) == 0
+    assert int(after.stages[1, Stat.EVA]) == -1
+    assert int(after.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1

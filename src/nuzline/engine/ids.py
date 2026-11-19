@@ -605,6 +605,15 @@ class EffectId(IntEnum):
     # (:6, subscript_feint.s:20) clears that flag after a hit that is not MOVE_STATUS_NO_EFFECTS
     # (``step`` and the reference engine, on the turn's events); no random draw; E3-B2-13.
     FEINT = 140
+    # Defog (258, BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN): ``(Stat.EVA, -1, 0)``. A direct
+    # ON_HIT subscript (effect_script_0258.s:5, ``BattleSystem_TriggerPrimaryEffect``,
+    # battle_lib.c:1481-1491): subscript_defog.s lowers the defender's evasion one stage (:19-20,
+    # the Mist / Clear Body / White Smoke / -6 / Substitute tests of BtlCmd_ChangeStatStage,
+    # ``effects._foe_stage``; behind a Substitute it also fails the move, FAILED skips
+    # AfterMoveEffects, ``effects.primary_effect_fails``), then clears the defender's side's
+    # Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes and Stealth Rock and the field's
+    # deep fog (:21-69, ``effects._defog``) whatever the drop did; no random draw; E3-B2-14.
+    DEFOG = 141
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

@@ -478,6 +478,8 @@ class BattleEffect(IntEnum):
     FAIL_IF_NOT_USED_ALL_OTHER_MOVES = 246
     # Feint: no Basic entry; Expert_Feint (:1766), E3-B2-13
     REMOVE_PROTECT = 223
+    # Defog: Basic_CheckDefog (:281); Expert_Defog (:1799), E3-B2-14
+    REMOVE_HAZARDS_SCREENS_EVA_DOWN = 258
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -2215,6 +2217,13 @@ def diff_stat_stages(ctx: AiContext, battler: Battler, stat: Stat) -> AiContext:
 def if_stat_stage_equal_to(ctx: AiContext, battler: Battler, stat: Stat, value: int) -> AiContext:
     """``IfStatStageEqualTo`` (trainer_ai.c:1495), ``value`` in decomp units."""
     return _jump(ctx, _stage(ctx, battler, stat) == value)
+
+
+def if_stat_stage_not_equal_to(
+    ctx: AiContext, battler: Battler, stat: Stat, value: int
+) -> AiContext:
+    """``IfStatStageNotEqualTo`` (trainer_ai.c:1510-1521), ``value`` in decomp units (E3-B2-14)."""
+    return _jump(ctx, _stage(ctx, battler, stat) != value)
 
 
 def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:

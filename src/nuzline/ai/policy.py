@@ -552,6 +552,35 @@ def _basic_check_lucky_chant(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+_DEFOG_HAZARDS = (
+    c.SideCondition.SPIKES | c.SideCondition.STEALTH_ROCK | c.SideCondition.TOXIC_SPIKES
+)
+_DEFOG_EVASION_MIN = (
+    0  # IfStatStageNotEqualTo's value: stage -6 in decomp units (BATTLE_STAT 0..12)
+)
+
+
+def _basic_check_defog(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckDefog`` (script.s:1476-1499): the player's evasion not at -6 (decomp stage 0), or
+    Light Screen or Reflect on its side, or deep fog (``LoadCurrentWeather`` ==
+    ``AI_WEATHER_DEEP_FOG``) ends the check; no living party member for the player after its active
+    one -10; its side without Spikes, Stealth Rock and Toxic Spikes -10 (:1488-1496); E3-B2-14."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_stat_stage_not_equal_to(ctx, _D, Stat.EVA, _DEFOG_EVASION_MIN))
+    ctx, _ = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
+    ctx, _ = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
+    ctx, _ = _split(c.if_loaded_equal_to(c.load_current_weather(ctx), c.AiWeather.DEEP_FOG))
+    ctx, t = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _D), 0))
+    ctx = _score(ctx, t, -10)
+    for hazard in (
+        c.SideCondition.SPIKES,
+        c.SideCondition.STEALTH_ROCK,
+        c.SideCondition.TOXIC_SPIKES,
+    ):
+        ctx, _ = _split(c.if_side_condition(ctx, _D, hazard))
+    return c.pop_or_end(c.add_to_move_score(ctx, -10))  # :1496 GoTo ScoreMinus10
+
+
 def _basic_check_last_resort(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckLastResort`` (script.s:1420-1426): the AI's battler that cannot use Last Resort
     yet (``IfCanUseLastResort``, trainer_ai.c:2030-2042, to the terminating label when it can) -10;
@@ -2174,6 +2203,47 @@ def _expert_feint(ctx: AiContext, mask) -> AiContext:
     ctx, _ = _split(c.go_to(c.add_to_move_score(ctx, 1)))  # :4943-4944
     # Expert_Feint_ProtectChain2OrMore (:4946)
     return c.pop_or_end(c.add_to_move_score(_at(ctx, many), -2))
+
+
+def _expert_defog(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Defog`` (script.s:6125-6188, the code): Light Screen or Reflect on the player's
+    side goes to _ScreenScrubbing (the AI above 30 % HP, or with a living party member left, on to
+    _CheckHazards, else _TryScoreMinus2; _CheckHazards: +1, then, unless the player has no
+    living party member, a hazard of its side goes to _TryScoreMinus1: -1 unless the 128 roll
+    (:6171) jumps); else a hazard (Spikes, Stealth Rock, Toxic Spikes) -2. Then
+    _CheckUserHPAndOpponentEvasion: the AI below 70 % HP, or the player's evasion at -3 or
+    below (not above decomp stage 3, :6177), goes to _TryScoreMinus2 (-2 unless the 50 roll
+    (:6180) jumps), then _CheckOpponentHP: -2 unless the player is above 70 % HP (E3-B2-14)."""
+    ctx = _at(ctx, mask)
+    ctx, screens = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
+    screens = screens | t
+    ctx, hazards = _split(c.if_side_condition(ctx, _D, _DEFOG_HAZARDS))
+    check = ctx.live  # GoTo _CheckUserHPAndOpponentEvasion (:6150)
+    # Expert_Defog_ScreenScrubbing (:6152)
+    ctx, scrub_hazards = _split(c.if_hp_percent_greater_than(_at(ctx, screens), _A, 30))
+    ctx, minus2_only = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _A), 0))
+    # Expert_Defog_ScreenScrubbingCheckHazards (:6157), reached by a jump or by falling through
+    ctx = c.add_to_move_score(_at(ctx, scrub_hazards | ctx.live), 1)
+    ctx, _ = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _D), 0))  # -> _End
+    ctx, try_minus1 = _split(c.if_side_condition(ctx, _D, _DEFOG_HAZARDS))
+    check = check | ctx.live  # GoTo _CheckUserHPAndOpponentEvasion (:6164)
+    # Expert_Defog_ScoreMinus2AndEnd (:6166)
+    ctx = c.add_to_move_score(_at(ctx, hazards), -2)
+    check = check | ctx.live
+    # Expert_Defog_TryScoreMinus1 (:6170)
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, try_minus1), 128, 6171))
+    ctx = c.add_to_move_score(ctx, -1)
+    check = check | skip | ctx.live
+    # Expert_Defog_CheckUserHPAndOpponentEvasion (:6175)
+    ctx, low_hp = _split(c.if_hp_percent_less_than(_at(ctx, check), _A, 70))
+    ctx, check_hp = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 3))
+    # Expert_Defog_TryScoreMinus2 (:6179), also the target of _ScreenScrubbing's no-party case
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, minus2_only | low_hp | ctx.live), 50, 6180))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_Defog_CheckOpponentHP (:6183)
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, check_hp | skip | ctx.live), _D, 70))
+    return c.pop_or_end(c.add_to_move_score(ctx, -2))
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -3997,6 +4067,7 @@ _BASIC_LABELS = (
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
+    (BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN, _basic_check_defog),  # :281 (E3-B2-14)
     (BattleEffect.TRICK_ROOM, _basic_check_trick_room),  # :282 (E3-2-4)
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
@@ -4136,6 +4207,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
     (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
+    (BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN, _expert_defog),  # :1799 (E3-B2-14)
     (BattleEffect.TRICK_ROOM, _expert_trick_room),  # :1800 (E3-2-4)
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802

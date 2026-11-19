@@ -804,6 +804,7 @@ def _threshold_grid(
       (subscript_exchange_abilities.s:21-24), and a weather ability one of them gained acts at the
       move's end (``hooks.move_end_switch_in``); its Role Play (E3-B2-5): the foe holds the
       side's ability (subscript_copy_ability.s:14-15), a weather one acting at the move's end;
+      its Defog (E3-B2-14): the field's deep fog cleared (subscript_defog.s:64-69);
     * the target's confusion (Tangled Feet): a confused foe moving first can snap out of it
       or be cured by its Persim / Lum Berry (over-approximate: whenever it is confused and can
       go first); an unconfused one can eat a flavor berry it dislikes before the check (its own
@@ -991,6 +992,13 @@ def _threshold_grid(
                 jnp.where(swap_move, swap_weather, jnp.where(role_move, role_weather, weather0)),
             ),
         )
+        # E3-B2-14: the foe's Defog clears the field's deep fog (subscript_defog.s:64-69) before
+        # the side's check; the evasion it lowers is the side's own, which only the foe's hit
+        # reads, and the foe's own accuracy check (100: acc 0) came first.
+        defog_move = effect[foe] == EffectId.DEFOG
+        moved_weather = jnp.where(
+            defog_move & (weather0 == Weather.FOG), Weather.NONE, moved_weather
+        )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         gravity_move = effect[foe] == EffectId.GRAVITY
         # E3-2-2: the foe's Worry Seed makes the side's own ability Insomnia before the check
@@ -1004,7 +1012,8 @@ def _threshold_grid(
         # side's later check; a doubles Gastro Acid on a defender is the doubles milestone's.
         gastro_move = effect[foe] == EffectId.GASTRO_ACID
         field_move = weather_move[foe] | (
-            changes[foe] & (gravity_move | xform | worry_move | swap_move | role_move | gastro_move)
+            changes[foe]
+            & (gravity_move | xform | worry_move | swap_move | role_move | gastro_move | defog_move)
         )
         weather_ok = jnp.stack([jnp.asarray(True), field_move])
         field_grid = jnp.tile(jnp.repeat(jnp.array([False, True]), 2 * n_stage), 2)

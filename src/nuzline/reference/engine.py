@@ -2825,6 +2825,36 @@ def _sub_blocks_drop(s: RefState, side: int, delta: int) -> bool:
     return delta < 0 and bool(s.battlers[side].substitute_hp)
 
 
+_DEFOG_SIDE_FIELDS = (
+    "reflect",
+    "light_screen",
+    "mist",
+    "safeguard",
+    "spikes",
+    "toxic_spikes",
+    "stealth_rock",
+)
+
+
+def _defog_fails(s: RefState, seen: int, target: int, stat: int) -> tuple[bool, bool]:
+    """Defog's evasion drop (subscript_defog.s:19-20, BtlCmd_ChangeStatStage, script.c:2874-2923,
+    a direct effect): ``(fails, silent)``. It fails (``MOVE_STATUS_FAILED``,
+    subscript_update_stat_stage.s:60) when the target's Substitute is the first test it meets: no
+    Mist (:2877), no Clear Body / White Smoke as the attacker sees it (``seen``, :2883-2884) and
+    the stage above -6 (:2904); every earlier test only stops the drop. ``silent``: it fails
+    with nothing for subscript_defog.s:5-13 to play the attack message for (a screen, Mist,
+    Safeguard or hazard on the target's side, or deep fog), so the message is never shown (E3-B2-14)."""
+    sd = s.sides[side_of(target)]
+    fails = (
+        not _mist_blocks_drop(s, target, -1)
+        and not _drop_blocked(seen, stat, -1)
+        and s.battlers[target].stages[stat] > STAGE_MIN
+        and bool(s.battlers[target].substitute_hp)
+    )
+    clearable = s.weather == Weather.FOG or any(getattr(sd, f) for f in _DEFOG_SIDE_FIELDS)
+    return fails, fails and not clearable
+
+
 def _recover_status_by_ability(s: RefState, side: int) -> None:
     """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
     asleep Insomnia holder (:4404) or a paralyzed Limber holder (:4397) with HP left is
@@ -3834,6 +3864,20 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.BRICK_BREAK and landed:
         # lib.c:1481-1510: applies on an immune target, not on a miss; script.c:6550.
         s.sides[side_of(target)].reflect = s.sides[side_of(target)].light_screen = 0
+    elif effect == EffectId.DEFOG and landed:
+        # effect_script_0258.s: a direct ON_HIT subscript_defog.s (lib.c:1481-1491, no HP test):
+        # the evasion drop first (:19-20; Mist, Clear Body / White Smoke, -6, Substitute), then the
+        # target's side's screens, Mist, Safeguard and hazards and the field's deep fog cleared
+        # (:21-69), whatever the drop did (E3-B2-14).
+        if _defog_fails(s, seen, target, p0)[1]:
+            turn.attack_message = False
+        blocked = _mist_blocks_drop(s, target, p1) or _drop_blocked(seen, p0, p1)
+        if not blocked and not _sub_blocks_drop(s, target, p1):
+            _change_stage(s, target, p0, p1)
+        for field in _DEFOG_SIDE_FIELDS:
+            setattr(s.sides[side_of(target)], field, 0)
+        if s.weather == Weather.FOG:
+            s.weather, s.weather_timer = Weather.NONE, 0
     elif effect == EffectId.KNOCK_OFF and effective:
         # effect_script_0188.s -> subscript_knock_off.s (B10-6): nothing behind a substitute
         # (:5), for Multitype (:6), the Griseous Orb (:7), a set quickClaw (:8) or custapBerry
@@ -5604,6 +5648,11 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         full = full or (effect == EffectId.MIST and bool(s.sides[side_of(side)].mist))
         # effect_script_0240.s:5, :9-11 (MOVE_STATUS_FAILED), E3-B2-7.
         full = full or (effect == EffectId.LUCKY_CHANT and bool(s.sides[side_of(side)].lucky_chant))
+        # Defog's evasion drop behind a Substitute (subscript_update_stat_stage.s:60), E3-B2-14.
+        full = full or (
+            effect == EffectId.DEFOG
+            and _defog_fails(s, _ignorable(s, side, _foe(side)), _foe(side), Stat.EVA)[0]
+        )
         # subscript_pain_split.s:5 (MOVE_STATUS_FAILED), B10-5.
         full = full or (
             effect == EffectId.PAIN_SPLIT and bool(s.battlers[_foe(side)].substitute_hp)
@@ -6920,12 +6969,14 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                 if _active(s, _foe(side)) is foe:
                     foe.types = saved
             # A failed Spite or Role Play skipped its attack message (subscript_reduce_target_pp.s:6,
-            # subscript_copy_ability.s:5-6, effect_script_0178.s:10-12): UpdateFlagsWhenHit then
+            # subscript_copy_ability.s:5-6, effect_script_0178.s:10-12) and a Defog stopped by a
+            # Substitute with nothing to clear (subscript_defog.s:5-13): UpdateFlagsWhenHit then
             # clears moveHit instead of recording the move (bcp.c:4498-4508), E3-B2-4, E3-B2-5.
             if (
                 record
                 and not turn.attack_message
-                and _t(tables, "move_effect", move) in (EffectId.SPITE, EffectId.ROLE_PLAY)
+                and _t(tables, "move_effect", turn.move_cur)
+                in (EffectId.SPITE, EffectId.ROLE_PLAY, EffectId.DEFOG)
             ):
                 record = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.

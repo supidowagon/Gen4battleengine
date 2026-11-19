@@ -133,7 +133,8 @@ three structs has a row.
   Block) is later (M6).
 - **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
   sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
-  permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
+  permanent (Defog clears the deep fog bit alone, subscript_defog.s:64-69, so a `Weather.FOG`
+  field goes to none: `effects._defog`, E3-B2-14); Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
   Uproar battler mask (`FIELD_CONDITION_UPROAR`, one bit per battler) is `uproar != 0`: the
   bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
   together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
@@ -144,7 +145,8 @@ three structs has a row.
   per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
   fires on a battler with HP, bcp.c:1767-1770, so it outlives a count that ran out on a fainted
   battler; the AI reads it). Its Reflect, Light Screen, Spikes, Safeguard, Mist, Toxic Spikes
-  and Wish bits are implied by the nonzero turn/layer counts in the mapped fields.
+  and Wish bits are implied by the nonzero turn/layer counts in the mapped fields. Defog clears
+  seven of them on its defender's side (`effects._defog`, subscript_defog.s:21-61, E3-B2-14).
 - **FieldConditions.futureSight\*** (E2 batch 5): per battler (`[MAX_BATTLERS]` arrays, the
   battler the move aims at; in singles the side's slot): `future_timer`, `future_damage` (the
   HP the hit takes: the decomp stores it negative), `future_move` and `future_attacker` (the

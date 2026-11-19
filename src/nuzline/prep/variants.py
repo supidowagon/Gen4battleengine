@@ -116,6 +116,9 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     # E3-B2-13: Expert_Feint (REMOVE_PROTECT, 223) tests the player at full HP (script.s:4922,
     # IfHPPercentEqualTo 100): the band hp * 100 // max_hp == 100 is hp == max_hp (hp_cuts).
     223: (("equal", 100),),
+    # E3-B2-14: Expert_Defog (REMOVE_HAZARDS_SCREENS_EVA_DOWN, 258) tests the player above 70 %
+    # (script.s:6184).
+    258: (("greater", 70),),
     # E2 batch 12 (B12-18): Expert_Refresh (HEAL_STATUS, 193) tests the player below 50 %
     # (script.s:4646), Expert_PsychoShift (TRANSFER_STATUS, 234) below 30 % (:5302).
     193: (("less", 50),),

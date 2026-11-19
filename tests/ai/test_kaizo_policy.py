@@ -4775,6 +4775,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
         ("Last Resort", "Accelerock", "Mist", ""),  # E3-B2-11
         ("Feint", "Accelerock", "", ""),  # E3-B2-13
+        ("Defog", "Accelerock", "", ""),  # E3-B2-14
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -6093,6 +6094,189 @@ def test_feint_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
     states = (
         _feint(t, n, kaizo_roark_party),
         _feint(t, n, kaizo_roark_party, known=True, chain=1, php=50, item="Leftovers", curse=1),
+    )
+    for s in states:
+        for flags in (0x27, 0x10F):
+            _assert_exact_equals_loose(t, s, layout_for(t, flags, s))
+
+
+# --- #258 Defog (E3-B2-14) ---------------------------------------------------------------------
+
+
+def _defog(t, n, party, eva=0, players=2, bench=(CRANIDOS,), ai_hp=100, php=100, **side):
+    """The AI's Bonsly with Defog against ``players`` Gibles: the player's evasion stage ``eva``,
+    its HP ``php`` %, the AI's ``ai_hp`` %, and each field of ``side`` (``reflect``, ``spikes``,
+    ``stealth_rock``, ``weather`` ...) set on the player's side (``weather``: the field)."""
+    s = _state(t, party, BONSLY, _ids(n, "Defog", "Accelerock", "", ""), bench, players)
+    s = _hp(_hp(s, 0, php), 1, ai_hp)
+    s = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+    for field, value in side.items():
+        if field == "weather":
+            s = s._replace(weather=jnp.asarray(value, s.weather.dtype))
+        else:
+            s = s._replace(**{field: getattr(s, field).at[0].set(value)})
+    return s
+
+
+def test_defog_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Defog is BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN, 258, in Basic_ScoreMoveEffect
+    (script.s:281), Expert_Main (:1799), SetupFirstTurn_SetupEffects (:6495) and
+    Harrassment_Effects (:8069); its two rolls are :6171 (128) and :6180 (50); the command
+    ``IfStatStageNotEqualTo`` (trainer_ai.c:1510) is the negation of ``IfStatStageEqualTo``
+    (E3-B2-14)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN == 258
+    assert KAIZO_EXPERT_LABELS[258] == ("Expert_Defog", 1799) and 258 in KAIZO_TRANSCRIBED
+    assert 258 in KAIZO_EXPERT_TRANSCRIBED
+    assert int(t.move_ai_effect[n.move("Defog")]) == 258
+    assert [SITE_N[line] for line in (6171, 6180)] == [128, 50]
+    assert c.SETUP_FIRST_TURN_EFFECTS.count(258) == 1 and c.HARRASSMENT_EFFECTS.count(258) == 1
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    if not script.exists():
+        pytest.skip("decomp not present")
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert [
+        i
+        for i, line in enumerate(lines, 1)
+        if "BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN" in line
+    ] == [281, 1799, 6495, 8069]
+    assert lines[1475] == "Basic_CheckDefog:" and lines[6124] == "Expert_Defog:"
+    assert lines[6170].strip() == "IfRandomLessThan 128, Expert_Defog_CheckUserHPAndOpponentEvasion"
+    assert lines[6179].strip() == "IfRandomLessThan 50, Expert_Defog_CheckOpponentHP"
+    assert (
+        lines[1478]
+        .strip()
+        .startswith("IfStatStageNotEqualTo AI_BATTLER_DEFENDER, BATTLE_STAT_EVASION, 0,")
+    )
+    trainer_ai = (DECOMP / "src/battle/trainer_ai/trainer_ai.c").read_text(encoding="utf-8")
+    assert (
+        "statBoosts[stat] != val" in trainer_ai.split("AICmd_IfStatStageNotEqualTo(BattleSystem")[2]
+    )
+
+
+def test_if_stat_stage_not_equal_to_negates_the_equal_command(kaizo_tables, kaizo_roark_party):
+    """``IfStatStageNotEqualTo`` jumps exactly where ``IfStatStageEqualTo`` does not, in decomp
+    units (stage + 6): the player's evasion at -6 is 0."""
+    t = kaizo_tables
+    s = _state(t, kaizo_roark_party, BONSLY, (0, 0, 0, 0))
+    for eva in (-6, -1, 0, 3):
+        at = s._replace(stages=s.stages.at[0, Stat.EVA].set(eva))
+        ctx = c.new_context(t, at, _outcome(t, at))
+        for value in (0, 5, 6):
+            eq = c.if_stat_stage_equal_to(ctx, c.Battler.DEFENDER, Stat.EVA, value).jump
+            ne = c.if_stat_stage_not_equal_to(ctx, c.Battler.DEFENDER, Stat.EVA, value).jump
+            assert bool(eq) == (eva + 6 == value) and bool(ne) != bool(eq)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        # Basic_CheckDefog (script.s:1476-1499): the player's evasion not at -6 (decomp 0) ends it.
+        ({}, 0),
+        ({"eva": -5, "stealth_rock": 1}, 0),
+        # At -6: Light Screen, Reflect or deep fog end it; so does a hazard (Spikes, Stealth Rock,
+        # Toxic Spikes) while the player has a living party member behind its active one.
+        ({"eva": -6, "light_screen": 5}, 0),
+        ({"eva": -6, "reflect": 5}, 0),
+        ({"eva": -6, "weather": Weather.FOG}, 0),
+        ({"eva": -6, "spikes": 1}, 0),
+        ({"eva": -6, "stealth_rock": 1}, 0),
+        ({"eva": -6, "toxic_spikes": 1}, 0),
+        # Nothing to remove: -10 (:1496); with no party member left for the player, -10 before
+        # the hazards are looked at (:1488-1489), but not before a screen or the fog ends it.
+        ({"eva": -6}, -10),
+        ({"eva": -6, "weather": Weather.RAIN}, -10),
+        ({"eva": -6, "players": 1, "stealth_rock": 1}, -10),
+        ({"eva": -6, "players": 1, "reflect": 5}, 0),
+        ({"eva": -6, "players": 1, "weather": Weather.FOG}, 0),
+        # Mist, Safeguard and Tailwind are no reason to Defog (:1479-1495 name none).
+        ({"eva": -6, "mist": 5, "safeguard": 5}, -10),
+    ],
+)
+def test_defog_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _defog(t, n, kaizo_roark_party, **case)
+    assert _delta(t, s, 0x2, 0x3)[0] == expected
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_Defog (script.s:6125-6188, the code). Nothing on the player's side, its evasion 0
+        # (decomp 6, above 3), both at full HP: end.
+        ({}, (), 0),
+        # The AI below 70 % HP (:6176) is _TryScoreMinus2: -2 unless :6180 jumps; then
+        # _CheckOpponentHP: the player above 70 % ends it.
+        ({"ai_hp": 69}, (), -2),
+        ({"ai_hp": 69}, (6180,), 0),
+        ({"ai_hp": 70}, (), 0),
+        # The player at or below 70 % (:6184): -2 more.
+        ({"php": 70}, (), -2),
+        ({"php": 71}, (), 0),
+        ({"ai_hp": 69, "php": 50}, (), -4),
+        ({"ai_hp": 69, "php": 50}, (6180,), -2),
+        # The player's evasion at -3 or below is not above decomp 3 (:6177): _TryScoreMinus2.
+        ({"eva": -3}, (), -2),
+        ({"eva": -3}, (6180,), 0),
+        ({"eva": -2}, (), 0),
+        # A hazard: -2 (:6166-6168), then the HP / evasion block.
+        ({"stealth_rock": 1}, (), -2),
+        ({"spikes": 2}, (), -2),
+        ({"toxic_spikes": 1, "ai_hp": 69}, (6180,), -2),
+        # A screen: _ScreenScrubbing (:6152). The AI above 30 %: _CheckHazards, +1 (:6158), the
+        # player with no party member ends it (:6159-6160); a hazard on its side is
+        # _TryScoreMinus1 (-1 unless :6171 jumps), else the HP / evasion block.
+        ({"reflect": 5}, (), 1),
+        ({"light_screen": 5}, (), 1),
+        ({"reflect": 5, "players": 1}, (), 1),
+        ({"reflect": 5, "players": 1, "ai_hp": 69, "stealth_rock": 1}, (), 1),
+        ({"reflect": 5, "stealth_rock": 1}, (), 0),
+        ({"reflect": 5, "stealth_rock": 1}, (6171,), 1),
+        ({"reflect": 5, "stealth_rock": 1, "ai_hp": 69}, (), -2),
+        ({"reflect": 5, "stealth_rock": 1, "ai_hp": 69}, (6171,), -1),
+        ({"reflect": 5, "stealth_rock": 1, "ai_hp": 69}, (6171, 6180), 1),
+        ({"reflect": 5, "ai_hp": 69}, (), -1),
+        ({"reflect": 5, "ai_hp": 69}, (6180,), 1),
+        ({"reflect": 5, "php": 50}, (), -1),
+        # The AI at 30 % or less: with a party member left it goes on to _CheckHazards as above;
+        # with none (:6154-6155) straight to _TryScoreMinus2 without the +1.
+        ({"reflect": 5, "ai_hp": 30}, (), -1),
+        ({"reflect": 5, "ai_hp": 30, "bench": ()}, (), -2),
+        ({"reflect": 5, "ai_hp": 30, "bench": ()}, (6180,), 0),
+        ({"reflect": 5, "ai_hp": 31, "bench": ()}, (), -1),  # above 30 %: the +1 is reached
+        ({"reflect": 5, "ai_hp": 30, "bench": (), "php": 50}, (6180,), -2),
+    ],
+)
+def test_expert_defog(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _defog(t, n, kaizo_roark_party, **case)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_defog_is_scored_not_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
+    t, n = kaizo_tables, kaizo_names
+    s = _defog(t, n, kaizo_roark_party, eva=-6, reflect=5, stealth_rock=1, ai_hp=60)
+    for flags in (0x27, 0x10F):
+        assert policy.ai_refusals(t, s, n, layout_for(t, flags, s)) == []
+
+
+def test_defog_adds_the_player_hp_band_to_the_prep_cuts(kaizo_tables, kaizo_roark_party):
+    """Expert_Defog's ``IfHPPercentGreaterThan DEFENDER 70`` (script.s:6184) is listed under effect
+    258 (``AI_EFFECT_DEFENDER_HP_CHECKS``), as ``hp_cuts`` cuts any ``greater`` check (E3-B2-14)."""
+    from nuzline.prep import variants
+
+    assert variants.AI_EFFECT_DEFENDER_HP_CHECKS[258] == (("greater", 70),)
+    assert variants.percent_cut("greater", 70, 100) == 70
+
+
+@pytest.mark.slow  # run on the pod
+def test_defog_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+    t, n = kaizo_tables, kaizo_names
+    states = (
+        _defog(t, n, kaizo_roark_party),
+        _defog(t, n, kaizo_roark_party, eva=-6, reflect=5, stealth_rock=1, ai_hp=60, php=50),
     )
     for s in states:
         for flags in (0x27, 0x10F):

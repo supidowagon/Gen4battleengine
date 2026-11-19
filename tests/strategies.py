@@ -1682,6 +1682,25 @@ def _draw_feint(draw, tables: Tables, a: dict, side: int, active: int, names: Na
                 _teach(tables, a, side, active, names.move("Protect"), other)
 
 
+def _draw_defog(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-14: maybe (1 in 6) Defog taught to the active Pokemon (``_teach``) and, with it, a
+    Mist or a Safeguard on the foe's side (one time in two: the evasion drop meets Mist before the
+    clear, and a Substitute and the stage floor are drawn elsewhere) and the deep fog (one time in
+    four: a permanent field condition, no timer) that Defog clears."""
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Defog")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+            a["taunt"][side] = 0
+            foe = 1 - side
+            if draw(st.booleans()):
+                a["mist"][foe] = draw(st.integers(1, 5))
+                a["safeguard"][foe] = draw(st.integers(0, 5))
+            if draw(st.integers(0, 3)) == 0:
+                a["weather"][...] = Weather.FOG
+                a["weather_timer"][...] = 0
+
+
 def _draw_last_resort(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E3-B2-11: maybe (1 in 6) Last Resort taught to the active Pokemon (``_teach``), and maybe
     (1 in 3) a use history under way: up to 4 distinct ids it knows (or Struggle's), never Last
@@ -2143,6 +2162,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_miracle_eye(draw, tables, a, side, active, names)
         _draw_last_resort(draw, tables, a, side, active, names)
         _draw_feint(draw, tables, a, side, active, names)
+        _draw_defog(draw, tables, a, side, active, names)
         _draw_mimic(draw, a, side, active)
         _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
@@ -2338,6 +2358,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
 
 # The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
 RARE_EFFECTS = (
+    EffectId.DEFOG,  # E3-B2-14
     EffectId.FEINT,  # E3-B2-13
     EffectId.LAST_RESORT,  # E3-B2-11
     EffectId.MIRACLE_EYE,  # E3-B2-10

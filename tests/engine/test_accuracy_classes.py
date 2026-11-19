@@ -575,6 +575,7 @@ _FOLLOWED = frozenset(
         EffectId.ROLE_PLAY,
         EffectId.GASTRO_ACID,
         EffectId.FLING,
+        EffectId.DEFOG,  # clears the deep fog the check reads (E3-B2-14)
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.
