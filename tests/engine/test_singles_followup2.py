@@ -26,8 +26,6 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
 from tests.engine.helpers import assert_matches_reference, jit_step, step_rows
 
-pytestmark = pytest.mark.fullset
-
 O = empty_outcome()
 SWITCH = MOVE_ACTIONS + 1  # switch to party slot 1
 
@@ -206,6 +204,7 @@ def _merged(tables, paused, acts):
     return merged
 
 
+@pytest.mark.slow  # enumerate_turn twice with cache clears
 def test_enumeration_after_a_pursuit_is_the_old_views_distribution(tables, names, monkeypatch):
     paused = _paused_u_turn(tables, names, ["Pursuit"])
     acts = jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32)
@@ -266,6 +265,7 @@ def _old_merged(tables, paused, acts, monkeypatch):
         enum_mod._jit_call_laws.clear_cache()
 
 
+@pytest.mark.slow  # brute force and enumerate_turn twice with cache clears
 @pytest.mark.parametrize("mirror", [False, True])
 def test_fainted_foe_is_done_in_the_paused_view(tables, names, monkeypatch, mirror):
     from tests.engine.test_enumerate import assert_equals_bruteforce
@@ -521,6 +521,7 @@ def _crit_out():
     return O._replace(crit=jnp.ones((2, MAX_HITS), jnp.int8))
 
 
+@pytest.mark.slow  # brute force (assert_equals_bruteforce)
 def test_pursuit_crit_armor_is_the_newcomers_no_longer(tables, names):
     from tests.engine.test_enumerate import (
         assert_equals_bruteforce,
