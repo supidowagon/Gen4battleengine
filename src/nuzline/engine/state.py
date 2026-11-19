@@ -929,9 +929,16 @@ def _fill_slot(a: dict[str, np.ndarray], tables: Tables, side: int, slot: int, m
     a["hp"][side, slot] = hp
     a["max_hp"][side, slot] = max_hp
     a["stats"][side, slot] = stats[Stat.ATK : Stat.SPE + 1]
-    a["types"][side, slot] = np.asarray(tables.species_types[row])
     ability_row = personal_row(tables, species, mon.ability_from)
     a["ability"][side, slot] = int(tables.species_abilities[ability_row, mon.ability_slot])
+    from nuzline.engine.damage import multitype_plate  # damage imports this module
+
+    # MON_DATA_TYPE_1/2 (pokemon.c:1219-1226): a Multitype Arceus' types are its plate's (F-3).
+    a["types"][side, slot] = np.asarray(
+        multitype_plate(
+            tables, species, a["ability"][side, slot], mon.item, tables.species_types[row]
+        )
+    )
     a["ability_slot"][side, slot] = mon.ability_slot
     a["ability_form"][side, slot] = mon.ability_from
     a["item"][side, slot] = mon.item

@@ -489,6 +489,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Minus": 58,
             "Heatproof": 85,
             "Flash Fire": 18,
+            "Multitype": 121,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -560,6 +561,9 @@ CONSTANTS: tuple[Constant, ...] = (
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
     Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    # SPECIES_ARCEUS (generated/species.txt line 494): Battler_MonType's Multitype case
+    # (battle_lib.c:7629-7630), F-3.
+    Constant("nuzline.engine.ids.SPECIES_ARCEUS", "species", 493, "Arceus", _E),
     # The crit species items' species (BattleSystem_CalcCriticalMulti, battle_lib.c:7127-7128).
     Constant("nuzline.engine.ids.SPECIES_CHANSEY", "species", 113, "Chansey", _E),
     Constant("nuzline.engine.ids.SPECIES_FARFETCHD", "species", 83, "Farfetch’d", _E),

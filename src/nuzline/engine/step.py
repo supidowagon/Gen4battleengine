@@ -105,6 +105,7 @@ from nuzline.engine.damage import (
     ignorable,
     move_type_of,
     natural_gift_params,
+    personal_types,
     trump_card_power,
     weather_suppressed,
     wonder_guarded,
@@ -582,16 +583,22 @@ def _restore_moves(state: BattleState, side, cond) -> BattleState:
 
 def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``types`` go back to its
-    personal row's (``tables.species_types`` at ``species_form_row``, as ``make_state`` builds
-    them). Only Camouflage (``effects._camouflage``) writes ``types``; the decomp writes the
-    battler's ``BattleMon.type1/type2`` and ``BattleSystem_InitBattleMon`` re-reads the party
-    Pokemon's on its next switch-in (battle_lib.c:114-115), so the party never sees it."""
+    personal row's (``damage.personal_types``, as ``make_state`` builds them: a Multitype
+    Arceus' are its plate's). Camouflage (``effects._camouflage``) and Transform write
+    ``types``; the decomp writes the battler's ``BattleMon.type1/type2`` and
+    ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on its next switch-in
+    (battle_lib.c:114-115), so the party never sees it."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    own_types = tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own_types = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
+    ).astype(state.types.dtype)
     value = jnp.where(cond, own_types, state.types[party(fmt, side), mon])
     return state._replace(types=state.types.at[party(fmt, side), mon].set(value))
 

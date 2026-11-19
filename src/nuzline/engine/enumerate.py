@@ -1040,6 +1040,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.MINUS,
     # E1 batch F (F-1): a fixed Fire power factor of the move, and the burn's own turn-end loss.
     AbilityId.HEATPROOF,
+    # F-3: Multitype's types are fixed by the held plate, which nothing can swap or remove
+    # (Transform's copy has its own clause).
+    AbilityId.MULTITYPE,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause

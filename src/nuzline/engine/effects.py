@@ -266,6 +266,8 @@ from nuzline.engine.damage import (
     identified,
     ignorable,
     move_type_of,
+    multitype_plate,
+    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -1863,7 +1865,19 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         form=put(state.form, own, state.form[pf, target]),
         stats=put(state.stats, own, battle_stats(state, foe, target)),
         ivs=put(state.ivs, own, state.ivs[pf, target]),
-        types=put(state.types, own, state.types[pf, target]),
+        # A copied Multitype Arceus gives the user its own plate's types, not the target's
+        # (Battler_MonType reads the user's raw heldItem, battle_lib.c:7629-7699), F-3.
+        types=put(
+            state.types,
+            own,
+            multitype_plate(
+                tables,
+                state.species[pf, target],
+                state.ability[pf, target],
+                state.item[own],
+                state.types[pf, target],
+            ),
+        ),
         ability=put(state.ability, own, state.ability[pf, target]),
         ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
         ability_form=put(state.ability_form, own, state.ability_form[pf, target]),
@@ -1977,12 +1991,16 @@ def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     the bit is set exactly when the types differ from the personal row's."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    return jnp.any(
-        state.types[party(fmt, side), mon] != tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
     )
+    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
 
 
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.

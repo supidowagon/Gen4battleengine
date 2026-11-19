@@ -3,12 +3,13 @@ and Intimidate's substitute skip, each case checked against the reference engine
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
-from nuzline.engine.damage import damage_table
-from nuzline.engine.ids import AbilityId, Status
+from nuzline.engine.damage import damage_table, personal_types
+from nuzline.engine.ids import AbilityId, Status, Type
 from nuzline.engine.outcome import empty_outcome
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import ref_damage_table
@@ -126,3 +127,63 @@ def test_the_flag_boosts_fire_moves_only_and_outlives_the_ability(tables, names)
     # The other side's flag does not boost this attacker.
     other = s._replace(flash_fire=s.flash_fire.at[1].set(1))
     assert _both(tables, other, ember) == _both(tables, s, ember)
+
+
+# --- Multitype (F-3) -----------------------------------------------------------------------
+
+PLATES = {"Flame Plate": Type.FIRE, "Splash Plate": Type.WATER, "Iron Plate": Type.STEEL}
+
+
+def test_multitype_is_covered_and_arceus_has_it(tables, names):
+    assert IMPLEMENTED_ABILITIES[AbilityId.MULTITYPE] == Support.EXACT
+    row = int(tables.species_form_row[names.species("Arceus"), 0])
+    assert int(tables.species_abilities[row, 0]) == AbilityId.MULTITYPE
+
+
+def test_an_arceus_has_its_raw_plates_type_whatever_its_form(tables, names):
+    """Battler_MonType (battle_lib.c:7618-7703) / MON_DATA_TYPE_1/2 (pokemon.c:1219-1226): both
+    types of the HOLD_EFFECT_ARCEUS_* of the held item, Normal for any other item or none; the
+    form's row types are ignored; other species keep theirs."""
+    arceus = names.species("Arceus")
+    for form in (0, 7):
+        for plate, kind in PLATES.items():
+            got = personal_types(tables, arceus, form, 0, 0, names.item(plate)).tolist()
+            assert got == [kind, kind], (form, plate)
+        for item in (0, names.item("Lum Berry"), names.item("Charcoal")):
+            assert personal_types(tables, arceus, form, 0, 0, item).tolist() == [Type.NORMAL] * 2
+    bidoof = names.species("Bidoof")
+    row = int(tables.species_form_row[bidoof, 0])
+    assert (
+        personal_types(tables, bidoof, 0, 0, 0, names.item("Flame Plate")).tolist()
+        == tables.species_types[row].tolist()
+    )
+
+
+def _transform_into(tables, names, *, plate, foe_types=None):
+    """Monferno (holding ``plate``) Transforms into a Multitype Arceus."""
+    s = _state(tables, names, mine=["Transform"])
+    s = _ability(s, 0, AbilityId.NONE)
+    s = s._replace(
+        species=s.species.at[1, 0].set(names.species("Arceus")),
+        ability=s.ability.at[1, 0].set(AbilityId.MULTITYPE),
+        item=s.item.at[0, 0].set(names.item(plate) if plate else 0),
+    )
+    if foe_types is not None:
+        s = s._replace(types=s.types.at[1, 0].set(jnp.asarray(foe_types, s.types.dtype)))
+    return assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), O)
+
+
+def test_a_transform_into_a_multitype_arceus_takes_the_users_own_plate_type(tables, names):
+    """The copy gives the user species Arceus and Multitype, so Battler_MonType reads its own
+    heldItem (battle_lib.c:7629-7699), not the target's types."""
+    out = _transform_into(tables, names, plate="Flame Plate", foe_types=[Type.WATER] * 2)
+    assert out.types[0, 0].tolist() == [Type.FIRE] * 2
+    out = _transform_into(tables, names, plate="", foe_types=[Type.WATER] * 2)
+    assert out.types[0, 0].tolist() == [Type.NORMAL] * 2
+
+
+def test_a_transform_into_another_species_still_copies_its_types(tables, names):
+    s = _state(tables, names, mine=["Transform"])
+    s = s._replace(types=s.types.at[1, 0].set(jnp.asarray([Type.WATER] * 2, s.types.dtype)))
+    out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), O)
+    assert out.types[0, 0].tolist() == [Type.WATER] * 2

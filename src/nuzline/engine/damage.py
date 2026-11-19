@@ -59,6 +59,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     SEMI_HIT_FLAGS,
+    SPECIES_ARCEUS,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -210,6 +211,28 @@ def judgment_type(tables, item, table_type) -> jnp.ndarray:
     index = _i32(tables.item_hold_effect[_i32(item)]) - _PLATE_LO
     plate = (index >= 0) & (index < rows.shape[0])
     return jnp.where(plate, rows[jnp.clip(index, 0, rows.shape[0] - 1)], _i32(table_type))
+
+
+def multitype_plate(tables, species, ability, item, types) -> jnp.ndarray:
+    """``int[2]``: the types of a battler of ``species`` with raw ``ability`` holding raw ``item``:
+    ``Battler_MonType`` (battle_lib.c:7618-7703): an Arceus whose ability is Multitype
+    (``BattleMon.ability``, not ``Battler_Ability``) has both types of its held item's
+    HOLD_EFFECT_ARCEUS_* (:7631-7696), Normal for any other item or none (:7697-7699); anything
+    else keeps ``types``. The item is the raw one (``BattleMon.heldItem``: Klutz and Embargo do
+    not hide it, :7631), and the plate's power is the item's own table value. Scalar arguments."""
+    arceus = (_i32(species) == SPECIES_ARCEUS) & (_i32(ability) == AbilityId.MULTITYPE)
+    plate = judgment_type(tables, item, Type.NORMAL)
+    return jnp.where(arceus, plate, jnp.asarray(types, _I32)).astype(jnp.asarray(types).dtype)
+
+
+def personal_types(tables, species, form, ability_form, ability_slot, item) -> jnp.ndarray:
+    """``int[2]``: the types ``BattleSystem_InitBattleMon`` reads for a party Pokemon
+    (``MON_DATA_TYPE_1/2``, pokemon.c:1219-1226): its form's personal row, or the plate type of
+    a Multitype Arceus (``multitype_plate``; its ability is the one at ``ability_form`` /
+    ``ability_slot``). Scalar arguments."""
+    types = tables.species_types[tables.species_form_row[species, form]]
+    ability = tables.species_abilities[tables.species_form_row[species, ability_form], ability_slot]
+    return multitype_plate(tables, species, ability, item, types)
 
 
 def gift_item(state, side, gift=0) -> jnp.ndarray:

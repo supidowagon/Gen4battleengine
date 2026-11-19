@@ -1262,3 +1262,18 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   independent sites cannot express it, so that state stays refused (`_Layout.absorb_gate`); Water Absorb / Volt
   Absorb on the AI's bench stay refused wholesale (not in this group). Doubles-only AI parts (TagStrategy,
   IfActivatedFlashFire) and Expert_ChangeUserAbility (Role Play / Skill Swap unmodelled) are not built.
+- F-3 Multitype (`AbilityId.MULTITYPE`, decomp 121). `Battler_MonType` (battle_lib.c:7618-7703): an Arceus whose raw
+  `BattleMon.ability` (not `Battler_Ability`) is Multitype has both types of its raw `heldItem`'s
+  `HOLD_EFFECT_ARCEUS_*` (:7631-7696), Normal for any other item or none (:7697-7699); the stored types and the
+  form are ignored, Klutz and Embargo do not hide the item. The party side agrees (`MON_DATA_TYPE_1/2`,
+  pokemon.c:1219-1226). `damage.multitype_plate` / `personal_types` (reference `_multitype_plate`,
+  `_personal_types`) are used where the engine builds or restores a battler's types: `make_state`,
+  `step._restore_types`, `effects.camouflaged`, and Transform (`effects._transform`: copying species Arceus and
+  Multitype, the user's own plate decides, not the target's types, :7629-7699; the reverse, an Arceus copying
+  another ability, keeps the copied types). The plate's power is the item's table value (Kaizo 50: `tables`,
+  nothing hardcoded; `judgment_type`). The protections already in place: Camouflage, Knock Off, Embargo, Trace's
+  exclusion; Gastro Acid, Worry Seed, Role Play, Skill Swap, Trick, Thief / Covet, Fling and Conversion are not
+  modelled moves, so their Multitype tests are not built (the sheet's rule stands for when they are). The save
+  parser's Arceus-form refusal (`saves/pkm.py`) is gone: the form's row is the species' and the types follow the
+  plate. AI: type loads read `state.types` (`BattleMon_Get`); the Fling / Gastro Acid / Worry Seed Multitype
+  scores belong to those moves.

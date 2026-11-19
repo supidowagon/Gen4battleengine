@@ -93,6 +93,7 @@ from nuzline.engine.ids import (
     SEMI_SET_FLAGS,
     SLEEPLESS_ABILITIES,
     SNORE_PARAM,
+    SPECIES_ARCEUS,
     SPECIES_CHATOT,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
@@ -510,8 +511,27 @@ def _restore_types(tables, s: RefState, side: int) -> None:
     battler's ``BattleMon.type1/type2``, which ``BattleSystem_InitBattleMon`` re-reads from
     the party (lib.c:114-115)."""
     mon = _active(s, side)
+    mon.types = _personal_types(tables, mon)
+
+
+def _multitype_plate(tables, species: int, ability: int, item: int, types: list[int]) -> list[int]:
+    """``Battler_MonType`` (lib.c:7618-7703): a Multitype Arceus (``BattleMon.ability``, raw) has
+    both types of its raw held item's HOLD_EFFECT_ARCEUS_* (:7631-7696), Normal for any other
+    item or none (:7697-7699); anything else keeps ``types`` (F-3)."""
+    if species == SPECIES_ARCEUS and ability == AbilityId.MULTITYPE:
+        plate = PLATE_TYPES.get(_t(tables, "item_hold_effect", item), Type.NORMAL)
+        return [int(plate)] * len(types)
+    return list(types)
+
+
+def _personal_types(tables, mon: RefPokemon) -> list[int]:
+    """The types ``BattleSystem_InitBattleMon`` reads from the party Pokemon (lib.c:114-115,
+    pokemon.c:1219-1226): its form's personal row, a Multitype Arceus' plate type (F-3)."""
     row = _t(tables, "species_form_row", mon.species, mon.form)
-    mon.types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
+    types = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
+    ability_row = _t(tables, "species_form_row", mon.species, mon.ability_form)
+    ability = _t(tables, "species_abilities", ability_row, mon.ability_slot)
+    return _multitype_plate(tables, mon.species, ability, mon.item, types)
 
 
 def _know_ability(s: RefState, slot: int) -> None:
@@ -597,7 +617,9 @@ def _transform(tables, s: RefState, side: int, target: int) -> bool:
     if bool(foe.power_trick) != bool(foe.power_trick_desync):
         stats[Stat.ATK - 1], stats[Stat.DEF - 1] = stats[Stat.DEF - 1], stats[Stat.ATK - 1]
     mon.species, mon.form, mon.stats = foe_mon.species, foe_mon.form, stats
-    mon.ivs, mon.types = list(foe_mon.ivs), list(foe_mon.types)
+    # A copied Multitype Arceus gives the user its own plate's types (lib.c:7629-7699), F-3.
+    mon.ivs = list(foe_mon.ivs)
+    mon.types = _multitype_plate(tables, foe_mon.species, foe_mon.ability, mon.item, foe_mon.types)
     mon.ability, mon.ability_slot = foe_mon.ability, foe_mon.ability_slot
     mon.ability_form = foe_mon.ability_form
     mon.moves = list(foe_mon.moves)
@@ -6027,8 +6049,7 @@ def _ingrain_anchors(tables, s: RefState, side: int) -> bool:
         sd.mud_sport, sd.water_sport, sd.aqua_ring, sd.minimized, sd.semi_invulnerable,
         sd.power_trick,
     )  # fmt: skip
-    row = _t(tables, "species_form_row", mon.species, mon.form)
-    party = [_t(tables, "species_types", row, i) for i in range(len(mon.types))]
+    party = _personal_types(tables, mon)
     return bool(sd.ingrain) and not any(others) and list(mon.types) == party
 
 

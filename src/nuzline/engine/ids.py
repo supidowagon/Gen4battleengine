@@ -714,6 +714,10 @@ class AbilityId(IntEnum):
     # F-2: Flash Fire (BattleSystem_TriggerImmunityAbility, battle_lib.c:3515-3521; step._use_move
     # beside Dry Skin; the flag boost in damage._pre_random, :7074-7076).
     FLASH_FIRE = 91
+    # F-3: Multitype (Battler_MonType, battle_lib.c:7629-7699): Arceus' types are its raw held
+    # plate's (``damage.multitype_plate``); the failure tests of the moves it protects against
+    # read the decomp id (``ABILITY_MULTITYPE``).
+    MULTITYPE = 92
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -813,6 +817,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.MINUS: 58,
     AbilityId.HEATPROOF: 85,
     AbilityId.FLASH_FIRE: 18,
+    AbilityId.MULTITYPE: 121,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1441,6 +1446,9 @@ MIMIC_FORBIDDEN = (118, 165, 166, MOVE_MIMIC, 448)
 # 0 / 1 / 2 (:8413-8426, sound_chatot.c:193-213) and the confusion comes on ``RandNext() % 100 <=
 # chance`` (:8428-8430), G-70. Species ids: generated/species.txt line 442.
 SPECIES_CHATOT = 441
+# SPECIES_ARCEUS (generated/species.txt line 494): Battler_MonType's Multitype case
+# (battle_lib.c:7629-7630), F-3.
+SPECIES_ARCEUS = 493
 MOVE_CHATTER = 448
 CHATTER_CHANCES = (0, 10, 30)
 # ``BtlCmd_TryMimic`` caps the copy's PP at 5 (battle_script.c:4508-4513), G-68.
