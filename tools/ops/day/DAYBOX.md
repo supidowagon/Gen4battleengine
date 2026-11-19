@@ -27,7 +27,7 @@ Runner knobs go in that exec-pod body's `"env":{...}` (the body's `env` field; s
 
 ## Merge candidate (the `fullset` run)
 
-Trigger: a stream message with the line `MERGE CANDIDATE <tip> fullset`, or a stream's request to run its tip with `-m fullset` on its pod list (`CLAUDE.md`, "After merging `main`"; `docs/process.md` section 2, step 7). Nothing else starts a `fullset` run. The managing session does not dispatch the merge-gate review of a tip until `fullset_done.sh <tip> <list>` exits 0 for it.
+Trigger: a stream message with the line `MERGE CANDIDATE <tip> fullset`, or a stream's request to run its tip with `-m fullset` on its pod list (`CLAUDE.md`, "After merging `main`"; `docs/process.md` section 2, step 7). Nothing else starts a `fullset` run. The managing session does not dispatch the merge-gate review of a tip that sent either trigger until `fullset_done.sh <tip> <list>` exits 0 for it.
 
 1. Skip check: `bash tools/ops/day/fullset_done.sh <tip> <the stream's pod list>`. `FULLSET DONE <run>` (exit 0): a collected run of that commit with `MARK="fullset"` whose list held every entry of this one passed; do not run it again. `FULLSET NOT DONE` (exit 1): run it. Exit 2: a bad commit or list.
 2. One run agent, right after the tip's targeted run and on the same pod (same commit: its programs load from the pod's compile cache): `MARK='fullset' bash tools/ops/day/pack.sh <tip> <tables> <stream>-fs-<short tip> <the stream's pod list>`, the same tables as the targeted run, then Send a run steps 4-5 and Wait. Drop the `A` from the list's lines first (an `A` line runs whole, slow tests included); a file without `fullset` tests collects nothing (`collect_rc=5`) and is not a failure.
