@@ -273,7 +273,6 @@ def test_default_tables_and_names_refuse_stale_tables(tmp_path):
 
 
 @pytest.mark.parametrize("version", [None, 7])
-@pytest.mark.fullset
 def test_default_tables_and_names_refuse_a_stale_npz(tmp_path, version):
     # The tracked manifest is current, the git-ignored npz is not (final review).
     import json

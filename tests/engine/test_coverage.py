@@ -467,6 +467,7 @@ def test_ability_override_without_set_data_refused(tables, names):  # review I1
     assert not any("no PKCalc set" in m for m in report.missing)
 
 
+@pytest.mark.fullset
 def test_report_names_a_labelled_trainer_by_its_label(tables, names, metronome_refused):
     # Task 18 fix round 1: a Kaizo label is what a report shows; the ROM name stays data.
     t = replace(roark_trainer(), label="Leader Roark", format="double")

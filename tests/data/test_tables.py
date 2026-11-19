@@ -279,7 +279,6 @@ def test_committed_manifest_is_the_code_version(
 
 
 @pytest.mark.parametrize("manifest", ['{"version": 7}', "{}"])
-@pytest.mark.fullset
 def test_old_tables_are_refused(tmp_path, manifest):  # no npz needed: check_manifest runs first
     (tmp_path / "manifest.json").write_text(manifest)
     for load in (load_tables, load_names, load_learnsets):
@@ -303,7 +302,6 @@ def _stale_npz(dir: Path, version: int | None) -> None:
 
 
 @pytest.mark.parametrize("version", [None, 7])
-@pytest.mark.fullset
 def test_stale_npz_beside_current_manifest_is_refused(tmp_path, version):
     _stale_npz(tmp_path, version)
     with pytest.raises(ValueError, match=STALE_NPZ):

@@ -46,6 +46,10 @@ def test_kaizo_tables(kaizo_tables, kaizo_names):
     assert kaizo_names.game == "platinum_kaizo_nightmare_final"
     assert kaizo_names.move_names[205] == "Accelerock" and kaizo_names.move("Water Ball") == 4
     assert int(kaizo_tables.move_priority[kaizo_names.move("Trick Room")]) == 7
+
+
+@pytest.mark.fullset
+def test_berserk_gene_is_unsupported(kaizo_tables, kaizo_names):
     assert int(kaizo_tables.item_effect[kaizo_names.item("Berserk Gene")]) == ItemId.UNSUPPORTED
 
 

@@ -223,16 +223,20 @@ def test_ability_slot_and_decomp_ability_ids(tables, names):
     assert rows[: len(species)] == [list(names.species_abilities(i)) for i in species]
     shinx = names.species("Shinx")
     assert int(decomp[shinx, 1]) == names.ability("Intimidate")
-    # An ability the engine does not implement still has its decomp id.
-    voltorb = names.species("Voltorb")
-    assert int(tables.species_abilities[voltorb, 0]) == AbilityId.UNSUPPORTED
-    assert int(decomp[voltorb, 0]) == names.ability("Soundproof")
 
     s = roark_state(tables, names, player_species="Shinx", player_ability="Intimidate")
     assert s.ability_slot.dtype == jnp.int8
     assert int(s.ability_slot[0, 0]) == 1 and int(s.ability[0, 0]) == AbilityId.INTIMIDATE
     assert int(decomp[s.species[0, 0], s.ability_slot[0, 0]]) == names.ability("Intimidate")
     assert s.ability_slot[1].tolist() == [0] * 6  # build_trainer_party: ability slot 0
+
+
+@pytest.mark.fullset
+def test_an_unimplemented_ability_keeps_its_decomp_id(tables, names):
+    decomp = tables.species_abilities_decomp
+    voltorb = names.species("Voltorb")
+    assert int(tables.species_abilities[voltorb, 0]) == AbilityId.UNSUPPORTED
+    assert int(decomp[voltorb, 0]) == names.ability("Soundproof")
 
 
 # --- hit threshold of an item action ---------------------------------------------------

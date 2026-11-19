@@ -339,6 +339,7 @@ def test_junk_pp_ups_in_an_empty_slot_are_refused(tables, names):
     assert _lines(_missing(tables, names, party, roark_party(names)), "experience") == []
 
 
+@pytest.mark.fullset
 def test_out_of_scope_formats_are_refused(tables, names):
     """§4.7: ``expBattler = 2`` exists only in doubles (battle_script.c:9716-9720); every
     format but singles is refused by ``IMPLEMENTED_FORMATS``."""
