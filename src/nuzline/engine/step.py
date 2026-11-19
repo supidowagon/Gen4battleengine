@@ -1861,9 +1861,14 @@ def _use_move(
     fx_side = jnp.where(resumed, side, target_side)
     entering = (dragged & head_on) | resumed
     # subscript_intimidate.s:13: the resumed U-turn's newcomer skips a foe whose substitute the
-    # paused action's hit struck (the flag stays through the party list), F-4.
-    entry_sub_hit = state_in.ts_sub_hit != 0
+    # paused action's hit struck (the flag stays through the party list), F-4. Only the resumed
+    # action reads it: BattleContext_Init clears selfTurnFlags at its end (battle_lib.c:2013-
+    # 2015, bcp.c:3998), so a later drag's newcomer in the same turn finds it clear.
+    entry_sub_hit = resumed & (state_in.ts_sub_hit != 0)
     state = _where(entering, switch_in_effects(tables, state, fx_side, entry_sub_hit), state)
+    state = state._replace(
+        ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype)
+    )
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
     # the hits below), G-69.
