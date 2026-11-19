@@ -1090,16 +1090,6 @@ def test_kaizo_roark_covered(tmp_path, capsys, kaizo_tables, kaizo_names):  # ex
     assert "Rollout" not in out
 
 
-@pytest.mark.fullset
-def test_kaizo_rival_barry_3_is_refused(tmp_path, capsys, kaizo_tables, kaizo_names):
-    # The refusal test_kaizo_rival_refusal_prints_on_a_cp1252_console prints, in process.
-    party = _kaizo_party(tmp_path, kaizo_names)
-    assert main(["coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472"]) == 2
-    out = capsys.readouterr().out
-    assert "Support: NONE" in out and "Missing (" in out
-    assert "AI_FLAG_CHECK_HP" not in out
-
-
 def test_cli_still_imports_without_jax():
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     code = "import sys, nuzline.cli; assert 'jax' not in sys.modules"
@@ -1304,6 +1294,7 @@ def test_trainers_prints_on_a_cp1252_console():
 
 
 @pytest.mark.slow
+@pytest.mark.fullset
 def test_kaizo_rival_refusal_prints_on_a_cp1252_console(tmp_path, kaizo_tables, kaizo_names):
     party = _kaizo_party(tmp_path, kaizo_names)
     done = _cp1252_cli("coverage", "--game", "kaizo", "--party", party, "--trainer-id", "472")

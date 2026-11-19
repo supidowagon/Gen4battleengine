@@ -241,6 +241,7 @@ def test_opponent_replacement_follows_post_ko_switch_in(tables, names):
     assert int(refused) == 0 and int(out.active[1]) == pick
 
 
+@pytest.mark.fullset
 def test_replacement_after_an_ai_switch_is_refused(tables, names):
     # roark.md section 14 (3): after the AI switched this turn, Task_TrainerShowPartyMenu
     # reads the stale aiSwitchedPartySlot; the engine refuses that path.
@@ -255,6 +256,7 @@ def test_no_replacement_needed_changes_nothing(tables, names):
     assert int(refused) == 0 and int(out.active[1]) == 0
 
 
+@pytest.mark.fullset
 def test_refused_playout_cannot_be_counted_as_a_loss(tables, names):
     # Levitate on the player's lead is refused by ai_refusals: traced, the first turn
     # stops the playout, and won = -1 so it cannot be summed as a loss.
@@ -263,6 +265,7 @@ def test_refused_playout_cannot_be_counted_as_a_loss(tables, names):
     assert (int(r.won), int(r.refused), int(r.turns)) == (REFUSED_WON, 1, 0)
 
 
+@pytest.mark.fullset
 def test_refusal_reason_names_the_refused_mechanic(tables, names):
     # The traced playout only says "refused"; the eager replay of the same key names
     # the mechanic (here the AI's Levitate refusal).
@@ -279,6 +282,7 @@ def test_refusal_reason_is_none_for_a_playout_that_is_not_refused(tables, names)
     assert refusal_reason(tables, s, 0, jax.random.PRNGKey(11)) is None
 
 
+@pytest.mark.fullset
 def test_replacement_refusal_names_the_stale_switch_slot(tables, names):
     s = roark_state(tables, names).replace_hp(1, 0, 0)
     assert "aiSwitchedPartySlot" in replacement_refusal(tables, s, True, 10)
@@ -441,6 +445,7 @@ def _left(tables, state):
     return hp.sum() / max_hp.sum(), np.asarray(state.pp[0], np.float64).sum() / max(1.0, full)
 
 
+@pytest.mark.fullset
 def test_hp_and_pp_left(tables, names):
     # Three whole-engine phases, each program dropped before the next (``drop_programs``):
     # the eight playouts, their turn-by-turn replays, then the 64-wide batch. Alive

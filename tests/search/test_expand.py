@@ -220,6 +220,7 @@ def test_sampling_only_reported(tables, names):
 
 
 @pytest.mark.usefixtures("small_chunk")
+@pytest.mark.fullset
 def test_replacement_refusal_flagged(tables, names):
     state = switch_refusal_root(tables, names)
     to_geodude = 4 + 0  # switch to party slot 0
