@@ -3505,7 +3505,10 @@ def play_hit(
     # hit itself (singles follow-up (ii)); its one reader, Bide's release (bcp.c:2700-2705), needs
     # storedDamage, which subscript_bide_start.s zeroes and only the foe's hits during Bide add to
     # (bcp.c:3357, :3407, each also setting lastHitByBattler), so it reads the foe either way.
-    if fmt.B == 4:
+    # Pursuit's hit on a switcher is not the controller's UpdateHP: subscript_pursuit.s:36 calls
+    # BATTLE_SUBSCRIPT_UPDATE_HP, and bcp.c:3357 is the only lastHitByBattler write, so it
+    # writes nothing (D3-1 note).
+    if fmt.B == 4 and not pursuit_switch:
         state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
     # UpdateHP returns early; `real`: the rest of UpdateHP runs on the defender's HP.
