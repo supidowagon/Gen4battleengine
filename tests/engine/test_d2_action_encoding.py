@@ -62,10 +62,12 @@ def test_b2_ghost_curse_targets_the_foe(tables, names):
 
 @pytest.mark.slow
 def test_b2_step_writes_chosen_target(tables, names):
+    # jit, not eager: an eager step peaks far above the jitted one's compile
+    fn = jax.jit(step)
     s = _singles(tables, names, "Swords Dance")
-    out = step(tables, s, _np_actions(0, 0), empty_outcome())
+    out = fn(tables, s, _np_actions(0, 0), empty_outcome())
     assert out.chosen_target.tolist() == [0, 0]
-    out = step(tables, _singles(tables, names), _np_actions(0, 0), empty_outcome())
+    out = fn(tables, _singles(tables, names), _np_actions(0, 0), empty_outcome())
     assert out.chosen_target.tolist() == [1, 0]
 
 
