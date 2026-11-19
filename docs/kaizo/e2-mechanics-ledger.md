@@ -383,8 +383,8 @@ Groups (rule source; files; owner flags):
   `ts_trace_fires`, ruling D2-5),
   reference/engine.py.
 
-Singles changes, ruled by the managing session 18 Nov: decomp-correct, approved. D2 builds both
-byte-identical to today's singles. One follow-up commit right after the D2 merge makes both
+Singles changes, ruled by the managing session 18 Nov: decomp-correct, approved. D2 builds all three
+byte-identical to today's singles. One follow-up commit right after the D2 merge makes the three
 changes, with its own tests and a snap_compare diff limited to those states, each diff explained,
 and deletes the batch 9 note "changes nothing in singles" at enumerate.py:816:
 
@@ -393,6 +393,8 @@ and deletes the batch 9 note "changes nothing in singles" at enumerate.py:816:
 - (ii) A battler whose stored target is itself (a RANGE_MY_SIDE selection) and that a faster Encore
   forces into Rollout reads that target once the Encore ends inside the lock (bcp.c:1885-1888,
   lib.c:1709-1719); at B = 2 that makes the user Rollout's defender. Sheets D2-1, D2-3, D2-4, D2-9.
+- (iii) A randomized non-Ghost Curse at B = 2 takes the foe as its defender (ruling D2-12); today it
+  keeps the user. Added by the managing session 18 Nov.
 
 Files E2 touches that another stream owns (send with the family list):
 
