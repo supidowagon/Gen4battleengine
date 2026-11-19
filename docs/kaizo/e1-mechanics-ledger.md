@@ -1233,3 +1233,13 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   `mechanics_backlog.md`); each can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it
   under any weather). A player's own Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any
   battle. Trigger: a real-game check (memory dump per caller) when the user next does real-game checks.
+
+### Rulings
+- F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
+  (`movePower /= 2`) for a defender whose `Battler_IgnorableAbility` is Heatproof (battle_lib.c:6841-6844): Mold Breaker
+  ignores it (`damage._pre_random`, `d_ability_eff`; reference `_calc_move_damage`); the AI estimate shares the code.
+  Burn damage: `subscript_burn_damage.s:6-9` takes `Divide(maxHP, 8)` and, for a Heatproof holder (`CheckAbility`, so
+  `Battler_Ability`: Mold Breaker never matters), `Divide(loss, 2)`; `BattleSystem_Divide` floors a positive dividend
+  at 1 (battle_lib.c:3599-3618), so the loss is max(1, max(1, maxHP/8) / 2) (`step._burn_check`, reference
+  `_burn_check`). Will-O-Wisp is not blocked (no other Heatproof read: `grep ABILITY_HEATPROOF`: lib:6842 and
+  burn_damage.s:8 only).

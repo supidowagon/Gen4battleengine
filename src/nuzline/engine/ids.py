@@ -708,6 +708,9 @@ class AbilityId(IntEnum):
     # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
     PLUS = 88
     MINUS = 89
+    # E1 batch F, ruling F-1: Heatproof (BattleSystem_CalcMoveDamage, battle_lib.c:6841-6844;
+    # subscript_burn_damage.s:8-9; damage._pre_random, step._burn_check).
+    HEATPROOF = 90
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -805,6 +808,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.KLUTZ: 103,
     AbilityId.PLUS: 57,
     AbilityId.MINUS: 58,
+    AbilityId.HEATPROOF: 85,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and

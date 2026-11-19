@@ -1300,6 +1300,9 @@ def _calc_move_damage(
         power = power * 150 // 100
     if move_type == Type.BUG and a_ability == AbilityId.SWARM and pinch:  # lib.c:6834-6838
         power = power * 150 // 100
+    # lib.c:6841-6844 Heatproof (ignorable): Fire power halved.
+    if d_ability == AbilityId.HEATPROOF and move_type == Type.FIRE:
+        power //= 2
     # lib.c:6845-6848 Dry Skin (ignorable): Fire power x125/100.
     if d_ability == AbilityId.DRY_SKIN and move_type == Type.FIRE:
         power = power * 125 // 100
@@ -5765,7 +5768,10 @@ def _burn_check(turn: _Turn, s: RefState, side: int) -> None:
     mon = _active(s, side)
     # subscript_burn_damage.s:5: not for Magic Guard.
     if mon.status == Status.BURN and mon.hp and mon.ability != AbilityId.MAGIC_GUARD:
-        _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
+        loss = _divide(mon.max_hp, 8)
+        if mon.ability == AbilityId.HEATPROOF:  # subscript_burn_damage.s:8-9: Divide(loss, 2)
+            loss = _divide(loss, 2)
+        _lose_hp(turn, s, side, loss)
 
 
 def _curse_check(turn: _Turn, s: RefState, side: int) -> None:

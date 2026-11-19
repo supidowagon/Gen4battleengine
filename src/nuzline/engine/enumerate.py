@@ -1038,6 +1038,8 @@ INPUT_NEUTRAL_ABILITIES = (
     # (the ally's ability and HP), whose inputs have their clauses.
     AbilityId.PLUS,
     AbilityId.MINUS,
+    # E1 batch F (F-1): a fixed Fire power factor of the move, and the burn's own turn-end loss.
+    AbilityId.HEATPROOF,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause

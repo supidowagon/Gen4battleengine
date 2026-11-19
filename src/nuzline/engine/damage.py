@@ -33,7 +33,7 @@ steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last)
 
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
-modifiers they would trigger (Hustle, Flash Fire, Heatproof, ...) are therefore omitted, not
+modifiers they would trigger (Hustle, ...) are therefore omitted, not
 approximated. E2 batch 3 adds Technician, Thick Fat, Dry Skin's Fire boost, Solar Power and
 Reckless's powerMul (``script_power_mul``) to the formula and Scrappy, Tinted Lens and
 Levitate to the type chart (``_finish``). Cloud Nine and Air Lock gate the
@@ -1556,8 +1556,11 @@ def _pre_random(
     # :6819-6838 Overgrow / Blaze / Torrent / Swarm: power x1.5 at curHP <= maxHP / 3.
     pinch = pinch_ability(move_type, a_ability) & (a_hp <= a_max_hp // 3)
     power = jnp.where(pinch, power * 150 // 100, power)
-    # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100 (Heatproof,
-    # just before it, is unsupported).
+    # :6841-6844 Heatproof (Battler_IgnorableAbility): a Fire move's power halved (floor).
+    power = jnp.where(
+        (d_ability_eff == AbilityId.HEATPROOF) & (move_type == Type.FIRE), power // 2, power
+    )
+    # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100.
     dry_skin = (d_ability_eff == AbilityId.DRY_SKIN) & (move_type == Type.FIRE)
     power = jnp.where(dry_skin, power * 125 // 100, power)
 

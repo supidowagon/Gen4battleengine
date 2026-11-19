@@ -3066,10 +3066,15 @@ def _toxic_check(tables: Tables, state: BattleState, side) -> BattleState:
 
 
 def _burn_check(tables: Tables, state: BattleState, side) -> BattleState:
-    """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8, which is
-    ``BattleSystem_Divide`` (battle_script.c:4413; Magic Guard and Heatproof are not
-    implemented)."""
-    return _status_damage(state, side, Status.BURN, _eighth(state, side))
+    """``subscript_burn_damage.s``: ``DivideVarByValue`` maxHP by 8 (:6-7, ``BattleSystem_Divide``
+    floored at 1, battle_lib.c:3599-3618), then a Heatproof holder (``CheckAbility``, :8, so
+    ``Battler_Ability``: Mold Breaker never reaches it) takes ``Divide(loss, 2)`` (:9). Magic
+    Guard skips it (:5, ``_status_damage``). E1 batch F ruling F-1."""
+    fmt = format_of(state)
+    ability = state.ability[party(fmt, side), state.active[side]]
+    loss = _eighth(state, side)
+    loss = jnp.where(ability == AbilityId.HEATPROOF, jnp.maximum(loss // 2, 1), loss)
+    return _status_damage(state, side, Status.BURN, loss)
 
 
 def _curse_check(state: BattleState, side) -> BattleState:
