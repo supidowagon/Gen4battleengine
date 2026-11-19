@@ -19,7 +19,7 @@ from nuzline.engine import enumerate as enum_mod
 from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import _paused_rock, enumerate_turn
-from nuzline.engine.ids import AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
@@ -636,3 +636,143 @@ def test_next_turns_switch_in_finds_the_flag_clear(tables, names):
     assert int(hit.substitute_hp[1]) == 0 and np.asarray(hit.ts_sub_hit).tolist() == [0, 0]
     out = assert_matches_reference(tables, hit, (SWITCH, 0), O)
     assert int(out.active[0]) == 1 and int(out.stages[1, Stat.ATK]) == -1
+
+
+# SF2 (i): Enigma Berry in the resumed U-turn tail (bcp.c:3698-3706; battle_lib.c:5374-5378,
+# :5421-5428). The tail reads the defender's SUBSTITUTE_HIT (``ts_sub_hit``, a per-battler byte
+# since E1 batch F-4) and moveStatusFlags & SUPER_EFFECTIVE (``ts_se``): the U-turn's, or the last
+# Pursuit's when one ran (lib.c:3359, script.c:6964-6973).
+
+
+def _enigma_duel(tables, n, user, foe, foe_moves, *, user_level=50, foe_level=40, user_hp=None,
+                 foe_hp=None, user_moves=("U-turn",), substitute=0, user_types=None,
+                 user_ability=None, foe_bench=False):  # fmt: skip
+    """The player's ``user`` (U-turn) with a Geodude on the bench vs ``foe`` holding an Enigma
+    Berry (``foe_hp``: its starting HP, else full)."""
+    s = make_state(
+        tables,
+        [
+            _mon(n, user, list(user_moves), user_level, ability=user_ability),
+            _mon(n, "Geodude", ["Tackle"], 30),
+        ],
+        [_mon(n, foe, list(foe_moves), foe_level, "Enigma Berry")]
+        + ([_mon(n, "Geodude", ["Tackle"], 30)] if foe_bench else []),
+    )
+    if foe_hp is not None:
+        s = s._replace(hp=s.hp.at[1, 0].set(_i8(s.hp, foe_hp)))
+    if user_hp is not None:
+        s = s._replace(hp=s.hp.at[0, 0].set(_i8(s.hp, user_hp)))
+    if user_types is not None:
+        s = s._replace(types=s.types.at[0, 0].set(jnp.asarray(user_types, s.types.dtype)))
+    if substitute:
+        s = s._replace(substitute_hp=s.substitute_hp.at[1].set(_i8(s.substitute_hp, substitute)))
+    return s
+
+
+def _gain(tables, n, s):
+    return max(int(s.max_hp[1, 0]) // int(tables.item_param[n.item("Enigma Berry"), 0]), 1)
+
+
+def _heals_on_resume(tables, names, paused, heals):
+    hp0 = int(paused.hp[1, 0])
+    out = _resume_slot1(tables, paused)
+    if heals:
+        gain = _gain(tables, names, paused)
+        assert hp0 + gain <= int(paused.max_hp[1, 0]) and int(out.hp[1, 0]) == hp0 + gain
+        assert int(out.item[1, 0]) == 0
+    else:
+        assert int(out.hp[1, 0]) == hp0
+        assert int(out.item[1, 0]) == names.item("Enigma Berry")
+    assert int(out.ts_se) == 0
+    return out
+
+
+def test_enigma_heals_after_a_super_effective_u_turn(tables, names):
+    s = _enigma_duel(tables, names, "Scyther", "Tangela", ["Tackle"], foe_level=70)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.hp[1, 0]) > 0
+    assert int(paused.ts_se) == 1 and int(paused.item[1, 0]) == names.item("Enigma Berry")
+    _heals_on_resume(tables, names, paused, True)
+
+
+def test_enigma_keeps_after_a_resisted_u_turn(tables, names):
+    s = _enigma_duel(tables, names, "Scyther", "Charmander", ["Tackle"], foe_level=70)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_se) == 0
+    _heals_on_resume(tables, names, paused, False)
+
+
+def test_enigma_does_not_heal_behind_a_substitute_the_u_turn_broke(tables, names):
+    s = _enigma_duel(tables, names, "Scyther", "Tangela", ["Tackle"], foe_level=70, substitute=1)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.ts_se) == 1 and np.asarray(paused.ts_sub_hit).tolist() == [0, 1]
+    _heals_on_resume(tables, names, paused, False)
+
+
+def test_enigma_heals_on_the_pursuits_flag_when_the_u_turn_was_resisted(tables, names):
+    s = _enigma_duel(tables, names, "Abra", "Charmander", ["Pursuit"], user_level=60, foe_level=20)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_pursued) == 2
+    assert int(paused.hp[0, 0]) > 0 and int(paused.hp[1, 0]) > 0
+    assert int(paused.ts_se) == 1  # Pursuit, Dark on Psychic; the U-turn (Bug on Fire) resisted
+    _heals_on_resume(tables, names, paused, True)
+
+
+def test_enigma_keeps_when_the_pursuit_is_neutral_after_a_super_effective_u_turn(tables, names):
+    s = _enigma_duel(tables, names, "Scyther", "Tangela", ["Pursuit"], user_level=60, foe_level=70)
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_pursued) == 2
+    assert int(paused.ts_se) == 0
+    _heals_on_resume(tables, names, paused, False)
+
+
+def test_enigma_pursuer_that_falls_to_rough_skin_does_not_heal(tables, names):
+    # Rough Skin (Carvanha), types made Psychic: Pursuit is super effective, and the pursuer is
+    # left with 1 HP after the U-turn, which its contact does not survive.
+    duel = {
+        "user_level": 60,
+        "foe_level": 45,
+        "user_ability": "Rough Skin",
+        "foe_bench": True,
+        "user_types": (Type.PSYCHIC, Type.PSYCHIC),
+    }
+    full = _enigma_duel(tables, names, "Carvanha", "Charmander", ["Pursuit"], **duel)
+    after = assert_matches_reference(tables, full, (0, 0), O)
+    rough_skin = max(int(full.max_hp[1, 0]) // 16, 1)
+    taken = int(full.max_hp[1, 0]) - int(after.hp[1, 0]) - rough_skin  # the U-turn's damage
+    s = _enigma_duel(
+        tables, names, "Carvanha", "Charmander", ["Pursuit"], foe_hp=taken + rough_skin, **duel
+    )  # fmt: skip
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_se) == 1
+    assert int(paused.hp[1, 0]) == 0 and int(paused.item[1, 0]) == names.item("Enigma Berry")
+    out = _resume_slot1(tables, paused)
+    assert int(out.hp[1, 0]) == 0 and int(out.ts_se) == 0
+
+
+def test_enigma_heals_in_the_same_step_when_the_pursuit_kills_the_user(tables, names):
+    s = _enigma_duel(
+        tables, names, "Abra", "Charmander", ["Pursuit"], user_level=60, foe_level=20, user_hp=1
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.pivot_battler) == 0 and int(out.ts_se) == 0
+    assert int(out.hp[0, 0]) == 0 and int(out.item[1, 0]) == 0
+    assert int(out.hp[1, 0]) > 0
+
+
+def test_enigma_keeps_in_the_same_step_when_the_killing_pursuit_is_neutral(tables, names):
+    s = _enigma_duel(
+        tables, names, "Scyther", "Tangela", ["Pursuit"], user_level=60, foe_level=70, user_hp=1
+    )
+    out = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(out.pivot_battler) == 0 and int(out.ts_se) == 0 and int(out.hp[0, 0]) == 0
+    assert int(out.item[1, 0]) == names.item("Enigma Berry")
+
+
+def test_baton_pass_pause_leaves_the_flag_clear_and_the_newcomer_untouched(tables, names):
+    s = _enigma_duel(tables, names, "Scyther", "Tangela", ["Tackle"], user_moves=("Baton Pass",))
+    paused = assert_matches_reference(tables, s, (0, 0), O)
+    assert int(paused.pivot_battler) == 1 and int(paused.ts_se) == 0
+    out = _resume_slot1(tables, paused)
+    assert int(out.item[1, 0]) == names.item("Enigma Berry")
+    assert int(out.hp[1, 0]) == int(paused.hp[1, 0])

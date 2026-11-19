@@ -248,6 +248,9 @@ class _Turn:
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), cleared with the others (B10-4).
     sub_hit: bool = False
     sub_hit_mon: int = -1  # the battler the flag is set on, while ``sub_hit`` (F-4)
+    # moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE: the last chart run (``_hit``'s, then
+    # ``_pursuit``'s: SetupLoop zeroes it, lib.c:3359), read by the tail's Enigma Berry (SF2 (i)).
+    move_se: bool = False
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
     # turnFlags.enduring (Endure, G-65): TryProtection succeeded for effect 116, same lifetime.
@@ -4382,6 +4385,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
     landed = target_mon.hp > 0 or _defender_always(tables, move, _ghost(s, side))
+    # moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE after the chart (bcp.c:2350-2358): the item
+    # block below and a paused U-turn's tail (``ts_se``) read it (SF2 (i)).
+    turn.move_se = _super_effective(turn, s, side, move, tg)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     hits_foe = (
@@ -5895,7 +5901,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
                 tgt,
                 turn.damaged and klass == PHYSICAL,
                 turn.damaged and klass == SPECIAL,
-                _super_effective(turn, s, side, move, tgt),
+                turn.move_se,
             )
         _thaw_target(turn, s, side, move, dealt, tgt)
         for battler in (side, tgt):
@@ -5993,6 +5999,10 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if _ability(s, _active(s, side)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
         mon.pp[slot] -= 1
     turn.done[pursuer] = True
+    # SetupLoop zeroes moveStatusFlags (lib.c:3359) and the Pursuit's ApplyTypeEffectiveness sets
+    # the bit (subscript_pursuit.s:12, script.c:6964-6973): the tail's Enigma Berry reads the
+    # last Pursuit's flag (SF2 (i)).
+    turn.move_se = _super_effective(turn, s, pursuer, move)
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
     # choiceLockedMove = Pursuit.
     s.battlers[pursuer].last_move = move
@@ -6043,7 +6053,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     if damage > 0:
         _sticky_barb_transfer(turn, s, pursuer, side, move)
         # :32 writes the damage to physicalDamageTaken whatever the class (G-54).
-        _on_hit_berry(turn, s, pursuer, side, True, False, _super_effective(turn, s, pursuer, move))
+        _on_hit_berry(turn, s, pursuer, side, True, False, turn.move_se)
         _shell_bell(turn, s, pursuer, min(damage, target_hp))
         _life_orb_recoil(turn, s, pursuer)
     # subscript_pursuit.s:100, :115: the switcher's KO runs ``fieldConditionsMask -=
@@ -7480,6 +7490,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     s.ts_used = turn.move_cur
     s.ts_damaged = int(turn.damaged)
     s.ts_dealt = turn.pivot_dealt
+    s.ts_se = int(turn.move_se)  # moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
     _put(s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)])
     fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
@@ -7509,7 +7520,7 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
-    "ts_dealt": 0, "ts_power_mul": 0, "ts_pick_mul": 0,
+    "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0,
 }  # fmt: skip
 
 
@@ -7561,6 +7572,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
             turn.done[k] = True
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
+    se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     position = s.ts_cursor
     for name, value in _SCRATCH_ZERO.items():
         setattr(s, name, copy.deepcopy(value))
@@ -7572,6 +7584,9 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     for sc in s.sides:
         sc.ts_follow_me = 0
     foe = _foe(side)
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (F-4): the tail's TriggerHeldItemOnHit returns
+    # early on it (battle_lib.c:5378).
+    sub_hit = turn.sub_hit and turn.sub_hit_mon == foe
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
     # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party
     # without its toxic counter (battle_controller.c:1482).
@@ -7607,6 +7622,11 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     _switch_in_effects(turn, s, side)
     for battler in (side, foe):
         _held_item(turn, s, battler)
+    # TRIGGER_ITEMS_ON_HIT (bcp.c:3698-3706): the Enigma Berry case reads the defender's
+    # substitute flag and moveStatusFlags (battle_lib.c:5378, :5421-5428); no attacker, moveCur
+    # or UTURN_ACTIVE test (SF2 (i)).
+    if se and not sub_hit:
+        _on_hit_berry(turn, s, side, foe, False, False, True)
     _thaw_target(turn, s, side, used, dealt)
     for battler in (side, foe):
         _held_item(turn, s, battler)

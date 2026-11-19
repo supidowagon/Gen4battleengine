@@ -230,6 +230,7 @@ class RefState:
     ts_used: int
     ts_damaged: int
     ts_dealt: int
+    ts_se: int
     ts_power_mul: int
     ts_pick_mul: int
 

@@ -526,6 +526,9 @@ class BattleState(NamedTuple):
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    # int8, moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE as the paused or chased action's tail
+    # reads it (Enigma Berry): the stopping hit's, or the last Pursuit's (SF2 (i))
+    ts_se: jnp.ndarray
     ts_alive: jnp.ndarray  # int8[P], per party its bitmask of HP > 0 at the last faint check
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
     ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
@@ -899,6 +902,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_used": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
+    "ts_se": (_FIELD, np.int8),
     "ts_alive": (_PARTY, np.int8),
     "ts_power_mul": (_FIELD, np.int8),
     "ts_switched": (_BATTLER, np.int8),

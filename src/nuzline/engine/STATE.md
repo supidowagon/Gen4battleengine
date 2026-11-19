@@ -452,7 +452,9 @@ three structs has a row.
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
   read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
-  `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
+  `ts_damaged`, `ts_dealt`), `moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE` (`ts_se`: the paused or
+  chased action's only; the U-turn's, or the last Pursuit's, lib.c:3359, script.c:6964-6973; the tail's
+  Enigma Berry reads it with `ts_sub_hit`, battle_lib.c:5378, :5421-5428), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
   `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
@@ -716,7 +718,7 @@ three structs has a row.
 | `BattleContext.moveType` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.moveEffectChance` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.prizeMoneyMul` | — | not needed because prize money does not affect the battle |
-| `BattleContext.moveStatusFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.moveStatusFlags` | `ts_se` | mapped |
 | `BattleContext.sideEffectDirectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectIndirectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectAbilityFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |

@@ -2116,7 +2116,7 @@ def _use_move(
         # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
         # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
         # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
-        sync_flag, sync_sem, disrupted = carry[16:]
+        sync_flag, sync_sem, disrupted, se0 = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -2308,6 +2308,18 @@ def _use_move(
         )
         # The same TriggerHeldItemOnHit's berry cases (effects.on_hit_berry, G-54, G-55): the
         # defender's physical / specialDamageTaken are this action's damage of the move's class.
+        # A paused or chased action's tail (``~head_on``) runs the Enigma Berry case on the
+        # flag the scratch kept (``ts_se``: the stopping hit's, or the last Pursuit's:
+        # battle_lib.c:5421-5428 reads ``moveStatusFlags`` and the defender's SUBSTITUTE_HIT, no
+        # attacker, moveCur or UTURN_ACTIVE), SF2 (i). ``ts_sub_hit`` is a per-battler byte (E1
+        # batch F-4), read from the entry state (the resumed switch-in call cleared the live one).
+        tail_enigma = (
+            ~head_on
+            & first
+            & items
+            & (state_in.ts_se != 0)
+            & (state_in.ts_sub_hit[target_side] == 0)
+        )
         state, recoiled = on_hit_berry(
             tables,
             state,
@@ -2315,8 +2327,8 @@ def _use_move(
             target_side,
             barbed & (category == PHYSICAL_CATEGORY),
             barbed & (category == SPECIAL_CATEGORY),
-            info.super_effective & info.effective,
-            items & landed & ~info.sub_hit,
+            jnp.where(head_on, info.super_effective & info.effective, True),
+            (items & landed & ~info.sub_hit) | tail_enigma,
         )
         hit_dealt = jnp.where(head_on, info.dealt, jnp.where(first, state_in.ts_dealt, 0))
         state, thawed = thaw_target(
@@ -2363,6 +2375,7 @@ def _use_move(
             sync_flag,
             sync_sem,
             disrupted | kick_miss,
+            jnp.where(first, info.super_effective & info.effective, se0),
         )
 
     init = (
@@ -2385,6 +2398,7 @@ def _use_move(
         jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
         jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
         jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
+        jnp.bool_(False),  # MOVE_STATUS_SUPER_EFFECTIVE of the first hit (``ts_se``, SF2 (i))
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[party(fmt, target_side), target]
@@ -2392,6 +2406,7 @@ def _use_move(
     state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
     paused, pursue, damaged0, dealt0 = looped[11:15]
     sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
+    se_now = looped[19]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
@@ -2401,6 +2416,7 @@ def _use_move(
         ts_used=jnp.where(note, used, state.ts_used).astype(state.ts_used.dtype),
         ts_damaged=jnp.where(note, damaged0, state.ts_damaged).astype(state.ts_damaged.dtype),
         ts_dealt=jnp.where(note, dealt0, state.ts_dealt).astype(state.ts_dealt.dtype),
+        ts_se=jnp.where(note, se_now, state.ts_se).astype(state.ts_se.dtype),
         ts_sub_hit=jnp.where(
             note,
             (jnp.arange(fmt.B) == target_side) & sub_hit_now,
@@ -2828,7 +2844,7 @@ def _active_hp(fmt: Format, state: BattleState, battler):
 
 def _pursuit_hit(
     tables: Tables, state: BattleState, pursuer, switcher, actions, choices, outcome: Outcome
-) -> BattleState:
+) -> tuple[BattleState, jnp.ndarray]:
     """The pursuer hits the outgoing Pokemon: ``BtlCmd_TryPursuit`` spends the PP and
     sets ``powerMul = 20``; ``subscript_pursuit.s`` then runs crit, damage and the type
     chart with no accuracy check. The pursuer's own action is over; it wrote
@@ -2899,7 +2915,10 @@ def _pursuit_hit(
         info.update_hp,  # the script's normal path (:30-49): not missed, no substitute
     )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
-    return life_orb_recoil(tables, state, pursuer, info.update_hp)
+    # ``(state, super_effective)``: the Pursuit's chart flag whatever the Substitute or damage
+    # (SetupLoop and ApplyTypeEffectiveness run before CheckSubstitute, subscript_pursuit.s:8-20;
+    # lib.c:3359, script.c:6964-6973): a U-turn's tail reads the last one (``ts_se``).
+    return life_orb_recoil(tables, state, pursuer, info.update_hp), info.super_effective
 
 
 def _faint_check(
@@ -3113,7 +3132,7 @@ def _execute_actions(
         pursuer = _foe(side)
         fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
         pre = state
-        hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
+        hit, p_se = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
         crit = crit & ~crit_blocked(pre, pursuer, side)
         seen = _hit_events(pre, hit, pursuer, True, crit)
@@ -3142,6 +3161,10 @@ def _execute_actions(
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
+        # moveStatusFlags & SUPER_EFFECTIVE: the U-turn chase's Pursuit overwrites the paused
+        # hit's (lib.c:3359); the tail (MODE_PURSUIT, a later MODE_RESUME) reads it (SF2 (i)). A
+        # switch's Pursuit has no tail.
+        state = state._replace(ts_se=jnp.where(ap, p_se, state.ts_se).astype(state.ts_se.dtype))
         # subscript_pursuit.s:100, :115: the KO of the switcher runs ``fieldConditionsMask -=
         # faintedMon`` (SUB_TO_ZERO, battle_script.c:3282-3287), which the engine cannot hold:
         # ``acid_rain`` records the operand and the state is refused (docs/kaizo FCM.md). The
@@ -3304,6 +3327,7 @@ def _execute_actions(
         "ts_used": state.ts_used,
         "ts_damaged": state.ts_damaged,
         "ts_dealt": state.ts_dealt,
+        "ts_se": state.ts_se,
         "ts_sub_hit": state.ts_sub_hit,
         "ts_alive": base,
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
