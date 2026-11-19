@@ -2158,8 +2158,8 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
     ``Item_IsHMMove``, src/item.c:306-315); the search also skips, for the active learner, the
     disabled and the encored move (ruling D2; the locked and the choice-locked move are read by
     id and offered, ``engine.levelup``'s module docstring) and the slot pinned by
-    ``learn_pin`` (ruling U1), and every replacement when the offered move's effect is
-    unsupported (ruling D10). Giving up is always allowed."""
+    ``learn_pin`` (ruling U1), none of them once the battle is over, and every replacement when
+    the offered move's effect is unsupported (ruling D10). Giving up is always allowed."""
     prompted = _prompted(state)
     slot = 0 if prompted is None else prompted
     battler = state.battlers[0]
@@ -2178,8 +2178,13 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
     for k in range(LEARNED_MOVES_MAX):
         move = party[k]
         ok = supported and not _t(tables, "move_is_hm", move)
-        if slot == battler.active and (
-            mon.moves[k] in (battler.disabled_move, battler.encore_move) or state.learn_pin == k + 1
+        if (
+            slot == battler.active
+            and not state.over  # no turn end or move after the battle ends (bcp.c:3965-3969)
+            and (
+                mon.moves[k] in (battler.disabled_move, battler.encore_move)
+                or state.learn_pin == k + 1
+            )
         ):
             ok = False
         options.append(ok)
@@ -5470,9 +5475,18 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
         list(range(len(mon.moves))) if p[ItemParam.PP_RESTORE_ALL] else []
     )
     for k in slots:  # move slot 0 (NULL), then every slot (:628-661)
-        top = _t(tables, "move_pp", mon.moves[k])  # a trainer Pokemon has no PP Ups
-        if mon.pp[k] != top:
-            mon.pp[k] = min(mon.pp[k] + p[ItemParam.PP_RESTORED], top)
+        # The party Pokemon's move and PP (:631-632); a Transform or Mimic copy's slot keeps
+        # the battler's PP and restores the party's, the shadow (:634-639, :651-654; F-21).
+        copied = bool(sd.mimic_slots >> k & 1)
+        move = sd.shadow_moves[k] if copied else mon.moves[k]
+        pp = sd.shadow_pp[k] if copied else mon.pp[k]
+        top = _t(tables, "move_pp", move)  # a trainer Pokemon has no PP Ups
+        if pp != top:
+            pp = min(pp + p[ItemParam.PP_RESTORED], top)
+            if copied:
+                sd.shadow_pp[k] = pp
+            else:
+                mon.pp[k] = pp
             applied = True
     recovery = 0
     if p[ItemParam.HP_RESTORE]:
@@ -6097,7 +6111,7 @@ def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
 
 
 def _mimic(tables, s: RefState, side: int, target: int) -> None:
-    """Mimic (effect_script_0082.s:3; ``BtlCmd_TryMimic``, script.c:4476-4523): fails on a
+    """Mimic (effect_script_0082.s:3; ``BtlCmd_TryMimic``, script.c:4476-4524): fails on a
     defender's ``movePrevByBattler`` that is MOVE_NONE or not Mimic-able (``MIMIC_FORBIDDEN``,
     lib.c:7152-7158, :7182-7192), on a defender with a Substitute, and on a move the user knows;
     else the user's first Mimic slot takes the move with ``min(5, table PP)`` and joins
@@ -6223,6 +6237,17 @@ def _ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> Ref
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
+    # The command selection's CheckInvalidMoves (bcp.c:433, every FIGHT battler that picks a
+    # command, :335) clears a Choice lock its holder no longer knows (lib.c:2307-2310).
+    for side in range(_fmt(s).B):
+        sd = s.battlers[side]
+        if (
+            actions[side] < MOVE_ACTIONS
+            and _locked_slot(s, side) < 0
+            and _holds_choice(tables, s, side)
+            and sd.choice_lock not in _active(s, side).moves
+        ):
+            sd.choice_lock = 0
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]

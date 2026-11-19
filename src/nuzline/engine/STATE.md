@@ -285,7 +285,7 @@ three structs has a row.
 - **Transform** (G-69): `VOLATILE_CONDITION_TRANSFORM` is `transformed`. `BtlCmd_Transform` copies
   the defender's BattleMon up to and including `ability` into the user's (species, the five stats
   as the BattleMon holds them, the moves, the IVs, the stat stages, both types, the form, the
-  ability; battle_script.c:5342-5348), each slot's PP `min(5, table PP)` (:5364-5370); the party
+  ability; battle_script.c:5346-5348), each slot's PP `min(5, table PP)` (:5364-5370); the party
   Pokemon's own species, form, stats, IVs, ability slot / form, moves and PP wait in the `shadow_*`
   fields (`shadow_moves` / `shadow_pp` with `mimic_slots` all four) until the battler leaves
   (`step._restore_transform`, `_restore_moves`) or the player's battle ends; a fainted one keeps the
@@ -379,8 +379,9 @@ three structs has a row.
     resolve set them.
   - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
     replacing the active learner's disabled or encored move, or the slot pinned by
-    `learn_pin` (the decomp ends Disable and Encore, and re-reads the pinned slot, after a
-    mid-turn learn; the locked and choice-locked moves are read by id and stay offered;
+    `learn_pin` (the decomp ends Disable and Encore at the turn end, and re-reads the pinned slot
+    when its move runs, after any learn of the turn; none of these masks once the battle is over,
+    bcp.c:3965-3969; the locked and choice-locked moves are read by id and stay offered;
     `levelup` module docstring), and every replacement when the offered move's effect is
     unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
     empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan

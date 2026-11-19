@@ -160,3 +160,23 @@ def test_bag_items_match_the_reference(tables, names):
     dizzy = s._replace(confusion=s.confusion.at[1].set(2))
     out = assert_matches_reference(tables, _bag(dizzy, names, "Persim Berry"), acts, o)
     assert int(out.confusion[1]) == 0
+
+
+def test_elixir_restores_the_party_pp_of_a_copied_slot(tables, names):
+    # BattleSystem_UseBagItem tests and restores the party Pokemon's PP (battle_system.c:
+    # 631-632, :646-648); the battler's follows only for a slot that is no Mimic copy and no
+    # Transform (:634-639, :651-654). F-21: the copied slot's party PP is the shadow.
+    s = roark_state(tables, names)
+    acts = [SWITCH_TO_1, FIRST_ITEM_ACTION]
+    rock = names.move("Rock Throw")
+    copied = s._replace(
+        pp=s.pp.at[1, 0].set(jnp.asarray([0, 3, 2, 3])),
+        moves=s.moves.at[1, 0, 1].set(names.move("Thunder Wave")),
+        mimic_slots=s.mimic_slots.at[1].set(0b10),
+        shadow_moves=s.shadow_moves.at[1, 1].set(rock),
+        shadow_pp=s.shadow_pp.at[1, 1].set(2),
+    )
+    out = assert_matches_reference(tables, _bag(copied, names, "Elixir"), acts, empty_outcome())
+    full = [int(tables.move_pp[m]) for m in np.asarray(copied.moves[1, 0])]
+    assert out.pp[1, 0].tolist() == [min(10, full[0]), 3, min(12, full[2]), min(13, full[3])]
+    assert int(out.shadow_pp[1, 1]) == min(12, int(tables.move_pp[rock]))

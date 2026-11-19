@@ -155,8 +155,9 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     its stage by 1 below +6 (:575-615); ``PP_RESTORE`` restores ``PP_RESTORED`` to move slot
     0 and ``PP_RESTORE_ALL`` to every slot whose PP is below its max (:628-661), capped at
     ``MoveTable_CalcMaxPP`` (pokemon.c ``Pokemon_IncreaseValue``; battle_lib.c ``Battler_AddVal``;
-    the battler's PP is skipped for a Transformed battler or a Mimicked slot, :636-641, never
-    the case here: coverage refuses Transform and Mimic, which the engine does not build),
+    the test and the restore read the party Pokemon, so a Transformed battler's or a Mimicked
+    slot's restore goes to the party's PP, ``shadow_pp``, and the battler's is skipped,
+    :634-639, :651-654; F-21),
     the move's base PP for a trainer Pokemon (no PP Ups: ``BoxPokemon_SetMoveSlot``); an HP
     item (:663-714) restores ``HP_RESTORED`` (``HP_RESTORED_*`` codes: all, half, a quarter,
     at least 1) to a living battler below max HP (to a fainted one with ``REVIVE``), set as the
@@ -208,19 +209,26 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     focus = run & (p[ItemParam.CRIT_STAGES] != 0) & (state.focus_energy[side] == 0)
     state = _set(state, "focus_energy", side, 1, focus)
     applied = applied | focus
-    moves = state.moves[row, mon].astype(_I32)
+    # The test and the restore read the party Pokemon's move and PP (Pokemon_IncreaseValue,
+    # :631-632); the battler's PP follows only for a slot that is no Transform or Mimic copy
+    # (:635-639, :651-654). A copied slot's party values are the shadow (``mimic_slots``: all
+    # four while transformed, G-68 / G-69; F-21).
+    slots = jnp.arange(state.moves.shape[-1])
+    copied = ((state.mimic_slots[side].astype(_I32) >> slots) & 1) == 1
+    battler_pp = state.pp[row, mon].astype(_I32)
+    moves = jnp.where(copied, state.shadow_moves[side], state.moves[row, mon]).astype(_I32)
     max_pp = tables.move_pp[moves].astype(_I32)
     gain = p[ItemParam.PP_RESTORED]
-    slots = jnp.arange(moves.shape[0])
     one = (p[ItemParam.PP_RESTORE] != 0) & (slots == 0)
     every = p[ItemParam.PP_RESTORE_ALL] != 0
     # PP_RESTORE then PP_RESTORE_ALL: slot 0 can take both (:628-661).
-    pp = state.pp[row, mon].astype(_I32)
+    pp = jnp.where(copied, state.shadow_pp[side], battler_pp).astype(_I32)
     for restore in (one, every & (slots >= 0)):
         restore = run & restore & (pp != max_pp)
         pp = jnp.where(restore, jnp.minimum(pp + gain, max_pp), pp)
         applied = applied | jnp.any(restore)
-    state = _set(state, "pp", (side, mon), pp, run)
+    state = _set(state, "pp", (side, mon), jnp.where(copied, battler_pp, pp), run)
+    state = _set(state, "shadow_pp", side, jnp.where(copied, pp, state.shadow_pp[side]), run)
 
     hp, max_hp = state.hp[row, mon].astype(_I32), state.max_hp[row, mon].astype(_I32)
     revive = p[ItemParam.REVIVE] != 0

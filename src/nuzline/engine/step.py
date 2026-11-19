@@ -30,7 +30,8 @@ is unlocked when the next turn is set up (``_unlock_sleepers``, battle_lib.c:224
 
 The Choice lock (``choice_lock``, ``moveEffectsData.choiceLockedMove``): ``_choice_lock``
 sets and clears it where ``UpdateMoveBuffers`` and ``UpdateFlagsWhenHit`` do, and
-``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does; ``actions.usable_moves`` reads it.
+``_pursuit_hit`` where ``BtlCmd_TryPursuit`` does, and ``_clear_stale_choice_locks`` clears a
+lock its holder no longer knows at the command selection; ``actions.usable_moves`` reads it.
 Shell Bell's heal and Life Orb's recoil follow the move's hits (``effects.shell_bell_heal``,
 ``effects.life_orb_recoil``); after every hit, ``AfterMoveEffects`` checks the held items,
 moves a Sticky Barb and thaws the defender, in that order (``_use_move``). A Custap Berry the
@@ -444,6 +445,23 @@ def _holds_choice(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 def _set_choice_lock(state: BattleState, side, move, cond) -> BattleState:
     lock = jnp.where(cond, move, state.choice_lock[side]).astype(state.choice_lock.dtype)
     return state._replace(choice_lock=state.choice_lock.at[side].set(lock))
+
+
+def _clear_stale_choice_locks(tables: Tables, state: BattleState, actions) -> BattleState:
+    """The command selection's ``BattleSystem_CheckInvalidMoves`` (bcp.c:433, run for every
+    battler whose command is FIGHT, before its Struggle and Encore checks): a Choice holder
+    whose ``choiceLockedMove`` it no longer knows has the lock cleared (battle_lib.c:2307-2310).
+    A locked battler picks no command (``Battler_CanPickCommand``, bcp.c:335; lib.c:6224-6235).
+    ``actions.choice_locked`` already reads such a lock as none; the clear keeps a move forgotten
+    and learned again later from reviving it."""
+    fmt = format_of(state)
+    for side in range(fmt.B):
+        mon = state.active[side]
+        known = jnp.any(state.moves[party(fmt, side), mon] == state.choice_lock[side])
+        fight = (actions[side] < MOVE_ACTIONS) & (locked_slot(state, side) < 0)
+        stale = fight & _holds_choice(tables, state, side) & ~known
+        state = _set_choice_lock(state, side, 0, stale)
+    return state
 
 
 def _choice_lock(
@@ -3925,6 +3943,7 @@ def _action_phase(
     # The turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events clears them.
     state = state._replace(starf_roll=jnp.asarray(outcome.starf, state.starf_roll.dtype))
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
+    fresh = _clear_stale_choice_locks(tables, fresh, actions)
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))

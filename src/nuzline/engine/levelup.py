@@ -439,6 +439,8 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
       the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
       bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
       (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895);
+      none of these while the battle is over (``state.over``: the payout that ended it runs no
+      later turn end or move, bcp.c:3965-3969);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
       D10). Coverage refuses an unsupported move only where it could be learned without a
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
@@ -467,7 +469,9 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
         | (live == state.encore_move[0])
         | (jnp.arange(MOVES) + 1 == state.learn_pin)
     )
-    ok = ok & ~((slot == state.active[0]) & held)
+    # After the battle ends no turn end or move runs (MoveEnd's AnyExpPayout precedes
+    # CheckBattleOver, bcp.c:3965-3969): the D2 and pin masks drop nothing then.
+    ok = ok & ~((slot == state.active[0]) & held & (state.over == 0))
     return jnp.concatenate([ok, jnp.ones(1, bool)])
 
 
