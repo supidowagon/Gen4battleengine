@@ -2020,7 +2020,7 @@ def _use_move(
     entry_sub_hit = resumed & (state_in.ts_sub_hit != 0)
     state = _where(
         entering,
-        switch_in_effects(tables, state, fx_side, entry_sub_hit, outcome.trace_pick),
+        switch_in_effects(tables, state, fx_side, outcome.trace_pick, sub_hit=entry_sub_hit),
         state,
     )
     state = state._replace(

@@ -438,7 +438,8 @@ three structs has a row.
   itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
   battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
   action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `focusItemActivated` and
-  `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`); `turnFlags.roosting` is the public `roosting`, kept at a pause
+  `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`);
+  `lightningRodActivated` / `stormDrainActivated` are `_use_move`'s local `redirected`; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
   read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
@@ -685,7 +686,7 @@ three structs has a row.
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
-| `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped: `SELF_TURN_FLAG_SUBSTITUTE_HIT` of an action paused at the party list (F-4); the rest is not needed because it is reset at every action's end (`BattleContext_Init`, bcp.c:3998) and `step` resolves a whole action; `focusItemActivated` and `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`); `lightningRodActivated` / `stormDrainActivated` are `_use_move`'s local `redirected` |
+| `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

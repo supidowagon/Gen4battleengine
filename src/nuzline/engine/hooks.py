@@ -1128,7 +1128,7 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
 
 
 def switch_in_effects(
-    tables: Tables, state: BattleState, side, sub_hit=None, trace_pick=None
+    tables: Tables, state: BattleState, side, trace_pick=None, sub_hit=None
 ) -> BattleState:
     """``on_switch_in`` after the entry hazards (``sub_hit``: ``intimidate``'s per-battler
     flags): ``BattleSystem_TriggerEffectOnSwitch``'s states
