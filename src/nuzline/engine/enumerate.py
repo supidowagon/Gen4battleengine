@@ -3560,10 +3560,11 @@ def _side_call_law(
     metro_w = jnp.where(values < n, metro_all[by_rank], 0)
     copy_w = ((values == 0) | ((values == 1) & foe_uses_move)).astype(_I32)
     # Assist (B10-11): every list position weighs 1 (RandNext() % numMoves), the list fixed for
-    # the turn; position v calls the v-th valid entry.
+    # the turn; position v calls the v-th valid entry. An empty list draws nothing and fails
+    # (battle_script.c:6438-6442): value 0 alone, calling no move.
     listed, valid = assist_candidates(tables, state, side)
     n_listed = jnp.sum(valid.astype(_I32))
-    assist_w = (values < n_listed).astype(_I32)
+    assist_w = jnp.where(n_listed > 0, values < n_listed, values == 0).astype(_I32)
     listed_rank = jnp.cumsum(valid.astype(_I32)) - 1
     assist_called = (
         jnp.zeros((CALL_VALUES,), _I32)

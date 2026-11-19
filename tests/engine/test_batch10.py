@@ -486,6 +486,23 @@ def test_assist_calls_a_party_mates_move(tables, names):
     assert int(out.stages[1, Stat.ATK]) == 0 and int(out.hp[1, 0]) == int(alone.hp[1, 0])
 
 
+def test_assist_with_no_mate_enumerates_its_failure(tables, names):
+    """B10-11: with an empty list BtlCmd_TryAssist draws nothing and fails (battle_script.c:
+    6438-6442), so the enumeration has the one call value 0 of weight 1 (test_observe's
+    ``combine_variants`` over no variants, Hypothesis seed 158841300046086878954362372528583724695)."""
+    from nuzline.engine.enumerate import call_laws, call_variants, enumerate_turn
+
+    n = names
+    alone = make_state(
+        tables, [_mon(n, "Skitty", ["Assist"], 30)], [_mon(n, "Snorlax", ["Splash"], 30)]
+    )
+    variants = call_variants(call_laws(tables, alone, jnp.asarray([0, 0], jnp.int32)))
+    assert [(v.call.tolist(), v.num, v.den) for v in variants] == [([0, 0], 1, 1)]
+    outcomes, probs = enumerate_turn(tables, alone, (0, 0))
+    assert abs(float(probs.sum()) - 1.0) < 1e-9
+    assert (outcomes.call[:, 0] == 0).all()
+
+
 def test_fly_charges_vanishes_then_hits_and_dodges_tackle(tables, names):
     """B10-12: effect_script_0155.s: the first use charges (no PP on the second turn, the lock
     into Fly, MOVE_EFFECT_AIRBORNE); the foe's Tackle misses the airborne user
