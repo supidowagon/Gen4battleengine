@@ -5821,11 +5821,12 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> None:
     dealt = _lose_hp(turn, s, side, taken)
     if damage > 0 and not taken and not target_sd.substitute_hp:  # hpCalcTemp 0 (B13-17)
         turn.assurance[side] = False
-    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the living
-    # pursuer down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
+    # pursuer down (subscript_faint_check_destiny_bond.s), before the contact ability (:86-87)
+    # and the items (:90, :94-95).
     if target_hp > 0 and _active(s, side).hp == 0 and s.battlers[side].destiny_bond and mon.hp > 0:
         _lose_hp(turn, s, pursuer, mon.hp)
+    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
     # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at

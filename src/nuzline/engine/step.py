@@ -2773,7 +2773,6 @@ def _pursuit_hit(
     move = choices[0][pursuer]
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
-    before_hp = state.hp[party(fmt, switcher), state.active[switcher]]
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
     # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
     # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
@@ -2797,11 +2796,8 @@ def _pursuit_hit(
         target_side=switcher,
         defender=switcher,
     )
-    # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the pursuer
-    # down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
-    fell = (before_hp > 0) & (state.hp[party(fmt, switcher), state.active[switcher]] == 0)
-    bonded = fell & (state.destiny_bond[switcher] != 0) & (state.hp[party(fmt, pursuer), mon] > 0)
-    state = _set_mon(state, "hp", pursuer, mon, 0, bonded)
+    # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``MoveHit.bonded``),
+    # before the contact ability (:86-87) and the items (:90, :94-95).
     state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
     # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).
