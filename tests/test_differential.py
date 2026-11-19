@@ -10,6 +10,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from nuzline.data.tables import to_numpy
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import MOVE_MIMIC
 from nuzline.engine.levelup import advance_learns, learn, learn_options, needs_learn, pay_exp
 from nuzline.engine.outcome import outcome_to_py
@@ -28,7 +29,9 @@ from tests.strategies import (
     GENDERLESS,
     MALE_ONLY,
     any_outcome,
+    four_state,
     legal_action_pair,
+    legal_actions_four,
     pivot_actions,
     possible_genders,
     recalc_stats,
@@ -54,16 +57,37 @@ def test_jax_matches_reference(tables, names, data):
     _step_both(tables, s, acts, o, data)
 
 
+@pytest.mark.slow
+@settings(
+    max_examples=500,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
+)
+@given(data=st.data())
+def test_jax_matches_reference_four(tables, names, data):
+    """D3-1: the four-battler differential, the acceptance test of batch D3 (red until D3-16)."""
+    s = data.draw(four_state(tables, names))
+    acts, targets = data.draw(legal_actions_four(tables, s))
+    o = data.draw(any_outcome(format_of(s)))
+    _step_both(tables, s, acts, o, data, targets, jitted=_jit_step_four)
+
+
+_jit_step_four = jax.jit(step)  # its own compile cache: the B = 4 shapes
 _PAUSES: list[int] = []  # the pauses the generator reached (a coverage aid for runs)
 
 
-def _step_both(tables, s, acts, o, data):
+def _step_both(tables, s, acts, o, data, targets=None, jitted=None):
     """Both engines on one turn, field for field; a turn that pauses at a U-turn's or Baton
     Pass's party list (E2 batch 6) is resumed with a drawn pick and a fresh outcome (each half
-    reads its own draws), again for a second pause in the same turn."""
+    reads its own draws), again for a second pause in the same turn. The first half uses
+    ``targets`` when given (D3-1: the drawn commands' targets); later halves draw
+    ``targets_for(s)`` and ``any_outcome(format_of(s))``. ``jitted``: the compiled ``step`` to
+    use (default ``jit_step``)."""
+    run = jit_step if jitted is None else jitted
     for _ in range(3):
-        targets = data.draw(targets_for(s))  # D2-1: ignored at B = 2 but for chosen_target
-        jax_out = jit_step(tables, s, acts, o, targets)
+        if targets is None:
+            targets = data.draw(targets_for(s))  # D2-1: ignored at B = 2 but for chosen_target
+        jax_out = run(tables, s, acts, o, targets)
         ref_out = from_ref(
             ref_step(
                 to_numpy(tables),
@@ -80,7 +104,8 @@ def _step_both(tables, s, acts, o, data):
         _PAUSES.append(int(jax_out.pivot_battler))
         s = jax_out
         acts = data.draw(pivot_actions(s, acts))
-        o = data.draw(any_outcome())
+        o = data.draw(any_outcome(format_of(s)))
+        targets = None
     raise AssertionError("a turn paused more than twice")
 
 
