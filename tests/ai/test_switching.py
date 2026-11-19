@@ -384,6 +384,7 @@ def test_the_players_magnet_rise_removes_the_ground_keep_draw(tables, names):
     assert K.KEEP in switch_sites(tables, bit).tolist()
 
 
+@pytest.mark.fullset  # F-O1: asserts the refusal of Weather Ball outside the typed weathers
 def test_party_variable_types_follow_move_calc_variable_type(tables, names):
     """B13-35: Move_CalcVariableType (battle_lib.c:8097-8203) of a bench member: Natural Gift
     the naturalGiftType of its party item (:8102-8104; a non-berry's is no type id,
@@ -422,3 +423,39 @@ def test_party_variable_types_follow_move_calc_variable_type(tables, names):
     with pytest.raises(Exception, match="Weather Ball"):
         post_ko_switch_in(tables, fainted)
     post_ko_switch_in(tables, rain._replace(hp=rain.hp.at[1, CRANIDOS].set(0)))
+
+
+def _flash_fire_bench(tables, names, *, player="Monferno"):
+    """Roark's Geodude (active) with a Flash Fire holder on the bench (Vulpix in Onix's slot 1) after the
+    player's Ember (moveHit, Fire with power)."""
+    s = roark_real_state(tables, names, player_species=player)
+    s = as_species(tables, s, 1, ONIX, names.species("Vulpix"))  # Flash Fire
+    return s._replace(move_hit=s.move_hit.at[1].set(names.move("Ember")))
+
+
+def test_flash_fire_bench_draws_one_absorb_site(tables, names):
+    """AI_HasAbsorbAbilityInParty (trainer_ai.c:3640-3713), Flash Fire's case: with no super-
+    effective move of A (no ``RandNext() % 3`` gate, :3651) a bench Flash Fire holder after a
+    Fire moveHit with power draws ``RandNext() & 1`` (:3706), which switches to it (:3707-3708)."""
+    s = _flash_fire_bench(tables, names)
+    assert switching_refusals(tables, s) == []
+    kinds = switch_sites(tables, s).tolist()
+    assert K.ABSORB in kinds
+    stop = kinds.index(K.ABSORB)
+    assert int(switch_action(tables, s, jnp.int8(stop))) == 4 + ONIX
+    # Its own Flash Fire holds the switch (:3678): no site.
+    own = as_species(tables, s, 1, 0, names.species("Vulpix"))
+    assert K.ABSORB not in switch_sites(tables, own).tolist()
+    # A Water moveHit is another case (Water Absorb's), a status moveHit has no power (:3657).
+    water = s._replace(move_hit=s.move_hit.at[1].set(names.move("Water Gun")))
+    assert K.ABSORB not in switch_sites(tables, water).tolist()
+
+
+def test_flash_fire_bench_behind_a_super_effective_move_is_refused(tables, names):
+    """With a super-effective move of A the function reads ``RandNext() % 3`` (:3651) first: one
+    draw shared by the bench draws, which independent sites cannot express."""
+    s = _flash_fire_bench(tables, names, player="Starly")  # Rock Throw is super effective
+    refusals = switching_refusals(tables, s)
+    assert any("AI_HasAbsorbAbilityInParty" in r for r in refusals), refusals
+    with pytest.raises(UnsupportedSwitching, match="AI_HasAbsorbAbilityInParty"):
+        switch_sites(tables, s)

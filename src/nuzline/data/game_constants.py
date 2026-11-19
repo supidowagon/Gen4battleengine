@@ -368,6 +368,9 @@ CONSTANTS: tuple[Constant, ...] = (
     # MOVE_HEAL_BELL (generated/moves.txt line 216): BtlCmd_TryPartyStatusRefresh's compare
     # (battle_script.c:5035), E2 batch 12.
     Constant("nuzline.engine.ids.MOVE_HEAL_BELL", "move", 215, "Heal Bell", _E),
+    # MOVE_WILL_O_WISP (generated/moves.txt line 262): Flash Fire's no-power exception
+    # (battle_lib.c:3519), F-2.
+    Constant("nuzline.engine.ids.MOVE_WILL_O_WISP", "move", 261, "Will-O-Wisp", _E),
     # MOVE_IMPRISON (generated/moves.txt line 287): DecrementPP's Pressure count for it
     # (battle_controller_player.c:2239-2240), ruling G-8.
     Constant("nuzline.engine.ids.MOVE_IMPRISON", "move", 286, "Imprison", _E),
@@ -490,6 +493,12 @@ CONSTANTS: tuple[Constant, ...] = (
             "Klutz": 103,
             "Plus": 57,
             "Minus": 58,
+            "Heatproof": 85,
+            "Flash Fire": 18,
+            "Multitype": 121,
+            "Hydration": 93,
+            "Forecast": 59,
+            "Storm Drain": 114,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -563,11 +572,17 @@ CONSTANTS: tuple[Constant, ...] = (
     # Thunder Wave: BattleControllerPlayer_CheckTypeChart's MOVE_THUNDER_WAVE
     # (src/battle/battle_controller_player.c:2357).
     Constant("tools.effect_map.TYPE_CHART_STATUS_MOVES", "move", 86, "Thunder Wave", _E),
-    # SPECIES_SHEDINJA (src/pokemon.c:598, :634); SPECIES_GIRATINA, SPECIES_SHAYMIN
-    # (include/constants/forms.h:94, :98).
+    # SPECIES_SHEDINJA (src/pokemon.c:598, :634); SPECIES_GIRATINA (include/constants/forms.h:94);
+    # SPECIES_SHAYMIN (subscript_check_shaymin_form.s:6, F-16).
     Constant("nuzline.engine.stats.SPECIES_SHEDINJA", "species", 292, "Shedinja", _E),
     Constant("nuzline.engine.coverage.SPECIES_GIRATINA", "species", 487, "Giratina", _E),
-    Constant("nuzline.engine.coverage.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    Constant("nuzline.engine.ids.SPECIES_SHAYMIN", "species", 492, "Shaymin", _E),
+    # SPECIES_ARCEUS (generated/species.txt line 494): Battler_MonType's Multitype case
+    # (battle_lib.c:7629-7630), F-3.
+    Constant("nuzline.engine.ids.SPECIES_ARCEUS", "species", 493, "Arceus", _E),
+    # SPECIES_CASTFORM (generated/species.txt line 352): BattleSystem_TriggerFormChange's Castform
+    # block (battle_lib.c:6314), F-6.
+    Constant("nuzline.engine.ids.SPECIES_CASTFORM", "species", 351, "Castform", _E),
     # The crit species items' species (BattleSystem_CalcCriticalMulti, battle_lib.c:7127-7128).
     Constant("nuzline.engine.ids.SPECIES_CHANSEY", "species", 113, "Chansey", _E),
     Constant("nuzline.engine.ids.SPECIES_FARFETCHD", "species", 83, "Farfetch’d", _E),
@@ -929,6 +944,12 @@ EXEMPT: dict[str, str] = {
         "keyed by decomp hold effect id: engine semantics of the vanilla item code; each "
         "game's items carry their own hold effect (build_tables looks theirs up here), and a "
         "game's code changes are rom_diff.toml entries (Ruling 13)"
+    ),
+    "tools.effect_map.KAIZO_ITEM_IDS": (
+        "keyed by (spelling of a Kaizo item's name, its Kaizo hold effect) for the slots the Kaizo "
+        "ROM renamed or re-purposed (docs/kaizo/discrepancies.md, items); used only for Kaizo, "
+        "where a slot that is not vanilla's takes the id of its own hold effect (E1 Batch F, "
+        "F-7 .. F-14)"
     ),
     "tools.effect_map.DECOMP_ABILITY_TO_ID": (
         "keyed by ability name: engine semantics of the vanilla ability handling; a game's "

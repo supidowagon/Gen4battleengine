@@ -46,6 +46,7 @@ class RefPokemon:
     status_counter: int
     gender: int
     friendship: int
+    party_friendship: int  # the party Pokemon's u8 friendship (F-15)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int
@@ -150,6 +151,7 @@ class RefBattler:
     shadow_ability_form: int
     truant: int  # MoveEffectsData.truant (G-69)
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
+    flash_fire: int  # MoveEffectsData.flashFire (F-2)
     ability_suppressed: int  # MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
     wish_timer: int
     wish_hp: int
@@ -159,6 +161,8 @@ class RefBattler:
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
     speed_rec: int  # BattleContext.monSpeedValues (E3-B2-15)
+    starf_roll: int  # a Starf Berry draw (Outcome.starf; engine.state docstring, F-10)
+    starf_open: int  # a battle-start Starf Berry's stat waits for the root draw (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
     ts_order: int
@@ -176,6 +180,10 @@ class RefBattler:
     ts_move_failed: int
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
+    ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
+    chosen_target: int  # battlerActions[b][1] (D2-1)
+    last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
 
 
 @dataclass
@@ -190,6 +198,7 @@ class RefSideConds:
     lucky_chant: int
     tailwind: int
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
+    ts_follow_me: int  # 1 + followMeUser while followMe is set, else 0 (D2-11)
 
 
 @dataclass

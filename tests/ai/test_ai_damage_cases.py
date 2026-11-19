@@ -208,29 +208,41 @@ def test_natural_gift_move_type(kaizo_tables, kaizo_names, kaizo_roark_party, it
 
 
 @pytest.mark.parametrize(
-    ("weather", "type_name", "typed"),
+    ("weather", "type_name"),
     [
-        (Weather.RAIN, "Water", True),
-        (Weather.SANDSTORM, "Rock", True),
-        (Weather.SUN, "Fire", True),
-        (Weather.HAIL, "Ice", True),
-        (Weather.FOG, None, False),
-        (Weather.NONE, None, False),
+        (Weather.RAIN, "Water"),
+        (Weather.SANDSTORM, "Rock"),
+        (Weather.SUN, "Fire"),
+        (Weather.HAIL, "Ice"),
     ],
 )
-def test_weather_ball_move_type(
-    kaizo_tables, kaizo_names, kaizo_roark_party, weather, type_name, typed
-):
-    """TrainerAI_MoveType's Weather Ball (trainer_ai.c:3209-3227): the weather's type, assigned
-    only in rain, sand, sun and hail without Cloud Nine; its AI damage takes the default case
+def test_weather_ball_move_type(kaizo_tables, kaizo_names, kaizo_roark_party, weather, type_name):
+    """TrainerAI_MoveType's Weather Ball (trainer_ai.c:3222-3240): the weather's type, assigned in
+    rain, sand, sun and hail without Cloud Nine; its AI damage takes the default case
     (table power and type, :3074-3078) whatever the weather."""
     t, n = kaizo_tables, kaizo_names
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Weather Ball", "", "", ""))
     s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
     move = n.move_names.index("Weather Ball")
-    assert bool(damage.ai_weather_ball_typed(t, s)) == typed
-    if typed:
-        assert int(damage.ai_move_type(t, s, 1, move)) == c.TYPE_IDS[type_name]
+    assert bool(damage.ai_weather_ball_typed(t, s))
+    assert int(damage.ai_move_type(t, s, 1, move)) == c.TYPE_IDS[type_name]
+    assert int(damage.ai_case_power(t, s, 1, move)) == 0
+    assert int(damage.ai_case_type(t, s, 1, move)) == int(t.move_type[move])
+
+
+@pytest.mark.fullset
+@pytest.mark.parametrize("weather", [Weather.FOG, Weather.NONE])
+def test_weather_ball_move_type_is_untyped_outside_the_four_weathers(
+    kaizo_tables, kaizo_names, kaizo_roark_party, weather
+):
+    """F-O1: with no weather or fog alone the case assigns nothing (trainer_ai.c:3222-3240) and the
+    function returns an uninitialised local, which the engine does not model: the typed flag
+    is false and the policy refuses the move (``ai_refusals``, test_kaizo_policy)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Weather Ball", "", "", ""))
+    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    move = n.move_names.index("Weather Ball")
+    assert not bool(damage.ai_weather_ball_typed(t, s))
     assert int(damage.ai_case_power(t, s, 1, move)) == 0
     assert int(damage.ai_case_type(t, s, 1, move)) == int(t.move_type[move])
 

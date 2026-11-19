@@ -34,7 +34,7 @@ steps 1, 4 and then 3: ``ai_damage_for_roll`` (crit multiplier 1, variance last)
 
 Only mechanics of the implemented set are modelled. Abilities, items and moves
 outside it are ``UNSUPPORTED`` ids and never reach the branches here; the decomp
-modifiers they would trigger (Hustle, Flash Fire, Heatproof, ...) are therefore omitted, not
+modifiers they would trigger (Hustle, ...) are therefore omitted, not
 approximated. E2 batch 3 adds Technician, Thick Fat, Dry Skin's Fire boost, Solar Power and
 Reckless's powerMul (``script_power_mul``) to the formula and Scrappy, Tinted Lens and
 Levitate to the type chart (``_finish``). Cloud Nine and Air Lock gate the
@@ -61,6 +61,7 @@ from nuzline.engine.ids import (
     POWER_IF_TARGET_PARALYZED,
     POWER_IF_USER_STATUSED,
     SEMI_HIT_FLAGS,
+    SPECIES_ARCEUS,
     SPECIES_CLAMPERL,
     SPECIES_CUBONE,
     SPECIES_DIALGA,
@@ -212,6 +213,28 @@ def judgment_type(tables, item, table_type) -> jnp.ndarray:
     index = _i32(tables.item_hold_effect[_i32(item)]) - _PLATE_LO
     plate = (index >= 0) & (index < rows.shape[0])
     return jnp.where(plate, rows[jnp.clip(index, 0, rows.shape[0] - 1)], _i32(table_type))
+
+
+def multitype_plate(tables, species, ability, item, types) -> jnp.ndarray:
+    """``int[2]``: the types of a battler of ``species`` with raw ``ability`` holding raw ``item``:
+    ``Battler_MonType`` (battle_lib.c:7618-7703): an Arceus whose ability is Multitype
+    (``BattleMon.ability``, not ``Battler_Ability``) has both types of its held item's
+    HOLD_EFFECT_ARCEUS_* (:7631-7696), Normal for any other item or none (:7697-7699); anything
+    else keeps ``types``. The item is the raw one (``BattleMon.heldItem``: Klutz and Embargo do
+    not hide it, :7631), and the plate's power is the item's own table value. Scalar arguments."""
+    arceus = (_i32(species) == SPECIES_ARCEUS) & (_i32(ability) == AbilityId.MULTITYPE)
+    plate = judgment_type(tables, item, Type.NORMAL)
+    return jnp.where(arceus, plate, jnp.asarray(types, _I32)).astype(jnp.asarray(types).dtype)
+
+
+def personal_types(tables, species, form, ability_form, ability_slot, item) -> jnp.ndarray:
+    """``int[2]``: the types ``BattleSystem_InitBattleMon`` reads for a party Pokemon
+    (``MON_DATA_TYPE_1/2``, pokemon.c:1219-1226): its form's personal row, or the plate type of
+    a Multitype Arceus (``multitype_plate``; its ability is the one at ``ability_form`` /
+    ``ability_slot``). Scalar arguments."""
+    types = tables.species_types[tables.species_form_row[species, form]]
+    ability = tables.species_abilities[tables.species_form_row[species, ability_form], ability_slot]
+    return multitype_plate(tables, species, ability, item, types)
 
 
 def gift_item(state, side, gift=0) -> jnp.ndarray:
@@ -878,6 +901,11 @@ def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.
     # (else the move fails and moveType keeps BattleContext_Init's 0, battle_lib.c:1981).
     # ``gift``: the action's removed berry (``gift_item``, B13-37).
     gift_power, gift_type = natural_gift_params(tables, gift_item(state, side, gift))
+    # Kaizo's RageCandyBar has Natural Gift power 250 and type 31 (F-14): no type id, so no chart
+    # row (battle_lib.c:2611-2645), no attacker type (:2592) and no type-keyed boost matches it, as
+    # TYPE_MYSTERY (no row, no battler has it) does (B13-26): clamped to it so every table read
+    # stays in range.
+    gift_type = jnp.where(gift_type > Type.DARK, Type.MYSTERY, gift_type)
     return jnp.where((effect == EffectId.NATURAL_GIFT) & (gift_power > 0), gift_type, out)
 
 
@@ -976,7 +1004,7 @@ AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
 AI_GYRO_BALL = 360
 AI_HIDDEN_POWER = 237
 # E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
-# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3209-3227), B13-25..26.
+# (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3222-3240), B13-25..26.
 AI_NATURAL_GIFT, AI_JUDGMENT, AI_WEATHER_BALL = 363, 449, 311
 # TYPE_MYSTERY: no sTypeMatchupMultipliers row and no species type (Tables.type_chart row 9 is
 # neutral). A TrainerAI_MoveType result that is no type id (a non-berry's naturalGiftType,
@@ -1087,7 +1115,7 @@ def ai_case_type(tables: Tables, s: BattleState, atk_side, move, *, ivs=None, it
 
 def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
     """``bool``: ``TrainerAI_MoveType``'s Weather Ball case assigns its result
-    (trainer_ai.c:3209-3227): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
+    (trainer_ai.c:3222-3240): ``NO_CLOUD_NINE`` and rain, sand, sun or hail. Otherwise (no
     weather, fog alone, or Cloud Nine / Air Lock on the field) the case assigns nothing and the
     function returns an uninitialized register: the ROM's TrainerAI_MoveType (overlay14
     0x0222327C-0x022233E6) returns r5, which it never wrote on that path and which holds the
@@ -1100,7 +1128,7 @@ def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
-    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3222) of ``move`` used by
+    """``int32``: ``TrainerAI_MoveType`` (trainer_ai.c:3127-3247) of ``move`` used by
     ``side``'s active Pokemon: Hidden Power (by id, :3208-3220) its IV type
     (``hidden_power``), any other move its table type (the function's TYPE_NORMAL, which
     ``ApplyTypeChart`` and ``CalcMoveDamage`` read as the table's, battle_lib.c:2588-2590,
@@ -1666,8 +1694,11 @@ def _pre_random(
     # :6819-6838 Overgrow / Blaze / Torrent / Swarm: power x1.5 at curHP <= maxHP / 3.
     pinch = pinch_ability(move_type, a_ability) & (a_hp <= a_max_hp // 3)
     power = jnp.where(pinch, power * 150 // 100, power)
-    # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100 (Heatproof,
-    # just before it, is unsupported).
+    # :6841-6844 Heatproof (Battler_IgnorableAbility): a Fire move's power halved (floor).
+    power = jnp.where(
+        (d_ability_eff == AbilityId.HEATPROOF) & (move_type == Type.FIRE), power // 2, power
+    )
+    # :6845-6848 Dry Skin (Battler_IgnorableAbility): a Fire move's power x125/100.
     dry_skin = (d_ability_eff == AbilityId.DRY_SKIN) & (move_type == Type.FIRE)
     power = jnp.where(dry_skin, power * 125 // 100, power)
 
@@ -1770,6 +1801,11 @@ def _pre_random(
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 
+    # :7074-7076 the attacker's flashFire flag (BATTLEMON_FLASH_FIRE; not its ability) and a Fire
+    # move: x15/10, after the weather block (F-2).
+    damage = jnp.where(
+        (s.flash_fire[atk_side] != 0) & (move_type == Type.FIRE), damage * 15 // 10, damage
+    )
     damage = damage + 2  # :7078
     # battle_script.c:1344, x3 for the attacker's Sniper (battle_lib.c:7142-7144).
     crit_mul = jnp.where(a_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
@@ -1944,6 +1980,7 @@ def damage_for_roll(
     in_power=0,
     gift=0,
     fling=0,
+    def_side=None,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
     ``power_mul`` (tenths) scales the move's power first (Pursuit on a switch: 20);
@@ -1954,8 +1991,10 @@ def damage_for_roll(
     ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
     ``gift``: its Natural Gift berry removed this action (B13-37). ``fling`` (> 0): the item Fling's
     script removed this action (``flung_view``): CalcMoveDamage and the item boosts after it read
-    the attacker as still holding it, ApplyTypeChart (``_finish``) as holding nothing."""
-    def_side = _foe(_i32(atk_side))  # the other side's active Pokemon (this function's contract)
+    the attacker as still holding it, ApplyTypeChart (``_finish``) as holding nothing. ``def_side``:
+    the defender's battler (default the other side's active Pokemon; ``atk_side`` itself for a lock
+    reading its stored target, singles follow-up (ii))."""
+    def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
     real = state
     state = flung_view(state, atk_side, fling)
     damage, move_type, category, power = _pre_random(
@@ -1964,7 +2003,7 @@ def damage_for_roll(
         atk_side,
         move,
         crit,
-        # Reckless, the DOUBLE_POWER scripts; the defender is the other side's active Pokemon.
+        # Reckless, the DOUBLE_POWER scripts.
         power_mul=script_power_mul(tables, state, atk_side, def_side, move, power_mul),
         magnitude=magnitude,
         present=present,

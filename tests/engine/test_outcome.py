@@ -195,3 +195,35 @@ def test_magnitude_and_shed_skin_draws(tables, names):
             assert abs(freq(magnitude[:, side], level) - p) < 5 * np.sqrt(p * (1 - p) / N), level
         shed = np.asarray(o.shed_skin)[:, side]
         assert abs(freq(shed) - 0.3) < 5 * np.sqrt(0.3 * 0.7 / N)
+
+
+def test_target_draw_field(samples):
+    """D2-4: ``target_draw`` is int8[B], a fair bit from its own key (fold_in 44), so every other
+    field keeps its samples; ``empty_outcome`` zeroes it."""
+    x = np.asarray(samples.target_draw)
+    assert x.shape == (N, 2) and set(np.unique(x).tolist()) == {0, 1}
+    assert abs(freq(x[:, 0]) - 0.5) < 4 * np.sqrt(0.25 / N)
+    keys = jax.random.split(jax.random.key(0), N)
+    want = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, 44), (2,), 0, 2))(keys)
+    np.testing.assert_array_equal(x, np.asarray(want))
+    assert np.asarray(empty_outcome().target_draw).tolist() == [0, 0]
+
+
+def test_d2_draw_fields(samples):
+    """D2-13, D2-14, D2-16: ``call_target_draw`` / ``bide_target_draw`` int8[B] and ``trace_pick``
+    int8[B, 5], fair bits from fold_in keys 45 / 46 / 47; ``empty_outcome`` zeroes them."""
+    for name, key, shape in (
+        ("call_target_draw", 45, (2,)),
+        ("bide_target_draw", 46, (2,)),
+        ("trace_pick", 47, (2, 5)),
+    ):
+        x = np.asarray(getattr(samples, name))
+        assert x.shape == (N, *shape) and set(np.unique(x).tolist()) == {0, 1}
+        keys = jax.random.split(jax.random.key(0), N)
+        want = jax.vmap(
+            lambda k, key=key, shape=shape: jax.random.randint(
+                jax.random.fold_in(k, key), shape, 0, 2
+            )
+        )(keys)
+        np.testing.assert_array_equal(x, np.asarray(want))
+        assert not np.asarray(getattr(empty_outcome(), name)).any()

@@ -64,9 +64,9 @@ Power, Reckless, Tinted Lens, Levitate and Scrappy in ``damage.py``; Shield Dust
 armors in ``effects.py``; Super Luck, Serene Grace, No Guard and Tangled Feet in
 ``outcome.py``; Quick Feet and Truant in ``order.py`` / ``step.py``; Dry Skin's absorb and the
 weather abilities' turn-end HP in ``step.py``; Trace and the weather abilities here.
-Lightningrod redirects only to a battler other than the defender (battle_lib.c:1756-1772),
-which singles never has, and Honey Gather acts after the battle (battle_script.c:7825):
-neither has a hook.
+Lightningrod and Storm Drain redirect only to a battler other than the defender
+(battle_lib.c:1732-1790; ``targets.redirect``), which singles never has, and Honey Gather acts
+after the battle (battle_script.c:7825): only the redirection message (``REDIRECTED``) is here.
 """
 
 from __future__ import annotations
@@ -74,13 +74,14 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import targets
 from nuzline.engine.damage import (
     ability_weather,
     apply_stage,
     battler_decomp_ability,
     decomp_ability_id,
     divide,
-    trace_copy,
+    weather_suppressed,
 )
 from nuzline.engine.effects import (
     change_stage,
@@ -92,15 +93,20 @@ from nuzline.engine.effects import (
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
+    ABILITY_DECOMP_IDS,
     ACUPRESSURE_STATS,
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
     NATURE_DISLIKED_FLAVOR,
+    SPECIES_CASTFORM,
+    SPECIES_SHAYMIN,
+    STARF_STATS,
     AbilityId,
     FlingEffect,
     ItemId,
     Stat,
     Status,
+    Type,
     Weather,
     sleepless,
 )
@@ -111,7 +117,8 @@ from nuzline.engine.order import (
     player_second,
     record_speeds,
 )
-from nuzline.engine.state import STAGE_MAX, BattleState, battler_ability, held_item
+from nuzline.engine.state import STAGE_MAX, STARF_UNDRAWN, BattleState, battler_ability, held_item
+from nuzline.engine.stats import calc_stats_jnp
 
 _I32 = jnp.int32
 
@@ -125,6 +132,7 @@ OHKO_BLOCKED = "ohko_blocked"
 STATUS_HP, TORMENT = "status_hp", "torment"
 STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 DAMAGE_AVOIDED = "damage_avoided"
+REDIRECTED = "redirected"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -208,6 +216,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.ICE_BODY: frozenset({WEATHER_HP}),
     AbilityId.LIMBER: frozenset({PARALYSIS_BLOCKED, STATUS_CURE}),
     AbilityId.SHED_SKIN: frozenset({STATUS_CURE}),
+    # F-5: subscript_ability_restore_status.s:8 tags the holder (BTLSCR_MSG_BATTLER_TEMP).
+    AbilityId.HYDRATION: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
     AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
     AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
@@ -218,6 +228,8 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     # B9-6: subscript_ability_restores_hp.s and subscript_weather_continues.s:_076, as Dry Skin's.
     AbilityId.VOLT_ABSORB: frozenset({ABSORB}),
     AbilityId.WATER_ABSORB: frozenset({ABSORB}),
+    # F-2: subscript_absorb_and_boost_fire_type_moves.s:10, :18 tag the holder (TAG_NICKNAME_ABILITY).
+    AbilityId.FLASH_FIRE: frozenset({ABSORB}),
     AbilityId.RAIN_DISH: frozenset({WEATHER_HP}),
     AbilityId.AFTERMATH: frozenset({CONTACT_DAMAGE}),
     # subscript_poison_damage.s:10 (TAG_NICKNAME_ABILITY, the holder); subscript_bad_dreams.s:6
@@ -228,6 +240,9 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.LEAF_GUARD: frozenset({STATUS_BLOCKED}),
     AbilityId.SYNCHRONIZE: frozenset({SYNCHRONIZED}),
     AbilityId.WONDER_GUARD: frozenset({DAMAGE_AVOIDED}),
+    # subscript_lightning_rod_redirected.s:9 tags BTLSCR_DEFENDER's ability (D2-12).
+    AbilityId.LIGHTNINGROD: frozenset({REDIRECTED}),
+    AbilityId.STORM_DRAIN: frozenset({REDIRECTED}),
 }
 
 
@@ -306,21 +321,39 @@ def _know(state: BattleState, side, slot, cond) -> BattleState:
     return state._replace(ai_ability_known=state.ai_ability_known.at[slot].set(known))
 
 
+def trace_coin(state: BattleState, trace_pick, holder):
+    """``(coin, in_step)``: ChooseTraceTarget's RandNext() & 1 for ``holder`` (D2-16 rules 3, 7).
+    ``trace_pick`` None: 0. An int8[B] array (``battle_start``, ``show_battle_mon``, ``replace``:
+    each slot fires at most once there): ``trace_pick[holder]``. An ``Outcome.trace_pick`` (int8[B,
+    TRACE_FIRES], inside ``step``): the entry ``[holder, ts_trace_fires[holder]]``, ``in_step``."""
+    if trace_pick is None:
+        return jnp.zeros((), _I32), False
+    pick = jnp.asarray(trace_pick)
+    if pick.ndim == 2:
+        fires = jnp.clip(state.ts_trace_fires[holder].astype(_I32), 0, pick.shape[1] - 1)
+        return pick[holder, fires].astype(_I32), True
+    return pick[holder].astype(_I32), False
+
+
 def trace(
-    tables: Tables, state: BattleState, side, foe, cond=True
+    tables: Tables, state: BattleState, side, coin, cond=True, count=False
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(state, traced)``: ``SWITCH_IN_CHECK_STATE_TRACE`` (battle_lib.c:3718-3737) for
-    ``side``'s active battler against ``foe``'s, where ``cond`` and ``damage.trace_copy``
-    passes: ``subscript_trace.s`` sets its ``BATTLEMON_ABILITY`` to the foe's (the battler's,
+    ``side``'s active battler, where ``cond`` and ``targets.trace_target`` finds a target: of the
+    holder's two opposing slots the eligible one, or ``coin`` between two eligible ones
+    (``ChooseTraceTarget``, :7750-7781; one battler at B = 2). ``subscript_trace.s`` sets its
+    ``BATTLEMON_ABILITY`` to the target's (the battler's,
     not the party's: ``BattleMon_CopyToParty`` writes an ability only for a form change,
     battle_controller.c:1495-1500, so it ends when the battler leaves,
     ``step._restore_ability``). The write is ``BattleAI_SetAbility`` of the tracer
     (battle_script.c:3403) and the message tags the target's ability (``BTLSCR_MSG_DEFENDER``,
     :11806): the AI knows both (``_know``). Abilities the engine does not model are refused by
-    coverage before they can be copied (the target holds them)."""
+    coverage before they can be copied (the target holds them). ``count``: inside ``step``, add the
+    fire to ``ts_trace_fires`` (B = 4 only: the field is 0 at B = 2)."""
     fmt = format_of(state)
+    foe, found = targets.trace_target(tables, state, side, coin)
     mon, target = state.active[side], state.active[foe]
-    traced = jnp.asarray(cond) & trace_copy(tables, state, side, foe)
+    traced = jnp.asarray(cond) & found
     # Raw: subscript_trace.s:6-7 copies BATTLEMON_ABILITY (else the holder's own is kept).
     new = jnp.where(
         traced, state.ability[party(fmt, foe), target], state.ability[party(fmt, side), mon]
@@ -328,6 +361,13 @@ def trace(
     state = state._replace(
         ability=state.ability.at[party(fmt, side), mon].set(new.astype(state.ability.dtype))
     )
+    if count and fmt.B == 4:
+        fired = state.ts_trace_fires[side].astype(_I32) + traced.astype(_I32)
+        state = state._replace(
+            ts_trace_fires=state.ts_trace_fires.at[side].set(
+                fired.astype(state.ts_trace_fires.dtype)
+            )
+        )
     state = announce(state, "trace_announced", side, traced)  # :3727
     state = _know(state, side, mon, traced)
     return _know(state, foe, target, traced), traced
@@ -508,7 +548,7 @@ def _restore(state: BattleState, side, mon, effect, cond):
     any_status = status != Status.NONE
     confused = state.confusion[side] > 0
     lowered = state.stages[side] < 0
-    lum = effect == ItemId.LUM_BERRY
+    lum = (effect == ItemId.LUM_BERRY) | (effect == ItemId.LAVA_COOKIE)  # F-12: the same cure
     berry = jnp.zeros((), bool)
     for item, statuses in _STATUS_BERRIES:
         cures = jnp.zeros((), bool)
@@ -538,16 +578,102 @@ def _restore(state: BattleState, side, mon, effect, cond):
 
 
 def _raise_stat(tables: Tables, state: BattleState, side, item, cond):
-    """``(state, raised)``: a ``PINCH_BERRY`` ``item`` raises ``side``'s stat
-    ``item_param[item, 1]`` by 1 where ``cond`` and that stage is below +6
+    """``(state, raised)``: a ``PINCH_BERRY`` or ``BERSERK_GENE`` (Kaizo's hold 36 on a non-berry,
+    F-8) ``item`` raises ``side``'s stat ``item_param[item, 1]`` by 1 where ``cond`` and that
+    stage is below +6
     (``statBoosts[stat] < MAX_STAT_STAGE``, battle_lib.c:4779 and :5754):
     ``subscript_held_item_raise_stat.s`` runs ``BtlCmd_ChangeStatStage`` with
     ``SIDE_EFFECT_TYPE_HELD_ITEM`` (battle_script.c:2841-2873; Simple applies where the stage
     is read, ``damage.simple_stage``)."""
     stat = tables.item_param[item, 1].astype(_I32)
-    on = jnp.asarray(cond) & (tables.item_effect[item] == ItemId.PINCH_BERRY)
+    effect = tables.item_effect[item]
+    on = jnp.asarray(cond) & ((effect == ItemId.PINCH_BERRY) | (effect == ItemId.BERSERK_GENE))
     on = on & (state.stages[side, stat] < STAGE_MAX)
     return change_stage(state, side, stat, 1, on), on
+
+
+def starf_stat(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(stat, any)``: the ``Stat`` a Starf Berry raises on ``side``'s battler and whether it can
+    raise one (BattleSystem_TriggerHeldItem, battle_lib.c:4850-4872; ``BattleSystem_PluckBerry``,
+    :5798-5817). The decomp scans Attack, Defense, Speed, Sp. Atk, Sp. Def (``STARF_STATS``) for
+    one below +6 and, if there is one, draws ``RandNext() % 5`` until the drawn stat is below +6:
+    uniform over the eligible stats by the project's ``% n`` convention, the rank
+    ``BattleState.starf_roll`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    eligible = state.stages[side][idx] < STAGE_MAX
+    count = jnp.sum(eligible.astype(_I32))
+    rank = jnp.cumsum(eligible.astype(_I32)) - 1
+    pick = eligible & (rank == state.starf_roll[side].astype(_I32) % jnp.maximum(count, 1))
+    return jnp.sum(jnp.where(pick, idx, 0)), count > 0
+
+
+def starf_holders(tables: Tables, state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(holds, pinched)``, ``bool[P, SLOTS]``: a living Pokemon holds a Starf Berry (the raw
+    item), and such a holder is at its pinch now: ``curHP <= maxHP / param``, the param halved
+    for Gluttony (battle_lib.c:5273-5279; ``order.pinch_limit``), F-10."""
+    item = state.item
+    holds = (tables.item_effect[item] == ItemId.STARF_BERRY) & (state.species != 0)
+    holds = holds & (state.hp > 0)
+    power = tables.item_param[item, 0].astype(_I32)
+    divisor = jnp.where(state.ability == AbilityId.GLUTTONY, power // 2, power)
+    limit = pinch_limit(state.max_hp, divisor)
+    return holds, holds & (state.hp.astype(_I32) <= limit)
+
+
+def entry_damage_up(state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: Spikes or Stealth Rock lie on the battler's side, so a newcomer loses HP at
+    its entry before its held-item check (``effects.entry_hazards``)."""
+    sides = side_of(jnp.arange(state.active.shape[0]))
+    return (state.spikes[sides] != 0) | (state.stealth_rock[sides] != 0)
+
+
+def starf_count(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: how many of the five ``STARF_STATS`` of ``side``'s battler are below +6 (the
+    values a Starf Berry's draw is read modulo, ``starf_stat``)."""
+    idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
+    return jnp.sum((state.stages[side][idx] < STAGE_MAX).astype(_I32))
+
+
+def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
+    """``(state, triggered)``: the Lansat Berry (``HOLD_EFFECT_PINCH_CRITRATE_UP``: the holder's
+    Focus Energy, ``subscript_held_item_raise_crit.s:11``, only without it, battle_lib.c:4838-4848,
+    Pluck :5819-5825) and the Starf Berry (``HOLD_EFFECT_PINCH_RANDOM_UP``: +2 on ``starf_stat``,
+    ``subscript_held_item_sharply_raise_stat.s``, a direct stage write: ``change_stage``, with no
+    Mist or Simple) of ``side``'s battler where ``cond`` (the pinch test, or the Pluck's none)."""
+    cond = jnp.asarray(cond)
+    lansat = cond & (effect == ItemId.LANSAT_BERRY) & (state.focus_energy[side] == 0)
+    state = state._replace(
+        focus_energy=state.focus_energy.at[side].set(
+            jnp.where(lansat, 1, state.focus_energy[side]).astype(state.focus_energy.dtype)
+        )
+    )
+    stat, some = starf_stat(state, side)
+    starf = cond & (effect == ItemId.STARF_BERRY) & some
+    # A check with no draw loaded (``starf_roll`` STARF_UNDRAWN: the battle start) eats the berry
+    # and leaves the stat open for the root's draw (``resolve_starf``, F-10).
+    drawn = state.starf_roll[side] != STARF_UNDRAWN
+    state = state._replace(
+        starf_open=state.starf_open.at[side].set(
+            jnp.where(starf & ~drawn, 1, state.starf_open[side]).astype(state.starf_open.dtype)
+        )
+    )
+    return change_stage(state, side, stat, 2, starf & drawn), lansat | starf
+
+
+def resolve_starf(state: BattleState, draws) -> BattleState:
+    """``state`` with every open Starf Berry stat (``starf_open``: a berry eaten at the battle
+    start, before any draw) raised by 2: the stat of rank ``draws[b] % eligible`` among the five
+    below +6 (``starf_stat``), the decomp's ``RandNext() % 5`` rejection loop (battle_lib.c:
+    4864-4866) under the ``% n`` convention; ``starf_open`` is then 0 (F-10)."""
+    draws = jnp.asarray(draws)
+    for side in range(state.active.shape[0]):
+        on = state.starf_open[side] != 0
+        drawn = state._replace(
+            starf_roll=state.starf_roll.at[side].set(draws[side].astype(state.starf_roll.dtype))
+        )
+        stat, some = starf_stat(drawn, side)
+        state = change_stage(state, side, stat, 2, on & some)
+    return state._replace(starf_open=jnp.zeros_like(state.starf_open))
 
 
 def max_pp(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
@@ -667,6 +793,8 @@ def held_item_check(
     limit = pinch_limit(max_hp, pinch_divisor(tables, state, side, mon, item))
     pinch = live & (hp <= limit)
     state, raised = _raise_stat(tables, state, side, item, pinch)
+    state, pumped = _pinch_effects(tables, state, side, effect, pinch)
+    raised = raised | pumped
     leppa = live & (effect == ItemId.LEPPA_BERRY)
     state, restored = _leppa(tables, state, side, mon, power, leppa)
     # Micle Berry (HOLD_EFFECT_PINCH_ACC_UP, :4897-4906 / :5110-5119): at the pinch, sets
@@ -718,6 +846,8 @@ PLUCKABLE = (
     ItemId.PERSIM_BERRY,
     ItemId.LUM_BERRY,
     ItemId.PINCH_BERRY,
+    ItemId.LANSAT_BERRY,  # PLUCK_EFFECT_CRIT_UP (:5819-5825), F-9
+    ItemId.STARF_BERRY,  # PLUCK_EFFECT_RANDOM_UP2 (:5798-5817), F-10
     ItemId.FLAVOR_BERRY,  # PLUCK_EFFECT_HP_RESTORE_SPICY .. _SOUR (:5678-5751), G-4
     ItemId.LEPPA_BERRY,  # PLUCK_EFFECT_PP_RESTORE (:5609-5633), G-58
     ItemId.MICLE_BERRY,  # PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830), G-59
@@ -783,6 +913,8 @@ def pluck_berry(
     state = state._replace(hp=state.hp.at[row, user].set(new_hp.astype(state.hp.dtype)))
     state, cured = _restore(state, side, user, effect, on)
     state, raised = _raise_stat(tables, state, side, item, on)
+    state, pumped = _pinch_effects(tables, state, side, effect, on)  # :5798-5825, no HP test
+    raised = raised | pumped
     state, restored = _leppa(
         tables, state, side, user, power, on & (effect == ItemId.LEPPA_BERRY), pluck=True
     )
@@ -813,13 +945,26 @@ def pluck_berry(
     return state, eaten & ~healed & ~cured & ~raised
 
 
-def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
-    """Where ``cond``, ``side``'s active Pokemon, alive with Intimidate, lowers the living
-    ``foe``'s Attack by 1 (clamped at -6; by default the other side). ``on_switch_in`` runs it
-    for a newcomer and for a battler that just traced Intimidate;
+def intimidate(state: BattleState, side, cond=True, foe=None, sub_hit=None) -> BattleState:
+    """Where ``cond``, ``side``'s active Pokemon, alive with Intimidate, lowers the Attack of each
+    living ``foe`` by 1 (clamped at -6; by default every battler of ``targets.opposing``: both
+    foes at B = 4, subscript_intimidate.s:10-23; each target reads only its own ability, side
+    Mist and stage, so the order between them changes nothing). ``sub_hit`` (``bool[B]`` or
+    None): each battler's ``SELF_TURN_FLAG_SUBSTITUTE_HIT`` of the action this runs in
+    (``BtlCmd_CheckSubstitute``, battle_script.c:9180-9181; ``step._use_move``'s resumed U-turn),
+    which skips a foe whose substitute that action hit even when it broke (F-4). ``on_switch_in``
+    runs it for a newcomer and for a battler that just traced Intimidate;
     ``playout.replacement_pass`` runs it again for a player newcomer that entered while the
     opponent's active was down (its Intimidate is still unannounced, battle_lib.c:3795)."""
-    foe = _foe(side) if foe is None else foe
+    fmt = format_of(state)
+    foes = targets.opposing(fmt, side) if foe is None else (foe,)
+    for target_battler in foes:
+        state = _intimidate_one(state, side, target_battler, cond, sub_hit)
+    return state
+
+
+def _intimidate_one(state: BattleState, side, foe, cond, sub_hit=None) -> BattleState:
+    """``intimidate`` against one opposing battler ``foe``."""
     fmt = format_of(state)
     row, foe_row = party(fmt, side), party(fmt, foe)
     mon, target = state.active[side], state.active[foe]
@@ -835,6 +980,7 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
         | (seen == AbilityId.HYPER_CUTTER)
     )
     blocks = blocks | mist_blocks_drop(state, foe, -1)
+    flagged = jnp.bool_(False) if sub_hit is None else (jnp.asarray(sub_hit)[foe] != 0)
     ready = (
         jnp.asarray(cond)
         & (battler_ability(state, side, mon) == AbilityId.INTIMIDATE)
@@ -844,9 +990,12 @@ def intimidate(state: BattleState, side, cond=True, foe=None) -> BattleState:
     on = (
         ready
         & (state.hp[foe_row, target] > 0)
-        # subscript_intimidate.s:13: a foe behind a substitute is skipped (B10-4); outside an
-        # action no flag is set, so its bit.
+        # subscript_intimidate.s:13 CheckSubstitute (battle_script.c:9172-9184): a foe with the
+        # substitute bit, or the flag a hit of this action set on it (it stays set when that hit
+        # broke the substitute, bcp.c:3359-3371), is skipped (B10-4); outside an action no flag
+        # is set, so its bit.
         & (state.substitute_hp[foe] == 0)
+        & ~flagged
         & ~blocks
     )
     return change_stage(state, foe, Stat.ATK, -1, on)
@@ -872,29 +1021,160 @@ def on_switch_in(tables: Tables, state: BattleState, side) -> BattleState:
     return switch_in_effects(tables, entry_hazards(tables, state, jnp.asarray(side, _I32)), side)
 
 
-def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
-    """``on_switch_in`` after the entry hazards: ``BattleSystem_TriggerEffectOnSwitch``'s states
+def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``SWITCH_IN_CHECK_STATE_FORM_CHANGE``'s Castform block (``BattleSystem_TriggerFormChange``,
+    battle_lib.c:6313-6364), F-6, for every battler (``monSpeedOrder``) that is a Castform with HP
+    and Forecast (``Battler_Ability``: ``damage.battler_decomp_ability``) where
+    ``cond``. With no alive Cloud Nine or Air Lock (``damage.weather_suppressed``): no rain, sun
+    or hail (``FIELD_CONDITION_CASTFORM``) and neither type Normal -> Normal/Normal; else sun and
+    neither type Fire -> Fire/Fire; else rain and neither Water -> Water/Water; else hail and
+    neither Ice -> Ice/Ice. With one alive: neither type Normal -> Normal/Normal (:6355-6363).
+    The state is not advanced while a change happened (battle_lib.c:4115-4121), so the call
+    repeats until none changes; each result is stable under its own test and no battler's change
+    feeds another's, so one pass reaches the same fixpoint whatever the order. Only ``types``
+    are written: ``formNum`` is read by the display only (``battle_controller.c``) and the party's
+    form, which the switch-in re-reads (battle_lib.c:113-114), is not updated (the change sets no
+    ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
+    fmt = format_of(state)
+    clear = ~weather_suppressed(tables, state)
+    rain, sun, hail = (state.weather == w for w in (Weather.RAIN, Weather.SUN, Weather.HAIL))
+    weathered = rain | sun | hail
+    for side in range(fmt.B):
+        row, mon = party(fmt, side), state.active[side]
+        types = state.types[row, mon]
+
+        def has(t, types=types):
+            return jnp.any(types == t)
+
+        is_castform = (
+            jnp.asarray(cond)
+            & (state.species[row, mon] == SPECIES_CASTFORM)
+            & (state.hp[row, mon] > 0)
+            & (
+                battler_decomp_ability(tables, state, side)
+                == ABILITY_DECOMP_IDS[AbilityId.FORECAST]
+            )
+        )
+        normal = jnp.where(clear, ~weathered, True) & ~has(Type.NORMAL)
+        fire = clear & sun & ~has(Type.FIRE)
+        water = clear & rain & ~has(Type.WATER)
+        ice = clear & hail & ~has(Type.ICE)
+        new = jnp.where(
+            normal,
+            Type.NORMAL,
+            jnp.where(fire, Type.FIRE, jnp.where(water, Type.WATER, Type.ICE)),
+        )
+        change = is_castform & (normal | fire | water | ice)
+        both = jnp.full(types.shape, new, state.types.dtype)
+        state = state._replace(types=state.types.at[row, mon].set(jnp.where(change, both, types)))
+    return state
+
+
+def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:
+    """``int32[6]``: party ``row``'s ``mon`` recalculated on Shaymin Land Forme's personal row
+    with its IVs, EVs, level and nature (``Pokemon_CalcLevelAndStats``, battle_io_command.c:
+    601-604), the stats ``shaymin_land`` gives it (HP first, ``ids.Stat`` order)."""
+    land = tables.species_form_row[SPECIES_SHAYMIN, 0]
+    return calc_stats_jnp(
+        tables.species_base_stats[land],
+        state.ivs[row, mon],
+        state.evs[row, mon],
+        state.level[row, mon],
+        tables.nature_mods[state.nature[row, mon]],
+        SPECIES_SHAYMIN,
+    )
+
+
+def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
+    """``subscript_check_shaymin_form.s`` (``AfterMoveMessage``'s ``*_FORM_CHANGE`` states,
+    battle_controller_player.c:3497-3505, :3557-3565; F-16) for ``side``'s active battler, the
+    hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute and
+    status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its personality
+    picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds none there),
+    types Land's (:24-27), stats recalculated from Land's row (``SYSCTL_RECALC_MON_STATS``,
+    ``BattleMon_CopyToParty`` -> ``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604;
+    ``Pokemon_CalcStats``: the HP change moves the current HP, as ``levelup``), and
+    ``RefreshMonData`` reloads the battler from the party (:30): Attack, Defense, Speed, Special
+    stats, HP, and friendship (``BattleSystem_ReloadPokemon``, battle_lib.c:169-193; the Power
+    Trick swap stays, as ``levelup``). Stages, status and volatiles stay. The AI learns the
+    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403). A Transformed battler
+    is left out: the script would write Land's ability into its own party Pokemon
+    (battle_script.c:3401-3407, battle_io_command.c:601-604), a party ability the engine does not
+    hold, so coverage refuses a Transform user facing a Sky Shaymin
+    (``coverage.transform_sky_refusals``, F-26)."""
+    fmt = format_of(state)
+    side = jnp.asarray(side, _I32)
+    row, mon = party(fmt, side), state.active[side]
+    on = (
+        jnp.asarray(cond)
+        & (state.species[row, mon] == SPECIES_SHAYMIN)
+        & (state.form[row, mon] != 0)
+        & (state.substitute_hp[side] == 0)
+        & (state.status[row, mon] == Status.FREEZE)
+        & (state.transformed[side] == 0)
+    )
+    land = tables.species_form_row[SPECIES_SHAYMIN, 0]
+    abilities = tables.species_abilities[land].astype(_I32)
+    slot = state.ability_slot[row, mon].astype(_I32)
+    slot = jnp.where(abilities[slot] != 0, slot, 0)
+    stats = land_stats(tables, state, row, mon)
+    old_max, hp = state.max_hp[row, mon].astype(_I32), state.hp[row, mon].astype(_I32)
+
+    def put(arr, value):
+        return arr.at[row, mon].set(jnp.where(on, value, arr[row, mon]).astype(arr.dtype))
+
+    state = state._replace(
+        form=put(state.form, 0),
+        ability=put(state.ability, abilities[slot]),
+        ability_slot=put(state.ability_slot, slot),
+        ability_form=put(state.ability_form, 0),
+        types=put(state.types, tables.species_types[land]),
+        stats=put(state.stats, stats[Stat.ATK :]),
+        max_hp=put(state.max_hp, stats[Stat.HP]),
+        hp=put(state.hp, jnp.where(hp != 0, hp + stats[Stat.HP] - old_max, hp)),
+        friendship=put(state.friendship, state.party_friendship[row, mon]),
+        power_trick_desync=state.power_trick_desync.at[side].set(
+            jnp.where(on, state.power_trick[side], state.power_trick_desync[side]).astype(
+                state.power_trick_desync.dtype
+            )
+        ),
+    )
+    return _know(state, side, mon, on)
+
+
+def switch_in_effects(
+    tables: Tables, state: BattleState, side, trace_pick=None, sub_hit=None
+) -> BattleState:
+    """``on_switch_in`` after the entry hazards (``sub_hit``: ``intimidate``'s per-battler
+    flags): ``BattleSystem_TriggerEffectOnSwitch``'s states
     for ``side``'s newcomer. A U-turn or Baton Pass newcomer meets them apart from its hazards: the
     party list runs only the hazards and a faint check (subscript_show_party_list.s:22-24), and the
     rest comes at ``AfterMoveEffects``' ``TRIGGER_SWITCH_IN_EFFECTS`` (bcp.c:3672-3682;
     ``step._use_move``)."""
     side = jnp.asarray(side, _I32)
+    fmt = format_of(state)
     foe = _foe(side)  # the entry point: the battler facing the newcomer in singles
-    # traceAnnounced gates it (:3726); clear for a newcomer, and for an armed holder (a holder that
-    # traced and got Trace back by Skill Swap has it set: no second copy).
-    state, _ = trace(tables, state, side, foe, state.trace_announced[side] == 0)
-    state, traced = trace(tables, state, foe, side, state.trace_announced[foe] == 0)
+    # ``trace_pick``: the Trace coins (``trace_coin``; None: 0). Intimidate and Download work over
+    # every opposing battler (D2-16); the pairing of the newcomer with one ``foe`` is singles'
+    # entry point, the order over four battlers is D3's. traceAnnounced gates Trace (:3726);
+    # clear for a newcomer, and for an armed holder (a holder that traced and got Trace back by
+    # Skill Swap has it set: no second copy).
+    coin, count = trace_coin(state, trace_pick, side)
+    state, _ = trace(tables, state, side, coin, state.trace_announced[side] == 0, count=count)
+    coin, count = trace_coin(state, trace_pick, foe)
+    state, traced = trace(tables, state, foe, coin, state.trace_announced[foe] == 0, count=count)
     state = weather_ability(state, side)
     state = weather_ability(state, foe, traced)
-    state = intimidate(state, side, foe=foe)
-    state = intimidate(state, foe, traced, foe=side)
-    state = download(state, side, (foe,))
-    state = download(state, foe, (side,), traced)
+    state = intimidate(state, side, sub_hit=sub_hit)
+    state = intimidate(state, foe, traced, sub_hit=sub_hit)
+    state = download(state, side, targets.opposing(fmt, side))
+    state = download(state, foe, targets.opposing(fmt, foe), traced)
     mon, other = state.active[side], state.active[foe]
     state = reveal_ability(
         state, side, mon, SWITCH_IN, state.hp[party(format_of(state), side), mon] > 0
     )
     state = reveal_ability(state, foe, other, SWITCH_IN, traced)
+    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
     state = recover_status_by_ability(state, side)
     state = recover_status_by_ability(state, foe, traced)
     # SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS runs for every battler (battle_lib.c:4135-4145):
@@ -904,12 +1184,16 @@ def switch_in_effects(tables: Tables, state: BattleState, side) -> BattleState:
     return after_damage_items(tables, state, foe)
 
 
-def move_end_switch_in(tables: Tables, state: BattleState, cond=True) -> BattleState:
+def move_end_switch_in(
+    tables: Tables, state: BattleState, cond=True, trace_pick=None
+) -> BattleState:
     """``BattleControllerPlayer_MoveEnd``'s ``BattleSystem_TriggerEffectOnSwitch``
     (battle_controller_player.c:3973), after the move's recovery and faint checks, where ``cond``
     (the battle goes on): each state loops over every battler and acts for one whose announced flag
-    is still clear (battle_lib.c:3718-3851): Trace (:3718-3737), the weather abilities
-    (:3740-3790), Intimidate (:3795-3808), Download (:3814-3851). A battler that gained the ability
+    is still clear (battle_lib.c:3718-3851): Trace (:3718-3737, its target by ``ChooseTraceTarget``
+    with ``trace_pick``'s coin, ``trace_coin``), the weather abilities (:3740-3790), Intimidate
+    (:3795-3808, every opposing battler, subscript_intimidate.s:10-23), Download (:3814-3851, the
+    sums over every opposing battler). A battler that gained the ability
     mid-battle (Skill Swap, E3-2-5) acts at once; one that has announced does not, so the pass
     changes nothing otherwise. Anticipation and Forewarn (:3855-3965) have no ability id in the
     engine, so no holder exists; Pressure, Mold Breaker and the others only print a message
@@ -923,19 +1207,25 @@ def move_end_switch_in(tables: Tables, state: BattleState, cond=True) -> BattleS
     sides = range(fmt.B)
     cond = jnp.asarray(cond)
     for side in sides:
-        state, _ = trace(tables, state, side, _foe(side), cond & (state.trace_announced[side] == 0))
+        coin, count = trace_coin(state, trace_pick, side)
+        state, _ = trace(
+            tables, state, side, coin, cond & (state.trace_announced[side] == 0), count=count
+        )
     for side in sides:
         state = weather_ability(state, side, cond & (state.weather_announced[side] == 0))
     for side in sides:
-        state = intimidate(
-            state, side, cond & (state.intimidate_announced[side] == 0), foe=_foe(side)
-        )
+        state = intimidate(state, side, cond & (state.intimidate_announced[side] == 0))
     for side in sides:
-        state = download(state, side, (_foe(side),), cond & (state.download_announced[side] == 0))
+        state = download(
+            state,
+            side,
+            targets.opposing(fmt, side),
+            cond & (state.download_announced[side] == 0),
+        )
     return state
 
 
-def battle_start(tables: Tables, state: BattleState) -> BattleState:
+def battle_start(tables: Tables, state: BattleState, trace_pick=None) -> BattleState:
     """The leads' switch-in checks at the start of the battle: ``ShowBattleMon``
     (battle_controller_player.c:256) runs ``BattleSystem_TriggerEffectOnSwitch`` once, a state
     machine whose every state loops over all battlers (``monSpeedOrder``) before the next
@@ -969,13 +1259,20 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
             weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
         ),
     )
+    # A lead's Starf Berry eaten here draws at the root (``starf_open``, ``step.root_belief``,
+    # ``step.sample_root``), F-10.
+    state = state._replace(starf_roll=jnp.full_like(state.starf_roll, STARF_UNDRAWN))
+    state = show_battle_mon(tables, state, swaps, trace_pick=trace_pick)
+    state = state._replace(starf_roll=jnp.zeros_like(state.starf_roll))
     # TrainerMessage's second SortMonSpeedOrder (bcp.c:263) writes monSpeedValues after the
-    # switch-in effects (E3-B2-15); a weather war left open is settled at the root, which writes
-    # them again (``step.resolve_war``).
-    return record_speeds(tables, show_battle_mon(tables, state, swaps))
+    # switch-in effects (E3-B2-15); a weather war or a lead's Starf Berry left open is settled at
+    # the root, which writes them again (``step.resolve_war``, ``step.sample_root``).
+    return record_speeds(tables, state)
 
 
-def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> BattleState:
+def show_battle_mon(
+    tables: Tables, state: BattleState, swaps, qc=None, trace_pick=None
+) -> BattleState:
     """``ShowBattleMon``'s ``BattleSystem_TriggerEffectOnSwitch`` (battle_controller_player.c:
     256; battle_lib.c:3649-4168) for two battlers whose states all wait: each state loops over
     both (``monSpeedOrder``) before the next runs: Trace, the weather abilities (the order the
@@ -987,17 +1284,19 @@ def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> Battl
     fmt = format_of(state)
     sides = range(fmt.B)
     for side in sides:
-        state, _ = trace(tables, state, side, _foe(side), state.trace_announced[side] == 0)
+        coin, _ = trace_coin(state, trace_pick, side)  # each slot fires at most once here
+        state, _ = trace(tables, state, side, coin, state.trace_announced[side] == 0)
     for side in sides:  # the engine's order, player first; hold_war reorders a weather war
         state = weather_ability(state, side)
     state = hold_war(state, weather_war(state), swaps, qc)
     for side in sides:
-        state = intimidate(state, side, foe=_foe(side))
+        state = intimidate(state, side)
     for side in sides:  # SWITCH_IN_CHECK_STATE_DOWNLOAD (:3814-3851), after every Intimidate
-        state = download(state, side, (_foe(side),))
+        state = download(state, side, targets.opposing(fmt, side))
     for side in sides:
         mon = state.active[side]
         state = reveal_ability(state, side, mon, SWITCH_IN, state.hp[party(fmt, side), mon] > 0)
+    state = forecast(tables, state)  # SWITCH_IN_CHECK_STATE_FORM_CHANGE (:4115), F-6
     for side in sides:
         state = recover_status_by_ability(state, side)
     for side in sides:

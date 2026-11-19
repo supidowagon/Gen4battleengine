@@ -272,6 +272,20 @@ def test_a_seen_slot_is_open_and_the_pinned_slot_is_masked(tables, names):
     assert _options(tables, pinned._replace(active=s.active.at[0].set(1))) == [True] * 5
 
 
+def test_no_mask_once_the_battle_is_over(tables, names):
+    # The payout that ends the battle runs no later turn end or move (MoveEnd's AnyExpPayout
+    # before CheckBattleOver, bcp.c:3965-3969): the disabled, encored and pinned slots are
+    # offered (F-19).
+    s = _prompt(tables, names)
+    s = s._replace(
+        disabled_move=s.disabled_move.at[0].set(names.move("Tackle")),
+        encore_move=s.encore_move.at[0].set(names.move("Vine Whip")),
+        learn_pin=jnp.int8(2),
+    )
+    assert _options(tables, s) == [False, False, True, False, True]
+    assert _options(tables, s._replace(over=jnp.asarray(1, s.over.dtype))) == [True] * 5
+
+
 @pytest.mark.parametrize("game", ["tables", "kaizo_tables"])
 @pytest.mark.parametrize(
     "move, effect", [("Sleep Talk", EffectId.SLEEP_TALK), ("Assist", EffectId.ASSIST)]

@@ -55,6 +55,9 @@ from nuzline.engine.damage import (
     trace_copy,
     weather_suppressed,
 )
+from nuzline.engine.damage import (
+    STATUS as STATUS_CATEGORY,
+)
 from nuzline.engine.format import SINGLES, Format, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.ids import (
@@ -64,11 +67,14 @@ from nuzline.engine.ids import (
     ON_HIT_EFFECTS,
     QUICK_CLAW_MODULUS,
     SLEEP_TALK_VALUES,
+    STARF_DRAWS,
+    TRACE_FIRES,
     AbilityId,
     EffectId,
     FlingEffect,
     ItemId,
     MoveFlag,
+    MoveTarget,
     Stat,
     Weather,
 )
@@ -185,6 +191,27 @@ class Outcome(NamedTuple):
     # ``RandNext() % 112`` retry loop. Its law depends on ``t`` and ``b``'s types
     # (``damage.conv2_probs``), so every ``t`` the move can meet is its own element (E3-B2-3).
     conv2: jnp.ndarray
+    # int8[B, 2], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866,
+    # :5286-5288): a value in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among
+    # the five stats below +6 (``hooks.starf_stat``), F-10. ``[b, 0]`` the turn's (its held-item
+    # checks and Pluck), ``[b, 1]`` the faint replacement's switch-in check after it (kept in
+    # ``BattleState.starf_roll`` between the turn and ``step.replace``, ``step.starf_kept``).
+    starf: jnp.ndarray
+    # int8[B], the low bit of the one RandNext() a fight command's BattleSystem_Defender call may
+    # draw (bcp.c:1900; lib.c:1653, :1700, :4187), indexed by the acting battler; read only at
+    # B = 4 (``targets.resolve``), D2-4. Its sample key is 44.
+    target_draw: jnp.ndarray
+    # int8[B], the low bit of the RandNext() of GoToMoveScript's BattleSystem_Defender call for the
+    # called move (script.c:2121; SetMirrorMove's :3511), by the invoking battler; read only at
+    # B = 4 (``targets.called_defender``), D2-13. Its sample key is 45.
+    call_target_draw: jnp.ndarray
+    # int8[B], the low bit of the Bide release's BattleSystem_RandomOpponent RandNext (bcp.c:2707;
+    # lib.c:4187), by the Bide user; read only at B = 4 (``targets.bide_defender``), D2-14. Key 46.
+    bide_target_draw: jnp.ndarray
+    # int8[B, TRACE_FIRES]: the low bit of ChooseTraceTarget's RandNext (lib.c:7763), by the Trace
+    # holder and its fire number this step (``BattleState.ts_trace_fires``); read only at B = 4
+    # (``targets.trace_target``), D2-16 / ruling D2-5. Its sample key is 47.
+    trace_pick: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -223,6 +250,11 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         berry_confusion=sides + 2,
         chatter=sides,
         conv2=jnp.zeros((fmt.B, NUM_TYPES), _I8),
+        starf=jnp.zeros((fmt.B, 2), _I8),
+        target_draw=sides,
+        call_target_draw=sides,
+        bide_target_draw=sides,
+        trace_pick=jnp.zeros((fmt.B, TRACE_FIRES), _I8),
     )
 
 
@@ -419,21 +451,30 @@ def _rate(
 
 
 def live_hit_threshold(
-    tables: Tables, state: BattleState, side, move, target_moved=False, overrides=True
+    tables: Tables,
+    state: BattleState,
+    side,
+    move,
+    target_moved=False,
+    overrides=True,
+    target=None,
 ) -> jnp.ndarray:
     """``int32``: the threshold of ``side``'s ``move`` at its accuracy check, read from
     ``state`` as it is at that moment (``step``): the stages, abilities, items, weather and
     HP of the two active battlers then; ``target_moved``: the target has acted this turn.
-    ``overrides``: as ``_rate``'s (False: a later Triple Kick hit, B13-6)."""
-    target_mon = state.active[_foe(side)]
-    eva = state.stages[_foe(side), Stat.EVA]
+    ``overrides``: as ``_rate``'s (False: a later Triple Kick hit, B13-6). ``target``: the
+    defender's battler (default the foe; ``side`` itself for a lock reading its stored target,
+    singles follow-up (ii), bcp.c:2865-2981 reading the one Pokemon twice)."""
+    target = _foe(side) if target is None else target
+    target_mon = state.active[target]
+    eva = state.stages[target, Stat.EVA]
     acc = state.stages[side, Stat.ACC]
     return _rate(
         tables,
         state,
         side,
         move,
-        _foe(side),
+        target,
         target_mon,
         jnp.asarray(False),
         acc,
@@ -506,14 +547,14 @@ def future_thresholds(
 
     The hit reads the battlers on the field at the turn's end. The attacker's slot holds its
     active Pokemon, the one it switches in, or (a foe's Roar) any living party member; likewise
-    the defender's. Their abilities and items do not change within a turn but by Trace or Transform
-    (``loose``; a Gravity that is set or ends this turn is ``loose`` too).
+    the defender's. Their abilities and items do not change within a turn but by Trace,
+    Transform, Embargo or Knock Off (``loose``; a Gravity that is set or ends this turn is
+    ``loose`` too).
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
-    stat effect on accuracy or evasion, Foresight, Miracle Eye, a White Herb); else the start
-    stages of a battler
-    that stays and 0 for a newcomer or a fainted attacker (CleanupFaintedMon). The weather can be
-    the start's, none (it ended, or a lock), or a weather move's or ability's sandstorm or hail
-    (the only ones the rate reads besides fog, which never starts); the target confused or not;
+    stat effect on accuracy or evasion, Foresight, Miracle Eye, Haze, Psych Up, Acupressure, a
+    White Herb); else the start stages of a battler that stays and 0 for a newcomer or a fainted
+    attacker (CleanupFaintedMon). The weather can be the start's, none (it ended, or a lock), or a
+    weather move's or ability's sandstorm or hail (the only ones the rate reads besides fog, which never starts); the target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
     roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
@@ -545,8 +586,17 @@ def future_thresholds(
         | (effect == EffectId.SECONDARY_STAT_SELF)
     ) & ((params[:, 0] == Stat.ACC) | (params[:, 0] == Stat.EVA))
     herbs = jnp.any(on_field & (tables.item_effect[state.item[rows]] == ItemId.WHITE_HERB) & living)
-    identifies = (effect == EffectId.FORESIGHT) | (effect == EffectId.MIRACLE_EYE)
-    free = jnp.any(uses & (accuracy_moves | identifies)) | herbs
+    # Haze zeroes both stages, Psych Up copies them, Acupressure can raise evasion (B12-31's
+    # writers; F-18): the sum then need be neither the kept nor the reset one (Transform's copy
+    # keeps the roll whole, ``loose`` below). Foresight and Miracle Eye (E3-B2-10) identify.
+    stage_writers = (
+        (effect == EffectId.FORESIGHT)
+        | (effect == EffectId.MIRACLE_EYE)
+        | (effect == EffectId.HAZE)
+        | (effect == EffectId.PSYCH_UP)
+        | (effect == EffectId.ACUPRESSURE)
+    )
+    free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
     weathers = jnp.stack(
@@ -620,27 +670,34 @@ def future_thresholds(
     # Embargo (B13-31): an Embargo used this turn, or a count that the turn end's
     # MON_COND_CHECK_STATE_EMBARGO (bcp.c:1671-1677) can end before the side-condition pass's
     # hit (:1758-1783), changes which items the hit reads (state.held_item): the roll is kept
-    # whole, rare and sound.
-    embargo_field = jnp.any(uses & (effect == EffectId.EMBARGO)) | jnp.any(state.embargo != 0)
+    # whole, rare and sound. So does a Knock Off used this turn, which takes an item
+    # (battle_script.c:6622-6624, F-17).
+    item_takers = (effect == EffectId.EMBARGO) | (effect == EffectId.KNOCK_OFF)
+    embargo_field = jnp.any(uses & item_takers) | jnp.any(state.embargo != 0)
     # Gravity at the hit (x10/6, bcp.c:2972-2974) is the turn end's: a Gravity used this turn
-    # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1235) ends a count of 1 before the
-    # side-condition pass's hit (:1758-1783). A Transform used this turn copies a battler's
-    # ability and stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its
-    # target's ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
+    # sets it, and FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238) ends a count of 1 before the
+    # side-condition pass's hit (:1758-1783), except in Kaizo, whose sub_seq 238 sets it again
+    # (``Tables.gravity_rearm``, G-67). A Transform used this turn copies a battler's ability and
+    # stages (BtlCmd_Transform, battle_script.c:5330-5373); a Worry Seed writes its target's
+    # ability (subscript_give_target_insomnia.s:11); a Skill Swap swaps both battlers'
     # (subscript_exchange_abilities.s:21-24); a Role Play gives its user its target's
     # (subscript_copy_ability.s:14-15); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
-    field_change = jnp.any(
-        uses
-        & (
-            (effect == EffectId.GRAVITY)
-            | (effect == EffectId.TRANSFORM)
-            | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
-            | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
-            | (effect == EffectId.ROLE_PLAY)  # the user takes its target's ability (E3-B2-5)
-            | (effect == EffectId.GASTRO_ACID)  # the target's ability is suppressed (E3-2-6)
+    ends = (state.gravity == 1) & (tables.gravity_rearm == 0)
+    field_change = (
+        jnp.any(
+            uses
+            & (
+                (effect == EffectId.GRAVITY)
+                | (effect == EffectId.TRANSFORM)
+                | (effect == EffectId.WORRY_SEED)  # the target's ability becomes Insomnia (E3-2-2)
+                | (effect == EffectId.SKILL_SWAP)  # both battlers' abilities swap (E3-2-5)
+                | (effect == EffectId.ROLE_PLAY)  # the user takes its target's ability (E3-B2-5)
+                | (effect == EffectId.GASTRO_ACID)  # the target's ability is suppressed (E3-2-6)
+            )
         )
-    ) | (state.gravity == 1)
+        | ends
+    )
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
     )
@@ -798,7 +855,8 @@ def _threshold_grid(
       (battle_controller_player.c:2972-2974); its Transform into the side's battler, which then
       holds the side's ability (Sand Veil, Snow Cloak, Tangled Feet, Simple, Unaware, No Guard,
       Cloud Nine as the target, :2876-2947, bcp.c:3016-3021) and runs its switch-in checks again
-      (step._use_move, the announce flags cleared :5350-5358), so a copied weather ability sets
+      (step._use_move: the announce flags cleared, battle_script.c:5350-5358, rerun at
+      bcp.c:3672-3673 and :3973), so a copied weather ability sets
       its weather (``hooks.weather_ability``, battle_lib.c:3740-3790); its Skill Swap (E3-2-5):
       the foe holds the side's ability and the side the foe's
       (subscript_exchange_abilities.s:21-24), and a weather ability one of them gained acts at the
@@ -813,6 +871,10 @@ def _threshold_grid(
 
     * the attacker's Micle Berry flag (G-59): its berry can trigger before the check (the
       second half of the grid, Zoom Lens's, possible for a holder: one item holds one of them).
+
+    * the attacker's Wide Lens hidden by the foe's Embargo (B13-31) or taken by its Knock Off
+      (``BtlCmd_TryKnockOff``, battle_script.c:6622-6624; F-17) before the check: the second
+      half, the threshold without the lens.
 
     Each applies once: a move has one effect, and the only repeated hits are
     ``MULTI_HIT``'s and Twineedle's (``MoveFlag.HIT_TWICE``, a poison), which change no stage
@@ -906,9 +968,11 @@ def _threshold_grid(
     # second half, which a Wide Lens holder (no Zoom Lens, no Micle Berry) never used, is its
     # threshold without the lens. A Zoom Lens or Micle holder's hidden item is the first half's
     # (no Zoom bonus, no berry); a hidden Bright Powder needs the defender embargoed before
-    # the side's own move: only the side itself could do it.
+    # the side's own move: only the side itself could do it. The foe's Knock Off before the
+    # check takes the item outright (BtlCmd_TryKnockOff, battle_script.c:6622-6624: heldItem =
+    # ITEM_NONE), which the check reads alike (F-17): the same second half.
     wide = held == ItemId.WIDE_LENS
-    foe_embargo = foes(changes & (effect == EffectId.EMBARGO))
+    foe_embargo = foes(changes & ((effect == EffectId.EMBARGO) | (effect == EffectId.KNOCK_OFF)))
     thresholds, possible = [], []
     n_stage = _STAGE_VARIANTS**2
     for side in range(fmt.B):
@@ -1073,7 +1137,15 @@ def _threshold_grid(
             # the foe's (below). Raw writes of BattleMon.ability.
             ability = jnp.where(f & (xf | sw | rp), copied, state.ability[party(fmt, foe), foe_mon])
             gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
+            # The copy also holds the side's species and ability row and slot, which
+            # NO_CLOUD_NINE reads (damage.decomp_abilities): a foe that loses its own Cloud
+            # Nine / Air Lock by its Transform no longer suppresses the weather (F-25).
             side_mon = state.active[side]
+            mine, theirs = (party(fmt, side), side_mon), (party(fmt, foe), foe_mon)
+
+            def take(arr):
+                return arr.at[theirs].set(jnp.where(f & xf, arr[mine], arr[theirs]))
+
             insomnia = jnp.where(
                 f & wk,
                 AbilityId.INSOMNIA,
@@ -1085,6 +1157,9 @@ def _threshold_grid(
                 .set(ability.astype(state.ability.dtype))
                 .at[party(fmt, side), side_mon]
                 .set(insomnia.astype(state.ability.dtype)),
+                species=take(state.species),
+                ability_form=take(state.ability_form),
+                ability_slot=take(state.ability_slot),
                 gravity=gravity.astype(state.gravity.dtype),
                 # Gastro Acid's bit (MOVE_EFFECT_ABILITY_SUPPRESSED), the side's own.
                 ability_suppressed=state.ability_suppressed.at[side].set(
@@ -1283,9 +1358,26 @@ CRIT_ODDS_EFFECTS = {
     EffectId.GASTRO_ACID: _suppress_all,
     EffectId.FLING: _flung_focus_energy,
 }
+
+
+def _lansat_pinch(tables: Tables, state: BattleState) -> BattleState:
+    """A Lansat Berry's write to the crit inputs (``HOLD_EFFECT_PINCH_CRITRATE_UP``,
+    battle_lib.c:4838-4848: the holder's Focus Energy, ``hooks._pinch_effects``): every
+    battler holding one has Focus Energy (its HP test is not judged: over-approximate). It is
+    another battler's move that brings the pinch before the holder's CalcCrit (bcp.c:3691-3696:
+    the held-item check after every move), so it is the last variant bit, used by any non-status
+    move and by Pain Split, the one modelled status move that lowers its target's HP
+    (``effects._pain_split``, subscript_pain_split.s:12-22) (``crit_variants``), F-9."""
+    holds = tables.item_effect[held_items(state)] == ItemId.LANSAT_BERRY
+    return state._replace(
+        focus_energy=(state.focus_energy | holds).astype(state.focus_energy.dtype)
+    )
+
+
 # The odds variants of ``crit_variants``: variant v applies the writes of the effects whose bit
-# is set in v (in ``CRIT_ODDS_EFFECTS`` order); variant 0 is the turn start.
-CRIT_VARIANTS = 2 ** len(CRIT_ODDS_EFFECTS)
+# is set in v (in ``CRIT_ODDS_EFFECTS`` order, then the Lansat pinch's); variant 0 is the turn
+# start.
+CRIT_VARIANTS = 2 ** (len(CRIT_ODDS_EFFECTS) + 1)
 
 
 def crit_variants(
@@ -1305,7 +1397,7 @@ def crit_variants(
     if before is None:
         before = ~jnp.eye(n, dtype=bool)
     before = jnp.asarray(before, bool)
-    writes = tuple(CRIT_ODDS_EFFECTS.values())
+    writes = (*CRIT_ODDS_EFFECTS.values(), _lansat_pinch)
     odds, singles = [], []
     for v in range(CRIT_VARIANTS):
         s = state
@@ -1316,8 +1408,12 @@ def crit_variants(
     base = odds[0]
     uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
     effect = tables.move_effect[moves]
-    for e, eff in enumerate(CRIT_ODDS_EFFECTS):
-        used = uses_move & (effect == eff)  # [B], by the user
+    # Each write's user: the battlers that use its effect; the Lansat pinch's (the last entry), a
+    # non-status move or Pain Split, which lowers its target's HP (F-9).
+    users = [uses_move & (effect == eff) for eff in CRIT_ODDS_EFFECTS]
+    hp_lowering = (tables.move_category[moves] != STATUS_CATEGORY) | (effect == EffectId.PAIN_SPLIT)
+    users.append(uses_move & hp_lowering)
+    for e, used in enumerate(users):  # [B], by the user
         reached = jnp.any(before & used[None, :], axis=1)  # [B], by the battler hit after
         singles.append(reached & (odds[1 << e] != base))
     possible = []
@@ -1353,6 +1449,29 @@ def crit_lands(tables: Tables, state: BattleState, side, move, value) -> jnp.nda
     return (value > 0) & ((value - 1) % odds == 0)
 
 
+def self_lock(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: the side's turn can start with its lock move aimed at itself (singles
+    follow-up (ii)): locked (a locked battler picks no command, bcp.c:334-338), not encored
+    (bcp.c:1869-1884 randomize), its stored target (``chosen_target``) the side itself, and the
+    locked move of ``RANGE_SINGLE_TARGET`` (Rollout, Ice Ball, a charge move's strike), whose
+    defender ``BattleSystem_Defender`` reads from the stored target (lib.c:1709-1719). A faster
+    Encore or Follow Me of the foe can still turn it to the foe (the Encore branch randomizes,
+    lib.c:1714-1717 comes first), so the laws cover both targets: this side's accuracy roll is
+    kept whole (every roll its own class, whatever the accuracy and evasion stages, items and
+    abilities of either battler), its crit and its damage are not cut by the foe's armor,
+    immunity or Protect, and its secondary, flinch, contact and Focus Band reads are kept for
+    either target."""
+    fmt = format_of(state)
+    locked = state.locked_move.astype(_I32)
+    return (
+        (state.over == 0)
+        & (locked != 0)
+        & (state.encore_move == 0)
+        & (state.chosen_target.astype(_I32) == jnp.arange(fmt.B))
+        & (tables.move_target[locked] == MoveTarget.RANGE_SINGLE_TARGET)
+    )
+
+
 def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndarray:
     """``bool[B]``: each side's move meets a Battle Armor or Shell Armor holder as it sees it
     (``Battler_IgnorableAbility``, battle_lib.c:7135-7136): the foe's active Pokemon or the one
@@ -1360,7 +1479,7 @@ def armored(tables: Tables, state: BattleState, actions, moves=None) -> jnp.ndar
 
     A foe that uses Transform this turn (``moves``: the move each action runs, as
     ``crit_odds``') may hold the side's own ability at the side's CalcCrit: ``BtlCmd_Transform``
-    copies the BattleMon up to ``ability`` (battle_script.c:5342-5345, battle_mon.h:84). It is
+    copies the BattleMon up to ``ability`` (battle_script.c:5346-5348, battle_mon.h:84). It is
     armored then only when the side's own ability is an armor too (over-approximate: the
     Transform may move later or fail, so either ability can be the one read)."""
     fmt = format_of(state)
@@ -1657,8 +1776,8 @@ def _draw_calls(key, tables: Tables, state: BattleState, chosen) -> jnp.ndarray:
     if fmt.B > 2:
         counts = jnp.sum((state.move_copied_hit != 0).astype(_I32), axis=1)
         mirror = jax.random.randint(
-            jax.random.fold_in(key, 44), (fmt.B,), 0, jnp.maximum(counts, 1), dtype=_I32
-        )
+            jax.random.fold_in(key, 50), (fmt.B,), 0, jnp.maximum(counts, 1), dtype=_I32
+        )  # key 50: 44-49 are the D2 target draws, Starf and Conversion 2
     return jnp.where(
         kinds == CALL_SLEEP_TALK,
         talk,
@@ -1718,13 +1837,21 @@ def _move_draws(key, tables: Tables, state: BattleState, actions, moves) -> dict
     rolls = _per_hit(fmt, key, k[0], "hit", 0, 100) + 1
     hit = hit_class(rolls, thresholds[:, None, :], possible[:, None, :])
     later_hit = hit_class(rolls, later[:, None, :], possible[:, None, :])
+    # A lock aimed at its user (self_lock) keeps the roll whole: its threshold reads either battler.
+    # Gated by a move action as the law is (enumerate.outcome_laws ``lock``).
+    uses_move = (state.over == 0) & ~is_switch(actions) & ~is_item(actions)
+    lock = (uses_move & self_lock(tables, state))[:, None]
+    hit = jnp.where(lock, rolls, hit)
+    later_hit = jnp.where(lock, rolls, later_hit)
     hit = jnp.where(jnp.arange(MAX_HITS)[None, :] == 0, hit, later_hit)
     # Lucky Chant on the defending side blocks crits (battle_lib.c:7137), as does the target's
-    # Battle Armor / Shell Armor (:7135-7136).
+    # Battle Armor / Shell Armor (:7135-7136). A lock aimed at its user is not cut: its defender
+    # may be the user or the foe, and step reads both on the hit's own defender
+    # (effects.crit_blocked); for every other move this cut makes that read a no-op.
     no_crit = (
         (state.lucky_chant[side_of(_foe(jnp.arange(fmt.B)))] != 0)
         | armored(tables, state, actions, moves)
-    )[:, None]
+    )[:, None] & ~lock
     # The crit draw, read by step with the odds at the hit (crit_lands). Odds that cannot change
     # before the hit: RandNext() % odds == 0 as 1 / 0 (the turn-start draw). Odds that can
     # (crit_variants): one r in [0, CRIT_DRAWS) per hit, as its class over the odds the hit can
@@ -1978,11 +2105,31 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         <= jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        # BattleSystem_Defender's one RandNext() & 1 (lib.c:1653, :1700, :4187), read at B = 4 only
+        # (D2-4, ledger D2-4 section R8). From a fold_in key: every field above keeps its samples.
+        target_draw=jax.random.randint(jax.random.fold_in(key, 44), per_side, 0, 2, dtype=_I32),
+        # GoToMoveScript's / the Bide release's / ChooseTraceTarget's one RandNext() & 1 (D2-13,
+        # D2-14, D2-16; keys 45-47, read at B = 4 only).
+        call_target_draw=jax.random.randint(
+            jax.random.fold_in(key, 45), per_side, 0, 2, dtype=_I32
+        ),
+        bide_target_draw=jax.random.randint(
+            jax.random.fold_in(key, 46), per_side, 0, 2, dtype=_I32
+        ),
+        trace_pick=jax.random.randint(
+            jax.random.fold_in(key, 47), (fmt.B, TRACE_FIRES), 0, 2, dtype=_I32
+        ),
+        # Starf Berry (battle_lib.c:4864-4866): RandNext() % 5 until the stat is below +6, uniform
+        # over the eligible stats by the % n convention; one value in [0, 60) serves every count 1-5
+        # (F-10): the turn's and the faint replacement's. Key 48 (main's D2 draws hold 44-47).
+        starf=jax.random.randint(
+            jax.random.fold_in(key, 48), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
+        ),
         # Conversion 2's pick (battle_script.c:4783-4817): for each battler and recorded type the
         # first eligible row of the ``% 112`` retry loop, its law ``damage.conv2_probs`` read at the
-        # turn-start types (a battler's types change only by its own action: E3-B2-3). From a
-        # fold_in key.
-        conv2=_conv2_draw(jax.random.fold_in(key, 45), tables, state),
+        # turn-start types (a battler's types change only by its own action: E3-B2-3). Key 49
+        # (main's D2 and Starf draws hold 44-48).
+        conv2=_conv2_draw(jax.random.fold_in(key, 49), tables, state),
     )
     outcome = _cast(outcome)
 

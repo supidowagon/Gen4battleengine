@@ -1066,7 +1066,7 @@ of them, :2107-2115).
   `test_invokers.py`, `test_kaizo_policy.py`, `test_coverage.py`.
 - G-68 Mimic (`EffectId.MIMIC`, BATTLE_EFFECT_COPY_MOVE_FOR_BATTLE 82), in both games; the party / battler
   split of the move and PP arrays. effect_script_0082.s:3 runs `subscript_mimic.s` on a hit that
-  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4523) fails
+  connected (battle_lib.c:1485-1490). `BtlCmd_TryMimic` (battle_script.c:4476-4524) fails
   (subscript_mimic.s:16, MOVE_STATUS_FAILED) when `movePrevByBattler[defender]` is MOVE_NONE or not
   Mimic-able (`Move_CanBeMimicked`, battle_lib.c:7152-7158, :7182-7192: Metronome, Struggle, Sketch,
   Mimic, Chatter, `ids.MIMIC_FORBIDDEN`), the user is Transformed (:4482, G-69), the defender has a
@@ -1100,7 +1100,7 @@ of them, :2107-2115).
   Transformed (:6) defender; a Substitute is not tested. `BtlCmd_Transform` (battle_script.c:5330-5373)
   sets `VOLATILE_CONDITION_TRANSFORM`, ends Disable (:5335-5336), clears `mimickedMoveSlot` (:5339: the
   mimicked slot is NOT restored, the copy overwrites it) and Last Resort's count, and copies every byte of
-  the defender's BattleMon up to and including `ability` (:5342-5348; battle_mon.h:57-84): species, the
+  the defender's BattleMon up to and including `ability` (:5346-5348; battle_mon.h:57-84): species, the
   five stats as the BattleMon holds them (a Power-Tricked defender's swapped ones), the four moves, the IVs,
   all eight stat stages, both types, the form and the ability; not HP, max HP, level, friendship, PP Ups,
   status, volatiles, `moveEffectsMask`, the item, the gender (`transformedPID` / `transformedGender` are
@@ -1196,13 +1196,13 @@ of them, :2107-2115).
   FIELD_CONDITION_GRAVITY, read as `hitRate * 10 / 6` (battle_controller_player.c:2972-2974); Transform
   (`BtlCmd_Transform`, battle_script.c:5330-5373) copies the BattleMon up to `ability`, so `statBoosts`
   (battle_mon.h:75) and `ability` (:84): the target's evasion becomes the side's own (as Psych Up's), and
-  the target holds the side's ability (Sand Veil / Snow Cloak :2927-2933, Tangled Feet :2944-2947, Simple /
-  Unaware :2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags (:5350-5358) rerun
-  its switch-in checks, so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
+  the target holds the side's ability (Sand Veil / Snow Cloak bcp.c:2927-2933, Tangled Feet bcp.c:2944-2947,
+  Simple / Unaware bcp.c:2876-2887, No Guard bcp.c:3016-3021, Cloud Nine); the cleared announce flags
+  (battle_script.c:5350-5358) let its switch-in checks rerun (bcp.c:3672-3673, :3973), so a copied weather ability sets its weather (battle_lib.c:3740-3790). Built in
   `_threshold_grid`: the eva copy joins Psych Up's, and the second weather variant is now the foe's field
   move (weather move, Gravity, or Transform with its copied ability and weather); one move has one effect.
   `future_thresholds` keeps the Future Sight roll whole (`loose`) when a Gravity or Transform is used this
-  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1235, ends it before the hit
+  turn or Gravity is at 1 (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1238, ends it before the hit
   :1758-1783). The reference engine's live check (`_hit_rate`, `_transform`) already read both; no change.
   Tests: `test_accuracy_classes.py` (registry, `test_gravity_and_transform_are_seen_by_hit_thresholds`).
 - Trial outcome laws: Transform, Mimic and Chatter in the damage registries and the laws (branch
@@ -1215,47 +1215,410 @@ of them, :2107-2115).
   whenever a Transform is used (the copied Spe, stage and speed ability); `shed_skin` for a copied Shed
   Skin. `outcome.armored` (laws `no_crit`, `sample_outcome`) drops a Battle Armor / Shell Armor the
   Transform replaces with the side's own ability (battle_lib.c:7135-7136). Mimic (`BtlCmd_TryMimic`,
-  :4476-4523) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
+  :4476-4524) writes only its user's moves, PP, `mimickedMoveSlot` and `lastResortCount`: input-neutral,
   non-table. Chatter (effect_script_0267.s:5-7: CalcCrit, CalcDamage, then the ON_HIT confusion):
   input-neutral, table damage. `UNSUPPORTED` stays outside both registries (the tests add it). The
   reference engine reads the live state at each check; no change. Tests: `test_transform_laws.py`,
   `test_damage_classes.py` (Chatter's exact case, Transform's compression case).
 
-## Stream state (restart point, 2026-11-18)
+## Batch F (Kaizo abilities, held items, other)
+
+Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_scratch/e1/b-next/carry.md`.
+
+### Open items
+- **F-O1 Weather Ball's AI type outside the typed weathers.** `TrainerAI_MoveType` (src/battle/trainer_ai/trainer_ai.c:
+  3222-3240) assigns a type only in rain, sand, sun and hail (each under `NO_CLOUD_NINE`); with no weather, fog, or
+  Cloud Nine / Air Lock out it returns an uninitialised local (`int result;`, :3129; no `default` for the move). Ruling
+  (manager, 2026-11-18), built: the four typed weathers are modelled (`damage.ai_move_type` via `weather_ball_params`,
+  `ai_weather_ball_typed`; the switch AI's and the replacement's reads share it); the AI refusal for the other states
+  stays (`policy._refused` `move_type`, `switching.weather_ball_refused`), and the tests of that refusal carry `fullset`
+  (`test_batch13_refusals_lifted`, `test_weather_ball_move_type_is_untyped_outside_the_four_weathers`,
+  `test_party_variable_types_follow_move_calc_variable_type`). The docstring cites now give :3222-3240 (they gave the
+  pre-re-index :3209-3227). Blocks 4 Kaizo battles (opponent parties with Weather Ball, `mechanics_backlog.md`); each
+  can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it under any weather). A player's own
+  Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any battle. Trigger: a real-game check
+  (memory dump per caller) when the user next does real-game checks.
+- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch.** Ruling
+  (manager, merge gate of batch F): kept as ordinary backlog in this batch, built as the next batch's first group. The
+  decomp path: a frozen Transformed copy passes `subscript_check_shaymin_form.s:5-9` (species 492, form not 0, no
+  Substitute, Freeze); :10 sets the form to 0; :12-19 load Land's ability by the copy's own personality bit 0; :22-23
+  write it under `SYSCTL_RECALC_MON_STATS`, so `BtlCmd_UpdateMonDataFromVar`'s `BattleMon_CopyToParty`
+  (battle_script.c:3401-3407) has `BtlIOCmd_UpdatePartyMon` set `MON_DATA_ABILITY` on the Transform user's own party
+  Pokemon and recalculate its stats (battle_io_command.c:601-604); :24-27 write Land's types; :30 `RefreshMonData`
+  reloads the stats, level, friendship and HP from that party Pokemon (`BattleSystem_ReloadPokemon`, battle_lib.c:
+  169-193; the moves stay while transformed, :183); every later switch-in reads the written ability
+  (`BattleSystem_InitBattleMon`, battle_lib.c:124). To build: a per-party ability override (per party slot, both
+  sides), written by `hooks.shaymin_land` (and the reference's) for a Transformed defender together with the party
+  stats recomputed on its own species, and read wherever the engine takes a party Pokemon's ability
+  (`damage.decomp_abilities` at switch-in / InitBattleMon, the Transform end's `_restore_ability`, the AI's
+  `MON_DATA_ABILITY` reads); then drop `coverage.transform_sky_refusals` and the backlog's F-26 rows. Kaizo: one
+  battle, Champion Cynthia (trainer 870, Elite Four Split, a level-100 Sky Shaymin), refused only when your side can
+  run Transform; `check_opponent` without your party counts none, so `tools/kaizo/backlog.py` adds the row with your
+  Transform user assumed (`mechanics_backlog.md`, "form change").
+- **F-O3 Two Starf Berry eats on one side in one turn share one draw.** The game draws `RandNext() % 5` per eat
+  (battle_lib.c:4864-4866); the engine has one turn draw per side (`Outcome.starf[side, 0]` -> `starf_roll`,
+  `step._action_phase`), so a holder that eats at its pinch and then U-turns / Baton Passes into a second holder that
+  eats on entry (the same `BattleSystem_TriggerHeldItem` path, :5273-5294) repeats the first rank, as F-10's Recycled
+  berry eaten twice. Needs a third draw column (`starf[side, 2]`) for the pivot newcomer's check with its own law in
+  `enumerate._starf_reads`. Not built in this fix round.
+- **F-O4 The AI's absorb switch under its shared gate draw, and Water / Volt Absorb on its bench.**
+  `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640) draws one `RandNext() % 3` when the AI has a super-effective move
+  and returns FALSE unless it is 0 (:3651), and only then the bench's `RandNext() & 1` draws (:3706): one sequence the
+  independent switch sites cannot express, refused (`switching._Layout.absorb_gate`, raises). The same function's
+  Water (:3668-3669) and Electric (:3670-3671) cases are refused outright (`switching._AI_SIDE_ABILITIES`). Both
+  raise; to build: the gate as a conditioning draw of the absorb sites, and `checkAbility` by `moveHit`'s type for the
+  bench test.
+- **F-O5 Hydration's Nightmare clear waits for Nightmare.** `subscript_ability_restore_status.s:6` clears
+  `VOLATILE_CONDITION_NIGHTMARE` with the status (F-5); Nightmare is not modelled, so this is part of the Nightmare
+  group: when it is built, Hydration's (and every `subscript_ability_restore_status` caller's) cure clears it.
+
+### Rulings
+- F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
+  (`movePower /= 2`) for a defender whose `Battler_IgnorableAbility` is Heatproof (battle_lib.c:6841-6844): Mold Breaker
+  ignores it (`damage._pre_random`, `d_ability_eff`; reference `_calc_move_damage`); the AI estimate shares the code.
+  Burn damage: `subscript_burn_damage.s:6-9` takes `Divide(maxHP, 8)` and, for a Heatproof holder (`CheckAbility`, so
+  `Battler_Ability`: Mold Breaker never matters), `Divide(loss, 2)`; `BattleSystem_Divide` floors a positive dividend
+  at 1 (battle_lib.c:3599-3618), so the loss is max(1, max(1, maxHP/8) / 2) (`step._burn_check`, reference
+  `_burn_check`). Will-O-Wisp is not blocked (no other Heatproof read: `grep ABILITY_HEATPROOF`: lib:6842 and
+  burn_damage.s:8 only).
+- F-2 Flash Fire (`AbilityId.FLASH_FIRE`, decomp 18; new per-battler `flash_fire` = `MoveEffectsData.flashFire`,
+  battle_mon.h:21). Absorb: `BattleSystem_TriggerImmunityAbility` (battle_lib.c:3515-3521): `Battler_IgnorableAbility`
+  Flash Fire, moveType Fire, defender not frozen, not `SYSCTL_FIRST_OF_MULTI_TURN`, and move power != 0 or
+  Will-O-Wisp (`ids.MOVE_WILL_O_WISP`); no attacker != defender test. Runs where Dry Skin / Water / Volt Absorb do
+  (`step._use_move`, reference `_use_move` beside them; bcp.c:3281-3286, :2789-2797: only a move that hit; no
+  damage, no effect); no heal: `subscript_absorb_and_boost_fire_type_moves.s:13` sets the flag, the holder's ability
+  is revealed (`hooks.REVEALS_ON` ABSORB). Boost: `BattleSystem_CalcMoveDamage` damage x15/10 for the attacker's flag
+  and a Fire move, after the weather block and before `+ 2` (:7074-7076; `damage._pre_random`, reference
+  `_calc_move_damage`): it reads the flag, so it survives a lost ability and Mold Breaker. The flag clears on a
+  switch and a faint (lib:2101-2104, :2185-2188: `VOLATILE_FIELDS`) and Baton Pass does not keep it (lib:2107-2115).
+  Enumerate: the absorb law removes a sure flinch; the foe's Fire move on a Flash Fire side changes its own later
+  Fire hit's input (`foe_move` clause). AI: `Basic_CheckForImmunity` already read decomp ability 18 (policy.py);
+  the AI estimate's boost is its attacker's flag; `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640-3713), Flash
+  Fire's case: a bench Flash Fire holder after a Fire `moveHit` with power (table type, :3668) draws `RandNext() & 1`
+  in party order, A's own Flash Fire holds the switch (:3678) (`switching.SwitchSite.ABSORB`). With a super-
+  effective move of A the function first reads `RandNext() % 3` (:3651), one draw shared by the bench draws:
+  independent sites cannot express it, so that state stays refused (`_Layout.absorb_gate`); Water Absorb / Volt
+  Absorb on the AI's bench stay refused wholesale (not in this group). Doubles-only AI parts (TagStrategy,
+  IfActivatedFlashFire) and Expert_ChangeUserAbility (Role Play / Skill Swap unmodelled) are not built.
+- F-3 Multitype (`AbilityId.MULTITYPE`, decomp 121). `Battler_MonType` (battle_lib.c:7618-7703): an Arceus whose raw
+  `BattleMon.ability` (not `Battler_Ability`) is Multitype has both types of its raw `heldItem`'s
+  `HOLD_EFFECT_ARCEUS_*` (:7631-7696), Normal for any other item or none (:7697-7699); the stored types and the
+  form are ignored, Klutz and Embargo do not hide the item. The party side agrees (`MON_DATA_TYPE_1/2`,
+  pokemon.c:1219-1226). `damage.multitype_plate` / `personal_types` (reference `_multitype_plate`,
+  `_personal_types`) are used where the engine builds or restores a battler's types: `make_state`,
+  `step._restore_types`, `effects.camouflaged`, and Transform (`effects._transform`: copying species Arceus and
+  Multitype, the user's own plate decides, not the target's types, :7629-7699; the reverse, an Arceus copying
+  another ability, keeps the copied types). The plate's power is the item's table value (Kaizo 50: `tables`,
+  nothing hardcoded; `judgment_type`). The protections already in place: Camouflage, Knock Off, Embargo, Trace's
+  exclusion; Gastro Acid, Worry Seed, Role Play, Skill Swap, Trick, Thief / Covet, Fling and Conversion are not
+  modelled moves, so their Multitype tests are not built (the sheet's rule stands for when they are). The save
+  parser's Arceus-form refusal (`saves/pkm.py`) is gone: the form's row is the species' and the types follow the
+  plate. AI: type loads read `state.types` (`BattleMon_Get`); the Fling / Gastro Acid / Worry Seed Multitype
+  scores belong to those moves.
+- F-4 Intimidate and a substitute the action hit. `subscript_intimidate.s:13` `CheckSubstitute` skips a foe with
+  the substitute bit or `selfTurnFlags[foe] & SELF_TURN_FLAG_SUBSTITUTE_HIT` (`BtlCmd_CheckSubstitute`,
+  battle_script.c:9172-9184), which every hit that lands on a substitute sets, the breaking one included
+  (bcp.c:3359-3371), until `BattleContext_Init` (battle_lib.c:2013-2015; every action's end, bcp.c:3998, and the
+  turn end, :1855). A U-turn's newcomer enters inside that action, so its Intimidate skips a foe whose substitute
+  the U-turn hit even with `substitute_hp` 0. New per-battler scratch `ts_sub_hit` (written at the pause beside
+  `ts_damaged`, read at the resumed `switch_in_effects`, `hooks.intimidate(sub_hit=)`); reference
+  `_Turn.sub_hit_mon`. An end-of-turn replacement or a turn-start switch finds the flag clear (unchanged). The other
+  `CheckSubstitute` users reachable from a switch-in: none (grep: `CheckSubstitute` in `res/battle/scripts`
+  switch-in subscripts is Intimidate's alone; the move subscripts that call it are not switch-ins).
+- F-5 Hydration (`AbilityId.HYDRATION`, decomp 93). `BtlCmd_EndOfTurnWeatherEffect` (battle_script.c:5626-5639):
+  in rain, a battler with HP and any status (`MON_CONDITION_ANY`) whose `Battler_Ability` is Hydration sets
+  `scriptTemp = WEATHER_EFFECT_HYDRATION`; `subscript_weather_continues.s` then runs
+  `subscript_ability_restore_status.s`: status := `MON_CONDITION_NONE` (sleep and toxic counters live in the status
+  bits, so `status_counter` goes with it), Nightmare off (:6; Nightmare is not modelled), message tags the holder
+  (`hooks.REVEALS_ON` STATUS_CURE). No HP change; no `MOVE_EFFECT_NO_WEATHER_DAMAGE` test in the rain block, so a
+  Diving holder is cured. The whole body sits inside `NO_CLOUD_NINE`, the weather step's own gate
+  (`step.field_conditions`: `weather_suppressed`), and runs only when the rain continues (the turn it runs out
+  nothing is cured). It sits in `step._weather_effect` (reference `_weather_effect`), read by decomp id from
+  `damage.decomp_abilities` (carry 9); the weather step precedes every mon-condition step (bcp.c:900-912, :1252), so
+  the cure comes before the turn's poison/burn damage and the held-item status checks. Not a
+  `BattleSystem_RecoverStatusByAbility` case (:3966-3968). The AI side was modelled before (Basic_CheckCannotPoison,
+  Basic_CheckRainDance / SunnyDay, Expert_RainDance: `ai/policy.py`); coverage no longer refuses Hydration.
+- F-6 Forecast (`AbilityId.FORECAST`, decomp 59; `ids.SPECIES_CASTFORM` 351). `BattleSystem_TriggerFormChange`'s
+  Castform block (battle_lib.c:6313-6364): for a battler of species Castform with HP and `Battler_Ability` Forecast,
+  with no alive Cloud Nine / Air Lock: no rain, sun or hail (`FIELD_CONDITION_CASTFORM`, condition.h:140) and
+  neither type Normal -> Normal/Normal; else sun and neither type Fire -> Fire/Fire; else rain and neither Water ->
+  Water/Water; else hail and neither Ice -> Ice/Ice; with one alive: neither type Normal -> Normal/Normal
+  (:6355-6363). Sandstorm and fog count as none. Only `type1/type2` are written (`hooks.forecast`, reference
+  `_forecast`); `formNum` is read by the display only (grep `formNum` in src/battle: battle_controller.c, battle_display.c)
+  and the party's form is not updated (no `SYSCTL_FORM_CHANGE`, only Giratina sets it, :6446), so `state.form` stays
+  and the switch-in's re-read of the party types (:113-114) restores the personal types. The state is not advanced
+  while a change happened (:4115-4121); each result is stable under its own test and no battler's change feeds
+  another's, so one pass per call reaches the same fixpoint in any order. Called where
+  `BattleSystem_TriggerEffectOnSwitch` runs: `hooks.switch_in_effects` and `hooks.show_battle_mon` after Pressure's
+  announcement (FORM_CHANGE follows PRESSURE, :3629-3640), `step._move_end` (every move; bcp.c:3672-3680, :3973),
+  and `step._turn_start_items` before its item check (the next turn's ShowBattleMon, bcp.c:256, :1844-1858: a
+  weather that ended reverts Castform before commands). Reference: `_switch_in_effects`, `_finish_action`,
+  `_end_turn`. Skill Swap / Role Play / Worry Seed keep the current types (no revert code); Transform copies species
+  and ability so a Castform copy follows the rule (the species test reads the battler's species). Trace cannot copy
+  Forecast (`UNTRACEABLE_ABILITIES`, already). AI: no `script.s` read; type loads read `state.types`
+  (`BattleMon_Get`), so the AI sees the changed types.
+
+Held items, hold effects 50, 36, 41, 42, 92, 0, 1, 12 (sheets `item-*.md`). Kaizo's renamed and re-purposed slots take
+the id of the hold effect they now have through `effect_map.KAIZO_ITEM_IDS` (keyed by the slot's `spelling()` name and
+Kaizo hold effect, used by `build_tables._item_maps` where the slot is not vanilla's); a non-berry never takes a
+berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_IsBerry` (`hooks.PLUCKABLE`).
+- F-7 Macho Brace and the Power items (hold 50 `EVS_UP_SPEED_DOWN`; `ItemId.MACHO_BRACE`, an id with no hook). Battle
+  Speed: `BattleSystem_CompareBattlerSpeed` halves a holder of `sSpeedHalvingItemEffects` (50, 106, 117-122,
+  battle_lib.c:1160-1169, :1240-1246, :1306-1312) read through `BattleSystem_GetItemData`, so Klutz and Embargo do not
+  stop it (`order.effective_speed`, reference `_speed`: both already read the raw hold effect). EVs:
+  `BattleScript_CalcEffortValues` doubles every yield for hold 50 (battle_script.c:10289-10291) and adds the item param
+  for 117-122 (:10243-10283); Kaizo's Power items 289-294 are hold 50 with param 0 (vanilla 117-122 with 4), so they act
+  as Macho Braces (`levelup`, which reads the party mon's raw hold effect and param; Knock Off keeps the party copy,
+  io:590-591). `effect_map.HOLD_EFFECT_TO_ID` maps 50 and 117-122 to the id (vanilla's Power items were UNSUPPORTED
+  for want of one) and `KAIZO_ITEM_IDS` the six Kaizo Power items (same name, other hold effect). Enumerate: neutral (a
+  speed factor of the order fixed at the turn's start, like Iron Ball). AI: `AICmd_IfSpeedCompare*` call
+  `CompareBattlerSpeed` (ai.c:1109, :1121), so the halving is seen; `Expert_Trick` and Fling are unsupported.
+- F-8 Berserk Gene (Kaizo item 70, hold 36 `PINCH_ATK_UP`, param 0; `ItemId.BERSERK_GENE`). The Liechi path:
+  `BattleSystem_TriggerHeldItem` / `_OnStatus` (battle_lib.c:4773-4784, :5196-5207): with param 0, `maxHP / 0` is
+  `maxHP` (ruling G-53), so it fires at any HP once Attack is below +6; +1 Attack by the stage routine
+  (`subscript_held_item_raise_stat.s:11`), then `PLUCK_CHECK` removes it. It is its own id because Pluck / Bug Bite
+  leave it (PLUCK_EFFECT_NONE, not a berry: lib:5832-5835): `hooks._raise_stat` and reference
+  `_held_item` take it with `PINCH_BERRY`, `PLUCKABLE` does not. `item_param[i, 1]` is Attack from
+  `PINCH_STAT_HOLD_EFFECTS[36]`; `PINCH_DIVISOR_ITEMS` takes any param. Enumerate: the pinch berry's item clause.
+- F-9 Lansat Berry (hold 41, param 4; `ItemId.LANSAT_BERRY`). Held: at `curHP <= maxHP / param` (Gluttony halves the
+  param) and no `VOLATILE_CONDITION_FOCUS_ENERGY`, the holder gets it (`subscript_held_item_raise_crit.s:11`) and the
+  berry is eaten (lib:4838-4848, :5261-5271); already focused: no trigger, the berry stays. Pluck / Bug Bite: the
+  eater gains it unless it has it, at any HP, the berry eaten either way (:5819-5825; Klutz / Embargo eater:
+  no effect, :5839-5844). `hooks._pinch_effects` (called by `held_item_check` and `pluck_berry`), reference
+  `_pinch_effect`. Its crit effect is the existing `focus_energy` (+2, `outcome.side_crit_odds`). The pinch can arrive
+  from a foe's hit before the holder's own CalcCrit, so `outcome.crit_variants` has one more variant bit
+  (`_lansat_pinch`: a Lansat holder has Focus Energy, used by any non-status move of another battler and by Pain
+  Split, the one modelled status move that lowers its target's HP (`effects._pain_split`,
+  subscript_pain_split.s:12-22; the defender's item check follows every move, bcp.c:3691-3696); over-
+  approximate): `CRIT_VARIANTS` is 16. AI: `Basic_CheckAlreadyPumpedUp` already reads the volatile (ai.s:592-594);
+  the Natural Gift and Recycle tables already list the berry (items 149-212).
+- F-10 Starf Berry (hold 42, param 4; `ItemId.STARF_BERRY`). At the same pinch (lib:4850-4872, :5273-5294) it raises
+  one of Attack, Defense, Speed, Sp. Atk, Sp. Def (`ids.STARF_STATS`: `BATTLE_STAT_ATTACK + i`, i < 5) by 2, capped at
+  +6, by a direct `UpdateMonData` write (`subscript_held_item_sharply_raise_stat.s:13-17`: no Mist, no Clear Body;
+  `hooks._pinch_effects` uses `change_stage`); with all five at +6 it does not trigger and is kept. The stat:
+  `RandNext() % 5` until the drawn stat is below +6 (lib:4864-4866; Pluck :5798-5817, eaten even with all five at +6).
+  Ruling: by the project's `% n` convention (`RandNext() % n` uniform, as `Outcome.acupressure`, B12-9) it is uniform
+  over the eligible stats, not the exact 13108 / 13107 split the sheet notes (Attack's extra 1 in 65536): the draw is
+  `Outcome.starf[side, k]`, one value in [0, `STARF_DRAWS` = 60), and the stat is the eligible one of rank `value %
+  eligible` (`hooks.starf_stat`). The draw reaches the item checks, which take no outcome, through
+  `BattleState.starf_roll` (STATE.md). Each check outside the turn's actions draws its own (lib:5273-5294 via
+  `BattleSystem_TriggerHeldItem`, review F item 5): k = 0 the turn's (`step._action_phase` loads it); k = 1 a faint
+  replacement's switch-in check (ShowBattleMon :4151 after `subscript_show_party_list.s:22-24`), kept by
+  `step_events` in `starf_roll` (modulo 5: a fresh battler's count) where `step.starf_kept` (the side awaits a
+  replacement and a living bench holder is at its pinch or Spikes / Stealth Rock lie on its side) and read by
+  `step.replace` (so `search.playout.replacement_pass` and the tree's replacement children), then cleared; hidden,
+  like `qc_roll`. The battle start's checks (`hooks.battle_start`) run with `starf_roll` = `STARF_UNDRAWN`: a lead's
+  berry is eaten there and its stat waits in `starf_open` for the root's chance node (`step.root_belief`: one state
+  per eligible stat at 1 / count, visible, so separate root outcomes; `step.sample_root` for playouts;
+  `hooks.resolve_starf`); a `step` given a state still open draws it first from `starf[:, 0]`. Reference: `ref_step`
+  and `ref_replace` the same (`_resolve_starf`, `_starf_kept`). The turn-end `_turn_start_items` check (the next
+  ShowBattleMon) still reads the turn's draw, and a Recycled berry eaten twice in a turn repeats the pick
+  (outcome-variable limit). Enumerate (`_starf_reads`): `starf[d, 0]` only where a holder can eat this turn (the
+  active or switched-in one, or any living holder of the party when its U-turn / Baton Pass or a foe's Roar can
+  bring it in, at its pinch or able to lose HP: a move, a residual damage source, hazards; a Pluck / Bug Bite of a
+  foe holder; a Recycle of one; an open berry); its law the five values while the count stays 5 (the five stages'
+  highest plus this turn's bounded gains below +6, none of Belly Drum, Psych Up, the stage swaps, Transform, Baton
+  Pass, Recycle), else all 60. `starf[d, 1]`: five values where a holder can enter at its pinch after the turn. An item
+  clause on any of the five stats (own and foe's), a Speed +2 grid point for a Roar's drag. AI: the Recycle and
+  Natural Gift tables list it.
+- F-11 Leek (Kaizo item 259, vanilla Stick; hold 92 `FARFETCHD_CRITRATE_UP`, param 0). Identical bytes in both ROMs
+  except the name: `KAIZO_ITEM_IDS` maps the slot to `ItemId.CRIT_ITEM` (+2 crit stages for a Farfetch'd,
+  `BattleSystem_CalcCriticalMulti`, battle_lib.c:7128, `outcome.side_crit_odds`).
+- F-12 Lava Cookie and Old Gateau (Kaizo hold 12 `STATUS_RESTORE`, param 0, non-berries; `ItemId.LAVA_COOKIE`). Lum's
+  trigger (lib:4662-4697, :5052-5087: any status or confusion, no HP test, no Gluttony), cured status and confusion
+  as `_restore` / `_cure` do for Lum, and the item removed; Pluck / Bug Bite leave it (PLUCK_EFFECT_NONE, no berry:
+  :5832-5835). Enumerate: a status cure (the burn and paralysis clauses of Lum).
+- F-13 Big Nugget (Kaizo item 92, vanilla Nugget; hold 0). Only the name and Fling power 250 differ: `KAIZO_ITEM_IDS`
+  maps it to `ItemId.NONE` (no hold effect, not a berry: `Item_IsBerry`, src/item.c:357-365; Pluck leaves it,
+  lib:5832-5835). Fling is unsupported.
+- F-14 RageCandyBar (Kaizo item 71, vanilla Shoal Shell; hold 1 `HP_RESTORE`, param 100, no berry): Berry Juice's
+  effect with 100 HP, `KAIZO_ITEM_IDS` maps it to `ItemId.BERRY_JUICE` (not pluckable: lib:5832-5835; trigger
+  `curHP <= maxHP / 2`, lib:4585-4591). Natural Gift power 250, type 31: `BtlCmd_CalcNaturalGiftParams`
+  (battle_script.c:8088-8102) sets `moveType` 31, a value that is no type id, so `BattleSystem_ApplyTypeChart` finds no
+  STAB (`MON_HAS_TYPE`, lib:2592) and no chart row (:2611-2645) and no type-keyed item, ability or weather case matches
+  it: `damage.move_type_of` and reference `_move_type` give a Natural Gift type above `Type.DARK` the value
+  `Type.MYSTERY` (no row, and no battler's `state.types` holds it: roost only reads Flying as Mystery in the defender's
+  chart), as ruling B13-26 does for the AI's estimate; the table reads stay in range.
+- F-15 Party friendship wraps apart from the battler's (trainer bag items; the Kaizo Poke Ball of #345 Christine).
+  `BattleSystem_UseBagItem` bands by `Pokemon_GetValue(mon, MON_DATA_FRIENDSHIP)` of the **party** Pokemon (src/battle/
+  battle_system.c:716-733) and, when the item's amount is nonzero, adds it with `Pokemon_IncreaseValue` (:751) to the
+  party's u8 and with `Battler_AddVal` (:752-754) to the battler's. `BoxPokemon_IncreaseDataInternal` sets `newValue`
+  to 255 when `friendship + value > 255`, then adds `value` unless the sum is below 0 (src/pokemon.c:1859-1874): the u8
+  stores `(255 + value) & 0xFF`, so any gain that crosses 255 stores `value - 1` (254 + 3 -> 2), and a loss below 0
+  stores 0. `BattleMon_AddVal` clamps to 0-255 (battle_lib.c:1032-1043). The battler re-reads the party value in
+  `BattleSystem_InitBattleMon` (:136) and `BattleSystem_ReloadPokemon` (:179). New per-slot `party_friendship` beside
+  `friendship` (STATE.md): `bag.use_bag_item` bands by it and writes both; `step._switch_in` / reference `_enter` copy it
+  into `friendship`; a level-up reads it and writes both (`levelup.pay_exp_leveled`; the closed form needs no change,
+  a u8 never exceeds 255); `make_state` starts both equal. The refusal is removed (`bag.refused_bag_params`,
+  `refused_bag_items`, `AI_BRANCH_PARAMS`, `coverage` "trainer item", `policy._Refused.bag`, `_item_refusals`). Not
+  built: the Luxury Ball and egg-location +1 (:737-743), neither true of a trainer Pokemon (Poke Ball, egg location 0,
+  pokemon.c:441-442), and a player-side bag item; the save export of the player's party value is `party_friendship`
+  (no export path reads it yet). Kaizo's only wrapping trainer item is the Poke Ball of #345 Christine (Lv1 Sandshrew,
+  friendship 255): party 2, battler 255; the AI reads the battler value (Return / Frustration, trainer_ai.c:3018-3026).
+- F-16 Shaymin-Sky reverts to Land Forme when frozen (Kaizo #870 Cynthia; any side). `BattleControllerPlayer_
+  AfterMoveMessage` loads `subscript_check_shaymin_form` after the secondary effect of every hit and before Rage and
+  the contact ability (src/battle/battle_controller_player.c:3497-3505 one hit, :3557-3565 per multi-hit hit). The
+  script (res/battle/scripts/subscripts/subscript_check_shaymin_form.s:5-30) needs a defender whose species is 492,
+  form number nonzero, no Substitute and status exactly `MON_CONDITION_FREEZE`; it sets the form to 0, the ability to
+  Land's (personality bit 0 clear: ABILITY_1, else ABILITY_2 when nonzero, else ABILITY_1; `LoadArchivedMonData`
+  writes `calcTemp`, battle_script.c:9414-9425, which the following `UpdateMonDataFromVar` reads), raises
+  `SYSCTL_RECALC_MON_STATS`, sets the two types from Land's row and runs `RefreshMonData`. `BattleMon_CopyToParty`
+  sends `updateForm` / `updateStats` (battle_controller.c:1496-1499): the party form 0, ability, and
+  `Pokemon_CalcLevelAndStats` (battle_io_command.c:597-604); `BattleSystem_ReloadPokemon` then reloads the battler's
+  stats, HP, level and friendship (battle_lib.c:169-193). `hooks.shaymin_land` (JAX, called from `effects.play_hit`
+  right before `_contact_ability`, not for Pursuit's pre-switch hit, which loads no `AfterMoveMessage`) and reference
+  `_shaymin_land` (called from `_hit` at the same point): form 0, `ability_slot` kept when Land's row has an ability
+  there else 0 (Land's second slot is 0, so Natural Cure), `ability_form` 0, types from the Land row, stats and max HP
+  from `calc_stats_jnp` / `_calc_stats` on Land's row with the slot's IVs, EVs, nature and level (HP moves by the max
+  HP's change; both rows have base HP 100), `friendship` = `party_friendship`, `power_trick_desync` = `power_trick`
+  (the Atk / Def reload is unswapped, as a level-up's, B12-10), and the AI learns the ability (`BattleAI_SetAbility`,
+  battle_script.c:3402-3403: `hooks._know`). Stages, status, volatiles and the thaw stay: the freeze goes at the
+  later thaw checks. `landed` stands for "the hit reached `AfterMoveMessage`" (a miss or no target does not). For a
+  U-turn the decomp runs the form change after the party list; the engine runs it before the pivot (nothing between
+  reads form-dependent state, F-4's skip aside). Enumerate: a foe's freezing move on a Sky Shaymin side and a hit on
+  a Sky Shaymin frozen at the turn start are input clauses (`enumerate.py`, `sky`, `foe_freezes`, `sky_frozen`).
+  Coverage: the "Sky Forme reverts when frozen" refusal is removed; `SPECIES_SHAYMIN` moved to `engine.ids`. A
+  Transformed copy of a Sky Shaymin is refused (F-26); `shaymin_land` skips a Transformed battler. The end-of-turn
+  speed grid takes the reverted Speed (F-27).
+- F-17 A faster foe's Knock Off takes the side's Wide Lens before its accuracy check. `BtlCmd_TryKnockOff`
+  (battle_script.c:6608-6632) sets `heldItem = ITEM_NONE` (:6622-6624); the check reads the attacker's
+  `HOLD_EFFECT_ACCURACY_UP` (bcp.c:2955-2957). `outcome._threshold_grid` files Knock Off with Embargo (`foe_embargo`):
+  the grid's second half, the threshold without the lens, is possible for a Wide Lens holder whose foe can Knock Off
+  first (a Zoom Lens or Micle holder's lost item is the first half's, as for Embargo). `future_thresholds` keeps the
+  Future Sight roll whole (`loose`) when a Knock Off is used this turn, as for Embargo (the turn-end hit reads the
+  items then). Tests: `test_accuracy_classes.py::test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_
+  thresholds` (slow), `test_batch8.py::test_future_sight_roll_is_kept_whole_around_gravity_and_transform`.
+- F-18 `future_thresholds`' stage sum follows Haze, Psych Up and Acupressure (B12-31's writers): Haze
+  (battle_script.c:3534-3549) zeroes both stages, Psych Up (:6042-6053) copies them, Acupressure (:8932-8956) can
+  raise evasion, before the turn end's hit (bcp.c:1758-1783); such a move used this turn frees the sum (`free`), as a
+  stat move on accuracy or evasion does. Nothing else in enumerate marked them loose. Gravity at 1 keeps the roll
+  whole only where it ends (FIELD_COND_CHECK_STATE_GRAVITY, bcp.c:1227-1238): not under `Tables.gravity_rearm`
+  (Kaizo's sub_seq 238 sets it again, G-67), where it holds at the hit. Tests: `test_batch8.py::
+  test_future_sight_law_follows_a_haze_this_turn`, `::test_future_sight_roll_is_kept_whole_around_gravity_and_transform`.
+- F-19 Learn masks lift once the battle is over. `MoveEnd` runs `AnyExpPayout` before `CheckBattleOver`
+  (bcp.c:3965-3969): the payout that ends the battle runs no later turn end (the Disable / Encore checks,
+  bcp.c:1565-1576, :1591-1602) and no move (the pinned slot's re-read, :1891-1895). `levelup.learn_options` and the
+  reference's `ref_learn_options` mask the disabled, encored and pinned slots only while `state.over == 0`; the
+  converter's `_learn_refusal` follows (it asks `learn_options`), and its unreachable D10 message is gone (an HM is
+  never fitted, D10 is refused first by `_check_learned`). The end-of-turn Disable and Encore checks end on a move no
+  longer known in both engines (`step._disable_check`, `_encore_check`). Spite, Grudge and Last Resort have no engine
+  reader (their moves are unsupported); Mimic's `_masked` slot takes a learned move into the shadow (`levelup.learn`).
+  Test: `test_learn.py::test_no_mask_once_the_battle_is_over`.
+- F-20 A stale Choice lock is cleared at the command selection. For every battler whose command is FIGHT and that
+  picks one (`Battler_CanPickCommand`, bcp.c:335; battle_lib.c:6224-6235), `BattleSystem_CheckInvalidMoves`
+  (bcp.c:433) clears `choiceLockedMove` when the Choice holder no longer knows it (battle_lib.c:2307-2310).
+  `step._clear_stale_choice_locks` (called from `_action_phase` on the fresh, unpaused state) and the reference's
+  `_ref_step` prologue do the same, so a move forgotten and learned again later does not revive the lock. Test:
+  `test_damage_items.py::test_a_choice_lock_the_holder_no_longer_knows_is_cleared_at_selection`.
+- F-21 Ether / Elixir on a Transform or Mimic copy. `BattleSystem_UseBagItem` tests and restores the party Pokemon's
+  PP (`Pokemon_GetValue` / `Pokemon_IncreaseValue`, battle_system.c:631-632, :646-648) and adds to the battler's PP
+  only for a slot that is not mimicked and a battler not transformed (:634-639, :651-654). `bag.use_bag_item` and the
+  reference's `_use_item` read a copied slot (`mimic_slots`, all four while transformed) from the shadow
+  (`shadow_moves`, `shadow_pp`) and restore `shadow_pp`; the battler's PP stays. Test:
+  `test_e1_batch_a.py::test_elixir_restores_the_party_pp_of_a_copied_slot`.
+- F-22 `gravity_rearm` is read from the ROM diff, not the game id. `tools/build_tables._gravity_rearm`: 1 when
+  sub_seq 238 (subscript_gravity_end) is among the members the ROM diff changed (`rom/changed_scripts.json`, written
+  by `tools.extract_rom` from both ROMs) and `data/kaizo/rom_diff.toml` classifies it `modelled` (its note decodes
+  the re-arm); a changed member classified otherwise stops the build; 0 when unchanged (vanilla). Values unchanged
+  (0 vanilla, 1 Kaizo). The build's one game branch (`tools/build_tables.py:730`, `_gravity_rearm(inter) if kaizo
+  else 0`) is vanilla being the diff's baseline: it has no `rom/` diff to read. Test: `tests/tools/test_build_tables_game.py::
+  test_gravity_rearm_reads_sub_seq_238_from_the_rom_diff`.
+- F-23 ROM confirmations from the repo's ROM diff (`tools/rom/diff.py`, read from both ROMs by `tools.extract_rom`;
+  `data/intermediate_kaizo/rom/changed_code.json`, `data/kaizo/rom_diff.toml`): (1) `sMovesAffectedByGravity`
+  (battle_lib.c:3385-3392, overlay16) is unpatched: the changed overlay16 keys are only
+  BattleControllerPlayer_CheckObedience, _CheckMoveHitAccuracy, _CheckMoveHitOverrides,
+  BattleSystem_TriggerEffectOnSwitch and sTrainerClassPrizeMul (rom_diff.toml:549-578), so the ban stays by id
+  (Kaizo move 150 Hidden Power Water is not on it; `ids.GRAVITY_MOVES`, G-67). (2) The Kaizo AI scripts match
+  vanilla's but one word: `tr_ai_seq.narc` is unchanged (rom_diff.toml:583) and the overlay14 script data
+  `gTrainerAITable` differs only at 0x022249CC (script.s:78, Dry Skin for Levitate, rom_diff.toml:543-546); none of
+  the script.s lines the E1 trial cites (G-63..G-70: :29, :62, :68, :112, :288-295, :438-443, :472, :534-536,
+  :720-723, :766, :853-871, :940, :1026-1029, :1461-1474, :1516, :3633-3649, :4336-4340, :4373-4377, :4441,
+  :5331-5334, :6511) is :78.
+- F-24 Cite fixes (reviews of bb24193 + 9a9b63e, a968143): Transform's copy loop is battle_script.c:5346-5348
+  (5342-5345 is pointer setup), the switch-in checks rerun at bcp.c:3672-3673 and :3973 (the announce flags are
+  cleared at battle_script.c:5350-5358), Sand Veil / Snow Cloak bcp.c:2927-2933, the Gravity countdown
+  bcp.c:1227-1238, `BtlCmd_TryMimic` ends at :4524; fixed in outcome.py (`armored`, `_threshold_grid`), enumerate.py,
+  effects.py, ids.py, state.py, STATE.md, tools/effect_map.py (comment only) and this ledger. Tests owed by 9a9b63e,
+  in F-17's test: copied Drizzle (Thunder in rain, bcp.c:3025-3027), copied Unaware (bcp.c:2882-2884), the foe's own
+  No Guard (bcp.c:3016-3021) and Cloud Nine lost by its Transform; the future Gravity / Transform `loose` flag in
+  F-18's.
+- F-25 A foe that loses its own Cloud Nine / Air Lock by its Transform (found by F-24's test, silently wrong before):
+  `NO_CLOUD_NINE` (bcp.c:2915, :3023) counts the battlers' abilities as `damage.decomp_abilities` reads them, from the
+  species row and ability slot, which `BtlCmd_Transform` copies (battle_script.c:5346-5348, battle_mon.h:57-84). The
+  grid's Transform variant (`_threshold_grid`'s `point`) copied only `ability`, so the transformed foe still
+  suppressed the weather: in sun the player's Thunder kept 70 where the live check reads 50 (bcp.c:2915-2917), and the
+  rolls 51-70 were one class with the hits. The variant now also copies the side's `species`, `ability_form` and
+  `ability_slot` onto the foe. Test: the sun case in `test_taken_items_and_copied_or_lost_abilities_are_seen_by_hit_
+  thresholds` (law {1: 50, 51: 20, 0: 30}).
+- F-26 A Transform user facing a Sky Shaymin is refused (review F item 4). `subscript_check_shaymin_form.s:6-9` tests
+  only the defender's `BATTLEMON_SPECIES` 492, a nonzero `BATTLEMON_FORM_NUM`, no Substitute and Freeze, all of which
+  a Transform copy holds (`BtlCmd_Transform` copies the BattleMon up to `ability`, battle_script.c:5346-5348,
+  battle_mon.h:57-84). For such a copy the script then: sets the battler's form to 0 (:10); takes Land's ability by
+  `BATTLEMON_PERSONALITY` bit 0, the user's own personality (not in the copied range); writes it with
+  `UpdateMonDataFromVar` under `SYSCTL_RECALC_MON_STATS` (:22-23), whose `BattleMon_CopyToParty`
+  (battle_script.c:3401-3407) sends `updateStats` (battle_controller.c:1496-1499), so `BtlIOCmd_UpdatePartyMon`
+  writes that ability into the Transform user's **own party Pokemon** and recalculates its stats on its own species
+  (battle_io_command.c:597-604); writes Land's types (:24-27); and `RefreshMonData` (:30, battle_script.c:9438-9447)
+  reloads Attack, Defense, Speed, Sp. Atk, Sp. Def, level, friendship and HP from that party Pokemon
+  (`BattleSystem_ReloadPokemon`, battle_lib.c:169-193: the copied stats are lost, the moves kept while
+  transformed). The party Pokemon keeps the written ability for every later switch-in (`BattleSystem_InitBattleMon`
+  reads `MON_DATA_ABILITY`, battle_lib.c:124). The engine has no party ability apart from the species row and
+  ability slot (`damage.decomp_abilities`), so modelling it needs a new per-party mechanic: refused instead.
+  `coverage.transform_sky_refusals` (called by `check_opponent`): one side can run Transform (its moves, a player's
+  learnable moves, Metronome's calls, or Mimic / Copycat while the fight has Transform) and the other has a Shaymin
+  with a nonzero form. Test: `test_e1_batch_f.py::test_a_transform_user_facing_a_sky_shaymin_is_refused`
+  (`fullset`). Open item F-O2: the next batch's first group.
+- F-27 The end-of-turn speed grid takes Shaymin's Land Speed (review F item 6). The revert recalculates the stats on
+  Land's row (base Speed 127 -> 100; F-16) mid-turn, before `SortMonSpeedOrder` at the turn's end, so
+  `enumerate._end_speeds` takes every grid point also with a Sky Shaymin's Land stats (`hooks.land_stats`, shared
+  with `shaymin_land`) where `land_free`: a living Sky Shaymin of the side and a foe's move this turn, with the
+  Shaymin frozen at the turn start or the foe's move able to freeze. Test: `test_the_shaymin_sky_clauses_equal_the_
+  bruteforce`.
+- F-28 Review F fixes: F-4's flag is read by the resumed action only (`resumed & ts_sub_hit`) and cleared at that
+  action's end (`BattleContext_Init`, battle_lib.c:2013-2015, bcp.c:3998), so a later drag's Intimidate in the same
+  turn meets a clear flag, as the reference's `turn.sub_hit` (test: `test_a_later_drag_in_the_same_turn_finds_the_
+  substitute_flag_clear`). F-2's AI absorb switch takes residue 1 of `RandNext() & 1` (trainer_ai.c:3706:
+  `_SWITCH_LO` / `_SWITCH_HI` 1, 2). Brute-force checks of the batch's laws: `test_the_starf_laws_equal_the_
+  bruteforce`, `test_the_lansat_crit_variant_equals_the_bruteforce`, `test_the_flash_fire_foe_move_clause_equals_
+  the_bruteforce`, `test_the_shaymin_sky_clauses_equal_the_bruteforce`.
+- F-29 Merge-gate fixes. JAX healed a Flash Fire holder below full HP by a quarter on an absorbed Fire move (the heal's
+  gate took every absorb); the heal is now Volt / Water Absorb's only (`hpCalcTemp`, battle_lib.c:3503, :3510; Flash
+  Fire's branch :3515-3521 sets none, `subscript_absorb_and_boost_fire_type_moves.s` changes no HP), as the
+  reference. Test: `test_a_holder_below_full_hp_is_not_healed`. F-26's test carries `fullset`. Open items F-O2..F-O5.
+  F-16's `landed` gate checked against bcp.c:3497-3505 / :3557-3565: `AfterMoveMessage` runs after `UpdateHP` for
+  every connected hit, damaging or not, and after a substitute hit (:3376, :3440, :3443; a substitute broken by the hit
+  no longer blocks the check, :3362, which `substitute_hp` 0 gives), never after a miss or `NO_MORE_WORK` (:3313-3328,
+  `subscript_missed` -> `LOOP_FAINTED`). One fix: the script reads `BTLVAR_DEFENDER`, which for a self-targeted move
+  (RANGE_USER, USER_SIDE, FIELD, and ALLY / USER_OR_ALLY in singles; `targets_user`) is the user (battle_lib.c:
+  1665-1684), so `effects.play_hit` and the reference's `_hit` no longer revert a frozen foe Shaymin on a Swords Dance.
+  Test: `test_a_foes_self_targeted_move_leaves_a_frozen_shaymin_sky`.
+- Open (not modelled; cites where stopped):
+  - Sleep Talk's sealed set after a faster foe that already imprisons Transforms (copies every move) or Mimics (one
+    slot): the call reads the foe's moves when it runs (CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290), but
+    `enumerate.call_laws` offers `CALL_SEALED` only when no foe imprisons at the turn start (`can_seal`,
+    enumerate.py:3701-3706) and `_split_events` sees only an Imprison landing (`sealed_at_move`, step.py:903). Needs a
+    hypothetical state of the foe's moves after the copy and a step event of the sealed set at the action: not a
+    bounded change, left for the next batch.
+  - Effect Spore's contact roll (battle_lib.c:4214-4335) and Suction Cups against Roar: both map to
+    `AbilityId.UNSUPPORTED`, so coverage refuses every holder (`IMPLEMENTED_ABILITIES`, coverage.py:194, :743).
+    Vanilla holders: 4 personal rows with Effect Spore, 3 with Suction Cups (`species_abilities_decomp` 27, 21); no
+    Kaizo species has either (`data/intermediate_kaizo/rom/species.json`), so the Kaizo backlog does not undercount.
+  - `test_transform_laws.py`: `assert_equals_bruteforce` in its four tests, a copied Cute Charm with the kept-gender
+    rule (battle_script.c:5732-5735), `present_guard` with a copied Wonder Guard, Transform through an invoker: not
+    written in this batch.
+- For E2 (doubles; not changed here):
+  - `chatot_cry` is per party (state.py:747); `BattleSystem_GetChatotCry` (battle_system.c:915-924) reads it per
+    battler in 2vs2 and for a tag battle's enemy battlers, per side (`battler & 1`) in other doubles. Check that the
+    party index gives that in every format.
+  - `outcome._threshold_grid`'s "one move has one effect" (one foe move between the turn start and the side's check)
+    holds with one foe only; with two foes both moves can land before the check (the D-steps).
+## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and
 pod state are kept outside the repo (the stream's `_scratch/e1/` notes).
 
-### Next mechanics batch (F)
-Kaizo abilities (Hydration, Forecast, Heatproof, Flash Fire, Multitype), held items (hold effects
-#50, #36, #41, #42, #92, #0, #1, #12), Weather Ball's AI type, the Poke Ball friendship wrap past
-255, Sky Forme reverting when frozen, and a U-turn newcomer's Intimidate against a foe whose
-substitute that U-turn hit. Effect Spore and Suction Cups are dropped (no Kaizo species has them).
-The owed items below go in first.
-
-### Owed items (into the next mechanics batch)
-- `chatot_cry` is per side; the decomp keeps it per battler in tag/2vs2
-  (battle_system.c:915-924). Tell E2 for doubles.
-- Confirm the Kaizo ROM leaves `sMovesAffectedByGravity` unpatched (Kaizo move 150 is Hidden
-  Power Water); confirm the Kaizo AI scripts match the vanilla script.s lines cited.
-- Bag Ether/Elixir on a Transformed/Mimic slot (battle_system.c:636-653).
-- `gravity_rearm`: read from ROM sub_seq 238, not the game id.
-- Learn masks (levelup.py:462-469, reference/engine.py:2079-2082) and `_learn_refusal` ignore
-  battle end: add `& (state.over == 0)` in both engines (learn_pin, step.py:2833-2834).
-- Stale Choice lock: the decomp clears `choiceLockedMove` at the next selection
-  (battle_lib.c:2307-2310); the engine reads it lazily (step.py:31, 436-456). Model the clear.
-- Nits: unreachable D10 fallback in `_learn_refusal`; STATE.md:349-352 "mid-turn learn"; end-of-turn
-  Disable/Encore on an unknown move; Spite, Grudge, Last Resort, Mimic `_masked` readers.
-- A. `hit_thresholds`: a faster foe's Knock Off removes Wide Lens before the hit
-  (battle_script.c:6608-6632); same-turn Knock Off vs Future Sight's items.
-- B. `future_thresholds` `free` (outcome.py:522) lacks Haze, Psych Up, Acupressure.
-- C. Tests for copied weather, copied No Guard / Unaware, losing the foe's own Cloud Nine /
-  No Guard, the Gravity/Transform loose flag.
-- D. outcome.py:595-599 Gravity "ends a count of 1" is wrong for Kaizo (`gravity_rearm`); cite
-  nits (Sand Veil/Snow Cloak are bcp.c lines; Gravity countdown to :1238; Mimic ends at :4524).
-- E. Doubles: `_threshold_grid`'s "one move has one effect" holds only with one foe. Tell E2.
-- F. Sleep Talk's call law (enumerate.py:3550-3555; order.py:316) uses the foe's turn-start moves
-  while it imprisons; a faster Transform/Mimic changes the sealed set (battle_lib.c:2287-2290).
-- G. Tests: `assert_equals_bruteforce` in test_transform_laws.py; copied Cute Charm with the kept
-  gender (battle_script.c:5732-5735); copied Wonder Guard; Transform through an invoker.
-- H. Cites: copy loop battle_script.c:5346-5348; switch-in re-trigger bcp.c:3672-3673 and 3973.
+- Batch F (section above) holds the Kaizo abilities, held items, Weather Ball's AI type, the Poke Ball
+  friendship wrap, Sky Forme's freeze revert, the U-turn Intimidate case and the owed items
+  (F-17..F-25). Effect Spore and Suction Cups are dropped (no Kaizo species has them).
+- Still open from the owed list: F (Sleep Talk's sealed set after a faster Transform/Mimic) and G
+  (the `test_transform_laws.py` additions); see Batch F's open items.

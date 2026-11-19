@@ -275,6 +275,8 @@ from nuzline.engine.damage import (
     ignorable,
     me_first_after_calc,
     move_type_of,
+    multitype_plate,
+    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -347,6 +349,7 @@ from nuzline.engine.state import (
     field_index,
     held_item,
 )
+from nuzline.engine.targets import NO_DEFENDER
 
 _I32 = jnp.int32
 _E = EffectId
@@ -362,6 +365,7 @@ class _Hit(NamedTuple):
 
     side: jnp.ndarray  # attacking side
     target_side: jnp.ndarray
+    defender: jnp.ndarray  # BattleSystem_Defender's battler (targets.resolve), NO_DEFENDER for none
     user: jnp.ndarray  # party slots
     target: jnp.ndarray
     effect: jnp.ndarray  # EffectId
@@ -961,14 +965,14 @@ def self_defender(tables: Tables, move, ghost=False) -> jnp.ndarray:
     return in_range | targets_user(tables, move, ghost)
 
 
-def defender_side(tables: Tables, state: BattleState, side, target_side, move) -> jnp.ndarray:
-    """``int32``: the side of ``BattleSystem_Defender``'s defender (battle_lib.c:1599-1727) for
-    ``side``'s ``move`` aimed at ``target_side``: the user's own for a ``self_defender`` move (in
-    singles RANGE_ALLY and RANGE_USER_OR_ALLY give the attacker, :1670-1684; in doubles they give
-    the chosen partner, which the doubles resolver replaces), else ``target_side``. Counter's
-    later defender (the last hitter) is the caller's."""
-    own = self_defender(tables, move, ghost_user(state, side))
-    return jnp.where(own, jnp.asarray(side, _I32), jnp.asarray(target_side, _I32))
+def defender_side(target_side, defender) -> jnp.ndarray:
+    """``int32``: the battler ``BattleSystem_Defender`` picked (``targets.resolve``,
+    battle_lib.c:1600-1730; ``defender``), or ``target_side`` when it is BATTLER_NONE: the user
+    itself for a ``self_defender`` move at B = 2, the partner or the chosen battler for
+    RANGE_ALLY / RANGE_USER_OR_ALLY at B = 4. Counter's later defender (the last hitter) is the
+    caller's."""
+    defender = jnp.asarray(defender, _I32)
+    return jnp.where(defender == NO_DEFENDER, jnp.asarray(target_side, _I32), defender)
 
 
 # BattleControllerPlayer_DecrementPP's range switch (battle_controller_player.c:2241-2267):
@@ -984,8 +988,7 @@ PRESSURE_NONE = (
     MoveTarget.RANGE_USER_OR_ALLY,
     MoveTarget.RANGE_ALLY,
 )
-# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE.
-NO_DEFENDER = -1
+# ``defender`` of ``pressure_pp_cost`` when the decomp's is BATTLER_NONE (``targets.NO_DEFENDER``).
 
 
 def pressure_holder(state: BattleState, battler) -> jnp.ndarray:
@@ -1008,17 +1011,24 @@ def pressure_pp_cost(tables: Tables, state: BattleState, attacker, defender, mov
     caller spends ``min(cost, ppCur)`` (:2276-2280). Ruling G-8."""
     fmt = format_of(state)
     move_range = tables.move_target[move]
-    holders = jnp.zeros((), _I32)
-    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
+    # D2-15: COUNT_ALIVE_BATTLERS_EXCEPT_ME (every living holder but the user, its partner
+    # included) and COUNT_ALIVE_BATTLERS_THEIR_SIDE (living holders of the other side), battle_lib.c:
+    # 2905-2967. At B = 2 the only other battler is the foe, so the two sums agree.
+    except_me = jnp.zeros((), _I32)
+    their_side = jnp.zeros((), _I32)
+    for battler in range(state.active.shape[0]):
         mon = state.active[battler]
         alive_holder = pressure_holder(state, battler) & (state.hp[party(fmt, battler), mon] > 0)
-        # In singles the only other battler is the other side's: EXCEPT_ME and THEIR_SIDE agree.
-        holders = holders + (alive_holder & (attacker != battler)).astype(_I32)
-    counted = (
-        (move == MOVE_IMPRISON)
-        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
-        | jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype))
+        except_me = except_me + (alive_holder & (attacker != battler)).astype(_I32)
+        their_side = their_side + (alive_holder & (side_of(battler) != side_of(attacker))).astype(
+            _I32
+        )
+    by_side = (move == MOVE_IMPRISON) | jnp.isin(
+        move_range, jnp.asarray(PRESSURE_COUNT_THEIR_SIDE, move_range.dtype)
     )
+    by_all = jnp.isin(move_range, jnp.asarray(PRESSURE_COUNT_EXCEPT_ME, move_range.dtype))
+    counted = by_side | by_all
+    holders = jnp.where(by_side, their_side, except_me)
     silent = jnp.isin(move_range, jnp.asarray(PRESSURE_NONE, move_range.dtype))
     defender = jnp.asarray(defender, _I32)
     has_defender = defender != NO_DEFENDER
@@ -1432,7 +1442,7 @@ def _acupressure(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     the user in singles), unless ``acupressure_fails``, a direct TO_DEFENDER +2
     (MOVE_SUBSCRIPT_PTR_ATTACK_UP_2_STAGES + the stat) on ``acupressure_stat``; the stat is below
     +6, so it rises (B12-9). The draw is the acting battler's (``Outcome.acupressure[h.side]``)."""
-    defender = defender_side(tables, state, h.side, h.target_side, h.move)
+    defender = defender_side(h.target_side, h.defender)
     cond = (h.effect == _E.ACUPRESSURE) & h.landed
     cond = cond & _alive(state, defender, state.active[defender])
     cond = cond & ~acupressure_fails(state, defender)
@@ -1698,12 +1708,13 @@ def uproar_on(state: BattleState) -> jnp.ndarray:
 
 
 def primary_effect_fails(
-    tables, state: BattleState, side, target_side, move, foe_claw=False, foe_custap=False
+    tables, state: BattleState, side, target_side, defender, move, foe_claw=False, foe_custap=False
 ) -> jnp.ndarray:
     """``bool``: ``side``'s ``move``, if it lands, has a direct effect that ends it with
     ``MOVE_STATUS_FAILED`` or ``_NO_MORE_WORK``, which ``BattleControllerPlayer_CheckMoveFailure``
     (bcp.c:3312-3331) sends past AfterMoveEffects: Swagger (``swagger_fails``), Dragon Dance
-    (``dragon_dance_fails``). ``target_side``: the defender's side; ``foe_claw`` /
+    (``dragon_dance_fails``). ``target_side``: the battler the hit reads as its target;
+    ``defender``: ``targets.resolve``'s (Acupressure's); ``foe_claw`` /
     ``foe_custap``: its quickClaw / custapBerry flags (``play_hit``'s)."""
     effect = tables.move_effect[jnp.asarray(move, _I32)]
     param = tables.move_param[jnp.asarray(move, _I32)].astype(_I32)
@@ -1762,7 +1773,7 @@ def primary_effect_fails(
         # defender (RANGE_USER_OR_ALLY: defender_side, the user in singles).
         | (
             (effect == _E.ACUPRESSURE)
-            & acupressure_fails(state, defender_side(tables, state, side, target_side, move))
+            & acupressure_fails(state, defender_side(target_side, defender))
         )
         # subscript_rest.s:73 (NO_MORE_WORK), BtlCmd_TryWish (FAILED), subscript_recover_psn_prz_
         # brn.s:15-16 and BtlCmd_CheckCanShareStatus (FAILED).
@@ -2167,7 +2178,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Mimic (effect_script_0082.s:3, a direct ON_HIT ``subscript_mimic.s``): ``BtlCmd_TryMimic``
-    (battle_script.c:4476-4523) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
+    (battle_script.c:4476-4524) fails (subscript_mimic.s:16, MOVE_STATUS_FAILED) when the
     defender's ``movePrevByBattler`` cannot be Mimicked (``MIMIC_FORBIDDEN``,
     battle_lib.c:7152-7158, :7182-7192) or is MOVE_NONE, when the defender has a Substitute
     (:4483), or when the user already knows the move (:4490-4492). Otherwise slot ``j``, the
@@ -2288,7 +2299,19 @@ def _transform(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         form=put(state.form, own, state.form[pf, target]),
         stats=put(state.stats, own, battle_stats(state, foe, target)),
         ivs=put(state.ivs, own, state.ivs[pf, target]),
-        types=put(state.types, own, state.types[pf, target]),
+        # A copied Multitype Arceus gives the user its own plate's types, not the target's
+        # (Battler_MonType reads the user's raw heldItem, battle_lib.c:7629-7699), F-3.
+        types=put(
+            state.types,
+            own,
+            multitype_plate(
+                tables,
+                state.species[pf, target],
+                state.ability[pf, target],
+                state.item[own],
+                state.types[pf, target],
+            ),
+        ),
         # Raw: BtlCmd_Transform copies BattleMon.ability (battle_script.c:5342-5348).
         ability=put(state.ability, own, state.ability[pf, target]),
         ability_slot=put(state.ability_slot, own, state.ability_slot[pf, target]),
@@ -2409,12 +2432,16 @@ def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     the bit is set exactly when the types differ from the personal row's."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.form[party(fmt, side), mon]
-    ]
-    return jnp.any(
-        state.types[party(fmt, side), mon] != tables.species_types[row].astype(state.types.dtype)
+    pm = (party(fmt, side), mon)
+    own = personal_types(
+        tables,
+        state.species[pm],
+        state.form[pm],
+        state.ability_form[pm],
+        state.ability_slot[pm],
+        state.item[pm],
     )
+    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
 
 
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
@@ -2725,11 +2752,14 @@ def armored(state: BattleState, side, target_side) -> jnp.ndarray:
 
 
 def crit_blocked(state: BattleState, side, target_side) -> jnp.ndarray:
-    """``bool``: ``side``'s hit at ``target_side`` never crits whatever the roll (``Outcome.crit``):
-    the defender's Battle Armor or Shell Armor (``armored``) or SIDE_CONDITION_LUCKY_CHANT on the
-    defending side's conditions as the CalcCrit reads them now (``BattleSystem_CalcCriticalMulti``,
-    battle_lib.c:7135-7137; battle_script.c:2158-2163 passes the defender's side). The draw is spent either
-    way (:7132 runs first). A Lucky Chant used earlier this turn counts (E3-B2-7)."""
+    """``bool``: ``BattleSystem_CalcCriticalMulti`` (battle_lib.c:7134-7137) gives no crit to
+    ``side``'s hit on ``target_side``, whatever the roll: the defender's Battle Armor / Shell
+    Armor (``armored``) or Lucky Chant on the defender's side (``sideConditions`` is
+    ``BATTLECTX_SIDE_CONDITIONS_MASK`` of ``battleCtx->defender``, battle_script.c:2158-2163).
+    The defender is the hit's own: the user for a lock reading its stored target (singles
+    follow-up (ii)), so the turn-start cut (``Outcome.crit``, the foe's side) cannot stand in.
+    The draw is spent either way (:7132 runs first). A Lucky Chant used earlier this turn
+    counts, as the conditions read now (E3-B2-7)."""
     return armored(state, side, target_side) | (state.lucky_chant[side_of(target_side)] != 0)
 
 
@@ -3668,6 +3698,8 @@ def apply_move_effect(
     target_moved,
     power_mul=10,
     struggling=False,
+    target_side=None,
+    defender=None,
 ) -> BattleState:
     """``play_hit``'s state, for a hit that is the first (or only) of its action."""
     return play_hit(
@@ -3681,6 +3713,8 @@ def apply_move_effect(
         target_moved=target_moved,
         power_mul=power_mul,
         struggling=struggling,
+        target_side=target_side,
+        defender=defender,
     )[0]
 
 
@@ -3706,6 +3740,8 @@ def play_hit(
     foe_enduring=False,
     in_power=0,
     gift=0,
+    target_side=None,
+    defender=None,
     script_calc=False,
     fling=0,
     coat_slot=0,
@@ -3765,7 +3801,17 @@ def play_hit(
     """
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
-    target_side = _foe(side)
+    # ``target_side`` / ``defender``: the fight command's ``targets.resolve`` (D2-4); omitted
+    # (a direct call of one hit), today's singles pair: the foe, and the user for a
+    # ``self_defender`` move, else the foe.
+    if target_side is None:
+        target_side = _foe(side)
+    target_side = jnp.asarray(target_side, _I32)
+    if defender is None:
+        defender = jnp.where(
+            self_defender(tables, move, ghost_user(state, side)), side, target_side
+        )
+    defender = jnp.asarray(defender, _I32)
     user, target = state.active[side], state.active[target_side]
     move = jnp.asarray(move, _I32)
     # A RANGE_USER move (Growth, Withdraw, Rock Polish) lands on its user, so the
@@ -3808,6 +3854,9 @@ def play_hit(
         gift=gift,
         # Fling's item, removed by its script this action after CalcDamage (damage.flung_view).
         fling=fling,
+        # The defender (targets.resolve): at B = 2 the foe, or the user for a lock reading its
+        # stored target (follow-up (ii)).
+        def_side=target_side,
     )
     # CalcDamage ran for this hit (a move with a rolled table damage whose script ran: hit 0 hit or
     # miss, ``script_calc``; a later hit when it lands): the Me First counter update of the same
@@ -3851,6 +3900,14 @@ def play_hit(
         | is_counter
     )
     update_hp = landed & hits_foe & (raw > 0)  # BattleControllerPlayer_UpdateHP runs
+    # lastHitByBattler[defender] = the attacker on every UpdateHP with damage, before the
+    # Substitute branch (bcp.c:3347, :3357; D2-14): a partner's hit and a Substitute's count, and
+    # nothing clears it. Written at B = 4 only. At B = 2 it is the foe, or the user after a lock
+    # hit itself (singles follow-up (ii)); its one reader, Bide's release (bcp.c:2700-2705), needs
+    # storedDamage, which subscript_bide_start.s zeroes and only the foe's hits during Bide add to
+    # (bcp.c:3357, :3407, each also setting lastHitByBattler), so it reads the foe either way.
+    if fmt.B == 4:
+        state = _set(state, "last_hit_by", target_side, side + 1, update_hp)
     # bcp.c:3359-3378: a substitute takes battleCtx->damage (before False Swipe's cap) and
     # UpdateHP returns early; `real`: the rest of UpdateHP runs on the defender's HP.
     sub_hp = state.substitute_hp[target_side].astype(_I32)
@@ -3937,6 +3994,7 @@ def play_hit(
     h = _Hit(
         side=side,
         target_side=target_side,
+        defender=defender,
         user=user,
         target=target,
         effect=effect,
@@ -4054,6 +4112,13 @@ def play_hit(
     state = _knock_off(tables, state, h, foe_custap, foe_claw)
     state = _embargo(tables, state, h, foe_custap, foe_claw)
     state = _struggle_recoil(state, h, jnp.asarray(struggling, jnp.bool_))
+    if not pursuit_switch:  # subscript_pursuit.s runs no AfterMoveMessage (F-16)
+        from nuzline.engine.hooks import shaymin_land  # hooks imports this module
+
+        # The check reads BTLVAR_DEFENDER, the user itself for a self-targeted move
+        # (BattleSystem_Defender, battle_lib.c:1665-1669): the foe's Shaymin is left as it is.
+        on_foe = h.landed & ~targets_user(tables, move, ghost_user(state, side))
+        state = shaymin_land(tables, state, target_side, on_foe)
     state = _contact_ability(tables, state, h, outcome)
     if extra_flinch is not False:  # a traced bool: U-turn defers its check (step._use_move)
         state = _kings_rock(tables, state, h._replace(landed=h.landed & extra_flinch), outcome)

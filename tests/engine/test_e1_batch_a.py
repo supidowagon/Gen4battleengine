@@ -11,7 +11,7 @@ import numpy as np
 
 from nuzline.data.trainer import IntermediateData, build_trainer_party, default_moves
 from nuzline.engine.actions import FIRST_ITEM_ACTION
-from nuzline.engine.bag import bag_item_category, refused_bag_params
+from nuzline.engine.bag import bag_item_category
 from nuzline.engine.format import SINGLES
 from nuzline.engine.ids import AbilityId, ItemAiCategory, ItemParam, Stat, Status
 from nuzline.engine.outcome import empty_outcome
@@ -102,18 +102,12 @@ def _bag(s, names, item):
 
 def test_bag_item_params_read_dummy_or_party_params(tables, kaizo_tables, names, kaizo_names):
     # Item_Get (item.c:186-191): a Poke Ball (partyUse FALSE) reads its dummy, 3, for every
-    # party param in both games; a Potion its hpRestored 20. A ball's friendship amount can
-    # pass 255, which is refused by name; a Full Restore's params are modelled. Dire Hit (crit
-    # stages only) has no TrainerAI_ShouldUseItem branch, so it is never used and not refused.
+    # party param in both games; a Potion its hpRestored 20.
     for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
         params = np.asarray(t.item_party_param)
         ball = params[n.item("Poké Ball")]
         assert ball[: ItemParam.HOLD_FRIENDSHIP_UP].tolist() == [3] * ItemParam.HOLD_FRIENDSHIP_UP
         assert int(params[n.item("Potion")][ItemParam.HP_RESTORED]) == 20
-        reasons = refused_bag_params(ball, n.item("Poké Ball"))
-        assert any("friendship" in r for r in reasons)
-        for item in ("Full Restore", "Dire Hit"):
-            assert refused_bag_params(params[n.item(item)], n.item(item)) == []
 
 
 def test_ai_item_choice_follows_the_param_branches(tables, names):
@@ -151,7 +145,10 @@ def test_bag_items_match_the_reference(tables, names):
     out = assert_matches_reference(tables, _bag(hurt, names, "Full Restore"), acts, o)
     assert (int(out.hp[1, 0]), int(out.status[1, 0]), int(out.confusion[1])) == (top, 0, 0)
     # X Accuracy: accuracy +1, and friendship 150 takes the medium band's +1.
-    fond = s._replace(friendship=s.friendship.at[1, 0].set(150))
+    fond = s._replace(
+        friendship=s.friendship.at[1, 0].set(150),
+        party_friendship=s.party_friendship.at[1, 0].set(150),
+    )
     out = assert_matches_reference(tables, _bag(fond, names, "X Accuracy"), acts, o)
     assert int(out.stages[1, Stat.ACC]) == 1 and int(out.friendship[1, 0]) == 151
     # Elixir (PP_RESTORE_ALL, 10): every slot below its max, capped.
@@ -163,3 +160,23 @@ def test_bag_items_match_the_reference(tables, names):
     dizzy = s._replace(confusion=s.confusion.at[1].set(2))
     out = assert_matches_reference(tables, _bag(dizzy, names, "Persim Berry"), acts, o)
     assert int(out.confusion[1]) == 0
+
+
+def test_elixir_restores_the_party_pp_of_a_copied_slot(tables, names):
+    # BattleSystem_UseBagItem tests and restores the party Pokemon's PP (battle_system.c:
+    # 631-632, :646-648); the battler's follows only for a slot that is no Mimic copy and no
+    # Transform (:634-639, :651-654). F-21: the copied slot's party PP is the shadow.
+    s = roark_state(tables, names)
+    acts = [SWITCH_TO_1, FIRST_ITEM_ACTION]
+    rock = names.move("Rock Throw")
+    copied = s._replace(
+        pp=s.pp.at[1, 0].set(jnp.asarray([0, 3, 2, 3])),
+        moves=s.moves.at[1, 0, 1].set(names.move("Thunder Wave")),
+        mimic_slots=s.mimic_slots.at[1].set(0b10),
+        shadow_moves=s.shadow_moves.at[1, 1].set(rock),
+        shadow_pp=s.shadow_pp.at[1, 1].set(2),
+    )
+    out = assert_matches_reference(tables, _bag(copied, names, "Elixir"), acts, empty_outcome())
+    full = [int(tables.move_pp[m]) for m in np.asarray(copied.moves[1, 0])]
+    assert out.pp[1, 0].tolist() == [min(10, full[0]), 3, min(12, full[2]), min(13, full[3])]
+    assert int(out.shadow_pp[1, 1]) == min(12, int(tables.move_pp[rock]))
