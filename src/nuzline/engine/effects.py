@@ -3524,6 +3524,7 @@ def play_hit(
         _torment,
         _worry_seed,
         _trick_room,
+        _skill_swap,
         _disable,
         _confuse_foe,
         _secondary_confuse,
