@@ -195,3 +195,15 @@ def test_magnitude_and_shed_skin_draws(tables, names):
             assert abs(freq(magnitude[:, side], level) - p) < 5 * np.sqrt(p * (1 - p) / N), level
         shed = np.asarray(o.shed_skin)[:, side]
         assert abs(freq(shed) - 0.3) < 5 * np.sqrt(0.3 * 0.7 / N)
+
+
+def test_target_draw_field(samples):
+    """D2-4: ``target_draw`` is int8[B], a fair bit from its own key (fold_in 44), so every other
+    field keeps its samples; ``empty_outcome`` zeroes it."""
+    x = np.asarray(samples.target_draw)
+    assert x.shape == (N, 2) and set(np.unique(x).tolist()) == {0, 1}
+    assert abs(freq(x[:, 0]) - 0.5) < 4 * np.sqrt(0.25 / N)
+    keys = jax.random.split(jax.random.key(0), N)
+    want = jax.vmap(lambda k: jax.random.randint(jax.random.fold_in(k, 44), (2,), 0, 2))(keys)
+    np.testing.assert_array_equal(x, np.asarray(want))
+    assert np.asarray(empty_outcome().target_draw).tolist() == [0, 0]
