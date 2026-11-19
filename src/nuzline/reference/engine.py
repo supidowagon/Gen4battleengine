@@ -5167,6 +5167,9 @@ def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
         turn.tables, s, side, move, order, turn.outcome.call_target_draw[side]
     )
     if called is None:
+        # battleCtx->defender = BATTLER_NONE (script.c:2121, :2126), so MoveEnd cures no defender
+        # (bcp.c:3966); step's ``_redefend`` writes NO_DEFENDER (SF2 review (a)).
+        turn.defender = None
         return True
     turn.defender = called
     turn.target_side = called if called != side else _foe(side)
