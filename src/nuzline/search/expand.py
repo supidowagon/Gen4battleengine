@@ -412,7 +412,7 @@ def _replace(tables: Tables, state: BattleState, action):
     refused = refused | (after.exp_refused != 0)
     # An open weather war (ruling G-26): its tie bit is a chance node here, before the
     # player's next decision (step.resolve_war), else both rows are the one child.
-    ties = [resolve_war(after, tie) for tie in (0, 1)]
+    ties = [resolve_war(after, tie, tables) for tie in (0, 1)]
     obs = jnp.stack([replacement_observation(t) for t in ties])
     both = jax.tree.map(lambda a, b: jnp.stack([a, b]), *ties)
     return both, war_split(after), refused, obs

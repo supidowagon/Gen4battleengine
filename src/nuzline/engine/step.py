@@ -248,6 +248,7 @@ from nuzline.engine.order import (
     me_first_copy,
     player_second,
     quick_claw_active,
+    record_speeds,
     selected_move,
     truant_loafs,
 )
@@ -3101,6 +3102,9 @@ def _execute_actions(
         side = order[position].astype(_I32)
         second = position == 1  # the first actor's target has not moved yet
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
+        # BranchActions' SortMonSpeedOrder before each action (bcp.c:888): monSpeedValues, which
+        # Gyro Ball and the AI's estimate read (E3-B2-15).
+        state = record_speeds(tables, state, start)
         # E3-B2-6: the pass after a reflection's first one (_use_move's reflect): the Magic Coat
         # user (actor, the foe of side, the mover whose action this still is) runs the mover's
         # move on the mover (MODE_REFLECT); coat is that move.
@@ -3264,6 +3268,8 @@ def _execute_actions(
     state, read, shown, position, _, pursued, base, pick_mul, fired, _, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
+    # The sort BranchActions runs once more after the last action (bcp.c:888, :889-891).
+    state = record_speeds(tables, state, ~stopped)
     # turnFlags.magicCoat ends with the turn (SetupNextTurn, battle_lib.c:2231); a pause keeps it.
     state = state._replace(
         magic_coat=jnp.where(stopped, state.magic_coat, 0).astype(state.magic_coat.dtype)
@@ -4356,7 +4362,7 @@ def sample_root(key, tables: Tables, state: BattleState) -> BattleState:
     and a tie bit from ``fold_in(key, 1)`` (``resolve_war``, ruling G-26)."""
     draw = jax.random.randint(key, (format_of(state).B,), 0, QUICK_CLAW_MODULUS) == 0
     state = _keep_quick_claw(tables, jax.tree.map(jnp.asarray, state), draw)
-    return sample_war(jax.random.fold_in(key, 1), state)
+    return sample_war(jax.random.fold_in(key, 1), state, tables)
 
 
 def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, float]]:
@@ -4381,9 +4387,9 @@ def root_belief(tables: Tables, state: BattleState) -> list[tuple[BattleState, f
                 prob *= 1 / n if b else (n - 1) / n
         drawn = state._replace(qc_roll=jnp.asarray(bits, state.qc_roll.dtype))
         if bool(war_split(drawn)):
-            out.extend((resolve_war(drawn, tie), prob / 2) for tie in (0, 1))
+            out.extend((resolve_war(drawn, tie, tables), prob / 2) for tie in (0, 1))
         else:
-            out.append((resolve_war(drawn, 0), prob))
+            out.append((resolve_war(drawn, 0, tables), prob))
     return out
 
 
@@ -4396,23 +4402,30 @@ def war_split(state: BattleState) -> jnp.ndarray:
     return (swaps != 0) & (((swaps >> at) & 1) != ((swaps >> (at + 1)) & 1))
 
 
-def resolve_war(state: BattleState, tie) -> BattleState:
+def resolve_war(state: BattleState, tie, tables: Tables | None = None) -> BattleState:
     """``state`` with its open weather war settled (ruling G-26): ``monSpeedOrder`` is the
     sort's at the state's ``speedRand`` (``qc_roll``) and the tie's ``RandNext() & 1``
     ``tie`` (bit ``tie + 2 * qc[0] + 4 * qc[1]`` of ``war_swaps``, ``hooks.order_swaps``);
     where it put the player second, the player's weather stays (``hooks.swap_war``).
-    ``war_swaps`` is then 0. Without an open war: ``state`` (``war_swaps`` is 0)."""
+    ``war_swaps`` is then 0. Without an open war: ``state`` (``war_swaps`` is 0).
+
+    E3-B2-15: a war the battle start (turn 0) left open has not written ``monSpeedValues`` with
+    its final weather (``hooks.battle_start`` wrote them before the settling, bcp.c:263), so
+    with ``tables`` the record is written again after it (a Swift Swim or Chlorophyll holder's
+    speed reads the weather); a replacement's war (turn 1 and later) has no sort after it."""
     swaps = state.war_swaps.astype(_I32)
     qc = state.qc_roll.astype(_I32)
     bit = (swaps >> (jnp.asarray(tie, _I32) + 2 * qc[0] + 4 * qc[1])) & 1
     state = swap_war(state, (swaps != 0) & (bit == 1))
+    if tables is not None:
+        state = record_speeds(tables, state, (swaps != 0) & (state.turn == 0))
     return state._replace(war_swaps=jnp.zeros_like(state.war_swaps))
 
 
-def sample_war(key, state: BattleState) -> BattleState:
+def sample_war(key, state: BattleState, tables: Tables | None = None) -> BattleState:
     """``resolve_war`` with the tie drawn from ``key`` (``RandNext() & 1``, uniform): the
     draw a playout makes before the next decision (``search.playout``)."""
-    return resolve_war(state, jax.random.randint(key, (), 0, 2))
+    return resolve_war(state, jax.random.randint(key, (), 0, 2), tables)
 
 
 def needs_replacement(state: BattleState) -> jnp.ndarray:

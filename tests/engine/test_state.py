@@ -184,16 +184,21 @@ def test_state_md_accounts_for_every_struct_field():
 # (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
 # ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count; the four
 # announced flags mapped with Skill Swap, E3-2-5, ``hooks.move_end_switch_in``).
-AUDIT_LATER_ROWS = (
-    "BattleContext.monSpeedValues",
-    "BattleContext.moveSketched",
-)
+AUDIT_LATER_ROWS = ("BattleContext.moveSketched",)
 
 
 def test_state_md_audit_rows_are_later_m6():
     status = {field: status for field, _, status in _state_md_rows()}
     for field in AUDIT_LATER_ROWS:
         assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
+
+
+def test_mon_speed_values_map_to_speed_rec():
+    # E3-B2-15: monSpeedValues, the speeds of the last CompareBattlerSpeed, read by Gyro Ball's
+    # script command and by TrainerAI_CalcDamage's Gyro Ball case: the per-battler `speed_rec`.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.monSpeedValues"] == ("speed_rec", "mapped")
+    assert "speed_rec" in BattleState._fields and LAYOUT["speed_rec"][0] == (2,)
 
 
 def test_move_protect_is_folded_into_protect_count():

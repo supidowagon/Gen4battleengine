@@ -27,19 +27,19 @@ New groups: needed in this split and in no earlier one.
 |---|---|---|---|---|---|---|---|---|---|
 | Roark Split | 26 | 26 | 26 | 0 | 0 | 0 (0) | 23 | 3 | 3 |
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 11 | 11 |
-| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 30 | 10 | 9 |
-| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 20 | 10 | 5 |
+| Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 31 | 9 | 8 |
+| Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 20 | 9 | 5 |
 | Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 12 | 16 | 11 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 24 | 14 | 3 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 13 | 12 | 5 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 12 | 36 | 20 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 26 | 13 | 3 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 13 | 11 | 5 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 12 | 35 | 20 |
 | Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 8 | 0 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 21 | 9 | 3 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 170 | 70 | 70 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 22 | 8 | 3 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 174 | 69 | 69 |
 
 ## Whole game
 
-70 distinct missing groups across all ten splits (387 battles,
+69 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -55,7 +55,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 0 | 0 | 0 | 0 | 2 | 1 | 3 |
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
-| Fantina Split | 0 | 1 | 0 | 0 | 0 | 8 | 0 | 9 |
+| Fantina Split | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 8 |
 | Maylene Split | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 5 |
 | Wake Split | 0 | 0 | 0 | 2 | 1 | 6 | 2 | 11 |
 | Byron Split | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
@@ -63,7 +63,7 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Galactic Split | 0 | 1 | 0 | 3 | 1 | 15 | 0 | 20 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 1 | 0 | 0 | 1 | 0 | 1 | 3 |
-| **Whole game** | **1** | **7** | **0** | **8** | **5** | **45** | **4** | **70** |
+| **Whole game** | **1** | **6** | **0** | **8** | **5** | **45** | **4** | **69** |
 
 ### Groups needed in each split, by kind
 
@@ -73,15 +73,15 @@ Every group the split's battles need, whether or not an earlier split needs it t
 |---|---|---|---|---|---|---|---|---|
 | Roark Split | 0 | 0 | 0 | 0 | 0 | 2 | 1 | 3 |
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
-| Fantina Split | 1 | 1 | 0 | 0 | 0 | 8 | 0 | 10 |
-| Maylene Split | 1 | 1 | 0 | 3 | 2 | 3 | 0 | 10 |
+| Fantina Split | 1 | 0 | 0 | 0 | 0 | 8 | 0 | 9 |
+| Maylene Split | 1 | 0 | 0 | 3 | 2 | 3 | 0 | 9 |
 | Wake Split | 1 | 0 | 0 | 3 | 2 | 8 | 2 | 16 |
-| Byron Split | 1 | 4 | 0 | 2 | 3 | 2 | 2 | 14 |
-| Candice Split | 1 | 2 | 0 | 1 | 3 | 5 | 0 | 12 |
-| Galactic Split | 1 | 3 | 0 | 5 | 4 | 21 | 2 | 36 |
+| Byron Split | 1 | 3 | 0 | 2 | 3 | 2 | 2 | 13 |
+| Candice Split | 1 | 1 | 0 | 1 | 3 | 5 | 0 | 11 |
+| Galactic Split | 1 | 2 | 0 | 5 | 4 | 21 | 2 | 35 |
 | Volkner Split | 1 | 1 | 0 | 2 | 1 | 2 | 1 | 8 |
-| Elite Four Split | 1 | 2 | 0 | 0 | 3 | 1 | 2 | 9 |
-| **Whole game** | **1** | **7** | **0** | **8** | **5** | **45** | **4** | **70** |
+| Elite Four Split | 1 | 1 | 0 | 0 | 3 | 1 | 2 | 8 |
+| **Whole game** | **1** | **6** | **0** | **8** | **5** | **45** | **4** | **69** |
 
 ### Battle conditions and other groups
 
@@ -287,7 +287,6 @@ Groups by kind: battle format 12, AI 1, trainer item 1
 | 37 | battle format: a double battle |
 | 24 | held item effect #50: Macho Brace, Power Anklet, Power Band, Power Belt, Power Bracer, Power Lens, +1 more |
 | 19 | ability: Hydration |
-| 16 | AI move-id case of TrainerAI_CalcDamage: Gyro Ball |
 | 10 | ability: Forecast |
 | 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
 | 8 | held item effect #36: Berserk Gene |
@@ -339,8 +338,9 @@ Groups by kind: battle format 12, AI 1, trainer item 1
 | 1 | battle format: gauntlet Wayward Cave (position 5; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 6; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 7; rules not recorded) |
+| 1 | battle format: gauntlet Wayward Cave (position 8; rules not recorded) |
 
-Groups by kind: battle format 36, battle terrain 9, AI 8, held item effect 8, ability 5, ROM change 2, trainer item 1, form change 1
+Groups by kind: battle format 36, battle terrain 9, held item effect 8, AI 7, ability 5, ROM change 2, trainer item 1, form change 1
 
 ## Build order for the first two splits
 

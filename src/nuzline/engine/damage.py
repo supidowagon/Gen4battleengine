@@ -968,10 +968,12 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
-# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003, monSpeedValues:
-# the last CompareBattlerSpeed's speeds, battle_lib.c:1372-1373) is refused
-# (ai.commands.CALC_DAMAGE_MOVES; B13-27).
+# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003) reads
+# monSpeedValues, the last CompareBattlerSpeed's speeds (battle_lib.c:1372-1373):
+# ``BattleState.speed_rec``, or the current speeds once the decision has compared them
+# (``ai.commands.AiContext.written``), E3-B2-15 (B13-27).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
+AI_GYRO_BALL = 360
 AI_HIDDEN_POWER = 237
 # E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
 # (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3209-3227), B13-25..26.
@@ -1014,7 +1016,10 @@ def ai_case_power(
     the player again as defender and the AI attacker's IVs. Natural Gift (:2885-2895) the
     ``naturalGiftPower`` of ``item``, the ``heldItem`` argument (default the attacker's own
     ``battleMons`` item; ``IfPartyMemberDealsMoreDamage`` passes the member's, :2156-2165);
-    Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
+    Gyro Ball (:2995-3003) ``1 + 25 * monSpeedValues[defender] / monSpeedValues[attacker]``,
+    at most 150 (``BattleState.speed_rec`` of ``def_side`` and ``atk_side``: the caller puts the
+    speeds the estimate reads there, ``ai.commands.seen_state``; a zero divisor is refused by
+    ``ai.policy._refused``). Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
     embargoTurns == 0`` (:2886, :2898): the default ``item`` is the attacker's
     ``state.held_item`` (none under either, which reads as the cases' power 0 and
     TYPE_NORMAL), and a caller passing another item (a party member's) passes 0 for a Klutz
@@ -1031,6 +1036,7 @@ def ai_case_power(
     ivs = s.ivs[party(fmt, atk_side), s.active[atk_side]] if ivs is None else ivs
     hidden = hidden_power(ivs)[1]
     magnitude = AI_MAGNITUDE_POWER[jnp.clip(_i32(draw), 0, 6)]
+    gyro = gyro_ball_power(s.speed_rec[atk_side], s.speed_rec[def_side])
     return jnp.select(
         [
             move == AI_RETURN,
@@ -1039,8 +1045,17 @@ def ai_case_power(
             move == AI_HIDDEN_POWER,
             move == AI_MAGNITUDE,
             move == AI_NATURAL_GIFT,
+            move == AI_GYRO_BALL,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude, gift],
+        [
+            friendship * 10 // 25,
+            (255 - friendship) * 10 // 25,
+            by_weight,
+            hidden,
+            magnitude,
+            gift,
+            gyro,
+        ],
         0,
     )
 

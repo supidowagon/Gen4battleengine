@@ -138,13 +138,13 @@ ROOT_FOLD = 0x0C1A  # fold_in data of a playout key's root draws (root_state)
 WAR_FOLD = 0x0A27  # fold_in data of a turn key's open weather war draw (settle_war)
 
 
-def settle_war(state: BattleState, k_turn) -> BattleState:
+def settle_war(state: BattleState, k_turn, tables: Tables | None = None) -> BattleState:
     """``state`` with an open weather war (``BattleState.war_swaps``, left by a double KO's
     replacements) settled before the turn's decisions read it: ``step.sample_war`` on
     ``fold_in(k_turn, WAR_FOLD)``, ``k_turn`` being the turn's key, so the turn's own draws are
     unchanged. The decomp draws its tie at the sort before ``ShowBattleMon``
     (battle_controller_player.c:251), before command selection (ruling G-26)."""
-    return sample_war(jax.random.fold_in(k_turn, WAR_FOLD), state)
+    return sample_war(jax.random.fold_in(k_turn, WAR_FOLD), state, tables)
 
 
 def _sort_view(before: BattleState, after: BattleState) -> BattleState:
@@ -643,7 +643,7 @@ def _run(
     def body(carry):
         s, key, turns, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
-        s = settle_war(s, k_turn)  # an open weather war, before the decisions (G-26)
+        s = settle_war(s, k_turn, tables)  # an open weather war, before the decisions (G-26)
         chosen, q_refused = _policy(tables, s, k_policy, layout)
         # A refused distribution refuses the turn whenever the player's choice uses it.
         q_refused = q_refused & ~_fixed(turns, first_action)
@@ -854,7 +854,7 @@ def refusal_reason(
         if int(state.over) != 0:
             return None
         key, k_policy, k_turn = jax.random.split(key, 3)
-        state = settle_war(state, k_turn)
+        state = settle_war(state, k_turn, tables)
         chosen, q_refused = _policy_jit(tables, state, k_policy, layout)
         q_refused = bool(q_refused) and not bool(_fixed(turns, first))
         player_action = _first_action(turns, first, chosen).astype(_I32)

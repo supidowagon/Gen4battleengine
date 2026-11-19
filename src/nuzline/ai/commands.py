@@ -74,6 +74,7 @@ from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import (
+    AI_GYRO_BALL,
     AI_MAGNITUDE,
     AI_PSYWAVE,
     ai_damage_for_roll,
@@ -88,6 +89,7 @@ from nuzline.engine.order import (
     COMPARE_SPEED_TIE,
     battler_slower,
     compare_speed,
+    effective_speed,
 )
 from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
 
@@ -1001,15 +1003,14 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_PHYSICAL, CLASS_SPECIAL, CLASS_STATUS = 0, 1, 2
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
-# refused: Gyro Ball (:2995-3003), whose power reads monSpeedValues, the speeds of the last
-# CompareBattlerSpeed of any caller (battle_lib.c:1372-1373: the action order's sorts,
-# battle_controller_player.c:780, :888, :3992, and the AI's own compares, trainer_ai.c:1109,
-# :1121, :2081, in the scripts' order across every move slot), which no state field holds
-# (B13-27). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
-# are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13), Psywave and
-# Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39, ``_calc_read``), Natural
-# Gift and Judgment by the held item (ai_case_power, ai_case_type; B13-25). Decomp move ids.
-CALC_DAMAGE_MOVES = (360,)
+# refused: none since E3-B2-15. Return, Frustration, Low Kick, Grass Knot, Hidden Power and the
+# fixed-damage cases are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13),
+# Psywave and Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39, ``_calc_read``),
+# Natural Gift and Judgment by the held item (ai_case_power, ai_case_type; B13-25), and Gyro Ball
+# (:2995-3003) by monSpeedValues, the speeds of the last CompareBattlerSpeed of any caller
+# (battle_lib.c:1372-1373): ``BattleState.speed_rec`` until the decision's first speed compare,
+# the current speeds after it (``AiContext.written``, B13-27, E3-B2-15). Decomp move ids.
+CALC_DAMAGE_MOVES: tuple[int, ...] = ()
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3227) refused in some state: Weather
 # Ball outside rain, sand, sun and hail or under Cloud Nine / Air Lock, where the case assigns
 # no result (engine.damage.ai_weather_ball_typed; policy._refused). Hidden Power's, Natural
@@ -1361,6 +1362,57 @@ class AiContext(NamedTuple):
     # (_slot_read); the per-slot layout refuses the decision
     missing_read: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
+    # E3-B2-15, monSpeedValues (battle_lib.c:1372-1373). ``speeds`` int32[B]: the battlers'
+    # speeds as CompareBattlerSpeed computes them now (``order.effective_speed``). ``written``:
+    # an IfSpeedCompare* ran earlier in this decision (trainer_ai.c:1109, :1121), so the
+    # record holds ``speeds`` instead of ``state.speed_rec`` (``seen_state``); threaded in the
+    # decomp's order, flags in bit order and slots 0-3 in each (``start_run``).
+    speeds: jnp.ndarray | None = None
+    written: jnp.ndarray | None = None  # bool
+    # ``damage`` with ``speeds`` in the record (``seen_damage``): only a Gyro Ball slot differs
+    damage_w: CalcEstimate | None = None
+    # int32: the index in the layout's flag list of the flag script running (``start_run``)
+    flag: jnp.ndarray | None = None
+    # int32: -1, or the exact distribution's injected schedule (``policy._slot_histograms``): a
+    # script run of flag index f starts with ``written`` = f >= inject, whatever ran before
+    inject: jnp.ndarray | None = None
+    # int32[MOVES]: per slot, the least flag index whose run made an IfSpeedCompare*, else
+    # ``NO_COMPARE`` (the first compare of the decision, the one split of the factoring)
+    first_cmp: jnp.ndarray | None = None
+
+
+NO_COMPARE = 127  # ``AiContext.first_cmp`` of a slot that made no speed compare
+
+
+def current_speeds(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[B]``: every battler's speed as ``BattleSystem_CompareBattlerSpeed`` computes it
+    now (``order.effective_speed``), what its call writes to ``monSpeedValues``."""
+    return jnp.stack([effective_speed(tables, state, b) for b in range(format_of(state).B)])
+
+
+def seen_state(ctx: AiContext) -> BattleState:
+    """``ctx.state`` with ``speed_rec`` as ``TrainerAI_CalcDamage`` reads ``monSpeedValues`` here
+    (trainer_ai.c:2995-3003): the record of the last turn's sort until the decision's first
+    ``IfSpeedCompare*`` (``AiContext.written``), the compare's own speeds after it. Every
+    estimate of ``ctx`` goes through this state (E3-B2-15)."""
+    state = ctx.state
+    return state._replace(
+        speed_rec=jnp.where(ctx.written, ctx.speeds, state.speed_rec).astype(state.speed_rec.dtype)
+    )
+
+
+def seen_damage(ctx: AiContext) -> CalcEstimate:
+    """``ctx.damage`` (``_slot_damage`` at USE_MAX_DAMAGE) in ``seen_state``'s speeds."""
+    return jax.tree.map(lambda w, r: jnp.where(ctx.written, w, r), ctx.damage_w, ctx.damage)
+
+
+def start_run(ctx: AiContext, flag: int) -> AiContext:
+    """The start of one flag script's run over the current slot (``TrainerAI_EvalMoves``,
+    trainer_ai.c:483-525): ``flag`` is its index in the layout's flag list. An injected
+    schedule (``AiContext.inject`` not -1) overrides what the earlier runs wrote."""
+    flag = jnp.asarray(flag, _I32)
+    written = jnp.where(ctx.inject >= 0, flag >= ctx.inject, ctx.written)
+    return ctx._replace(flag=flag, written=written)
 
 
 def ai_damage(tables: Tables, state: BattleState, move, roll, draw=0) -> jnp.ndarray:
@@ -1599,7 +1651,8 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     active's best and M_j member j's, all independent (the loop's ``break``, :2167, only stops
     draws that change nothing)."""
     assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
-    tables, state = ctx.tables, ctx.state
+    # A bench member's Gyro Ball reads monSpeedValues as the active's does (seen_state).
+    tables, state = ctx.tables, seen_state(ctx)
     a = _side(Battler.ATTACKER)
     active = state.active[a]
 
@@ -1670,10 +1723,10 @@ def if_battler_deals_more_damage(
     assert battler == Battler.DEFENDER, battler
     tables, state = ctx.tables, ctx.state
     a, d = _side(Battler.ATTACKER), _side(battler)
-    mine = ctx.damage  # _slot_damage at USE_MAX_DAMAGE (new_context)
+    mine = seen_damage(ctx)  # _slot_damage at USE_MAX_DAMAGE (new_context)
     theirs = estimate(
         tables,
-        state,
+        seen_state(ctx),
         state.last_move[d].astype(_I32),
         SIM_ROLL_MAX,
         atk_side=d,
@@ -1840,6 +1893,23 @@ def new_context(
         sites = jnp.zeros((), _I32)
     elif sites is None:
         sites = line_sites(state)
+    # E3-B2-15: Gyro Ball's estimate in the current speeds is the one estimate that differs once
+    # the decision has compared speeds; the other moves' are the same (``seen_damage``).
+    speeds = current_speeds(tables, state)
+    damage = _slot_damage(tables, state, SIM_ROLL_MAX)
+    moves = state.moves[1, state.active[1]].astype(_I32)
+    gyro = estimate(
+        tables,
+        state._replace(speed_rec=speeds.astype(state.speed_rec.dtype)),
+        AI_GYRO_BALL,
+        SIM_ROLL_MAX,
+    )
+    gyro_slot = moves == AI_GYRO_BALL
+    damage_w = jax.tree.map(
+        lambda g, d: jnp.where(gyro_slot.reshape((-1,) + (1,) * (d.ndim - 1)), g[None], d),
+        gyro,
+        damage,
+    )
     return AiContext(
         tables=tables,
         state=state,
@@ -1856,7 +1926,7 @@ def new_context(
             if slotted
             else defender_ability(tables, state, outcome.ability_guess)
         ),
-        damage=_slot_damage(tables, state, SIM_ROLL_MAX),
+        damage=damage,
         sites=jnp.asarray(sites, _I32),
         guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
         guessing=ability_guessed(tables, state),
@@ -1864,6 +1934,12 @@ def new_context(
         weight=jnp.ones(MOVES, jnp.float32),
         missing_read=jnp.asarray(0, _I32),
         loose=loose,
+        speeds=speeds,
+        written=false,
+        damage_w=damage_w,
+        flag=jnp.asarray(0, _I32),
+        inject=jnp.asarray(-1, _I32),
+        first_cmp=jnp.full(MOVES, NO_COMPARE, _I32),
     )
 
 
@@ -1977,9 +2053,9 @@ def flag_move_damage_score(
     anew before reading it again (script.s:62-67, :112-117, :6511-6512, :6572-6573), so the
     draws are no read (the loose oracle still draws them)."""
     if use_damage_roll == ROLL_FOR_DAMAGE:
-        damage = _slot_damage(ctx.tables, ctx.state, ctx.outcome.sim_roll)
+        damage = _slot_damage(ctx.tables, seen_state(ctx), ctx.outcome.sim_roll)
     else:
-        damage = ctx.damage
+        damage = seen_damage(ctx)
     mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
     others = jnp.arange(MOVES) != ctx.slot
     le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c)
@@ -2310,7 +2386,7 @@ def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
         roll = ctx.outcome.sim_roll[ctx.slot]
     else:
         roll = SIM_ROLL_MAX
-    est = estimate(ctx.tables, ctx.state, ctx.move, roll)
+    est = estimate(ctx.tables, seen_state(ctx), ctx.move, roll)
     state = ctx.state
     hp = state.hp[0, state.active[0]].astype(_I32)
     p_kill = jnp.sum(jnp.where(hp <= est.value, est.prob, 0.0))
@@ -2555,6 +2631,13 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
     tables, state = ctx.tables, ctx.state
     a = _side(Battler.ATTACKER)
     slower = value == COMPARE_SPEED_SLOWER
+    # The compare writes both battlers' speeds to monSpeedValues (battle_lib.c:1372-1373) before
+    # it returns: what the estimates after it read (E3-B2-15, ``seen_state``).
+    first = jnp.minimum(ctx.first_cmp[ctx.slot], ctx.flag)
+    first = jnp.where(ctx.live, first, ctx.first_cmp[ctx.slot])
+    ctx = ctx._replace(
+        written=ctx.written | ctx.live, first_cmp=ctx.first_cmp.at[ctx.slot].set(first.astype(_I32))
+    )
     if ctx.loose is not None:
         reads = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
         kind = ReadKind.SPEED_TIE if slower else ReadKind.SPEED_TIE_DRAWN

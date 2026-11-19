@@ -78,7 +78,6 @@ LISTED = [
     "nuzline.ai.switching.MOVE_IDS",
     "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS",
     "nuzline.ai.outcome._SITES",
-    "nuzline.ai.commands.CALC_DAMAGE_MOVES",
     "nuzline.ai.commands.MOVE_TYPE_MOVES",
     "nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES",
     # vanilla_policy / kaizo_policy: script.s:78's compare (the Dry Skin word)
@@ -361,15 +360,11 @@ def test_kaizo_policy_ids_are_checked(vanilla_manifest, vanilla_items):
 
 
 def test_id_cases_are_decomp_ids_in_every_policy():
-    """The TrainerAI_CalcDamage and TrainerAI_MoveType id cases are compared by id in both
-    policies (the C code is unchanged in Kaizo), so Kaizo's Triple Axel (149) hits
-    MOVE_PSYWAVE: they are vanilla_policy constants, never name-checked against Kaizo."""
-    scopes = {
-        c.scope
-        for c in CONSTANTS
-        if c.where
-        in ("nuzline.ai.commands.CALC_DAMAGE_MOVES", "nuzline.ai.commands.MOVE_TYPE_MOVES")
-    }
+    """The TrainerAI_CalcDamage (``CALC_DAMAGE_MOVES``, empty since E3-B2-15) and
+    TrainerAI_MoveType id cases are compared by id in both policies (the C code is unchanged in
+    Kaizo), so Kaizo's Triple Axel (149) hits MOVE_PSYWAVE: they are vanilla_policy constants,
+    never name-checked against Kaizo."""
+    scopes = {c.scope for c in CONSTANTS if c.where == "nuzline.ai.commands.MOVE_TYPE_MOVES"}
     assert scopes == {"vanilla_policy"}
 
 

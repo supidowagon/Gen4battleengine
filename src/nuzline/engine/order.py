@@ -678,6 +678,25 @@ def effective_speed(
     return jnp.where(state.tailwind[side_of(side)] != 0, speed * 2, speed)
 
 
+def record_speeds(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``state`` with ``speed_rec`` (``BattleContext.monSpeedValues``) written as a
+    ``SortMonSpeedOrder`` writes it where ``cond`` (E3-B2-15): ``BattleSystem_CompareBattlerSpeed``
+    stores both battlers' speeds (``effective_speed``, battle_lib.c:1372-1373) unless either has no
+    HP (:1204-1211), and the sort compares every pair of battlers (:3364-3383), so a battler's
+    value is written when it is alive and another battler is (doubles section 5 rule 4: a loop,
+    not "me and the foe"). A fainted battler's slot keeps its last value. Called at the battle
+    start after the switch-in effects (bcp.c:263), before each action and after the last one of
+    a turn (BranchActions, bcp.c:888)."""
+    fmt = format_of(state)
+    sides = list(range(fmt.B))
+    alive = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in sides])
+    speeds = jnp.stack([effective_speed(tables, state, b) for b in sides])
+    write = jnp.asarray(cond, bool) & alive & (jnp.sum(alive.astype(_I32)) >= 2)
+    return state._replace(
+        speed_rec=jnp.where(write, speeds, state.speed_rec).astype(state.speed_rec.dtype)
+    )
+
+
 def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
     """Battler_HeldItemEffect (battle_lib.c:1215, :1217: ``held_item``, B13-29) is ``item``."""
     return tables.item_effect[held_item(state, side)] == item

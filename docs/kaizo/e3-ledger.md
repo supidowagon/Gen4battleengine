@@ -1208,3 +1208,68 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/engine/test_accuracy_classes.py (Defog in `_FOLLOWED`), tests/ai/test_kaizo_policy.py (`test_defog_*`,
   `test_if_stat_stage_not_equal_to_negates_the_equal_command`, `test_expert_defog`, `test_defog_basic`, the slow
   `test_defog_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
+- E3-B2-15 Gyro Ball's TrainerAI_CalcDamage case (effect 219, move 360 in both games; sheet gyro_ball_ai.md; closes
+  Owed B13-27 of docs/kaizo/e2-mechanics-ledger.md). The mechanic itself was modelled by B13-14 and is unchanged
+  (`damage.gyro_ball_speeds_power` reads the speeds at the action's start, which is the value BranchActions' sort just wrote,
+  bcp.c:888). New state `BattleState.speed_rec` (`int32[B]`, STATE.md row `BattleContext.monSpeedValues` -> `speed_rec`,
+  `mapped`; `RefBattler.speed_rec`), no `Outcome` or table field, no draw. Tables: `game_constants._CALC_DAMAGE_MOVES` is
+  empty (Gyro Ball left it; `commands.CALC_DAMAGE_MOVES = ()`); no array or key changed, no manifest bump.
+  Writers (`order.record_speeds`, the reference's `_record_speeds`): a battler's value is written when it has HP and another
+  battler does (lib.c:1204-1211, :1372-1373; the sort compares every pair, :3364-3383): (W1) at the end of `hooks.battle_start`
+  (bcp.c:263, after the switch-in effects; the earlier sort at :251 is overwritten), and again in `step.resolve_war` at turn 0
+  when a weather war the start left open is settled (a Swift Swim / Chlorophyll speed reads the weather; `tables` is an
+  optional argument of `resolve_war`, `sample_war`, `settle_war`, passed by every caller that has it); (W3) at the start of
+  every action of `_execute_actions` (phase `_START`: not a resume, a pursuit pass or a reflection pass) and after the loop
+  unless it paused (BranchActions, bcp.c:888-891). W2 (CalcTurnOrder, :773-786) and W4 (Trick Room's sort, :3990-3992) add
+  nothing: a W3 follows before any reader. There is no switch-in or end-of-turn writer, so a replacement's slot holds its
+  predecessor's speed, and after a knock-out the record keeps the values of the sort before the fatal action.
+  The AI's own compares (W5: `IfSpeedCompareEqualTo`, trainer_ai.c:1109) write both speeds inside one decision only: no
+  later decision reads them (the next turn's W3 comes first), so they are not state but `AiContext.written`, threaded in the
+  decomp's order (flags in bit order, slots 0-3 in each, trainer_ai.c:297-310, :483-526): `commands.start_run` (per flag run),
+  `if_speed_compare_equal_to` (sets it where live), `seen_state` (the state whose `speed_rec` is the record until the first
+  compare and the current speeds, `current_speeds`, after it) used by every estimate (`flag_move_damage_score`,
+  `if_current_move_kills`, `if_battler_deals_more_damage`, `if_party_member_deals_more_damage`) and `seen_damage`
+  (`AiContext.damage` and `damage_w`, the USE_MAX_DAMAGE estimates under the record and under the current speeds; they differ
+  in the Gyro Ball slot only). `damage.ai_case_power` has the case: `min(1 + 25 * rec[defender] / rec[attacker], 150)`
+  (trainer_ai.c:2995-3003) from `speed_rec[atk_side]` and `[def_side]`; type 0 (the table's Steel, :3001). So the player's Gyro
+  Ball in Expert_Copycat's IfBattlerDealsMoreDamage (attacker = defender, :2229-2237) is 26 and a bench Gyro Ball reads the
+  record as the active's (:2158).
+  Exactness. The per-slot factoring assumes a slot's score reads only its own draws; `written` ties the slots and flags
+  together: it turns true at the first (flag, slot) run that makes a compare and stays true. For a layout that transcribes
+  effect 219 (`policy._tracks_speed`, static: a fight's own moves, R7) the exact distribution is split by that first run
+  (`policy._slot_event_histograms`): the scoring is run under each injected schedule `tau` in 0..n (`AiContext.inject`: a flag
+  run of index f starts with `written` = f >= tau) and with `first_cmp` (the first flag index at which a slot's pattern
+  compared, from the `tau = n` run, where nothing is written before the first compare); the event (f, s) holds when slots
+  before s have not compared up to flag f, slot s compares at f, the slots after s have not compared before f; the slots
+  are independent given the event, each scored under its `tau_m = f + 1` (m <= s) or `f` (m > s); the last event is "no
+  compare". Pick = the sum over events of the existing pick of the events' histograms (`vmap`). `_slot_histograms` returns
+  the marginal of each slot (so the loose-oracle comparisons keep their contract). A layout without effect 219 is traced
+  exactly as before. `_path_records` covers every schedule (the enumeration oracle's read columns). The loose oracle and
+  `ai_action_distribution_enumerated` run the natural threaded `written` (joint patterns), which the factored version is
+  tested against.
+  Refusal: a zero divisor. `policy._refused.calc_damage` also marks a Gyro Ball of the AI's party when `speed_rec[1]` or
+  the AI battler's current speed is 0 (the ROM's division routine decides, as for the mechanic's `GYRO_SPEED_MIN`), and
+  `copied` the player's Gyro Ball under a known Copycat with the player's value 0. The static per-move refusal list
+  (`opponent_move_refusals`) no longer has "calc damage" for any move.
+  Hit chance: none (the estimate ignores accuracy). Damage inputs: the power above through the existing AI path
+  (`ai_damage_for_roll`); crit: none; held items: those CompareBattlerSpeed reads when the record is written (Choice Scarf,
+  speed-halving items, Unburden's empty slot, `order.effective_speed`).
+  Doubles (docs/doubles-state-design.md section 5): `speed_rec` is per battler `[B]`; `record_speeds` and `current_speeds`
+  loop over battlers (a battler is written when alive with another alive); the estimate indexes `speed_rec[atk_side]` and
+  `[def_side]` passed in, never `1 - side`; `AiContext.speeds` is `[B]`.
+  Owed lines closed: B13-27 (e2 ledger). Owed lines added: (1) `LoadBattlerSpeedRank` (trainer_ai.c:2056-2093, only in
+  TagStrategy_Main and after, script.s:6637ff) and `IfSpeedCompareNotEqualTo` (:1114-1124, in no script) are not
+  transcribed; when Tag Strategy is, each must set `written` (and `first_cmp`) as the compare does (the rank command's pair
+  loop writes every pair's speeds). (2) A weather war settled by a replacement pass (turn 1 and later) writes no record
+  (no sort follows it in the decomp, correct); only the turn-0 case writes.
+  Not built: Defog, Nature Power, Secret Power, Camouflage, Nightmare (another stream). Message-only: none.
+  Tests: tests/engine/test_e3_batch2.py (`test_monspeedvalues_is_speed_rec_in_both_games`,
+  `test_the_battle_start_record_follows_the_weather_and_ability`, `test_a_turn_ends_with_the_speeds_of_the_last_sort`,
+  `test_a_change_during_the_turn_is_in_the_record`, `test_a_faint_stops_the_writes_and_a_replacement_keeps_its_predecessors`,
+  `test_the_record_after_a_switch_turn_is_the_newcomers`, `test_a_weather_war_at_the_start_writes_the_record_when_it_settles`),
+  tests/engine/test_state.py (`test_mon_speed_values_map_to_speed_rec`), tests/ai/test_kaizo_policy.py (`test_gyro_ball_*`,
+  `test_the_gyro_ball_*`, `test_a_speed_compare_writes_monspeedvalues_where_it_is_live`, `test_new_context_holds_both_estimates_*`,
+  `test_a_bench_gyro_ball_*`, `test_a_players_gyro_ball_is_26_*`, `test_a_zero_monspeedvalues_divisor_is_refused`,
+  `test_the_natural_run_is_the_injected_schedule_of_the_first_compare`, the slow `test_gyro_ball_exact_equals_loose` and
+  `test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant`, and `test_batch13_refusals_lifted`, a fullset
+  test run on the pod); tests/strategies.py draws `speed_rec`.

@@ -222,6 +222,17 @@ Encodings:
   side's replacement can send one in); else 0. Hidden from the player. At a root it is a
   chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
   (``BattleContext_InitCounters``, battle_lib.c:2024) is.
+* ``speed_rec`` is ``BattleContext.monSpeedValues[battler]`` (E3-B2-15), per battler: the speed
+  ``BattleSystem_CompareBattlerSpeed`` last computed for it (battle_lib.c:1372-1373, ``order.
+  effective_speed``), which only ``BtlCmd_CalcGyroBallPower`` (battle_script.c:7123-7131) and
+  ``TrainerAI_CalcDamage``'s Gyro Ball case (trainer_ai.c:2995-3003) read. It is not a volatile
+  (a replacement's slot keeps its predecessor's value) and is written only by the sorts that
+  compare two battlers alive: the battle start after the switch-in effects (bcp.c:263,
+  ``hooks.battle_start``; ``step.resolve_war`` for a weather war the start left open), before
+  each action and after the last one of a turn (BranchActions, bcp.c:888, ``step.
+  _execute_actions``). The AI's own compares (``IfSpeedCompare*``, ``LoadBattlerSpeedRank``,
+  trainer_ai.c:1109, :1121, :2081) write it too, but only inside one decision, which no other
+  decision reads (the next turn's W3 comes first): ``ai.commands.AiContext.written``.
 * ``war_swaps`` (E1 Gardenia batch, ruling G-26): two newcomers that run the weather state
   together (the leads at the battle start, a double KO's replacements) with switch-in weather
   abilities setting different weathers leave the slower one's weather in ``monSpeedOrder``
@@ -497,6 +508,8 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
+    # int32, BattleContext.monSpeedValues[battler]: the last CompareBattlerSpeed's speed (E3-B2-15)
+    speed_rec: jnp.ndarray
     # field (scalars)
     weather: jnp.ndarray  # int8, ids.Weather
     weather_timer: jnp.ndarray  # int8, 0 = permanent
@@ -880,6 +893,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
+    "speed_rec": (_BATTLER, np.int32),
     "weather": (_FIELD, np.int8),
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),

@@ -4726,8 +4726,8 @@ def test_batch13_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case
 @pytest.mark.fullset
 def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
     """B13-23..27: the batch's effects are transcribed (no "not transcribed" or "expert
-    label"); Natural Gift and Judgment take modelled id cases; Gyro Ball's TrainerAI_CalcDamage
-    case stays refused (monSpeedValues), and Weather Ball's TrainerAI_MoveType case is refused
+    label"); Natural Gift and Judgment take modelled id cases, Gyro Ball's TrainerAI_CalcDamage
+    case since E3-B2-15 (monSpeedValues), and Weather Ball's TrainerAI_MoveType case is refused
     exactly where it assigns no type (trainer_ai.c:3209-3227)."""
     from nuzline.ai.layout import ALLIN
 
@@ -4740,7 +4740,7 @@ def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
         kinds = policy.opponent_move_refusals(t, n.move_names.index(name), ALLIN)
         assert kinds == (["move type"] if name == "Weather Ball" else []), (name, kinds)
     gyro = n.move_names.index("Gyro Ball")
-    assert policy.opponent_move_refusals(t, gyro, ALLIN) == ["calc damage"]
+    assert policy.opponent_move_refusals(t, gyro, ALLIN) == []  # modelled since E3-B2-15
     moves = _ids(n, "Weather Ball", "Natural Gift", "Judgment", "")
     s = _state(t, kaizo_roark_party, BONSLY, moves)
     r = policy._refused(t, s, KAIZO)
@@ -6281,3 +6281,297 @@ def test_defog_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
     for s in states:
         for flags in (0x27, 0x10F):
             _assert_exact_equals_loose(t, s, layout_for(t, flags, s))
+
+
+# --- #360 Gyro Ball's TrainerAI_CalcDamage case (E3-B2-15) ------------------------------------
+
+
+def _gyro(t, n, party, moves=("Gyro Ball", "Accelerock", "", ""), rec=None, **kw):
+    """The AI's Bonsly with ``moves`` against Roark's Gible, ``rec`` = (player, AI) the record
+    ``BattleState.speed_rec`` holds (default: the battle start's, the current speeds)."""
+    s = _state(t, party, BONSLY, _ids(n, *moves), **kw)
+    return s if rec is None else _record(s, rec)
+
+
+def _record(s, rec):
+    return s._replace(speed_rec=jnp.asarray(rec, s.speed_rec.dtype))
+
+
+def _cur(t, s) -> list[int]:
+    return [int(x) for x in c.current_speeds(t, s)]
+
+
+def _gyro_power(p: int, a: int) -> int:
+    """trainer_ai.c:2995-3003: ``1 + 25 * monSpeedValues[defender] / monSpeedValues[attacker]``,
+    at most 150."""
+    return min(1 + 25 * p // a, 150)
+
+
+def _estimate(t, s, move):
+    return int(ai_damage_for_roll(t, s, 1, move, SIM_ROLL_MAX))
+
+
+def test_gyro_ball_is_a_modelled_calc_damage_case(kaizo_tables, kaizo_names):
+    """Gyro Ball (360 in both games) is no longer refused; ``CALC_DAMAGE_MOVES`` is empty; the
+    case's lines, the record's writer and the speed compare's own call are the decomp's
+    (E3-B2-15)."""
+    t, n = kaizo_tables, kaizo_names
+    assert c.CALC_DAMAGE_MOVES == () and damage.AI_GYRO_BALL == GYRO_BALL == 360
+    assert n.move_names[GYRO_BALL] == "Gyro Ball"
+    assert policy.opponent_move_refusals(t, GYRO_BALL, KAIZO_ALL) == []
+    trainer_ai = DECOMP / "src/battle/trainer_ai/trainer_ai.c"
+    battle_lib = DECOMP / "src/battle/battle_lib.c"
+    if not trainer_ai.exists():
+        pytest.skip("decomp not present")
+    ai = trainer_ai.read_text(encoding="utf-8").splitlines()
+    assert ai[2994].strip() == "case MOVE_GYRO_BALL:"
+    assert ai[2995].strip() == (
+        "power = 1 + 25 * battleCtx->monSpeedValues[AI_CONTEXT.defender] / "
+        "battleCtx->monSpeedValues[attacker];"
+    )
+    assert ai[2997].strip() == "if (power > 150) {" and ai[2998].strip() == "power = 150;"
+    assert ai[3001].strip() == "type = TYPE_NORMAL; // default to the base move type"
+    lib = battle_lib.read_text(encoding="utf-8").splitlines()
+    assert lib[1371].strip() == "battleCtx->monSpeedValues[battler1] = battler1Speed;"
+    assert lib[1372].strip() == "battleCtx->monSpeedValues[battler2] = battler2Speed;"
+    # the decision's compares: both call CompareBattlerSpeed(attacker, defender, TRUE)
+    assert "AI_CONTEXT.attacker, AI_CONTEXT.defender, TRUE) == val" in ai[1108]
+    assert "AI_CONTEXT.attacker, AI_CONTEXT.defender, TRUE) != val" in ai[1120]
+    # the one speed-compare command the scripts use is IfSpeedCompareEqualTo; LoadBattlerSpeedRank
+    # is in Tag Strategy and after it (TagStrategy_Main, script.s:6637), not transcribed
+    script = (DECOMP / "src/battle/trainer_ai/script.s").read_text(encoding="utf-8")
+    assert "IfSpeedCompareNotEqualTo" not in script
+    ranks = [i for i, line in enumerate(script.splitlines(), 1) if "LoadBattlerSpeedRank" in line]
+    assert ranks and min(ranks) > 6637
+
+
+@pytest.mark.parametrize("rec", [(1, 1), (100, 100), (100, 40), (7, 300), (4000, 60), (90, 33)])
+def test_the_gyro_ball_estimate_reads_the_record(kaizo_tables, kaizo_names, kaizo_roark_party, rec):
+    """``ai_case_power``: the power is ``1 + 25 * rec[defender] / rec[attacker]``, at most 150, from
+    the record; the estimate does not fall as the power rises and does not change with a record
+    of the same power."""
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party, rec=rec)
+    power = int(damage.ai_case_power(t, s, 1, GYRO_BALL))
+    assert power == _gyro_power(*rec)
+    est = _estimate(t, s, GYRO_BALL)
+    double = (rec[0] * 2 + 1, rec[1] * 2 + 1)
+    if _gyro_power(*double) == power:
+        assert _estimate(t, _record(s, double), GYRO_BALL) == est
+    faster = (rec[0] * 3, rec[1])
+    assert _gyro_power(*faster) >= power
+    assert _estimate(t, _record(s, faster), GYRO_BALL) >= est
+
+
+def test_gyro_ball_power_is_capped_and_takes_the_table_type(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party, rec=(5000, 10))
+    assert int(damage.ai_case_power(t, s, 1, GYRO_BALL)) == 150
+    # type = TYPE_NORMAL, "the base move type": ApplyTypeChart reads 0 as the table's, Steel (8)
+    assert int(damage.ai_case_type(t, s, 1, GYRO_BALL)) == int(t.move_type[GYRO_BALL]) == 8
+
+
+def test_a_players_gyro_ball_is_26_whatever_the_record(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """``IfBattlerDealsMoreDamage`` prices the player's move with ``attacker = defender = the
+    player`` (trainer_ai.c:2229-2237): ``1 + 25 * v / v`` = 26 for any record v > 0."""
+    t, n = kaizo_tables, kaizo_names
+    for v in (1, 37, 1000):
+        s = _gyro(t, n, kaizo_roark_party, rec=(v, 5))
+        assert int(damage.ai_case_power(t, s, 0, GYRO_BALL, def_side=0)) == 26
+
+
+def test_new_context_holds_both_estimates_of_a_gyro_slot(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """``damage`` is the record's estimate, ``damage_w`` the current speeds': they differ in the
+    Gyro Ball slot only, ``seen_damage`` picks by ``written``, ``seen_state`` likewise."""
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party)
+    cur = _cur(t, s)
+    assert [int(x) for x in s.speed_rec] == cur  # the battle start's sort wrote the speeds
+    s = _record(s, [cur[0] * 4, cur[1]])
+    ctx = c.new_context(t, s, _outcome(t, s))
+    assert [int(x) for x in ctx.speeds] == cur and not bool(ctx.written)
+    assert int(ctx.inject) == -1 and set(np.asarray(ctx.first_cmp).tolist()) == {c.NO_COMPARE}
+    gyro, other = 0, 1  # Gyro Ball and Accelerock
+    est, est_w = ctx.damage.value[:, 0], ctx.damage_w.value[:, 0]
+    assert int(est[other]) == int(est_w[other])
+    assert int(est[gyro]) == _estimate(t, _record(s, [cur[0] * 4, cur[1]]), GYRO_BALL)
+    assert int(est_w[gyro]) == _estimate(t, _record(s, cur), GYRO_BALL)
+    assert int(est[gyro]) > int(est_w[gyro])
+    assert int(c.seen_damage(ctx).value[gyro, 0]) == int(est[gyro])
+    assert [int(x) for x in c.seen_state(ctx).speed_rec] == [cur[0] * 4, cur[1]]
+    on = ctx._replace(written=jnp.asarray(True))
+    assert int(c.seen_damage(on).value[gyro, 0]) == int(est_w[gyro])
+    assert [int(x) for x in c.seen_state(on).speed_rec] == cur
+
+
+def test_a_speed_compare_writes_monspeedvalues_where_it_is_live(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """``IfSpeedCompareEqualTo`` (trainer_ai.c:1102-1112) writes both speeds before it jumps, on
+    the paths that reach it: ``written`` and the slot's ``first_cmp`` (the first flag index of a
+    compare); a masked compare (not live) writes nothing, a later flag does not move the first,
+    and an injected schedule overrides what the earlier runs wrote."""
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party)
+    ctx = c.at_slot(c.new_context(t, s, _outcome(t, s)), 1)
+    off = c.if_speed_compare_equal_to(ctx._replace(live=jnp.asarray(False)), COMPARE_SPEED_SLOWER)
+    assert not bool(off.written) and int(off.first_cmp[1]) == c.NO_COMPARE
+    ran = c.if_speed_compare_equal_to(c.start_run(ctx, 2), COMPARE_SPEED_SLOWER)
+    assert bool(ran.written) and int(ran.first_cmp[1]) == 2
+    assert int(ran.first_cmp[0]) == c.NO_COMPARE
+    again = c.if_speed_compare_equal_to(c.start_run(ran, 3), COMPARE_SPEED_SLOWER)
+    assert int(again.first_cmp[1]) == 2 and bool(again.written)
+    assert bool(c.start_run(ran, 4).written)  # nothing resets it
+    for inject, flag, expected in ((5, 4, False), (4, 4, True), (0, 4, True), (3, 2, False)):
+        run = c.start_run(ran._replace(inject=jnp.asarray(inject, jnp.int32)), flag)
+        assert bool(run.written) == expected, (inject, flag)
+
+
+def test_a_bench_gyro_ball_reads_the_record_as_the_actives_does(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """``IfPartyMemberDealsMoreDamage`` passes ``attacker = the AI's active`` for a bench move
+    (trainer_ai.c:2158): a bench Gyro Ball is ``1 + 25 * rec[d] / rec[a]`` as the active's is,
+    and after the decision's first compare the current speeds."""
+    t, n = kaizo_tables, kaizo_names
+    party = list(kaizo_roark_party)
+    party[CRANIDOS] = replace(party[CRANIDOS], moves=_ids(n, "Gyro Ball", "", "", ""), pp=None)
+    s = _gyro(t, n, party, moves=("Tackle", "", "", ""))
+    cur = _cur(t, s)
+    tackle = _estimate(t, s, n.move_names.index("Tackle"))
+    for rec in ([cur[0] * 50, cur[1]], [1, cur[1]], cur):
+        at = _record(s, rec)
+        ctx = c.at_slot(c.new_context(t, at, _outcome(t, at)), 0)
+        for written, speeds in ((False, rec), (True, cur)):
+            seen = ctx._replace(written=jnp.asarray(written))
+            out = c.if_party_member_deals_more_damage(seen, c.USE_MAX_DAMAGE)
+            expected = _estimate(t, _record(at, speeds), GYRO_BALL) > tackle
+            assert bool(out.jump) == expected, (rec, written)
+    huge, tiny = _record(s, [cur[0] * 50, cur[1]]), _record(s, [1, cur[1]])
+    assert _estimate(t, huge, GYRO_BALL) > tackle >= _estimate(t, tiny, GYRO_BALL)
+
+
+def test_the_gyro_ball_move_reads_what_branchactions_wrote(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """The mechanic (``damage.gyro_ball_speeds_power`` at the action's start) and the battle
+    start's record agree: ``1 + 25 * the foe's speed / the user's``."""
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party)
+    cur = _cur(t, s)
+    assert int(damage.gyro_ball_speeds_power(t, s, 1, 0)) == _gyro_power(cur[0], cur[1])
+    assert int(damage.ai_case_power(t, s, 1, GYRO_BALL)) == _gyro_power(cur[0], cur[1])
+
+
+def test_gyro_ball_is_scored_not_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party)
+    for flags in (0x27, 0x10F):
+        assert policy.ai_refusals(t, s, n, layout_for(t, flags, s)) == []
+
+
+@pytest.mark.parametrize("rec", [(0, 50), (50, 0)])
+def test_a_zero_monspeedvalues_divisor_is_refused(
+    kaizo_tables, kaizo_names, kaizo_roark_party, rec
+):
+    """The AI battler's 0 is a division by zero (trainer_ai.c:2995-3003): the ROM's division
+    routine decides, so the decision is refused (as the mechanic's own, ``GYRO_SPEED_MIN``); the
+    player's 0 only where the AI reads the player's Gyro Ball (Expert_Copycat)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _gyro(t, n, kaizo_roark_party, rec=rec)
+    reasons = policy.ai_refusals(t, s, n, layout_for(t, 0x27, s))
+    if rec[1] == 0:
+        assert len(reasons) == 1 and "monSpeedValues of 0" in reasons[0], reasons
+    else:
+        assert reasons == []
+    # no Gyro Ball in the AI's party: a 0 is never divided by
+    plain = _gyro(t, n, kaizo_roark_party, moves=("Accelerock", "", "", ""), rec=rec)
+    assert policy.ai_refusals(t, plain, n, layout_for(t, 0x27, plain)) == []
+
+
+def _trick_gyro(t, n, party, trick_first: bool, rec_player=1):
+    """The AI's Bonsly with Trick Room and Gyro Ball (and Accelerock): Trick Room's
+    Basic_CheckTrickRoom makes an ``IfSpeedCompareEqualTo`` (script.s:1501-1506) in BASIC, so the
+    slot that holds it writes monSpeedValues for every run after it. The record holds the player's
+    speed ``rec_player``, the AI's current one: Gyro Ball's power 1 + 25 * rec_player / speed."""
+    moves = ("Trick Room", "Gyro Ball") if trick_first else ("Gyro Ball", "Trick Room")
+    s = _gyro(t, n, party, moves=(*moves, "Accelerock", ""))
+    return _record(s, [rec_player, _cur(t, s)[1]])
+
+
+@partial(jax.jit, static_argnames="layout")
+def _inject_run(t, s, o, inject, layout):
+    ctx = policy._score_context(t, s, o, layout, inject)
+    return ctx.scores, ctx.first_cmp, ctx.written
+
+
+@pytest.mark.parametrize("trick_first", [True, False])
+def test_the_natural_run_is_the_injected_schedule_of_the_first_compare(
+    kaizo_tables, kaizo_names, kaizo_roark_party, trick_first
+):
+    """``written`` turns true at the first (flag, slot) run that makes an ``IfSpeedCompareEqualTo``
+    and stays true: the natural threaded run equals the run with the schedule ``tau`` (a flag run
+    of index f starts with ``written`` = f >= tau) that the factoring injects for it
+    (``policy._slot_event_histograms``): the slots after the compare's (flag-major, slot-minor)
+    run from its flag on, the others from the flag after it. E3-B2-15."""
+    t, n = kaizo_tables, kaizo_names
+    s = _trick_gyro(t, n, kaizo_roark_party, trick_first)
+    layout = layout_for(t, 0x27, s)
+    o = _outcome(t, s, layout=layout)
+    flags = len(policy._flag_scripts(layout))
+    assert flags == 4 and policy._tracks_speed(layout)
+    nat, first, written = _inject_run(t, s, o, -1, layout)
+    tr, gyro = (0, 1) if trick_first else (1, 0)
+    assert [int(x) for x in first[:3]] == [
+        0 if m == tr else c.NO_COMPARE for m in range(3)
+    ]  # BASIC's Trick Room compare is the only one on the path
+    assert bool(written)
+    never, _, _ = _inject_run(t, s, o, flags, layout)  # no run starts written
+    always, _, _ = _inject_run(t, s, o, 0, layout)  # every run does
+    after_flag0, _, _ = _inject_run(t, s, o, 1, layout)  # the runs of flags 1.. do
+    for slot in range(MOVES):
+        # a slot after the compare's own runs from flag 0 on; the compare's slot and the ones
+        # before it from flag 1 on
+        expected = always if slot > tr else after_flag0
+        assert int(nat[slot]) == int(expected[slot]), (trick_first, slot)
+    # the schedule matters: the record's Gyro Ball (power 1) is not the current speeds' (> 1)
+    assert int(never[gyro]) != int(always[gyro]) or int(never[gyro]) != int(after_flag0[gyro])
+
+
+@pytest.mark.slow  # run on the pod
+def test_gyro_ball_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """The exact distribution factors the decision by where the first speed compare is
+    (``policy._slot_event_histograms``); the loose oracle runs the slots' paths jointly with the
+    threaded ``written``: equal, with a record that is not the current speeds, Trick Room before
+    and after Gyro Ball, and with Gyro Ball alone (E3-B2-15)."""
+    t, n = kaizo_tables, kaizo_names
+    states = (
+        _trick_gyro(t, n, kaizo_roark_party, True),
+        _trick_gyro(t, n, kaizo_roark_party, False),
+        _trick_gyro(t, n, kaizo_roark_party, True, rec_player=900),
+        _gyro(t, n, kaizo_roark_party, rec=(1, 12)),
+    )
+    for s in states:
+        for flags in (0x27, 0x10F):
+            _assert_exact_equals_loose(t, s, layout_for(t, flags, s))
+
+
+@pytest.mark.slow  # run on the pod
+def test_with_the_record_equal_to_the_speeds_the_compare_order_is_irrelevant(
+    kaizo_tables, kaizo_names, kaizo_roark_party
+):
+    """With the record equal to the current speeds no compare changes an estimate: Trick Room
+    before and after Gyro Ball give the same distribution up to the swapped slots (E3-B2-15)."""
+    t, n = kaizo_tables, kaizo_names
+    dists = []
+    for trick_first in (True, False):
+        s = _trick_gyro(t, n, kaizo_roark_party, trick_first)
+        s = _record(s, _cur(t, s))
+        dists.append(np.asarray(policy.ai_action_distribution(t, s, layout_for(t, 0x27, s)))[:4])
+    np.testing.assert_allclose(dists[0][[1, 0, 2, 3]], dists[1], atol=1e-6)

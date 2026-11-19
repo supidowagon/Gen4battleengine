@@ -168,8 +168,9 @@ _AI_MOVE_IDS = {
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
 # Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
 # Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES),
-# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25).
-_CALC_DAMAGE_MOVES = {"Gyro Ball": 360}
+# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25), Gyro Ball (360) since E3-B2-15
+# (engine.damage.AI_GYRO_BALL, a ``commands.MOVE_IDS`` id too): none is left, so the table is
+# empty and names no id (so it is no constant of this table).
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3227)
 # refused in some state: Weather Ball where its case assigns no type (B13-26). Hidden Power's
 # (E1 batch 14), Natural Gift's and Judgment's (B13-26) are modelled (engine.damage.ai_move_type).
@@ -674,7 +675,6 @@ CONSTANTS: tuple[Constant, ...] = (
     # The decomp's C id cases: both policies compare these by id, whatever a game names the
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
     # name-checked against vanilla only.
-    *_table("nuzline.ai.commands.CALC_DAMAGE_MOVES", "move", _P, _CALC_DAMAGE_MOVES),
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the

@@ -158,6 +158,7 @@ class RefBattler:
     future_move: int
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
+    speed_rec: int  # BattleContext.monSpeedValues (E3-B2-15)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
     ts_order: int

@@ -1158,6 +1158,18 @@ def _effective_speed(tables, s: RefState, side: int) -> int:
     return speed
 
 
+def _record_speeds(tables, s: RefState) -> None:
+    """``order.record_speeds``: ``monSpeedValues`` (``speed_rec``) as a ``SortMonSpeedOrder``
+    writes it (lib.c:1372-1373, compares of two battlers with HP: :1204-1211, every pair:
+    :3364-3383), E3-B2-15."""
+    alive = [_active(s, b).hp > 0 for b in range(_fmt(s).B)]
+    if sum(alive) < 2:
+        return
+    for b, up in enumerate(alive):
+        if up:
+            s.battlers[b].speed_rec = _effective_speed(tables, s, b)
+
+
 def _held(s: RefState, mon: RefPokemon) -> int:
     """``Battler_HeldItem`` (lib.c:5352-5363) of ``mon``: none for a Klutz holder or the active
     battler of a side under Embargo (``embargoTurns``), else its item (B13-29)."""
@@ -6919,6 +6931,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
     for position in range(start, 2):
         side = turn.order[position]
         turn.position = position
+        _record_speeds(tables, s)  # BranchActions' SortMonSpeedOrder before the action (bcp.c:888)
         if s.over:
             break
         stale = _stale_snapshot(s)
@@ -7085,6 +7098,7 @@ def _stale_known_item(s: RefState, snap: tuple[int, bool, int], fought: bool) ->
 def _end_turn(turn: _Turn, s: RefState) -> RefState:
     """The end of the turn after the actions."""
     tables, outcome = turn.tables, turn.outcome
+    _record_speeds(tables, s)  # the sort after the last action (bcp.c:888-891), E3-B2-15
     order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
     snap = _stale_snapshot(s)
     _field_conditions(turn, s, order)

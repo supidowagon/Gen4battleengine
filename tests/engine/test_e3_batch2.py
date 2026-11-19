@@ -36,9 +36,10 @@ from nuzline.engine.ids import (
     Status,
     Weather,
 )
-from nuzline.engine.order import CALL_MIRROR_MOVE, call_kind
+from nuzline.engine.order import CALL_MIRROR_MOVE, MOVE_ACTIONS, call_kind, effective_speed
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.state import make_state
+from nuzline.engine.step import replace as send_in
 from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
@@ -2866,3 +2867,159 @@ def test_metronome_calling_defog_runs_defogs_script_with_metronomes_pp(kaizo_tab
     assert int(after.reflect[1]) == 0 and int(after.stealth_rock[1]) == 0
     assert int(after.stages[1, Stat.EVA]) == -1
     assert int(after.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+
+
+# --- Gyro Ball's AI case and monSpeedValues (#360 / effect 219, E3-B2-15) --------------------------
+# battle_lib.c:1372-1373: BattleSystem_CompareBattlerSpeed stores both speeds in
+# BattleContext.monSpeedValues, which BtlCmd_CalcGyroBallPower (battle_script.c:7123-7131) and
+# TrainerAI_CalcDamage's Gyro Ball case (trainer_ai.c:2995-3003) read. Its writers: the sort after
+# the switch-in effects at the battle start (bcp.c:263) and, in BranchActions (bcp.c:888), before
+# each action and once more after the last one; the AI's own compares write it inside a decision
+# (tests/ai/test_kaizo_policy.py). ``BattleState.speed_rec``; each case against the reference.
+
+
+def _speeds(t, s):
+    return [int(effective_speed(t, s, b)) for b in range(2)]
+
+
+def _rec(s):
+    return [int(x) for x in s.speed_rec]
+
+
+def _sp(t, n, species, *moves, level=40, ability_slot=0):
+    """One Pokemon of ``species`` at ``level`` with ``moves`` (no item)."""
+    return PokemonSpec(
+        species=n.species(species),
+        level=level,
+        nature=0,
+        ivs=(15,) * 6,
+        evs=(0,) * 6,
+        moves=tuple(n.move(m) for m in moves) + (0,) * (4 - len(moves)),
+        item=0,
+        ability_slot=ability_slot,
+        gender=0,
+        friendship=70,
+    )
+
+
+def test_monspeedvalues_is_speed_rec_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """The field exists per battler and ``battle_start`` fills it with the battlers' speeds."""
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        s = make_state(t, [_sp(t, n, "Monferno", "Tackle")], [_sp(t, n, "Geodude", "Tackle")])
+        assert s.speed_rec.shape == (2,) and s.speed_rec.dtype == jnp.int32
+        assert _rec(s) == _speeds(t, s) and min(_rec(s)) > 0
+
+
+def test_the_battle_start_record_follows_the_weather_and_ability(tables, names):
+    """bcp.c:263 sorts after the switch-in effects: a Swift Swim lead in the start weather rain
+    has its speed doubled in the record (CompareBattlerSpeed :1228-1238)."""
+    t, n = tables, names
+    mine, foe = _sp(t, n, "Monferno", "Tackle"), _sp(t, n, "Goldeen", "Tackle")
+    s = make_state(t, [mine], [foe], start_condition=Weather.RAIN)
+    assert int(s.ability[1, 0]) == AbilityId.SWIFT_SWIM
+    plain = make_state(t, [mine], [foe])
+    assert _rec(s)[1] == 2 * _rec(plain)[1] and _rec(s)[0] == _rec(plain)[0]
+    assert _rec(s) == _speeds(t, s)
+
+
+def test_a_turn_ends_with_the_speeds_of_the_last_sort(tables, names):
+    """Speed Boost raises the foe's Speed at the end of the turn, after the sort that follows the
+    last action (bcp.c:888-891): the record still holds the speed before it; the next turn's
+    sorts overwrite it."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Monferno", "Tackle")],
+        [_sp(t, n, "Ninjask", "Tackle", level=30)],
+    )
+    assert int(s.ability[1, 0]) == AbilityId.SPEED_BOOST
+    before = _speeds(t, s)
+    s1 = _go2(t, n, s)
+    assert _stage(s1, 1, Stat.SPE) == 1  # the end-of-turn boost happened
+    assert _rec(s1) == before and _speeds(t, s1)[1] > before[1]
+    s2 = _go2(t, n, s1)
+    assert _rec(s2)[1] == _speeds(t, s1)[1] and _stage(s2, 1, Stat.SPE) == 2
+
+
+def _go2(t, n, s, me="Tackle", foe="Tackle"):
+    return assert_matches_reference(t, s, A(me, foe, s, n), _hits())
+
+
+def test_a_change_during_the_turn_is_in_the_record(tables, names):
+    """Agility (+2 Speed) is the first action: the sorts after it (before the second action and
+    after the last, bcp.c:888) see the new speed."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Monferno", "Agility", "Tackle", level=30)],
+        [_sp(t, n, "Geodude", "Tackle", level=30)],
+    )
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(300).at[1, 0, SPE].set(20))
+    s1 = _go2(t, n, s, me="Agility")
+    assert _stage(s1, 0, Stat.SPE) == 2
+    assert _rec(s1) == _speeds(t, s1) and _rec(s1)[0] > _speeds(t, s)[0]
+
+
+def test_a_faint_stops_the_writes_and_a_replacement_keeps_its_predecessors(tables, names):
+    """CompareBattlerSpeed writes nothing when a battler has no HP (battle_lib.c:1204-1211): the
+    sorts after the knock-out leave the record at the speeds of the sort before the fatal action,
+    and the newcomer's slot holds the fainted Pokemon's value until the next sort."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Monferno", "Tackle", level=50)],
+        [_sp(t, n, "Geodude", "Tackle", level=5), _sp(t, n, "Ninjask", "Tackle", level=60)],
+    )
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(300).at[1, 0, SPE].set(20))
+    before = _speeds(t, s)
+    s1 = _go2(t, n, s)
+    assert int(s1.hp[1, 0]) == 0 and int(s1.hp[0, 0]) > 0
+    assert _rec(s1) == before
+    s2 = send_in(t, s1, 1, 1)
+    assert int(s2.active[1]) == 1
+    assert _rec(s2) == before and _speeds(t, s2)[1] != before[1]
+    s3 = _go2(t, n, s2)  # the next turn's sorts write the newcomer's speed
+    assert int(s3.hp[0, 0]) > 0 and int(s3.hp[1, 1]) > 0
+    assert _rec(s3)[1] == _speeds(t, s2)[1] and _rec(s3)[0] == _speeds(t, s2)[0]
+
+
+def test_the_record_after_a_switch_turn_is_the_newcomers(tables, names):
+    """BranchActions sorts before every action, a switch included, and after the last one
+    (bcp.c:888): after a turn with a switch the record holds the newcomer's speed."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Monferno", "Tackle"), _sp(t, n, "Ninjask", "Tackle")],
+        [_sp(t, n, "Geodude", "Tackle", level=30)],
+    )
+    before = _speeds(t, s)
+    s1 = assert_matches_reference(t, s, jnp.asarray([MOVE_ACTIONS + 1, 0], jnp.int32), _hits())
+    assert int(s1.active[0]) == 1
+    assert _rec(s1) == _speeds(t, s1) and _rec(s1)[0] != before[0]
+
+
+def test_a_weather_war_at_the_start_writes_the_record_when_it_settles(tables, names):
+    """The battle start's sort (bcp.c:263) read the weather the engine's order leaves; a tie left
+    open in ``war_swaps`` is settled at the root and the record is written again with the final
+    weather (``step.resolve_war``), at turn 0 only: a replacement's war has no sort after it."""
+    from nuzline.engine.step import resolve_war
+
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_sp(t, n, "Groudon", "Tackle", level=50)],
+        [_sp(t, n, "Kyogre", "Tackle", level=50)],
+    )
+    assert int(s.war_swaps) != 0
+    swim = AbilityId.SWIFT_SWIM
+    s = s._replace(ability=s.ability.at[1, 0].set(swim))  # a Swift Swim speed reads the weather
+    seen = {}
+    for tie in (0, 1):
+        after = resolve_war(s, tie, t)
+        seen[tie] = _rec(after)
+        assert _rec(after) == _speeds(t, after)
+        assert int(after.war_swaps) == 0
+    assert seen[0][1] != seen[1][1]  # rain doubles the Swift Swim speed, sun does not
+    later = resolve_war(s._replace(turn=jnp.asarray(1, s.turn.dtype)), 0, t)
+    assert _rec(later) == _rec(s)
+    assert _rec(resolve_war(s, 0)) == _rec(s)  # no tables: nothing to compute with

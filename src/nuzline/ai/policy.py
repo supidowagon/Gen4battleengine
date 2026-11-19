@@ -108,7 +108,7 @@ from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.bag import bag_item_category, refused_bag_items, refused_bag_params
-from nuzline.engine.damage import ai_weather_ball_typed, decomp_abilities
+from nuzline.engine.damage import AI_GYRO_BALL, ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
 from nuzline.engine.ids import ItemAiCategory, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
@@ -4498,6 +4498,12 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
+    # Gyro Ball's estimate divides by the AI battler's monSpeedValues (trainer_ai.c:2995-3003):
+    # the record's, or the current speed after the decision's first speed compare; a 0 divisor is
+    # left to the ROM's division routine (as the mechanic's, coverage.GYRO_SPEED_MIN), E3-B2-15.
+    speeds = c.current_speeds(tables, state)
+    zero = jnp.stack([(state.speed_rec[b] == 0) | (speeds[b] == 0) for b in range(2)])
+    calc_damage = calc_damage | (known & (moves[1] == AI_GYRO_BALL) & zero[1])
     # Weather Ball's TrainerAI_MoveType case assigns nothing outside its weathers (B13-26).
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     move_type = move_type & ~ai_weather_ball_typed(tables, state)
@@ -4534,6 +4540,8 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     copied = (
         present[0][:, None] & jnp.isin(moves[0], jnp.array(c.CALC_DAMAGE_MOVES, _I32)) & copycat
     )
+    # The player's Gyro Ball is 1 + 25 * v / v there (attacker = defender = the player): v = 0
+    copied = copied | (present[0][:, None] & (moves[0] == AI_GYRO_BALL) & copycat & zero[0])
     bag_items = state.trainer_items[1].astype(_I32)
     bag = (bag_items != 0) & refused_bag_items(tables, bag_items)
     scoring = (
@@ -4674,6 +4682,13 @@ def _scoring_refusals(
             "(docs/ai/kaizo_roark.md 5)"
         )
     for s, k in zip(*np.nonzero(np.asarray(r.calc_damage)), strict=True):
+        if int(moves[1, s, k]) == AI_GYRO_BALL:
+            out.append(
+                f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
+                "divides by a monSpeedValues of 0 (trainer_ai.c:2995-3003), which the ROM's "
+                "division routine decides (E3-B2-15)"
+            )
+            continue
         out.append(
             f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
             "takes a TrainerAI_CalcDamage move-id case (trainer_ai.c:2885-3056) that is not "
@@ -4837,11 +4852,12 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
     draws as in the fight's own layout (E1 Ruling R4)."""
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
     pairs = _flag_scripts(layout) if flags is None else tuple((None, f) for f in flags)
-    for bit, flag in pairs:  # trainer_ai.c:297-310
+    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-310
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
-        def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)
-            ctx = flag(c.at_slot(ctx, slot))
+        def eval_slot(slot, ctx, flag=flag, index=index):  # TrainerAI_EvalMoves (:483-525)
+            # E3-B2-15: ``written`` (monSpeedValues) runs on across the slots and the flags
+            ctx = flag(c.start_run(c.at_slot(ctx, slot), index))
             # A MOVE_NONE slot runs no command and scores 0 (:499-501).
             return ctx._replace(
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
@@ -4880,11 +4896,13 @@ def _check_outcome(ai_outcome: AiOutcome, layout: AiLayout) -> None:
 
 
 def _score_context(
-    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout, inject=-1
 ) -> AiContext:
-    """The ``AiContext`` after the policy's flag scripts (refusals not applied)."""
+    """The ``AiContext`` after the policy's flag scripts (refusals not applied). ``inject``: -1,
+    or the exact distribution's injected speed-compare schedule (``_slot_event_scorings``)."""
     _check_outcome(ai_outcome, layout)
-    return _run_flags(c.new_context(tables, state, ai_outcome), layout)
+    ctx = c.new_context(tables, state, ai_outcome)
+    return _run_flags(ctx._replace(inject=jnp.asarray(inject, _I32)), layout)
 
 
 def _scores(
@@ -5176,25 +5194,35 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
 
     NaN when a score is outside the s8 ``moveScore``'s clamped range 0-127
     (include/battle/ai_context.h:14)."""
-    scores, hist = _slot_histograms(tables, state, layout)
     has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
-    equal = jnp.where(has[:, None], hist, 0.0)
-    below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
-    picked = []
-    for slot in range(MOVES):
-        others = [j for j in range(MOVES) if j != slot]
-        win = jnp.zeros(_SCORE_VALUES, jnp.float32)
-        for subset in range(2 ** len(others)):
-            tied = [j for k, j in enumerate(others) if subset >> k & 1]
-            term = jnp.ones(_SCORE_VALUES, jnp.float32)
-            for j in others:
-                term = term * (equal[j] if j in tied else below[j])
-            rank = sum(j < slot for j in tied)
-            win = win + term * _TIE_SHARE[len(tied) + 1, rank]
-        picked.append(jnp.sum(equal[slot] * win))
-    dist = jnp.stack(picked)
+
+    def pick(hist):
+        equal = jnp.where(has[:, None], hist, 0.0)
+        below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
+        picked = []
+        for slot in range(MOVES):
+            others = [j for j in range(MOVES) if j != slot]
+            win = jnp.zeros(_SCORE_VALUES, jnp.float32)
+            for subset in range(2 ** len(others)):
+                tied = [j for k, j in enumerate(others) if subset >> k & 1]
+                term = jnp.ones(_SCORE_VALUES, jnp.float32)
+                for j in others:
+                    term = term * (equal[j] if j in tied else below[j])
+                rank = sum(j < slot for j in tied)
+                win = win + term * _TIE_SHARE[len(tied) + 1, rank]
+            picked.append(jnp.sum(equal[slot] * win))
+        return jnp.stack(picked)
+
+    if _tracks_speed(layout):
+        # E3-B2-15: the events (the first speed compare's place) are disjoint and the slots
+        # independent within one: the pick of each event's histograms, summed.
+        _, hists, out_of_range = _slot_event_histograms(tables, state, layout)
+        dist = jnp.sum(jax.vmap(pick)(hists), axis=0)
+    else:
+        scores, hist = _slot_histograms(tables, state, layout)
+        dist = pick(hist)
+        out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
-    out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     return jnp.where(out_of_range, jnp.nan, dist)
 
 
@@ -5233,10 +5261,16 @@ def _path_records(tables: Tables, state: BattleState, layout: AiLayout):
     slot's random reads."""
     _, outcomes = _pattern_outcomes(layout)
 
-    def one(o):
-        ctx = _score_context(tables, state, o, layout)
+    def one(o, inject=-1):
+        ctx = _score_context(tables, state, o, layout, inject)
         return ctx.missing_read, ctx.reads
 
+    if _tracks_speed(layout):  # a path can differ with the injected schedule: every one counts
+        n = len(_flag_scripts(layout))
+        missing, reads = jax.vmap(lambda k: jax.vmap(lambda o: one(o, k))(outcomes))(
+            jnp.arange(n + 1, dtype=_I32)
+        )
+        return missing.reshape(-1), reads.reshape(-1, MOVES)
     return jax.vmap(one)(outcomes)
 
 
@@ -5271,12 +5305,102 @@ def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) ->
     raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
 
 
+def _tracks_speed(layout: AiLayout) -> bool:
+    """Static: the fight's AI can estimate a Gyro Ball (a per-slot layout that transcribes
+    ``POWER_BASED_ON_LOW_SPEED``, ``R7``: the effects of the fight's own moves), whose power reads
+    ``monSpeedValues`` (trainer_ai.c:2995-3003), written by the decision's own speed compares
+    (``AiContext.written``). The scoring then depends across the slots and flags on which paths
+    reached a compare first, which ``_slot_event_histograms`` factors exactly. E3-B2-15."""
+    return (
+        layout.per_slot_sites and int(BattleEffect.POWER_BASED_ON_LOW_SPEED) in layout.transcribed
+    )
+
+
+def _slot_event_scorings(tables: Tables, state: BattleState, layout: AiLayout):
+    """``(n, scores int32[n + 1, P, MOVES], weight float32[n + 1, P, MOVES], first int32[P,
+    MOVES])`` of a layout that tracks monSpeedValues: the scoring of every local bit pattern p
+    (``_pattern_outcomes``) under each injected schedule ``tau`` in 0..n (``n`` flag scripts): a
+    script run of flag index f starts with ``written`` = f >= tau, so ``tau = n`` is "no run
+    starts after a compare", ``tau = 0`` "every run does". ``first[p, m]``: under ``tau = n`` the
+    least flag index at which slot m's pattern p made a speed compare (``commands.NO_COMPARE``:
+    none)."""
+    _, outcomes = _pattern_outcomes(layout)
+    refused = _refused(tables, state, layout).scoring
+    n = len(_flag_scripts(layout))
+
+    def one(o, tau):
+        ctx = _score_context(tables, state, o, layout, tau)
+        scores = jnp.where(refused | (ctx.missing_read > 0), -1, ctx.scores).astype(_I32)
+        keep = _canonical(o.script_rolls, ctx.reads)
+        return scores, jnp.where(keep, ctx.weight, 0.0), ctx.first_cmp
+
+    scores, weight, first = jax.vmap(lambda tau: jax.vmap(lambda o: one(o, tau))(outcomes))(
+        jnp.arange(n + 1, dtype=_I32)
+    )
+    return n, scores, weight, first[n]
+
+
+def _slot_event_histograms(tables: Tables, state: BattleState, layout: AiLayout):
+    """``(scores int32[(n + 1) * P, MOVES], hists float32[E, MOVES, 256], bad bool)`` for a
+    layout that tracks monSpeedValues (``_tracks_speed``): the decision split by where the first
+    speed compare happened, the one split of the cross-slot dependence (E3-B2-15).
+
+    ``written`` turns true at the first (flag, slot) run, in the decomp's order (flags in bit
+    order, slots 0-3 in each), that makes an ``IfSpeedCompare*`` and stays true (nothing resets
+    it); a run's own estimates before its compare still read the record. The event ``(f, s)``: the
+    first compare is in the run of flag index f, slot s. The slots' paths are independent
+    given the event: slot m must not have compared in a run before it (flags before f, and f
+    itself when m < s), slot s must compare at f, and slot m's runs after it start with ``written``
+    (``tau_m = f + 1`` for m <= s, ``f`` for m > s). The last event: no compare anywhere
+    (``tau = n``). A slot's runs before the first compare are those of the ``tau = n`` scoring
+    (nothing was written), so its first compare there decides the event; ``hists[e, m, v]`` is
+    the probability that the event holds for slot m's pattern and slot m scores v, the event's
+    probability the product over the slots of their masses. ``bad``: a reachable score outside
+    the s8 range 0-127."""
+    n, scores, weight, first = _slot_event_scorings(tables, state, layout)
+    values = jnp.clip(scores, 0, _SCORE_VALUES - 1)
+    events = [(f, s) for f in range(n) for s in range(MOVES)] + [None]
+    hists = []
+    bad = jnp.asarray(False)
+    for event in events:
+        rows = []
+        for m in range(MOVES):
+            if event is None:
+                tau, cond = n, first[:, m] == c.NO_COMPARE
+            else:
+                f, s = event
+                tau = f + 1 if m <= s else f
+                cond = (
+                    (first[:, m] > f)
+                    if m < s
+                    else (first[:, m] == f)
+                    if m == s
+                    else (first[:, m] >= f)
+                )
+            w = jnp.where(cond, weight[tau, :, m], 0.0)
+            rows.append(jnp.zeros(_SCORE_VALUES, jnp.float32).at[values[tau, :, m]].add(w))
+            off = (scores[tau, :, m] < 0) | (scores[tau, :, m] > _SCORE_MAX)
+            bad = bad | jnp.any(off & (w > 0))
+        hists.append(jnp.stack(rows))
+    return scores.reshape(-1, MOVES), jnp.stack(hists), bad
+
+
 def _slot_histograms(
     tables: Tables, state: BattleState, layout: AiLayout
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[P, MOVES],
     hist float32[MOVES, 256])``, ``hist[m, v]`` the probability that slot m scores v
-    (refusals not applied)."""
+    (refusals not applied). A layout that tracks monSpeedValues (``_tracks_speed``) gives the
+    marginal of each slot over the events of ``_slot_event_histograms``, and every schedule's
+    scores."""
+    if _tracks_speed(layout):
+        scores, hists, _ = _slot_event_histograms(tables, state, layout)
+        mass = jnp.sum(hists, axis=2)  # [E, MOVES]
+        others = jnp.stack(
+            [jnp.prod(jnp.where(jnp.arange(MOVES) != m, mass, 1.0), axis=1) for m in range(MOVES)],
+            axis=1,
+        )  # [E, MOVES]: the product of the other slots' masses
+        return scores, jnp.sum(hists * others[:, :, None], axis=0)
     _, outcomes = _pattern_outcomes(layout)
     refused = _refused(tables, state, layout).scoring
 

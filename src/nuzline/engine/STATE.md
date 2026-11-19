@@ -212,8 +212,8 @@ three structs has a row.
   four are mapped since E3-2-5, `hooks.move_end_switch_in`);
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
-  whose Quick Claw activated this turn); `monSpeedValues`, the
-  speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
+  whose Quick Claw activated this turn); `monSpeedValues` (mapped since E3-B2-15 to
+  `speed_rec`, below), by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
   activation is `qc_roll` (below; the per-turn flag only shows its animation, a
@@ -313,6 +313,21 @@ three structs has a row.
   `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
   reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
   is never read).
+- **monSpeedValues -> `speed_rec`** (E3-B2-15): `BattleContext.monSpeedValues[battler]` is the
+  speed `BattleSystem_CompareBattlerSpeed` last computed for the battler
+  (`src/battle/battle_lib.c:1372-1373`, `order.effective_speed`), read only by
+  `BtlCmd_CalcGyroBallPower` (`battle_script.c:7123-7131`) and `TrainerAI_CalcDamage`'s Gyro Ball
+  case (`trainer_ai.c:2995-3003`). Per battler (`[B]`), not a volatile: a replacement's slot keeps
+  its predecessor's value, and nothing writes a battler without HP or when it has no live
+  opponent (`:1204-1211`). Written by `order.record_speeds` at the sorts that can be read before
+  the next one: after the battle start's switch-in effects (`battle_controller_player.c:263`,
+  `hooks.battle_start`; a weather war the start leaves open is settled by `step.resolve_war`,
+  which writes again at turn 0), before each action and after the last one of a turn
+  (`BranchActions`, `:888`, `step._execute_actions`). The turn-order sort's own compares
+  (`:773-786`, the Trick Room sort `:3990-3992`) are followed by one of those sorts before any
+  reader and add no state. The trainer AI's compares (`IfSpeedCompareEqualTo`,
+  `trainer_ai.c:1109`) write it inside one decision, which no later decision reads (the next
+  turn's `BranchActions` comes first): `ai.commands.AiContext.written`, not state.
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and
@@ -729,7 +744,7 @@ three structs has a row.
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
-| `BattleContext.monSpeedValues` | — | later (M6) |
+| `BattleContext.monSpeedValues` | `speed_rec` | mapped |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleScript` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

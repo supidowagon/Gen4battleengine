@@ -2114,6 +2114,8 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         a["aqua_ring"][side] = draw(st.integers(0, 1))
         a["infatuated"][side] = draw(st.integers(0, 1))
         a["qc_roll"][side] = draw(st.integers(0, 1))
+        # E3-B2-15: monSpeedValues from a past sort (``step`` rewrites it at the next one)
+        a["speed_rec"][side] = draw(st.integers(0, 1200))
         a["curled"][side] = draw(st.integers(0, 1))
         a["foresight"][side] = draw(st.integers(0, 1))
         a["stealth_rock"][side] = draw(st.integers(0, 1))

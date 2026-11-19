@@ -104,7 +104,13 @@ from nuzline.engine.ids import (
     Weather,
     sleepless,
 )
-from nuzline.engine.order import dislikes_berry, pinch_divisor, pinch_limit, player_second
+from nuzline.engine.order import (
+    dislikes_berry,
+    pinch_divisor,
+    pinch_limit,
+    player_second,
+    record_speeds,
+)
 from nuzline.engine.state import STAGE_MAX, BattleState, battler_ability, held_item
 
 _I32 = jnp.int32
@@ -963,7 +969,10 @@ def battle_start(tables: Tables, state: BattleState) -> BattleState:
             weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
         ),
     )
-    return show_battle_mon(tables, state, swaps)
+    # TrainerMessage's second SortMonSpeedOrder (bcp.c:263) writes monSpeedValues after the
+    # switch-in effects (E3-B2-15); a weather war left open is settled at the root, which writes
+    # them again (``step.resolve_war``).
+    return record_speeds(tables, show_battle_mon(tables, state, swaps))
 
 
 def show_battle_mon(tables: Tables, state: BattleState, swaps, qc=None) -> BattleState:
