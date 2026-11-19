@@ -63,7 +63,14 @@ from nuzline.engine.step import (
 )
 from nuzline.prep.problem import _item_refusal
 from nuzline.search.plan_tree import _FLAG_TEXT
-from tests.engine.helpers import A, assert_matches_reference, roark_state, sample_party, sample_rows
+from tests.engine.helpers import (
+    A,
+    assert_matches_reference,
+    jit_step,
+    roark_state,
+    sample_party,
+    sample_rows,
+)
 from tests.engine.test_enumerate import (
     _kaizo_spec,
     assert_equals_bruteforce,
@@ -440,7 +447,7 @@ def test_the_animation_is_seen_when_the_claw_moves_it_first(tables, names):
         assert _events(tables, s, jnp.asarray(a, jnp.int32), _o())["quick_claw"].tolist() == [0, 0]
     # The turn's own draw is not seen: observations equal over it.
     obs = [
-        np.asarray(observe(tables, s, acts, _o((k, 0)), step(tables, s, acts, _o((k, 0)))))
+        np.asarray(observe(tables, s, acts, _o((k, 0)), jit_step(tables, s, acts, _o((k, 0)))))
         for k in (0, 1)
     ]
     assert (obs[0] == obs[1]).all()

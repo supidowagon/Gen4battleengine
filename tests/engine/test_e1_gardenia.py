@@ -1071,8 +1071,8 @@ def test_trace_standoff_copies_the_next_newcomer_before_the_holders_move(tables,
     (SWITCH_IN_CHECK_STATE_TRACE, battle_lib.c:3718-3737), before its own move: the step writes
     the copy and the laws read it (Super Luck: crit 1 in 8, ``outcome.pivot_view``). A Pursuit on
     the switch hits before it (subscript_switch_pokemon.s:11): its reads see Trace."""
-    from nuzline.engine.enumerate import outcome_laws
     from nuzline.engine.outcome import pivot_view
+    from tests.engine.test_enumerate import laws_of as outcome_laws  # jitted, not eager
 
     n = names
     s = _standoff(tables, names)
@@ -1094,7 +1094,7 @@ def test_trace_standoff_copies_the_next_newcomer_before_the_holders_move(tables,
 def test_trace_standoff_copies_a_u_turn_newcomer(tables, names):
     """G-25: the foe's U-turn pick enters before the holder moves: at the paused list the laws'
     view gives the holder the copy (``pivot_view``), and the resume writes it."""
-    from nuzline.engine.enumerate import outcome_laws
+    from tests.engine.test_enumerate import laws_of as outcome_laws  # jitted, not eager
 
     n = names
     s = make_state(

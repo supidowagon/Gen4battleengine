@@ -7,10 +7,10 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.damage import damage_table
 from nuzline.engine.ids import AbilityId, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, outcome_to_py
-from nuzline.engine.step import replace, step
+from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_damage_table, ref_replace, ref_step
-from tests.engine.helpers import A, roark_state
+from tests.engine.helpers import A, jit_step, roark_state
 
 
 def _same(a, b):
@@ -29,7 +29,7 @@ def test_round_trip_exact(tables, names):
 def test_one_turn_matches_jax(tables, names):
     s = roark_state(tables, names)
     acts = A("Scratch", "Tackle", s, names)
-    jax_out = step(tables, s, acts, empty_outcome())
+    jax_out = jit_step(tables, s, acts, empty_outcome())
     ref_in = to_ref(s)
     ref_out = ref_step(
         to_numpy(tables),
@@ -116,6 +116,6 @@ def _scenarios(tables, names):
 )
 def test_discrepancy_scenarios_match_jax(tables, names, name):
     s, acts, o = _scenarios(tables, names)[name]
-    jax_out = step(tables, s, acts, o)
+    jax_out = jit_step(tables, s, acts, o)
     ref_out = ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
     _same(jax_out, from_ref(ref_out))

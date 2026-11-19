@@ -3,8 +3,7 @@ import pytest
 
 from nuzline.engine.actions import NUM_ACTIONS, legal_actions, legal_replacements
 from nuzline.engine.outcome import empty_outcome
-from nuzline.engine.step import step
-from tests.engine.helpers import A, roark_state
+from tests.engine.helpers import A, jit_step, roark_state
 
 
 def test_full_party_lead(tables, names):
@@ -44,7 +43,7 @@ def test_taunted_with_only_status_moves_struggles(tables, names):
     s = roark_state(tables, names, player_moves=["Leer"]).with_pp(0, 0, [10, 0, 0, 0])
     s = s._replace(taunt=s.taunt.at[0].set(2))
     assert legal_actions(tables, s, 0).tolist()[:4] == [True, False, False, False]
-    out = step(tables, s, A(0, "Leer", s, names), empty_outcome())
+    out = jit_step(tables, s, A(0, "Leer", s, names), empty_outcome())
     assert int(out.hp[1, 0]) < int(s.hp[1, 0])  # Struggle hit
     max_hp = int(s.max_hp[0, 0])
     assert int(out.hp[0, 0]) == int(s.hp[0, 0]) - max(max_hp // 4, 1)  # Struggle recoil
@@ -59,7 +58,7 @@ def test_taunt_after_choosing_a_status_move_fails_it_without_struggling(tables, 
     s = roark_state(tables, names, opp_moves=["Taunt"], opp_faster=True)
     s = s.with_pp(0, 0, [0, 10, 0, 0])
     o = empty_outcome()._replace(duration=jnp.array([0, 3], jnp.int8))
-    out = step(tables, s, A("Leer", "Taunt", s, names), o)
+    out = jit_step(tables, s, A("Leer", "Taunt", s, names), o)
     assert int(out.taunt[0]) > 0
     assert int(out.stages[1, 2]) == 0  # Leer failed
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])  # no Struggle hit
