@@ -2389,3 +2389,11 @@ docs/doubles-state-design.md.
   no engine change.
 - D2-9 Follow Me is one per-side turn-scratch field `ts_follow_me` (1 + user battler, 0 = off;
   `followMe` / `followMeUser`, script.c:6261-6270, cleared lib.c:2251-2252).
+- D2-10 (build of D2-1) The differential's `targets` are drawn inside `tests/test_differential._step_both`
+  (after the caller's outcome draw, once per half), so `test_jax_matches_reference` and
+  `tools/differential.check` need no edit. `step`, `step_events`, `turn_events`, `_action_phase`
+  and `ref_step` take `targets=None`; at B = 4 `None` raises ValueError, at B = 2 it is zeros.
+- D2-11 (build of D2-2 / D2-3) `ghost_user` is imported inside `actions.selection_range`
+  (effects imports actions). The reference had no `Battler_IsTrapped`: `reference/engine._trapped`
+  mirrors `actions.trapped`. `decision_pairs` raises ValueError at B = 2 and for MULTI (the
+  player commands battler 0 alone there: `legal_choices(tables, state, 0)`).

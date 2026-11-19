@@ -80,6 +80,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
+    chosen_targets,
     gravity_banned,
     imprisoning_foe,
     locked_slot,
@@ -3852,14 +3853,21 @@ def _quick_claw_shown(tables: Tables, state: BattleState, actions, order) -> jnp
 
 
 def _action_phase(
-    tables: Tables, state: BattleState, actions, outcome: Outcome
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict, dict, jnp.ndarray]:
     """Phases 2-3 with the turn's events: ``(state, shown, read, order)``. ``learn_pin`` is the
     turn's own (design §3.3(a)): it starts each turn at 0. A resumed pause (``pivot_battler``)
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
-    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch."""
+    Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
+    ``targets`` (``int8[B]``, the menu's picks) is required at B = 4 and ignored at B = 2, where
+    the range decides (D2-1); the selection writes ``chosen_target`` before the turn order."""
+    if targets is None:
+        if state.active.shape[0] != 2:
+            raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
+        targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
+    fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     order = action_order(tables, fresh, actions, outcome)
     claw = jnp.where(paused, 0, _quick_claw_shown(tables, fresh, actions, order))
@@ -3870,14 +3878,16 @@ def _action_phase(
     return s, {**shown, "order": order, "quick_claw": claw}, read, order
 
 
-def turn_events(tables: Tables, state: BattleState, actions, outcome: Outcome) -> dict:
+def turn_events(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
+) -> dict:
     """The events of ``step(tables, state, actions, outcome)``'s action phase, without
     playing the end of the turn (``step_events``)."""
-    return _action_phase(tables, state, jnp.asarray(actions, _I32), outcome)[1]
+    return _action_phase(tables, state, jnp.asarray(actions, _I32), outcome, targets)[1]
 
 
 def step_events(
-    tables: Tables, state: BattleState, actions, outcome: Outcome
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict]:
     """``(step(...), its events)``: one implementation of the turn serves both ``step``
     (which drops the events) and ``engine.observe`` (which reads them). The events, a
@@ -3887,7 +3897,7 @@ def step_events(
     6) returns the first half's events and stops before the end of the turn; the resuming call
     returns the second half's."""
     actions = jnp.asarray(actions, _I32)
-    s, events, read, order = _action_phase(tables, state, actions, outcome)
+    s, events, read, order = _action_phase(tables, state, actions, outcome, targets)
     halted = s.pivot_battler != 0
     sides = end_of_turn_order(tables, s, outcome)
     e = field_conditions(tables, s, sides)
@@ -3920,9 +3930,13 @@ def roosting_now(state: BattleState, roosted) -> jnp.ndarray:
     return ((jnp.asarray(roosted) != 0) & alive).astype(jnp.int8)
 
 
-def step(tables: Tables, state: BattleState, actions, outcome: Outcome) -> BattleState:
-    """Play one turn: ``actions`` is ``int32[B]`` (singles: player, opponent; see ``order``)."""
-    return step_events(tables, state, actions, outcome)[0]
+def step(
+    tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
+) -> BattleState:
+    """Play one turn: ``actions`` is ``int32[B]`` (singles: player, opponent; see ``order``),
+    ``targets`` the ``int8[B]`` target each battler chose (D2-1; required at B = 4, ignored
+    at B = 2, where the range decides)."""
+    return step_events(tables, state, actions, outcome, targets)[0]
 
 
 def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:

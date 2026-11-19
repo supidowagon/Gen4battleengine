@@ -404,6 +404,12 @@ three structs has a row.
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
   Pursuit, `ts_pursued`, and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.
+- The chosen target (D2-1): `chosen_target` (per battler, `battlerActions[b][1]`, a battler index
+  0..B-1, not 1 + battler: it has no "none" value; initial `b ^ 1`). Unlike the other
+  `battlerActions` values it persists across turns and switches (no code clears it,
+  battle_controller_player.c:180-182) and is written at selection (`actions.chosen_targets`, in
+  `step._action_phase`) only by a battler that reaches the target menu (bcp.c:507-531); D2-9 and
+  D2-13 overwrite it later. Not in `VOLATILE_FIELDS` or `BATON_PASSED_FIELDS`.
 
 ## BattleMon (`include/battle/battle_mon.h`)
 
@@ -657,7 +663,7 @@ three structs has a row.
 | `BattleContext.selectedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
-| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged` | mapped |
+| `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |

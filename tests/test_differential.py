@@ -33,6 +33,7 @@ from tests.strategies import (
     possible_genders,
     recalc_stats,
     supported_state,
+    targets_for,
 )
 
 # Compiled once: every generated state has the same shapes and dtypes (plan ruling).
@@ -61,9 +62,16 @@ def _step_both(tables, s, acts, o, data):
     Pass's party list (E2 batch 6) is resumed with a drawn pick and a fresh outcome (each half
     reads its own draws), again for a second pause in the same turn."""
     for _ in range(3):
-        jax_out = jit_step(tables, s, acts, o)
+        targets = data.draw(targets_for(s))  # D2-1: ignored at B = 2 but for chosen_target
+        jax_out = jit_step(tables, s, acts, o, targets)
         ref_out = from_ref(
-            ref_step(to_numpy(tables), to_ref(s), tuple(int(x) for x in acts), outcome_to_py(o))
+            ref_step(
+                to_numpy(tables),
+                to_ref(s),
+                tuple(int(x) for x in acts),
+                outcome_to_py(o),
+                [int(x) for x in targets],
+            )
         )
         for name, a, b in zip(jax_out._fields, jax_out, ref_out, strict=True):
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)

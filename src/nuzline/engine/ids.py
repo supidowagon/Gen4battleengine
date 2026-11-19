@@ -1370,6 +1370,9 @@ MOVE_STRUGGLE = 165
 # Snore and Sleep Talk (``generated/moves.txt`` lines 174, 215): the sleep check lets a sleeping
 # battler use them (bcp.c:2455).
 MOVE_SNORE = 173
+# Curse (``generated/moves.txt`` line 175): a non-Ghost user's range is RANGE_USER at selection
+# (bcp.c:4344-4349).
+MOVE_CURSE = 174
 MOVE_SLEEP_TALK = 214
 # BtlCmd_Metronome (battle_script.c:4540): ``RandNext() % NUM_VALID_MOVES + 1`` with
 # NUM_VALID_MOVES = MAX_MOVES - 1 (include/constants/moves.h:12; MAX_MOVES 468,

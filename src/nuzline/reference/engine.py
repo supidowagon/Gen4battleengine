@@ -66,6 +66,7 @@ from nuzline.engine.ids import (
     MIMIC_PP_CAP,
     MINIMIZE_PARAM,
     MOVE_BATON_PASS,
+    MOVE_CURSE,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
     MOVE_IMPRISON,
@@ -6023,6 +6024,174 @@ def _locked_slot(s: RefState, side: int) -> int:
     return moves.index(locked) if locked in moves else 0
 
 
+# RANGE_MY_SIDE (moves.h:91): the B = 2 target is the user (bcp.c:4363-4367).
+_MY_SIDE_RANGES = (
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL,
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+# The target menu's legal set per range (D2-2 rule 5, battle_subscreen.c:797-810, :1336-1364) as
+# relations of the user: (user, partner b ^ 2, foe b ^ 1, foe b ^ 3).
+_TARGET_RELATIONS = {
+    MoveTarget.RANGE_SINGLE_TARGET: (0, 1, 1, 1),
+    MoveTarget.RANGE_SINGLE_TARGET_SPECIAL: (1, 0, 0, 0),
+    MoveTarget.RANGE_RANDOM_OPPONENT: (1, 0, 0, 0),
+    MoveTarget.RANGE_ADJACENT_OPPONENTS: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALL_ADJACENT: (0, 1, 1, 1),
+    MoveTarget.RANGE_USER: (1, 0, 0, 0),
+    MoveTarget.RANGE_USER_SIDE: (1, 1, 0, 0),
+    MoveTarget.RANGE_FIELD: (1, 1, 1, 1),
+    MoveTarget.RANGE_OPPONENT_SIDE: (0, 0, 1, 1),
+    MoveTarget.RANGE_ALLY: (0, 1, 0, 0),
+    MoveTarget.RANGE_USER_OR_ALLY: (1, 1, 0, 0),
+    MoveTarget.RANGE_SINGLE_TARGET_ME_FIRST: (0, 0, 1, 1),
+}
+
+
+def _present(s: RefState, b: int) -> bool:
+    """Battler ``b``'s active Pokemon has HP (not in ``battlersSwitchingMask``, D2-1 rule 5)."""
+    return _active(s, b).hp > 0
+
+
+def _selection_range(tables, s: RefState, b: int, slot: int) -> int:
+    """``MustSelectTarget``'s range (bcp.c:4344-4349): ``RANGE_USER`` for the move Curse on a
+    non-Ghost user, else the move's data range."""
+    move = _active(s, b).moves[min(slot, MOVE_ACTIONS - 1)]
+    if move == MOVE_CURSE and not _ghost(s, b):
+        return MoveTarget.RANGE_USER
+    return _move_target(tables, move)
+
+
+def _selects_target(tables, s: RefState, b: int, action: int) -> bool:
+    """Battler ``b`` reaches the target menu with ``action`` (D2-1 rule 5)."""
+    if not (
+        action < MOVE_ACTIONS
+        and _locked_slot(s, b) < 0
+        and any(_usable(tables, s, b))
+        and not s.battlers[b].encore_move
+        and _present(s, b)
+    ):
+        return False
+    if _fmt(s).B == 4:
+        alone = not _present(s, b ^ 2)
+        return not (_selection_range(tables, s, b, action) == MoveTarget.RANGE_ALLY and alone)
+    return True
+
+
+def _chosen_targets(tables, s: RefState, actions, targets) -> list[int]:
+    """``chosen_target`` of every battler after the turn's selection (D2-1): a selecting battler's
+    new target (B = 2: the user for a RANGE_MY_SIDE range, else ``b ^ 1``; B = 4: ``targets[b]``),
+    else its stored value."""
+    out = []
+    for b in range(_fmt(s).B):
+        if not _selects_target(tables, s, b, actions[b]):
+            out.append(s.battlers[b].chosen_target)
+        elif _fmt(s).B == 2:
+            own = _selection_range(tables, s, b, actions[b]) in _MY_SIDE_RANGES
+            out.append(b if own else b ^ 1)
+        else:
+            out.append(int(targets[b]))
+    return out
+
+
+def _legal_targets(tables, s: RefState, b: int, slot: int) -> list[bool]:
+    """The battlers ``b`` may choose as the target of move slot ``slot`` (D2-2)."""
+    rng = _selection_range(tables, s, b, slot)
+    count = _fmt(s).B
+    if count == 2:
+        one = b if rng in _MY_SIDE_RANGES else b ^ 1
+        return [x == one for x in range(2)]
+    out = [False] * count
+    for who, flag in zip((b, b ^ 2, b ^ 1, b ^ 3), _TARGET_RELATIONS[rng]):
+        out[who] = bool(flag) and _present(s, who)
+    return out
+
+
+def _trapped(tables, s: RefState, b: int) -> bool:
+    """``Battler_IsTrapped`` (lib.c:5514-5536): Bind, Mean Look, Ingrain, or a living foe's Shadow
+    Tag, Magnet Pull (Steel) or Arena Trap (grounded)."""
+    mon, sd = _active(s, b), s.battlers[b]
+    grounded = (
+        (
+            mon.ability != AbilityId.LEVITATE
+            and not sd.magnet_rise_turns
+            and Type.FLYING not in mon.types
+        )
+        or _iron_ball(tables, s, mon)
+        or bool(s.gravity)
+    )
+    if sd.trapped or sd.mean_look or sd.ingrain:
+        return True
+    for foe in range(_fmt(s).B):
+        if foe == b or not _present(s, foe):
+            continue
+        theirs = _active(s, foe).ability
+        if (
+            (theirs == AbilityId.SHADOW_TAG and mon.ability != AbilityId.SHADOW_TAG)
+            or (theirs == AbilityId.MAGNET_PULL and Type.STEEL in mon.types)
+            or (theirs == AbilityId.ARENA_TRAP and grounded)
+        ):
+            return True
+    return False
+
+
+def _switch_targets(tables, s: RefState, b: int) -> list[bool]:
+    """The party slots ``b`` may switch to (D2-3 rule 7)."""
+    mons = _party_of(s, b).mons
+    blocked = _trapped(tables, s, b) or _locked_slot(s, b) >= 0
+    partner = None
+    if _fmt(s).B == 4 and _party(_fmt(s), b ^ 2) == _party(_fmt(s), b):
+        partner = s.battlers[b ^ 2].active
+    return [
+        not blocked
+        and slot != s.battlers[b].active
+        and slot != partner
+        and mon.species > 0
+        and mon.hp > 0
+        for slot, mon in enumerate(mons)
+    ]
+
+
+def _legal_choices(tables, s: RefState, b: int) -> list[list[bool]]:
+    """``[action][target]``: battler ``b``'s legal (action, target) pairs (D2-3)."""
+    count = _fmt(s).B
+    placeholder = [x == b for x in range(count)]
+    none = [False] * count
+    if not _present(s, b):
+        return [placeholder if a == 0 else none for a in range(MOVE_ACTIONS + 6)]
+    usable = _usable(tables, s, b)
+    if not any(usable):  # Struggle: action 0 stays legal
+        usable[0] = True
+    rows = []
+    for a in range(MOVE_ACTIONS):
+        picks = _legal_targets(tables, s, b, a) if _selects_target(tables, s, b, a) else placeholder
+        rows.append(picks if usable[a] else none)
+    for ok in _switch_targets(tables, s, b):
+        rows.append(placeholder if ok else none)
+    return rows
+
+
+def _decision_pairs(tables, s: RefState) -> list[list[list[list[bool]]]]:
+    """``[a0][t0][a2][t2]``: the player's joint decision of battlers 0 and 2 (D2-3 rule 8)."""
+    first, second = _legal_choices(tables, s, 0), _legal_choices(tables, s, 2)
+    return [
+        [
+            [
+                [
+                    first[a0][t0]
+                    and second[a2][t2]
+                    and not (a0 >= MOVE_ACTIONS and a2 >= MOVE_ACTIONS and a0 == a2)
+                    for t2 in range(len(second[a2]))
+                ]
+                for a2 in range(len(second))
+            ]
+            for t0 in range(len(first[a0]))
+        ]
+        for a0 in range(len(first))
+    ]
+
+
 def _command(action: int) -> str:
     if action >= FIRST_ITEM_ACTION:
         return ITEM
@@ -6040,7 +6209,7 @@ def _choose(tables, s: RefState, side: int, action: int) -> tuple[int, bool, boo
     return _active(s, side).moves[min(action, MOVE_ACTIONS - 1)], False, False
 
 
-def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefState:
+def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets=None) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
     Pass's party list (``pivot_battler``) resumes with ``actions[pivot]`` the switch to the
     picked slot (``_resume``); a turn that reaches such a list stops there and writes the
@@ -6048,10 +6217,16 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome) -> RefS
     s = copy.deepcopy(state)
     if s.over:
         return s
+    picked = [int(a) for a in actions]
     actions = (int(actions[0]), int(actions[1]))
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     s.learn_pin = 0  # the turn's own pin (design §3.3(a))
+    if targets is None:
+        if _fmt(s).B != 2:
+            raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
+        targets = [0, 0]
+    _put(s, "chosen_target", _chosen_targets(tables, s, picked, targets))  # bcp.c:548
     turn = _Turn(tables, outcome, entry_turn=s.turn + 1, battler_count=_fmt(s).B)
     choices = [_choose(tables, s, side, actions[side]) for side in range(_fmt(s).B)]
     commands = [_command(a) for a in actions]

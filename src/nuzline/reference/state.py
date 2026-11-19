@@ -156,6 +156,7 @@ class RefBattler:
     ts_move_failed: int
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
+    chosen_target: int  # battlerActions[b][1] (D2-1)
 
 
 @dataclass
