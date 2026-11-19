@@ -274,6 +274,7 @@ BATCH3_ABILITIES = (
     AbilityId.TRUANT,
     AbilityId.DRY_SKIN,
     AbilityId.LIGHTNINGROD,
+    AbilityId.STORM_DRAIN,
     AbilityId.NO_GUARD,
     AbilityId.SERENE_GRACE,
     AbilityId.HONEY_GATHER,

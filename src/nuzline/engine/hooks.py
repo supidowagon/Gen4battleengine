@@ -64,9 +64,9 @@ Power, Reckless, Tinted Lens, Levitate and Scrappy in ``damage.py``; Shield Dust
 armors in ``effects.py``; Super Luck, Serene Grace, No Guard and Tangled Feet in
 ``outcome.py``; Quick Feet and Truant in ``order.py`` / ``step.py``; Dry Skin's absorb and the
 weather abilities' turn-end HP in ``step.py``; Trace and the weather abilities here.
-Lightningrod redirects only to a battler other than the defender (battle_lib.c:1756-1772),
-which singles never has, and Honey Gather acts after the battle (battle_script.c:7825):
-neither has a hook.
+Lightningrod and Storm Drain redirect only to a battler other than the defender
+(battle_lib.c:1732-1790; ``targets.redirect``), which singles never has, and Honey Gather acts
+after the battle (battle_script.c:7825): only the redirection message (``REDIRECTED``) is here.
 """
 
 from __future__ import annotations
@@ -110,6 +110,7 @@ OHKO_BLOCKED = "ohko_blocked"
 STATUS_HP, TORMENT = "status_hp", "torment"
 STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 DAMAGE_AVOIDED = "damage_avoided"
+REDIRECTED = "redirected"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -213,6 +214,9 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     AbilityId.LEAF_GUARD: frozenset({STATUS_BLOCKED}),
     AbilityId.SYNCHRONIZE: frozenset({SYNCHRONIZED}),
     AbilityId.WONDER_GUARD: frozenset({DAMAGE_AVOIDED}),
+    # subscript_lightning_rod_redirected.s:9 tags BTLSCR_DEFENDER's ability (D2-12).
+    AbilityId.LIGHTNINGROD: frozenset({REDIRECTED}),
+    AbilityId.STORM_DRAIN: frozenset({REDIRECTED}),
 }
 
 

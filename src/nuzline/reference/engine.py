@@ -69,14 +69,18 @@ from nuzline.engine.ids import (
     MOVE_CURSE,
     MOVE_FAKE_OUT,
     MOVE_HEAL_BELL,
+    MOVE_HIDDEN_POWER,
     MOVE_IMPRISON,
+    MOVE_JUDGMENT,
     MOVE_KNOCK_OFF,
     MOVE_MIMIC,
+    MOVE_NATURAL_GIFT,
     MOVE_SLEEP_TALK,
     MOVE_SNORE,
     MOVE_SOLAR_BEAM,
     MOVE_STRUGGLE,
     MOVE_U_TURN,
+    MOVE_WEATHER_BALL,
     NATURE_DISLIKED_FLAVOR,
     ON_HIT_EFFECTS,
     POWER_IF_TARGET_ASLEEP,
@@ -4482,6 +4486,95 @@ def _resolve(tables, s: RefState, attacker: int, move: int, randomize: bool, cho
     return result(pick if hp(pick) else None, 0, True)
 
 
+def multi_turn(tables, move: int) -> bool:
+    """``Move_IsMultiTurn`` (lib.c:2975-2992): Bide and the charge effects (D2-10 rule 1)."""
+    return bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) or (
+        _t(tables, "move_effect", move) == EffectId.BIDE
+    )
+
+
+def no_target(tables, s: RefState, battler: int, move: int, defender: int | None,
+              last_of_multi: bool) -> bool:  # fmt: skip
+    """``NO_TARGET`` (include/battle/common.h:56-61): no defender (None or -1) and the move is
+    not multi-turn, or the battler is ``MOVE_LOCKED`` or ``SYSCTL_LAST_OF_MULTI_TURN`` is set."""
+    none = defender is None or defender == -1
+    return none and (
+        not multi_turn(tables, move) or bool(s.battlers[battler].locked_move) or last_of_multi
+    )
+
+
+def charge_keeps_user(tables, s: RefState, battler: int, move: int,
+                      defender: int | None) -> bool:  # fmt: skip
+    """``BattleControllerPlayer_HasNoTarget``'s second part (bcp.c:2319-2334): the user becomes the
+    defender of a multi-turn move that found none, unless SolarBeam in sun, a Power Herb or a
+    lock (D2-10 rule 2)."""
+    none = defender is None or defender == -1
+    sun_now = (
+        bool(_t(tables, "move_flags", move) & MoveFlag.SUN_SKIP)
+        and s.weather == Weather.SUN
+        and not _weather_suppressed(tables, s)
+    )
+    herb = _item_effect(tables, _active(s, battler), s) == ItemId.POWER_HERB
+    return (
+        none
+        and multi_turn(tables, move)
+        and not no_target(tables, s, battler, move, defender, False)
+        and not sun_now
+        and not herb
+    )
+
+
+def redirect_type(tables, s: RefState, attacker: int, move: int) -> int:
+    """``CalcMoveType`` by move id, Normal replaced by the data type (lib.c:1747-1750, :7815-7917;
+    D2-12 rule 3; Weather Ball with no weather: Normal, ledger D2-6)."""
+    mon = _active(s, attacker)
+    kind = Type.NORMAL
+    if move == MOVE_HIDDEN_POWER:
+        kind = _hidden_power(mon.ivs)[0]
+    elif move == MOVE_WEATHER_BALL:
+        if _weather_ball_on(tables, s):
+            kind = WEATHER_BALL_TYPES.get(s.weather, Type.NORMAL)
+    elif move == MOVE_NATURAL_GIFT:
+        kind = _t(tables, "item_gift_type", _held(s, mon))
+    elif move == MOVE_JUDGMENT:
+        kind = PLATE_TYPES.get(_t(tables, "item_hold_effect", _held(s, mon)), Type.NORMAL)
+    return _t(tables, "move_type", move) if kind == Type.NORMAL else kind
+
+
+def redirect(tables, s: RefState, attacker: int, move: int, defender: int | None,
+             speed_order: list[int]) -> tuple[int | None, bool]:  # fmt: skip
+    """``BattleSystem_CheckRedirectionAbilities`` (lib.c:1732-1790; D2-12): ``(defender,
+    redirected)``."""
+    if defender is None or defender == -1:
+        return defender, False
+    if _active(s, attacker).ability == AbilityId.MOLD_BREAKER:
+        return defender, False
+    if _follow_me_target(s, attacker) is not None:
+        return defender, False
+    if _move_target(tables, move) not in (
+        MoveTarget.RANGE_SINGLE_TARGET,
+        MoveTarget.RANGE_RANDOM_OPPONENT,
+    ):
+        return defender, False
+    kind = redirect_type(tables, s, attacker, move)
+    wanted = {Type.ELECTRIC: AbilityId.LIGHTNINGROD, Type.WATER: AbilityId.STORM_DRAIN}.get(kind)
+    if wanted is None:
+        return defender, False
+    for b in speed_order:
+        if b != attacker and _active(s, b).hp > 0 and _active(s, b).ability == wanted:
+            return (b, True) if b != defender else (defender, False)
+    return defender, False
+
+
+def _reveal_redirect(s: RefState, tables, holder: int) -> None:
+    """subscript_lightning_rod_redirected.s:9 tags the holder's ability: ``BattleAI_SetAbility``
+    for a player's Pokemon (D2-12 rule 10)."""
+    if _party_of(s, holder) is s.parties[0]:
+        mon = _active(s, holder)
+        slot = s.battlers[holder].active
+        s.ai_ability_known[slot] = ABILITY_DECOMP_IDS[AbilityId(mon.ability)]
+
+
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
            struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
@@ -4536,15 +4629,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # 1 plus Pressure's (bcp.c:2236-2270), capped at the PP left (:2276-2280), ruling G-8.
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221), past DecrementPP
     # (whose no-PP case only flags MOVE_STATUS_NO_PP) and HasNoTarget (below), G-60.
-    first_charge0 = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
-        s.battlers[side].locked_move
-    )
-    no_target0 = (
-        _move_target(tables, move) != MoveTarget.RANGE_SINGLE_TARGET_SPECIAL
-        and not first_charge0
-        and not _defender_always(tables, move, _ghost(s, side))
-        and _active(s, _foe(side)).hp == 0
-    )
+    fight_defender = turn.defender
+    no_target0 = no_target(tables, s, side, move, fight_defender, False)  # D2-10
     if not no_target0:
         _metronome_update(tables, s, side, move)
         turn.met_reached = True
@@ -4560,26 +4646,24 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # invokers (Sleep Talk, Metronome, Copycat, Assist: their called move's defender is
     # re-picked by GoToMoveScript, below) and Counter / Mirror Coat / Metal Burst, whose
     # command re-picks the foe. Ruling B12-30.
-    special_range = _move_target(tables, move) == MoveTarget.RANGE_SINGLE_TARGET_SPECIAL
     nature_power = _t(tables, "move_effect", move) == EffectId.NATURE_POWER
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     special_counter = counter and _move_target(tables, move) in SELF_DEFENDER
-    # A charge move's first use keeps a defender (the user, bcp.c:2327-2334) and runs its script,
-    # whose hit then finds none (below), B10-12.
-    first_charge = bool(_t(tables, "move_flags", move) & MoveFlag.CHARGE) and not (
-        s.battlers[side].locked_move
-    )
     # The invokers (Metronome, Sleep Talk, Copycat, Assist) are RANGE_SINGLE_TARGET_SPECIAL too:
     # their own defender is the user (lib.c:1665-1669), so they pass here and their call's
     # GoToMoveScript re-picks one below (E1 Batch D; step's ``succeeded``).
-    if (
-        not special_range
-        and not first_charge
-        and not _defender_always(tables, move, _ghost(s, side))
-        and _active(s, _foe(side)).hp == 0
-    ):
+    if no_target0:  # D2-10: NO_TARGET on the fight command's defender
         _unlock(s.battlers[side])  # subscript_no_target.s
         return record
+    # HasNoTarget's second part (bcp.c:2319-2334): a charge turn with no foe keeps the user.
+    keeps_user = charge_keeps_user(tables, s, side, move, fight_defender)
+    # D2-12: REDIRECT_TARGET (bcp.c:3204-3206), the holder is the defender from here on.
+    order0 = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
+    redirect_to, redirected = redirect(
+        tables, s, side, move, side if keeps_user else fight_defender, order0
+    )
+    if redirected:
+        turn.defender = turn.target_side = redirect_to
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
@@ -4631,6 +4715,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # SYSCTL_ATTACK_MESSAGE_SHOWN (subscript_update_stat_stage.s:6-7).
     flags = _t(tables, "move_flags", move)
     sd = s.battlers[side]
+    if redirected and flags & MoveFlag.CHARGE:
+        _reveal_redirect(s, tables, turn.defender)  # TryMove's message, a charge turn too
     if flags & MoveFlag.CHARGE:
         second = bool(sd.locked_move)
         sun_now = (
@@ -4658,7 +4744,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         sd.locked_move = 0  # subscript_charge_move_cleanup.s:6
         turn.charge_strike = True  # :7 SYSCTL_LAST_OF_MULTI_TURN (G-60)
         sd.semi_invulnerable = 0  # the scripts' FLAG_OFF MOVE_EFFECT_SEMI_INVULNERABLE
-        if _active(s, _foe(side)).hp == 0:  # TryMove's HasNoTarget: subscript_no_target.s
+        # TryMove's HasNoTarget: subscript_no_target.s, SYSCTL_LAST_OF_MULTI_TURN set (D2-10)
+        if no_target(tables, s, side, move, turn.defender, True):
             _unlock(sd)
             return record
     # TryMove's CheckMoveHitAccuracy runs after the move script, whatever the script set (a failed
@@ -4850,6 +4937,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and not _protected(turn, s, side, move, unleash)
     ):
         _know_ability(s, s.battlers[0].active)
+    if redirected:
+        _reveal_redirect(s, tables, turn.defender)  # TryMove, bcp.c:3247-3252 (D2-12 rule 10)
     roll = o.hit[side][0]
     missed = (
         _t(tables, "move_accuracy", move) != 0

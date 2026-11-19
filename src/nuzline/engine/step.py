@@ -177,6 +177,7 @@ from nuzline.engine.hooks import (
     ABSORB,
     DAMAGE_AVOIDED,
     OHKO_BLOCKED,
+    REDIRECTED,
     STATUS_CURE,
     STATUS_HP,
     TORMENT,
@@ -1078,6 +1079,22 @@ def _use_move(
         jnp.where(spend, left, state.pp[party(fmt, side), user, slot]).astype(state.pp.dtype)
     )
     state = state._replace(pp=pp)
+    # D2-10: HasNoTarget (bcp.c:3189-3194, :2306-2337) on the fight command's defender
+    # (``targets.no_target``): a charge turn with no foe keeps the user as its defender; then D2-12:
+    # REDIRECT_TARGET (bcp.c:3204-3206) moves a single-target Electric / Water move to a Lightning
+    # Rod / Storm Drain holder (``targets.redirect``), the holder being the action's defender from
+    # here on. The PP above took the fight command's defender (rule 9).
+    nt_before = targets.no_target(tables, state, side, move, resolved.defender, False)
+    keeps_user = targets.charge_keeps_user(tables, state, side, move, resolved.defender)
+    redirect_to, redirected = targets.redirect(
+        tables, state, side, move, jnp.where(keeps_user, side, resolved.defender), speed_order
+    )
+    resolved = resolved._replace(
+        defender=jnp.where(redirected, redirect_to, resolved.defender),
+        target_side=jnp.where(redirected, redirect_to, resolved.target_side),
+    )
+    target_side = resolved.target_side
+    target = state.active[target_side]
 
     # Nature Power (effect_script_0173.s): its script turns it into the terrain's move
     # (order.called_move: GetTerrainMove, then GoToMoveScript sets moveCur and re-picks the
@@ -1128,7 +1145,9 @@ def _use_move(
     # The script runs with a defender: the foe, or for the user's own first turn the user
     # (HasNoTarget, bcp.c:2327-2334); a called move without a foe goes to subscript_no_target.s
     # from GoToMoveScript (battle_script.c:2124-2126) before its script.
-    script_runs = (state.hp[party(fmt, target_side), target] > 0) | (~invoker & ~nature_power)
+    script_runs = jnp.where(
+        invoker | nature_power, state.hp[party(fmt, target_side), target] > 0, ~nt_before
+    )
     herb = (
         can_act
         & charge_move
@@ -1153,9 +1172,20 @@ def _use_move(
     never_misses = (tables.move_accuracy[used] == 0) | (
         tables.move_effect[used] == EffectId.FUTURE_SIGHT
     )
-    has_target = (state.hp[party(fmt, target_side), target] > 0) | defender_always(
+    # D2-10: the BeforeMove check is ``~nt_before`` (the resolver's defender; at B = 2 today's "the
+    # foe has HP or the move has a defender whatever its HP"); a called move's defender is
+    # GoToMoveScript's (D2-13), still the foe test. TryMove checks again after the script
+    # (bcp.c:3240-3245): a charge move that skipped its charge (Power Herb, sun) with no foe has
+    # set SYSCTL_LAST_OF_MULTI_TURN (subscript_charge_move_cleanup.s:7) and ends in no target.
+    called_target = (state.hp[party(fmt, target_side), target] > 0) | defender_always(
         tables, used, ghost_user(state, side)
     )
+    bm_target = ~nt_before
+    last_of_multi = can_act & bm_target & (second_turn | sun_now | herb)
+    nt_try = targets.no_target(
+        tables, state, side, used, jnp.where(keeps_user, side, resolved.defender), last_of_multi
+    )
+    has_target = jnp.where(invoker | nature_power, called_target, bm_target & ~nt_try)
     # Counter, Mirror Coat, Metal Burst (battle_script.c:4615-4705, :7153-7184): the command
     # reads the user's turnFlags damage and its last attacker (physical / special /
     # lastAttacker, stored as 1 + battler) and fails (MOVE_STATUS_FAILED) on 0 taken, an
@@ -1350,6 +1380,12 @@ def _use_move(
     # CheckMoveHitAccuracy reads the threshold now, with this moment's stages (bcp.c:
     # 2873-2874): a faster Sand-Attack or Double Team this turn counts. outcome.hit[side, 0]
     # is the roll's class (outcome.py): it hits when 0 < class <= threshold (:2976).
+    # TryMove's TriggerRedirectionAbilities (bcp.c:3247-3252): the holder's ability message
+    # (subscript_lightning_rod_redirected.s:9) unless the move failed (D2-12 rule 10).
+    holder = jnp.clip(resolved.defender, 0, fmt.B - 1)
+    state = reveal_ability(
+        state, holder, state.active[holder], REDIRECTED, redirected & can_act & has_target & ~failed
+    )
     roll = outcome.hit[side, 0].astype(_I32)
     threshold = live_hit_threshold(tables, state, side, used, target_moved)
     hit = never_misses | ((roll > 0) & (roll <= threshold)) | charging

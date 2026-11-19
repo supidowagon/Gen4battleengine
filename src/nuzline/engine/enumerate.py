@@ -989,7 +989,9 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.SERENE_GRACE,
     AbilityId.SHIELD_DUST,
     AbilityId.TRUANT,  # removes its holder's hit
-    AbilityId.LIGHTNINGROD,  # no effect in singles
+    # D2-12: no effect at B = 2 (redirects only to a battler other than the defender).
+    AbilityId.LIGHTNINGROD,
+    AbilityId.STORM_DRAIN,
     AbilityId.HONEY_GATHER,  # after the battle
     # E2 batch 4: fixed damage factors of the hit's own battlers (damage._pre_random,
     # _finish); Magic Guard only spares its holder HP losses (the HP clause).

@@ -18,9 +18,28 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.damage import (
+    hidden_power,
+    judgment_type,
+    natural_gift_params,
+    weather_ball_params,
+    weather_suppressed,
+)
 from nuzline.engine.format import format_of, party, side_of
-from nuzline.engine.ids import EffectId, MoveTarget, Type
-from nuzline.engine.state import BattleState
+from nuzline.engine.ids import (
+    MOVE_HIDDEN_POWER,
+    MOVE_JUDGMENT,
+    MOVE_NATURAL_GIFT,
+    MOVE_WEATHER_BALL,
+    AbilityId,
+    EffectId,
+    ItemId,
+    MoveFlag,
+    MoveTarget,
+    Type,
+    Weather,
+)
+from nuzline.engine.state import BattleState, held_item
 
 _I32 = jnp.int32
 
@@ -78,11 +97,107 @@ def random_opponent(state: BattleState, attacker, bit):
 
 
 def fight_randomizes(state: BattleState, side, struggling) -> jnp.ndarray:
-    """``bool``: the fight command passes ``randomizeTarget`` (bcp.c:1866-1893): Struggle, or an
-    Encore on the attacker at the action's start, whether or not its slot still holds the move
-    (:1869-1884). A selected move that is not in its slot (:1889-1893) cannot occur here: the
-    engine picks the move from the slot."""
+    """``bool``: the fight command's ``randomizeTarget`` (bcp.c:1861-1903, D2-9 rule 1).
+    ``struggling`` (:1866-1868), or an Encore on the attacker at the action's start (:1869-1884):
+    both Encore branches randomize, whether or not the slot still holds the encored move. The
+    lock branch (:1885-1888) and the plain slot (:1894-1896) do not; a locked battler is never
+    struggling. Branch 1.5 (:1889-1893, the selected move left its slot) cannot occur: the move is
+    read from the slot at the action (``levelup.learn_pin``)."""
     return jnp.asarray(struggling, bool) | (state.encore_move[side] != 0)
+
+
+def multi_turn(tables: Tables, move) -> jnp.ndarray:
+    """``Move_IsMultiTurn`` (lib.c:2975-2992): Bide and the nine charge effects (the ``CHARGE``
+    flag marks exactly those, step.py's charge block)."""
+    move = jnp.asarray(move, _I32)
+    return ((tables.move_flags[move].astype(_I32) & MoveFlag.CHARGE) != 0) | (
+        tables.move_effect[move] == EffectId.BIDE
+    )
+
+
+def no_target(tables: Tables, state: BattleState, battler, move, defender, last_of_multi):
+    """``NO_TARGET`` (include/battle/common.h:56-61, D2-10 rule 1): ``defender`` is BATTLER_NONE and
+    the move is not multi-turn, or it is and the battler is ``MOVE_LOCKED`` or
+    ``SYSCTL_LAST_OF_MULTI_TURN`` (``last_of_multi``) is set."""
+    locked = state.locked_move[battler] != 0
+    none = jnp.asarray(defender, _I32) == NO_DEFENDER
+    return none & (~multi_turn(tables, move) | locked | jnp.asarray(last_of_multi, bool))
+
+
+def charge_keeps_user(tables: Tables, state: BattleState, battler, move, defender) -> jnp.ndarray:
+    """``BattleControllerPlayer_HasNoTarget``'s second part (bcp.c:2319-2334, D2-10 rule 2): no
+    defender, a multi-turn move the check did not fire on, not SolarBeam in unsuppressed sun, no
+    Power Herb (``HOLD_EFFECT_CHARGE_SKIP``) and not ``MOVE_LOCKED``: the defender becomes the
+    attacker, so a charge turn with no foe charges."""
+    sun_now = (
+        ((tables.move_flags[move].astype(_I32) & MoveFlag.SUN_SKIP) != 0)
+        & (state.weather == Weather.SUN)
+        & ~weather_suppressed(tables, state)
+    )
+    herb = tables.item_effect[held_item(state, battler)] == ItemId.POWER_HERB
+    keeps = (jnp.asarray(defender, _I32) == NO_DEFENDER) & multi_turn(tables, move)
+    return keeps & ~no_target(tables, state, battler, move, defender, False) & ~sun_now & ~herb
+
+
+def _ability(state: BattleState, battler) -> jnp.ndarray:
+    """``int32``: ``Battler_Ability`` of ``battler`` (lib.c:3088-3106; D2-12 rule 11). The one read
+    of a battler's ability in this module: E3's suppressed-ability function (Gastro Acid) replaces
+    this body when it lands in hooks.py."""
+    fmt = format_of(state)
+    battler = jnp.asarray(battler, _I32)
+    return state.ability[party(fmt, battler), state.active[battler]].astype(_I32)
+
+
+def redirect_type(tables: Tables, state: BattleState, attacker, move) -> jnp.ndarray:
+    """``CalcMoveType(attacker, move)`` with the Normal -> data type fallback of
+    ``BattleSystem_CheckRedirectionAbilities`` (lib.c:1747-1750, :7815-7917; D2-12 rule 3). Weather
+    Ball with no weather reads an uninitialised type in the C: Normal, then the data type (ledger
+    D2-6)."""
+    fmt = format_of(state)
+    attacker = jnp.asarray(attacker, _I32)
+    move = jnp.asarray(move, _I32)
+    item = held_item(state, attacker)
+    hp_type = hidden_power(state.ivs[party(fmt, attacker), state.active[attacker]])[0]
+    kind = jnp.asarray(Type.NORMAL, _I32)
+    kind = jnp.where(move == MOVE_HIDDEN_POWER, hp_type, kind)
+    kind = jnp.where(move == MOVE_WEATHER_BALL, weather_ball_params(tables, state, move)[2], kind)
+    kind = jnp.where(move == MOVE_NATURAL_GIFT, natural_gift_params(tables, item)[1], kind)
+    kind = jnp.where(move == MOVE_JUDGMENT, judgment_type(tables, item, Type.NORMAL), kind)
+    return jnp.where(kind == Type.NORMAL, tables.move_type[move].astype(_I32), kind).astype(_I32)
+
+
+def redirect(tables: Tables, state: BattleState, attacker, move, defender, speed_order):
+    """``BattleSystem_CheckRedirectionAbilities`` (lib.c:1732-1790, D2-12 rules 2-6): ``(defender,
+    redirected)``. A single-target or random-opponent move of Electric (Water) type goes to the
+    first living Lightning Rod (Storm Drain) holder other than the attacker in ``speed_order``
+    (``monSpeedOrder``, D3's input; ``jnp.arange(2)`` at B = 2). No change for a BATTLER_NONE
+    defender, a Mold Breaker attacker (Normalize: owed to E1) or a living Follow Me user on the
+    other side; a holder that is already the defender sets no flag."""
+    fmt = format_of(state)
+    attacker = jnp.asarray(attacker, _I32)
+    move = jnp.asarray(move, _I32)
+    defender = jnp.asarray(defender, _I32)
+    order = jnp.asarray(speed_order, _I32)
+    rng = tables.move_target[move]
+    ranged = (rng == MoveTarget.RANGE_SINGLE_TARGET) | (rng == MoveTarget.RANGE_RANDOM_OPPONENT)
+    exits = (
+        (defender == NO_DEFENDER)
+        | (_ability(state, attacker) == AbilityId.MOLD_BREAKER)
+        | (follow_me_target(state, attacker) != NO_DEFENDER)
+    )
+    kind = redirect_type(tables, state, attacker, move)
+    abilities = jnp.stack([_ability(state, order[k]) for k in range(fmt.B)])
+    living = jnp.stack([alive(state, order[k]) for k in range(fmt.B)])
+    wanted = jnp.where(
+        kind == Type.ELECTRIC,
+        jnp.asarray(AbilityId.LIGHTNINGROD, _I32),
+        jnp.where(kind == Type.WATER, jnp.asarray(AbilityId.STORM_DRAIN, _I32), -1),
+    )
+    cands = (abilities == wanted) & living & (order != attacker)
+    found = jnp.any(cands)
+    holder = order[jnp.argmax(cands)]
+    redirected = ~exits & ranged & found & (holder != defender)
+    return jnp.where(redirected, holder, defender).astype(_I32), redirected
 
 
 def _ghost(state: BattleState, battler) -> jnp.ndarray:

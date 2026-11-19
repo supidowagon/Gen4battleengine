@@ -711,6 +711,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Truant": AbilityId.TRUANT,
     "Dry Skin": AbilityId.DRY_SKIN,
     "Lightningrod": AbilityId.LIGHTNINGROD,
+    "Storm Drain": AbilityId.STORM_DRAIN,
     "No Guard": AbilityId.NO_GUARD,
     "Serene Grace": AbilityId.SERENE_GRACE,
     "Drought": AbilityId.DROUGHT,

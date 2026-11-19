@@ -610,8 +610,9 @@ class AbilityId(IntEnum):
     # (outcome.secondary_chance): Serene Grace; effects.py: Shield Dust, Dry Skin's Water
     # absorb (step._use_move); step.py: Truant, the weather abilities' turn-end HP (Dry Skin,
     # Solar Power); hooks.on_switch_in: Trace, Drought, Drizzle, Sand Stream, Snow Warning.
-    # Lightningrod (BattleSystem_TriggerRedirectionAbilities, battle_lib.c:1756-1772) only
-    # redirects to a battler other than the defender, which singles never has; Honey Gather
+    # Lightningrod and Storm Drain (BattleSystem_CheckRedirectionAbilities, battle_lib.c:1732-1790;
+    # message by ..._TriggerRedirectionAbilities, :1792-1817) only redirect to a battler other
+    # than the defender, which singles never has (engine/targets.redirect); Honey Gather
     # acts only after the battle (battle_script.c:7825).
     RECKLESS = 33
     TECHNICIAN = 34
@@ -711,6 +712,8 @@ class AbilityId(IntEnum):
     # battle_lib.c:6802-6809; damage.side_ability_count, damage._pre_random).
     PLUS = 88
     MINUS = 89
+    # D2-12: redirection only (battle_lib.c:1771-1789; engine/targets.redirect).
+    STORM_DRAIN = 90
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -756,6 +759,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.TRUANT: 54,
     AbilityId.DRY_SKIN: 87,
     AbilityId.LIGHTNINGROD: 31,
+    AbilityId.STORM_DRAIN: 114,  # generated/abilities.txt:115
     AbilityId.NO_GUARD: 99,
     AbilityId.SERENE_GRACE: 32,
     AbilityId.DROUGHT: 70,
@@ -1370,6 +1374,11 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# D2-12: the moves ``CalcMoveType`` keys on (generated/moves.txt line N is id N - 1).
+MOVE_HIDDEN_POWER = 237
+MOVE_WEATHER_BALL = 311
+MOVE_NATURAL_GIFT = 363
+MOVE_JUDGMENT = 449
 # Snore and Sleep Talk (``generated/moves.txt`` lines 174, 215): the sleep check lets a sleeping
 # battler use them (bcp.c:2455).
 MOVE_SNORE = 173

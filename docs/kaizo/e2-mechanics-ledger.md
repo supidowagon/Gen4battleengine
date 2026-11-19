@@ -2421,3 +2421,36 @@ docs/doubles-state-design.md.
 - D2-18 (build of D2-4..D2-8, D2-11) The `ts_follow_me` write sits behind step.py's `script_on`
   (script ran, not failed to find a target) as Imprison's does; D2-11 and the resolver share
   step.py / reference/engine.py edits, so the engine code is one commit.
+- D2-19 (build of D2-9) `targets.fight_randomizes` already held the sheet's rule (`struggling |
+  encore_move != 0`, ruling D2-13); D2-9 changes no code, adds its tests, and the docstring cites the
+  six branches. Branch 1.5 needs no code. Owed to D10: `learn_pin` (state.py, one scalar) must pin
+  per player battler at B = 4 (a partner's KO pays exp while two player battlers hold pending move
+  actions). Disobedience (rule 4) stays unbuilt: the engine has no obedience check (Kaizo always obeys).
+- D2-20 (build of D2-10) `nt_before` / `charge_keeps_user` / the TryMove check read the resolver's
+  `defender` of `move` (moveTemp). A called move (invoker, Nature Power) keeps today's "foe has HP or
+  `defender_always`" test as `called_target` (D2-13 re-picks its defender); every other move's
+  `has_target` is `~nt_before & ~nt_try`, with `last_of_multi = can_act & ~nt_before & (second_turn |
+  sun_now | herb)`. `succeeded`, `_unlock` and the `no_target` event are unchanged. `resolved.defender`
+  stays NO_DEFENDER for a charge turn with no foe (the user is the defender for the checks only), so
+  `play_hit`, Pressure and `record` read what they read today. The reference's `_fight` mirrors it
+  (`no_target0`, the HasNoTarget block, the charge strike's TryMove check) and keeps its other
+  `_foe(side)` reads. The four-battler step cases of the sheet (both foes down: PP, lock, `last_move`,
+  Choice lock; Spikes; Helping Hand; Fly with and without a Power Herb) are owed to D3 with the
+  four-actor `step` (as D2-17); `tests/engine/test_d2_no_target.py` composes the resolver and the
+  three functions at B = 4 instead.
+- D2-21 (build of D2-12) `targets.redirect` returns the holder in place of the defender; `_use_move`
+  writes it into `resolved.defender` / `target_side` (and `target`) after the PP block, so the move
+  script and `play_hit` read the holder, Pressure's cost the fight command's defender. The reveal
+  sits before the accuracy roll with `redirected & can_act & has_target & ~failed`
+  (`hooks.REDIRECTED`); the reference reveals at the same point and also on a charge turn (the
+  engine's cond holds there). The step-level reveal-not-on-failure test needs a four-actor `step`
+  (owed to D3, as D2-17); `test_d2_redirection.py` tests the hook and `redirect` directly. A
+  Normalize attacker (not an `AbilityId`) is owed to E1: it adds `| (_ability(attacker) ==
+  AbilityId.NORMALIZE)` to `redirect`'s exits. `targets._ability` is the single place E3's
+  suppressed-ability function replaces. `ids.MOVE_*` for `CalcMoveType`'s four moves were added.
+- D2-22 (build of D2-12) Storm Drain: `AbilityId.STORM_DRAIN = 90`, `ABILITY_DECOMP_IDS` 114,
+  `effect_map`, `INPUT_NEUTRAL_ABILITIES`, `tests/strategies.py`, and the `game_constants.py`
+  "ability" table row (the guard `tests/data/test_game_constants.py` compares it). The vanilla and
+  Kaizo table rebuild (`tools.build_tables`) was not run by this builder (ordered not to): the
+  tables keep refusing Storm Drain's holders until the managing session rebuilds; the
+  differential's Storm Drain draw is gated by the supported set after the rebuild.
