@@ -250,6 +250,7 @@ def test_roark_moves_are_all_accepted(kaizo_tables, kaizo_names, kaizo_roark_par
     assert roark_labels <= KAIZO.expert_transcribed
 
 
+@pytest.mark.fullset
 def test_expert_label_table_is_the_dispatch():
     """``KAIZO_EXPERT_LABELS`` is read off ``Expert_Main``'s dispatch table (script.s:1628-1808,
     ``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_<effect>, <label>``): each entry's line holds
@@ -299,6 +300,8 @@ def _dispatched(t, s, flag, layout) -> set[int]:
     return seen
 
 
+@pytest.mark.slow
+@pytest.mark.fullset
 def test_expert_transcribed_is_the_dispatch(
     kaizo_tables, kaizo_names, kaizo_roark_party, monkeypatch
 ):
@@ -343,6 +346,7 @@ def test_expert_transcribed_is_the_dispatch(
     assert reasons == [line]
 
 
+@pytest.mark.fullset
 def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
     """Task 6 review m1: the jump tables hold only the layout's effects, decided at trace
     time, so the vanilla program traces none of the Kaizo labels. Vanilla's transcribed moves
@@ -359,6 +363,7 @@ def test_dispatch_is_static_per_layout(kaizo_tables, kaizo_roark_party):
     assert _dispatched(t, s, policy._expert, VANILLA) == vanilla_expert
 
 
+@pytest.mark.fullset
 def test_basic_label_table_is_the_dispatch():
     """K3c Task 6 re-review A: ``policy._BASIC_LABELS`` is read off ``Basic_ScoreMoveEffect``
     (script.s:133-286, ``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_<effect>, <label>``).
@@ -425,6 +430,7 @@ def test_expert_guard_refuses_an_untranscribed_label(
     assert any(line in m for m in report.missing), report.missing
 
 
+@pytest.mark.fullset
 def test_battle_effect_ids_are_the_decomps():
     """``commands.BattleEffect``: line n + 1 of generated/move_battle_effects.txt is
     ``BATTLE_EFFECT_<name>``, id n."""
@@ -437,6 +443,7 @@ def test_battle_effect_ids_are_the_decomps():
         assert lines[member.value] == f"BATTLE_EFFECT_{name}", member
 
 
+@pytest.mark.fullset
 def test_kaizo_refusals_use_the_kaizo_names(names, kaizo_tables, kaizo_names, kaizo_roark_party):
     """K3c final review: a refusal message without the caller's names names the move in
     the tables' own game, never in the shipped vanilla tables (Kaizo renames ids)."""
@@ -1338,6 +1345,7 @@ def test_flag_set_runs_its_scripts(kaizo_tables, kaizo_roark_party, flags, scrip
         ]
 
 
+@pytest.mark.fullset
 def test_opponent_move_refusals_are_refused(kaizo_tables, kaizo_roark_party):
     """``policy.opponent_move_refusals`` (the backlog's per-move AI lines) agrees with
     ``_refused`` for every Kaizo move in an opponent slot: a move has a kind exactly when
@@ -1395,6 +1403,7 @@ def _turn(s, turn: int):
 _SETUP_MOVES = (ROCK_POLISH, LIGHT_SCREEN, CURSE, STEALTH_ROCK)
 
 
+@pytest.mark.fullset
 def test_setup_first_turn_effects_are_the_decomps():
     """``commands.SETUP_FIRST_TURN_EFFECTS`` is SetupFirstTurn_SetupEffects (script.s:6435-6497)
     entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n)."""
@@ -1513,6 +1522,7 @@ def test_prioritize_extremes(kaizo_tables, kaizo_roark_party, jump):
     _assert_exact_equals_loose(t, s, layout_for(t, 0x27, s))
 
 
+@pytest.mark.fullset
 def test_check_hp_tables_are_the_decomps():
     """``commands.CHECK_HP_TABLES`` is CheckHP_Main's six tables (script.s:7748-7977), label by
     label and entry by entry, through generated/move_battle_effects.txt (line n + 1 is id n);
@@ -4017,6 +4027,7 @@ def test_charge_turn_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_p
 # --- E2 batch 11 (B11-4): Encore -------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_encore_encouraged_effects_are_the_decomps():
     """``commands.ENCORE_ENCOURAGED_EFFECTS`` is Expert_Encore_EncouragedMoveEffects
     (script.s:3202-3285) entry by entry, through generated/move_battle_effects.txt."""
@@ -4703,6 +4714,7 @@ def test_batch13_expert(kaizo_tables, kaizo_names, kaizo_roark_party, move, case
     assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
 
 
+@pytest.mark.fullset
 def test_batch13_refusals_lifted(kaizo_tables, kaizo_names, kaizo_roark_party):
     """B13-23..27: the batch's effects are transcribed (no "not transcribed" or "expert
     label"); Natural Gift and Judgment take modelled id cases; Gyro Ball's TrainerAI_CalcDamage

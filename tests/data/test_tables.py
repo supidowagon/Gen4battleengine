@@ -271,6 +271,7 @@ def test_names_form_checks_the_species_range(names):
         names.form(479, 6)
 
 
+@pytest.mark.fullset
 def test_committed_manifest_is_the_code_version(
     names,
 ):  # the committed manifest; `names` skips when tables are absent
@@ -307,6 +308,7 @@ def test_stale_npz_beside_current_manifest_is_refused(tmp_path, version):
         load_tables(tmp_path)
 
 
+@pytest.mark.fullset
 def test_built_npz_records_its_version(tables):
     with np.load(TABLES / "tables.npz") as z:
         assert "version" in z.files and int(z["version"]) == MANIFEST_VERSION

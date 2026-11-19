@@ -111,12 +111,14 @@ def test_check_pool_names_unsupported(tmp_path, tables, names, learnsets, metron
     assert report.level == Support.NONE
 
 
+@pytest.mark.fullset
 def test_player_move_refusal(names):
     assert player_move_refusal(names.move("Miracle Eye"))
     assert player_move_refusal(names.move("Foresight")) is None
     assert player_move_refusal(names.move("Hidden Power")) is None
 
 
+@pytest.mark.fullset
 def test_player_ability_refusal(names):
     assert player_ability_refusal(26)  # Levitate
     assert player_ability_refusal(51) is None  # Keen Eye
@@ -166,6 +168,7 @@ def test_pool_ignores_fight_level_conditions(tables, names, vanilla_manifest, co
     assert check_pool(tables, kaizo, cands, (), trainer=roark_trainer()).missing == []
 
 
+@pytest.mark.fullset
 def test_pool_lists_holdable_bag_items(tables, names):
     from nuzline.engine.coverage import Support
 

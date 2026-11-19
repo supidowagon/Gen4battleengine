@@ -519,12 +519,17 @@ def recalc_stats(tables: Tables, a: dict, side: int, slot: int) -> None:
     ``hp += newMax - oldMax`` never takes a living Pokemon to 0 (:633-645); a stale max HP above
     the formula's lets it, and ``pay_exp``'s telescoped HP then leaves the per-level rule (and a
     negative HP is alive to the reference, fainted to JAX). HP stays full if it was, else is
-    capped at the new max (a fainted Pokemon stays at 0)."""
-    species = int(a["species"][side, slot])
-    row = int(tables.species_form_row[species, int(a["form"][side, slot])])
+    capped at the new max (a fainted Pokemon stays at 0). A Transformed active's stats are the
+    party Pokemon's own: its shadow species, form and IVs give its max HP and shadow stats
+    (``party_identity``, G-69); the copied species would leave a max HP above its own formula."""
+    own = bool(a["transformed"][side]) and slot == int(a["active"][side])
+    species = int(a["shadow_species"][side] if own else a["species"][side, slot])
+    form = int(a["shadow_form"][side] if own else a["form"][side, slot])
+    ivs = a["shadow_ivs"][side] if own else a["ivs"][side, slot]
+    row = int(tables.species_form_row[species, form])
     new = calc_stats(
         np.asarray(tables.species_base_stats[row]),
-        a["ivs"][side, slot],
+        ivs,
         a["evs"][side, slot],
         int(a["level"][side, slot]),
         np.asarray(tables.nature_mods[int(a["nature"][side, slot])]),
@@ -533,7 +538,10 @@ def recalc_stats(tables: Tables, a: dict, side: int, slot: int) -> None:
     hp, old_max = int(a["hp"][side, slot]), int(a["max_hp"][side, slot])
     a["hp"][side, slot] = new[Stat.HP] if hp == old_max else min(hp, int(new[Stat.HP]))
     a["max_hp"][side, slot] = new[Stat.HP]
-    a["stats"][side, slot] = new[Stat.ATK :]
+    if own:  # the slot keeps the copied stats; the shadow holds its own (_draw_transform)
+        a["shadow_stats"][side] = new[Stat.ATK :]
+    else:
+        a["stats"][side, slot] = new[Stat.ATK :]
 
 
 def possible_genders(ratio: int) -> tuple[int, ...]:

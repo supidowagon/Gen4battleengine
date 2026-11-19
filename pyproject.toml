@@ -37,7 +37,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "slow: brute-force, loose, save- or ROM-bound tests; excluded from the fast tier",
-    "fullset: asserts over a growing set or count, or a coverage-dependent refusal (CLAUDE.md)",
+    "fullset: asserts over a full set or count (effect ids, registered builders, manifest version, supported sets) and refusals of mechanics not modelled yet; changes whenever coverage grows",
 ]
 addopts = "--strict-markers"
 

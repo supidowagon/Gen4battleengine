@@ -122,7 +122,9 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
         level = int(a["level"][0, slot])
-        row = table[rates[a["species"][0, slot]]]
+        # The growth rate is the party Pokemon's own: a Transformed active's shadow (G-69).
+        own = bool(a["transformed"][0]) and slot == int(a["active"][0])
+        row = table[rates[a["shadow_species"][0] if own else a["species"][0, slot]]]
         top = level >= 100
         lo, hi = int(row[level]), int(row[level]) if top else int(row[level + 1]) - 1
         if near_level and not top:
@@ -155,6 +157,31 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
 jit_pay = jax.jit(pay_exp)
 
 
+def _transformed_payer(tables, names):
+    """gb2's falsifying draw (seed 329494325992175728685579227899638383608): the player's
+    active (slot 1) is a Pikachu (25, its shadow) Transformed into a Furret (162), level 5, IVs,
+    EVs and nature 0, exp 125, 2 HP of its own max 18; the foe's slot 0 is a level-62 Pikachu.
+    ``recalc_stats`` must keep the max HP its own: the Furret copy's 23 made the first level's
+    ``hp += newMax - oldMax`` reach 0 (pokemon.c:633-645), where the per-level loop stops adding
+    HP and the telescoped HP does not (engine 6, reference 0)."""
+    from tests.engine.helpers import roark_real_state
+
+    s = roark_real_state(tables, names)
+    a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
+    a["active"][0] = 1
+    a["species"][0, 1], a["form"][0, 1], a["level"][0, 1], a["nature"][0, 1] = 162, 0, 5, 0
+    a["ivs"][0, 1], a["evs"][0, 1], a["item"][0, 1] = 0, 0, 0
+    a["hp"][0, 1], a["max_hp"][0, 1], a["friendship"][0, 1] = 2, 18, 92
+    a["transformed"][0], a["shadow_species"][0], a["shadow_form"][0] = 1, 25, 0
+    a["shadow_ivs"][0] = 0
+    a["exp"][1], a["exp_boost"][1], a["pokerus"][1], a["friend_bonus"][1] = 125, 100, 0, 0
+    a["learn_level"][1] = 0
+    a["exp_mask"][...] = 1 << 1
+    recalc_stats(tables, a, 0, 1)
+    a["species"][1, 0], a["form"][1, 0], a["level"][1, 0] = 25, 0, 62
+    return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
+
+
 # The lazy strategy's repr carries the tables (72 kB); Hypothesis warns when it builds it.
 @pytest.mark.filterwarnings("ignore:Generating overly large repr")
 @pytest.mark.slow
@@ -163,17 +190,21 @@ jit_pay = jax.jit(pay_exp)
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture],
 )
-@given(data=st.data())
-def test_pay_exp_matches_the_per_level_loop(tables, names, data):
+@given(data=st.data(), pinned=st.none())
+@example(data=None, pinned=True)  # gb2: a Transformed payer's stale max HP (G-69)
+def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
     # The closed form (one level count, telescoped HP, friendship by tier counts) against the
     # decomp's literal per-level ShouldLevelUp loop. A foe up to level 100 pays up to
     # 255 * 100 / 7 = 3642 before the multipliers: many levels at once.
-    s = data.draw(supported_state(tables, names))
-    s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
-    living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
-    j = data.draw(st.sampled_from(living))
-    s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
-    pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
+    if pinned:
+        s, j, pending, selected = _transformed_payer(tables, names), 0, False, 0
+    else:
+        s = data.draw(supported_state(tables, names))
+        s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
+        living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
+        j = data.draw(st.sampled_from(living))
+        s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
+        pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
     after = s.replace_hp(1, j, 0)
     got = jit_pay(tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32))
     want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j, pending, selected))

@@ -489,6 +489,7 @@ def _replace_both(tables, s, side, slot):
     return out
 
 
+@pytest.mark.fullset
 def test_a_hazard_ko_inside_the_replacement_loop_refuses_learn_work(tables, names):
     # The opponent sends Bonsly (1 HP) into Stealth Rock: TurnEnd's payout (bcp.c:1846) levels
     # Prinplup, and the next replacement pick would read the moves before the learn
@@ -587,8 +588,12 @@ def _equations(jaxpr) -> int:
 # Fixed at implementation (T5): pay_exp measured 762 equations. step inlines it 6 times
 # (Pursuit, the act body, the field pass, once per battler of the end of turn, replace):
 # 46913 -> 50734 step equations, compile 14.7 s -> 16.9 s (task-5-report.md). One copy per
-# end-of-turn check (22) made step take over an hour to compile.
-PAY_EXP_CEILING = 800
+# end-of-turn check (22) made step take over an hour to compile. Raised 800 -> 880 at the E1 trial's
+# Transform (G-69, c7ccdf8): a Transformed payer's party identity (``levelup.party_identity``) and
+# the shadow stats it reloads took pay_exp 777 -> 834; linear growth from a modelled mechanic, about
+# 340 step equations over the 6 copies. The ceiling still fails a duplicated stats calculation (about
+# 74 equations) inside pay_exp; it does not count how often step inlines pay_exp.
+PAY_EXP_CEILING = 880
 
 
 def test_pay_exp_stays_small(tables, names):

@@ -60,6 +60,7 @@ def test_clowns_fight_on_jubilife_buildings(kaizo_trainers, tid):
 LEER, THUNDER_WAVE = 43, 86  # Kaizo ids: DEF_DOWN (19), STATUS_PARALYZE (67)
 
 
+@pytest.mark.fullset
 def test_harrassment_effects_are_the_decomps():
     """``commands.HARRASSMENT_EFFECTS`` is Harrassment_Effects (script.s:8036-8071) entry by
     entry, through generated/move_battle_effects.txt (line n + 1 is id n)."""

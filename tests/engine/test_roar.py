@@ -529,6 +529,7 @@ def test_sampled_draws(tables, names):
     assert abs(target.mean() - 0.5) < 5 * math.sqrt(0.25 / 4000)
 
 
+@pytest.mark.fullset
 def test_roar_builder_is_registered():
     assert "_roar_reads" in [b.__name__ for b in _READ_BUILDERS]
 
@@ -702,6 +703,7 @@ def test_kaizo_vulpix_roar_bruteforce(kaizo_tables, kaizo_names, level):
 # --- coverage --------------------------------------------------------------------------------
 
 
+@pytest.mark.fullset
 def test_roar_is_supported_and_its_blockers_refused(tables, names):
     base = sample_party(names)
     mon = replace_spec(base[0], moves=(names.move("Roar"), *base[0].moves[1:]))
