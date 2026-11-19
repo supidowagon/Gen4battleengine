@@ -188,6 +188,7 @@ class VolatileCondition(IntEnum):
     SUBSTITUTE = 1 << 24  # :56; BattleState.substitute_hp (its HP left, 0 = none)
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
+    TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
 
 
 _VOLATILE_FIELDS = {
@@ -197,6 +198,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.SUBSTITUTE: "substitute_hp",
     VolatileCondition.MEAN_LOOK: "mean_look",
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
+    VolatileCondition.TORMENT: "torment",
 }
 
 
@@ -447,6 +449,11 @@ class BattleEffect(IntEnum):
     DISABLE = 86  # Basic_CheckCannotDisable (:184); Expert_Disable (:1687)
     FLEE_FROM_WILD_BATTLE = 153  # Teleport: Basic :221 ScoreMinus10
     SPEED_DOWN_HIT = 218  # Hammer Arm: Expert_HammerArm (:1762)
+    # E3 batch 1 round 2 (E3-2-1 .. E3-2-4).
+    TORMENT = 165  # Basic_CheckTorment (:229); no Expert entry
+    USE_MOVE_FIRST = 241  # Me First: Expert_MeFirst (:1784); Risky :6560
+    SET_ABILITY_TO_INSOMNIA = 247  # Worry Seed: Basic :276; Expert_WorrySeed (:1790)
+    TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a

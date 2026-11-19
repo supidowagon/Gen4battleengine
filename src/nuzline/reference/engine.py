@@ -465,6 +465,7 @@ def _invoked_move(tables, s: RefState, side: int, move: int, call: int) -> int:
             and not _t(tables, "move_flags", m) & MoveFlag.NO_SLEEP_TALK
             and m != sd.disabled_move
             and not (sd.taunt > 0 and _t(tables, "move_power", m) == 0)
+            and not (sd.torment > 0 and m == sd.last_move)  # CHECK_INVALID_TORMENTED (lib.c:2275)
             and not (locked and m != lock)
             and not _move_imprisoned(s, side, m)
             and not _gravity_banned(s, m)  # CHECK_INVALID_GRAVITY (lib.c:2292-2295)
@@ -1658,6 +1659,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "leech_seed",
         "substitute_hp",
         "taunt",
+        "torment",  # VOLATILE_CONDITION_TORMENT: statusVolatile, not Baton-passed (E3-2-1)
         "trapped",
         "trap_move",
         "flinched",
@@ -3219,6 +3221,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_taunt_start.s: fails on a taunted target; Random 2, 3 turns.
         if target_alive and not s.battlers[target].taunt:
             s.battlers[target].taunt = o.duration[side]
+    elif effect == EffectId.TORMENT and effective:
+        # subscript_torment_start.s:5-8: fails on a target with the bit; no Substitute or ability
+        # test; no count (E3-2-1).
+        if target_alive and not s.battlers[target].torment:
+            s.battlers[target].torment = 1
     elif effect == EffectId.DISABLE and effective:
         # effect_script_0086.s / BtlCmd_TryDisable (script.c:4581): nothing disabled yet and
         # the target's movePrevByBattler is one of its moves with PP left; RandNext() % 4 + 3.
@@ -5907,6 +5914,7 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
     (lib.c:2307-2315: a Choice holder locked into a move it knows can use only that one; a
     lock it does not know is cleared there, which reads as no lock)."""
     mon, taunted = _active(s, side), s.battlers[side].taunt > 0
+    tormented, last = s.battlers[side].torment > 0, s.battlers[side].last_move
     disabled = s.battlers[side].disabled_move
     lock = _locked_slot(s, side)
     if lock >= 0:  # Battler_CanPickCommand is FALSE (lib.c:6224): only the locked move
@@ -5919,6 +5927,7 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
         and pp > 0
         and m != disabled
         and not (taunted and _t(tables, "move_power", m) == 0)
+        and not (tormented and m == last)  # CHECK_INVALID_TORMENTED (lib.c:2275-2279), E3-2-1
         and not (choice_locked and m != choice)
         and not _move_imprisoned(s, side, m)  # CHECK_INVALID_IMPRISONED (lib.c:2287)
         and not _gravity_banned(s, m)  # CHECK_INVALID_GRAVITY (lib.c:2292, G-67)

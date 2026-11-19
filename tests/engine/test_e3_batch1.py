@@ -17,12 +17,14 @@ import numpy as np
 import nuzline.ai.commands as c
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import to_numpy
+from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, damage_table
 from nuzline.engine.ids import AbilityId, EffectId, Stat
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
-from nuzline.engine.state import make_state
+from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
 from nuzline.engine.step import step_events
 from nuzline.reference.convert import to_ref
+from nuzline.reference.engine import _usable as ref_usable
 from nuzline.reference.engine import ref_damage_table
 from tests.engine.helpers import A, assert_matches_reference
 from tools.effect_map import CERTAIN_SECONDARY_EFFECTS, DECOMP_EFFECT_TO_ID
@@ -212,3 +214,83 @@ def test_hammer_arm_lowers_the_users_speed_through_a_substitute_and_a_faint(
     assert int(out.hp[1, 0]) == 0 and _stage(out, 0, Stat.SPE) == -1
     floor = s._replace(stages=s.stages.at[0, Stat.SPE].set(-6))
     assert _stage(assert_matches_reference(t, floor, acts, empty_outcome()), 0, Stat.SPE) == -6
+
+
+# --- Round 2 (E3-2-1 .. E3-2-4) ---------------------------------------------------------------
+#
+# #165 Torment: ``effect_script_0165.s:5``, ``subscript_torment_start.s:5-8``; the selection-time
+# block is ``BattleSystem_CheckInvalidMoves`` CHECK_INVALID_TORMENTED (battle_lib.c:2275-2279).
+
+
+def _legal(t, s, side=1):
+    return np.asarray(usable_moves(t, s, side)).tolist()
+
+
+def test_torment_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 165 (effect_script_0165.s:5); Torment is in both games' move tables."""
+    assert DECOMP_EFFECT_TO_ID[165] == (EffectId.TORMENT, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Torment")]) == EffectId.TORMENT
+
+
+def test_torment_sets_the_bit_through_a_substitute_and_not_on_a_miss(tables, names):
+    """subscript_torment_start.s:5-8: no Substitute test, no ability test; a miss or a target that
+    has the bit already fails (the bit stays 1). No count is kept (E3-2-1)."""
+    s = _fight(tables, names, ("Torment",), ("Tackle", "Rock Throw"))
+    acts = A("Torment", "Tackle", s, names)
+    hit = empty_outcome()._replace(hit=jnp.ones((2, MAX_HITS), jnp.int8))
+    out = assert_matches_reference(tables, s, acts, hit)
+    assert int(out.torment[1]) == 1 and int(out.torment[0]) == 0
+    shielded = s._replace(substitute_hp=s.substitute_hp.at[1].set(30))
+    out = assert_matches_reference(tables, shielded, acts, hit)
+    assert int(out.torment[1]) == 1
+    already = s._replace(torment=s.torment.at[1].set(1))
+    assert int(assert_matches_reference(tables, already, acts, hit).torment[1]) == 1
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    assert int(assert_matches_reference(tables, s, acts, miss).torment[1]) == 0
+
+
+def test_torment_blocks_only_the_move_used_last(tables, names):
+    """CHECK_INVALID_TORMENTED (battle_lib.c:2275-2279): the slot holding ``movePrevByBattler``;
+    ``last_move`` 0 (a move that did not succeed) blocks nothing; a lone known move that is blocked
+    leaves no legal slot (Struggle, bcp.c:433). The reference mask agrees (E3-2-1)."""
+    s = _fight(tables, names, ("Tackle",), ("Tackle", "Rock Throw"))
+    tormented = s._replace(
+        torment=s.torment.at[1].set(1), last_move=s.last_move.at[1].set(names.move("Tackle"))
+    )
+    got = _legal(tables, tormented)
+    assert got == [False, True, False, False]
+    ref = ref_usable(to_numpy(tables), to_ref(tormented), 1)
+    assert [bool(x) for x in ref] == got
+    fresh = tormented._replace(last_move=tormented.last_move.at[1].set(0))
+    assert _legal(tables, fresh) == [True, True, False, False]
+    clean = tormented._replace(torment=tormented.torment.at[1].set(0))
+    assert _legal(tables, clean) == [True, True, False, False]
+    lone = _fight(tables, names, ("Tackle",), ("Tackle",))
+    lone = lone._replace(
+        torment=lone.torment.at[1].set(1), last_move=lone.last_move.at[1].set(names.move("Tackle"))
+    )
+    assert not any(_legal(tables, lone))
+
+
+def test_torment_is_read_at_selection_only_and_leaves_with_the_battler(tables, names):
+    """No execution check (bcp.c:2543-2560 has Disable and Taunt states only): a move chosen
+    before the Torment still runs. A switch clears the bit with the volatiles (lib.c:2071; Baton
+    Pass keeps ``VOLATILE_CONDITION_BATON_PASSED`` only, :2075, condition.h:72-76)."""
+    s = _fight(tables, names, ("Tackle",), ("Tackle",))
+    tormented = s._replace(
+        torment=s.torment.at[1].set(1), last_move=s.last_move.at[1].set(names.move("Tackle"))
+    )
+    acts = A("Tackle", "Tackle", tormented, names)  # the tormented foe's raw action 0: Tackle
+    out = assert_matches_reference(tables, tormented, acts, empty_outcome())
+    assert int(out.hp[0, 0]) < int(tormented.hp[0, 0])
+    assert "torment" in VOLATILE_FIELDS and "torment" not in BATON_PASSED_FIELDS
+    two = make_state(
+        tables,
+        [_spec(names, "Monferno", 20, ("Tackle",))],
+        [_spec(names, "Geodude", 40, ("Tackle",)), _spec(names, "Geodude", 40, ("Scratch",))],
+    )
+    two = two._replace(torment=two.torment.at[1].set(1))
+    switch = jnp.array([names.move_slot(two, 0, "Tackle"), 4 + 1], jnp.int32)
+    out = assert_matches_reference(tables, two, switch, empty_outcome())
+    assert int(out.torment[1]) == 0

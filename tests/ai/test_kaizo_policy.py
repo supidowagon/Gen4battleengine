@@ -4864,3 +4864,17 @@ def test_label_less_moves_score_through_the_damage_path_only(
     s = _state(t, kaizo_roark_party, BONSLY, _ids(n, move, "Accelerock", "", ""))
     assert _delta(t, s, 0x3, 0x7)[0] == 0
     assert bool(c.is_damaging(t, n.move(move)))
+
+
+# --- E3 batch 1 round 2: Torment, Worry Seed, Me First, Trick Room (E3-2-1 .. E3-2-4) ---------
+
+
+def test_torment_basic(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """Basic_CheckTorment (script.s:874-877): the player already tormented, -10, else nothing; no
+    Expert entry (E3-2-1)."""
+    t, n = kaizo_tables, kaizo_names
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Torment", "Accelerock", "", ""))
+    assert _delta(t, s, 0x2, 0x3)[0] == 0
+    tormented = s._replace(torment=s.torment.at[0].set(1))
+    assert _delta(t, tormented, 0x2, 0x3)[0] == -10
+    assert _delta(t, tormented, 0x3, 0x7)[0] == 0

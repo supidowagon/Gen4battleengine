@@ -173,7 +173,9 @@ Each is open; close it with its ruling.
 
 1. Kaizo Magic Coat on Disable (E3-1-3): Disable carries CAN_MAGIC_COAT in Kaizo
    (data/intermediate_kaizo/moves.json). Magic Coat is unmodelled engine-wide (batch 2), so a
-   Disable aimed at a Magic Coat user is not reflected today. Model it with Magic Coat.
+   Disable aimed at a Magic Coat user is not reflected today. Model it with Magic Coat. Torment
+   (E3-2-1) and Worry Seed (E3-2-2) carry CAN_MAGIC_COAT as well (Torment in Kaizo only, Worry
+   Seed in both games).
 2. Mirror Move's AI table reads the player's last move by id (script.s:1959, MOVE_THIEF) and
    Me First's `sCannotMeFirstMoves` compares by effect (lib.c:7233-7251), so in Kaizo every
    effect-85 move is uncopyable (sheet e241): both belong to their own groups (Mirror Move
@@ -231,3 +233,24 @@ Each is open; close it with its ruling.
   `coverage.IMPLEMENTED_EFFECTS` covers every EffectId, so the two new ids are supported with no
   list edit; `tests/ai/test_kaizo_policy.py` `test_batch13_exact_equals_loose` sweeps
   Disable, Hammer Arm, Thief and Mist Ball against the loose oracle.
+- E3-2-1 Torment (#165): new `EffectId.TORMENT` (effect 165) and the per-battler `[B]` field
+  `torment` (int8; statusVolatile bit VOLATILE_CONDITION_TORMENT, condition.h:63; STATE.md;
+  `state.VOLATILE_FIELDS`, so a switch or faint clears it and Baton Pass drops it:
+  battle_lib.c:2071, :2075, condition.h:72-76). `effects._torment`: effect_script_0165.s:5 runs
+  subscript_torment_start.s, which fails on a target that has the bit (:5) and on MISSED |
+  SEMI_INVULNERABLE (:6, `h.effective`); it has no Substitute and no ability test (goes through a
+  Substitute) and no count (nothing ends it while the target stays). The block is selection-time
+  only: CHECK_INVALID_TORMENTED (battle_lib.c:2275-2279) flags the slot holding
+  `movePrevByBattler` (`last_move`: 0 after a move that did not succeed, Struggle's id in no
+  slot, so nothing is blocked then). It is read by the player's menu (:2331-2335), the AI's
+  `CHECK_INVALID_ALL` (ai.c:234-237), the Struggle test (bcp.c:433) and Sleep Talk's slot list
+  (:4927): `actions.usable_moves` and `order.sleep_talk_slots` (reference `_usable`,
+  `_invoked_move`). There is no execution-time check (bcp.c:2543-2560), so a move chosen before
+  the Torment still runs. A lone blocked move leaves no usable slot (Struggle). Classified
+  INPUT_NEUTRAL and NON_TABLE_DAMAGE; `_NO_ACC_EVA_WRITE`; the observation adds `torment` to the
+  non-zero side fields. AI: `commands.BattleEffect.TORMENT`, `VolatileCondition.TORMENT` (1 << 31,
+  read from `torment`), `policy._basic_check_torment` (Basic :229 -> script.s:874-877: the player
+  already tormented, -10); no Expert entry; 165 joins `KAIZO_TRANSCRIBED` (its SetupFirstTurn
+  :6480 and Harrassment :8055 table entries, and the Encore table :3247, were already in
+  `commands`). Kaizo's CAN_MAGIC_COAT flag on Torment: Owed 1. Tests: tests/engine/test_e3_batch1.py,
+  tests/ai/test_kaizo_policy.py `test_torment_basic`.

@@ -211,6 +211,8 @@ _NONZERO_SIDE = (
     # E2 batch 13: "{0} can't use items anymore!" (subscript_embargo_start.s:16) until "{0} can
     # use items again!" (subscript_embargo_end.s:6); the count is hidden (B13-31).
     "embargo",
+    # E3 batch 1: "{0} was subjected to torment!" (subscript_torment_start.s) until it leaves.
+    "torment",
 )
 _NONZERO_FIELD = ("trick_room", "gravity")
 

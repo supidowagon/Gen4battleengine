@@ -522,6 +522,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     # write no stage: a used move's last_move and PP only.
     EffectId.DO_NOTHING,
     EffectId.FLEE,
+    EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
 # hit_thresholds (B12-31): Haze zeroes every stage (BtlCmd_ResetAllStatChanges,

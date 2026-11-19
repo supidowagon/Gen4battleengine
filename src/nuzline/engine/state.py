@@ -297,6 +297,7 @@ class BattleState(NamedTuple):
     leech_seed: jnp.ndarray  # int8
     substitute_hp: jnp.ndarray  # int16
     taunt: jnp.ndarray  # int8, turns left
+    torment: jnp.ndarray  # int8, VOLATILE_CONDITION_TORMENT (bit 31; no turn count), E3-2-1
     trapped: jnp.ndarray  # int8, turns left
     trap_move: jnp.ndarray  # int16
     flinched: jnp.ndarray  # int8
@@ -539,6 +540,7 @@ VOLATILE_FIELDS = (
     "leech_seed",
     "substitute_hp",
     "taunt",
+    "torment",
     "trapped",
     "trap_move",
     "flinched",
@@ -659,6 +661,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "leech_seed": (_BATTLER, np.int8),
     "substitute_hp": (_BATTLER, np.int16),
     "taunt": (_BATTLER, np.int8),
+    "torment": (_BATTLER, np.int8),
     "trapped": (_BATTLER, np.int8),
     "trap_move": (_BATTLER, np.int16),
     "flinched": (_BATTLER, np.int8),

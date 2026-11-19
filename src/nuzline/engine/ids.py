@@ -505,6 +505,10 @@ class EffectId(IntEnum):
     # trainer battle MOVE_STATUS_FAILED (``step._use_move``, E3-1-4); the wild-only flee is not
     # modelled (every Nuzline battle is a trainer battle).
     FLEE = 123
+    # E3 batch 1 round 2. Torment (165, BATTLE_EFFECT_TORMENT): zeros. effect_script_0165.s:5 runs
+    # subscript_torment_start.s: VOLATILE_CONDITION_TORMENT on the defender, through a Substitute,
+    # unless it has the bit already or the move missed (``effects._torment``, E3-2-1).
+    TORMENT = 124
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

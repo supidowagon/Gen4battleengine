@@ -68,6 +68,7 @@ class RefBattler:
     leech_seed: int
     substitute_hp: int
     taunt: int
+    torment: int  # VOLATILE_CONDITION_TORMENT (E3-2-1)
     trapped: int
     trap_move: int
     flinched: int

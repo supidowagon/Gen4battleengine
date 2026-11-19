@@ -78,8 +78,11 @@ three structs has a row.
   `curse` (below), Focus Energy -> `focus_energy` (E2 batch 12, B12-4: per battler, set by
   subscript_focus_energy.s:6, ORed in by Psych Up, battle_script.c:6050, cleared by Haze, :3544,
   and with the volatiles; Baton Pass keeps it, condition.h:72). The other bits (Thrash,
-  Transform, Rage, Substitute flag, Nightmare, Torment) are later (M6); the Substitute flag is
-  implied by `substitute_hp > 0`.
+  Transform, Rage, Substitute flag, Nightmare) are later (M6); the Substitute flag is
+  implied by `substitute_hp > 0`. Torment -> `torment` (E3 batch 1, E3-2-1: per battler `[B]`,
+  `VOLATILE_CONDITION_TORMENT` bit 31, set by subscript_torment_start.s:8 with no count, cleared
+  with the volatiles; Baton Pass drops it, condition.h:72-76, battle_lib.c:2075; it only blocks
+  the slot holding `last_move` at the next move selection, `actions.usable_moves`).
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
@@ -455,7 +458,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `transformed` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |

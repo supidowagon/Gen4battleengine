@@ -855,6 +855,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # changes an input of the side's hit (E3-1-1, E3-1-4).
     _E.DO_NOTHING,
     _E.FLEE,
+    # E3-2-1: Torment sets a bit read only at the target's next move selection
+    # (CHECK_INVALID_TORMENTED, battle_lib.c:2275-2279); no hit of this turn reads it.
+    _E.TORMENT,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1342,6 +1345,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.TRANSFORM,
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
+    _E.TORMENT,  # a status move: no damage (E3-2-1)
 )
 
 

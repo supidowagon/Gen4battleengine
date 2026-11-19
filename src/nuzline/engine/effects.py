@@ -1648,6 +1648,20 @@ def _taunt(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "taunt", h.target_side, outcome.duration[h.side], cond)
 
 
+def _torment(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Torment (effect_script_0165.s:5 ON_HIT; ``subscript_torment_start.s``): fails on a miss or a
+    semi-invulnerable target (:6, ``h.effective``) and on a target that has the bit (:5); no
+    Substitute test and no ability test, so it goes through a Substitute. No count: the bit stays
+    until the battler leaves (E3-2-1)."""
+    cond = (
+        (h.effect == _E.TORMENT)
+        & h.effective
+        & _alive(state, h.target_side, h.target)
+        & (state.torment[h.target_side] == 0)
+    )
+    return _set(state, "torment", h.target_side, 1, cond)
+
+
 def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Disable (``BtlCmd_TryDisable``, battle_script.c:4581; the script skips it when the
     move missed): the target's last move must sit in one of its slots with PP left, and
@@ -3395,6 +3409,7 @@ def play_hit(
         _stealth_rock,
         _trap,
         _taunt,
+        _torment,
         _disable,
         _confuse_foe,
         _secondary_confuse,

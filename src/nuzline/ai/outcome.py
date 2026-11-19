@@ -694,6 +694,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         86,  # DISABLE: Basic_CheckCannotDisable (:184); Expert_Disable (:1687), :3089 (E3-1-3)
         153,  # FLEE_FROM_WILD_BATTLE (Teleport): Basic :221 ScoreMinus10 (E3-1-4)
         218,  # SPEED_DOWN_HIT (Hammer Arm): Expert_HammerArm (:1762), no roll (E3-1-5)
+        # E3 batch 1 round 2.
+        165,  # TORMENT: Basic_CheckTorment (:229); no Expert entry; tables :6480, :8055 (E3-2-1)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

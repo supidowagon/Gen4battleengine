@@ -544,6 +544,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     85: ("BATTLE_EFFECT_DO_NOTHING", _E.DO_NOTHING, (0, 0, 0)),
     # Teleport: effect_script_0153.s:5, :9-10, MOVE_STATUS_FAILED in a trainer battle (E3-1-4).
     153: ("BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE", _E.FLEE, (0, 0, 0)),
+    # Torment: effect_script_0165.s:5 -> subscript_torment_start.s (E3-2-1).
+    165: ("BATTLE_EFFECT_TORMENT", _E.TORMENT, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

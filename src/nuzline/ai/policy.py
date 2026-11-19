@@ -880,6 +880,13 @@ def _basic_check_cannot_disable(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -8))
 
 
+def _basic_check_torment(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckTorment`` (script.s:874-877): the player already tormented, -10 (E3-2-1)."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.TORMENT))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
     """``IfCurrentMoveEffectEqualTo BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE, ScoreMinus10``
     (script.s:221): Teleport, -10 with no further test (E3-1-4)."""
@@ -3507,6 +3514,7 @@ _BASIC_LABELS = (
     (BattleEffect.FLEE_FROM_WILD_BATTLE, _basic_score_minus_10),  # :221 (E3-1-4)
     (BattleEffect.ALWAYS_FLINCH_FIRST_TURN_ONLY, _basic_check_first_turn),  # :224
     (BattleEffect.WEATHER_HAIL, _basic_check_hail),  # :228
+    (BattleEffect.TORMENT, _basic_check_torment),  # :229 (E3-2-1)
     (BattleEffect.SP_ATK_UP_CAUSE_CONFUSION, _basic_check_cannot_confuse),  # :230 (B12-11)
     (BattleEffect.STATUS_BURN, _basic_check_cannot_burn),  # :231
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _basic_check_non_standard_damage),  # :233

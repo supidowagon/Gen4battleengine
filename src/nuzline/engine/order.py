@@ -201,7 +201,8 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     it does not know is cleared there and restricts nothing) and a move a foe's Imprison seals
     (``actions.move_imprisoned``, CHECK_INVALID_IMPRISONED, battle_lib.c:2287-2290; ruling
     B7-13) and, under Encore, every move but the encored one (battle_lib.c:2302-2304, B10-9).
-    Torment and Heal Block come from unsupported moves; Gravity (``Move_FailsInHighGravity``,
+    Torment (CHECK_INVALID_TORMENTED, :2275-2279: the slot holding ``last_move``, E3-2-1) and Heal Block
+    come from unsupported moves; Gravity (``Move_FailsInHighGravity``,
     ``gravity_banned``, CHECK_INVALID_GRAVITY, :2292-2295: the opMask ``~CHECK_INVALID_NO_PP``
     keeps it) is read here (G-67)."""
     fmt = format_of(state)
@@ -210,6 +211,7 @@ def sleep_talk_slots(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     ok = (moves > 0) & ((tables.move_flags[moves] & MoveFlag.NO_SLEEP_TALK) == 0)
     ok = ok & (moves != state.disabled_move[side])
     ok = ok & ~((state.taunt[side] > 0) & (tables.move_power[moves] == 0))
+    ok = ok & ~((state.torment[side] > 0) & (moves == state.last_move[side]))  # :2275, E3-2-1
     ok = ok & ~move_imprisoned(state, side, moves)
     ok = ok & ~gravity_banned(state, moves)
     encore = state.encore_move[side].astype(_I32)
