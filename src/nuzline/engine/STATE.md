@@ -462,7 +462,8 @@ three structs has a row.
   itself and Assurance reads, B13-17; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
-  read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
+  read by the second actor in `step._execute_actions`; a Feint that hits clears it,
+  subscript_feint.s:20, E3-B2-13: `step._execute_actions` zeroes the defender's `protect_ok` read), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,

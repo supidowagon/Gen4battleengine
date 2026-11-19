@@ -276,6 +276,10 @@ SITE_N: dict[int, int] = {
     2836: 128,  # Expert_HighCritical (neutral: on to TryScorePlus1 when it does NOT jump)
     2839: 128,  # Expert_HighCritical_TryScorePlus1 (+1 when it does NOT jump)
     4882: 128,  # Expert_Brine (+1 more when it does NOT jump)
+    4912: 64,  # Expert_Feint (to _CheckConditions when it jumps, else the end), E3-B2-13
+    4927: 128,  # Expert_Feint_TryScorePlus1 (+1 when it does NOT jump)
+    4937: 128,  # Expert_Feint_NoProtectChain (to _End when it jumps, else +1)
+    4942: 192,  # Expert_Feint_ProtectChain1 (to _End when it jumps, else +1)
     # E1 batch 9.
     3346: 128,  # Expert_DestinyBond (+1 when it does NOT jump)
     3351: 128,  # Expert_DestinyBond_CheckUserMediumHP (+1 when it does NOT jump)
@@ -744,6 +748,8 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # Expert_MiracleEye (:1760), :4820, :4823 (E3-B2-10)
         246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES (Last Resort): Basic_CheckLastResort (:275);
         # Expert_LastResort (:1789), no roll (E3-B2-11)
+        223,  # REMOVE_PROTECT (Feint): no Basic entry; Expert_Feint (:1766), :4912, :4927, :4937,
+        # :4942 (E3-B2-13)
         233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
         # (E3-B2-1)
         9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
@@ -907,6 +913,7 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     240: ("Expert_LuckyChant", 1783),
     216: ("Expert_MiracleEye", 1760),
     246: ("Expert_LastResort", 1789),
+    223: ("Expert_Feint", 1766),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -1049,6 +1056,7 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         240,  # PREVENT_CRITS: Expert_LuckyChant (E3-B2-7)
         216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE: Expert_MiracleEye (E3-B2-10)
         246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES: Expert_LastResort (E3-B2-11)
+        223,  # REMOVE_PROTECT: Expert_Feint (E3-B2-13)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED

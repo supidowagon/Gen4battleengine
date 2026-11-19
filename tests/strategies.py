@@ -1669,6 +1669,19 @@ def _draw_miracle_eye(draw, tables: Tables, a: dict, side: int, active: int, nam
     a["miracle_eye"][side] = int(draw(st.integers(0, 5)) == 0)
 
 
+def _draw_feint(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
+    """E3-B2-13: maybe (1 in 6) Feint taught to the active Pokemon (``_teach``) and, one time in
+    three more, a Protect or Detect beside it, so the foe's Protect and Feint meet in a turn."""
+    if draw(st.integers(0, 5)) == 0:
+        move = names.move("Feint")
+        if tables.move_effect[move] != EffectId.UNSUPPORTED:
+            slot = _teach(tables, a, side, active, move, draw(st.integers(0, 3)))
+            a["taunt"][side] = 0
+            if draw(st.integers(0, 2)) == 0:
+                other = (slot + 1 + draw(st.integers(0, 2))) % 4
+                _teach(tables, a, side, active, names.move("Protect"), other)
+
+
 def _draw_last_resort(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
     """E3-B2-11: maybe (1 in 6) Last Resort taught to the active Pokemon (``_teach``), and maybe
     (1 in 3) a use history under way: up to 4 distinct ids it knows (or Struggle's), never Last
@@ -2129,6 +2142,7 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
         _draw_batch12(draw, tables, a, side, active, names)
         _draw_miracle_eye(draw, tables, a, side, active, names)
         _draw_last_resort(draw, tables, a, side, active, names)
+        _draw_feint(draw, tables, a, side, active, names)
         _draw_mimic(draw, a, side, active)
         _draw_transform(draw, a, side, active)
         _draw_substitute(draw, tables, a, side, active, names)
@@ -2324,6 +2338,7 @@ def legal_action_pair(draw, tables: Tables, state: BattleState) -> jnp.ndarray:
 
 # The batch 10-11 move effects ``legal_action_pair`` uses one draw in two when known.
 RARE_EFFECTS = (
+    EffectId.FEINT,  # E3-B2-13
     EffectId.LAST_RESORT,  # E3-B2-11
     EffectId.MIRACLE_EYE,  # E3-B2-10
     EffectId.ENCORE,

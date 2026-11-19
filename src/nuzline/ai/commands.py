@@ -476,6 +476,8 @@ class BattleEffect(IntEnum):
     IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
     # Last Resort: Basic_CheckLastResort (:275); Expert_LastResort (:1789), E3-B2-11
     FAIL_IF_NOT_USED_ALL_OTHER_MOVES = 246
+    # Feint: no Basic entry; Expert_Feint (:1766), E3-B2-13
+    REMOVE_PROTECT = 223
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -1046,6 +1048,11 @@ FLING_ITEMS_POISON = (100, 80)
 FLING_ITEMS_BURN = (101,)
 FLING_ITEMS_PARALYZE = (71,)
 FLING_DESIRABLE_EFFECTS = (56, 80, 100, 101, 71)
+# Expert_Feint_GradualRecoveryItems (script.s:4952-4955): HOLD_EFFECT_HP_RESTORE_GRADUAL (Leftovers)
+# and HOLD_EFFECT_HP_RESTORE_PSN_TYPE (Black Sludge), compared with ``LoadHeldItemEffect``
+# (generated/item_hold_effects.txt, line N is id N-1); checked against the decomp's names by
+# tests/ai/test_kaizo_policy.py (E3-B2-13).
+FEINT_GRADUAL_RECOVERY_EFFECTS = (69, 109)
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {

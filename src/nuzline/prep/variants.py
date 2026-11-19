@@ -113,6 +113,9 @@ AI_EFFECT_DEFENDER_HP_CHECKS: dict[int, tuple[tuple[str, int], ...]] = {
     # E1 trial batch: EVA_UP (16, Double Team) shares Expert_StatusEvasionUp (:2247).
     16: (("less", 40),),
     188: (("less", 30),),
+    # E3-B2-13: Expert_Feint (REMOVE_PROTECT, 223) tests the player at full HP (script.s:4922,
+    # IfHPPercentEqualTo 100): the band hp * 100 // max_hp == 100 is hp == max_hp (hp_cuts).
+    223: (("equal", 100),),
     # E2 batch 12 (B12-18): Expert_Refresh (HEAL_STATUS, 193) tests the player below 50 %
     # (script.s:4646), Expert_PsychoShift (TRANSFER_STATUS, 234) below 30 % (:5302).
     193: (("less", 50),),
@@ -396,7 +399,14 @@ def hp_cuts(
     saves a holder at full HP, bcp.c:3391). Unsorted, may repeat."""
     cuts = []
     for kind, percent in ai_defender_hp_checks(tables):
-        cuts.append(percent_cut(kind, percent, max_hp))
+        if kind in ("equal", "not_equal"):
+            # HP % == percent (trainer_ai.c:640-646) is the band whose edges are the highest HP
+            # below it (as "less" turned on) and its own top (as "greater" kept off); the top is
+            # max_hp or more for percent 100, which the filter below drops (E3-B2-13).
+            cuts.append(percent_cut("less", percent, max_hp))
+            cuts.append(percent_cut("greater", percent, max_hp))
+        else:
+            cuts.append(percent_cut(kind, percent, max_hp))
     cuts.extend(d for d in kill_damage if 1 <= d < max_hp)
     row = personal_row(tables, spec.species, spec.ability_from)
     ability = int(np.asarray(tables.species_abilities)[row, spec.ability_slot])

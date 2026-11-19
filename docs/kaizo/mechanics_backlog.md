@@ -161,25 +161,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 34 | 22 | 22 |
-| Gardenia Split | 28 | 410 (65) | 34 | 22 | 0 |
-| Fantina Split | 38 | 463 (69) | 34 | 22 | 0 |
-| Maylene Split | 47 | 480 (73) | 35 | 22 | 0 |
-| Wake Split | 54 | 482 (71) | 35 | 22 | 0 |
-| Byron Split | 65 | 486 (72) | 35 | 22 | 0 |
-| Candice Split | 74 | 486 (72) | 35 | 22 | 0 |
-| Galactic Split | 100 | 493 (73) | 35 | 22 | 0 |
-| Volkner Split | 84 | 487 (73) | 35 | 22 | 0 |
-| Elite Four Split | 100 | 493 (73) | 35 | 22 | 0 |
-| **Whole game** | | | 35 | 22 | 22 |
+| Roark Split | 16 | 358 (64) | 33 | 21 | 21 |
+| Gardenia Split | 28 | 410 (65) | 33 | 21 | 0 |
+| Fantina Split | 38 | 463 (69) | 33 | 21 | 0 |
+| Maylene Split | 47 | 480 (73) | 34 | 21 | 0 |
+| Wake Split | 54 | 482 (71) | 34 | 21 | 0 |
+| Byron Split | 65 | 486 (72) | 34 | 21 | 0 |
+| Candice Split | 74 | 486 (72) | 34 | 21 | 0 |
+| Galactic Split | 100 | 493 (73) | 34 | 21 | 0 |
+| Volkner Split | 84 | 487 (73) | 34 | 21 | 0 |
+| Elite Four Split | 100 | 493 (73) | 34 | 21 | 0 |
+| **Whole game** | | | 34 | 21 | 21 |
 
-Of your 35 groups, 13 are also needed by opposing trainers and 22 are player-only.
+Of your 34 groups, 13 are also needed by opposing trainers and 21 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 4 | 3 | 9 | 6 | 0 | 0 | 22 |
+| Roark Split | 0 | 4 | 2 | 9 | 6 | 0 | 0 | 21 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -189,7 +189,7 @@ Of your 35 groups, 13 are also needed by opposing trainers and 22 are player-onl
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **4** | **3** | **9** | **6** | **0** | **0** | **22** |
+| **Whole game** | **0** | **4** | **2** | **9** | **6** | **0** | **0** | **21** |
 
 ### Player-only groups
 
@@ -199,7 +199,6 @@ Of your 35 groups, 13 are also needed by opposing trainers and 22 are player-onl
 | AI move effects | AI reads your ability: AI scoring: ability Solid Rock changes IfMoveEffectivenessEquals and is not implemented: Solid Rock | Roark Split |
 | AI move effects | AI reads your ability: AI switching: ability Levitate (LEVITATED / INEFFECTIVE in ApplyTypeChart and CalcEffectiveness) is not implemented: Levitate | Roark Split |
 | AI move effects | AI reads your ability: AI switching: ability Scrappy (skips the Ghost immunities) is not implemented: Scrappy | Roark Split |
-| move effects | move effect #223: Feint | Roark Split |
 | move effects | move effect #258: Defog | Roark Split |
 | move effects | move effect #95: Sketch | Roark Split |
 | held items | held item effect #102: Quick Powder | Roark Split |

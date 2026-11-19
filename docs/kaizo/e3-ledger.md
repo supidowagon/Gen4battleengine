@@ -1088,3 +1088,75 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/ai/test_kaizo_policy.py (`test_last_resort_tables_are_the_decomps`, `test_if_can_use_last_resort_is_the_
   mechanics_test`, `test_last_resort_basic`, `test_expert_last_resort`, `test_last_resort_is_scored_not_refused_and_
   exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
+- E3-B2-13 Feint (#223, BATTLE_EFFECT_REMOVE_PROTECT; move 364, the only move with effect 223 in either game, Normal
+  physical, acc 100, PP 10, priority +2, vanilla 50 BP and Kaizo 80 BP, flags none: no CAN_PROTECT, CONTACT or
+  KINGS_ROCK; no Kaizo trainer knows it; player-only; Metronome cannot call it, lib.c:7175): new `EffectId.FEINT` (140,
+  `tools/effect_map.py` entry 223). No new `BattleState` field, no `Outcome` field, no draw beyond the plain hit's crit
+  and roll. Tables: `move_effect` of Feint only; no manifest bump (no array or key changed); vanilla and Kaizo tables
+  rebuilt.
+  Script (effect_script_0223.s): :5 `TryFeint _008` (fail to :11-13, MOVE_STATUS_FAILED), :6 an indirect
+  `ON_HIT | SUBSCRIPT_PTR_FEINT`, :7-8 CalcCrit, CalcDamage. `BtlCmd_TryFeint` (bs.c:7518-7528) fails the move unless
+  the defender's `turnFlags.protecting` is set. `step._use_move` fails it with the other script failures
+  (`failed |= FEINT & ~foe_protecting`, the Fake Out place: the accuracy roll is still drawn, no crit or roll;
+  reference `_fight`'s `feint_fails`); `foe_protecting` is the argument the Protect block already had
+  (`read["protect_ok"][foe]`). Feint has no CAN_PROTECT, so `CheckMoveHitOverrides` (bcp.c:3007-3014) never blocks
+  it, and a semi-invulnerable foe is missed as usual (bcp.c:3034-3040).
+  The clear: subscript_feint.s:20 `SetTurnFlag DEFENDER PROTECTING 0` runs as the secondary ON_HIT effect, i.e. unless
+  `MOVE_STATUS_NO_EFFECTS` (`BattleSystem_TriggerSecondaryEffect`, lib.c:1524-1529): a hit that was not a miss, not
+  ineffective (a Ghost foe, Wonder Guard) and not failed. Shadow Force's attack turn runs the same subscript
+  (effect_script_0272.s:21, before its CalcCrit and CalcDamage, also on the Power Herb path), so it clears the flag
+  too (`step._feint_clears`: effect FEINT or the `MoveFlag.SEMI_SHADOW` charge flag; reference `_move_effect`). In `step`
+  the hit loop's new carry `unprotect` is `landed & info.effective & _feint_clears` (`effective` is
+  `MoveHit.effective`: damage > 0, a Substitute hit counts), returned as `ctl["unprotect"]`; `_execute_actions` zeroes the target's
+  `protect_ok` read (`read["protect_ok"][foe]`, a merge cannot write a 0) while the shown event stays; the reference
+  does `turn.protecting[target] = False` in `_move_effect`. The flag is what the end of the turn's Future Sight check
+  (`_future_sight`'s `protecting`) and a battler acting later read; in singles the Feint user is always the later
+  actor (+2 under Protect's +3), so no later reader exists but the end of the turn, and both Future Sight and Doom
+  Desire have no CAN_PROTECT flag (res/moves/*/data.json): the clear is unobservable in singles play. It is
+  modelled whole, because doubles has later readers (the partner of the Feint user hitting the same target).
+  `test_a_feint_hit_clears_protecting_for_the_rest_of_the_turn` makes it observable with a stored Tackle.
+  Success needs `turnFlags.protecting`, which only a Protect or Detect that passed its chain roll and acted first
+  sets (bs.c:5174-5177): a failed Protect, Endure (`turnFlags.enduring`, a different flag) and no Protect all fail
+  Feint. Sleep Talk (priority 0) calling Feint reads the same flag (`used` is the called move).
+  Enumeration: `enumerate.INPUT_NEUTRAL_EFFECTS` and `TABLE_DAMAGE_EFFECTS` (a plain hit that can fail, like Last
+  Resort; the foe's Protect roll is already an enumerated read, `protect[s]`, and a Feint's own reads stay
+  over-approximated, which the relevance masks allow: Feint's crit, roll and hit are read in rows where the Protect
+  failed and Feint fails, merged after `step`); `test_accuracy_classes._NO_ACC_EVA_WRITE`; `tests/strategies.py` draws
+  the move beside a Protect (`_draw_feint`, `RARE_EFFECTS`). No observation entry (the failure is the ordinary "But it
+  failed!").
+  AI: no Basic entry. Expert_Feint (script.s:4892-4950, entry :1766; `policy._expert_feint`): a player knowing a
+  Protect-effect move (`IfMoveEffectKnown`) goes on, else the 64 roll (:4912) jumping goes on, else it ends; the AI
+  badly poisoned, cursed, perishing, infatuated, seeded or drowsy goes to the +1 block (+1 unless the 128 roll :4927
+  jumps); else a player at full HP or holding an item (as the AI knows it, `ai_item_known`) whose hold effect is not
+  Leftovers' or Black Sludge's goes to the chain, and a wounded holder of either falls into the +1 block; the chain of
+  the player (`LoadProtectChain DEFENDER`): 0 and, by the fall-through, exactly 2: +1 unless the 128 roll (:4937)
+  jumps; 1: +1 unless the 192 roll (:4942) jumps; above 2: -2. New `commands.BattleEffect.REMOVE_PROTECT`,
+  `commands.FEINT_GRADUAL_RECOVERY_EFFECTS` (69, 109: hold effects, line - 1 of generated/item_hold_effects.txt,
+  checked by name in `test_feint_tables_are_the_decomps`; the other reads of 223, the Encore table :3269 and
+  Expert_Protect's `IfMoveKnown MOVE_FEINT` :3536, were transcribed before); four `SITE_N` entries; 223 joins `KAIZO_TRANSCRIBED`,
+  `KAIZO_EXPERT_LABELS` (`("Expert_Feint", 1766)`), `KAIZO_EXPERT_TRANSCRIBED`. Read bounds regenerated (223: 3
+  reads on the Expert path; four rows and four drawn rows); backlog regenerated: the row "move effect #223: Feint"
+  (Roark Split, player-only) closes, 22 to 21 groups.
+  Prep: Expert_Feint reads the player's HP percent with `IfHPPercentEqualTo 100` (:4922), the first equal check the
+  prep regions meet (tests/prep/test_variants.py's pins ask for it): `variants.AI_EFFECT_DEFENDER_HP_CHECKS[223] =
+  (("equal", 100),)` and `variants.hp_cuts` cuts an equal or not-equal check at both edges of its band (the highest HP
+  below it, as a "less" check, and its own top, as a "greater" check): for 100 % the region top max_hp - 1
+  (`test_feint_adds_the_full_hp_band_to_the_prep_cuts`).
+  Rulings. (1) The sheet's section 7 "missing entirely" is closed by the effect id, the gate input that already
+  existed (`foe_protecting`) and the new clear. (2) The comment of Expert_Feint says "otherwise 50 % chance"; the code
+  is transcribed, not the comment: a chain of exactly 2 falls into `_NoProtectChain` (the first `IfLoaded` tests are
+  0, 1 and "greater than 2"), and the "+1 for a wounded Leftovers holder" is the fall-through of
+  `IfLoadedNotInTable` into `_TryScorePlus1`. (3) The ON_HIT clear is tied to `effective` (damage > 0), not to
+  `landed`: a Ghost target (Normal 0x) is MOVE_STATUS_INEFFECTIVE, a NO_EFFECTS status, and keeps its flag. (4)
+  Doubles (docs/doubles-state-design.md section 5): the flag is a fact about the named target, read and cleared per
+  battler (`read["protect_ok"][foe]`, the argument `foe_protecting`); nothing computes "the other side" inside the
+  mechanic beyond `_execute_actions`' existing `_foe(actor)`, which the doubles milestone replaces with the chosen
+  defender, and the clear then reaches the partner that moves later.
+  Not built: Owed lines naming Feint: none. Nothing owed: Shadow Force's clear, which the E2 batch 10 entry left out
+  as unobservable in singles, is built here with Feint's (above). Not modelled, message only: "{0} fell for the
+  feint!" / "It broke through {0}'s protection!" (subscript_feint.s:5-17).
+  Tests: tests/engine/test_e3_batch2.py (`test_feint_*`, `test_a_feint_*`, `test_a_called_feint_reads_the_same_flag`,
+  each stepped through both engines; `test_shadow_force_clears_protecting_with_its_attack_turn`;
+  `test_feint_enumeration_matches_the_brute_force` is slow), tests/ai/test_kaizo_policy.py
+  (`test_feint_tables_are_the_decomps`, `test_expert_feint`, `test_feint_is_scored_not_refused`, the slow
+  `test_feint_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).

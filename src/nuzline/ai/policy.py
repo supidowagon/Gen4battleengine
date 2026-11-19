@@ -2128,6 +2128,54 @@ def _expert_last_resort(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))  # _ScorePlus1 (:5967)
 
 
+def _expert_feint(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Feint`` (script.s:4892-4950, the code, not its comment): a player knowing a
+    Protect-effect move goes on, else the 64 roll (:4912) jumping goes on, else it ends. The AI
+    badly poisoned, cursed, perishing, infatuated, seeded or drowsy goes to the +1 block; else the
+    player at full HP, or holding an item whose effect is not Leftovers' or Black Sludge's
+    (``FEINT_GRADUAL_RECOVERY_EFFECTS``), goes to the Protect chain; else (a wounded holder of
+    either) the +1 block: +1 unless the 128 roll (:4927) jumps. The player's chain: 0 and the
+    exactly-2 fall-through, +1 unless the 128 roll (:4937) jumps; 1, +1 unless the 192 roll
+    (:4942) jumps; above 2, -2 (E3-B2-13)."""
+    ctx, check = _split(c.if_move_effect_known(_at(ctx, mask), _D, BattleEffect.PROTECT))
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 4912))
+    check = check | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End (:4913)
+    # Expert_Feint_CheckConditions (:4915)
+    ctx = _at(ctx, check)
+    plus1 = jnp.zeros_like(ctx.live)
+    for test in (
+        lambda x: c.if_status(x, _A, c.MonCondition.TOXIC),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.CURSE),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.PERISH_SONG),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.ATTRACT),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.LEECH_SEED),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.YAWN),
+    ):
+        ctx, t = _split(test(ctx))
+        plus1 = plus1 | t
+    ctx, chain = _split(c.if_hp_percent_equal_to(ctx, _D, 100))  # -> _CheckProtectChain
+    ctx = c.load_held_item_effect(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.FEINT_GRADUAL_RECOVERY_EFFECTS))
+    chain = chain | t
+    # Expert_Feint_TryScorePlus1 (:4926), reached by a jump or by falling through
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, plus1 | ctx.live), 128, 4927))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Feint_CheckProtectChain (:4930)
+    ctx = c.load_protect_chain(_at(ctx, chain | skip | ctx.live), _D)
+    ctx, none = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, one = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx, many = _split(c.if_loaded_greater_than(ctx, 2))
+    # Expert_Feint_NoProtectChain (:4936), which a chain of exactly 2 falls into
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, none | ctx.live), 128, 4937))  # -> _End
+    ctx, _ = _split(c.go_to(c.add_to_move_score(ctx, 1)))  # :4938-4939
+    # Expert_Feint_ProtectChain1 (:4941)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, one), 192, 4942))  # -> _End
+    ctx, _ = _split(c.go_to(c.add_to_move_score(ctx, 1)))  # :4943-4944
+    # Expert_Feint_ProtectChain2OrMore (:4946)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, many), -2))
+
+
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
     """``Expert_HammerArm`` (script.s:4849-4867): resisted (immune, quarter, half) -1; else
     slower than the player (the SLOWER compare, no tie read) +1; else nothing, E3-1-5."""
@@ -4061,6 +4109,7 @@ _EXPERT_LABELS = (
     (BattleEffect.SPEED_DOWN_HIT, _expert_hammer_arm),  # :1762 (E3-1-5)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.REMOVE_PROTECT, _expert_feint),  # :1766 (E3-B2-13)
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
     (BattleEffect.RANDOM_STAT_UP_2, _expert_acupressure),  # :1769 (B12-11)

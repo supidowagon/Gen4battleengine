@@ -3934,6 +3934,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.sides[side_of(target)].toxic_spikes += 1
     elif effect == EffectId.DESTINY_BOND and landed:
         s.battlers[side].destiny_bond = 1  # subscript_destiny_bond.s:9
+    elif (
+        effect == EffectId.FEINT or _t(tables, "move_flags", move) & MoveFlag.SEMI_SHADOW
+    ) and effective:
+        # effect_script_0223.s:6 / subscript_feint.s:20: an ON_HIT indirect effect (lib.c:1524-1529:
+        # not NO_EFFECTS) clears the defender's turnFlags.protecting; Shadow Force's attack turn
+        # runs the same subscript (effect_script_0272.s:21), E3-B2-13.
+        turn.protecting[target] = False
     elif effect == EffectId.MIRACLE_EYE and landed:
         # effect_script_0216.s / subscript_miracle_eye.s:5: an ON_HIT indirect effect on a living
         # target, no failure check and no Substitute test (E3-B2-10).
@@ -5224,7 +5231,14 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # Focus Punch (effect_script_0170.s:5-6): MOVE_STATUS_LOST_FOCUS when the user's
     # physical / specialDamageAttackerMask is set this turn (its turnFlags attackers), B10-8.
     lost_focus = effect == EffectId.FOCUS_PUNCH and bool(turn.taken[side][3] or turn.taken[side][4])
-    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)) or lost_focus:
+    # Feint (effect_script_0223.s:5, :11-13): BtlCmd_TryFeint (script.c:7518-7528) fails the move
+    # unless the defender's turnFlags.protecting is set (E3-B2-13).
+    feint_fails = effect == EffectId.FEINT and not turn.protecting[_foe(side)]
+    if (
+        _script_fails(s, side, effect, _t(tables, "move_param", move, 1))
+        or lost_focus
+        or feint_fails
+    ):
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
     # Recycle (effect_script_0184.s): fails on a held item (:5) or an empty recycleItem

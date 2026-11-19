@@ -488,8 +488,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # CalcCrit, CalcDamage (:20-22), as Thunderbolt's (6).
     263: ("BATTLE_EFFECT_BOUNCE", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
     # Shadow Force: effect_script_0272.s, an ON_HIT subscript_feint.s (:21) and CalcCrit,
-    # CalcDamage: the feint only clears the defender's turnFlags.protecting (subscript_feint.s:20),
-    # which in singles nothing reads after the defender's own action (it acted, as it protected).
+    # CalcDamage: the feint clears the defender's turnFlags.protecting (subscript_feint.s:20),
+    # which ``step._feint_clears`` models with Feint's (E3-B2-13; keyed on MoveFlag.SEMI_SHADOW);
+    # in singles nothing reads it after the defender's own action (it acted, as it protected).
     272: ("BATTLE_EFFECT_SHADOW_FORCE", _E.PLAIN, (0, 0, 0)),
     # Twister: effect_script_0146.s, Headbutt's flinch (:5) with SYSCTL_HIT_DURING_FLY and a x2
     # against MOVE_EFFECT_AIRBORNE (SEMI_HIT_EFFECTS).
@@ -581,6 +582,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     216: ("BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE", _E.MIRACLE_EYE, (0, 0, 0)),
     # Last Resort: effect_script_0246.s, BtlCmd_TryLastResort then a plain hit (E3-B2-11).
     246: ("BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES", _E.LAST_RESORT, (0, 0, 0)),
+    # Feint: effect_script_0223.s, TryFeint, an ON_HIT subscript_feint.s (the defender's
+    # turnFlags.protecting cleared) and a plain hit (E3-B2-13).
+    223: ("BATTLE_EFFECT_REMOVE_PROTECT", _E.FEINT, (0, 0, 0)),
     # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
     240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }

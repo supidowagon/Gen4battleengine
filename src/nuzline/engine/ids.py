@@ -599,6 +599,12 @@ class EffectId(IntEnum):
     # (``BattleSystem_UpdateLastResort``, battle_lib.c:3443-3459, ``step._use_move``); no random
     # draw; E3-B2-11.
     LAST_RESORT = 139
+    # Feint (223, BATTLE_EFFECT_REMOVE_PROTECT): zeros. A plain hit (effect_script_0223.s:7-8
+    # CalcCrit, CalcDamage) behind BtlCmd_TryFeint (:5, MOVE_STATUS_FAILED at :11-13 unless the
+    # defender's turnFlags.protecting is set, battle_script.c:7518-7528), whose ON_HIT subscript
+    # (:6, subscript_feint.s:20) clears that flag after a hit that is not MOVE_STATUS_NO_EFFECTS
+    # (``step`` and the reference engine, on the turn's events); no random draw; E3-B2-13.
+    FEINT = 140
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

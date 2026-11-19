@@ -799,6 +799,14 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit) -> 
     }
 
 
+def _feint_clears(tables: Tables, move) -> jnp.ndarray:
+    """``bool``: ``move``'s script runs subscript_feint.s as its ON_HIT effect: Feint
+    (effect_script_0223.s:6) and Shadow Force (effect_script_0272.s:21, the move with the
+    ``SEMI_SHADOW`` charge flag, ``MoveFlag``). E3-B2-13."""
+    shadow = (tables.move_flags[move] & MoveFlag.SEMI_SHADOW) != 0
+    return (tables.move_effect[move] == EffectId.FEINT) | shadow
+
+
 def _use_move(
     tables: Tables,
     state: BattleState,
@@ -1343,6 +1351,10 @@ def _use_move(
     # fails the move with MOVE_STATUS_FAILED unless the user has used every other move it knows
     # (``last_resort_fails``), read after the recording above (E3-B2-11).
     failed = failed | ((effect_used == EffectId.LAST_RESORT) & last_resort_fails(state, side))
+    # Feint (effect_script_0223.s:5, :11-13): BtlCmd_TryFeint (battle_script.c:7518-7528) fails the
+    # move with MOVE_STATUS_FAILED unless the defender's turnFlags.protecting is set (``foe_protecting``:
+    # its Protect or Detect succeeded earlier this turn, a fact about the named target, E3-B2-13).
+    failed = failed | ((effect_used == EffectId.FEINT) & ~jnp.asarray(foe_protecting, bool))
     # Focus Punch (effect_script_0170.s:5-6, :12-16): MOVE_STATUS_LOST_FOCUS, a DID_NOT_HIT status
     # (subscript_missed.s), when the user's physical / specialDamageAttackerMask is set: a hit on
     # its HP this turn (``foe_taken``'s attackers; a substitute hit sets none), B10-8.
@@ -2028,7 +2040,7 @@ def _use_move(
         # SYSCTL_TRY_SYNCHRONIZE_STATUS and sideEffectMon through the action's hits (cleared by
         # BattleContext_Init at the action's end, battle_lib.c:2009); ``disrupted``: a later
         # Triple Kick hit missed (MOVE_STATUS_MULTI_HIT_DISRUPTED).
-        sync_flag, sync_sem, disrupted = carry[16:]
+        sync_flag, sync_sem, disrupted, unprotect = carry[16:]
         stopped = paused | pursue
         # BattleControllerPlayer_LoopMultiHit (bcp.c:3780) stops once a battler fainted
         # (faintedMon): the target, or the attacker by Rough Skin (Selfdestruct's user is
@@ -2285,6 +2297,11 @@ def _use_move(
             sync_flag,
             sync_sem,
             disrupted | kick_miss,
+            # Feint's ON_HIT subscript (effect_script_0223.s:6, subscript_feint.s:20) runs unless
+            # MOVE_STATUS_NO_EFFECTS (battle_lib.c:1524-1529): a hit that was not ineffective clears
+            # the defender's turnFlags.protecting; Shadow Force's attack turn runs the same
+            # subscript (effect_script_0272.s:21; its charge move flag SEMI_SHADOW), E3-B2-13.
+            unprotect | (landed & info.effective & _feint_clears(tables, used)),
         )
 
     init = (
@@ -2307,6 +2324,7 @@ def _use_move(
         jnp.bool_(False),  # SYSCTL_TRY_SYNCHRONIZE_STATUS (BattleContext_Init clears it)
         jnp.asarray(target_side, _I32),  # sideEffectMon (no side effect yet)
         jnp.bool_(False),  # MOVE_STATUS_MULTI_HIT_DISRUPTED (B13-6)
+        jnp.bool_(False),  # Feint's hit cleared the defender's turnFlags.protecting (E3-B2-13)
     )
     category = tables.move_category[used]  # CURRENT_MOVE_DATA.class (moveCur)
     target_hp0 = state.hp[party(fmt, target_side), target]
@@ -2587,6 +2605,7 @@ def _use_move(
         "conv2": conv2,
         "reflect": reflect,
         "reflect_move": jnp.where(reflect, move, 0).astype(_I32),
+        "unprotect": looped[19],
     }
     return state, own, foe, ctl
 
@@ -2730,6 +2749,7 @@ def _act(
         "pursue": ctl["pursue"] & runs_move,
         "conv2": jnp.where(runs_move, ctl["conv2"], 0),
         "reflect": ctl["reflect"] & runs_move,
+        "unprotect": ctl["unprotect"] & runs_move,
         "fbase": jnp.where(resumed, _alive_mask(listed), base),
     }
     return acted, own, foe_events, ctl
@@ -3177,6 +3197,14 @@ def _execute_actions(
         ]
         read = _put(read, foe, merged[0], keep)
         shown = _put(shown, foe, merged[1], keep)
+        # Feint's hit cleared the defender's turnFlags.protecting (subscript_feint.s:20, E3-B2-13):
+        # the read flag only (what the turn showed stays), so a battler acting later this turn, and
+        # the end of the turn, meet the target unprotected; a merge cannot write the 0.
+        read["protect_ok"] = (
+            read["protect_ok"]
+            .at[foe]
+            .set(jnp.where(keep & ctl["unprotect"], 0, read["protect_ok"][foe]))
+        )
         stop = ctl["pause"] | ctl["pursue"]
         # E3-B2-6: a reflected move's first pass ends before the mover's move end and faint check:
         # the holder's pass comes next, then both run (bcp.c:3831-3837, LoopSpreadMoves).

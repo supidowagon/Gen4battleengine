@@ -2363,3 +2363,220 @@ def test_last_resort_decomp_lines_are_as_cited():
     bcp = (_ME_DECOMP / "src/battle/battle_controller_player.c").read_text("utf-8").splitlines()
     assert "MOVE_STATUS_NO_EFFECTS" in bcp[3208] and "BattleSystem_UpdateLastResort" in bcp[3217]
     assert "battleCtx->moveTemp = MOVE_STRUGGLE" in bcp[1866]
+
+
+# --- Feint (#223, E3-B2-13) --------------------------------------------------------------------
+# effect_script_0223.s: TryFeint (:5; MOVE_STATUS_FAILED at :11-13), an ON_HIT indirect
+# subscript_feint.s (:6), CalcCrit, CalcDamage (:7-8). BtlCmd_TryFeint (battle_script.c:7518-7528)
+# fails the move unless the defender's turnFlags.protecting is set; subscript_feint.s:20 clears it
+# after a hit that is not MOVE_STATUS_NO_EFFECTS (battle_lib.c:1524-1529). Feint is move 364, +2;
+# Protect and Detect are +3, so in singles a successful Protect is always earlier in the turn.
+
+MOVE_FEINT = 364
+
+
+def _fe(
+    t, n, foe=("Protect", "Tackle"), mine=("Feint", "Tackle"), foe_count=0, foe_species="Geodude"
+):
+    """Monferno (side 0, ``mine``) against a level 40 ``foe_species`` (``foe``), no abilities; the
+    foe's Protect chain starts at ``foe_count``."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 30, mine)],
+        [_spec(n, foe_species, 40, foe)],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(1).at[1, 0, SPE].set(500))
+    return s._replace(protect_count=s.protect_count.at[1].set(foe_count))
+
+
+def _fego(t, n, s, me="Feint", foe="Protect", out=None):
+    ones = jnp.ones(2, jnp.int8)
+    out = out if out is not None else _hits()._replace(protect=ones, future_hit=ones)
+    return assert_matches_reference(t, s, A(me, foe, s, n), out)
+
+
+def _pending_future_sight(n, s, damage=50):
+    """``s`` with a delayed hit of the player due on the foe at this turn's end, whose stored move
+    is a Tackle. Future Sight and Doom Desire have no MOVE_FLAG_CAN_PROTECT (res/moves/*/data.json),
+    so the end-of-turn Protect test (bcp.c:3007) never stops either and the flag Feint clears has
+    no reader in a singles turn (the sheet's section 1); a stored Tackle, which a Protect does
+    stop, is what makes the flag observable."""
+    return s._replace(
+        future_timer=s.future_timer.at[1].set(1),
+        future_damage=s.future_damage.at[1].set(damage),
+        future_move=s.future_move.at[1].set(n.move("Tackle")),
+        future_attacker=s.future_attacker.at[1].set(1),
+        future_sight=s.future_sight.at[1].set(1),
+    )
+
+
+def test_feint_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 223 (effect_script_0223.s) is EffectId.FEINT in both games and Feint (move 364,
+    Normal physical, accuracy 100, PP 10, +2, no flags: it is not blocked by Protect, which is its
+    point) the only move with it; vanilla 50 BP, Kaizo 80 BP. It is a plain hit that can fail,
+    classed as Last Resort is (enumerate's two allowlists)."""
+    from nuzline.engine.enumerate import INPUT_NEUTRAL_EFFECTS, TABLE_DAMAGE_EFFECTS
+
+    assert DECOMP_EFFECT_TO_ID[223] == (EffectId.FEINT, (0, 0, 0))
+    for t, nn, power in ((tables, names, 50), (kaizo_tables, kaizo_names, 80)):
+        move = nn.move("Feint")
+        assert move == MOVE_FEINT
+        assert int(t.move_effect[move]) == EffectId.FEINT
+        assert int((np.asarray(t.move_effect) == EffectId.FEINT).sum()) == 1
+        assert int(t.move_power[move]) == power and int(t.move_accuracy[move]) == 100
+        assert int(t.move_pp[move]) == 10 and int(t.move_type[move]) == nn.type("Normal")
+        assert int(t.move_priority[move]) == 2 and int(t.move_category[move]) == 0
+        assert not int(t.move_flags[move]) & (MoveFlag.PROTECT | MoveFlag.CONTACT)
+        assert int(t.move_priority[nn.move("Protect")]) == 3
+    assert EffectId.FEINT in INPUT_NEUTRAL_EFFECTS and EffectId.FEINT in TABLE_DAMAGE_EFFECTS
+
+
+def test_feint_fails_against_a_foe_that_did_not_protect(tables, names):
+    """TryFeint (:5, battle_script.c:7523): no turnFlags.protecting, MOVE_STATUS_FAILED: no damage,
+    but the PP is spent (DecrementPP precedes the script) and the foe's Tackle still lands."""
+    t, n = tables, names
+    s = _fe(t, n)
+    out = _fego(t, n, s, foe="Tackle")
+    assert _foe_hp(out) == _foe_hp(s)
+    assert int(out.pp[0, 0, 0]) == int(s.pp[0, 0, 0]) - 1
+    assert int(out.hp[0, 0]) < int(s.hp[0, 0])
+
+
+def test_feint_hits_through_a_successful_protect(tables, names):
+    """A Protect that succeeded earlier this turn sets turnFlags.protecting (battle_script.c:5174-
+    5177): Feint (no MOVE_FLAG_CAN_PROTECT, so CheckMoveHitOverrides does not stop it, bcp.c:3007-
+    3014) damages the foe, where a Tackle of the same Monferno is stopped. Detect is the same."""
+    t, n = tables, names
+    s = _fe(t, n, foe=("Protect", "Detect"))
+    out = _fego(t, n, s)
+    assert _foe_hp(out) < _foe_hp(s)
+    assert int(out.protect_count[1]) == 1  # the Protect counted
+    assert _foe_hp(_fego(t, n, s, me="Tackle")) == _foe_hp(s)
+    assert _foe_hp(_fego(t, n, s, foe="Detect")) < _foe_hp(s)
+
+
+def test_feint_fails_after_a_failed_protect_and_after_endure(tables, names):
+    """A Protect whose chain roll fails (count 1, roll 0) sets no flag, so Feint fails; Endure sets
+    turnFlags.enduring instead of protecting (battle_script.c:5174-5177), so Feint fails against
+    it as well."""
+    t, n = tables, names
+    s = _fe(t, n, foe_count=1)
+    failed = _fego(t, n, s, out=_hits()._replace(protect=jnp.zeros(2, jnp.int8)))
+    assert _foe_hp(failed) == _foe_hp(s) and int(failed.protect_count[1]) == 0
+    assert _foe_hp(_fego(t, n, s)) < _foe_hp(s)  # the same chain, the roll passing
+    endure = _fe(t, n, foe=("Endure", "Tackle"))
+    assert _foe_hp(_fego(t, n, endure, foe="Endure")) == _foe_hp(endure)
+
+
+def test_a_feint_hit_clears_protecting_for_the_rest_of_the_turn(tables, names):
+    """subscript_feint.s:20 clears the defender's flag, so a delayed hit due at this turn's end
+    (CheckMoveHitOverrides, bcp.c:3005-3011; see ``_pending_future_sight``) lands on the foe that
+    protected: the foe loses the Feint and the hit; with a Tackle the Protect stands and stops
+    it."""
+    t, n = tables, names
+    s = _pending_future_sight(n, _fe(t, n))
+    out = _fego(t, n, s)
+    plain = _fego(t, n, _fe(t, n))
+    assert _foe_hp(out) < _foe_hp(plain) < _foe_hp(s)
+    assert _foe_hp(_fego(t, n, s, me="Tackle")) == _foe_hp(s)
+
+
+def test_a_feint_that_does_not_hit_leaves_protecting_up(tables, names):
+    """The clear is an ON_HIT subscript, run unless MOVE_STATUS_NO_EFFECTS (battle_lib.c:1524-
+    1529): a Feint that misses (MOVE_STATUS_MISSED) and one that is ineffective against a Ghost
+    (MOVE_STATUS_INEFFECTIVE) leave the Protect up, and the pending hit is still stopped."""
+    t, n = tables, names
+    s = _pending_future_sight(n, _fe(t, n))
+    off = _hits()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8), protect=jnp.ones(2, jnp.int8))
+    missed = _fego(t, n, s, out=off)
+    assert _foe_hp(missed) == _foe_hp(s)
+    ghost = _pending_future_sight(n, _fe(t, n, foe_species="Gastly"))
+    assert _foe_hp(_fego(t, n, ghost)) == _foe_hp(ghost)
+
+
+def test_shadow_force_clears_protecting_with_its_attack_turn(tables, names):
+    """Shadow Force's script runs subscript_feint.s as its ON_HIT effect too (effect_script_0272.s:
+    21): an attack turn that hits (a Power Herb skips the charge) goes through the Protect (no
+    MOVE_FLAG_CAN_PROTECT) and clears the flag, so the pending hit lands; a Ghost-immune Normal
+    foe cannot be told apart, so the Geodude is used. Its charge turn clears nothing."""
+    t, n = tables, names
+    herb = n.item("Power Herb")
+    base = _fe(t, n, mine=("Shadow Force", "Tackle"))
+    base = base._replace(item=base.item.at[0, 0].set(herb))
+    pending = _pending_future_sight(n, base)
+    out = _fego(t, n, pending, me="Shadow Force")
+    alone = _fego(t, n, base, me="Shadow Force")
+    assert _foe_hp(out) < _foe_hp(alone) < _foe_hp(base)
+    charging = _pending_future_sight(n, _fe(t, n, mine=("Shadow Force", "Tackle")))
+    assert _foe_hp(_fego(t, n, charging, me="Shadow Force")) == _foe_hp(charging)
+
+
+def test_a_called_feint_reads_the_same_flag(tables, names):
+    """Sleep Talk (priority 0) calls Feint, whose TryFeint reads the foe's turnFlags.protecting
+    the same way: the Protect (+3) is earlier, so the called Feint hits; with no Protect it
+    fails."""
+    t, n = tables, names
+    s = _fe(t, n, mine=("Sleep Talk", "Feint"))
+    s = s._replace(
+        status=s.status.at[0, 0].set(Status.SLEEP), status_counter=s.status_counter.at[0, 0].set(3)
+    )
+    out = _hits()._replace(protect=jnp.ones(2, jnp.int8), call=jnp.zeros(2, jnp.int16))
+    assert _foe_hp(_fego(t, n, s, me="Sleep Talk", out=out)) < _foe_hp(s)
+    assert _foe_hp(_fego(t, n, s, me="Sleep Talk", foe="Tackle", out=out)) == _foe_hp(s)
+
+
+@pytest.mark.slow  # 157 s (fast tier: 60 s, 4 GB); run on the pod
+def test_feint_enumeration_matches_the_brute_force(tables, names):
+    """The exact enumeration (Feint a table-damage, input-neutral effect; the foe's chain roll a
+    read of the Protect) equals the brute-force one, at chain 2 (the roll is drawn)."""
+    from tests.engine.test_enumerate import assert_equals_bruteforce
+
+    t, n = tables, names
+    s = _fe(t, n, foe_count=2)
+    assert_equals_bruteforce(t, s, A("Feint", "Protect", s, n))
+
+
+def test_feint_takes_the_targets_flag_as_an_input(tables, names):
+    """Doubles-ready (docs/doubles-state-design.md section 5, rules 1 and 5): ``_use_move`` takes
+    ``foe_protecting``, the named target's flag, as an argument (``step._execute_actions`` reads
+    ``read["protect_ok"][foe]`` and zeroes that entry after a Feint hit, never the mover's): with
+    the flag given and no Protect in the turn the Feint hits; withdrawn, it fails."""
+    import inspect
+
+    from nuzline.engine import step as step_module
+
+    assert "foe_protecting" in inspect.signature(step_module._use_move).parameters
+    t, n = tables, names
+    s = _fe(t, n)
+    out = _fego(t, n, s)
+    assert _foe_hp(out) < _foe_hp(s) and int(out.protect_count[0]) == 0
+
+
+def test_feint_decomp_lines_are_as_cited():
+    """The lines the ledger and the code cite for Feint (E3-B2-13): the script, the command, the
+    subscript's clear, and the shared ON_HIT trigger."""
+    if not _ME_DECOMP.exists():
+        pytest.skip("decomp not present")
+    effect = (_ME_DECOMP / "res/battle/scripts/effects/effect_script_0223.s").read_text("utf-8")
+    body = [line.strip() for line in effect.splitlines() if line.strip()]
+    assert body[1:7] == [
+        "_000:",
+        "TryFeint _008",
+        (
+            "UpdateVar OPCODE_SET, BTLVAR_SIDE_EFFECT_FLAGS_INDIRECT, MOVE_SIDE_EFFECT_ON_HIT|"
+            "MOVE_SUBSCRIPT_PTR_FEINT"
+        ),
+        "CalcCrit",
+        "CalcDamage",
+        "End",
+    ]
+    assert "MOVE_STATUS_FAILED" in body[-2]
+    sub = (_ME_DECOMP / "res/battle/scripts/subscripts/subscript_feint.s").read_text("utf-8")
+    assert "SetTurnFlag BTLSCR_DEFENDER, TURN_FLAG_PROTECTING, 0" in sub
+    bs = (_ME_DECOMP / "src/battle/battle_script.c").read_text("utf-8").splitlines()
+    assert "BtlCmd_TryFeint" in bs[7517] and "DEFENDER_TURN_FLAGS.protecting == FALSE" in bs[7522]
+    assert "BattleScript_Iter(battleCtx, jumpOnFail)" in bs[7523]
+    lib = (_ME_DECOMP / "src/battle/battle_lib.c").read_text("utf-8").splitlines()
+    assert "BattleSystem_TriggerSecondaryEffect" in lib[1518]
+    assert "MOVE_SIDE_EFFECT_ON_HIT" in lib[1523] and "MOVE_STATUS_NO_EFFECTS" in lib[1526]

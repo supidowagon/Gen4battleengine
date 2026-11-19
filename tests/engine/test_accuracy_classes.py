@@ -493,6 +493,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.SAFEGUARD,  # a side condition (B10-7)
     EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
     EffectId.LAST_RESORT,  # a plain hit that can fail (E3-B2-11)
+    EffectId.FEINT,  # a plain hit that can fail (E3-B2-13)
     EffectId.ENCORE,  # sets the encore only (B10-9)
     # E2 batch 12, the stat family: Tickle writes Attack and Defense (B12-4), Power / Guard Swap
     # Attack / Sp. Atk or Defense / Sp. Def (B12-7), Captivate Sp. Atk (B12-8): their params name

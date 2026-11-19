@@ -899,6 +899,11 @@ EXEMPT: dict[str, str] = {
         "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
         "the decomp (E3-B2-1)"
     ),
+    "nuzline.ai.commands.FEINT_GRADUAL_RECOVERY_EFFECTS": (
+        "decomp hold effect ids of the AI script's table (Expert_Feint_GradualRecoveryItems, "
+        "script.s:4952), compared with each game's own item hold effects (LoadHeldItemEffect); "
+        "tests/ai/test_kaizo_policy.py reads it back from the decomp (E3-B2-13)"
+    ),
     "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
         "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "
         "table compared with each game's own item hold effects; tests/engine/test_e1_batch_d.py "

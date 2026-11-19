@@ -4774,6 +4774,7 @@ def test_batch13_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party
         ("Magic Coat", "Accelerock", "", ""),  # E3-B2-6
         ("Miracle Eye", "Accelerock", "", ""),  # E3-B2-10
         ("Last Resort", "Accelerock", "Mist", ""),  # E3-B2-11
+        ("Feint", "Accelerock", "", ""),  # E3-B2-13
     ):
         s = _state(t, kaizo_roark_party, BONSLY, _ids(n, *moves))
         s = s._replace(recycle_item=s.recycle_item.at[1].set(lum))
@@ -5952,3 +5953,147 @@ def test_last_resort_is_scored_not_refused_and_exact_equals_loose(
             layout = layout_for(t, flags, s)
             assert policy.ai_refusals(t, s, n, layout) == []
             _assert_exact_equals_loose(t, _hp(_used_moves(s, count), 1, 50), layout)
+
+
+# --- #223 Feint (E3-B2-13) ---------------------------------------------------------------------
+
+
+def _feint(t, n, party, known=False, chain=0, php=100, item="", status=0, **ai):
+    """The AI's Bonsly with Feint against Gible: the player knows Protect (seen by the AI) when
+    ``known``, has a Protect chain ``chain`` and ``php`` % HP, and a known ``item``; the AI's
+    battler has ``status`` and each per-battler state field of ``ai`` (``curse``, ``infatuated``,
+    ...) set to 1."""
+    s = _state(t, party, BONSLY, _ids(n, "Feint", "Accelerock", "", ""))
+    if known:
+        s = _seen_protect(t, n, s)
+    s = _hp(s, 0, php)
+    s = s._replace(protect_count=s.protect_count.at[0].set(chain))
+    s = s._replace(status=s.status.at[1, 0].set(status))
+    if item:
+        s = s._replace(ai_item_known=s.ai_item_known.at[0].set(n.item(item)))
+    for field, value in ai.items():
+        s = s._replace(**{field: getattr(s, field).at[1].set(value)})
+    return s
+
+
+def test_feint_tables_are_the_decomps(kaizo_tables, kaizo_names):
+    """Feint is BATTLE_EFFECT_REMOVE_PROTECT, 223, with no Basic entry and Expert_Main's
+    (script.s:1766) only; its four rolls are :4912 (64), :4927 and :4937 (128), :4942 (192); the
+    gradual-recovery table is HOLD_EFFECT_HP_RESTORE_GRADUAL and _PSN_TYPE (E3-B2-13)."""
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED, SITE_N
+
+    t, n = kaizo_tables, kaizo_names
+    assert BattleEffect.REMOVE_PROTECT == 223
+    assert KAIZO_EXPERT_LABELS[223] == ("Expert_Feint", 1766) and 223 in KAIZO_TRANSCRIBED
+    assert 223 in KAIZO_EXPERT_TRANSCRIBED
+    assert int(t.move_ai_effect[n.move("Feint")]) == 223
+    assert [SITE_N[line] for line in (4912, 4927, 4937, 4942)] == [64, 128, 128, 192]
+    for item in ("Leftovers", "Black Sludge"):
+        assert int(t.item_hold_effect[n.item(item)]) in c.FEINT_GRADUAL_RECOVERY_EFFECTS
+    script = DECOMP / "src/battle/trainer_ai/script.s"
+    hold = DECOMP / "generated/item_hold_effects.txt"
+    if not script.exists() or not hold.exists():
+        pytest.skip("decomp not present")
+    effects = [x.strip() for x in hold.read_text(encoding="utf-8").splitlines()]
+    assert c.FEINT_GRADUAL_RECOVERY_EFFECTS == (
+        effects.index("HOLD_EFFECT_HP_RESTORE_GRADUAL"),
+        effects.index("HOLD_EFFECT_HP_RESTORE_PSN_TYPE"),
+    )
+    lines = script.read_text(encoding="utf-8").splitlines()
+    assert (
+        lines[1765].strip()
+        == "IfCurrentMoveEffectEqualTo BATTLE_EFFECT_REMOVE_PROTECT, Expert_Feint"
+    )
+    # The effect is named twice: Expert_Main's jump and Expert_Encore's table (:3269, already
+    # ``commands.ENCORE_ENCOURAGED_EFFECTS``).
+    assert [i for i, line in enumerate(lines, 1) if "BATTLE_EFFECT_REMOVE_PROTECT" in line] == [
+        1766,
+        3269,
+    ]
+    assert 223 in c.ENCORE_ENCOURAGED_EFFECTS
+    assert lines[4891] == "Expert_Feint:"
+    assert lines[4911].strip() == "IfRandomLessThan 64, Expert_Feint_CheckConditions"
+    assert lines[4926].strip() == "IfRandomLessThan 128, Expert_Feint_CheckProtectChain"
+    assert lines[4936].strip() == "IfRandomLessThan 128, Expert_Feint_End"
+    assert lines[4941].strip() == "IfRandomLessThan 192, Expert_Feint_End"
+    assert [line.strip() for line in lines[4931:4934]] == [
+        "IfLoadedEqualTo 0, Expert_Feint_NoProtectChain",
+        "IfLoadedEqualTo 1, Expert_Feint_ProtectChain1",
+        "IfLoadedGreaterThan 2, Expert_Feint_ProtectChain2OrMore",
+    ]
+    assert "Basic_CheckFeint" not in script.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("case", "jumps", "expected"),
+    [
+        # Expert_Feint (script.s:4892-4950), the AI's Bonsly with Feint against Gible at full HP.
+        # A player not known to have Protect: end unless the 64 roll (:4912) jumps.
+        ({}, (), 0),
+        ({}, (4912,), 1),  # on to the chain 0: +1 unless :4937 jumps
+        ({}, (4912, 4937), 0),
+        ({"known": True}, (), 1),  # known Protect: no :4912 read, chain 0, +1
+        ({"known": True}, (4937,), 0),
+        ({"known": True, "chain": 1}, (), 1),  # chain 1: +1 unless :4942 jumps
+        ({"known": True, "chain": 1}, (4942,), 0),
+        ({"known": True, "chain": 2}, (), 1),  # chain 2 falls into the chain-0 block
+        ({"known": True, "chain": 2}, (4937,), 0),
+        ({"known": True, "chain": 3}, (), -2),  # a longer chain: -2 and end
+        # The AI badly poisoned, cursed, perishing, infatuated, seeded or drowsy: the +1 block
+        # (:4927, +1 unless it jumps), then the chain.
+        ({"known": True, "status": Status.TOXIC}, (), 2),
+        ({"known": True, "status": Status.TOXIC}, (4927,), 1),
+        ({"known": True, "status": Status.TOXIC}, (4927, 4937), 0),
+        ({"known": True, "curse": 1}, (), 2),
+        ({"known": True, "perish_song": 1}, (), 2),
+        ({"known": True, "infatuated": 1}, (), 2),
+        ({"known": True, "leech_seed": 1}, (), 2),
+        ({"known": True, "yawn": 1}, (), 2),
+        ({"known": True, "curse": 1, "chain": 3}, (), -1),  # +1, then -2
+        # A wounded player: without a known Leftovers or Black Sludge on it, straight to the
+        # chain; with one, the +1 block first.
+        ({"known": True, "php": 50}, (), 1),
+        ({"known": True, "php": 50, "item": "Leftovers"}, (), 2),
+        ({"known": True, "php": 50, "item": "Black Sludge"}, (), 2),
+        ({"known": True, "php": 50, "item": "Leftovers"}, (4927,), 1),
+        ({"known": True, "php": 50, "item": "Choice Band"}, (), 1),
+        ({"known": True, "php": 100, "item": "Leftovers"}, (), 1),  # full HP: the chain only
+    ],
+)
+def test_expert_feint(kaizo_tables, kaizo_names, kaizo_roark_party, case, jumps, expected):
+    t, n = kaizo_tables, kaizo_names
+    s = _feint(t, n, kaizo_roark_party, **case)
+    assert _delta(t, s, 0x3, 0x7, tuple((0, line) for line in jumps))[0] == expected
+
+
+def test_feint_is_scored_not_refused(kaizo_tables, kaizo_names, kaizo_roark_party):
+    t, n = kaizo_tables, kaizo_names
+    s = _feint(t, n, kaizo_roark_party, known=True, chain=1, php=50, item="Leftovers", curse=1)
+    for flags in (0x27, 0x10F):
+        assert policy.ai_refusals(t, s, n, layout_for(t, flags, s)) == []
+
+
+def test_feint_adds_the_full_hp_band_to_the_prep_cuts(kaizo_tables, kaizo_roark_party, monkeypatch):
+    """Expert_Feint's ``IfHPPercentEqualTo DEFENDER 100`` (script.s:4922) is listed under effect
+    223 (``AI_EFFECT_DEFENDER_HP_CHECKS``): HP % == 100 is HP == max_hp, so the region top below
+    it is max_hp - 1 (the band's own top is cut off by the filter); an equal check at 50 % of 100
+    HP cuts the band's two edges, 49 and 50 (E3-B2-13)."""
+    from nuzline.prep import variants
+
+    assert variants.AI_EFFECT_DEFENDER_HP_CHECKS[223] == (("equal", 100),)
+    spec = kaizo_roark_party[GIBLE]
+    for checks, expected in (((("equal", 100),), (99,)), ((("equal", 50),), (49, 50))):
+        monkeypatch.setattr(variants, "ai_defender_hp_checks", lambda t, layout=None, c=checks: c)
+        assert variants.hp_cuts(kaizo_tables, spec, 100) == expected
+
+
+@pytest.mark.slow  # 187 s, 4 GB (fast tier: 60 s, 4 GB); run on the pod
+def test_feint_exact_equals_loose(kaizo_tables, kaizo_names, kaizo_roark_party):
+    t, n = kaizo_tables, kaizo_names
+    states = (
+        _feint(t, n, kaizo_roark_party),
+        _feint(t, n, kaizo_roark_party, known=True, chain=1, php=50, item="Leftovers", curse=1),
+    )
+    for s in states:
+        for flags in (0x27, 0x10F):
+            _assert_exact_equals_loose(t, s, layout_for(t, flags, s))

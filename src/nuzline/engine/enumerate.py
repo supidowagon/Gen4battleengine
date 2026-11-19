@@ -874,6 +874,10 @@ INPUT_NEUTRAL_EFFECTS = (
     # E3-B2-11: a plain hit, or none while the user has not used its other moves (its own count and
     # moves, no input of the foe's hit).
     _E.LAST_RESORT,
+    # E3-B2-13: a plain hit, or none unless the foe protected; the hit's only write is the foe's
+    # turnFlags.protecting, which no damage input reads (a later hit meets it through the Protect
+    # clause only).
+    _E.FEINT,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
     _E.ENCORE,
     # B12-4: its user's own crit stages (another battler's crit odds are crit_variants').
@@ -1313,6 +1317,9 @@ TABLE_DAMAGE_EFFECTS = (
     # E3-B2-11: CalcCrit, CalcDamage (effect_script_0246.s:6-7) unless TryLastResort fails first
     # (the user's own count and moves, nothing the foe changes within the turn).
     _E.LAST_RESORT,
+    # E3-B2-13: CalcCrit, CalcDamage (effect_script_0223.s:7-8) unless TryFeint fails first (the
+    # foe's Protect this turn, an input of whether the hit happens, never of its table).
+    _E.FEINT,
     # B13-5, B13-10: their per-hit tables (``OutcomeLaws.damage[side, hit]``: Triple Kick's
     # k x step power, Beat Up's member), each its damage for the hit's (crit, roll).
     _E.TRIPLE_KICK,

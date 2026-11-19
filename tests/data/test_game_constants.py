@@ -121,6 +121,7 @@ LISTED = [
     "nuzline.ai.commands.FLING_ITEMS_BURN",
     "nuzline.ai.commands.FLING_ITEMS_PARALYZE",
     "nuzline.ai.commands.FLING_DESIRABLE_EFFECTS",
+    "nuzline.ai.commands.FEINT_GRADUAL_RECOVERY_EFFECTS",
     "nuzline.ai.commands.CHECK_HP_TABLES",
     "nuzline.ai.outcome.KAIZO_TRANSCRIBED",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",
