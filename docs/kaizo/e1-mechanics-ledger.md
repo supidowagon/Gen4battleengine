@@ -1643,6 +1643,27 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   AI Ditto with the override now reaches that refusal, which names it. A state built with `party_ability` set
   must also set `ability` (the planner that carries a player's override forward does both).
   Also fixed: the empty-slot fallback tested `AbilityId` 0, but an empty slot maps to `AbilityId.NONE` (1); it tests the decomp id now (:18-19). Tests: `tests/engine/test_e1_batch_g.py`.
+- G-4 FCM step 1 (FCM.md 4.4; fcm-verify corrections (a)-(d)): `field_mask` (int32, `_FIELD`, `BattleContext.
+  fieldConditionsMask`, battle_context.h:210, bits condition.h:110-149 as `ids.FieldCondition`) and
+  `weather_turns` (int32, `FieldConditions.weatherTurns`, battle_context.h:29) beside the old fields; readers
+  unchanged. Writers (`engine.field`, the reference the same): start condition -> PERM bit or DEEP_FOG
+  (subscript_overworld_*.s:11, lib.c:3664-3696), Kaizo area Gravity / Trick Room counters (sub_seq 297;
+  subscript_overworld_trick_room.s:14) (`ids.start_field_mask`); weather moves WEATHER off + TEMP bit +
+  weatherTurns (effect_script_0115/0136/0137/0164.s:8-14); weather abilities WEATHER off + PERM bit, skipped
+  while their own PERM bit is set (lib.c:3749-3776; subscript_drizzle.s etc. :11-12), at the switch-in, the
+  move-end recheck and the weather war's swap (`hooks.swap_war`); the TEMP-only countdown in bcp.c order
+  (:1113-1211, `--weatherTurns == 0` at :1121, :1146, :1171, :1196; the end scripts clear the TEMP bit, :5);
+  Gravity `|= GRAVITY_INIT` (subscript_gravity_start.s:9), `-= 1 << 12` (bcp.c:1229), Kaizo re-arm at 0
+  (sub_seq 238, G-67); Trick Room toggle (effect_script_0259.s:5-12), `-= 1 << 16` (bcp.c:1824) and Kaizo's
+  re-arm at 0 (sub_seq 251 = the move's script, :6; manager ruling 8: E3's `_trick_room_check` stays the one
+  implementation and writes the bits too); Uproar bit 8 + b on (subscript_uproar.s:9-11), off at its end
+  (bcp.c:1528, :1534), switch (lib.c:2135) and faint (lib.c:2213, `step._reset_battler`). The views that
+  write the old fields write the bits too: `order.gravity_state`, `outcome`'s foe-Gravity variant,
+  `outcome.pivot_view` (the pivot's Uproar bit), `playout._sort_view`, the battle-start sort's no-weather view.
+  Acid Rain (subscript_pursuit.s:115) is not written yet: FCM 4.4 places it after the readers move (its diff is
+  the stated one). Tests: `tests/engine/test_field_mask.py` (clean mask = old fields on each writer path,
+  engine = reference). Owed for step 2: `tests/strategies.py` and hand-built test states write the old
+  fields only; they must set `field_mask` / `weather_turns` before the readers move.
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

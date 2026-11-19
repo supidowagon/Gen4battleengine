@@ -119,6 +119,16 @@ three structs has a row.
   bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
   together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
   `CleanupFaintedMon`, :2213, with the volatiles).
+- **`field_mask`** (int32, `_FIELD`): `BattleContext.fieldConditionsMask` (battle_context.h:210)
+  bit for bit, bits condition.h:110-149 (`ids.FieldCondition`). **`weather_turns`** (int32,
+  `_FIELD`): `FieldConditions.weatherTurns` (battle_context.h:29); stale outside a TEMP-only
+  weather (only the weather moves, effect_script_0115/0136/0137/0164.s :10-14, and the TEMP-only
+  countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM step 1 (FCM.md 4.4): every writer of
+  `weather`, `weather_timer`, `gravity`, `trick_room` and `uproar` also writes these
+  (`engine.field`; reference: the same writes), the readers still read the old fields. A clean
+  mask equals the old fields: at most one weather group, TEMP-only with `weather_turns ==
+  weather_timer` or PERM-only; bits 12-14 = `gravity`, 16-18 = `trick_room`; bit `8 + b` =
+  `uproar[b] != 0`.
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
   `tailwind`, Lucky Chant turns -> `lucky_chant`, Future Sight -> `future_sight` (E2 batch 5:
   per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
@@ -617,7 +627,7 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `FieldConditions.weatherTurns` | `weather_timer` | mapped |
+| `FieldConditions.weatherTurns` | `weather_timer`, `weather_turns` | mapped |
 | `FieldConditions.futureSightTurns` | `future_timer` | mapped |
 | `FieldConditions.wishTurns` | `wish_timer` | mapped |
 | `FieldConditions.futureSightMove` | `future_move` | mapped |
@@ -698,8 +708,8 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
-| `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
+| `BattleContext.fieldConditionsMask` | `field_mask`, `weather`, `trick_room`, `gravity`, `uproar` | mapped |
+| `BattleContext.fieldConditions` | `weather_timer`, `weather_turns`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |

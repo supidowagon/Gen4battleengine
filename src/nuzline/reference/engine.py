@@ -47,6 +47,9 @@ from nuzline.engine.ids import (
     CANNOT_ENCORE_MOVES,
     CHOICE_ITEMS,
     CONFUSION_PENDING,
+    FIELD_CONDITION_GRAVITY_SHIFT,
+    FIELD_CONDITION_TRICK_ROOM_SHIFT,
+    FIELD_CONDITION_UPROAR_SHIFT,
     FLAIL_FALLOFF,
     FUTURE_SIGHT_TURNS,
     GENDER_NONE,
@@ -129,11 +132,15 @@ from nuzline.engine.ids import (
     UNTRACEABLE_ABILITIES,
     WEATHER_ABILITIES,
     WEATHER_ABILITY_IDS,
+    WEATHER_COUNTDOWN,
+    WEATHER_PERM_BIT,
+    WEATHER_TEMP_BIT,
     WEATHER_TURNS,
     WISH_TURNS,
     YAWN_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FieldCondition,
     ItemAiCategory,
     ItemId,
     ItemParam,
@@ -1789,6 +1796,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     on a foe (lib.c:2179) and the foe's infatuation (:2174-2176)."""
     _restore_types(turn.tables, s, side)
     _reset_battler(s.battlers[side])
+    _uproar_bit_off(s, side)  # lib.c:2213
     turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
@@ -2900,6 +2908,7 @@ def _switch_in_effects(turn: _Turn, s: RefState, side: int, flagged: int = -1) -
         if weather is not None and _active(s, battler).hp:
             if not (s.weather == weather and s.weather_timer == 0) and battler == 0:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
+            _weather_ability_bits(s, weather)
             s.weather, s.weather_timer = weather, 0
             s.battlers[battler].weather_announced = 1
     # subscript_intimidate.s: ATTACK_DOWN_1_STAGE on a living foe not behind a substitute (:13,
@@ -3052,6 +3061,7 @@ def _move_end_switch_in(turn: _Turn, s: RefState) -> None:
         if not sd.weather_announced and weather is not None and mon.hp:
             if not (s.weather == weather and s.weather_timer == 0) and b == 0:
                 _know_ability(s, s.battlers[0].active)  # subscript_drought.s etc.
+            _weather_ability_bits(s, weather)
             s.weather, s.weather_timer = weather, 0
             sd.weather_announced = 1
     for b in battlers:
@@ -3078,6 +3088,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _restore_moves(s, side)  # and its Mimic copies (G-68)
     sd.active = slot
     _reset_battler(sd, baton)
+    _uproar_bit_off(s, side)  # lib.c:2135
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
@@ -3309,6 +3320,34 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
 def _uproar_on(s: RefState) -> bool:
     """FIELD_CONDITION_UPROAR: a battler's bit is set while it is in an uproar."""
     return any(bt.uproar for bt in s.battlers)
+
+
+# fieldConditionsMask (``field_mask``) and weatherTurns (``weather_turns``), written beside the old
+# fields (FCM step 1; ``engine.field``); the readers read the old fields.
+
+
+def _uproar_bit_off(s: RefState, b: int) -> None:
+    """Battler ``b``'s FIELD_CONDITION_UPROAR bit off: its Uproar ends (bcp.c:1528, :1534), it
+    switches out (lib.c:2135) or faints (lib.c:2213)."""
+    s.field_mask &= ~(1 << (FIELD_CONDITION_UPROAR_SHIFT + b))
+
+
+def _weather_ability_bits(s: RefState, weather: int) -> None:
+    """A weather ability's script (subscript_drizzle.s etc. :11-12: WEATHER off, its PERM bit on),
+    skipped while that PERM bit is set (lib.c:3749, :3758, :3767, :3776)."""
+    perm = int(WEATHER_PERM_BIT[weather])
+    if not s.field_mask & perm:
+        s.field_mask = (s.field_mask & ~FieldCondition.WEATHER) | perm
+
+
+def _weather_countdown_bits(s: RefState) -> None:
+    """bcp.c:1113-1211 in order: a TEMP-only group counts weatherTurns down (:1121, :1146, :1171,
+    :1196); at 0 its end script clears its TEMP bit (subscript_raining_end.s etc. :5)."""
+    for temp, perm in WEATHER_COUNTDOWN:
+        if s.field_mask & (temp | perm) and not s.field_mask & perm:
+            s.weather_turns -= 1
+            if s.weather_turns == 0:
+                s.field_mask &= ~temp
 
 
 def _life_orb_recoil(turn: _Turn, s: RefState, side: int) -> None:
@@ -3695,11 +3734,16 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.GRAVITY and landed and not s.gravity:
         # effect_script_0215.s (the failure is ``_script_fails``), subscript_gravity_start.s:9.
         s.gravity = GRAVITY_TURNS
+        s.field_mask |= FieldCondition.GRAVITY_INIT
         _gravity_ground(s)
     elif effect == EffectId.TRICK_ROOM and landed:
         # effect_script_0259.s:5-12: any Trick Room bit up -> cleared, else FIELD_CONDITION_
         # TRICK_ROOM_INIT (5); it never fails (E3-2-4).
         s.trick_room = 0 if s.trick_room else TRICK_ROOM_TURNS
+        if s.field_mask & FieldCondition.TRICK_ROOM:
+            s.field_mask &= ~FieldCondition.TRICK_ROOM
+        else:
+            s.field_mask |= FieldCondition.TRICK_ROOM_INIT
     elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.battlers[side].magnet_rise = 1
@@ -3835,6 +3879,9 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             ):
                 extra = _t(tables, "item_param", user.item, 0)
             s.weather, s.weather_timer = p0, WEATHER_TURNS + extra
+            # :8-10: WEATHER off, the TEMP bit on, weatherTurns.
+            s.field_mask = (s.field_mask & ~FieldCondition.WEATHER) | int(WEATHER_TEMP_BIT[p0])
+            s.weather_turns = WEATHER_TURNS + extra
     elif effect == EffectId.DOUBLE_POWER and effective and p1 == 1:
         # effect_script_0171.s:12: an ON_HIT indirect subscript_heal_target_paralysis.s
         # against a defender paralyzed when the script ran: cured when it has HP left (:5-6).
@@ -3876,6 +3923,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # and its FIELD_CONDITION_UPROAR bit.
         s.battlers[side].locked_move = move
         s.battlers[side].uproar = o.duration[side]
+        s.field_mask |= 1 << (FIELD_CONDITION_UPROAR_SHIFT + side)  # subscript_uproar.s:9-11
     elif effect == EffectId.DRAGON_DANCE and landed and _active(s, side).hp > 0:
         # subscript_user_*_up_1_stage.s:13-16: the first stat (p0) +1, then the second (p1) +1
         # (B9-10, B12-1).
@@ -6323,6 +6371,7 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
     # RAINING, SANDSTORM, SUNNY, HAILING (:1113-1211): a permanent weather goes on; a
     # temporary one ends when its count reaches 0 (subscript_*_end.s: no effect that turn).
     # DEEP_FOG (:1213-1225) prints a message only.
+    _weather_countdown_bits(s)
     if s.weather in (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL):
         goes_on = True
         if s.weather_timer:
@@ -6341,6 +6390,10 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int]) -> None:
     # GRAVITY (:1227-1238): one turn off; at 0 vanilla's subscript_gravity_end only prints,
     # Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets it again and runs the grounding loop
     # (G-67).
+    if s.field_mask & FieldCondition.GRAVITY:
+        s.field_mask -= 1 << FIELD_CONDITION_GRAVITY_SHIFT  # :1229
+        if not s.field_mask & FieldCondition.GRAVITY and _t(turn.tables, "gravity_rearm"):
+            s.field_mask |= FieldCondition.GRAVITY_INIT
     if s.gravity:
         s.gravity -= 1
         if not s.gravity and _t(turn.tables, "gravity_rearm"):
@@ -6465,6 +6518,10 @@ def _trick_room_check(turn: _Turn, s: RefState) -> None:
     0 drops by 1; at 0 ``subscript_trick_room_end`` runs: vanilla's only prints (Trick Room ends),
     Kaizo's (sub_seq 251, ``Tables.trick_room_rearm``) is the move's own script and sets the
     counter to 5 again (E3-2-4)."""
+    if s.field_mask & FieldCondition.TRICK_ROOM:
+        s.field_mask -= 1 << FIELD_CONDITION_TRICK_ROOM_SHIFT  # :1824
+        if not s.field_mask & FieldCondition.TRICK_ROOM and _t(turn.tables, "trick_room_rearm"):
+            s.field_mask |= FieldCondition.TRICK_ROOM_INIT  # sub_seq 251 = effect_script_0259.s:6
     if s.trick_room:
         s.trick_room -= 1
         if not s.trick_room and _t(turn.tables, "trick_room_rearm"):
@@ -6694,6 +6751,7 @@ def _uproar_check(turn: _Turn, s: RefState, side: int) -> None:
     if turn.move_failed[side] or not sd.uproar:
         sd.uproar = 0
         sd.locked_move = 0
+        _uproar_bit_off(s, side)
 
 
 def _disable_check(turn: _Turn, s: RefState, side: int) -> None:

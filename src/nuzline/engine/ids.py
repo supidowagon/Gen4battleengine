@@ -1435,6 +1435,77 @@ WEATHER_ABILITIES = {
 WEATHER_TURNS = 5
 
 
+class FieldCondition(IntEnum):
+    """``BattleContext.fieldConditionsMask`` bits and groups (include/constants/battle/
+    condition.h:110-145), ``BattleState.field_mask`` (``engine.field``)."""
+
+    RAINING_TEMP = 1 << 0
+    RAINING_PERM = 1 << 1
+    SANDSTORM_TEMP = 1 << 2
+    SANDSTORM_PERM = 1 << 3
+    SUNNY_TEMP = 1 << 4
+    SUNNY_PERM = 1 << 5
+    HAILING_TEMP = 1 << 6
+    HAILING_PERM = 1 << 7
+    UPROAR = 0xF << 8  # bit 8 + battler (:118)
+    GRAVITY = 0x7 << 12  # a 3-bit counter (:119-121, :142)
+    DEEP_FOG = 1 << 15
+    TRICK_ROOM = 0x7 << 16  # a 3-bit counter (:123-125, :144)
+    RAINING = RAINING_TEMP | RAINING_PERM
+    SANDSTORM = SANDSTORM_TEMP | SANDSTORM_PERM
+    SUNNY = SUNNY_TEMP | SUNNY_PERM
+    HAILING = HAILING_TEMP | HAILING_PERM
+    WEATHER = RAINING | SANDSTORM | SUNNY | HAILING | DEEP_FOG  # :131-135
+    GRAVITY_INIT = 0x5 << 12  # :143
+    TRICK_ROOM_INIT = 0x5 << 16  # :145
+
+
+FIELD_CONDITION_UPROAR_SHIFT = 8  # condition.h:147
+FIELD_CONDITION_GRAVITY_SHIFT = 12  # :148
+FIELD_CONDITION_TRICK_ROOM_SHIFT = 16  # :149
+# The TEMP / PERM bit of each ``Weather`` (by id): a weather move sets the TEMP bit
+# (effect_script_0115.s, _0136.s, _0137.s, _0164.s :9), a weather ability or a battle-start area
+# condition the PERM bit (subscript_drizzle.s etc. :12, subscript_overworld_rain.s etc. :11);
+# deep fog has one bit (subscript_overworld_fog.s:11).
+WEATHER_TEMP_BIT = (
+    0,
+    FieldCondition.SUNNY_TEMP,
+    FieldCondition.RAINING_TEMP,
+    FieldCondition.SANDSTORM_TEMP,
+    FieldCondition.HAILING_TEMP,
+    FieldCondition.DEEP_FOG,
+)
+WEATHER_PERM_BIT = (
+    0,
+    FieldCondition.SUNNY_PERM,
+    FieldCondition.RAINING_PERM,
+    FieldCondition.SANDSTORM_PERM,
+    FieldCondition.HAILING_PERM,
+    FieldCondition.DEEP_FOG,
+)
+# CheckFieldConditions' four countdown states in their order (battle_controller_player.c:907-912,
+# :1113-1211): the (TEMP, PERM) bits of RAINING, SANDSTORM, SUNNY, HAILING.
+WEATHER_COUNTDOWN = (
+    (FieldCondition.RAINING_TEMP, FieldCondition.RAINING_PERM),
+    (FieldCondition.SANDSTORM_TEMP, FieldCondition.SANDSTORM_PERM),
+    (FieldCondition.SUNNY_TEMP, FieldCondition.SUNNY_PERM),
+    (FieldCondition.HAILING_TEMP, FieldCondition.HAILING_PERM),
+)
+
+
+def start_field_mask(start_condition: int, gravity: int = 0, trick_room: int = 0) -> int:
+    """``fieldConditionsMask`` at battle start (BattleContext starts zeroed, battle_controller_
+    player.c:180-184): the area condition's bit (a weather's PERM bit, subscript_overworld_rain.s /
+    _sand.s / _sun.s / _hail.s :11; DEEP_FOG, _fog.s:11; chosen at battle_lib.c:3664-3696) and the
+    counters of a Kaizo Gravity / Trick Room area condition (``gravity << 12``: sub_seq 297's
+    GRAVITY_INIT; ``trick_room << 16``: subscript_overworld_trick_room.s:14)."""
+    return (
+        int(WEATHER_PERM_BIT[int(start_condition)])
+        | (int(gravity) << FIELD_CONDITION_GRAVITY_SHIFT)
+        | (int(trick_room) << FIELD_CONDITION_TRICK_ROOM_SHIFT)
+    )
+
+
 class Type(IntEnum):
     """Decomp type ids (``generated/pokemon_types.txt`` order), as stored in
     ``tables.move_type``, ``tables.species_types`` and the type chart axes."""

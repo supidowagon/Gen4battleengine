@@ -74,6 +74,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.damage import (
     ability_weather,
@@ -371,6 +372,7 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     already = (state.weather == weather) & (state.weather_timer == 0)
     state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
+    state = fcm.weather_ability(state, weather, on)
     return state._replace(
         weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
         weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
@@ -428,6 +430,7 @@ def swap_war(state: BattleState, swapped) -> BattleState:
     mon = state.active[0]
     weather = ability_weather(battler_ability(state, 0))
     state = reveal_ability(state, 0, mon, WEATHER_SET, on)
+    state = fcm.weather_ability(state, weather, on)
     return state._replace(
         weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
         weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
@@ -1289,7 +1292,7 @@ def battle_start(tables: Tables, state: BattleState, trace_pick=None) -> BattleS
     # (BattleContext_InitCounters, battle_lib.c:2024), a root draw (ruling G-26).
     swaps = order_swaps(
         tables,
-        state._replace(
+        fcm.without_weather(state)._replace(
             weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
         ),
     )

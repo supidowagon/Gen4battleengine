@@ -39,6 +39,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
@@ -386,6 +387,7 @@ def gravity_state(state: BattleState) -> BattleState:
     subscript_gravity_start.s), which then bans ``GRAVITY_MOVES`` from the invokers' calls
     (``Move_CanBeMetronomed``, battle_lib.c:7198-7201; Sleep Talk's CHECK_INVALID_GRAVITY,
     :2292-2295). Only the count is set: the call sets read nothing else of it (G-67)."""
+    state = fcm.with_gravity(state, GRAVITY_TURNS)
     return state._replace(gravity=jnp.asarray(GRAVITY_TURNS, state.gravity.dtype))
 
 

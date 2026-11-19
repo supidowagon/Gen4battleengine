@@ -80,6 +80,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
@@ -427,8 +428,11 @@ def _switch_out(state: BattleState, side) -> BattleState:
 
 def _reset_battler(state: BattleState, side, cond, baton=False) -> BattleState:
     """Stages and ``_VOLATILE`` fields of ``side``'s active battler back to neutral
-    where ``cond``; ``baton`` (a Baton Pass switch) keeps the stages and ``_BATON_PASSED``."""
+    where ``cond``; ``baton`` (a Baton Pass switch) keeps the stages and ``_BATON_PASSED``.
+    Its ``FIELD_CONDITION_UPROAR`` bit goes with ``uproar`` (a switch, Baton Pass included:
+    battle_lib.c:2135; a faint: :2213)."""
     baton = jnp.asarray(baton)
+    state = fcm.uproar_end(state, side, cond)
 
     def reset(name):
         clear = cond & ~baton if name in (*_BATON_PASSED, "stages") else cond
@@ -3495,6 +3499,7 @@ def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleSta
     ends = on & ((jnp.asarray(failed)[side] != 0) | (left <= 0))
     uproar = jnp.where(on, jnp.where(ends, 0, left), state.uproar[side])
     locked = jnp.where(ends, 0, state.locked_move[side])
+    state = fcm.uproar_end(state, side, ends)  # bcp.c:1528, :1534
     return state._replace(
         uproar=state.uproar.at[side].set(uproar.astype(state.uproar.dtype)),
         locked_move=state.locked_move.at[side].set(locked.astype(state.locked_move.dtype)),
@@ -3937,7 +3942,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         weather=jnp.where(ended, Weather.NONE, weather).astype(weather.dtype),
         weather_timer=timer.astype(state.weather_timer.dtype),
     )
-    state = _where(live, counted, state)
+    state = _where(live, fcm.weather_countdown(counted, live), state)
     for position in (0, 1):
         state = _where(live, _wish(state, sides[position]), state)
 
@@ -3958,6 +3963,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
     counted = _count_down(state.gravity)
     rearm = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0) & (state.over == 0)
     gravity = jnp.where(rearm, GRAVITY_TURNS, counted)
+    state = fcm.gravity_tick(state, state.over == 0, tables.gravity_rearm != 0)
     state = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
     return gravity_ground(state, rearm)
 
@@ -4126,6 +4132,7 @@ def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
     running = live & (state.trick_room != 0)
     rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)
     value = jnp.where(rearm, TRICK_ROOM_TURNS, counted)
+    state = fcm.trick_room_tick(state, live, tables.trick_room_rearm != 0)
     return state._replace(
         trick_room=jnp.where(running, value, state.trick_room).astype(state.trick_room.dtype)
     )

@@ -45,6 +45,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     PRESENT_HEAL,
     ability_weather,
@@ -1105,7 +1106,7 @@ def _threshold_grid(
                 AbilityId.INSOMNIA,
                 jnp.where(f & sw, foe_old, state.ability[party(fmt, side), side_mon]),
             )
-            hidden = state._replace(
+            hidden = fcm.with_gravity(state, gravity, f & grav)._replace(
                 embargo=state.embargo.at[side].set(embargo),
                 ability=state.ability.at[party(fmt, foe), foe_mon]
                 .set(ability.astype(state.ability.dtype))
@@ -1587,7 +1588,7 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
         clear = ~baton if name in (*BATON_PASSED_FIELDS, "stages") else True
         return arr.at[pivot].set(jnp.where(clear, jnp.zeros_like(arr[pivot]), arr[pivot]))
 
-    seen = state._replace(
+    seen = fcm.uproar_end(state, pivot, True)._replace(
         active=state.active.at[pivot].set(slot.astype(state.active.dtype)),
         move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},

@@ -3,7 +3,9 @@
 ``BattleState`` is unbatched: the party axis (0 the player, 1 the opponent) and the battler axis
 (singles: the same two) lead the arrays, then the slot axis in party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
 ``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
-ruling D1). The field list is ticked off against the decomp's battle structs in
+ruling D1), and ``field_mask`` / ``weather_turns`` (``int32``: fieldConditionsMask uses bits 0-18;
+weatherTurns is a ``u32`` whose ``--x == 0`` test int32 reproduces, FCM 4.2). The field list is
+ticked off against the decomp's battle structs in
 ``STATE.md``.
 
 Encodings:
@@ -23,6 +25,15 @@ Encodings:
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
 * ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
+* ``field_mask`` is ``BattleContext.fieldConditionsMask`` bit for bit (``ids.FieldCondition``,
+  condition.h:110-149) and ``weather_turns`` is ``FieldConditions.weatherTurns``
+  (battle_context.h:29), written beside the old fields by every writer (``engine.field``; FCM
+  step 1): the readers still read ``weather``, ``weather_timer``, ``gravity``, ``trick_room`` and
+  ``uproar``. A clean mask equals them: at most one weather group, TEMP-only with
+  ``weather_turns == weather_timer`` or PERM-only (``weather_timer == 0``); Gravity bits 12-14 =
+  ``gravity``, Trick Room bits 16-18 = ``trick_room``; Uproar bit ``8 + b`` = ``uproar[b] != 0``.
+  ``weather_turns`` is stale outside a TEMP-only weather (only the weather moves and the countdown
+  write it).
 * ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
   double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
@@ -291,6 +302,7 @@ from nuzline.engine.ids import (
     AbilityId,
     Stat,
     Weather,
+    start_field_mask,
 )
 from nuzline.engine.stats import calc_stats
 
@@ -475,6 +487,8 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
+    field_mask: jnp.ndarray  # int32, BattleContext.fieldConditionsMask (engine.field)
+    weather_turns: jnp.ndarray  # int32, FieldConditions.weatherTurns
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
@@ -855,6 +869,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "weather_timer": (_FIELD, np.int8),
     "trick_room": (_FIELD, np.int8),
     "gravity": (_FIELD, np.int8),
+    "field_mask": (_FIELD, np.int32),
+    "weather_turns": (_FIELD, np.int32),
     "war_swaps": (_FIELD, np.int16),
     "entry_pending": (_BATTLER, np.int8),
     "move_prev": (_FIELD, np.int16),
@@ -1195,6 +1211,8 @@ def initial_arrays(
     if not 0 <= trick_room <= TRICK_ROOM_TURNS:
         raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
     a["trick_room"][...] = trick_room
+    # fieldConditionsMask of the same start (``ids.start_field_mask``); weatherTurns 0.
+    a["field_mask"][...] = start_field_mask(start_condition, gravity, trick_room)
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).

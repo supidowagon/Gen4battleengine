@@ -250,6 +250,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     PHYSICAL,
     PRESENT_HEAL,
@@ -1556,6 +1557,7 @@ def _uproar(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``moveLockedInto`` = moveCur (:5), ``Random 3, 3`` turns (:6-8, ``outcome.duration``, 3-6) and
     the battler's ``FIELD_CONDITION_UPROAR`` bit (:9-11, ``uproar != 0``)."""
     cond = (h.effect == _E.UPROAR) & h.effective & (state.uproar[h.side] == 0)
+    state = fcm.uproar_start(state, h.side, cond)
     state = _set(state, "locked_move", h.side, h.move, cond)
     return _set(state, "uproar", h.side, outcome.duration[h.side], cond)
 
@@ -1691,6 +1693,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (battle_lib.c:1432-1439). E3-2-4."""
     cond = (h.effect == _E.TRICK_ROOM) & h.landed
     value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
+    state = fcm.trick_room_toggle(state, cond)
     return state._replace(
         trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
     )
@@ -1894,6 +1897,7 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
     the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
     cond = (h.effect == _E.GRAVITY) & h.landed & (state.gravity == 0)
+    state = fcm.gravity_start(state, cond)
     state = state._replace(
         gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
     )
@@ -2381,6 +2385,7 @@ def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     turns = WEATHER_TURNS + jnp.where(rock, tables.item_param[item, 0].astype(_I32), 0)
     cond = (h.effect == _E.WEATHER) & h.landed & ~weather_fails(state, h.param)
+    state = fcm.weather_move(state, weather, turns, cond)
     return state._replace(
         weather=jnp.where(cond, weather, state.weather).astype(state.weather.dtype),
         weather_timer=jnp.where(cond, turns, state.weather_timer).astype(state.weather_timer.dtype),

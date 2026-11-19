@@ -199,6 +199,8 @@ class RefState:
     weather_timer: int
     trick_room: int
     gravity: int
+    field_mask: int  # fieldConditionsMask (engine.state, engine.field)
+    weather_turns: int  # FieldConditions.weatherTurns
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
     move_prev: int
     terrain: int
