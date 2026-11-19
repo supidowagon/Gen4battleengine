@@ -23,14 +23,25 @@ from tests.strategies import any_outcome, legal_action_pair, supported_state
 NEW_FIELDS = ("deaths", "faint_budget", "protected", "replace_mul")
 # Fields added after them (E2 batch 6: the turn scratch, 0 between turns, docs/kaizo/
 # e2-mechanics-ledger.md "Batch 6 design"): all 0 in a fresh state too.
-LATER_FIELDS = tuple(BattleState._fields[BattleState._fields.index("replace_mul") + 1 :])
+LATER_FIELDS = tuple(
+    BattleState._fields[
+        BattleState._fields.index("replace_mul") + 1 : BattleState._fields.index("chosen_target")
+    ]
+)
+# D2's fields after the scratch (ruling D2-38): `chosen_target` starts at b ^ 1 (D2-1; the
+# game's 0 is never read, every battler selects on turn 1, bcp.c:507-531), `last_hit_by` at 0.
+D2_FIELDS = ("chosen_target", "last_hit_by")
 
 
 def test_new_fields_default_to_zero(tables, names):
     s = roark_state(tables, names)
-    assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS) :] == LATER_FIELDS
-    for name in NEW_FIELDS + LATER_FIELDS:
+    assert LATER_FIELDS and BattleState._fields[-len(LATER_FIELDS + D2_FIELDS) :] == (
+        LATER_FIELDS + D2_FIELDS
+    )
+    for name in NEW_FIELDS + LATER_FIELDS + ("last_hit_by",):
         assert not np.any(np.asarray(getattr(s, name))), name
+    b = np.arange(len(s.chosen_target))
+    assert np.asarray(s.chosen_target).tolist() == (b ^ 1).tolist()
     start = BattleState._fields.index("deaths")
     assert BattleState._fields[start : start + 4] == NEW_FIELDS
     assert all(name == "pivot_battler" or name.startswith("ts_") for name in LATER_FIELDS)
