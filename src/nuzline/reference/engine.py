@@ -1826,6 +1826,18 @@ def _conv2_fails(tables, s: RefState, side: int) -> bool:
     return not _conv2_rows(tables, sd.conv2_type, mon.types)
 
 
+def _spite_slot(s: RefState, target: int) -> tuple[bool, int, int]:
+    """``BtlCmd_TrySpite`` (battle_script.c:4990-5016, E3-B2-4): ``(fails, slot, taken)`` for the
+    battler ``target``: its last move (``movePrevByBattler``) must be set and sit in one of its
+    slots (``Battler_SlotForMove``, the first) with PP left; it loses ``min(4, ppCur)``."""
+    sd, mon = s.battlers[target], _active(s, target)
+    last = sd.last_move
+    if not last or last not in mon.moves:
+        return True, 0, 0
+    slot = mon.moves.index(last)
+    return mon.pp[slot] == 0, slot, min(4, mon.pp[slot])
+
+
 def _conv2_type(tables, s: RefState, side: int, o) -> int:
     """The type ``BtlCmd_TryConversion2`` gives ``side``'s battler (not ``_conv2_fails``):
     ``o.conv2[side][recorded type]`` when that row is eligible, else the linear scan's first one."""
@@ -2501,7 +2513,7 @@ def _metronome_update(tables, s: RefState, side: int, move: int) -> None:
     uproaring nor move-locked counts ``moveTemp`` (same move +1 up to 10, else 0 and the new
     move); an attacker holding no Metronome has its own count reset to 0 (:6176-6177). A move
     with MOVE_STATUS_NO_PP (bcp.c:2285) counts too: the update follows the NO_EFFECTS branch
-    (bcp.c:3209-3221); only the unsupported Spite (or an encored move with no PP) gets there."""
+    (bcp.c:3209-3221); only Spite (E3-B2-4; or an encored move with no PP) gets there."""
     sd = s.battlers[side]
     if _item_effect(tables, _active(s, side), s) != ItemId.METRONOME_ITEM:
         sd.metronome_turns = 0
@@ -3465,6 +3477,14 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             new = int(TERRAIN_TYPES[row])
             if new not in user.types:
                 user.types = [new] * len(user.types)
+    elif effect == EffectId.SPITE and landed:
+        # effect_script_0100.s -> subscript_reduce_target_pp.s -> BtlCmd_TrySpite (script.c:4990-
+        # 5016): the slot of the target's last move loses min(4, ppCur) (E3-B2-4).
+        fails, slot, taken = _spite_slot(s, target)
+        if fails:  # :12-14: the attack message (:6) is skipped
+            turn.attack_message = False
+        else:
+            _active(s, target).pp[slot] -= taken
     elif effect == EffectId.CONVERSION_2 and landed:
         # effect_script_0093.s -> subscript_conversion_2.s -> BtlCmd_TryConversion2 (script.c:
         # 4765-4820): both types become the picked defending type (E3-B2-3).
@@ -5424,6 +5444,9 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         if effect == EffectId.CONVERSION_2 and _conv2_fails(tables, s, side):
             full = True
             turn.attack_message = False
+        # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED); the
+        # attack message it skips is cleared where the move connects (``_move_effect``), E3-B2-4.
+        full = full or (effect == EffectId.SPITE and _spite_slot(s, _foe(side))[0])
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         full = full or (effect == EffectId.ENCORE and _encore_fails(tables, s, _foe(side))[0])
         # BtlCmd_TrySafeguard (script.c:5760-5762, MOVE_STATUS_FAILED), B10-7.
@@ -6700,6 +6723,14 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             finally:
                 if _active(s, _foe(side)) is foe:
                     foe.types = saved
+            # A failed Spite skipped its attack message (subscript_reduce_target_pp.s:6): UpdateFlags
+            # WhenHit then clears moveHit instead of recording the move (bcp.c:4498-4508), E3-B2-4.
+            if (
+                record
+                and not turn.attack_message
+                and _t(tables, "move_effect", move) == EffectId.SPITE
+            ):
+                record = 0
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)
             last_of_multi = turn.charge_strike or turn.bide_ended

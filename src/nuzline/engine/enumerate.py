@@ -782,6 +782,7 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.MAGNITUDE,
     _E.SECONDARY_CONFUSE,
     _E.DISABLE,
+    _E.SPITE,  # E3-B2-4: the target's PP only; its move failing is no input of a hit
     _E.BIDE,
     _E.ROLLOUT,
     _E.BRICK_BREAK,  # clears the attacker's side's screens; the hit reads the defender's
@@ -1336,6 +1337,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
     _E.CONVERSION_2,  # a status move: no damage
+    _E.SPITE,  # a status move: no damage (E3-B2-4)
     _E.ROAR,  # a status move: no damage
     _E.WEATHER,  # a status move: no damage
     # Power from the defender's HP or status, or the user's status, at the hit: not the

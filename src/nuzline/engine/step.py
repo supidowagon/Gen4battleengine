@@ -161,6 +161,7 @@ from nuzline.engine.effects import (
     reveal_item,
     self_defender,
     shell_bell_heal,
+    spite_slot,
     sticky_barb_transfer,
     sync_landed,
     synchronize,
@@ -1068,8 +1069,8 @@ def _use_move(
     # (effects.pressure_pp_cost), at most the PP left (:2276-2280), ruling G-8.
     spend = can_act & ~struggling & ~locked
     # No PP left in the slot (bcp.c:2275-2285): MOVE_STATUS_NO_PP, the move fails after its attack
-    # message. Only an encored move taken over this turn can reach it (B10-9; the selection
-    # offers no 0-PP slot).
+    # message. Only an encored move taken over this turn (B10-9; the selection offers no 0-PP
+    # slot) or a slot a faster Spite emptied (``effects._spite``, E3-B2-4) can reach it.
     no_pp = spend & (state.pp[party(fmt, side), user, slot] == 0)
     spend = spend & ~no_pp
     defender = jnp.where(
@@ -1228,7 +1229,10 @@ def _use_move(
     # (HasNoTarget, bcp.c:2327-2334; its hit may still find none after a Power Herb), B10-12.
     first_charge = charge_move & ~second_turn & ~invoker & ~nature_power
     succeeded = can_act & (has_target | nature_power | self_invoker | first_charge)
-    state = _set_last_move(state, side, jnp.where(succeeded, move, 0), ready)
+    # DecrementPP's MOVE_STATUS_NO_PP is a NO_EFFECTS status (bcp.c:2285, :3209): no
+    # SYSCTL_MOVE_SUCCEEDED, so no last move (a Spite-emptied slot, E3-B2-4); the Metronome count
+    # below still follows it.
+    state = _set_last_move(state, side, jnp.where(succeeded & ~no_pp, move, 0), ready)
     # BattleSystem_UpdateMetronomeCount at the end of BeforeMove (bcp.c:3221): reached once the
     # status checks pass and HasNoTarget finds a target (bcp.c:3175-3179; DecrementPP never
     # returns TRUE): where SYSCTL_MOVE_SUCCEEDED is set (``succeeded``), before the move's
@@ -1832,6 +1836,14 @@ def _use_move(
         & conv2_fails(tables, state, side)
     )
     items_full = items_full & ~conv2_failed
+    # Spite (subscript_reduce_target_pp.s:5-6, :12-14): TrySpite's failure jump also skips the
+    # attack message (``shown_t``); its AfterMoveEffects are skipped by ``primary_effect_fails``.
+    spite_failed = (
+        connected
+        & (tables.move_effect[used] == EffectId.SPITE)
+        & spite_slot(tables, state, target_side)[0]
+    )
+    items_full = items_full & ~spite_failed
     # AFTER_MOVE_EFFECT_SYNCHRONIZE_STATUS (bcp.c:3665-3670) comes before the switch-in effects
     # (:3672): a Roar's AfterMoveEffects, or the resumed tail's. The Synchronize flag is the
     # newcomer's Toxic Spikes poison (the U-turn subscript cleared it before the list,
@@ -2284,7 +2296,9 @@ def _use_move(
     # MOVE_NONE (bcp.c:3936-3942, :4499-4508). Skull Bash's indirect Defense +1 runs
     # subscript_update_stat_stage.s, whose PrintAttackMessage (:6-7, shown or not) sets it
     # (battle_script.c:1431-1432), B10-12.
-    shown_t = jnp.where(head_on, can_act & ~(charging & ~def_up) & ~conv2_failed, True)
+    shown_t = jnp.where(
+        head_on, can_act & ~(charging & ~def_up) & ~conv2_failed & ~spite_failed, True
+    )
     hit_record = jnp.where(record, jnp.where(shown_t, used_t, 0), state.move_hit[target_side])
     hit_record = jnp.where(tail, hit_record, state.move_hit[target_side])
     state = state._replace(

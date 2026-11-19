@@ -330,6 +330,9 @@ three structs has a row.
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
   (its `BtlIOCmd_UpdatePartyMon`, battle_io_command.c:581-587), a level-up's learn writes the shadow, and
   leaving (`step._restore_moves`) puts the party's back (`InitBattleMon`, battle_lib.c:80-85).
+  Spite (E3-B2-4, `effects._spite`) takes `min(4, ppCur)` from the BattleMon's slot of the target's
+  `last_move` (BtlCmd_TrySpite, battle_script.c:4990-5016): it writes `pp` only, so a Mimic slot's
+  `shadow_pp` stays (`BattleMon_CopyToParty` skips it).
 - **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`

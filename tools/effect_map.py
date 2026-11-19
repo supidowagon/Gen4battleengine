@@ -562,6 +562,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     9: ("BATTLE_EFFECT_COPY_MOVE", _E.MIRROR_MOVE, (0, 0, 0)),
     # Conversion 2: effect_script_0093.s -> subscript_conversion_2.s, BtlCmd_TryConversion2 (E3-B2-3).
     93: ("BATTLE_EFFECT_CONVERSION2", _E.CONVERSION_2, (0, 0, 0)),
+    # Spite: effect_script_0100.s -> subscript_reduce_target_pp.s, BtlCmd_TrySpite (E3-B2-4).
+    100: ("BATTLE_EFFECT_DECREASE_LAST_MOVE_PP", _E.SPITE, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``

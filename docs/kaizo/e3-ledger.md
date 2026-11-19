@@ -675,3 +675,40 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   test_kaizo_policy.py (`test_conversion_2_has_no_basic_or_expert_label`), tests/engine/test_state.py
   (`test_conversion_2_record_maps_to_conv2_fields`); `fullset`-free; pod: test_enumerate's marginals
   need a `conv2` oracle clause (not added: the law is checked by the retry-loop test).
+
+- E3-B2-4 Spite (#100, BATTLE_EFFECT_DECREASE_LAST_MOVE_PP; move 180, the only move with effect 100 in
+  either game): new `EffectId.SPITE` (133). No new state, no `Outcome` field and no draw (BtlCmd_
+  TrySpite reads no random). Tables: only `move_effect` of Spite (effect-map entry); no manifest bump:
+  no array or key changed (as Conversion 2).
+  Script: effect_script_0100.s:5 direct ON_HIT TO_DEFENDER (lib.c:1485-1491: not on NO_EFFECTS, so not
+  on a miss, Protect or a semi-invulnerable foe), subscript_reduce_target_pp.s:5 skips MISSED |
+  SEMI_INVULNERABLE, :6 TrySpite, failure -> :12-14 `MOVE_STATUS_FAILED` with the attack message (:7)
+  skipped. `BtlCmd_TrySpite` (bs.c:4990-5016): `effects.spite_slot`: the first slot holding the
+  defender's `movePrevByBattler` (`last_move`; Battler_SlotForMove, lib.c:2376-2387) fails when
+  `last_move` is 0 (:4995, :5011-5013), is in no slot (Struggle, a move no longer held: :4996) or its
+  slot is at 0 PP (:4996-4998); else `dec = min(4, ppCur)` (:5000-5003), `ppCur -= dec`, CopyToParty.
+  `effects._spite` writes `pp[party, active, slot]` only: a Mimic slot's `shadow_pp` stays (CopyToParty
+  skips flagged slots). Through a Substitute, no ability check.
+  Failure joins `primary_effect_fails` (no AfterMoveEffects) and `shown_t` (no attack message: no
+  movePrev, no Choice lock, no moveHit) beside Conversion 2's. Reference engine: `_spite_slot`, the
+  `_move_effect` branch, the `full` flag, and `_actions` clearing the foe's moveHit for a failed Spite.
+  Hit chance: acc 100, standard. Damage and crit: none (status move). The enumeration classes it
+  `INPUT_NEUTRAL_EFFECTS` / `NON_TABLE_DAMAGE_EFFECTS` (no damage input changes; a foe move it empties
+  fails with NO_PP, which only removes later draws); `test_accuracy_classes` lists it as writing no stage.
+  Held items: the defender's Leppa Berry (after-move TriggerHeldItem, bcp.c:3694; lib.c:4636-4653)
+  restores the slot Spite emptied in the same action (`hooks._leppa`, tested).
+  Same-turn effect (bcp.c:2275-2286, :3209): a faster Spite leaves the foe's chosen move at 0 PP:
+  DecrementPP sets MOVE_STATUS_NO_PP (a NO_EFFECTS status) and the move fails. Engine fix found by the
+  test: `step._use_move` wrote `last_move` for such a move (SYSCTL_MOVE_SUCCEEDED is set only on the
+  non-NO_EFFECTS branch, :3211-3212); it now writes 0 (the Metronome count still follows, :3221).
+  AI: no Basic or Expert label; 100 in `KAIZO_TRANSCRIBED` (label-less list); its tables, CheckHP_Target_
+  DiscourageAtLowHP (script.s:7960) and Harrassment_Effects (:8051), were already transcribed
+  (commands.py). Read bounds and backlog regenerated.
+  Rulings. (1) Kaizo's Magic Coat on Spite (a reflected Spite cuts the user's own Spite PP): Magic
+  Coat / Snatch do not exist in the engine (Owed 1 of E3-B2-3), so it is not modelled. (2) The
+  target's slot is read at the move's hit, after any faster move of this turn (`last_move` is
+  written when the foe acts, bcp.c:3945-3949).
+  Not built: Magic Coat reflection; doubles (the defender is the chosen foe, `last_move[target_side]`
+  is per battler, but no doubles format runs the enumeration yet). Tests: tests/engine/test_e3_batch2.py
+  (`test_spite_*`, `test_a_*` of the Spite section), tests/ai/test_kaizo_policy.py
+  (`test_spite_has_no_basic_or_expert_label`); `fullset`-free.

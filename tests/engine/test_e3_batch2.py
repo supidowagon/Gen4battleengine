@@ -16,6 +16,7 @@ import numpy as np
 from nuzline.data.spec import PokemonSpec
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
 from nuzline.engine.ids import (
+    MOVE_STRUGGLE,
     AbilityId,
     EffectId,
     FlingEffect,
@@ -754,3 +755,153 @@ def test_the_draw_is_sampled_from_the_law(tables, names):
     picks = np.asarray(draw(jax.random.split(jax.random.PRNGKey(0), 4000)))
     assert set(np.unique(picks)) == {STEEL, GHOST}
     assert abs((picks == STEEL).mean() - law[STEEL]) < 0.04
+
+
+# --- #100 Spite (E3-B2-4) ---------------------------------------------------------------------
+#
+# effect_script_0100.s -> subscript_reduce_target_pp.s -> BtlCmd_TrySpite (battle_script.c:4990-
+# 5016): the slot of the target's movePrevByBattler (``last_move``) loses min(4, ppCur); no last
+# move, a move in no slot (Struggle) or a slot at 0 PP is MOVE_STATUS_FAILED
+# (subscript_reduce_target_pp.s:12-14) and the attack message is skipped. No random draw.
+
+
+def _spite_fight(t, n, foe=("Tackle", "Growl"), last="Tackle", fast=True, foe_item=""):
+    """A level 50 Monferno (Spite, Swords Dance) against a level 50 Geodude (``foe``) whose
+    ``last_move`` is ``last`` ('' = none); the Monferno is faster unless not ``fast``."""
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 50, ("Spite", "Swords Dance"))],
+        [_spec(n, "Geodude", 50, foe, foe_item)],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500 if fast else 1))
+    if last:
+        s = s._replace(last_move=s.last_move.at[1].set(n.move(last)))
+    return s
+
+
+def _pp(s, side=1):
+    return np.asarray(s.pp[side, 0]).tolist()[:2]
+
+
+def _spite(t, n, s, foe="Growl", out=None):
+    return assert_matches_reference(
+        t, s, A("Spite", foe, s, n), out if out is not None else _hits()
+    )
+
+
+def test_spite_is_mapped_in_both_games(tables, names, kaizo_tables, kaizo_names):
+    """Effect 100 (effect_script_0100.s) is EffectId.SPITE in both games; Spite (move 180) is the
+    only move with that effect; the effect is a neutral, non-damaging one of the enumeration."""
+    from nuzline.engine.enumerate import INPUT_NEUTRAL_EFFECTS
+
+    assert DECOMP_EFFECT_TO_ID[100] == (EffectId.SPITE, (0, 0, 0))
+    for t, n in ((tables, names), (kaizo_tables, kaizo_names)):
+        assert int(t.move_effect[n.move("Spite")]) == EffectId.SPITE
+        assert int((np.asarray(t.move_effect) == EffectId.SPITE).sum()) == 1
+    assert EffectId.SPITE in INPUT_NEUTRAL_EFFECTS
+    assert EffectId.SPITE in NON_TABLE_DAMAGE_EFFECTS
+
+
+def test_spite_takes_four_pp_from_the_slot_of_the_targets_last_move(tables, names):
+    """BtlCmd_TrySpite (:5000-5007): the slot holding movePrevByBattler (Tackle, slot 0) loses 4;
+    the other slot is untouched by it (the foe's own Growl spends its usual 1)."""
+    s = _spite_fight(tables, names)
+    before = _pp(s)
+    out = _spite(tables, names, s)
+    assert _pp(out) == [before[0] - 4, before[1] - 1]
+
+
+def test_spite_takes_only_the_pp_left(tables, names):
+    """dec = min(4, ppCur) (:5000-5003): 1 or 3 PP left empties the slot, 4 empties it, 5 leaves
+    1; a slot already at 0 fails it (:4996-4998) and stays at 0."""
+    t, n = tables, names
+    s = _spite_fight(t, n)
+    for left in (1, 3, 4, 5):
+        low = s._replace(pp=s.pp.at[1, 0, 0].set(left))
+        assert _pp(_spite(t, n, low))[0] == max(left - 4, 0)
+    empty = s._replace(pp=s.pp.at[1, 0, 0].set(0))
+    assert _pp(_spite(t, n, empty))[0] == 0
+
+
+def test_spite_fails_without_a_usable_last_move_and_skips_the_attack_message(tables, names):
+    """No last move (:4995, :5011-5013), Struggle (in no slot) or a move the foe holds in no slot
+    (Battler_SlotForMove finds none, :4996) fail it: no PP changes. The attack message
+    (subscript_reduce_target_pp.s:6, after TrySpite) is skipped, so movePrev stays 0 behind a
+    slower user's sleeping foe (whose own failed move zeroed it and zeroed its last move), where
+    the foe's Growl first lets Spite succeed and show itself."""
+    t, n = tables, names
+    s = _spite_fight(t, n, fast=False)
+    worked = _spite(t, n, s)
+    assert int(worked.move_prev) == n.move("Spite")
+    sleeper = s.with_status(1, 0, Status.SLEEP, 5)
+    out = _spite(t, n, sleeper)
+    assert _pp(out) == _pp(sleeper) and int(out.move_prev) == 0
+    # A faster user meets the turn-start last move: none, Struggle, a move in no slot, 0 PP left.
+    fast = _spite_fight(t, n).with_status(1, 0, Status.SLEEP, 5)
+    assert _pp(_spite(t, n, fast))[0] == _pp(fast)[0] - 4
+    for last in (0, MOVE_STRUGGLE, n.move("Rock Throw")):
+        case = fast._replace(last_move=fast.last_move.at[1].set(last))
+        assert _pp(_spite(t, n, case)) == _pp(case)
+    empty = fast._replace(pp=fast.pp.at[1, 0, 0].set(0))
+    assert _pp(_spite(t, n, empty)) == _pp(empty)
+
+
+def test_a_slower_spite_reads_the_move_the_foe_just_used(tables, names):
+    """movePrevByBattler is written when the foe acts (bcp.c:3945-3949): behind a foe that Growls,
+    Spite takes from Growl's slot (slot 1), not the turn-start last move (Tackle)."""
+    s = _spite_fight(tables, names, fast=False)
+    out = _spite(tables, names, s)
+    before = _pp(s)
+    assert _pp(out) == [before[0], before[1] - 1 - 4]
+
+
+def test_a_miss_takes_nothing_and_a_substitute_does_not_stop_it(tables, names):
+    """The direct ON_HIT runs unless NO_EFFECTS (battle_lib.c:1485-1491): a miss leaves the PP;
+    a Substitute is not checked (:4990-5016), so it still takes the 4."""
+    t, n = tables, names
+    s = _spite_fight(t, n)
+    miss = _hits()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    out = _spite(t, n, s, out=miss)
+    assert _pp(out)[0] == _pp(s)[0]
+    sub = s._replace(substitute_hp=s.substitute_hp.at[1].set(20))
+    assert _pp(_spite(t, n, sub))[0] == _pp(s)[0] - 4
+
+
+def test_a_faster_spite_empties_the_chosen_move_and_it_fails_with_no_pp(tables, names):
+    """DecrementPP (bcp.c:2275-2286) finds 0 PP in the foe's chosen Tackle after a faster Spite
+    emptied it: MOVE_STATUS_NO_PP, the move fails (the Monferno takes nothing); with PP to spare
+    the same Tackle hits."""
+    t, n = tables, names
+    s = _spite_fight(t, n)
+    low = s._replace(pp=s.pp.at[1, 0, 0].set(3))
+    out = _spite(t, n, low, foe="Tackle")
+    assert _pp(out)[0] == 0
+    assert _hp(out, 0) == int(s.hp[0, 0])
+    assert _hp(_spite(t, n, s, foe="Tackle"), 0) < int(s.hp[0, 0])
+
+
+def test_a_leppa_berry_restores_the_emptied_slot_in_the_same_action(tables, names):
+    """The after-move TriggerHeldItem on the defender (bcp.c:3694; battle_lib.c:4636-4653): the
+    foe's Leppa Berry restores the first slot at 0 PP that Spite just emptied; the berry is spent."""
+    t, n = tables, names
+    s = _spite_fight(t, n, foe_item="Leppa Berry")
+    s = s._replace(pp=s.pp.at[1, 0, 0].set(3))
+    out = _spite(t, n, s)
+    assert _pp(out)[0] == int(t.item_param[n.item("Leppa Berry"), 0])
+    assert int(out.item[1, 0]) == 0
+
+
+def test_a_mimicked_slot_loses_only_the_battlemons_pp(tables, names):
+    """BattleMon_CopyToParty (:5007-5009) skips a Mimic-flagged slot (BtlIOCmd_UpdatePartyMon): the
+    BattleMon's PP drops, the party's shadow of it stays."""
+    t, n = tables, names
+    s = _spite_fight(t, n)
+    s = s._replace(
+        mimic_slots=s.mimic_slots.at[1].set(1),
+        shadow_moves=s.shadow_moves.at[1, 0].set(n.move("Rock Throw")),
+        shadow_pp=s.shadow_pp.at[1, 0].set(15),
+    )
+    out = _spite(t, n, s)
+    assert _pp(out)[0] == _pp(s)[0] - 4
+    assert int(out.shadow_pp[1, 0]) == 15

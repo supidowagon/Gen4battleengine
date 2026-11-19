@@ -684,6 +684,10 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # entry names it: its move takes the generic paths (the tables that list it, Expert_
         # Encore's :3223 and the CheckHP ones :7798, :7847, :7958, are transcribed).
         93,  # CONVERSION2
+        # E3-B2-4. Named only by the tables Harrassment_Effects (script.s:8051) and CheckHP_Target_
+        # DiscourageAtLowHP (:7960), both transcribed (commands.py): no Basic_ScoreMoveEffect or
+        # Expert_Main entry, so its move takes the generic paths.
+        100,  # DECREASE_LAST_MOVE_PP (Spite)
         # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
         # (:1623-1811) or other flag entry names these: their moves take the generic paths.
         77,  # POISON_MULTI_HIT (Twineedle)

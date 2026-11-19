@@ -347,6 +347,7 @@ BIDE_TURNS = 2  # VOLATILE_CONDITION_BIDE_1 (condition.h:41): the 2-bit counter'
 SAFEGUARD_TURNS = 5  # BtlCmd_TrySafeguard (battle_script.c:5765)
 MIST_TURNS = 5  # BtlCmd_TryMist: NUM_SCREEN_TURNS (battle_script.c:4312; battle.h:142)
 ROLLOUT_USES = 5  # BtlCmd_CalcRolloutPower starts rolloutCount at 5
+SPITE_PP = 4  # BtlCmd_TrySpite's ``dec`` (battle_script.c:5000)
 
 
 class _Hit(NamedTuple):
@@ -687,6 +688,38 @@ def _conversion_2(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     types = state.types[party(fmt, h.side), h.user]
     value = jnp.where(cond, picked, types.astype(_I32)).astype(types.dtype)
     return state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+
+
+def spite_slot(tables: Tables, state: BattleState, target_side) -> tuple:
+    """``(fails, slot, taken)``: ``BtlCmd_TrySpite`` (battle_script.c:4990-5016) on ``target_side``'s
+    battler. ``slot`` is the first slot holding its ``movePrevByBattler`` (``last_move``,
+    ``Battler_SlotForMove``, battle_lib.c:2376-2387); the move fails (jump to subscript_reduce_
+    target_pp.s:12-14, ``MOVE_STATUS_FAILED``, the attack message skipped) when that is none
+    (:4995, :5011-5013), is in no slot (Struggle, a move the battler no longer holds) or its slot
+    has 0 PP (:4996-4998). ``taken`` = ``min(4, ppCur)`` (:5000-5003). E3-B2-4."""
+    fmt = format_of(state)
+    mon = state.active[target_side]
+    last = state.last_move[target_side].astype(_I32)
+    moves = state.moves[party(fmt, target_side), mon].astype(_I32)
+    held = (moves == last) & (last != 0)
+    slot = jnp.argmax(held).astype(_I32)
+    left = state.pp[party(fmt, target_side), mon, slot].astype(_I32)
+    fails = (last == 0) | ~jnp.any(held) | (left == 0)
+    return fails, slot, jnp.minimum(left, SPITE_PP)
+
+
+def _spite(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """``SPITE`` (effect_script_0100.s:5, a direct ON_HIT ``subscript_reduce_target_pp.s`` that
+    skips a miss: ``MOVE_STATUS_MISSED`` / ``_SEMI_INVULNERABLE`` :5): unless ``spite_slot`` fails,
+    the target's slot of its last move loses ``min(4, ppCur)`` (:4999-5005; the BattleMon's PP, then
+    ``BattleMon_CopyToParty``: the party row it is). Through a Substitute, no ability test, no draw.
+    E3-B2-4."""
+    fmt = format_of(state)
+    fails, slot, taken = spite_slot(tables, state, h.target_side)
+    cond = (h.effect == _E.SPITE) & h.landed & ~fails
+    row, mon = party(fmt, h.target_side), state.active[h.target_side]
+    left = state.pp[row, mon, slot].astype(_I32) - jnp.where(cond, taken, 0)
+    return state._replace(pp=state.pp.at[row, mon, slot].set(left.astype(state.pp.dtype)))
 
 
 def _flinch(tables, state, h: _Hit) -> BattleState:
@@ -1639,6 +1672,8 @@ def primary_effect_fails(
         | ((effect == _E.MIST) & (state.mist[side_of(side)] != 0))
         # BtlCmd_TryEncore's failure (MOVE_STATUS_FAILED), B10-9.
         | ((effect == _E.ENCORE) & encore_slot_of(tables, state, target_side)[0])
+        # BtlCmd_TrySpite's failure (subscript_reduce_target_pp.s:12-14, MOVE_STATUS_FAILED), E3-B2-4.
+        | ((effect == _E.SPITE) & spite_slot(tables, state, target_side)[0])
         # subscript_tailwind_start.s:5, :18 and the effect scripts' TrySpikes / TryToxicSpikes
         # jumps (effect_script_0112.s, _0249.s): MOVE_STATUS_FAILED.
         | ((effect == _E.TAILWIND) & (state.tailwind[side_of(side)] != 0))
@@ -3268,8 +3303,8 @@ def metronome_update(tables: Tables, state: BattleState, side, move, cond) -> Ba
     10, another one sets the count to 0 and becomes ``metronomeMove``. A battler that holds no
     Metronome has its own count reset to 0 (:6176-6177). As the update follows the
     ``MOVE_STATUS_NO_EFFECTS`` branch (bcp.c:3209-3221), a move DecrementPP flagged
-    ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite empties a chosen move's PP before
-    its use, an unsupported move (the encored move with no PP, B10-9, takes the same path). G-60."""
+    ``MOVE_STATUS_NO_PP`` (bcp.c:2285) counts too; only Spite (``_spite``, E3-B2-4) empties a chosen move's PP
+    before its use, as does the encored move with no PP (B10-9). G-60."""
     side = jnp.asarray(side, _I32)
     move = jnp.asarray(move, _I32)
     cond = jnp.asarray(cond)
@@ -3685,6 +3720,7 @@ def play_hit(
         _present,
         _camouflage,
         _conversion_2,
+        _spite,
         _stealth_rock,
         _trap,
         _taunt,

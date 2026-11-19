@@ -551,6 +551,11 @@ class EffectId(IntEnum):
     # (``BattleState.conv2_move`` / ``conv2_battler`` / ``conv2_type``), the row drawn by
     # ``Outcome.conv2``; E3-B2-3.
     CONVERSION_2 = 132
+    # Spite (100, BATTLE_EFFECT_DECREASE_LAST_MOVE_PP): zeros. effect_script_0100.s: a direct ON_HIT
+    # ``subscript_reduce_target_pp.s``: BtlCmd_TrySpite (battle_script.c:4990-5016) takes
+    # min(4, ppCur) from the PP of the slot of the target's last move (``BattleState.last_move``),
+    # no random draw; E3-B2-4.
+    SPITE = 133
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

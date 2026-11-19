@@ -5345,3 +5345,26 @@ def test_conversion_2_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, ka
         layout = layout_for(t, flags, s)
         assert policy.ai_refusals(t, s, n, layout) == []
         _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
+
+
+# --- #100 Spite (E3-B2-4) ---------------------------------------------------------------------
+
+
+def test_spite_has_no_basic_or_expert_label(kaizo_tables, kaizo_names, kaizo_roark_party):
+    """BATTLE_EFFECT_DECREASE_LAST_MOVE_PP (100) is named by no Basic_ScoreMoveEffect or Expert_Main
+    entry (script.s lists it only in the tables CheckHP_Target_DiscourageAtLowHP :7960 and
+    Harrassment_Effects :8051, which are transcribed): a label-less transcribed effect, scored
+    through the generic paths only, so nothing is refused (E3-B2-4)."""
+    from nuzline.ai.layout import ALLIN
+    from nuzline.ai.outcome import KAIZO_EXPERT_LABELS, KAIZO_TRANSCRIBED
+
+    t, n = kaizo_tables, kaizo_names
+    assert 100 in KAIZO_TRANSCRIBED and 100 not in KAIZO_EXPERT_LABELS
+    assert int(t.move_ai_effect[n.move("Spite")]) == 100
+    assert policy.opponent_move_refusals(t, n.move("Spite"), ALLIN) == []
+    s = _state(t, kaizo_roark_party, BONSLY, _ids(n, "Spite", "Accelerock", "", ""))
+    assert not bool(c.is_damaging(t, n.move("Spite")))
+    for flags in (0x27, 0x10F):
+        layout = layout_for(t, flags, s)
+        assert policy.ai_refusals(t, s, n, layout) == []
+        _assert_exact_equals_loose(t, _hp(s, 1, 25), layout)
