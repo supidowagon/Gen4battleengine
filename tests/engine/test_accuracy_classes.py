@@ -536,6 +536,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.DO_NOTHING,
     EffectId.FLEE,
     EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
+    EffectId.NIGHTMARE,  # G-31: a statusVolatile bit (subscript_nightmare_start.s:9), no stage
     EffectId.TRICK_ROOM,  # E3-2-4: a field condition bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by

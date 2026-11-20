@@ -1271,6 +1271,7 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
 - **F-O5 Hydration's Nightmare clear waits for Nightmare.** `subscript_ability_restore_status.s:6` clears
   `VOLATILE_CONDITION_NIGHTMARE` with the status (F-5); Nightmare is not modelled, so this is part of the Nightmare
   group: when it is built, Hydration's (and every `subscript_ability_restore_status` caller's) cure clears it.
+  (Built in batch G: G-31..G-34.)
 
 ### Rulings
 - F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
@@ -2018,6 +2019,59 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
 - G-30 No coverage refusal held this case (F-O3 was a known limit, none to remove); no AI read (the AI reads
   the stages next turn; Recycle / Natural Gift tables already list Starf, F-10); no table input changed (no
   MANIFEST bump). Tests: tests/engine/test_e1_batch_g.py (engine equals reference per case, the laws).
+- G-31 Nightmare (F-O5; manager ruling 6: kept, vanilla coverage). Effect 107 BATTLE_EFFECT_STATUS_NIGHTMARE
+  (generated/move_battle_effects.txt:108; res/moves/nightmare/data.json: Ghost, status, power 0, accuracy 100,
+  CAN_PROTECT) maps to `EffectId.NIGHTMARE` (tools/effect_map.py; MANIFEST 40). No Kaizo move has effect 107
+  (Kaizo move 171 is Hidden Power Ghost, effect 0), so it is vanilla only; Snore (effect 92, whose AI label is
+  named Expert_Nightmare) is unchanged. effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender
+  behind a Substitute (:5), with the bit (:6) or not asleep (:7): `effects.nightmare_fails(state,
+  target_side)`, read with the script beside Dream Eater's in `step._use_move` and the reference's
+  `_script_fails(..., target)`; a landed move runs subscript_nightmare_start.s (re-tests :5-7, sets the bit
+  :9): `effects._nightmare`, the reference's `_move_effect`. Power 0: no type chart (bcp.c:2350-2357), a
+  Normal type is hit. New state `nightmare: int8[B]` (statusVolatile bit 27, condition.h:59): in
+  `VOLATILE_FIELDS`, not in `BATON_PASSED_FIELDS` (condition.h:72-76; battle_lib.c:2070, :2075, faint :2165),
+  not copied by Transform (statusVolatile, battle_mon.h:115, lies past `ability`, battle_script.c:5346-5348);
+  STATE.md row. Doubles: the defender is passed in (`target_side` / `turn.target_side`), never `1 - side`.
+  Coverage: the effect is EXACT once mapped (coverage.py:203); no backlog row (no Kaizo move).
+- G-32 What clears the bit (every decomp writer of VOLATILE_CONDITION_NIGHTMARE, by grep; `effects.clear_nightmare`
+  and the reference's `nightmare = 0`): every wake-up, subscript_wake_up.s:20 (the counter at the move,
+  bcp.c:2443-2470; an uproar at the move, :2432-2439, and at the turn end, :1505-1516); Chesto / Lum through
+  subscript_held_item_slp_restore.s:13 (a sleep cure: battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580,
+  :5648-5651) and _multi_restore.s:13 (Lum on a status and confusion, :4689-4692, :5669-5672); Lum's other
+  restore subscripts (prz/psn/brn/frz/cnf) keep it (`hooks._restore`, reference `_cure`); Shed Skin
+  (battle_lib.c:3567-3586) and Hydration in rain (battle_script.c:5626-5639 -> subscript_weather_continues.s:54)
+  through subscript_ability_restore_status.s:6, with any status (closes F-O5); Insomnia / Vital Spirit
+  (RecoverStatusByAbility, battle_lib.c:4404-4408, at the switch-in :4139 and the move end bcp.c:3965-3967)
+  through subscript_ability_forbids_status.s:16-18 (msgTemp MSGCOND_SLEEP = 0 only; Limber's branch keeps it);
+  Heal Bell / Aromatherapy (BtlCmd_TryPartyStatusRefresh, battle_script.c:5039-5070: the user unless its
+  Soundproof spares it, and the doubles partner): each battler of the user's party whose active slot the
+  refresh cures (the partner's battlersSwitchingMask test, :5049, :5068, is a doubles case for the multi-battler
+  milestone); a bag sleep cure on the active battler (battle_system.c:459-475, `bag.use_bag_item`). Full
+  Restore's subscript_use_full_restore.s clears the status first and copies it to the party
+  (battle_script.c:3077-3078), so its UseBagItem finds no sleep and keeps the bit (the engines already read
+  the status after it). Not cleared: Wake-Up Slap (subscript_heal_target_sleep.s:6), Psycho Shift
+  (subscript_give_target_own_status.s:30), Refresh, Natural Cure (the switch clears it anyway); the bit then
+  waits for the turn end (G-33), or costs a quarter if the battler is asleep again by then (a Rest after a
+  Wake-Up Slap). Fling's Chesto / Lum (battle_lib.c:5886, :5948, :5969) has no engine path: Fling is refused
+  (`coverage.ITEM_MOVING_EFFECTS`).
+- G-33 The turn end: MON_COND_CHECK_STATE_NIGHTMARE (bcp.c:1436-1448) runs after BURN and before CURSE
+  (enum bcp.c:1256-1283): a battler with the bit and curHP that is asleep runs subscript_nightmare_effect.s
+  (Magic Guard: CheckAbility :5 skips it; else Divide(maxHP, 4), :8-10, battle_lib.c:3599-3618, floor 1;
+  UPDATE_HP :16, it may faint); not asleep, the bit is cleared with no message (:1444). JAX
+  `step._nightmare_check` inside `_burn_then_curse` (one faint check still serves the three: each needs
+  curHP); reference `_nightmare_check` in `_end_of_turn`'s list. The loss is before ITEM_CONDITION (:1699),
+  so a pinch berry can eat after it, and after Shed Skin (:1355) and USE_ITEM (:1362), so those cures come
+  first. `enumerate._starf_reads` counts the bit as a residual HP source. Observation: `nightmare` beside
+  `torment` (observe.py). Tests: tests/engine/test_e1_batch_g.py (engine equals reference per case).
+- G-34 AI: Basic_CheckNightmare (script.s:194 -> :321-327) is `policy._basic_check_nightmare`: the defender's
+  VOLATILE_CONDITION_NIGHTMARE -10 (`commands.VolatileCondition.NIGHTMARE`, read from `nightmare`), not asleep
+  -8, a loaded Magic Guard (LoadBattlerAbility: known or guessed, one read) -10. 107 joins
+  `outcome.KAIZO_TRANSCRIBED` (no Expert_Main entry: Expert_StatusSleep's IfMoveEffectKnown :1817 and
+  Expert_Encore's table :3227 name it for other moves, both already transcribed), so
+  `opponent_move_refusals` no longer refuses it; `read_bounds.py` regenerated (tools/ai_read_bounds.py) with
+  its rows; the run also adds the rows of 213 (Camouflage), which G-20 put in `KAIZO_TRANSCRIBED` without
+  regenerating (tests/ai/test_read_bounds.py pins the key set to it). Test: tests/ai/test_kaizo_policy.py
+  test_nightmare_basic (a synthetic effect-107 move).
 
 ## Stream state (restart point, 2026-11-19)
 

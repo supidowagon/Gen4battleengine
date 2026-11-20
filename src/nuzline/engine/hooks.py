@@ -84,7 +84,13 @@ from nuzline.engine.damage import (
     divide,
     weather_suppressed,
 )
-from nuzline.engine.effects import change_stage, entry_hazards, forget_item, mist_blocks_drop
+from nuzline.engine.effects import (
+    change_stage,
+    clear_nightmare,
+    entry_hazards,
+    forget_item,
+    mist_blocks_drop,
+)
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
@@ -498,6 +504,9 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
             jnp.where(woke, 0, state.status_counter[row, mon]).astype(state.status_counter.dtype)
         ),
     )
+    # subscript_ability_forbids_status.s:10, :16-18: msgTemp MSGCOND_SLEEP (0, battle_lib.c:4406) also
+    # clears VOLATILE_CONDITION_NIGHTMARE; Limber's paralysis takes :13-14, which keeps it (G-32).
+    state = clear_nightmare(state, side, woke & (status == Status.SLEEP))
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
 
 
@@ -539,6 +548,10 @@ def _restore(state: BattleState, side, mon, effect, cond):
     cure_status = cond & (berry | (lum & any_status))
     cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
+    # VOLATILE_CONDITION_NIGHTMARE off (G-32): subscript_held_item_slp_restore.s:13 (a sleep cure,
+    # battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580, :5648-5651) and _multi_restore.s:13
+    # (Lum on a status and confusion, :4689-4692, :5669-5672); the other restore subscripts keep it.
+    nightmare_off = cure_status & ((status == Status.SLEEP) | (lum & confused))
     state = state._replace(
         status=state.status.at[row, mon].set(
             jnp.where(cure_status, Status.NONE, status).astype(state.status.dtype)
@@ -555,6 +568,7 @@ def _restore(state: BattleState, side, mon, effect, cond):
             jnp.where(herb & lowered, 0, state.stages[side]).astype(state.stages.dtype)
         ),
     )
+    state = clear_nightmare(state, side, nightmare_off)
     return state, cure_status | cure_confusion | herb
 
 

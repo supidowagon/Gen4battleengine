@@ -1890,6 +1890,7 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "perish_song_turns",
         "yawn",
         "curse",
+        "nightmare",  # VOLATILE_CONDITION_NIGHTMARE: not Baton-passed (G-31)
         "can_unburden",
         "trace_announced",  # BattleMon announce flags, cleared at InitBattleMon (lib.c:103-106)
         "weather_announced",
@@ -2399,6 +2400,9 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
         ItemId.ASPEAR_BERRY: (Status.FREEZE,),
     }
     cured = False
+    # subscript_held_item_slp_restore.s:13 / _multi_restore.s:13 clear VOLATILE_CONDITION_NIGHTMARE:
+    # a sleep cure, or Lum's on a status and confusion (lib.c:4689-4692); the others keep it (G-32).
+    asleep, confused = mon.status == Status.SLEEP, bool(sd.confusion)
     if mon.status in cures.get(effect, ()):
         cured = True
     elif effect == ItemId.PERSIM_BERRY and sd.confusion:  # lib.c:4655: confusion only
@@ -2408,8 +2412,12 @@ def _cure(s: RefState, side: int, effect: int) -> bool:
         mon.status != Status.NONE or sd.confusion
     ):
         cured = True
+        if mon.status != Status.NONE and confused:
+            sd.nightmare = 0
         sd.confusion = 0
     if cured:
+        if asleep:
+            sd.nightmare = 0
         mon.status = Status.NONE  # sleep turns and the toxic counter are status bits
         mon.status_counter = 0
         return True
@@ -2832,6 +2840,10 @@ def _recover_status_by_ability(s: RefState, side: int) -> None:
         AbilityId.LIMBER: Status.PARALYSIS,
     }
     if forbidden.get(_ability(s, mon)) == mon.status and mon.hp:
+        # subscript_ability_forbids_status.s:16-18: the sleep branch (msgTemp 0) clears
+        # VOLATILE_CONDITION_NIGHTMARE too (G-32).
+        if mon.status == Status.SLEEP:
+            s.battlers[side].nightmare = 0
         mon.status = Status.NONE
         mon.status_counter = 0
         if side == 0:
@@ -2890,6 +2902,7 @@ def _turn_end_ability(turn: _Turn, s: RefState, side: int) -> None:
     ):
         mon.status = Status.NONE
         mon.status_counter = 0
+        s.battlers[side].nightmare = 0  # subscript_ability_restore_status.s:6 (G-32)
         # subscript_ability_restore_status.s:8 tags the holder (script.c:11806).
         if side == 0:
             _know_ability(s, s.battlers[0].active)
@@ -3660,6 +3673,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # subscript_taunt_start.s: fails on a taunted target; Random 2, 3 turns.
         if target_alive and not s.battlers[target].taunt:
             s.battlers[target].taunt = o.duration[side]
+    elif effect == EffectId.NIGHTMARE and landed:
+        # subscript_nightmare_start.s:5-9: the script's checks again (``_script_fails`` stopped a
+        # failing one), then the defender's VOLATILE_CONDITION_NIGHTMARE (G-31).
+        if not _script_fails(s, side, effect, target=target):
+            s.battlers[target].nightmare = 1
     elif effect == EffectId.TORMENT and effective:
         # subscript_torment_start.s:5-8: fails on a target with the bit; no Substitute or ability
         # test; no count (E3-2-1).
@@ -4022,6 +4040,11 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         for slot, mon in enumerate(_party_of(s, side).mons):
             if mon.species and not spared[slot]:
                 mon.status, mon.status_counter = Status.NONE, 0
+                # script.c:5039-5070: the user's and its partner's VOLATILE_CONDITION_NIGHTMARE
+                # goes with the status of their active slot (G-32).
+                for b, sd_b in enumerate(s.battlers):
+                    if _party_of(s, b) is _party_of(s, side) and sd_b.active == slot:
+                        sd_b.nightmare = 0
     elif effect == EffectId.REFRESH and landed:
         # subscript_recover_psn_prz_brn.s:5-7 (B12-16).
         user = _active(s, side)
@@ -4745,11 +4768,14 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
     # CHECK_STATUS_STATE_SLEEP (bcp.c:2430): the counter drops by 1 (Early Bird is
     # unsupported); still asleep stops the move, waking up lets the checks go on. In an uproar
     # (FIELD_CONDITION_UPROAR) a sleeper wakes at once (bcp.c:2432-2439, subscript_wake_up.s).
+    # Every wake-up runs subscript_wake_up.s, whose :20 clears VOLATILE_CONDITION_NIGHTMARE (G-32).
     if mon.status == Status.SLEEP and _uproar_on(s):
         mon.status, mon.status_counter = Status.NONE, 0
+        s.battlers[side].nightmare = 0
     if mon.status == Status.SLEEP:
         if mon.status_counter < 1:
             mon.status = Status.NONE
+            s.battlers[side].nightmare = 0
         else:
             mon.status_counter -= 1
             # bcp.c:2455: a sleeping battler still uses Snore or Sleep Talk.
@@ -4758,6 +4784,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                     return DISRUPTED
             else:
                 mon.status = Status.NONE
+                s.battlers[side].nightmare = 0
     # CHECK_STATUS_STATE_FREEZE (bcp.c:2478): RandNext() % 5 == 0 thaws; otherwise the
     # move stops unless it is a thawing move (it thaws at SELF_THAW below).
     still_frozen = False
@@ -5482,7 +5509,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # Focus Punch (effect_script_0170.s:5-6): MOVE_STATUS_LOST_FOCUS when the user's
     # physical / specialDamageAttackerMask is set this turn (its turnFlags attackers), B10-8.
     lost_focus = effect == EffectId.FOCUS_PUNCH and bool(turn.taken[side][3] or turn.taken[side][4])
-    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)) or lost_focus:
+    if (
+        _script_fails(s, side, effect, _t(tables, "move_param", move, 1), turn.target_side)
+        or lost_focus
+    ):
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
     # Recycle (effect_script_0184.s): fails on a held item (:5) or an empty recycleItem
@@ -6225,6 +6255,8 @@ def _use_item(tables, s: RefState, side: int, item: int) -> None:
         (ItemParam.HEAL_PARALYSIS, (Status.PARALYSIS,)),
     ):
         if p[param] and mon.status in statuses:
+            if param == ItemParam.HEAL_SLEEP:  # battle_system.c:469-472 (G-32)
+                sd.nightmare = 0
             clear_status()
             applied = True
     if p[ItemParam.HEAL_CONFUSION] and sd.confusion:
@@ -6390,6 +6422,7 @@ def _weather_effect(turn: _Turn, s: RefState, side: int) -> None:
     if hydrate:
         mon.status = Status.NONE
         mon.status_counter = 0
+        s.battlers[side].nightmare = 0  # subscript_ability_restore_status.s:6 (G-32)
         if side == 0:
             _know_ability(s, s.battlers[0].active)
 
@@ -6463,6 +6496,7 @@ def _end_of_turn(turn: _Turn, s: RefState, order: list[int]) -> None:
             _poison_check,  # MON_COND_CHECK_STATE_POISON, bcp.c:1393
             _toxic_check,  # MON_COND_CHECK_STATE_TOXIC, bcp.c:1405
             _burn_check,  # MON_COND_CHECK_STATE_BURN, bcp.c:1425
+            _nightmare_check,  # MON_COND_CHECK_STATE_NIGHTMARE, bcp.c:1436 (G-33)
             _curse_check,  # MON_COND_CHECK_STATE_CURSE, bcp.c:1451
             _bind_check,  # MON_COND_CHECK_STATE_BIND, bcp.c:1462
             _bad_dreams_check,  # MON_COND_CHECK_STATE_BAD_DREAMS, bcp.c:1484
@@ -6747,6 +6781,19 @@ def _burn_check(turn: _Turn, s: RefState, side: int) -> None:
         _lose_hp(turn, s, side, loss)
 
 
+def _nightmare_check(turn: _Turn, s: RefState, side: int) -> None:
+    """``MON_COND_CHECK_STATE_NIGHTMARE`` (bcp.c:1436-1448): a battler with the bit and HP runs
+    subscript_nightmare_effect.s while asleep (no Magic Guard, :5: ``Divide(maxHP, 4)``, :8-10);
+    not asleep, the bit is cleared silently (:1444), G-33."""
+    sd, mon = s.battlers[side], _active(s, side)
+    if not (sd.nightmare and mon.hp):
+        return
+    if mon.status != Status.SLEEP:
+        sd.nightmare = 0
+    elif _ability(s, mon) != AbilityId.MAGIC_GUARD:
+        _lose_hp(turn, s, side, _divide(mon.max_hp, 4))
+
+
 def _curse_check(turn: _Turn, s: RefState, side: int) -> None:
     """``MON_COND_CHECK_STATE_CURSE`` (bcp.c:1451-1459), subscript_curse_damage.s: a cursed
     battler with HP and no Magic Guard loses ``Divide(maxHP, 4)``."""
@@ -6790,6 +6837,7 @@ def _uproar_check(turn: _Turn, s: RefState, side: int) -> None:
             break
         woken = _active(s, sleeper)
         woken.status, woken.status_counter = Status.NONE, 0
+        s.battlers[sleeper].nightmare = 0  # subscript_wake_up.s:20 (G-32)
     sd.uproar -= 1
     if turn.move_failed[side] or not sd.uproar:
         sd.uproar = 0
@@ -6945,9 +6993,18 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
     sd.mimic_slots |= 1 << j
 
 
-def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> bool:
-    """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
+def _script_fails(
+    s: RefState, side: int, effect: int, move_param1: int = 0, target: int | None = None
+) -> bool:
+    """A user-effect script's MOVE_STATUS_FAILED (``_use_move``); ``target``: the defender's
+    battler (the foe when None)."""
     sd = s.battlers[side]
+    tgt = _foe(side) if target is None else target
+    if effect == EffectId.NIGHTMARE:  # effect_script_0107.s:5-7, :11-12 (G-31)
+        foe_sd = s.battlers[tgt]
+        return bool(foe_sd.substitute_hp or foe_sd.nightmare) or (
+            _active(s, tgt).status != Status.SLEEP
+        )
     if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
         return True
     if effect == EffectId.FLEE:  # effect_script_0153.s:5, :9-10: a trainer battle (E3-1-4)

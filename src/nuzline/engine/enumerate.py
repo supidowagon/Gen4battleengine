@@ -927,6 +927,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # marked done, so no action changes. Its flip of the order bit is read at the next turn's
     # order (order.py), not by a hit of this one. A doubles partner's order is not a singles case.
     _E.TRICK_ROOM,
+    # G-31: Nightmare sets a bit read at the turn end (bcp.c:1436-1448) and by its own script; no
+    # hit of this turn reads it.
+    _E.NIGHTMARE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -1457,6 +1460,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
     _E.TORMENT,  # a status move: no damage (E3-2-1)
+    _E.NIGHTMARE,  # a status move: no damage (G-31)
     _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
     _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
@@ -2775,6 +2779,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         | jnp.any((state.status != Status.NONE) & (state.hp > 0))
         | jnp.any(state.leech_seed != 0)
         | jnp.any(state.curse != 0)
+        | jnp.any(state.nightmare != 0)  # G-33: the turn end's Divide(maxHP, 4)
         | jnp.any(state.trapped != 0)
         | jnp.any(state.future_timer != 0)
         | jnp.any(hazards)

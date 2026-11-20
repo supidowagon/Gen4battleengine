@@ -83,6 +83,15 @@ Encodings:
   battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
   stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
+* ``nightmare`` (G-31) is the battler's ``VOLATILE_CONDITION_NIGHTMARE`` (condition.h:59), 0/1:
+  set by Nightmare on a sleeping defender (subscript_nightmare_start.s:9); the turn end costs a
+  sleeper ``Divide(maxHP, 4)`` and clears it on a battler not asleep (bcp.c:1436-1448); every
+  wake-up (subscript_wake_up.s:20), a Chesto / Lum cure (subscript_held_item_slp_restore.s:13,
+  _multi_restore.s:13), Shed Skin / Hydration (subscript_ability_restore_status.s:6), Insomnia /
+  Vital Spirit (subscript_ability_forbids_status.s:18), Heal Bell / Aromatherapy
+  (battle_script.c:5039-5070) and a bag sleep cure (battle_system.c:469-472) clear it; a
+  volatile, not Baton-passed (condition.h:72-76), not copied by Transform (battle_mon.h:115
+  lies past ``ability``, battle_script.c:5346-5348).
 * ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
   a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
@@ -408,6 +417,7 @@ class BattleState(NamedTuple):
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
+    nightmare: jnp.ndarray  # int8, VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
     perish_song_turns: jnp.ndarray  # int8, MoveEffectsData.perishSongTurns (live at 0)
     yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
@@ -687,6 +697,7 @@ VOLATILE_FIELDS = (
     "perish_song_turns",
     "yawn",
     "curse",
+    "nightmare",  # VOLATILE_CONDITION_NIGHTMARE (G-31); not in BATON_PASSED_FIELDS
     "can_unburden",
     "trace_announced",
     "weather_announced",
@@ -811,6 +822,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "destiny_bond": (_BATTLER, np.int8),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
+    "nightmare": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),
     "perish_song_turns": (_BATTLER, np.int8),
     "yawn": (_BATTLER, np.int8),

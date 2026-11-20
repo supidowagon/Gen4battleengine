@@ -501,3 +501,136 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
         names, tables, ["Bug Bite"], ["Roar"], foe_item="Starf Berry", bench=True, foe_level=60
     )
     assert laws(bite, "Bug Bite", "Roar").relevant.starf[0].tolist() == [True] * 4
+
+
+# --- Nightmare (F-O5, G-31..G-34) -----------------------------------------------------------
+
+
+def _nm(tables, names, mine, opp="Tackle", *, counter=3, bit=0, foe="Bidoof", first=0):
+    """Monferno (``mine``) against a level-matched ``foe`` (Bidoof: Normal) asleep with
+    ``counter`` turns and Nightmare bit ``bit``; side ``first`` moves first."""
+    from tests.engine.test_e1_batch_f import _become
+    from tests.engine.test_protect import _state
+
+    s = _become(tables, names, _state(tables, names, mine=mine, opp=opp), 1, foe)
+    spe = (200, 10) if first == 0 else (10, 200)
+    s = s._replace(stats=s.stats.at[0, 0, Stat.SPE].set(spe[0]).at[1, 0, Stat.SPE].set(spe[1]))
+    if counter:
+        s = s.with_status(1, 0, Status.SLEEP, counter)
+    return s._replace(nightmare=s.nightmare.at[1].set(bit))
+
+
+def _quarter(s, side=1):
+    return max(int(s.max_hp[side, 0]) // 4, 1)
+
+
+def _step(tables, names, s, mine, theirs, outcome=O):
+    return assert_matches_reference(tables, s, _acts(names, s, 0, mine, theirs), outcome)
+
+
+def test_nightmare_on_a_sleeper_costs_a_quarter_at_the_turn_end(tables, names):
+    """effect_script_0107.s:8 -> subscript_nightmare_start.s:9 sets the bit on a Normal-type
+    sleeper (power 0: no type chart, bcp.c:2350-2357); the turn end runs
+    subscript_nightmare_effect.s: Divide(maxHP, 4) (:8-10, bcp.c:1436-1448)."""
+    s = _nm(tables, names, ["Nightmare"])
+    out = _step(tables, names, s, "Nightmare", "Tackle")
+    assert int(out.nightmare[1]) == 1 and int(out.status[1, 0]) == Status.SLEEP
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - _quarter(s)
+
+
+@pytest.mark.parametrize("case", ["awake", "substitute", "already"])
+def test_nightmare_fails_on_an_awake_substituted_or_haunted_target(tables, names, case):
+    """effect_script_0107.s:5-7, :11-12: MOVE_STATUS_FAILED; an existing bit costs one quarter."""
+    s = _nm(tables, names, ["Nightmare"], counter=0 if case == "awake" else 3)
+    if case == "substitute":
+        s = s._replace(substitute_hp=s.substitute_hp.at[1].set(5))
+    if case == "already":
+        s = s._replace(nightmare=s.nightmare.at[1].set(1))
+    out = _step(tables, names, s, "Nightmare", "Tackle")
+    assert int(out.nightmare[1]) == (case == "already")
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - (_quarter(s) if case == "already" else 0)
+
+
+def test_a_wake_up_at_its_own_move_ends_the_nightmare(tables, names):
+    """The sleeper's counter runs out at its move: subscript_wake_up.s:20 clears the bit (G-32),
+    so the turn end costs nothing."""
+    s = _nm(tables, names, ["Nightmare"], counter=1)
+    out = _step(tables, names, s, "Nightmare", "Tackle")
+    assert int(out.nightmare[1]) == 0 and int(out.status[1, 0]) == Status.NONE
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_wake_up_slap_keeps_the_bit_for_a_rest_after_it(tables, names):
+    """subscript_heal_target_sleep.s:6 clears only the sleep: the bit stays, the foe's Rest puts
+    it back to sleep, and the turn end costs a quarter of the full HP Rest gave (G-32)."""
+    s = _nm(tables, names, ["Wake-Up Slap"], opp="Rest", bit=1)
+    s = s._replace(hp=s.hp.at[1, 0].set(300), max_hp=s.max_hp.at[1, 0].set(300))  # survives the slap
+    out = _step(tables, names, s, "Wake-Up Slap", "Rest")
+    assert int(out.status[1, 0]) == Status.SLEEP and int(out.nightmare[1]) == 1
+    assert int(out.hp[1, 0]) == int(out.max_hp[1, 0]) - _quarter(s)
+
+
+def test_magic_guard_keeps_the_bit_and_loses_nothing(tables, names):
+    """subscript_nightmare_effect.s:5: CheckAbility Magic Guard jumps to the end."""
+    s = _nm(tables, names, ["Protect"], bit=1)
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.MAGIC_GUARD))
+    out = _step(tables, names, s, "Protect", "Tackle")
+    assert int(out.nightmare[1]) == 1 and int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+@pytest.mark.parametrize("case", ["chesto", "lum", "shed skin", "no shed skin", "hydration"])
+def test_the_foes_cures_end_the_nightmare_before_it_bites(tables, names, case):
+    """Chesto / Lum at the turn end's USE_ITEM (bcp.c:1362; subscript_held_item_slp_restore.s:13),
+    Shed Skin at its ABILITY check (:1355, 30 %: subscript_ability_restore_status.s:6) and Hydration
+    in rain (battle_script.c:5626-5639, the same subscript) all run before NIGHTMARE (:1436)."""
+    from nuzline.engine.field import with_weather
+    from nuzline.engine.ids import Weather
+
+    foe = "Phione" if case == "hydration" else "Bidoof"
+    s = _nm(tables, names, ["Protect"], bit=1, foe=foe)
+    outcome = O
+    if case in ("chesto", "lum"):
+        item = names.item("Chesto Berry" if case == "chesto" else "Lum Berry")
+        s = s._replace(item=s.item.at[1, 0].set(item))
+    if "shed skin" in case:
+        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.SHED_SKIN))
+        outcome = O._replace(shed_skin=jnp.asarray([0, case == "shed skin"], jnp.int8))
+    if case == "hydration":
+        s = with_weather(s, Weather.RAIN)
+    out = _step(tables, names, s, "Protect", "Tackle", outcome)
+    cured = case != "no shed skin"
+    assert int(out.nightmare[1]) == (not cured)
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0]) - (0 if cured else _quarter(s))
+
+
+def test_insomnia_gained_by_skill_swap_ends_the_nightmare(tables, names):
+    """The move end's RecoverStatusByAbility (bcp.c:3965-3967) on the defender, now Insomnia:
+    subscript_ability_forbids_status.s:16-18 clears the sleep and the bit (G-32)."""
+    s = _nm(tables, names, ["Skill Swap"], bit=1)
+    s = s._replace(ability=s.ability.at[0, 0].set(AbilityId.INSOMNIA))
+    out = _step(tables, names, s, "Skill Swap", "Tackle")
+    assert int(out.status[1, 0]) == Status.NONE and int(out.nightmare[1]) == 0
+    assert int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_heal_bell_from_sleep_talk_ends_the_users_nightmare(tables, names):
+    """BtlCmd_TryPartyStatusRefresh (battle_script.c:5039-5042): the user's status and bit."""
+    s = _nm(tables, names, ["Sleep Talk", "Heal Bell"], counter=0)
+    s = s.with_status(0, 0, Status.SLEEP, 3)._replace(nightmare=s.nightmare.at[0].set(1))
+    out = _step(tables, names, s, "Sleep Talk", "Tackle")
+    assert int(out.status[0, 0]) == Status.NONE and int(out.nightmare[0]) == 0
+
+
+@pytest.mark.parametrize("baton", [False, True])
+def test_a_switch_or_baton_pass_leaves_no_nightmare(tables, names, baton):
+    """BattleSystem_UpdateAfterSwitch: statusVolatile cleared, Baton Pass keeping only
+    VOLATILE_CONDITION_BATON_PASSED (battle_lib.c:2070, :2075; condition.h:72-76: no Nightmare)."""
+    from nuzline.engine.step import _reset_battler
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _reset_battler as ref_reset
+
+    s = _nm(tables, names, ["Protect"], bit=1)
+    assert int(_reset_battler(s, 1, True, baton).nightmare[1]) == 0
+    sd = to_ref(s).battlers[1]
+    ref_reset(sd, baton)
+    assert sd.nightmare == 0

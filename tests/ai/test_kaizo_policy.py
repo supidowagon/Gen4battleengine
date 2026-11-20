@@ -4490,6 +4490,28 @@ def test_camouflage_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case):
 
 
 @pytest.mark.parametrize(
+    ("case", "basic"), [("asleep", 0), ("awake", -8), ("nightmare", -10), ("magic guard", -10)]
+)
+def test_nightmare_basic(kaizo_tables, kaizo_names, kaizo_roark_party, case, basic):
+    """Basic_CheckNightmare (script.s:194 -> :321-327, G-34) on a synthetic effect-107 move (no
+    Kaizo move has it: Camouflage given STATUS_NIGHTMARE): the player already in a nightmare -10
+    (:323), not asleep -8 (:324), a Magic Guard player -10 (:325-326). The effect is not refused."""
+    t, n = kaizo_tables, kaizo_names
+    moves = _ids(n, "Camouflage", "Accelerock", "", "")
+    t = t._replace(move_ai_effect=t.move_ai_effect.at[moves[0]].set(BattleEffect.STATUS_NIGHTMARE))
+    s = _state(t, kaizo_roark_party, BONSLY, moves)
+    if case != "awake":
+        s = s.with_status(0, 0, Status.SLEEP, 3)
+    if case == "nightmare":
+        s = s._replace(nightmare=s.nightmare.at[0].set(1))
+    if case == "magic guard":
+        mg = c.ABILITY_IDS["Magic Guard"]
+        t = _with_abilities(t, int(s.species[0, 0]), [mg, mg])
+    assert policy.ai_refusals(t, s, n) == []
+    assert _delta(t, s, 0x2, 0x3)[0] == basic
+
+
+@pytest.mark.parametrize(
     ("own_hp", "ground", "known", "jumps", "expert"),
     [
         # Expert_MagnetRise (script.s:6090-6119): below 50 % HP ends; a known Earthquake / Earth

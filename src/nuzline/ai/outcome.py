@@ -717,6 +717,9 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (:1782), :5481, :5484 (E3-2-6)
         # E1 batch G (G-20): no Expert_Main entry; tables :3264, :6477, :6490, :8065.
         213,  # CAMOUFLAGE: Basic_CheckCamouflage (:252 -> :1021-1024)
+        # G-34: no Expert_Main entry (Expert_StatusSleep's :1817 and Expert_Encore's table :3227
+        # name it for other moves); no Kaizo move has it (vanilla Nightmare).
+        107,  # STATUS_NIGHTMARE: Basic_CheckNightmare (:194 -> :321-327)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added

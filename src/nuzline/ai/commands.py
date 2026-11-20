@@ -190,6 +190,7 @@ class VolatileCondition(IntEnum):
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
     TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
+    NIGHTMARE = 1 << 27  # :59; BattleState.nightmare (G-31)
 
 
 _VOLATILE_FIELDS = {
@@ -200,6 +201,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.MEAN_LOOK: "mean_look",
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
     VolatileCondition.TORMENT: "torment",
+    VolatileCondition.NIGHTMARE: "nightmare",
 }
 
 
@@ -321,7 +323,8 @@ class BattleEffect(IntEnum):
     STATUS_LEECH_SEED = 84
     KO_MON_THAT_DEFEATED_USER = 98  # Destiny Bond
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
-    STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
+    # Nightmare: Basic_CheckNightmare (:194, G-34); Expert_StatusSleep's IfMoveEffectKnown (:1817)
+    STATUS_NIGHTMARE = 107
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700); Protect, Detect
     DEF_UP_DOUBLE_ROLLOUT_POWER = 156  # Defense Curl (Expert_Protect, script.s:3554)

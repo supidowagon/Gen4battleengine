@@ -128,6 +128,7 @@ from nuzline.engine.effects import (
     can_have_status,
     captivate_fails,
     change_stage,
+    clear_nightmare,
     consume_item,
     copy_stat_stages,
     crit_blocked,
@@ -149,6 +150,7 @@ from nuzline.engine.effects import (
     magnet_rise_fails,
     metronome_update,
     metronome_verify,
+    nightmare_fails,
     on_hit_berry,
     pivot_item,
     play_hit,
@@ -1002,6 +1004,8 @@ def _use_move(
     sleeping = asleep & (sleep_left > 0)
     state = _set_mon(state, "status_counter", side, user, sleep_left, asleep)
     state = _set_mon(state, "status", side, user, Status.NONE, asleep & ~sleeping)
+    # subscript_wake_up.s:20: the wake-up ends VOLATILE_CONDITION_NIGHTMARE too (G-32).
+    state = clear_nightmare(state, side, asleep & ~sleeping)
     # CHECK_STATUS_STATE_FREEZE (:2478): RandNext() % 5 == 0 (outcome.thaw) thaws and the
     # move goes on; otherwise the move is disrupted unless it is a thawing move (Flame
     # Wheel, :2481), whose user thaws at CHECK_STATUS_STATE_SELF_THAW (:2728) below.
@@ -1416,6 +1420,9 @@ def _use_move(
     dream = (effect_used == EffectId.DRAIN) & (tables.move_param[used, 1] == 1)
     awake = state.status[party(fmt, target_side), state.active[target_side]] != Status.SLEEP
     failed = failed | (dream & (awake | (state.substitute_hp[target_side] != 0)))
+    # Nightmare (effect_script_0107.s:5-7, :11-12): MOVE_STATUS_FAILED on a defender behind a
+    # substitute, with the bit or not asleep (``nightmare_fails``, G-31).
+    failed = failed | ((effect_used == EffectId.NIGHTMARE) & nightmare_fails(state, target_side))
     # Endeavor (effect_script_0189.s:5-7, :13-14): MOVE_STATUS_FAILED unless the defender's curHP
     # exceeds the user's (B10-5).
     gap = state.hp[party(fmt, target_side), state.active[target_side]].astype(_I32) - state.hp[
@@ -3446,11 +3453,28 @@ def _curse_check(state: BattleState, side) -> BattleState:
     return _hp_change(state, side, mon, -jnp.where(on, loss, 0))
 
 
+def _nightmare_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_NIGHTMARE`` (bcp.c:1436-1448): a battler with
+    VOLATILE_CONDITION_NIGHTMARE and HP left runs subscript_nightmare_effect.s while asleep:
+    nothing for its own Magic Guard (``CheckAbility``, :5), else ``Divide(maxHP, 4)`` through
+    UPDATE_HP (:8-10, :16; it may faint); not asleep, the bit is cleared with no message (:1444),
+    G-33."""
+    fmt = format_of(state)
+    mon = state.active[side]
+    on = (state.nightmare[side] != 0) & (state.hp[party(fmt, side), mon] > 0)
+    asleep = state.status[party(fmt, side), mon] == Status.SLEEP
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
+    loss = jnp.maximum(state.max_hp[party(fmt, side), mon].astype(_I32) // 4, 1)
+    state = _hp_change(state, side, mon, -jnp.where(on & asleep & ~guarded, loss, 0))
+    return clear_nightmare(state, side, on & ~asleep)
+
+
 def _burn_then_curse(tables: Tables, state: BattleState, side) -> BattleState:
-    """``MON_COND_CHECK_STATE_BURN`` then (``_NIGHTMARE``, unsupported, between) ``_CURSE``: one
-    faint check serves both, as a battler the burn fainted has no HP for the curse and the
-    battle-over check between finds what the one after them finds."""
-    return _curse_check(_burn_check(tables, state, side), side)
+    """``MON_COND_CHECK_STATE_BURN``, ``_NIGHTMARE`` then ``_CURSE``: one faint check serves the
+    three, as a battler the burn or the nightmare fainted has no HP for the checks after it (each
+    needs ``curHP``, bcp.c:1437, :1452) and the battle-over check between finds what the one after
+    them finds."""
+    return _curse_check(_nightmare_check(_burn_check(tables, state, side), side), side)
 
 
 def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -3543,6 +3567,7 @@ def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleSta
         )
         state = _set_mon(state, "status", battler, mon, Status.NONE, wake)
         state = _set_mon(state, "status_counter", battler, mon, 0, wake)
+        state = clear_nightmare(state, battler, wake)  # subscript_wake_up.s:20 (G-32)
     left = state.uproar[side].astype(_I32) - 1
     ends = on & ((jnp.asarray(failed)[side] != 0) | (left <= 0))
     uproar = jnp.where(on, jnp.where(ends, 0, left), state.uproar[side])
@@ -3787,6 +3812,8 @@ def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome
             )
         ),
     )
+    # subscript_ability_restore_status.s:6: VOLATILE_CONDITION_NIGHTMARE off with any status (G-32).
+    state = clear_nightmare(state, side, cured)
     return reveal_ability(state, side, mon, STATUS_CURE, cured)
 
 
@@ -3808,8 +3835,8 @@ END_OF_TURN_ORDER = (
     ("poison", _poison_check),
     # MON_COND_CHECK_STATE_TOXIC, battle_controller_player.c:1405
     ("toxic", _toxic_check),
-    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _CURSE, :1451
-    # (``_burn_then_curse``)
+    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _NIGHTMARE, :1436, then
+    # _CURSE, :1451 (``_burn_then_curse``)
     ("burn_curse", _burn_then_curse),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462, then _BAD_DREAMS, :1484
     # (``_bind_then_bad_dreams``)
@@ -3938,6 +3965,7 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     state = know_ability(state, side, mon, alive & (delta < 0) & fcm.sun(w))
     state = _set_mon(state, "status", side, mon, Status.NONE, hydrate)
     state = _set_mon(state, "status_counter", side, mon, 0, hydrate)
+    state = clear_nightmare(state, side, hydrate)  # subscript_ability_restore_status.s:6 (G-32)
     state = reveal_ability(state, side, mon, STATUS_CURE, hydrate)
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 

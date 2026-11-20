@@ -1008,6 +1008,20 @@ def _basic_check_dream_eater(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -10))
 
 
+def _basic_check_nightmare(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckNightmare`` (script.s:321-327): the player already in a nightmare -10 (:323),
+    not asleep -8 (:324), Magic Guard (the player's ability, guessed or known: LoadBattlerAbility,
+    :325-326) -10 (G-34)."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.NIGHTMARE))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_not_status(ctx, _D, c.MonCondition.SLEEP))
+    ctx = _score(ctx, t, -8)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
 def _basic_check_metal_burst(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckMetalBurst`` (script.s:1160-1182): immune -10; against Stall (a guessing
     read) or a player known to hold a Shiny Stone (the decomp's Lagging Tail bug, :1163-1164)
@@ -3642,6 +3656,7 @@ _BASIC_LABELS = (
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
     (BattleEffect.PREVENT_ESCAPE, _basic_check_mean_look),  # :193
+    (BattleEffect.STATUS_NIGHTMARE, _basic_check_nightmare),  # :194 (G-34)
     (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197

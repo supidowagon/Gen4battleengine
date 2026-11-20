@@ -102,6 +102,7 @@ class RefBattler:
     destiny_bond: int
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
+    nightmare: int  # VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: int
     perish_song_turns: int
     yawn: int

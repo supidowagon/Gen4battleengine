@@ -536,6 +536,12 @@ class EffectId(IntEnum):
     # it is behind a Substitute, already has the bit, the move missed, the defender is
     # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
     GASTRO_ACID = 129
+    # E1 batch G (G-31). Nightmare (107, BATTLE_EFFECT_STATUS_NIGHTMARE; no Kaizo move has it):
+    # zeros. effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender behind a
+    # Substitute (:5), with the bit (:6) or not asleep (:7) (``effects.nightmare_fails``, read
+    # with the script in ``step._use_move``); else a direct ON_HIT subscript_nightmare_start.s
+    # sets the defender's VOLATILE_CONDITION_NIGHTMARE (:9, ``effects._nightmare``).
+    NIGHTMARE = 130
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).

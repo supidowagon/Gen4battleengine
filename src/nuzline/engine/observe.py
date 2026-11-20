@@ -220,6 +220,9 @@ _NONZERO_SIDE = (
     # E3 batch 1: "{0}'s ability was suppressed!" (subscript_suppress_target_ability.s:12) until it
     # leaves (Baton Pass keeps it, so the message is not re-shown: the bit stays set).
     "ability_suppressed",
+    # G-31: "{0} began having a nightmare!" (subscript_nightmare_start.s:10-11) until it wakes or
+    # leaves.
+    "nightmare",
 )
 # Trick Room / Gravity up: the views the observation reads (the mask's counter bits, FCM step 2).
 _FIELD_VIEWS = (("trick_room", fcm.trick_room_on), ("gravity", fcm.gravity_on))

@@ -753,6 +753,37 @@ def _curse(tables, state, h: _Hit) -> BattleState:
     return hp_update(state, h.side, h.user, -cost, hexed)
 
 
+def nightmare_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender behind a
+    Substitute (:5, ``CheckSubstitute``: no hit of the action yet), with
+    VOLATILE_CONDITION_NIGHTMARE (:6) or not asleep (:7); subscript_nightmare_start.s re-tests the
+    same three (:5-7, :29-30) on the hit (G-31). ``target_side``: the defender's battler."""
+    fmt = format_of(state)
+    status = state.status[party(fmt, target_side), state.active[target_side]]
+    return (
+        (state.substitute_hp[target_side] != 0)
+        | (state.nightmare[target_side] != 0)
+        | (status != Status.SLEEP)
+    )
+
+
+def _nightmare(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Nightmare (effect_script_0107.s:8, a direct ON_HIT subscript_nightmare_start.s): unless
+    ``nightmare_fails`` (the script's failure, ``step._use_move``, already stopped the move; the
+    subscript's own :5-7 find the same), the defender's VOLATILE_CONDITION_NIGHTMARE (:9). No
+    ability test: a Magic Guard holder takes the bit and loses nothing at the turn end (G-31)."""
+    cond = (h.effect == _E.NIGHTMARE) & h.landed & ~nightmare_fails(state, h.target_side)
+    return _set(state, "nightmare", h.target_side, 1, cond)
+
+
+def clear_nightmare(state: BattleState, battler, cond) -> BattleState:
+    """VOLATILE_CONDITION_NIGHTMARE off on ``battler`` where ``cond``: subscript_wake_up.s:20,
+    subscript_held_item_slp_restore.s:13 / _multi_restore.s:13, subscript_ability_restore_status.s:6,
+    subscript_ability_forbids_status.s:18 (the sleep branch), BtlCmd_TryPartyStatusRefresh
+    (battle_script.c:5041, :5052, :5063, :5070) and a bag sleep cure (battle_system.c:469-472), G-32."""
+    return _set(state, "nightmare", battler, 0, cond)
+
+
 def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
     """``bool``: subscript_curse_ghost.s fails (MOVE_STATUS_FAILED, :22-24) on a defender behind
     a substitute (:6) or already cursed (:7); its semi-invulnerable test (:5) cannot hold."""
@@ -1440,10 +1471,18 @@ def _heal_bell(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     counter = jnp.where(cure, 0, state.status_counter[party(fmt, h.side)]).astype(
         state.status_counter.dtype
     )
-    return state._replace(
+    state = state._replace(
         status=state.status.at[party(fmt, h.side)].set(status),
         status_counter=state.status_counter.at[party(fmt, h.side)].set(counter),
     )
+    # BtlCmd_TryPartyStatusRefresh (battle_script.c:5039-5070) clears VOLATILE_CONDITION_NIGHTMARE
+    # with the status of the user (unless its Soundproof spares it, :5038-5043) and of its doubles
+    # partner (unless spared, :5049-5053): each battler of the user's party whose active slot the
+    # refresh cures (G-32).
+    for battler in range(fmt.B):
+        mine = jnp.asarray(party(fmt, battler)) == jnp.asarray(party(fmt, h.side))
+        state = clear_nightmare(state, battler, mine & cure[state.active[battler]])
+    return state
 
 
 def refresh_fails(state: BattleState, side) -> jnp.ndarray:
@@ -3593,6 +3632,7 @@ def play_hit(
         _trap,
         _taunt,
         _torment,
+        _nightmare,
         _worry_seed,
         _gastro_acid,
         _trick_room,
