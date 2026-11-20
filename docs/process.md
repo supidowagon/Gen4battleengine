@@ -128,6 +128,10 @@ per day is the rate used for estimates.
   stream's ledger explains every diverged part (in a tests/docs-only commit) and the
   merge-gate review agent has checked that explanation against the compare log. Anything
   unexplained blocks the merge.
+- **Rebuilding a diverged state.** The snapshot generator has drawn different states on the
+  PC (Windows) than on the pod (Linux) from the same seed and content hash. A stream rebuilds
+  a diverged part only from the capture's `<part>.inputs.pkl.gz`: it asks the managing
+  session, which copies those files from the pod into `<scratch>/rent/<snapshot folder>/`.
 - **Snapshot jobs and the runner.** A capture or compare runs outside the runner's `MAXP`,
   `GATE_GB` and `KILL_GB` accounting. While one runs, the managing session sends new pack
   runs with `MAXP` lowered by 2.
