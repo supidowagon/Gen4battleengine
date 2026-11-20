@@ -1476,6 +1476,25 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   payout waits for the replacement without a different line. Removed (E1's masks, reported): the D2 Disable/Encore masks and the
   `learn_pin` mask in `levelup.learn_options` (only the HM and D10 masks stay), the window (c) refusal (`EXP_REFUSED_WINDOW_C`),
   the trace converter's refusal of those answers. The known limitation (optimism after a Shed Skin draw) is gone.
+  L4 (gate, field-pass order with two set weather groups; a documented deviation, accepted at the gate review): the game pays and prompts at CheckFieldConditions' loop
+  head (AnyFainted, AnyExpPayout, CheckBattleOver, bcp.c:938-944) after the weather state whose chip fainted the
+  foe (each set state breaks out to subscript_weather_continues.s, bcp.c:1113-1225, whose :35-37 UPDATE_HP / FAINT_MON
+  faint it), so a later set state (a corrupted mask, FCM 3.1: reachable through Acid Rain) runs after the answer.
+  Both engines pay at the same head (`step.field_conditions`' scan, the reference's per-state `_pay_exp`) and defer
+  only the prompt to after the last weather state, before Gravity. Proof that the orders give one state in singles:
+  (a) a later state reads no move or PP: its countdown (bcp.c:1121, :1146, :1171, :1196) reads the mask and
+  weatherTurns, its end scripts (subscript_raining_end.s:5 and the like) clear a bit, EndOfTurnWeatherEffect
+  (battle_script.c:5561-5647) reads types, HP, max HP, ability, status and moveEffectsMask, and
+  subscript_weather_continues.s (:11-50) runs UPDATE_HP, FAINT_MON and ABILITY_RESTORE_STATUS; none reads the learner's
+  moves or PP, and the answer (`levelup.learn_options`: moves, HM flags, the learnset) reads no HP, status or field
+  value the state writes; (b) nothing draws (no RandNext in those lines), so the answer sees no information the
+  game's player lacks; (c) no second payout: in singles the paying chip fainted the foe's only battler, and a later
+  chip on a 0-HP battler is skipped (curHP tests, battle_script.c:5578, :5586, :5599, :5614-5626) and a player faint
+  pays no exp; (d) a later chip that ends the battle can only be the player's loss (the foe's last-Pokemon end already
+  ended it at the paying head, :941), where the left prompt (D8) is read by nothing. The payout's max-HP rise reaches
+  the later chip in both engines (paid per state). Doubles (owed, for the doubles milestone): (c) fails with a second
+  foe battler, whose faint in a later state pays again before the first prompt is answered: the pass must then pause
+  per state. Test: `test_midturn_learn_field_prompt_with_two_weather_groups_follows_the_later_chip`.
   Doubles (section 5): the learner is a party slot; `reselected` feeds `fight_randomizes` per battler; `ts_move_cur`, `ts_eot`,
   `ts_qc` are `[B]`.
   Owed lines closed: (1) by review b2 #7: `order.selected_move` reads the selection-time Struggle and lock (`ts_struggling`,

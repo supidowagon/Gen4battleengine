@@ -3440,6 +3440,29 @@ def test_midturn_learn_field_payout_pauses_before_gravity_and_the_turn_end(table
     assert int(done.learn_site) == 0
 
 
+def test_midturn_learn_field_prompt_with_two_weather_groups_follows_the_later_chip(tables, names):
+    # A corrupted mask with sand and hail set (FCM 3.1): the SANDSTORM state's chip faints the 1-HP
+    # Bidoof and the payout levels Prinplup at the loop head (bcp.c:938-944); the HAILING state then
+    # chips Prinplup again on its new max HP before the pause (ledger E3-B2-21 ruling L4: the
+    # game's prompt between the two states gives the same state in singles).
+    from nuzline.engine.ids import FieldCondition
+    from nuzline.engine.levelup import LEARN_FIELD, needs_learn
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Bidoof", 12), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    mask = int(FieldCondition.SANDSTORM_PERM | FieldCondition.HAILING_PERM)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    paused = assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), miss)
+    assert int(paused.learn_site) == LEARN_FIELD and bool(needs_learn(paused))
+    assert int(paused.level[0, 0]) == 19 and int(paused.hp[1, 0]) == 0
+    hp0, max0, max1 = int(s.hp[0, 0]), int(s.max_hp[0, 0]), int(paused.max_hp[0, 0])
+    assert int(paused.hp[0, 0]) == hp0 - max0 // 16 + (max1 - max0) - max1 // 16
+    _, done = _resume_learn(tables, paused)
+    assert int(done.learn_site) == 0
+
+
 def test_midturn_learn_battler_block_payout_pauses_in_the_turn_end_order(tables, names):
     # Burn faints the 1-HP Geodude in its end-of-turn block (bcp.c:1296): the prompt comes after
     # that block, and the resume runs the other battlers' blocks in the stored order.

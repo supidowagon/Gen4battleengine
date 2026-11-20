@@ -4645,9 +4645,10 @@ def field_conditions(
     E3-B2-21: ``(state, prompt)``. The chip's payout runs its learnset scan (the loop head's
     ``AnyExpPayout`` runs the whole ``GetExpTask``, bcp.c:938-944), and a prompt left stops the
     pass before Gravity (``prompt``; ``step_events`` pauses the turn at ``LEARN_FIELD``). The game
-    prompts at the loop head after the state that paid; with two set groups (a corrupted mask,
-    FCM 3.1) the later state runs before the prompt here, which reads no move the prompt can
-    change (the reference the same). ``resume`` is the ``learn_site`` the call resumes:
+    prompts at the loop head after the state that paid (bcp.c:938-944); with two set groups (a
+    corrupted mask, FCM 3.1) a later weather state runs before the prompt here. In singles the
+    two orders give the same state (ledger E3-B2-21 ruling L4: the later state reads no move or
+    PP, draws nothing, and can pay no second exp). ``resume`` is the ``learn_site`` the call resumes:
     ``LEARN_FIELD`` runs Gravity alone, ``LEARN_MON`` nothing (the pause was in a later phase)."""
     resume = jnp.asarray(resume, _I32)
     entry = state

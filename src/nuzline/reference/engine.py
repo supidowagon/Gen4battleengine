@@ -7133,9 +7133,9 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int], resume: int = 
         if s.over:
             return
     # A learn prompt left by a chip's payout pauses before Gravity. The game prompts at the loop
-    # head after the state that paid; with two set groups (a corrupted mask, FCM 3.1) the later
-    # state runs before the prompt here, which reads no move the prompt can change (``step``
-    # the same).
+    # head after the state that paid (bcp.c:938-944); with two set groups (a corrupted mask, FCM
+    # 3.1) a later state runs before the prompt here: the same state in singles (ledger E3-B2-21
+    # ruling L4), ``step`` the same.
     if _learn_prompt(turn.tables, s):
         raise _LearnPause(LEARN_FIELD, 2, order=order)
     _gravity(turn, s)
