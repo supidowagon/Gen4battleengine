@@ -37,11 +37,12 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    `fullset` marker.
 6. The stream merges `main` into its branch, does the after-merge steps (CLAUDE.md), then
    the targeted run on the merged tip (CLAUDE.md, Merges) on the pod. The `fullset`
-   tests are their own pod run (DAYBOX.md: one mark per run). The managing session runs the
-   tip's snapshot compare (section 5); the stream explains every diverged part in its ledger.
+   tests are their own pod run (DAYBOX.md: one mark per run). With the tip it sends for
+   these runs the stream sends its `--allow-new` list and the divergences it expects; then
+   the managing session runs the tip's snapshot compare (section 5).
 7. The stream sends one message: the final tip, the batch contents with citations, the
    review outcome, the targeted run's results with time and peak memory per test file, and
-   its `--allow-new` list.
+   its ledger's explanation of every diverged part of the snapshot compare.
 8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
    diff range and the criteria, never the stream's conclusions. Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
@@ -52,7 +53,9 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 **Merge train.** When two or more batches are expected to be merge-ready within one gate run
 of each other (about 3 hours), the managing session names a train order.
 - The first stream merges `main`; each later stream merges the tip of the stream before it
-  (not `main`) and does the after-merge steps (CLAUDE.md) on that.
+  (not `main`) and does the after-merge steps (CLAUDE.md) on that. In a train only the last
+  tip gets the pod runs of step 6 and the after-merge `fullset` run; earlier members do the
+  table rebuild and the duplicate scan only.
 - Each batch keeps its own Opus merge-gate review (step 8) on its own diff range.
 - The pod work runs once, on the last tip: one targeted run with the union of the lists
   and the default mark, one `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot
@@ -75,7 +78,8 @@ of each other (about 3 hours), the managing session names a train order.
   with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
   new batches start, like a red nightly. Slow tests run in no other gate except
   `tests/test_differential.py`, which every merge run carries whole (list line
-  `tests/test_differential.py 1 A`), and the files a batch lists with the `A` flag.
+  `tests/test_differential.py 1 A`), the nightly's `tests/test_damage_oracle.py 1000 A`
+  line, and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
 - **Local runs:** CLAUDE.md, Where tests run.
@@ -113,13 +117,19 @@ per day is the rate used for estimates.
 - **Snapshot capture of `main`.** After every push of `main` the managing session starts
   one capture of the new tip on a test pod, in `/work/snapmain-<short sha>` (seeds 0-199,
   about 90 minutes; steps: DAYBOX.md, "Snapshot compare"). Keep the newest two captures;
-  delete an older one only when no compare reads it. Before a pod is deleted, copy the
-  newest capture off or re-make it on the next pod.
+  delete an older one only when no compare reads it. A capture is never copied off the pod:
+  one lost with a pod is re-made on the next pod.
 - **Snapshot compare of a merge candidate.** Compare only (about 85 minutes), against the
-  capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`.
-  The stream explains every diverged part in its ledger, in a tests/docs-only commit, before
-  the merge. Never compare a merge candidate against an older base once `main` was merged
-  into the branch.
+  capture of the `main` tip its branch contains, with `--allow-new <the stream's list>`
+  (left out when the list is empty). Never compare a merge candidate against an older base
+  once `main` was merged into the branch.
+- **Snapshot pass rule.** `compare: ok` passes. A diverged compare passes only when the
+  stream's ledger explains every diverged part (in a tests/docs-only commit) and the
+  merge-gate review agent has checked that explanation against the compare log. Anything
+  unexplained blocks the merge.
+- **Snapshot jobs and the runner.** A capture or compare runs outside the runner's `MAXP`,
+  `GATE_GB` and `KILL_GB` accounting. While one runs, the managing session sends new pack
+  runs with `MAXP` lowered by 2.
 - **Chunking.** At most one test file per process. Cut large files into chunks of test ids:
   about 57 ids for `tests/ai/test_kaizo_policy.py`, about 8 ids for memory-heavy engine
   files, about 40 for other files. Start a chunk only while container memory

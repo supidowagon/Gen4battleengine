@@ -29,11 +29,14 @@ from nuzline.jaxcache import (
 # ``self._fallback = parent or settings.default``; core.py ``given``: ``... or Settings.default``),
 # so a test that does not set ``derandomize`` takes the profile's. ``gate`` (default): fixed seeds,
 # each test's seed drawn from its own code (``derandomize=True``, which also turns the example
-# database off). ``explore`` ($NUZLINE_HYPOTHESIS_PROFILE=explore, the nightly): random seeds, and
-# a failure prints its ``@reproduce_failure`` line. Both build on Hypothesis's own "default"
-# profile, so local runs and the pod (where Hypothesis may load its "ci" profile) agree.
+# database off). ``explore`` ($NUZLINE_HYPOTHESIS_PROFILE=explore, the nightly): random seeds, no
+# example database, and a failure prints its ``@reproduce_failure`` line. Both build on
+# Hypothesis's own "default" profile, so local runs and the pod (where Hypothesis may load its
+# "ci" profile) agree. The active profile is printed in the terminal summary.
 settings.register_profile("gate", settings.get_profile("default"), derandomize=True)
-settings.register_profile("explore", settings.get_profile("default"), print_blob=True)
+settings.register_profile(
+    "explore", settings.get_profile("default"), print_blob=True, database=None
+)
 settings.load_profile(
     "explore" if os.environ.get("NUZLINE_HYPOTHESIS_PROFILE") == "explore" else "gate"
 )
@@ -203,17 +206,16 @@ def pytest_runtest_protocol(item, nextitem):
         _CLEARS.append((item.nodeid, before, _LAST_AFTER[0], not next_module))
 
 
-def pytest_report_header(config):
-    """The active Hypothesis profile (gate: fixed seeds; explore: random seeds)."""
-    return f"nuzline hypothesis profile: {settings.get_current_profile_name()}"
-
-
 def pytest_terminal_summary(terminalreporter):
     """The tests whose run grew the resident size most, and the JAX cache clears of the run:
     how many were memory-driven, and the resident size they left (a clear that leaves the
     process above the threshold would fire after every test)."""
     memory = [c for c in _CLEARS if c[3]]
     gb = 2**30
+    # Printed under -q too (the pod's unit.sh runs -q, which hides the report header).
+    terminalreporter.write_line(
+        f"nuzline hypothesis profile: {settings.get_current_profile_name()}"
+    )
     if _GROWTH:
         terminalreporter.write_line("largest resident growth over one test:")
         for growth, nodeid, after, peak in _GROWTH:
