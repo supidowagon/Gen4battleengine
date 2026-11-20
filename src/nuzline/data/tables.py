@@ -23,6 +23,8 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 
 # The version ``tools/build_tables.py`` writes into ``manifest.json``. Bump it with any change
 # to the packed arrays or manifest keys; every loader refuses tables of another version.
+# 44: E3 batch 3 GT-2: trainers carry gauntlet_facts (the group orders, gaps, escape, partner) in place of
+# gauntlet_rules; fight ids from the orders; Elite Four + Champion is a gauntlet group.
 # 43: E3 batch 2 over E1's 42 (EffectId FLING..DEFOG 131-142 after NIGHTMARE 130; MoveFlag.MIRROR_MOVE,
 # MoveFlag.MAGIC_COAT, E3-B2-2, E3-B2-6); 42: batch G merged main 08a5700 (E2 SF2; main was 34, batch G 41).
 # 41: gFieldScriptCommands is not_reached on header 321 (the multi-condition status word, G-39); 40: vanilla Nightmare (effect 107) is EffectId.NIGHTMARE (G-31); 39: Kaizo script weather (G-23, G-24): 835/836 start in rain, trainers carry script_weather /
@@ -30,7 +32,7 @@ DEFAULT = Path(__file__).resolve().parents[3] / "data" / "gen4_platinum"
 # trainers carry fog_headers (field Defog, G-15); 36: Air Lock = ability id 96; 35: batch F's
 # abilities at ids 91-95; 34: E3's trick_room_rearm; 33: gravity_rearm with E2 batch 13's fling /
 # Natural Gift.
-MANIFEST_VERSION = 43
+MANIFEST_VERSION = 44
 
 
 def check_manifest(manifest: dict, dir: Path) -> None:

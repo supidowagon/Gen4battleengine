@@ -123,8 +123,10 @@ each with a `source` (`"<Sheet>:<row>"`, `"pkcalc:<file>:<line>"`, `"rom:<what>"
   condition (see "Settling a user call").
 - `[area_exception.<id>]`: a ROM Trick Room trainer deliberately left without Trick Room, with
   the `reason`.
-- `[[gauntlet]]`: `name`, `trainers` (ids in fight order), `rules` (`heal_between`,
-  `change_team`; fill in when play reaches the gauntlet).
+- `[[gauntlet]]`: `name`, `trainers` (ids in the sheet's order) and the group's game facts, all or none:
+  `orders`, `leave_gaps`, `escape`, `pc_gaps`, `heal_gaps`, `locked_gaps`, optional `partner`, each with a
+  `<key>_source` (`orders_source` required). They are read from the ROM by `tools/kaizo/gauntlet_map.py`
+  and re-derived by `tests/kaizo/test_gauntlet_map.py`; user choices never go here.
 - `[trainer_ids."<label or Sheet:row>"]`: `id`, when a PKCalc label or sheet header matches
   the wrong ROM trainer.
 - `[fields.<id>]`: `split` (the trainer's sheet position is then unknown), `optional`,

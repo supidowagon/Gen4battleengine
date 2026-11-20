@@ -1653,3 +1653,46 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   GT-2 writes `gauntlet_facts`). Coverage's gauntlet text reads "fight <id>; facts recorded|not recorded" until GT-18.
   Tests: tests/data/test_gauntlet_settings.py (new); tests/data/test_trainer.py, tests/engine/test_coverage.py,
   tests/test_cli.py updated.
+
+- E3-B3-2 GT-2 group facts and the map read (`tools/kaizo/gauntlet_map.py`, `data/kaizo/overrides.toml`,
+  `tools/kaizo/overrides.py`, `tools/kaizo/resolve.py`). Kaizo ROM `.cache/rom/kaizo-b787e743b5fa78e1.nds`; decomp paths
+  relative to `external/pokeplatinum` (579d2d5c6). The facts are `facts-final.md` (design v5.3 section 2) entered per
+  group with `rom:` sources; a ROM-backed test re-derives them. The tool ports the Node oracle (`_scratch/e3/b3rules`
+  `bfs2.js`, `chain.js`, `gym.js`, `wayward2.js`, `wayward_nomira.js`, `wayward_talk.js`) on `RomFiles`.
+  Walk rules (all cited in the tool's docstring): the sight check runs on the start tile, every tile entered and every
+  warp arrival (`FieldInput_Process`, field_control.c:181-188; trainer_encounter.c:84-100, `IsPathInterrupted` :310-344);
+  a collision tile with behaviour 0x69 that holds a warp is entered by walking into it (field_control.c:572-592); an
+  object behind a TABLE tile (0x80) is talked to (unk_0203C954.c:58-80); a coord with var 0 always matches
+  (unk_0203C954.c:218; script_manager.c:432-433, :447-448); item balls, Rock Smash rocks and, with Strength, boulders
+  are removed (script_manager.h:112; field_move_tasks.c:457-470).
+  (a) E3-B3-2.a Oreburgh Mine (header 199): orders [195, 196] only, leave after 195, escape true (map type 3, escape
+  bit 1; item_use_functions.c:941-948). Route 204 North entered from the Ravaged Path side only (the walk masks the
+  matrix to header 346; stated assumption). Walking trainers (Route 213's 107 and 108) are not modelled: a member with a
+  walking movement type raises, a non-member is taken as beaten before the group; Route 213's facts are already the
+  widest possible, so the assumption cannot change them.
+  (b) E3-B3-2.b Eterna Building #1: orders [421, 831] (no leave gap) and [831, 421] (leave after 831). A leave gap holds
+  when every sequence of the shared Building chain that gives that order can leave the buildings' headers there.
+  (c) E3-B3-2.c Eterna Gym (header 67): fights start from scripts, not sight (scr 73 entries 7, 8, 5; var 0 coords);
+  the clock state (0x404B) is raised by the guide's first talk, the first win over 324 and the win over 260
+  (gym_features.c:2903-2914); collision per state gym_features.c:2333-2418, hour-hand jump tiles :2308-2331. The tool
+  reads the two tables from the decomp source. Order 324, 259, 260 only; the door is not reachable at gaps 1 and 2.
+  (d) E3-B3-2.d Wayward Cave (header 284): orders = the six pairs and the split form (459, 460 as two fights; 459 is
+  talked to alone from (34,28) or (35,27), from the ROM script, not observed in play). The partner joins before any fight
+  1-6 (her tile is reachable at every gap of the partnerless walk); coord row 47 needs 0x4091 == 1, row 48 with
+  0x4091 == 0 warps back to (84,9) (scr 318 entries 4, 5); the coord at x 85 (entry 6, a leave prompt) matches only
+  while 0x4091 == 0, the same gaps where Escape Rope is open, so `leave_gaps` stays empty. Heal after every won battle
+  while the partner is set is a rule (GT-6), not a gap list. A pair's fight id is its first sheet id (443, 380, 450, 459,
+  454, 749); the stored order lists the pair `[443, 383]` so `fight[0]` is that id.
+  (e) E3-B3-2.e Eterna Building #3 by the arrival check: orders 412, 422 only, no leave gap (changed against v5.1).
+  Route 213: leave and heal at every gap (lobby door, header 376; the healer across the table tile, scr 462 entry 2).
+  Elite Four + Champion (scr 188/190/192/194/196): PC gaps 1-4 (the lifts of headers 178, 180, 182, 184), no leave.
+  Table input changed: yes. `resolve.py` writes `gauntlet_facts` (facts only, no `gauntlet_rules`), numbers fights from
+  each group's first order (a trainer's fight id is its first trainer id there), checks that every two-id fight is a
+  resolved `opponent_2` pair and every resolved pair inside a group is a two-id fight in at least one order, and
+  `MANIFEST_VERSION` is 44. `overrides.py` drops `RULE_KEYS` and `rules`; a group with no facts (a draft) has
+  `facts = None`. Elite Four + Champion trainers become gauntlet members, so coverage refuses them until GT-18.
+  Not modelled (stated, not guessed): the push direction of entrance and stairs warp tiles (a warp tile is a step into
+  the warp, as in the oracle), the heal and PC tiles outside the group's own source list, coords whose variable the
+  caller does not know (recorded in `Walk.crossed`).
+  Tests: tests/kaizo/test_gauntlet_map.py (new; synthetic maps plus ROM-backed slow tests), tests/kaizo/test_overrides.py,
+  tests/kaizo/test_resolve.py.

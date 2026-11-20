@@ -5,6 +5,7 @@ import tomllib
 
 import pytest
 
+from nuzline.data.gauntlet import Partner
 from tools.kaizo.overrides import (
     DEFAULT_PATH,
     AreaException,
@@ -43,8 +44,8 @@ def test_entry_without_source_refused(tmp_path):
         load_overrides(write(tmp_path, "[area.246]\ntrick_room = true\n"))
 
 
-def test_unknown_rule_key_refused(tmp_path):
-    with pytest.raises(OverridesError, match="'heal'"):
+def test_rules_key_refused(tmp_path):
+    with pytest.raises(OverridesError, match="'rules'"):
         load_overrides(
             write(
                 tmp_path,
@@ -98,7 +99,6 @@ source = "rom:trainers.json start_condition unknown"
 [[gauntlet]]
 name = "Oreburgh Mine"
 trainers = [196, 195]
-rules = {}
 source = "Roark Split:229"
 
 [trainer_ids."Gardenia Split:91"]
@@ -121,20 +121,81 @@ source = "user, 2026-11-03"
     assert o.area_exceptions == {
         509: AreaException("two maps", "rom:trainers.json start_condition unknown")
     }
-    assert o.gauntlets == (Gauntlet("Oreburgh Mine", (196, 195), {}, "Roark Split:229"),)
+    assert o.gauntlets == (Gauntlet("Oreburgh Mine", (196, 195), "Roark Split:229"),)
     assert o.trainer_ids == {"Gardenia Split:91": 296}
     assert o.fields == {107: {"optional": True}}
     assert o.move_lists == {"punch": [5, 7]}
     assert o.sources["trainer_ids.Gardenia Split:91"] == "pkcalc:src/js/data/sets.js:988"
 
 
-def test_gauntlet_rules_must_be_booleans(tmp_path):
-    text = (
-        '[[gauntlet]]\nname = "g"\ntrainers = [1, 2]\nrules = {heal_between = 1}\n'
-        'source = "user, 2026-11-03"\n'
+FACTS = (
+    "orders = [[[1], [2]]]\nleave_gaps = [1]\nescape = false\npc_gaps = []\nheal_gaps = []\n"
+    'locked_gaps = []\norders_source = "rom:header 1 events 2"\n'
+)
+
+
+def gauntlet_text(trainers="[1, 2]", facts=FACTS):
+    return f'[[gauntlet]]\nname = "g"\ntrainers = {trainers}\nsource = "user, 2026-11-03"\n{facts}'
+
+
+def test_gauntlet_facts_load(tmp_path):
+    f = load_overrides(write(tmp_path, gauntlet_text())).gauntlets[0].facts
+    assert f.name == "g" and f.source == "user, 2026-11-03"
+    assert f.orders == (((1,), (2,)),) and f.leave_gaps == ((1,),) and f.escape is False
+    assert f.pc_gaps == f.heal_gaps == f.locked_gaps == () and f.partner is None
+    assert f.orders_source == f.leave_gaps_source == f.locked_gaps_source == "rom:header 1 events 2"
+
+
+def test_gauntlet_without_facts_has_none(tmp_path):
+    text = '[[gauntlet]]\nname = "g"\ntrainers = [1, 2]\nsource = "user, 2026-11-03"\n'
+    assert load_overrides(write(tmp_path, text)).gauntlets[0].facts is None
+
+
+def test_gauntlet_permutations_and_all(tmp_path):
+    facts = (
+        'orders = { permutations = [[1], [2], [3]] }\nleave_gaps = "all"\nescape = false\n'
+        'pc_gaps = []\nheal_gaps = "all"\nlocked_gaps = []\norders_source = "rom:x"\n'
+        'heal_gaps_source = "rom:y z"\n'
     )
-    with pytest.raises(OverridesError, match="heal_between"):
-        load_overrides(write(tmp_path, text))
+    f = load_overrides(write(tmp_path, gauntlet_text("[1, 2, 3]", facts))).gauntlets[0].facts
+    assert len(f.orders) == 6 and ((1,), (2,), (3,)) in f.orders
+    assert f.leave_gaps == ((1, 2),) * 6 and f.heal_gaps == (1, 2)
+    assert f.heal_gaps_source == "rom:y z" and f.pc_gaps_source == "rom:x"
+
+
+def test_gauntlet_leave_gaps_per_order_and_partner(tmp_path):
+    facts = (
+        "orders = [[[1], [2]], [[2], [1]]]\nleave_gaps = [[], [1]]\nescape = true\npc_gaps = []\n"
+        "heal_gaps = []\nlocked_gaps = []\npartner = { trainer = 9, join_before = [1, 2] }\n"
+        'orders_source = "rom:header 1 events 2"\n'
+    )
+    f = load_overrides(write(tmp_path, gauntlet_text(facts=facts))).gauntlets[0].facts
+    assert f.leave_gaps == ((), (1,)) and f.leave_gaps_of(((2,), (1,))) == (1,)
+    assert f.partner == Partner(9, (1, 2), "rom:header 1 events 2")
+
+
+@pytest.mark.parametrize(
+    "old, new, match",
+    [
+        ("locked_gaps = []\n", "", "all or none"),
+        ("orders = [[[1], [2]]]", "orders = [[[1], [3]]]", "exactly once"),
+        ("orders = [[[1], [2]]]", "orders = [[[1, 2, 3]]]", "one or two"),
+        ("orders = [[[1], [2]]]", "orders = [[[1], [2]], [[1], [2]]]", "twice"),
+        ("leave_gaps = [1]", "leave_gaps = [2]", "within 1..1"),
+        ("leave_gaps = [1]", "leave_gaps = [[1], [1]]", "one list per order"),
+        ("pc_gaps = []", "pc_gaps = [1, 1]", "ascending"),
+        ("escape = false", "escape = 0", "true or false"),
+        (
+            "locked_gaps = []",
+            "locked_gaps = []\npartner = { trainer = 5, join_before = [3] }",
+            "1..2",
+        ),
+        ('"rom:header 1 events 2"', '"somewhere"', "orders_source"),
+    ],
+)
+def test_gauntlet_facts_refused(tmp_path, old, new, match):
+    with pytest.raises(OverridesError, match=match):
+        load_overrides(write(tmp_path, gauntlet_text(facts=FACTS.replace(old, new))))
 
 
 def test_missing_file_is_empty(tmp_path):
@@ -215,8 +276,8 @@ def test_citation_to_missing_row():
 def test_gauntlet_citation_needs_gauntlet_tag():
     o = overrides_with(
         gauntlets=(
-            Gauntlet("ok", (1, 2), {}, "S Split:11"),
-            Gauntlet("bad", (3, 4), {}, "S Split:13"),
+            Gauntlet("ok", (1, 2), "S Split:11"),
+            Gauntlet("bad", (3, 4), "S Split:13"),
         )
     )
     assert check_citations(o, SYN) == ["gauntlet 'bad': S Split:13 does not say gauntlet"]
@@ -327,8 +388,8 @@ def test_gauntlet_members_tied_to_cited_group():
     ]
     o = overrides_with(
         gauntlets=(
-            Gauntlet("ok", (21, 22), {}, "S Split:11"),
-            Gauntlet("wrong", (2, 23), {}, "S Split:11"),
+            Gauntlet("ok", (21, 22), "S Split:11"),
+            Gauntlet("wrong", (2, 23), "S Split:11"),
         )
     )
     got = check_gauntlet_members(o, SYN, sheet)
@@ -346,7 +407,7 @@ def test_trainer_in_two_gauntlets_refused(tmp_path):
 def test_ids_must_be_rom_trainers():
     o = overrides_with(
         area={5: AreaOverride(True, False, None, "rom:x")},
-        gauntlets=(Gauntlet("g", (5, 9), {}, "S Split:11"),),
+        gauntlets=(Gauntlet("g", (5, 9), "S Split:11"),),
     )
     assert check_trainer_ids(o, {5, 6}) == ["gauntlet 'g': 9 is no ROM trainer id"]
 
@@ -507,15 +568,15 @@ def test_draft_gravity_from_pkcalc(syn_draft):
 
 def test_draft_gauntlet_groups(syn_draft):
     text, o = syn_draft
-    got = {g.trainers: (g.source, g.rules) for g in o.gauntlets}
+    got = {g.trainers: (g.source, g.facts) for g in o.gauntlets}
     assert got == {
-        (21, 22, 23): ("S Split:21", {}),
-        (24, 25): ("S Split:24", {}),
-        (26, 27): ("S Split:26", {}),
-        (31, 32): ("S Split:30", {}),  # leader excluded
-        (35, 36, 37, 38): ("S Split:40", {}),  # tag partner excluded
+        (21, 22, 23): ("S Split:21", None),
+        (24, 25): ("S Split:24", None),
+        (26, 27): ("S Split:26", None),
+        (31, 32): ("S Split:30", None),  # leader excluded
+        (35, 36, 37, 38): ("S Split:40", None),  # tag partner excluded
     }
-    assert "rules = {}" in text
+    assert "rules = {}" not in text and "\norders = " not in text  # the draft has no facts
     # a group with an unmapped member is drafted commented out, citing the row
     block = text[text.index("# UNSETTLED gauntlet") :].split("\n\n")[0]
     assert "S Split:28" in block and "S Split:29" in block and "# [[gauntlet]]" in block
@@ -568,8 +629,8 @@ def test_stale_citation_detected(docs):  # Roark Split:7's header has no TRICK R
 
 
 @pytest.mark.slow
-def test_rules_left_unset_by_draft(docs, mappings):
-    assert "rules = {}" in draft_overrides(docs, mappings)
+def test_no_facts_in_draft(docs, mappings):
+    assert "\norders = " not in draft_overrides(docs, mappings)
 
 
 def test_real_draft_loads_and_cites_clean(docs, mappings, field_effects, tmp_path):
@@ -598,7 +659,7 @@ def test_committed_override_keys_known(mappings):
 
 def test_committed_gauntlet_members_tied_to_their_cite(docs, mappings):
     assert check_gauntlet_members(load_overrides(), docs, mappings.sheet) == []
-    probe = overrides_with(gauntlets=(Gauntlet("wrong", (246, 870), {}, "Roark Split:229"),))
+    probe = overrides_with(gauntlets=(Gauntlet("wrong", (246, 870), "Roark Split:229"),))
     assert len(check_gauntlet_members(probe, docs, mappings.sheet)) == 2
 
 
@@ -643,9 +704,17 @@ def test_committed_file_records_the_users_start_answers():
     assert o.area[870].gravity and o.area[870].source == "Elite Four Split:298"
 
 
-def test_committed_rules_unset():
+def test_committed_facts_recorded():
     raw = tomllib.loads(DEFAULT_PATH.read_text(encoding="utf-8"))
-    assert raw["gauntlet"] and all(g["rules"] == {} for g in raw["gauntlet"])
+    assert raw["gauntlet"] and all("rules" not in g for g in raw["gauntlet"])
+    o = load_overrides()
+    assert all(g.facts is not None for g in o.gauntlets)
+    elite = next(g for g in o.gauntlets if g.name == "Elite Four + Champion")
+    assert elite.trainers == (866, 867, 868, 869, 870) and elite.facts.pc_gaps == (1, 2, 3, 4)
+    wayward = next(g for g in o.gauntlets if g.name == "Wayward Cave")
+    assert len(wayward.facts.orders) == 2 and wayward.facts.partner.trainer == 612
+    route = next(g for g in o.gauntlets if g.name == "Route 213")
+    assert len(route.facts.orders) == 120
 
 
 def test_real_mapping_with_overrides(pkcalc, kaizo_rom_trainers, species):

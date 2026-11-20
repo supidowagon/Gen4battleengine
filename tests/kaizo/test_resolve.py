@@ -9,15 +9,18 @@ from pathlib import Path
 import pytest
 
 from nuzline.data.games import GAMES, KAIZO
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.trainer import GENDER_NONE, AreaCondition
 from tools.extract_rom import INPUTS_KEY, MOVE_LISTS_INPUT, kaizo_input_hashes
 from tools.kaizo.crosscheck import CrossCheck, CrossCheckError, Outcome, Resolution, Row
-from tools.kaizo.overrides import AreaOverride, Overrides
+from tools.kaizo.overrides import AreaOverride, Gauntlet, Overrides
 from tools.kaizo.resolve import (
     ResolveError,
     _sha256,
     check_extract_inputs,
+    check_gauntlet_pairs,
     check_used,
+    gauntlet_context,
     names,
     resolve,
     spelling,
@@ -582,7 +585,8 @@ def test_json_shapes(resolved_trainers):
     for t in resolved_trainers.values():
         assert t["gauntlet"] is None or len(t["gauntlet"]) == 2
         assert t["split_order"] is None or len(t["split_order"]) == 2
-        assert isinstance(t["gauntlet_rules"], dict) and isinstance(t["sources"], dict)
+        assert t["gauntlet_facts"] is None or t["gauntlet_facts"]["name"] == t["gauntlet"][0]
+        assert isinstance(t["sources"], dict)
         # fog_headers on every trainer (ledger G-15); script_weather and script_window only
         # where a script weather window reaches the fight (G-23, G-24).
         keys = {"weather", "fog", "trick_room", "gravity", "permanent", "fog_headers"}
@@ -678,3 +682,100 @@ def test_user_calls_drop_answered_weather_and_sheet_backed_gravity():
     rain = AreaOverride(False, False, "rain", "user, 2026-11-07")
     maps = Mappings((), (Mapping("S Split:2", 2, "exact", (2,)),), {}, ())
     assert calls(Overrides(area={1: rain, 2: grav}), maps) == []
+
+
+# --- gauntlet facts and fights ------------------------------------------------------------
+
+
+def _group(name, trainers, orders):
+    """A gauntlet group with facts: ``orders`` is a list of orders of fights (lists of ids)."""
+    facts = GauntletFacts(
+        name=name,
+        source="user, 2026-11-20",
+        orders=tuple(tuple(tuple(f) for f in o) for o in orders),
+        orders_source="rom:x",
+        leave_gaps=((),) * len(orders),
+        leave_gaps_source="rom:x",
+        escape=False,
+        escape_source="rom:x",
+        pc_gaps=(),
+        pc_gaps_source="rom:x",
+        heal_gaps=(),
+        heal_gaps_source="rom:x",
+        locked_gaps=(),
+        locked_gaps_source="rom:x",
+    )
+    return Gauntlet(name, tuple(trainers), "user, 2026-11-20", facts)
+
+
+def test_fight_ids_come_from_the_first_order():
+    g = _group("g", [5, 6, 7, 8], [[[5, 6], [7], [8]], [[5, 6], [8], [7]]])
+    bare = Gauntlet("bare", (1, 2), "user, 2026-11-20")
+    ctx = gauntlet_context(Overrides(gauntlets=(g, bare)))
+    assert {t: ctx[t][:2] for t in (5, 6, 7, 8)} == {
+        5: ("g", 5),
+        6: ("g", 5),
+        7: ("g", 7),
+        8: ("g", 8),
+    }
+    assert ctx[5][2]["name"] == "g" and ctx[5][2]["orders"][0] == [[5, 6], [7], [8]]
+    assert ctx[1] == ("bare", 1, None, "user, 2026-11-20")  # no facts: its own fight
+
+
+def test_split_pair_takes_the_first_orders_fight_id():
+    g = _group("g", [5, 6], [[[5, 6]], [[5], [6]]])
+    ctx = gauntlet_context(Overrides(gauntlets=(g,)))
+    assert (ctx[5][1], ctx[6][1]) == (5, 5)
+
+
+def _records(*pairs):
+    ids = {i for p in pairs for i in p} | {9}
+    out = {i: {"id": i, "opponent_2": None} for i in ids}
+    for a, b in pairs:
+        out[a]["opponent_2"] = b
+    return list(out.values())
+
+
+def test_pair_check_accepts_matching_pairs():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]]])
+    check_gauntlet_pairs(_records((5, 6), (7, 9)), Overrides(gauntlets=(g,)))  # 7-9 is outside
+
+
+def test_pair_check_refuses_a_fight_that_is_no_pair():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]]])
+    with pytest.raises(ResolveError, match=r"\[5, 6\].*not a resolved opponent_2 pair"):
+        check_gauntlet_pairs(_records((5, 9)), Overrides(gauntlets=(g,)))
+
+
+def test_pair_check_refuses_a_pair_no_order_fights_together():
+    g = _group("g", [5, 6, 7], [[[5], [6], [7]]])
+    with pytest.raises(ResolveError, match=r"\[5, 6\].*no order fights it"):
+        check_gauntlet_pairs(_records((5, 6)), Overrides(gauntlets=(g,)))
+
+
+def test_pair_may_be_split_where_another_order_pairs_it():
+    g = _group("g", [5, 6, 7], [[[5, 6], [7]], [[5], [6], [7]]])
+    check_gauntlet_pairs(_records((6, 5)), Overrides(gauntlets=(g,)))  # either side names it
+
+
+def test_group_without_facts_is_not_pair_checked():
+    check_gauntlet_pairs(_records((5, 6)), Overrides(gauntlets=(Gauntlet("g", (5, 6), "user, x"),)))
+
+
+def test_wayward_fights_and_facts_in_the_real_table(resolved_trainers):
+    ids = (443, 383, 380, 458, 459, 460, 450, 496, 454, 455, 749, 750)
+    fights = {t: resolved_trainers[t]["gauntlet"][1] for t in ids}
+    assert fights == dict(zip(ids, (443, 443, 380, 380, 459, 459, 450, 450, 454, 454, 749, 749),
+                              strict=True))  # fmt: skip
+    facts = resolved_trainers[443]["gauntlet_facts"]
+    assert [len(o) for o in facts["orders"]] == [6, 7]
+    assert facts["partner"]["trainer"] == 612
+    assert resolved_trainers[870]["gauntlet"] == ["Elite Four + Champion", 870]
+    for t in resolved_trainers.values():
+        for order in (t["gauntlet_facts"] or {}).get("orders", ()):
+            for fight in order:
+                if len(fight) == 2:
+                    a, b = fight
+                    assert resolved_trainers[a]["opponent_2"] == b or (
+                        resolved_trainers[b]["opponent_2"] == a
+                    )

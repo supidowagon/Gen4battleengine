@@ -485,7 +485,7 @@ class TrainerContext:
     labels: dict[int, tuple[str, str]]  # id -> (PKCalc label, mapping how)
     headers: dict[int, list[str]]  # id -> sheet cites, workbook order
     sight: dict[int, tuple[int, int]]  # id -> (partner id, shared map header)
-    gauntlets: dict[int, tuple[str, int, dict, str]]  # id -> (name, position, rules, source)
+    gauntlets: dict[int, tuple[str, int, dict | None, str]]  # id -> (name, fight id, facts, source)
 
 
 def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
@@ -517,15 +517,24 @@ def trainer_context(check: CrossCheck, maps: Mappings, overrides: Overrides,
                 f"sight pair {tid} -> {pair} is confirmed on {tid}'s side only: {pair} would "
                 "stay a runnable single (needs a trainer_ids or fields correction)"
             )
-    gauntlets: dict[int, tuple[str, int, dict, str]] = {}
+    return TrainerContext(labels, dict(headers), sight, gauntlet_context(overrides))
+
+
+def gauntlet_context(overrides: Overrides) -> dict[int, tuple[str, int, dict | None, str]]:
+    """trainer id -> (group, fight id, the group's facts row or None, source). A trainer's
+    fight id is the first trainer id of its fight in the group's first order (a trainer of a
+    group with no facts is its own fight); the facts are the tracked game facts only."""
+    out: dict[int, tuple[str, int, dict | None, str]] = {}
     for g in overrides.gauntlets:
-        for pos, tid in enumerate(g.trainers, 1):
-            if tid in gauntlets:
-                raise ResolveError(
-                    f"trainer {tid} is in gauntlets {gauntlets[tid][0]!r} and {g.name!r}"
-                )
-            gauntlets[tid] = (g.name, pos, dict(g.rules), g.source)
-    return TrainerContext(labels, dict(headers), sight, gauntlets)
+        fight_of = {}
+        if g.facts is not None:
+            fight_of = {tid: fight[0] for fight in g.facts.orders[0] for tid in fight}
+        facts = None if g.facts is None else g.facts.to_dict()
+        for tid in g.trainers:
+            if tid in out:
+                raise ResolveError(f"trainer {tid} is in gauntlets {out[tid][0]!r} and {g.name!r}")
+            out[tid] = (g.name, fight_of.get(tid, tid), facts, g.source)
+    return out
 
 
 def trainer_record(
@@ -591,9 +600,9 @@ def trainer_record(
 
     g = ctx.gauntlets.get(tid)
     out["gauntlet"] = None if g is None else [g[0], g[1]]
-    out["gauntlet_rules"] = {} if g is None else g[2]
+    out["gauntlet_facts"] = None if g is None else g[2]
     if g is not None:
-        sources["gauntlet"] = sources["gauntlet_rules"] = g[3]
+        sources["gauntlet"] = sources["gauntlet_facts"] = g[3]
 
     cites = ctx.headers.get(tid, [])
     if cites:
@@ -799,6 +808,34 @@ def fill_pk_partners(records: list[dict], pkcalc: dict) -> list[int]:
     return filled
 
 
+def check_gauntlet_pairs(records: list[dict], overrides: Overrides) -> None:
+    """The two-trainer fights of a group's orders must be the resolved ``opponent_2`` pairs
+    (the other trainer of a two-trainer double or a multi, either side naming it), and every
+    resolved pair inside a group must be a two-trainer fight in at least one order: a pair
+    fought as two single fights is allowed only where another order says so as well."""
+    by_id = {t["id"]: t for t in records}
+    for g in overrides.gauntlets:
+        if g.facts is None:
+            continue
+        members = set(g.trainers)
+        resolved = set()
+        for tid in g.trainers:
+            other = by_id[tid].get("opponent_2") if tid in by_id else None
+            if other in members:
+                resolved.add(frozenset((tid, other)))
+        fought = {frozenset(f) for o in g.facts.orders for f in o if len(f) == 2}
+        for pair in sorted(fought - resolved, key=sorted):
+            raise ResolveError(
+                f"gauntlet {g.name!r}: {sorted(pair)} is a two-trainer fight of an order but "
+                "not a resolved opponent_2 pair"
+            )
+        for pair in sorted(resolved - fought, key=sorted):
+            raise ResolveError(
+                f"gauntlet {g.name!r}: {sorted(pair)} is a resolved opponent_2 pair but no "
+                "order fights it as one two-trainer fight"
+            )
+
+
 def resolve_trainers(
     src: Sources, trainers: list[dict], check: CrossCheck, maps: Mappings, overrides: Overrides
 ) -> tuple[list[dict], list[str]]:
@@ -812,6 +849,7 @@ def resolve_trainers(
         trainer_record(t, ctx, overrides, src, sheet, partner_starts, split_rows) for t in trainers
     ]
     filled = fill_pk_partners(out, src.pkcalc)
+    check_gauntlet_pairs(out, overrides)
     sight = [t for t in out if t["sources"]["format"].startswith("rom: map header")]
     n_double = sum(1 for t in sight if t["format"] == "double_two_trainer")
     lines = [

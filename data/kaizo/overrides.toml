@@ -26,7 +26,8 @@
 # sheet: a "Gauntlet Start" .. "Gauntlet End" chain, a "B2B With X" pair, a section tagged
 # "GYM TRAINERS ARE A GAUNTLET" (its trainers in sheet order, leader excluded) and a
 # "Gauntlet With X" section (its GAUNTLET-tagged trainers, the tag partner excluded).
-# Every group's rules stay {} until play reaches it (heal_between, change_team).
+# The game facts of each group (orders, gaps, escape, partner) are read from the ROM by
+# tools/kaizo/gauntlet_map.py and recorded below with their sources.
 #
 # Level caps are not here: data/kaizo/level_caps.toml (read at runtime by prep).
 
@@ -475,79 +476,162 @@ source = "rom:map header 306 weather 18 (Trick Room)"
 gravity = true
 source = "Elite Four Split:298"
 
-# --- Gauntlets (rules stay {} until play reaches each group) ----------
+# --- Gauntlets (game facts: tools/kaizo/gauntlet_map.py reads them from the ROM) ----------
+# orders: each order is a list of fights, each fight one or two trainer ids (a two-trainer
+# fight is one battle); gap k follows the k-th fight. The first order is the one the sheet's
+# fight ids come from (a fight's id is its first trainer id). A ROM-backed test
+# (tests/kaizo/test_gauntlet_map.py) re-derives every value below.
 
 # Worker Mason (Gauntlet Start)*; Worker Colin (Gauntlet End)*
 # rows: Roark Split:229=196, Roark Split:239=195
+# 195 is fought first, not the sheet's 196 (game data vs the sheet).
 [[gauntlet]]
 name = "Oreburgh Mine"
 trainers = [196, 195]
-rules = {}
 source = "Roark Split:229"
+orders = [[[195], [196]]]
+leave_gaps = [1]
+escape = true
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 199 events 197 objs 5, 6; stairs warp (15,1)"
+escape_source = "rom:header 199 map type 3 escape bit 1"
 
 # Twins Liv & Liz (DOUBLE) (Gauntlet Start)*; Bug Catcher Brandon (Gauntlet)*; Aroma Lady Taylor (Gauntlet End)*
 # rows: Gardenia Split:59=15, Gardenia Split:69=13, Gardenia Split:79=14
+# Assumption: the walk enters from the Ravaged Path side only (header 254 -> warp (180,698)).
 [[gauntlet]]
 name = "Route 204 North"
 trainers = [15, 13, 14]
-rules = {}
 source = "Gardenia Split:59"
+orders = [[[15], [13], [14]]]
+leave_gaps = [1, 2]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 346 events 332; warp (180,698) -> header 254"
 
 # Galactic Mercury (B2B With Galactic Terra); GalacticfTerra (B2B With Galactic Mercury)
 # rows: Gardenia Split:91=296, Gardenia Split:101=297
 [[gauntlet]]
 name = "Route 204 North B2B"
 trainers = [296, 297]
-rules = {}
 source = "Gardenia Split:91"
+orders = [[[296], [297]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = [1]
+orders_source = "rom:scr 277 entry 2 LockAll @36, battles @44 @73, ReleaseAll @106"
 
 # Lass Caroline; Aroma Lady Jenna; Artist Angel
 # rows: Gardenia Split:454=324, Gardenia Split:464=259, Gardenia Split:474=260
 [[gauntlet]]
 name = "Eterna Gym gym trainers"
 trainers = [324, 259, 260]
-rules = {}
 source = "Gardenia Split:451"
+orders = [[[324], [259], [260]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 67 events 66; scr 73 entries 7, 8, 5; clock states 0-3"
 
 # Galactic Amalthia (Gauntlet Start)*; Scientist Galileo (Gauntlet End)*
 # rows: Fantina Split:7=421, Fantina Split:17=831
 [[gauntlet]]
 name = "Team Galactic Eterna Building #1"
 trainers = [421, 831]
-rules = {}
 source = "Fantina Split:7"
+orders = [[[421], [831]], [[831], [421]]]
+leave_gaps = [[], [1]]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 73 events 72 objs 0, 2; header 72 warps 1 (14,6), 3 (20,6)"
 
 # Galactic Callisto (Gauntlet Start)*; Galactic Europa (Gauntlet End)*
 # rows: Fantina Split:27=410, Fantina Split:37=423
 [[gauntlet]]
 name = "Team Galactic Eterna Building #2"
 trainers = [410, 423]
-rules = {}
 source = "Fantina Split:27"
+orders = [[[410], [423]]]
+leave_gaps = [1]
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 74 events 73 objs 0, 1; header 73 warp 1 (16,3) -> (9,11)"
 
 # Galactic Ganymede (Gauntlet Start)*; Galactic Io (Gauntlet End)*
 # rows: Fantina Split:47=412, Fantina Split:57=422
 [[gauntlet]]
 name = "Team Galactic Eterna Building #3"
 trainers = [412, 422]
-rules = {}
 source = "Fantina Split:47"
+orders = [[[412], [422]]]
+leave_gaps = []
+escape = false
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:header 74 events 73 obj 2; warp 4 (25,20) and the panels leading to it"
 
 # SwimmerF Mary (GAUNTLET START)*; Swimmer Sheltin (GAUNTLET)*; SwimmerF Haley (GAUNTLET)*; Fisherman Kenneth (GAUNTLET)*; Sailor Paul (GAUNTLET END)*
 # rows: Wake Split:215=106, Wake Split:225=103, Wake Split:235=105, Wake Split:245=111, Wake Split:255=110
 [[gauntlet]]
 name = "Route 213"
 trainers = [106, 103, 105, 111, 110]
-rules = {}
 source = "Wake Split:215"
+orders = { permutations = [[106], [103], [105], [111], [110]] }
+leave_gaps = "all"
+escape = false
+pc_gaps = []
+heal_gaps = "all"
+locked_gaps = []
+orders_source = "rom:header 373 events 359; door (706,818) -> header 376"
+heal_gaps_source = "rom:scr 462 entry 2 HealParty @74"
 
 # Collector Gerald (MULTI BATTLE with Clown Bob, GAUNTLET)*; Clown Bob (MULTI BATTLE with Collector Gerald, GAUNTLET); Camper Parker (MULTI BATTLE with Picknicker Tori, GAUNTLET); Picknicker Tori (MULTI BATTLE with Camper Parker, GAUNTLET); Bug Catcher Adalbert (MULTI BATTLE with Camper Mike, GAUNTLET); Camper Mike (MULTI BATTLE with Bug Catcher Adalbert, GAUNTLET); Lass Cassidy (MULTI BATTLE with Youngster Butch, GAUNTLET); Youngster Butch (MULTI BATTLE with Lass Cassidy, GAUNTLET); Hiker Reginald (MULTI BATTLE with Hiker Lorenzo, GAUNTLET); Hiker Lorenzo (MULTI BATTLE with Hiker Reginald, GAUNTLET); Castle Valet Darach (MULTI BATTLE with Lady Caitlin, GAUNTLET END); Lady Caitlin (MULTI BATTLE with Castle Valet Darach, GAUNTLET END)
 # rows: Galactic Split:117=443, Galactic Split:127=383, Galactic Split:137=380, Galactic Split:147=458, Galactic Split:157=459, Galactic Split:167=460, Galactic Split:177=450, Galactic Split:187=496, Galactic Split:197=454, Galactic Split:207=455, Galactic Split:217=749, Galactic Split:227=750
+# The first order is the sheet's six pairs; the second fights 459 and 460 as two singles (459 is
+# talked to alone). A pair's fight id is its first sheet id: 443, 380, 450, 459, 454, 749.
 [[gauntlet]]
 name = "Wayward Cave"
 trainers = [443, 383, 380, 458, 459, 460, 450, 496, 454, 455, 749, 750]
-rules = {}
 source = "Galactic Split:105"
+orders = [
+  [[443, 383], [380, 458], [450, 496], [459, 460], [454, 455], [749, 750]],
+  [[443, 383], [380, 458], [450, 496], [459], [460], [454, 455], [749, 750]],
+]
+leave_gaps = []
+escape = true
+pc_gaps = []
+heal_gaps = []
+locked_gaps = []
+partner = { trainer = 612, join_before = [1, 2, 3, 4, 5, 6] }
+orders_source = "rom:header 284 events 273; scr 318 entries 2, 4, 5; split: obj 459 talk tiles (34,28), (35,27)"
+escape_source = "rom:header 284 map type 3 escape bit 1"
+
+# Elite Four and Champion: the five rooms in script order (not a drafted sheet group).
+[[gauntlet]]
+name = "Elite Four + Champion"
+trainers = [866, 867, 868, 869, 870]
+source = "rom:scr 188/190/192/194/196"
+orders = [[[866], [867], [868], [869], [870]]]
+leave_gaps = []
+escape = false
+pc_gaps = [1, 2, 3, 4]
+heal_gaps = []
+locked_gaps = []
+orders_source = "rom:scr 188/190/192/194/196"
+pc_gaps_source = "rom:headers 178, 180, 182 (6,11), 184 (6,19) tile behaviour 0x83"
 
 # draft totals: 51 trick_room, 3 area conflicts, 1 gravity, 9 gauntlets, 0 unsettled gauntlets
 
