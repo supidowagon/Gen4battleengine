@@ -8003,6 +8003,9 @@ def _ref_step(
         return s
     picked = [int(a) for a in actions]
     actions = (int(actions[0]), int(actions[1]))
+    if s.pivot_battler or s.learn_site:
+        # The turn's speedRand draw (bcp.c:853-857), stored at the stop (engine.step._turn_outcome).
+        outcome = outcome._replace(quick_claw=[int(bool(f)) for f in _get(s, "ts_qc")])
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     if s.learn_site:
@@ -8395,7 +8398,6 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         upto = turn.position + 1 if pause.site == LEARN_MOVE_END else 2
         if pause.site != LEARN_MOVE_END:
             _put(s, "ts_eot", pause.order)
-            _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
         _put(s, "ts_move_cur", turn.move_curs)
     else:
         s.pivot_battler = side + 1
@@ -8403,6 +8405,8 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         upto = turn.position
     _put(s, "ts_acted", [int(b in turn.order[:upto]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
+    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome).
+    _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
     _put(s, "ts_struggling", [int(c[1]) for c in turn.choices])

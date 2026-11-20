@@ -3567,3 +3567,24 @@ def test_midturn_learn_resume_starts_the_next_action_at_power_mul_10(tables, nam
     _, listed = _resume_learn(tables, paused)
     assert int(listed.pivot_battler) == 1 and int(listed.learn_site) == 0
     assert int(listed.ts_pick_mul) == 10
+
+
+def test_a_party_list_resume_keeps_the_turns_speed_rand_draw(tables, names):
+    # speedRand is drawn once per turn (bcp.c:853-857): the foe's Quick Claw activates (it moves
+    # first), Scyther's U-turn stops at its party list, and the resume, played with a draw of 0,
+    # still reads the turn's draw (``ts_qc``): the turn end keeps it for the next turn's readers
+    # (``qc_roll``, the foe an active Quick Claw holder).
+    from tests.engine.test_levelup import _mon
+
+    s = make_state(
+        tables,
+        [_mon(names, "Scyther", 50, moves=("U-turn",)), _mon(names, "Geodude", 30)],
+        [_mon(names, "Tangela", 70, item=names.item("Quick Claw"))],
+    )
+    turn_draw = empty_outcome()._replace(quick_claw=jnp.asarray([0, 1], jnp.int8))
+    paused = assert_matches_reference(tables, s, (0, 0), turn_draw)
+    assert int(paused.pivot_battler) == 1 and np.asarray(paused.ts_qc).tolist() == [0, 1]
+    done = assert_matches_reference(tables, paused, (MOVE_ACTIONS + 1, 0), empty_outcome())
+    assert int(done.pivot_battler) == 0 and int(done.active[0]) == 1
+    assert np.asarray(done.qc_roll).tolist() == [0, 1]
+    assert np.asarray(done.ts_qc).tolist() == [0, 0]
