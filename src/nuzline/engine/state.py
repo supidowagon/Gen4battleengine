@@ -265,6 +265,12 @@ Encodings:
   left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
   ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
   from ``Outcome.starf[:, 0]``); else 0.
+  F-O3 (G-27): every eat draws its own, so ``starf_roll`` is the turn's queue ``int8[B, 3]``
+  (``Outcome.starf[:, ids.STARF_QUEUE]``: columns 0, 2, 3) and ``starf_taken`` ``int8[B]`` counts
+  the draws the battler's eats used this turn (``hooks._pinch_effects`` adds one where a draw is
+  made, ``resolve_starf``'s open berry takes entry 0); an eat reads entry
+  ``min(starf_taken, 2)`` (``hooks.starf_stat``). ``starf_taken`` is 0 between turns and after
+  ``step.replace`` (a kept replacement draw sits in entry 0, the rest 0).
 * E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
   ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
   mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
@@ -485,7 +491,8 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
-    starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
+    starf_roll: jnp.ndarray  # int8[B, 3], the turn's Starf Berry draws (``Outcome.starf``), F-O3
+    starf_taken: jnp.ndarray  # int8[B], the draws this turn's Starf Berry eats used (F-O3)
     starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
     field_mask: jnp.ndarray  # int32, BattleContext.fieldConditionsMask (engine.field)
@@ -866,7 +873,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
-    "starf_roll": (_BATTLER, np.int8),
+    "starf_roll": ((*_BATTLER, 3), np.int8),
+    "starf_taken": (_BATTLER, np.int8),
     "starf_open": (_BATTLER, np.int8),
     "field_mask": (_FIELD, np.int32),
     "weather_turns": (_FIELD, np.int32),

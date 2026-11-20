@@ -287,6 +287,13 @@ three structs has a row.
   `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
   (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
   the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).
+  F-O3 (E1 batch G, G-27): each eat draws its own `RandNext() % 5` (lib:4864-4866, :5286-5288,
+  Pluck :5808), so `starf_roll` is per battler `int8[B, 3]`, the turn's queue
+  `Outcome.starf[:, ids.STARF_QUEUE]` (columns 0, 2, 3: first, second, third eat), and
+  **`starf_taken`** (per battler, `int8[B]`, no decomp field: the count of draws the battler's
+  eats made this turn) picks the entry an eat reads, `min(starf_taken, 2)` (`hooks.starf_draw`;
+  `hooks._pinch_effects` adds one per draw, an open battle-start berry takes entry 0). Both
+  0 between turns except a kept replacement draw in entry 0; `step.replace` sets `starf_taken` 0.
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and

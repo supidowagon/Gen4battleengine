@@ -1260,7 +1260,7 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   `step._action_phase`), so a holder that eats at its pinch and then U-turns / Baton Passes into a second holder that
   eats on entry (the same `BattleSystem_TriggerHeldItem` path, :5273-5294) repeats the first rank, as F-10's Recycled
   berry eaten twice. Needs a third draw column (`starf[side, 2]`) for the pivot newcomer's check with its own law in
-  `enumerate._starf_reads`. Not built in this fix round.
+  `enumerate._starf_reads`. Not built in this fix round. (Modelled in batch G: G-27..G-30.)
 - **F-O4 The AI's absorb switch under its shared gate draw, and Water / Volt Absorb on its bench.**
   `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640) draws one `RandNext() % 3` when the AI has a super-effective move
   and returns FALSE unless it is 0 (:3651), and only then the bench's `RandNext() & 1` draws (:3706): one sequence the
@@ -1979,6 +1979,45 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   0x3F write 1 (sleep 1), one condition, read from the save as any status.
 - G-26 gFieldScriptCommands is `modelled` in rom_diff.toml / rom_diff.md (its `when` dropped): the weather by
   G-23 / G-24, the status and exp (0x1CE) through the save's party, a multi-condition word refused (G-25).
+- G-27 Every Starf Berry eat on one battler in one turn draws its own (F-O3, F-10's Recycle repeat): each
+  site runs its own `RandNext() % 5` loop: `BattleSystem_TriggerHeldItem` (battle_lib.c:4576, Starf
+  :4850-4872, draw :4865), `BattleSystem_TriggerHeldItemOnStatus` (:4967, Starf :5273-5294, draw :5288; the
+  F-O3 / F-10 text names it `TriggerHeldItem`: same code, its own function and draw), `BattleSystem_PluckBerry`
+  on the attacker (:5798-5817, draw :5808). `Outcome.starf` is `int8[B, 4]`: `[b, 0]` the battler's first eat,
+  `[b, 1]` the faint replacement's (unchanged), `[b, 2]` its second, `[b, 3]` its third. State: `starf_roll`
+  `int8[B, 3]` is the turn's queue (`Outcome.starf[:, ids.STARF_QUEUE]`, columns 0, 2, 3) and `starf_taken`
+  `int8[B]` counts the draws its eats made (STATE.md); `hooks.starf_draw` reads entry `min(starf_taken, 2)`,
+  `hooks._pinch_effects` (every held-item check and Pluck) adds one where a draw is made (a stat below +6),
+  an open battle-start berry takes entry 0 (`step._action_phase`: `starf_taken` 1). `step_events` and
+  `step.replace` leave `starf_taken` 0 and a kept replacement draw in entry 0, so a second replacement
+  re-reads it as before. The turn-start check (`_turn_start_items`) reads the queue, not the stale first
+  draw. Reference: `_pinch_effect`, `ref_step`, `ref_replace` the same.
+- G-28 Three draws without Fling (amends the sheet's bound "without Fling ... two"): battler b's Pluck / Bug
+  Bite of a foe's Starf (draw :5808; its `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears
+  SELF_TURN_FLAG_PLUCK_BERRY), its own Starf at AFTER_MOVE_EFFECT_ATTACKER_ITEM
+  (battle_controller_player.c:3684-3689), then a slower foe's Roar (priority -6) drags in a bench holder at
+  its pinch, whose switch-in check eats (lib:4151-4165 -> :5288). And one berry eaten twice: a Pluck whose
+  berry did nothing leaves the flag set (lib:5848, `subscript_pluck_check.s:5-9` skips RemoveItem), so the
+  attacker's own Starf is kept at :3684 and eaten again at _HELD_ITEM_STATUS (:3730-3761), two draws
+  (`step` `info.pluck_flag`). A fourth draw needs a foe's Fling of a Starf (lib:6110-6127, draw :6121) on
+  top; Fling (effect 233), Thief / Covet (105) and Trick / Switcheroo (177) are unsupported
+  (`coverage.ITEM_MOVING_EFFECTS`), so an eat past the third reads the queue's last entry; Fling's builder
+  adds its column. A U-turn / Baton Pass newcomer is no same-call source: the turn pauses at the party
+  pick (`pivot_battler`, subscript_attack_then_switch_out.s:71, subscript_baton_pass.s:17) and the resumed
+  call loads its own queue, so its eat takes the resumed outcome's `[b, 0]`.
+- G-29 The laws (`enumerate._starf_reads`): `[b, 0]` and `[b, 1]` unchanged. Battler b's eat sources this
+  call are counted: its own (the field holder at its pinch or able to lose HP; once more with a Pluck /
+  Bug Bite of a foe item (G-28); a Recycle of a Starf, recycled before or eaten first; a Pluck / Bug Bite of
+  a foe holder; an open battle-start berry) plus a Roar newcomer holder. `[b, k]` (k = 2, 3) is read where
+  the count reaches k. Law: the k-th eat is the same battler's while it has k own sources: the `[b, 0]` rule
+  with +2 per earlier eat (Recycle stays a stage jump: all 60); else the Roar newcomer's on fresh stages
+  (`InitBattleMon`, battle_lib.c:97-101; a dragged battler does not act): five values unless the foe's
+  bounded gains + 2 reach +6 or a stage jump is used. Brute force (`loose`): `[b, 2]`, `[b, 3]` all 60 where
+  a holder or berry source meets a second source of any kind (a drag, Recycle, Pluck / Bug Bite, open berry).
+  `starf_loose` is `bool[B, 4]`. Doubles: partners' actions add sources (multi-battler milestone).
+- G-30 No coverage refusal held this case (F-O3 was a known limit, none to remove); no AI read (the AI reads
+  the stages next turn; Recycle / Natural Gift tables already list Starf, F-10); no table input changed (no
+  MANIFEST bump). Tests: tests/engine/test_e1_batch_g.py (engine equals reference per case, the laws).
 
 ## Stream state (restart point, 2026-11-19)
 

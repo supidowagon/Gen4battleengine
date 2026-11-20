@@ -217,6 +217,7 @@ from nuzline.engine.ids import (
     SEMI_SET_FLAGS,
     SNORE_PARAM,
     STARF_DRAWS,
+    STARF_QUEUE,
     STARF_STATS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
@@ -4262,11 +4263,13 @@ def _action_phase(
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = state.pivot_battler != 0
-    # A battle-start Starf Berry still open (a state no root drew for) draws here first; then the
-    # turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events replaces them.
-    turn_draw = jnp.asarray(outcome.starf)[:, 0]
-    state = resolve_starf(state, turn_draw)
-    state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
+    # A battle-start Starf Berry still open (a state no root drew for) draws here first, from the
+    # queue's entry 0; then the turn's Starf Berry draws, one per eat in order, read by
+    # hooks.starf_stat (F-10, F-O3 G-27); step_events replaces them.
+    queue = jnp.asarray(outcome.starf)[:, jnp.asarray(STARF_QUEUE)]
+    opened = (state.starf_open != 0).astype(state.starf_taken.dtype)
+    state = resolve_starf(state, queue[:, 0])
+    state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
     fresh = _clear_stale_choice_locks(tables, fresh, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
@@ -4323,9 +4326,14 @@ def step_events(
     # pause and elsewhere, so states merge (F-10).
     # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
     # at most an Intimidate or Download stage before it), so states that read alike merge.
+    # The kept draw sits in the queue's entry 0 with ``starf_taken`` 0 (F-O3).
     kept = starf_kept(tables, s) & ~halted
     replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
-    s = s._replace(starf_roll=jnp.where(kept, replacement_draw, 0).astype(s.starf_roll.dtype))
+    entry0 = jnp.arange(len(STARF_QUEUE))[None, :] == 0
+    roll = jnp.where(kept[:, None] & entry0, replacement_draw[:, None], 0)
+    s = s._replace(
+        starf_roll=roll.astype(s.starf_roll.dtype), starf_taken=jnp.zeros_like(s.starf_taken)
+    )
     return _where(state.over != 0, state, s), events
 
 
@@ -4564,8 +4572,12 @@ def replace(
     # The kept Starf Berry draw (F-10) is read; kept on for a side whose next replacement can
     # still eat one (a newcomer that the hazards fainted) or whose newcomer's checks wait for
     # ShowBattleMon (``entry_pending``, G-32), else 0.
+    # Its ``starf_taken`` is 0 again: a later replacement reads the same kept entry 0 (F-O3).
     keep = starf_kept(tables, out) | (out.entry_pending != 0)
-    out = out._replace(starf_roll=jnp.where(keep, out.starf_roll, 0).astype(out.starf_roll.dtype))
+    out = out._replace(
+        starf_roll=jnp.where(keep[:, None], out.starf_roll, 0).astype(out.starf_roll.dtype),
+        starf_taken=jnp.zeros_like(out.starf_taken),
+    )
     # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))

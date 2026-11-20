@@ -1128,6 +1128,11 @@ SPEED_HALVING_HOLD_EFFECTS = (50, 106, 122, 117, 118, 121, 119, 120)
 # generated/battle_stats.txt:2-6) is below +6. By the project's ``% n`` convention uniform over
 # the eligible stats: one value in [0, STARF_DRAWS) read modulo their count (1-5, lcm 60), F-10.
 STARF_DRAWS = 60
+# Every eat draws its own (lib:4864-4866, :5286-5288, Pluck :5808, Fling :6121), F-O3 (G-27): the
+# ``Outcome.starf`` columns a battler's eats in one turn take in order (column 1 is the faint
+# replacement's, after the turn), loaded into ``BattleState.starf_roll``; the turn's
+# ``starf_taken``-th eat reads entry ``min(starf_taken, len - 1)``.
+STARF_QUEUE = (0, 2, 3)
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
 # ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold

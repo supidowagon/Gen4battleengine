@@ -522,7 +522,7 @@ def _starf(tables, names, roll, stages=None, side=0):
     s = _hold(_state(tables, names, mine=["Protect"]), side, names.item("Starf Berry"), hp_div=4)
     for stat, stage in (stages or {}).items():
         s = s._replace(stages=s.stages.at[side, stat].set(stage))
-    draw = np.zeros((2, 2), np.int8)
+    draw = np.zeros((2, 4), np.int8)
     draw[side, 0] = roll
     o = O._replace(starf=jnp.asarray(draw))
     return assert_matches_reference(tables, s, A("Protect", "Tackle", s, names), o)
@@ -558,7 +558,7 @@ def test_a_plucked_starf_berry_gives_its_eater_the_same_draw(tables, names):
     """PLUCK_EFFECT_RANDOM_UP2 (battle_lib.c:5798-5817): the eater's stat, at any HP; eaten even
     with every stat at +6."""
     s = _hold(_state(tables, names, mine=["Pluck"]), 1, names.item("Starf Berry"))
-    o = O._replace(starf=jnp.asarray([[2, 0], [0, 0]], jnp.int8))
+    o = O._replace(starf=jnp.asarray([[2, 0, 0, 0], [0, 0, 0, 0]], jnp.int8))
     acts = A("Pluck", "Tackle", s, names)
     out = assert_matches_reference(tables, s, acts, o)
     assert int(out.stages[0, Stat.SPE]) == 2 and int(out.item[1, 0]) == 0
@@ -584,16 +584,16 @@ def test_the_starf_draws_have_count_classes_and_need_a_reachable_pinch(tables, n
     s = _hold(_state(tables, names, mine=["Protect"]), 0, starf)
     acts = A("Protect", "Tackle", s, names)
     laws = _laws(tables, s, acts)
-    assert laws.relevant.starf.tolist() == [[True, False], [False, False]]
+    assert laws.relevant.starf.tolist() == [[True, False, False, False], [False] * 4]
     assert _starf(laws, 0, 0) == (list(range(5)), [1] * 5, 5)
     high = s._replace(stages=s.stages.at[0, Stat.ATK].set(4))
     assert _starf(_laws(tables, high, acts), 0, 0)[2] == STARF_DRAWS
     assert all(STARF_DRAWS % c == 0 for c in range(1, 6))
     bench = s._replace(item=s.item.at[0, 0].set(0).at[0, 1].set(starf))
-    assert _laws(tables, bench, acts).relevant.starf.tolist() == [[False, False]] * 2
+    assert _laws(tables, bench, acts).relevant.starf.tolist() == [[False] * 4] * 2
     low = bench._replace(hp=bench.hp.at[0, 1].set(max(int(bench.max_hp[0, 1]) // 4, 1)))
     laws = _laws(tables, low, acts)
-    assert laws.relevant.starf.tolist() == [[False, True], [False, False]]
+    assert laws.relevant.starf.tolist() == [[False, True, False, False], [False] * 4]
     assert _starf(laws, 0, 1) == (list(range(5)), [1] * 5, 5)
 
 
@@ -603,7 +603,7 @@ def _starf_replacement(tables, names, kept=7):
     s = _state(tables, names, mine=["Tackle"])
     s = s._replace(hp=s.hp.at[0, 0].set(1), item=s.item.at[0, 1].set(names.item("Starf Berry")))
     s = s._replace(hp=s.hp.at[0, 1].set(max(int(s.max_hp[0, 1]) // 4, 1)))
-    o = O._replace(starf=jnp.asarray([[0, kept], [0, 0]], jnp.int8))
+    o = O._replace(starf=jnp.asarray([[0, kept, 0, 0], [0, 0, 0, 0]], jnp.int8))
     return assert_matches_reference(tables, s, A("Tackle", "Tackle", s, names), o)
 
 
@@ -616,13 +616,13 @@ def test_a_faint_replacement_eats_its_starf_berry_with_the_kept_draw(tables, nam
     from nuzline.reference.engine import ref_replace
 
     out = _starf_replacement(tables, names)
-    assert int(out.hp[0, 0]) == 0 and np.asarray(out.starf_roll).tolist() == [2, 0]
+    assert int(out.hp[0, 0]) == 0 and np.asarray(out.starf_roll).tolist() == [[2, 0, 0], [0, 0, 0]]
     got = jax.jit(replace, static_argnums=(2, 3))(tables, out, 0, 1)
     ref = from_ref(ref_replace(to_numpy(tables), to_ref(out), 0, 1))
     for name, x, y in zip(got._fields, got, ref, strict=True):
         np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
     assert int(got.stages[0, Stat.SPE]) == 2 and int(got.item[0, 1]) == 0
-    assert np.asarray(got.starf_roll).tolist() == [0, 0]
+    assert np.asarray(got.starf_roll).tolist() == [[0, 0, 0]] * 2
 
 
 def test_a_battle_start_starf_berry_waits_for_the_root_draw(tables, names):
@@ -636,12 +636,12 @@ def test_a_battle_start_starf_berry_waits_for_the_root_draw(tables, names):
     started = battle_start(tables, s)
     assert int(started.starf_open[0]) == 1 and int(started.item[0, 0]) == 0
     assert started.stages[0].tolist() == s.stages[0].tolist()
-    assert np.asarray(started.starf_roll).tolist() == [0, 0]
+    assert np.asarray(started.starf_roll).tolist() == [[0, 0, 0]] * 2
     belief = root_belief(tables, started)
     raised = sorted(int(np.argmax(np.asarray(b.stages[0]))) for b, _ in belief)
     assert raised == sorted(int(x) for x in (Stat.ATK, Stat.DEF, Stat.SPE, Stat.SPA, Stat.SPD))
     assert all(abs(p - 0.2) < 1e-12 and int(b.starf_open[0]) == 0 for b, p in belief)
-    o = O._replace(starf=jnp.asarray([[3, 0], [0, 0]], jnp.int8))
+    o = O._replace(starf=jnp.asarray([[3, 0, 0, 0], [0, 0, 0, 0]], jnp.int8))
     out = assert_matches_reference(tables, started, A("Protect", "Tackle", started, names), o)
     assert int(out.stages[0, Stat.SPA]) == 2 and int(out.starf_open[0]) == 0
 

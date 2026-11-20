@@ -151,7 +151,8 @@ class RefBattler:
     future_move: int
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
-    starf_roll: int  # a Starf Berry draw (Outcome.starf; engine.state docstring, F-10)
+    starf_roll: list[int]  # the turn's Starf Berry draws (engine.state docstring, F-O3)
+    starf_taken: int  # the draws this turn's Starf Berry eats used (F-O3)
     starf_open: int  # a battle-start Starf Berry's stat waits for the root draw (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int

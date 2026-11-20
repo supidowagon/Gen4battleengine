@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import dataclasses
 
+import jax
+import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from nuzline.ai.switching import switching_refusals
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import decomp_abilities
-from nuzline.engine.ids import ABILITY_DECOMP_IDS, AbilityId, Stat, Status, Type
+from nuzline.engine.hooks import battle_start
+from nuzline.engine.ids import ABILITY_DECOMP_IDS, STARF_DRAWS, AbilityId, Stat, Status, Type
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
@@ -374,3 +378,126 @@ def test_a_status_word_with_several_conditions_is_refused():
     mon = SimpleNamespace(location=("party", 0, 0), status_raw=0x7B)
     with pytest.raises(RecordError, match="sleep 3, poison, burn, freeze, paralysis"):
         SaveMon.to_spec(mon, None)
+
+
+# --- F-O3 (G-27..G-30): every Starf Berry eat on one battler in one turn draws its own -------
+
+
+_SPE = 4  # stats[..., 0..4] are Atk, Def, Sp. Atk, Sp. Def, Speed (state.py, ``stats``)
+
+
+def _starf_fight(names, tables, mine, theirs, *, foe_item="", bench=False, foe_level=10):
+    """Side 0: a level-50 Abra (``mine``) holding a Starf Berry at a quarter HP, and with
+    ``bench`` a second one at a quarter HP; side 1: a Rattata (``theirs``, ``foe_item``) at
+    ``foe_level``, faster than the Abra."""
+    abra = _mon(names, "Abra", mine, 50, "Starf Berry")
+    party = [abra, _mon(names, "Abra", ["Tackle"], 50, "Starf Berry")] if bench else [abra]
+    s = make_state(tables, party, [_mon(names, "Rattata", theirs, foe_level, foe_item)])
+    for slot in range(len(party)):
+        s = s.replace_hp(0, slot, int(s.max_hp[0, slot]) // 4)
+    return s._replace(stats=s.stats.at[1, 0, _SPE].set(500))
+
+
+def _draws(first, second=0, third=0):
+    """``Outcome.starf`` with side 0's eats drawing ``first``, ``second``, ``third`` (columns 0, 2,
+    3; ``ids.STARF_QUEUE``)."""
+    return O._replace(
+        starf=jnp.asarray([[first, 0, second, third], [0, 0, 0, 0]], jnp.int8),
+        roar_level=jnp.ones(2, jnp.int8),
+    )
+
+
+def _boosts(s, side=0):
+    return {Stat(i).name: int(v) for i, v in enumerate(np.asarray(s.stages[side])) if v}
+
+
+def test_a_recycled_starf_berry_draws_again(tables, names):
+    """(c) The foe's faster Tackle puts the holder's Starf Berry check at the defender item check
+    (bcp:3691-3696, lib:4865: Attack, draw 0); its Recycle gives the berry back and it is eaten
+    again with its own draw (lib:4865 / :5288: rank 3 of five, Sp. Atk), not a repeat (G-27)."""
+    s = _starf_fight(names, tables, ["Recycle"], ["Tackle"])
+    out = assert_matches_reference(tables, s, _acts(names, s, 0, "Recycle", "Tackle"), _draws(0, 3))
+    assert _boosts(out) == {"ATK": 2, "SPA": 2} and int(out.item[0, 0]) == 0
+    assert np.asarray(out.starf_roll).tolist() == [[0, 0, 0]] * 2
+    assert np.asarray(out.starf_taken).tolist() == [0, 0]
+
+
+def test_a_roar_newcomer_eats_with_its_own_draw(tables, names):
+    """(b) The holder eats at its Tackle's attacker item check (bcp:3684-3689: Attack, draw 0);
+    the foe's Roar drags in the bench holder at its pinch, whose switch-in check (lib:4151-4165,
+    :5288) takes the second draw: 4 of five, Sp. Def, on fresh stages (lib:97-101), G-27."""
+    s = _starf_fight(names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60)
+    out = assert_matches_reference(tables, s, _acts(names, s, 0, "Tackle", "Roar"), _draws(0, 4))
+    assert int(out.active[0]) == 1 and int(out.item[0, 0]) == int(out.item[0, 1]) == 0
+    assert _boosts(out) == {"SPD": 2}
+
+
+@pytest.mark.parametrize("theirs", ["Tackle", "Roar"])
+def test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer(tables, names, theirs):
+    """(d) Bug Bite eats the foe's Starf Berry for the attacker (lib:5798-5817, draw :5808:
+    Attack, draw 0); the attacker's own one goes at its item check (bcp:3684-3689: rank 3 of five,
+    Sp. Atk); a slower foe's Roar then drags in the bench holder, the third draw (Defense, 1),
+    G-28."""
+    level = 60 if theirs == "Roar" else 10  # Roar's level check; a weak Tackle
+    s = _starf_fight(
+        names, tables, ["Bug Bite"], [theirs], foe_item="Starf Berry", bench=True, foe_level=level
+    )
+    s = s._replace(stats=s.stats.at[1, 0, _SPE].set(1))
+    out = assert_matches_reference(
+        tables, s, _acts(names, s, 0, "Bug Bite", theirs), _draws(0, 3, 1)
+    )
+    assert int(out.item[1, 0]) == 0 and int(out.item[0, 0]) == 0
+    if theirs == "Roar":
+        assert int(out.active[0]) == 1 and _boosts(out) == {"DEF": 2}
+    else:
+        assert int(out.active[0]) == 0 and _boosts(out) == {"ATK": 2, "SPA": 2}
+
+
+def test_a_pluck_flag_left_set_eats_the_attackers_starf_twice(tables, names):
+    """A Bug Bite of a Cheri Berry that cures nothing leaves SELF_TURN_FLAG_PLUCK_BERRY set
+    (lib:5848; subscript_pluck_check.s): the attacker's Starf Berry is kept at the attacker item
+    check (bcp:3684-3689, draw 0: Attack) and eaten at _HELD_ITEM_STATUS (bcp:3730-3761, lib:5288:
+    rank 2 of five, Speed), two draws, G-28."""
+    s = _starf_fight(names, tables, ["Bug Bite"], ["Growl"], foe_item="Cheri Berry")
+    s = s._replace(stats=s.stats.at[1, 0, _SPE].set(1))
+    acts = _acts(names, s, 0, "Bug Bite", "Growl")
+    out = assert_matches_reference(tables, s, acts, _draws(0, 2))
+    assert int(out.item[0, 0]) == 0 and _boosts(out) == {"ATK": 2, "SPE": 2}
+
+
+def test_a_battle_start_berry_takes_entry_zero_and_a_recycled_one_the_next(tables, names):
+    """A lead's battle-start Starf Berry waits open for the turn's first draw (F-10: Sp. Atk, 3);
+    its Recycle then eats it again from queue entry 2 (Attack, 0), G-27."""
+    s = _starf_fight(names, tables, ["Recycle"], ["Tackle"])
+    started = battle_start(tables, s)
+    assert int(started.starf_open[0]) == 1
+    out = assert_matches_reference(
+        tables, started, _acts(names, started, 0, "Recycle", "Tackle"), _draws(3, 0)
+    )
+    assert _boosts(out) == {"SPA": 2, "ATK": 2} and int(out.starf_open[0]) == 0
+
+
+@pytest.mark.slow
+def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
+    """``enumerate._starf_reads`` (G-29): ``starf[d, 2]`` where two eats can meet on battler
+    ``d``, ``[d, 3]`` where three can; five values for a fresh Roar newcomer, all 60 for the same
+    battler's Recycle (``_STARF_STAGE_JUMPS``); none with one eat source."""
+    from nuzline.engine.enumerate import _starf, outcome_laws
+
+    def laws(s, mine, theirs):
+        acts = jnp.asarray(_acts(names, s, 0, mine, theirs))
+        return jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
+
+    one = laws(_starf_fight(names, tables, ["Tackle"], ["Tackle"]), "Tackle", "Tackle")
+    assert one.relevant.starf[0].tolist() == [True, False, False, False]
+    rec = laws(_starf_fight(names, tables, ["Recycle"], ["Tackle"]), "Recycle", "Tackle")
+    assert rec.relevant.starf[0].tolist() == [True, False, True, False]
+    assert _starf(rec, 0, 2)[2] == STARF_DRAWS
+    roar = _starf_fight(names, tables, ["Tackle"], ["Roar"], bench=True, foe_level=60)
+    roar_laws = laws(roar, "Tackle", "Roar")
+    assert roar_laws.relevant.starf[0].tolist() == [True, True, True, False]
+    assert _starf(roar_laws, 0, 2) == (list(range(5)), [1] * 5, 5)
+    bite = _starf_fight(
+        names, tables, ["Bug Bite"], ["Roar"], foe_item="Starf Berry", bench=True, foe_level=60
+    )
+    assert laws(bite, "Bug Bite", "Roar").relevant.starf[0].tolist() == [True] * 4

@@ -117,6 +117,7 @@ from nuzline.engine.ids import (
     SPECIES_SHAYMIN,
     SPEED_HALVING_HOLD_EFFECTS,
     SPIKES_MAX,
+    STARF_QUEUE,
     STARF_STATS,
     STAT_MOVE_ABILITY_IDS,
     STOMP_PARAM,
@@ -2445,10 +2446,13 @@ def _pinch_effect(s: RefState, side: int, effect: int) -> bool:
         eligible = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
         if not eligible:
             return False
-        if sd.starf_roll == STARF_UNDRAWN:  # no draw yet (the battle start): the root draws it
+        # Every eat draws its own: the queue entry after the draws used (``hooks.starf_draw``, F-O3).
+        roll = sd.starf_roll[min(sd.starf_taken, len(sd.starf_roll) - 1)]
+        if roll == STARF_UNDRAWN:  # no draw yet (the battle start): the root draws it
             sd.starf_open = 1
         else:
-            _change_stage(s, side, eligible[sd.starf_roll % len(eligible)], 2)
+            _change_stage(s, side, eligible[roll % len(eligible)], 2)
+            sd.starf_taken += 1
         return True
     return False
 
@@ -7194,15 +7198,21 @@ def ref_step(tables, state: RefState, actions: tuple[int, int], outcome, targets
     if state.over:
         return copy.deepcopy(state)
     loaded = copy.deepcopy(state)
-    # A battle-start Starf Berry still open draws first (``step._action_phase``).
+    # A battle-start Starf Berry still open draws first, from the queue's entry 0
+    # (``step._action_phase``); each later eat this turn takes the next entry (F-O3).
+    opened = [int(bool(sd.starf_open)) for sd in loaded.battlers]
     _resolve_starf(loaded, [draw[0] for draw in outcome.starf])
-    for sd, draw in zip(loaded.battlers, outcome.starf, strict=True):
-        sd.starf_roll = int(draw[0])
+    for sd, draw, taken in zip(loaded.battlers, outcome.starf, opened, strict=True):
+        sd.starf_roll = [int(draw[k]) for k in STARF_QUEUE]
+        sd.starf_taken = taken
     out = _ref_step(tables, loaded, actions, outcome, targets, copied=True)
-    # The faint replacement's draw is kept where ``ref_replace`` can read it; 0 at a pause.
+    # The faint replacement's draw is kept in entry 0 where ``ref_replace`` can read it; 0 at a
+    # pause.
     kept = _starf_kept(tables, out)
     for sd, keep, draw in zip(out.battlers, kept, outcome.starf, strict=True):
-        sd.starf_roll = int(draw[1]) % len(STARF_STATS) if keep and not out.pivot_battler else 0
+        first = int(draw[1]) % len(STARF_STATS) if keep and not out.pivot_battler else 0
+        sd.starf_roll = [first] + [0] * (len(STARF_QUEUE) - 1)
+        sd.starf_taken = 0
     return out
 
 
@@ -7751,7 +7761,8 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
     # The kept Starf Berry draw stays for a later replacement or a waiting newcomer (F-10).
     for sd, keep in zip(s.battlers, _starf_kept(tables, s), strict=True):
         if not (keep or sd.entry_pending):
-            sd.starf_roll = 0
+            sd.starf_roll = [0] * len(STARF_QUEUE)
+        sd.starf_taken = 0
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)

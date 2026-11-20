@@ -579,12 +579,27 @@ def starf_stat(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
     :5798-5817). The decomp scans Attack, Defense, Speed, Sp. Atk, Sp. Def (``STARF_STATS``) for
     one below +6 and, if there is one, draws ``RandNext() % 5`` until the drawn stat is below +6:
     uniform over the eligible stats by the project's ``% n`` convention, the rank
-    ``BattleState.starf_roll`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    ``starf_draw`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    return _starf_pick(state, side, starf_draw(state, side))
+
+
+def starf_draw(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: the draw ``side``'s next Starf Berry eat this turn reads: every eat draws its
+    own ``RandNext() % 5`` (battle_lib.c:4864-4866, :5286-5288, Pluck :5808), so the eat after
+    ``starf_taken`` earlier ones reads queue entry ``min(starf_taken, 2)`` of ``starf_roll``
+    (``Outcome.starf[:, ids.STARF_QUEUE]``), F-O3 (G-27)."""
+    last = state.starf_roll.shape[1] - 1
+    entry = jnp.minimum(state.starf_taken[side].astype(_I32), last)
+    return state.starf_roll[side, entry].astype(_I32)
+
+
+def _starf_pick(state: BattleState, side, roll) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``starf_stat`` for the draw ``roll``: the eligible stat of rank ``roll % count``."""
     idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     eligible = state.stages[side][idx] < STAGE_MAX
     count = jnp.sum(eligible.astype(_I32))
     rank = jnp.cumsum(eligible.astype(_I32)) - 1
-    pick = eligible & (rank == state.starf_roll[side].astype(_I32) % jnp.maximum(count, 1))
+    pick = eligible & (rank == jnp.asarray(roll, _I32) % jnp.maximum(count, 1))
     return jnp.sum(jnp.where(pick, idx, 0)), count > 0
 
 
@@ -632,12 +647,15 @@ def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
     starf = cond & (effect == ItemId.STARF_BERRY) & some
     # A check with no draw loaded (``starf_roll`` STARF_UNDRAWN: the battle start) eats the berry
     # and leaves the stat open for the root's draw (``resolve_starf``, F-10).
-    drawn = state.starf_roll[side] != STARF_UNDRAWN
+    drawn = starf_draw(state, side) != STARF_UNDRAWN
     state = state._replace(
         starf_open=state.starf_open.at[side].set(
             jnp.where(starf & ~drawn, 1, state.starf_open[side]).astype(state.starf_open.dtype)
         )
     )
+    # The draw is used: the battler's next eat this turn draws its own (F-O3, G-27).
+    taken = state.starf_taken[side] + (starf & drawn).astype(state.starf_taken.dtype)
+    state = state._replace(starf_taken=state.starf_taken.at[side].set(taken))
     return change_stage(state, side, stat, 2, starf & drawn), lansat | starf
 
 
@@ -649,10 +667,7 @@ def resolve_starf(state: BattleState, draws) -> BattleState:
     draws = jnp.asarray(draws)
     for side in range(state.active.shape[0]):
         on = state.starf_open[side] != 0
-        drawn = state._replace(
-            starf_roll=state.starf_roll.at[side].set(draws[side].astype(state.starf_roll.dtype))
-        )
-        stat, some = starf_stat(drawn, side)
+        stat, some = _starf_pick(state, side, draws[side])
         state = change_stage(state, side, stat, 2, on & some)
     return state._replace(starf_open=jnp.zeros_like(state.starf_open))
 

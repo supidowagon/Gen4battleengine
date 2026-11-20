@@ -150,7 +150,12 @@ of the turn:
   Plucks / Bug Bites a foe holding one, or Recycles one; or a battle-start berry is still open
   (``starf_open``). Five values while the count of stats below +6 stays 5, else all 60
   (``_starf_reads``). ``starf[d, 1]``: a faint replacement's draw (five values), where a holder
-  can enter at its pinch after the turn (``step.starf_kept`` keeps it).
+  can enter at its pinch after the turn (``step.starf_kept`` keeps it). ``starf[d, 2]`` (F-O3,
+  G-27): battler ``d``'s second eat this turn, where two of its eat sources can meet in one call
+  (a U-turn / Baton Pass newcomer eats after the pause, from the resumed outcome's ``[d, 0]``);
+  five values where the later eater is a fresh Roar newcomer, else as ``[d, 0]`` with one more +2.
+  ``starf[d, 3]``: its third eat (its Pluck / Bug Bite and own Starf Berry, then a foe's Roar
+  newcomer), the same law with +2 per earlier eat.
 * ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
   at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
@@ -436,7 +441,7 @@ class OutcomeLaws(NamedTuple):
     acupressure_loose: jnp.ndarray  # bool[B]
     # int32[B]: ids.CHATTER_CHANCES of each battler's party's Chatot cry (G-70)
     chatter_chance: jnp.ndarray
-    # bool[B, 2]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
+    # bool[B, 4]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
     # change before the eating: all STARF_DRAWS values; else the five of a fixed count of 5.
     starf_loose: jnp.ndarray
 
@@ -2707,16 +2712,15 @@ _STARF_STAGE_JUMPS = (
 
 
 def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loose):
-    """``(relevant bool[B, 2], loose bool[B, 2])`` of ``Outcome.starf`` (F-10). Index 0, the turn's
-    draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the one
-    it switches in holds one, or any living holder of its party can enter (its own U-turn or Baton
-    Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
+    """``(relevant bool[B, 4], loose bool[B, 4])`` of ``Outcome.starf`` (F-10). Index 0, the first
+    eat's draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the
+    one it switches in holds one, or any living holder of its party can enter (its own U-turn or
+    Baton Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
     residual damage source, entry hazards; over-approximate); or ``d`` Plucks / Bug Bites a foe
     holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a battle-start berry is
-    still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of
-    the party can be at its pinch when a replacement sends it in: at its pinch now, on the field
-    this turn when it can leave, or with Spikes / Stealth Rock up or set this turn
-    (``step.starf_kept``).
+    still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of the
+    party can be at its pinch when a replacement sends it in: at its pinch now, on the field this
+    turn when it can leave, or with Spikes / Stealth Rock up or set this turn (``step.starf_kept``).
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
@@ -2725,7 +2729,27 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     stat move (its param) and 2 for the rest (Steadfast, Speed Boost, a plucked pinch berry,
     Download); no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
     (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
-    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5)."""
+    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5).
+
+    Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
+    (battle_lib.c:4864-4866, :5286-5288, Pluck :5808). Read where two of its eat sources can meet
+    in one call: the holder on the field (at its pinch or able to lose HP), a newcomer holder a
+    foe's Roar drags in (a party holder off the field), a Recycle of a Starf Berry (the one
+    recycled before the turn, or the one eaten first), a Pluck / Bug Bite of a foe holder, an open
+    battle-start berry. A U-turn / Baton Pass newcomer is not one: the turn pauses at the party
+    pick (``pivot_battler``) and the resumed call loads its own queue, so the newcomer's eat takes
+    the resumed outcome's index 0. A Pluck / Bug Bite whose berry did nothing makes the holder's
+    own Starf Berry two sources (kept at the attacker's item check, eaten again at the held-item
+    status check: SELF_TURN_FLAG_PLUCK_BERRY, lib:5848, subscript_pluck_check.s). Index 3, the
+    third eat, where three sources can meet: d's Pluck / Bug Bite and its own Starf Berry, then a
+    foe's Roar newcomer holder (Roar's priority -6 drags after d's move). The k-th eat's law: the
+    same battler's while it has k sources of its own, the index-0 rule with +2 per earlier eat;
+    else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
+    dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
+    values unless those reach +6. A fourth eat needs a foe's Fling of a Starf Berry
+    (lib:6110-6127) on top, which is unsupported (``coverage.ITEM_MOVING_EFFECTS``), as are Thief /
+    Covet and Trick / Switcheroo, the other item givers; an eat past the third reads the queue's
+    last entry."""
     fmt = format_of(state)
     sides = jnp.arange(fmt.B)
     rows = party(fmt, sides)
@@ -2786,16 +2810,56 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     gain = jnp.where(uses_move, own_gain, 0) + foes(jnp.where(uses_move, foe_gain, 0)) + 2
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
-    relevant = jnp.stack([turn, rep], axis=1)
-    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn_loose)], axis=1)
+    # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
+    # then a Roar newcomer's (Roar's priority -6 puts its drag after d's own action).
+    reach = pinched_b | hp_drop
+    held_eat = jnp.any(holds_b & on_field & reach, axis=1)
+    # A Pluck / Bug Bite whose berry did nothing leaves SELF_TURN_FLAG_PLUCK_BERRY set
+    # (lib:5848; subscript_pluck_check.s skips RemoveItem while it is set): the attacker's own
+    # Starf Berry triggers at AFTER_MOVE_EFFECT_ATTACKER_ITEM, kept (bcp:3684-3689), and again at
+    # _HELD_ITEM_STATUS (bcp:3730-3761), two draws (``step`` ``info.pluck_flag``).
+    foe_item = jnp.any((state.item[rows] != 0) & on_field, axis=1)
+    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_item)
+    newcomer = jnp.any(holds_b & (slots != state.active[:, None]) & reach, axis=1)
+    entries = jnp.asarray(dragged, bool).astype(_I32)
+    recycles = (
+        uses_move
+        & (effect == _E.RECYCLE)
+        & ((tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY) | held_eat | open_)
+    )
+    own = (
+        held_eat.astype(_I32)
+        + twice.astype(_I32)
+        + recycles.astype(_I32)
+        + plucked.astype(_I32)
+        + open_.astype(_I32)
+    )
+    sources = own + jnp.where(newcomer, entries, 0)
+    # The k-th eat (k = 2, 3) is the same battler's while ``own >= k``, its stages up 2 per
+    # earlier eat; else the Roar newcomer's, fresh (only a foe's bounded gains reach it).
+    fresh_loose = jump | (foes(jnp.where(uses_move, foe_gain, 0)) + 2 >= STAGE_MAX)
+
+    def later(k):
+        same = turn_loose | (highest + gain + 2 * (k - 1) >= STAGE_MAX)
+        return live & (sources >= k), jnp.where(own >= k, same, fresh_loose)
+
+    second, second_loose = later(2)
+    third, third_loose = later(3)
+    relevant = jnp.stack([turn, rep, second, third], axis=1)
+    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn), second_loose, third_loose], axis=1)
     if loose:
         # The brute force: the turn's draw, all STARF_DRAWS values, wherever a living holder is
         # in the side's party (or its foe's, for a Pluck / Bug Bite) or a berry is open, and the
-        # replacement's (five values: a fresh battler's count) wherever one is in the party.
+        # replacement's (five values: a fresh battler's count) wherever one is in the party; the
+        # second and third eats', all values, wherever the side has a second source at all (a
+        # Roar's drag, a Recycle, a Pluck / Bug Bite, an open berry) beside a holder.
         anyone = jnp.any(holds_b, axis=1)
         eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone)
-        relevant = jnp.stack([live & (anyone | eats | open_ | recycled), live & anyone], axis=1)
-        loose_out = jnp.stack([jnp.ones_like(live & anyone), jnp.zeros_like(anyone)], axis=1)
+        first = live & (anyone | eats | open_ | recycled)
+        more = (entries > 0) | (uses_move & _any_of(effect, (_E.RECYCLE, _E.EAT_BERRY))) | open_
+        relevant = jnp.stack([first, live & anyone, first & more, first & more], axis=1)
+        all_ = jnp.ones_like(first)
+        loose_out = jnp.stack([all_, jnp.zeros_like(first), all_, all_], axis=1)
     return relevant, loose_out
 
 
@@ -3613,7 +3677,7 @@ def _law(laws: OutcomeLaws, elem: Elem) -> _Law:
     name, index = elem
     if name == "hit":  # B13-6: a later Triple Kick hit's own thresholds
         values, weights, den = _hit(laws, index[0], index[1])
-    elif name == "starf":  # F-10: the turn's draw or the faint replacement's
+    elif name == "starf":  # F-10 / F-O3: an eat's draw or the faint replacement's
         values, weights, den = _starf(laws, index[0], index[1])
     else:
         values, weights, den = _LAWS[name](laws, index[0] if index else 0)
