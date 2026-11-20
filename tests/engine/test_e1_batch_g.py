@@ -570,27 +570,73 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
 @pytest.mark.parametrize(
     "move, foe_item, full, second",
     [
-        ("Bug Bite", "Grip Claw", False, False),
-        ("Pluck", "Micle Berry", False, False),
-        ("Bug Bite", "Oran Berry", True, True),
+        ("Bug Bite", "Grip Claw", False),
+        ("Pluck", "Micle Berry", False),
+        ("Pluck", "Leppa Berry", False),
+        ("Bug Bite", "Occa Berry", True),
+        ("Pluck", "Razz Berry", True),
+        ("Bug Bite", "Cheri Berry", True),
     ],
 )
 def test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it(
-    tables, names, move, foe_item, full, second
+    tables, names, move, foe_item, second
 ):
     """G-S6: ``starf[0, 2]`` through the Pluck flag (``_starf_reads``' ``twice``) only where the
-    foe's item can leave SELF_TURN_FLAG_PLUCK_BERRY set. Grip Claw is no berry: no flag
-    (``result`` FALSE, battle_lib.c:5832-5835, :5846-5848). Micle's PLUCK_EFFECT_TEMP_ACC_UP
-    always sets ``nextSeq`` (:5827-5830) and subscript_held_item_temp_acc_up.s calls PLUCK_CHECK,
-    clearing it. An Oran Berry eaten at full HP leaves ``nextSeq`` 0 (:5551-5558): kept."""
+    foe's item can leave SELF_TURN_FLAG_PLUCK_BERRY set, the plucker at its pinch. Grip Claw is
+    no berry: no flag (``result`` FALSE, battle_lib.c:5832-5835, :5846-5848). Micle's
+    PLUCK_EFFECT_TEMP_ACC_UP (:5827-5830, subscript_held_item_temp_acc_up.s:12) and Leppa's
+    PLUCK_EFFECT_PP_RESTORE (:5609-5633) always set ``nextSeq``, whose subscript's PLUCK_CHECK
+    clears it. Occa (a resist berry) and Razz are PLUCK_EFFECT_NONE berries (Item_IsBerry, :5833),
+    Cheri cures no paralysis on the unparalysed plucker (:5569-5575): ``nextSeq`` 0, kept."""
     from nuzline.engine.enumerate import outcome_laws
 
     s = _starf_fight(names, tables, [move], ["Tackle"], foe_item=foe_item)
-    if full:
-        s = s.replace_hp(0, 0, int(s.max_hp[0, 0]))
     acts = jnp.asarray(_acts(names, s, 0, move, "Tackle"))
     laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
     assert bool(laws.relevant.starf[0, 2]) is second
+
+
+def _consumed_starf(tables, s, acts):
+    """The ``Outcome.starf`` cells of side 0 the step consumes: those whose draw (0 against 3)
+    changes the turn's stages, each run checked against the reference engine."""
+    base = assert_matches_reference(tables, s, acts, _draws(0))
+    out = []
+    for i in range(4):
+        starf = jnp.zeros((2, 4), jnp.int8).at[0, i].set(3)
+        o = O._replace(starf=starf, roar_level=jnp.ones(2, jnp.int8))
+        moved = assert_matches_reference(tables, s, acts, o)
+        out.append(not np.array_equal(np.asarray(moved.stages), np.asarray(base.stages)))
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("own_starf", [True, False])
+def test_the_pluck_reads_a_berry_the_foe_recycles_first(tables, names, own_starf):
+    """G-S6: the faster foe holds nothing and Recycles (effect_script_0184.s:5-7, BtlCmd_TryRecycle
+    battle_script.c:9000-9013) before side 0's Bug Bite, which plucks the live item
+    (BattleSystem_PluckBerry, battle_lib.c:5539). ``own_starf``: an Occa Berry (PLUCK_EFFECT_NONE,
+    :5832-5835) comes back; the flag stays (:5848) and the quarter-HP plucker's own Starf Berry is
+    eaten twice: ``starf[0, 2]``. Else a Starf Berry comes back and the holderless plucker eats it
+    (:5798-5817): ``starf[0, 0]``. The step's consumed cells are a subset of the enumerator's."""
+    from nuzline.engine.enumerate import outcome_laws
+
+    if own_starf:
+        s = _starf_fight(names, tables, ["Bug Bite"], ["Recycle"], foe_level=60)
+        recycled, cell = "Occa Berry", 2
+    else:
+        s = make_state(
+            tables,
+            [_mon(names, "Abra", ["Bug Bite"], 50)],
+            [_mon(names, "Rattata", ["Recycle"], 60)],
+        )
+        s = s._replace(stats=s.stats.at[1, 0, _SPE].set(500))
+        recycled, cell = "Starf Berry", 0
+    s = s._replace(recycle_item=s.recycle_item.at[1].set(names.item(recycled)))
+    acts = jnp.asarray(_acts(names, s, 0, "Bug Bite", "Recycle"))
+    relevant = np.asarray(outcome_laws(tables, s, acts).relevant.starf[0]).tolist()
+    consumed = _consumed_starf(tables, s, acts)
+    assert consumed[cell] and relevant[cell]
+    assert all(r for r, c in zip(relevant, consumed) if c)
 
 
 def _snap_segment(tables, names, seed_value, turn):

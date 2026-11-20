@@ -2221,8 +2221,11 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Leppa (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830,
   subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-46). `twice` now needs a foe
   item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
-  Focus Energy) are over-approximated. Klutz / Embargo (:5838-5843) keep the flag but make the own Starf inert.
-  Step and reference unchanged. `test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it`.
+  Focus Energy) are over-approximated. Klutz / Embargo (:5839-5845) keep the flag but make the own Starf inert.
+  The read also takes a berry the foe Recycles before the Pluck (effect_script_0184.s:5-7: `hooks.pluck_berry`
+  reads the live item), for `twice` (a `keeps` berry) and for `plucked` (a Starf Berry, index 0).
+  Step and reference unchanged. `test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it`,
+  `test_the_pluck_reads_a_berry_the_foe_recycles_first`.
 
 ## Stream state (restart point, 2026-11-19)
 

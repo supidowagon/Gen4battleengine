@@ -2730,10 +2730,11 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     one it switches in holds one, or any living holder of its party can enter (its own U-turn or
     Baton Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
     residual damage source, entry hazards; over-approximate); or ``d`` Plucks / Bug Bites a foe
-    holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a battle-start berry is
-    still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of the
-    party can be at its pinch when a replacement sends it in: at its pinch now, on the field this
-    turn when it can leave, or with Spikes / Stealth Rock up or set this turn (``step.starf_kept``).
+    holding one or Recycling one first (no HP test, battle_lib.c:5798-5817), or Recycles one; or a
+    battle-start berry is still open (``starf_open``). Index 1, the faint replacement's draw,
+    where a living holder of the party can be at its pinch when a replacement sends it in: at its
+    pinch now, on the field this turn when it can leave, or with Spikes / Stealth Rock up or set
+    this turn (``step.starf_kept``).
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
@@ -2781,7 +2782,13 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         & (effect == _E.RECYCLE)
         & (tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY)
     )
-    plucked = uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1))
+    # A foe that Recycles a Starf Berry before d's Pluck / Bug Bite holds it again
+    # (effect_script_0184.s:5-7; ``step`` puts ``recycle_item`` back into ``item``) and
+    # ``hooks.pluck_berry`` reads the live item: ``recycled`` read through ``foes`` (G-S6).
+    # TODO(D2): at B = 4 ``foes`` must become the chosen target (or every other battler).
+    plucked = (
+        uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1) | recycled)
+    )
     hazards = entry_damage_up(state)
     residual = (
         fcm.any_weather(fcm.weather_bits(state))
@@ -2843,7 +2850,15 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # ``nextSeq`` is 0: every held-item subscript ends in PLUCK_CHECK, which clears it. Leppa
     # (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830) always set
     # ``nextSeq``; a non-berry (Grip Claw) sets no flag. The other berries' conditions (full HP,
-    # no status, +6, Focus Energy) are not tested: over-approximate.
+    # no status, +6, Focus Energy) are not tested: over-approximate. Klutz / Embargo
+    # (:5839-5845) keep the flag. STARF_BERRY's exclusion overlaps ``~plucked``.
+    # The foe's item as the Pluck reads it: the start-of-turn item of each on-field slot (the
+    # incoming one too: a switch acts before moves) or a berry it Recycles first
+    # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
+    # foe's own eaten berry only remove it (an over-read); Thief / Covet, Trick / Switcheroo and
+    # Fling are unsupported effects (``coverage.ITEM_MOVING_EFFECTS``); a foe's U-turn / Baton
+    # Pass newcomer is read by the resumed call (``pivot_battler``); in singles only d itself
+    # could Roar the foe's side, and d is Plucking.
     keeps = jnp.asarray(
         [
             e
@@ -2853,7 +2868,13 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         _I32,
     )
     foe_effect = tables.item_effect[state.item[rows]].astype(_I32)
-    foe_berry = jnp.any(jnp.isin(foe_effect, keeps) & (state.item[rows] != 0) & on_field, axis=1)
+    recycle_keeps = (
+        uses_move
+        & (effect == _E.RECYCLE)
+        & jnp.isin(tables.item_effect[state.recycle_item].astype(_I32), keeps)
+    )
+    foe_berry = jnp.any(jnp.isin(foe_effect, keeps) & on_field, axis=1) | recycle_keeps
+    # TODO(D2): at B = 4 ``foes`` must become the chosen target (or every other battler).
     twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_berry) & ~plucked
     newcomer = jnp.any(holds_b & (slots != state.active[:, None]) & reach, axis=1)
     entries = jnp.asarray(dragged, bool).astype(_I32)
@@ -2889,7 +2910,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         # second and third eats', all values, wherever the side has a second source at all (a
         # Roar's drag, a Recycle, a Pluck / Bug Bite, an open berry) beside a holder.
         anyone = jnp.any(holds_b, axis=1)
-        eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone)
+        eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone | recycled)
         first = live & (anyone | eats | open_ | recycled)
         more = (entries > 0) | (uses_move & _any_of(effect, (_E.RECYCLE, _E.EAT_BERRY))) | open_
         relevant = jnp.stack([first, live & anyone, first & more, first & more], axis=1)
