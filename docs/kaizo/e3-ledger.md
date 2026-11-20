@@ -501,7 +501,11 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
 
 ## Batch 2 (rulings E3-B2-n)
 
-- E3-B2-1 Fling (#233): new `EffectId.FLING` (effect 233, BATTLE_EFFECT_FLING; no manifest bump: no
+Numbering: E3-B2-12 (Defog) was built inside E3-B2-14 (the Metronome close-out; the manager kept it in E3) and
+E3-B2-19 (Camouflage) moved to E1 batch G (ownership, manager 19 Nov), so the ids jump 11 -> 13 and 18 -> 20.
+EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRROR_MOVE 132 ... DEFOG 142.
+
+- E3-B2-1 Fling (#233): new `EffectId.FLING` (131; effect 233, BATTLE_EFFECT_FLING; no manifest bump: no
   array or key changed, only the move row's effect value; `item_fling_power`, `item_fling_effect`
   and `item_hold_param` already carry every item) and `ids.FlingEffect` (FLING_EFFECT_*,
   items.h:86-116). Order, from effect_script_0233.s: `step._use_move` fails the move on the raw
@@ -580,7 +584,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   carry Fling.
 
 - E3-B2-2 Mirror Move (#9, BATTLE_EFFECT_COPY_MOVE; the only move with effect 9 in either game):
-  new `EffectId.MIRROR_MOVE` (131), `order.CALL_MIRROR_MOVE` (an invoker with no draw in singles,
+  new `EffectId.MIRROR_MOVE` (132), `order.CALL_MIRROR_MOVE` (an invoker with no draw in singles,
   ordered like Copycat and Me First), `MoveFlag.MIRROR_MOVE` (bit 1 << 23 from
   MOVE_FLAG_CAN_MIRROR_MOVE; `tools/build_tables._move_flags`; manifest 35: the packed `move_flags`
   values changed), state `move_copied` `[B]` and `move_copied_hit` `[B, B]` (int16, in
@@ -647,7 +651,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_a_switch_a_bag_item_and_a_pursuit_record_no_copied_move`.
 
 - E3-B2-3 Conversion 2 (#93, BATTLE_EFFECT_CONVERSION2; move 176, the only move with effect 93 in
-  either game): new `EffectId.CONVERSION_2` (132), state `conv2_move` / `conv2_battler` (`1 +
+  either game): new `EffectId.CONVERSION_2` (133), state `conv2_move` / `conv2_battler` (`1 +
   battler`) / `conv2_type` `[B]` (`VOLATILE_FIELDS`; STATE.md rows mapped), `Outcome.conv2`
   `int8[B, 18]`. No manifest bump: no array or key changed. The 112 rows of
   `sTypeMatchupMultipliers` come from `type_chart_order` / `type_chart_foresight` (decomp row =
@@ -713,7 +717,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   need a `conv2` oracle clause (not added: the law is checked by the uniform-law test).
 
 - E3-B2-4 Spite (#100, BATTLE_EFFECT_DECREASE_LAST_MOVE_PP; move 180, the only move with effect 100 in
-  either game): new `EffectId.SPITE` (133). No new state, no `Outcome` field and no draw (BtlCmd_
+  either game): new `EffectId.SPITE` (134). No new state, no `Outcome` field and no draw (BtlCmd_
   TrySpite reads no random). Tables: only `move_effect` of Spite (effect-map entry); no manifest bump:
   no array or key changed (as Conversion 2).
   Script: effect_script_0100.s:5 direct ON_HIT TO_DEFENDER (lib.c:1485-1491: not on NO_EFFECTS, so not
@@ -751,7 +755,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   (`test_spite_has_no_basic_or_expert_label`); `fullset`-free.
 
 - E3-B2-5 Role Play (#178, BATTLE_EFFECT_COPY_ABILITY; move 272, the only move with effect 178 in either
-  game, acc 0, no PROTECT / MIRROR_MOVE flag): new `EffectId.ROLE_PLAY` (134). No new state, no
+  game, acc 0, no PROTECT / MIRROR_MOVE flag): new `EffectId.ROLE_PLAY` (135). No new state, no
   `Outcome` field and no draw. Tables: only `move_effect` of Role Play (effect-map entry); no manifest bump:
   no array or key changed. Machinery is Skill Swap's (E3-2-5), nothing new.
   Script: effect_script_0178.s:5-6 fails (:10-12 `MOVE_STATUS_FAILED`) on the user's `Battler_Ability`
@@ -791,7 +795,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   list), tests/engine/test_accuracy_classes.py (`_FOLLOWED`); `fullset`-free.
 
 - E3-B2-6 Magic Coat (#183, BATTLE_EFFECT_APPLY_MAGIC_COAT; the move of that name, priority +4): new
-  `EffectId.MAGIC_COAT` (135), `MoveFlag.MAGIC_COAT` (bit 16777216, MOVE_FLAG_CAN_MAGIC_COAT, a
+  `EffectId.MAGIC_COAT` (136), `MoveFlag.MAGIC_COAT` (bit 16777216, MOVE_FLAG_CAN_MAGIC_COAT, a
   `DECOMP_FLAG_BITS` entry; vanilla and Kaizo flags, Gastro Acid and Kaizo's Torment / Spite among
   them) and the state `magic_coat` (per battler, int8, 1 + the user's move slot; STATE.md `turnFlags`
   row, `magicCoatMon` reworded). Manifest bumped to 36 (the flag array changed; both tables rebuilt).
@@ -845,7 +849,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tests/engine/test_accuracy_classes.py; `fullset`-free.
 
 - E3-B2-7 Lucky Chant (#240, BATTLE_EFFECT_PREVENT_CRITS; move 381, the only move with effect 240 in
-  either game, acc 0; priority 0 vanilla, +2 Kaizo): new `EffectId.LUCKY_CHANT` (136). No new state
+  either game, acc 0; priority 0 vanilla, +2 Kaizo): new `EffectId.LUCKY_CHANT` (137). No new state
   (`lucky_chant [2]` and its countdown, `step.FIELD_SIDE_TIMERS`, existed), no `Outcome` field and no draw.
   Tables: only `move_effect` of Lucky Chant (effect-map entry); no manifest bump: no array or key changed.
   Script: effect_script_0240.s:5, :9-11 fails (`MOVE_STATUS_FAILED`) with SIDE_CONDITION_LUCKY_CHANT on the
@@ -930,7 +934,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_expert_encore_encourages_a_players_last_charge`); `fullset`-free.
 
 - E3-B2-9 Grudge (#194, BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT; move 288, the only move with effect 194 in either
-  game, acc 0, PP 5, RANGE_USER; player-only in Kaizo, Metronome-callable): new `EffectId.GRUDGE` (137,
+  game, acc 0, PP 5, RANGE_USER; player-only in Kaizo, Metronome-callable): new `EffectId.GRUDGE` (138,
   `tools/effect_map.py` entry 194); new per-battler `grudge [B]` int8 (`MOVE_EFFECT_GRUDGE`, moves.h:22, a bit with
   no count) in `VOLATILE_FIELDS` (cleared at switch and faint, lib.c:2071, :2166), not in `BATON_PASSED_FIELDS`
   (moves.h:46-48), in `effects.MOVE_EFFECT_MASK_FIELDS` (Roar's whole-mask Ingrain test,
@@ -1019,7 +1023,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
 - E3-B2-10 Miracle Eye (#216, BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE; move 357, the only move with
   effect 216 in either game (the ROM's effect, discrepancies.md: the sheet says 217), acc 0, PP 40,
   RANGE_SINGLE_TARGET, PROTECT and MIRROR_MOVE flags; player-only in Kaizo, Metronome-callable): new
-  `EffectId.MIRACLE_EYE` (138, `tools/effect_map.py` entry 216); new per-battler `miracle_eye [B]` int8
+  `EffectId.MIRACLE_EYE` (139, `tools/effect_map.py` entry 216); new per-battler `miracle_eye [B]` int8
   (`MOVE_EFFECT_MIRACLE_EYE`, moves.h:30, a bit with no count) in `VOLATILE_FIELDS` (cleared at switch and faint,
   lib.c:2071, :2166), not in `BATON_PASSED_FIELDS` (moves.h:46-48), in `effects.MOVE_EFFECT_MASK_FIELDS` (Roar's
   whole-mask Ingrain test; the reference's `_ingrain_anchors` list has it too). No `Outcome` field, no draw.
@@ -1093,7 +1097,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   tables out of `LISTED`).
 - E3-B2-11 Last Resort (#246, BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES; move 387, the only move with effect
   246 in either game, 130 BP Normal physical, acc 100, PP 5, flags CONTACT, PROTECT, MIRROR_MOVE, KINGS_ROCK; no
-  Kaizo trainer knows it; player-only, Metronome-callable): new `EffectId.LAST_RESORT` (139, `tools/effect_map.py`
+  Kaizo trainer knows it; player-only, Metronome-callable): new `EffectId.LAST_RESORT` (140, `tools/effect_map.py`
   entry 246), `ids.MOVE_LAST_RESORT` (387, also in `data/game_constants.py`); new per-battler `last_resort_count [B]`
   int8 (`lastResortCount`, 3 bits, battle_mon.h:27) and `last_resort_moves [B, 4]` int16 (`lastResortMoves`,
   battle_mon.h:50), both in `VOLATILE_FIELDS` (the whole `moveEffectsData` is zeroed at a switch and a faint,
@@ -1163,7 +1167,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
 - E3-B2-13 Feint (#223, BATTLE_EFFECT_REMOVE_PROTECT; move 364, the only move with effect 223 in either game, Normal
   physical, acc 100, PP 10, priority +2, vanilla 50 BP and Kaizo 80 BP, flags none: no CAN_PROTECT, CONTACT or
-  KINGS_ROCK; no Kaizo trainer knows it; player-only; Metronome cannot call it, lib.c:7175): new `EffectId.FEINT` (140,
+  KINGS_ROCK; no Kaizo trainer knows it; player-only; Metronome cannot call it, lib.c:7175): new `EffectId.FEINT` (141,
   `tools/effect_map.py` entry 223). No new `BattleState` field, no `Outcome` field, no draw beyond the plain hit's crit
   and roll. Tables: `move_effect` of Feint only; no manifest bump (no array or key changed); vanilla and Kaizo tables
   rebuilt.
@@ -1235,7 +1239,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_feint_exact_equals_loose`, and the batch13 exact-equals-loose list, a slow test run on the pod).
 - E3-B2-14 Defog (#258, BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN; move 432, the only move with effect 258 in either
   game, Flying status, acc 0, PP 15 (Kaizo 1), flags PROTECT and MIRROR_MOVE, no Kaizo trainer knows it; player-only,
-  Metronome-callable) and the Metronome close-out (#83, E3-B2-14): new `EffectId.DEFOG` (141, `tools/effect_map.py`
+  Metronome-callable) and the Metronome close-out (#83, E3-B2-14): new `EffectId.DEFOG` (142, `tools/effect_map.py`
   entry 258 with params `(Stat.EVA, -1, 0)`). No new `BattleState` field, no `Outcome` field, no draw. Tables: `move_effect`
   and `move_param` of Defog only; no manifest bump (no array or key changed); vanilla and Kaizo tables rebuilt.
   The sheet e258_defog.md was built here by the same group because Metronome's close-out needs it: it was the last
@@ -1528,7 +1532,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   both engines; `enumerate._starf_reads` counts `flung` as one of d's own sources (the k-th eat's law) and in the brute
   force's `first` / `more`. No fourth queue column: in singles a flung Starf Berry is the flinger's only item and its only
   action, so it meets at most d's own eat and a Recycle or an open berry (three draws). Renumbered: `EffectId` FLING..DEFOG
-  131-142 (E1's NIGHTMARE is 130); MANIFEST_VERSION 42. Both sides' moveEffectsMask bits are kept (`charged_turns`,
+  131-142 (E1's NIGHTMARE is 130); MANIFEST_VERSION 43 (src/nuzline/data/tables.py:33). Both sides' moveEffectsMask bits are kept (`charged_turns`,
   `grudge`, `miracle_eye`, `camouflage`; `effects.camouflaged` is gone, G-20). No state or Outcome field of main changes
   shape here, so no `snap_compare.UPGRADES` row.
 - E3-B2-23 Merge of E1's gate tip 47e08eb (2c437bc + main 08a5700, E2's SF2). Batch 2's MoveEnd split keeps SF2's
