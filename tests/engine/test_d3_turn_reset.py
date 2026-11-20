@@ -17,9 +17,10 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.format import DOUBLES
 from nuzline.engine.ids import Stat, Status
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
+from nuzline.engine.step import needs_replacement, qc_kept
 from nuzline.reference.convert import from_ref, to_ref
-from nuzline.reference.engine import ref_step
-from tests.engine.d2_states import four, party_of, with_moves
+from nuzline.reference.engine import _qc_kept, ref_step
+from tests.engine.d2_states import four, party_of, with_hp, with_moves
 from tests.engine.helpers import jit_step
 from tests.engine.test_d3_action_loop import _all_moves, _set_item
 
@@ -105,3 +106,60 @@ def test_quick_claw_draw_is_kept_per_battler(tables, names):
     assert np.asarray(kept.qc_roll).tolist() == [1, 0, 1, 1]
     every = turn(tables, s, o._replace(quick_claw=jnp.asarray([1, 1, 1, 1], o.quick_claw.dtype)))
     assert np.asarray(every.qc_roll).tolist() == [1, 0, 1, 1]
+
+
+def _partner_claw_state(tables, names, bench: int, bench_claw: bool):
+    """Battler 3 holds Quick Claw; battler 1 (same party in DOUBLES) is at 1 HP and Tackled by
+    battler 0. ``bench`` = 2: no Pokemon left but the partner's active; 3: party slot 2 waits,
+    holding Quick Claw when ``bench_claw``."""
+    claw = names.item("Quick Claw")
+    s = _all_moves(four(tables, names, bench=bench), names, "Swords Dance")
+    s = with_moves(s, names, 0, ["Tackle"])
+    s = _set_item(s, 3, claw)
+    if bench_claw:
+        s = s._replace(item=s.item.at[party_of(s, 1), 2].set(claw))
+    return with_hp(s, 1, 1)
+
+
+def _qc_after_faint(tables, names, s):
+    o = empty_outcome(DOUBLES)
+    o = o._replace(quick_claw=jnp.asarray([0, 1, 0, 1], o.quick_claw.dtype))
+    out = turn(tables, s, o)
+    assert int(out.hp[party_of(out, 1), int(out.active[1])]) == 0  # battler 1 fainted
+    return out, np.asarray(qc_kept(tables, out)).tolist(), _qc_kept(to_numpy(tables), to_ref(out))
+
+
+def test_partner_active_claw_is_not_battler_ones_replacement(tables, names):
+    """Differential failure (pod run df4f55a0): battler 1 faints with no Pokemon left but its
+    partner's active, which holds Quick Claw. ReplaceFainted counts only party slots other than
+    ``selectedPartySlot[i ^ 2]`` (bcp.c:4103), so battler 1 is absent and no holder can be sent in:
+    its speedRand (bcp.c:853-857) is never read as a Quick Claw (battle_lib.c:1278-1279). Battler
+    3's own draw is kept. ``qc_roll`` = [0, 0, 0, 1] in both engines (the reference kept
+    battler 1's draw before)."""
+    out, jax_kept, ref_kept = _qc_after_faint(
+        tables, names, _partner_claw_state(tables, names, bench=2, bench_claw=False)
+    )
+    assert np.asarray(out.qc_roll).tolist() == [0, 0, 0, 1]
+    assert jax_kept == ref_kept == [False, False, False, True]
+
+
+def test_partner_claw_with_a_plain_bench_does_not_keep_battler_ones_draw(tables, names):
+    """Battler 1 faints with a non-holder on the bench (slot 2) and a Quick Claw on its partner's
+    active: the partner's slot is no replacement (bcp.c:4103), so battler 1's draw is dropped
+    (the engine kept it before)."""
+    out, jax_kept, ref_kept = _qc_after_faint(
+        tables, names, _partner_claw_state(tables, names, bench=3, bench_claw=False)
+    )
+    assert int(needs_replacement(out)[1]) == 1
+    assert np.asarray(out.qc_roll).tolist() == [0, 0, 0, 1]
+    assert jax_kept == ref_kept == [False, False, False, True]
+
+
+def test_bench_claw_keeps_battler_ones_draw(tables, names):
+    """Battler 1 faints with a Quick Claw holder on the bench (slot 2): its replacement can be the
+    holder, so the draw is kept: ``qc_roll`` = [0, 1, 0, 1]."""
+    out, jax_kept, ref_kept = _qc_after_faint(
+        tables, names, _partner_claw_state(tables, names, bench=3, bench_claw=True)
+    )
+    assert np.asarray(out.qc_roll).tolist() == [0, 1, 0, 1]
+    assert jax_kept == ref_kept == [False, True, False, True]

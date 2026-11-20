@@ -5003,10 +5003,14 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     effects (bcp.c:251, :263; order-free in singles, ``hooks``), all with the battler on the
     field then, and ``CompareBattlerSpeed`` tests the item of that battler
     (battle_lib.c:1278). So the draw is read when a living Quick Claw holder is active, or
-    when the side's active fainted and its replacement (``needs_replacement``) can be a
-    living Quick Claw holder. Elsewhere nothing reads it before the pre-move redraw
-    (bcp.c:853-857): a Pokemon that switches in during a turn is first read by that turn's
-    end-of-turn sort, which reads that turn's draw."""
+    when the side's active fainted and its replacement can be a living Quick Claw holder: a
+    holder in ``actions.replacement_bench``, which leaves out the partner's active slot where
+    the partner draws from the same party (ReplaceFainted counts only slots other than
+    ``selectedPartySlot[i ^ 2]``, bcp.c:4103). A high battler whose partner is down too is
+    served on a later TurnEnd entry (bcp.c:4083-4086), still from that bench, so it keeps the
+    draw as well. Elsewhere nothing reads it before the pre-move redraw (bcp.c:853-857): a
+    Pokemon that switches in during a turn is first read by that turn's end-of-turn sort, which
+    reads that turn's draw."""
     fmt = format_of(state)
     # The raw item (a Klutz holder or an embargoed one keeps the draw: over-keeping only splits
     # states, B13-29).
@@ -5015,8 +5019,9 @@ def qc_kept(tables: Tables, state: BattleState) -> jnp.ndarray:
     alive = (state.species[rows] != 0) & (state.hp[rows] > 0)
     on_field = jnp.arange(state.hp.shape[1])[None, :] == state.active[:, None]
     active = jnp.any(holds & alive & on_field, axis=1)
-    bench = jnp.any(holds & alive & ~on_field, axis=1)
-    return (state.over == 0) & (active | ((needs_replacement(state) != 0) & bench))
+    down = state.hp[rows, state.active] == 0
+    bench = jnp.stack([jnp.any(holds[b] & replacement_bench(state, b)) for b in range(fmt.B)])
+    return (state.over == 0) & (active | (down & bench))
 
 
 def _keep_quick_claw(tables: Tables, state: BattleState, qc) -> BattleState:

@@ -8384,9 +8384,10 @@ def _qc_rolls(s: RefState) -> list[int]:
 
 
 def _qc_kept(tables, s: RefState) -> list[bool]:
-    """``step.qc_kept``: a living Quick Claw holder is active, or the side waits for a
-    replacement and a living holder is on its bench (the next turn's order and the AI read
-    the slot's speedRand with the battler on the field then)."""
+    """``step.qc_kept``: a living Quick Claw holder is active, or the active fainted and a
+    living holder is in ``_replacement_bench`` (not the partner's active slot where the partner
+    draws from the same party, bcp.c:4103; a deferred high battler too, bcp.c:4083-4086). The
+    next turn's order and the AI read the slot's speedRand with the battler on the field then."""
     out = []
     for b, sd in enumerate(s.battlers):
 
@@ -8396,9 +8397,9 @@ def _qc_kept(tables, s: RefState) -> list[bool]:
 
         mons = _party_of(s, b).mons
         active = mons[sd.active]
-        bench = [m for i, m in enumerate(mons) if i != sd.active]
-        pending = active.hp == 0 and any(m.species and m.hp for m in bench)
-        out.append(not s.over and (bool(claw(active)) or (pending and any(claw(m) for m in bench))))
+        bench = [m for m, ok in zip(mons, _replacement_bench(s, b), strict=True) if ok]
+        down = active.hp == 0
+        out.append(not s.over and (bool(claw(active)) or (down and any(claw(m) for m in bench))))
     return out
 
 
