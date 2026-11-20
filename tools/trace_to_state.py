@@ -398,6 +398,53 @@ def apply_turn(
     return _apply_turn(tables, state, actions, outcome, player_slot, opp_slot, learn_choices)[0]
 
 
+def ref_apply_turn(
+    np_tables, state, actions, outcome, player_slot, opp_slot, learn_choices=()
+) -> BattleState:
+    """``apply_turn`` on the reference engine (``ref_step``, ``ref_advance_learns``,
+    ``ref_learn``, ``ref_replace``), step for step as ``_apply_turn``: each learn pause
+    (E3-B2-21) is answered and the turn resumed with the same outcome before the replacements,
+    which TurnEnd's ReplaceFainted runs only after the whole turn (bcp.c:1848-1852; the
+    send-out's fakeOutTurnNumber is totalTurns + 1, battle_lib.c:2117). ``np_tables``:
+    ``to_numpy(tables)``."""
+    from nuzline.engine.outcome import outcome_to_py
+    from nuzline.reference.convert import from_ref, to_ref
+    from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_replace, ref_step
+
+    choices = [int(c) for c in np.asarray(learn_array(learn_choices))]
+    auto = choices[0] == AUTO_LEARN
+    acts = tuple(int(a) for a in actions)
+    py_outcome = outcome_to_py(outcome)
+    k = 0
+
+    def answer(ref):
+        nonlocal k
+        ref = ref_advance_learns(np_tables, ref)
+        while any(ref.learn_level):
+            if not auto and not (k < MAX_LEARNS and choices[k] >= 0):
+                break
+            ref = ref_learn(np_tables, ref, GIVE_UP if auto else choices[k])
+            k += 0 if auto else 1
+        return ref
+
+    ref = ref_step(np_tables, to_ref(state), acts, py_outcome)
+    for _ in range(MAX_PAUSES - 1):
+        more = auto or (k < MAX_LEARNS and choices[k] >= 0)
+        if not (ref.learn_site and more):
+            break
+        ref = answer(ref)
+        if any(ref.learn_level):  # no answer left: the turn stays at the prompt
+            break
+        ref = ref_step(np_tables, ref, acts, py_outcome)
+    need = np.asarray(needs_replacement(from_ref(ref))) != 0
+    ref = answer(ref)  # TurnEnd's prompts (unpaused)
+    if need[0] and player_slot >= 0:
+        ref = ref_replace(np_tables, ref, 0, int(player_slot))
+    if need[1] and opp_slot >= 0:
+        ref = ref_replace(np_tables, ref, 1, int(opp_slot))
+    return from_ref(ref)
+
+
 def _answer_prompts(tables, state, choices, k, auto):
     """``advance_learns``, then the answers ``choices[k:]`` (``int32[MAX_LEARNS]``, -1 none) given
     to the pending prompts in order (``levelup.learn``), or give-up for each with ``auto``:

@@ -1064,11 +1064,7 @@ def roark_steps(ctx: Ctx, which: str):
         )
         return [("rank_actions roark_real_state", {"state": state, "ranking": ranking})]
     from nuzline.data.tables import load_names, to_numpy
-    from nuzline.engine.outcome import outcome_to_py
-    from nuzline.engine.step import needs_replacement
-    from nuzline.reference.convert import from_ref, to_ref
-    from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_replace, ref_step
-    from tools.trace_to_state import learn_array, replay_turn, trace_to_states
+    from tools.trace_to_state import learn_array, ref_apply_turn, replay_turn, trace_to_states
 
     kt, kn = ctx.tables_for("roark.trace"), load_names(ctx.kdir)
     knp = to_numpy(kt)
@@ -1100,18 +1096,9 @@ def roark_steps(ctx: Ctx, which: str):
             )
 
             def ref_replay(b=before, opp=opp_slot):
-                ref = ref_step(
-                    knp, to_ref(b.state), tuple(int(a) for a in b.actions), outcome_to_py(b.outcome)
+                return ref_apply_turn(
+                    knp, b.state, b.actions, b.outcome, b.player_slot, opp, b.learn_choices
                 )
-                need = np.asarray(needs_replacement(from_ref(ref))) != 0
-                ref = ref_advance_learns(knp, ref)
-                for choice in b.learn_choices:
-                    ref = ref_learn(knp, ref, choice)
-                if need[0] and b.player_slot >= 0:
-                    ref = ref_replace(knp, ref, 0, b.player_slot)
-                if need[1] and opp >= 0:
-                    ref = ref_replace(knp, ref, 1, opp)
-                return from_ref(ref)
 
             rec["ref_replay"] = timed("ref_replay", ref_replay)
         steps.append((f"kaizo_roark_02 turn {i}", rec))
