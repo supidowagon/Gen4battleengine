@@ -55,7 +55,7 @@ of each other (about 3 hours), the managing session names a train order.
   (not `main`) and does the after-merge steps (CLAUDE.md) on that.
 - Each batch keeps its own Opus merge-gate review (step 8) on its own diff range.
 - The pod work runs once, on the last tip: one targeted run with the union of the lists
-  (`MARK='not slow'`), one `fullset` check (DAYBOX.md, Merge candidate), one snapshot
+  and the default mark, one `MARK='fullset'` run (DAYBOX.md, Merge candidate), one snapshot
   compare against the `main` capture with the union `--allow-new` list (section 5).
 - On green and MERGE from every review, the managing session merges the last tip
   `--no-ff` (it contains the others) and pushes once.
@@ -73,7 +73,9 @@ of each other (about 3 hours), the managing session names a train order.
   managing session runs `-m slow` on `main`'s tip on the test pod: one run agent,
   `MARK='slow' bash tools/ops/day/pack.sh <tip> <tables> slow-<yyyymmdd>-<short tip> <list>`
   with the one-line list `tests 8` (DAYBOX.md, Send a run). A red slow tier is fixed before
-  new batches start, like a red nightly.
+  new batches start, like a red nightly. Slow tests run in no other gate except
+  `tests/test_differential.py`, which every merge run carries whole (list line
+  `tests/test_differential.py 1 A`), and the files a batch lists with the `A` flag.
 - **Split close:** one full suite, one final review, a replay of the user's recorded fight
   for that split, a cross-check against the reference scoring tool, and a speed comparison.
 - **Local runs:** CLAUDE.md, Where tests run.
