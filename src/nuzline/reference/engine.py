@@ -17,7 +17,7 @@ Entry points:
   like ``engine.step.replace``.
 * ``ref_damage_table(tables, state, atk_side, move, crit) -> list[int]``: the 16
   damage rolls, like ``engine.damage.damage_table``.
-* ``ref_grant_exp(tables, state, slot, pending, selected) -> RefState``: the exp payout for
+* ``ref_grant_exp(tables, state, slot, pending, selected, battler=1) -> RefState``: the exp payout for
   the opponent's party ``slot`` fainting, like ``engine.levelup.pay_exp``.
 * ``ref_advance_learns(tables, state)``, ``ref_learn_options(tables, state)`` and
   ``ref_learn(tables, state, option)``: the deferred learnset scan, like
@@ -36,9 +36,9 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+from nuzline.engine.format import blackout_parties, side_of, side_out_parties
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import party as _party
-from nuzline.engine.format import side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
@@ -271,8 +271,8 @@ class _Turn:
     # SYSCTL_FIRST_OF_MULTI_TURN of the current action: a charge turn (B10-12), which updates the
     # Choice locks as the attack message does (bcp.c:3921-3922, :4490-4491).
     charging: bool = False
-    # SYSCTL_PAYOUT_EXP (script.c:1800): the opponent party slots whose faint is still to pay.
-    payout: list[int] = field(default_factory=list)
+    # SYSCTL_PAYOUT_EXP (script.c:1800): the enemy (battler, party slot) pairs whose faint is still to pay.
+    payout: list[tuple[int, int]] = field(default_factory=list)
     # SYSCTL_MOVE_HIT of the current action: a hit's UpdateHP ran (bcp.c:3340, :3441).
     move_hit: bool = False
     # The defender's physical / specialDamageTaken this action is nonzero (bcp.c:3411-3424):
@@ -1295,9 +1295,7 @@ def _compare_battlers(
         for b, quick, pinch in zip((b1, b2), claw, custap, strict=True):
             flags[0][b] = flags[0][b] or quick
             flags[1][b] = flags[1][b] or pinch
-    lagging = [
-        _item_effect(tables, _active(s, b), s) == ItemId.LAGGING_TAIL for b in (b1, b2)
-    ]
+    lagging = [_item_effect(tables, _active(s, b), s) == ItemId.LAGGING_TAIL for b in (b1, b2)]
     result = 0
     if priority[0] == priority[1]:
         if activated[0] and activated[1]:
@@ -2049,11 +2047,27 @@ def _source_leaves(s: RefState, side: int, baton: bool = False, faint: bool = Fa
 
 def _sides_out(s: RefState) -> tuple[bool, bool]:
     """``(player_out, opp_out)``: CheckBattleOver's per-side test (bcp.c:4181-4260) as built
-    today, party 0 / party 1 with no Pokemon with HP (the singles branch, :4242-4260); shared by
-    ``_faint_check`` and ``_switch``. D3-7's per-format rule (2vs2 / tag sum the partner's party,
-    :4211-4240; AI partner: the player's own party, :4189-4210) goes here (step._sides_out)."""
-    out = [all(m.species == 0 or m.hp == 0 for m in s.parties[p].mons) for p in (0, 1)]
-    return out[0], out[1]
+    per format (D3-7): the player's party 0 (branches a and c, :4189-4210, :4242-4260), the
+    opponent's ``side_out_parties`` (party 1; TWO_TRAINERS parties 1 and 2, MULTI parties 1 and 3,
+    branch b :4211-4240), each with no Pokemon with HP; shared by ``_faint_check`` and
+    ``_switch`` (step._sides_out)."""
+    fmt = _fmt(s)
+    return tuple(
+        all(
+            m.species == 0 or m.hp == 0
+            for p in side_out_parties(fmt, side)
+            for m in s.parties[p].mons
+        )
+        for side in (0, 1)
+    )
+
+
+def _blacked_out(s: RefState, b: int) -> bool:
+    """``BtlCmd_CheckBlackOut`` (script.c:8846-8915): no Pokemon with HP in any party
+    ``blackout_parties`` names for battler ``b`` (step._blacked_out)."""
+    return all(
+        m.species == 0 or m.hp == 0 for p in blackout_parties(_fmt(s), b) for m in s.parties[p].mons
+    )
 
 
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
@@ -2076,7 +2090,7 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     for side, slot in turn.fainted:
         turn.done[side] = True  # script.c:1801, battlerActions = MOVE_END
         if side_of(side) == 1:  # script.c:1800 flags the payout; CalcExpGain pays a SOLO_ENEMY only
-            turn.payout.append(slot)
+            turn.payout.append((side, slot))
         if s.battlers[side].active == slot:
             _cleanup_fainted(turn, s, side)
         if _party(_fmt(s), side) == 0:  # the player's party only (step._faint_check fainted[0])
@@ -2135,34 +2149,37 @@ def _hold_effect(tables, mon: RefPokemon) -> int:
 
 def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0) -> bool:
     """``BattleControllerPlayer_AnyExpPayout`` (bcp.c:4449-4469), re-entered until no payout
-    flag is left: ``subscript_grant_exp.s`` for the lowest flagged battler each time. Returns
-    whether a player Pokemon gained a level."""
+    flag is left: ``subscript_grant_exp.s`` for the lowest flagged entry each time (``(battler,
+    slot)``; the ordering rule is D3-8's). Returns whether a player Pokemon gained a level."""
     leveled = False
     while turn.payout:
-        slot = min(turn.payout)
-        turn.payout.remove(slot)
-        leveled |= _grant_exp(turn.tables, s, slot, pending, selected)
+        battler, slot = min(turn.payout)
+        turn.payout.remove((battler, slot))
+        leveled |= _grant_exp(turn.tables, s, battler, slot, pending, selected)
     return leveled
 
 
 def ref_grant_exp(
-    tables, state: RefState, slot: int, pending: bool = False, selected: int = 0
+    tables, state: RefState, slot: int, pending: bool = False, selected: int = 0, battler: int = 1
 ) -> RefState:
-    """The payout for the opponent's party ``slot`` fainting (``engine.levelup.pay_exp``'s
-    contract); the input state is not modified."""
+    """The payout for the fainted enemy ``battler``'s party ``slot`` fainting
+    (``engine.levelup.pay_exp``'s contract; singles: battler 1); the input state is not
+    modified."""
     s = copy.deepcopy(state)
-    _grant_exp(tables, s, slot, pending, selected)
+    _grant_exp(tables, s, battler, slot, pending, selected)
     return s
 
 
-def _grant_exp(tables, s: RefState, fainted: int, pending: bool, selected: int) -> bool:
+def _grant_exp(
+    tables, s: RefState, battler: int, fainted: int, pending: bool, selected: int
+) -> bool:
     """``subscript_grant_exp.s``: ``BtlCmd_CalcExpGain`` (script.c:2187-2245), then
     ``BattleScript_GetExpTask`` (script.c:9700-10193) for every party slot in turn. The engine
     plays trainer singles only: the fainted battler is a ``SOLO_ENEMY`` (script.c:2196), the
     battle is a trainer battle (:9753-9755) and the payout goes to party 0 (:9716-9720).
     Returns whether a slot gained a level."""
     party = s.parties[0].mons
-    foe = s.parties[1].mons[fainted]
+    foe = _party_of(s, battler).mons[fainted]
     # CalcExpGain (script.c:2201-2212): the party Pokemon with a species and HP.
     gaining = with_share = 0
     for i, mon in enumerate(party):
@@ -4710,7 +4727,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     action goes on, King's Rock included (bcp.c:3524, no attacker HP test)."""
     tables, o = turn.tables, turn.outcome
     foe = _foe(side)
-    if all(m.species == 0 or m.hp == 0 for m in _party_of(s, foe).mons) or not _bench(s, side):
+    if _blacked_out(s, foe) or not _bench(s, side):
         return False
     target_moved = turn.position == 1
     _contact_ability(turn, s, side, move, hit, True, dealt)
@@ -4740,7 +4757,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             _life_orb_recoil(turn, s, side)
     if holder.hp == 0 and s.battlers[foe].destiny_bond and user.hp > 0:
         _lose_hp(turn, s, side, user.hp)
-    owed: list[int] = []
+    owed: list[tuple[int, int]] = []
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
         p_alive = holder.hp > 0
@@ -5441,10 +5458,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # subscript_missed.s); either way the defender stays the user (no moveHit).
         first = 0
         # BtlCmd_TryMeFirst reads DEFENDER_ACTION[PICK_COMMAND] (battle_script.c:7299).
-        if (
-            _t(tables, "move_effect", move) == EffectId.ME_FIRST
-            and not moved[turn.target_side]
-        ):
+        if _t(tables, "move_effect", move) == EffectId.ME_FIRST and not moved[turn.target_side]:
             # The copied move is the resolved defender's (:7286-7312; D3-5), the foe at B = 2.
             copied_from = turn.target_side
             first = _me_first_copy(
@@ -5970,9 +5984,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         )
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
         # subscript_embargo_start.s:6-11, :57 (MOVE_STATUS_FAILED), B13-31.
-        full = full or (
-            effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, tgt)
-        )
+        full = full or (effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, tgt))
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, tgt)[0])
         full = full or (
             effect == EffectId.CURSE
@@ -6072,9 +6084,11 @@ def _item_order(side: int, defender: int, count: int) -> list[int]:
     """AfterMoveEffects' item states in the order they run: the attacker's (bcp.c:3684-3689), the
     defender's unless it is the attacker (:3691-3696), then every other battler in battler order
     (``AFTER_MOVE_EFFECT_HELD_ITEM_STATUS``, :3730-3756; D3-5)."""
-    return [side] + ([defender] if defender != side else []) + [
-        b for b in range(count) if b != side and b != defender
-    ]
+    return (
+        [side]
+        + ([defender] if defender != side else [])
+        + [b for b in range(count) if b != side and b != defender]
+    )
 
 
 def _roar(turn: _Turn, s: RefState, side: int, foe: int) -> bool:
@@ -6267,16 +6281,16 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
         _switch_in_effects(turn, s, side)
 
 
-def _owed_pursuer(turn: _Turn, s: RefState, pursuer: int, fell: bool) -> list[int]:
+def _owed_pursuer(turn: _Turn, s: RefState, pursuer: int, fell: bool) -> list[tuple[int, int]]:
     """The pursuer's active slot when a recoil felled it in the Pursuit chain (``fell``: it was
     alive before, and Destiny Bond did not take it) and it is the foe: its payout flag leaves
     ``turn.payout`` for the caller to hand back at the action's MoveEnd (SF2 (a2) R3)."""
     slot = s.battlers[pursuer].active
     if not (fell and _active(s, pursuer).hp == 0 and side_of(pursuer) == 1):
         return []
-    if slot in turn.payout:
-        turn.payout.remove(slot)
-    return [slot]
+    if (pursuer, slot) in turn.payout:
+        turn.payout.remove((pursuer, slot))
+    return [(pursuer, slot)]
 
 
 def _item_branch(tables, s: RefState, side: int, item: int) -> tuple[int, int, bool]:
@@ -7511,9 +7525,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         # a Pursuit fired, dragged, a Pokemon entered its slot, fainted or absent: script.c:1801,
         # bcp.c:3988, :4430, :330-333, lib.c:2053). Fact A reads one entry, Fact B all but the
         # actor's own (waitingBattlers == 1, bcp.c:881-886).
-        moved = [
-            turn.done[b] or turn.entered[b] or _active(s, b).hp == 0 for b in range(_fmt(s).B)
-        ]
+        moved = [turn.done[b] or turn.entered[b] or _active(s, b).hp == 0 for b in range(_fmt(s).B)]
         last_to_act = all(m for b, m in enumerate(moved) if b != side)
         record = None
         if commands[side] == ITEM:
@@ -7951,7 +7963,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     # SF2 (a2) R3, R4: the pursuer the Pursuit's recoil felled in the paused pass (a U-turn user
     # has no Destiny Bond) is paid at this MoveEnd.
     if turn.pursued >> foe & 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
-        turn.payout.append(s.battlers[foe].active)
+        turn.payout.append((foe, s.battlers[foe].active))
     turn.target_side = foe  # the resumed tail's defender (D3-10 carries the kept one)
     _finish_action(turn, s, side, position, record)
     try:

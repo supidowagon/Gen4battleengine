@@ -316,21 +316,6 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
     return False
 
 
-def _split_side_alive(state: BattleState) -> bool:
-    """A side whose two battlers send from different parties (TWO_TRAINERS parties 1 and 2;
-    MULTI 0 and 2, or 1 and 3), each party with a living Pokemon."""
-    fmt = format_of(state)
-    if fmt.B != 4:
-        return False
-    hp, species = np.asarray(state.hp), np.asarray(state.species)
-    alive = [bool(np.any((species[p] != 0) & (hp[p] > 0))) for p in range(fmt.P)]
-    for side in (0, 1):
-        first, second = fmt.party_of[side], fmt.party_of[side + 2]
-        if first != second and alive[first] and alive[second]:
-            return True
-    return False
-
-
 def _pivot_pending(state: BattleState) -> bool:
     return int(np.asarray(state.pivot_battler)) != 0
 
@@ -346,8 +331,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-7: side-out per format (_faint_check species[0] / [1]); deleted by D3-7
-    TurnClause("D3-7", "side-out with two parties on a side", lambda t, s, a: _split_side_alive(s)),
     # D3-8: faint and payout order over four; deleted by D3-8
     TurnClause("D3-8", "faint and payout order over four", lambda t, s, a: _four(s)),
     # D3-9: Pursuit scan over four (pursuit_fires, _pursues); deleted by D3-9

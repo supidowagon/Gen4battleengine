@@ -174,7 +174,14 @@ from nuzline.engine.effects import (
     yawn_blocks,
     yawn_sleep,
 )
-from nuzline.engine.format import Format, format_of, party, side_of
+from nuzline.engine.format import (
+    Format,
+    blackout_parties,
+    format_of,
+    party,
+    side_of,
+    side_out_parties,
+)
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.hooks import (
     ABSORB,
@@ -772,10 +779,24 @@ def _has_bench(state: BattleState, side) -> jnp.ndarray:
 
 
 def _blacked_out(state: BattleState, side) -> jnp.ndarray:
-    """``BtlCmd_CheckBlackOut`` (battle_script.c:8846-8920) in singles: no party Pokemon of
-    ``side`` has HP."""
+    """``BtlCmd_CheckBlackOut`` (battle_script.c:8846-8920): no Pokemon with HP in any party
+    ``blackout_parties`` names for battler ``side`` (D3-7; singles: its own party)."""
     fmt = format_of(state)
-    return ~jnp.any((state.species[party(fmt, side)] != 0) & (state.hp[party(fmt, side)] > 0))
+
+    def party_out(p):
+        return ~jnp.any((state.species[p] != 0) & (state.hp[p] > 0))
+
+    if fmt.B == 2:
+        return party_out(party(fmt, side))
+    # ``side`` is a traced battler: one static row per battler (``blackout_parties``), selected.
+    rows = []
+    for b in range(fmt.B):
+        ps = blackout_parties(fmt, b)
+        out = party_out(ps[0])
+        for p in ps[1:]:
+            out = out & party_out(p)
+        rows.append(out)
+    return jnp.stack(rows)[side]
 
 
 def _sides_out(state: BattleState) -> tuple:
@@ -785,8 +806,12 @@ def _sides_out(state: BattleState) -> tuple:
     ``decided`` (SF2 (a2)); D3-7 builds the per-format rule here, for both at once: 2vs2 and
     the tag opponents sum the partner's party (:4211-4240), the AI-partner battles test the
     player's own party only (:4189-4210)."""
+    fmt = format_of(state)
     player_out = jnp.all((state.species[0] == 0) | (state.hp[0] == 0))
-    opp_out = jnp.all((state.species[1] == 0) | (state.hp[1] == 0))
+    opp_parties = side_out_parties(fmt, 1)
+    opp_out = jnp.all((state.species[opp_parties[0]] == 0) | (state.hp[opp_parties[0]] == 0))
+    for p in opp_parties[1:]:
+        opp_out = opp_out & jnp.all((state.species[p] == 0) | (state.hp[p] == 0))
     return player_out, opp_out
 
 
@@ -835,9 +860,7 @@ def _put(events: dict, side, values: dict, cond) -> dict:
     return out
 
 
-def _hit_events(
-    before: BattleState, after: BattleState, side, landed, crit, defender=None
-) -> dict:
+def _hit_events(before: BattleState, after: BattleState, side, landed, crit, defender=None) -> dict:
     """What one hit of ``side``'s move showed, from the states around it: a crit on a
     landed hit that dealt damage (the target's HP drop: only the hit itself lowers it,
     effects.py:441-444; a crit into a substitute is not seen, a documented coarsening in
@@ -1241,8 +1264,10 @@ def _use_move(
     if pursuit is not None:
         # The copied move is the resolved defender's (battle_script.c:7286-7312: DEFENDER_ACTION,
         # ``Battler_SelectedMove(defender)``); at B = 2 that is the foe's, ``pursuit``'s.
-        copy_action, copy_move = (pursuit[0], pursuit[1]) if picks is None else (
-            picks[0][target_side], picks[1][target_side]
+        copy_action, copy_move = (
+            (pursuit[0], pursuit[1])
+            if picks is None
+            else (picks[0][target_side], picks[1][target_side])
         )
         foe_fights = ~is_switch(copy_action) & ~is_item(copy_action)
         copied = me_first_copy(tables, state, target_side, copy_move, foe_fights)
