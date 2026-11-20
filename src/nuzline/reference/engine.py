@@ -17,8 +17,8 @@ Entry points:
   like ``engine.step.replace``.
 * ``ref_damage_table(tables, state, atk_side, move, crit) -> list[int]``: the 16
   damage rolls, like ``engine.damage.damage_table``.
-* ``ref_grant_exp(tables, state, slot, pending, selected) -> RefState``: the exp payout for
-  the opponent's party ``slot`` fainting, like ``engine.levelup.pay_exp``.
+* ``ref_grant_exp(tables, state, slot) -> RefState``: the exp payout for the opponent's
+  party ``slot`` fainting, like ``engine.levelup.pay_exp``.
 * ``ref_advance_learns(tables, state)``, ``ref_learn_options(tables, state)`` and
   ``ref_learn(tables, state, option)``: the deferred learnset scan, like
   ``engine.levelup.advance_learns`` / ``learn_options`` / ``learn``.
@@ -7137,6 +7137,10 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int], resume: int = 
         _faint_check(turn, s)
         _pay_exp(turn, s)
         if s.over:
+            # The payout that ended the battle ran its whole GetExpTask, the learnset scan
+            # included (subscript_grant_exp.s; bs.c:9882, :10007), before CheckBattleOver at the
+            # loop head (bcp.c:938-944); a prompt it leaves stays (D8).
+            _scan_learnsets(turn.tables, s)
             return
     # A learn prompt left by a chip's payout pauses before Gravity. The game prompts at the loop
     # head after the state that paid (bcp.c:938-944); with two set groups (a corrupted mask, FCM
@@ -7999,6 +8003,9 @@ def _ref_step(
         return s
     picked = [int(a) for a in actions]
     actions = (int(actions[0]), int(actions[1]))
+    if s.pivot_battler or s.learn_site:
+        # The turn's speedRand draw (bcp.c:853-857), stored at the stop (engine.step._turn_outcome).
+        outcome = outcome._replace(quick_claw=[int(bool(f)) for f in _get(s, "ts_qc")])
     if s.pivot_battler:
         return _resume(tables, s, actions, outcome)
     if s.learn_site:
@@ -8283,6 +8290,9 @@ def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
         _forecast(turn.tables, s)
+    # MoveEnd's BattleContext_Init (bcp.c:3998, battle_lib.c:1980): powerMul back to 10, so a
+    # later action's list never reads a Pursuit's 20 and a resumed MoveEnd pause starts at 10.
+    turn.pick_mul = 10
 
 
 def _stale_snapshot(s: RefState) -> tuple[int, bool, int]:
@@ -8388,7 +8398,6 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         upto = turn.position + 1 if pause.site == LEARN_MOVE_END else 2
         if pause.site != LEARN_MOVE_END:
             _put(s, "ts_eot", pause.order)
-            _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
         _put(s, "ts_move_cur", turn.move_curs)
     else:
         s.pivot_battler = side + 1
@@ -8396,6 +8405,8 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         upto = turn.position
     _put(s, "ts_acted", [int(b in turn.order[:upto]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
+    # The turn's speedRand draw, read by the resume (engine.step._turn_outcome).
+    _put(s, "ts_qc", [int(bool(f)) for f in turn.outcome.quick_claw])
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
     _put(s, "ts_struggling", [int(c[1]) for c in turn.choices])

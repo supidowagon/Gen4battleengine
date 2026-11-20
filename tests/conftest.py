@@ -11,6 +11,7 @@ from pathlib import Path
 import jax
 import numpy as np
 import pytest
+from hypothesis import settings
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
 from nuzline.data.tables import load_names, load_tables
@@ -20,6 +21,24 @@ from nuzline.jaxcache import (
     jax_version,
     prune_other_versions,
     set_compile_cache_dir,
+)
+
+# Hypothesis profiles, loaded here at import, before any test module: every ``@settings(...)``,
+# ``settings(...)`` object and ``@given`` without settings copies each value it does not set from
+# the profile loaded when it is built (hypothesis/_settings.py ``settings.__init__``:
+# ``self._fallback = parent or settings.default``; core.py ``given``: ``... or Settings.default``),
+# so a test that does not set ``derandomize`` takes the profile's. ``gate`` (default): fixed seeds,
+# each test's seed drawn from its own code (``derandomize=True``, which also turns the example
+# database off). ``explore`` ($NUZLINE_HYPOTHESIS_PROFILE=explore, the nightly): random seeds, no
+# example database, and a failure prints its ``@reproduce_failure`` line. Both build on
+# Hypothesis's own "default" profile, so local runs and the pod (where Hypothesis may load its
+# "ci" profile) agree. The active profile is printed in the terminal summary.
+settings.register_profile("gate", settings.get_profile("default"), derandomize=True)
+settings.register_profile(
+    "explore", settings.get_profile("default"), print_blob=True, database=None
+)
+settings.load_profile(
+    "explore" if os.environ.get("NUZLINE_HYPOTHESIS_PROFILE") == "explore" else "gate"
 )
 
 TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
@@ -193,6 +212,10 @@ def pytest_terminal_summary(terminalreporter):
     process above the threshold would fire after every test)."""
     memory = [c for c in _CLEARS if c[3]]
     gb = 2**30
+    # Printed under -q too (the pod's unit.sh runs -q, which hides the report header).
+    terminalreporter.write_line(
+        f"nuzline hypothesis profile: {settings.get_current_profile_name()}"
+    )
     if _GROWTH:
         terminalreporter.write_line("largest resident growth over one test:")
         for growth, nodeid, after, peak in _GROWTH:

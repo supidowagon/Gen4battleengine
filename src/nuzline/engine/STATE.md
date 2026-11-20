@@ -510,8 +510,9 @@ three structs has a row.
     `TurnEnd` payout (:1846, before `ReplaceFainted`, :1848). `step` pauses at the prompt:
     `learn_site` (per field, 0 none, 1 `LEARN_MOVE_END`, 2 `LEARN_FIELD`, 3 `LEARN_MON`) and
     the turn scratch (`ts_ran`: the MoveEnd `clear`; `ts_move_cur`: each battler's `moveCur`;
-    `ts_eot` and `ts_qc`: the turn end's order and speedRand draw, fixed at the last
-    `BranchActions`, :888-891) hold the turn, and the answered state resumes it through the
+    `ts_eot`: the turn end's order, fixed at the last `BranchActions`, :888-891; `ts_qc`: the
+    turn's speedRand draw, :853-857, which every stop, a party list's included, keeps for the
+    resume's re-sorts and turn end, `step._turn_outcome`) hold the turn, and the answered state resumes it through the
     same `step` (`levelup.learn_prompt`, `levelup.learn`). A pending action re-reads its move
     slot (`FightCommand`, :1889-1895), so the learner's replaced slot runs the new move. The
     answer is a request `(state, option)` of `search.expand.expand`; a playout gives the

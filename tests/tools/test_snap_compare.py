@@ -867,6 +867,102 @@ def test_rows_run_on_batched_outputs_by_kind(rows):
     ].shape == (2, 2)
 
 
+# main 08a57000's from_ref output entries (``ref_step``'s state), exactly as its code emitted
+# them through ``canon``: from_ref stores every field in LAYOUT's dtype and shape
+# (08a57000 reference/convert.py:53-75; state.py:741 _FIELD = (), :868-870 weather /
+# weather_timer / trick_room int8, :801 uproar int8[B]), and canon writes a 0-d array as (1,)
+# (np.ascontiguousarray, ndim >= 1). Generated with 08a57000's src on a singles state with
+# weather 2, timer 3, gravity 4, Trick Room 1, uproar (0, 2). jit(step) / step_events write
+# the same dtypes (08a57000 step.py:4133-4134 and :4326 astype; :4157 jnp.where of the int8
+# counter and the weak Python int GRAVITY_TURNS stays int8), root_belief and the Roark parts
+# return single states: every output state stores its 0-d fields as (1,).
+MAIN_OLD_FIELDS = {
+    "weather": ("arr", "|i1", "(1,)", b"\x02"),
+    "weather_timer": ("arr", "|i1", "(1,)", b"\x03"),
+    "gravity": ("arr", "|i1", "(1,)", b"\x04"),
+    "trick_room": ("arr", "|i1", "(1,)", b"\x01"),
+    "uproar": ("arr", "|i1", "(2,)", b"\x00\x02"),
+    "acid_rain": ("arr", "|i1", "(1,)", b"\x00"),
+    "species": ("arr", "<i2", "(2, 6)", bytes(24)),
+    "active": ("arr", "|i1", "(2,)", bytes(2)),
+    "hp": ("arr", "<i2", "(2, 6)", bytes(24)),
+}
+OUTPUT_PREFIXES = (".ref_step", ".step_events[0]", ".jit_step", ".root_belief[0][0]",
+                   ".ref_replay", ".replay_turn", ".state", ".in_state", ".in_ai_state")  # fmt: skip
+
+
+@pytest.mark.parametrize("prefix", OUTPUT_PREFIXES)
+def test_field_row_runs_on_main_output_records(rows, prefix):
+    """Task 1 (pod compare of 56cd9f4): the field row ran on the saved inputs only. A captured
+    output state's 0-d fields are (1,) entries (canon) while uproar is (2,): the reads' leads
+    differed ((1,) against ()), so Upgrade.lead returned None on every output (ref_step,
+    step_events, jit_step, root_belief, ref_replay / replay_turn / state, the record's
+    in_state / in_ai_state). Read flat, they are the 0-d fields and the row runs."""
+    from nuzline.engine.ids import FieldCondition as F
+
+    entries = {f"{prefix}.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    got = sc.upgrade_entries(entries, None)
+    assert not {
+        f"{prefix}.{k}" for k in ("weather", "weather_timer", "gravity", "trick_room")
+    } & set(got)
+    mask = got[f"{prefix}.field_mask"]
+    want = F.RAINING_TEMP | 4 << 12 | 1 << 16 | 1 << 9  # Weather 2 = rain, timer 3
+    assert mask[:3] == ("arr", "<i4", "(1,)") and struct.unpack("<i", mask[3])[0] == want
+    assert got[f"{prefix}.weather_turns"] == ("arr", "<i4", "(1,)", struct.pack("<i", 3))
+    assert got[f"{prefix}.uproar"] == MAIN_OLD_FIELDS["uproar"]
+    assert sc.UPGRADED[sc.UPGRADES[2].name] == 1
+
+
+def test_flat_scalars_keep_batches_and_newer_captures(rows):
+    """A (1,) read is a batch of one where the other reads say so; a newer capture (a
+    field_mask already there) and a scalar of another dtype still run no row."""
+    one = {k: v for k, v in MAIN_OLD_FIELDS.items()}
+    one.update(uproar=("arr", "|i1", "(1, 2)", b"\x00\x02"), species=("arr", "<i2", "(1, 2, 6)", bytes(24)),
+               active=("arr", "|i1", "(1, 2)", bytes(2)), hp=("arr", "<i2", "(1, 2, 6)", bytes(24)))  # fmt: skip
+    got = sc.upgrade_entries({f".rb.{k}": v for k, v in one.items()}, None)
+    assert got[".rb.field_mask"][2] == "(1,)" and ".rb.weather" not in got
+    newer = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    newer[".s.field_mask"] = ("arr", "<i4", "(1,)", bytes(4))
+    assert ".s.weather" in sc.upgrade_entries(newer, None)
+    wide = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    wide[".s.gravity"] = ("arr", "<i4", "(1,)", struct.pack("<i", 4))
+    assert ".s.weather" in sc.upgrade_entries(wide, None)
+    batch3 = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}  # (1,) scalars, lead (3,): no
+    batch3[".s.uproar"] = ("arr", "|i1", "(3, 2)", bytes(6))
+    assert ".s.weather" in sc.upgrade_entries(batch3, None)
+
+
+def test_sampler_outputs_drift_in_every_starf_column_saved_outcomes_in_2_3(capsys):
+    """Task 2: main drew Outcome.starf as randint(fold_in(key, 48), (B, 2)) and this checkout
+    draws (B, 4) from that key (outcome.py sample_outcome), so every column of a fresh draw
+    (.sample_outcome) changes: all four are sampler drift. A saved Outcome (.in_outcome)
+    invents only columns 2-3; its columns 0-1 stay strict."""
+    old = np.array([[5, 1], [7, 2]], np.int8)
+    marks = {"hit": np.zeros((2, 6), np.int8), "roll": np.zeros(2, np.int8),
+             "crit": np.zeros(2, np.int8)}  # fmt: skip
+    entries = sc.canon(
+        {"sample_outcome": {"starf": old, **marks}, "in_outcome": {"starf": old, **marks}}
+    )
+    inv: dict = {}
+    want = sc.upgrade_entries(entries, None, inv)
+    assert inv == {".sample_outcome.starf": (0, 1, 2, 3), ".in_outcome.starf": (2, 3)}
+    drawn = np.array([[9, 8, 7, 6], [5, 4, 3, 2]], np.int8)
+    saved = np.array([[5, 1, 5, 5], [7, 2, 7, 7]], np.int8)
+    got = sc.canon(
+        {"sample_outcome": {"starf": drawn, **marks}, "in_outcome": {"starf": saved, **marks}}
+    )
+    assert sc.settle_new_columns(want, got, inv) == 1
+    assert sc.compare_dumps(_step(want), [("k", got)])[0] is None
+    saved[1, 0] = 0  # a saved Outcome's column 0 still diverges
+    want = sc.upgrade_entries(entries, None, inv := {})
+    got = sc.canon(
+        {"sample_outcome": {"starf": drawn, **marks}, "in_outcome": {"starf": saved, **marks}}
+    )
+    sc.settle_new_columns(want, got, inv)
+    diverged = sc.compare_dumps(_step(want), [("k", got)])[0]
+    assert diverged and ".in_outcome.starf[1, 0]" in diverged
+
+
 def test_new_starf_columns_are_sampler_drift_not_divergence(capsys):
     """Rule 4: Outcome.starf columns 2-3 of an old capture are invented: a rerun's own draws
     there are sampler drift; columns 0-1 stay strict."""

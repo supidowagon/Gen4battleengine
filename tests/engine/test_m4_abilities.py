@@ -21,6 +21,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from nuzline.engine.damage import decomp_ability_id
 from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.outcome import empty_outcome, hit_threshold
@@ -124,6 +125,15 @@ def test_insomnia_cures_on_entry_and_move_end(tables, names, spinarak):
 )
 @given(data=st.data())
 def test_cloud_nine_is_inert(tables, names, data):
+    """Cloud Nine against no ability changes nothing but the ability id itself. The id travels:
+    a Trace holder copies it (subscript_trace.s:6-7, UpdateMonDataFromVar OPCODE_SET
+    BATTLEMON_ABILITY), and that write records it for the AI (battle_script.c:3401-3404
+    BattleAI_SetAbility, :12106-12109 battlerAbilities[battler] = ability); Transform copies it too
+    (battle_script.c:5342-5348) and settles the user's AI record (``effects._transform``). So
+    ``ability`` is not compared and in ``ai_ability_known`` Cloud Nine's decomp id (13) is read as
+    the record the NONE run writes (-1, known but not named, ``damage.decomp_ability_id``). The
+    Transform ``shadow_*`` fields hold the user's own slot and form, never an ability id, and stay
+    compared."""
     s = data.draw(supported_state(tables, names))
     s = with_weather(s, Weather.NONE)
     acts = data.draw(legal_action_pair(tables, s))
@@ -132,9 +142,14 @@ def test_cloud_nine_is_inert(tables, names, data):
     cloudy = s._replace(ability=s.ability.at[side, s.active[side]].set(AbilityId.CLOUD_NINE))
     plain = s._replace(ability=s.ability.at[side, s.active[side]].set(AbilityId.NONE))
     a, b = _jit_step(tables, cloudy, acts, outcome), _jit_step(tables, plain, acts, outcome)
+    cloud = int(decomp_ability_id(AbilityId.CLOUD_NINE))
+    unnamed = int(decomp_ability_id(AbilityId.NONE))
     for name, x, y in zip(a._fields, a, b, strict=True):
+        x, y = np.asarray(x), np.asarray(y)
+        if name == "ai_ability_known":
+            x = np.where(x == cloud, unnamed, x)
         if name != "ability":
-            np.testing.assert_array_equal(np.asarray(x), np.asarray(y), err_msg=name)
+            np.testing.assert_array_equal(x, y, err_msg=name)
 
 
 # Every site in the decomp's src/battle that reads Cloud Nine (the ability, NO_CLOUD_NINE or

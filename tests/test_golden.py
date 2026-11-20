@@ -26,16 +26,13 @@ import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.levelup import GIVE_UP
-from nuzline.engine.outcome import outcome_to_py
 from nuzline.engine.state import BattleState
-from nuzline.engine.step import needs_replacement
-from nuzline.reference.convert import from_ref, to_ref
-from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_replace, ref_step
 from tools.trace_to_state import (
     COMPARED_FIELDS,
     ReplayTurn,
     convert,
     learn_array,
+    ref_apply_turn,
     replay_turn,
     trace_to_states,
 )
@@ -87,17 +84,15 @@ def reference_mismatches(tables, turns: list[ReplayTurn]) -> list[str]:
             opp_slot,
             learn_array(before.learn_choices),
         )
-        actions = tuple(int(a) for a in before.actions)
-        ref = ref_step(np_tables, to_ref(before.state), actions, outcome_to_py(before.outcome))
-        need = np.asarray(needs_replacement(from_ref(ref))) != 0
-        ref = ref_advance_learns(np_tables, ref)
-        for choice in before.learn_choices:
-            ref = ref_learn(np_tables, ref, choice)
-        if need[0] and before.player_slot >= 0:
-            ref = ref_replace(np_tables, ref, 0, before.player_slot)
-        if need[1] and opp_slot >= 0:
-            ref = ref_replace(np_tables, ref, 1, opp_slot)
-        ref_state = from_ref(ref)
+        ref_state = ref_apply_turn(
+            np_tables,
+            before.state,
+            before.actions,
+            before.outcome,
+            before.player_slot,
+            opp_slot,
+            before.learn_choices,
+        )
         wrong += [
             f"turn {int(before.state.turn)} field {name}"
             for name in BattleState._fields

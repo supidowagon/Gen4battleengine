@@ -1577,3 +1577,42 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   the child pauses unrefused (`LEARN_MOVE_END`, `ts_switched[1]` kept); after both answers the resumed turn's opponent
   replacement after the AI switch is refused (`playout.turn_muls` -> `send_replacements`; roark.md 14, item 3, a coverage
   refusal, so the `fullset` marker stays). No engine change.
+- E3-B2-27 Train gate fixes (pod gates on 8b89ca3c, 0439270d, 375094ac, 11978186). Tests: `test_roar` checks the six records
+  UpdateFlagsWhenHit writes on Roar's newcomer (battle_lib.c:2121-2149; battle_controller_player.c:3956, :4484-4485,
+  :4500, :4525-4527); `test_faints` admits `learn_site` (turn scratch, 0 between turns); `test_m4_abilities` takes the
+  Cloud Nine hunk of ops 49ed8c94; `test_differential` calls the 3-argument `pay_exp` (E3-B2-21 dropped
+  pending / selected) and `_exp_party` takes a `markers` flag: off for the step differential (a step starts with no pending
+  learn: expand.py:272-286, playout.py:540-541; D8 is never stepped), on for the `pay_exp` differential (a payout can
+  start with markers set: Pursuit's payouts mark without scanning, reference :5168 / :6817, step.py:3673). The test-only differential failures surfaced when main's fixed
+  Hypothesis seeds (1008706a) changed the drawn examples; `test_differential` also resumes every learn pause before a
+  replacement (6df38775: the game replaces only after the whole turn, bcp.c:1848).
+  Reference fix (e09363f2): a weather or field payout that ends the battle runs its learnset scan before returning
+  (`_field_conditions`; the payout is subscript_grant_exp.s with its scan, battle_script.c:9882, :10007, and runs before
+  CheckBattleOver, bcp.c:938-944); JAX already did (`step.field_conditions`). The other six reference payout sites scan
+  on every path or leave the markers for the caller's `advance_learns` as JAX does (bcp.c:1846-1848). Snapshot compare
+  (vs main): `step` part `ref_step` outputs and the `roark.trace` reference replay differ only where such a payout ends
+  the battle and levels a mon with a learnset move at the new level (learn_level / learn_cursor 0, the auto-learned move
+  in party moves and PP); JAX outputs unchanged. No table input changed, no manifest bump.
+- E3-B2-28 Reference replay harnesses resume a learn pause (snapshot roark.trace, kaizo_roark_02 turn 15:
+  `.ref_replay.fake_out_turn[1]` 16 -> 15). Since E3-B2-21 a payout's prompt pauses `ref_step` (`learn_site`); the
+  harnesses (`tools/snap_compare.py` `ref_replay`, `tests/test_golden.py` `reference_mismatches`) answered the prompt
+  and sent the replacement into the paused turn, so `ref_replace` set `fake_out_turn = s.turn` (15). The game's
+  ReplaceFainted (bcp.c:1848) runs after the whole turn and sets totalTurns + 1 (battle_lib.c:2117): 16. Both now call
+  `tools/trace_to_state.ref_apply_turn` (3abd3efe), which answers each prompt and finishes the turn before the
+  replacements, as `_apply_turn` does for JAX. No engine change.
+- E3-B2-29 Engine fixes from the train gate (E3's, found by E2's SF2 tests and the step differential):
+  (a) cf8bf157: merge e5490ccb put Feint's loop-carry slot (E3-B2-13) ahead of E2's super-effective and Trick Room
+  flags but kept main's read positions; JAX read Feint's flag as `ts_se` and the Trick Room re-sort read the
+  super-effective flag (Enigma reads moveStatusFlags, battle_lib.c:5421-5428; the re-sort runs at MoveEnd on
+  trickRoomActivated, bcp.c:3989-3992, battle_lib.c:7276-7300). Five test_singles_followup2 tests green again.
+  (b) 37772b10: a learn stop wrote `ts_pick_mul` 0 and the resume started there, and a Pursuit's 20 outlived its action;
+  MoveEnd ends in BattleContext_Init, powerMul = 10 (bcp.c:3998, battle_lib.c:1974-1980). Both engines.
+  (c) a975f7af: the turn's speedRand / Quick Claw draw is made once per turn (bcp.c:853-857); a resume from a party list
+  or a learn stop drew it again. Paused states keep it in `ts_qc`. Both engines. Snapshot: a resumed step / jitstep segment reports the turn's
+  draw where main drew again (seed 171 turn 1 segment 1 `qc_roll[0]` 1 -> 0: main's saved state has no `ts_qc`, read as 0).
+  (d) 093367d6: a MoveEnd learn resume passed `learn_site` (1) to `field_conditions` as a mid-pass resume site and skipped
+  the field pass but Gravity (screens, Wish, weather chip and countdown); a MoveEnd pause comes before the turn end,
+  whose field pass runs whole (bcp.c:932-1254). Only LEARN_FIELD / LEARN_MON resume mid-pass. JAX only.
+  Tests: tests/engine/test_e3_batch2.py (powerMul after a learn resume, the kept Quick Claw draw, each turn-end counter
+  drops once over a pause at each learn site). Snapshot: states captured at a pause carry `ts_qc` and the turn-end
+  countdowns; no other class.
