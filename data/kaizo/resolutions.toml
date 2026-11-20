@@ -65,15 +65,6 @@ evidence = "rom: d_test.narc map header 373 (ROUTE_213) weather byte 0 in Kaizo 
 
 [[resolution]]
 table = "trainers"
-keys = ["835 Galactic Triton #2", "836 Galactic Neptune #2"]
-field = "area_weather"
-pkcalc = "rain"
-use = "rom"
-reason = "the ROM map has no weather; PKCalc's rain list names these Iron Island trainers and the sheet makes no claim"
-evidence = "rom: d_test.narc map header 293 (IRON_ISLAND_B2F_LEFT_ROOM) weather byte 0 (as vanilla), their only header in rom_trainer_maps.json"
-
-[[resolution]]
-table = "trainers"
 keys = ["560 Galactic Uranus #3"]
 field = "area_weather"
 pkcalc = "hail"

@@ -90,6 +90,27 @@ def test_kaizo_header_rows_vs_vanilla(kaizo_files, vanilla_files, symbols):
     assert [r[2] for r in krows] == [m[20] for m in members]
 
 
+def test_kaizo_fog_and_flash_headers_keep_vanilla_map_types(kaizo_files, vanilla_files, symbols):
+    """MapHeader_GetMapType (rom_diff.md:277; G-15): the d_test.narc weather (u8 at 20) and
+    mapType (bits 0-6 of the u16 at 22, include/map_header.h:23-25) of the headers whose fights
+    reach it. 363 ROUTE_210_NORTH outdoors (2), 449 CELESTIC_TOWN_CAVE indoors (4), 247
+    VICTORY_ROAD_1F_ROOM_2 cave (3) are fog (14); 154-156 Sunyshore Gym and 284 WAYWARD_CAVE_1F
+    are dark flash (16); every one keeps vanilla's mapType, so the patched getter changes no
+    fight (enum MapType, include/data/map_headers.h:33-41)."""
+    import struct
+
+    from tools.rom.readers.maps import _map_header_bytes
+
+    def fields(rom):
+        raw = _map_header_bytes(rom, symbols)
+        return lambda h: (raw[24 * h + 20], struct.unpack_from("<H", raw, 24 * h + 22)[0] & 0x7F)
+
+    kaizo, vanilla = fields(kaizo_files), fields(vanilla_files)
+    assert [kaizo(h) for h in (363, 449, 247)] == [(14, 2), (14, 4), (14, 3)]
+    assert [kaizo(h)[0] for h in (154, 155, 156, 284)] == [16] * 4
+    assert all(kaizo(h)[1] == vanilla(h)[1] for h in (363, 449, 247, 154, 155, 156, 284))
+
+
 class _Arm9Patched:
     """``rom`` with ARM9 bytes at ``address`` replaced by ``new``."""
 

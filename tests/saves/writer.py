@@ -148,6 +148,7 @@ def build_image(
     party_count=None,
     vars=None,
     chatot_cry=None,
+    location=None,
 ) -> bytes:
     """A 0x80000 Platinum image with valid footers.
 
@@ -156,7 +157,8 @@ def build_image(
     ``(save counter, normal block counter, boxes block counter)`` for copy ``i``, or
     ``None`` for an erased (0xFF) copy. ``party_count`` overrides ``currentCount``.
     ``vars``: ``{index into VarsFlags.vars: u16 value}``. ``chatot_cry``: ``(valid, audioData[15])``
-    of the Chatot cry page.
+    of the Chatot cry page. ``location``: ``(map header, overworld weather)`` of
+    FieldOverworldState (``layout.MAP_HEADER``, ``OVERWORLD_WEATHER``).
     """
     normal = bytearray(L.NORMAL_SIZE - L.FOOTER_SIZE)
     codes = list(trainer_name_codes) + [0xFFFF] * (L.TRAINER_NAME_LEN - len(trainer_name_codes))
@@ -185,6 +187,10 @@ def build_image(
         valid, sample = chatot_cry
         normal[L.CHATOT_CRY : L.CHATOT_CRY + 4] = valid.to_bytes(4, "little")
         normal[L.CHATOT_CRY + 4 + L.CHATOT_PARAM_SAMPLE] = sample & 0xFF
+    if location is not None:
+        header, weather = location
+        normal[L.MAP_HEADER : L.MAP_HEADER + 4] = header.to_bytes(4, "little")
+        normal[L.OVERWORLD_WEATHER : L.OVERWORLD_WEATHER + 2] = weather.to_bytes(2, "little")
 
     box_body = bytearray(L.BOXES_SIZE - L.FOOTER_SIZE)
     for (b, s), rec in (boxes or {}).items():

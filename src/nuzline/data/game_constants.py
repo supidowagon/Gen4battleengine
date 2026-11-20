@@ -499,6 +499,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hydration": 93,
             "Forecast": 59,
             "Storm Drain": 114,
+            "Air Lock": 76,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -745,6 +746,14 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.MoveFlag": _ENGINE_ENCODING,
     "nuzline.engine.ids.SemiKind": _ENGINE_ENCODING,
     "nuzline.engine.ids.Weather": _ENGINE_ENCODING,
+    "nuzline.engine.ids.FieldCondition": (
+        "fieldConditionsMask bits (FIELD_CONDITION_*, include/constants/battle/condition.h:110-149), "
+        "battle-engine state, not a game id"
+    ),
+    "nuzline.engine.ids.WEATHER_TEMP_BIT": "the FieldCondition TEMP bit by Weather; "
+    + _ENGINE_ENCODING,
+    "nuzline.engine.ids.WEATHER_PERM_BIT": "the FieldCondition PERM bit by Weather; "
+    + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemId": _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemParam": "columns of tables.item_party_param; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemAiCategory": _ENGINE_ENCODING,

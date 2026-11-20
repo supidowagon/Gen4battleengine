@@ -26,7 +26,7 @@ from hypothesis import strategies as st
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Names, Tables
-from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN, IntermediateData
+from nuzline.data.trainer import TERRAIN_NAMES, IntermediateData
 from nuzline.engine.actions import (
     MOVE_ACTIONS,
     legal_actions,
@@ -41,14 +41,18 @@ from nuzline.engine.ids import (
     MOVE_STRUGGLE,
     NATURE_DISLIKED_FLAVOR,
     SEMI_SET_FLAGS,
+    WEATHER_PERM_BIT,
+    WEATHER_TEMP_BIT,
     AbilityId,
     EffectId,
+    FieldCondition,
     ItemId,
     MoveFlag,
     Stat,
     Status,
     Type,
     Weather,
+    clean_field_mask,
 )
 from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
@@ -406,6 +410,20 @@ _DISABLE_MAX = 6  # Disable stores RandNext() % 4 + 3
 _TIMER_MAX = 5  # screens, Tailwind, Trick Room: turns left
 
 
+def _set_weather(a: dict, weather) -> None:
+    """A drawn state's weather, before its timer is drawn: the PERM bit of ``weather`` in
+    ``field_mask`` (``battle_states`` makes the final mask from it, ``_drawn_weather``)."""
+    mask = int(a["field_mask"][()]) & ~int(FieldCondition.WEATHER)
+    a["field_mask"][...] = mask | int(WEATHER_PERM_BIT[weather])
+
+
+def _drawn_weather(a: dict) -> Weather:
+    """The ``Weather`` whose bits a drawn state's ``field_mask`` holds (one at most), else NONE."""
+    mask = int(a["field_mask"][()])
+    bits = {w: int(WEATHER_TEMP_BIT[w]) | int(WEATHER_PERM_BIT[w]) for w in Weather}
+    return next((w for w in Weather if w and mask & bits[w]), Weather.NONE)
+
+
 @lru_cache(maxsize=1)
 def _learnsets() -> dict[int, list[tuple[int, int]]]:
     if not (INTERMEDIATE / "learnsets.json").exists():
@@ -634,14 +652,15 @@ def _party(draw, tables: Tables, names: Names) -> tuple[list[PokemonSpec], int]:
     return party, active
 
 
-# TERRAIN_UNKNOWN and every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24).
-TERRAINS = (TERRAIN_UNKNOWN, *range(len(TERRAIN_NAMES)))
+# Every TERRAIN_* id (nuzline.data.trainer.TERRAIN_NAMES, 0-24). TERRAIN_UNKNOWN with a move that
+# reads it is refused before the engine (coverage.terrain_refusal, ledger G-21).
+TERRAINS = tuple(range(len(TERRAIN_NAMES)))
 
 
 def _draw_terrain(draw, tables: Tables, a: dict) -> None:
     """A terrain (``TERRAINS``) when any Pokemon knows a move that reads it (Nature Power,
-    Camouflage), so that both engines play those moves on a known terrain too; otherwise the
-    state keeps ``make_state``'s ``TERRAIN_UNKNOWN`` (nothing reads it)."""
+    Secret Power, Camouflage); otherwise the state keeps ``make_state``'s ``TERRAIN_UNKNOWN``
+    (nothing reads it)."""
     effect = np.asarray(tables.move_effect)[a["moves"]]
     readers = (EffectId.NATURE_POWER, EffectId.CAMOUFLAGE, EffectId.SECRET_POWER)
     if np.isin(effect, readers).any():
@@ -853,7 +872,7 @@ def _draw_batch3(draw, tables: Tables, a: dict, side: int, active: int, names: N
                 a["types"][foe, foe_mon, 0] = Type.GHOST
         if enable and ability == AbilityId.SOLAR_POWER:
             give(side, active, "Ember")
-            a["weather"][...] = Weather.SUN
+            _set_weather(a, Weather.SUN)
         if enable and ability == AbilityId.TRUANT:  # a loafing turn (order.truant_loafs)
             a["fake_out_turn"][side] = (int(a["turn"][()]) + 1) % 2
         if enable and ability == AbilityId.TANGLED_FEET:
@@ -945,7 +964,7 @@ def _draw_status_guard(draw, tables: Tables, a: dict, side: int, active: int, na
     if rnd.random() < 1 / 3:
         a["ability"][foe, foe_mon] = rnd.choice(CONTACT_STATUS_ABILITIES)
     if guard == AbilityId.LEAF_GUARD and rnd.random() < 0.5:
-        a["weather"][...] = Weather.SUN
+        _set_weather(a, Weather.SUN)
     bench = [
         i for i in range(SLOTS) if i != active and a["species"][side, i] and a["hp"][side, i] > 0
     ]
@@ -1118,7 +1137,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
             )
         )
         if rnd.random() < 0.5:
-            a["weather"][...] = rnd.choice((Weather.RAIN, Weather.SUN, Weather.HAIL))
+            _set_weather(a, rnd.choice((Weather.RAIN, Weather.SUN, Weather.HAIL)))
     a["minimized"][side] = draw(st.sampled_from([0, 0, 1]))
     if not draw(st.booleans()):
         return
@@ -1127,7 +1146,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     if rnd.random() >= 0.75:
         return
     if ability in (AbilityId.CHLOROPHYLL, AbilityId.FLOWER_GIFT):
-        a["weather"][...] = Weather.SUN
+        _set_weather(a, Weather.SUN)
         give("Tackle")
     if ability == AbilityId.SWARM:
         give("Bug Bite")
@@ -1145,7 +1164,7 @@ def _draw_batch9(draw, tables: Tables, a: dict, side: int, active: int, names: N
     if ability == AbilityId.WATER_ABSORB:
         give_foe(rnd.choice(("Water Gun", "Surf")))
     if ability == AbilityId.RAIN_DISH:
-        a["weather"][...] = Weather.RAIN
+        _set_weather(a, Weather.RAIN)
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) // 2)
     if ability == AbilityId.POISON_HEAL:
         a["status"][side, active] = rnd.choice((Status.POISON, Status.TOXIC))
@@ -1415,6 +1434,8 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
     turns = rnd.choice((0, 0, 0, 1, 2, 5))
     a["magnet_rise_turns"][side] = turns
     a["magnet_rise"][side] = int(turns > 0 or rnd.random() < 0.1)
+    # E1 batch G (G-20): a Camouflage bit (the AI's Basic_CheckCamouflage, Roar's Ingrain test).
+    a["camouflage"][side] = int(rnd.random() < 0.1)
     if draw(st.integers(0, 1)) != 0:
         return
     move = rnd.choice(BATCH12_MOVES)
@@ -1461,7 +1482,7 @@ def _draw_batch12(draw, tables: Tables, a: dict, side: int, active: int, names: 
                 a["status"][side, slot] = rnd.choice((Status.BURN, Status.PARALYSIS, Status.TOXIC))
                 a["status_counter"][side, slot] = 0
     if move in ("Morning Sun", "Synthesis", "Moonlight") and rnd.random() < 0.6:
-        a["weather"][...] = rnd.choice(list(Weather))
+        _set_weather(a, rnd.choice(list(Weather)))
     if rnd.random() < 0.15:
         a["wish_timer"][rnd.choice((side, foe))] = rnd.randint(1, 2)
     # B12-23: Mist up on either side (its failure, its block), and a foe drop to meet it: a
@@ -1698,8 +1719,7 @@ def _draw_defog(draw, tables: Tables, a: dict, side: int, active: int, names: Na
                 a["mist"][foe] = draw(st.integers(1, 5))
                 a["safeguard"][foe] = draw(st.integers(0, 5))
             if draw(st.integers(0, 3)) == 0:
-                a["weather"][...] = Weather.FOG
-                a["weather_timer"][...] = 0
+                _set_weather(a, Weather.FOG)
 
 
 def _draw_last_resort(draw, tables: Tables, a: dict, side: int, active: int, names: Names) -> None:
@@ -1916,7 +1936,7 @@ def _draw_batch_c(draw, tables: Tables, a: dict, side: int, active: int, names: 
 
     if ability == AbilityId.ICE_BODY:
         if rnd.random() < 0.75:
-            a["weather"][...] = Weather.HAIL
+            _set_weather(a, Weather.HAIL)
         a["hp"][side, active] = max(1, int(a["max_hp"][side, active]) * rnd.randint(1, 16) // 16)
     if ability in BATCH_C_FOE_MOVES:
         teach(foe, foe_mon, rnd.choice(BATCH_C_FOE_MOVES[ability]))
@@ -2211,15 +2231,14 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     bag = draw(st.lists(st.sampled_from(M1_BAG_ITEMS), min_size=count, max_size=count))
     a["trainer_items"][1] = [names.item(i) for i in bag] + [0] * (BAG_SLOTS - count)
     a["trainer_item_count"][1] = count
-    weather = a["weather"][()] if a["weather"][()] else draw(st.sampled_from(list(Weather)))
-    a["weather"][...] = weather
+    weather = _drawn_weather(a) or draw(st.sampled_from(list(Weather)))
     # A temporary weather (a weather move's: 1-8 turns left) or a permanent one (0).
     timed = weather not in (Weather.NONE, Weather.FOG)
-    a["weather_timer"][...] = draw(st.integers(0, 8)) if timed else 0
+    timer = draw(st.integers(0, 8)) if timed else 0
     _draw_terrain(draw, tables, a)
-    a["trick_room"][...] = draw(st.integers(0, _TIMER_MAX))
+    trick_room = draw(st.integers(0, _TIMER_MAX))
     # E1 trial batch (G-67): Gravity up (0-5 turns), mostly off.
-    a["gravity"][...] = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
+    gravity = draw(st.sampled_from((0, 0, 0, 0, 1, 2, 5)))
     # E1 trial batch (G-70): the player's Chatot cry parameter (an enemy's is always 0).
     a["chatot_cry"][0] = draw(st.integers(0, 2))
     a["turn"][...] = turn
@@ -2238,6 +2257,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     a["protected"][...] = [int(draw(st.booleans())) if alive else 0 for alive in living]
     a["replace_mul"][...] = 0
     _draw_exp(draw, tables, a)
+    # FCM 4.4: the clean fieldConditionsMask and weatherTurns of the field drawn above.
+    a["field_mask"][...] = clean_field_mask(weather, timer, gravity, trick_room, a["uproar"])
+    a["weather_turns"][...] = timer
     return BattleState(**{name: jnp.asarray(a[name]) for name in BattleState._fields})
 
 
@@ -2508,7 +2530,7 @@ def any_outcome() -> st.SearchStrategy[Outcome]:
         # Conversion 2's pick per battler and recorded type: any type id (``damage.conv2_choice``
         # falls back to the first eligible row for a draw that is not eligible).
         conv2=_ints(0, 17, (2, 18)),
-        starf=_ints(0, 59, (2, 2)),
+        starf=_ints(0, 59, (2, 4)),
         target_draw=_flag(sides),
         call_target_draw=_flag(sides),
         bide_target_draw=_flag(sides),

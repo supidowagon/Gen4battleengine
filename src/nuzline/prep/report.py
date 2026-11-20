@@ -16,6 +16,7 @@ import numpy as np
 
 from nuzline.data.forms import personal_row
 from nuzline.data.tables import Names, Tables
+from nuzline.data.trainer import TERRAIN_NAMES, run_terrain
 from nuzline.engine.coverage import start_gravity, start_trick_room
 from nuzline.engine.ids import Status
 from nuzline.engine.state import BattleState, make_state
@@ -183,6 +184,18 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup, tables: Tables)
         if rest
         else f"Party order: {lead} alone."
     )
+    if problem.field_move:  # ledger G-15: after the last warp onto the map, so no PC between
+        move = names.move_names[problem.field_move]
+        steps.append(
+            f"On the fight's map, after the last warp onto it, use {move} from the party menu "
+            "(clears the fog); then walk to the fight without warping."
+        )
+    if run_terrain(problem.trainer):  # ledger G-18: the tile under the player at the start
+        terrain = TERRAIN_NAMES[problem.trainer.terrain]
+        steps.append(
+            f"Start the fight standing on a tile whose battle terrain is {terrain} (the tile "
+            "under the player decides it)."
+        )
     return steps
 
 

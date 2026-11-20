@@ -72,6 +72,7 @@ from nuzline.ai.switching import (
 )
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import (
     AI_GYRO_BALL,
@@ -82,7 +83,7 @@ from nuzline.engine.damage import (
     decomp_abilities,
 )
 from nuzline.engine.format import format_of, party, side_of
-from nuzline.engine.ids import AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
@@ -179,8 +180,8 @@ class FieldCondition(IntEnum):
     """``IfFieldConditionsMask`` masks Roark's scripts use (``FIELD_CONDITION_*``,
     include/constants/battle/condition.h:123-125, :144)."""
 
-    TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
-    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; BattleState.gravity (G-67)
+    TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # field.trick_room_on
+    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; field.gravity_on (G-67)
 
 
 class VolatileCondition(IntEnum):
@@ -196,6 +197,7 @@ class VolatileCondition(IntEnum):
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
     TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
     FORESIGHT = 1 << 29  # :61; BattleState.foresight (Basic_CheckForesight, E3-B2-18)
+    NIGHTMARE = 1 << 27  # :59; BattleState.nightmare (G-31)
 
 
 _VOLATILE_FIELDS = {
@@ -207,6 +209,7 @@ _VOLATILE_FIELDS = {
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
     VolatileCondition.TORMENT: "torment",
     VolatileCondition.FORESIGHT: "foresight",
+    VolatileCondition.NIGHTMARE: "nightmare",
 }
 
 
@@ -227,6 +230,7 @@ class MoveEffectMask(IntEnum):
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
     ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
     MIRACLE_EYE = 1 << 22  # moves.h:30; BattleState.miracle_eye (Basic_CheckMiracleEye, E3-B2-10)
+    CAMOUFLAGE = 1 << 28  # :36; BattleState.camouflage (G-20)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -243,6 +247,7 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
     MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
     MoveEffectMask.MIRACLE_EYE: "miracle_eye",
+    MoveEffectMask.CAMOUFLAGE: "camouflage",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -304,6 +309,7 @@ class BattleEffect(IntEnum):
     SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
     GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
     GRAVITY = 215  # Gravity (Basic_CheckGravityActive :254; Expert_Gravity :1759)
+    CAMOUFLAGE = 213  # Camouflage (Basic_CheckCamouflage :252; no Expert_Main entry), G-20
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -327,7 +333,8 @@ class BattleEffect(IntEnum):
     STATUS_LEECH_SEED = 84
     KO_MON_THAT_DEFEATED_USER = 98  # Destiny Bond
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
-    STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
+    # Nightmare: Basic_CheckNightmare (:194, G-34); Expert_StatusSleep's IfMoveEffectKnown (:1817)
+    STATUS_NIGHTMARE = 107
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700); Protect, Detect
     DEF_UP_DOUBLE_ROLLOUT_POWER = 156  # Defense Curl (Expert_Protect, script.s:3554)
@@ -1626,7 +1633,7 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
             tables,
             m,
             d_types,
-            state.gravity,
+            fcm.gravity_count(state),
             identified,
             ai_move_type(tables, state, a, m),
             grounded,
@@ -1786,7 +1793,7 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         tables,
         move,
         d_types,
-        state.gravity,
+        fcm.gravity_count(state),
         identified,
         ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
         grounded,
@@ -2567,14 +2574,12 @@ def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value:
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
     ``FieldCondition.TRICK_ROOM`` and ``FieldCondition.GRAVITY`` are supported (static; refused
-    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while
-    ``BattleState.gravity`` is."""
+    otherwise), read from ``field_mask`` itself, so a borrowed counter (FCM 3.1) counts too."""
     assert int(mask) in (
         FieldCondition.TRICK_ROOM,
         FieldCondition.GRAVITY,
     ), f"unsupported field mask {int(mask):#x}"
-    field = ctx.state.gravity if int(mask) == FieldCondition.GRAVITY else ctx.state.trick_room
-    return _jump(ctx, field != 0)
+    return _jump(ctx, (ctx.state.field_mask.astype(_I32) & int(mask)) != 0)
 
 
 def load_current_weather(ctx: AiContext) -> AiContext:
@@ -2582,29 +2587,20 @@ def load_current_weather(ctx: AiContext) -> AiContext:
     ``fieldConditionsMask`` through ``WEATHER_IS_*`` (include/battle/common.h:68-72), with
     **no** Cloud Nine or Air Lock check. Each ``WEATHER_IS_*`` takes both the temporary and
     the permanent bit (``FIELD_CONDITION_SANDSTORM`` = ``_TEMP | _PERM``,
-    include/constants/battle/condition.h:112-128). The battle holds one weather at a time:
-    a weather move clears ``FIELD_CONDITION_WEATHER`` before it sets its own bit
-    (effect_script_0115.s:8-9, Sandstorm), so the decomp's last-match order does not matter
-    and the engine's single ``BattleState.weather`` gives the value."""
-    w = ctx.state.weather
-    value = jnp.select(
-        [
-            w == Weather.RAIN,
-            w == Weather.SANDSTORM,
-            w == Weather.SUN,
-            w == Weather.HAIL,
-            w == Weather.FOG,
-        ],
-        [
-            AiWeather.RAINING,
-            AiWeather.SANDSTORM,
-            AiWeather.SUNNY,
-            AiWeather.HAILING,
-            AiWeather.DEEP_FOG,
-        ],
-        AiWeather.CLEAR,
-    )
-    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
+    include/constants/battle/condition.h:112-128), ``if`` after ``if``: the last set group wins,
+    rain < sand < sun < hail < fog (``field.weather_bits``; a mask with several groups, FCM
+    3.2)."""
+    w = fcm.weather_bits(ctx.state)
+    value = jnp.asarray(AiWeather.CLEAR, _I32)
+    for test, kind in (
+        (fcm.rain, AiWeather.RAINING),
+        (fcm.sand, AiWeather.SANDSTORM),
+        (fcm.sun, AiWeather.SUNNY),
+        (fcm.hail, AiWeather.HAILING),
+        (fcm.fog, AiWeather.DEEP_FOG),
+    ):
+        value = jnp.where(test(w), int(kind), value)
+    return ctx._replace(calc_temp=value)
 
 
 def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:

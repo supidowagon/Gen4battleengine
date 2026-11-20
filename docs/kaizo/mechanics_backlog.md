@@ -7,8 +7,7 @@ not transcribed, keyed by battle effect), which `check_opponent` skips. Both run
 opposing trainer row of every split.
 It counts only what the trainers' teams, bags, AI and battle conditions need.
 Your own Pokemon's moves, abilities and items are not counted, nor are the teams of
-AI partners beside you in multi battles, except F-26: a trainer's Sky Shaymin is counted
-as facing your Transform user (form change).
+AI partners beside you in multi battles.
 Moves are grouped by the game's move-effect number and held items by hold-effect number,
 since one implementation covers the whole group.
 
@@ -30,17 +29,17 @@ New groups: needed in this split and in no earlier one.
 | Gardenia Split | 42 | 35 | 19 | 5 | 0 | 11 (0) | 12 | 11 | 11 |
 | Fantina Split | 42 | 40 | 38 | 0 | 2 | 0 (0) | 31 | 9 | 8 |
 | Maylene Split | 34 | 33 | 27 | 5 | 0 | 1 (0) | 25 | 4 | 0 |
-| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 17 | 11 | 8 |
-| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 27 | 6 | 1 |
-| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 14 | 7 | 5 |
-| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 25 | 25 | 15 |
-| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 3 | 5 | 0 |
-| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 25 | 4 | 1 |
-| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 203 | 51 | 51 |
+| Wake Split | 38 | 33 | 26 | 2 | 5 | 0 (0) | 20 | 9 | 6 |
+| Byron Split | 66 | 58 | 42 | 8 | 0 | 8 (0) | 39 | 4 | 1 |
+| Candice Split | 48 | 36 | 24 | 0 | 0 | 12 (0) | 15 | 6 | 4 |
+| Galactic Split | 109 | 79 | 37 | 12 | 19 | 11 (0) | 29 | 23 | 15 |
+| Volkner Split | 25 | 19 | 9 | 4 | 6 | 0 (0) | 9 | 4 | 0 |
+| Elite Four Split | 28 | 28 | 27 | 1 | 0 | 0 (0) | 26 | 2 | 0 |
+| **Whole game** | 458 | 387 | 275 | 37 | 32 | 43 (0) | 230 | 47 | 47 |
 
 ## Whole game
 
-51 distinct missing groups across all ten splits (387 battles,
+47 distinct missing groups across all ten splits (387 battles,
 458 opposing trainer rows). Kinds: AI flags are flag lines the
 policy lacks; AI move effects are the AI's per-move script paths (untranscribed
 effects, refused effects, move-id cases of its damage and type helpers); battle
@@ -58,13 +57,13 @@ Groups first needed in that split (needed by no earlier split). The whole-game r
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 8 | 0 | 8 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 2 | 8 |
+| Wake Split | 0 | 0 | 0 | 0 | 0 | 6 | 0 | 6 |
 | Byron Split | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| Candice Split | 0 | 1 | 0 | 0 | 0 | 4 | 0 | 5 |
+| Candice Split | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 4 |
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 15 | 0 | 15 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
-| **Whole game** | **1** | **2** | **0** | **0** | **0** | **45** | **3** | **51** |
+| Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Whole game** | **1** | **1** | **0** | **0** | **0** | **45** | **0** | **47** |
 
 ### Groups needed in each split, by kind
 
@@ -76,13 +75,13 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | Gardenia Split | 1 | 0 | 0 | 0 | 0 | 10 | 0 | 11 |
 | Fantina Split | 1 | 0 | 0 | 0 | 0 | 8 | 0 | 9 |
 | Maylene Split | 1 | 0 | 0 | 0 | 0 | 3 | 0 | 4 |
-| Wake Split | 1 | 0 | 0 | 0 | 0 | 8 | 2 | 11 |
-| Byron Split | 1 | 1 | 0 | 0 | 0 | 2 | 2 | 6 |
-| Candice Split | 1 | 1 | 0 | 0 | 0 | 5 | 0 | 7 |
-| Galactic Split | 1 | 1 | 0 | 0 | 0 | 21 | 2 | 25 |
-| Volkner Split | 1 | 1 | 0 | 0 | 0 | 2 | 1 | 5 |
-| Elite Four Split | 1 | 0 | 0 | 0 | 0 | 1 | 2 | 4 |
-| **Whole game** | **1** | **2** | **0** | **0** | **0** | **45** | **3** | **51** |
+| Wake Split | 1 | 0 | 0 | 0 | 0 | 8 | 0 | 9 |
+| Byron Split | 1 | 1 | 0 | 0 | 0 | 2 | 0 | 4 |
+| Candice Split | 1 | 0 | 0 | 0 | 0 | 5 | 0 | 6 |
+| Galactic Split | 1 | 1 | 0 | 0 | 0 | 21 | 0 | 23 |
+| Volkner Split | 1 | 1 | 0 | 0 | 0 | 2 | 0 | 4 |
+| Elite Four Split | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 2 |
+| **Whole game** | **1** | **1** | **0** | **0** | **0** | **45** | **0** | **47** |
 
 ### Battle conditions and other groups
 
@@ -107,17 +106,17 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #2 (position 2; rules not recorded) | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #3 (position 1; rules not recorded) | Fantina Split |
 | battle conditions | battle format: gauntlet Team Galactic Eterna Building #3 (position 2; rules not recorded) | Fantina Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it | Fantina Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain | Fantina Split |
 | battle conditions | battle format: gauntlet Route 213 (position 1; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 2; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 3; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 4; rules not recorded) | Wake Split |
 | battle conditions | battle format: gauntlet Route 213 (position 5; rules not recorded) | Wake Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it | Wake Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it | Candice Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_MOUNTAIN, TERRAIN_CAVE), and Nature Power would read it | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain | Wake Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain | Candice Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_MOUNTAIN, TERRAIN_CAVE (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Candice Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 10; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 11; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 12; rules not recorded) | Galactic Split |
@@ -130,12 +129,18 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle format: gauntlet Wayward Cave (position 7; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 8; rules not recorded) | Galactic Split |
 | battle conditions | battle format: gauntlet Wayward Cave (position 9; rules not recorded) | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it | Galactic Split |
-| battle conditions | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it | Galactic Split |
-| other | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
-| other | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) | Wake Split |
-| other | form change a Transform user facing Sky Forme Shaymin: its freeze writes Land's ability into the user's party Pokemon (F-26; your Transform user assumed): Champion Cynthia | Elite Four Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain | Galactic Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain | Galactic Split |
+| battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain | Galactic Split |
+
+### Start conditions set by ROM scripts
+
+Set on your party by a script outside any trainer row (E1 ledger G-25, G-35); no split
+battle needs them, so they count in no total above.
+
+| Condition | Status | Source |
+|---|---|---|
+| Newmoon status 0x7B on party[0] (sleep 3, poison, burn, freeze, paralysis; condition.h:7-13), kept by the battle until healed | playable after heal; multi-status start refused (`SaveMon.to_spec`, src/nuzline/saves/pkm.py:109) | scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with trainer flag 882 set (scr_seq 278 0x011d), always with flag 823 (0x0199 -> 0x0b18); scr_seq 362 0x00f8 warps 320 -> 321; scr_seq 363 0x00f2 writes the word, then StartFirstBattle 674 (Lady Emi, no split) |
 
 ## Your side (upper bound)
 
@@ -161,25 +166,25 @@ bound under these assumptions:
 
 | Split | Cap | Species reachable (via a non-level step) | Your groups | Player-only | New player-only |
 |---|---|---|---|---|---|
-| Roark Split | 16 | 358 (64) | 20 | 20 | 20 |
-| Gardenia Split | 28 | 410 (65) | 20 | 20 | 0 |
-| Fantina Split | 38 | 463 (69) | 20 | 20 | 0 |
-| Maylene Split | 47 | 480 (73) | 20 | 20 | 0 |
-| Wake Split | 54 | 482 (71) | 20 | 20 | 0 |
-| Byron Split | 65 | 486 (72) | 20 | 20 | 0 |
-| Candice Split | 74 | 486 (72) | 20 | 20 | 0 |
-| Galactic Split | 100 | 493 (73) | 20 | 20 | 0 |
-| Volkner Split | 84 | 487 (73) | 20 | 20 | 0 |
-| Elite Four Split | 100 | 493 (73) | 20 | 20 | 0 |
-| **Whole game** | | | 20 | 20 | 20 |
+| Roark Split | 16 | 358 (64) | 19 | 19 | 19 |
+| Gardenia Split | 28 | 410 (65) | 19 | 19 | 0 |
+| Fantina Split | 38 | 463 (69) | 19 | 19 | 0 |
+| Maylene Split | 47 | 480 (73) | 19 | 19 | 0 |
+| Wake Split | 54 | 482 (71) | 19 | 19 | 0 |
+| Byron Split | 65 | 486 (72) | 19 | 19 | 0 |
+| Candice Split | 74 | 486 (72) | 19 | 19 | 0 |
+| Galactic Split | 100 | 493 (73) | 19 | 19 | 0 |
+| Volkner Split | 84 | 487 (73) | 19 | 19 | 0 |
+| Elite Four Split | 100 | 493 (73) | 19 | 19 | 0 |
+| **Whole game** | | | 19 | 19 | 19 |
 
-Of your 20 groups, 0 are also needed by opposing trainers and 20 are player-only.
+Of your 19 groups, 0 are also needed by opposing trainers and 19 are player-only.
 
 ### New player-only groups per split, by kind
 
 | Split | AI flags | AI move effects | move effects | held items | abilities | battle conditions | other | All |
 |---|---|---|---|---|---|---|---|---|
-| Roark Split | 0 | 4 | 1 | 9 | 6 | 0 | 0 | 20 |
+| Roark Split | 0 | 4 | 1 | 9 | 5 | 0 | 0 | 19 |
 | Gardenia Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Fantina Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Maylene Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
@@ -189,7 +194,7 @@ Of your 20 groups, 0 are also needed by opposing trainers and 20 are player-only
 | Galactic Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Volkner Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | Elite Four Split | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Whole game** | **0** | **4** | **1** | **9** | **6** | **0** | **0** | **20** |
+| **Whole game** | **0** | **4** | **1** | **9** | **5** | **0** | **0** | **19** |
 
 ### Player-only groups
 
@@ -209,7 +214,6 @@ Of your 20 groups, 0 are also needed by opposing trainers and 20 are player-only
 | held items | held item effect #54: Mental Herb | Roark Split |
 | held items | held item effect #63: Smoke Ball | Roark Split |
 | held items | held item effect #66: Lucky Egg | Roark Split |
-| abilities | ability: Air Lock | Roark Split |
 | abilities | ability: Color Change | Roark Split |
 | abilities | ability: Immunity | Roark Split |
 | abilities | ability: Marvel Scale | Roark Split |
@@ -236,7 +240,7 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 ## AI partners in multi battles
 
-25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 5 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
+25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 3 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
 
 ## Roark split
 
@@ -280,15 +284,12 @@ Groups by kind: battle format 12, AI 1
 | 129 | AI: AI_FLAG_TAG_STRATEGY |
 | 82 | battle format: a multi battle |
 | 64 | battle format: a double_two_trainer battle |
-| 45 | ROM change: arm9 gFieldScriptCommands is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
-| 43 | ROM change: arm9 MapHeader_GetMapType is not modelled and this fight reaches it (docs/kaizo/rom_diff.md) |
 | 37 | battle format: a double battle |
-| 9 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Secret Power would read it |
-| 6 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power, Secret Power would read it |
+| 9 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |
+| 6 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain |
 | 4 | AI move-id case of TrainerAI_MoveType where it assigns no type (open: real-game check, trainer_ai.c:3222-3240): Weather Ball |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and Nature Power would read it |
-| 2 | battle terrain: the battle terrain varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it |
-| 1 | AI move effect #213 CAMOUFLAGE not transcribed (Basic_CheckCamouflage): Camouflage |
+| 2 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
+| 2 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 1; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 2; rules not recorded) |
 | 1 | battle format: gauntlet Eterna Gym gym trainers (position 3; rules not recorded) |
@@ -322,14 +323,13 @@ Groups by kind: battle format 12, AI 1
 | 1 | battle format: gauntlet Wayward Cave (position 7; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 8; rules not recorded) |
 | 1 | battle format: gauntlet Wayward Cave (position 9; rules not recorded) |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Nature Power would read it |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW), and Secret Power would read it |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER), and Nature Power, Secret Power, Camouflage would read it |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING), and Nature Power, Secret Power would read it |
-| 1 | battle terrain: the battle terrain varies over its maps (TERRAIN_MOUNTAIN, TERRAIN_CAVE), and Nature Power would read it |
-| 1 | form change a Transform user facing Sky Forme Shaymin: its freeze writes Land's ability into the user's party Pokemon (F-26; your Transform user assumed): Champion Cynthia |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_MOUNTAIN, TERRAIN_WATER (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power, Camouflage would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain |
+| 1 | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_MOUNTAIN, TERRAIN_CAVE (ROM; the calc repo and the docs sheet record none), and Nature Power would read it: name it with --terrain |
 
-Groups by kind: battle format 36, battle terrain 9, AI 3, ROM change 2, form change 1
+Groups by kind: battle format 36, battle terrain 9, AI 2
 
 ## Build order for the first two splits
 

@@ -77,6 +77,7 @@ from nuzline.ai.policy import (
 )
 from nuzline.ai.replacement import post_ko_switch_in
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import (
     MOVE_ACTIONS,
     NUM_ACTIONS,
@@ -158,12 +159,10 @@ def _sort_view(before: BattleState, after: BattleState) -> BattleState:
     hazards' (a Custap Berry's pinch test; no other item of a Custap holder heals)."""
     sides = jnp.arange(2)
     mons = after.active
-    return after._replace(
+    return fcm.with_weather_of(after, before)._replace(
         status=after.status.at[sides, mons].set(before.status[sides, mons]),
         item=after.item.at[sides, mons].set(before.item[sides, mons]),
         stages=after.stages.at[:, Stat.SPE].set(0),
-        weather=before.weather,
-        weather_timer=before.weather_timer,
     )
 
 

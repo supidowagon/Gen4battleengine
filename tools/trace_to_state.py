@@ -63,7 +63,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.format import foe as foe_of
 from nuzline.engine.format import format_of, party
-from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Status
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, learn_options, needs_learn
 from nuzline.engine.order import MOVE_ACTIONS, effective_speed, used_move
 from nuzline.engine.outcome import MAX_HITS, Outcome, empty_outcome, read_chance
@@ -92,7 +92,7 @@ COMPARED_FIELDS: tuple[str, ...] = (
     "pp",
     "active",
     "stages",
-    "weather",
+    "field_mask",
 )
 _START_FIELDS = ("species", "level", "max_hp", "moves", "item")
 
@@ -106,14 +106,6 @@ MOVE_STATUS_PROTECTED = 1 << 15  # include/constants/battle/moves.h
 COMMAND_RESULT = 41  # BATTLE_CONTROL_RESULT
 NO_ACTIONS = (-1, -1)  # the last turn: the trace ends before any choice
 
-# FIELD_CONDITION_* (TEMP | PERM pairs) and FIELD_CONDITION_DEEP_FOG
-_WEATHER_BITS = (
-    (0x3, Weather.RAIN),
-    (0xC, Weather.SANDSTORM),
-    (0x30, Weather.SUN),
-    (0xC0, Weather.HAIL),
-    (1 << 15, Weather.FOG),
-)
 
 _MAX_CANDIDATES = 4096
 # Learn-move prompts answered in one turn (``apply_turn``'s ``learn_choices``, padded with -1
@@ -208,14 +200,6 @@ class _Fit:
     asked: bool = False  # the per-turn replay gave up a learn-move prompt (``_fit_learns``)
 
 
-def decode_weather(mask: int) -> Weather:
-    """``ids.Weather`` from ``fieldConditionsMask``."""
-    for bits, weather in _WEATHER_BITS:
-        if mask & bits:
-            return weather
-    return Weather.NONE
-
-
 def resolve_roll(candidates: Sequence[tuple[int, int]]) -> tuple[int, int]:
     """The ``(crit, roll)`` used for a hit that ``candidates`` all fit. They all give
     the same damage, so the lowest is used. A crit is an observable game event,
@@ -304,7 +288,8 @@ def _fields(record: dict) -> dict[str, np.ndarray]:
             a["status"][side, slot], a["status_counter"][side, slot] = decode_status(mon["status"])
         a["active"][side] = data["active"]
         a["stages"][side] = _stage_row(data["stages"])
-    a["weather"][...] = decode_weather(record["field"])
+    # fieldConditionsMask as traced (``BattleState.field_mask`` is it bit for bit, FCM 4.2).
+    a["field_mask"][...] = record["field"]
     # The tracer reads an active battler's status from the BattleMon
     # (tools/trace_battle.lua:182-183). The decomp zeroes the status only in the party copy
     # of a Pokemon with no HP (BattleController_EmitUpdatePartyMon, battle_controller.c:

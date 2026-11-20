@@ -78,17 +78,27 @@ three structs has a row.
   `curse` (below), Focus Energy -> `focus_energy` (E2 batch 12, B12-4: per battler, set by
   subscript_focus_energy.s:6, ORed in by Psych Up, battle_script.c:6050, cleared by Haze, :3544,
   and with the volatiles; Baton Pass keeps it, condition.h:72). The other bits (Thrash,
-  Transform, Rage, Substitute flag, Nightmare) are later (M6); the Substitute flag is
+  Transform, Rage, Substitute flag) are later (M6); the Substitute flag is
   implied by `substitute_hp > 0`. Torment -> `torment` (E3 batch 1, E3-2-1: per battler `[B]`,
   `VOLATILE_CONDITION_TORMENT` bit 31, set by subscript_torment_start.s:8 with no count, cleared
   with the volatiles; Baton Pass drops it, condition.h:72-76, battle_lib.c:2075; it only blocks
   the slot holding `last_move` at the next move selection, `actions.usable_moves`).
+  Nightmare -> `nightmare` (E1 batch G, G-31..G-33: per battler `[B]`,
+  `VOLATILE_CONDITION_NIGHTMARE` bit 27, condition.h:59, set on a sleeping defender by
+  subscript_nightmare_start.s:9; the turn end, after the burn and before the curse, costs a
+  sleeper `Divide(maxHP, 4)` unless Magic Guard and clears it on a battler not asleep,
+  bcp.c:1436-1448; every wake-up, Chesto / Lum, Shed Skin, Hydration, Insomnia / Vital Spirit,
+  Heal Bell / Aromatherapy and a bag sleep cure clear it (`effects.clear_nightmare`); cleared
+  with the volatiles, not Baton-passed, condition.h:72-76, not copied by Transform).
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
   Imprison -> `imprison` (its user) and Imprisoned -> `imprisoned` (its foes) (E2 batch 7, per
   battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
-  Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
+  Song, Yawn and Lock-On (below). Camouflage -> `camouflage` (E1 batch G, G-20: per battler, set
+  by a Camouflage that changed the types, effect_script_0213.s:6; not copied by Transform, which
+  copies the BattleMon up to `ability`, battle_script.c:5346-5348; cleared by a switch or a faint,
+  battle_lib.c:2071, :2166, and not Baton-passed, moves.h:46-48).
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
   `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
   UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
@@ -131,14 +141,21 @@ three structs has a row.
   copies Last Resort, :4514-4516; `effects.last_resort_fails` is BtlCmd_TryLastResort,
   battle_script.c:7567-7579; the Sketch zeroing, :4876-4878, waits for Sketch). The rest (Heal
   Block) is later (M6).
-- **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
-  sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
-  permanent (Defog clears the deep fog bit alone, subscript_defog.s:64-69, so a `Weather.FOG`
-  field goes to none: `effects._defog`, E3-B2-14); Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
-  Uproar battler mask (`FIELD_CONDITION_UPROAR`, one bit per battler) is `uproar != 0`: the
-  bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
-  together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
-  `CleanupFaintedMon`, :2213, with the volatiles).
+- **fieldConditionsMask -> `field_mask`** (int32, `_FIELD`, one per battle: BattleContext state,
+  doubles-state-design section 5 convention 2): `BattleContext.fieldConditionsMask`
+  (battle_context.h:210) bit for bit, bits condition.h:110-149 (`ids.FieldCondition`): the
+  weather bits 0-7 (TEMP / PERM of rain, sand, sun, hail) and deep fog 15, the Uproar bits 8-11
+  (bit `8 + b` of battler `b`), the Gravity counter 12-14 and the Trick Room counter 16-18.
+  **`weather_turns`** (int32, `_FIELD`): `FieldConditions.weatherTurns` (battle_context.h:29);
+  stale outside a TEMP-only weather (only the weather moves, effect_script_0115/0136/0137/0164.s
+  :10-14, and the TEMP-only countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM (FCM.md
+  section 4, steps 1-3): every writer and reader goes through `engine.field` (the reference the
+  same), so a mask with several groups or a borrowed counter (FCM 3.1, Acid Rain) reads as the
+  decomp reads it (FCM 3.2). `uproar[b]` is the battler's VOLATILE_CONDITION_UPROAR count only
+  (the lock, its end check, Metronome): the field's Uproar readers read bits 8-11
+  (`field.uproar_any`). The old `weather`, `weather_timer`, `gravity` and `trick_room` fields
+  are gone (step 3). Defog clears the deep fog bit 15 alone (subscript_defog.s:64-65,
+  `effects._defog`, E3-B2-14).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
   `tailwind`, Lucky Chant turns -> `lucky_chant` (the 3-bit counter at bits 12-14, set to 5 by
   `effects._lucky_chant`, subscript_lucky_chant_start.s:5-6, E3-B2-7), Future Sight -> `future_sight` (E2 batch 5:
@@ -155,10 +172,11 @@ three structs has a row.
 - **The field-condition pass** (`step.field_conditions`,
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
-  a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
-  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) is not counted
-  down yet. `trick_room` is counted down by the turn end's side-condition pass
-  (`step._trick_room_check`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
+  `weather_turns` once per TEMP-only weather group (the group's TEMP bit clears at 0,
+  `field.weather_state`) and the Gravity bits (`field.gravity_tick`); a turn count of 0 is the
+  condition's mask bit clear. `wish_timer` (Wish's heal) is not counted down yet. The Trick
+  Room bits are counted down by the turn end's side-condition pass (`step._trick_room_check`,
+  `field.trick_room_tick`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
 - **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
@@ -340,23 +358,33 @@ three structs has a row.
   `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
   (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
   the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).
+  F-O3 (E1 batch G, G-27): each eat draws its own `RandNext() % 5` (lib:4864-4866, :5286-5288,
+  Pluck :5808), so `starf_roll` is per battler `int8[B, 3]`, the turn's queue
+  `Outcome.starf[:, ids.STARF_QUEUE]` (columns 0, 2, 3: first, second, third eat), and
+  **`starf_taken`** (per battler, `int8[B]`, no decomp field: the count of draws the battler's
+  eats made this turn) picks the entry an eat reads, `min(starf_taken, 2)` (`hooks.starf_draw`;
+  `hooks._pinch_effects` adds one per draw, an open battle-start berry takes entry 0). Both
+  0 between turns except a kept replacement draw in entry 0; `step.replace` sets `starf_taken` 0.
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and
   never written in battle. `BattleSystem_GetTerrain` (`src/battle/battle_system.c:375-382`)
   is read by Nature Power, Secret Power and Camouflage (`src/battle/battle_script.c:8007`,
   `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
-  it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
-  maps give several terrains or none, and coverage then refuses those three effects.
-  Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
-  `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
-  (`order.terrain_index`: those readers then do nothing).
+  it from `Trainer.terrain` (`tools/terrain.py`), or for a trainer whose start tiles give
+  several, from the run's `--terrain` (`cli.fight_terrain`, ledger G-18); `TERRAIN_UNKNOWN`
+  (-1) while none is named or no map places the trainer, and coverage then refuses those
+  three effects (G-21).
+  Nature Power (`order.called_move`), Secret Power (`order.move_effects`) and Camouflage
+  (`effects._camouflage`) read it through `ids.TERRAIN_MOVES` / `SECRET_POWER_EFFECTS` /
+  `TERRAIN_TYPES` (`order.terrain_index`, the decomp's clamp to `TERRAIN_SPECIAL`).
 - **BattleMon.type1/type2 -> `types`**: per party slot, from the personal row; written for
   the active battler by Camouflage (`BtlCmd_TryCamouflage`, `battle_script.c:7997-8022`)
   and restored from the personal row when the battler leaves (a switch, a faint,
   `step._restore_types`), as `BattleSystem_InitBattleMon` re-reads the party's types on the
-  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` stays
-  later: only the AI's own Camouflage scoring reads it (`script.s:1023`).
+  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` is
+  `camouflage` (G-20; read by the AI's `Basic_CheckCamouflage`, `script.s:1023`, and Roar's
+  Ingrain test).
 - **moveCur / msgMoveTemp** (Nature Power's call) stay per-action scratch: `step._use_move`
   recomputes the called move (`order.called_move`) from the chosen move and the terrain.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
@@ -434,6 +462,17 @@ three structs has a row.
     writes both (`engine.bag.use_bag_item`); every switch-in (`step._switch_in`, battle_lib.c:136),
     a level-up and Shaymin-Sky's revert (`BattleSystem_ReloadPokemon`, :179) copy it into
     `friendship`. It is the value a save returns for the player's Pokemon.
+  - `party_ability` (F-O2, per party Pokemon like `party_friendship`): the ability a script wrote into
+    the party Pokemon in battle (MON_DATA_ABILITY written in battle, `BtlIOCmd_UpdatePartyMon`,
+    battle_io_command.c:601-604); 0 (`UNSUPPORTED`) = none, the personal row's. Only `hooks.shaymin_land`
+    on a Transformed battler writes it (Land's ability: the revert's `UpdateMonDataFromVar` sends the
+    BattleMon's ability to the Transform user's OWN party Pokemon, battle_script.c:3401-3407,
+    battle_controller.c:1496-1499); `step._restore_ability` puts it back into `ability` when that
+    Pokemon leaves (`BattleSystem_InitBattleMon`, battle_lib.c:124), so every later read of the bench
+    slot (`damage.decomp_abilities`, the AI's, Natural Cure, Heal Bell) sees it through `ability`. The
+    same write sets the party's form 0 and recalculated stats: `shadow_form` / `shadow_stats` /
+    `max_hp` / `hp` (`hooks.own_stats`). A state built with `party_ability` set must set `ability`
+    to match (a run planner carrying the override forward does both).
   - `form` (F-16): a frozen Shaymin-Sky's form becomes 0 after a hit (`hooks.shaymin_land`;
     `subscript_check_shaymin_form.s`), with `ability`, `ability_slot`, `ability_form`, `types`,
     `stats`, `max_hp` / `hp` and `friendship` rewritten as `BattleSystem_ReloadPokemon` reloads them;
@@ -567,7 +606,7 @@ three structs has a row.
 | `BattleMon.formNum` | `form`, `shadow_form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
-| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
+| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form`, `party_ability` | mapped |
 | `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped |
 | `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped |
 | `BattleMon.traceAnnounced` | `trace_announced` | mapped |
@@ -591,7 +630,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `nightmare`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -600,7 +639,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns`, `grudge`, `miracle_eye` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns`, `grudge`, `miracle_eye`, `camouflage` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -675,7 +714,7 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `FieldConditions.weatherTurns` | `weather_timer` | mapped |
+| `FieldConditions.weatherTurns` | `weather_turns` | mapped |
 | `FieldConditions.futureSightTurns` | `future_timer` | mapped |
 | `FieldConditions.wishTurns` | `wish_timer` | mapped |
 | `FieldConditions.futureSightMove` | `future_move` | mapped |
@@ -756,8 +795,8 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar` | mapped |
-| `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
+| `BattleContext.fieldConditionsMask` | `field_mask` | mapped |
+| `BattleContext.fieldConditions` | `weather_turns`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
 | `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `magic_coat` | mapped |

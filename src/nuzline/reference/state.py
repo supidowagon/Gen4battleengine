@@ -47,6 +47,7 @@ class RefPokemon:
     gender: int
     friendship: int
     party_friendship: int  # the party Pokemon's u8 friendship (F-15)
+    party_ability: int  # the party Pokemon's ability a script wrote, 0 = none (F-O2)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int
@@ -111,6 +112,7 @@ class RefBattler:
     last_resort_moves: list[int]  # MoveEffectsData.lastResortMoves[4] (E3-B2-11)
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
+    nightmare: int  # VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: int
     perish_song_turns: int
     yawn: int
@@ -139,6 +141,7 @@ class RefBattler:
     magnet_rise: int  # MOVE_EFFECT_MAGNET_RISE (G-66)
     magnet_rise_turns: int  # MoveEffectsData.magnetRiseTurns (G-66)
     charged_turns: int  # MoveEffectsData.chargedTurns with MOVE_EFFECT_CHARGE (E3-B2-8)
+    camouflage: int  # MOVE_EFFECT_CAMOUFLAGE (G-20)
     mimic_slots: int  # MoveEffectsData.mimickedMoveSlot bitmask (G-68)
     shadow_moves: list[int]  # the party's move of each flagged slot (G-68)
     shadow_pp: list[int]  # the party's PP of each flagged slot (G-68)
@@ -161,7 +164,8 @@ class RefBattler:
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
     speed_rec: int  # BattleContext.monSpeedValues (E3-B2-15)
-    starf_roll: int  # a Starf Berry draw (Outcome.starf; engine.state docstring, F-10)
+    starf_roll: list[int]  # the turn's Starf Berry draws (engine.state docstring, F-O3)
+    starf_taken: int  # the draws this turn's Starf Berry eats used (F-O3)
     starf_open: int  # a battle-start Starf Berry's stat waits for the root draw (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
@@ -210,10 +214,8 @@ class RefState:
     parties: list[RefParty]
     battlers: list[RefBattler]
     sides: list[RefSideConds]
-    weather: int
-    weather_timer: int
-    trick_room: int
-    gravity: int
+    field_mask: int  # fieldConditionsMask (engine.state, engine.field)
+    weather_turns: int  # FieldConditions.weatherTurns
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
     move_prev: int
     terrain: int

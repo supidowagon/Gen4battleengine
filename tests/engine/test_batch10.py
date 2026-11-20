@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_for_roll
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import Stat, Status, Type
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
@@ -371,7 +372,7 @@ def test_laws_no_sure_flinch_through_a_substitute(tables, names):
     s = make_state(
         tables, [_mon(n, "Pikachu", ["Headbutt"], 12)], [_mon(n, "Starly", ["Tackle"], 30)]
     )
-    s = _subbed(s, 1, 1)._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    s = with_trick_room(_subbed(s, 1, 1), 3)
     s = s._replace(hp=s.hp.at[0, 0].set(3))
     assert_equals_bruteforce(tables, s, np.zeros(2, np.int32))
 
@@ -592,7 +593,7 @@ def test_yawn_reveals_a_blocking_ability_through_the_semi_miss(
         locked_move=s.locked_move.at[0].set(n.move("Fly")),
     )
     if sun:
-        s = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+        s = with_weather(s, Weather.SUN)
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert bool(out.ai_ability_known[0]) == bool(revealed) and int(out.yawn[0]) == 0
 
@@ -604,12 +605,12 @@ def test_dig_dodges_sandstorm_and_earthquake_doubles(tables, names):
 
     n = names
     s = make_state(tables, [_mon(n, "Sandshrew", ["Dig"], 30)], [_mon(n, "Pikachu", ["Growl"], 30)])
-    s = s._replace(weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype))
+    s = with_weather(s, Weather.SANDSTORM)
     one = assert_matches_reference(tables, s, (0, 0), O)
     assert int(one.semi_invulnerable[0]) == SemiKind.UNDERGROUND
     assert int(one.hp[1, 0]) < int(s.hp[1, 0])  # the foe takes the chip
     d = make_state(tables, [_mon(n, "Pikachu", ["Dig"], 30)], [_mon(n, "Pikachu", ["Growl"], 30)])
-    d = d._replace(weather=jnp.asarray(Weather.SANDSTORM, d.weather.dtype))
+    d = with_weather(d, Weather.SANDSTORM)
     dug = assert_matches_reference(tables, d, (0, 0), O)
     assert int(dug.hp[0, 0]) == int(d.hp[0, 0])  # no chip while underground
     assert int(dug.hp[1, 0]) < int(d.hp[1, 0])
@@ -625,7 +626,7 @@ def test_solarbeam_fires_in_sun_and_power_herb_skips_the_charge(tables, names):
     s = make_state(
         tables, [_mon(n, "Bulbasaur", ["SolarBeam"], 40)], [_mon(n, "Geodude", ["Growl"], 30)]
     )
-    sun = s._replace(weather=jnp.asarray(Weather.SUN, s.weather.dtype))
+    sun = with_weather(s, Weather.SUN)
     out = assert_matches_reference(tables, sun, (0, 0), O)
     assert int(out.hp[1, 0]) < int(s.hp[1, 0]) and int(out.locked_move[0]) == 0
     herb = make_state(
@@ -635,7 +636,7 @@ def test_solarbeam_fires_in_sun_and_power_herb_skips_the_charge(tables, names):
     )
     out = assert_matches_reference(tables, herb, (0, 0), O)
     assert int(out.hp[1, 0]) < int(s.hp[1, 0]) and int(out.item[0, 0]) == 0
-    rain = s._replace(weather=jnp.asarray(Weather.RAIN, s.weather.dtype))
+    rain = with_weather(s, Weather.RAIN)
     beam = n.move("SolarBeam")
     assert int(damage_for_roll(tables, rain, 0, beam, False, 15)) < int(
         damage_for_roll(tables, s, 0, beam, False, 15)

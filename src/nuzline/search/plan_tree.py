@@ -37,6 +37,7 @@ import numpy as np
 
 from nuzline.data.tables import Names
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.field import weather_text
 from nuzline.engine.ids import Status
 from nuzline.engine.levelup import GIVE_UP
 from nuzline.engine.observe import (
@@ -333,7 +334,9 @@ def _differences(f: dict, others: list[dict], names: Names) -> list[str]:
         if differs(name, 0):
             out.append(text if int(f[name][0]) else f"no {text}")
     if differs("weather", 0):
-        out.append(_WEATHER_TEXT.get(int(f["weather"][0]), "clear weather"))
+        # An observation's weather (engine.field.weather_seen): one group, or several.
+        seen = int(f["weather"][0])
+        out.append(_WEATHER_TEXT.get(seen, "clear weather" if seen < 8 else weather_text(seen)))
     if differs("pursuit", 0):
         out.append("Pursuit hit first" if int(f["pursuit"][0]) else "no Pursuit")
     if differs("player_pp", 0) or any(differs("player_pp", i) for i in range(1, SLOTS * 4)):

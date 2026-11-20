@@ -26,6 +26,7 @@ from nuzline.engine.damage import (
     weather_ball_params,
 )
 from nuzline.engine.effects import hp_update
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import (
     ITEM_GRISEOUS_ORB,
     AbilityId,
@@ -233,7 +234,7 @@ def test_blaze_kick_law_exact_and_sampled(tables, names):
 
 def _hurricane(t, n, weather=Weather.NONE, theirs=("Snorlax", "Growl")):
     s = _plain(_state(t, n, ("Pidgeot", "Hurricane"), theirs, (50, 40)))
-    return s._replace(weather=jnp.int8(weather))
+    return with_weather(s, weather)
 
 
 def _cloud_nine(t, s, side: int):
@@ -624,10 +625,7 @@ DECOMP_SCRIPTS = "external/pokeplatinum/res/battle/scripts/effects"
 
 
 def _weather(s, weather):
-    return s._replace(
-        weather=jnp.asarray(weather, s.weather.dtype),
-        weather_timer=jnp.zeros_like(s.weather_timer),
-    )
+    return with_weather(s, weather)
 
 
 def _loss(s, out, side=1, slot=0):

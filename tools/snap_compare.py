@@ -102,7 +102,21 @@ singles zero (BattleState: ``state.LAYOUT``'s shape and dtype) or at ``empty_out
 differs from ``LAYOUT``, a saved Outcome field whose shape or dtype differs from
 ``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an error (the part
 fails). Each one-sided input field is reported
-(``in_state.NAME`` / ``in_outcome.NAME``). Outputs (states, Outcomes, events, reference
+(``in_state.NAME`` / ``in_outcome.NAME``).
+
+Layout upgrades: a field whose shape a later commit changed is read through ``UPGRADES``
+(kind ``state`` / ``outcome``, field, dtype, old shape, new shape, a fill), applied wherever the
+capture is read back: the saved inputs (``in_state``, ``in_ai_state``: state; ``in_outcome``:
+outcome) as they are loaded and in ``rebuild_state`` / ``rebuild_outcome``, and the captured
+output entries of every part (a ``.FIELD`` entry of the row's field) before they are compared.
+A field is upgraded only when its dtype and shape are the row's old ones exactly (``B`` the
+array's own battler count); any other shape or dtype is still the error above. What is compared
+after the upgrade is unchanged. The compare header lists the rows; each part prints the upgrades
+it ran with their counts, and a line before the final one sums them. Rows (F-O3, G-27..G-30,
+``ids.STARF_QUEUE``): ``state.starf_roll`` (B,) -> (B, 3): the old draw in entry 0, entries 1-2
+at 0 (what ``step_events`` and ``replace`` store in a queue entry no draw is loaded into);
+``outcome.starf`` (B, 2) -> (B, 4): columns 0-1 kept, columns 2-3 a copy of column 0 (the old
+engine's second and third eats in a turn read its one draw, column 0). Outputs (states, Outcomes, events, reference
 outputs) are flattened to "path" -> (kind, dtype, shape, bytes) entries keyed by name. compare
 checks the entries present on both sides byte for byte (dtype, shape and bytes) and lists, per
 part, the entries present on one side only (indices folded to []).
@@ -368,12 +382,114 @@ def check_actions(saved, battlers: int) -> None:
         raise ValueError(f"saved actions {a.dtype}{a.shape} != int32({battlers},)")
 
 
+# --- layout upgrades (see the docstring) -----------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class Upgrade:
+    """A saved field of ``kind`` ("state" / "outcome") in shape ``old`` (dtype ``dtype``; "B"
+    the array's own battler count), read as shape ``new`` through ``fill(old array)``."""
+
+    kind: str
+    field: str
+    dtype: str
+    old: tuple
+    new: tuple
+    fill: object
+
+    @property
+    def name(self) -> str:
+        def shape(t):
+            return "(" + ", ".join(map(str, t)) + ("," if len(t) == 1 else "") + ")"
+
+        return f"{self.kind}.{self.field} {shape(self.old)} -> {shape(self.new)}"
+
+    def matches(self, a) -> bool:
+        """``a`` has this row's old dtype and shape exactly."""
+        return (
+            a.dtype.str == self.dtype
+            and a.ndim == len(self.old)
+            and all(d == "B" or d == n for d, n in zip(self.old, a.shape, strict=True))
+        )
+
+
+def _starf_queue(old):
+    """``starf_roll`` int8[B] -> the turn's queue int8[B, 3]: the draw in entry 0, entries 1-2
+    at 0 (what step_events / replace store where no draw is loaded), F-O3 (G-27)."""
+    import numpy as np
+
+    new = np.zeros((old.shape[0], 3), old.dtype)
+    new[:, 0] = old
+    return new
+
+
+def _starf_columns(old):
+    """``Outcome.starf`` int8[B, 2] -> int8[B, 4]: columns 0-1 kept; the old engine's second and
+    third eats read the one draw of column 0, so columns 2-3 copy it (F-O3, G-27)."""
+    import numpy as np
+
+    return np.concatenate([old, old[:, :1], old[:, :1]], axis=1)
+
+
+UPGRADES = (
+    Upgrade("state", "starf_roll", "|i1", ("B",), ("B", 3), _starf_queue),
+    Upgrade("outcome", "starf", "|i1", ("B", 2), ("B", 4), _starf_columns),
+)
+UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
+INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
+
+
+def _upgrade(u: Upgrade, a):
+    UPGRADED[u.name] = UPGRADED.get(u.name, 0) + 1
+    return u.fill(a)
+
+
+def upgrade_fields(kind: str, saved: dict) -> dict:
+    """``saved`` (a field dict of ``kind``) with each field in an ``UPGRADES`` row's old dtype
+    and shape upgraded; every other field as it was."""
+    import numpy as np
+
+    out = dict(saved)
+    for u in UPGRADES:
+        if u.kind == kind and u.field in out and u.matches(np.asarray(out[u.field])):
+            out[u.field] = _upgrade(u, np.asarray(out[u.field]))
+    return out
+
+
+def upgrade_inputs(inputs: list) -> list:
+    """Saved ``[(key, {in_state, in_actions, in_outcome} | {in_ai_state})]``, upgraded."""
+    return [
+        (key, {n: upgrade_fields(INPUT_KINDS[n], v) if n in INPUT_KINDS else v
+               for n, v in inp.items()})
+        for key, inp in inputs
+    ]  # fmt: skip
+
+
+def upgrade_entries(entries: dict) -> dict:
+    """Captured canon ``entries`` with each ``.FIELD`` array of an ``UPGRADES`` row in its old
+    dtype and shape upgraded (a row's field name is unique to its kind)."""
+    import numpy as np
+
+    rows = {u.field: u for u in UPGRADES}
+    out = dict(entries)
+    for path, e in entries.items():
+        u = rows.get(path.rsplit(".", 1)[-1])
+        if u is None or e[0] != "arr":
+            continue
+        a = np.frombuffer(e[3], np.dtype(e[1])).reshape(ast.literal_eval(e[2]))
+        if u.matches(a):
+            a = np.ascontiguousarray(_upgrade(u, a))
+            out[path] = ("arr", a.dtype.str, str(a.shape), a.tobytes())
+    return out
+
+
 def rebuild_state(saved: dict):
     """A ``BattleState`` of this checkout from a saved field dict (see the docstring)."""
     import numpy as np
 
     from nuzline.engine.state import LAYOUT, BattleState
 
+    saved = upgrade_fields("state", saved)
     check_layout(saved, LAYOUT)
     _note_input_fields("in_state", saved, BattleState._fields)
     return BattleState(
@@ -392,6 +508,7 @@ def rebuild_outcome(saved: dict):
     from nuzline.engine.outcome import Outcome, empty_outcome
 
     empty = jax.device_get(empty_outcome())
+    saved = upgrade_fields("outcome", saved)
     check_layout(
         saved,
         {
@@ -578,7 +695,7 @@ def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: st
             pickle.dump(inputs, f, protocol=pickle.HIGHEST_PROTOCOL)
     else:
         with gzip.open(inputs_path, "rb") as f:
-            inputs = pickle.load(f)
+            inputs = upgrade_inputs(pickle.load(f))
     if group == "gen":  # compare only: the generator still draws the saved inputs
         saved = dict(inputs)
         return [kv for v in range(lo, hi + 1) for kv in draw_inputs(ctx, v, saved)]
@@ -735,11 +852,12 @@ def child(mode: str, directory: Path, part: str) -> int:
         )
     else:
         with gzip.open(path, "rb") as f:
-            record = pickle.load(f)
+            record = [(key, h, upgrade_entries(d)) for key, h, d in pickle.load(f)]
         result["diverged"], only_base, only_new = compare_dumps(record, dump)
         only_base |= INPUT_ONE_SIDED["base"]
         only_new |= INPUT_ONE_SIDED["new"]
         result["only_base"], result["only_new"] = sorted(only_base), sorted(only_new)
+    result["upgraded"] = dict(sorted(UPGRADED.items()))
     result["peak_bytes"] = _peak_bytes()
     print("TIMES " + json.dumps({k: round(v, 1) for k, v in TIMES.items()}), file=sys.stderr)
     print("RESULT " + json.dumps(result), flush=True)
@@ -761,6 +879,10 @@ def check_imported_from(module_file: str, root: Path) -> None:
 def _names(fields: list[str]) -> str:
     shown = ", ".join(fields[:LIST_SHOWN])
     return shown + (f" (+{len(fields) - LIST_SHOWN} more)" if len(fields) > LIST_SHOWN else "")
+
+
+def _counts(upgraded: dict[str, int]) -> str:
+    return ", ".join(f"{name} x {n}" for name, n in sorted(upgraded.items())) or "none"
 
 
 def _csv(text: str | None) -> set[str]:
@@ -1038,6 +1160,7 @@ def parent(args) -> int:
             flush=True,
         )
         stop = compare_problems(args, base, here, problems, parts)
+        print(f"layout upgrades: {'; '.join(u.name for u in UPGRADES) or 'none'}", flush=True)
     if stop:
         for p in stop:
             print(f"FAIL: {p}", flush=True)
@@ -1058,6 +1181,7 @@ def parent(args) -> int:
         record["seeds"].append([lo, hi, args.chunk])
         write_capture(directory, record)
     bad, overs, skipped, total = 0, [], [], time.monotonic()
+    upgraded: dict[str, int] = {}
     for part in parts:
         failed = 1
         lack = missing(part)
@@ -1076,11 +1200,15 @@ def parent(args) -> int:
             else:
                 res = json.loads(line[7:])
                 failed = report(args, part, res, took, allow, allow_raise, stderr)
+                for name, n in res.get("upgraded", {}).items():
+                    upgraded[name] = upgraded.get(name, 0) + n
                 overs += [part] if took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES else []
         bad += failed
         if record is not None:
             record["parts"][part] = "failed" if failed else "ok"
             write_capture(directory, record)
+    if args.mode == "compare":
+        print(f"layout upgrades run: {_counts(upgraded)}", flush=True)
     verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
     seeded = [p for p in parts if not p.startswith("roark.")]
     groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
@@ -1143,6 +1271,8 @@ def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr
         else:
             note = " (--allow-all-raise)" if every else ""
             print(f"  raised: {name} {count}/{calls}{note} ({first})", flush=True)
+    if res.get("upgraded"):
+        print(f"  layout upgrades: {_counts(res['upgraded'])}", flush=True)
     if args.verbose:
         print("  " + next((ln for ln in stderr.splitlines() if ln.startswith("TIMES")), ""))
     return int(failed)

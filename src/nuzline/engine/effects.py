@@ -68,8 +68,10 @@ many are real). Decomp sources:
   (battle_script.c:7997-8022), in the move script before ``TryMove`` (which cannot stop this
   ``RANGE_USER``, accuracy-0 move): it fails for Multitype (``ABILITY_MULTITYPE``) or when
   either of the user's types already is ``TERRAIN_TYPES[min(terrain, TERRAIN_SPECIAL)]``,
-  else writes that type to both (``_camouflage``). ``step`` restores the party types when
-  the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115).
+  else writes that type to both and sets the user's ``MOVE_EFFECT_CAMOUFLAGE``
+  (``camouflage``, effect_script_0213.s:6; ``_camouflage``). ``step`` restores the party types
+  when the battler leaves (``BattleSystem_InitBattleMon`` re-reads them, battle_lib.c:114-115)
+  and clears the bit with the volatiles (battle_lib.c:2071, :2166; Baton Pass drops it, :2076).
 * Recover (``RECOVER``): ``effect_script_0032.s`` -> ``subscript_recover_half_max_hp.s``:
   ``DivideVarByValue(maxHP, 2)`` (``BattleSystem_Divide``, at least 1), then
   ``subscript_recover_hp.s``: "HP is full!" at full HP (:6), else the HP update, capped at
@@ -253,6 +255,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     NUM_TYPES,
     PHYSICAL,
@@ -276,7 +279,6 @@ from nuzline.engine.damage import (
     me_first_after_calc,
     move_type_of,
     multitype_plate,
-    personal_types,
     spikes_loss,
     stealth_rock_loss,
     weather_suppressed,
@@ -291,7 +293,6 @@ from nuzline.engine.ids import (
     CHARGE_PARAM,
     CHARGE_TURNS,
     GENDER_NONE,
-    GRAVITY_TURNS,
     GRIP_CLAW_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
@@ -319,7 +320,6 @@ from nuzline.engine.ids import (
     TERRAIN_TYPES,
     TOXIC_SPIKES_MAX,
     TRI_ATTACK_STATUSES,
-    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     WEATHER_TURNS,
@@ -335,10 +335,9 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
-from nuzline.engine.order import encore_slot_of, move_effects, terrain_index, terrain_known
+from nuzline.engine.order import encore_slot_of, move_effects, terrain_index
 from nuzline.engine.outcome import Outcome, crit_lands, read_chance
 from nuzline.engine.state import (
     MOVES,
@@ -517,7 +516,7 @@ def can_have_status(
     (``damage.weather_suppressed``, read on ``state``: the field when the effect runs)."""
     fmt = format_of(state)
     types = state.types[party(fmt, side), slot]
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = _sunny(tables, state)
     has = lambda t: jnp.any(types == t)
     immune = (
         ((status == Status.BURN) & has(Type.FIRE))
@@ -595,7 +594,7 @@ def _inflict(
     # awake while FIELD_CONDITION_UPROAR is set (Soundproof, which skips it, is unsupported);
     # a direct effect then ends in MOVE_STATUS_NO_MORE_WORK (``step``: ``kept_awake``), an
     # indirect one silently (:_292).
-    blocked = blocked | (cond & (status == Status.SLEEP) & uproar_on(state))
+    blocked = blocked | (cond & (status == Status.SLEEP) & fcm.uproar_any(state))
     cond = cond & ~blocked & can_have_status(tables, state, h.target_side, h.target, status)
     counter = jnp.where(status == Status.SLEEP, outcome.duration[h.side], 0)
     old_status = state.status[party(fmt, h.target_side), h.target]
@@ -638,22 +637,17 @@ def _tri_attack(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _camouflage(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring). An unknown terrain
-    (``order.terrain_known``) writes nothing (coverage refuses such a fight)."""
+    """``CAMOUFLAGE``: ``BtlCmd_TryCamouflage`` (module docstring): on success both types and
+    the user's ``camouflage`` bit (effect_script_0213.s:5-6; a failure jumps to :16 past it)."""
     fmt = format_of(state)
     new = jnp.asarray(TERRAIN_TYPES, _I32)[terrain_index(state)]
     types = state.types[party(fmt, h.side), h.user]
     # BtlCmd_TryCamouflage (battle_script.c:8001): Battler_Ability.
     multitype = battler_decomp_ability(tables, state, h.side, h.user) == ABILITY_MULTITYPE
-    cond = (
-        (h.effect == _E.CAMOUFLAGE)
-        & h.landed
-        & terrain_known(state)
-        & ~multitype
-        & ~jnp.any(types.astype(_I32) == new)
-    )
+    cond = (h.effect == _E.CAMOUFLAGE) & h.landed & ~multitype & ~jnp.any(types.astype(_I32) == new)
     value = jnp.where(cond, new, types.astype(_I32)).astype(types.dtype)
-    return state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+    state = state._replace(types=state.types.at[party(fmt, h.side), h.user].set(value))
+    return _set(state, "camouflage", h.side, 1, cond)
 
 
 # The ranges for which UpdateFlagsWhenHit clears the defender's conversion2 fields instead of
@@ -862,6 +856,37 @@ def _curse(tables, state, h: _Hit) -> BattleState:
     state = _set(state, "curse", h.target_side, 1, hexed)
     cost = divide(state.max_hp[party(fmt, h.side), h.user].astype(_I32), 2)
     return hp_update(state, h.side, h.user, -cost, hexed)
+
+
+def nightmare_fails(state: BattleState, target_side) -> jnp.ndarray:
+    """``bool``: effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender behind a
+    Substitute (:5, ``CheckSubstitute``: no hit of the action yet), with
+    VOLATILE_CONDITION_NIGHTMARE (:6) or not asleep (:7); subscript_nightmare_start.s re-tests the
+    same three (:5-7, :29-30) on the hit (G-31). ``target_side``: the defender's battler."""
+    fmt = format_of(state)
+    status = state.status[party(fmt, target_side), state.active[target_side]]
+    return (
+        (state.substitute_hp[target_side] != 0)
+        | (state.nightmare[target_side] != 0)
+        | (status != Status.SLEEP)
+    )
+
+
+def _nightmare(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    """Nightmare (effect_script_0107.s:8, a direct ON_HIT subscript_nightmare_start.s): unless
+    ``nightmare_fails`` (the script's failure, ``step._use_move``, already stopped the move; the
+    subscript's own :5-7 find the same), the defender's VOLATILE_CONDITION_NIGHTMARE (:9). No
+    ability test: a Magic Guard holder takes the bit and loses nothing at the turn end (G-31)."""
+    cond = (h.effect == _E.NIGHTMARE) & h.landed & ~nightmare_fails(state, h.target_side)
+    return _set(state, "nightmare", h.target_side, 1, cond)
+
+
+def clear_nightmare(state: BattleState, battler, cond) -> BattleState:
+    """VOLATILE_CONDITION_NIGHTMARE off on ``battler`` where ``cond``: subscript_wake_up.s:20,
+    subscript_held_item_slp_restore.s:13 / _multi_restore.s:13, subscript_ability_restore_status.s:6,
+    subscript_ability_forbids_status.s:18 (the sleep branch), BtlCmd_TryPartyStatusRefresh
+    (battle_script.c:5041, :5052, :5063, :5070) and a bag sleep cure (battle_system.c:469-472), G-32."""
+    return _set(state, "nightmare", battler, 0, cond)
 
 
 def curse_fails(state: BattleState, target_side) -> jnp.ndarray:
@@ -1473,7 +1498,7 @@ def rest_fails(tables, state: BattleState, side) -> tuple:
     ids = STAT_MOVE_ABILITY_IDS
     by_ability = (own == ids["Insomnia"]) | (own == ids["Vital Spirit"])
     asleep = state.status[party(fmt, side), mon] == Status.SLEEP
-    uproar = (own != ids["Soundproof"]) & uproar_on(state)
+    uproar = (own != ids["Soundproof"]) & fcm.uproar_any(state)
     full = state.hp[party(fmt, side), mon] == state.max_hp[party(fmt, side), mon]
     return by_ability | asleep | uproar | full, by_ability
 
@@ -1495,11 +1520,13 @@ def _rest(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 def weather_heal_amount(tables, state: BattleState, side) -> jnp.ndarray:
     """``int32``: BtlCmd_WeatherHPRecovery (battle_script.c:5966-5979) for ``side``'s battler:
     ``maxHP / 2`` with no weather or a weather lock (NO_WEATHER, include/battle/common.h:65-67;
-    deep fog is a weather), ``Divide(maxHP * 20, 30)`` in sun, else ``Divide(maxHP, 4)``."""
+    deep fog is a weather), ``Divide(maxHP * 20, 30)`` with any SUNNY bit, else
+    ``Divide(maxHP, 4)`` (script.c:5970-5976)."""
     fmt = format_of(state)
     max_hp = state.max_hp[party(fmt, side), state.active[side]].astype(_I32)
-    no_weather = (state.weather == Weather.NONE) | weather_suppressed(tables, state)
-    sun = state.weather == Weather.SUN
+    w = fcm.weather_bits(state)
+    no_weather = ~fcm.any_weather(w) | weather_suppressed(tables, state)
+    sun = fcm.sun(w)
     return jnp.where(
         no_weather, max_hp // 2, jnp.where(sun, divide(max_hp * 20, 30), divide(max_hp, 4))
     )
@@ -1559,10 +1586,18 @@ def _heal_bell(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     counter = jnp.where(cure, 0, state.status_counter[party(fmt, h.side)]).astype(
         state.status_counter.dtype
     )
-    return state._replace(
+    state = state._replace(
         status=state.status.at[party(fmt, h.side)].set(status),
         status_counter=state.status_counter.at[party(fmt, h.side)].set(counter),
     )
+    # BtlCmd_TryPartyStatusRefresh (battle_script.c:5039-5070) clears VOLATILE_CONDITION_NIGHTMARE
+    # with the status of the user (unless its Soundproof spares it, :5038-5043) and of its doubles
+    # partner (unless spared, :5049-5053): each battler of the user's party whose active slot the
+    # refresh cures (G-32).
+    for battler in range(fmt.B):
+        mine = jnp.asarray(party(fmt, battler)) == jnp.asarray(party(fmt, h.side))
+        state = clear_nightmare(state, battler, mine & cure[state.active[battler]])
+    return state
 
 
 def refresh_fails(state: BattleState, side) -> jnp.ndarray:
@@ -1697,14 +1732,9 @@ def _uproar(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``moveLockedInto`` = moveCur (:5), ``Random 3, 3`` turns (:6-8, ``outcome.duration``, 3-6) and
     the battler's ``FIELD_CONDITION_UPROAR`` bit (:9-11, ``uproar != 0``)."""
     cond = (h.effect == _E.UPROAR) & h.effective & (state.uproar[h.side] == 0)
+    state = fcm.uproar_start(state, h.side, cond)
     state = _set(state, "locked_move", h.side, h.move, cond)
     return _set(state, "uproar", h.side, outcome.duration[h.side], cond)
-
-
-def uproar_on(state: BattleState) -> jnp.ndarray:
-    """``bool``: ``FIELD_CONDITION_UPROAR`` is set: some battler is in an uproar
-    (``BattleState.uproar``)."""
-    return jnp.any(state.uproar != 0)
 
 
 def primary_effect_fails(
@@ -1843,11 +1873,7 @@ def _trick_room(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     accuracy roll (RANGE_FIELD, accuracy 0). ``step._trick_room_check`` counts it down
     (battle_controller_player.c:1822-1830); the order it reverses is ``order.action_order``'s
     (battle_lib.c:1432-1439). E3-2-4."""
-    cond = (h.effect == _E.TRICK_ROOM) & h.landed
-    value = jnp.where(state.trick_room != 0, 0, TRICK_ROOM_TURNS)
-    return state._replace(
-        trick_room=jnp.where(cond, value, state.trick_room).astype(state.trick_room.dtype)
-    )
+    return fcm.trick_room_toggle(state, (h.effect == _E.TRICK_ROOM) & h.landed)
 
 
 def _worry_seed(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2153,7 +2179,7 @@ def magnet_rise_fails(state: BattleState, side) -> jnp.ndarray:
     levitate = (
         (battler_ability(state, side) == AbilityId.LEVITATE)
         & (state.ingrain[side] == 0)
-        & (state.gravity == 0)
+        & ~fcm.gravity_on(state)
     )
     return (state.magnet_rise_turns[side] != 0) | levitate | (state.ingrain[side] != 0)
 
@@ -2187,11 +2213,8 @@ def _gravity(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Gravity (effect_script_0215.s, the indirect subscript_gravity_start.s): the field
     condition for ``GRAVITY_TURNS`` and the grounding loop (``gravity_ground``). With Gravity up
     the script fails (:3, :9-10: ``step._use_move``'s ``failed``). G-67."""
-    cond = (h.effect == _E.GRAVITY) & h.landed & (state.gravity == 0)
-    state = state._replace(
-        gravity=jnp.where(cond, GRAVITY_TURNS, state.gravity).astype(state.gravity.dtype)
-    )
-    return gravity_ground(state, cond)
+    cond = (h.effect == _E.GRAVITY) & h.landed & ~fcm.gravity_on(state)
+    return gravity_ground(fcm.gravity_start(state, cond), cond)
 
 
 def _mimic(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
@@ -2443,25 +2466,6 @@ def imprison_fails(state: BattleState, side) -> jnp.ndarray:
     return (state.imprison[side] != 0) | ~shared
 
 
-def camouflaged(tables: Tables, state: BattleState, side) -> jnp.ndarray:
-    """``bool``: ``side``'s active battler has ``MOVE_EFFECT_CAMOUFLAGE`` (effect_script_0213.s:6).
-    ``BtlCmd_TryCamouflage`` fails a battler that has the terrain's type already, so a Camouflage
-    that ran left both types on a type the personal row lacks, and nothing else writes ``types``:
-    the bit is set exactly when the types differ from the personal row's."""
-    fmt = format_of(state)
-    mon = state.active[side]
-    pm = (party(fmt, side), mon)
-    own = personal_types(
-        tables,
-        state.species[pm],
-        state.form[pm],
-        state.ability_form[pm],
-        state.ability_slot[pm],
-        state.item[pm],
-    )
-    return jnp.any(state.types[pm] != own.astype(state.types.dtype))
-
-
 # The moveEffectsMask bits (moves.h:7-36) the engine keeps, by field, besides Ingrain.
 MOVE_EFFECT_MASK_FIELDS = (
     "leech_seed",
@@ -2481,6 +2485,7 @@ MOVE_EFFECT_MASK_FIELDS = (
     "charged_turns",  # MOVE_EFFECT_CHARGE, E3-B2-8
     "grudge",  # MOVE_EFFECT_GRUDGE, E3-B2-9
     "miracle_eye",  # MOVE_EFFECT_MIRACLE_EYE, E3-B2-10
+    "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20)
 )
 
 
@@ -2488,10 +2493,9 @@ def ingrain_anchors(tables: Tables, state: BattleState, side) -> jnp.ndarray:
     """``bool``: subscript_force_target_to_switch_or_flee.s:7 finds the defender's
     ``moveEffectsMask`` equal (``OPCODE_EQU``) to ``MOVE_EFFECT_INGRAIN``: ``side``'s battler is
     ingrained and has no other bit of the mask: none of ``MOVE_EFFECT_MASK_FIELDS`` (the Leech
-    Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14) and no Camouflage
-    (``camouflaged``). The other bits come from unsupported moves (Heal Block); each joins the
-    tuple with its move."""
-    other = camouflaged(tables, state, side)
+    Seed bits sit on the seeded battler, subscript_leech_seed_start.s:13-14). The other bits come
+    from unsupported moves (Heal Block); each joins the tuple with its move."""
+    other = jnp.bool_(False)
     for name in MOVE_EFFECT_MASK_FIELDS:
         other = other | (getattr(state, name)[side] != 0)
     return (state.ingrain[side] != 0) & ~other
@@ -2550,8 +2554,9 @@ YAWN_TURNS = 2  # BtlCmd_TryYawn: 1 << (MOVE_EFFECT_YAWN_SHIFT + 1) (battle_scri
 
 
 def _sunny(tables, state: BattleState) -> jnp.ndarray:
-    """``CheckIgnoreWeather`` then ``FIELD_CONDITION_SUNNY`` (battle_script.c:9195-9206)."""
-    return (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    """``CheckIgnoreWeather`` then ``FIELD_CONDITION_SUNNY`` (battle_script.c:9195-9206): any
+    SUNNY bit of the mask (``field.sun``)."""
+    return fcm.sun(fcm.weather_bits(state)) & ~weather_suppressed(tables, state)
 
 
 def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -2571,7 +2576,7 @@ def yawn_blocks(tables, state: BattleState, side, target_side) -> tuple[jnp.ndar
     fails = (
         by_ability
         | (state.substitute_hp[target_side] != 0)
-        | ((own != ids["Soundproof"]) & uproar_on(state))
+        | ((own != ids["Soundproof"]) & fcm.uproar_any(state))
         | (state.status[party(fmt, target_side), mon] != Status.NONE)
         | (state.safeguard[side_of(target_side)] != 0)
         | (state.yawn[target_side] != 0)
@@ -2624,7 +2629,7 @@ def yawn_sleep(tables, state: BattleState, side, outcome: Outcome) -> BattleStat
     sleeps = (
         falls
         & ~awake
-        & ~((own != ids["Soundproof"]) & uproar_on(state))
+        & ~((own != ids["Soundproof"]) & fcm.uproar_any(state))
         & (state.status[party(fmt, side), mon] == Status.NONE)
     )
     state = _set(state, "status", (side, mon), Status.SLEEP, sleeps)
@@ -2689,26 +2694,22 @@ def _defog(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``_foe_stage`` (:19-20: Mist, Clear Body / White Smoke, -6, Substitute; the subscript goes on
     whatever it does), then on the defender's side Reflect, Light Screen, Mist (after the drop met
     it), Safeguard, Spikes, Toxic Spikes and Stealth Rock cleared (:21-61) and the field's deep fog
-    (:64-69: ``FIELD_CONDITION_DEEP_FOG`` off, so the weather becomes none; fog has no timer). The
-    user's own side is never touched. E3-B2-14."""
+    (:64-65: ``FIELD_CONDITION_DEEP_FOG`` off, ``field.defog_clear``; the other mask bits and
+    ``weather_turns`` stay). The user's own side is never touched. E3-B2-14."""
     cond = (h.effect == _E.DEFOG) & h.landed
     state = _foe_stage(state, h, cond)
     for field in ("reflect", "light_screen", "mist", "safeguard", "spikes", "toxic_spikes"):
         state = _set(state, field, h.target_side, 0, cond)
     state = _set(state, "stealth_rock", h.target_side, 0, cond)
-    fog = cond & (state.weather == Weather.FOG)
-    return state._replace(
-        weather=jnp.where(fog, Weather.NONE, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(fog, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.defog_clear(state, cond)
 
 
 def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     """Sandstorm, Rain Dance, Sunny Day, Hail (``WEATHER``; effect_script_0115.s, _0136.s,
     _0137.s, _0164.s, run before ``TryMove``, which cannot stop this accuracy-0
-    ``RANGE_FIELD`` move): ``MOVE_STATUS_FAILED`` when its weather is up already, either kind
-    (``move_param[m, 1] == 1``) or, for Hail, only a temporary one (``weather_timer != 0``);
-    else ``FIELD_CONDITION_WEATHER`` is cleared and the temporary weather set with
+    ``RANGE_FIELD`` move): ``MOVE_STATUS_FAILED`` while a bit of its weather's group is set
+    (``move_param[m, 1] == 1``) or, for Hail, its TEMP bit (``weather_fails``); else
+    ``FIELD_CONDITION_WEATHER`` is cleared and the temporary weather set with
     ``WEATHER_TURNS`` turns plus the param of the user's matching weather rock
     (``CheckItemHoldEffect`` / ``GetItemEffectParam`` on the attacker). The failure skips
     ``AfterMoveEffects`` (``step._use_move``)."""
@@ -2719,18 +2720,15 @@ def _weather(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     )
     turns = WEATHER_TURNS + jnp.where(rock, tables.item_param[item, 0].astype(_I32), 0)
     cond = (h.effect == _E.WEATHER) & h.landed & ~weather_fails(state, h.param)
-    return state._replace(
-        weather=jnp.where(cond, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(cond, turns, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_move(state, weather, turns, cond)
 
 
 def weather_fails(state: BattleState, param) -> jnp.ndarray:
     """``bool``: a ``WEATHER`` move with ``param`` (``move_param[m]``) fails on this field
-    (``_weather``)."""
-    up = state.weather == param[0]
-    temporary = state.weather_timer != 0
-    return up & ((param[1] == 1) | temporary)
+    (``_weather``): Sandstorm, Rain Dance, Sunny Day test their whole group (``param[1] == 1``:
+    effect_script_0115.s, _0136.s, _0137.s :5), Hail only HAILING_TEMP (effect_script_0164.s:5),
+    so Hail succeeds under a HAILING_PERM-only mask."""
+    return fcm.weather_move_fails(fcm.weather_bits(state), param[0], param[1] == 1)
 
 
 def armored(state: BattleState, side, target_side) -> jnp.ndarray:
@@ -3353,7 +3351,7 @@ def entry_hazards(tables: Tables, state: BattleState, side) -> BattleState:
     absorbed = down & (layers > 0) & poison_type
     state = _set(state, "toxic_spikes", side, 0, absorbed)
     ability = battler_decomp_ability(tables, state, side, mon)
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = _sunny(tables, state)
     status = jnp.where(layers >= 2, Status.TOXIC, Status.POISON)
     # subscript_poison.s:5-10 / subscript_badly_poison.s:5-10 (CheckAbility, before the status
     # and type checks): Immunity, or Leaf Guard in sun, jumps to "{0}'s {1} prevents
@@ -4033,6 +4031,7 @@ def play_hit(
         _trap,
         _taunt,
         _torment,
+        _nightmare,
         _worry_seed,
         _gastro_acid,
         _fling,

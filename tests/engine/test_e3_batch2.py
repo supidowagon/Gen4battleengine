@@ -26,11 +26,13 @@ from nuzline.engine.damage import (
     identified,
 )
 from nuzline.engine.enumerate import INPUT_CLAUSE_EFFECTS, NON_TABLE_DAMAGE_EFFECTS
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     MOVE_STRUGGLE,
     AbilityId,
     EffectId,
+    FieldCondition,
     FlingEffect,
     MoveFlag,
     Stat,
@@ -41,7 +43,13 @@ from nuzline.engine.order import CALL_MIRROR_MOVE, MOVE_ACTIONS, call_kind, effe
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
 from nuzline.engine.state import make_state
 from nuzline.engine.step import replace as send_in
-from tests.engine.helpers import A, as_species, assert_matches_reference, roark_state
+from tests.engine.helpers import (
+    A,
+    as_species,
+    assert_matches_reference,
+    roark_state,
+    weather_of,
+)
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
 SPE = 4
@@ -229,6 +237,21 @@ def test_flung_stat_berries_and_starf(tables, names):
     capped = star._replace(stages=star.stages.at[1, Stat.ATK].set(6))
     out = _go(tables, names, capped, draw(0))
     assert _stage(out, 1, Stat.DEF) == 2 and _stage(out, 1, Stat.ATK) == 6
+
+
+def test_a_flung_starf_uses_up_a_draw_of_the_defenders_queue(tables, names):
+    """E3-B2-22 (G-27, G-28): Fling's RANDOM_UP2 loop is its own ``RandNext() % 5``
+    (battle_lib.c:6121), so it takes the defender's next queue entry (``Outcome.starf[1, 0]``)
+    and the defender's own Starf Berry, eaten at its pinch after the hit, reads the next one
+    (``Outcome.starf[1, 2]``): Attack from the fling, Sp. Atk from the eat (the old single draw
+    would raise Attack twice). Engine equals reference."""
+    s = _fight(tables, names, "Starf Berry", foe_item="Starf Berry", foe="Bidoof", foe_level=40)
+    s = s._replace(hp=s.hp.at[1, 0].set(int(s.max_hp[1, 0]) // 4))
+    out = _hits()
+    out = out._replace(starf=out.starf.at[1, 0].set(0).at[1, 2].set(3))
+    after = _go(tables, names, s, out)
+    assert int(after.hp[1, 0]) > 0
+    assert _stage(after, 1, Stat.ATK) == 2 and _stage(after, 1, Stat.SPA) == 2
 
 
 def test_flung_lansat_and_white_herb(tables, names):
@@ -696,7 +719,7 @@ def test_a_record_is_written_for_every_landing_move_and_cleared_otherwise(tables
         if stale:
             s = _record(s, 0, n.move("Growl"), 1, NORMAL)
         if weather is not None:
-            s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+            s = with_weather(s, weather)
         out = _c2_out(hits=hits)
         for kind, pick in picks:
             out = out._replace(conv2=out.conv2.at[0, kind].set(pick))
@@ -1207,9 +1230,8 @@ def test_role_play_is_seen_by_hit_thresholds_and_armor(tables, names):
     t, n = tables, names
     s = roark_state(t, n, player_moves=["Rock Throw"], opp_moves=["Role Play"], opp_faster=True)
     mon = int(s.active[0])
-    s = s._replace(
-        ability=s.ability.at[0, mon].set(AbilityId.SAND_VEIL),
-        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
+    s = with_weather(
+        s._replace(ability=s.ability.at[0, mon].set(AbilityId.SAND_VEIL)), Weather.SANDSTORM
     )
     law = hit_law(t, s, A("Rock Throw", "Role Play", s, n), 0)
     assert law == {0: 10, 1: 72, 73: 18}  # a roll up to 72 hits either way; 73-90 only at 90
@@ -2836,7 +2858,7 @@ def _dg(t, n, *, fog=False, side=1, fields=_NO_MIST, mine=("Defog", "Tackle"), f
     for field, value in fields:
         s = s._replace(**{field: getattr(s, field).at[side].set(value)})
     if fog:
-        s = s._replace(weather=jnp.asarray(Weather.FOG, s.weather.dtype))
+        s = with_weather(s, Weather.FOG)
     return s
 
 
@@ -2940,14 +2962,19 @@ def test_defog_behind_a_substitute_fails_but_still_clears(tables, names):
 
 
 def test_defog_clears_the_deep_fog(tables, names):
-    """subscript_defog.s:64-69: FIELD_CONDITION_DEEP_FOG off, the field has no weather (a timer of
-    0: the fog is permanent); another weather is not touched."""
+    """subscript_defog.s:64-65: FIELD_CONDITION_DEEP_FOG off, the field has no weather; another
+    weather is not touched, nor are the other bits of a mask that holds fog and a rain bit (FCM
+    3.1: only bit 15 goes, ``field.defog_clear``)."""
     t, n = tables, names
     out = _dgo(t, n, _dg(t, n, fog=True, fields=()))
-    assert int(out.weather) == Weather.NONE and int(out.weather_timer) == 0
-    rain = _dg(t, n, fields=())
-    rain = rain._replace(weather=jnp.asarray(Weather.RAIN, rain.weather.dtype))
-    assert int(_dgo(t, n, rain).weather) == Weather.RAIN
+    assert int(weather_of(out)) == Weather.NONE
+    assert int(out.field_mask) & int(FieldCondition.DEEP_FOG) == 0
+    rain = with_weather(_dg(t, n, fields=()), Weather.RAIN)
+    assert int(weather_of(_dgo(t, n, rain))) == Weather.RAIN
+    fog = _dg(t, n, fog=True, fields=())
+    both = fog._replace(field_mask=fog.field_mask | int(FieldCondition.RAINING_PERM))
+    out = _dgo(t, n, both)
+    assert int(out.field_mask) & int(FieldCondition.WEATHER) == int(FieldCondition.RAINING_PERM)
 
 
 def test_defog_is_seen_by_hit_thresholds_and_the_damage_clauses(tables, names):
@@ -2960,13 +2987,13 @@ def test_defog_is_seen_by_hit_thresholds_and_the_damage_clauses(tables, names):
 
     t, n = tables, names
     s = roark_state(t, n, player_moves=["Rock Throw"], opp_moves=["Defog"], opp_faster=True)
-    fog = s._replace(weather=jnp.asarray(Weather.FOG, s.weather.dtype))
+    fog = with_weather(s, Weather.FOG)
     acts = A("Rock Throw", "Defog", fog, n)
     assert hit_law(t, fog, acts, 0) == {0: 10, 1: 54, 55: 36}
     assert hit_law(t, s, acts, 0) == {0: 10, 1: 90}
     # The Defog user is side 0 here, going before side 1's hit (the Lucky Chant case's layout).
     d = roark_state(t, n, player_moves=["Defog"], opp_moves=["Rock Throw"])
-    dfog = d._replace(weather=jnp.asarray(Weather.FOG, d.weather.dtype))
+    dfog = with_weather(d, Weather.FOG)
     dacts = A("Defog", "Rock Throw", dfog, n)
     foe_first = jnp.array([False, True])
     assert bool(damage_inputs_can_change(t, dfog, dacts, foe_first)[1, 0])

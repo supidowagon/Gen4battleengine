@@ -74,6 +74,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.damage import (
     ability_weather,
@@ -85,6 +86,7 @@ from nuzline.engine.damage import (
 )
 from nuzline.engine.effects import (
     change_stage,
+    clear_nightmare,
     entry_hazards,
     forget_item,
     hp_update,
@@ -376,19 +378,17 @@ def weather_ability(state: BattleState, side, cond=True) -> BattleState:
     """``SWITCH_IN_CHECK_STATE_WEATHER_ABILITIES`` (battle_lib.c:3740-3790) for ``side``'s
     active battler where ``cond`` (it has not announced: it entered, or it just traced): with
     HP left and Drizzle, Sand Stream, Drought or Snow Warning (``Battler_Ability``), the weather
-    becomes that one, permanently (``weather_timer`` 0; subscript_drizzle.s etc.:
-    ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless that permanent weather is
-    up already (no script then, the field is the same). Cloud Nine does not stop it."""
+    becomes that one, permanently (subscript_drizzle.s etc.:
+    ``FIELD_CONDITION_WEATHER`` off, then the ``*_PERM`` bit), unless its own PERM bit is set
+    already (:3749, :3758, :3767, :3776: no script, no reveal). Cloud Nine does not stop it."""
     mon, row = state.active[side], party(format_of(state), side)
     weather = ability_weather(battler_ability(state, side))
     on = jnp.asarray(cond) & (weather != Weather.NONE) & (state.hp[row, mon] > 0)
-    already = (state.weather == weather) & (state.weather_timer == 0)
+    w = fcm.weather_bits(state)
+    already = fcm.ability_bits(w, weather) == w
     state = announce(state, "weather_announced", side, on)  # :3748-3786, even when already up
     state = reveal_ability(state, side, mon, WEATHER_SET, on & ~already)
-    return state._replace(
-        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_ability(state, weather, on)
 
 
 # Every bit of ``order_swaps``: the three draws a sort of two battlers reads (a tie, two speedRand).
@@ -442,10 +442,7 @@ def swap_war(state: BattleState, swapped) -> BattleState:
     mon = state.active[0]
     weather = ability_weather(battler_ability(state, 0))
     state = reveal_ability(state, 0, mon, WEATHER_SET, on)
-    return state._replace(
-        weather=jnp.where(on, weather, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(on, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    return fcm.weather_ability(state, weather, on)
 
 
 def hold_war(state: BattleState, war, swaps, qc=None) -> BattleState:
@@ -516,6 +513,9 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
             jnp.where(woke, 0, state.status_counter[row, mon]).astype(state.status_counter.dtype)
         ),
     )
+    # subscript_ability_forbids_status.s:10, :16-18: msgTemp MSGCOND_SLEEP (0, battle_lib.c:4406) also
+    # clears VOLATILE_CONDITION_NIGHTMARE; Limber's paralysis takes :13-14, which keeps it (G-32).
+    state = clear_nightmare(state, side, woke & (status == Status.SLEEP))
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
 
 
@@ -557,6 +557,10 @@ def _restore(state: BattleState, side, mon, effect, cond):
     cure_status = cond & (berry | (lum & any_status))
     cure_confusion = cond & (lum | (effect == ItemId.PERSIM_BERRY)) & confused
     herb = cond & (effect == ItemId.WHITE_HERB) & jnp.any(lowered)
+    # VOLATILE_CONDITION_NIGHTMARE off (G-32): subscript_held_item_slp_restore.s:13 (a sleep cure,
+    # battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580, :5648-5651) and _multi_restore.s:13
+    # (Lum on a status and confusion, :4689-4692, :5669-5672); the other restore subscripts keep it.
+    nightmare_off = cure_status & ((status == Status.SLEEP) | (lum & confused))
     state = state._replace(
         status=state.status.at[row, mon].set(
             jnp.where(cure_status, Status.NONE, status).astype(state.status.dtype)
@@ -573,6 +577,7 @@ def _restore(state: BattleState, side, mon, effect, cond):
             jnp.where(herb & lowered, 0, state.stages[side]).astype(state.stages.dtype)
         ),
     )
+    state = clear_nightmare(state, side, nightmare_off)
     return state, cure_status | cure_confusion | herb
 
 
@@ -597,12 +602,27 @@ def starf_stat(state: BattleState, side) -> tuple[jnp.ndarray, jnp.ndarray]:
     :5798-5817). The decomp scans Attack, Defense, Speed, Sp. Atk, Sp. Def (``STARF_STATS``) for
     one below +6 and, if there is one, draws ``RandNext() % 5`` until the drawn stat is below +6:
     uniform over the eligible stats by the project's ``% n`` convention, the rank
-    ``BattleState.starf_roll`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    ``starf_draw`` modulo their count (F-10). ``any`` is false with all five at +6."""
+    return _starf_pick(state, side, starf_draw(state, side))
+
+
+def starf_draw(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: the draw ``side``'s next Starf Berry eat this turn reads: every eat draws its
+    own ``RandNext() % 5`` (battle_lib.c:4864-4866, :5286-5288, Pluck :5808), so the eat after
+    ``starf_taken`` earlier ones reads queue entry ``min(starf_taken, 2)`` of ``starf_roll``
+    (``Outcome.starf[:, ids.STARF_QUEUE]``), F-O3 (G-27)."""
+    last = state.starf_roll.shape[1] - 1
+    entry = jnp.minimum(state.starf_taken[side].astype(_I32), last)
+    return state.starf_roll[side, entry].astype(_I32)
+
+
+def _starf_pick(state: BattleState, side, roll) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``starf_stat`` for the draw ``roll``: the eligible stat of rank ``roll % count``."""
     idx = jnp.asarray([int(x) for x in STARF_STATS], _I32)
     eligible = state.stages[side][idx] < STAGE_MAX
     count = jnp.sum(eligible.astype(_I32))
     rank = jnp.cumsum(eligible.astype(_I32)) - 1
-    pick = eligible & (rank == state.starf_roll[side].astype(_I32) % jnp.maximum(count, 1))
+    pick = eligible & (rank == jnp.asarray(roll, _I32) % jnp.maximum(count, 1))
     return jnp.sum(jnp.where(pick, idx, 0)), count > 0
 
 
@@ -650,12 +670,15 @@ def _pinch_effects(tables: Tables, state: BattleState, side, effect, cond):
     starf = cond & (effect == ItemId.STARF_BERRY) & some
     # A check with no draw loaded (``starf_roll`` STARF_UNDRAWN: the battle start) eats the berry
     # and leaves the stat open for the root's draw (``resolve_starf``, F-10).
-    drawn = state.starf_roll[side] != STARF_UNDRAWN
+    drawn = starf_draw(state, side) != STARF_UNDRAWN
     state = state._replace(
         starf_open=state.starf_open.at[side].set(
             jnp.where(starf & ~drawn, 1, state.starf_open[side]).astype(state.starf_open.dtype)
         )
     )
+    # The draw is used: the battler's next eat this turn draws its own (F-O3, G-27).
+    taken = state.starf_taken[side] + (starf & drawn).astype(state.starf_taken.dtype)
+    state = state._replace(starf_taken=state.starf_taken.at[side].set(taken))
     return change_stage(state, side, stat, 2, starf & drawn), lansat | starf
 
 
@@ -667,10 +690,7 @@ def resolve_starf(state: BattleState, draws) -> BattleState:
     draws = jnp.asarray(draws)
     for side in range(state.active.shape[0]):
         on = state.starf_open[side] != 0
-        drawn = state._replace(
-            starf_roll=state.starf_roll.at[side].set(draws[side].astype(state.starf_roll.dtype))
-        )
-        stat, some = starf_stat(drawn, side)
+        stat, some = _starf_pick(state, side, draws[side])
         state = change_stage(state, side, stat, 2, on & some)
     return state._replace(starf_open=jnp.zeros_like(state.starf_open))
 
@@ -1036,7 +1056,8 @@ def forecast(tables: Tables, state: BattleState, cond=True) -> BattleState:
     ``SYSCTL_FORM_CHANGE``, only Giratina does, :6446), so ``state.form`` stays."""
     fmt = format_of(state)
     clear = ~weather_suppressed(tables, state)
-    rain, sun, hail = (state.weather == w for w in (Weather.RAIN, Weather.SUN, Weather.HAIL))
+    w = fcm.weather_bits(state)
+    rain, sun, hail = fcm.rain(w), fcm.sun(w), fcm.hail(w)
     weathered = rain | sun | hail
     for side in range(fmt.B):
         row, mon = party(fmt, side), state.active[side]
@@ -1084,39 +1105,74 @@ def land_stats(tables: Tables, state: BattleState, row, mon) -> jnp.ndarray:
     )
 
 
+def own_stats(tables: Tables, state: BattleState, side, row, mon) -> jnp.ndarray:
+    """``int32[6]``: the party Pokemon ``mon`` of ``side`` recalculated on its OWN species at form 0
+    (``shadow_species``, its own IVs in ``shadow_ivs``, its EVs, level and nature): what
+    ``BtlIOCmd_UpdatePartyMon`` writes for a Transform user whose ``MON_DATA_FORM`` is set to 0
+    (``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604) and ``BattleSystem_ReloadPokemon``
+    reads back (battle_lib.c:169-194), HP first (``ids.Stat`` order), F-O2."""
+    species = state.shadow_species[side].astype(_I32)
+    return calc_stats_jnp(
+        tables.species_base_stats[tables.species_form_row[species, 0]],
+        state.shadow_ivs[side],
+        state.evs[row, mon],
+        state.level[row, mon],
+        tables.nature_mods[state.nature[row, mon]],
+        species,
+    )
+
+
+def reverted_stats(tables: Tables, state: BattleState, side, mon) -> jnp.ndarray:
+    """``int32[6]``: the stats party ``mon`` of ``side`` has once a Sky Shaymin's revert has run on
+    it (``shaymin_land``): Land Forme's (``land_stats``), or, for the Transformed active battler,
+    its own species' (``own_stats``): the party Pokemon is the one recalculated (F-O2)."""
+    row = party(format_of(state), side)
+    own = (state.transformed[side] != 0) & (mon == state.active[side])
+    return jnp.where(
+        own, own_stats(tables, state, side, row, mon), land_stats(tables, state, row, mon)
+    )
+
+
 def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
     """``subscript_check_shaymin_form.s`` (``AfterMoveMessage``'s ``*_FORM_CHANGE`` states,
-    battle_controller_player.c:3497-3505, :3557-3565; F-16) for ``side``'s active battler, the
-    hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute and
-    status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its personality
-    picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds none there),
-    types Land's (:24-27), stats recalculated from Land's row (``SYSCTL_RECALC_MON_STATS``,
+    battle_controller_player.c:3497-3505, :3557-3565; F-16, F-O2) for ``side``'s active battler,
+    the hit's defender, where ``cond``: a Shaymin (species 492) with a form number, no Substitute
+    and status exactly Freeze (:6-9) becomes Land Forme (form 0, :10): ability slot as its
+    personality picks it in Land's row (:11-19: ``ability_slot``, slot 0 when the Land row holds
+    none there), types Land's (:24-27), stats recalculated (``SYSCTL_RECALC_MON_STATS``,
     ``BattleMon_CopyToParty`` -> ``Pokemon_CalcLevelAndStats``, battle_io_command.c:597-604;
     ``Pokemon_CalcStats``: the HP change moves the current HP, as ``levelup``), and
     ``RefreshMonData`` reloads the battler from the party (:30): Attack, Defense, Speed, Special
     stats, HP, and friendship (``BattleSystem_ReloadPokemon``, battle_lib.c:169-193; the Power
     Trick swap stays, as ``levelup``). Stages, status and volatiles stay. The AI learns the
-    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403). A Transformed battler
-    is left out: the script would write Land's ability into its own party Pokemon
-    (battle_script.c:3401-3407, battle_io_command.c:601-604), a party ability the engine does not
-    hold, so coverage refuses a Transform user facing a Sky Shaymin
-    (``coverage.transform_sky_refusals``, F-26)."""
+    written ability (``BattleAI_SetAbility``, battle_script.c:3402-3403).
+
+    A Transformed battler (F-O2) is a copy of a Sky Shaymin: the script tests the copy (Transform
+    copies the BattleMon up to ``ability``, battle_script.c:5346-5348), but the ability slot is the
+    battler's own personality's (``shadow_ability_slot``: ``BATTLEMON_PERSONALITY`` is not copied,
+    battle_mon.h:105-106), and ``BattleMon_CopyToParty`` writes into the Transform user's OWN
+    party Pokemon: its ability (``party_ability``, io:601-604), form 0 and stats recalculated on
+    its own species. ``RefreshMonData`` then gives the copy those own stats (``shadow_stats`` too:
+    the party's), not Land's; types and ability are Land's."""
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
     row, mon = party(fmt, side), state.active[side]
+    tr = state.transformed[side] != 0
     on = (
         jnp.asarray(cond)
         & (state.species[row, mon] == SPECIES_SHAYMIN)
         & (state.form[row, mon] != 0)
         & (state.substitute_hp[side] == 0)
         & (state.status[row, mon] == Status.FREEZE)
-        & (state.transformed[side] == 0)
     )
     land = tables.species_form_row[SPECIES_SHAYMIN, 0]
     abilities = tables.species_abilities[land].astype(_I32)
-    slot = state.ability_slot[row, mon].astype(_I32)
-    slot = jnp.where(abilities[slot] != 0, slot, 0)
-    stats = land_stats(tables, state, row, mon)
+    slot = jnp.where(tr, state.shadow_ability_slot[side], state.ability_slot[row, mon]).astype(_I32)
+    # An empty slot is decomp ability 0 (AbilityId.NONE here, not 0): shay:18-19 tests the raw id.
+    slot = jnp.where(tables.species_abilities_decomp[land, slot] != 0, slot, 0)
+    stats = jnp.where(
+        tr, own_stats(tables, state, side, row, mon), land_stats(tables, state, row, mon)
+    )
     old_max, hp = state.max_hp[row, mon].astype(_I32), state.hp[row, mon].astype(_I32)
 
     def put(arr, value):
@@ -1132,6 +1188,20 @@ def shaymin_land(tables: Tables, state: BattleState, side, cond=True) -> BattleS
         max_hp=put(state.max_hp, stats[Stat.HP]),
         hp=put(state.hp, jnp.where(hp != 0, hp + stats[Stat.HP] - old_max, hp)),
         friendship=put(state.friendship, state.party_friendship[row, mon]),
+        # F-O2: the Transform user's own party Pokemon takes Land's ability (io:601-604) and its
+        # form 0 / stats (io:597-604): the shadow holds the party's own values while it is
+        # Transformed (``step._restore_transform`` puts them back on leaving).
+        party_ability=put(
+            state.party_ability, jnp.where(tr, abilities[slot], state.party_ability[row, mon])
+        ),
+        shadow_form=state.shadow_form.at[side].set(
+            jnp.where(on & tr, 0, state.shadow_form[side]).astype(state.shadow_form.dtype)
+        ),
+        shadow_stats=state.shadow_stats.at[side].set(
+            jnp.where(on & tr, stats[Stat.ATK :], state.shadow_stats[side]).astype(
+                state.shadow_stats.dtype
+            )
+        ),
         power_trick_desync=state.power_trick_desync.at[side].set(
             jnp.where(on, state.power_trick[side], state.power_trick_desync[side]).astype(
                 state.power_trick_desync.dtype
@@ -1252,12 +1322,7 @@ def battle_start(tables: Tables, state: BattleState, trace_pick=None) -> BattleS
     # on the leads as sent out, no weather yet (SWITCH_IN_CHECK_STATE_FIELD_WEATHER sets the
     # start condition inside TriggerEffectOnSwitch), with the battle-start speedRand
     # (BattleContext_InitCounters, battle_lib.c:2024), a root draw (ruling G-26).
-    swaps = order_swaps(
-        tables,
-        state._replace(
-            weather=jnp.zeros_like(state.weather), weather_timer=jnp.zeros_like(state.weather_timer)
-        ),
-    )
+    swaps = order_swaps(tables, fcm.without_weather(state))
     # A lead's Starf Berry eaten here draws at the root (``starf_open``, ``step.root_belief``,
     # ``step.sample_root``), F-10.
     state = state._replace(starf_roll=jnp.full_like(state.starf_roll, STARF_UNDRAWN))
@@ -1367,8 +1432,9 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> B
     what the defender has (``_restore``: Cheri, Chesto, Pecha, Rawst, Aspear, Persim, Lum); heal
     infatuation clears its attraction; the stat items raise one stage below +6, Starf two on one
     of the five below +6 (lib.c:6110-6129: ``RandNext() % 5`` redrawn while the stage is 12; by
-    the ``% n`` convention uniform over them, the held Starf Berry's draw and rank, ``starf_stat``
-    on the defender's ``starf_roll``, F-10, review b2 #4); Lansat sets Focus Energy; Micle its
+    the ``% n`` convention uniform over them, the rank of the defender's next queued Starf draw,
+    ``starf_stat`` / ``starf_draw``, which it then uses up: ``starf_taken`` + 1, F-10, G-27,
+    review b2 #4); Lansat sets Focus Energy; Micle its
     ``micleBerry``. ``FLING_EFFECT_PP_RESTORE`` and ``_STATDOWN_RESTORE`` already acted
     (``fling_try``). Statuses and the flinch are ``effects._fling``'s. E3-B2-1."""
     cond = jnp.asarray(cond)
@@ -1402,7 +1468,12 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> B
     raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32))
     state = change_stage(state, side, up, 1, raises & (state.stages[side, up] < STAGE_MAX))
     stat, some = starf_stat(state, side)
-    state = change_stage(state, side, stat, 2, cond & (kind == FlingEffect.RANDOM_UP2) & some)
+    starf = cond & (kind == FlingEffect.RANDOM_UP2) & some
+    state = change_stage(state, side, stat, 2, starf)
+    # The fling's loop is its own draw (lib.c:6121): the defender's next eat this turn reads the
+    # next queue entry (``starf_draw``, F-O3 G-27/G-28).
+    taken = state.starf_taken[side] + starf.astype(state.starf_taken.dtype)
+    state = state._replace(starf_taken=state.starf_taken.at[side].set(taken))
     crit = cond & (kind == FlingEffect.CRIT_UP)
     acc = cond & (kind == FlingEffect.TEMP_ACC_UP)
     return state._replace(

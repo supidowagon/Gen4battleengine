@@ -44,6 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     CONV2_DRAWS,
     NUM_TYPES,
@@ -72,6 +73,7 @@ from nuzline.engine.ids import (
     TRACE_FIRES,
     AbilityId,
     EffectId,
+    FieldCondition,
     FlingEffect,
     ItemId,
     MoveFlag,
@@ -193,11 +195,13 @@ class Outcome(NamedTuple):
     # (``damage.conv2_pick``). Its law depends on ``t`` and ``b``'s types, so every ``t`` the move
     # can meet is its own element (E3-B2-3, review b2 #3).
     conv2: jnp.ndarray
-    # int8[B, 2], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866,
+    # int8[B, 4], a Starf Berry's draw (BattleSystem_TriggerHeldItem, battle_lib.c:4864-4866,
     # :5286-5288): a value in [0, ids.STARF_DRAWS), the stat is rank ``value % eligible`` among
-    # the five stats below +6 (``hooks.starf_stat``), F-10. ``[b, 0]`` the turn's (its held-item
-    # checks and Pluck), ``[b, 1]`` the faint replacement's switch-in check after it (kept in
-    # ``BattleState.starf_roll`` between the turn and ``step.replace``, ``step.starf_kept``).
+    # the five stats below +6 (``hooks.starf_stat``), F-10. ``[b, 0]`` the battler's first eat
+    # this turn (its held-item checks and Pluck), ``[b, 1]`` the faint replacement's switch-in
+    # check after it (kept in ``BattleState.starf_roll`` between the turn and ``step.replace``,
+    # ``step.starf_kept``), ``[b, 2]`` its second eat this turn and ``[b, 3]`` its third, each eat
+    # its own draw: F-O3 (G-27, ``ids.STARF_QUEUE``; ``enumerate._starf_reads``).
     starf: jnp.ndarray
     # int8[B], the low bit of the one RandNext() a fight command's BattleSystem_Defender call may
     # draw (bcp.c:1900; lib.c:1653, :1700, :4187), indexed by the acting battler; read only at
@@ -252,7 +256,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         berry_confusion=sides + 2,
         chatter=sides,
         conv2=jnp.zeros((fmt.B, NUM_TYPES), _I8),
-        starf=jnp.zeros((fmt.B, 2), _I8),
+        starf=jnp.zeros((fmt.B, 4), _I8),
         target_draw=sides,
         call_target_draw=sides,
         bide_target_draw=sides,
@@ -300,8 +304,9 @@ def _rate(
     attacker's accuracy stage ``acc`` and the target's evasion stage ``eva_stage``
     (``target_switches``: it comes in this turn, fresh); ``target_moved``: the target's action
     is over (``Battler_MovedThisTurn``, battle_lib.c:5365-5368: in singles, the attacker acts
-    second), for Zoom Lens; ``weather`` (default ``state.weather``) and ``target_confused``
-    (default: the target's confusion counter is nonzero, a newcomer never) as at the check.
+    second), for Zoom Lens; ``weather`` (the mask's weather bits, default
+    ``field.weather_bits`` of ``state``) and ``target_confused`` (default: the target's
+    confusion counter is nonzero, a newcomer never) as at the check.
     100 when No Guard makes the move hit (``CheckMoveHitOverrides``, bcp.c:3016-3021). A
     target that switches in holds its entry ability (``damage.entry_ability``: the copy when it
     traces), since its switch-in checks run before the move (ruling B3-19). ``total``: the
@@ -317,7 +322,7 @@ def _rate(
     Triple Kick hit's: the first hit's check cleared the flag, :2968, so only a berry eaten
     since sets it; default ``micle``)."""
     fmt = format_of(state)
-    weather = state.weather if weather is None else weather
+    weather = fcm.weather_bits(state) if weather is None else jnp.asarray(weather, _I32)
     # A pivot's newcomer (``pivot_view``) is not fresh: its view holds its own stages / volatiles.
     fresh = (
         jnp.asarray(target_switches, bool)
@@ -363,21 +368,24 @@ def _rate(
     suppressed = weather_suppressed(tables, state._replace(hp=hp), on_field)
     if grid:  # the grid's weather is the one at the check (none for a lock)
         suppressed = jnp.asarray(False)
-    weather = jnp.where(suppressed, Weather.NONE, weather)
+    weather = jnp.where(suppressed, 0, weather)
     flags = tables.move_flags[move]
+    # MoveFlag.THUNDER: Thunder (effect 152) and Kaizo's effect 141 (Hurricane), whose two
+    # compares Kaizo widened (docs/kaizo/rom_diff.md:366-367; B13-3).
     thunder = (flags & MoveFlag.THUNDER) != 0
-    # :2915-2917 Thunder in sun: hitRate = 50, before the stage scaling (B9-1).
-    base = jnp.where(thunder & (weather == Weather.SUN), 50, accuracy)
+    # :2915-2917 Thunder in sun (any SUNNY bit): hitRate = 50, before the stage scaling (B9-1).
+    base = jnp.where(thunder & fcm.sun(weather), 50, accuracy)
     rate = base * _ACC_NUM[total] // _ACC_DEN[total]
     # Compoundeyes (battle_controller_player.c:2922-2924), right after the stage scaling.
     rate = jnp.where(a_ability == AbilityId.COMPOUNDEYES, rate * 130 // 100, rate)
     # Sand Veil in sand and Snow Cloak in hail (Battler_IgnorableAbility: Mold Breaker pierces
     # them, :2927, :2931) x80/100, then deep fog x6/10 (:2934).
-    veiled = ((weather == Weather.SANDSTORM) & (d_ability == AbilityId.SAND_VEIL)) | (
-        (weather == Weather.HAIL) & (d_ability == AbilityId.SNOW_CLOAK)
+    # Each its own WEATHER_IS_* test (sand and hail both set: both can apply, FCM 3.2).
+    rate = jnp.where(fcm.sand(weather) & (d_ability == AbilityId.SAND_VEIL), rate * 80 // 100, rate)
+    rate = jnp.where(
+        fcm.hail(weather) & (d_ability == AbilityId.SNOW_CLOAK), rate * 80 // 100, rate
     )
-    rate = jnp.where(veiled, rate * 80 // 100, rate)
-    rate = jnp.where(weather == Weather.FOG, rate * 6 // 10, rate)  # deep fog
+    rate = jnp.where(fcm.fog(weather), rate * 6 // 10, rate)  # deep fog
     # :2944-2947 Tangled Feet (Battler_IgnorableAbility) on a confused target: x50/100 (Hustle,
     # just before it, is unsupported).
     tangled = (d_ability == AbilityId.TANGLED_FEET) & jnp.asarray(target_confused, bool)
@@ -407,7 +415,7 @@ def _rate(
 
     def finish(rate, micle):
         rate = jnp.where(micle, rate * 120 // 100, rate)
-        return jnp.where(state.gravity != 0, rate * 10 // 6, rate)
+        return jnp.where(fcm.gravity_on(state), rate * 10 // 6, rate)
 
     before_micle = rate
     rate = finish(before_micle, micle)
@@ -426,8 +434,8 @@ def _rate(
     no_guard = no_guard | locked
     # :3023-3031 (after No Guard / Lock-On, inside NO_CLOUD_NINE): Thunder in rain, Blizzard in
     # hail clear MOVE_STATUS_MISSED (B9-1).
-    weather_sure = (thunder & (weather == Weather.RAIN)) | (
-        ((flags & MoveFlag.BLIZZARD) != 0) & (weather == Weather.HAIL)
+    weather_sure = (thunder & fcm.rain(weather)) | (
+        ((flags & MoveFlag.BLIZZARD) != 0) & fcm.hail(weather)
     )
     no_guard = no_guard | weather_sure
     # An OHKO move (BtlCmd_TryOHKOMove, battle_script.c:4334-4386) sets
@@ -536,10 +544,40 @@ def future_threshold(tables: Tables, state: BattleState, defender) -> jnp.ndarra
     )
 
 
+def acid_rain_reachable(state: BattleState, actions, uses, effect) -> jnp.ndarray:
+    """``bool``: an Acid Rain write (subscript_pursuit.s:100, :115; ledger G-12) can happen this
+    turn. ``BtlCmd_TryPursuit`` runs only from a switch (subscript_switch_pokemon.s:11) and from
+    U-turn (subscript_attack_then_switch_out.s:54), and takes only a battler of the other side
+    whose selected (or encored) move has Pursuit's effect (battle_script.c:6899-6916). So some
+    battler switches or uses U-turn while a battler of the other side uses Pursuit (``uses``,
+    ``effect``: per battler, the move it runs; a called Pursuit over-approximates), and the mask
+    at :115 can be nonzero: nonzero now, or a third battler's action can come before the chase
+    and write it. In singles there is none (a switch's chase comes before every move; a U-turn's
+    pursuer has not acted, and U-turn writes no field condition), and :115 and the switcher's
+    FAINT_MON only clear bits, so a mask that is 0 now stays 0 at :115."""
+    fmt = format_of(state)
+    live = state.over == 0
+    # A switch action's chase runs at its switch, before every move (switches go first): a turn
+    # resumed after a party list (``pivot_battler``) has run them all, and its pivot's switch is
+    # the list's pick, which reaches no TryPursuit.
+    switch = is_switch(actions) & (state.pivot_battler == 0)
+    chased = live & (switch | (uses & (effect == EffectId.U_TURN)))
+    pursues = uses & (effect == EffectId.PURSUIT)
+    reach = jnp.asarray(False)
+    for b in range(fmt.B):
+        for x in range(fmt.B):
+            if side_of(x) == side_of(b):
+                continue
+            earlier = any(y not in (b, x) for y in range(fmt.B))
+            reach = reach | (chased[b] & pursues[x] & ((state.field_mask != 0) | earlier))
+    return reach
+
+
 # future_thresholds' grid per defender: attacker slot (SLOTS) x defender slot (SLOTS) x stage
-# total (13) x weather (4: the turn start's, none, sandstorm, hail) x the target confused or not.
+# total (13) x weather (6: none, sandstorm, hail, each with the start's deep fog bit or not) x
+# the target confused or not.
 _FUTURE_TOTALS = 13
-_FUTURE_WEATHERS = 4
+_FUTURE_WEATHERS = 6
 
 
 def future_thresholds(
@@ -557,10 +595,15 @@ def future_thresholds(
     Transform, Embargo or Knock Off (``loose``; a Gravity that is set or ends this turn is
     ``loose`` too).
     The stage sum takes every value 0-12 when a stage it reads can change this turn (a move with a
-    stat effect on accuracy or evasion, Foresight, Miracle Eye, Haze, Psych Up, Acupressure, a
-    White Herb); else the start stages of a battler that stays and 0 for a newcomer or a fainted
-    attacker (CleanupFaintedMon). The weather can be the start's, none (it ended, or a lock), or a
-    weather move's or ability's sandstorm or hail (the only ones the rate reads besides fog, which never starts); the target confused or not;
+    stat effect on accuracy or evasion, Foresight, Miracle Eye, Haze, Psych Up, Acupressure, a White Herb);
+    else the start stages of a battler that stays and 0 for a newcomer or a fainted attacker
+    (CleanupFaintedMon). The rate reads three weather tests (``_rate``: sand for Sand Veil, hail
+    for Snow Cloak, deep fog; a defender holds one ability), so the grid's weathers are none,
+    sandstorm and hail, each with and without the start's deep fog bit: that covers every mask
+    at the hit, a corrupted one included (FCM 3.1: a group ending, 0x8044 -> 0x8040, a lock,
+    a weather move or ability, which clear fog, effect_script_0115.s etc. :8, subscript_
+    drizzle.s etc. :11); nothing but Acid Rain sets fog after the start (``loose`` below); the
+    target confused or not;
     and the defender locked onto by the attacker's slot or not (B8-6: the lock as it stands after
     the turn end's countdown). The attacker's Micle Berry flag is the active battler's of now, the
     roll kept whole where it can change (G-59), and so is it where an Embargo is used or up
@@ -605,9 +648,15 @@ def future_thresholds(
     free = jnp.any(uses & (accuracy_moves | stage_writers)) | herbs
     # Raw over the parties: a superset of every Battler_Ability the field can show.
     tracer = jnp.any(on_field & (state.ability[rows] == AbilityId.TRACE))
+    # As weather bits (field.weather_bits): none, a sandstorm, a hail, each with the start's fog.
+    fog = fcm.weather_bits(state) & int(FieldCondition.DEEP_FOG)
     weathers = jnp.stack(
-        [state.weather.astype(_I32), Weather.NONE, Weather.SANDSTORM, Weather.HAIL]
-    ).astype(_I32)
+        [
+            jnp.asarray(bits, _I32) | f
+            for f in (jnp.asarray(0, _I32), fog)
+            for bits in (0, int(FieldCondition.SANDSTORM_TEMP), int(FieldCondition.HAILING_TEMP))
+        ]
+    )
     a_mon, d_mon, total, wi, conf, lk = (
         g.reshape(-1)
         for g in jnp.meshgrid(
@@ -689,7 +738,11 @@ def future_thresholds(
     # (subscript_exchange_abilities.s:21-24); a Role Play gives its user its target's
     # (subscript_copy_ability.s:14-15); a Gastro Acid suppresses its target's
     # (subscript_suppress_target_ability.s:10). Either way the roll is kept whole, rare and sound.
-    ends = (state.gravity == 1) & (tables.gravity_rearm == 0)
+    ends = (fcm.gravity_count(state) == 1) & (tables.gravity_rearm == 0)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
+    # subtracts a battler from a nonzero mask, which can turn Gravity or deep fog on or off
+    # (FCM 3.1): kept whole too, only where that write can happen (``acid_rain_reachable``).
+    acid = acid_rain_reachable(state, actions, uses, effect)
     field_change = (
         jnp.any(
             uses
@@ -703,6 +756,7 @@ def future_thresholds(
             )
         )
         | ends
+        | acid
     )
     loose = (
         jnp.broadcast_to(tracer | embargo_field | field_change, (fmt.B,)) | micle_field[attackers]
@@ -740,7 +794,9 @@ def _hit_threshold(
         eva = jnp.where(fresh_switch(state, actions, target), 0, state.stages[target, Stat.EVA])
     if weather is None:
         weather = jnp.where(
-            target_switches, entry_weather(tables, state, target, target_mon, side), state.weather
+            target_switches,
+            entry_weather(tables, state, target, target_mon, side),
+            fcm.weather_bits(state),
         )
     rate = _rate(
         tables,
@@ -855,7 +911,11 @@ def _threshold_grid(
       the turn-start threshold, always is);
     * the weather (Sand Veil, Snow Cloak): the foe's weather move (``EffectId.WEATHER``,
       ``effects._weather``) sets its weather first; a switch-in weather ability is in the
-      turn-start threshold (``damage.entry_weather``);
+      turn-start threshold (``damage.entry_weather``). Both variants are the start mask's
+      weather bits through ``field``'s what-ifs (``ability_bits``, ``move_bits``), exact on any
+      mask, a corrupted one included (FCM 3.1); the turn end's countdown comes after every
+      check, and an Acid Rain write (a Pursuit KO, subscript_pursuit.s:115, G-12) ends both
+      singles actions (the pursuer's and the switcher's), so no check follows it;
     * the foe's field move, the second weather variant (one move has one effect): its weather
       move's weather; its Gravity (``effects._gravity``), FIELD_CONDITION_GRAVITY's x10/6
       (battle_controller_player.c:2972-2974); its Transform into the side's battler, which then
@@ -1019,8 +1079,12 @@ def _threshold_grid(
             herb[foe] & ~foe_fresh,
         )
         _, _, target_mon = _target_mon(state, actions, side)
+        # As weather bits (field.weather_bits); the what-ifs below act on them as the game's
+        # writers do (field.ability_bits, field.move_bits).
         weather0 = jnp.where(
-            foe_switches, entry_weather(tables, state, foe, target_mon, side), state.weather
+            foe_switches,
+            entry_weather(tables, state, foe, target_mon, side),
+            fcm.weather_bits(state),
         )
         # The foe's field move (the second variant): a weather move's weather (another move's
         # param 0 is no weather); a Transform's copied weather ability, which its switch-in checks
@@ -1038,10 +1102,10 @@ def _threshold_grid(
         foe_weather = ability_weather(foe_ability)
         swap_weather = jnp.where(
             (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
-            copied_weather,
+            fcm.ability_bits(weather0, copied_weather),
             jnp.where(
                 (foe_weather != Weather.NONE) & (state.weather_announced[side] == 0),
-                foe_weather,
+                fcm.ability_bits(weather0, foe_weather),
                 weather0,
             ),
         )
@@ -1050,24 +1114,24 @@ def _threshold_grid(
         role_move = effect[foe] == EffectId.ROLE_PLAY
         role_weather = jnp.where(
             (copied_weather != Weather.NONE) & (state.weather_announced[foe] == 0),
-            copied_weather,
+            fcm.ability_bits(weather0, copied_weather),
             weather0,
         )
         moved_weather = jnp.where(
             effect[foe] == EffectId.WEATHER,
-            stat[foe],
+            fcm.move_bits(weather0, stat[foe]),
             jnp.where(
                 xform & (copied_weather != Weather.NONE),
-                copied_weather,
+                fcm.ability_bits(weather0, copied_weather),
                 jnp.where(swap_move, swap_weather, jnp.where(role_move, role_weather, weather0)),
             ),
         )
-        # E3-B2-14: the foe's Defog clears the field's deep fog (subscript_defog.s:64-69) before
-        # the side's check; the evasion it lowers is the side's own, which only the foe's hit
-        # reads, and the foe's own accuracy check (100: acc 0) came first.
+        # E3-B2-14: the foe's Defog clears the field's deep fog bit (subscript_defog.s:64-65)
+        # before the side's check; the evasion it lowers is the side's own, which only the foe's
+        # hit reads, and the foe's own accuracy check (100: acc 0) came first.
         defog_move = effect[foe] == EffectId.DEFOG
         moved_weather = jnp.where(
-            defog_move & (weather0 == Weather.FOG), Weather.NONE, moved_weather
+            defog_move, moved_weather & ~int(FieldCondition.DEEP_FOG), moved_weather
         )
         weathers = jnp.stack([weather0, moved_weather.astype(weather0.dtype)])
         gravity_move = effect[foe] == EffectId.GRAVITY
@@ -1142,7 +1206,6 @@ def _threshold_grid(
             # Transform copies the side's ability onto the foe; Skill Swap also gives the side
             # the foe's (below). Raw writes of BattleMon.ability.
             ability = jnp.where(f & (xf | sw | rp), copied, state.ability[party(fmt, foe), foe_mon])
-            gravity = jnp.where(f & grav, GRAVITY_TURNS, state.gravity)
             # The copy also holds the side's species and ability row and slot, which
             # NO_CLOUD_NINE reads (damage.decomp_abilities): a foe that loses its own Cloud
             # Nine / Air Lock by its Transform no longer suppresses the weather (F-25).
@@ -1157,7 +1220,7 @@ def _threshold_grid(
                 AbilityId.INSOMNIA,
                 jnp.where(f & sw, foe_old, state.ability[party(fmt, side), side_mon]),
             )
-            hidden = state._replace(
+            hidden = fcm.with_gravity(state, GRAVITY_TURNS, f & grav)._replace(
                 embargo=state.embargo.at[side].set(embargo),
                 ability=state.ability.at[party(fmt, foe), foe_mon]
                 .set(ability.astype(state.ability.dtype))
@@ -1166,7 +1229,6 @@ def _threshold_grid(
                 species=take(state.species),
                 ability_form=take(state.ability_form),
                 ability_slot=take(state.ability_slot),
-                gravity=gravity.astype(state.gravity.dtype),
                 # Gastro Acid's bit (MOVE_EFFECT_ABILITY_SUPPRESSED), the side's own.
                 ability_suppressed=state.ability_suppressed.at[side].set(
                     jnp.where(f & ga, 1, state.ability_suppressed[side]).astype(
@@ -1677,7 +1739,7 @@ def pivot_view(tables: Tables, state: BattleState, actions) -> tuple[BattleState
         clear = ~baton if name in (*BATON_PASSED_FIELDS, "stages") else True
         return arr.at[pivot].set(jnp.where(clear, jnp.zeros_like(arr[pivot]), arr[pivot]))
 
-    seen = state._replace(
+    seen = fcm.uproar_end(state, pivot, True)._replace(
         active=state.active.at[pivot].set(slot.astype(state.active.dtype)),
         move_prev=state.ts_move[pivot].astype(state.move_prev.dtype),
         **{name: reset(name) for name in (*VOLATILE_FIELDS, "stages")},
@@ -2142,9 +2204,10 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         ),
         # Starf Berry (battle_lib.c:4864-4866): RandNext() % 5 until the stat is below +6, uniform
         # over the eligible stats by the % n convention; one value in [0, 60) serves every count 1-5
-        # (F-10): the turn's and the faint replacement's. Key 48 (main's D2 draws hold 44-47).
+        # (F-10): the turn's eats (F-O3) and the faint replacement's. Key 48 (main's D2 draws hold
+        # 44-47).
         starf=jax.random.randint(
-            jax.random.fold_in(key, 48), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
+            jax.random.fold_in(key, 48), (fmt.B, 4), 0, STARF_DRAWS, dtype=_I32
         ),
         # Conversion 2's pick (battle_script.c:4783-4817): for each battler and recorded type the
         # first eligible row of the ``% 112`` retry loop (``damage.conv2_pick``) read at the

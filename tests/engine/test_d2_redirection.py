@@ -9,6 +9,7 @@ import numpy as np
 from nuzline.data.tables import to_numpy
 from nuzline.engine import targets
 from nuzline.engine.damage import hidden_power
+from nuzline.engine.field import with_weather
 from nuzline.engine.hooks import REDIRECTED, reveal_ability
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Stat, Type, Weather
 from nuzline.engine.state import make_state
@@ -82,7 +83,7 @@ def test_redirect_type(tables, names):
     assert type_of(tables, item(s, 0, names.item("Zap Plate")), "Judgment", names) == Type.ELECTRIC
     assert type_of(tables, s, "Judgment", names) == Type.NORMAL
     # Weather Ball in rain; with no weather the data type (Normal)
-    assert type_of(tables, s._replace(weather=Weather.RAIN), "Weather Ball", names) == Type.WATER
+    assert type_of(tables, with_weather(s, Weather.RAIN), "Weather Ball", names) == Type.WATER
     assert type_of(tables, s, "Weather Ball", names) == Type.NORMAL
 
 

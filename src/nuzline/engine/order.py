@@ -39,6 +39,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
@@ -72,7 +73,6 @@ from nuzline.engine.ids import (
     MoveTarget,
     Stat,
     Status,
-    Weather,
 )
 from nuzline.engine.state import BattleState, battler_ability, held_item
 
@@ -121,16 +121,12 @@ def selected_move(
 def terrain_index(state: BattleState) -> jnp.ndarray:
     """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
     battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
-    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010). An unknown terrain
-    (``TERRAIN_UNKNOWN``, -1) is clamped to row 0 so that no table is ever indexed with -1;
-    its readers test ``terrain_known`` and do nothing then (coverage and ``trace_to_state``
-    refuse such a battle before it reaches the engine)."""
+    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010;
+    ``BtlCmd_GetTerrainSecondaryEffect``, :8067-8070). A fight that reads it has a named terrain:
+    ``TERRAIN_UNKNOWN`` (-1, the run named none) with a terrain move is refused before the engine
+    (``coverage.terrain_refusal``, manager ruling 1; ledger G-21); the lower bound 0 only keeps the
+    index in the tables."""
     return jnp.clip(jnp.asarray(state.terrain, _I32), 0, TERRAIN_SPECIAL)
-
-
-def terrain_known(state: BattleState) -> jnp.ndarray:
-    """``bool``: the battle's terrain is a ``TERRAIN_*`` id, not ``TERRAIN_UNKNOWN``."""
-    return jnp.asarray(state.terrain, _I32) >= 0
 
 
 def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
@@ -142,11 +138,9 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
     effect and ``moveHit`` read the called move (``step._use_move``); otherwise ``move``
     itself. Nature Power stays the move for the status checks, the PP, Taunt, Disable,
     priority and ``movePrevByBattler`` (``moveTemp``, set at command selection,
-    bcp.c:1861-1898, is never changed by ``GoToMoveScript``). With ``TERRAIN_UNKNOWN`` the
-    call is ``MOVE_NONE`` (0, the guard of ``terrain_index``): the move then does nothing."""
+    bcp.c:1861-1898, is never changed by ``GoToMoveScript``)."""
     move = jnp.asarray(move, _I32)
     terrain_move = jnp.asarray(TERRAIN_MOVES, _I32)[terrain_index(state)]
-    terrain_move = jnp.where(terrain_known(state), terrain_move, 0)
     nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
     return jnp.where(nature_power, terrain_move, move)
 
@@ -449,7 +443,7 @@ def gravity_state(state: BattleState) -> BattleState:
     subscript_gravity_start.s), which then bans ``GRAVITY_MOVES`` from the invokers' calls
     (``Move_CanBeMetronomed``, battle_lib.c:7198-7201; Sleep Talk's CHECK_INVALID_GRAVITY,
     :2292-2295). Only the count is set: the call sets read nothing else of it (G-67)."""
-    return state._replace(gravity=jnp.asarray(GRAVITY_TURNS, state.gravity.dtype))
+    return fcm.with_gravity(state, GRAVITY_TURNS)
 
 
 def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
@@ -467,7 +461,7 @@ def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> 
     calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
     foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
     foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
-    return (state.gravity == 0) & uses_move[side] & calls & foe_can
+    return ~fcm.gravity_on(state) & uses_move[side] & calls & foe_can
 
 
 def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
@@ -552,15 +546,13 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
     ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
     (``ids.SECRET_POWER_EFFECTS``; effect_script_0197.s ``GetTerrainSecondaryEffect``,
     battle_script.c:8063-8075: ``min(terrain, TERRAIN_SPECIAL)``), the effect every hit and law
-    reads. An unknown terrain (coverage refuses it) resolves to ``PLAIN``. ``move`` may be
-    batched."""
+    reads. ``move`` may be batched."""
     move = jnp.asarray(move, _I32)
     effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
     row = terrain_index(state)
     sp_effect = jnp.asarray([e for e, _ in SECRET_POWER_EFFECTS], _I32)[row]
     sp_param = jnp.asarray([p for _, p in SECRET_POWER_EFFECTS], _I32)[row]
-    sp_effect = jnp.where(terrain_known(state), sp_effect, EffectId.PLAIN)
     secret = effect == EffectId.SECRET_POWER
     return (
         jnp.where(secret, sp_effect, effect),
@@ -639,21 +631,23 @@ def effective_speed(
 ) -> jnp.ndarray:
     """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it. ``suppressed``
     (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
-    lock (``NO_CLOUD_NINE``) and ``weather`` (default ``state.weather``) the weather, for a
-    lock or a weather that can change before the speed is read (``enumerate._end_speeds``)."""
+    lock (``NO_CLOUD_NINE``) and ``weather`` (weather bits, default ``field.weather_bits`` of
+    ``state``) the weather, for a lock or a weather that can change before the speed is read
+    (``enumerate._end_speeds``)."""
     fmt = format_of(state)
     if suppressed is None:
         suppressed = weather_suppressed(tables, state)
-    weather = state.weather if weather is None else weather
+    weather = fcm.weather_bits(state) if weather is None else weather
     mon = state.active[side]
     ability = battler_ability(state, side)  # CompareBattlerSpeed (battle_lib.c:1213-1214)
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[party(fmt, side), mon, Stat.SPE - 1].astype(_I32), stage)
-    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability), inside NO_CLOUD_NINE.
+    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability, WEATHER_IS_RAIN /
+    # _SUN of the mask), inside NO_CLOUD_NINE.
     swim = (
-        ((ability == AbilityId.SWIFT_SWIM) & (weather == Weather.RAIN))
-        | ((ability == AbilityId.CHLOROPHYLL) & (weather == Weather.SUN))
+        ((ability == AbilityId.SWIFT_SWIM) & fcm.rain(weather))
+        | ((ability == AbilityId.CHLOROPHYLL) & fcm.sun(weather))
     ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
     # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),
@@ -832,7 +826,7 @@ def compare_speed(
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]
     lag1, lag2 = lag[battler1], lag[other]
-    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | ((state.trick_room != 0) & ~lag1 & ~lag2))
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | (fcm.trick_room_on(state) & ~lag1 & ~lag2))
     slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
     tie = (speed1 == speed2) & (jnp.asarray(tie_roll) != 0)
     by_speed = jnp.where(

@@ -9,6 +9,7 @@ import numpy as np
 
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import to_numpy
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import Status, Weather
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
@@ -65,10 +66,7 @@ def test_immunity_and_leaf_guard_stop_toxic_spikes_and_reveal(tables, names):
                 [_mon(n, "Rattata", ["Tackle"]), _mon(n, species, ["Tackle"], slot=slot)],
                 [_mon(n, "Pikachu", ["Growl"])],
             )
-            s = s._replace(
-                toxic_spikes=s.toxic_spikes.at[0].set(layers),
-                weather=jnp.asarray(weather, s.weather.dtype),
-            )
+            s = with_weather(s, weather)._replace(toxic_spikes=s.toxic_spikes.at[0].set(layers))
             out = _both(t, s, (5, 0))
             assert int(out.active[0]) == 1
             want = Status.NONE if blocked else (Status.TOXIC if layers == 2 else Status.POISON)

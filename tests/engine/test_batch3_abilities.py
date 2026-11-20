@@ -16,7 +16,7 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace, ref_step
-from tests.engine.helpers import jit_step
+from tests.engine.helpers import jit_step, weather_of, weather_timer_of
 
 
 def _same(a, b):
@@ -45,11 +45,11 @@ def test_battle_start_weather_ability_and_trace(tables, names):
     """B3-13, B3-14: Drought sets a permanent sun at the battle-start check; a Trace lead copies
     the foe's ability (its decomp id follows) and fires the copied Drought too."""
     s = make_state(tables, [_mon(names, "Geodude")], [_mon(names, "Groudon")])
-    assert int(s.weather) == Weather.SUN and int(s.weather_timer) == 0
+    assert int(weather_of(s)) == Weather.SUN and int(weather_timer_of(s)) == 0
     s = make_state(tables, [_mon(names, "Porygon")], [_mon(names, "Groudon")])
     assert int(s.ability[0, 0]) == AbilityId.DROUGHT
     assert int(decomp_abilities(tables, s)[0, 0]) == ABILITY_DECOMP_IDS[AbilityId.DROUGHT]
-    assert int(s.weather) == Weather.SUN
+    assert int(weather_of(s)) == Weather.SUN
     # A Trace facing Trace copies nothing (ChooseTraceTarget, battle_lib.c:7750-7775).
     s = make_state(tables, [_mon(names, "Porygon")], [_mon(names, "Porygon")])
     assert s.ability[:, 0].tolist() == [AbilityId.TRACE, AbilityId.TRACE]

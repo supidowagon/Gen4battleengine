@@ -62,7 +62,13 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   decomp readers of a weather (Thunder, Blizzard, Chlorophyll, Rain Dish and Flower Gift since
   E2 batch 9, Kaizo's Hurricane and Weather Ball since batch 13) are modelled too; the rest
   belong to unsupported moves (SolarBeam, Moonlight), refused with their holder (Leaf Guard is
-  modelled since the E1 Gardenia batch, G-14; Hydration and Forecast since E1 batch F, F-5, F-6);
+  modelled since the E1 Gardenia batch, G-14; Hydration and Forecast since E1 batch F, F-5, F-6).
+  The field conditions are ``fieldConditionsMask`` bit for bit (``BattleState.field_mask``,
+  ``engine.field``; FCM.md 4.5): weather and deep fog, the Uproar bits, the Gravity and Trick
+  Room counters, each reader testing its own bits, so a mask with several groups or a borrowed
+  counter reads as the decomp reads it. Acid Rain (a Pursuit KO subtracts ``faintedMon`` from
+  the mask, subscript_pursuit.s:100, :115; ledger G-12) is modelled in every format: nothing is
+  refused for it;
 * a Trace copy the AI refuses on the holder's side: the AI reads the copy
   (``damage.decomp_abilities``, as ``LoadBattlerAbility`` does, trainer_ai.c:1170-1209), so it
   is refused like the holder's own ability would be (``trace_copy_refusals``, ruling B3-21).
@@ -78,15 +84,11 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   Griseous Orb reverts to Altered Forme at battle start (``battle_lib.c:6412-6417``,
   ``subscript_form_change``), which the engine does not model; Shaymin-Sky reverts to Land
   Forme when frozen (``subscript_check_shaymin_form.s``, ``battle_controller_player.c:3497-3505``)
-  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), except for a Transformed
-  battler that copied a Sky Shaymin: the script tests only the copied species and form, then its
-  ``UpdateMonDataFromVar`` writes Land's ability into the Transform user's own party Pokemon
-  (``BattleMon_CopyToParty`` with ``updateStats``, battle_script.c:3401-3407,
+  and is modelled since E1 batch F (``hooks.shaymin_land``, F-16), also for a Transformed
+  battler that copied a Sky Shaymin: the script writes Land's ability into the Transform user's
+  own party Pokemon (``BattleMon_CopyToParty`` with ``updateStats``, battle_script.c:3401-3407,
   battle_io_command.c:601-604), which keeps it for its later switch-ins (``InitBattleMon``,
-  battle_lib.c:124): a party ability apart from its species row, which the engine does not
-  model. A fight where one side can use Transform (its moves, a player's learnable moves,
-  Metronome's calls, or Mimic / Copycat while the fight has Transform) against a Sky Shaymin is
-  refused (``transform_sky_refusals``, F-26).
+  battle_lib.c:124): ``BattleState.party_ability``, modelled in E1 batch G (F-O2).
   Rotom, Deoxys and Wormadam forms never change in battle and are read by personal row
   (``Tables.species_form_row``), like Giratina-Origin holding the Orb. A trainer Pokemon in
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
@@ -111,11 +113,12 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
 * battle terrain (K3b2 Task 9): a move whose decomp effect reads the terrain
   (``TERRAIN_EFFECTS``: Nature Power, Secret Power, Camouflage), on either side or a pool
   candidate's, is refused against a trainer whose ``Trainer.terrain`` is
-  ``TERRAIN_UNKNOWN``: its maps give several terrains (the line names them) or none
-  (``terrain_refusal``). With a known terrain only Nature Power can be refused here: when the
-  move it calls there (``terrain_call``, ``ids.TERRAIN_MOVES``) has an unsupported effect
-  (Earthquake, Blizzard). Its call also counts as a move of the fight for the Kaizo ROM-change
-  conditions (``rom_change_refusals``).
+  ``TERRAIN_UNKNOWN``: its start tiles give several terrains and the run has not named one
+  (``cli.fight_terrain``, ``--terrain``: a run input, ledger G-18; the line names the
+  choices) or its maps give none (``terrain_refusal``). That is a run input (manager ruling 1),
+  not a coverage gap: with a named terrain all three are modelled (ledger G-21). Nature Power's
+  call (``terrain_call``, ``ids.TERRAIN_MOVES``) also counts as a move of the fight for the
+  Kaizo ROM-change conditions (``rom_change_refusals``).
 
 ``check_coverage`` also runs the AI's own refusals (``ai.policy.ai_refusals``: opponent
 moves without transcribed script paths, too many script-roll sites, type-chart
@@ -154,7 +157,6 @@ from nuzline.engine.ids import (
     METRONOME_DRAW,
     MOVE_CHATTER,
     SPECIES_CHATOT,
-    SPECIES_SHAYMIN,
     SPEED_HALVING_HOLD_EFFECTS,
     TERRAIN_MOVES,
     TERRAIN_SPECIAL,
@@ -304,10 +306,45 @@ def start_trick_room(trainer: Trainer) -> int:
     return TRICK_ROOM_TURNS if trainer.area_condition.trick_room else 0
 
 
-def start_weather(trainer: Trainer) -> Weather:
+def start_weather(
+    trainer: Trainer, field_defog: bool = False, script_weather: bool | None = None
+) -> Weather:
     """The weather a trainer's fight starts in (``Trainer.start_condition``). A start
     condition of ``"unknown"`` (a user call) is no weather: ``ValueError``, like any
-    other unknown value; ``check_opponent`` refuses it instead."""
+    other unknown value; ``check_opponent`` refuses it instead.
+
+    ``field_defog``: the run cleared the fight's fog with field Defog on that map visit (a
+    run input, ledger G-15): FLAG_DEFOG_ACTIVE turns the overworld weather of a fog header
+    (14) clear (field_map_change.c:275-280; ScrCmd_0C4 at once, scrcmd.c:3667-3674), and
+    the battle starts in the overworld weather (field_battle_data_transfer.c:267), so in no
+    weather. ``ValueError`` for a fight that is not on such a header
+    (``AreaCondition.fog_headers``): its fog, if any, is deep fog (15) or not map fog.
+
+    ``script_weather`` (ledger G-24): True, the fight starts while a map script's weather is
+    on (``AreaCondition.script_weather``: the Kaizo command 0x9C set the overworld weather,
+    field_battle_data_transfer.c:267); False, after it ended or before it began (the map's
+    own weather, clear: ScrCmd_0C4, scrcmd.c:3667-3674; a map change,
+    field_map_change.c:272-280); None, the start condition. ``ValueError`` for True or
+    False on a fight no script weather reaches (``AreaCondition.script_window`` empty)."""
+    if script_weather is not None:
+        area = trainer.area_condition
+        if area.script_weather is None:
+            raise ValueError(
+                f"trainer {trainer.id}: no map script sets the weather where this fight is met "
+                "(rom_script_weather.json)"
+            )
+        # False is the header's own weather; the one script window's header, 373 (Route 213),
+        # holds 0 (rom/rom_map_weather.json[373]; field_map_change.c:273-280). A window on a
+        # header with its own weather must read it here.
+        return START_CONDITIONS[area.script_weather] if script_weather else Weather.NONE
+    if field_defog:
+        if not trainer.area_condition.fog_clearable:
+            raise ValueError(
+                f"trainer {trainer.id}: field Defog clears only the fog of a map whose weather "
+                "is OVERWORLD_WEATHER_FOG (src/field_map_change.c:275-277), and this fight "
+                "starts on none"
+            )
+        return Weather.NONE
     if trainer.start_condition == UNKNOWN_CONDITION:
         raise ValueError(
             f"trainer {trainer.id}: start condition unknown is a pending user call, not a "
@@ -768,46 +805,6 @@ def _check_party(
         _check_form(c, where, mon)
 
 
-def _transform_reach(tables: Tables, specs: Sequence[PokemonSpec], extra, fight_has: bool):
-    """``bool``: a Pokemon of ``specs`` can run Transform: its moves, ``extra`` (a player's
-    learnable moves) or its Metronome calls hold the effect, or Mimic / Copycat while
-    ``fight_has`` (the fight holds Transform, which they can copy)."""
-    effect = np.asarray(tables.move_effect)
-    moves = [m for s in specs for m in s.moves if m] + list(extra) + fight_calls(tables, specs)
-    kinds = {int(effect[m]) for m in moves if m}
-    copies = bool(kinds & {EffectId.MIMIC, EffectId.COPYCAT})
-    return EffectId.TRANSFORM in kinds or (copies and fight_has)
-
-
-def transform_sky_refusals(
-    tables: Tables,
-    names: Names,
-    player: Sequence[PokemonSpec],
-    opp: Sequence[PokemonSpec],
-    extra_moves: Sequence[int] = (),
-) -> list[str]:
-    """The fight's lines for a Transform user facing a Sky Shaymin (F-26): when a Transformed
-    copy of a Sky Shaymin is frozen, subscript_check_shaymin_form.s (:6-9: species and form, which
-    Transform copies, battle_script.c:5346-5348) writes Land's ability into the Transform user's
-    own party Pokemon (battle_script.c:3401-3407, battle_io_command.c:601-604), which the engine
-    cannot hold (``hooks.shaymin_land`` leaves a Transformed battler out)."""
-    sides = ((player, tuple(extra_moves)), (opp, ()))
-    reach = [_transform_reach(tables, s, e, False) for s, e in sides]
-    fight_has = any(reach)
-    reach = [_transform_reach(tables, s, e, fight_has) for s, e in sides]
-    out = []
-    for i, (specs, _) in enumerate(sides):
-        if not reach[1 - i]:
-            continue
-        for mon in specs:
-            if mon.species == SPECIES_SHAYMIN and mon.form != 0:
-                out.append(
-                    f"a Transform user facing Sky Forme {names.species_names[mon.species]}: its "
-                    "freeze writes Land's ability into the user's party Pokemon"
-                )
-    return out
-
-
 def _check_form(c: _Collector, where: str, mon: PokemonSpec) -> None:
     """Ruling 8: a form the battle changes, which the engine does not model."""
     if (
@@ -894,31 +891,29 @@ def terrain_refusal(
 ) -> str | None:
     """Why ``moves`` (decomp move ids) cannot be played against ``trainer``: some read the
     battle terrain (``TERRAIN_EFFECTS``) and the trainer's terrain is unknown, either mixed
-    (the line names every terrain its maps give) or unplaced; or, on a known terrain, Nature
-    Power calls a move whose effect the engine does not implement; else None."""
+    and not named by the run (``cli.fight_terrain``; the line names every terrain its start
+    tiles give and the three sources checked, ledger G-18) or unplaced; else None. Every
+    move Nature Power calls is modelled (ledger G-21)."""
     effect = np.asarray(tables.move_ai_effect)
     hit = sorted({int(m) for m in moves if m and int(effect[m]) in TERRAIN_EFFECTS})
-    if not hit:
-        return None
-    if trainer.terrain != TERRAIN_UNKNOWN:
-        for called in terrain_calls(tables, trainer, hit):
-            engine = EffectId(int(np.asarray(tables.move_effect)[called]))
-            if IMPLEMENTED_EFFECTS.get(engine, Support.NONE) == Support.NONE:
-                return (
-                    f"{display_name(trainer)}: on {TERRAIN_NAMES[trainer.terrain]} Nature Power "
-                    f"calls {names.move_names[called]}, whose effect is not supported"
-                )
+    if not hit or trainer.terrain != TERRAIN_UNKNOWN:
         return None
     if trainer.terrains:
         known = [TERRAIN_NAMES[t] for t in trainer.terrains if t != TERRAIN_UNKNOWN]
         unread = (
             " and a map whose tiles cannot be read" if TERRAIN_UNKNOWN in trainer.terrains else ""
         )
-        why = f"the battle terrain varies over its maps ({', '.join(known)}{unread})"
+        # Manager ruling 1: the tile under the player is the run's route, so the terrain is
+        # a run input; the ROM gives the choices, the calc repo and the docs sheet none.
+        why = (
+            f"the battle terrain is a run input: its start tiles give {', '.join(known)}{unread} "
+            "(ROM; the calc repo and the docs sheet record none)"
+        )
+        ask = ": name it with --terrain"
     else:
-        why = "the battle terrain is unknown (no map places the trainer)"
+        why, ask = "the battle terrain is unknown (no map places the trainer)", ""
     moves_ = ", ".join(names.move_names[m] for m in hit)
-    return f"{display_name(trainer)}: {why}, and {moves_} would read it"
+    return f"{display_name(trainer)}: {why}, and {moves_} would read it{ask}"
 
 
 def rom_change_line(label: str) -> str:
@@ -1045,8 +1040,6 @@ def check_opponent(
     c = _Collector()
     _check_party(c, tables, names, display_name(trainer), opp)
     _check_trainer(c, tables, names, trainer, [*player, *opp], extra_moves)
-    for line in transform_sky_refusals(tables, names, player, opp, extra_moves):
-        c.add(Support.NONE, f"{display_name(trainer)}: {line}", "form change")
     # An "unknown" start condition is refused by _check_trainer, never read as a weather.
     weathers = [start_condition]
     if not unknown_start(trainer):

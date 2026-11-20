@@ -4,6 +4,7 @@
 import jax.numpy as jnp
 import pytest
 
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome
@@ -65,7 +66,7 @@ def test_speed_stages_and_simple(tables, names):
 
 
 def test_trick_room_reverses_speed(tables, names):
-    s = roark_state(tables, names)._replace(trick_room=jnp.int8(5))
+    s = with_trick_room(roark_state(tables, names), 5)
     assert order(tables, s, [SCRATCH, TACKLE]) == [1, 0]
     assert order(tables, s, [MACH_PUNCH, TACKLE]) == [0, 1]  # priority still first
 

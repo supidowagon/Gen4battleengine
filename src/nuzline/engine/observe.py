@@ -121,6 +121,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.format import format_of
 from nuzline.engine.outcome import MAX_HITS, Outcome
 from nuzline.engine.state import MOVES, SIDES, SLOTS, BattleState
@@ -225,8 +226,13 @@ _NONZERO_SIDE = (
     "grudge",
     # E3 batch 2: "{0} identified {1}!" (subscript_miracle_eye.s:6) until it leaves.
     "miracle_eye",
+    # G-31: "{0} began having a nightmare!" (subscript_nightmare_start.s:10-11) until it wakes or
+    # leaves.
+    "nightmare",
 )
-_NONZERO_FIELD = ("trick_room", "gravity")
+# Trick Room / Gravity up: the views the observation reads (the mask's counter bits, FCM step 2).
+_FIELD_VIEWS = (("trick_room", fcm.trick_room_on), ("gravity", fcm.gravity_on))
+_NONZERO_FIELD = tuple(name for name, _ in _FIELD_VIEWS)
 
 _LAYOUT: tuple[tuple[str, tuple[int, ...]], ...] = (
     ("order", ()),
@@ -349,8 +355,9 @@ def observation(events: dict, after: BattleState) -> jnp.ndarray:
         # "{0}'s perish count fell to {1}!" (subscript_continue_perish_song.s:3): 1 + the count
         # while the effect is up, else 0.
         "perish_count": jnp.where(after.perish_song != 0, 1 + after.perish_song_turns, 0),
-        "weather": after.weather,
-        **{name: _nonzero(getattr(after, name)) for name in _NONZERO_FIELD},
+        # The weather the player sees (one message per set group): field.weather_seen.
+        "weather": fcm.weather_seen(fcm.weather_bits(after)),
+        **{name: _nonzero(view(after)) for name, view in _FIELD_VIEWS},
         "over": after.over,
         "winner": after.winner,
     }

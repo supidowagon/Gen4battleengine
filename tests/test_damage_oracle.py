@@ -59,6 +59,7 @@ from nuzline.engine.damage import (
     weight_power,
 )
 from nuzline.engine.effects import armored, pressure_pp_cost
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import (
     POWER_IF_TARGET_MOVED,
     AbilityId,
@@ -456,8 +457,7 @@ def _matchup(
     s = s.replace_hp(0, 0, hp)._replace(stages=s.stages.at[...].set(stages))
     if m["burn"]:
         s = s.with_status(0, 0, Status.BURN)
-    s = s._replace(
-        weather=s.weather.at[...].set(m["weather"]),
+    s = with_weather(s, m["weather"])._replace(
         reflect=s.reflect.at[1].set(int(m["reflect"])),
         light_screen=s.light_screen.at[1].set(int(m["light_screen"])),
     )

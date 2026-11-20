@@ -11,6 +11,7 @@ import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.enumerate import enumerate_turn, outcome_laws
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.outcome import ACUPRESSURE_DRAWS, MAX_HITS, crit_odds, empty_outcome
 from nuzline.engine.state import make_state
@@ -509,7 +510,7 @@ def test_weather_heal_by_weather(tables, names):
     m = int(s.max_hp[0, 0])
     cases = ((Weather.NONE, m // 2), (Weather.SUN, m * 20 // 30), (Weather.RAIN, m // 4))
     for weather, gained in cases:
-        w = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        w = with_weather(s, weather)
         out = assert_matches_reference(tables, w, (0, 0), O)
         assert int(out.hp[0, 0]) == 1 + gained, weather
 

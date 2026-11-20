@@ -80,6 +80,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
@@ -130,6 +131,7 @@ from nuzline.engine.effects import (
     can_have_status,
     captivate_fails,
     change_stage,
+    clear_nightmare,
     consume_item,
     conv2_fails,
     copy_stat_stages,
@@ -154,6 +156,7 @@ from nuzline.engine.effects import (
     magnet_rise_fails,
     metronome_update,
     metronome_verify,
+    nightmare_fails,
     on_hit_berry,
     pivot_item,
     play_hit,
@@ -178,7 +181,6 @@ from nuzline.engine.effects import (
     thaw_target,
     try_grudge,
     unlock_move,
-    uproar_on,
     weather_fails,
     yawn_blocks,
     yawn_sleep,
@@ -216,7 +218,6 @@ from nuzline.engine.ids import (
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
     FUTURE_SIGHT_TURNS,
-    GRAVITY_TURNS,
     ITEM_ABILITY_IDS,
     ITEM_GRISEOUS_ORB,
     MOVE_BATON_PASS,
@@ -230,8 +231,8 @@ from nuzline.engine.ids import (
     SEMI_SET_FLAGS,
     SNORE_PARAM,
     STARF_DRAWS,
+    STARF_QUEUE,
     STARF_STATS,
-    TRICK_ROOM_TURNS,
     UNROLLED_EFFECTS,
     WEATHER_ABILITY_IDS,
     AbilityId,
@@ -242,7 +243,6 @@ from nuzline.engine.ids import (
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
 from nuzline.engine.levelup import (
@@ -447,8 +447,11 @@ def _switch_out(state: BattleState, side) -> BattleState:
 
 def _reset_battler(state: BattleState, side, cond, baton=False) -> BattleState:
     """Stages and ``_VOLATILE`` fields of ``side``'s active battler back to neutral
-    where ``cond``; ``baton`` (a Baton Pass switch) keeps the stages and ``_BATON_PASSED``."""
+    where ``cond``; ``baton`` (a Baton Pass switch) keeps the stages and ``_BATON_PASSED``.
+    Its ``FIELD_CONDITION_UPROAR`` bit goes with ``uproar`` (a switch, Baton Pass included:
+    battle_lib.c:2135; a faint: :2213)."""
     baton = jnp.asarray(baton)
+    state = fcm.uproar_end(state, side, cond)
 
     def reset(name):
         clear = cond & ~baton if name in (*_BATON_PASSED, "stages") else cond
@@ -663,7 +666,8 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
 
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
-    its party Pokemon's (``tables.species_abilities`` at its ``ability_form``'s row and
+    its party Pokemon's (``party_ability`` where a script wrote it, F-O2; else
+    ``tables.species_abilities`` at its ``ability_form``'s row and
     ability slot, as ``make_state`` builds it). Only Trace
     (``hooks.trace``) writes it, to the battler's ``BattleMon.ability``;
     ``BattleSystem_InitBattleMon`` re-reads the party Pokemon's on the next switch-in
@@ -676,6 +680,9 @@ def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleSt
         state.species[party(fmt, side), mon], state.ability_form[party(fmt, side), mon]
     ]
     own_ability = tables.species_abilities[row, state.ability_slot[party(fmt, side), mon]]
+    # F-O2: the party Pokemon's written ability (``party_ability``) is what InitBattleMon reads.
+    party_ability = state.party_ability[party(fmt, side), mon]
+    own_ability = jnp.where(party_ability != 0, party_ability, own_ability)
     # The raw BattleMon.ability write-back (battle_lib.c:124).
     value = jnp.where(cond, own_ability, state.ability[party(fmt, side), mon]).astype(
         state.ability.dtype
@@ -1005,7 +1012,7 @@ def _use_move(
     sealed_at_move = ready & imprisoning_foe(state, side)
     # Gravity is up when the action starts: a faster foe's Gravity this turn changes the
     # invokers' sets (G-67), the event their Gravity call variants split on.
-    gravity_at_move = ready & (state.gravity != 0)
+    gravity_at_move = ready & fcm.gravity_on(state)
     # The encored move replaced the chosen one when the action started (FightCommand above): the
     # event the takeover variants split on (enumerate.call_consistent, ruling B11-1).
     encored_at_move = ready & encored_now & (state.encore_move[side] != jnp.asarray(choice[0]))
@@ -1045,12 +1052,14 @@ def _use_move(
     # instead, with no counter drop (:2432-2439, subscript_wake_up.s:19 clears every sleep bit).
     status = state.status[party(fmt, side), user]
     asleep = checks & (status == Status.SLEEP)
-    roused = asleep & uproar_on(state)
+    roused = asleep & fcm.uproar_any(state)
     sleep_left = jnp.maximum(state.status_counter[party(fmt, side), user].astype(_I32) - 1, 0)
     sleep_left = jnp.where(roused, 0, sleep_left)
     sleeping = asleep & (sleep_left > 0)
     state = _set_mon(state, "status_counter", side, user, sleep_left, asleep)
     state = _set_mon(state, "status", side, user, Status.NONE, asleep & ~sleeping)
+    # subscript_wake_up.s:20: the wake-up ends VOLATILE_CONDITION_NIGHTMARE too (G-32).
+    state = clear_nightmare(state, side, asleep & ~sleeping)
     # CHECK_STATUS_STATE_FREEZE (:2478): RandNext() % 5 == 0 (outcome.thaw) thaws and the
     # move goes on; otherwise the move is disrupted unless it is a thawing move (Flame
     # Wheel, :2481), whose user thaws at CHECK_STATUS_STATE_SELF_THAW (:2728) below.
@@ -1287,7 +1296,7 @@ def _use_move(
     second_turn = charge_move & (state.locked_move[side] != 0)
     sun_now = (
         ((used_flags & MoveFlag.SUN_SKIP) != 0)
-        & (state.weather == Weather.SUN)
+        & fcm.sun(fcm.weather_bits(state))
         & ~weather_suppressed(tables, state)
     )
     # D2-13: GoToMoveScript (script.c:2111-2134) picks the called move's defender by its own range
@@ -1501,7 +1510,7 @@ def _use_move(
     # Magnet Rise (effect_script_0252.s:5-7, :16): the turns, Levitate or Ingrain (G-66).
     failed = failed | ((effect_used == EffectId.MAGNET_RISE) & magnet_rise_fails(state, side))
     # Gravity (effect_script_0215.s:3, :9-10): MOVE_STATUS_FAILED with Gravity already up (G-67).
-    failed = failed | ((effect_used == EffectId.GRAVITY) & (state.gravity != 0))
+    failed = failed | ((effect_used == EffectId.GRAVITY) & fcm.gravity_on(state))
     # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
     # battle (battle_script.c:6309-6311), so always in singles (B9-5).
     failed = failed | (effect_used == EffectId.HELPING_HAND)
@@ -1514,6 +1523,9 @@ def _use_move(
     dream = (effect_used == EffectId.DRAIN) & (tables.move_param[used, 1] == 1)
     awake = state.status[party(fmt, target_side), state.active[target_side]] != Status.SLEEP
     failed = failed | (dream & (awake | (state.substitute_hp[target_side] != 0)))
+    # Nightmare (effect_script_0107.s:5-7, :11-12): MOVE_STATUS_FAILED on a defender behind a
+    # substitute, with the bit or not asleep (``nightmare_fails``, G-31).
+    failed = failed | ((effect_used == EffectId.NIGHTMARE) & nightmare_fails(state, target_side))
     # Endeavor (effect_script_0189.s:5-7, :13-14): MOVE_STATUS_FAILED unless the defender's curHP
     # exceeds the user's (B10-5).
     gap = state.hp[party(fmt, target_side), state.active[target_side]].astype(_I32) - state.hp[
@@ -1981,14 +1993,14 @@ def _use_move(
     volt = (seen == AbilityId.VOLT_ABSORB) & (move_type == Type.ELECTRIC)
     # Flash Fire (:3515-3521): a Fire move whose holder is not frozen, with power or Will-O-Wisp;
     # no heal: the subscript sets flashFire (subscript_absorb_and_boost_fire_type_moves.s:13), F-2.
-    # Volt Absorb tests ``attacker != defender`` (:3500-3502); Water Absorb, Dry Skin and Flash
-    # Fire do not (:3507-3512, :3538-3544, :3515-3521): a Dive that hit its own user can heal it.
     flash = (
         (seen == AbilityId.FLASH_FIRE)
         & (move_type == Type.FIRE)
         & (state.status[party(fmt, target_side), target] != Status.FREEZE)
         & ((tables.move_power[used] != 0) | (used == MOVE_WILL_O_WISP))
     )
+    # Volt Absorb tests ``attacker != defender`` (:3500-3502); Water Absorb, Dry Skin and Flash
+    # Fire do not (:3507-3512, :3538-3544, :3515-3521): a Dive that hit its own user can heal it.
     absorbed = (
         connected
         & ~self_defender(tables, used, ghost_user(state, side))
@@ -2060,7 +2072,7 @@ def _use_move(
         & (state.status[party(fmt, target_side), target] != Status.SLEEP)
         # :40 CheckSubstitute comes first: behind a substitute it fails instead (B10-4).
         & (state.substitute_hp[target_side] == 0)
-        & uproar_on(state)
+        & fcm.uproar_any(state)
     )
     no_more_work = no_more_work | kept_awake
     # moveFailFlags (BattleContext_MoveFailed, battle_lib.c:2808-2820), which only the Uproar check
@@ -3077,15 +3089,33 @@ def _pursuer_ready(tables: Tables, state: BattleState, pursuer, action, move, st
     )
 
 
+def first_pursuer(
+    tables: Tables, state: BattleState, switcher, actions, choices
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(int32, bool)``: the battler ``BtlCmd_TryPursuit`` takes against ``switcher``
+    (``switchedMon``) and whether there is one. It loops the battlers in index order
+    (battle_script.c:6899) and takes the first (``break``, :6934) on the other side (:6904)
+    that is ``_pursuer_ready`` (:6901-6916), not the fastest (fcm-verify (d)). The not-acted
+    test (:6900) is the caller's: both singles sites run before the other side acts (a first
+    actor's switch; U-turn's chase, ``~tgt_moved``). None: the battler across from
+    ``switcher``, so the caller's hit is computed on a real foe and masked. Singles: the foe
+    or none."""
+    fmt = format_of(state)
+    who, found = _foe(jnp.asarray(switcher, _I32)), jnp.asarray(False)
+    for b in range(fmt.B):
+        ready = (side_of(b) != side_of(switcher)) & _pursuer_ready(
+            tables, state, b, actions[b], choices[0][b], choices[1][b]
+        )
+        who = jnp.where(ready & ~found, b, who)
+        found = found | ready
+    return who, found
+
+
 def pursuit_fires(tables: Tables, state: BattleState, side, actions, choices) -> jnp.ndarray:
-    """``side`` switches and the other side, which has not acted yet, chose Pursuit:
-    ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
-    ``subscript_switch_pokemon.s:11`` before the switch; ``_pursuer_ready``)."""
-    pursuer = _foe(side)
-    ready = _pursuer_ready(
-        tables, state, pursuer, actions[pursuer], choices[0][pursuer], choices[1][pursuer]
-    )
-    return is_switch(actions[side]) & ready
+    """``side`` switches and a battler of the other side, which has not acted yet, chose
+    Pursuit: ``BtlCmd_TryPursuit`` (battle_script.c:6884, called from
+    ``subscript_switch_pokemon.s:11`` before the switch; ``first_pursuer``)."""
+    return is_switch(actions[side]) & first_pursuer(tables, state, side, actions, choices)[1]
 
 
 def replacement_power_mul(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
@@ -3184,6 +3214,33 @@ def _pursuit_hit(
     )
     state = shell_bell_heal(tables, state, pursuer, info.pursuit_shell_bell, info.update_hp)
     return life_orb_recoil(tables, state, pursuer, info.update_hp)
+
+
+def _acid_rain(pre: BattleState, hit: BattleState, state: BattleState, pursuer, switcher, fire):
+    """Acid Rain (docs/bugs_and_glitches.md; FCM.md 1.2-1.4, 4.3; ledger G-12) on ``state``, the
+    state after a Pursuit pass's faint check and payout (``pre``: before the hit, ``hit``: after
+    ``_pursuit_hit``). Where ``fire`` and the hit KO'd the switcher (subscript_pursuit.s:39,
+    ``_166``), :100 copies ``faintedMon`` and :115 subtracts it from fieldConditionsMask,
+    clamped at 0 (``field.acid_rain``). ``faintedMon`` (FCM 1.3) is the pursuer when it is at 0
+    HP after the chain (Rough Skin, Aftermath, Jaboca Berry, Life Orb: UPDATE_HP's TryFaintMon,
+    battle_script.c:1767-1770) and the switcher's Destiny Bond did not fire, else the switcher:
+    Destiny Bond (subscript_pursuit.s:85, the game's order: before every recoil, the pursuer
+    always alive there) fires exactly when the switcher holds it (subscript_faint_check_destiny_
+    bond.s:5-7) and restores ``faintedMon`` (:10, :25). The mask at :115 (FCM 1.4, fcm-verify
+    (c)) has lost the switcher's Uproar bit (its FAINT_MON, :36) and, when Destiny Bond fired,
+    the pursuer's (:16 PlayFaintAnimation, battle_script.c:1803, battle_lib.c:2213); a pursuer
+    that fell to a recoil keeps its bit until its own faint is cleaned up (``kept``). Battlers
+    are passed in (doubles-state-design section 5)."""
+    fmt = format_of(pre)
+
+    def hp(s, b):
+        return s.hp[party(fmt, b), s.active[b]]
+
+    ko = jnp.asarray(fire, bool) & (hp(pre, switcher) > 0) & (hp(hit, switcher) == 0)
+    recoil = (hp(hit, pursuer) == 0) & (pre.destiny_bond[switcher] == 0)
+    fainted = jnp.where(recoil, pursuer, switcher)
+    kept = jnp.where(recoil, hit.field_mask.astype(_I32) & fcm.uproar_bit(pursuer), 0)
+    return fcm.acid_rain(state, fainted, ko, kept)
 
 
 def _faint_check(
@@ -3451,10 +3508,12 @@ def _execute_actions(
         # the Pursuit (:11).
         first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
         state = _natural_cure(state, side, first_switch)
-        # The one Pursuit site: the hit before a first actor's switch, or the one U-turn's
-        # head stopped for (``ap``); the pursuer has not acted yet, so it is the second actor.
-        pursuer = _foe(side)
-        fire = (start & (position == 0) & pursuit_fires(tables, state, side, acts, choices)) | ap
+        # The one Pursuit site: the hit before a first actor's switch or the one U-turn's head
+        # stopped for (``ap``): the first ready battler of the other side (``first_pursuer``;
+        # with none it names the foe, so in singles the chase's pursuer is the foe either way);
+        # the pursuer has not acted yet.
+        pursuer, ready = first_pursuer(tables, state, side, acts, choices)
+        fire = (start & (position == 0) & is_switch(acts[side]) & ready) | ap
         pre = state
         hit = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = crit_lands(tables, pre, pursuer, choices[0][pursuer], outcome.crit[pursuer, 0])
@@ -3485,6 +3544,8 @@ def _execute_actions(
         # subscript_pursuit.s:106-108: Pursuit's own payout (no pending move: the pursuer's
         # action is over, and a switcher's or a U-turn's reads no move list).
         state = pay_exp(tables, pre, state)
+        # subscript_pursuit.s:100, :115 after that payout: Acid Rain (G-12).
+        state = _acid_rain(pre, hit, state, pursuer, side, fire)
         pursued = jnp.where(fire, 1 + pursuer, pursued)
         fired = fired | fire
         # BtlCmd_TryPursuit's powerMul = 20 (battle_script.c:6928) stands at U-turn's list.
@@ -3841,11 +3902,28 @@ def _curse_check(state: BattleState, side) -> BattleState:
     return _hp_change(state, side, mon, -jnp.where(on, loss, 0))
 
 
+def _nightmare_check(state: BattleState, side) -> BattleState:
+    """``MON_COND_CHECK_STATE_NIGHTMARE`` (bcp.c:1436-1448): a battler with
+    VOLATILE_CONDITION_NIGHTMARE and HP left runs subscript_nightmare_effect.s while asleep:
+    nothing for its own Magic Guard (``CheckAbility``, :5), else ``Divide(maxHP, 4)`` through
+    UPDATE_HP (:8-10, :16; it may faint); not asleep, the bit is cleared with no message (:1444),
+    G-33."""
+    fmt = format_of(state)
+    mon = state.active[side]
+    on = (state.nightmare[side] != 0) & (state.hp[party(fmt, side), mon] > 0)
+    asleep = state.status[party(fmt, side), mon] == Status.SLEEP
+    guarded = battler_ability(state, side, mon) == AbilityId.MAGIC_GUARD
+    loss = jnp.maximum(state.max_hp[party(fmt, side), mon].astype(_I32) // 4, 1)
+    state = _hp_change(state, side, mon, -jnp.where(on & asleep & ~guarded, loss, 0))
+    return clear_nightmare(state, side, on & ~asleep)
+
+
 def _burn_then_curse(tables: Tables, state: BattleState, side) -> BattleState:
-    """``MON_COND_CHECK_STATE_BURN`` then (``_NIGHTMARE``, unsupported, between) ``_CURSE``: one
-    faint check serves both, as a battler the burn fainted has no HP for the curse and the
-    battle-over check between finds what the one after them finds."""
-    return _curse_check(_burn_check(tables, state, side), side)
+    """``MON_COND_CHECK_STATE_BURN``, ``_NIGHTMARE`` then ``_CURSE``: one faint check serves the
+    three, as a battler the burn or the nightmare fainted has no HP for the checks after it (each
+    needs ``curHP``, bcp.c:1437, :1452) and the battle-over check between finds what the one after
+    them finds."""
+    return _curse_check(_nightmare_check(_burn_check(tables, state, side), side), side)
 
 
 def _bind_check(tables: Tables, state: BattleState, side) -> BattleState:
@@ -3938,10 +4016,12 @@ def _uproar_check(tables: Tables, state: BattleState, side, failed) -> BattleSta
         )
         state = _set_mon(state, "status", battler, mon, Status.NONE, wake)
         state = _set_mon(state, "status_counter", battler, mon, 0, wake)
+        state = clear_nightmare(state, battler, wake)  # subscript_wake_up.s:20 (G-32)
     left = state.uproar[side].astype(_I32) - 1
     ends = on & ((jnp.asarray(failed)[side] != 0) | (left <= 0))
     uproar = jnp.where(on, jnp.where(ends, 0, left), state.uproar[side])
     locked = jnp.where(ends, 0, state.locked_move[side])
+    state = fcm.uproar_end(state, side, ends)  # bcp.c:1528, :1534
     return state._replace(
         uproar=state.uproar.at[side].set(uproar.astype(state.uproar.dtype)),
         locked_move=state.locked_move.at[side].set(locked.astype(state.locked_move.dtype)),
@@ -4111,7 +4191,7 @@ def _detrimental_item_check(tables: Tables, state: BattleState, side) -> BattleS
     )
     alive = hp > 0
     ability = battler_decomp_ability(tables, state, side, mon)
-    sun = (state.weather == Weather.SUN) & ~weather_suppressed(tables, state)
+    sun = fcm.sun(fcm.weather_bits(state)) & ~weather_suppressed(tables, state)
     leaf_guard = sun & (ability == ITEM_ABILITY_IDS["Leaf Guard"])
     toxic = (
         alive
@@ -4190,6 +4270,8 @@ def _turn_end_ability(tables: Tables, state: BattleState, side, outcome: Outcome
             )
         ),
     )
+    # subscript_ability_restore_status.s:6: VOLATILE_CONDITION_NIGHTMARE off with any status (G-32).
+    state = clear_nightmare(state, side, cured)
     return reveal_ability(state, side, mon, STATUS_CURE, cured)
 
 
@@ -4211,8 +4293,8 @@ END_OF_TURN_ORDER = (
     ("poison", _poison_check),
     # MON_COND_CHECK_STATE_TOXIC, battle_controller_player.c:1405
     ("toxic", _toxic_check),
-    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _CURSE, :1451
-    # (``_burn_then_curse``)
+    # MON_COND_CHECK_STATE_BURN, battle_controller_player.c:1425, then _NIGHTMARE, :1436, then
+    # _CURSE, :1451 (``_burn_then_curse``)
     ("burn_curse", _burn_then_curse),
     # MON_COND_CHECK_STATE_BIND, battle_controller_player.c:1462, then _BAD_DREAMS, :1484
     # (``_bind_then_bad_dreams``)
@@ -4248,9 +4330,6 @@ def end_of_turn_order(tables: Tables, state: BattleState, outcome: Outcome) -> j
 # The side conditions FIELD_COND_CHECK_STATE_REFLECT .. _LUCKY_CHANT count down, in this
 # order (battle_controller_player.c:947-1083).
 FIELD_SIDE_TIMERS = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
-# The weathers with a countdown (FIELD_COND_CHECK_STATE_RAINING .. _HAILING, :1113-1211);
-# deep fog (:1213-1225) only prints a message.
-_TIMED_WEATHERS = (Weather.RAIN, Weather.SANDSTORM, Weather.SUN, Weather.HAIL)
 
 
 def _count_down(x: jnp.ndarray) -> jnp.ndarray:
@@ -4276,7 +4355,14 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
     ``damage.battler_decomp_ability`` of each battler). The caller applies ``NO_CLOUD_NINE``.
     The sandstorm, sun and hail branches skip a battler with ``MOVE_EFFECT_NO_WEATHER_DAMAGE``
     (moves.h:50: Dig's UNDERGROUND, Dive's UNDERWATER; :5580, :5587, :5600), rain does not
-    (B10-12)."""
+    (B10-12).
+
+    Each branch tests its own group of the mask (``WEATHER_IS_*``) and writes ``hpCalcTemp``,
+    so with several groups set the last writer wins, in the order sand, sun, hail, rain (FCM
+    3.2): Ice Body at full HP writes nothing (a sand chip stays). Hydration's
+    ``scriptTemp`` 1 skips the whole HP step (subscript_weather_continues.s:13 -> _098). A
+    chip (no Magic Guard, :12) tags the ability whenever any SUNNY bit is set (:14 -> _045;
+    subscript_weather_continues.s:17), every heal at _076."""
     fmt = format_of(state)
     mon = state.active[side]
     hp, max_hp = (
@@ -4291,8 +4377,9 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         return jnp.any(types == t)
 
     sixteenth = jnp.maximum(max_hp // 16, 1)
+    w = fcm.weather_bits(state)
     sand = (
-        (state.weather == Weather.SANDSTORM)
+        fcm.sand(w)
         & ~has(Type.ROCK)
         & ~has(Type.STEEL)
         & ~has(Type.GROUND)
@@ -4302,38 +4389,41 @@ def _weather_effect(state: BattleState, side, ability) -> BattleState:
         state.semi_invulnerable[side] == SemiKind.UNDERWATER
     )
     sand = sand & ~hidden
-    hail = (state.weather == Weather.HAIL) & ~hidden
+    hail = fcm.hail(w) & ~hidden
     ice_body = hail & (own == AbilityId.ICE_BODY)  # battle_script.c:5601 (G-45)
     hail_chip = hail & ~ice_body & ~has(Type.ICE) & (own != AbilityId.SNOW_CLOAK)
     eighth = jnp.maximum(max_hp // 8, 1)
-    sun = (
-        (state.weather == Weather.SUN)
-        & ~hidden
-        & ((own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER))
-    )
-    rain = (state.weather == Weather.RAIN) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
+    sun = fcm.sun(w) & ~hidden & ((own == AbilityId.DRY_SKIN) | (own == AbilityId.SOLAR_POWER))
+    rain = fcm.rain(w) & (own == AbilityId.DRY_SKIN) & (hp < max_hp)
     # battle_script.c:5614-5618 Rain Dish: Divide(maxHP, 16) below full HP in rain (B9-6).
-    rain_dish = (state.weather == Weather.RAIN) & (own == AbilityId.RAIN_DISH) & (hp < max_hp)
+    rain_dish = fcm.rain(w) & (own == AbilityId.RAIN_DISH) & (hp < max_hp)
     magic_guard = ab == WEATHER_ABILITY_IDS["Magic Guard"]
-    chip = (sand | hail_chip) & ~magic_guard
-    sun_chip = sun & ~magic_guard
-    heal = (ice_body | rain_dish) & (hp < max_hp)
-    delta = jnp.where(chip, -sixteenth, jnp.where(heal, sixteenth, 0))
-    delta = jnp.where(sun_chip, -eighth, jnp.where(rain, eighth, delta))
+    # hpCalcTemp, each branch in the decomp's order over the last (:5573-5625).
+    delta = jnp.where(sand, -sixteenth, 0)
+    delta = jnp.where(sun, -eighth, delta)
+    delta = jnp.where(ice_body & (hp < max_hp), sixteenth, delta)
+    delta = jnp.where(hail_chip, -sixteenth, delta)
+    delta = jnp.where(rain_dish, sixteenth, delta)
+    delta = jnp.where(rain, eighth, delta)
     alive = hp > 0
-    # :_076 tags every heal's battler, Ice Body's included (G-45).
-    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (sun_chip | rain | heal))
     # Hydration (:5626-5639): no weather-hidden test in the rain block (a Diving holder is cured);
     # subscript_ability_restore_status.s:5 sets the status to 0, counter bits included (F-5).
     row = party(fmt, side)
     hydrate = (
         alive
-        & (state.weather == Weather.RAIN)
+        & fcm.rain(w)
         & (ab == ABILITY_DECOMP_IDS[AbilityId.HYDRATION])
         & (state.status[row, mon] != Status.NONE)
     )
+    delta = jnp.where(hydrate | ((delta < 0) & magic_guard), 0, delta)
+    # :_076 tags every heal's battler, Ice Body's included (G-45); :_045 / :_057 tag a chip's
+    # battler under any SUNNY bit with TAG_NICKNAME_ABILITY, whatever its ability (a sand or hail
+    # chip too, FCM 3.2): BattleAI_SetAbility records it (battle_script.c:11805).
+    state = reveal_ability(state, side, mon, WEATHER_HP, alive & (delta > 0))
+    state = know_ability(state, side, mon, alive & (delta < 0) & fcm.sun(w))
     state = _set_mon(state, "status", side, mon, Status.NONE, hydrate)
     state = _set_mon(state, "status_counter", side, mon, 0, hydrate)
+    state = clear_nightmare(state, side, hydrate)  # subscript_ability_restore_status.s:6 (G-32)
     state = reveal_ability(state, side, mon, STATUS_CURE, hydrate)
     return _hp_change(state, side, mon, jnp.where(alive, delta, 0))
 
@@ -4370,52 +4460,53 @@ def field_conditions(
        a nonzero ``wish_timer`` counts it down, and at 0 a battler with HP regains
        ``Divide(maxHP, 2)`` of its own (subscript_wish_heal.s: "HP is full!" at full HP, else
        UPDATE_HP, capped; Heal Block is unsupported) (``_wish``).
-    3. The weather: a temporary one (``weather_timer != 0``) drops its count and ends at 0
-       with no effect that turn (``subscript_sandstorm_end.s`` and the like); a permanent
-       one (``*_PERM``, ``weather_timer == 0``) never ends. A weather that goes on runs
-       ``_weather_effect`` for each battler in ``sides`` (``monSpeedOrder``, sorted after
-       the last action, :887) unless ``damage.weather_suppressed``. Deep fog never counts
-       down (:1213-1225). The faints the chip causes are checked once, after both
-       battlers (``BATTLE_SUBSCRIPT_FAINT_MON`` inside the subscript; the battle end only
-       when the loop resumes, :939-944): two last Pokemon down at once is a draw, a loss.
+    3. The weather states RAINING, SANDSTORM, SUNNY, HAILING, DEEP_FOG (:1113-1225), one per
+       set group of the mask, in that order (``field.weather_state``): a TEMP-only group
+       counts ``weather_turns`` down and ends at 0 with no effect that turn
+       (``subscript_sandstorm_end.s`` and the like); a PERM group and deep fog go on. A group
+       that goes on runs ``_weather_effect`` (on the whole mask) for each battler in
+       ``sides`` (``monSpeedOrder``, sorted after the last action, :887) unless
+       ``damage.weather_suppressed``, so N set groups run it N times. The faints a group's
+       chip causes are checked after both battlers (``BATTLE_SUBSCRIPT_FAINT_MON`` inside the
+       subscript) and paid at the loop head; the battle end stops the next state (:939-944):
+       two last Pokemon down at once is a draw, a loss.
     4. Gravity (:1227-1238) drops by 1.
 
-    Trick Room counts down in the turn end's side-condition pass (:1823-1826), not here,
-    and is not implemented.
+    Trick Room counts down in the turn end's side-condition pass (:1823-1826,
+    ``_trick_room_check``), not here.
 
     E3-B2-21: ``(state, prompt)``. The chip's payout runs its learnset scan (the loop head's
     ``AnyExpPayout`` runs the whole ``GetExpTask``, bcp.c:938-944), and a prompt left stops the
-    pass before Gravity (``prompt``; ``step_events`` pauses the turn at ``LEARN_FIELD``).
-    ``resume`` is the ``learn_site`` the call resumes: ``LEARN_FIELD`` runs Gravity alone,
-    ``LEARN_MON`` nothing (the pause was in a later phase)."""
+    pass before Gravity (``prompt``; ``step_events`` pauses the turn at ``LEARN_FIELD``). The game
+    prompts at the loop head after the state that paid; with two set groups (a corrupted mask,
+    FCM 3.1) the later state runs before the prompt here, which reads no move the prompt can
+    change (the reference the same). ``resume`` is the ``learn_site`` the call resumes:
+    ``LEARN_FIELD`` runs Gravity alone, ``LEARN_MON`` nothing (the pause was in a later phase)."""
     resume = jnp.asarray(resume, _I32)
     entry = state
     live = state.over == 0
     counted = state._replace(
         **{name: _count_down(getattr(state, name)) for name in FIELD_SIDE_TIMERS}
     )
-    weather = state.weather
-    timed = jnp.isin(weather, jnp.array(_TIMED_WEATHERS, weather.dtype))
-    countdown = timed & (state.weather_timer != 0)
-    timer = jnp.where(countdown, state.weather_timer - 1, state.weather_timer)
-    ended = countdown & (timer == 0)
-    counted = counted._replace(
-        weather=jnp.where(ended, Weather.NONE, weather).astype(weather.dtype),
-        weather_timer=timer.astype(state.weather_timer.dtype),
-    )
     state = _where(live, counted, state)
     for position in (0, 1):
         state = _where(live, _wish(state, sides[position]), state)
 
-    before = state
-    ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
-    effects = live & ~ended & ~weather_suppressed(tables, state)
-    for position in (0, 1):
-        side = sides[position]
-        state = _where(effects, _weather_effect(state, side, ability), state)
-    state = _faint_check(tables, before, state)
-    # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
-    state = pay_exp(tables, before, state)
+    def weather_state(state, bits):
+        before = state
+        state, goes_on = fcm.weather_state(state, bits[0], bits[1], state.over == 0)
+        ability = battler_decomp_ability(tables, state, jnp.arange(state.active.shape[0]))
+        effects = goes_on & ~weather_suppressed(tables, state)
+        for position in (0, 1):
+            state = _where(effects, _weather_effect(state, sides[position], ability), state)
+        state = _faint_check(tables, before, state)
+        # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
+        state = pay_exp(tables, before, state)
+        return jax.tree.map(lambda x, y: x.astype(y.dtype), state, before), None
+
+    # One trace for the five states (a scan): each runs on the state the one before left.
+    state = jax.tree.map(lambda x: jnp.asarray(x).astype(jnp.asarray(x).dtype), state)
+    state, _ = jax.lax.scan(weather_state, state, jnp.asarray(fcm.WEATHER_STATES, _I32))
     state = _where(resume != 0, entry, state)
     state, prompt = learn_prompt(tables, state)
     prompt = prompt & (resume == 0)
@@ -4423,11 +4514,10 @@ def field_conditions(
     # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
     # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the
     # counter to GRAVITY_TURNS again and runs the grounding loop (``gravity_ground``): Gravity
-    # never ends (G-67).
-    counted = _count_down(state.gravity)
-    rearm = (tables.gravity_rearm != 0) & (state.gravity > 0) & (counted == 0) & (state.over == 0)
-    gravity = jnp.where(rearm, GRAVITY_TURNS, counted)
-    ticked = state._replace(gravity=jnp.where(state.over == 0, gravity, state.gravity))
+    # never ends (G-67). The re-arm and its loop run where the tick takes the counter bits from 1
+    # to 0 (a borrowed counter of 7 runs 7 turns first, FCM 3.2).
+    rearm = (tables.gravity_rearm != 0) & (fcm.gravity_count(state) == 1) & (state.over == 0)
+    ticked = fcm.gravity_tick(state, state.over == 0, tables.gravity_rearm != 0)
     ticked = gravity_ground(ticked, rearm)
     return _where(prompt | (resume == LEARN_MON), state, ticked), prompt
 
@@ -4614,13 +4704,7 @@ def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:
     Trick Room ends (started at 5 on turn T it is up through T + 4); Kaizo's (sub_seq 251, byte
     for byte the Trick Room move's script, ``Tables.trick_room_rearm``) finds the bits clear and
     sets ``FIELD_CONDITION_TRICK_ROOM_INIT`` again: it never ends. E3-2-4."""
-    counted = _count_down(state.trick_room)
-    running = live & (state.trick_room != 0)
-    rearm = running & (counted == 0) & (tables.trick_room_rearm != 0)
-    value = jnp.where(rearm, TRICK_ROOM_TURNS, counted)
-    return state._replace(
-        trick_room=jnp.where(running, value, state.trick_room).astype(state.trick_room.dtype)
-    )
+    return fcm.trick_room_tick(state, live, tables.trick_room_rearm != 0)
 
 
 def _perish_song_check(tables: Tables, state: BattleState, sides, live) -> BattleState:
@@ -4703,11 +4787,13 @@ def _action_phase(
             raise ValueError("a four-battler turn needs the chosen targets (D2-1)")
         targets = jnp.zeros(state.active.shape[0], jnp.int8)
     paused = (state.pivot_battler != 0) | (state.learn_site != 0)
-    # A battle-start Starf Berry still open (a state no root drew for) draws here first; then the
-    # turn's Starf Berry draws, read by hooks.starf_stat (F-10); step_events replaces them.
-    turn_draw = jnp.asarray(outcome.starf)[:, 0]
-    state = resolve_starf(state, turn_draw)
-    state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
+    # A battle-start Starf Berry still open (a state no root drew for) draws here first, from the
+    # queue's entry 0; then the turn's Starf Berry draws, one per eat in order, read by
+    # hooks.starf_stat (F-10, F-O3 G-27); step_events replaces them.
+    queue = jnp.asarray(outcome.starf)[:, jnp.asarray(STARF_QUEUE)]
+    opened = (state.starf_open != 0).astype(state.starf_taken.dtype)
+    state = resolve_starf(state, queue[:, 0])
+    state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
     fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
@@ -4810,9 +4896,14 @@ def step_events(
     # pause and elsewhere, so states merge (F-10).
     # Stored modulo 5: a replacement's check always meets five stats below +6 (a fresh battler;
     # at most an Intimidate or Download stage before it), so states that read alike merge.
+    # The kept draw sits in the queue's entry 0 with ``starf_taken`` 0 (F-O3).
     kept = starf_kept(tables, s) & ~all_halted
     replacement_draw = jnp.asarray(outcome.starf)[:, 1].astype(_I32) % len(STARF_STATS)
-    s = s._replace(starf_roll=jnp.where(kept, replacement_draw, 0).astype(s.starf_roll.dtype))
+    entry0 = jnp.arange(len(STARF_QUEUE))[None, :] == 0
+    roll = jnp.where(kept[:, None] & entry0, replacement_draw[:, None], 0)
+    s = s._replace(
+        starf_roll=roll.astype(s.starf_roll.dtype), starf_taken=jnp.zeros_like(s.starf_taken)
+    )
     return _where(state.over != 0, state, s), events
 
 
@@ -5061,8 +5152,12 @@ def replace(
     # The kept Starf Berry draw (F-10) is read; kept on for a side whose next replacement can
     # still eat one (a newcomer that the hazards fainted) or whose newcomer's checks wait for
     # ShowBattleMon (``entry_pending``, G-32), else 0.
+    # Its ``starf_taken`` is 0 again: a later replacement reads the same kept entry 0 (F-O3).
     keep = starf_kept(tables, out) | (out.entry_pending != 0)
-    out = out._replace(starf_roll=jnp.where(keep, out.starf_roll, 0).astype(out.starf_roll.dtype))
+    out = out._replace(
+        starf_roll=jnp.where(keep[:, None], out.starf_roll, 0).astype(out.starf_roll.dtype),
+        starf_taken=jnp.zeros_like(out.starf_taken),
+    )
     # The turn's turnFlags.roosting ends with the last replacement (SetupNextTurn, bcp.c:1856).
     pending = jnp.any(needs_replacement(out) != 0)
     out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))

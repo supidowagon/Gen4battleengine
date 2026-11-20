@@ -1485,3 +1485,21 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_midturn_learn_pending_action_rereads_the_replaced_slot`), tests/engine/test_learn.py, tests/engine/test_levelup.py,
   tests/search/test_learn.py, tests/search/test_stage_b_learn.py, tests/search/test_player_learn.py,
   tests/test_trace_to_state.py (the old window and mask tests rewritten).
+- E3-B2-22 Merge of E1 batch G (2c437bc; second merger, E1 G-7, G-28). FCM (G-4..G-11): batch 2's field writers and
+  readers go through `engine.field`. Defog's fog clear is `field.defog_clear` (subscript_defog.s:64-65: bit 15 off, every
+  other bit and `weather_turns` stay; a mask with fog and a rain bit keeps the rain bit): `effects._defog`, the reference's
+  `field_mask &= ~DEEP_FOG`, the outcome what-if (`moved_weather & ~DEEP_FOG` for the foe's Defog), enumerate's defog
+  clause (`field.fog(field.weather_bits(state))`). Role Play's what-if weather is `field.ability_bits`; its Gravity
+  variant is E1's `field.with_gravity`. The turn-end Gravity tick and the E3-B2-21 learn pause: `step.field_conditions`
+  runs E1's weather-state scan, then the learn prompt, then `field.gravity_tick`; the reference's prompt moves after its
+  weather loop (the game prompts at the loop head after the state that paid, bcp.c:938-944; with two set groups, a
+  corrupted mask, the later state runs before the prompt, which reads no move the prompt can change). AI chart flags
+  take `field.gravity_count` with batch 2's Miracle Eye `eyed`. Tests and `tests.strategies` set the weather through
+  `field.with_weather` / `_set_weather`. Starf (G-27, G-28): Fling's RANDOM_UP2 (battle_lib.c:6110-6127, its own
+  `RandNext() % 5` at :6121) reads the defender's next queue entry (`hooks.starf_draw`) and uses it up (`starf_taken` + 1),
+  both engines; `enumerate._starf_reads` counts `flung` as one of d's own sources (the k-th eat's law) and in the brute
+  force's `first` / `more`. No fourth queue column: in singles a flung Starf Berry is the flinger's only item and its only
+  action, so it meets at most d's own eat and a Recycle or an open berry (three draws). Renumbered: `EffectId` FLING..DEFOG
+  131-142 (E1's NIGHTMARE is 130); MANIFEST_VERSION 42. Both sides' moveEffectsMask bits are kept (`charged_turns`,
+  `grudge`, `miracle_eye`, `camouflage`; `effects.camouflaged` is gone, G-20). No state or Outcome field of main changes
+  shape here, so no `snap_compare.UPGRADES` row.

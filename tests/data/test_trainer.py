@@ -231,7 +231,7 @@ def test_vanilla_area_condition_follows_start_condition(trainers):
         if t.start_condition == "none":
             assert area == AreaCondition()
         elif t.start_condition == "fog":
-            assert area == AreaCondition(fog=True)
+            assert area == AreaCondition(fog=True, fog_headers=area.fog_headers)
         else:
             assert area == AreaCondition(weather=t.start_condition)
     assert {t.area_condition.weather for t in trainers} == {None, "rain", "hail", "sandstorm"}
@@ -400,7 +400,20 @@ def test_vanilla_area_conditions_pinned(trainers):
     assert trainers[91].area_condition == AreaCondition(weather="rain")
     assert trainers[559].area_condition == AreaCondition(weather="sandstorm")
     assert trainers[132].area_condition == AreaCondition(weather="hail")
-    assert trainers[66].area_condition == AreaCondition(fog=True)
+    assert trainers[66].area_condition == AreaCondition(fog=True, fog_headers=(363,))
+
+
+def test_vanilla_fog_headers_are_the_fog_weather_maps(trainers):
+    """``fog_headers`` (G-15): the fog fights on a map of weather OVERWORLD_WEATHER_FOG (14,
+    include/data/map_headers.h: 363 ROUTE_210_NORTH, 247 VICTORY_ROAD_1F_ROOM_2, 359-360), the
+    one fog field Defog clears (field_map_change.c:275-277); none elsewhere."""
+    clearable = {
+        t.id: t.area_condition.fog_headers for t in trainers if t.area_condition.fog_clearable
+    }
+    assert {h for hs in clearable.values() for h in hs} == {247, 359, 360, 363}
+    assert all(trainers[i].start_condition == "fog" for i in clearable)
+    with pytest.raises(ValueError, match="fog headers"):
+        AreaCondition(fog_headers=(363,))
 
 
 def test_null_partner_loads_as_none(tmp_path):  # Kaizo: a partner present, not evaluated

@@ -161,6 +161,36 @@ _PATH_ENDS = {"SCRCMD_END", "SCRCMD_RETURN", "SCRCMD_GOTO"}
 _BATTLES = {"SCRCMD_STARTTRAINERBATTLE", "SCRCMD_STARTTAGBATTLE", "SCRCMD_STARTFIRSTBATTLE"}
 _SET_VAR = "SCRCMD_SETVARFROMVALUE"  # destVarID u16, value u16 (scrcmd.inc:297-301)
 
+# Kaizo's script weather (rom_diff.md gFieldScriptCommands; ledger G-23): the unused command
+# 0x9C (include/data/scripts/scrcmd.h:164) runs injected code at 0x023C8345: with
+# VAR_0x4015 != 0 it calls FieldOverworldState_SetWeather(VAR_0x4016) (and the field effect
+# when VAR_0x4017 != 0); with VAR_0x4015 == 0 it loads wild encounters instead. A battle
+# starts in the overworld weather (src/field_battle_data_transfer.c:267); ScrCmd_0C3 and
+# ScrCmd_0C4 set it clear (src/scrcmd.c:3657-3674) and a warp rewrites it from the new
+# header (FieldMapChange_UpdateGameData, src/field_map_change.c:272-280).
+SCRIPT_WEATHER_COMMAND = "SCRCMD_UNUSED_09C"
+SCRIPT_WEATHER_ON, SCRIPT_WEATHER_ID = 0x4015, 0x4016
+WEATHER_RESETS = ("SCRCMD_0C3", "SCRCMD_0C4", "SCRCMD_WARP")
+# The env key a path's script weather rides under in ``_walk`` (no variable id is negative).
+_SCRIPT_WEATHER = -2
+# Saved variables are VARS_START..VARS_END (VarsFlags.vars, src/vars_flags.c:65-69); from
+# SCRIPT_LOCAL_VARS_START (generated/vars_flags.txt:4400) up they are the script's own.
+SPECIAL_VARS_START = 0x8000
+
+
+class ScriptWeatherWalk:
+    """What ``_walk`` records of the script weather: ``sets``: offset of a
+    ``SCRIPT_WEATHER_COMMAND`` -> its overworld weather ids; ``battles``: trainer (a battle's
+    opponents, not a tag battle's partner) -> the weather command offsets its battle runs
+    after, with ``NOT_CONSTANT`` for a path that reaches it with none since the last reset;
+    ``marks``: weather command offset -> the (saved variable, value) pairs a path sets after
+    it, before a reset."""
+
+    def __init__(self) -> None:
+        self.sets: dict[int, set[int]] = {}
+        self.battles: dict[int, set[int]] = {}
+        self.marks: dict[int, set[tuple[int, int]]] = {}
+
 
 class UnresolvedOperand(NamedTuple):
     """A battle command operand that is a variable some walked path reaches with no
@@ -434,17 +464,29 @@ NOT_CONSTANT = -1
 _UNSET = frozenset({NOT_CONSTANT})
 
 
-def _walk(script: bytes, table: CommandTable, name: str, entries: list[int] | None = None):
+def _walk(
+    script: bytes,
+    table: CommandTable,
+    name: str,
+    entries: list[int] | None = None,
+    weather: ScriptWeatherWalk | None = None,
+):
     """K1's control-flow walk from every header entry, or from ``entries`` (absolute offsets)
     when given (``script_battles``): the decoded
     commands it reaches (offset -> (opcode, operands, end)), the trainers it places, and
-    each battle operand variable's values ((offset, variable) -> values)."""
+    each battle operand variable's values ((offset, variable) -> values).
+
+    ``weather`` (when given) also follows Kaizo's script weather into it
+    (``ScriptWeatherWalk``): a path carries the offsets of the ``SCRIPT_WEATHER_COMMAND`` it
+    last ran (with ``VAR_0x4015`` != 0) until one of ``WEATHER_RESETS``."""
     oc = table.opcode
     branch = {oc[c] for c in _BRANCHES}
     calls = {oc["SCRCMD_CALL"], oc["SCRCMD_CALLIF"]}
     ends = {oc[c] for c in _PATH_ENDS}
     battles = {oc[c] for c in _BATTLES}
     set_var, ret, call = oc[_SET_VAR], oc["SCRCMD_RETURN"], oc["SCRCMD_CALL"]
+    sets_weather, tag = oc[SCRIPT_WEATHER_COMMAND], oc["SCRCMD_STARTTAGBATTLE"]
+    resets = {oc[c] for c in WEATHER_RESETS}
     for op in branch:
         if table[op][1][-1:] != (4,):
             raise ReaderError(f"{table.constants[op]}: last operand is not a u32 offset")
@@ -469,17 +511,39 @@ def _walk(script: bytes, table: CommandTable, name: str, entries: list[int] | No
             decoded[pos] = _decode(script, table, name, pos)
         op, values, end = decoded[pos]
         if op in battles:
-            for v in values:
+            opponents: set[int] = set()
+            for i, v in enumerate(values):
                 if v >= VARS_START:
                     values_of = env.get(v, _UNSET)
                     operands.setdefault((pos, v), set()).update(values_of)
-                    out |= values_of - _UNSET
+                    got = values_of - _UNSET
                 else:
-                    out.add(v)
+                    got = {v}
+                out |= got
+                if not (op == tag and i == 0):  # StartTagBattle's first operand: the partner
+                    opponents |= got
+            if weather is not None and _SCRIPT_WEATHER in env:
+                for t in opponents - {0}:
+                    weather.battles.setdefault(t, set()).update(env[_SCRIPT_WEATHER])
         elif op == set_var:
             if values[0] == table.partner_var:
                 out.add(values[1])
+            if weather is not None and _SCRIPT_WEATHER in env and values[0] < SPECIAL_VARS_START:
+                for at in env[_SCRIPT_WEATHER] - _UNSET:
+                    weather.marks.setdefault(at, set()).add((values[0], values[1]))
             env = {**env, values[0]: frozenset({values[1]})}
+        elif weather is not None and op == sets_weather:
+            on = env.get(SCRIPT_WEATHER_ON, _UNSET)
+            if on != frozenset({0}):  # VAR_0x4015 == 0 runs the wild-encounter branch
+                ids = env.get(SCRIPT_WEATHER_ID, _UNSET)
+                if NOT_CONSTANT in on | ids or 0 in on:
+                    raise ScriptDecodeError(
+                        name, pos, op, f"script weather on {set(on)} id {set(ids)}: not constant"
+                    )
+                weather.sets[pos] = set(ids)
+                env = {**env, _SCRIPT_WEATHER: frozenset({pos})}
+        elif weather is not None and op in resets:
+            env = {k: v for k, v in env.items() if k != _SCRIPT_WEATHER}
         if op == ret:
             if stack:
                 work.append((stack[-1], stack[:-1], env))
@@ -1357,6 +1421,129 @@ def refused_formats(path: Path, name_at: Callable[[int], str]) -> dict[int, str]
     return out
 
 
+# Coord event (tools/jsoncnv/event.py:109-131): script, x, z, width, length, y, value, var,
+# all u16; it runs its script when the player steps on it and the var holds the value
+# (src/unk_0203C954.c:218).
+COORD_EVENTS = 3
+_COORD_SCRIPT, _COORD_VALUE, _COORD_VAR = 0, 6, 7
+
+
+def _coord_records(member: bytes, index: int) -> list[tuple[int, int, int]]:
+    """(script, var, value) of one ``zone_event.narc`` member's coord events."""
+    _event_records(member, index)  # validates the member's layout
+    pos = 0
+    for kind, size in enumerate(EVENT_RECORD_SIZES):
+        n = struct.unpack_from("<I", member, pos)[0]
+        pos += 4
+        if kind == COORD_EVENTS:
+            rows = [struct.unpack_from("<8H", member, pos + i * size) for i in range(n)]
+            return [(r[_COORD_SCRIPT], r[_COORD_VAR], r[_COORD_VALUE]) for r in rows]
+        pos += n * size
+    return []
+
+
+class ScriptWeather(NamedTuple):
+    """Kaizo's script weather on the map headers (``script_weathers``).
+
+    ``battles``: trainer -> header -> the overworld weather ids its battle there starts in,
+    ``NOT_CONSTANT`` standing for the header's own (a path with no script weather, or the
+    trainer is also an object trainer of the header). ``windows``: trainer -> the persistent
+    script weather it can meet on its header: {header, weather (overworld id), var, value
+    (the saved var's value once the weather has been set), source}. ``sites``: trainer ->
+    header -> the ``scr_seq`` member and weather command offsets of its ``battles`` entry."""
+
+    battles: dict[int, dict[int, set[int]]]
+    windows: dict[int, dict]
+    sites: dict[int, dict[int, str]]
+
+
+def script_weathers(
+    rows: Sequence[tuple[int, int, int]],
+    scripts: Sequence[bytes],
+    events: Sequence[bytes],
+    table: CommandTable,
+    field_effect: Callable[[int], bool],
+) -> ScriptWeather:
+    """Where Kaizo's ``SCRIPT_WEATHER_COMMAND`` (0x9C) sets the overworld weather before a
+    battle (ledger G-23, G-24): each header's script file walked with ``ScriptWeatherWalk``.
+
+    * A battle a path reaches after the command, with no ``WEATHER_RESETS`` between, starts
+      in that weather (``ScriptWeather.battles``): file 329 (header 293) sets 4 (rain in the
+      Kaizo switch) before StartTagBattle 609, 835, 836, so 835 and 836 start in rain. A
+      weather whose condition is a field effect (``field_effect``: 18, Trick Room; file 182
+      before 666) is not recorded here: that fight's Trick Room is the overrides file's
+      (area.666), as for every Trick Room fight.
+    * A command after which the path sets a saved variable and ends with no battle
+      (file 459, header 373: rain, then VAR 0x40FA := 8) leaves the weather on the map until a
+      map change or a reset (``windows``). Its entry runs from a coord event on that variable
+      (gate value G; ``_coord_records``). The trainers that can meet it are the header's
+      object trainers and the battles of entries an object or bg event runs or a coord event
+      on another variable or on a value >= the set value; a coord-gated battle on the same
+      variable at a value < G runs before the weather (VAR 0x40FA 3, 4, 5: 692-695, 466).
+    A file several headers share with a script weather that reaches a battle or a saved
+    variable raises ``ReaderError``, as does a window whose gate is not one coord value."""
+    users = Counter(script_id for script_id, _, _ in rows)
+    opcode = struct.pack("<H", table.opcode[SCRIPT_WEATHER_COMMAND])
+    battles: dict[int, dict[int, set[int]]] = {}
+    windows: dict[int, dict] = {}
+    sites: dict[int, dict[int, str]] = {}
+    for header, (script_id, events_id, _) in enumerate(rows):
+        script = scripts[script_id]
+        if opcode not in script:
+            continue
+        name = f"{SCRIPTS_NARC} member {script_id}"
+        walk = ScriptWeatherWalk()
+        _walk(script, table, name, None, walk)
+        if not (walk.battles or walk.marks):
+            continue
+        if users[script_id] != 1:
+            raise ReaderError(f"{name}: script weather in a file {users[script_id]} headers share")
+        objects = set(_object_trainers(events[events_id], events_id))
+        for t, offsets in walk.battles.items():
+            ids = {w for at in offsets - _UNSET for w in walk.sets[at] if not field_effect(w)}
+            if not ids:
+                continue
+            if NOT_CONSTANT in offsets or t in objects:
+                ids.add(NOT_CONSTANT)
+            battles.setdefault(t, {})[header] = ids
+            at = ", ".join(f"{a:#06x}" for a in sorted(offsets - _UNSET))
+            sites.setdefault(t, {})[header] = f"rom: scr_seq {script_id} script weather at {at}"
+        for at, marks in sorted(walk.marks.items()):
+            saved = {(v, x) for v, x in marks if v >= VARS_START}
+            if len(saved) != 1 or len(walk.sets[at]) != 1:
+                raise ReaderError(f"{name} {at:#06x}: script weather marks {sorted(marks)}")
+            ((var, value),) = saved
+            (weather,) = walk.sets[at]
+            entries = script_entries(script, name)
+            per_entry = [_walk(script, table, name, [e]) for e in entries]
+            holds = {i + 1 for i, w in enumerate(per_entry) if at in w[0]}
+            coords = _coord_records(events[events_id], events_id)
+            gates = {x for s, v, x in coords if s in holds and v == var}
+            if len(gates) != 1:
+                raise ReaderError(f"{name} {at:#06x}: coord gates {sorted(gates)} on {var:#x}")
+            (gate,) = gates
+            before = {s for s, v, x in coords if v == var and x < gate}
+            later = {s for s, v, x in coords if s not in before}
+            free = set(range(1, len(entries) + 1)) - {s for s, _, _ in coords}
+            meets = set(objects)
+            for s in sorted(later | free):
+                if 1 <= s <= len(entries):
+                    meets |= per_entry[s - 1][1]
+            k = min(holds)
+            for t in sorted(meets - set(walk.battles)):
+                windows[t] = {
+                    "header": header,
+                    "weather": weather,
+                    "var": var,
+                    "value": value,
+                    "source": (
+                        f"rom: scr_seq {script_id} entry {k} (coord event {var:#x} == {gate}) "
+                        f"sets overworld weather {weather} at {at:#06x}, then {var:#x} := {value}"
+                    ),
+                }
+    return ScriptWeather(battles, windows, sites)
+
+
 def trainer_start_conditions(
     rom: RomFiles,
     decomp: Path,
@@ -1366,6 +1553,7 @@ def trainer_start_conditions(
     unresolved: list[UnresolvedOperand] | None = None,
     field_effects: dict[int, dict[str, list[int]]] | None = None,
     maps: dict[int, list[int]] | None = None,
+    script_weather: dict[str, dict] | None = None,
 ) -> list[str]:
     """One start condition per trainer id, derived as ``extract_decomp.extract_trainers``
     does (§6.3) from the maps of ``trainer_maps``. Battle operand variables that no
@@ -1382,7 +1570,14 @@ def trainer_start_conditions(
     A map whose weather starts a ``FIELD_EFFECTS`` effect (Kaizo's map weather 18: Trick
     Room) gives the weather "none"; the effect is recorded in ``field_effects`` (when
     given) as trainer id -> {effect: [its map headers with it]}, never dropped silently.
-    ``maps`` (when given) receives the join itself: trainer id -> its sorted map headers."""
+    ``maps`` (when given) receives the join itself: trainer id -> its sorted map headers.
+
+    Kaizo's script weather (``script_weathers``, ledger G-23): a battle the script runs after
+    setting the overworld weather starts in that weather on that header instead of the
+    header's (835, 836: rain); the trainers that can meet a weather a script leaves on the
+    map are written to ``script_weather`` (when given) as {"battles": {trainer: {header:
+    [overworld ids, -1 the header's]}}, "windows": {trainer: row}}; their start condition is
+    still the header's (the run input decides, ``cli.fight_start``)."""
     decomp = Path(decomp)
     trainers = _constants(decomp, "trainers", "TRAINER_")
     if rom.game_code == KAIZO_GAME_CODE:
@@ -1395,12 +1590,49 @@ def trainer_start_conditions(
     if maps is not None:
         maps.update({t: sorted(h) for t, h in sorted(where.items())})
     conditions = _map_conditions(rom, decomp, symbols, weathers)
+    scripted = ScriptWeather({}, {}, {})
+    if rom.game_code == KAIZO_GAME_CODE:
+
+        def field_effect(w: int) -> bool:
+            if w not in conditions:
+                conditions.update(_map_conditions(rom, decomp, symbols, [w]))
+            return bool(conditions[w] & set(FIELD_EFFECTS))
+
+        scripted = script_weathers(
+            map_header_rows(rom, symbols),
+            rom.narc(SCRIPTS_NARC),
+            rom.narc(EVENTS_NARC),
+            command_table(decomp),
+            field_effect,
+        )
+        for w in {w for h in scripted.battles.values() for ws in h.values() for w in ws}:
+            if w != NOT_CONSTANT:
+                field_effect(w)
+        for row in scripted.windows.values():
+            field_effect(row["weather"])
+            if len(conditions[row["weather"]]) != 1:
+                raise ReaderError(f"script weather {row['weather']}: {conditions[row['weather']]}")
+            (row["condition"],) = conditions[row["weather"]]
+    if script_weather is not None:
+        script_weather.update(
+            battles={
+                str(t): {
+                    str(h): {"weather": sorted(ws), "source": scripted.sites[t][h]}
+                    for h, ws in sorted(hs.items())
+                }
+                for t, hs in sorted(scripted.battles.items())
+            },
+            windows={str(t): row for t, row in sorted(scripted.windows.items())},
+        )
     fixed = _start_condition_overrides(path, labels.__getitem__, allowed) if path else {}
     out = []
     for tid, label in enumerate(labels):
         derived = set()
         for header in sorted(where.get(tid, ())):
-            conds = conditions[weathers[header]]
+            ids = scripted.battles.get(tid, {}).get(header, {NOT_CONSTANT})
+            conds = set().union(
+                *(conditions[weathers[header] if w == NOT_CONSTANT else w] for w in ids)
+            )
             derived |= {"none" if c in FIELD_EFFECTS else c for c in conds}
             for effect in sorted(conds & set(FIELD_EFFECTS)):
                 if field_effects is not None:

@@ -3,7 +3,9 @@
 ``BattleState`` is unbatched: the party axis (0 the player, 1 the opponent) and the battler axis
 (singles: the same two) lead the arrays, then the slot axis in party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
 ``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
-ruling D1). The field list is ticked off against the decomp's battle structs in
+ruling D1), and ``field_mask`` / ``weather_turns`` (``int32``: fieldConditionsMask uses bits 0-18;
+weatherTurns is a ``u32`` whose ``--x == 0`` test int32 reproduces, FCM 4.2). The field list is
+ticked off against the decomp's battle structs in
 ``STATE.md``.
 
 Encodings:
@@ -22,7 +24,13 @@ Encodings:
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
-* ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
+* ``field_mask`` is ``BattleContext.fieldConditionsMask`` bit for bit (``ids.FieldCondition``,
+  condition.h:110-149) and ``weather_turns`` is ``FieldConditions.weatherTurns``
+  (battle_context.h:29); every writer and reader goes through ``engine.field`` (FCM steps 1-3):
+  the weather bits 0-7 and deep fog 15, the field's Uproar bits 8-11 (battler ``b``'s bit
+  ``8 + b``; ``uproar[b]`` stays the battler's VOLATILE_CONDITION_UPROAR count), the Gravity
+  counter bits 12-14 and the Trick Room counter bits 16-18. ``weather_turns`` is stale outside a
+  TEMP-only weather (only the weather moves and the countdown write it).
 * ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
   double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
@@ -96,6 +104,15 @@ Encodings:
   battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
   stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
+* ``nightmare`` (G-31) is the battler's ``VOLATILE_CONDITION_NIGHTMARE`` (condition.h:59), 0/1:
+  set by Nightmare on a sleeping defender (subscript_nightmare_start.s:9); the turn end costs a
+  sleeper ``Divide(maxHP, 4)`` and clears it on a battler not asleep (bcp.c:1436-1448); every
+  wake-up (subscript_wake_up.s:20), a Chesto / Lum cure (subscript_held_item_slp_restore.s:13,
+  _multi_restore.s:13), Shed Skin / Hydration (subscript_ability_restore_status.s:6), Insomnia /
+  Vital Spirit (subscript_ability_forbids_status.s:18), Heal Bell / Aromatherapy
+  (battle_script.c:5039-5070) and a bag sleep cure (battle_system.c:469-472) clear it; a
+  volatile, not Baton-passed (condition.h:72-76), not copied by Transform (battle_mon.h:115
+  lies past ``ability``, battle_script.c:5346-5348).
 * ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
   a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
@@ -210,9 +227,16 @@ Encodings:
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
   (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
   (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
-  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's maps give several terrains or none
+  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's start tiles give several terrains and
+  the run names none (``cli.fight_terrain``, ledger G-18) or no map places it
   (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
   read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
+* ``camouflage`` (G-20) is the battler's MOVE_EFFECT_CAMOUFLAGE (moves.h:36), 0/1: set only by a
+  Camouflage that changed the types (effect_script_0213.s:6, after ``TryCamouflage _016``, whose
+  failure skips it), never copied by Transform (BtlCmd_Transform copies the BattleMon up to
+  ``ability``, battle_script.c:5346-5348; the mask lies after it), cleared by a switch or a faint
+  and not Baton-passed (MOVE_EFFECT_BATON_PASSED, moves.h:46-48, omits it). Read by the AI's
+  Basic_CheckCamouflage (script.s:1021-1024) and Roar's Ingrain test (``effects.ingrain_anchors``).
 * ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
   Quick Claw would activate), the per-battler draw the next turn's order reads
   (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
@@ -284,6 +308,12 @@ Encodings:
   left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
   ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
   from ``Outcome.starf[:, 0]``); else 0.
+  F-O3 (G-27): every eat draws its own, so ``starf_roll`` is the turn's queue ``int8[B, 3]``
+  (``Outcome.starf[:, ids.STARF_QUEUE]``: columns 0, 2, 3) and ``starf_taken`` ``int8[B]`` counts
+  the draws the battler's eats used this turn (``hooks._pinch_effects`` adds one where a draw is
+  made, ``resolve_starf``'s open berry takes entry 0); an eat reads entry
+  ``min(starf_taken, 2)`` (``hooks.starf_stat``). ``starf_taken`` is 0 between turns and after
+  ``step.replace`` (a kept replacement draw sits in entry 0, the rest 0).
 * E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
   ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
   mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
@@ -331,6 +361,7 @@ from nuzline.engine.ids import (
     AbilityId,
     Stat,
     Weather,
+    start_field_mask,
 )
 from nuzline.engine.stats import calc_stats
 
@@ -378,6 +409,11 @@ class BattleState(NamedTuple):
     # (pokemon.c:1859-1874); every switch-in and ``BattleSystem_ReloadPokemon`` re-read it into
     # ``friendship`` (lib.c:136, :179), and a bag item's band reads it (battle_system.c:716-733)
     party_friendship: jnp.ndarray
+    # int16, ``ids.AbilityId``: the party Pokemon's ability where a script wrote it in battle
+    # (F-O2: a Sky Shaymin revert of a Transform user writes Land's into its OWN party Pokemon,
+    # ``BtlIOCmd_UpdatePartyMon``, battle_io_command.c:601-604); 0 (``UNSUPPORTED``) = no override,
+    # the personal row's ability. ``step._restore_ability`` reads it (F-O2)
+    party_ability: jnp.ndarray
     ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
@@ -448,6 +484,7 @@ class BattleState(NamedTuple):
     last_resort_moves: jnp.ndarray
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
+    nightmare: jnp.ndarray  # int8, VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
     perish_song_turns: jnp.ndarray  # int8, MoveEffectsData.perishSongTurns (live at 0)
     yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
@@ -482,6 +519,7 @@ class BattleState(NamedTuple):
     # int8, MoveEffectsData.chargedTurns (2 bits, battle_mon.h:11), 0 = none; MOVE_EFFECT_CHARGE
     # (moves.h:17) is set and cleared with it (subscript_charge.s:5-6, bcp.c:1626-1630), E3-B2-8.
     charged_turns: jnp.ndarray
+    camouflage: jnp.ndarray  # int8, MOVE_EFFECT_CAMOUFLAGE in moveEffectsMask (G-20)
     # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
     # active slot are the BattleMon's, and these hold the party's values of the slots the battler
     # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
@@ -535,13 +573,12 @@ class BattleState(NamedTuple):
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
     # int32, BattleContext.monSpeedValues[battler]: the last CompareBattlerSpeed's speed (E3-B2-15)
     speed_rec: jnp.ndarray
-    starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
+    starf_roll: jnp.ndarray  # int8[B, 3], the turn's Starf Berry draws (``Outcome.starf``), F-O3
+    starf_taken: jnp.ndarray  # int8[B], the draws this turn's Starf Berry eats used (F-O3)
     starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
-    weather: jnp.ndarray  # int8, ids.Weather
-    weather_timer: jnp.ndarray  # int8, 0 = permanent
-    trick_room: jnp.ndarray  # int8
-    gravity: jnp.ndarray  # int8
+    field_mask: jnp.ndarray  # int32, BattleContext.fieldConditionsMask (engine.field)
+    weather_turns: jnp.ndarray  # int32, FieldConditions.weatherTurns
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
@@ -752,6 +789,7 @@ VOLATILE_FIELDS = (
     "perish_song_turns",
     "yawn",
     "curse",
+    "nightmare",  # VOLATILE_CONDITION_NIGHTMARE (G-31); not in BATON_PASSED_FIELDS
     "can_unburden",
     "trace_announced",
     "weather_announced",
@@ -768,6 +806,7 @@ VOLATILE_FIELDS = (
     "magnet_rise",
     "magnet_rise_turns",
     "charged_turns",
+    "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20); not in BATON_PASSED_FIELDS (moves.h:46-48)
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
@@ -836,6 +875,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "gender": (_MON, np.int8),
     "friendship": (_MON, np.int16),
     "party_friendship": (_MON, np.int16),
+    "party_ability": (_MON, np.int16),
     "ivs": ((*_MON, 6), np.int8),
     "active": (_BATTLER, np.int8),
     "stages": ((*_BATTLER, 8), np.int8),
@@ -885,6 +925,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "last_resort_moves": ((*_BATTLER, MOVES), np.int16),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
+    "nightmare": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),
     "perish_song_turns": (_BATTLER, np.int8),
     "yawn": (_BATTLER, np.int8),
@@ -913,6 +954,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "magnet_rise": (_BATTLER, np.int8),
     "magnet_rise_turns": (_BATTLER, np.int8),
     "charged_turns": (_BATTLER, np.int8),
+    "camouflage": (_BATTLER, np.int8),
     "mimic_slots": (_BATTLER, np.int8),
     "shadow_moves": ((*_BATTLER, MOVES), np.int16),
     "shadow_pp": ((*_BATTLER, MOVES), np.int8),
@@ -948,12 +990,11 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
     "speed_rec": (_BATTLER, np.int32),
-    "starf_roll": (_BATTLER, np.int8),
+    "starf_roll": ((*_BATTLER, 3), np.int8),
+    "starf_taken": (_BATTLER, np.int8),
     "starf_open": (_BATTLER, np.int8),
-    "weather": (_FIELD, np.int8),
-    "weather_timer": (_FIELD, np.int8),
-    "trick_room": (_FIELD, np.int8),
-    "gravity": (_FIELD, np.int8),
+    "field_mask": (_FIELD, np.int32),
+    "weather_turns": (_FIELD, np.int32),
     "war_swaps": (_FIELD, np.int16),
     "entry_pending": (_BATTLER, np.int8),
     "move_prev": (_FIELD, np.int16),
@@ -1237,11 +1278,12 @@ def initial_arrays(
     ``fmt.P`` parties (party 0 the player's, 1 the opponent's), stats via ``calc_stats``, empty
     slots all zero (``species = 0, hp = 0``), battler ``b``'s lead in party slot ``leads[b]``
     (default: the battlers of one party take slots 0, 1, ... in battler order),
-    no volatiles, hazards or screens, and
-    ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
-    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default) and ``gravity``
+    no volatiles, hazards or screens, and ``field_mask`` = ``ids.start_field_mask``: the
+    ``start_condition``'s PERM bit (deep fog: bit 15), the ``gravity`` counter
     (``ids.GRAVITY_TURNS`` for a trainer whose area condition is Gravity, Kaizo's sub_seq 297, 0
-    otherwise; the grounding loop it runs at battle start is a no-op, G-67). The leads'
+    otherwise; the grounding loop it runs at battle start is a no-op, G-67) and the
+    ``trick_room`` counter (subscript_overworld_trick_room.s:14); and ``terrain`` (a decomp
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
     switch-in effects then run (``hooks.battle_start``: each switch-in state over both
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
@@ -1307,16 +1349,15 @@ def initial_arrays(
             raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
         a["trainer_items"][b, : len(bag)] = bag
         a["trainer_item_count"][b] = len(bag)
-    a["weather"][...] = Weather(start_condition)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
-    a["gravity"][...] = gravity
     if not 0 <= trick_room <= TRICK_ROOM_TURNS:
         raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
-    a["trick_room"][...] = trick_room
+    # fieldConditionsMask of the start (``ids.start_field_mask``); weatherTurns 0.
+    a["field_mask"][...] = start_field_mask(Weather(start_condition), gravity, trick_room)
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).

@@ -1,12 +1,19 @@
 """The voluntary-switch site layout (docs/ai/roark.md 11.1) and its stop-to-action map."""
 
+import itertools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from nuzline.ai import replacement, switching
-from nuzline.ai.outcome import enumerate_ai_outcomes, sample_ai_outcome
+from nuzline.ai.outcome import (
+    _first_stop,
+    enumerate_ai_outcomes,
+    sample_ai_outcome,
+    switch_stop_probs,
+)
 from nuzline.ai.switching import (
     INEFFECTIVE,
     NO_SWITCH,
@@ -24,6 +31,7 @@ from nuzline.ai.switching import (
     switch_sites,
     switching_refusals,
 )
+from nuzline.engine.field import with_weather
 from tests.engine.helpers import as_species, roark_real_state, roark_state
 
 K = SwitchSite
@@ -205,7 +213,7 @@ def test_too_many_sites_are_refused(tables, names):
     [
         ("opp_move", "Weather Ball"),
         ("ability", "Levitate"),
-        ("absorb", "Water Absorb"),
+        ("natural_cure", "Natural Cure"),
     ],
 )
 @pytest.mark.fullset
@@ -217,8 +225,8 @@ def test_unimplemented_modifiers_are_refused(tables, names, change, missing):
         s = s._replace(moves=s.moves.at[1, 2, 3].set(names.move(missing)))
     elif change == "ability":  # Gastly's only ability is Levitate
         s = as_species(tables, s, 0, 5, names.species("Gastly"))
-    else:  # Poliwag (Water Absorb) on Roark's bench: AI_HasAbsorbAbilityInParty
-        s = as_species(tables, s, 1, 1, names.species("Poliwag"))
+    else:  # Chansey (Natural Cure) on Roark's bench: AI_IsAsleepWithNaturalCure
+        s = as_species(tables, s, 1, 1, names.species("Chansey"))
     refusals = switching_refusals(tables, s)
     assert any(missing in r for r in refusals), refusals
     with pytest.raises(UnsupportedSwitching, match=missing):
@@ -412,10 +420,7 @@ def test_party_variable_types_follow_move_calc_variable_type(tables, names):
     assert not any("Natural Gift" in r or "Judgment" in r for r in refusals), refusals
     rock_gift = s._replace(item=s.item.at[1, 0].set(rock))
     assert int(party_move_types(tables, rock_gift)[0, 3]) == AI_TYPELESS
-    rain = s._replace(
-        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
-        weather_timer=jnp.asarray(5, s.weather_timer.dtype),
-    )
+    rain = with_weather(s, Weather.RAIN, 5)
     assert int(party_move_types(tables, rain)[0, 2]) == Type.WATER
     assert switching_refusals(tables, rain) == []
     # The post-KO replacement types its candidates the same way (battle_lib.c:7998, :8051).
@@ -451,11 +456,122 @@ def test_flash_fire_bench_draws_one_absorb_site(tables, names):
     assert K.ABSORB not in switch_sites(tables, water).tolist()
 
 
-def test_flash_fire_bench_behind_a_super_effective_move_is_refused(tables, names):
-    """With a super-effective move of A the function reads ``RandNext() % 3`` (:3651) first: one
-    draw shared by the bench draws, which independent sites cannot express."""
-    s = _flash_fire_bench(tables, names, player="Starly")  # Rock Throw is super effective
-    refusals = switching_refusals(tables, s)
-    assert any("AI_HasAbsorbAbilityInParty" in r for r in refusals), refusals
-    with pytest.raises(UnsupportedSwitching, match="AI_HasAbsorbAbilityInParty"):
-        switch_sites(tables, s)
+# Each read's stopping u16 residues (BattleSystem_RandNext is a u16), counted here: KEEP :3588,
+# the passes :3796 (rand 2 / 3), WONDER_GUARD :3338, ABSORB(_GATED) :3706; the gate :3651.
+_U16 = np.arange(65536)
+_STOPS = {
+    K.KEEP: np.count_nonzero(_U16 % 10 != 0),
+    K.PASS_INEFFECTIVE: np.count_nonzero(_U16 % 2 == 0),
+    K.PASS_NOT_VERY_EFFECTIVE: np.count_nonzero(_U16 % 3 == 0),
+    K.WONDER_GUARD: np.count_nonzero(_U16 % 3 < 2),
+    K.ABSORB: np.count_nonzero(_U16 & 1),
+    K.ABSORB_GATED: np.count_nonzero(_U16 & 1),
+}
+_GATE_PASS = np.count_nonzero(_U16 % 3 == 0)  # :3651-3653: % 3 != 0 returns FALSE
+
+
+def _brute_stop_law(kinds) -> np.ndarray:
+    """P(site i is the first to stop) and P(none), by walking ``TrainerAI_ShouldSwitch``'s reads
+    in order for every combination of (gate, site) residue classes, the gate (:3651) read before
+    the ABSORB_GATED sites and skipping them when it fails (:3652)."""
+    used = [K(k) for k in kinds if k != K.NONE]
+    gated = K.ABSORB_GATED in used
+    out = np.zeros(len(kinds) + 1)
+    for gate in (True, False) if gated else (True,):
+        w_gate = (_GATE_PASS if gate else 65536 - _GATE_PASS) / 65536 if gated else 1.0
+        for bits in itertools.product((True, False), repeat=len(used)):
+            w = w_gate
+            for k, b in zip(used, bits, strict=True):
+                w *= (_STOPS[k] if b else 65536 - _STOPS[k]) / 65536
+            stop = len(kinds)
+            for i, (k, b) in enumerate(zip(used, bits, strict=True)):
+                if k == K.ABSORB_GATED and not gate:
+                    continue  # not read: the gate returned FALSE first
+                if b:
+                    stop = i
+                    break
+            out[stop] += w
+    return out
+
+
+def _absorb_bench(tables, names, player, hit, holder, moves=("Rock Throw",)):
+    """Roark's Geodude (active, knowing ``moves``) with ``holder`` in Onix's and Cranidos's slots
+    (knowing Tackle only, so no party pass), after the player's ``hit`` (moveHit)."""
+    s = roark_real_state(tables, names, player_species=player)
+    for j in (ONIX, CRANIDOS):
+        s = as_species(tables, s, 1, j, names.species(holder))
+    tackle = jnp.asarray([names.move("Tackle"), 0, 0, 0], s.moves.dtype)
+    own = jnp.asarray([names.move(m) for m in moves] + [0] * (4 - len(moves)), s.moves.dtype)
+    s = s._replace(moves=s.moves.at[1, ONIX].set(tackle).at[1, CRANIDOS].set(tackle))
+    s = s._replace(moves=s.moves.at[1, 0].set(own))
+    return s._replace(move_hit=s.move_hit.at[1].set(names.move(hit)))
+
+
+def test_flash_fire_bench_behind_a_super_effective_move_is_gated(tables, names):
+    """G-36, G-37: Geodude's Rock Throw is super effective against Starly, so
+    AI_HasAbsorbAbilityInParty reads ``RandNext() % 3`` first and returns FALSE unless it is 0
+    (trainer_ai.c:3651-3653); then each bench Flash Fire holder draws ``RandNext() & 1`` (:3706).
+    The stop law (absorb 1: g/2, absorb 2: g/4, the keep draw scaled by 1 - g + g/4) matches the
+    brute force over the residues, and the sampler masks the gated sites unless the gate is 0."""
+    s = _absorb_bench(tables, names, "Starly", "Ember", "Vulpix")
+    assert switching_refusals(tables, s) == []
+    kinds = switch_sites(tables, s).tolist()
+    assert kinds == [K.ABSORB_GATED] * 2 + [K.KEEP] + [K.NONE] * (SWITCH_SITES - 3)
+    assert _actions(tables, s)[:3] == [4 + ONIX, 4 + CRANIDOS, NO_SWITCH]
+    got = np.asarray(switch_stop_probs(jnp.asarray(kinds, jnp.int8)), np.float64)
+    np.testing.assert_allclose(got, _brute_stop_law(kinds), rtol=1e-5, atol=1e-7)
+    g = 21846 / 65536
+    np.testing.assert_allclose(got[:2], [g / 2, g / 4], rtol=1e-5)
+    np.testing.assert_allclose(got[2], (1 - g + g / 4) * 58982 / 65536, rtol=1e-5)
+    # The sampler: draws [1, 1, 1] stop at the first absorb site only under a gate of residue 0.
+    draws, sites = jnp.asarray([1] * SWITCH_SITES, jnp.int32), jnp.asarray(kinds, jnp.int8)
+    assert int(_first_stop(draws, sites, jnp.int32(3))) == 0
+    assert int(_first_stop(draws, sites, jnp.int32(4))) == 2  # gate fails: the keep draw
+    stops = jax.vmap(lambda k: sample_ai_outcome(k, tables, s).switch_stop)(
+        jax.random.split(jax.random.PRNGKey(5), 4000)
+    )
+    share = float(np.mean(np.asarray(stops) == 0))
+    assert abs(share - g / 2) < 4 * np.sqrt(g / 2 * (1 - g / 2) / 4000), share
+
+
+def test_flash_fire_bench_without_a_super_effective_move_has_no_gate(tables, names):
+    """Against Monferno Geodude has no super-effective move: no gate draw (:3651), so the two
+    sites are plain ABSORB with 1/2, 1/4 and 1/4 for none."""
+    s = _absorb_bench(tables, names, "Monferno", "Ember", "Vulpix")
+    kinds = switch_sites(tables, s).tolist()
+    assert kinds == [K.ABSORB] * 2 + [K.NONE] * (SWITCH_SITES - 2)
+    got = np.asarray(switch_stop_probs(jnp.asarray(kinds, jnp.int8)), np.float64)
+    np.testing.assert_allclose(got, _brute_stop_law(kinds), rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(got[[0, 1, -1]], [0.5, 0.25, 0.25], rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("hit", "holder", "sites"),
+    [
+        ("Water Gun", "Poliwag", 2),  # Water -> Water Absorb (:3668-3669)
+        ("ThunderShock", "Jolteon", 2),  # Electric -> Volt Absorb (:3670-3671)
+        ("Ice Beam", "Poliwag", 0),  # another type: return ABILITY_NONE (:3672-3674)
+        ("Water Gun", "Jolteon", 0),  # a holder of another absorb ability
+    ],
+)
+def test_water_and_volt_absorb_bench_sites(tables, names, hit, holder, sites):
+    """G-36: checkAbility by moveHit's table type; each bench holder of it draws (:3706)."""
+    s = _absorb_bench(tables, names, "Monferno", hit, holder)
+    assert switching_refusals(tables, s) == []
+    kinds = switch_sites(tables, s).tolist()
+    assert kinds.count(K.ABSORB) == sites
+    assert _actions(tables, s)[:sites] == [4 + ONIX, 4 + CRANIDOS][:sites]
+
+
+def test_absorb_holder_active_or_untyped_move_hit_draws_none(tables, names):
+    """The active's own Battler_Ability equal to checkAbility holds the switch (:3677-3679); a
+    Weather Ball in rain is read by its table type Normal (``MOVE_DATA().type``, :3665)."""
+    from nuzline.engine.ids import Weather
+
+    s = _absorb_bench(tables, names, "Monferno", "Water Gun", "Poliwag")
+    own = as_species(tables, s, 1, 0, names.species("Poliwag"))
+    assert K.ABSORB not in switch_sites(tables, own).tolist()
+    rain = with_weather(s, Weather.RAIN, 5)
+    ball = rain._replace(move_hit=rain.move_hit.at[1].set(names.move("Weather Ball")))
+    assert switching_refusals(tables, ball) == []
+    assert K.ABSORB not in switch_sites(tables, ball).tolist()
