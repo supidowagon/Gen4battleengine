@@ -615,13 +615,23 @@ def test_the_pluck_reads_a_berry_the_foe_recycles_first(tables, names, own_starf
     """G-S6: the faster foe holds nothing and Recycles (effect_script_0184.s:5-7, BtlCmd_TryRecycle
     battle_script.c:9000-9013) before side 0's Bug Bite, which plucks the live item
     (BattleSystem_PluckBerry, battle_lib.c:5539). ``own_starf``: an Occa Berry (PLUCK_EFFECT_NONE,
-    :5832-5835) comes back; the flag stays (:5848) and the quarter-HP plucker's own Starf Berry is
-    eaten twice: ``starf[0, 2]``. Else a Starf Berry comes back and the holderless plucker eats it
+    :5832-5835) comes back. The plucker holds a Starf Berry above its pinch (curHP <= maxHP / 4,
+    starf_berry.json effectParam 4, lib:4850-4855) at turn start and through the Recycle's
+    held-item pass (bcp:3730-3761), so its berry is uneaten. Bug Bite (contact,
+    bug_bite/data.json) plucks at ONE_HIT_TRIGGER_SECONDARY (bcp:3484-3495, effect_script_0224.s:5,
+    subscript_pluck.s:5) and sets SELF_TURN_FLAG_PLUCK_BERRY (:5848); the foe's Rough Skin then
+    takes maxHP / 8 (lib:4257-4270) at ONE_HIT_TRIGGER_ABILITY (bcp:3513) and puts the plucker at
+    its pinch. Its Starf is eaten at AFTER_MOVE_EFFECT_ATTACKER_ITEM (bcp:3684), kept by
+    subscript_pluck_check.s:5-9, which clears the flag, and eaten again at the held-item pass:
+    ``starf[0, 2]``. Else a Starf Berry comes back and the holderless plucker eats it
     (:5798-5817): ``starf[0, 0]``. The step's consumed cells are a subset of the enumerator's."""
     from nuzline.engine.enumerate import outcome_laws
 
     if own_starf:
         s = _starf_fight(names, tables, ["Bug Bite"], ["Recycle"], foe_level=60)
+        top = int(s.max_hp[0, 0])
+        s = s.replace_hp(0, 0, top // 4 + top // 8)  # Rough Skin's max/8 lands on max/4
+        s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.ROUGH_SKIN))
         recycled, cell = "Occa Berry", 2
     else:
         s = make_state(
@@ -639,52 +649,53 @@ def test_the_pluck_reads_a_berry_the_foe_recycles_first(tables, names, own_starf
     assert all(r for r, c in zip(relevant, consumed) if c)
 
 
-def _snap_segment(tables, names, seed_value, turn):
-    """``(state, actions)`` of "seed S turn T segment 0" exactly as tools/snap_compare.py's
-    ``draw_inputs`` draws it (tests.strategies, Hypothesis @seed), its pauses resumed by the
-    reference engine in place of jit(step_events) (the differential holds them equal)."""
-    from types import SimpleNamespace
+@pytest.mark.slow
+def test_the_loose_law_reads_the_pluck_of_a_berry_the_foe_recycles_first(tables, names):
+    """G-S6, the brute-force law (``outcome_laws(..., loose=True)``): the loose branch's ``eats``
+    is ``foes(anyone | recycled)``, so a holderless plucker whose faster foe holds nothing and
+    Recycles a Starf Berry (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013)
+    reads ``starf[0, 0]``: Bug Bite plucks the live item (BattleSystem_PluckBerry,
+    battle_lib.c:5798-5817, its ``RandNext() % 5`` at :5808). The step consumes that cell."""
+    from nuzline.engine.enumerate import outcome_laws
 
-    from nuzline.data.tables import to_numpy
-    from nuzline.engine.outcome import outcome_to_py
-    from nuzline.reference.convert import from_ref, to_ref
-    from nuzline.reference.engine import ref_step
-    from tools import snap_compare as sc
-
-    np_tables = to_numpy(tables)
-
-    def events(t, s, acts, o):
-        py = tuple(int(x) for x in jax.device_get(acts))
-        return (from_ref(ref_step(np_tables, to_ref(s), py, outcome_to_py(o))),)
-
-    ctx = SimpleNamespace(tables=tables, names=names, jit=lambda f: events)
-    inp = dict(sc.draw_inputs(ctx, seed_value))[f"seed {seed_value} turn {turn} segment 0"]
-    return sc.rebuild_state(inp["in_state"], tables), jnp.asarray(inp["in_actions"], jnp.int32)
+    s = make_state(
+        tables, [_mon(names, "Abra", ["Bug Bite"], 50)], [_mon(names, "Rattata", ["Recycle"], 60)]
+    )
+    s = s._replace(stats=s.stats.at[1, 0, _SPE].set(500))
+    s = s._replace(recycle_item=s.recycle_item.at[1].set(names.item("Starf Berry")))
+    acts = jnp.asarray(_acts(names, s, 0, "Bug Bite", "Recycle"))
+    loose = np.asarray(outcome_laws(tables, s, acts, loose=True).relevant.starf[0]).tolist()
+    assert loose[0] and _consumed_starf(tables, s, acts)[0]
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("seed_value, turn", [(165, 3), (107, 3), (22, 4), (64, 4), (120, 2)])
-def test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer(
-    tables, names, seed_value, turn
-):
-    """G-46: the snapshot "rest" states whose enumeration batch G widened (pod compare of
-    56cd9f4 against main 08a57000). A battler's third eat (``starf[d, 3]``) is read only where a
-    foe's Roar can drag in a bench holder (G-28: the third needs one); the plucked Starf draw
-    and the Pluck flag's second own eat never both draw. Seed 107 enumerates (main did)."""
-    from nuzline.engine.enumerate import enumerate_turn, outcome_laws
+@pytest.mark.parametrize("mine, third", [("Recycle", True), ("Tackle", False)])
+def test_a_flung_starf_its_own_and_its_recycle_are_three_eats(tables, names, mine, third):
+    """The third eat's bound in ``enumerate._starf_reads`` (``own`` counts ``flung``, a Recycle and
+    the held berry; E3-B2-1 on G-28). The faster foe Flings a Starf Berry at side 0's Abra, held
+    Starf Berry, one HP above its pinch at the turn start (curHP <= maxHP / 4,
+    battle_lib.c:4852-4853, would have eaten it earlier); the Fling's hit takes it to the pinch
+    (power 10, starf_berry.json flingPower, from a level-10 foe: no KO). effect_script_0233.s:7
+    TryFling runs BattleSystem_FlingItem's FLING_EFFECT_RANDOM_UP2 loop before the hit
+    (battle_lib.c:6110-6129, ``RandNext() % 5`` at :6121; ``hooks.fling_try``), queue entry 0. The
+    Abra's own Starf Berry is eaten at AFTER_MOVE_EFFECT_DEFENDER_ITEM (bcp:3691-3696, draw
+    lib:4865), entry 2. With ``Recycle`` (effect_script_0184.s:5-7, BtlCmd_TryRecycle
+    battle_script.c:9000-9013) it gets that berry back and eats it again at
+    AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (bcp:3730-3761, draw lib:5288), entry 3: ``starf[0, 3]``
+    with no Roar. With ``Tackle`` two sources only: no ``starf[0, 3]``. The Roar newcomer's third
+    eat (own + Bug Bite of a foe's Starf + a Roar-dragged bench holder) is pinned by
+    ``test_the_later_starf_draws_are_read_where_eats_can_meet`` (enumeration) and
+    ``test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Roar]`` (step). Every
+    consumed cell is read."""
+    from nuzline.engine.enumerate import outcome_laws
 
-    s, acts = _snap_segment(tables, names, seed_value, turn)
-    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
-    from nuzline.engine.ids import EffectId
-
-    for d in range(2):
-        if laws.relevant.starf[d, 3]:
-            foe, slot = 1 - d, int(acts[1 - d])
-            assert slot < MOVE_ACTIONS, (seed_value, d)  # the foe uses a move: Roar
-            move = int(s.moves[foe, int(s.active[foe]), slot])
-            assert int(tables.move_effect[move]) == EffectId.ROAR, (seed_value, d)
-    if seed_value == 107:
-        enumerate_turn(tables, s, acts)
+    s = _starf_fight(names, tables, [mine], ["Fling"], foe_item="Starf Berry")
+    s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4 + 1)  # reachable: above the pinch at start
+    acts = jnp.asarray(_acts(names, s, 0, mine, "Fling"))
+    relevant = np.asarray(outcome_laws(tables, s, acts).relevant.starf[0]).tolist()
+    consumed = _consumed_starf(tables, s, acts)
+    assert relevant == [True, False, True, third]
+    assert consumed == [True, False, True, third]
 
 
 # --- Nightmare (F-O5, G-31..G-34) -----------------------------------------------------------

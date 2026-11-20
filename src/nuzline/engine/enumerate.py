@@ -2912,9 +2912,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
     has no Roar the same turn, a Recycling foe does not Fling, and a plucked or flung foe Starf
     Berry is gone for the other, so a fourth draw is not reached there; Thief / Covet and Trick /
-    Switcheroo, the other item givers, are unsupported (``coverage.ITEM_MOVING_EFFECTS``); an eat
-    past the third reads the queue's
-    last entry."""
+    Switcheroo, the other item givers, are unsupported (no ``EffectId``: ``Support.NONE`` in
+    ``coverage.IMPLEMENTED_EFFECTS``); an eat past the third reads the queue's last entry."""
     fmt = format_of(state)
     sides = jnp.arange(fmt.B)
     rows = party(fmt, sides)
@@ -2999,7 +2998,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # Not with a plucked Starf Berry (``plucked``): its PLUCK_EFFECT_RANDOM_UP2 draws while one of
     # the five stats is below +6, and its subscript_held_item_sharply_raise_stat.s:21 PLUCK_CHECK
     # clears the flag (the own berry is eaten once after it); with all five at +6 neither berry
-    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5838-5841) its
+    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5839-5845) its
     # own berry does not act either. The plucked draw and a second own draw never meet: two
     # draws, not three (G-28's bound needs a Roar newcomer for the third).
     # G-S6: the flag is set only for an eaten berry (``result == TRUE``, lib:5848: a listed
@@ -3013,8 +3012,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # incoming one too: a switch acts before moves) or a berry it Recycles first
     # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
     # foe's own eaten berry and its Fling (RemoveItem, effect_script_0233.s; ``fling_removed``) only
-    # remove it (an over-read); Thief / Covet and Trick / Switcheroo are unsupported
-    # (``coverage.ITEM_MOVING_EFFECTS``); a foe's U-turn / Baton
+    # remove it (an over-read); Thief / Covet and Trick / Switcheroo are unsupported (no
+    # ``EffectId``: ``Support.NONE`` in ``coverage.IMPLEMENTED_EFFECTS``); a foe's U-turn / Baton
     # Pass newcomer is read by the resumed call (``pivot_battler``); in singles only d itself
     # could Roar the foe's side, and d is Plucking.
     keeps = jnp.asarray(
