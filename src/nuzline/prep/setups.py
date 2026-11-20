@@ -15,6 +15,7 @@ from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.engine.coverage import start_gravity, start_trick_room
 from nuzline.engine.state import BattleState
+from nuzline.prep.friendship import battle_start_party, starts_with_friendship
 from nuzline.prep.problem import PrepProblem
 from nuzline.prep.states import make_states
 from nuzline.prep.variants import (
@@ -22,6 +23,7 @@ from nuzline.prep.variants import (
     RELEARNER,
     Cost,
     Member,
+    _default_tables,
     _free_changes,
     _relearner_options,
     ai_kill_damage,
@@ -121,8 +123,17 @@ def check_team_space(n: int, max_team: int, limit: int = MAX_TEAM_SETUPS) -> Non
 def setup_specs(
     problem: PrepProblem, setup: Setup, tables: Tables | None = None
 ) -> list[PokemonSpec]:
-    """The party specs of ``setup``, lead first (``tables`` as ``member_spec``)."""
-    return [member_spec(problem, m, tables) for m in setup.members]
+    """The party specs of ``setup``, lead first (``tables`` as ``member_spec``), as they stand
+    when the battle starts: friendship raised against a Gym Leader, Elite Four or Champion
+    class (``prep.friendship``; the raise reads each member's held item, so it follows the
+    setup's item changes)."""
+    specs = [member_spec(problem, m, tables) for m in setup.members]
+    classes = (problem.trainer.class_id, problem.enemy_2_class)
+    if not starts_with_friendship(classes):
+        return specs
+    return battle_start_party(
+        tables if tables is not None else _default_tables(), specs, classes, problem.map_label
+    )
 
 
 def protected_slots(problem: PrepProblem, setup: Setup) -> tuple[int, ...]:

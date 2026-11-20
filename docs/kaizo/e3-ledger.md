@@ -1726,3 +1726,41 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   rules file (when the CLI passes the group list: only with `--rules`).
   Tests: tests/data/test_gauntlet_settings.py (loader half), tests/tools/rom/test_inputs.py, tests/test_cli.py (parser and
   `_gauntlet_setup` cases). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.
+
+- E3-B3-5a GT-5, unblocked parts (`src/nuzline/prep/friendship.py`, `src/nuzline/prep/gauntlet.py`, `prep/problem.py`,
+  `prep/setups.py`, `prep/checkpoint.py`, `cli.py`). No table input changed. Built: .a battle-start friendship, .b the
+  level-cap sit-out. Not built (wait for GT-4's `carry_out` and E2's D3-8b `party_held_item`): .c lead and `slot_of`, .d
+  `barred` and its playout and Stage B input, .e the re-run root (`--beaten`, `--dead`, root sit-outs, deaths left), .f
+  format per fight, `write_carry`, `carry_to_specs`, and the sheet's tests for them.
+  (a) Battle-start friendship (E3-B3-5.a): `prep.friendship` raises every party-0 member's friendship by
+  `Pokemon_UpdateFriendship(mon, FRIENDSHIP_EVENT_BEAT_GYM_LEADER_E4_OR_CHAMPION, mapHeader)` when enemy 1's or enemy 2's
+  class is one of the 13 classes of `TrainerIsGymLeaderE4OrChampion` (`src/battle/battle_main.c:1360-1372`, `:1376-1397`):
+  tier by friendship >= 100 and >= 200 (`src/pokemon.c:2652-2660`, `include/constants/pokemon.h:29-30`), change
+  `{3, 2, 1}` (`:2626`), +1 Luxury Ball (`:2664-2666`, `friend_bonus`), +1 egg location equals `mapID` (`:2668-2670`), x150/100
+  in integers for HOLD_EFFECT_FRIENDSHIP_UP (`:2672-2676`), clamp 0..255 (`:2678-2686`). Class ids are line N - 1 of
+  `generated/trainer_classes.txt`: 62, 64-69, 74-79; the Kaizo trainer data keeps them (Roark is 62). The raise sits in
+  `setups.setup_specs`, so it follows each setup's held item and reaches `setup_states` and the report root; `build_problem`
+  stores `PrepProblem.enemy_2_class` and `map_label` (`opponent_2`, `map_label` keywords) and checks the candidates at once;
+  `cli rank`, `solve` and the `line` setup apply it before `make_state` (single enemy). The checkpoint fingerprint adds both
+  fields only when set. `mapID` is the map label text id, not the header id (`battle_main.c:1054`;
+  `src/field_battle_data_transfer.c:263`; the Kaizo getter reads the field at byte 18 of the `d_test.narc` member,
+  `docs/kaizo/rom_diff.md:269`; ROM check: Kaizo header 454, the rematch trainers' map, has label 82).
+  (b) Unread label (a gap, stated, not guessed): the label of each trainer's header is not in the tables, so callers pass
+  `map_label` or None. None: a member with egg location 0 gets no match (ROM check over `rom_trainer_maps.json` and the
+  `d_test.narc` headers: no Gym Leader, Elite Four or Champion trainer has a header with label 0; labels 7-15, 81, 82, 84 and
+  119; 33 of 618 headers do have label 0, so the test is not generally safe), and a member with a nonzero egg location is a
+  `ValueError` naming the missing label. Follow-up (a table input, for the managing session): per trainer map label text
+  ids (a Kaizo trainer can have several headers, Byron has labels 7 and 119) and a worst-case rule over them.
+  (c) The partner party gets the same raise (`battle_main.c:1368-1371`); no tag or multi fight in the game is against these
+  classes, so prep applies it to party 0 only. `opponent_2` is not yet passed by `cli._prep` (formats other than singles
+  run when E2's formats land, D11).
+  (d) Level-cap sit-out (E3-B3-5.b): `prep.gauntlet.cap_sit_out(levels, next_cap, cap_overflow, cap_sit_out_in_party,
+  deposit_room, sat_out)` -> `CapSitOut(over, deposited, barred, lost)`. User settings (house rules), not game rules
+  (design section 3): `sit_out_after_fight` sits out a member whose level exceeds the next cap (equal stays in); `fight`
+  removes nobody; `forbidden` must deposit every such member at this gap (`deposit_room` = how many the gap takes: None for
+  a PC or walk-out gap, a swap count, 0 for none), more than the room is `lost`; `allowed` keeps them, barred, with the
+  earlier sit-outs. The next cap comes from `prep.caps.next_fight_cap`, or `default_cap` of the next fight along the
+  resolved order when that differs from the split order (GT-6).
+  Tests: tests/prep/test_gauntlet_start.py (friendship tiers 99/100/199/200, Luxury Ball, egg location against the label
+  and not the header id, Soothe Bell rounding, clamp, Gym and E4 classes yes and regular no, Return and Frustration in both
+  engines, `setup_specs`, cap sit-out cases). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.

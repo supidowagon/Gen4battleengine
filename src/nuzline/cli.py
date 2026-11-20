@@ -1065,6 +1065,9 @@ def _rank(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,))
 
     state = make_state(
         tables,
@@ -1163,6 +1166,9 @@ def _solve(args) -> int:
         _print_report(e.report)
         return EXIT_REFUSED
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,))
 
     state = make_state(
         tables,
@@ -1484,6 +1490,9 @@ def line_setup(
     weather, _ = fight_start(trainer, names, save, field_defog, player, script_weather)
     require_coverage(tables, names, player, trainer, opp, weather, (0, 0), cry)
     from nuzline.engine.coverage import start_gravity, start_trick_room
+    from nuzline.prep.friendship import battle_start_party
+
+    player = battle_start_party(tables, player, (trainer.class_id,))
 
     state = make_state(
         tables,
