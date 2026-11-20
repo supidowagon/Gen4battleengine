@@ -122,6 +122,8 @@ def fake_inter(tmp_path):
         "trainers": [],
         "rom_field_effects": [],
         "rom_trainer_maps": {},
+        "rom_map_weather": [],
+        "rom_script_weather": {"battles": {}, "windows": {}},
     }
     for name, data in rom.items():
         _write(inter / "rom" / f"{name}.json", data)
@@ -581,7 +583,10 @@ def test_json_shapes(resolved_trainers):
         assert t["gauntlet"] is None or len(t["gauntlet"]) == 2
         assert t["split_order"] is None or len(t["split_order"]) == 2
         assert isinstance(t["gauntlet_rules"], dict) and isinstance(t["sources"], dict)
-        assert set(t["area_condition"]) == {"weather", "fog", "trick_room", "gravity", "permanent"}
+        # fog_headers on every trainer (ledger G-15); script_weather and script_window only
+        # where a script weather window reaches the fight (G-23, G-24).
+        keys = {"weather", "fog", "trick_room", "gravity", "permanent", "fog_headers"}
+        assert set(t["area_condition"]) in (keys, keys | {"script_weather", "script_window"})
 
 
 # Derived from rom_trainer_maps.json and rom_field_effects.json (fix round 1): ROM Trick Room

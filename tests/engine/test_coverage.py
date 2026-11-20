@@ -618,7 +618,11 @@ def test_pool_candidate_with_a_terrain_move_is_refused(tables, names):
     cand = Candidate(("party", 0, 0), "party slot 0", spec, 0, (names.move("Secret Power"),), ())
     mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(0, 2))
     report = check_pool(tables, names, [cand], roark_party(names), mixed)
-    assert any("Secret Power would read it (battle terrain" in m for m in report.missing)
+    # G-21: an unnamed mixed terrain stays refused, a run input (G-18).
+    assert any(
+        "Secret Power would read it: name it with --terrain (battle terrain" in m
+        for m in report.missing
+    )
     report = check_pool(tables, names, [cand], roark_party(names), roark_trainer())
     assert not any("battle terrain" in m for m in report.missing)
 
