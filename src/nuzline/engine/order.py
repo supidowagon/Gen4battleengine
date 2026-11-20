@@ -399,9 +399,16 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     """``state`` with ``MOVE_EFFECT_IMPRISON`` on every battler of the other side of ``sides``
     (``bool[2]``): a faster foe's Imprison this turn (``BtlCmd_TryImprison``, battle_script.c:
     6724), which then seals its moves for the Sleep Talk user (battle_script.c:4927; battle
-    b on side b in singles)."""
+    b on side b in singles). A battler gets the bit when any battler of the other side is in
+    ``sides`` (Move_Imprisoned's side test, battle_lib.c:3323-3324)."""
     fmt = format_of(state)
-    foe_of = jnp.asarray(sides)[_foe(jnp.arange(fmt.B))]
+    sides = jnp.asarray(sides)
+    foe_of = jnp.stack(
+        [
+            jnp.any(sides[[x for x in range(fmt.B) if side_of(x) != side_of(b)]])
+            for b in range(fmt.B)
+        ]
+    )
     value = jnp.where(foe_of, 1, state.imprison)
     return state._replace(imprison=value.astype(state.imprison.dtype))
 

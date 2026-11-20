@@ -707,22 +707,25 @@ def _present(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     return _set(state, "hp", (h.target_side, h.target), healed, cond)
 
 
-def recovers_at_full_hp(tables, state: BattleState, side, move, outcome: Outcome) -> jnp.ndarray:
+def recovers_at_full_hp(
+    tables, state: BattleState, side, move, outcome: Outcome, target_side=None
+) -> jnp.ndarray:
     """``bool``: ``side``'s ``move``, if it lands, runs ``subscript_recover_hp.s`` on a
     recipient at full HP: Recover on its user (``subscript_recover_half_max_hp.s:16``),
     Present's heal on its target (``subscript_present_heal.s:9``). That subscript's ``_036``
     ("HP is full!") sets ``MOVE_STATUS_NO_MORE_WORK``, so
     ``BattleControllerPlayer_CheckMoveFailure`` (bcp.c:3313-3315) jumps to
     ``LOOP_SPREAD_MOVES`` and the move's ``AfterMoveEffects`` (bcp.c:3638-3769: the attacker's
-    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``)."""
+    and defender's held items, ``HELD_ITEM_STATUS``) never run (``step._use_move``).
+    ``target_side``: the action's defender (Present's BTLSCR_DEFENDER, effect_script_0122.s);
+    default the battler across."""
     fmt = format_of(state)
     side = jnp.asarray(side, _I32)
+    foe = _foe(side) if target_side is None else jnp.asarray(target_side, _I32)
     effect = tables.move_effect[jnp.asarray(move, _I32)]
-    user, target = state.active[side], state.active[_foe(side)]
+    user, target = state.active[side], state.active[foe]
     user_full = state.hp[party(fmt, side), user] == state.max_hp[party(fmt, side), user]
-    target_full = (
-        state.hp[party(fmt, _foe(side)), target] == state.max_hp[party(fmt, _foe(side)), target]
-    )
+    target_full = state.hp[party(fmt, foe), target] == state.max_hp[party(fmt, foe), target]
     heal = (effect == _E.PRESENT) & (outcome.present[side] == PRESENT_HEAL)
     # Roost runs the same subscript (subscript_roost.s:10), and so does the weather heal
     # (subscript_present_heal.s:9, B12-13).
@@ -2137,14 +2140,15 @@ def imprison_fails(state: BattleState, side) -> jnp.ndarray:
     """``bool``: ``BtlCmd_TryImprison`` jumps to failure (battle_script.c:6692-6693, :6721-6722):
     ``side``'s battler already has ``MOVE_EFFECT_IMPRISON``, or none of its moves is a move of a
     battler of the other side (the loop over battlers, :6697-6716: their ``battleMons`` moves,
-    whatever their HP; doubles convention 4, battler b is on side b in singles)."""
+    whatever their HP; the user's partner is on its own side and does not count)."""
     fmt = format_of(state)
     own = state.moves[party(fmt, side), state.active[side]].astype(_I32)
     shared = jnp.bool_(False)
     for battler in range(state.active.shape[0]):
         theirs = state.moves[party(fmt, battler), state.active[battler]].astype(_I32)
         match = (own[:, None] == theirs[None, :]) & (own[:, None] != 0) & (theirs[None, :] != 0)
-        shared = shared | ((jnp.asarray(side) != battler) & jnp.any(match))
+        other_side = side_of(jnp.asarray(side)) != side_of(battler)
+        shared = shared | (other_side & jnp.any(match))
     return (state.imprison[side] != 0) | ~shared
 
 

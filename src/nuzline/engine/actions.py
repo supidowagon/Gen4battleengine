@@ -47,7 +47,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
-from nuzline.engine.format import format_of, party
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
     GRAVITY_MOVES,
@@ -119,14 +119,14 @@ def choice_locked(tables: Tables, state: BattleState, side) -> jnp.ndarray:
 def move_imprisoned(state: BattleState, side, move) -> jnp.ndarray:
     """``bool`` (the shape of ``move``): ``Move_Imprisoned`` (battle_lib.c:3316-3338): a battler
     of the other side has ``MOVE_EFFECT_IMPRISON`` and knows ``move`` (the loop over battlers,
-    doubles convention 4; battler b is on side b in singles)."""
+    :3323-3324: the side test, so never the partner)."""
     fmt = format_of(state)
     move = jnp.asarray(move, jnp.int32)
     out = jnp.zeros(move.shape, bool)
     for battler in range(state.active.shape[0]):
         known = state.moves[party(fmt, battler), state.active[battler]].astype(jnp.int32)
         holds = jnp.any(move[..., None] == known, axis=-1)
-        sealing = (jnp.asarray(side) != battler) & (state.imprison[battler] != 0)
+        sealing = (side_of(jnp.asarray(side)) != side_of(battler)) & (state.imprison[battler] != 0)
         out = out | (sealing & holds & (move != 0))
     return out
 
@@ -136,7 +136,8 @@ def imprisoning_foe(state: BattleState, side) -> jnp.ndarray:
     ``Move_Imprisoned``, battle_lib.c:3325-3326)."""
     out = jnp.bool_(False)
     for battler in range(state.active.shape[0]):
-        out = out | ((jnp.asarray(side) != battler) & (state.imprison[battler] != 0))
+        other = side_of(jnp.asarray(side)) != side_of(battler)
+        out = out | (other & (state.imprison[battler] != 0))
     return out
 
 

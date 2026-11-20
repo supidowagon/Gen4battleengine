@@ -936,8 +936,8 @@ def _hit_events(before: BattleState, after: BattleState, side, landed, crit, def
     (``effects.thaw_target`` in ``_use_move``; Pursuit's hit has none)."""
     fmt = format_of(before)
     # The defender's battler (``targets.resolve``'s ``target_side``; default the foe): the user
-    # itself when a lock reads the stored target (singles follow-up (ii)). The Pursuit site's
-    # caller passes none (D3-9).
+    # itself when a lock reads the stored target (singles follow-up (ii)); Pursuit's: the
+    # switcher (subscript_pursuit.s's BTLSCR_DEFENDER).
     foe = _foe(side) if defender is None else jnp.asarray(defender, _I32)
     user, target = before.active[side], before.active[foe]
     dealt = before.hp[party(fmt, foe), target] > after.hp[party(fmt, foe), target]
@@ -1605,11 +1605,12 @@ def _use_move(
     failed = failed | ((effect_used == EffectId.EMBARGO) & (state.substitute_hp[target_side] != 0))
     # Imprison (effect_script_0192.s): BtlCmd_TryImprison first sets MOVE_EFFECT_IMPRISONED on
     # the user's foes (battle_script.c:6686-6690: both enemy slots, which in singles name the
-    # one foe battler, whatever its HP), then fails (:10) a user already imprisoning or sharing
-    # no move with them (effects.imprison_fails).
+    # one foe battler, whatever its HP; never the partner), then fails (:10) a user already
+    # imprisoning or sharing no move with them (effects.imprison_fails).
     imprison_runs = can_act & has_target & (effect_used == EffectId.IMPRISON)
-    for battler in range(state.active.shape[0]):  # battler b is on side b in singles
-        state = _set_side(state, "imprisoned", battler, 1, imprison_runs & (side != battler))
+    for battler in range(state.active.shape[0]):
+        enemy = side_of(jnp.asarray(side)) != side_of(battler)
+        state = _set_side(state, "imprisoned", battler, 1, imprison_runs & enemy)
     failed = failed | ((effect_used == EffectId.IMPRISON) & imprison_fails(state, side))
     # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (battle_script.c:6261-6270) sets the
     # user's side's followMe and followMeUser, on every run of the script (no failure branch; a
@@ -1639,7 +1640,9 @@ def _use_move(
     failed = failed | (future & pending)
     sets = future & ~pending
     rolled = 85 + outcome.roll[side, 0].astype(_I32)
-    stored = jnp.maximum(calc_move_damage(tables, state, side, used) * rolled // 100, 1)
+    # CalcMoveDamage against battleCtx->defender (battle_script.c:6079-6089).
+    stored = calc_move_damage(tables, state, side, used, def_side=target_side)
+    stored = jnp.maximum(stored * rolled // 100, 1)
     # futureSightDamage is an s32; the hit reads it only through min(damage, curHP) and
     # damage >= curHP, so it is kept capped to the int16 storage (above any HP).
     stored = jnp.minimum(stored, FUTURE_DAMAGE_MAX)
@@ -1917,7 +1920,7 @@ def _use_move(
     # A Recover / Present heal on a full-HP recipient (single-hit moves): MOVE_STATUS_NO_MORE_WORK
     # skips the move's AfterMoveEffects (effects.recovers_at_full_hp), so no item check runs in
     # any loop pass below (the passes after the hit would otherwise repeat it).
-    no_more_work = connected & recovers_at_full_hp(tables, state, side, used, outcome)
+    no_more_work = connected & recovers_at_full_hp(tables, state, side, used, outcome, target_side)
     # A direct effect that fails (Swagger) or does nothing (Dragon Dance at +6 / +6):
     # MOVE_STATUS_FAILED / _NO_MORE_WORK skip AfterMoveEffects (effects.primary_effect_fails).
     no_more_work = no_more_work | (
@@ -3496,7 +3499,7 @@ def _execute_actions(
         hit, p_se = _pursuit_hit(tables, pre, pursuer, side, acts, choices, outcome)
         crit = crit_lands(tables, pre, pursuer, pmove, outcome.crit[pursuer, 0])
         crit = crit & ~crit_blocked(pre, pursuer, side)
-        seen = _hit_events(pre, hit, pursuer, True, crit)
+        seen = _hit_events(pre, hit, pursuer, True, crit, side)
         pursuer_events = {
             "act_kind": ACT_MOVE,
             "act_id": pmove,
@@ -4037,14 +4040,15 @@ def _bad_dreams_check(tables: Tables, state: BattleState, side) -> BattleState:
     Magic Guard (Battler_Ability) facing a living Bad Dreams holder of the other side
     (COUNT_ALIVE_BATTLERS_THEIR_SIDE_FLAG, battle_lib.c:2915-2922) runs subscript_bad_dreams.s:
     per holder Divide(maxHP, 8) through UPDATE_HP, stopping once it faints, each message tagging
-    the holder's ability (B9-8). A loop over the foe battlers (in singles the one)."""
+    the holder's ability (B9-8). A loop over the battlers of the other side in index order (the
+    flag's bits, subscript_bad_dreams.s:3-31; in singles the one foe), never the partner."""
     fmt = format_of(state)
     mon = state.active[side]
     max_hp = state.max_hp[party(fmt, side), mon].astype(_I32)
     for foe in range(state.active.shape[0]):
         holder = state.active[foe]
         on = (
-            (jnp.asarray(side) != foe)
+            (side_of(jnp.asarray(side)) != side_of(foe))
             & (battler_ability(state, foe, holder) == AbilityId.BAD_DREAMS)
             & (state.hp[party(fmt, foe), holder] > 0)
             & (state.status[party(fmt, side), mon] == Status.SLEEP)

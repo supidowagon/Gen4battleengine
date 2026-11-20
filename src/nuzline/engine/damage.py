@@ -892,7 +892,7 @@ def move_type_of(tables: Tables, state: BattleState, side, move, gift=0) -> jnp.
 
 
 def fixed_damage(
-    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True
+    tables: Tables, state: BattleState, atk_side, move, wonder_guard=True, def_side=None
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(is_fixed, damage)``: a ``LEVEL_DAMAGE`` move (Night Shade, Seismic Toss;
     ``effect_script_0087.s``) deals the attacker's level with ``SYSCTL_IGNORE_TYPE_CHECKS``:
@@ -910,10 +910,14 @@ def fixed_damage(
 
     Wonder Guard (``wonder_guarded``, where ``wonder_guard``) stops them like an immunity: they
     have table power 1, so ``ApplyTypeChart`` flags any that is not super effective (ruling
-    G-18)."""
+    G-18).
+
+    ``def_side``: the defender's battler, battleCtx->defender of the scripts (BTLSCR_DEFENDER,
+    effect_script_0040.s, _0189.s; ApplyTypeChart, battle_lib.c:7544-7552); default the
+    battler across."""
     fmt = format_of(state)
     atk_side = _i32(atk_side)
-    def_side = _foe(atk_side)
+    def_side = _foe(atk_side) if def_side is None else _i32(def_side)
     effect = tables.move_effect[_i32(move)]
     is_level = effect == EffectId.LEVEL_DAMAGE
     is_bide = effect == EffectId.BIDE
@@ -1902,7 +1906,7 @@ def damage_table(
         tables, state, atk_side, move, damage, move_type, category, power, rolls,
         wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
-    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard, def_side)
     amount = jnp.where(tables.move_effect[_i32(move)] == EffectId.BIDE, 0, amount)
     beat_up = beat_up_damage(tables, state, atk_side, def_side, move, hit, crit, rolls)
     table = jnp.where(tables.move_effect[_i32(move)] == EffectId.BEAT_UP, beat_up, table)
@@ -1974,7 +1978,7 @@ def damage_for_roll(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard, def_side=def_side,
     )  # fmt: skip
-    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard)
+    fixed, amount = fixed_damage(tables, state, atk_side, move, wonder_guard, def_side)
     # The only place Present's heal path deals 0: ``_pre_random`` above still ran at the
     # table power (it ignores a ``present`` outside 0-2), so a caller that needs the heal's
     # damage must come through here, not ``_pre_random`` / ``calc_move_damage``.
@@ -1989,14 +1993,15 @@ def damage_for_roll(
 
 
 def calc_move_damage(
-    tables: Tables, state: BattleState, atk_side, move, power_mul=10
+    tables: Tables, state: BattleState, atk_side, move, power_mul=10, def_side=None
 ) -> jnp.ndarray:
     """``int32``: ``BattleSystem_CalcMoveDamage`` (battle_lib.c:6601) alone, with
     ``criticalMul`` 1: step 1 above, ending with the ``+ 2`` (so a power-0 move gives 2).
     No variance, STAB, type chart or Life Orb. ``power_mul`` is ``battleCtx->powerMul`` in
-    tenths."""
+    tenths. ``def_side``: the defender's battler (default the battler across)."""
+    def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
     return _pre_random(
-        tables, state, atk_side, move, False, power_mul=power_mul, def_side=_foe(_i32(atk_side))
+        tables, state, atk_side, move, False, power_mul=power_mul, def_side=def_side
     )[0]
 
 

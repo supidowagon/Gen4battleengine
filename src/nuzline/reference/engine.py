@@ -1034,11 +1034,13 @@ def _rollout_multiplier(s: RefState, attacker: int) -> int:
     return power * 2 if sd.curled else power
 
 
-def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: bool = True) -> int:
+def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: bool = True,
+                  defender: int | None = None) -> int:  # fmt: skip
     """``effect_script_0087.s``: the attacker's level, with ``SYSCTL_IGNORE_TYPE_CHECKS``
     (lib.c:7544): no multiplier, but the chart's immunity still fails the move. Bide's
     unleash is ``2 * storedDamage`` (bcp.c:2702) and ignores the chart (``RANGE_USER``,
-    bcp.c:2350-2358); on any other Bide turn nothing is dealt."""
+    bcp.c:2350-2358); on any other Bide turn nothing is dealt. ``defender``: battleCtx->defender
+    (BTLSCR_DEFENDER, effect_script_0040.s, _0189.s), default the battler across."""
     sd = s.battlers[attacker]
     effect = _t(tables, "move_effect", move)
     if effect == EffectId.FUTURE_SIGHT:  # effect_script_0148.s: no CalcDamage at the use
@@ -1047,13 +1049,14 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
         return 0
     if effect == EffectId.BIDE:
         return 2 * sd.bide_damage if sd.locked_move and sd.bide_turns == 0 else 0
-    foe = _active(s, _foe(attacker))
+    defender = _foe(attacker) if defender is None else defender
+    foe = _active(s, defender)
     kind = _move_type(tables, s, attacker, move)
-    if _matchup_x40(tables, kind, foe.types, _identified(tables, s, attacker, _foe(attacker))) == 0:
+    if _matchup_x40(tables, kind, foe.types, _identified(tables, s, attacker, defender)) == 0:
         return 0
-    if _ground_immune(tables, s, attacker, _foe(attacker), kind):
+    if _ground_immune(tables, s, attacker, defender, kind):
         return 0
-    if wonder_guard and _wonder_guarded(tables, s, attacker, _foe(attacker), move, kind):
+    if wonder_guard and _wonder_guarded(tables, s, attacker, defender, move, kind):
         return 0  # power 1: MOVE_STATUS_WONDER_GUARD stops it (G-18)
     if effect == EffectId.HALVE_HP:  # effect_script_0040.s: Divide(curHP, 2)
         return _divide(foe.hp, 2)
@@ -1062,7 +1065,7 @@ def _fixed_damage(tables, s: RefState, attacker: int, move: int, wonder_guard: b
     if effect == EffectId.OHKO:
         # BtlCmd_TryOHKOMove (script.c:4340-4341): an ignorable Sturdy, MOVE_STATUS_STURDY;
         # else UpdateHP deals maxHP (bcp.c:3343-3345).
-        if _ignorable(s, attacker, _foe(attacker)) == AbilityId.STURDY:
+        if _ignorable(s, attacker, defender) == AbilityId.STURDY:
             return 0
         return foe.max_hp
     flat = _t(tables, "move_param", move, 0)  # Dragon Rage 40, SonicBoom 20 (B9-9)
@@ -1844,7 +1847,7 @@ def _move_damage(
         return 0
     defender = _foe(attacker) if defender is None else defender  # the user for a self-hitting lock
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
-        return _fixed_damage(tables, s, attacker, move, wonder_guard)
+        return _fixed_damage(tables, s, attacker, move, wonder_guard, defender)
     if _t(tables, "move_effect", move) == EffectId.BEAT_UP:
         return _beat_up_damage(tables, s, attacker, defender, move, crit, roll, hit)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
@@ -4903,7 +4906,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     if _blacked_out(s, foe) or not _bench(s, side):
         return False
     target_moved = turn.position == 1
-    _contact_ability(turn, s, side, move, hit, True, dealt)
+    _contact_ability(turn, s, side, move, hit, True, dealt, foe)
     user, holder = _active(s, side), _active(s, foe)
     barb = (
         turn.damaged
@@ -5500,19 +5503,16 @@ def _unstrip_roost(turn: _Turn, s: RefState) -> None:
         turn.roost_strip = None
 
 
-def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
+def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
            struggling: bool, locked: bool, moved: list[bool],
            last_to_act: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
-    for ``side``'s active Pokemon; ``target`` is the battler whose speed the action's sort
-    compared (monSpeedValues, Gyro Ball). Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
+    for ``side``'s active Pokemon. Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
     writes to the foe's ``moveHit`` (``ref_step`` applies it after the faint check), or
     None when the foe is not the defender."""
     tables, o = turn.tables, turn.outcome
     mon = _active(s, side)
-    # BranchActions' SortMonSpeedOrder (bcp.c:888) writes monSpeedValues before the action
-    # (Gyro Ball, B13-14); moveSlot (Trump Card, B13-15).
-    turn.gyro_power = _gyro_power(tables, s, side, target) if _active(s, target).hp else 0
+    # moveSlot (Trump Card, B13-15).
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
     turn.gift = 0
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
@@ -5528,6 +5528,12 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         o.target_draw[side],
     )  # fmt: skip
     foe_defender = turn.defender is not None and turn.defender != side
+    # BranchActions' SortMonSpeedOrder (bcp.c:888) writes every battler's monSpeedValues before
+    # the action (Gyro Ball, B13-14); BtlCmd_CalcGyroBallPower (script.c:7127) reads the
+    # defender's, the battler FightCommand picked (_resolve is pure, so the state is the
+    # action start's).
+    gyro_target = turn.target_side
+    turn.gyro_power = _gyro_power(tables, s, side, gyro_target) if _active(s, gyro_target).hp else 0
     _strip_roost(turn, s, turn.target_side)
     # BEFORE_MOVE_STATE_QUICK_CLAW (bcp.c:3140-3143): subscript_check_quick_claw.s:26-28 eats
     # an activated Custap Berry (RemoveItem: the recycle item) before the status checks.
@@ -5756,10 +5762,12 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if effect == EffectId.FAKE_OUT and s.battlers[side].fake_out_turn != s.turn:
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
-    # Imprison (effect_script_0192.s): BtlCmd_TryImprison sets the foes' MOVE_EFFECT_IMPRISONED
-    # first (script.c:6686-6690), whatever follows.
+    # Imprison (effect_script_0192.s): BtlCmd_TryImprison sets MOVE_EFFECT_IMPRISONED on both
+    # enemy slots first (script.c:6686-6690; the foe twice at B = 2), whatever follows; never
+    # the partner.
     if effect == EffectId.IMPRISON:
-        s.battlers[_foe(side)].imprisoned = 1
+        for b in opposing(s, side):
+            s.battlers[b].imprisoned = 1
     # Follow Me (effect_script_0172.s:5-8): BtlCmd_FollowMe (script.c:6261-6270) runs with the
     # script, no failure branch (D2-11). Written in both formats (ruling D2-33): at B = 2 the other
     # side's non-Ghost Curse reads it.
@@ -5774,7 +5782,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # Focus Punch (effect_script_0170.s:5-6): MOVE_STATUS_LOST_FOCUS when the user's
     # physical / specialDamageAttackerMask is set this turn (its turnFlags attackers), B10-8.
     lost_focus = effect == EffectId.FOCUS_PUNCH and bool(turn.taken[side][3] or turn.taken[side][4])
-    if _script_fails(s, side, effect, _t(tables, "move_param", move, 1)) or lost_focus:
+    script_failed = _script_fails(
+        s, side, effect, _t(tables, "move_param", move, 1), turn.target_side
+    )
+    if script_failed or lost_focus:
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
     # Recycle (effect_script_0184.s): fails on a held item (:5) or an empty recycleItem
@@ -6871,13 +6882,13 @@ def _future_sight(turn: _Turn, s: RefState, order: list[int]) -> None:
         sd_sc.future_sight = 0
         attacker, move = sd.future_attacker - 1, sd.future_move
         # BattleControllerPlayer_CheckMoveHitAccuracy: the roll against the rate of now.
-        if not 0 < o.future_hit[d] <= _hit_rate(tables, s, attacker, move, True):
+        if not 0 < o.future_hit[d] <= _hit_rate(tables, s, attacker, move, True, target=d):
             flags.add("missed")
         if _t(tables, "move_accuracy", move):  # the check clears the Micle flag (G-59)
             s.battlers[attacker].micle = 0
         # CheckMoveHitOverrides (bcp.c:3001-3021): Protect first (it unlocks the attacker's
         # battler), else either battler's No Guard clears MOVE_STATUS_MISSED.
-        if _protected(turn, s, attacker, move, False):
+        if _protected(turn, s, attacker, move, False, target=d):
             _unlock(s.battlers[attacker])
             flags.add("protected")
         elif AbilityId.NO_GUARD in (
@@ -7072,17 +7083,24 @@ def _poison_heal(s: RefState, side: int) -> bool:
 
 def _bad_dreams_check(turn: _Turn, s: RefState, side: int) -> None:
     """MON_COND_CHECK_STATE_BAD_DREAMS (bcp.c:1484-1500): an asleep battler with HP, no Magic
-    Guard, facing a living Bad Dreams holder loses Divide(maxHP, 8); the message tags the holder."""
-    mon, foe = _active(s, side), _active(s, _foe(side))
-    if (
-        _ability(s, foe) == AbilityId.BAD_DREAMS
-        and foe.hp
-        and mon.status == Status.SLEEP
-        and _ability(s, mon) != AbilityId.MAGIC_GUARD
-        and mon.hp
-    ):
+    Guard, loses Divide(maxHP, 8) once per living Bad Dreams holder of the other side
+    (COUNT_ALIVE_BATTLERS_THEIR_SIDE_FLAG, battle_lib.c:2915-2922; never its ally), in battler
+    order, stopping once it faints (subscript_bad_dreams.s:3-31); each message tags its holder."""
+    mon = _active(s, side)
+    holders = [
+        b
+        for b in range(_fmt(s).B)
+        if side_of(b) != side_of(side)
+        and _active(s, b).hp
+        and _ability(s, _active(s, b)) == AbilityId.BAD_DREAMS
+    ]
+    if mon.status != Status.SLEEP or _ability(s, mon) == AbilityId.MAGIC_GUARD:
+        return
+    for holder in holders:
+        if not mon.hp:
+            return
         _lose_hp(turn, s, side, _divide(mon.max_hp, 8))
-        _know_ability(s, _foe(side))
+        _know_ability(s, holder)
 
 
 def _toxic_check(turn: _Turn, s: RefState, side: int) -> None:
@@ -7271,9 +7289,12 @@ def _usable(tables, s: RefState, side: int) -> list[bool]:
 
 def _move_imprisoned(s: RefState, side: int, move: int) -> bool:
     """``Move_Imprisoned`` (lib.c:3316-3338): a battler of the other side has
-    ``MOVE_EFFECT_IMPRISON`` and knows ``move``."""
+    ``MOVE_EFFECT_IMPRISON`` and knows ``move`` (:3323-3324: the side test, never the partner)."""
     return any(
-        b != side and s.battlers[b].imprison and move and move in _active(s, b).moves
+        side_of(b) != side_of(side)
+        and s.battlers[b].imprison
+        and move
+        and move in _active(s, b).moves
         for b in range(_fmt(s).B)
     )
 
@@ -7304,8 +7325,10 @@ def _mimic(tables, s: RefState, side: int, target: int) -> None:
     sd.mimic_slots |= 1 << j
 
 
-def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> bool:
-    """A user-effect script's MOVE_STATUS_FAILED (``_use_move``)."""
+def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0,
+                  target: int | None = None) -> bool:  # fmt: skip
+    """A user-effect script's MOVE_STATUS_FAILED (``_use_move``); ``target`` is the action's
+    defender (BTLSCR_DEFENDER of Dream Eater, Embargo and Endeavor)."""
     sd = s.battlers[side]
     if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
         return True
@@ -7313,15 +7336,22 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0) -> 
         return True
     if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5-6
         # CheckSubstitute (:5; no hit of the action yet) then the sleep test (:6), B10-4.
-        foe_sd = s.battlers[_foe(side)]
-        return bool(foe_sd.substitute_hp) or _active(s, _foe(side)).status != Status.SLEEP
+        foe_sd = s.battlers[target]
+        return bool(foe_sd.substitute_hp) or _active(s, target).status != Status.SLEEP
     if effect == EffectId.EMBARGO:  # effect_script_0232.s:5, :7-8: CheckSubstitute (B13-31)
-        return bool(s.battlers[_foe(side)].substitute_hp)
+        return bool(s.battlers[target].substitute_hp)
     if effect == EffectId.ENDEAVOR:  # effect_script_0189.s:5-7, :13-14 (B10-5)
-        return _active(s, _foe(side)).hp <= _active(s, side).hp
+        return _active(s, target).hp <= _active(s, side).hp
     if effect == EffectId.IMPRISON:
+        # BtlCmd_TryImprison (script.c:6697-6720): a move the user shares with any battler on the
+        # other side (the partner's moves do not count).
         own = [m for m in _active(s, side).moves if m]
-        shared = any(m in _active(s, b).moves for b in range(_fmt(s).B) if b != side for m in own)
+        shared = any(
+            m in _active(s, b).moves
+            for b in range(_fmt(s).B)
+            if side_of(b) != side_of(side)
+            for m in own
+        )
         return bool(sd.imprison) or not shared
     if effect == EffectId.GRAVITY:  # effect_script_0215.s:3, :9-10 (G-67)
         return bool(s.gravity)
@@ -7775,7 +7805,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             rollout0 = s.battlers[side].rollout_count
             try:
                 record = _fight(
-                    turn, s, side, _foe(side), action_slot, move, struggling, locked,
+                    turn, s, side, action_slot, move, struggling, locked,
                     moved=moved, last_to_act=last_to_act,
                 )  # fmt: skip
             finally:
@@ -8258,7 +8288,7 @@ def _resume(
     # or UTURN_ACTIVE test (SF2 (i)).
     if se and not sub_hit:
         _on_hit_berry(turn, s, side, foe, False, False, True)
-    _thaw_target(turn, s, side, used, dealt)
+    _thaw_target(turn, s, side, used, dealt, foe)  # the kept defender (bcp.c:3708-3727)
     for battler in (side, foe):
         _held_item(turn, s, battler)
     # UpdateMoveBuffers / UpdateFlagsWhenHit on the newcomer (bcp.c:3917-3944): no Choice lock
