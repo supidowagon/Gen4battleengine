@@ -1349,3 +1349,17 @@ source = "user, 2026-11-07"
 [area.896]
 weather = "none"
 source = "user, 2026-11-07"
+
+# --- Lady Emi 674 (manager / user ruling 2026-11-19) ------------------------------------
+# Avoidable trap fight: two level-100 Pokemon (species 200, 491) against a level cap in the 20s.
+# Split: Gardenia Split, provisional, from the second source: pkcalc PARTY_ORDER_PK.json orders her
+# between Gardenia Split:79 and Gardenia Split:91 (the ROM has no split field; the docs sheet has no row).
+# ROM gate: Floaroma Meadow house (scr_seq 278, header 257) sets trainer flag 882 (0x011d) and fights
+# 823 (0x0155), no badge check; the PC 2F bed (scr_seq 213 entry 20, common script 9019) needs 882
+# (0x0171) and, with 823 set, warps to header 320 (0x09dc); scr_seq 362 warps 320 -> 321, where
+# scr_seq 363 entry 4 writes status 0x7B to party[0] and starts battle 674 (ledger G-25, G-39).
+# Unchecked: whether the meadow house is reachable during Roark Split; whether 674 can be fought again.
+[fields.674]
+split = "Gardenia Split"
+optional = true
+source = "user, 2026-11-19"
