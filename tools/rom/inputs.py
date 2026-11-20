@@ -62,7 +62,10 @@ class RomInputs:
 
 
 def _read_toml(config: Path) -> dict[str, object]:
-    """Parse ``config`` (empty when absent), rejecting unknown keys."""
+    """Parse ``config`` (empty when absent), rejecting unknown keys. The top-level ``run``
+    key, whatever its type, is the Nuzlocke rules table of ``nuzline prep``
+    (``nuzline.data.gauntlet.load_local`` reads and validates it): skipped here, and
+    ``load_inputs`` never reads it."""
     if not config.exists():
         return {}
     try:
@@ -73,7 +76,7 @@ def _read_toml(config: Path) -> dict[str, object]:
             f"{config}: {e}; use single-quoted literal strings for Windows paths "
             "(vanilla_rom = 'G:\\dir\\file.nds')"
         ) from e
-    unknown = sorted(set(data) - set(_ENV))
+    unknown = sorted(set(data) - set(_ENV) - {"run"})
     if unknown:
         raise RomInputError(f"{config}: unknown key(s) {', '.join(unknown)}; known: {list(_ENV)}")
     return data

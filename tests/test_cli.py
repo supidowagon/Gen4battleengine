@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from nuzline.cli import main, resolve_trainer
+from nuzline.cli import _gauntlet_setup, _parser, main, resolve_trainer
 from nuzline.data import games
 from nuzline.data.games import Game
 from nuzline.data.trainer import Trainer
@@ -1462,3 +1462,95 @@ def test_pkmn_glyphs_print_as_pkmn():  # final review M13
     barry = kt("Pok\xe9mon Trainer Barry #2 [Turtwig]", id=247, cls="\u20a7\u20a6 Trainer")
     assert _trainer_line(barry) == "Pok\\xe9mon Trainer Barry #2 [Turtwig] (PKMN Trainer, id 247)"
     assert _listing_line(barry).endswith("(PKMN Trainer)") and _listing_line(barry).isascii()
+
+
+def test_gauntlet_flags_parse():
+    args = _parser().parse_args(
+        ["prep", "--save", "s.sav", "--trainer-id", "5", "--rule", "heal=bag"]
+        + ["--rule", "swap=bench:1,budget:1", "--gap-rule", "2:heal=full", "--rules", "r.toml"]
+        + ["--beaten", "195", "196", "--dead", "party:1", "box:1:2", "--swaps-left", "1"]
+        + ["--bench", "box:1:3", "--horizon", "3", "--growth-cap", "40", "--time", "night"]
+        + ["--next", "12", "--deaths", "1"]
+    )
+    assert args.rule == ["heal=bag", "swap=bench:1,budget:1"] and args.gap_rule == ["2:heal=full"]
+    assert args.rules == Path("r.toml") and args.beaten == ["195", "196"]
+    assert args.dead == ["party:1", "box:1:2"] and args.bench == ["box:1:3"]
+    assert (args.swaps_left, args.horizon, args.growth_cap) == (1, 3, 40)
+    assert (args.time, args.next_fight, args.deaths) == ("night", 12, 1)
+
+
+def test_gauntlet_flags_default_to_nothing_on_prep_and_coverage():
+    for argv in (
+        ["prep", "--save", "s.sav", "--trainer-id", "5"],
+        ["coverage", "--party", "p.toml", "--trainer-id", "5"],
+    ):
+        args = _parser().parse_args(argv)
+        assert args.rule == [] and args.gap_rule == [] and args.rules is None
+        assert args.beaten == [] and args.dead == [] and args.bench == []
+        assert args.swaps_left is None and args.horizon is None and args.growth_cap is None
+        assert args.time is None and args.next_fight is None
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["prep", "--save", "s", "--trainer-id", "5", "--time", "noon"])
+
+
+def _gauntlet_trainer(with_facts: bool) -> Trainer:
+    from nuzline.data.gauntlet import GauntletFacts
+
+    facts = GauntletFacts.from_dict(
+        {
+            "name": "Test Cave",
+            "source": "rom:test",
+            "orders": [[[10], [11], [12]]],
+            "orders_source": "rom:test",
+            "leave_gaps": [[]],
+            "leave_gaps_source": "rom:test",
+            "escape": False,
+            "escape_source": "rom:test",
+            "pc_gaps": [],
+            "pc_gaps_source": "rom:test",
+            "heal_gaps": [],
+            "heal_gaps_source": "rom:test",
+            "locked_gaps": [],
+            "locked_gaps_source": "rom:test",
+            "partner": None,
+        }
+    )
+    return Trainer(
+        10,
+        "A",
+        "C",
+        0,
+        0,
+        7,
+        (),
+        (),
+        "none",
+        "single",
+        gauntlet=("Test Cave", 10),
+        gauntlet_facts=facts if with_facts else None,
+    )
+
+
+def test_gauntlet_setup_from_flags(monkeypatch):
+    from nuzline.data import gauntlet as G
+
+    monkeypatch.setattr(G, "load_local", lambda: G.RawSettings("local"))
+    argv = ["coverage", "--party", "p.toml", "--trainer-id", "10"]
+    args = _parser().parse_args(argv)
+    assert _gauntlet_setup(args, _gauntlet_trainer(False), None, None) is None
+    setup = _gauntlet_setup(args, _gauntlet_trainer(True), None, None)
+    assert setup.settings["heal"].origin == G.Origin.DEFAULT and setup.run == G.RunInput()
+    flags = ["--rule", "heal=bag", "--gap-rule", "1:pc_heal=off", "--beaten", "10", "--next", "11"]
+    args = _parser().parse_args([*argv, *flags, "--time", "day", "--swaps-left", "2"])
+    setup = _gauntlet_setup(args, _gauntlet_trainer(True), None, None)
+    assert setup.settings["heal"] == ("bag", G.Origin.FLAG, G.FLAG_SOURCE)
+    assert setup.settings["time"].value == "day"
+    assert setup.run.beaten == (10,) and setup.run.swaps_left == 2 and setup.run.next_fight == 11
+    with pytest.raises(ValueError, match="not in a gauntlet group"):
+        _gauntlet_setup(args, _gauntlet_trainer(False), None, None)
+    bad = _parser().parse_args([*argv, "--rule", "heal=most"])
+    with pytest.raises(G.GauntletSettingsError, match="Test Cave.*heal"):
+        _gauntlet_setup(bad, _gauntlet_trainer(True), None, None)
+    twice = _parser().parse_args([*argv, "--rule", "time=day", "--time", "night"])
+    with pytest.raises(G.GauntletSettingsError, match="given twice"):
+        _gauntlet_setup(twice, _gauntlet_trainer(True), None, None)

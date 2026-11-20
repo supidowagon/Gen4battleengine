@@ -1,5 +1,9 @@
 """The gauntlet option registry, precedence and tracked facts (GT-1; synthetic groups and
-settings only, no user choice). The loader half is GT-3's."""
+settings only, no user choice) and the settings input: flags, a rules file, ``[run]`` of
+``data/local.toml``, the per-run re-run inputs and every input error (GT-3)."""
+
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,12 +17,21 @@ from nuzline.data.gauntlet import (
     RUN,
     SET,
     GauntletFacts,
+    GauntletSettingsError,
     Layer,
     Origin,
+    RunInput,
     SettingsError,
     Swap,
+    check_swap_gap,
+    load_local,
+    load_rules_file,
     missing_transitions,
+    parse_flags,
+    parse_ids,
+    parse_members,
     resolve,
+    resolve_settings,
 )
 from nuzline.data.trainer import Trainer
 
@@ -233,3 +246,377 @@ def test_walkout_gaps(facts):
 def test_trainer_gauntlet_is_group_and_fight_id():
     t = Trainer(1, "A", "C", 0, 0, 7, (), (), "none", "single", gauntlet=("Test Cave", 11))
     assert t.gauntlet == ("Test Cave", 11) and t.gauntlet_facts is None
+
+
+# --- GT-3: the settings input -----------------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+GROUP = "Test Cave"
+
+
+@pytest.fixture
+def plain():
+    """No partner, no escape, nothing locked: the walk-out gaps are the leave gaps (gap 1
+    of the first order, none of the second), the PC is at gap 2, no free heal."""
+    return GauntletFacts.from_dict(facts_dict(escape=False, partner=None, locked_gaps=[]))
+
+
+def setup(facts, rule=(), gap_rule=(), **kw):
+    return resolve_settings(facts, flags=parse_flags(list(rule), list(gap_rule)), **kw)
+
+
+def refused(facts, rule=(), gap_rule=(), **kw) -> GauntletSettingsError:
+    with pytest.raises(GauntletSettingsError) as e:
+        setup(facts, rule, gap_rule, **kw)
+    return e.value
+
+
+def test_error_names_key_group_and_origin(facts):
+    e = refused(facts, ["partner_from=4"])
+    assert (e.key, e.group, e.origin) == ("partner_from", GROUP, "--rule/--gap-rule")
+    assert str(e).startswith(f"--rule/--gap-rule: group '{GROUP}': partner_from: ")
+    assert isinstance(e, SettingsError)
+
+
+def test_parse_flags():
+    raw = parse_flags(
+        [
+            "heal=bag",
+            "swap=bench:-1,budget:2",
+            "order=11,10,13",
+            "move_sources=bag,tutor,relearner",
+            "partner_from=2",
+            "bag_uses=3",
+            "time=night",
+            "shedinja=allowed",
+        ],
+        ["2:heal=full", "1:swap_cap=2", "1:pc_heal=on"],
+    )
+    assert raw.run == {"shedinja": "allowed"}
+    assert raw.gauntlet == {
+        "heal": "bag",
+        "swap": {"bench": -1, "budget": 2},
+        "order": [11, 10, 13],
+        "move_sources": ["bag", "tutor", "relearner"],
+        "partner_from": 2,
+        "bag_uses": 3,
+        "time": "night",
+    }
+    assert raw.gaps == {2: {"heal": "full"}, 1: {"swap_cap": 2, "pc_heal": "on"}}
+    assert parse_flags(["order=sheet", "partner_from=worst"]).gauntlet == {
+        "order": "sheet",
+        "partner_from": "worst",
+    }
+    assert parse_flags([], []).gauntlet == {}
+
+
+def test_flag_values_resolve(plain, facts):
+    s = setup(plain, ["swap=bench:-1,budget:2", "order=11,10,13", "bag_uses=3"])
+    assert s.settings["swap"] == (Swap(-1, 2), Origin.FLAG, "--rule/--gap-rule")
+    assert s.settings["order"].value == (11, 10, 13) and s.orders == (plain.orders[1],)
+    assert s.settings["bag_uses"].value == 3
+    ms = setup(plain, ["move_sources=bag,tutor,relearner"]).settings["move_sources"]
+    assert ms.value == ("bag", "tutor", "relearner")
+    assert setup(facts, ["partner_from=2"]).joins == (2,)
+
+
+def test_flag_errors():
+    for item in ("heal", "nope=1", "order=1,x", "swap=bench:1,bench:2", "swap=1"):
+        with pytest.raises(GauntletSettingsError):
+            parse_flags([item])
+    with pytest.raises(GauntletSettingsError, match="given twice"):
+        parse_flags(["heal=bag", "heal=full"])
+    for item in ("heal=full", "x:heal=full", "2:order=worst", "2:swap_cap=a", "2:nope=1"):
+        with pytest.raises(GauntletSettingsError):
+            parse_flags([], [item])
+    with pytest.raises(GauntletSettingsError, match="given twice"):
+        parse_flags([], ["2:heal=full", "2:heal=bag"])
+
+
+def test_value_errors_resolve(plain):
+    for rule in ("heal=most", "swap=bench:1", "bag_uses=x", "time=noon", "shedinja=maybe"):
+        e = refused(plain, [rule])
+        assert e.group == GROUP and rule.split("=")[0] in str(e)
+
+
+def test_scope_and_unknown_key_errors(plain, tmp_path):
+    rules = tmp_path / "rules.toml"
+    rules.write_text(f'[gauntlet."{GROUP}"]\nshedinja = "allowed"\n')
+    with pytest.raises(GauntletSettingsError, match="shedinja.*run"):
+        resolve_settings(plain, rules_file=load_rules_file(rules))
+    rules.write_text('[run]\nheal = "bag"\n')
+    with pytest.raises(GauntletSettingsError, match="heal.*gauntlet"):
+        resolve_settings(plain, rules_file=load_rules_file(rules))
+    rules.write_text(f'[gauntlet."{GROUP}"]\nnope = 1\n')
+    e = refused(plain, rules_file=load_rules_file(rules))
+    assert "nope" in str(e) and e.group == GROUP
+
+
+def test_rules_file_shape(tmp_path):
+    rules = tmp_path / "rules.toml"
+    rules.write_text('[run]\nshedinja = "allowed"\n[gauntlet."A".gap.2]\nheal = "bag"\n')
+    raw = load_rules_file(rules)
+    assert raw.run == {"shedinja": "allowed"} and raw.source == str(rules)
+    assert raw.groups["A"].gaps == {2: {"heal": "bag"}}
+    assert raw.layer("A").gaps == {2: {"heal": "bag"}} and raw.layer("B").gaps == {}
+    for text in ("nope = 1\n", '[gauntlet."A".gap.x]\nheal = "bag"\n', "gauntlet = 3\n", "[[run"):
+        rules.write_text(text)
+        with pytest.raises(GauntletSettingsError):
+            load_rules_file(rules)
+    with pytest.raises(GauntletSettingsError, match="cannot read"):
+        load_rules_file(tmp_path / "absent.toml")
+
+
+def test_unknown_group_in_a_rules_file(plain, tmp_path):
+    rules = tmp_path / "rules.toml"
+    rules.write_text('[gauntlet."Nope"]\nheal = "bag"\n')
+    raw = load_rules_file(rules)
+    resolve_settings(plain, rules_file=raw)  # no group list given: nothing to check against
+    with pytest.raises(GauntletSettingsError, match="Nope"):
+        resolve_settings(plain, rules_file=raw, known_groups={GROUP, "Other"})
+
+
+def test_precedence_across_four_inputs(facts, tmp_path):
+    local_file = tmp_path / "local.toml"
+    local_file.write_text(
+        "vanilla_rom = 'v.nds'\n"
+        '[run]\ndeaths_scope = "fight"\ncap_overflow = "fight"\nshedinja = "allowed"\n'
+    )
+    rules_file = tmp_path / "rules.toml"
+    rules_file.write_text(
+        '[run]\ncap_overflow = "sit_out_after_fight"\nshedinja = "forbidden"\n'
+        f'[gauntlet."{GROUP}"]\nheal = "bag"\nteam = "reorder"\n'
+        f'[gauntlet."{GROUP}".gap.1]\nheal = "bag"\n'
+        '[gauntlet."Other"]\nheal = "full"\n'
+    )
+    s = resolve_settings(
+        facts,
+        flags=parse_flags(["shedinja=allowed", "team=moves"]),
+        rules_file=load_rules_file(rules_file),
+        local=load_local(local_file),
+        known_groups={GROUP, "Other"},
+    ).settings
+    src_local, src_rules, src_flag = f"{local_file} [run]", str(rules_file), "--rule/--gap-rule"
+    assert s["deaths_scope"] == ("fight", Origin.LOCAL, src_local)
+    assert s["cap_overflow"] == ("sit_out_after_fight", Origin.RULES_FILE, src_rules)
+    assert s["shedinja"] == ("allowed", Origin.FLAG, src_flag)
+    assert s["heal"] == ("bag", Origin.RULES_FILE, src_rules)
+    assert s["team"] == ("moves", Origin.FLAG, src_flag)
+    assert s["field_poison"] == ("worst_case", Origin.DEFAULT, "default")
+    assert s.at_gap(1)["heal"] == ("bag", Origin.RULES_FILE, src_rules)
+
+
+def test_local_without_run_or_absent_gives_defaults(plain, tmp_path):
+    local_file = tmp_path / "local.toml"
+    local_file.write_text("vanilla_rom = 'v.nds'\nkaizo_save = 's.sav'\n")
+    for path in (local_file, tmp_path / "absent.toml"):
+        raw = load_local(path)
+        assert raw.run == {}
+        s = resolve_settings(plain, local=raw).settings
+        assert all(s[n].origin == Origin.DEFAULT for n in OPTIONS)
+    local_file.write_text("run = 3\n")
+    with pytest.raises(GauntletSettingsError, match="not a table"):
+        load_local(local_file)
+    local_file.write_text('[run]\nheal = "bag"\n')  # a gauntlet key in [run]
+    with pytest.raises(GauntletSettingsError, match="heal"):
+        resolve_settings(plain, local=load_local(local_file))
+
+
+def test_example_run_block_is_the_code_defaults():
+    raw = load_local(REPO / "data" / "local.example.toml")
+    defaults = {n: o.default for n, o in OPTIONS.items() if o.scope == RUN}
+    assert dict(raw.run) == defaults
+    facts = GauntletFacts.from_dict(facts_dict(partner=None))
+    s = resolve_settings(facts, local=raw).settings
+    assert all(s[n] == (v, Origin.LOCAL, raw.source) for n, v in defaults.items())
+
+
+def test_order_and_partner_from_default_to_worst(facts):
+    s = resolve_settings(facts)
+    assert s.settings["order"] == ("worst", Origin.DEFAULT, "default")
+    assert s.settings["partner_from"] == ("worst", Origin.DEFAULT, "default")
+    assert s.orders == facts.orders and s.joins == (1, 2, 3) and not s.sheet_fallback
+    best = setup(facts, ["order=best", "partner_from=best"])
+    assert best.settings["order"].value == "best" and best.orders == facts.orders
+    assert best.settings["partner_from"].value == "best" and best.joins == (1, 2, 3)
+    assert setup(facts, ["partner_from=3"]).settings["partner_from"].value == 3
+    sheet = setup(facts, ["order=sheet"])
+    assert sheet.sheet_fallback and sheet.orders == facts.orders
+
+
+def test_order_and_partner_errors(facts, plain):
+    assert refused(facts, ["order=10,13,11"]).key == "order"
+    assert refused(facts, ["partner_from=4"]).key == "partner_from"
+    assert "no partner" in str(refused(plain, ["partner_from=2"]))
+    assert "no partner" in str(refused(plain, ["partner_from=best"]))
+
+
+def test_rerun_in_a_partner_group_needs_a_number(facts, tmp_path):
+    rerun = RunInput(beaten=(10,))
+    e = refused(facts, run=rerun)
+    assert e.key == "partner_from" and e.origin == "default" and "by default" in str(e)
+    assert refused(facts, ["partner_from=worst"], run=rerun).origin == "--rule/--gap-rule"
+    rules = tmp_path / "rules.toml"
+    rules.write_text(f'[gauntlet."{GROUP}"]\npartner_from = "best"\n')
+    with pytest.raises(GauntletSettingsError) as err:
+        resolve_settings(facts, rules_file=load_rules_file(rules), run=rerun)
+    assert err.value.origin == str(rules)
+    ok = setup(facts, ["partner_from=2"], run=rerun)
+    assert ok.joins == (2,) and ok.orders == (facts.orders[0],)
+
+
+def test_rerun_without_a_partner_needs_no_number(plain):
+    ok = resolve_settings(plain, run=RunInput(beaten=(10,)))
+    assert ok.joins == (None,) and ok.orders == (plain.orders[0],)
+
+
+def test_beaten_and_next_narrow_the_orders(plain):
+    o0, o1 = plain.orders
+    assert resolve_settings(plain, run=RunInput(beaten=(10, 11))).orders == (o0,)
+    assert resolve_settings(plain, run=RunInput(beaten=(12,))).orders == (o1,)  # either id
+    assert resolve_settings(plain, run=RunInput(next_fight=12)).orders == (o1,)
+    assert resolve_settings(plain, run=RunInput(beaten=(10,), next_fight=11)).orders == (o0,)
+    for run, key in (
+        (RunInput(beaten=(13,)), "--beaten"),  # no order starts with 13
+        (RunInput(next_fight=13), "--next"),  # no order opens with 13
+        (RunInput(beaten=(10,), next_fight=13), "--next"),  # 13 is the third fight, not the second
+    ):
+        with pytest.raises(GauntletSettingsError) as e:
+            resolve_settings(plain, run=run)
+        assert e.value.key == key
+    with pytest.raises(GauntletSettingsError) as e:  # the order given does not start with 10
+        setup(plain, ["order=11,10,13"], run=RunInput(beaten=(10,)))
+    assert e.value.key == "--beaten"
+
+
+def test_gap_outside_the_order(plain):
+    for gap in (0, 3):
+        e = refused(plain, gap_rule=[f"{gap}:heal=bag"])
+        assert e.key == f"gap {gap}" and "outside 1..2" in str(e)
+    assert setup(plain, gap_rule=["2:heal=bag"]).settings.at_gap(2)["heal"].value == "bag"
+
+
+def test_locked_gap_names_the_source(facts, tmp_path):
+    for gap_rule in ("2:heal=bag", "2:pc_heal=on", "2:team=moves", "2:swap_cap=1", "2:bag_cap=1"):
+        e = refused(facts, gap_rule=[gap_rule])
+        assert "rom:test locked" in str(e) and e.key.startswith("gap 2") and e.group == GROUP
+    ok = setup(facts, gap_rule=["2:heal=none", "2:swap_cap=0", "2:pc_heal=off"])
+    assert ok.settings.at_gap(2)["heal"].origin == Origin.LOCKED
+    rules = tmp_path / "rules.toml"
+    rules.write_text(f'[gauntlet."{GROUP}".gap.2]\nheal = "full"\n')
+    with pytest.raises(GauntletSettingsError, match="rom:test locked") as err:
+        resolve_settings(facts, rules_file=load_rules_file(rules))
+    assert err.value.origin == str(rules)
+    # a group, rules-file or default value reaching a locked gap is not an error
+    inherited = setup(facts, ["heal=full", "team=moves"])
+    assert inherited.settings.at_gap(2)["heal"] == ("none", Origin.LOCKED, "rom:test locked")
+
+
+def test_map_settled_heal(plain):
+    # gap 1 is a walk-out gap of the first order only; no free heal anywhere
+    assert setup(plain, gap_rule=["1:heal=full"]).settings.at_gap(1)["heal"].value == "full"
+    e = refused(plain, ["order=11,10,13"], ["1:heal=full"])
+    assert e.key == "gap 1 heal" and "free full heal" in str(e) and "rom:test" in str(e)
+    assert refused(plain, gap_rule=["2:heal=full"]).key == "gap 2 heal"
+    setup(plain, gap_rule=["2:heal=bag", "1:heal=bag"])  # only `full` needs the map
+    with_heal = GauntletFacts.from_dict(
+        facts_dict(escape=False, partner=None, locked_gaps=[], heal_gaps=[2])
+    )
+    setup(with_heal, gap_rule=["2:heal=full"])
+
+
+def test_map_settled_pc_and_swap(plain):
+    setup(plain, gap_rule=["2:pc_heal=on", "2:swap_cap=1"])  # the PC gap
+    setup(plain, gap_rule=["1:pc_heal=on", "1:swap_cap=1"])  # walk-out gap of one open order
+    e = refused(plain, ["order=11,10,13"], ["1:pc_heal=on"])
+    assert e.key == "gap 1 pc_heal" and "a PC" in str(e)
+    assert refused(plain, ["order=11,10,13"], ["1:swap_cap=1"]).key == "gap 1 swap_cap"
+    setup(plain, ["order=11,10,13"], ["1:swap_cap=0"])  # a cap of 0 asks for nothing
+
+
+def test_map_settled_with_a_partner_open():
+    # escape holds at the gaps before the partner joins; no PC and no leave gap in the group
+    open_facts = GauntletFacts.from_dict(
+        facts_dict(locked_gaps=[], pc_gaps=[], leave_gaps=[[], []])
+    )
+    setup(open_facts, gap_rule=["1:pc_heal=on"])  # worst: allowed where some join point allows
+    for join in ("2", "3"):
+        setup(open_facts, [f"partner_from={join}"], ["1:pc_heal=on"])
+    e = refused(open_facts, ["partner_from=1"], ["1:pc_heal=on"])  # set from fight 1: no escape
+    assert e.key == "gap 1 pc_heal"
+
+
+def test_planned_swap(plain):
+    o0, o1 = plain.orders
+    check_swap_gap(plain, o0, None, 2)  # the PC gap
+    check_swap_gap(plain, o0, None, 1)  # a walk-out gap
+    check_swap_gap(plain, o1, None, 2)
+    with pytest.raises(GauntletSettingsError, match="a swap at gap 1") as e:
+        check_swap_gap(plain, o1, None, 1)  # no PC, no walk-out
+    assert e.value.key == "swap" and e.value.group == GROUP
+
+
+def _mon(hp):
+    return SimpleNamespace(current_hp=hp)
+
+
+def _save():
+    return SimpleNamespace(
+        party=(_mon(40), _mon(0), _mon(7)),
+        boxes=((_mon(None), None), (_mon(None),)),
+    )
+
+
+def test_parse_members_and_ids():
+    got = parse_members(["party:2,box:1:3", "box:2:0", "party:2"], "--dead")
+    assert got == (("box", 0, 3), ("box", 1, 0), ("party", 0, 2))
+    assert [m.label for m in got] == ["box:1:3", "box:2:0", "party:2"]
+    assert parse_members([], "--dead") == ()
+    for bad in ("2", "party", "box:0:1", "box:1", "slot:1"):
+        with pytest.raises(GauntletSettingsError) as e:
+            parse_members([bad], "--bench")
+        assert e.value.key == "--bench"
+    assert parse_ids(["10,11", "13", "10"], "--beaten") == (10, 11, 13, 10)
+    with pytest.raises(GauntletSettingsError, match="--beaten"):
+        parse_ids(["10,x"], "--beaten")
+
+
+def test_dead_and_bench_against_the_save(plain):
+    save = _save()
+
+    def run(dead=(), bench=()):
+        return RunInput(dead=parse_members(dead, "--dead"), bench=parse_members(bench, "--bench"))
+
+    ok = resolve_settings(plain, run=run(["party:0", "box:1:0"], ["box:2:0"]), save=save)
+    assert ok.run.dead == (("box", 0, 0), ("party", 0, 0)) and ok.run.bench == (("box", 1, 0),)
+    resolve_settings(plain, run=run(["party:2"]), save=save)  # hurt, not dead
+    cases = [
+        (run(["party:3"]), "--dead", "party has 3"),
+        (run(["party:1"]), "--dead", "0 HP"),
+        (run(["box:1:1"]), "--dead", "no Pokemon"),  # an empty slot
+        (run(["box:1:5"]), "--dead", "no Pokemon"),  # a slot outside the box
+        (run(["box:3:0"]), "--dead", "no Pokemon"),  # a box outside the save
+        (run(bench=["party:0"]), "--bench", "box members only"),
+        (run(bench=["box:1:1"]), "--bench", "no Pokemon"),
+        (run(["box:1:0"], ["box:1:0"]), "--bench", "both"),
+    ]
+    for inputs, key, text in cases:
+        with pytest.raises(GauntletSettingsError, match=text) as e:
+            resolve_settings(plain, run=inputs, save=save)
+        assert e.value.key == key and e.value.group == GROUP
+    with pytest.raises(GauntletSettingsError, match="--save") as e:  # no save to check against
+        resolve_settings(plain, run=run(["party:0"]))
+    assert e.value.key == "--dead/--bench"
+
+
+def test_run_input_counts(plain):
+    for run, key in (
+        (RunInput(swaps_left=-2), "--swaps-left"),
+        (RunInput(horizon=-1), "--horizon"),
+        (RunInput(growth_cap=-1), "--growth-cap"),
+    ):
+        with pytest.raises(GauntletSettingsError) as e:
+            resolve_settings(plain, run=run)
+        assert e.value.key == key
+    ok = resolve_settings(plain, run=RunInput(swaps_left=-1, horizon=0, growth_cap=40))
+    assert ok.run.swaps_left == -1 and ok.run.growth_cap == 40

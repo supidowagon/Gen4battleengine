@@ -10,13 +10,21 @@ a lower bound under every user rule (design section 13): for ``order`` and
 
 ``GauntletFacts`` holds what the game fixes for one group (design section 2); user
 choices never appear in it. Fights are numbered 1..n along an order; gap k sits after the
-k-th fight played (1 <= k <= n-1)."""
+k-th fight played (1 <= k <= n-1).
+
+The loader half (design section 3; ``load_rules_file``, ``load_local``, ``parse_flags``,
+``resolve_settings``) turns the user's inputs into a ``GauntletSetup`` or raises a
+``GauntletSettingsError`` naming the key, the group and the origin. Nothing here writes a
+file or holds a user choice."""
 
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Collection, Mapping
+import re
+import tomllib
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, NamedTuple
 
 LEVEL = "level"
@@ -471,3 +479,539 @@ def resolve(
                 checked = _check_gap_value(layer.source, k, key, value)
                 gaps.setdefault(k, {})[key] = Resolved(checked, origin, layer.source)
     return Settings(values, gaps, facts.locked_gaps, facts.locked_gaps_source)
+
+
+# --- the settings input: flags, a rules file, data/local.toml [run] ------------------
+
+LOCAL_TOML = Path(__file__).resolve().parents[3] / "data" / "local.toml"
+FLAG_SOURCE = "--rule/--gap-rule"
+GAP_KEYS = GAP_LEVEL_KEYS + GAP_CAP_KEYS
+
+
+class GauntletSettingsError(SettingsError):
+    """An input the loader refuses; the message names the origin, the group and the key
+    where they are known (design section 3, "Input errors")."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        key: str | None = None,
+        group: str | None = None,
+        origin: str | None = None,
+    ) -> None:
+        self.detail, self.key, self.group, self.origin = detail, key, group, origin
+        parts = [origin, None if group is None else f"group {group!r}", key, detail]
+        super().__init__(": ".join(p for p in parts if p))
+
+
+@dataclass(frozen=True)
+class RawGroup:
+    """The options and gap tables one rules file holds for one group."""
+
+    gauntlet: Mapping[str, Any] = field(default_factory=dict)
+    gaps: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RawSettings:
+    """One input as read, before validation: ``run`` the ``[run]`` table, ``gauntlet`` and
+    ``gaps`` the values that apply to whichever group is selected (flags), ``groups`` the
+    per-group tables of a rules file. ``layer`` is the ``Layer`` ``resolve`` merges."""
+
+    source: str
+    run: Mapping[str, Any] = field(default_factory=dict)
+    gauntlet: Mapping[str, Any] = field(default_factory=dict)
+    gaps: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
+    groups: Mapping[str, RawGroup] = field(default_factory=dict)
+
+    def layer(self, group: str) -> Layer:
+        mine = self.groups.get(group, RawGroup())
+        gaps: dict[int, dict[str, Any]] = {k: dict(t) for k, t in self.gaps.items()}
+        for k, table in mine.gaps.items():
+            gaps.setdefault(k, {}).update(table)
+        return Layer(
+            self.source,
+            run=dict(self.run),
+            gauntlet={**self.gauntlet, **mine.gauntlet},
+            gaps=gaps,
+        )
+
+    def unknown_groups(self, known: Collection[str]) -> tuple[str, ...]:
+        return tuple(sorted(set(self.groups) - set(known)))
+
+
+def _read_toml(path: Path) -> dict:
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except OSError as e:
+        raise GauntletSettingsError(f"cannot read ({e.strerror or e})", origin=str(path)) from e
+    except tomllib.TOMLDecodeError as e:
+        raise GauntletSettingsError(str(e), origin=str(path)) from e
+
+
+def _table(value: Any, what: str, origin: str) -> Mapping:
+    if not isinstance(value, Mapping):
+        raise GauntletSettingsError(f"{what} is not a table", origin=origin)
+    return value
+
+
+def load_rules_file(path: Path | str) -> RawSettings:
+    """A rules file the user keeps outside the tracked tree (design section 3): ``[run]``,
+    ``[gauntlet."<group>"]`` and ``[gauntlet."<group>".gap.<k>]``. Values are checked by
+    ``resolve_settings``, which knows the group."""
+    path = Path(path)
+    origin = str(path)
+    data = _read_toml(path)
+    unknown = sorted(set(data) - {RUN, GAUNTLET})
+    if unknown:
+        raise GauntletSettingsError(
+            f"unknown top-level key(s) {', '.join(unknown)}; known: run, gauntlet", origin=origin
+        )
+    run = dict(_table(data.get(RUN, {}), "[run]", origin))
+    groups: dict[str, RawGroup] = {}
+    for name, body in _table(data.get(GAUNTLET, {}), "[gauntlet]", origin).items():
+        body = _table(body, f"[gauntlet.{name!r}]", origin)
+        gaps: dict[int, dict[str, Any]] = {}
+        for k, table in _table(body.get("gap", {}), f"[gauntlet.{name!r}.gap]", origin).items():
+            if not k.isdecimal():
+                raise GauntletSettingsError(
+                    f"gap table {k!r} is not a gap number",
+                    key=f"gap.{k}",
+                    group=name,
+                    origin=origin,
+                )
+            gaps[int(k)] = dict(_table(table, f"[gauntlet.{name!r}.gap.{k}]", origin))
+        groups[name] = RawGroup({k: v for k, v in body.items() if k != "gap"}, gaps)
+    return RawSettings(origin, run=run, groups=groups)
+
+
+def load_local(path: Path | str = LOCAL_TOML) -> RawSettings:
+    """Only the ``[run]`` table of ``data/local.toml`` (no import from ``tools``). A missing
+    file or table is no error; every other key is the ROM tools' (``tools/rom/inputs.py``)."""
+    path = Path(path)
+    source = f"{path} [run]"
+    if not path.exists():
+        return RawSettings(source)
+    run = _read_toml(path).get(RUN, {})
+    return RawSettings(source, run=dict(_table(run, "[run]", source)))
+
+
+_INT = re.compile(r"-?\d+")
+
+
+def _parse_rule_value(name: str, text: str) -> Any:
+    if name == "swap":
+        pairs: dict[str, int] = {}
+        for part in text.split(","):
+            key, _, num = part.partition(":")
+            if key not in ("bench", "budget") or key in pairs or not _INT.fullmatch(num):
+                raise SettingsError(f"{text!r} is not bench:N,budget:N")
+            pairs[key] = int(num)
+        return pairs
+    if name == "order":
+        if text in ("worst", "sheet", "best"):
+            return text
+        ids = text.split(",")
+        if not all(_INT.fullmatch(i) for i in ids):
+            raise SettingsError(f"{text!r} is not worst, sheet, best or comma-separated fight ids")
+        return [int(i) for i in ids]
+    if name == "move_sources":
+        return text.split(",")
+    if name in ("bag_uses", "partner_from"):
+        return int(text) if _INT.fullmatch(text) else text
+    return text
+
+
+def parse_flags(rule: Sequence[str], gap_rule: Sequence[str] = ()) -> RawSettings:
+    """``--rule heal=bag --rule swap=bench:1,budget:1 --gap-rule 2:heal=full`` as one
+    input. A key goes to ``run`` or ``gauntlet`` by its option's scope; a key given twice,
+    an unknown key or a malformed value is a ``GauntletSettingsError``; the value itself is
+    checked by ``resolve_settings``."""
+    run: dict[str, Any] = {}
+    gauntlet: dict[str, Any] = {}
+    for item in rule:
+        name, eq, text = item.partition("=")
+        if not eq or name not in OPTIONS:
+            raise GauntletSettingsError(
+                f"{item!r} is not KEY=VALUE with a key of {sorted(OPTIONS)}",
+                key=name or item,
+                origin="--rule",
+            )
+        table = run if OPTIONS[name].scope == RUN else gauntlet
+        if name in table:
+            raise GauntletSettingsError("given twice", key=name, origin="--rule")
+        try:
+            table[name] = _parse_rule_value(name, text)
+        except SettingsError as e:
+            raise GauntletSettingsError(str(e), key=name, origin="--rule") from None
+    gaps: dict[int, dict[str, Any]] = {}
+    for item in gap_rule:
+        m = re.fullmatch(r"(\d+):([a-z_]+)=(.*)", item)
+        if m is None or m.group(2) not in GAP_KEYS:
+            raise GauntletSettingsError(
+                f"{item!r} is not K:KEY=VALUE with a key of {list(GAP_KEYS)}",
+                key=item,
+                origin="--gap-rule",
+            )
+        k, key, text = int(m.group(1)), m.group(2), m.group(3)
+        if key in GAP_CAP_KEYS and not _INT.fullmatch(text):
+            raise GauntletSettingsError(
+                f"{text!r} is not an integer", key=f"gap {k} {key}", origin="--gap-rule"
+            )
+        if key in gaps.setdefault(k, {}):
+            raise GauntletSettingsError("given twice", key=f"gap {k} {key}", origin="--gap-rule")
+        gaps[k][key] = int(text) if key in GAP_CAP_KEYS else text
+    return RawSettings(FLAG_SOURCE, run=run, gauntlet=gauntlet, gaps=gaps)
+
+
+# --- per-run inputs of a re-run ------------------------------------------------------
+
+
+class Member(NamedTuple):
+    """A save Pokemon as ``Candidate.location`` names it: ``("party", 0, slot)`` or
+    ``("box", box, slot)`` with the box 0-based (the user's ``box:B:S`` is 1-based)."""
+
+    kind: str
+    box: int
+    slot: int
+
+    @property
+    def label(self) -> str:
+        return f"party:{self.slot}" if self.kind == "party" else f"box:{self.box + 1}:{self.slot}"
+
+
+def parse_ids(values: Iterable[str], flag: str) -> tuple[int, ...]:
+    """Trainer ids of ``--beaten`` (played order, repeats kept), commas or spaces."""
+    out = []
+    for value in values:
+        for part in value.split(","):
+            if not _INT.fullmatch(part.strip()):
+                raise GauntletSettingsError(f"{part!r} is not a trainer id", key=flag, origin=flag)
+            out.append(int(part))
+    return tuple(out)
+
+
+def parse_members(values: Iterable[str], flag: str) -> tuple[Member, ...]:
+    """``party:N`` and ``box:B:S`` (the labels of ``save show``; B 1-based), commas or
+    spaces; sorted, each once."""
+    out: set[Member] = set()
+    for value in values:
+        for part in value.split(","):
+            text = part.strip()
+            if m := re.fullmatch(r"party:(\d+)", text, re.IGNORECASE):
+                out.add(Member("party", 0, int(m.group(1))))
+            elif (m := re.fullmatch(r"box:(\d+):(\d+)", text, re.IGNORECASE)) and int(m[1]) >= 1:
+                out.add(Member("box", int(m[1]) - 1, int(m[2])))
+            else:
+                raise GauntletSettingsError(
+                    f"{part!r} is not party:N or box:B:S (B from 1)", key=flag, origin=flag
+                )
+    return tuple(sorted(out))
+
+
+@dataclass(frozen=True)
+class RunInput:
+    """The per-run inputs of a re-run mid-gauntlet (design sections 3 and 5): nothing is
+    tracked or written, the save holds none of it."""
+
+    beaten: tuple[int, ...] = ()
+    dead: tuple[Member, ...] = ()
+    bench: tuple[Member, ...] = ()
+    swaps_left: int | None = None
+    horizon: int | None = None
+    growth_cap: int | None = None
+    next_fight: int | None = None
+
+
+def _check_members(run: RunInput, save: Any, err: Callable[..., GauntletSettingsError]) -> None:
+    """``--dead`` and ``--bench`` against the save (``party`` of members with
+    ``current_hp``, ``boxes`` of box rows with ``None`` for an empty slot)."""
+    if (run.dead or run.bench) and save is None:
+        raise err("needs --save: the party and the boxes come from it", key="--dead/--bench")
+
+    def present(m: Member, flag: str):
+        if m.kind == "party":
+            if not 0 <= m.slot < len(save.party):
+                raise err(f"{m.label}: the save's party has {len(save.party)} Pokemon", key=flag)
+            return save.party[m.slot]
+        if (
+            not 0 <= m.box < len(save.boxes)
+            or not 0 <= m.slot < len(save.boxes[m.box])
+            or save.boxes[m.box][m.slot] is None
+        ):
+            raise err(f"{m.label}: no Pokemon there in the save's boxes", key=flag)
+        return save.boxes[m.box][m.slot]
+
+    for m in run.bench:
+        if m.kind != "box":
+            raise err(f"{m.label}: the bench holds box members only", key="--bench")
+        present(m, "--bench")
+    for m in run.dead:
+        mon = present(m, "--dead")
+        if m.kind == "party" and mon.current_hp == 0:
+            raise err(f"{m.label}: already at 0 HP, so already dead", key="--dead")
+    both = sorted(set(run.dead) & set(run.bench))
+    if both:
+        raise err(f"{both[0].label} is in both --dead and --bench", key="--bench")
+
+
+# --- the open orders and join points -------------------------------------------------
+
+
+def open_orders(
+    facts: GauntletFacts,
+    order_value: Any,
+    beaten: Sequence[int] = (),
+    next_fight: int | None = None,
+) -> tuple[Order, ...]:
+    """The orders still open: the one a list value names, else every order of the group
+    (``"worst"``, ``"best"``, and ``"sheet"``, which falls back to them because the facts
+    hold no sheet order); then those whose first fights match ``--beaten`` (any member id
+    of a fight names it) and whose next fight holds ``next_fight``. Empty when none is
+    left; ``resolve_settings`` raises then."""
+    orders = facts.orders
+    if isinstance(order_value, tuple):
+        orders = tuple(o for o in orders if facts.fight_ids(o) == order_value)
+    kept = []
+    for o in orders:
+        if len(beaten) > len(o) or any(b not in o[i] for i, b in enumerate(beaten)):
+            continue
+        if next_fight is not None and (len(beaten) >= len(o) or next_fight not in o[len(beaten)]):
+            continue
+        kept.append(o)
+    return tuple(kept)
+
+
+def open_joins(facts: GauntletFacts, partner_from: Any) -> tuple[int | None, ...]:
+    """The join points still open: ``(None,)`` for a group without a partner, the number
+    a setting fixes, else every ``partner.join_before``."""
+    if facts.partner is None:
+        return (None,)
+    if isinstance(partner_from, int):
+        return (partner_from,)
+    return facts.partner.join_before
+
+
+def _gap_allows(facts: GauntletFacts, order: Order, join: int | None, k: int, need: str) -> bool:
+    if k in facts.walkout_gaps(order, join):
+        return True
+    return k in (facts.heal_gaps if need == "heal" else facts.pc_gaps)
+
+
+def _map_refusal(
+    facts: GauntletFacts,
+    orders: Sequence[Order],
+    joins: Sequence[int | None],
+    k: int,
+    need: str,
+) -> str | None:
+    """Why the map gives no ``need`` ("heal" or "pc") at gap k, else None. Where an order
+    or join point is open, a value is refused only when refused under every open order
+    and join point in which gap k exists."""
+    combos = [(o, j) for o in orders for j in joins if 1 <= k <= len(o) - 1]
+    if not combos or any(_gap_allows(facts, o, j, k, need) for o, j in combos):
+        return None
+    what, listed, src = (
+        ("a free full heal", facts.heal_gaps, facts.heal_gaps_source)
+        if need == "heal"
+        else ("a PC", facts.pc_gaps, facts.pc_gaps_source)
+    )
+    return (
+        f"the map gives {what} at gap {k} under no open order and join point "
+        f"(gaps {list(listed)}: {src}; walk-out gaps: {facts.leave_gaps_source}, "
+        f"{facts.escape_source})"
+    )
+
+
+def check_swap_gap(
+    facts: GauntletFacts,
+    order: Order,
+    partner_from: int | None,
+    k: int,
+    *,
+    origin: str = "swap plan",
+) -> None:
+    """A swap at gap k needs a PC or a walk-out there (design section 3): a
+    ``GauntletSettingsError`` otherwise."""
+    why = _map_refusal(facts, (order,), (partner_from,), k, "pc")
+    if why is not None:
+        raise GauntletSettingsError(
+            f"a swap at gap {k}: {why}", key="swap", group=facts.name, origin=origin
+        )
+
+
+# --- the whole input ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GauntletSetup:
+    """One group's resolved input: ``settings`` merged over the longest open order,
+    ``orders`` and ``joins`` still open (consumers take the minimum over them under
+    ``"worst"``), ``run`` the re-run inputs, ``sheet_fallback`` true when ``order =
+    "sheet"`` fell back to ``"worst"``."""
+
+    facts: GauntletFacts
+    settings: Settings
+    orders: tuple[Order, ...]
+    joins: tuple[int | None, ...]
+    run: RunInput
+    sheet_fallback: bool = False
+
+
+def _first(layers, scope: str, key: str):
+    for origin, layer in layers:
+        table = layer.run if scope == RUN else layer.gauntlet
+        if key in table:
+            return table[key], origin, layer
+    return None
+
+
+def resolve_settings(
+    facts: GauntletFacts,
+    *,
+    flags: RawSettings | None = None,
+    rules_file: RawSettings | None = None,
+    local: RawSettings | None = None,
+    run: RunInput | None = None,
+    save: Any = None,
+    known_groups: Collection[str] | None = None,
+) -> GauntletSetup:
+    """The loader's one entry (design section 3): merge flag > rules file > local >
+    default for ``facts``' group, then apply every input error. Locked gaps override all
+    of it in ``Settings.at_gap``. Raises ``GauntletSettingsError`` naming key, group and
+    origin; ``save`` (anything with ``party`` and ``boxes``) checks ``--dead`` and
+    ``--bench``."""
+    run = run or RunInput()
+    group = facts.name
+
+    def err(detail: str, *, key: str | None = None, origin: str | None = None):
+        return GauntletSettingsError(detail, key=key, group=group, origin=origin)
+
+    raws = [(Origin.FLAG, flags), (Origin.RULES_FILE, rules_file), (Origin.LOCAL, local)]
+    if known_groups is not None:
+        for _, raw in raws:
+            if raw is not None and (bad := raw.unknown_groups(known_groups)):
+                raise err(f"no such gauntlet group {bad[0]!r}", key="gauntlet", origin=raw.source)
+    layers = [(origin, raw.layer(group)) for origin, raw in raws if raw is not None]
+
+    for key in ("order", "partner_from"):
+        for _, layer in layers:
+            if key in layer.gauntlet:
+                try:
+                    OPTIONS[key].validate(layer.gauntlet[key])
+                except SettingsError as e:
+                    raise err(str(e), key=key, origin=layer.source) from None
+    for name, value, check in (
+        ("--swaps-left", run.swaps_left, _count),
+        ("--horizon", run.horizon, _cap),
+        ("--growth-cap", run.growth_cap, _cap),
+    ):
+        if value is not None:
+            try:
+                check(value)
+            except SettingsError as e:
+                raise err(str(e), key=name, origin=name) from None
+
+    # partner_from: only for a group with a partner, a number from its join_before
+    for _, layer in layers:
+        pf = layer.gauntlet.get("partner_from")
+        if pf is None:
+            continue
+        if facts.partner is None:
+            raise err("the group has no partner", key="partner_from", origin=layer.source)
+        if pf not in ("worst", "best") and pf not in facts.partner.join_before:
+            raise err(
+                f"{pf} is not in join_before {list(facts.partner.join_before)} "
+                f"({facts.partner.source})",
+                key="partner_from",
+                origin=layer.source,
+            )
+    # order: a list names one of the group's orders (checked in every layer)
+    all_orders = [facts.fight_ids(o) for o in facts.orders]
+    for _, layer in layers:
+        ov = layer.gauntlet.get("order")
+        if isinstance(ov, (list, tuple)) and tuple(ov) not in all_orders:
+            raise err(
+                f"{list(ov)} is not one of the group's orders {[list(o) for o in all_orders]} "
+                f"({facts.orders_source})",
+                key="order",
+                origin=layer.source,
+            )
+
+    found = _first(layers, GAUNTLET, "order")
+    order_value = OPTIONS["order"].validate(found[0]) if found else OPTIONS["order"].default
+    pf_found = _first(layers, GAUNTLET, "partner_from")
+    pf_value = pf_found[0] if pf_found else OPTIONS["partner_from"].default
+    if facts.partner is not None and run.beaten and pf_value in ("worst", "best"):
+        raise err(
+            "a re-run (--beaten) in a group with a partner needs partner_from as the fight "
+            "number the partner joined before (the save's vars are not read); it is "
+            f"{pf_value!r}" + ("" if pf_found else " by default"),
+            key="partner_from",
+            origin=pf_found[2].source if pf_found else "default",
+        )
+
+    orders = open_orders(facts, order_value, run.beaten, run.next_fight)
+    if not orders:
+        if run.next_fight is not None and open_orders(facts, order_value, run.beaten):
+            raise err(
+                f"{run.next_fight} is not the next fight of any open order",
+                key="--next",
+                origin="--next",
+            )
+        raise err(
+            f"{list(run.beaten)} is not the start of any open order "
+            f"{[list(facts.fight_ids(o)) for o in open_orders(facts, order_value)]}",
+            key="--beaten",
+            origin="--beaten",
+        )
+    joins = open_joins(facts, pf_value)
+    longest = max(orders, key=len)
+
+    for _, layer in layers:
+        for k in layer.gaps:
+            if not any(1 <= k <= len(o) - 1 for o in orders):
+                top = len(longest) - 1
+                raise err(f"gap {k} is outside 1..{top}", key=f"gap {k}", origin=layer.source)
+
+    by_origin = dict(layers)
+    try:
+        settings = resolve(
+            facts,
+            longest,
+            by_origin.get(Origin.FLAG),
+            by_origin.get(Origin.RULES_FILE),
+            by_origin.get(Origin.LOCAL),
+        )
+    except GauntletSettingsError:
+        raise
+    except SettingsError as e:
+        raise err(str(e)) from None
+
+    for _, layer in layers:
+        for k, table in layer.gaps.items():
+            for key, value in table.items():
+                where = f"gap {k} {key}"
+                if k in facts.locked_gaps:
+                    strict = strictest(key) if key in GAP_LEVEL_KEYS else 0
+                    if value != strict:
+                        raise err(
+                            f"{value!r} at locked gap {k}: only {strict!r} holds there "
+                            f"({facts.locked_gaps_source})",
+                            key=where,
+                            origin=layer.source,
+                        )
+                    continue
+                if (key, value) == ("heal", "full"):
+                    need = "heal"
+                elif (key, value) == ("pc_heal", "on") or (key == "swap_cap" and value > 0):
+                    need = "pc"
+                else:
+                    continue
+                if why := _map_refusal(facts, orders, joins, k, need):
+                    raise err(f"{value!r}: {why}", key=where, origin=layer.source)
+
+    _check_members(run, save, err)
+    return GauntletSetup(facts, settings, orders, joins, run, sheet_fallback=order_value == "sheet")

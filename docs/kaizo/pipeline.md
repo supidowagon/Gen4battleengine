@@ -9,6 +9,7 @@ ROM reading: `docs/rom_pipeline.md`.
 All inputs are local files and are never committed. Each path comes from an environment
 variable, else from `data/local.toml` (git-ignored; copy `data/local.example.toml`). Use
 single-quoted strings for Windows paths; relative paths resolve against the repository root.
+An optional `[run]` table (Nuzlocke rules, `nuzline prep`) shares the file; the ROM tools skip it.
 
 | `data/local.toml` key | Environment variable | What it is |
 | --- | --- | --- |

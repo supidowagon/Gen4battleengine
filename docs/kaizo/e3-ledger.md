@@ -1696,3 +1696,33 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   caller does not know (recorded in `Walk.crossed`).
   Tests: tests/kaizo/test_gauntlet_map.py (new; synthetic maps plus ROM-backed slow tests), tests/kaizo/test_overrides.py,
   tests/kaizo/test_resolve.py.
+
+- E3-B3-3 GT-3 settings input (`src/nuzline/data/gauntlet.py`, `src/nuzline/cli.py`, `tools/rom/inputs.py`,
+  `data/local.example.toml`). No game rule: input shapes and errors (design v5.3 section 3); map-settled checks use GT-2's
+  facts and their sources. No table input changed. `tools/rom/inputs.py` `_read_toml` skips the top-level `run` key (only
+  it, whatever its type) before the unknown-key check; `load_inputs` never reads it; a `local.toml` without `[run]` loads
+  as before. `data/local.example.toml` gains the documented `[run]` block with the strictest values (the test compares it
+  with `OPTIONS` defaults). `data/local.toml` is not touched. Loader: `load_rules_file`, `load_local` (only `[run]`, a
+  missing file or table is no error, no `tools` import), `parse_flags` -> `RawSettings` (`layer(group)` -> GT-1 `Layer`);
+  `resolve_settings(facts, flags, rules_file, local, run, save, known_groups) -> GauntletSetup` (settings, open `orders`,
+  open `joins`, `RunInput`); every refusal is a `GauntletSettingsError` (a `SettingsError`) with `key`, `group`, `origin`.
+  Flags: `--rule`, `--gap-rule`, `--rules`, `--beaten`, `--dead`, `--swaps-left`, `--bench`, `--horizon`, `--growth-cap`,
+  `--time`, `--next` on `prep` and `coverage`; `args.gauntlet` holds the `GauntletSetup` (None outside a gauntlet group;
+  a gauntlet flag for such a trainer is an error).
+  (a) Rulings of this group: `--dead` and `--bench` take the labels of `save show` (`party:N`, `box:B:S`, B from 1), the
+  same syntax as `--exclude`; `--bench` takes box members only. `--beaten` and `--next` name fights by any member id and
+  narrow the open orders (an order matches when its first fights hold the beaten ids); none left is an error on
+  `--beaten` or `--next`. (b) A map-settled value (`heal = full`, `pc_heal = on`, `swap_cap > 0`) is checked where it is
+  stated per gap (`--gap-rule` or a gap table); a group-level value is not an error, it simply is not applied where the
+  map gives nothing (the transition's job). Under open orders and join points a gap value is refused only when refused in
+  every open (order, join) combination in which that gap exists; the same for the swap check
+  (`check_swap_gap(facts, order, partner_from, k)` is the entry for a planned swap). (c) `order = "sheet"`: the facts hold
+  no sheet order, so it resolves as `"worst"` and `GauntletSetup.sheet_fallback` is true (the report says so, GT-11).
+  (d) An explicit gap value at a locked gap is refused unless it is the strictest value (0 for a cap), with the
+  `locked_gaps` source in the message; any layer's own explicit value counts, also one a higher layer overrides.
+  (e) The re-run partner rule: `partner_from` worst or best (set or default) with `--beaten` non-empty in a group with a
+  partner is refused; the user gives the join point as a number. Also checked: `order` lists in every layer, `partner_from`
+  on a group without a partner, counts `--swaps-left` (>= -1), `--horizon`, `--growth-cap` (>= 0), unknown group names in a
+  rules file (when the CLI passes the group list: only with `--rules`).
+  Tests: tests/data/test_gauntlet_settings.py (loader half), tests/tools/rom/test_inputs.py, tests/test_cli.py (parser and
+  `_gauntlet_setup` cases). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.

@@ -44,6 +44,38 @@ def test_unknown_key_raises(tmp_path):
         load_inputs(cfg, environ={})
 
 
+def test_run_table_is_skipped(tmp_path):
+    cfg = tmp_path / "local.toml"
+    cfg.write_text(
+        "vanilla_rom = 'roms/v.nds'\nkaizo_save = 's.sav'\n"
+        '[run]\nshedinja = "allowed"\nvanilla_rom = "not a path"\n'
+    )
+    got = load_inputs(cfg, environ={})
+    assert got.vanilla_rom == REPO_ROOT / "roms" / "v.nds"  # run's keys are never read
+    assert got.kaizo_save == REPO_ROOT / "s.sav" and got.kaizo_patch is None
+    cfg.write_text("vanilla_rom = 'v.nds'\nrun = 3\n")  # skipped whatever its type
+    assert load_inputs(cfg, environ={}).vanilla_rom == REPO_ROOT / "v.nds"
+
+
+def test_run_table_does_not_excuse_an_unknown_key(tmp_path):
+    cfg = tmp_path / "local.toml"
+    cfg.write_text("vanila_rom = 'v.nds'\n[run]\nshedinja = 'allowed'\n")
+    with pytest.raises(RomInputError, match="vanila_rom") as e:
+        load_inputs(cfg, environ={})
+    assert "unknown key(s) vanila_rom;" in str(e.value)  # `run` is not named as unknown
+    cfg.write_text("vanilla_rom = 'v.nds'\n[runs]\nx = 1\n")  # only `run` is skipped
+    with pytest.raises(RomInputError, match="runs"):
+        load_inputs(cfg, environ={})
+
+
+def test_local_without_run_loads_as_before(tmp_path):
+    cfg = tmp_path / "local.toml"
+    cfg.write_text("vanilla_rom = 'roms/v.nds'\nkaizo_patch = 'k.xdelta'\n")
+    got = load_inputs(cfg, environ={})
+    assert got.vanilla_rom == REPO_ROOT / "roms" / "v.nds"
+    assert got.kaizo_patch == REPO_ROOT / "k.xdelta" and got.kaizo_save is None
+
+
 def test_read_checked(tmp_path):
     p = tmp_path / "f.bin"
     p.write_bytes(b"abc")

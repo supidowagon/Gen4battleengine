@@ -14,3 +14,14 @@ kaizo_docs = 'C:\roms\Platinum Kaizo Docs.xlsx'
 kaizo_save = 'C:\roms\Platinum Kaizo Nightmare.sav'
 kaizo_save_pre_roark = 'C:\roms\Platinum Kaizo Base.dsv'
 kaizo_save_probe = 'C:\roms\Battery\Kaizo Probe.dsv'
+
+# Nuzlocke rules for `nuzline prep` (docs/gauntlet-design.md section 3). Optional; the
+# ROM tools ignore this table. Values below are the strictest, which are also the
+# defaults when the table or a key is absent.
+[run]
+deaths_scope = "chain"                  # or "fight"
+cap_overflow = "sit_out_after_fight"    # or "fight"
+cap_sit_out_in_party = "forbidden"      # or "allowed"
+revived_dead = "stay_dead"              # or "revived"
+shedinja = "forbidden"                  # or "allowed"
+field_poison = "worst_case"             # or "ignore"
