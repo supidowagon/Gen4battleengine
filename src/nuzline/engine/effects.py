@@ -198,7 +198,9 @@ many are real). Decomp sources:
   (battle_script.c:5727-5742) fails silently (:60-65) on equal genders or a genderless
   battler, else the attacker falls in love with the holder (``infatuated``); its message
   (:17, ``TAG_NICKNAME_ABILITY_NICKNAME`` with ``BTLSCR_MSG_BATTLER_TEMP``, the holder)
-  reveals the holder's ability. Oblivious (:5) is an unsupported ability.
+  reveals the holder's ability. The attacker's own Oblivious (:5, ``CheckIgnorableAbility``; the
+  attacker is the side-effect battler, so no Mold Breaker pierces it) ends it silently
+  (:_055 -> :_082 -> :_117), H-2.
 * Attract (``ATTRACT``): ``effect_script_0120.s``, a direct TO_DEFENDER effect (no ON_HIT:
   ``BattleSystem_TriggerPrimaryEffect`` needs a living defender, battle_lib.c:1492-1505)
   running ``subscript_infatuate.s``: ``BtlCmd_TryAttract`` as above, failing on a target
@@ -239,8 +241,11 @@ another battler (``_foe_stage``, ``hooks.intimidate``).
 Leaf Guard and Synchronize (E1 Gardenia batch, rulings G-12..G-17): Leaf Guard in sun in
 ``_inflict``, ``_contact_ability`` and ``synchronize`` (Toxic Spikes, the status orbs and Yawn
 read it by decomp id); ``synchronize`` is AfterMoveEffects' step, run by ``step._use_move``.
-Unreachable branches are not modelled: Clear Body, Hyper Cutter, Immunity, Liquid Ooze,
-Magic Guard, Skill Link, Own Tempo, Normalize and Color Change are unsupported abilities
+Immunity, Water Veil, Magma Armor (``_inflict``, ``_contact_ability``), Own Tempo (the confusion
+effects) and Oblivious (``_attract``, ``_contact_ability``): E1 batch H, H-2; their cures are
+``hooks.recover_status_by_ability`` and ``step._restore_status_on_switch``.
+Unreachable branches are not modelled: Clear Body, Hyper Cutter, Liquid Ooze,
+Magic Guard, Skill Link, Normalize and Color Change are unsupported abilities
 (Grip Claw is E1 Batch D's, ``_trap``). Shield Dust (``_shield_dust``) and the weather moves
 (``_weather``) are E2 batch 3's; Serene Grace acts on the secondary chance
 (``outcome.secondary_chance``), Reckless on the damage (``damage.script_power_mul``),
@@ -548,8 +553,21 @@ def _inflict(
     # subscript_paralyze.s:5/_170: an ignorable Limber stops a paralysis before any other
     # check; "prevents paralysis" (TAG_NICKNAME_ABILITY) is printed for a direct effect only.
     limber = cond & (status == Status.PARALYSIS) & (h.target_ignorable == AbilityId.LIMBER)
+    # H-2: likewise an ignorable Immunity stops any poison (subscript_poison.s:13,
+    # subscript_badly_poison.s:31), Water Veil a burn (subscript_burn.s:20) and Magma Armor a
+    # freeze (subscript_freeze.s:5), each before any other check. A direct effect prints
+    # "prevents poisoning" (poison :_177 -> :_201, badly_poison :_249) or "prevents burns"
+    # (burn :_264), TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON (battle_script.c:11798-11810);
+    # an indirect one ends silently. Magma Armor's block prints the attack message only
+    # (subscript_freeze.s:_128): it never reveals.
+    poisons = (status == Status.POISON) | (status == Status.TOXIC)
+    immune = cond & poisons & (h.target_ignorable == AbilityId.IMMUNITY)
+    veil = cond & (status == Status.BURN) & (h.target_ignorable == AbilityId.WATER_VEIL)
+    magma = cond & (status == Status.FREEZE) & (h.target_ignorable == AbilityId.MAGMA_ARMOR)
     from nuzline.engine.hooks import (  # hooks imports this module
+        BURN_BLOCKED,
         PARALYSIS_BLOCKED,
+        POISON_BLOCKED,
         SLEEP_BLOCKED,
         STATUS_BLOCKED,
         reveal_ability,
@@ -557,8 +575,11 @@ def _inflict(
 
     state = reveal_ability(state, h.target_side, h.target, SLEEP_BLOCKED, blocked)
     state = reveal_ability(state, h.target_side, h.target, PARALYSIS_BLOCKED, limber & direct)
+    state = reveal_ability(state, h.target_side, h.target, POISON_BLOCKED, immune & direct)
+    state = reveal_ability(state, h.target_side, h.target, BURN_BLOCKED, veil & direct)
+    blocked = blocked | limber | immune | veil | magma
     # Leaf Guard in sun (ruling G-14), after the status's own ability test (Insomnia, Vital
-    # Spirit, Limber; Immunity and Water Veil are unsupported): ``CheckIgnoreWeather`` then
+    # Spirit, Limber, Immunity, Water Veil): ``CheckIgnoreWeather`` then
     # FIELD_CONDITION_SUNNY then an ignorable ABILITY_LEAF_GUARD (subscript_fall_asleep.s:23-25,
     # subscript_poison.s:14-16, subscript_badly_poison.s:32-34, subscript_burn.s:21-23,
     # subscript_paralyze.s:6-8; subscript_freeze.s has no such test). A direct effect prints the
@@ -575,15 +596,13 @@ def _inflict(
     leaf = (
         cond
         & ~blocked
-        & ~limber
         & guarded
         & _sunny(tables, state)
         & (h.target_ignorable == AbilityId.LEAF_GUARD)
     )
     state = reveal_ability(state, h.target_side, h.target, STATUS_BLOCKED, leaf & direct)
-    # Shield Dust, after Insomnia / Limber / Leaf Guard (Water Veil and the like in between are
-    # unsupported), for an indirect effect only.
-    blocked = blocked | limber | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
+    # Shield Dust, after the abilities above and Leaf Guard, for an indirect effect only.
+    blocked = blocked | leaf | (cond & ~jnp.asarray(direct, bool) & _shield_dust(h))
     # Then CheckSubstitute on the side-effect battler (subscript_paralyze.s:21, burn :36,
     # freeze :19, poison :29, badly_poison :46, fall_asleep :40, before its uproar test at
     # :43): a direct effect prints "But it failed!", an indirect one stops silently. An
@@ -1198,22 +1217,31 @@ def _swagger(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (effect_script_0166.s; subscript_flatter.s, the same script on Sp. Atk +1, B12-2): the stat
     (``move_param[m, 0]``) raised by ``move_param[m, 1]`` below +6 (``UPDATE_STAT_STAGE``), then
     subscript_confuse.s unless the defender is confused (:13, no message): ``Random 3, 2`` turns
-    (``outcome.duration``). Own Tempo and Safeguard (subscript_confuse.s:12, :26) come from
-    unsupported abilities and moves; the failure (``swagger_fails``, a substitute included) skips
-    AfterMoveEffects (``step``)."""
+    (``outcome.duration``). In subscript_confuse.s (a direct side effect) the defender's
+    ignorable Own Tempo comes first (:12 -> :_141): no confusion, "prevents confusion" (:73,
+    TAG_NICKNAME_ABILITY: the AI learns it), the raise kept (H-2); then Safeguard (:26). The
+    failure (``swagger_fails``, a substitute included) skips AfterMoveEffects (``step``)."""
     stat, stages = h.param[0], h.param[1]
     cond = (h.effect == _E.SWAGGER) & h.landed & _alive(state, h.target_side, h.target)
     cond = cond & ~swagger_fails(state, h.target_side, stat)
     below = state.stages[h.target_side, stat] < STAGE_MAX
     state = change_stage(state, h.target_side, stat, stages, cond & below)
-    # subscript_confuse.s (a direct side effect): the substitute is swagger_fails'; then Safeguard
-    # (:26, B10-7), after the raise.
-    confuse = (
-        cond
-        & (state.confusion[h.target_side] == 0)
-        & (state.safeguard[side_of(h.target_side)] == 0)
-    )
+    # subscript_confuse.s (a direct side effect): Own Tempo (:12, H-2), the substitute is
+    # swagger_fails'; then Safeguard (:26, B10-7), after the raise.
+    calls = cond & (state.confusion[h.target_side] == 0)
+    tempo = calls & (h.target_ignorable == AbilityId.OWN_TEMPO)
+    state = _reveal_confusion_block(state, h, tempo)
+    confuse = calls & ~tempo & (state.safeguard[side_of(h.target_side)] == 0)
     return _set(state, "confusion", h.target_side, outcome.duration[h.side], confuse)
+
+
+def _reveal_confusion_block(state: BattleState, h: _Hit, cond) -> BattleState:
+    """subscript_confuse.s:12 -> :_141, :73: a direct confusion that an ignorable Own Tempo stops
+    prints "prevents confusion" (TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON,
+    battle_script.c:11798-11810), where ``cond`` (H-2)."""
+    from nuzline.engine.hooks import CONFUSION_BLOCKED, reveal_ability  # hooks imports this module
+
+    return reveal_ability(state, h.target_side, h.target, CONFUSION_BLOCKED, cond)
 
 
 # The two stats in move_param[m, 0..1], in order (Attack and Speed: Dragon Dance; Attack and
@@ -2153,10 +2181,14 @@ def _disable(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
 
 
 def _confuse_foe(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
+    # subscript_confuse.s:12 (H-2): an ignorable Own Tempo stops it before every other check and,
+    # a direct effect, reveals itself (:_141).
+    runs = (h.effect == _E.CONFUSE_FOE) & h.effective & _alive(state, h.target_side, h.target)
+    tempo = runs & (h.target_ignorable == AbilityId.OWN_TEMPO)
+    state = _reveal_confusion_block(state, h, tempo)
     cond = (
-        (h.effect == _E.CONFUSE_FOE)
-        & h.effective
-        & _alive(state, h.target_side, h.target)
+        runs
+        & ~tempo
         & (state.confusion[h.target_side] == 0)
         & ~h.shielded  # subscript_confuse.s:23
         & (state.safeguard[side_of(h.target_side)] == 0)  # :26 (B10-7)
@@ -2170,6 +2202,7 @@ def _secondary_confuse(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & h.effective
         & h.proc
         & _alive(state, h.target_side, h.target)
+        & (h.target_ignorable != AbilityId.OWN_TEMPO)  # subscript_confuse.s:12, silent (H-2)
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
         & ~h.shielded  # the rolled-secondary gate (battle_lib.c:1580-1582); confuse :23
@@ -2400,7 +2433,8 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     (effect_script_0267.s:5, battle_lib.c:1520-1522), so the defender's Shield Dust as the
     attacker sees it stops it (subscript_confuse.s:14-15, ``CheckIgnorableAbility``: a Mold
     Breaker attacker ignores it), after the roll is drawn; then not confused :24, no Substitute
-    :23, no Safeguard :26 (G-70)."""
+    :23, no Safeguard :26 (G-70). Before them the defender's ignorable Own Tempo (:12 -> :_141)
+    ends it silently (H-2)."""
     fmt = format_of(state)
     chatot = (state.species[party(fmt, h.side), h.user] == SPECIES_CHATOT) & (
         state.transformed[h.side] == 0
@@ -2411,6 +2445,7 @@ def _chatter(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & chatot
         & _alive(state, h.target_side, h.target)
         & (outcome.chatter[h.side] != 0)
+        & (h.target_ignorable != AbilityId.OWN_TEMPO)
         & (state.confusion[h.target_side] == 0)
         & ~_shield_dust(h)
         & ~h.shielded
@@ -2903,13 +2938,15 @@ def _attractable(state: BattleState, side, slot, foe_side, foe_slot) -> jnp.ndar
 
 
 def _attract(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
-    """Attract: the living target of the opposite gender falls in love with the user."""
-    cond = (
-        (h.effect == _E.ATTRACT)
-        & h.effective
-        & _alive(state, h.target_side, h.target)
-        & _attractable(state, h.target_side, h.target, h.side, h.user)
-    )
+    """Attract: the living target of the opposite gender falls in love with the user. The
+    target's ignorable Oblivious stops it first (subscript_infatuate.s:5 -> :_055): "prevents
+    romance" (:39, TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON: the AI learns it), H-2."""
+    runs = (h.effect == _E.ATTRACT) & h.effective & _alive(state, h.target_side, h.target)
+    oblivious = runs & (h.target_ignorable == AbilityId.OBLIVIOUS)
+    from nuzline.engine.hooks import ROMANCE_BLOCKED, reveal_ability  # hooks imports this module
+
+    state = reveal_ability(state, h.target_side, h.target, ROMANCE_BLOCKED, oblivious)
+    cond = runs & ~oblivious & _attractable(state, h.target_side, h.target, h.side, h.user)
     return _set(state, "infatuated", h.target_side, 1, cond)
 
 
@@ -2950,8 +2987,13 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     # subscript_paralyze.s:5: the attacker's own Limber (the side-effect battler is the
     # attacker itself, so no Mold Breaker can pierce it) ends Static's paralysis silently
     # (:_170 ends an ABILITY side effect with no message).
-    limber = (status == Status.PARALYSIS) & (
-        battler_ability(state, h.side, h.user) == AbilityId.LIMBER
+    own = battler_ability(state, h.side, h.user)
+    # Likewise its own Immunity stops Poison Point's poison (subscript_poison.s:13 -> :_177) and
+    # its own Water Veil Flame Body's burn (subscript_burn.s:20 -> :_264), silently (H-2).
+    own_block = (
+        ((status == Status.PARALYSIS) & (own == AbilityId.LIMBER))
+        | ((status == Status.POISON) & (own == AbilityId.IMMUNITY))
+        | ((status == Status.BURN) & (own == AbilityId.WATER_VEIL))
     )
     # Then the attacker's own Leaf Guard in sun (paralyze :6-8, poison :14-16, burn :21-23; ruling
     # G-14): an ABILITY side effect ends silently (:_170, :_177, :_264).
@@ -2960,7 +3002,7 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         (status != Status.NONE)
         & hit
         & h.contact_proc
-        & ~limber
+        & ~own_block
         & ~leaf
         & can_have_status(tables, state, h.side, h.user, status)
     )
@@ -2997,6 +3039,8 @@ def _contact_ability(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & hit
         & _alive(state, h.target_side, h.target)
         & h.contact_proc
+        # subscript_infatuate.s:5 -> :_082 -> :_117: the attacker's own Oblivious, silent (H-2).
+        & (own != AbilityId.OBLIVIOUS)
         & _attractable(state, h.side, h.user, h.target_side, h.target)
     )
     state = _set(state, "infatuated", h.side, 1, charm)

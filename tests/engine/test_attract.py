@@ -7,7 +7,7 @@ Decomp (external/pokeplatinum):
   ``TO_DEFENDER | INFATUATE`` (no ON_HIT), ``msgBattlerTemp = attacker``.
   ``BattleSystem_TriggerPrimaryEffect`` (src/battle/battle_lib.c:1481-1510) runs it only on a
   living defender and without ``MOVE_STATUS_NO_EFFECTS`` (a miss, Protect).
-* ``res/battle/scripts/subscripts/subscript_infatuate.s``: Oblivious (refused: unsupported),
+* ``res/battle/scripts/subscripts/subscript_infatuate.s``: Oblivious (E1 batch H, H-2),
   ``MISSED|SEMI_INVULNERABLE``, then ``TryAttract`` (fail: ``MOVE_STATUS_FAILED`` for a move,
   silent for an ability, :60-65).
 * ``BtlCmd_TryAttract`` (src/battle/battle_script.c:5727-5742): fails on equal genders, a
@@ -151,9 +151,9 @@ def test_effect_120_maps_attract(tables, names, kaizo_tables, kaizo_names):
 
 
 @pytest.mark.fullset
-def test_cute_charm_maps_and_oblivious_stays_unsupported(tables, names, kaizo_tables, kaizo_names):
+def test_cute_charm_and_oblivious_map(tables, names, kaizo_tables, kaizo_names):
     assert DECOMP_ABILITY_TO_ID["Cute Charm"] == AbilityId.CUTE_CHARM
-    assert "Oblivious" not in DECOMP_ABILITY_TO_ID
+    assert DECOMP_ABILITY_TO_ID["Oblivious"] == AbilityId.OBLIVIOUS  # H-2
     for t, n, charmers in (
         (tables, names, ("Skitty", "Clefairy")),
         (kaizo_tables, kaizo_names, ("Skitty",)),  # Kaizo's Clefairy has other abilities
@@ -162,12 +162,12 @@ def test_cute_charm_maps_and_oblivious_stays_unsupported(tables, names, kaizo_ta
             slots = n.species_abilities(n.species(species))
             k = [n.ability_names[a] for a in slots].index("Cute Charm")
             assert int(t.species_abilities[n.species(species), k]) == AbilityId.CUTE_CHARM
-        # Every Oblivious holder (Slowpoke, Wailmer, ...) maps to UNSUPPORTED.
+        # Every Oblivious holder (Slowpoke, Wailmer, ...; none in Kaizo) maps to OBLIVIOUS.
         table = np.asarray(t.species_abilities_decomp)
         oblivious = n.ability_names.index("Oblivious")
         rows, slots = np.nonzero(table == oblivious)
         assert rows.size > 0 or t is kaizo_tables
-        assert (np.asarray(t.species_abilities)[rows, slots] == AbilityId.UNSUPPORTED).all()
+        assert (np.asarray(t.species_abilities)[rows, slots] == AbilityId.OBLIVIOUS).all()
         # Mental Herb (HOLD_EFFECT_HEAL_INFATUATION) and Destiny Knot (RECIPROCATE_INFAT)
         # would touch infatuation: unsupported, so coverage refuses them.
         for item in ("Mental Herb", "Destiny Knot"):
@@ -687,20 +687,21 @@ def test_kaizo_skitty_bruteforce(kaizo_tables, kaizo_names, order):
 
 
 @pytest.mark.fullset
-def test_oblivious_is_refused(tables, names):
+def test_oblivious_is_covered(tables, names):
+    """H-2: Oblivious is modelled (``effects._attract``, ``_contact_ability``,
+    ``hooks.recover_status_by_ability``): no refusal on either side."""
     base = sample_party(names)
     slow = names.species("Slowpoke")
     k = [names.ability_names[a] for a in names.species_abilities(slow)].index("Oblivious")
     mon = replace_spec(base[0], species=slow, form=0, ability_slot=k)
     report = check_coverage(tables, names, [mon, *base[1:]], roark_trainer(), roark_party(names), 0)
-    assert "Player SLOWPOKE (slot 0): Oblivious (ability UNSUPPORTED)" in report.missing
+    assert not any("Oblivious" in m for m in report.missing)
     cand = Candidate(("party", 0, 0), "P", mon, 0, (), ())
-    assert "P: Oblivious (ability UNSUPPORTED)" in check_pool(tables, names, [cand], ()).missing
-    assert _ability_refusal(tables, mon) == "ability not implemented"
-    # The opponent's side is refused the same way.
+    assert not any("Oblivious" in m for m in check_pool(tables, names, [cand], ()).missing)
+    assert _ability_refusal(tables, mon) is None
     opp = [mon, *roark_party(names)[1:]]
     report = check_coverage(tables, names, base, roark_trainer(), opp, 0)
-    assert any(m.endswith("Oblivious (ability UNSUPPORTED)") for m in report.missing)
+    assert not any("Oblivious" in m for m in report.missing)
 
 
 @pytest.mark.parametrize("item", ["Mental Herb", "Destiny Knot"])

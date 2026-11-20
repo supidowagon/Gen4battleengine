@@ -199,6 +199,7 @@ from nuzline.engine.hooks import (
     after_damage_items,
     entry_damage_up,
     fling_try,
+    forbids_status,
     forecast,
     held_item_check,
     move_end_switch_in,
@@ -416,30 +417,49 @@ def _set_side(state: BattleState, field: str, side, value, cond) -> BattleState:
     return state._replace(**{field: arr.at[index].set(new)})
 
 
-def _natural_cure(state: BattleState, side, cond=True) -> BattleState:
-    """``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139) clears the status of a
-    switching battler with HP left and Natural Cure. ``subscript_switch_pokemon.s:5-6``
-    runs it before Pursuit hits (:11), so ``execute_actions`` applies it before the
-    Pursuit hit; repeating it in ``_send_out`` changes nothing."""
+def _restore_status_on_switch(tables: Tables, state: BattleState, side, cond=True) -> BattleState:
+    """``BtlCmd_TryRestoreStatusOnSwitch`` (battle_script.c:9139-9160) for battler ``side`` where
+    ``cond``, and the subscript's ``UpdateMonData ... BATTLEMON_STATUS, MON_CONDITION_NONE`` after
+    it: a battler with HP left (:9147) whose raw ``BattleMon.ability`` is Natural Cure (:9152;
+    Gastro Acid leaves it), or whose party Pokemon's ``MON_DATA_ABILITY`` (:9149,
+    ``_party_ability``: not a copied or swapped ability) forbids its status
+    (``Ability_ForbidsStatus``, battle_lib.c:4454-4492, :9153; ``hooks.forbids_status``: Immunity,
+    Limber, Insomnia, Vital Spirit, Water Veil, Magma Armor; H-2), loses its status and counter.
+    Its callers: subscript_switch_pokemon.s:5-6, before the Pursuit (:11; ``_execute_actions``),
+    subscript_baton_pass.s:7-8, subscript_attack_then_switch_out.s:56-57 and
+    subscript_force_target_to_switch_or_flee.s:11-12 (Roar's drag; all three ``_use_move``) and
+    subscript_battle_won.s:6-11 (the player's battlers, ``_battle_won``). subscript_escape.s:5-10
+    and subscript_throw_pokeball.s:13 belong to wild battles. Each runs before the switch
+    itself (``_send_out``), which does not run it again."""
     fmt = format_of(state)
     mon = state.active[side]
-    # Raw BattleMon.ability (battle_script.c:9151), not Battler_Ability: Gastro Acid leaves it.
-    cure = (state.ability[party(fmt, side), mon] == AbilityId.NATURAL_CURE) & (
-        state.hp[party(fmt, side), mon] > 0
+    row = party(fmt, side)
+    cure = (state.ability[row, mon] == AbilityId.NATURAL_CURE) | forbids_status(
+        _party_ability(tables, state, side), state.status[row, mon]
     )
-    cure = cure & jnp.asarray(cond)
+    cure = cure & (state.hp[row, mon] > 0) & jnp.asarray(cond)
     state = _set_mon(state, "status", side, mon, Status.NONE, cure)
     return _set_mon(state, "status_counter", side, mon, 0, cure)
 
 
-def _switch_out(state: BattleState, side) -> BattleState:
-    """``side``'s active Pokemon leaves by a switch action (``subscript_switch_pokemon.s``):
-    Natural Cure (``_natural_cure``), and the toxic counter restarts: battle_controller.c:
-    1482 writes the status back to the party without ``MON_CONDITION_TOXIC_COUNTER``, and
-    a returning battler reads it from there. A sleep counter is part of the status and
-    stays."""
+def _battle_won(tables: Tables, state: BattleState, cond) -> BattleState:
+    """subscript_battle_won.s:6-11: ``TryRestoreStatusOnSwitch`` on ``BTLSCR_PLAYER_SLOT_1`` and
+    ``_2``, every battler of the player's party (``_restore_status_on_switch``), where ``cond``
+    (the player won). It runs after the last action's MoveEnd cures (bcp.c:3965-3969), on the
+    battle abilities: the callers apply it before the battle end's ``_restore_ability``."""
     fmt = format_of(state)
-    state = _natural_cure(state, side)
+    for b in (b for b in range(fmt.B) if fmt.party_of[b] == 0):
+        state = _restore_status_on_switch(tables, state, b, cond)
+    return state
+
+
+def _switch_out(state: BattleState, side) -> BattleState:
+    """``side``'s active Pokemon leaves by a switch action (``subscript_switch_pokemon.s``), Roar's
+    drag or a pivot's party list, after its status cure (``_restore_status_on_switch``, each
+    caller's): the toxic counter restarts: battle_controller.c:1482 writes the status back to the
+    party without ``MON_CONDITION_TOXIC_COUNTER``, and a returning battler reads it from there. A
+    sleep counter is part of the status and stays."""
+    fmt = format_of(state)
     mon = state.active[side]
     toxic = state.status[party(fmt, side), mon] == Status.TOXIC
     return _set_mon(state, "status_counter", side, mon, 0, toxic)
@@ -664,6 +684,21 @@ def _restore_types(tables: Tables, state: BattleState, side, cond) -> BattleStat
     return state._replace(types=state.types.at[party(fmt, side), mon].set(value))
 
 
+def _party_ability(tables: Tables, state: BattleState, side) -> jnp.ndarray:
+    """The ``MON_DATA_ABILITY`` of ``side``'s active battler's party Pokemon: ``party_ability``
+    where a script wrote it (F-O2), else ``tables.species_abilities`` at its ``ability_form``'s
+    row and ability slot, as ``make_state`` builds it. ``BattleSystem_InitBattleMon`` re-reads it
+    (battle_lib.c:124); Trace, Role Play and Skill Swap write only the battler's."""
+    fmt = format_of(state)
+    mon = state.active[side]
+    row = tables.species_form_row[
+        state.species[party(fmt, side), mon], state.ability_form[party(fmt, side), mon]
+    ]
+    own_ability = tables.species_abilities[row, state.ability_slot[party(fmt, side), mon]]
+    party_ability = state.party_ability[party(fmt, side), mon]
+    return jnp.where(party_ability != 0, party_ability, own_ability)
+
+
 def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleState:
     """``side``'s active battler leaves the field where ``cond``: its ``ability`` goes back to
     its party Pokemon's (``party_ability`` where a script wrote it, F-O2; else
@@ -676,13 +711,8 @@ def _restore_ability(tables: Tables, state: BattleState, side, cond) -> BattleSt
     copied ability until then, as its ``BattleMon`` does, and no Pokemon comes back from 0 HP."""
     fmt = format_of(state)
     mon = state.active[side]
-    row = tables.species_form_row[
-        state.species[party(fmt, side), mon], state.ability_form[party(fmt, side), mon]
-    ]
-    own_ability = tables.species_abilities[row, state.ability_slot[party(fmt, side), mon]]
     # F-O2: the party Pokemon's written ability (``party_ability``) is what InitBattleMon reads.
-    party_ability = state.party_ability[party(fmt, side), mon]
-    own_ability = jnp.where(party_ability != 0, party_ability, own_ability)
+    own_ability = _party_ability(tables, state, side)
     # The raw BattleMon.ability write-back (battle_lib.c:124).
     value = jnp.where(cond, own_ability, state.ability[party(fmt, side), mon]).astype(
         state.ability.dtype
@@ -1885,6 +1915,8 @@ def _use_move(
     roar_failed = (roar & ~dragged) | anchored
     drag_slot = roar_slot(eligible, outcome.roar_target[side])
     pre_drag = state
+    # subscript_force_target_to_switch_or_flee.s:11-12: the target's status cure before the switch.
+    state = _restore_status_on_switch(tables, state, target_side, dragged)
     state = _where(dragged, _send_out(tables, state, target_side, drag_slot, effects=False), state)
     # The drag's Toxic Spikes poisoned the newcomer (subscript_hazards_check.s:14-28): its status
     # subscript set SYSCTL_TRY_SYNCHRONIZE_STATUS with the newcomer, the new defender, as
@@ -2145,7 +2177,7 @@ def _use_move(
     # action goes on without a switch.
     pursuit_pause = after_pursuit & (state_in.hp[party(fmt, side), user] > 0) & (state_in.over == 0)
     stops = baton_go | pursuit_pause
-    state = _natural_cure(state, side, stops)
+    state = _restore_status_on_switch(tables, state, side, stops)
     # MODE_RESUME: the rest of AfterMoveMessage on the newcomer (bcp.c:3497-3530): King's Rock with
     # its item (CheckExtraFlinch, bcp.c:4630-4650, no U-turn guard; U-turn has
     # MOVE_FLAG_TRIGGERS_KINGS_ROCK, res/moves/u_turn/data.json:25; flinch_item[side, 0]), then
@@ -2445,7 +2477,7 @@ def _use_move(
             & _pursuer_ready(tables, hit_state, foe, foe_action, foe_move, foe_struggling)
         )
         lists = goes & ~chases
-        hit_state = _natural_cure(hit_state, side, lists)
+        hit_state = _restore_status_on_switch(tables, hit_state, side, lists)
         # A U-turn that does not switch makes its King's Rock check after the secondary effect
         # (ONE_HIT_EXTRA_FLINCH, bcp.c:3524).
         rock_now = going & first & is_uturn & ~goes & landed & info.damaged
@@ -3321,7 +3353,12 @@ def _acid_rain(pre: BattleState, hit: BattleState, state: BattleState, pursuer, 
 
 
 def _faint_check(
-    tables: Tables, before: BattleState, after: BattleState, entry_turn=None, decide: bool = True
+    tables: Tables,
+    before: BattleState,
+    after: BattleState,
+    entry_turn=None,
+    decide: bool = True,
+    won_cure: bool = True,
 ) -> BattleState:
     """Count new player faints (``player_faints``) and record their party slots
     (``deaths``); a player faint ends the battle only when no player Pokemon has HP left.
@@ -3361,6 +3398,10 @@ def _faint_check(
         over=jnp.where(ended, 1, after.over).astype(after.over.dtype),
         winner=jnp.where(ended, winner, after.winner).astype(after.winner.dtype),
     )
+    # subscript_battle_won.s's cures (``_battle_won``), on the battle abilities; ``won_cure``
+    # False: the caller runs them after its MoveEnd cures (``_move_end_head``).
+    if won_cure:
+        after = _battle_won(tables, after, ended & (after.winner == WINNER_PLAYER))
     # The battle's end: the player's party is what the next battle carries, and it never saw a
     # Mimic copy (``_restore_moves``): every battler of party 0 (ruling D1-3). The opponent's
     # active keeps its battler until the payout has read it (the copied species of a Transform,
@@ -3386,6 +3427,7 @@ def _faint_check(
 
 
 def _move_end_head(
+    tables: Tables,
     state: BattleState,
     acted: BattleState,
     side,
@@ -3458,6 +3500,9 @@ def _move_end_head(
     named = defender != NO_DEFENDER  # bcp.c:3966: BATTLER_NONE skips the call
     second = jnp.where(ended & named, defender, foe)
     state = recover_status_by_ability(state, second, clear | (ended & fought & named))
+    # subscript_battle_won.s after CheckBattleOver (bcp.c:3969): on the battle abilities, after
+    # the cures above (the faint check left it to here, ``won_cure``).
+    state = _battle_won(tables, state, ended & (state.winner == WINNER_PLAYER))
     state = state._replace(ability=restored)
     return state, clear
 
@@ -3612,10 +3657,10 @@ def _execute_actions(
         # move on the mover (MODE_REFLECT); coat is that move.
         reflecting = phase == _REFLECT
         actor = jnp.where(reflecting, _foe(side), side)
-        # subscript_switch_pokemon.s:5-6: a first actor's switch gets its Natural Cure before
-        # the Pursuit (:11).
-        first_switch = start & (position == 0) & is_switch(acts[side]) & (state.over == 0)
-        state = _natural_cure(state, side, first_switch)
+        # subscript_switch_pokemon.s:5-6: a switch gets its status cure before the Pursuit (:11)
+        # a first actor's switch meets.
+        switching = start & is_switch(acts[side]) & (state.over == 0)
+        state = _restore_status_on_switch(tables, state, side, switching)
         # The one Pursuit site: the hit before a first actor's switch or the one U-turn's head
         # stopped for (``ap``): the first ready battler of the other side (``first_pursuer``;
         # with none it names the foe, so in singles the chase's pursuer is the foe either way);
@@ -3776,7 +3821,8 @@ def _execute_actions(
         # the holder's pass comes next, then both run (bcp.c:3831-3837, LoopSpreadMoves).
         hold = ctl["reflect"] & ~reflecting
         done, clear = _move_end_head(
-            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
+            tables,
+            _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted, won_cure=False),
             acted,
             side,
             ran,

@@ -40,9 +40,8 @@ Poison/Steel, burn vs Fire and freeze vs Ice (and no freezing in sun), which
 are Insomnia and Vital Spirit (alike at every site; Vital Spirit since E1 Batch C, G-47),
 Limber and Leaf Guard in sun (implemented in ``engine/effects.py``; Leaf Guard since the E1
 Gardenia batch, G-14), Shield Dust against a damaging move's secondary status
-(``effects._inflict``), and Immunity, Water Veil and Magma Armor (``AbilityId.UNSUPPORTED``), and
-Safeguard and Substitute are unsupported moves, so none of those branches can be
-reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
+(``effects._inflict``), and Immunity, Water Veil and Magma Armor (``effects._inflict``, E1 batch
+H, H-2). Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) is modelled
 (E2 batch 5, ``effects._inflict``).
 """
 
@@ -752,8 +751,8 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Limber": AbilityId.LIMBER,
     "Adaptability": AbilityId.ADAPTABILITY,
     "Solid Rock": AbilityId.SOLID_ROCK,
-    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); Oblivious, which would block
-    # it (subscript_infatuate.s:5), stays unsupported (coverage refuses it).
+    # BattleSystem_TriggerAbilityOnHit (battle_lib.c:4339-4355); the attacker's own Oblivious
+    # blocks it silently (subscript_infatuate.s:5, :_082 -> :_117; H-2).
     "Cute Charm": AbilityId.CUTE_CHARM,
     # Halves the pinch berries' and Custap Berry's param (battle_lib.c:4774-4776, :1289-1291):
     # the only decomp reads of ABILITY_GLUTTONY.
@@ -825,6 +824,12 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Forecast": AbilityId.FORECAST,
     "Air Lock": AbilityId.AIR_LOCK,
     "Klutz": AbilityId.KLUTZ,
+    # E1 batch H, H-2 (engine/ids.py AbilityId).
+    "Immunity": AbilityId.IMMUNITY,
+    "Own Tempo": AbilityId.OWN_TEMPO,
+    "Water Veil": AbilityId.WATER_VEIL,
+    "Magma Armor": AbilityId.MAGMA_ARMOR,
+    "Oblivious": AbilityId.OBLIVIOUS,
 }
 
 DECOMP_ITEM_TO_ID: dict[str, ItemId] = {

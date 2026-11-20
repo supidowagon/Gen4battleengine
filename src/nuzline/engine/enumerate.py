@@ -1201,6 +1201,14 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.MULTITYPE,
     # F-5: Hydration cures in the turn-end weather step, after every hit.
     AbilityId.HYDRATION,
+    # H-2: they only stop a status, confusion or infatuation (fewer input changes than the
+    # clauses already allow) and cure one at a move's end or a switch (a status pierced by Mold
+    # Breaker is cured at that move's end, before its holder's later hit).
+    AbilityId.IMMUNITY,
+    AbilityId.OWN_TEMPO,
+    AbilityId.WATER_VEIL,
+    AbilityId.MAGMA_ARMOR,
+    AbilityId.OBLIVIOUS,
 )
 INPUT_CLAUSE_ABILITIES = (
     AbilityId.GUTS,  # status clause
@@ -2044,6 +2052,17 @@ def outcome_laws(
         ]
     )
     limber = (param0 == Status.PARALYSIS) & (ignorable == AbilityId.LIMBER)
+    # H-2: Immunity, Water Veil and Magma Armor (effects._inflict) block as Limber does: a reveal
+    # only for a direct status move, none for Magma Armor.
+    limber = (
+        limber
+        | (
+            ((param0 == Status.POISON) | (param0 == Status.TOXIC))
+            & (ignorable == AbilityId.IMMUNITY)
+        )
+        | ((param0 == Status.BURN) & (ignorable == AbilityId.WATER_VEIL))
+        | ((param0 == Status.FREEZE) & (ignorable == AbilityId.MAGMA_ARMOR))
+    )
     insomnia = (param0 == Status.SLEEP) & sleepless(ignorable)  # Vital Spirit too (G-47)
     single = ~multi
 
@@ -2056,16 +2075,18 @@ def outcome_laws(
         )
 
     # Tri Attack: blocked when the target can take none of its three statuses (an existing
-    # status; or Fire, Ice and Limber together, subscript_paralyze.s:5).
+    # status; or Fire, Ice and Limber together, subscript_paralyze.s:5; Water Veil and Magma Armor
+    # each stop one, subscript_burn.s:20, subscript_freeze.s:5, H-2).
     tri_open = (
-        takes(Status.BURN)
-        | takes(Status.FREEZE)
+        (takes(Status.BURN) & (ignorable != AbilityId.WATER_VEIL))
+        | (takes(Status.FREEZE) & (ignorable != AbilityId.MAGMA_ARMOR))
         | (takes(Status.PARALYSIS) & (ignorable != AbilityId.LIMBER))
     )
     status_blocked = single & jnp.where(
         effect == _E.TRI_ATTACK, ~tri_open, ~insomnia & (~can_take | limber)
     )
-    confused_blocked = single & (foes(state.confusion) > 0)
+    # subscript_confuse.s:12: an ignorable Own Tempo stops it first (H-2).
+    confused_blocked = single & ((foes(state.confusion) > 0) | (ignorable == AbilityId.OWN_TEMPO))
     # subscript_flinch_mon.s:7: Inner Focus (ignorable) stops Thunder Fang's flinch.
     flinch_blocked = ignorable == AbilityId.INNER_FOCUS
     if loose:
@@ -2080,6 +2101,8 @@ def outcome_laws(
     infatuated_own = uses_move & (state.infatuated != 0)
     if not loose:
         attract = attract & lovers(gender[sides, mons], foes(gender[sides, mons])) & foe_calm
+        # subscript_infatuate.s:5: an ignorable Oblivious stops it (effects._attract, H-2).
+        attract = attract & (ignorable != AbilityId.OBLIVIOUS)
         infatuated_own = infatuated_own & ~foes(switch)
     # Focus Band (effects.play_hit, step._use_move; G-1): the defender's roll on every hit of a
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
@@ -2101,7 +2124,9 @@ def outcome_laws(
             for side in range(fmt.B)
         ]
     )
-    calm_now = state.confusion == 0
+    # subscript_confuse.s:6: the holder's own Own Tempo (CheckAbility) stops a berry's confusion
+    # (hooks.berry_confuse, H-2).
+    calm_now = (state.confusion == 0) & (battler_ability(state, sides, mons) != AbilityId.OWN_TEMPO)
     if loose:
         calm_now = jnp.ones((fmt.B,), bool)
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.

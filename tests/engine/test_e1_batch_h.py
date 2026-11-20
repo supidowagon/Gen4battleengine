@@ -1,8 +1,9 @@
-"""E1 batch H, H-1: the Future Sight / Doom Desire hit's accuracy law where an Acid Rain write
+"""E1 batch H. H-1: the Future Sight / Doom Desire hit's accuracy law where an Acid Rain write
 (subscript_pursuit.s:115, OPCODE_SUB_TO_ZERO battle_script.c:3282-3287; ledger G-12) can happen:
 classes over the union of every mask the hit can read (``outcome.future_thresholds``' field
 axis, ``outcome._future_fields``), and the roll kept whole (``loose``) only on a battler whose hit
-is due (bcp.c:1767-1769, :1782; accuracy 0 draws nothing, bcp.c:2900-2902)."""
+is due (bcp.c:1767-1769, :1782; accuracy 0 draws nothing, bcp.c:2900-2902). H-2: Immunity, Own Tempo,
+Water Veil, Magma Armor and Oblivious (blocks, MoveEnd cures, the switch-out and battle-won cures)."""
 
 from __future__ import annotations
 
@@ -12,12 +13,19 @@ import numpy as np
 import pytest
 
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.effects import apply_move_effect
 from nuzline.engine.enumerate import _future_hit, hit_class_law, outcome_laws
-from nuzline.engine.ids import Weather
+from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import is_switch, move_effects
-from nuzline.engine.outcome import acid_rain_pairs, future_thresholds, hit_class
+from nuzline.engine.outcome import (
+    MAX_HITS,
+    acid_rain_pairs,
+    empty_outcome,
+    future_thresholds,
+    hit_class,
+)
 from tests.engine.d2_states import four, with_moves
-from tests.engine.helpers import A, assert_matches_reference, jit_step, sample_rows
+from tests.engine.helpers import A, assert_matches_reference, jit_step, roark_state, sample_rows
 from tests.engine.test_field_mask import _hits, _masked, _pursuit_fight, _rearming
 
 
@@ -177,3 +185,259 @@ def test_four_battlers_keep_the_roll_whole_where_an_acid_pair_is_reachable(table
         want[2, 3] = bool(pursuit)
         assert np.array_equal(pairs, want)
         assert bool(future_thresholds(tables, s, acts, moves)[2][0]) is bool(pursuit)
+
+
+# --- H-2: Immunity, Own Tempo, Water Veil, Magma Armor, Oblivious; the switch-out cure -------
+# Rule sheets ability-immunity.md, ability-own-tempo.md, ability-cure-veil-armor-oblivious.md. The
+# blocks: subscript_poison.s:13, subscript_badly_poison.s:31, subscript_burn.s:20,
+# subscript_freeze.s:5, subscript_confuse.s:12, subscript_infatuate.s:5; the cures:
+# BattleSystem_RecoverStatusByAbility (battle_lib.c:4378-4452, no HP test) at the move end
+# (bcp.c:3965-3967) and Ability_ForbidsStatus (battle_lib.c:4454-4492) in
+# BtlCmd_TryRestoreStatusOnSwitch (battle_script.c:9139-9160). A status here only exists where
+# the game sets it: a Mold Breaker attacker (Cranidos) pierces the block, Gastro Acid suppresses
+# the ability, Skill Swap moves it.
+
+SWITCH_TO_1 = MOVE_ACTIONS + 1
+DECOMP = {"Immunity": 17, "Own Tempo": 20, "Water Veil": 41, "Magma Armor": 40, "Oblivious": 12}
+
+
+def _procs(player=0, opp=0, secondary=0):
+    """``empty_outcome`` with the defenders' ``contact_proc`` and every ``secondary`` roll set."""
+    rows = jnp.array([[player] * MAX_HITS, [opp] * MAX_HITS], jnp.int8)
+    sec = jnp.full((2, MAX_HITS), secondary, jnp.int8)
+    return empty_outcome()._replace(contact_proc=rows, secondary=sec)
+
+
+def _holder(tables, names, species, ability, opp_moves, **kw):
+    s = roark_state(
+        tables,
+        names,
+        player_species=species,
+        player_ability=ability,
+        player_moves=kw.pop("player_moves", ("Leer",)),
+        opp_moves=opp_moves,
+        **kw,
+    )
+    assert int(s.ability[0, 0]) == int(AbilityId[ability.upper().replace(" ", "_")])
+    return s
+
+
+@pytest.mark.parametrize(
+    "species, ability, move, status, outcome",
+    [
+        ("Zangoose", "Immunity", "Toxic", Status.TOXIC, empty_outcome()),
+        ("Wailmer", "Water Veil", "Will-O-Wisp", Status.BURN, empty_outcome()),
+    ],
+)
+def test_a_direct_status_is_blocked_and_revealed_a_mold_breaker_one_cured_at_move_end(
+    tables, names, species, ability, move, status, outcome
+):
+    """The direct status move prints "prevents" (TAG_NICKNAME_ABILITY: the AI learns the decomp id,
+    battle_script.c:11798-11810). Cranidos' Mold Breaker pierces the block (CheckIgnorableAbility);
+    the defender's MoveEnd cure clears it again and reveals nothing (BTLSCR_MSG_TEMP,
+    battle_script.c:11801-11802)."""
+    s = _holder(tables, names, species, ability, (move,))
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), outcome)
+    assert int(out.status[0, 0]) == Status.NONE
+    assert int(out.ai_ability_known[0]) == DECOMP[ability]
+    mb = _holder(tables, names, species, ability, (move,), opp_species="Cranidos")
+    hit = apply_move_effect(
+        tables, mb, 1, names.move(move), outcome, 0, connected=True, target_moved=False
+    )
+    assert int(hit.status[0, 0]) == status and int(hit.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, mb, A("Leer", move, mb, names), outcome)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.status_counter[0, 0]) == 0
+    assert int(out.ai_ability_known[0]) == 0
+
+
+@pytest.mark.parametrize(
+    "species, ability, move",
+    [
+        ("Zangoose", "Immunity", "Poison Sting"),
+        ("Wailmer", "Water Veil", "Ember"),
+        ("Camerupt", "Magma Armor", "Ice Beam"),
+    ],
+)
+def test_a_secondary_status_is_blocked_silently(tables, names, species, ability, move):
+    """An INDIRECT side effect ends at the ability test with no message (poison :_177 -> :_322,
+    burn :_264, freeze :_128 -> :_157)."""
+    s = _holder(tables, names, species, ability, (move,))
+    out = assert_matches_reference(tables, s, A("Leer", move, s, names), _procs(secondary=1))
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
+
+
+def test_magma_armor_never_reveals_and_a_pierced_freeze_thaws_at_move_end(tables, names):
+    """subscript_freeze.s:5 -> :_128 prints only the attack message; Cranidos' Ice Beam freezes
+    Camerupt (Mold Breaker), MSGCOND_FREEZE cures it at the MoveEnd (battle_lib.c:4419-4424)."""
+    s = _holder(tables, names, "Camerupt", "Magma Armor", ("Ice Beam",), opp_species="Cranidos")
+    o = _procs(secondary=1)
+    hit = apply_move_effect(tables, s, 1, names.move("Ice Beam"), o, 0, connected=True,
+                            target_moved=False)  # fmt: skip
+    assert int(hit.status[0, 0]) == Status.FREEZE
+    out = assert_matches_reference(tables, s, A("Leer", "Ice Beam", s, names), o)
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
+
+
+def test_psycho_shift_of_poison_onto_immunity_is_blocked_and_the_user_keeps_it(tables, names):
+    """subscript_give_target_own_status.s:9-11 runs subscript_poison.s as a direct effect: Immunity
+    prints "prevents poisoning"; the defender has no status, so the user keeps its own (:41-45)."""
+    s = _holder(tables, names, "Zangoose", "Immunity", ("Psycho Shift",))
+    s = s.with_status(1, 0, Status.POISON)
+    out = assert_matches_reference(tables, s, A("Leer", "Psycho Shift", s, names), empty_outcome())
+    assert int(out.status[0, 0]) == Status.NONE and int(out.status[1, 0]) == Status.POISON
+    assert int(out.ai_ability_known[0]) == DECOMP["Immunity"]
+
+
+@pytest.mark.parametrize(
+    "species, ability, opp_ability, status",
+    [
+        ("Zangoose", "Immunity", AbilityId.POISON_POINT, Status.POISON),
+        ("Wailmer", "Water Veil", AbilityId.FLAME_BODY, Status.BURN),
+    ],
+)
+def test_the_attackers_own_ability_stops_a_contact_status_silently(
+    tables, names, species, ability, opp_ability, status
+):
+    """BattleSystem_TriggerAbilityOnHit's status runs on the attacker as an ABILITY side effect:
+    its own Immunity / Water Veil ends it silently (subscript_poison.s:13 -> :_322,
+    subscript_burn.s:20 -> :_264); the holder's message (and the reveal) never comes."""
+    s = _holder(tables, names, species, ability, ("Leer",), player_moves=("Tackle",))
+    s = s._replace(ability=s.ability.at[1, 0].set(opp_ability))
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert int(out.status[0, 0]) == Status.NONE and int(out.ai_ability_known[0]) == 0
+    bare = s._replace(ability=s.ability.at[0, 0].set(AbilityId.NONE))
+    out = assert_matches_reference(tables, bare, A("Tackle", "Leer", bare, names), _procs(opp=1))
+    assert int(out.status[0, 0]) == status
+
+
+def test_own_tempo_blocks_confuse_ray_and_swagger_and_reveals(tables, names):
+    """subscript_confuse.s:12 -> :_141 (DIRECT) prints "prevents confusion" (:73). Swagger raises
+    Attack first (subscript_swagger.s:10-12) and keeps the raise."""
+    s = _holder(tables, names, "Spoink", "Own Tempo", ("Confuse Ray", "Swagger"))
+    out = assert_matches_reference(tables, s, A("Leer", "Confuse Ray", s, names), empty_outcome())
+    assert int(out.confusion[0]) == 0 and int(out.ai_ability_known[0]) == DECOMP["Own Tempo"]
+    out = assert_matches_reference(tables, s, A("Leer", "Swagger", s, names), empty_outcome())
+    assert int(out.confusion[0]) == 0 and int(out.ai_ability_known[0]) == DECOMP["Own Tempo"]
+    assert int(out.stages[0, Stat.ATK]) == 2
+
+
+def test_own_tempo_blocks_a_psybeam_confusion_silently_and_cures_a_pierced_one(tables, names):
+    """An INDIRECT confusion ends at :_141 -> :_185 silently. Cranidos pierces Confuse Ray; the
+    MoveEnd cure (MSGCOND_CONFUSION, battle_lib.c:4390-4395) clears it, no reveal."""
+    s = _holder(tables, names, "Spoink", "Own Tempo", ("Psybeam",))
+    out = assert_matches_reference(tables, s, A("Leer", "Psybeam", s, names), _procs(secondary=1))
+    assert int(out.confusion[0]) == 0 and int(out.ai_ability_known[0]) == 0
+    mb = _holder(tables, names, "Spoink", "Own Tempo", ("Confuse Ray",), opp_species="Cranidos")
+    ray = names.move("Confuse Ray")
+    hit = apply_move_effect(tables, mb, 1, ray, empty_outcome(), 0, connected=True,
+                            target_moved=False)  # fmt: skip
+    assert int(hit.confusion[0]) != 0
+    out = assert_matches_reference(tables, mb, A("Leer", "Confuse Ray", mb, names), empty_outcome())
+    assert int(out.confusion[0]) == 0 and int(out.ai_ability_known[0]) == 0
+
+
+def test_oblivious_blocks_attract_and_reveals_and_cures_a_pierced_one(tables, names):
+    """subscript_infatuate.s:5 -> :_055 prints "prevents romance" (:39). Cranidos pierces it; the
+    MoveEnd cure (MSGCOND_INFATUATION, battle_lib.c:4426-4431; :_052) clears the infatuation."""
+    kw = {"player_gender": "female", "opp_gender": "male"}
+    s = _holder(tables, names, "Slowpoke", "Oblivious", ("Attract",), **kw)
+    out = assert_matches_reference(tables, s, A("Leer", "Attract", s, names), empty_outcome())
+    assert int(out.infatuated[0]) == 0 and int(out.ai_ability_known[0]) == DECOMP["Oblivious"]
+    mb = _holder(tables, names, "Slowpoke", "Oblivious", ("Attract",), opp_species="Cranidos", **kw)
+    hit = apply_move_effect(tables, mb, 1, names.move("Attract"), empty_outcome(), 0,
+                            connected=True, target_moved=False)  # fmt: skip
+    assert int(hit.infatuated[0]) != 0
+    out = assert_matches_reference(tables, mb, A("Leer", "Attract", mb, names), empty_outcome())
+    assert int(out.infatuated[0]) == 0 and int(out.ai_ability_known[0]) == 0
+
+
+def test_cute_charm_cannot_infatuate_an_oblivious_attacker(tables, names):
+    """subscript_infatuate.s:5 -> :_055 -> :_082 -> :_117: an ABILITY side effect ends silently."""
+    s = _holder(tables, names, "Slowpoke", "Oblivious", ("Leer",), player_moves=("Tackle",),
+                player_gender="female", opp_gender="male")  # fmt: skip
+    s = s._replace(ability=s.ability.at[1, 0].set(AbilityId.CUTE_CHARM))
+    out = assert_matches_reference(tables, s, A("Tackle", "Leer", s, names), _procs(opp=1))
+    assert int(out.infatuated[0]) == 0
+    bare = s._replace(ability=s.ability.at[0, 0].set(AbilityId.NONE))
+    out = assert_matches_reference(tables, bare, A("Tackle", "Leer", bare, names), _procs(opp=1))
+    assert int(out.infatuated[0]) != 0
+
+
+@pytest.mark.parametrize(
+    "species, ability, status",
+    [
+        ("Zangoose", "Immunity", Status.TOXIC),
+        ("Spoink", "Own Tempo", None),
+        ("Wailmer", "Water Veil", Status.BURN),
+    ],
+)
+def test_skill_swap_gives_the_foe_the_ability_and_its_move_end_cures_it(
+    tables, names, species, ability, status
+):
+    """subscript_exchange_abilities.s:21-24: the foe now holds the ability; the defender's MoveEnd
+    RecoverStatusByAbility (bcp.c:3966-3967) clears its status (counter 0) or its confusion."""
+    s = _holder(tables, names, species, ability, ("Leer",), player_moves=("Skill Swap",))
+    if status is None:
+        s = s._replace(confusion=s.confusion.at[1].set(3))
+    else:
+        s = s.with_status(1, 0, status, 2 if status == Status.TOXIC else 0)
+    out = assert_matches_reference(tables, s, A("Skill Swap", "Leer", s, names), empty_outcome())
+    assert int(out.ability[1, 0]) == int(s.ability[0, 0])
+    assert int(out.status[1, 0]) == Status.NONE and int(out.status_counter[1, 0]) == 0
+    assert int(out.confusion[1]) == 0
+
+
+def _suppressed(tables, names, species, ability, move, outcome, **kw):
+    """Gastro Acid on the holder, then ``move`` lands (Battler_Ability is NONE: no block, no MoveEnd
+    cure, battle_lib.c:3088-3093)."""
+    s = _holder(tables, names, species, ability, ("Gastro Acid", move, "Leer"),
+                player_moves=("Leer", "Scratch"), **kw)  # fmt: skip
+    s = assert_matches_reference(tables, s, A("Leer", "Gastro Acid", s, names), empty_outcome())
+    return assert_matches_reference(tables, s, A("Leer", move, s, names), outcome)
+
+
+@pytest.mark.parametrize(
+    "species, ability, move, status, outcome",
+    [
+        ("Zangoose", "Immunity", "Toxic", Status.TOXIC, empty_outcome()),
+        ("Persian", "Limber", "Thunder Wave", Status.PARALYSIS, empty_outcome()),
+        ("Wailmer", "Water Veil", "Will-O-Wisp", Status.BURN, empty_outcome()),
+        ("Camerupt", "Magma Armor", "Ice Beam", Status.FREEZE, _procs(secondary=1)),
+    ],
+)
+def test_a_suppressed_holder_keeps_its_status_until_its_switch_out_cure(
+    tables, names, species, ability, move, status, outcome
+):
+    """TryRestoreStatusOnSwitch (subscript_switch_pokemon.s:5-6) reads the party Pokemon's
+    MON_DATA_ABILITY (battle_script.c:9149), not Battler_Ability: Ability_ForbidsStatus
+    (battle_lib.c:4454-4492) clears it on the switch out."""
+    s = _suppressed(tables, names, species, ability, move, outcome)
+    assert int(s.status[0, 0]) == status and int(s.ai_ability_known[0]) == 0
+    out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Leer", s, names), empty_outcome())
+    assert int(out.active[0]) == 1
+    assert int(out.status[0, 0]) == Status.NONE and int(out.status_counter[0, 0]) == 0
+
+
+def test_the_switch_out_cure_reads_the_party_ability_after_skill_swap(tables, names):
+    """Zangoose swaps its Immunity away (subscript_exchange_abilities.s:21-24 writes only the
+    battler's), is badly poisoned, and its switch out still clears it (MON_DATA_ABILITY,
+    battle_script.c:9149)."""
+    s = _holder(tables, names, "Zangoose", "Immunity", ("Toxic", "Leer"),
+                player_moves=("Skill Swap", "Leer"))  # fmt: skip
+    s = assert_matches_reference(tables, s, A("Skill Swap", "Leer", s, names), empty_outcome())
+    assert int(s.ability[0, 0]) != AbilityId.IMMUNITY
+    s = assert_matches_reference(tables, s, A("Leer", "Toxic", s, names), empty_outcome())
+    assert int(s.status[0, 0]) == Status.TOXIC
+    out = assert_matches_reference(tables, s, A(SWITCH_TO_1, "Leer", s, names), empty_outcome())
+    assert int(out.status[0, 0]) == Status.NONE
+
+
+def test_the_battle_won_cure_clears_a_suppressed_holders_status(tables, names):
+    """subscript_battle_won.s:6-7: TryRestoreStatusOnSwitch on the player's battler after the last
+    KO; Gastro Acid left Zangoose badly poisoned."""
+    s = _suppressed(tables, names, "Zangoose", "Immunity", "Toxic", empty_outcome(), opp_count=1)
+    assert int(s.status[0, 0]) == Status.TOXIC
+    s = s.replace_hp(1, 0, 1)
+    out = assert_matches_reference(tables, s, A("Scratch", "Leer", s, names), empty_outcome())
+    assert int(out.over) == 1 and int(out.winner) == 2
+    assert int(out.status[0, 0]) == Status.NONE

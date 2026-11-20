@@ -2317,6 +2317,73 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Snapshot (expected, confirm by print): seed 165 turn 3 `future_hit[0]` back to main's 0 and `rest` rows back to
   160; seed 22 turn 4 segment 0 `future_hit[0]` back to 1 (`rest` may still differ through `weather_free`); seed
   107 unchanged (G-S6, ruling 1); other seeds: G-S8.
+- H-2 Immunity (17), Own Tempo (20), Water Veil (41), Magma Armor (40), Oblivious (12): rule sheets
+  ability-immunity.md, ability-own-tempo.md, ability-cure-veil-armor-oblivious.md; manager rulings of 19 Nov (Q3:
+  the switch-out cure for every ability of Ability_ForbidsStatus; the hp > 0 guard removed; Q2, the STATUS_CURE
+  reveals of Insomnia / Vital Spirit / Limber, not done here). New `AbilityId` IMMUNITY 97, OWN_TEMPO 98, WATER_VEIL
+  99, MAGMA_ARMOR 100, OBLIVIOUS 101 (`ABILITY_DECOMP_IDS`, tools/effect_map.py `DECOMP_ABILITY_TO_ID`); coverage
+  covers every AbilityId but UNSUPPORTED, so their holders are no longer refused (pool, prep, check_coverage).
+  Blocks (`effects._inflict`, reference `_inflict`), each before every other check of its subscript: an ignorable
+  Immunity stops any poison (subscript_poison.s:13, subscript_badly_poison.s:31), Water Veil a burn
+  (subscript_burn.s:20), Magma Armor a freeze (subscript_freeze.s:5); a DIRECT effect prints "prevents poisoning"
+  (:_177 -> :_201, :_249) / "prevents burns" (:_264), TAG_NICKNAME_ABILITY on BTLSCR_SIDE_EFFECT_MON
+  (battle_script.c:11798-11810): new reveal phases POISON_BLOCKED, BURN_BLOCKED; Magma Armor's :_128 prints only the
+  attack message (no reveal); an INDIRECT effect (secondaries, Tri Attack, a flung orb) ends silently. Psycho Shift
+  is direct (subscript_give_target_own_status.s:9-11). Own Tempo (`_confuse_foe`, `_secondary_confuse`, `_swagger`,
+  `_chatter`; reference `_move_effect`): subscript_confuse.s:12 -> :_141; Confuse Ray and Swagger/Flatter (after
+  the raise, subscript_swagger.s:10-16, only when the target is not confused) print "prevents confusion" (:73,
+  CONFUSION_BLOCKED); Psybeam-type secondaries and Chatter end silently. Oblivious (`_attract`): subscript_infatuate
+  .s:5 -> :_055 prints "prevents romance" (:39, ROMANCE_BLOCKED) for Attract. The attacker's own Immunity / Water
+  Veil stops Poison Point / Flame Body, its own Oblivious Cute Charm, silently (an ABILITY side effect: poison
+  :_322, burn :_264, infatuate :_082 -> :_117; `_contact_ability`, reference `_contact`); the Cute Charm roll is
+  C-level (battle_lib.c:4339-4355) and still drawn. Synchronize, Toxic Spikes, the status orbs and the disliked
+  berry already read Immunity / Water Veil / Own Tempo by decomp id (unchanged).
+  Cure: `hooks.recover_status_by_ability` / reference `_recover_status_by_ability` = BattleSystem_RecoverStatusByAbility
+  (battle_lib.c:4378-4452): `Battler_Ability` picks one case; `hooks.forbids_status` (Ability_ForbidsStatus's pairs,
+  :4454-4492, the same as the status cases :4383-4388, :4397-4424) clears the status and counter (:13 of
+  subscript_ability_forbids_status.s; the Nightmare clear only for sleep, :16-18, G-32), Own Tempo clears the
+  confusion (:4390-4395, msgTemp 5 -> :_045), Oblivious the infatuation (:4426-4431, msgTemp 6 -> :_052). No reveal
+  for the five (BTLSCR_MSG_TEMP, battle_script.c:11801-11802); Insomnia's, Vital Spirit's and Limber's STATUS_CURE is
+  kept until the Q2 group. Callers unchanged: MoveEnd attacker then defender (bcp.c:3965-3967) and the switch-in's
+  FORBIDDEN_STATUS (battle_lib.c:4135-4145).
+  No HP guard: lib.c:4378-4452 has no HP test; removed in both engines for every ability. The stored status of a
+  0-HP battler at the call sites: at MoveEnd the action's faint check has already zeroed the status and counter of
+  every newly fainted Pokemon (`step._faint_check`, reference `_faint_check`: the party copy, battle_controller.c:
+  1481-1486), so the cure finds 0 there; at a switch-in a newcomer that the entry hazards KO is not zeroed until
+  its action's faint check, but it cannot hold a status its ability forbids (blocked at infliction; under Gastro
+  Acid or after Skill Swap the switch-out or battle-won cure clears it; prep refuses those prestatus pairs,
+  `STATUS_BLOCKING_ABILITIES`) and its volatiles are fresh. So removing the guard changes no stored field on a
+  reachable board (no expected snapshot part from it). The decomp's BattleMon.status of a fainted battler is not
+  zeroed (only the party copy), but a status the ability forbids cannot be on it at 0 HP either: a secondary skips
+  a fainted target (battle_lib.c:1564-1566, :1580-1582).
+  Switch-out cure, all callers (Q3): `step._restore_status_on_switch` / reference `_restore_status_on_switch` =
+  BtlCmd_TryRestoreStatusOnSwitch (battle_script.c:9139-9160) and the subscript's status NONE after it: HP left
+  (:9147), raw BattleMon.ability Natural Cure (:9152) or Ability_ForbidsStatus on the party Pokemon's
+  MON_DATA_ABILITY (:9149, :9153; `_party_ability`: `party_ability` or the species row, not a Trace / Role Play /
+  Skill Swap copy) and the party status. Callers: subscript_switch_pokemon.s:5-6 (every switch now, before the
+  Pursuit at :11; `_send_out` no longer repeats it), subscript_baton_pass.s:7-8, subscript_attack_then_switch_out.s
+  :56-57, subscript_force_target_to_switch_or_flee.s:11-12 (Roar's drag, before `_send_out`), and
+  subscript_battle_won.s:6-11 (new: `_battle_won`, the player's battlers when the player wins; run after the last
+  action's MoveEnd cures on the battle abilities: `_faint_check(won_cure=False)` at the action's faint check and
+  `_move_end_head`, reference `_finish_action`; every other battle-ending faint check runs it itself, before the
+  battle end's `_restore_ability`). subscript_escape.s:5-10 and subscript_throw_pokeball.s:13 are wild-battle only.
+  The battle-won cure is new for Natural Cure too: a player's statused Natural Cure (or forbidding) battler now ends
+  a won battle clean (the next battle's carried party).
+  Enumerate: `status_blocked` gains Immunity / Water Veil / Magma Armor beside Limber, `tri_open` drops burn under
+  Water Veil and freeze under Magma Armor, `confused_blocked` the foe's ignorable Own Tempo, `attract_inflict` the
+  foe's ignorable Oblivious, `berry_confuse` the side's own Own Tempo (loose: unchanged); the five are in
+  `INPUT_NEUTRAL_ABILITIES`. AI: the readers are decomp-id reads (unchanged). Kaizo: no species or form has 12, 40 or
+  41; Zangoose and Spoink / Grumpig are player-side only (data/intermediate_kaizo/species.json).
+  Tests: tests/engine/test_e1_batch_h.py (H-2 block: blocks and reveals, Mold Breaker piercing then the MoveEnd cure
+  for Immunity, Water Veil, Magma Armor, Own Tempo, Oblivious; silent secondaries and contact abilities; Psycho
+  Shift; Skill Swap cures; the switch-out cure for Immunity, Limber, Water Veil, Magma Armor under Gastro Acid and
+  after Skill Swap; the battle-won cure); tests/engine/test_singles_followup2.py (the battle-ending MoveEnd cure gains
+  Immunity, Water Veil, Magma Armor; the two Limber boards that end the battle now end cured by the battle-won cure
+  and show no STATUS_CURE reveal); tests/engine/test_attract.py (Oblivious maps and is covered).
+  Snapshot (expected): generator drift for every seed that draws Camerupt, Glameow, Goldeen or Swinub
+  (tests/strategies.py M1_SPECIES: Magma Armor, Own Tempo, Water Veil, Oblivious become drawable slots); outcome
+  changes where a player's Natural Cure / forbidding holder ends a won battle with a status, and where a switch-out
+  meets a status the party ability forbids.
 
 ## Stream state (restart point, 2026-11-19)
 

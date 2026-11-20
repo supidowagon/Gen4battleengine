@@ -869,6 +869,16 @@ class AbilityId(IntEnum):
     # G-14: Air Lock shares Cloud Nine's lock (include/battle/common.h:63-67); read by decomp id
     # (``WEATHER_ABILITY_IDS``) in ``damage.weather_suppressed``, so no new reader.
     AIR_LOCK = 96
+    # E1 batch H, H-2: the status-forbidding abilities of BattleSystem_RecoverStatusByAbility
+    # (battle_lib.c:4378-4431: the cure at a move's end and a switch-in,
+    # ``hooks.recover_status_by_ability``) and Ability_ForbidsStatus (:4454-4492: the switch-out
+    # cure, ``step._restore_status_on_switch``), and their blocks in the status subscripts
+    # (``effects._inflict``, ``_contact_ability``, ``_attract``, the confusion effects).
+    IMMUNITY = 97
+    OWN_TEMPO = 98
+    WATER_VEIL = 99
+    MAGMA_ARMOR = 100
+    OBLIVIOUS = 101
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -973,6 +983,11 @@ ABILITY_DECOMP_IDS = {
     AbilityId.HYDRATION: 93,
     AbilityId.FORECAST: 59,
     AbilityId.AIR_LOCK: 76,
+    AbilityId.IMMUNITY: 17,
+    AbilityId.OWN_TEMPO: 20,
+    AbilityId.WATER_VEIL: 41,
+    AbilityId.MAGMA_ARMOR: 40,
+    AbilityId.OBLIVIOUS: 12,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and

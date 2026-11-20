@@ -55,7 +55,9 @@ reveals nothing.
 Abilities handled elsewhere: Blaze, Torrent, Overgrow, Rivalry, Guts, Unaware,
 Simple, Mold Breaker, Adaptability and Solid Rock in ``damage.py``; Keen Eye, Inner
 Focus, Rock Head, Static, Poison Point, Flame Body, Rough Skin and Limber in
-``effects.py`` (Limber's cure here); Steadfast, Natural Cure and Shed Skin in ``step.py``,
+``effects.py`` (Limber's cure here); Immunity, Own Tempo, Water Veil, Magma Armor and Oblivious
+block in ``effects.py`` and cure here (``recover_status_by_ability``, H-2); Steadfast, Natural Cure,
+the switch-out cure of ``Ability_ForbidsStatus`` and Shed Skin in ``step.py``,
 Compoundeyes, Sand Veil and Snow Cloak (accuracy) in ``outcome.py``, Swift
 Swim in ``order.py``; Sand Veil and Snow Cloak also in the end-of-turn weather chip
 (``step.py``). Cloud Nine: every decomp branch on it is a weather branch
@@ -138,6 +140,9 @@ STATUS_HP, TORMENT = "status_hp", "torment"
 STATUS_BLOCKED, SYNCHRONIZED = "status_blocked", "synchronized"
 DAMAGE_AVOIDED = "damage_avoided"
 REDIRECTED = "redirected"
+# H-2: the "prevents" messages of Immunity, Water Veil, Own Tempo and Oblivious.
+POISON_BLOCKED, BURN_BLOCKED = "poison_blocked", "burn_blocked"
+CONFUSION_BLOCKED, ROMANCE_BLOCKED = "confusion_blocked", "romance_blocked"
 # Ability -> the phases at which it shows a message tagging it, for the implemented
 # abilities that ever do:
 # * Mold Breaker: SWITCH_IN_CHECK_STATE_MOLD_BREAKER (battle_lib.c:4075), a living
@@ -197,6 +202,20 @@ REDIRECTED = "redirected"
 #   battle_script.c:4340-4341; subscript_missed.s:67-69 prints "{0} was protected by {1}!"
 #   with ``TAG_NICKNAME_ABILITY``, BTLSCR_DEFENDER) unless an earlier flag of subscript_missed.s
 #   prints first: protected (:18), Levitate (:34), ineffective (:59) (``step._use_move``).
+# * Immunity (H-2): a direct poison it blocks (subscript_poison.s:13 -> :_177 -> :_201,
+#   subscript_badly_poison.s:31 -> :_249; "prevents poisoning", ``TAG_NICKNAME_ABILITY``,
+#   BTLSCR_SIDE_EFFECT_MON: battle_script.c:11798-11810); an indirect or ability side effect ends
+#   silently (Toxic Spikes and Toxic Orb read it by decomp id).
+# * Water Veil (H-2): a direct burn it blocks (subscript_burn.s:20 -> :_264, "prevents burns").
+# * Own Tempo (H-2): a direct confusion it blocks (subscript_confuse.s:12 -> :_141, :73,
+#   "prevents confusion"); an indirect, held-item or move-effect one ends silently.
+# * Oblivious (H-2): a direct Attract it blocks (subscript_infatuate.s:5 -> :_055, :39, "prevents
+#   romance"); Cute Charm's (an ability side effect, :_082 -> :_117) ends silently.
+# Magma Armor's freeze block prints the attack message only (subscript_freeze.s:_128). The cures of
+# ``recover_status_by_ability`` tag ``BTLSCR_MSG_TEMP``, which never reaches
+# ``BattleAI_SetAbility`` (battle_script.c:11801-11802): Immunity, Own Tempo, Water Veil, Magma
+# Armor and Oblivious reveal nothing there (Insomnia's, Vital Spirit's and Limber's
+# ``STATUS_CURE`` stay for now).
 # The others never reveal: Intimidate's "cuts" message, Download's "raised its" message
 # (``SetupNicknameAbilityStatMsg``, :2854) and Keen Eye's "prevents"
 # message are built in C (``BtlCmd_ChangeStatStage``, battle_script.c:2956, :2900);
@@ -224,6 +243,10 @@ REVEALS_ON: dict[int, frozenset[str]] = {
     # F-5: subscript_ability_restore_status.s:8 tags the holder (BTLSCR_MSG_BATTLER_TEMP).
     AbilityId.HYDRATION: frozenset({STATUS_CURE}),
     AbilityId.INNER_FOCUS: frozenset({FLINCH_BLOCKED}),
+    AbilityId.IMMUNITY: frozenset({POISON_BLOCKED}),  # H-2
+    AbilityId.WATER_VEIL: frozenset({BURN_BLOCKED}),
+    AbilityId.OWN_TEMPO: frozenset({CONFUSION_BLOCKED}),
+    AbilityId.OBLIVIOUS: frozenset({ROMANCE_BLOCKED}),
     AbilityId.DRIZZLE: frozenset({WEATHER_SET}),
     AbilityId.SAND_STREAM: frozenset({WEATHER_SET}),
     AbilityId.DROUGHT: frozenset({WEATHER_SET}),
@@ -487,28 +510,44 @@ def arm_unburden(state: BattleState, side, cond=True) -> BattleState:
     return state._replace(can_unburden=state.can_unburden.at[side].set(value))
 
 
+def forbids_status(ability, status) -> jnp.ndarray:
+    """``Ability_ForbidsStatus`` (battle_lib.c:4454-4492): ``ability`` (an ``AbilityId``) forbids
+    ``status``: Immunity any poison (:4460-4464), Limber paralysis (:4466-4470), Insomnia and
+    Vital Spirit sleep (:4472-4477), Water Veil burn (:4478-4482), Magma Armor freeze
+    (:4484-4488). The same pairs are the status cases of ``BattleSystem_RecoverStatusByAbility``
+    (:4383-4388, :4397-4424)."""
+    return (
+        ((ability == AbilityId.IMMUNITY) & ((status == Status.POISON) | (status == Status.TOXIC)))
+        | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
+        | (sleepless(ability) & (status == Status.SLEEP))  # G-47
+        | ((ability == AbilityId.WATER_VEIL) & (status == Status.BURN))
+        | ((ability == AbilityId.MAGMA_ARMOR) & (status == Status.FREEZE))
+    )
+
+
 def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleState:
-    """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378) for ``side``'s active
-    Pokemon, where ``cond``: an asleep Insomnia holder (:4404) or a paralyzed Limber holder
-    (:4397), the abilities of the family in M1, with HP left is cured (counter 0) and
-    shows ``subscript_ability_forbids_status.s``, whose message tags its ability. The
-    ability is the holder's own (``Battler_Ability``: Mold Breaker does not matter). The
-    decomp runs it for the attacker then the defender at each move end
-    (``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3965-3967) and for
-    every battler on a switch-in (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
-    battle_lib.c:4135-4145)."""
+    """``BattleSystem_RecoverStatusByAbility`` (battle_lib.c:4378-4452) for battler ``side``,
+    where ``cond``. ``Battler_Ability`` (Gastro Acid: none; Mold Breaker does not matter) picks
+    one case: a status its ability forbids (``forbids_status``: Immunity, Limber, Insomnia, Vital
+    Spirit, Water Veil, Magma Armor), Own Tempo with ``VOLATILE_CONDITION_CONFUSION``
+    (:4390-4395) or Oblivious with ``VOLATILE_CONDITION_ATTRACT`` (:4426-4431). There is no HP
+    test (H-2). subscript_ability_forbids_status.s then clears it: the status to NONE (:13, the
+    counter with it; msgTemp MSGCOND_SLEEP 0 also clears VOLATILE_CONDITION_NIGHTMARE, :10,
+    :16-18, G-32), the confusion bits (msgTemp 5, :11, :_045) or the infatuation (msgTemp 6,
+    :12, :_052). Its message (:6) tags ``BTLSCR_MSG_TEMP``, which never reaches
+    ``BattleAI_SetAbility`` (battle_script.c:11801-11802); only Insomnia's, Vital Spirit's and
+    Limber's ``STATUS_CURE`` reveal is kept for now (``REVEALS_ON``). The decomp runs it for the
+    attacker then the defender at each move end (``BattleControllerPlayer_MoveEnd``,
+    battle_controller_player.c:3965-3967) and for every battler on a switch-in
+    (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``, battle_lib.c:4135-4145)."""
     side = jnp.asarray(side, _I32)
+    cond = jnp.asarray(cond, bool)
     state = arm_unburden(state, side, cond)
     mon, row = state.active[side], party(format_of(state), side)
     ability, status = battler_ability(state, side), state.status[row, mon]
-    woke = (
-        cond
-        & (
-            (sleepless(ability) & (status == Status.SLEEP))  # :4404-4405 (G-47)
-            | ((ability == AbilityId.LIMBER) & (status == Status.PARALYSIS))
-        )
-        & (state.hp[row, mon] > 0)
-    )
+    woke = cond & forbids_status(ability, status)
+    tempo = cond & (ability == AbilityId.OWN_TEMPO) & (state.confusion[side] != 0)
+    love = cond & (ability == AbilityId.OBLIVIOUS) & (state.infatuated[side] != 0)
     state = state._replace(
         status=state.status.at[row, mon].set(
             jnp.where(woke, Status.NONE, state.status[row, mon]).astype(state.status.dtype)
@@ -516,9 +555,13 @@ def recover_status_by_ability(state: BattleState, side, cond=True) -> BattleStat
         status_counter=state.status_counter.at[row, mon].set(
             jnp.where(woke, 0, state.status_counter[row, mon]).astype(state.status_counter.dtype)
         ),
+        confusion=state.confusion.at[side].set(
+            jnp.where(tempo, 0, state.confusion[side]).astype(state.confusion.dtype)
+        ),
+        infatuated=state.infatuated.at[side].set(
+            jnp.where(love, 0, state.infatuated[side]).astype(state.infatuated.dtype)
+        ),
     )
-    # subscript_ability_forbids_status.s:10, :16-18: msgTemp MSGCOND_SLEEP (0, battle_lib.c:4406) also
-    # clears VOLATILE_CONDITION_NIGHTMARE; Limber's paralysis takes :13-14, which keeps it (G-32).
     state = clear_nightmare(state, side, woke & (status == Status.SLEEP))
     return reveal_ability(state, side, mon, STATUS_CURE, woke)
 

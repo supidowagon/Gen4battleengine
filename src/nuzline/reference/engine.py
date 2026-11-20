@@ -831,16 +831,54 @@ def _party_moves(s: RefState, slot: int):
         swap()
 
 
-def _restore_ability(tables, s: RefState, side: int) -> None:
-    """The leaving battler's ability goes back to its party Pokemon's (``party_ability`` where a
-    script wrote it, F-O2; else its personal row's): Trace writes only the battler's
-    ``BattleMon.ability``, which ``BattleSystem_InitBattleMon`` re-reads from the party
-    (lib.c:124)."""
-    mon = _active(s, side)
+def _party_ability(tables, mon: RefPokemon) -> int:
+    """The party Pokemon's ``MON_DATA_ABILITY``: ``party_ability`` where a script wrote it (F-O2,
+    io:601-604), else its personal row's. Trace, Role Play and Skill Swap write only the
+    battler's ``BattleMon.ability``."""
+    if mon.party_ability:
+        return mon.party_ability
     row = _t(tables, "species_form_row", mon.species, mon.ability_form)
-    mon.ability = _t(tables, "species_abilities", row, mon.ability_slot)  # raw write, lib.c:124
-    if mon.party_ability:  # F-O2: a script wrote the party Pokemon's ability (io:601-604)
-        mon.ability = mon.party_ability
+    return _t(tables, "species_abilities", row, mon.ability_slot)
+
+
+def _restore_ability(tables, s: RefState, side: int) -> None:
+    """The leaving battler's ability goes back to its party Pokemon's (``_party_ability``):
+    Trace writes only the battler's ``BattleMon.ability``, which ``BattleSystem_InitBattleMon``
+    re-reads from the party (lib.c:124)."""
+    mon = _active(s, side)
+    mon.ability = _party_ability(tables, mon)  # raw write, lib.c:124
+
+
+# Ability_ForbidsStatus (lib.c:4454-4492) and the status cases of RecoverStatusByAbility
+# (:4383-4388, :4397-4424): the statuses each ability forbids (H-2).
+_FORBIDDEN = {
+    AbilityId.IMMUNITY: (Status.POISON, Status.TOXIC),
+    AbilityId.LIMBER: (Status.PARALYSIS,),
+    AbilityId.INSOMNIA: (Status.SLEEP,),
+    AbilityId.VITAL_SPIRIT: (Status.SLEEP,),  # G-47
+    AbilityId.WATER_VEIL: (Status.BURN,),
+    AbilityId.MAGMA_ARMOR: (Status.FREEZE,),
+}
+
+
+def _restore_status_on_switch(tables, s: RefState, side: int) -> None:
+    """``BtlCmd_TryRestoreStatusOnSwitch`` (script.c:9139-9160) and the subscript's status NONE
+    after it, as ``step._restore_status_on_switch``: a battler with HP left (:9147) whose raw
+    ``BattleMon.ability`` is Natural Cure (:9152) or whose party Pokemon's ability forbids its
+    status (``Ability_ForbidsStatus``, lib.c:4454-4492; :9149, :9153) is cured."""
+    mon = _active(s, side)
+    forbids = mon.status in _FORBIDDEN.get(_party_ability(tables, mon), ())
+    if mon.hp and (mon.ability == AbilityId.NATURAL_CURE or forbids):
+        mon.status = Status.NONE
+        mon.status_counter = 0
+
+
+def _battle_won(tables, s: RefState) -> None:
+    """subscript_battle_won.s:6-11: ``_restore_status_on_switch`` on every battler of the player's
+    party, as ``step._battle_won``."""
+    for b in range(_fmt(s).B):
+        if _fmt(s).party_of[b] == 0:
+            _restore_status_on_switch(tables, s, b)
 
 
 def _armored(s: RefState, attacker: int, defender: int) -> bool:
@@ -2193,7 +2231,7 @@ def _sides_out(s: RefState) -> tuple[bool, bool]:
     return out[0], out[1]
 
 
-def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
+def _faint_check(turn: _Turn, s: RefState, decide: bool = True, won_cure: bool = True) -> None:
     """``BattleControllerPlayer_AnyFainted`` (bcp.c:4409) then ``CheckBattleOver``:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
     script.c:1795, which ends its action and cleans the battler up), then the battle
@@ -2228,6 +2266,10 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
         s.over, s.winner = 1, WINNER_OPPONENT
     elif opp_out:
         s.over, s.winner = 1, WINNER_PLAYER
+    # subscript_battle_won.s's cures on the battle abilities; ``won_cure`` False: the caller
+    # runs them after its MoveEnd cures (``_finish_action``).
+    if won_cure and s.over and s.winner == WINNER_PLAYER:
+        _battle_won(turn.tables, s)
     if s.over:  # the player's party never saw a Mimic or Transform copy (step._faint_check)
         for b in range(_fmt(s).B):  # every battler of party 0 (ruling D1-3)
             if _fmt(s).party_of[b] == 0:
@@ -3096,26 +3138,29 @@ def _defog_fails(s: RefState, seen: int, target: int, stat: int) -> bool:
 
 
 def _recover_status_by_ability(s: RefState, side: int) -> None:
-    """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378) for ``side``'s battler: an
-    asleep Insomnia holder (:4404) or a paralyzed Limber holder (:4397) with HP left is
-    cured, and subscript_ability_forbids_status.s tags its ability (BattleAI_SetAbility,
-    script.c:11806). Run at each move end for the attacker then the defender
+    """``BattleSystem_RecoverStatusByAbility`` (lib.c:4378-4452) for ``side``'s battler, no HP
+    test (H-2): a status its ``Battler_Ability`` forbids (``_FORBIDDEN``), Own Tempo's confusion
+    (:4390-4395) or Oblivious' infatuation (:4426-4431) is cleared by
+    subscript_ability_forbids_status.s (:11-13, :_045, :_052). Its message tags BTLSCR_MSG_TEMP
+    (no BattleAI_SetAbility, script.c:11801-11802); the Insomnia, Vital Spirit and Limber reveal
+    stays for now (``hooks.REVEALS_ON``). Run at each move end for the attacker then the defender
     (bcp.c:3965-3967) and on a switch-in (lib.c:4135-4145)."""
     mon = _active(s, side)
     _arm_unburden(s, side)
-    forbidden = {
-        AbilityId.INSOMNIA: Status.SLEEP,
-        AbilityId.VITAL_SPIRIT: Status.SLEEP,  # :4405, G-47
-        AbilityId.LIMBER: Status.PARALYSIS,
-    }
-    if forbidden.get(_ability(s, mon)) == mon.status and mon.hp:
+    ability = _ability(s, mon)
+    sd = s.battlers[side]
+    if ability == AbilityId.OWN_TEMPO and sd.confusion:
+        sd.confusion = 0
+    elif ability == AbilityId.OBLIVIOUS and sd.infatuated:
+        sd.infatuated = 0
+    elif mon.status in _FORBIDDEN.get(ability, ()):
         # subscript_ability_forbids_status.s:16-18: the sleep branch (msgTemp 0) clears
         # VOLATILE_CONDITION_NIGHTMARE too (G-32).
         if mon.status == Status.SLEEP:
-            s.battlers[side].nightmare = 0
+            sd.nightmare = 0
         mon.status = Status.NONE
         mon.status_counter = 0
-        if side == 0:
+        if side == 0 and ability in (*SLEEPLESS_ABILITIES, AbilityId.LIMBER):
             _know_ability(s, s.battlers[0].active)
 
 
@@ -3590,6 +3635,19 @@ def _inflict(turn: _Turn, s: RefState, side: int, target: int, status: int,
         if target == 0 and direct:
             _know_ability(s, s.battlers[0].active)
         return
+    # H-2: an ignorable Immunity (subscript_poison.s:13, _badly_poison.s:31), Water Veil
+    # (subscript_burn.s:20) or Magma Armor (subscript_freeze.s:5) stops its status first; the
+    # first two print their "prevents" message (tagging the ability) for a direct effect only,
+    # Magma Armor never (:_128).
+    seen = _ignorable(s, side, target)
+    if mon.hp and (
+        (status in (Status.POISON, Status.TOXIC) and seen == AbilityId.IMMUNITY)
+        or (status == Status.BURN and seen == AbilityId.WATER_VEIL)
+        or (status == Status.FREEZE and seen == AbilityId.MAGMA_ARMOR)
+    ):
+        if target == 0 and direct and seen != AbilityId.MAGMA_ARMOR:
+            _know_ability(s, s.battlers[0].active)
+        return
     # Leaf Guard in sun (ignorable; subscript_fall_asleep.s:23-25, _poison.s:14-16,
     # _badly_poison.s:32-34, _burn.s:21-23, _paralyze.s:6-8; none in subscript_freeze.s): a
     # direct effect prints its message, tagging the ability (G-14).
@@ -4017,7 +4075,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.ATTRACT and effective:
         # effect_script_0120.s: a direct TO_DEFENDER effect on a living defender ->
         # subscript_infatuate.s -> BtlCmd_TryAttract (script.c:5727-5742).
-        if target_alive and _attractable(s, target, side):
+        # subscript_infatuate.s:5 -> :_055: an ignorable Oblivious stops it first and prints
+        # "prevents romance" (:39), tagging the ability (H-2).
+        if target_alive and seen == AbilityId.OBLIVIOUS:
+            if target == 0:
+                _know_ability(s, s.battlers[0].active)
+        elif target_alive and _attractable(s, target, side):
             s.battlers[target].infatuated = 1
     elif effect == EffectId.DRAIN and effective and dealt > 0:
         # subscript_drain_half_damage_dealt.s: Divide(hitDamage * percent, 100), then
@@ -4136,9 +4199,13 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             victim.disabled_move = last
             victim.disable_turns = o.duration[side]
     elif effect == EffectId.CONFUSE_FOE and effective:
-        # subscript_confuse.s: fails behind a substitute (:23) or on a confused target;
+        # subscript_confuse.s: an ignorable Own Tempo first (:12 -> :_141, "prevents confusion"
+        # :73, tagging it; H-2); fails behind a substitute (:23) or on a confused target;
         # Random 3, 2 turns. Safeguard (:26, B10-7).
-        if (
+        if target_alive and seen == AbilityId.OWN_TEMPO:
+            if target == 0:
+                _know_ability(s, s.battlers[0].active)
+        elif (
             target_alive
             and not s.battlers[target].confusion
             and not _shielded(turn, s, target)
@@ -4151,6 +4218,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
         # :15); Random 3, 2 turns.
         if (
             target_alive
+            and seen != AbilityId.OWN_TEMPO  # subscript_confuse.s:12, silent (H-2)
             and not s.battlers[target].confusion
             and seen != AbilityId.SHIELD_DUST
             and not _shielded(turn, s, target)  # the rolled gate (lib.c:1580); confuse :23
@@ -4191,6 +4259,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             and not s.battlers[side].transformed
             and target_alive
             and o.chatter[side]
+            and seen != AbilityId.OWN_TEMPO  # subscript_confuse.s:12, silent (H-2)
             and not s.battlers[target].confusion
             and seen != AbilityId.SHIELD_DUST
             and not _shielded(turn, s, target)
@@ -4340,8 +4409,12 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             return
         if s.battlers[target].stages[p0] < 6:
             _change_stage(s, target, p0, p1)
-        # subscript_confuse.s:26: Safeguard after the raise (B10-7).
-        if not s.battlers[target].confusion and not s.sides[side_of(target)].safeguard:
+        # subscript_confuse.s: Own Tempo (:12, "prevents confusion", H-2), then Safeguard (:26)
+        # after the raise (B10-7).
+        if not s.battlers[target].confusion and seen == AbilityId.OWN_TEMPO:
+            if target == 0:
+                _know_ability(s, s.battlers[0].active)
+        elif not s.battlers[target].confusion and not s.sides[side_of(target)].safeguard:
             s.battlers[target].confusion = o.duration[side]
     elif effect == EffectId.ROOST and landed:
         # subscript_roost.s: Divide(maxHP, 2) unless at full HP, then turnFlags.roosting.
@@ -4647,7 +4720,13 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
         # subscript_infatuate.s, whose TryAttract fails silently; its message (:17) tags the
         # holder's ability.
         holder = _active(s, target)
-        if holder.hp and turn.outcome.contact_proc[target][hit] and _attractable(s, side, target):
+        # subscript_infatuate.s:5 -> :_082 -> :_117: the attacker's own Oblivious, silent (H-2).
+        if (
+            holder.hp
+            and turn.outcome.contact_proc[target][hit]
+            and _ability(s, attacker) != AbilityId.OBLIVIOUS
+            and _attractable(s, side, target)
+        ):
             s.battlers[side].infatuated = 1
             if target == 0:
                 _know_ability(s, s.battlers[0].active)
@@ -4661,6 +4740,9 @@ def _contact_ability(turn: _Turn, s: RefState, side: int, move: int, hit: int, e
     else:
         return
     if status == Status.PARALYSIS and _ability(s, attacker) == AbilityId.LIMBER:
+        return
+    # Its own Immunity / Water Veil stops Poison Point / Flame Body, silently (H-2).
+    if status in _FORBIDDEN.get(_ability(s, attacker), ()):
         return
     # The attacker's own Leaf Guard in sun, silent for an ABILITY side effect (G-14).
     if _ability(s, attacker) == AbilityId.LEAF_GUARD and _sunny(turn.tables, s):
@@ -5168,10 +5250,8 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             _pay_exp(turn, s)
             _acid_rain(s, acid)
     if user.hp > 0 and not s.over:
-        # TryRestoreStatusOnSwitch, script.c:9139: raw BattleMon.ability (:9151).
-        if user.ability == AbilityId.NATURAL_CURE:
-            user.status = Status.NONE
-            user.status_counter = 0
+        # subscript_attack_then_switch_out.s:56-57, TryRestoreStatusOnSwitch (script.c:9139).
+        _restore_status_on_switch(turn.tables, s, side)
         turn.pivot_dealt = dealt
         turn.grudge_kept = kept
         raise _Pause  # the resumed pass finds the owed pursuer again (``_resume``)
@@ -6312,9 +6392,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     if effect == EffectId.BATON_PASS:
         if not _bench(s, side):
             return record
-        if mon.ability == AbilityId.NATURAL_CURE:  # raw BattleMon.ability (script.c:9151)
-            mon.status = Status.NONE
-            mon.status_counter = 0
+        _restore_status_on_switch(turn.tables, s, side)  # TryRestoreStatusOnSwitch, script.c:9139
         turn.pivot_dealt = 0
         raise _Pause
     # A failed weather move: MOVE_STATUS_FAILED, subscript_missed.s, no AfterMoveEffects.
@@ -6641,10 +6719,8 @@ def _roar(turn: _Turn, s: RefState, side: int) -> bool:
         return False
     slot = eligible[min(int(o.roar_target[side]), len(eligible) - 1)]
     out = _active(s, foe)
-    # TryRestoreStatusOnSwitch (script.c:9139): raw BattleMon.ability (:9151).
-    if out.hp and out.ability == AbilityId.NATURAL_CURE:
-        out.status = Status.NONE
-        out.status_counter = 0
+    # TryRestoreStatusOnSwitch (script.c:9139), subscript_force_target_to_switch_or_flee.s:11-12.
+    _restore_status_on_switch(turn.tables, s, foe)
     # Back to the party: the status is written back without MON_CONDITION_TOXIC_COUNTER
     # (battle_controller.c:1481-1483), which every write-back strips.
     if out.status == Status.TOXIC:
@@ -6802,11 +6878,8 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     """``BattleControllerPlayer_SwitchCommand`` -> ``subscript_switch_pokemon.s``, then
     ``BattleControllerPlayer_MoveEnd`` (bcp.c:3973) runs the switch-in effects."""
     mon = _active(s, side)
-    # :5-6 BtlCmd_TryRestoreStatusOnSwitch (script.c:9139): Natural Cure with HP left, the raw
-    # BattleMon.ability (:9151).
-    if mon.hp and mon.ability == AbilityId.NATURAL_CURE:
-        mon.status = Status.NONE
-        mon.status_counter = 0
+    # :5-6 BtlCmd_TryRestoreStatusOnSwitch (script.c:9139).
+    _restore_status_on_switch(turn.tables, s, side)
     # :11 Pursuit, then its faint flags: nothing up to the action's MoveEnd checks for a battle
     # end (SF2 (a2) R1), so the switch goes on. subscript_pursuit.s:100-113 pays the switcher's KO
     # and a Destiny-Bond pursuer; a pursuer felled by a recoil is paid at MoveEnd, after the
@@ -8238,7 +8311,9 @@ def _finish_action(
     payout and the tail (``_LearnPause``; ``engine.step._execute_actions``)."""
     turn.done[side] = True
     battle = [(_active(s, b), _active(s, b).ability) for b in range(len(s.battlers))]
-    _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+    was_over = s.over
+    # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+    _faint_check(turn, s, won_cure=False)
     # The MoveEnd cures read the battle abilities; the battle-end _restore_ability of
     # _faint_check (the party's own) is put back after them (Owed 20).
     restored = [(mon, mon.ability) for mon, _ in battle]
@@ -8272,6 +8347,9 @@ def _finish_action(
         _recover_status_by_ability(s, _foe(side))
     elif turn.commands[side] == FIGHT and turn.defender is not None:
         _recover_status_by_ability(s, turn.defender)
+    # subscript_battle_won.s after CheckBattleOver (bcp.c:3969), on the battle abilities.
+    if s.over and not was_over and s.winner == WINNER_PLAYER:
+        _battle_won(turn.tables, s)
     for mon, ability in restored:
         mon.ability = ability
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver and
