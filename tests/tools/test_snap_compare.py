@@ -646,6 +646,26 @@ def test_a_dropped_field_without_a_row_fails_even_with_allow_new(capsys):
     assert all(u.reason and u.ledger for u in sc.UPGRADES)
 
 
+def test_learn_pin_and_exp_refused_leave_by_their_rows(monkeypatch, capsys):
+    """E3-B2-21 (review b2 #6): main's learn_pin and exp_refused have "dropped, no successor"
+    rows, so a captured state holding them upgrades with no "dropped field" failure."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    hp = np.ones(2, np.int16)
+    old = {"species": hp, "active": np.zeros(2, np.int8), "hp": hp,
+           "learn_pin": np.int8(2), "exp_refused": np.int8(2)}  # fmt: skip
+    ((_, got),) = sc.upgrade_inputs([("k", {"in_state": old})])
+    assert "learn_pin" not in got["in_state"] and "exp_refused" not in got["in_state"]
+    got = sc.upgrade_entries(sc.canon({"jit_step": old}))
+    assert not any(p.endswith(("learn_pin", "exp_refused")) for p in got)
+    assert {".jit_step.species", ".jit_step.active", ".jit_step.hp"} <= set(got)
+    assert {
+        "state.learn_pin (): dropped, no successor",
+        "state.exp_refused (): dropped, no successor",
+    } <= set(sc.UPGRADED)
+    assert sc.report(args(), "p", result(), 1.0, set(), set(), "") == 0
+    assert "dropped field without an upgrade row" not in capsys.readouterr().out
+
+
 # --- layout upgrades (an older commit's field shapes) ---------------------------------------
 
 STARF_ROW, STARF_COLS = sc.UPGRADES[0].name, sc.UPGRADES[1].name

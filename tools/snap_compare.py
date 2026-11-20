@@ -125,7 +125,8 @@ sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B,
 (F-O3, G-27..G-30); ``weather``, ``weather_timer``, ``gravity``, ``trick_room`` (with
 ``uproar``) -> ``field_mask`` (``ids.clean_field_mask``) and ``weather_turns`` (the timer)
 (G-4, G-11); ``party_ability``, ``nightmare``, ``camouflage``, ``starf_taken`` = 0 (F-O2,
-G-31, G-20, G-27); ``acid_rain`` dropped, no successor (G-12, G-13).
+G-31, G-20, G-27); ``acid_rain`` dropped, no successor (G-12, G-13);
+``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21).
 
 Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
 shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
@@ -618,6 +619,8 @@ UPGRADES = (
     derive("state", _MON_READS, ("camouflage",), _camouflage, "G-20", "the old engine's own bit (effects.camouflaged: types != the personal row's), but 0 on a Transformed battler", tuple(r[0] for r in _MON_READS)),
     zero("state", "starf_taken", _ACTIVE, "F-O3, G-27", "0 between turns and after step / replace: every point a state is saved"),
     dropped("state", "acid_rain", _I1, (), "G-12, G-13", "E2's interim Acid Rain guard flag (main 08a57000, SF2 (f)); batch G models the write in field_mask and removed the flag"),
+    dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
+    dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
