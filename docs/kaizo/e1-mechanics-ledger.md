@@ -2213,6 +2213,16 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
   (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
   The pod checks `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer`.
+- G-S6 Snapshot seeds 64 turn 4 / 107 turn 3: `_starf_reads` over-read `starf(0, 2)` through `twice` (the Pluck
+  flag's second own Starf eat) whenever the Pluck / Bug Bite target held any item (Grip Claw, Micle Berry).
+  `BattleSystem_PluckBerry` (battle_lib.c:5539-5850) sets SELF_TURN_FLAG_PLUCK_BERRY only for an eaten berry
+  (`result == TRUE`: a listed PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, :5846-5848), and every held-item
+  subscript ends in PLUCK_CHECK (subscript_pluck_check.s clears it), so it stays only while `nextSeq` is 0.
+  Leppa (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830,
+  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-46). `twice` now needs a foe
+  item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
+  Focus Energy) are over-approximated. Klutz / Embargo (:5838-5843) keep the flag but make the own Starf inert.
+  Step and reference unchanged. `test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it`.
 
 ## Stream state (restart point, 2026-11-19)
 
