@@ -135,8 +135,16 @@ byte (dtype, shape and bytes) and lists, per part, the entries present on one si
 (indices folded to []; the entries under a path that raised on either side are left out: the
 raise is the divergence). Columns a row invents (``new_columns``: ``Outcome.starf``'s 2-3, for
 which the capture has no draw) are taken from the rerun before the compare and counted per part
-as "sampler drift (new columns)", not a divergence; columns 0-1 compare strictly. The "gen"
-part's divergence is "generator drift: first at seed S turn T", counted, not a failure.
+as "sampler drift (new columns)", not a divergence; columns 0-1 compare strictly.
+
+Generator drift (decided): a "gen" divergence is informational ("generator drift: first at seed
+S turn T", counted, not a failure) only when every differing entry of the part is an input
+tests.strategies draws (``drawn_input``): a segment's ``in_actions`` (legal_action_pair /
+pivot_actions) and ``in_outcome`` (any_outcome), the AI example's ``in_ai_state``
+(gated_states), and segment 0's ``in_state`` (supported_state). Anything else that differs
+(a later segment's ``in_state``, which compare reads from the saved inputs, not from a draw; any
+other entry; a raise; a different step list) is a divergence and fails the part
+(``classify_gen``): a .gen part fails on a changed rebuild, never on a changed draw.
 
 An output that raised is stored as its exception (a refusal is an output) and compared like
 one: a raise against a result (a value or a structure) is a divergence, never a one-sided entry
@@ -146,7 +154,8 @@ payloads, differ. Each part prints its raise count and, per
 function, count/calls and the first error.
 
 Pass: compare prints "compare: ok" and exits 0 only when every precondition above holds, every
-listed part ran (no skip, no error), no entry diverged (but "gen": generator drift), no field
+listed part ran (no skip, no error), no entry diverged (but "gen"'s drawn inputs: generator
+drift), no field
 was dropped without an upgrade row, every field new in this checkout is named by --allow-new,
 and no function raised on every one of its calls in a part (unless named by --allow-all-raise),
 no part ran zero steps or (but "gen") zero calls, and no part's raise share is over
@@ -352,6 +361,38 @@ def compare_dumps(record: list, dump: list) -> tuple[str | None, set[str], set[s
         if diff and not diverged:
             diverged = f"{key}: {diff}"
     return diverged, only_base, only_new
+
+
+# The inputs tests.strategies draws in every "gen" step (draw_inputs): actions, Outcome, the
+# AI example's state; segment 0's state too (``drawn_input``).
+DRAWN_INPUTS = (".in_actions", ".in_outcome", ".in_ai_state")
+
+
+def drawn_input(key: str, path: str) -> bool:
+    """``path`` of the "gen" step ``key`` is an input tests.strategies draws (draw_inputs): a
+    segment's actions and Outcome, the AI example's state, and segment 0's state. A later
+    segment's state is the step's result (capture) or the saved one (compare), never a draw."""
+    drawn = DRAWN_INPUTS + ((".in_state",) if key.endswith(" segment 0") else ())
+    return under(path, list(drawn))
+
+
+def classify_gen(record: list, dump: list, diverged: str | None) -> tuple[str | None, bool]:
+    """The "gen" part's ``(divergence, generator drift)`` from ``compare_dumps``'s ``diverged``:
+    drift (informational) only when the step lists match and every differing entry is a
+    ``drawn_input``; else the first entry that is not one (or the step-list / raise
+    divergence) is the part's divergence, a failure."""
+    if not diverged or [k for k, _, _ in record] != [k for k, _ in dump]:
+        return diverged, False
+    for (key, _, want), (_, got) in zip(record, dump, strict=True):
+        diff = raise_mismatch(want, got)
+        for k in sorted(set(want) & set(got)):
+            if diff:
+                break
+            if want[k] != got[k] and not drawn_input(key, k):
+                diff = f"{first_diff({k: want[k]}, {k: got[k]})} (not an input the strategies draw)"
+        if diff:
+            return f"{key}: {diff}", False
+    return diverged, True
 
 
 def under(key: str, paths: list[str]) -> bool:
@@ -1111,6 +1152,10 @@ def child(mode: str, directory: Path, part: str) -> int:
         record += [(key, h, upgrade_entries(d, tables)) for key, h, d in saved[len(record) :]]
         result["sampler_drift"] = drift
         result["diverged"], only_base, only_new = compare_dumps(record, dump)
+        if group == "gen":
+            result["diverged"], result["generator_drift"] = classify_gen(
+                record, dump, result["diverged"]
+            )
         only_base |= INPUT_ONE_SIDED["base"]
         only_new |= INPUT_ONE_SIDED["new"]
         result["only_base"], result["only_new"] = sorted(only_base), sorted(only_new)
@@ -1490,8 +1535,9 @@ CLASSES = ("ok", "diverged", "error", "sampler drift", "generator drift")
 
 def part_class(part: str, res: dict, failed: int) -> str:
     """One compared part's class (``CLASSES``): diverged, else error (any other failure), else
-    generator drift (the "gen" part's divergence), sampler drift, or ok."""
-    gen = part.rsplit(".", 1)[-1] == "gen"
+    generator drift (a "gen" divergence in drawn inputs only, ``classify_gen``), sampler drift,
+    or ok."""
+    gen = part.rsplit(".", 1)[-1] == "gen" and bool(res.get("generator_drift"))
     if res["diverged"] and not gen:
         return "diverged"
     if failed:
@@ -1509,14 +1555,14 @@ def generator_drift(diverged: str) -> str:
 
 
 def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr: str) -> int:
-    """Print one part's result; 1 if it failed: a divergence (but the "gen" part's: generator
-    drift), a field only in the capture (a dropped field without an upgrade row), a field only
+    """Print one part's result; 1 if it failed: a divergence (but generator drift: a "gen"
+    divergence in drawn inputs only, ``classify_gen``), a field only in the capture (a dropped field without an upgrade row), a field only
     in this checkout not in ``--allow-new``, or a function (not in ``--allow-all-raise``) that
     raised on every call. Sampler drift (new columns) is counted, never a failure."""
     gb = res["peak_bytes"] / 2**30
     over = took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES
     group = part.rsplit(".", 1)[-1]
-    gen_drift = group == "gen" and bool(res["diverged"])
+    gen_drift = group == "gen" and bool(res.get("generator_drift")) and bool(res["diverged"])
     if args.mode == "capture":
         verdict = "captured"
     elif gen_drift:

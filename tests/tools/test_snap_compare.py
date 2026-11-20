@@ -892,10 +892,52 @@ def test_gen_divergence_is_generator_drift_and_the_closing_line_counts(run, caps
     assert run(["capture", snap, "0-1", "--commit", BASE, "--parts", "gen,rest"]) == 0
     run.code = "code-b"
     capsys.readouterr()
-    drift = result(diverged="seed 1 turn 3 segment 0: .in_actions[0]: 0 -> 2")
+    drift = {**result(diverged="seed 1 turn 3 segment 0: .in_actions[0]: 0 -> 2"),
+             "generator_drift": True}  # fmt: skip
     argv = ["compare", snap, "0-1", "--commit", NEW, "--parts", "gen,rest"]
     assert run(argv, res=drift) == 1  # rest diverged with the same canned result
     out = capsys.readouterr().out
     assert "generator drift: first at seed 1 turn 3" in out
     assert "parts: 0 ok, 1 diverged, 0 error, 0 sampler drift, 1 generator drift" in out
     assert sc.report(args(), "0-1.gen", drift, 1.0, set(), set(), "") == 0
+    hard = {**drift, "generator_drift": False}  # classify_gen found an entry no strategy draws
+    assert sc.report(args(), "0-1.gen", hard, 1.0, set(), set(), "") == 1
+    assert sc.part_class("0-1.gen", hard, 1) == "diverged"
+
+
+def test_gen_drift_only_in_inputs_the_strategies_draw():
+    """Generator drift is informational only when every differing "gen" entry is a drawn input
+    (a segment's actions and Outcome, the AI state, segment 0's state); a later segment's
+    state (read from the saved inputs, not drawn), any other entry, a raise or a different step
+    list is a divergence."""
+    a, b = np.zeros(2, np.int32), np.ones(2, np.int32)
+    s0, s1, ai = "seed 1 turn 0 segment 0", "seed 1 turn 0 segment 1", "seed 1 turn 0 ai"
+
+    def gen(changed):
+        """(record, dump, diverged) of three steps; ``changed``: {(key, path)} that differ."""
+        steps = {s0: (".in_actions", ".in_outcome.roll", ".in_state.hp"),
+                 s1: (".in_actions", ".in_outcome.roll", ".in_state.hp"), ai: (".in_ai_state.hp",)}  # fmt: skip
+        record = [(k, "d", {p: sc.canon(a)[""] for p in ps}) for k, ps in steps.items()]
+        dump = [(k, {p: sc.canon(b if (k, p) in changed else a)[""] for p in ps})
+                for k, ps in steps.items()]  # fmt: skip
+        return record, dump, sc.compare_dumps(record, dump)[0]
+
+    for changed in ({(s0, ".in_actions")}, {(s0, ".in_state.hp")}, {(s1, ".in_outcome.roll")},
+                    {(ai, ".in_ai_state.hp")}, {(s0, ".in_state.hp"), (s1, ".in_actions")}):  # fmt: skip
+        record, dump, diverged = gen(changed)
+        assert diverged and sc.classify_gen(record, dump, diverged) == (diverged, True), changed
+    record, dump, diverged = gen({(s0, ".in_actions"), (s1, ".in_actions"), (s1, ".in_state.hp")})
+    hard, drift = sc.classify_gen(record, dump, diverged)
+    assert not drift and hard.startswith(f"{s1}: .in_state.hp[0]") and "not an input" in hard
+    record, dump, _ = gen(set())
+    record[0][2][".other"], dump[0][1][".other"] = sc.canon(a)[""], sc.canon(b)[""]
+    hard, drift = sc.classify_gen(record, dump, sc.compare_dumps(record, dump)[0])
+    assert not drift and hard.startswith(f"{s0}: .other")
+    record, dump, _ = gen(set())
+    dump[2][1][".in_ai_state.hp"] = sc.canon(ValueError("x"))[""]
+    hard, drift = sc.classify_gen(record, dump, sc.compare_dumps(record, dump)[0])
+    assert not drift and "raised on" in hard
+    record, dump, _ = gen({(s0, ".in_actions")})
+    diverged = sc.compare_dumps(record, dump[:2])[0]
+    assert sc.classify_gen(record, dump[:2], diverged) == (diverged, False)
+    assert sc.classify_gen(record, dump, None) == (None, False)
