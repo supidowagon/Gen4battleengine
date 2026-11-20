@@ -44,7 +44,8 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
    review outcome, the targeted run's results with time and peak memory per test file, and
    its ledger's explanation of every diverged part of the snapshot compare.
 8. The managing session dispatches a fresh Opus review agent as the merge gate. Give it the
-   diff range and the criteria, never the stream's conclusions. Verdict: MERGE or FIX. When
+   diff range and the criteria, never the stream's conclusions (the ledger's explanation of a diverged snapshot compare is
+   inside the diff range and is checked against the compare log). Verdict: MERGE or FIX. When
    only tests or docs changed since an already-reviewed commit, a diff stat of `src` and
    `tools` replaces the review.
 9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
