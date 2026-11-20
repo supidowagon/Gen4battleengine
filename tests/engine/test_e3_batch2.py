@@ -205,7 +205,11 @@ def test_flung_berries_heal_and_cure_the_foe(tables, names):
 def test_flung_stat_berries_and_starf(tables, names):
     """ATK_UP (Liechi Berry) raises the foe's Attack one stage, +1 only below 12
     (battle_lib.c:6075-6108); Starf (RANDOM_UP2) draws a stat among those below +6 at TryFling
-    (:6110-6129): ``Outcome.acupressure`` 0 is the first (Attack), +2."""
+    (:6110-6129, ``RandNext() % 5`` redrawn while the stage is 12): by the ``% n`` convention
+    (F-10) the held Starf Berry's draw of the DEFENDER, ``Outcome.starf[1, 0]`` read modulo the
+    count of its stats below +6 (``hooks.starf_stat``, review b2 #4): 0 is Attack, 3 Sp. Atk, and
+    with Attack at +6 the rank skips it (0 is Defense). The attacker's Acupressure draw is not
+    read."""
     s = _fight(tables, names, "Liechi Berry", foe="Bidoof", foe_level=40)
     out = _go(tables, names, s)
     assert _stage(out, 1, Stat.ATK) == 1
@@ -213,10 +217,18 @@ def test_flung_stat_berries_and_starf(tables, names):
     out = _go(tables, names, maxed)
     assert _stage(out, 1, Stat.ATK) == 6
     star = _fight(tables, names, "Starf Berry", foe="Bidoof", foe_level=40)
-    out = _go(tables, names, star, _hits()._replace(acupressure=jnp.zeros(2, jnp.int16)))
+
+    def draw(value, acu=0):
+        out = _hits()._replace(acupressure=jnp.full(2, acu, jnp.int16))
+        return out._replace(starf=out.starf.at[1, 0].set(value))
+
+    out = _go(tables, names, star, draw(0, acu=3))
     assert _stage(out, 1, Stat.ATK) == 2
-    out = _go(tables, names, star, _hits()._replace(acupressure=jnp.asarray([3, 3], jnp.int16)))
-    assert sum(_stage(out, 1, st) for st in range(5)) == 2
+    out = _go(tables, names, star, draw(3))
+    assert _stage(out, 1, Stat.SPA) == 2 and sum(_stage(out, 1, st) for st in range(1, 6)) == 2
+    capped = star._replace(stages=star.stages.at[1, Stat.ATK].set(6))
+    out = _go(tables, names, capped, draw(0))
+    assert _stage(out, 1, Stat.DEF) == 2 and _stage(out, 1, Stat.ATK) == 6
 
 
 def test_flung_lansat_and_white_herb(tables, names):
@@ -250,6 +262,26 @@ def test_flung_kings_rock_flinches_a_slower_foe(tables, names):
 
 
 # --- hit chance, crit and the enumeration -----------------------------------------------------
+
+
+def test_a_flung_starf_makes_the_defenders_starf_draw_relevant(tables, names):
+    """Review b2 #4: the enumeration reads ``Outcome.starf[d, 0]`` of the Fling's defender ``d``
+    (``enumerate._starf_reads``), with its five-value law at a count fixed at 5, and no longer
+    the flinger's Acupressure draw."""
+    from nuzline.engine.enumerate import outcome_laws
+
+    s = _fight(tables, names, "Starf Berry", foe="Bidoof", foe_level=40)
+    laws = jax.tree.map(
+        np.asarray, jax.jit(outcome_laws)(tables, s, A("Fling", "Tackle", s, names))
+    )
+    relevant = np.asarray(laws.relevant.starf)
+    assert bool(relevant[1, 0]) and not bool(np.asarray(laws.relevant.acupressure)[0])
+    assert not bool(np.asarray(laws.starf_loose)[1, 0])
+    plain = _fight(tables, names, "Oran Berry", foe="Bidoof", foe_level=40)
+    laws = jax.tree.map(
+        np.asarray, jax.jit(outcome_laws)(tables, plain, A("Fling", "Tackle", plain, names))
+    )
+    assert not bool(np.asarray(laws.relevant.starf)[1, 0])
 
 
 def test_fling_is_an_input_clause_and_a_crit_writer():

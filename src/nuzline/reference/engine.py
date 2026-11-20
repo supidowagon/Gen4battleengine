@@ -3717,11 +3717,12 @@ def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: b
     with MOVE_EFFECT_EMBARGO (lib.c:6145-6146); else the flung item's fling effect acts on it:
     the heals (UPDATE_HP, capped; a flavor its nature dislikes confuses it), the cures
     (``_cure``), heal infatuation, the stat items (+1 below +6; Starf +2 on the drawn one of the
-    five stats below +6, ``Outcome.acupressure``), Lansat's Focus Energy, Micle's flag, the flinch
+    five stats below +6: the defender's Starf Berry draw ``starf_roll``, F-10, review b2 #4),
+    Lansat's Focus Energy, Micle's flag, the flinch
     and the INDIRECT statuses (``_inflict``). PP restore and White Herb acted at TryFling
     (``_fling_try``). The restore subscripts' PLUCK_CHECK keeps the defender's own item (the
     flag TryFling set), so none is removed. E3-B2-1."""
-    tables, o = turn.tables, turn.outcome
+    tables = turn.tables
     item = turn.fling
     foe, sd = _active(s, target), s.battlers[target]
     if not item or not turn.fling_power or foe.hp == 0 or _shielded(turn, s, target) or sd.embargo:
@@ -3743,9 +3744,11 @@ def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: b
         if sd.stages[_FLING_STAT_UP[kind]] < STAGE_MAX:
             _change_stage(s, target, _FLING_STAT_UP[kind], 1)
     elif kind == FlingEffect.RANDOM_UP2:
-        valid = [x for x in ACUPRESSURE_STATS[:5] if sd.stages[x] < STAGE_MAX]
+        # lib.c:6110-6129: RandNext() % 5 redrawn while the stage is 12, uniform over the five
+        # stats below +6 by the % n convention: the held Starf Berry's draw and rank (F-10).
+        valid = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
         if valid:
-            _change_stage(s, target, valid[o.acupressure[side] % len(valid)], 2)
+            _change_stage(s, target, valid[sd.starf_roll % len(valid)], 2)
     elif kind == FlingEffect.CRIT_UP:
         sd.focus_energy = 1
     elif kind == FlingEffect.TEMP_ACC_UP:

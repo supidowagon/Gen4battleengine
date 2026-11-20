@@ -1923,7 +1923,8 @@ def _fling(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``flingScript`` named at TryFling, which the defender's state at the hit still selects (the
     hit changes none of its status, confusion, attraction, stages, Focus Energy or movesets
     before this runs). The flung item's effect then acts on the defender: ``hooks.fling_effect``
-    (the heals, cures, stat raises, Starf's draw ``Outcome.acupressure``, Lansat, Micle), and the
+    (the heals, cures, stat raises, Starf's draw: the defender's ``Outcome.starf``, F-10, review
+    b2 #4; Lansat, Micle), and the
     INDIRECT flinch and status subscripts here, with the secondary-effect checks they share
     (Shield Dust, Inner Focus, Substitute, Safeguard, immunities, ``_inflict``; the flinch needs
     a target that has not moved, subscript_flinch_mon.s:5). The attacker's item is gone: the
@@ -1942,9 +1943,7 @@ def _fling(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (item != 0)
         & (tables.item_fling_power[item] != 0)
     )
-    state = fling_effect(
-        tables, state, h.target_side, h.target, item, reached, outcome.acupressure[h.side]
-    )
+    state = fling_effect(tables, state, h.target_side, h.target, item, reached)
     flinch = (
         reached
         & (kind == FlingEffect.FLINCH)

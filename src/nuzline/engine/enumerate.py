@@ -2495,23 +2495,8 @@ def outcome_laws(
     )
     acu_loose = foes(live & (uses_move | switch))
     acupressure = uses_move & (effect == _E.ACUPRESSURE) & (acu_loose | (acu_count >= 2))
-    # E3-B2-1: a Fling of Starf draws the same kind of value (BattleSystem_FlingItem,
-    # battle_lib.c:6110-6129: ``RandNext() % 5`` redrawn while the stage is 12, which is the
-    # ``acupressure_stat`` ranking, uniform by the % n convention) among the five stats of its
-    # DEFENDER (the foe) below +6: Atk to Sp. Def. It is read at TryFling and acts at the hit, so
-    # it needs the same two or more stats (or a foe action that can change them first).
-    starf = (
-        uses_move
-        & (effect == _E.FLING)
-        & (tables.item_fling_effect[state.item[party(fmt, sides), mons]] == FlingEffect.RANDOM_UP2)
-    )
-    fling_count = jnp.stack(
-        [jnp.sum(acupressure_valid(state, _foe(b))[:5].astype(_I32)) for b in range(fmt.B)]
-    )
-    acu_count = jnp.where(starf, fling_count, acu_count)
-    acupressure = acupressure | (starf & (acu_loose | (fling_count >= 2)))
     if loose:
-        acupressure = uses_move & ((effect == _E.ACUPRESSURE) | starf)
+        acupressure = uses_move & (effect == _E.ACUPRESSURE)
         acu_loose = jnp.ones_like(acu_loose)
     if loose:
         # The brute force: both sides' draws whenever a Quick Claw is anywhere in the battle
@@ -2865,7 +2850,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     it switches in holds one, or any living holder of its party can enter (its own U-turn or Baton
     Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
     residual damage source, entry hazards; over-approximate); or ``d`` Plucks / Bug Bites a foe
-    holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a battle-start berry is
+    holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a foe Flings one
+    at ``d`` (BattleSystem_FlingItem, battle_lib.c:6110-6129: the same ``RandNext() % 5`` loop on
+    the defender's stats, read through ``d``'s draw, review b2 #4); or a battle-start berry is
     still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of
     the party can be at its pinch when a replacement sends it in: at its pinch now, on the field
     this turn when it can leave, or with Spikes / Stealth Rock up or set this turn
@@ -2898,6 +2885,12 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         & (tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY)
     )
     plucked = uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1))
+    flung_item = state.item[rows, state.active]
+    flung = foes(
+        uses_move
+        & (effect == _E.FLING)
+        & (tables.item_fling_effect[flung_item] == FlingEffect.RANDOM_UP2)
+    )
     hazards = entry_damage_up(state)
     residual = (
         (state.weather != Weather.NONE)
@@ -2911,7 +2904,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     hp_drop = jnp.any(uses_move) | residual
     pinch_reach = jnp.any(candidates & (pinched_b | hp_drop), axis=1)
     open_ = state.starf_open != 0
-    turn = live & (pinch_reach | plucked | recycled | open_)
+    turn = live & (pinch_reach | plucked | recycled | flung | open_)
     # Index 1: a holder at its pinch when a replacement sends it in: one off the field, or the
     # active one if it can leave (a switch, its U-turn or Baton Pass, a foe's Roar), at its pinch
     # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
@@ -2947,7 +2940,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         # replacement's (five values: a fresh battler's count) wherever one is in the party.
         anyone = jnp.any(holds_b, axis=1)
         eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone)
-        relevant = jnp.stack([live & (anyone | eats | open_ | recycled), live & anyone], axis=1)
+        relevant = jnp.stack(
+            [live & (anyone | eats | open_ | recycled | flung), live & anyone], axis=1
+        )
         loose_out = jnp.stack([jnp.ones_like(live & anyone), jnp.zeros_like(anyone)], axis=1)
     return relevant, loose_out
 

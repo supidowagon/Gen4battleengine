@@ -94,7 +94,6 @@ from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
-    ACUPRESSURE_STATS,
     CONFUSION_PENDING,
     ITEM_ABILITY_IDS,
     NATURE_DISLIKED_FLAVOR,
@@ -1357,7 +1356,7 @@ def fling_try(tables: Tables, state: BattleState, side, mon, item, cond) -> Batt
     return state._replace(stages=state.stages.at[side].set(reset))
 
 
-def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, draw) -> BattleState:
+def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> BattleState:
     """The flung ``item``'s effect on ``side``'s party ``mon`` (the Fling's defender) where
     ``cond`` (``effects._fling``: ``subscript_fling.s`` ran the script ``BattleSystem_FlingItem``
     chose, battle_lib.c:5857-6158). The restore subscripts (``subscript_held_item_*.s``) act on
@@ -1366,9 +1365,10 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, draw
     param, 100)``, ``Divide(maxHP, param)``), and a flavor the defender's nature dislikes then
     confuses it (``berry_confuse``, subscript_held_item_dislike_flavor.s); the status restores cure
     what the defender has (``_restore``: Cheri, Chesto, Pecha, Rawst, Aspear, Persim, Lum); heal
-    infatuation clears its attraction; the stat items raise one stage below +6, Starf two on the
-    stat of ``draw`` among the five below +6 (``RandNext() % 5`` redrawn while the stage is 12,
-    ranked as ``effects.acupressure_stat`` does); Lansat sets Focus Energy; Micle its
+    infatuation clears its attraction; the stat items raise one stage below +6, Starf two on one
+    of the five below +6 (lib.c:6110-6129: ``RandNext() % 5`` redrawn while the stage is 12; by
+    the ``% n`` convention uniform over them, the held Starf Berry's draw and rank, ``starf_stat``
+    on the defender's ``starf_roll``, F-10, review b2 #4); Lansat sets Focus Energy; Micle its
     ``micleBerry``. ``FLING_EFFECT_PP_RESTORE`` and ``_STATDOWN_RESTORE`` already acted
     (``fling_try``). Statuses and the flinch are ``effects._fling``'s. E3-B2-1."""
     cond = jnp.asarray(cond)
@@ -1401,14 +1401,8 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, draw
     up = _fling_lookup(_FLING_STAT_UP, Stat.ATK)[kind]
     raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32))
     state = change_stage(state, side, up, 1, raises & (state.stages[side, up] < STAGE_MAX))
-    order = jnp.asarray([int(x) for x in ACUPRESSURE_STATS[:5]], _I32)
-    valid = state.stages[side][order] < STAGE_MAX
-    count = jnp.maximum(jnp.sum(valid.astype(_I32)), 1)
-    pick = valid & (jnp.cumsum(valid.astype(_I32)) - 1 == jnp.asarray(draw, _I32) % count)
-    stat = jnp.sum(jnp.where(pick, order, 0))
-    state = change_stage(
-        state, side, stat, 2, cond & (kind == FlingEffect.RANDOM_UP2) & jnp.any(valid)
-    )
+    stat, some = starf_stat(state, side)
+    state = change_stage(state, side, stat, 2, cond & (kind == FlingEffect.RANDOM_UP2) & some)
     crit = cond & (kind == FlingEffect.CRIT_UP)
     acc = cond & (kind == FlingEffect.TEMP_ACC_UP)
     return state._replace(

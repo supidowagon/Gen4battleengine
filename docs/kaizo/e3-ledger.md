@@ -522,11 +522,18 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   flinch (King's Rock, Razor Fang: not before the foe's move, Inner Focus, Shield Dust) and
   statuses (`_inflict`: Substitute, Safeguard, immunities, Shield Dust, Limber, Water Veil...). The
   reference engine has the same blocks (`_fling_try`, `_fling_hit`, `_Turn.fling`).
-  Rulings. (1) Starf's draw is the `acupressure` rank among the foe's five stats below +6 (value %
-  count, the "uniform by the % n convention"): the decomp draws `RandNext() % 5` until the stat is
-  not 12 (lib.c:6110-6129), whose per-stat weights are not exactly uniform (the redraw of a
-  maxed stat); the engine uses 1/count (the convention of Acupressure, B12-9), no new outcome
-  field. (2) The PLUCK flag Fling sets on the user (lib.c:6150-6152) is not modelled: it dies with
+  Rulings. (1) Starf's draw: the decomp draws `RandNext() % 5` until the stat is not 12 (lib.c:6110-6129);
+  `RandNext` is a u16 (battle_system.c:1308-1312), and 65536 = 5 * 13107 + 1, so Attack weighs 13108 and the
+  other four 13107 each, P(s) = w_s / (sum of w over the stats below +6). Ruled by E1 F-10 (the project's `% n`
+  convention, e1-mechanics-ledger.md F-10; the managing session's ruling of 19 Nov, review b2 #4): uniform over
+  the eligible stats, and the draw is the held Starf Berry's: `hooks.starf_stat` on the DEFENDER's
+  `starf_roll` (`Outcome.starf[d, 0]`, one value in [0, 60), the stat of rank `value % eligible`; reference
+  `starf_roll`), not Fling's own `acupressure` rank as first built. `enumerate._starf_reads` marks the
+  defender's draw relevant when a foe Flings a Starf Berry at it (count fixed at 5 or loose, as a held
+  berry's), and Fling no longer joins the acupressure relevance. A defender that eats its own Starf Berry in
+  the same turn reads the same value (F-10's turn draw is one per battler). Test:
+  `test_flung_stat_berries_and_starf`, `test_a_flung_starf_makes_the_defenders_starf_draw_relevant`.
+  (2) The PLUCK flag Fling sets on the user (lib.c:6150-6152) is not modelled: it dies with
   selfTurnFlags at the next BattleContext_Init (bcp.c:3998) and is read only by a PLUCK_CHECK,
   which only a restore subscript of this same hit runs; the user's item is gone and the foe's items
   cannot newly trigger when the script is skipped, so no read of it is reachable. (3) The flung
@@ -541,7 +548,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   width; the writes take `(tables, state)`; test_batch12's writer scan
   plays Fling with a Lansat user and a foe without Focus Energy). Enumerate: INPUT_CLAUSE effect
   (fling clause), NON_TABLE_DAMAGE (power and item read at the hit), `damage_inputs_can_change`
-  (foe Fling), Starf joins the acupressure relevance (the draw needs two or more stats), the end
+  (foe Fling), Starf joins the Starf relevance (`_starf_reads`, review b2 #4), the end
   speed tie, and the flung paralysis and confusion join `para_inflict` / `confuse_inflict`.
   `outcome.kings_rock_chance` is over-approximate for a flung King's Rock.
   AI: Basic_CheckFling (script.s:1199-1286, dispatch :263): the chart immune -10 (:1201), the AI's
