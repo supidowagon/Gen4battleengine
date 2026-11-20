@@ -2072,6 +2072,11 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   its rows; the run also adds the rows of 213 (Camouflage), which G-20 put in `KAIZO_TRANSCRIBED` without
   regenerating (tests/ai/test_read_bounds.py pins the key set to it). Test: tests/ai/test_kaizo_policy.py
   test_nightmare_basic (a synthetic effect-107 move).
+- G-35 Backlog row (manager order 19 Nov, G-25 context): `tools/kaizo/backlog.py` `SCRIPT_START_CONDITIONS`
+  writes "Start conditions set by ROM scripts" into docs/kaizo/mechanics_backlog.md: Newmoon's status 0x7B
+  on party[0] is "playable after heal; multi-status start refused" (`SaveMon.to_spec`), citing scr_seq 213
+  entry 20, scr_seq 363 0x00f2 and trainer flags 882 + 823. It blocks no split battle (Lady Emi 674 has no
+  split), so it counts in no total.
 
 ## Stream state (restart point, 2026-11-19)
 

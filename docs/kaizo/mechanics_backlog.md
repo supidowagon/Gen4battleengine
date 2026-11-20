@@ -133,6 +133,15 @@ Every group the split's battles need, whether or not an earlier split needs it t
 | battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_CAVE, TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Secret Power would read it: name it with --terrain | Galactic Split |
 | battle conditions | battle terrain: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, TERRAIN_SNOW, TERRAIN_BUILDING (ROM; the calc repo and the docs sheet record none), and Nature Power, Secret Power would read it: name it with --terrain | Galactic Split |
 
+### Start conditions set by ROM scripts
+
+Set on your party by a script outside any trainer row (E1 ledger G-25, G-35); no split
+battle needs them, so they count in no total above.
+
+| Condition | Status | Source |
+|---|---|---|
+| Newmoon status 0x7B on party[0] (sleep 3, poison, burn, freeze, paralysis; condition.h:7-13), kept by the battle until healed | playable after heal; multi-status start refused (`SaveMon.to_spec`, src/nuzline/saves/pkm.py:109) | scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with trainer flag 882 set (scr_seq 278 0x011d), always with flag 823 (0x0199 -> 0x0b18); scr_seq 362 0x00f8 warps 320 -> 321; scr_seq 363 0x00f2 writes the word, then StartFirstBattle 674 (Lady Emi, no split) |
+
 ## Your side (upper bound)
 
 What your own Pokemon could bring that the engine does not model, counted apart
