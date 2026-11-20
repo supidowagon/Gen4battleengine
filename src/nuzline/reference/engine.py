@@ -1269,6 +1269,103 @@ def _player_second(
     return speed0 < speed1
 
 
+def _compare_battlers(
+    tables, s: RefState, b1: int, b2: int, bit: int, qc: list[int], priority: tuple[int, int],
+    flags=None,
+) -> int:  # fmt: skip
+    """``BattleSystem_CompareBattlerSpeed(b1, b2)`` (lib.c:1188-1454): 0 FASTER, 1 SLOWER, 2 TIE.
+    ``bit``: the pair's ``RandNext() & 1`` (drawn only on an equal-speed branch); ``priority``: the
+    two moves' priorities (0, 0 where the caller skips them); ``flags`` ``(claw, custap)``: the
+    turn's lists, written for a holder when ``ignoreQuickClaw`` is FALSE (``flags`` given) and both
+    battlers have HP (sheet D3-3 rule 9; :1282-1284, :1296-1298, :1348-1350, :1362-1364)."""
+    hp1, hp2 = _active(s, b1).hp, _active(s, b2).hp
+    if hp1 == 0 and hp2:
+        return 1
+    if hp1 and hp2 == 0:
+        return 0
+    speed1, speed2 = _effective_speed(tables, s, b1), _effective_speed(tables, s, b2)
+    claw, custap, activated = [], [], []
+    for b in (b1, b2):
+        quick = _item_effect(tables, _active(s, b), s) == ItemId.QUICK_CLAW and qc[b] != 0
+        pinch = _custap_active(tables, s, b)
+        claw.append(quick)
+        custap.append(pinch)
+        activated.append(quick or pinch)
+    if flags is not None and hp1 and hp2:
+        for b, quick, pinch in zip((b1, b2), claw, custap, strict=True):
+            flags[0][b] = flags[0][b] or quick
+            flags[1][b] = flags[1][b] or pinch
+    lagging = [
+        _item_effect(tables, _active(s, b), s) == ItemId.LAGGING_TAIL for b in (b1, b2)
+    ]
+    result = 0
+    if priority[0] == priority[1]:
+        if activated[0] and activated[1]:
+            if speed1 < speed2:
+                result = 1
+            elif speed1 == speed2 and bit & 1:
+                result = 2
+        elif not activated[0] and activated[1]:
+            result = 1
+        elif activated[0] and not activated[1]:
+            result = 0
+        elif lagging[0] and lagging[1]:
+            if speed1 > speed2:
+                result = 1
+            elif speed1 == speed2 and bit & 1:
+                result = 2
+        elif lagging[0] and not lagging[1]:
+            result = 1
+        elif not lagging[0] and lagging[1]:
+            result = 0
+        elif s.trick_room:  # (Stall, lib.c:1422-1431, is unsupported)
+            if speed1 > speed2:
+                result = 1
+            if speed1 == speed2 and bit & 1:
+                result = 2
+        else:
+            if speed1 < speed2:
+                result = 1
+            if speed1 == speed2 and bit & 1:
+                result = 2
+    elif priority[0] < priority[1]:
+        result = 1
+    return result
+
+
+def _four_turn_order(tables, s: RefState, commands, choices, outcome) -> tuple[list, list, list]:
+    """``BattleControllerPlayer_CalcTurnOrder`` over four battlers (bcp.c:754-786): ``(order,
+    custap, claw)``. Every ITEM or PARTY battler in battler order, then every other (an absent
+    battler is a FIGHT entry, rule 7); then for the position pairs (0,1) (0,2) (0,3) (1,2) (1,3)
+    (2,3), the battlers *currently* at the two positions with the same command are compared
+    (priority only for FIGHT) and swapped on a nonzero result. Pair ``p``'s bit is
+    ``outcome.order_tie[p]``."""
+    command = [commands[b] if _active(s, b).hp > 0 else FIGHT for b in range(4)]
+    early = [b for b in range(4) if command[b] != FIGHT]
+    order = early + [b for b in range(4) if command[b] == FIGHT]
+    qc = _qc_rolls(s)
+    claw, custap = [False] * 4, [False] * 4
+    p = 0
+    for i in range(3):
+        for j in range(i + 1, 4):
+            b1, b2 = order[i], order[j]
+            if command[b1] == command[b2]:
+                fight = command[b1] == FIGHT
+                priority = (
+                    tuple(_t(tables, "move_priority", choices[b][0]) for b in (b1, b2))
+                    if fight
+                    else (0, 0)
+                )
+                result = _compare_battlers(
+                    tables, s, b1, b2, outcome.order_tie[p], qc, priority,
+                    (claw, custap) if fight else None,
+                )  # fmt: skip
+                if result:
+                    order[i], order[j] = b2, b1
+            p += 1
+    return order, custap, claw
+
+
 # --------------------------------------------------------------------------- damage
 
 
@@ -7224,14 +7321,13 @@ def _record_last_moves(tables, s: RefState, actions, choices) -> None:
 
 
 def ref_step(
-    tables, state: RefState, actions: tuple[int, ...], outcome, targets=None, order=None,
+    tables, state: RefState, actions: tuple[int, ...], outcome, targets=None,
     actions_only: bool = False,
 ) -> RefState:  # fmt: skip
     """``_ref_step`` with the turn's Starf Berry draws (``Outcome.starf``) loaded into
     ``RefBattler.starf_roll`` for its held-item checks and cleared after it (F-10), as
-    ``step.step_events`` does. ``order`` (a test seam until D3-3's order is built in both engines):
-    the battler order of the turn, in place of the computed one; ``actions_only``: stop after the
-    actions, before the end of the turn (``step.execute_actions``'s contract)."""
+    ``step.step_events`` does. ``actions_only`` (a test seam): stop after the actions, before the
+    end of the turn (``step.execute_actions``'s contract)."""
     if state.over:
         return copy.deepcopy(state)
     loaded = copy.deepcopy(state)
@@ -7239,7 +7335,7 @@ def ref_step(
     _resolve_starf(loaded, [draw[0] for draw in outcome.starf])
     for sd, draw in zip(loaded.battlers, outcome.starf, strict=True):
         sd.starf_roll = int(draw[0])
-    out = _ref_step(tables, loaded, actions, outcome, targets, copied=True, forced=order,
+    out = _ref_step(tables, loaded, actions, outcome, targets, copied=True,
                     actions_only=actions_only)  # fmt: skip
     # The faint replacement's draw is kept where ``ref_replace`` can read it; 0 at a pause.
     kept = _starf_kept(tables, out)
@@ -7255,7 +7351,6 @@ def _ref_step(
     outcome,
     targets=None,
     copied: bool = False,
-    forced=None,
     actions_only: bool = False,
 ) -> RefState:
     """Play one turn (``engine.step.step``'s contract): a state paused at a U-turn's or Baton
@@ -7319,7 +7414,9 @@ def _ref_step(
     # battler order, then moves; two actions of one command are ordered by
     # CompareBattlerSpeed, with priority only between two moves.
     early = [c != FIGHT for c in commands]
-    if early[0] != early[1]:
+    if _fmt(s).B == 4:
+        order, turn.custap, turn.claw = _four_turn_order(tables, s, commands, choices, outcome)
+    elif early[0] != early[1]:
         order = [0, 1] if early[0] else [1, 0]
     elif commands[0] != commands[1]:  # an item and a switch: battler order
         order = [0, 1]
@@ -7342,13 +7439,6 @@ def _ref_step(
                 _item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0
                 for side in range(_fmt(s).B)
             ]
-    if _fmt(s).B == 4:
-        # Battlers 2 and 3 are absent (MOVE_END, bcp.c:330-333): a 0-HP battler loses every
-        # compare against a living one (lib.c:1204-1211), so they go last, never act and get
-        # no claw flag. The four-battler compare is D3-3's (coverage.FOUR_TURN_CLAUSES).
-        order = order + [2, 3]
-        turn.custap = turn.custap[:2] + [False, False]
-        turn.claw = turn.claw[:2] + [False, False]
     # The flags the last turn left standing (only the holder's BeforeMove, a switch-in and a
     # faint clear them, SF2 (k)).
     for side in range(_fmt(s).B):
@@ -7356,7 +7446,7 @@ def _ref_step(
         turn.custap[side] = turn.custap[side] or bool(s.battlers[side].custap_flag)
     turn.actions, turn.choices, turn.items = actions, choices, items
     turn.commands = commands
-    turn.order = order if forced is None else [int(b) for b in forced]
+    turn.order = order
     try:
         _actions(turn, s, 0)
     except _Pause:

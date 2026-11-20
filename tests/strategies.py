@@ -62,6 +62,7 @@ from nuzline.engine.ids import (
     Type,
     Weather,
 )
+from nuzline.engine.order import TIE_PAIRS
 from nuzline.engine.outcome import MAX_HITS, Outcome, read_chance
 from nuzline.engine.state import (
     BAG_SLOTS,
@@ -2368,6 +2369,13 @@ def _flag(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
     return _ints(0, 1, shape)
 
 
+def _tie_bits(shape: tuple[int, ...]) -> st.SearchStrategy[jnp.ndarray]:
+    """Bits of shape ``shape``; a size-0 shape (B = 2) is a constant, no draw is consumed."""
+    if int(np.prod(shape, dtype=int)) == 0:
+        return st.just(jnp.zeros(shape, jnp.int8))
+    return _flag(shape)
+
+
 @st.composite
 def targets_for(draw, state: BattleState) -> jnp.ndarray:
     """``int8[B]``: each battler's chosen target (D2-1), a battler 0..B-1. At B = 2 ``step``
@@ -2429,6 +2437,9 @@ def any_outcome(fmt: Format = SINGLES) -> st.SearchStrategy[Outcome]:
         call_target_draw=_flag(sides),
         bide_target_draw=_flag(sides),
         trace_pick=_flag((fmt.B, 5)),
+        # D3-3: the position loops' tie bits (size 0 at B = 2: nothing drawn).
+        order_tie=_tie_bits((TIE_PAIRS[fmt.B],)),
+        sort_tie=_tie_bits((fmt.B + 1, TIE_PAIRS[fmt.B])),
     )
 
 

@@ -688,8 +688,30 @@ def custap_active(tables: Tables, state: BattleState) -> jnp.ndarray:
     return jnp.stack(out)
 
 
+def _alive_battlers(state: BattleState) -> jnp.ndarray:
+    """``bool[B]``: each battler's active Pokemon has HP (``curHP`` of lib.c:1204-1211)."""
+    fmt = format_of(state)
+    return jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+
+
+def _compared_fighters(state: BattleState, actions) -> jnp.ndarray:
+    """``bool[B]`` at B = 4: the battlers whose claw / pinch flag ``CalcTurnOrder`` writes
+    (rule 9, sheet D3-3): a FIGHT compare (``ignoreQuickClaw == FALSE``, bcp.c:773-786) with both
+    battlers alive has the battler on one side. Absent battlers are FIGHT entries that lose every
+    compare against a living one (lib.c:1204-1211), so they are never the other side of a write.
+    Every living FIGHT battler meets another living FIGHT battler in the position loop whenever
+    there is one (swaps stay inside a command group, the pairs cover every position pair, a
+    dead battler sinks past a living one): the flag is the closed form, whatever the tie bits
+    (checked over all 16 x 81 x 64 cases of alive masks, commands and swap results)."""
+    alive = _alive_battlers(state)
+    fight = (~is_switch(actions) & ~is_item(actions)) | ~alive  # an absent battler is FIGHT
+    eligible = fight & alive
+    others = jnp.sum(eligible.astype(_I32)) - eligible.astype(_I32)
+    return eligible & (others > 0)
+
+
 def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool[2]``: ``moveEffectsData.custapBerry`` after the turn order: ``CalcTurnOrder``
+    """``bool[B]``: ``moveEffectsData.custapBerry`` after the turn order: ``CalcTurnOrder``
     compares two FIGHT commands with ``ignoreQuickClaw = FALSE`` (bcp.c:772-786), which writes
     the flag of each activated holder (``custap_active`` on the turn-start ``state``,
     battle_lib.c:1296-1298, :1362-1364). The holder eats the berry when its move starts
@@ -698,15 +720,14 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     writes it too, through the same compare with ``ignoreQuickClaw = FALSE``, when a Trick
     Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_claw_flags`` re-sets it there."""
     actions = jnp.asarray(actions, _I32)
+    if format_of(state).B == 4:
+        return custap_active(tables, state) & _compared_fighters(state, actions)
     fight = ~is_switch(actions) & ~is_item(actions)
-    flags = custap_active(tables, state) & fight[0] & fight[1]
-    if format_of(state).B == 4:  # battlers 2 and 3 absent (action_order): no compare with HP
-        flags = flags & (jnp.arange(4) < 2)
-    return flags
+    return custap_active(tables, state) & fight[0] & fight[1]
 
 
 def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
-    """``bool[2]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
+    """``bool[B]``: ``moveEffectsData.quickClaw`` after the turn order: ``CalcTurnOrder``'s
     FIGHT-against-FIGHT compare (``ignoreQuickClaw = FALSE``, bcp.c:772-786) sets it for each
     activated Quick Claw (battle_lib.c:1283, :1349; ``quick_claw_active`` on the turn's
     ``qc_roll``). The holder's own BEFORE_MOVE_STATE_QUICK_CLAW clears it
@@ -716,9 +737,9 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     any other battler fights (doubles design section 5 rule 4). A Trick Room's MoveEnd re-sort
     sets it again (``resort_claw_flags``)."""
     actions = jnp.asarray(actions, _I32)
+    if format_of(state).B == 4:
+        return quick_claw_active(tables, state, state.qc_roll) & _compared_fighters(state, actions)
     fight = ~is_switch(actions) & ~is_item(actions)
-    if format_of(state).B == 4:  # battlers 2 and 3 absent (action_order): no compare with HP
-        fight = fight & (jnp.arange(4) < 2)
     others = jnp.sum(fight.astype(_I32)) - fight.astype(_I32)
     return quick_claw_active(tables, state, state.qc_roll) & fight & (others > 0)
 
@@ -757,6 +778,11 @@ def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
 
 # BattleSystem_CompareBattlerSpeed's results (include/constants/battle.h:163-165).
 COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE = 0, 1, 2
+
+# CalcTurnOrder's position pairs (bcp.c:773-774) and their count per battler count: the length of
+# ``Outcome.order_tie`` (``TIE_PAIRS[2] = 0``: at B = 2 the one pair's bit is ``speed_tie``).
+PAIRS = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+TIE_PAIRS = {2: 0, 4: 6}
 
 
 def compare_speed(
@@ -815,16 +841,122 @@ def player_second(tables: Tables, state: BattleState, tie_roll, qc) -> jnp.ndarr
     return battler_slower(tables, state, 0, tie_roll, qc)
 
 
+def _pair_facts(tables: Tables, state: BattleState, qc):
+    """``(speed int32[B], claw bool[B], lag bool[B])``: each battler's speed as
+    ``CompareBattlerSpeed`` computes it, its Quick Claw / Custap activation (``qc`` the
+    ``speedRand`` bits) and Lagging Tail, built once for every pair of a sort."""
+    fmt = format_of(state)
+    speed = jnp.stack([effective_speed(tables, state, b) for b in range(fmt.B)])
+    claw = quick_claw_active(tables, state, qc) | custap_active(tables, state)
+    lag = jnp.stack([_holds(tables, state, b, ItemId.LAGGING_TAIL) for b in range(fmt.B)])
+    return speed, claw, lag
+
+
+def compare_full(
+    tables: Tables,
+    state: BattleState,
+    b1,
+    b2,
+    tie_bit,
+    qc,
+    priority1=0,
+    priority2=0,
+    facts=None,
+):
+    """``(result int32, read bool)``: ``BattleSystem_CompareBattlerSpeed(b1, b2)`` (lib.c:1188-1454)
+    with the dead-battler short-circuit (:1204-1211: ``b1`` dead and ``b2`` alive is SLOWER,
+    ``b1`` alive and ``b2`` dead FASTER, nothing computed; two dead go through the compare).
+    Within equal priority the ladder is ``compare_speed``'s (Quick Claw / Custap, Lagging Tail,
+    Trick Room, speed; Stall is unsupported); a lower priority is SLOWER (:1448-1449). ``b1`` and
+    ``b2`` may be traced battler indices; ``priority1`` / ``priority2`` are the moves' priorities
+    (0 both where the caller skips priority). ``tie_bit`` is the pair's ``RandNext() & 1``;
+    ``read`` is true where the decomp draws it: both battlers alive, equal priority, a branch that
+    compares speeds (not a lone Quick Claw or Lagging Tail holder) at equal speed. ``facts``:
+    ``_pair_facts`` if the caller has it."""
+    speed, claw, lag = _pair_facts(tables, state, qc) if facts is None else facts
+    alive = _alive_battlers(state)
+    alive1, alive2 = alive[b1], alive[b2]
+    speed1, speed2 = speed[b1], speed[b2]
+    claw1, claw2 = claw[b1], claw[b2]
+    lag1, lag2 = lag[b1], lag[b2]
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | ((state.trick_room != 0) & ~lag1 & ~lag2))
+    slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
+    tie = (speed1 == speed2) & (jnp.asarray(tie_bit) != 0)
+    by_speed = jnp.where(
+        slower, COMPARE_SPEED_SLOWER, jnp.where(tie, COMPARE_SPEED_TIE, COMPARE_SPEED_FASTER)
+    )
+    lagging = jnp.where(
+        lag1 != lag2, jnp.where(lag1, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER), by_speed
+    )
+    lone_claw = jnp.where(claw2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER)
+    ladder = jnp.where(claw1 != claw2, lone_claw, jnp.where(claw1, by_speed, lagging))
+    p1, p2 = jnp.asarray(priority1, _I32), jnp.asarray(priority2, _I32)
+    result = jnp.where(
+        p1 == p2,
+        ladder,
+        jnp.where(p1 < p2, COMPARE_SPEED_SLOWER, COMPARE_SPEED_FASTER),
+    )
+    result = jnp.where(
+        alive1 != alive2,
+        jnp.where(alive1, COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER),
+        result,
+    ).astype(_I32)
+    compares = (claw1 == claw2) & (claw1 | (lag1 == lag2))
+    read = alive1 & alive2 & (p1 == p2) & compares & (speed1 == speed2)
+    return result, read
+
+
+def _four_order(tables: Tables, state: BattleState, actions, order_tie, qc):
+    """``(order int8[4], read bool[6])``: ``BattleControllerPlayer_CalcTurnOrder`` over four
+    battlers (bcp.c:754-786, rules 2, 3 and 7 of sheet D3-3). ITEM and PARTY commands first, then
+    the rest, each group in battler order (absent battlers are FIGHT entries); then for each
+    position pair of ``PAIRS`` (lexicographic, :773-774) the battlers *currently* at the two
+    positions, when their commands are equal, are compared (``compare_full``; priority only for
+    FIGHT, :779-780) and swapped on a result other than FASTER. ``order_tie[p]`` is pair ``p``'s
+    bit; ``read[p]`` whether that compare drew it."""
+    alive = _alive_battlers(state)
+    actions = jnp.asarray(actions, _I32)
+    switch, item = is_switch(actions), is_item(actions)
+    fight = (~switch & ~item) | ~alive
+    command = jnp.where(fight, 0, jnp.where(item, 1, 2)).astype(_I32)
+    moves = jnp.stack([selected_move(tables, state, b, actions[b])[0] for b in range(4)])
+    priority = tables.move_priority[moves].astype(_I32)
+    facts = _pair_facts(tables, state, qc)
+    # Stable sort on "is FIGHT": ITEM / PARTY battlers first, then the rest, each in battler order.
+    order = jnp.argsort(fight.astype(_I32), stable=True).astype(_I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        same = command[b1] == command[b2]
+        skip = command[b1] != 0
+        p1 = jnp.where(skip, 0, priority[b1])
+        p2 = jnp.where(skip, 0, priority[b2])
+        result, read = compare_full(tables, state, b1, b2, order_tie[p], qc, p1, p2, facts)
+        swap = same & (result != COMPARE_SPEED_FASTER)
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(same & read)
+    return order.astype(jnp.int8), jnp.stack(reads)
+
+
+def action_order_reads(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
+    """``bool[TIE_PAIRS[B]]``: the elements of ``outcome.order_tie`` the order reads (the pair's
+    compare drew its bit); empty at B = 2, where ``speed_tie`` is the one bit."""
+    if format_of(state).B == 2:
+        return jnp.zeros((0,), bool)
+    return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[1]
+
+
 def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.ndarray:
-    """``int8[B]``: the battlers in execution order. ``outcome.speed_tie`` decides
+    """``int8[B]``: the battlers in execution order. At B = 2, ``outcome.speed_tie`` decides
     equal speeds (0 = player first): the decomp swaps on ``RandNext() & 1``. Quick Claw
     reads ``state.qc_roll``, the draw of the turn before (module docstring), never the
-    outcome. At B = 4 positions 0-1 are the two-battler order and battlers 2 and 3 follow:
-    they are absent (``battlersSwitchingMask``: PICK_COMMAND MOVE_END, bcp.c:330-333) and a
-    0-HP battler loses every compare against a living one (lib.c:1204-1211), so they never
-    act; ``coverage.FOUR_TURN_CLAUSES`` refuses a living battler 2 or 3 until D3-3."""
+    outcome. At B = 4 (``_four_order``) the pairs' bits are ``outcome.order_tie``; absent
+    battlers (``battlersSwitchingMask``: PICK_COMMAND MOVE_END, bcp.c:330-333) lose every compare
+    against a living one (lib.c:1204-1211) and go last."""
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
+    if fmt.B == 4:
+        return _four_order(tables, state, actions, outcome.order_tie, state.qc_roll)[0]
     switch, item = is_switch(actions), is_item(actions)
     early = switch | item  # items and switches go before moves
     moves = jnp.stack(
@@ -839,10 +971,7 @@ def action_order(tables: Tables, state: BattleState, actions, outcome) -> jnp.nd
     same_kind = (switch[0] == switch[1]) & (item[0] == item[1])
     player_second_ = jnp.where(same_kind, player_second_, early[1] & ~early[0])
     first = player_second_.astype(jnp.int8)
-    order = jnp.stack([first, _foe(first)]).astype(jnp.int8)
-    if fmt.B == 4:
-        order = jnp.concatenate([order, jnp.arange(2, 4, dtype=jnp.int8)])
-    return order
+    return jnp.stack([first, _foe(first)]).astype(jnp.int8)
 
 
 def truant_loafs(state: BattleState, side) -> jnp.ndarray:

@@ -82,6 +82,7 @@ from nuzline.engine.order import (
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
+    TIE_PAIRS,
     action_order,
     assist_candidates,
     call_kind,
@@ -202,6 +203,14 @@ class Outcome(NamedTuple):
     # holder and its fire number this step (``BattleState.ts_trace_fires``); read only at B = 4
     # (``targets.trace_target``), D2-16 / ruling D2-5. Its sample key is 47.
     trace_pick: jnp.ndarray
+    # int8[TIE_PAIRS[B]]: pair p's ``RandNext() & 1`` of CalcTurnOrder's position loop (bcp.c:773-786;
+    # ``order.PAIRS``), D3-3; read only where the pair's compare draws it (``order.action_order_reads``).
+    # Size 0 at B = 2, where ``speed_tie`` is the one pair's bit. No tie bit is ever stored in the
+    # state. Its sample key is 49 (48 is ``starf``'s).
+    order_tie: jnp.ndarray
+    # int8[B + 1, TIE_PAIRS[B]]: the position-loop bits of the BranchActions sorts (D3-4: row = the
+    # acting battler) and of the end-of-turn sort (D3-11: row B); size 0 at B = 2. Key 50.
+    sort_tie: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -244,6 +253,8 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         call_target_draw=sides,
         bide_target_draw=sides,
         trace_pick=jnp.zeros((fmt.B, TRACE_FIRES), _I8),
+        order_tie=jnp.zeros((TIE_PAIRS[fmt.B],), _I8),
+        sort_tie=jnp.zeros((fmt.B + 1, TIE_PAIRS[fmt.B]), _I8),
     )
 
 
@@ -1943,7 +1954,20 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
 
     roar_counts = roar_inputs(state, actions)[1]
     roar_la, roar_ld = roar_levels(state, actions)
-    speed_tie = draw(5, (), 2)  # battle_lib.c:1445, RandNext() & 1
+    # battle_lib.c:1445, RandNext() & 1. At B = 4 the order's bits are ``order_tie`` (D3-3): 0 here.
+    speed_tie = draw(5, (), 2) if fmt.B == 2 else jnp.zeros((), _I32)
+    # Every pair's bit, read or not (the tie policy, ledger D3-3). Nothing is drawn at B = 2.
+    pairs = TIE_PAIRS[fmt.B]
+    order_tie = (
+        jax.random.randint(jax.random.fold_in(key, 49), (pairs,), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((0,), _I32)
+    )
+    sort_tie = (
+        jax.random.randint(jax.random.fold_in(key, 50), (fmt.B + 1, pairs), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((fmt.B + 1, 0), _I32)
+    )
     chosen = jnp.stack(
         [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
     )
@@ -1951,7 +1975,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
     # Nature Power and the invokers draw for their called move (order.called_move, used_moves):
     # its accuracy, crit odds, effect chance and secondary effect are the called move's. Copycat's
     # call follows this outcome's order (the foe's move before it, or the turn-start movePrev).
-    tie_outcome = empty_outcome(fmt)._replace(speed_tie=speed_tie)
+    tie_outcome = empty_outcome(fmt)._replace(speed_tie=speed_tie, order_tie=order_tie)
     first = action_order(tables, state, actions, tie_outcome)[0]
     fight = ~is_switch(actions) & ~is_item(actions)
     after_foe = jnp.stack([(first == _foe(side)) & fight[_foe(side)] for side in range(fmt.B)])
@@ -1987,7 +2011,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         )
         == 0,
         # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364) on equal speed: RandNext() & 1.
-        end_speed_tie=draw(12, (), 2),
+        end_speed_tie=draw(12, (), 2) if fmt.B == 2 else jnp.zeros((), _I32),
         # BtlCmd_CalcMagnitude (battle_script.c:5820-5852): rand % 100 mapped to the
         # level; ShedSkin (battle_lib.c:3567-3575): RandNext() % 10 < 3. Drawn from
         # fold_in keys so every field above keeps its samples.
@@ -2076,6 +2100,8 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         starf=jax.random.randint(
             jax.random.fold_in(key, 48), (fmt.B, 2), 0, STARF_DRAWS, dtype=_I32
         ),
+        order_tie=order_tie,
+        sort_tie=sort_tie,
     )
     outcome = _cast(outcome)
 

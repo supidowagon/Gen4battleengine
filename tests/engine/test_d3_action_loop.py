@@ -3,10 +3,11 @@ over ``fmt.B`` positions; each action reads the turn flags of its own defender (
 Roost) and its item states follow the attacker, the defender, then every other battler
 (bcp.c:873-895, :3007, :3684-3696, :3730-3756, lib.c:2540-2543).
 
-The order is an argument of ``execute_actions`` (D3-3 computes it), so these tests pass an explicit
-one. The engine side is the action phase of ``step`` with that order (``play``); the reference side
-is ``ref_step(..., order=..., actions_only=True)``, which plays the same ``_actions`` loop and stops
-before the end of the turn, as ``execute_actions`` does. The full state is compared field by field.
+The order is the real CalcTurnOrder (D3-3): each test names the order it wants and ``play`` gives
+the battlers distinct speeds that produce it (``speed_ordered``; every battler FIGHTs, an absent one
+goes last). The engine side is the action phase of ``step`` (``play``); the reference side is
+``ref_step(..., actions_only=True)``, which plays the same ``_actions`` loop and stops before the
+end of the turn, as ``execute_actions`` does. The full state is compared field by field.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ import numpy as np
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import chosen_targets
 from nuzline.engine.format import DOUBLES, SINGLES
-from nuzline.engine.ids import AbilityId, Status, Type
+from nuzline.engine.ids import AbilityId, Stat, Status, Type
+from nuzline.engine.order import action_order
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import (
@@ -39,10 +41,10 @@ TACKLE, SWORDS, EARTH_POWER = "Tackle", "Swords Dance", "Earth Power"
 
 
 @jax.jit
-def _engine(tables, state, actions, outcome, targets, order):
-    """``step._action_phase`` with ``order`` in place of the computed one: the turn's prologue
-    (the Starf draw, the stale locks, the stored targets, the last moves) and the action loop;
-    ``(state, shown)``."""
+def _engine(tables, state, actions, outcome, targets, order=None):
+    """``step._action_phase``: the turn's prologue (the Starf draw, the stale locks, the stored
+    targets, the last moves), the order and the action loop; ``(state, shown)``. ``order``: an
+    explicit battler order in place of CalcTurnOrder's (``play_forced``)."""
     turn_draw = jnp.asarray(outcome.starf)[:, 0]
     state = resolve_starf(state, turn_draw)
     state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
@@ -50,6 +52,9 @@ def _engine(tables, state, actions, outcome, targets, order):
     fresh = _clear_stale_choice_locks(tables, fresh, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
+    if order is None:
+        order = action_order(tables, fresh, actions, outcome)
+    order = jnp.asarray(order).astype(jnp.int32)
     out, _, shown = _execute_actions(
         tables,
         fresh,
@@ -63,15 +68,42 @@ def _engine(tables, state, actions, outcome, targets, order):
     return out._replace(starf_roll=jnp.zeros_like(out.starf_roll)), shown
 
 
+def speed_ordered(state, order):
+    """``state`` with distinct speeds that put the battlers in ``order`` (fastest first)."""
+    for rank, b in enumerate(order):
+        p, slot = party_of(state, b), int(state.active[b])
+        state = state._replace(stats=state.stats.at[p, slot, Stat.SPE - 1].set(400 - 40 * rank))
+    return state
+
+
+def play_forced(tables, state, actions, order, targets=(0, 0, 0, 0), outcome=None):
+    """Engine only: the action phase in an ``order`` CalcTurnOrder cannot give (a -6 priority
+    mover acting before a priority-0 one). The reference has no such seam; the caller asserts the
+    expected values itself. Returns ``(state, shown)``."""
+    fmt_b = int(state.active.shape[0])
+    outcome = empty_outcome(DOUBLES if fmt_b == 4 else SINGLES) if outcome is None else outcome
+    return _engine(
+        tables, state, jnp.asarray(actions, jnp.int32), outcome, jnp.asarray(targets, jnp.int8),
+        jnp.asarray(order, jnp.int32),
+    )  # fmt: skip
+
+
 def play(tables, state, actions, order, targets=(0, 0, 0, 0), outcome=None):
-    """The action phase of ``actions`` in ``order`` on the engine, asserted equal to the
-    reference's (every field); returns ``(state, shown)`` of the engine."""
+    """The action phase of ``actions`` on the engine, asserted equal to the reference's (every
+    field); returns ``(state, shown)`` of the engine. The battlers get the speeds that make
+    CalcTurnOrder give ``order`` (an absent battler, 0 HP, goes last whatever it says);
+    ``order=None`` keeps the state's speeds, and the outcome's ``order_tie`` decides ties."""
     fmt_b = int(state.active.shape[0])
     outcome = empty_outcome(DOUBLES if fmt_b == 4 else SINGLES) if outcome is None else outcome
     acts = jnp.asarray(actions, jnp.int32)
-    order_arr = jnp.asarray(order, jnp.int32)
+    if order is not None:
+        present = [int(state.hp[party_of(state, b), int(state.active[b])]) > 0 for b in order]
+        wanted = [b for b, p in zip(order, present, strict=True) if p]
+        wanted += [b for b, p in zip(order, present, strict=True) if not p]
+        state = speed_ordered(state, wanted)
+        assert [int(b) for b in action_order(tables, state, acts, outcome)] == wanted
     tg = jnp.asarray(targets, jnp.int8)
-    out, shown = _engine(tables, state, acts, outcome, tg, order_arr)
+    out, shown = _engine(tables, state, acts, outcome, tg)
     ref = from_ref(
         ref_step(
             to_numpy(tables),
@@ -79,7 +111,6 @@ def play(tables, state, actions, order, targets=(0, 0, 0, 0), outcome=None):
             tuple(int(a) for a in actions),
             outcome_to_py(outcome),
             [int(t) for t in targets],
-            order=[int(b) for b in order],
             actions_only=True,
         )
     )

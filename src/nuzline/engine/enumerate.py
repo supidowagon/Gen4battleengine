@@ -272,6 +272,7 @@ from nuzline.engine.order import (
     CALL_NONE,
     CALL_SLEEP_TALK,
     MOVE_ACTIONS,
+    TIE_PAIRS,
     action_order,
     assist_candidates,
     call_kind,
@@ -2375,6 +2376,9 @@ def outcome_laws(
         axis=1,
     )[party(fmt, jnp.arange(fmt.B))]
 
+    on_field = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
+    order_tie_live = live & (fmt.B == 4) & (jnp.sum(on_field.astype(jnp.int32)) >= 2)
+
     def branch_relevant(m: dict) -> Outcome:
         return Outcome(
             speed_tie=speed_tie,
@@ -2429,6 +2433,11 @@ def outcome_laws(
                 (jnp.any(state.ability == AbilityId.TRACE) & (fmt.B == 4))[None, None],
                 (fmt.B, TRACE_FIRES),
             ),
+            # D3-3: CalcTurnOrder's pair bits and the sorts' (``order_tie``, ``sort_tie``), B = 4
+            # only. Over-approximate (D6-D7 marginalize the unread ones): every element while two
+            # battlers have HP, since which battlers meet at a position pair depends on the swaps.
+            order_tie=jnp.broadcast_to(order_tie_live, (TIE_PAIRS[fmt.B],)),
+            sort_tie=jnp.broadcast_to(order_tie_live, (fmt.B + 1, TIE_PAIRS[fmt.B])),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -3028,6 +3037,9 @@ _LAWS = {
     "call_target_draw": _coin,
     "bide_target_draw": _coin,
     "trace_pick": _coin,
+    # CalcTurnOrder's and the sorts' RandNext() & 1 (lib.c:1405-1445), B = 4 only (D3-3, D3-4).
+    "order_tie": _coin,
+    "sort_tie": _coin,
 }
 
 

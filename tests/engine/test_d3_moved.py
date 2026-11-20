@@ -85,6 +85,12 @@ def _four_play(tables, s, acts, order, targets, outcome=None):
     return play(tables, s, acts, order, targets, outcome)
 
 
+def _forced_play(tables, s, acts, order, targets, outcome=None):
+    from tests.engine.test_d3_action_loop import play_forced
+
+    return play_forced(tables, s, acts, order, targets, outcome)
+
+
 def _hp4(s, b):
     from tests.engine.test_d3_action_loop import hp
 
@@ -123,17 +129,20 @@ def test_zoom_lens_lifts_the_threshold_only_against_a_mover(tables, names):
 def test_protect_last_fails_third_of_four_succeeds(tables, names):
     from tests.engine.d2_states import four, with_moves
 
+    # Protect's +4 priority puts its user first unless the others also use a +4 move (Detect).
     s = four(tables, names)
     for b in range(4):
-        s = with_moves(s, names, b, ["Protect" if b == 2 else "Tackle"])
+        s = with_moves(s, names, b, ["Protect" if b == 2 else "Detect"])
     for roll in (0, 1):
         o = empty_outcome(DOUBLES)
         o = o._replace(protect=o.protect.at[2].set(roll))
         _, shown = _four_play(tables, s, [0, 0, 0, 0], (0, 1, 3, 2), (1, 0, 0, 2), o)
         assert int(shown["protect_ok"][2]) == 0  # last: fails whatever the roll
-    out, shown = _four_play(tables, s, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 0, 2))
-    assert int(shown["protect_ok"][2]) == 1  # third of four, battler 3 still to act
-    assert _hp4(out, 2) == _hp4(s, 2)  # battler 3's Tackle at 2 is blocked
+    # Third of four with battler 3 (Tackle, priority 0) still to act: it succeeds and blocks it.
+    t = with_moves(s, names, 3, ["Tackle"])
+    out, shown = _four_play(tables, t, [0, 0, 0, 0], (0, 1, 2, 3), (1, 0, 0, 2))
+    assert int(shown["protect_ok"][2]) == 1
+    assert _hp4(out, 2) == _hp4(t, 2)  # battler 3's Tackle at 2 is blocked
 
 
 def test_fake_out_flinches_only_a_defender_that_has_not_moved(tables, names):
@@ -147,7 +156,9 @@ def test_fake_out_flinches_only_a_defender_that_has_not_moved(tables, names):
     o = empty_outcome(DOUBLES)
     o = o._replace(secondary=o.secondary.at[0, 0].set(1))
     early, _ = _four_play(tables, s, [0, 0, 0, 0], (0, 3, 1, 2), (3, 0, 0, 0), o)
-    late, _ = _four_play(tables, s, [0, 0, 0, 0], (3, 0, 1, 2), (3, 0, 0, 0), o)
+    # Fake Out's +3 priority goes first in a real turn, so a mover before it needs a forced order
+    # (engine only).
+    late, _ = _forced_play(tables, s, [0, 0, 0, 0], (3, 0, 1, 2), (3, 0, 0, 0), o)
     # the flinch costs battler 3 its action (it moves after the Fake Out); a mover is not flinched
     assert int(early.last_move[3]) == int(s.last_move[3])
     assert int(late.last_move[3]) == names.move("Swords Dance")
@@ -166,11 +177,12 @@ def test_roar_into_slot_three_clears_its_quick_claw_flag(tables, names):
     s = s._replace(item=s.item.at[1, 2].set(lum))  # the newcomer (party 1 slot 2)
     o = empty_outcome(DOUBLES)
     o = o._replace(roar_target=o.roar_target.at[0].set(1))
-    out, _ = _four_play(tables, s, [0, 0, 0, 0], (0, 2, 1, 3), (3, 0, 3, 0), o)
+    # Roar's -6 priority puts it last in a real turn, so the order is forced (engine only).
+    out, _ = _forced_play(tables, s, [0, 0, 0, 0], (0, 2, 1, 3), (3, 0, 3, 0), o)
     assert int(out.active[3]) == 2
     assert int(out.item[1, 2]) == 0  # knocked off: the flag went with the old Pokemon
     # control: no Roar, the flag stands and Knock Off fails
     kept = with_moves(s, names, 0, ["Tackle"])
     kept = _set_item(kept, 3, lum)
-    ctl, _ = _four_play(tables, kept, [0, 0, 0, 0], (0, 2, 1, 3), (1, 0, 3, 0))
+    ctl, _ = _forced_play(tables, kept, [0, 0, 0, 0], (0, 2, 1, 3), (1, 0, 3, 0))
     assert int(ctl.item[1, 1]) == lum

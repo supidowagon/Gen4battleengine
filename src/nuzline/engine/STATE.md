@@ -273,6 +273,12 @@ three structs has a row.
   `LoadBattlerSpeedRank`, trainer_ai.c:2081) only while a
   reader can see a holder before the redraw (`step.qc_kept`), else 0 (exact: the value
   is never read).
+- **Tie bits are never stored** (D3-3): `Outcome.order_tie` (`int8[TIE_PAIRS[B]]`, one `RandNext() & 1` per
+  position pair of `CalcTurnOrder`, `battle_controller_player.c:773-786`) and `Outcome.sort_tie`
+  (`int8[B + 1, TIE_PAIRS[B]]`, the later sorts' bits) are read only where the decomp's compare draws them
+  (`order.action_order_reads`); no `BattleState` field or scratch keeps one (a paused action keeps its
+  sort's result in `ts_order` / `ts_speed_order`, not the bits). Both have size 0 at B = 2, where
+  `speed_tie` / `end_speed_tie` are the bits.
 - **Starf Berry draw -> `starf_roll`** (E1 batch F, F-10): `BattleSystem_TriggerHeldItem`
   (`battle_lib.c:4864-4866`) and `BattleSystem_PluckBerry` (:5805-5810) draw `RandNext() % 5` until
   the stat is below +6. `Outcome.starf[side, k]` holds a draw as one value in [0, 60) (the stat
@@ -736,7 +742,7 @@ three structs has a row.
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
-| `BattleContext.battlerActionOrder` | `ts_order` | mapped |
+| `BattleContext.battlerActionOrder` | `ts_order` | mapped (written from `order.action_order`'s `int8[B]` order; the position loop's tie bits are `Outcome.order_tie`, never stored) |
 | `BattleContext.monSpeedOrder` | `war_swaps` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

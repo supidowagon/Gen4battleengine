@@ -516,7 +516,7 @@ class BattleState(NamedTuple):
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
     ts_acted: jnp.ndarray  # int8[B], the battler's action is over (Battler_MovedThisTurn)
-    # int8[B], battlerActionOrder (written from order.action_order's [2] until D6-D7)
+    # int8[B], battlerActionOrder (written from order.action_order's [B] order, D3-3)
     ts_order: jnp.ndarray
     ts_actions: jnp.ndarray  # int8[B], the turn's actions as chosen
     ts_move: jnp.ndarray  # int16[B], each battler's move fixed at selection (selected_move)
