@@ -47,6 +47,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
@@ -147,34 +148,20 @@ def falloff_power(power, cur, max_hp) -> jnp.ndarray:
     return jnp.maximum(out, 1)
 
 
-# BtlCmd_CalcWeatherBallParams (battle_script.c:6843-6872): moveType per weather; fog
-# (FIELD_CONDITION_DEEP_FOG, part of FIELD_CONDITION_WEATHER, condition.h:131-135) doubles the
-# power and sets no type (the move's own). Indexed by ids.Weather.
-WEATHER_BALL_TYPES = (
-    Type.NORMAL,  # NONE (unused: no weather leaves the table type)
-    Type.FIRE,  # SUN: WEATHER_IS_SUN
-    Type.WATER,  # RAIN: WEATHER_IS_RAIN
-    Type.ROCK,  # SANDSTORM: WEATHER_IS_SAND
-    Type.ICE,  # HAIL: WEATHER_IS_HAIL
-    Type.NORMAL,  # FOG: no WEATHER_IS_* holds (unused: the table type)
-)
-
-
 def weather_ball_params(tables, state, move) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """``(on, power, type)`` of Weather Ball (``BtlCmd_CalcWeatherBallParams``,
     battle_script.c:6843-6872): under ``NO_CLOUD_NINE`` (``weather_suppressed``) and any weather
     (FIELD_CONDITION_WEATHER, fog included) the script sets movePower = power x 2 and moveType
-    (``WEATHER_BALL_TYPES``; fog sets none); else it sets nothing, so CalcMoveDamage and the
-    chart use the move's own power and type (battle_lib.c:6673-6684, :2582-2588). ``on``: the
-    script doubled the power (B13-12)."""
+    (``field.weather_ball_type``: the last set group of rain, sand, sun, hail; fog sets none);
+    else it sets nothing, so CalcMoveDamage and the chart use the move's own power and type
+    (battle_lib.c:6673-6684, :2582-2588). ``on``: the script doubled the power (B13-12)."""
     move = _i32(move)
-    weather = _i32(state.weather)
-    on = (weather != Weather.NONE) & ~weather_suppressed(tables, state)
+    w = fcm.weather_bits(state)
+    on = fcm.any_weather(w) & ~weather_suppressed(tables, state)
     table_power = _i32(tables.move_power[move])
     table_type = _i32(tables.move_type[move])
-    kind = jnp.asarray(WEATHER_BALL_TYPES, _I32)[jnp.clip(weather, 0, len(WEATHER_BALL_TYPES) - 1)]
-    typed = on & (weather != Weather.FOG)
-    return on, jnp.where(on, table_power * 2, table_power), jnp.where(typed, kind, table_type)
+    kind = fcm.weather_ball_type(w, table_type)
+    return on, jnp.where(on, table_power * 2, table_power), jnp.where(on, kind, table_type)
 
 
 # effect_script_0268.s:5-95: HOLD_EFFECT_ARCEUS_* (generated/item_hold_effects.txt, id = line
@@ -250,6 +237,21 @@ def gift_item(state, side, gift=0) -> jnp.ndarray:
     power 0 whatever an earlier berry left there (B13-20, B13-37)."""
     gift = _i32(gift)
     return jnp.where(gift != 0, gift, held_item(state, _i32(side)))
+
+
+def flung_view(state: BattleState, atk_side, fling=0) -> BattleState:
+    """``state`` with ``atk_side``'s active Pokemon holding ``fling`` (> 0) again: the item Fling's
+    own script removed before TryMove (effect_script_0233.s:18, ``step._use_move``). CalcCrit and
+    CalcDamage ran on it (:9-10, before the removal), so the move's crit odds and
+    ``BattleSystem_CalcMoveDamage`` (the power items, Choice Band, Life Orb, the Metronome item)
+    read this view, through ``Battler_HeldItem`` (Klutz and Embargo hide it as for any held item);
+    ApplyTypeChart (Expert Belt, battle_lib.c:2577, :2663), the accuracy check and everything after
+    read the real state (E3-B2-1). ``fling`` 0 returns ``state``."""
+    fmt = format_of(state)
+    side = _i32(atk_side)
+    row, slot = party(fmt, side), state.active[side]
+    item = jnp.where(_i32(fling) != 0, _i32(fling), _i32(state.item[row, slot]))
+    return state._replace(item=state.item.at[row, slot].set(item.astype(state.item.dtype)))
 
 
 def natural_gift_params(tables, item) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -390,7 +392,7 @@ def ignorable(state: BattleState, atk_side, def_side, slot=None) -> jnp.ndarray:
         # 3098, G-67) and for an ingrained battler (:3100-3103). Only the active battler's: a
         # party slot being read is a switch action's newcomer (the laws), which carries no Ingrain
         # (only Baton Pass keeps it).
-        rooted = ((state.ingrain[def_side] != 0) | (state.gravity != 0)) & (
+        rooted = ((state.ingrain[def_side] != 0) | fcm.gravity_on(state)) & (
             ability == AbilityId.LEVITATE
         )
         ability = jnp.where(rooted, AbilityId.NONE, ability)
@@ -552,6 +554,7 @@ def wonder_guarded(
 
 CHART_IDENTIFIED = 1  # ``chart_entry`` flag: skip the Ghost immunities (Foresight, Scrappy)
 CHART_GROUNDED = 2  # ``chart_entry`` flag: skip the Flying immunity (Ingrain)
+CHART_EYED = 4  # ``chart_entry`` flag: skip the Dark immunity (Miracle Eye, E3-B2-10)
 
 
 def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.ndarray:
@@ -560,14 +563,16 @@ def identified(tables: Tables, state: BattleState, atk_side, def_side) -> jnp.nd
     Ghost immunities (battle_lib.c:2611-2615), for a Foresight-identified defender or an
     attacker with Scrappy (``Battler_Ability``); ``CHART_GROUNDED`` when ``BasicTypeMulApplies``
     (:2534-2537) skips the rows of an immune Flying defender for an ingrained one or one holding
-    an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67). Only
+    an Iron Ball (``iron_ball``, G-56) or under Gravity (:2545-2549, G-67); ``CHART_EYED`` when
+    it skips the immune Dark rows of a defender under Miracle Eye (:2551-2555, E3-B2-10). Only
     ``ApplyTypeChart`` walks the chart this way (:2626, :2636)."""
     scrappy = battler_ability(state, atk_side) == AbilityId.SCRAPPY
     seen = ((state.foresight[def_side] != 0) | scrappy).astype(_I32) * CHART_IDENTIFIED
     rooted = (
-        (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | (state.gravity != 0)
+        (state.ingrain[def_side] != 0) | iron_ball(tables, state, def_side) | fcm.gravity_on(state)
     )
-    return seen | rooted.astype(_I32) * CHART_GROUNDED
+    eyed = state.miracle_eye[def_side] != 0
+    return seen | rooted.astype(_I32) * CHART_GROUNDED | eyed.astype(_I32) * CHART_EYED
 
 
 def trace_copy(
@@ -640,7 +645,7 @@ def grounded(
     magnet = state.magnet_rise[side] != 0 if magnet is None else jnp.asarray(magnet)
     levitate = (battler_ability(state, side, slot) == AbilityId.LEVITATE) & ~ingrained
     airborne = levitate | jnp.any(state.types[party(fmt, side), slot] == Type.FLYING) | magnet
-    return (state.gravity != 0) | iron_ball(tables, state, side, slot) | ~airborne
+    return fcm.gravity_on(state) | iron_ball(tables, state, side, slot) | ~airborne
 
 
 def spikes_loss(
@@ -695,12 +700,11 @@ def entry_ability(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
 
 
 def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.ndarray:
-    """``int32``: the weather once ``side``'s party ``slot`` has switched in
-    (``hooks.on_switch_in``): its entry hazards (``hazards_loss``) leave
-    it HP, and its weather ability, its own or the one it traces from the foe's active
-    battler (``entry_ability``; ``foe``: the other side), sets that weather for good; else
-    ``state.weather``. For the turn-start laws of the foe's move (``outcome``): a switch goes
-    first."""
+    """``int32``: the weather bits (``field.weather_bits``) once ``side``'s party ``slot`` has
+    switched in (``hooks.on_switch_in``): its entry hazards (``hazards_loss``) leave it HP, and
+    its weather ability, its own or the one it traces from the foe's active battler
+    (``entry_ability``; ``foe``: the other side), acts (``field.ability_bits``); else the
+    field's. For the turn-start laws of the foe's move (``outcome``): a switch goes first."""
     fmt = format_of(state)
     # A switch action's newcomer: no Ingrain, no Magnet Rise (only Baton Pass keeps them).
     alive = (
@@ -709,7 +713,8 @@ def entry_weather(tables: Tables, state: BattleState, side, slot, foe) -> jnp.nd
         > 0
     )
     weather = ability_weather(entry_ability(tables, state, side, slot, foe))
-    return jnp.where(alive & (weather != Weather.NONE), weather, _i32(state.weather))
+    w = fcm.weather_bits(state)
+    return jnp.where(alive, fcm.ability_bits(w, weather), w)
 
 
 # effect_script_0048.s, _0269.s (RECOIL: Take Down, Double-Edge, ...): a Reckless attacker
@@ -978,10 +983,12 @@ def rollout_multiplier(state: BattleState, atk_side) -> jnp.ndarray:
 
 
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) that the AI damage models;
-# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003, monSpeedValues:
-# the last CompareBattlerSpeed's speeds, battle_lib.c:1372-1373) is refused
-# (ai.commands.CALC_DAMAGE_MOVES; B13-27).
+# decomp move ids (line - 1 of generated/moves.txt). Gyro Ball's (:2995-3003) reads
+# monSpeedValues, the last CompareBattlerSpeed's speeds (battle_lib.c:1372-1373):
+# ``BattleState.speed_rec``, or the current speeds once the decision has compared them
+# (``ai.commands.AiContext.written``), E3-B2-15 (B13-27).
 AI_RETURN, AI_FRUSTRATION, AI_LOW_KICK, AI_GRASS_KNOT = 216, 218, 67, 447
+AI_GYRO_BALL = 360
 AI_HIDDEN_POWER = 237
 # E2 batch 13: Natural Gift's and Judgment's cases (:2885-2971) and TrainerAI_MoveType's
 # (:3132-3207), and TrainerAI_MoveType's Weather Ball case (:3222-3240), B13-25..26.
@@ -1024,7 +1031,10 @@ def ai_case_power(
     the player again as defender and the AI attacker's IVs. Natural Gift (:2885-2895) the
     ``naturalGiftPower`` of ``item``, the ``heldItem`` argument (default the attacker's own
     ``battleMons`` item; ``IfPartyMemberDealsMoreDamage`` passes the member's, :2156-2165);
-    Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
+    Gyro Ball (:2995-3003) ``1 + 25 * monSpeedValues[defender] / monSpeedValues[attacker]``,
+    at most 150 (``BattleState.speed_rec`` of ``def_side`` and ``atk_side``: the caller puts the
+    speeds the estimate reads there, ``ai.commands.seen_state``; a zero divisor is refused by
+    ``ai.policy._refused``). Judgment's case leaves 0 (:2897-2899). Both cases need ``ability != ABILITY_KLUTZ &&
     embargoTurns == 0`` (:2886, :2898): the default ``item`` is the attacker's
     ``state.held_item`` (none under either, which reads as the cases' power 0 and
     TYPE_NORMAL), and a caller passing another item (a party member's) passes 0 for a Klutz
@@ -1041,6 +1051,7 @@ def ai_case_power(
     ivs = s.ivs[party(fmt, atk_side), s.active[atk_side]] if ivs is None else ivs
     hidden = hidden_power(ivs)[1]
     magnitude = AI_MAGNITUDE_POWER[jnp.clip(_i32(draw), 0, 6)]
+    gyro = gyro_ball_power(s.speed_rec[atk_side], s.speed_rec[def_side])
     return jnp.select(
         [
             move == AI_RETURN,
@@ -1049,8 +1060,17 @@ def ai_case_power(
             move == AI_HIDDEN_POWER,
             move == AI_MAGNITUDE,
             move == AI_NATURAL_GIFT,
+            move == AI_GYRO_BALL,
         ],
-        [friendship * 10 // 25, (255 - friendship) * 10 // 25, by_weight, hidden, magnitude, gift],
+        [
+            friendship * 10 // 25,
+            (255 - friendship) * 10 // 25,
+            by_weight,
+            hidden,
+            magnitude,
+            gift,
+            gyro,
+        ],
         0,
     )
 
@@ -1090,8 +1110,9 @@ def ai_weather_ball_typed(tables: Tables, s: BattleState) -> jnp.ndarray:
     BattleSystem pointer in AICmd_IfMoveEffectivenessEquals at 0x0222111A), a heap address
     whose low byte ApplyTypeChart reads as the type (battle_lib.c:2564, u8 moveType). The
     policy refuses that state (``ai.commands.MOVE_TYPE_MOVES``, B13-26)."""
-    weather = _i32(s.weather)
-    return (weather != Weather.NONE) & (weather != Weather.FOG) & ~weather_suppressed(tables, s)
+    w = fcm.weather_bits(s)
+    typed = fcm.rain(w) | fcm.sand(w) | fcm.sun(w) | fcm.hail(w)
+    return typed & ~weather_suppressed(tables, s)
 
 
 def ai_move_type(tables: Tables, s: BattleState, side, move, *, ivs=None) -> jnp.ndarray:
@@ -1175,14 +1196,16 @@ def chart_entry(tables: Tables, move_type, def_type, identified=False) -> jnp.nd
     """``int32`` chart entry in tenths. ``identified``: a bool (Foresight) or ``identified``'s
     flags. The rows after the 0xFE separator (the Ghost immunities) are skipped for an
     identified defender (Foresight, battle_lib.c:2611), and an immune row of a Flying defender
-    for a grounded one (Ingrain, :2534-2537), i.e. count as neutral."""
+    for a grounded one (Ingrain, :2534-2537), and an immune row of a Dark defender for one under
+    Miracle Eye (:2551-2555), i.e. count as neutral."""
     flags = _i32(identified)
     mul = _i32(tables.type_chart[move_type, def_type])
     ghost = ((flags & CHART_IDENTIFIED) != 0) & (
         tables.type_chart_foresight[move_type, def_type] != 0
     )
     flying = ((flags & CHART_GROUNDED) != 0) & (_i32(def_type) == Type.FLYING) & (mul == 0)
-    return jnp.where(ghost | flying, 10, mul)
+    dark = ((flags & CHART_EYED) != 0) & (_i32(def_type) == Type.DARK) & (mul == 0)
+    return jnp.where(ghost | flying | dark, 10, mul)
 
 
 def effectiveness(tables: Tables, move_type, def_types, identified=False) -> jnp.ndarray:
@@ -1577,14 +1600,6 @@ def _pre_random(
     drawn = (effect == EffectId.PRESENT) & (present >= 0) & (present < PRESENT_HEAL) & (not ai)
     power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
-    power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
-    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul (Charge
-    # and Helping Hand, between them, are unsupported), never Struggle (the self-hit's move).
-    technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
-        power <= 60
-    )
-    technician = technician & (move != MOVE_STRUGGLE)
-    power = jnp.where(technician, power * 15 // 10, power)
     # :6682 moveType = MOVE_DATA(move).type, or Hidden Power's IV type (battle_script.c:6028);
     # the AI passes its case's type (trainer_ai.c:3074-3097; ai_case_type): Hidden Power's IV
     # type, Natural Gift's and Judgment's item types, else 0 (the table's).
@@ -1593,6 +1608,19 @@ def _pre_random(
         if ai
         else move_type_of(tables, s, atk_side, move, gift)
     )
+    power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
+    # :6690-6692 MOVE_EFFECT_CHARGE on the attacker doubles an Electric move's power (moveType as
+    # above; Normalize is unsupported), after powerMul and before Helping Hand (a doubles flag) and
+    # Technician; the hit does not consume it (E3-B2-8).
+    charged = (s.charged_turns[atk_side] != 0) & (move_type == Type.ELECTRIC)
+    power = jnp.where(charged, power * 2, power)
+    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul and Charge,
+    # never Struggle (the self-hit's move).
+    technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
+        power <= 60
+    )
+    technician = technician & (move != MOVE_STRUGGLE)
+    power = jnp.where(technician, power * 15 // 10, power)
     category = _i32(tables.move_category[move])  # :6704 moveClass
     level = _i32(s.level[party(fmt, atk_side), a_slot])
     # :6653-6654 attackerParams / defenderParams.ability: Battler_Ability.
@@ -1690,20 +1718,22 @@ def _pre_random(
 
     # :6921 NO_CLOUD_NINE gates the weather modifiers here and at :7046 (the self-hit
     # passes no field conditions).
-    weather = jnp.where(weather_suppressed(tables, s), Weather.NONE, s.weather)
+    # The mask's weather bits (field.weather_bits): each test below is one WEATHER_IS_*, so with
+    # several groups set each modifier applies in the decomp's order.
+    w = jnp.where(weather_suppressed(tables, s), 0, fcm.weather_bits(s))
     # :6922-6924 Solar Power (attackerParams.ability) in sun: Sp. Atk x15/10 (the self-hit
     # passes no field conditions).
-    solar = (weather == Weather.SUN) & (a_ability == AbilityId.SOLAR_POWER) & (not self_hit)
+    solar = fcm.sun(w) & (a_ability == AbilityId.SOLAR_POWER) & (not self_hit)
     sp_attack = jnp.where(solar, sp_attack * 15 // 10, sp_attack)
     # :6926 sandstorm: a Rock-type defender's SpD x1.5.
     rock = jnp.any(d_types == Type.ROCK)
-    sand = (weather == Weather.SANDSTORM) & rock & (not self_hit)
+    sand = fcm.sand(w) & rock & (not self_hit)
     sp_defense = jnp.where(sand, sp_defense * 15 // 10, sp_defense)
     # :6930-6941 Flower Gift in sun: COUNT_ALIVE_BATTLERS_OUR_SIDE (battle_lib.c:2886-2893, a
     # living battler of the side with the ability, Battler_Ability): the attacker's side's makes
     # attackStat x15/10, the defender's spDefenseStat x15/10 unless the attacker has Mold Breaker.
     # In singles each side's only battler is its active one (the self-hit passes no weather).
-    sunny = (weather == Weather.SUN) & (not self_hit)
+    sunny = fcm.sun(w) & (not self_hit)
     a_gift = (a_ability == AbilityId.FLOWER_GIFT) & (a_hp > 0)
     d_gift = (
         (_i32(battler_ability(s, def_side, d_slot)) == AbilityId.FLOWER_GIFT)
@@ -1743,21 +1773,17 @@ def _pre_random(
     screen = screen & (not self_hit) & (effect != EffectId.BRICK_BREAK)  # :6984, :7025
     damage = jnp.where(screen & ~crit, damage // 2, damage)
 
-    # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing.
-    rain = (weather == Weather.RAIN) & (not self_hit)
-    sun = (weather == Weather.SUN) & (not self_hit)
+    # :7047 rain: Fire x0.5, Water x1.5; :7062 sun: Fire x1.5, Water x0.5. Fog: nothing. Both
+    # rain and sun set: rain's integer step, then sun's (FCM 3.2).
+    rain = fcm.rain(w) & (not self_hit)
+    sun = fcm.sun(w) & (not self_hit)
     fire, water = move_type == Type.FIRE, move_type == Type.WATER
     damage = jnp.where(rain & fire, damage // 2, damage)
     damage = jnp.where(rain & water, damage * 15 // 10, damage)
     # :7058-7060 SolarBeam (by move id) under FIELD_CONDITION_SOLAR_DOWN (rain, sandstorm, hail,
     # fog: condition.h:136-139) is halved, between rain and sun (B10-13).
-    solar_down = (
-        (weather == Weather.RAIN)
-        | (weather == Weather.SANDSTORM)
-        | (weather == Weather.HAIL)
-        | (weather == Weather.FOG)
-    )
-    damage = jnp.where(solar_down & (move == MOVE_SOLAR_BEAM) & (not self_hit), damage // 2, damage)
+    solar_down = fcm.solar_down(w) & (move == MOVE_SOLAR_BEAM) & (not self_hit)
+    damage = jnp.where(solar_down, damage // 2, damage)
     damage = jnp.where(sun & fire, damage * 15 // 10, damage)
     damage = jnp.where(sun & water, damage // 2, damage)
 
@@ -1939,6 +1965,7 @@ def damage_for_roll(
     hit=0,
     in_power=0,
     gift=0,
+    fling=0,
     def_side=None,
 ) -> jnp.ndarray:
     """``int32``: ``damage_table(...)[roll]``, the single value the engine uses.
@@ -1948,10 +1975,14 @@ def damage_for_roll(
     ``CalcDamage``. ``wonder_guard``: as ``_finish``'s. ``hit`` (0-based): Triple Kick's
     power, Beat Up's party member (``beat_up_damage``, which replaces the whole formula).
     ``in_power``: ``_pre_random``'s (Gyro Ball, Trump Card at the action, B13-14, B13-15);
-    ``gift``: its Natural Gift berry removed this action (B13-37). ``def_side``: the defender's
-    battler (default the other side's active Pokemon; ``atk_side`` itself for a lock reading its
-    stored target, singles follow-up (ii))."""
+    ``gift``: its Natural Gift berry removed this action (B13-37). ``fling`` (> 0): the item Fling's
+    script removed this action (``flung_view``): CalcMoveDamage and the item boosts after it read
+    the attacker as still holding it, ApplyTypeChart (``_finish``) as holding nothing. ``def_side``:
+    the defender's battler (default the other side's active Pokemon; ``atk_side`` itself for a lock
+    reading its stored target, singles follow-up (ii))."""
     def_side = _foe(_i32(atk_side)) if def_side is None else _i32(def_side)
+    real = state
+    state = flung_view(state, atk_side, fling)
     damage, move_type, category, power = _pre_random(
         tables,
         state,
@@ -1970,6 +2001,7 @@ def damage_for_roll(
     damage = life_orb(tables, state, atk_side, damage)  # battle_script.c:1346
     damage = metronome_boost(tables, state, atk_side, damage)  # :1350-1352 (G-60)
     damage = me_first_boost(state, atk_side, damage)  # :1354-1364 (E3-2-3)
+    state = real  # ApplyTypeChart runs in TryMove, after Fling's RemoveItem (E3-B2-1)
     rolled = _finish(
         tables, state, atk_side, move, damage, move_type, category, power, _i32(roll),
         wonder_guard=wonder_guard, def_side=def_side,
@@ -2053,8 +2085,9 @@ def ai_damage_for_roll(
     # The fixed cases (ai_case_fixed): an immunity 0 (:3106), else the variance (:3109).
     fixed, amount = ai_case_fixed(state, atk_side, move, draw)
     d_types = state.types[party(fmt, def_side), state.active[def_side]]
-    identified = state.foresight[def_side] != 0
-    immune = effectiveness(tables, move_type, d_types, identified) == 0
+    # ``ApplyTypeChart``'s walk flags: Foresight, Scrappy, Ingrain / Iron Ball / Gravity, Miracle Eye.
+    seen = identified(tables, state, atk_side, def_side)
+    immune = effectiveness(tables, move_type, d_types, seen) == 0
     # :3106 MOVE_STATUS_IMMUNE includes MOVE_STATUS_WONDER_GUARD (ruling G-18).
     immune = immune | wonder_guarded(tables, state, atk_side, move, move_type, def_side)
     fixed_damage_ = jnp.where(immune, 0, divide(amount * (85 + _i32(roll)), 100))
@@ -2071,3 +2104,81 @@ def confusion_damage(tables: Tables, state: BattleState, side, roll) -> jnp.ndar
         tables, state, side, MOVE_STRUGGLE, False, self_hit=True, def_side=side
     )
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
+
+
+# --- Conversion 2 (BtlCmd_TryConversion2, battle_script.c:4765-4820; E3-B2-3) -----------------
+#
+# BattleSystem_TypeMatchup (battle_lib.c:2994-3007) with an index of 0xFFFF draws
+# ``BattleSystem_RandNext() % NELEMS(sTypeMatchupMultipliers)`` (a u16 modulo 112 rows,
+# battle_lib.c:2399-2517). TryConversion2 repeats it up to 1000 times, taking the first row whose
+# attacking type is the recorded move's, whose multiplier is at most TYPE_MULTI_NOT_VERY_EFF (0 or
+# 5) and whose defending type is neither of the user's; then, with none after 1000 tries, scans the
+# table from row 0 (the call at index 112 draws once more and ends the scan).
+# By the project's ``% n`` convention (``RandNext() % n`` uniform, E1 F-10, E2 B12-9) every try
+# picks each row alike, so the loop's pick is uniform over the eligible rows (one per defending
+# type): ``CONV2_DRAWS`` values read modulo their count (``conv2_pick``). The exact u16 law differs
+# by the 586 / 585 row weights (65536 = 112 * 585 + 16) and by the linear scan's mass
+# ``(1 - W / 65536) ** 1000`` (below 2e-8 with two eligible rows; one row is picked either way),
+# review b2 #3.
+CONV2_ROWS = (
+    112  # NELEMS(sTypeMatchupMultipliers): 108 rows, the 0xFE separator, 2 Foresight rows, 0xFF
+)
+CONV2_RAND = 65536  # BattleSystem_RandNext() is a u16
+CONV2_TRIES = 1000
+CONV2_NOT_VERY_EFFECTIVE = 5  # TYPE_MULTI_NOT_VERY_EFF (include/constants/battle.h:145)
+NUM_TYPES = 18  # the axes of tables.type_chart (Type.NORMAL .. Type.DARK, MYSTERY included)
+# lcm(1..NUM_TYPES): one value in [0, CONV2_DRAWS) read modulo any count of eligible types is
+# exactly uniform (as ids.STARF_DRAWS for the Starf Berry's five stats).
+CONV2_DRAWS = 12252240
+
+
+def conv2_pairs(tables: Tables) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(weight, row)`` ``int32[T, T]`` by (attacking type, defending type): ``row`` the pair's
+    decomp row of ``sTypeMatchupMultipliers`` (``type_chart_order`` skips the 0xFE separator at
+    row 108, so the Foresight rows after it, ``type_chart_foresight``, sit one row later), and
+    ``weight`` how many u16 values ``% 112`` picks it: ``65536 = 112 * 585 + 16``, so rows 0-15 weigh
+    586 and the others 585; 0 for a pair that is not listed or whose multiplier is above
+    TYPE_MULTI_NOT_VERY_EFF (neutral and super effective rows never qualify)."""
+    order = _i32(tables.type_chart_order)
+    row = order + _i32(tables.type_chart_foresight)
+    listed = (order >= 0) & (_i32(tables.type_chart) <= CONV2_NOT_VERY_EFFECTIVE)
+    base = CONV2_RAND // CONV2_ROWS
+    weight = jnp.where(listed, base + (row < CONV2_RAND % CONV2_ROWS), 0)
+    return _i32(weight), jnp.where(listed, row, CONV2_ROWS)
+
+
+def conv2_eligible(tables: Tables, state: BattleState, side, atk_type) -> jnp.ndarray:
+    """``bool[T]``: the defending types ``MON_IS_NOT_TYPE(attacker, defType)`` accepts
+    (battle_script.c:4789-4796) among the rows whose attacking type is ``atk_type``: not the first
+    or the second type of ``side``'s battler (``BattleMon`` types, ``state.types``)."""
+    fmt = format_of(state)
+    weight, _ = conv2_pairs(tables)
+    own = state.types[party(fmt, side), state.active[side]]
+    kinds = jnp.arange(NUM_TYPES, dtype=jnp.int32)
+    return (weight[_i32(atk_type)] > 0) & (kinds != _i32(own[0])) & (kinds != _i32(own[1]))
+
+
+def conv2_pick(tables: Tables, state: BattleState, side, atk_type, value) -> jnp.ndarray:
+    """``int32``: the defending type ``BtlCmd_TryConversion2`` picks for ``side``'s battler against
+    ``atk_type`` (battle_script.c:4783-4817), uniform over the eligible types by the ``% n``
+    convention: the eligible type of rank ``value % count`` in type order, ``value`` in
+    ``[0, CONV2_DRAWS)``. Integer arithmetic only, so exact. 0 when no row is eligible (the move
+    fails). The enumeration's law is ``enumerate._conv2``."""
+    elig = conv2_eligible(tables, state, side, atk_type)
+    count = jnp.sum(elig.astype(jnp.int32))
+    rank = jnp.cumsum(elig.astype(jnp.int32)) - 1
+    pick = elig & (rank == _i32(value) % jnp.maximum(count, 1))
+    return jnp.sum(jnp.where(pick, jnp.arange(NUM_TYPES, dtype=jnp.int32), 0)).astype(jnp.int32)
+
+
+def conv2_choice(tables: Tables, state: BattleState, side, atk_type, draw):
+    """``(ok, type)``: the type ``BtlCmd_TryConversion2`` gives ``side``'s battler, ``draw`` being
+    ``Outcome.conv2[side, atk_type]`` (the picked defending type), and whether any row was
+    eligible. A ``draw`` that is not eligible in this state (an outcome built for another state)
+    takes the linear scan's first eligible row."""
+    _, row = conv2_pairs(tables)
+    elig = conv2_eligible(tables, state, side, atk_type)
+    first = jnp.argmin(jnp.where(elig, row[_i32(atk_type)], CONV2_ROWS + 1))
+    picked = _i32(draw)
+    kind = jnp.where(elig[jnp.clip(picked, 0, NUM_TYPES - 1)], picked, first)
+    return jnp.any(elig), _i32(kind)

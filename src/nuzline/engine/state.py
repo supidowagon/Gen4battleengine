@@ -3,7 +3,9 @@
 ``BattleState`` is unbatched: the party axis (0 the player, 1 the opponent) and the battler axis
 (singles: the same two) lead the arrays, then the slot axis in party order. Every field is ``int8``/``int16`` storage (spec §4.2), except ``exp``:
 ``int32``, because the level-100 experience of most growth rates exceeds ``int16`` (K3d-exp
-ruling D1). The field list is ticked off against the decomp's battle structs in
+ruling D1), and ``field_mask`` / ``weather_turns`` (``int32``: fieldConditionsMask uses bits 0-18;
+weatherTurns is a ``u32`` whose ``--x == 0`` test int32 reproduces, FCM 4.2). The field list is
+ticked off against the decomp's battle structs in
 ``STATE.md``.
 
 Encodings:
@@ -22,7 +24,13 @@ Encodings:
   ``max_hp``. ``ivs`` are in ``ids.Stat`` order.
 * ``stages[side, ids.Stat]`` are the active Pokemon's stat stages, 0 = neutral
   (the decomp stores 6 = neutral); index 0 (HP) is unused.
-* ``weather`` is an ``ids.Weather``; ``weather_timer == 0`` means permanent.
+* ``field_mask`` is ``BattleContext.fieldConditionsMask`` bit for bit (``ids.FieldCondition``,
+  condition.h:110-149) and ``weather_turns`` is ``FieldConditions.weatherTurns``
+  (battle_context.h:29); every writer and reader goes through ``engine.field`` (FCM steps 1-3):
+  the weather bits 0-7 and deep fog 15, the field's Uproar bits 8-11 (battler ``b``'s bit
+  ``8 + b``; ``uproar[b]`` stays the battler's VOLATILE_CONDITION_UPROAR count), the Gravity
+  counter bits 12-14 and the Trick Room counter bits 16-18. ``weather_turns`` is stale outside a
+  TEMP-only weather (only the weather moves and the countdown write it).
 * ``winner``: 0 none, 1 player lost (no player Pokemon with HP left, a
   double KO included), 2 player won.
 * ``turn`` is the decomp's ``totalTurns`` while a turn is played and at each decision;
@@ -46,6 +54,27 @@ Encodings:
 * ``destiny_bond`` is the active battler's ``VOLATILE_CONDITION_DESTINY_BOND``
   (subscript_destiny_bond.s:9): cleared when its next move attempt starts
   (``CHECK_STATUS_START``, bcp.c:2425) and with the other volatiles (``step._VOLATILE``).
+* E3-B2-9 (Grudge). ``grudge`` is the active battler's ``MOVE_EFFECT_GRUDGE`` bit of
+  ``moveEffectsMask`` (moves.h; set by effect_script_0194.s:6): cleared when its next move attempt
+  starts (``CHECK_STATUS_START``, bcp.c:2424-2427), and with the other volatiles when it leaves or
+  faints (battle_lib.c:2071, :2166), not Baton-passed (moves.h:46-48). ``step`` reads it where a
+  battler that holds it fainted to a living attacker of the other side (``BtlCmd_TryGrudge``,
+  battle_script.c:6743-6763) and zeroes that attacker's selected move slot's PP.
+* E3-B2-10 (Miracle Eye). ``miracle_eye`` is the active battler's ``MOVE_EFFECT_MIRACLE_EYE`` bit of
+  ``moveEffectsMask`` (moves.h:30; set on the defender by subscript_miracle_eye.s:5): per battler,
+  cleared when it leaves or faints (battle_lib.c:2071, :2166), not Baton-passed (moves.h:46-48), no
+  end-of-turn count. It identifies the battler (``MON_IS_IDENTIFIED``, common.h:48-49: a positive
+  evasion stage counts as 0, bcp.c:2888-2890) and makes ``BasicTypeMulApplies`` skip its Dark
+  immunity rows (battle_lib.c:2551-2555), for every attacker of it.
+* E3-B2-11 (Last Resort). ``last_resort_count`` / ``last_resort_moves`` are the active battler's
+  ``MoveEffectsData.lastResortCount`` (3 bits, battle_mon.h:27, 0-4) and ``lastResortMoves[4]``
+  (battle_mon.h:50): the move ids (not slots: Mimic and Struggle make id and slot differ) it has
+  used since it entered, the first ``count`` of them valid. ``step._use_move`` writes them where
+  BeforeMove ends without ``MOVE_STATUS_NO_EFFECTS`` (``BattleSystem_UpdateLastResort``,
+  battle_lib.c:3443-3459, called at bcp.c:3218); a Mimic or Sketch that copies Last Resort and a
+  Transform zero the count (battle_script.c:4514-4516, :4876-4878, :5340). Per battler, cleared
+  with the other volatiles at a switch or faint (the whole ``moveEffectsData``, battle_lib.c:
+  2100-2104, :2166), not Baton-passed (:2107-2115).
 * ``uproar`` is the active battler's ``VOLATILE_CONDITION_UPROAR`` count (subscript_uproar.s:
   ``Random 3, 3``, 3-6; condition.h:66, :81), decremented by the end-of-turn check
   (``step._uproar_check``, bcp.c:1505-1541) and cleared with the other volatiles. The battler's
@@ -75,6 +104,15 @@ Encodings:
   battler's ``MoveEffectsData.lockOnTarget`` (battle_mon.h:23), the battler that locked on,
   stored as ``1 + battler``, 0 = none
   (doubles convention 3, docs/doubles-state-design.md section 5).
+* ``nightmare`` (G-31) is the battler's ``VOLATILE_CONDITION_NIGHTMARE`` (condition.h:59), 0/1:
+  set by Nightmare on a sleeping defender (subscript_nightmare_start.s:9); the turn end costs a
+  sleeper ``Divide(maxHP, 4)`` and clears it on a battler not asleep (bcp.c:1436-1448); every
+  wake-up (subscript_wake_up.s:20), a Chesto / Lum cure (subscript_held_item_slp_restore.s:13,
+  _multi_restore.s:13), Shed Skin / Hydration (subscript_ability_restore_status.s:6), Insomnia /
+  Vital Spirit (subscript_ability_forbids_status.s:18), Heal Bell / Aromatherapy
+  (battle_script.c:5039-5070) and a bag sleep cure (battle_system.c:469-472) clear it; a
+  volatile, not Baton-passed (condition.h:72-76), not copied by Transform (battle_mon.h:115
+  lies past ``ability``, battle_script.c:5346-5348).
 * ``ai_item_known`` is ``aiContext.battlerHeldItems`` of the player's party slot: the held item
   a battle message named (``BattleAI_SetHeldItem``, battle_script.c:11726-11745, :12119-12122;
   ``effects.reveal_item``), 0 when none. It is cleared when the Pokemon loses its item (every
@@ -189,9 +227,16 @@ Encodings:
 * ``terrain`` is ``BattleSystem.terrain``: the battle terrain, a decomp ``TERRAIN_*`` id
   (``nuzline.data.trainer.TERRAIN_NAMES``) fixed when the battle starts
   (``SetBackgroundAndTerrain``, field_battle_data_transfer.c:496-505) and never written in
-  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's maps give several terrains or none
+  battle; ``TERRAIN_UNKNOWN`` (-1) when the trainer's start tiles give several terrains and
+  the run names none (``cli.fight_terrain``, ledger G-18) or no map places it
   (``Trainer.terrain``, tools/terrain.py). Only Nature Power, Secret Power and Camouflage
   read it (battle_script.c:8007, :8040, :8067), and coverage refuses them unless it is known.
+* ``camouflage`` (G-20) is the battler's MOVE_EFFECT_CAMOUFLAGE (moves.h:36), 0/1: set only by a
+  Camouflage that changed the types (effect_script_0213.s:6, after ``TryCamouflage _016``, whose
+  failure skips it), never copied by Transform (BtlCmd_Transform copies the BattleMon up to
+  ``ability``, battle_script.c:5346-5348; the mask lies after it), cleared by a switch or a faint
+  and not Baton-passed (MOVE_EFFECT_BATON_PASSED, moves.h:46-48, omits it). Read by the AI's
+  Basic_CheckCamouflage (script.s:1021-1024) and Roar's Ingrain test (``effects.ingrain_anchors``).
 * ``qc_roll`` is ``BattleContext.speedRand[side] % (100 / QUICK_CLAW_PARAM) == 0`` (1 = a
   Quick Claw would activate), the per-battler draw the next turn's order reads
   (``order.action_order``). ``speedRand`` belongs to the battler slot, not to a Pokemon: it
@@ -201,6 +246,17 @@ Encodings:
   side's replacement can send one in); else 0. Hidden from the player. At a root it is a
   chance node (``step.root_belief``, ``step.sample_root``), as the battle-start draw
   (``BattleContext_InitCounters``, battle_lib.c:2024) is.
+* ``speed_rec`` is ``BattleContext.monSpeedValues[battler]`` (E3-B2-15), per battler: the speed
+  ``BattleSystem_CompareBattlerSpeed`` last computed for it (battle_lib.c:1372-1373, ``order.
+  effective_speed``), which only ``BtlCmd_CalcGyroBallPower`` (battle_script.c:7123-7131) and
+  ``TrainerAI_CalcDamage``'s Gyro Ball case (trainer_ai.c:2995-3003) read. It is not a volatile
+  (a replacement's slot keeps its predecessor's value) and is written only by the sorts that
+  compare two battlers alive: the battle start after the switch-in effects (bcp.c:263,
+  ``hooks.battle_start``; ``step.resolve_war`` for a weather war the start left open), before
+  each action and after the last one of a turn (BranchActions, bcp.c:888, ``step.
+  _execute_actions``). The AI's own compares (``IfSpeedCompare*``, ``LoadBattlerSpeedRank``,
+  trainer_ai.c:1109, :1121, :2081) write it too, but only inside one decision, which no other
+  decision reads (the next turn's W3 comes first): ``ai.commands.AiContext.written``.
 * ``war_swaps`` (E1 Gardenia batch, ruling G-26): two newcomers that run the weather state
   together (the leads at the battle start, a double KO's replacements) with switch-in weather
   abilities setting different weathers leave the slower one's weather in ``monSpeedOrder``
@@ -225,8 +281,10 @@ Encodings:
   ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
   bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
-  scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
-  them (later K3d-exp tasks).
+  scan) are 0 until the payout and the learn resolve set them. E3-B2-21: a payout's learn prompt
+  pauses the turn
+  (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
+  ``ts_eot`` and ``ts_qc``; all 0 between turns (``STATE.md`` "Mid-turn learn prompts").
 * E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
   ``MoveEffectsData.embargoTurns`` (battle_mon.h:30, 3 bits), 0 = none. Its
   ``MOVE_EFFECT_EMBARGO`` bit (moves.h:34) is set and cleared with it (subscript_embargo_start.s:
@@ -250,6 +308,12 @@ Encodings:
   left open, ``starf_open`` 1, until the root draws it (``step.root_belief``,
   ``step.sample_root``; ``hooks.resolve_starf``; a ``step`` given an open state draws it first
   from ``Outcome.starf[:, 0]``); else 0.
+  F-O3 (G-27): every eat draws its own, so ``starf_roll`` is the turn's queue ``int8[B, 3]``
+  (``Outcome.starf[:, ids.STARF_QUEUE]``: columns 0, 2, 3) and ``starf_taken`` ``int8[B]`` counts
+  the draws the battler's eats used this turn (``hooks._pinch_effects`` adds one where a draw is
+  made, ``resolve_starf``'s open berry takes entry 0); an eat reads entry
+  ``min(starf_taken, 2)`` (``hooks.starf_stat``). ``starf_taken`` is 0 between turns and after
+  ``step.replace`` (a kept replacement draw sits in entry 0, the rest 0).
 * E3-2-6a (Gastro Acid 1/2). ``ability_suppressed`` is the battler's
   ``MOVE_EFFECT_ABILITY_SUPPRESSED`` bit (moves.h:29), 0/1: a volatile (switch-out clears the
   mask, battle_lib.c:2071) that Baton Pass keeps (moves.h:46-48, battle_lib.c:2076).
@@ -258,6 +322,12 @@ Encodings:
   makes through ``Battler_Ability``, ``Battler_IgnorableAbility``, ``BattleSystem_CountAbility``
   or ``BtlCmd_CheckAbility`` goes through one of them; a raw ``BattleMon.ability`` read stays on
   ``ability`` with a comment naming its decomp line.
+* E3-B2-8 (Charge). ``charged_turns`` is the active battler's ``MoveEffectsData.chargedTurns``
+  (battle_mon.h:11, 2 bits), 0 = none; its ``MOVE_EFFECT_CHARGE`` bit (moves.h:17) is set and
+  cleared with it (subscript_charge.s:5-6, bcp.c:1626-1630), so one field holds both. A volatile
+  (switch-out and faint clear the mask and the data, battle_lib.c:2071, :2101-2104) that Baton
+  Pass drops (moves.h:46-48). ``damage`` doubles the user's Electric move power while it is up
+  (battle_lib.c:6690).
 * SF2 (k). ``claw_flag`` / ``custap_flag`` are the battler's ``MoveEffectsData.quickClaw`` /
   ``.custapBerry`` between turns: CalcTurnOrder (and a Trick Room's re-sort at its MoveEnd) sets
   them, only the holder's BeforeMove (subscript_check_quick_claw.s:22-28), a switch-in
@@ -297,6 +367,7 @@ from nuzline.engine.ids import (
     AbilityId,
     Stat,
     Weather,
+    start_field_mask,
 )
 from nuzline.engine.stats import calc_stats
 
@@ -344,6 +415,11 @@ class BattleState(NamedTuple):
     # (pokemon.c:1859-1874); every switch-in and ``BattleSystem_ReloadPokemon`` re-read it into
     # ``friendship`` (lib.c:136, :179), and a bag item's band reads it (battle_system.c:716-733)
     party_friendship: jnp.ndarray
+    # int16, ``ids.AbilityId``: the party Pokemon's ability where a script wrote it in battle
+    # (F-O2: a Sky Shaymin revert of a Transform user writes Land's into its OWN party Pokemon,
+    # ``BtlIOCmd_UpdatePartyMon``, battle_io_command.c:601-604); 0 (``UNSUPPORTED``) = no override,
+    # the personal row's ability. ``step._restore_ability`` reads it (F-O2)
+    party_ability: jnp.ndarray
     ivs: jnp.ndarray  # int8[P,6,6], ids.Stat order
     # per battler [B]: the active Pokemon
     active: jnp.ndarray  # int8, party slot
@@ -370,6 +446,27 @@ class BattleState(NamedTuple):
     water_sport: jnp.ndarray  # int8
     fake_out_turn: jnp.ndarray  # int16, fakeOutTurnNumber
     move_hit: jnp.ndarray  # int16, moveHit: decomp move id, 0 = none
+    # int16, BattleContext.moveCopied (per battler: the last Mirror-Move-able move aimed at it,
+    # battle_controller_player.c:4480-4486) and moveCopiedHit (per holder, then per attacking
+    # battler; read only in doubles, battle_script.c:3492-3503); E3-B2-2. Cleared with the volatiles
+    # of the holder and, on any battler's switch-in or faint, for every foe's entry and every
+    # holder's column of that battler (battle_lib.c:2125-2149, :2203-2220: ``step._reset_battler``).
+    move_copied: jnp.ndarray
+    move_copied_hit: jnp.ndarray
+    # int8, BattleContext.turnFlags[b].magicCoat as ``1 + the user's moveSlot`` (0 = down): set by
+    # TrySetMagicCoat (battle_script.c:6459-6478), consumed by the first reflection (bcp.c:3071),
+    # cleared at the holder's faint (``VOLATILE_FIELDS``) and at the turn's end
+    # (``step._execute_actions``, battle_lib.c:2231); the slot is the PP of the reflection's Pressure
+    # drain (bcp.c:3083, lib.c:7390-7397: ``moveSlot[holder]``); E3-B2-6.
+    magic_coat: jnp.ndarray
+    # BattleContext.conversion2Move (int16 decomp move id, 0 = none), conversion2Battler (int8,
+    # 1 + the attacking battler, 0 = none) and conversion2Type (int8 type id), per battler: the last
+    # move that landed on it (battle_controller_player.c:4498-4536), read by Conversion 2
+    # (battle_script.c:4765-4820); E3-B2-3. Cleared with the volatiles of the holder; the move alone
+    # at the holder's own MoveEnd (``step._move_end``).
+    conv2_move: jnp.ndarray
+    conv2_battler: jnp.ndarray
+    conv2_type: jnp.ndarray
     foresight: jnp.ndarray  # int8, VOLATILE_CONDITION_FORESIGHT
     disabled_move: jnp.ndarray  # int16, MoveEffectsData.disabledMove: move id, 0 = none
     disable_turns: jnp.ndarray  # int8, MoveEffectsData.disabledTurns (hidden)
@@ -385,8 +482,15 @@ class BattleState(NamedTuple):
     aqua_ring: jnp.ndarray  # int8, MOVE_EFFECT_AQUA_RING in moveEffectsMask
     infatuated: jnp.ndarray  # int8, VOLATILE_CONDITION_ATTRACT (0/1 in D1; 1 + battler in D5)
     destiny_bond: jnp.ndarray  # int8, VOLATILE_CONDITION_DESTINY_BOND
+    grudge: jnp.ndarray  # int8, MOVE_EFFECT_GRUDGE in moveEffectsMask (E3-B2-9)
+    miracle_eye: jnp.ndarray  # int8, MOVE_EFFECT_MIRACLE_EYE in moveEffectsMask (E3-B2-10)
+    # int8, MoveEffectsData.lastResortCount (0-4) and int16[B,4] lastResortMoves: the move ids the
+    # battler used since it entered, the first ``count`` valid (E3-B2-11).
+    last_resort_count: jnp.ndarray
+    last_resort_moves: jnp.ndarray
     uproar: jnp.ndarray  # int8, VOLATILE_CONDITION_UPROAR turns left (its FIELD_CONDITION bit)
     curse: jnp.ndarray  # int8, VOLATILE_CONDITION_CURSE
+    nightmare: jnp.ndarray  # int8, VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: jnp.ndarray  # int8, MOVE_EFFECT_PERISH_SONG in moveEffectsMask
     perish_song_turns: jnp.ndarray  # int8, MoveEffectsData.perishSongTurns (live at 0)
     yawn: jnp.ndarray  # int8, MOVE_EFFECT_YAWN counter in moveEffectsMask, 0 = none
@@ -418,6 +522,10 @@ class BattleState(NamedTuple):
     power_trick_desync: jnp.ndarray  # int8, the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: jnp.ndarray  # int8, MOVE_EFFECT_MAGNET_RISE in moveEffectsMask (G-66)
     magnet_rise_turns: jnp.ndarray  # int8, MoveEffectsData.magnetRiseTurns, 0-5 (G-66)
+    # int8, MoveEffectsData.chargedTurns (2 bits, battle_mon.h:11), 0 = none; MOVE_EFFECT_CHARGE
+    # (moves.h:17) is set and cleared with it (subscript_charge.s:5-6, bcp.c:1626-1630), E3-B2-8.
+    charged_turns: jnp.ndarray
+    camouflage: jnp.ndarray  # int8, MOVE_EFFECT_CAMOUFLAGE in moveEffectsMask (G-20)
     # The party Pokemon's moves and PP under the BattleMon's (G-68): ``moves`` / ``pp`` of the
     # active slot are the BattleMon's, and these hold the party's values of the slots the battler
     # changed without the party seeing it. ``mimic_slots`` is ``mimickedMoveSlot`` (bit k = move slot
@@ -473,14 +581,14 @@ class BattleState(NamedTuple):
     trainer_items: jnp.ndarray  # int16[B,4], bag item ids (aiContext.trainerItems, ruling D1-5)
     trainer_item_count: jnp.ndarray  # int8[B], bag size at battle start (trainerItemCounts)
     qc_roll: jnp.ndarray  # int8, speedRand % 5 == 0 (Quick Claw), hidden, see the docstring
-    starf_roll: jnp.ndarray  # int8, a Starf Berry draw (``Outcome.starf``), F-10
+    # int32, BattleContext.monSpeedValues[battler]: the last CompareBattlerSpeed's speed (E3-B2-15)
+    speed_rec: jnp.ndarray
+    starf_roll: jnp.ndarray  # int8[B, 3], the turn's Starf Berry draws (``Outcome.starf``), F-O3
+    starf_taken: jnp.ndarray  # int8[B], the draws this turn's Starf Berry eats used (F-O3)
     starf_open: jnp.ndarray  # int8, a battle-start Starf Berry's stat waits for the root draw
     # field (scalars)
-    weather: jnp.ndarray  # int8, ids.Weather
-    weather_timer: jnp.ndarray  # int8, 0 = permanent
-    trick_room: jnp.ndarray  # int8
-    gravity: jnp.ndarray  # int8
-    acid_rain: jnp.ndarray  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
+    field_mask: jnp.ndarray  # int32, BattleContext.fieldConditionsMask (engine.field)
+    weather_turns: jnp.ndarray  # int32, FieldConditions.weatherTurns
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
@@ -505,8 +613,6 @@ class BattleState(NamedTuple):
     friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
     learn_level: jnp.ndarray  # int8[6], 0 = no learnset work, else the level to scan
     learn_cursor: jnp.ndarray  # int8[6], index into that level's learnset scan
-    learn_pin: jnp.ndarray  # int8, 0 none, else 1 + the move slot the player selected
-    exp_refused: jnp.ndarray  # int8, sticky refusal code (0 none, 2 = window (c))
     # faint budget (search data; the engine only records deaths and never reads k)
     deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
@@ -515,6 +621,12 @@ class BattleState(NamedTuple):
     # E2 batch 6: the mid-turn switch decision (U-turn, Baton Pass; see the docstring).
     pivot_battler: jnp.ndarray  # int8, 1 + the battler owing the party pick, 0 = none
     ts_cursor: jnp.ndarray  # int8, turnOrderCounter: the paused action's position
+    # E3-B2-21: the mid-turn learn pause (the learn prompt at its payout; module docstring)
+    learn_site: jnp.ndarray  # int8, 0 none, else the LEARN_* site the turn paused at
+    ts_ran: jnp.ndarray  # int8, a MoveEnd pause: the action's ``clear`` (MoveEnd's tail runs)
+    ts_move_cur: jnp.ndarray  # int16[B], each battler's moveCur of the turn (``read["move_cur"]``)
+    ts_eot: jnp.ndarray  # int8[B], monSpeedOrder of the turn end, sorted before the pause
+    ts_qc: jnp.ndarray  # int8[B], the turn's speedRand draw (Quick Claw), kept for the next turn
     ts_acted: jnp.ndarray  # int8[B], the battler's action is over (Battler_MovedThisTurn)
     # int8[B], battlerActionOrder (written from order.action_order's [2] until D6-D7)
     ts_order: jnp.ndarray
@@ -547,6 +659,12 @@ class BattleState(NamedTuple):
     # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
     # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
     ts_sub_hit: jnp.ndarray
+    # int8[B], 1 = the battler fainted in the paused action holding MOVE_EFFECT_GRUDGE (review b2
+    # #5): SYSCTL_MON_FAINTED keeps it flagged across a U-turn's party list (battle_script.c:
+    # 1770-1771, cleared by PlayFaintAnimation :1799) and its moveEffectsMask stays until its faint
+    # cleanup (battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs TryGrudge again, on the
+    # newcomer (subscript_faint_check_destiny_bond.s:28, ``step._use_move``'s ``MODE_RESUME``)
+    ts_grudge: jnp.ndarray
     # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
     # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
     ts_follow_me: jnp.ndarray
@@ -650,6 +768,12 @@ VOLATILE_FIELDS = (
     "pursuit_target",
     "water_sport",
     "move_hit",
+    "move_copied",
+    "move_copied_hit",
+    "magic_coat",
+    "conv2_move",
+    "conv2_battler",
+    "conv2_type",
     "foresight",
     "disabled_move",
     "disable_turns",
@@ -664,6 +788,10 @@ VOLATILE_FIELDS = (
     "aqua_ring",
     "infatuated",
     "destiny_bond",
+    "grudge",
+    "miracle_eye",
+    "last_resort_count",
+    "last_resort_moves",
     "uproar",
     "ingrain",
     "mean_look",
@@ -676,6 +804,7 @@ VOLATILE_FIELDS = (
     "perish_song_turns",
     "yawn",
     "curse",
+    "nightmare",  # VOLATILE_CONDITION_NIGHTMARE (G-31); not in BATON_PASSED_FIELDS
     "can_unburden",
     "trace_announced",
     "weather_announced",
@@ -691,6 +820,8 @@ VOLATILE_FIELDS = (
     "power_trick_desync",
     "magnet_rise",
     "magnet_rise_turns",
+    "charged_turns",
+    "camouflage",  # MOVE_EFFECT_CAMOUFLAGE (G-20); not in BATON_PASSED_FIELDS (moves.h:46-48)
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
@@ -761,6 +892,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "gender": (_MON, np.int8),
     "friendship": (_MON, np.int16),
     "party_friendship": (_MON, np.int16),
+    "party_ability": (_MON, np.int16),
     "ivs": ((*_MON, 6), np.int8),
     "active": (_BATTLER, np.int8),
     "stages": ((*_BATTLER, 8), np.int8),
@@ -784,6 +916,12 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "water_sport": (_BATTLER, np.int8),
     "fake_out_turn": (_BATTLER, np.int16),
     "move_hit": (_BATTLER, np.int16),
+    "move_copied": (_BATTLER, np.int16),
+    "move_copied_hit": ((*_BATTLER, "B"), np.int16),
+    "magic_coat": (_BATTLER, np.int8),
+    "conv2_move": (_BATTLER, np.int16),
+    "conv2_battler": (_BATTLER, np.int8),
+    "conv2_type": (_BATTLER, np.int8),
     "foresight": (_BATTLER, np.int8),
     "disabled_move": (_BATTLER, np.int16),
     "disable_turns": (_BATTLER, np.int8),
@@ -798,8 +936,13 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "aqua_ring": (_BATTLER, np.int8),
     "infatuated": (_BATTLER, np.int8),
     "destiny_bond": (_BATTLER, np.int8),
+    "grudge": (_BATTLER, np.int8),
+    "miracle_eye": (_BATTLER, np.int8),
+    "last_resort_count": (_BATTLER, np.int8),
+    "last_resort_moves": ((*_BATTLER, MOVES), np.int16),
     "uproar": (_BATTLER, np.int8),
     "curse": (_BATTLER, np.int8),
+    "nightmare": (_BATTLER, np.int8),
     "perish_song": (_BATTLER, np.int8),
     "perish_song_turns": (_BATTLER, np.int8),
     "yawn": (_BATTLER, np.int8),
@@ -827,6 +970,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "power_trick_desync": (_BATTLER, np.int8),
     "magnet_rise": (_BATTLER, np.int8),
     "magnet_rise_turns": (_BATTLER, np.int8),
+    "charged_turns": (_BATTLER, np.int8),
+    "camouflage": (_BATTLER, np.int8),
     "mimic_slots": (_BATTLER, np.int8),
     "shadow_moves": ((*_BATTLER, MOVES), np.int16),
     "shadow_pp": ((*_BATTLER, MOVES), np.int8),
@@ -863,13 +1008,12 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "trainer_items": ((*_BATTLER, BAG_SLOTS), np.int16),
     "trainer_item_count": (_BATTLER, np.int8),
     "qc_roll": (_BATTLER, np.int8),
-    "starf_roll": (_BATTLER, np.int8),
+    "speed_rec": (_BATTLER, np.int32),
+    "starf_roll": ((*_BATTLER, 3), np.int8),
+    "starf_taken": (_BATTLER, np.int8),
     "starf_open": (_BATTLER, np.int8),
-    "weather": (_FIELD, np.int8),
-    "weather_timer": (_FIELD, np.int8),
-    "trick_room": (_FIELD, np.int8),
-    "gravity": (_FIELD, np.int8),
-    "acid_rain": (_FIELD, np.int8),
+    "field_mask": (_FIELD, np.int32),
+    "weather_turns": (_FIELD, np.int32),
     "war_swaps": (_FIELD, np.int16),
     "entry_pending": (_BATTLER, np.int8),
     "move_prev": (_FIELD, np.int16),
@@ -890,14 +1034,17 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "friend_bonus": ((SLOTS,), np.int8),
     "learn_level": ((SLOTS,), np.int8),
     "learn_cursor": ((SLOTS,), np.int8),
-    "learn_pin": (_FIELD, np.int8),
-    "exp_refused": (_FIELD, np.int8),
     "deaths": ((SLOTS,), np.int8),
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
     "replace_mul": (_FIELD, np.int8),
     "pivot_battler": (_FIELD, np.int8),
     "ts_cursor": (_FIELD, np.int8),
+    "learn_site": (_FIELD, np.int8),
+    "ts_ran": (_FIELD, np.int8),
+    "ts_move_cur": (_BATTLER, np.int16),
+    "ts_eot": (_BATTLER, np.int8),
+    "ts_qc": (_BATTLER, np.int8),
     "ts_acted": (_BATTLER, np.int8),
     "ts_order": (_BATTLER, np.int8),
     "ts_actions": (_BATTLER, np.int8),
@@ -923,6 +1070,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_sub_hit": (_BATTLER, np.int8),
+    "ts_grudge": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
@@ -943,6 +1091,25 @@ LAYOUT = layout(SINGLES)  # the singles shapes: what every caller outside the fo
 
 # The turn scratch (``ts_*``, design rev. 2 section 1): 0 everywhere unless ``pivot_battler``.
 TURN_SCRATCH = tuple(name for name in LAYOUT if name.startswith("ts_"))
+
+
+def clear_copied(state: BattleState, b, cond=True) -> BattleState:
+    """``moveCopied`` / ``moveCopiedHit`` as battler ``b`` switches in or faints, where ``cond``
+    (``BattleSystem_UpdateAfterSwitch`` battle_lib.c:2125-2149, ``BattleSystem_CleanupFaintedMon``
+    :2203-2220): every foe's ``move_copied`` (the other side's holders: what ``b`` did is gone) and
+    every holder's ``move_copied_hit`` column of ``b``. ``b``'s own entry and row are
+    ``VOLATILE_FIELDS``' (E3-B2-2)."""
+    fmt = format_of(state)
+    b = jnp.asarray(b, jnp.int32)
+    foes = (jnp.arange(fmt.B) & 1) != (b & 1)
+    copied = jnp.where(cond & foes, 0, state.move_copied)
+    column = jnp.where(cond, 0, state.move_copied_hit[:, b])
+    return state._replace(
+        move_copied=copied.astype(state.move_copied.dtype),
+        move_copied_hit=state.move_copied_hit.at[:, b].set(
+            column.astype(state.move_copied_hit.dtype)
+        ),
+    )
 
 
 def ability_is_suppressed(state: BattleState, b, slot=None) -> jnp.ndarray:
@@ -1131,11 +1298,12 @@ def initial_arrays(
     ``fmt.P`` parties (party 0 the player's, 1 the opponent's), stats via ``calc_stats``, empty
     slots all zero (``species = 0, hp = 0``), battler ``b``'s lead in party slot ``leads[b]``
     (default: the battlers of one party take slots 0, 1, ... in battler order),
-    no volatiles, hazards or screens, and
-    ``weather = start_condition`` with a permanent timer (0), and ``terrain`` (a decomp
-    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default) and ``gravity``
+    no volatiles, hazards or screens, and ``field_mask`` = ``ids.start_field_mask``: the
+    ``start_condition``'s PERM bit (deep fog: bit 15), the ``gravity`` counter
     (``ids.GRAVITY_TURNS`` for a trainer whose area condition is Gravity, Kaizo's sub_seq 297, 0
-    otherwise; the grounding loop it runs at battle start is a no-op, G-67). The leads'
+    otherwise; the grounding loop it runs at battle start is a no-op, G-67) and the
+    ``trick_room`` counter (subscript_overworld_trick_room.s:14); and ``terrain`` (a decomp
+    ``TERRAIN_*`` id, ``Trainer.terrain``; ``TERRAIN_UNKNOWN`` by default). The leads'
     switch-in effects then run (``hooks.battle_start``: each switch-in state over both
     leads, as ``BattleSystem_TriggerEffectOnSwitch`` runs them).
 
@@ -1162,7 +1330,7 @@ def initial_arrays(
     battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
     (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
     :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
-    battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
+    battle_lib.c:1461-1479). The learn fields start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:
@@ -1201,16 +1369,15 @@ def initial_arrays(
             raise ValueError(f"a trainer's bag holds at most {BAG_SLOTS} items, got {len(bag)}")
         a["trainer_items"][b, : len(bag)] = bag
         a["trainer_item_count"][b] = len(bag)
-    a["weather"][...] = Weather(start_condition)
     if not TERRAIN_UNKNOWN <= terrain < len(TERRAIN_NAMES):
         raise ValueError(f"terrain {terrain} is neither a TERRAIN_* id nor TERRAIN_UNKNOWN")
     a["terrain"][...] = terrain
     if not 0 <= gravity <= GRAVITY_TURNS:
         raise ValueError(f"gravity {gravity} is not 0-{GRAVITY_TURNS} turns")
-    a["gravity"][...] = gravity
     if not 0 <= trick_room <= TRICK_ROOM_TURNS:
         raise ValueError(f"trick_room {trick_room} is not 0-{TRICK_ROOM_TURNS} turns")
-    a["trick_room"][...] = trick_room
+    # fieldConditionsMask of the start (``ids.start_field_mask``); weatherTurns 0.
+    a["field_mask"][...] = start_field_mask(Weather(start_condition), gravity, trick_room)
     # BattleSystem.chatotCries (battle_system.c:915-924): every enemy cry is invalid and gives 0
     # (field_battle_data_transfer.c:97, chatot_cry.c:13-25, sound_chatot.c:193-200); the player's
     # is the save's (:260, :319, :385), ``chatot_cry``: 0, 1 or 2 (``saves.chatot_parameter``).

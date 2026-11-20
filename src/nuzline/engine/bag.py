@@ -22,7 +22,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.effects import MIST_TURNS
+from nuzline.engine.effects import MIST_TURNS, clear_nightmare
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     HP_RESTORED_ALL,
@@ -150,9 +150,10 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
     * ``subscript_use_stat_booster.s`` / ``_guard_spec.s``: ``UseBagItem`` only.
 
     ``UseBagItem`` on the battler (``BtlCmd_UseBagItem``, battle_script.c:8533-8542, move slot
-    NULL = 0): each status cure (:459-541; a sleep cure also ends Nightmare, which the engine
-    does not build), confusion (:543-551), infatuation (:553-561); each stage param raises
-    its stage by 1 below +6 (:575-615); ``PP_RESTORE`` restores ``PP_RESTORED`` to move slot
+    NULL = 0): each status cure (:459-541; a sleep cure also ends Nightmare, :469-472, G-32;
+    Full Restore's own clear runs first and copies to the party, battle_script.c:3077-3078, so
+    its UseBagItem finds no sleep and keeps the bit), confusion (:543-551), infatuation
+    (:553-561); each stage param raises its stage by 1 below +6 (:575-615); ``PP_RESTORE`` restores ``PP_RESTORED`` to move slot
     0 and ``PP_RESTORE_ALL`` to every slot whose PP is below its max (:628-661), capped at
     ``MoveTable_CalcMaxPP`` (pokemon.c ``Pokemon_IncreaseValue``; battle_lib.c ``Battler_AddVal``;
     the test and the restore read the party Pokemon, so a Transformed battler's or a Mimicked
@@ -191,6 +192,8 @@ def use_bag_item(tables: Tables, state: BattleState, side, item, run) -> BattleS
         cure = run & (p[param] != 0) & has
         state = _set(state, "status", (side, mon), Status.NONE, cure)
         state = _set(state, "status_counter", (side, mon), 0, cure)
+        if param == ItemParam.HEAL_SLEEP:  # battle_system.c:469-472 (G-32)
+            state = clear_nightmare(state, side, cure)
         applied = applied | cure
     cure = run & (p[ItemParam.HEAL_CONFUSION] != 0) & (state.confusion[side] > 0)
     state = _set(state, "confusion", side, 0, cure)

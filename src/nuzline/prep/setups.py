@@ -40,6 +40,7 @@ __all__ = [
     "Setup",
     "check_team_space",
     "dedupe",
+    "knows_field_move",
     "neighbours",
     "protected_slots",
     "setup_cost",
@@ -69,16 +70,33 @@ def _arranged(lead: Member, rest: Sequence[Member]) -> Setup:
     return Setup((lead, *sorted(rest, key=lambda m: m.candidate)))
 
 
+def knows_field_move(problem: PrepProblem, setup: Setup) -> bool:
+    """Some member of ``setup`` knows ``problem.field_move`` after its changes (always True
+    without one): the field Defog run's party holds its Defog user (ledger G-15)."""
+    if not problem.field_move:
+        return True
+    for member in setup.members:
+        moves = list(problem.candidates[member.candidate].spec.moves)
+        for change in member.moves:  # member_spec's slots, without its PP lookup
+            moves[change.slot] = change.move
+        if problem.field_move in moves:
+            return True
+    return False
+
+
 def team_setups(problem: PrepProblem, max_team: int = 6) -> list[Setup]:
     """Every team of ``1..min(max_team, n)`` candidates (``itertools.combinations`` in pool
-    order, by size) with every lead, each member its ``base_member``."""
+    order, by size) with every lead, each member its ``base_member``; with a
+    ``problem.field_move``, only the teams that know it (``knows_field_move``)."""
     n = len(problem.candidates)
     base = [base_member(problem, i) for i in range(n)]
     out = []
     for size in range(1, min(max_team, n) + 1):
         for team in itertools.combinations(range(n), size):
             for lead in team:
-                out.append(_arranged(base[lead], [base[i] for i in team if i != lead]))
+                setup = _arranged(base[lead], [base[i] for i in team if i != lead])
+                if knows_field_move(problem, setup):
+                    out.append(setup)
     return out
 
 
@@ -206,13 +224,18 @@ def neighbours(
     levelled: bool = True,
 ) -> list[Setup]:
     """The setups one change from ``setup`` (ruling 4): one change to one member, or another
-    member as lead. Only setups that fit the unreserved resources, none whose changed member is
-    in ``pruned``, no duplicates and not ``setup`` itself."""
+    member as lead. Only setups that fit the unreserved resources and keep the field move
+    (``knows_field_move``), none whose changed member is in ``pruned``, no duplicates and not
+    ``setup`` itself."""
     seen = {setup}
     out: list[Setup] = []
 
     def add(candidate: Setup) -> None:
-        if candidate not in seen and setup_cost(problem, candidate).fits(problem.resources):
+        if (
+            candidate not in seen
+            and setup_cost(problem, candidate).fits(problem.resources)
+            and knows_field_move(problem, candidate)
+        ):
             seen.add(candidate)
             out.append(candidate)
 

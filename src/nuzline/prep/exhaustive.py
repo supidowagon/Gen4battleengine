@@ -22,7 +22,7 @@ import numpy as np
 from nuzline.data.tables import Names, Tables
 from nuzline.prep.problem import PrepProblem
 from nuzline.prep.screen import screen
-from nuzline.prep.setups import Setup, _arranged, setup_states
+from nuzline.prep.setups import Setup, _arranged, knows_field_move, setup_states
 from nuzline.prep.variants import (
     RELEARNER,
     Member,
@@ -70,7 +70,8 @@ def _designated_member(tables: Tables, problem: PrepProblem, candidate: int) -> 
 def restricted_setups(tables: Tables, problem: PrepProblem, max_team: int = 6) -> list[Setup]:
     """Every team of ``1..max_team`` and lead, each member its ``base_member``, and (with a
     Heart Scale) each such setup again with exactly one member on its designated change. Count:
-    ``sum(comb(n, k) * k * (1 + d_k))``, ``d_k`` a team's members with a designated change."""
+    ``sum(comb(n, k) * k * (1 + d_k))``, ``d_k`` a team's members with a designated change;
+    with a ``problem.field_move`` only the setups that know it (``knows_field_move``)."""
     n = len(problem.candidates)
     base = [base_member(problem, i) for i in range(n)]
     designated: list[Member | None] = [None] * n
@@ -85,7 +86,7 @@ def restricted_setups(tables: Tables, problem: PrepProblem, max_team: int = 6) -
                 if designated[i] is not None:
                     changed = {**members, i: designated[i]}
                     out.append(_arranged(changed[lead], [changed[j] for j in team if j != lead]))
-    return out
+    return [s for s in out if knows_field_move(problem, s)]
 
 
 def pruned_setups(
@@ -119,7 +120,7 @@ def pruned_setups(
             members[c] = dropped
             for lead in team:
                 setup = _arranged(members[lead], [members[i] for i in team if i != lead])
-                if setup not in seen:
+                if setup not in seen and knows_field_move(problem, setup):
                     seen.add(setup)
                     setups.append(setup)
     return setups, pairs

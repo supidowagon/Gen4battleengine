@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 from nuzline.engine.actions import legal_actions, legal_opponent_actions, legal_replacements
 from nuzline.engine.damage import STATUS
 from nuzline.engine.enumerate import SamplingOnly, enumerate_turn
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.observe import (
     OBS_FIELDS,
@@ -322,7 +323,7 @@ def visible_cases(tables, names):
             np.asarray(A("Scratch", "Leer", leer, names)),
             [plain, with_outcome(hit=[(1, 0, 0)])],
         ),
-        "weather": projected("weather", lambda a: a._replace(weather=jnp.int8(Weather.RAIN))),
+        "weather": projected("weather", lambda a: with_weather(a, Weather.RAIN)),
         "stealth rock": projected("stealth_rock", lambda a: set_field(a, "stealth_rock", 0, 1)),
         "screen": projected("reflect", lambda a: set_field(a, "reflect", 1, 5)),
         "item consumed": projected(

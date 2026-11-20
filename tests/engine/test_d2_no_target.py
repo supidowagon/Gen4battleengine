@@ -11,6 +11,7 @@ import pytest
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine import targets
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import ItemId, Weather
 from nuzline.engine.state import make_state
 from nuzline.reference import engine as ref
@@ -81,7 +82,7 @@ def test_charge_keeps_user(tables, names, fmt):
     assert not _keeps(tables, s, tackle, NONE)  # not multi-turn
     assert not _keeps(tables, _locked(s, names), fly, NONE)
     assert not _keeps(tables, _holding(s, tables, ItemId.POWER_HERB), fly, NONE)
-    sun = s._replace(weather=Weather.SUN)
+    sun = with_weather(s, Weather.SUN)
     assert not _keeps(tables, sun, solar, NONE)  # SolarBeam skips its charge in sun
     assert _keeps(tables, s, solar, NONE)
     assert _keeps(tables, sun, fly, NONE)  # sun only skips SolarBeam's charge
@@ -118,7 +119,7 @@ def test_engine_matches_reference_over_states(tables, names, last):
     moves = [names.move(m) for m in ("Tackle", "Fly", "Bide", "SolarBeam", "Dig")]
     base = four(tables, names)
     for s, move, locked, defender in itertools.product(
-        (base, base._replace(weather=Weather.SUN)),
+        (base, with_weather(base, Weather.SUN)),
         moves,
         (False, True),
         (NONE, 1, 3),

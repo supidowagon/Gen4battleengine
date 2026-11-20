@@ -122,6 +122,8 @@ def fake_inter(tmp_path):
         "trainers": [],
         "rom_field_effects": [],
         "rom_trainer_maps": {},
+        "rom_map_weather": [],
+        "rom_script_weather": {"battles": {}, "windows": {}},
     }
     for name, data in rom.items():
         _write(inter / "rom" / f"{name}.json", data)
@@ -544,6 +546,25 @@ def test_start_condition_matches_area_condition(resolved_trainers):
         assert (area.weather, area.fog) == (want.weather, want.fog), t["id"]
 
 
+def test_fog_headers_are_the_weather_14_fights(resolved_trainers):
+    """``area_condition.fog_headers`` (G-15; rom-map-type sheet): the fog fights on a header of
+    d_test.narc weather 14 (ROUTE_210_NORTH 363, CELESTIC_TOWN_CAVE 449). Byron Split's Route
+    210 North rows and 913 Cyrus #1; Wake 695 / 696 (start none) and Candice 610 (rain by
+    override) are on 363 / 247 but do not start in fog; the deep-fog (15) Hearthome Gym and
+    Coronet fights are never clearable (field_map_change.c:275-277)."""
+    got = {
+        t["id"]: t["area_condition"]["fog_headers"]
+        for t in resolved_trainers.values()
+        if t["area_condition"]["fog_headers"]
+    }
+    byron = [66, 67, 68, 69, 71, 72, 73, 74, 75, 76, 78, 79, 81, 441, 442, 489, 490]
+    assert {i: got[i] for i in byron} == {i: [363] for i in byron}
+    assert got[913] == [449]
+    assert set(got) == {*byron, 913, 636, 637, 659, 660, 748, 774, 776}
+    for tid in (34, 562, 572, 695, 696, 610):
+        assert resolved_trainers[tid]["area_condition"]["fog_headers"] == [], tid
+
+
 def test_rom_trick_room_and_gravity(resolved_trainers):
     assert resolved_trainers[403]["area_condition"]["trick_room"] is True  # Cyrus, header 308
     assert sum(t["area_condition"]["gravity"] for t in resolved_trainers.values()) == 1
@@ -562,7 +583,10 @@ def test_json_shapes(resolved_trainers):
         assert t["gauntlet"] is None or len(t["gauntlet"]) == 2
         assert t["split_order"] is None or len(t["split_order"]) == 2
         assert isinstance(t["gauntlet_rules"], dict) and isinstance(t["sources"], dict)
-        assert set(t["area_condition"]) == {"weather", "fog", "trick_room", "gravity", "permanent"}
+        # fog_headers on every trainer (ledger G-15); script_weather and script_window only
+        # where a script weather window reaches the fight (G-23, G-24).
+        keys = {"weather", "fog", "trick_room", "gravity", "permanent", "fog_headers"}
+        assert set(t["area_condition"]) in (keys, keys | {"script_weather", "script_window"})
 
 
 # Derived from rom_trainer_maps.json and rom_field_effects.json (fix round 1): ROM Trick Room
@@ -608,9 +632,8 @@ def test_report_lists_user_calls():
     lines = [ln for ln in calls.splitlines() if ln.startswith("- ")]
     assert [ln.split(":", 1)[0] for ln in lines] == [
         "- no map placement found",
-        # Iron Island (E3 batch 4 mapped Byron Split:662): sheet and PKCalc say rain, the
-        # ROM map header none; the ROM is used and the user is asked.
-        "- area weather 835 Galactic Triton #2",
+        # Iron Island 835/836 left this list (ledger G-23): the ROM's script weather (scr_seq
+        # 329 0x01df) starts them in rain, as the sheet and PKCalc say.
         f"- {_unclassified()} ROM changes unclassified in data/kaizo/rom_diff.toml",
     ]
     unplaced = {int(i) for i in lines[0].rsplit(": ", 1)[1].split(", ")}

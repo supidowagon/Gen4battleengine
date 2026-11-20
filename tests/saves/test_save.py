@@ -347,6 +347,19 @@ def test_the_chatot_cry_parameter(tmp_path, tables, names, cry, want):
     assert save.chatot_cry == want
 
 
+def test_the_map_header_and_overworld_weather(tmp_path, tables, names):
+    """FieldOverworldState, the FIELD_PLAYER_STATE page (save_table.c:55): the player's
+    Location's mapHeaderID (include/field_overworld_state.h:14, include/location.h:19) and the
+    u16 weather after five Locations and bgm (field_overworld_state.h:19-20), which the battle
+    reads (field_battle_data_transfer.c:267; G-15)."""
+    from nuzline.saves import layout as L
+
+    assert L.MAP_HEADER == L.page_offset("FIELD_PLAYER_STATE") == 0x1280
+    assert L.OVERWORLD_WEATHER == 0x1280 + 5 * 20 + 2
+    save = _load(tmp_path, build_image(location=(363, 14)), tables, names)
+    assert (save.map_header, save.overworld_weather) == (363, 14)
+
+
 def test_the_normal_pages_add_up_to_the_block():
     """The page table (gSaveTable, save_table.c:49-86; SaveTableEntry_BodySize, savedata.c:
     813-823) puts the pages ``load_save`` reads where the layout says and sums to the block."""

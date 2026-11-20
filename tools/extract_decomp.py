@@ -1310,7 +1310,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
       depend on being null; empty unless "multi").
     * ``start_condition`` comes from the weather of the maps where the trainer is
       fought (``_trainer_maps``, ``_weather_conditions``), assuming the player has
-      not cleared fog with Defog (``src/field_map_change.c``). A trainer the decomp
+      not cleared fog with Defog (``src/field_map_change.c``). ``fog_headers`` lists a
+      fog fight's map header ids whose weather is ``OVERWORLD_WEATHER_FOG``: there field
+      Defog can clear it (``AreaCondition.fog_headers``, ledger G-15). A trainer the decomp
       places on no map (unused and dummy entries, or trainers set up by a shared
       script) gets "none". A trainer whose maps or dates give more than one
       condition must be listed in ``tools/start_conditions.json``
@@ -1354,6 +1356,9 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
     if unknown:
         raise ExtractError(f"maps name unknown trainers {unknown}")
     terrains = _trainer_terrains(decomp, trainers, headers, where)
+    from tools.terrain import header_names
+
+    header_id = _index(header_names(decomp), "map header")
 
     out = []
     for tid, const in enumerate(trainers):
@@ -1396,6 +1401,12 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
         derived = set()
         for header in where.get(const, ()):
             derived |= weather[headers[header]["weather"]]
+        start = _start_condition(tid, const, derived, overrides, START_CONDITIONS_FILE)
+        fog = sorted(
+            header_id(h)
+            for h in where.get(const, ())
+            if headers[h]["weather"] == "OVERWORLD_WEATHER_FOG"
+        )
         out.append(
             {
                 "id": tid,
@@ -1409,9 +1420,8 @@ def extract_trainers(decomp_root: Path, out_dir: Path) -> None:
                 **structure_fields(
                     structures.get(tid), "double" if d["double_battle"] else "single"
                 ),
-                "start_condition": _start_condition(
-                    tid, const, derived, overrides, START_CONDITIONS_FILE
-                ),
+                "start_condition": start,
+                "fog_headers": fog if start == "fog" else [],
                 **terrains[tid],
             }
         )

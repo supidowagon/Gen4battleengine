@@ -22,7 +22,7 @@ import pytest
 from nuzline.data.party import load_party
 from nuzline.data.trainer import IntermediateData, build_trainer_party, load_trainers
 from nuzline.engine.damage import PRESENT_HEAL, confusion_damage, damage_for_roll
-from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, EffectId, MoveFlag, Stat, Status
 from nuzline.engine.levelup import GIVE_UP, advance_learns, learn
 from nuzline.engine.order import (
     MOVE_ACTIONS,
@@ -51,7 +51,6 @@ from tools.trace_to_state import (
     convert,
     convert_bundle,
     decode_status,
-    decode_weather,
     initial_state,
     main,
     resolve_roll,
@@ -1288,19 +1287,20 @@ def test_a_seen_move_answer_replays_and_an_unsupported_learn_is_refused(
 
 
 @pytest.mark.parametrize(
-    ("field", "slot", "why"),
+    ("field", "slot"),
     [
-        ("learn_pin", 3, "selected this turn"),  # bcp.c:1891-1895
-        ("disabled_move", 0, "disabled move"),  # bcp.c:1565-1576
-        ("encore_move", 3, "encored move"),  # bcp.c:1591-1602
-        ("locked_move", 1, None),  # by id: bcp.c:1885-1888
-        ("choice_lock", 2, None),  # by id: battle_lib.c:2307-2310
-        ("ai_seen_moves", 1, None),  # move ids: trainer_ai.c:2705-2716
+        ("disabled_move", 0),  # bcp.c:1565-1576, after the payout (bcp.c:3968)
+        ("encore_move", 3),  # bcp.c:1591-1602
+        ("locked_move", 1),  # by id: bcp.c:1885-1888
+        ("choice_lock", 2),  # by id: battle_lib.c:2307-2310
+        ("ai_seen_moves", 1),  # move ids: trainer_ai.c:2705-2716
     ],
 )
-def test_a_learn_answer_the_engine_cannot_replay_is_refused(tables, names, field, slot, why):
-    # The active learner (Bulbasaur: Tackle, Growl, Leech Seed, Vine Whip) prompted for
-    # PoisonPowder; replacing ``slot`` while ``field`` holds it.
+def test_every_learn_answer_the_game_allows_is_replayed(tables, names, field, slot):
+    # E3-B2-21: the prompt is answered at the payout, before the turn end that ends Disable and
+    # Encore and before the move slot is read again, so no volatile masks an answer: the active
+    # learner (Bulbasaur: Tackle, Growl, Leech Seed, Vine Whip) may replace ``slot`` while
+    # ``field`` holds it. Only an HM or an unsupported move (D10) is refused.
     from types import SimpleNamespace
 
     from tests.engine.test_learn import _prompt
@@ -1308,20 +1308,13 @@ def test_a_learn_answer_the_engine_cannot_replay_is_refused(tables, names, field
 
     s = _prompt(tables, names)
     move = int(s.moves[0, 0, slot])
-    if field == "learn_pin":
-        s = s._replace(learn_pin=jnp.int8(slot + 1))
-    elif field == "ai_seen_moves":
+    if field == "ai_seen_moves":
         s = s._replace(ai_seen_moves=s.ai_seen_moves.at[0, 0].set(move))
     else:
         s = s._replace(**{field: getattr(s, field).at[0].set(move)})
     inference = SimpleNamespace(fail=lambda message: TraceError(f"turn 1: {message}"))
     _learn_refusal(tables, inference, s, GIVE_UP)
-    if why is None:
-        _learn_refusal(tables, inference, s, slot)
-        return
-    with pytest.raises(TraceError, match=f"turn 1: the player replaced move {move} .*{why}"):
-        _learn_refusal(tables, inference, s, slot)
-    _learn_refusal(tables, inference, s, (slot + 1) % 4 if field != "learn_pin" else 0)
+    _learn_refusal(tables, inference, s, slot)
 
 
 def _two_learns_party(tables, names, tmp_path: Path) -> Path:
@@ -1411,22 +1404,6 @@ def test_resolve_roll_refuses_when_a_crit_and_a_non_crit_both_fit():
 )
 def test_decode_status(raw, expected):
     assert decode_status(raw) == expected
-
-
-@pytest.mark.parametrize(
-    ("mask", "expected"),
-    [
-        (0, Weather.NONE),
-        (1, Weather.RAIN),
-        (1 << 3, Weather.SANDSTORM),
-        (1 << 4, Weather.SUN),
-        (1 << 7, Weather.HAIL),
-        (1 << 15, Weather.FOG),
-        (1 << 12, Weather.NONE),
-    ],
-)
-def test_decode_weather(mask, expected):
-    assert decode_weather(mask) == expected
 
 
 def test_initial_state_uses_the_trainers_party_and_bag(tables, names):

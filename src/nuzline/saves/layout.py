@@ -19,8 +19,11 @@ __all__ = [
     "CHATOT_PARAM_SAMPLE",
     "COPY_OFFSETS",
     "FOOTER_SIZE",
+    "MAP_HEADER",
     "NORMAL_PAGES",
     "NORMAL_SIZE",
+    "NUM_VARS",
+    "OVERWORLD_WEATHER",
     "PARTY_COUNT",
     "PARTY_MAX",
     "PARTY_MONS",
@@ -34,6 +37,7 @@ __all__ = [
     "TRAINER_NAME",
     "TRAINER_NAME_LEN",
     "VARS",
+    "VARS_START",
     "VAR_PLAYER_STARTER_INDEX",
     "page_body_size",
     "page_offset",
@@ -96,6 +100,10 @@ VARS = 0xDAC
 # lines such as MAP_LOCAL_VARS_END = VAR_MAP_LOCAL_0x1F do not advance); the next line,
 # VAR_UNUSED_0x4031, confirms it. Holds the starter's species id, 0 before the choice.
 VAR_PLAYER_STARTER_INDEX = 48
+# NUM_VARS = VARS_END - VARS_START (include/constants/savedata/vars_flags.h:6): VARS_END is
+# 0x4120 (generated/vars_flags.txt:4399, counted as above), so the page holds 288 vars.
+NUM_VARS = 288
+VARS_START = 0x4000  # the first saved variable's id (generated/vars_flags.txt: VARS_START)
 
 # --- the normal block's pages (gSaveTable, src/savedata/save_table.c:49-86) -------------
 # Each page's ``sizeFunc`` result in table order (SavePageInfo_Init, src/savedata.c:826-850:
@@ -166,6 +174,16 @@ def page_offset(name: str) -> int:
         offset += page_body_size(size)
     raise KeyError(name)
 
+
+# FieldOverworldState (include/field_overworld_state.h:13-29) is the FIELD_PLAYER_STATE page
+# (save_table.c:55: FieldOverworldState_Size = sizeof, src/field_overworld_state.c:17-20).
+# Its first member is the player's Location (FieldOverworldState_GetPlayerLocation, :42-45;
+# the FieldSystem's ``location``, src/field_system.c:163), whose first member is the enum
+# (int) mapHeaderID (include/location.h:18-24). After the five Locations (5 ints each) and
+# u16 bgm comes u16 weather, the overworld weather a trainer battle starts with
+# (field_battle_data_transfer.c:267); Continue keeps it (field_map_change.c:521-525).
+MAP_HEADER = page_offset("FIELD_PLAYER_STATE")
+OVERWORLD_WEATHER = MAP_HEADER + 5 * 5 * 4 + 2
 
 # ChatotCry (include/struct_defs/chatot_cry.h:6-9): BOOL valid, then s8 audioData[1000]
 # (CHATOT_CRY_SIZE). SaveData_GetChatotCry (src/chatot_cry.c:27-30) is the page itself.

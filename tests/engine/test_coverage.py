@@ -36,10 +36,12 @@ from nuzline.engine.ids import AbilityId, ItemId, Weather
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
+    gravity_of,
     kaizo_names_with,
     roark_party,
     roark_trainer,
     sample_party,
+    trick_room_of,
 )
 
 
@@ -346,8 +348,8 @@ def test_area_trick_room_is_modelled(tables, names):
     assert start_trick_room(trainer) == TRICK_ROOM_TURNS and start_trick_room(roark_trainer()) == 0
     party = roark_party(names)
     state = make_state(tables, party, party, trick_room=start_trick_room(trainer))
-    assert int(state.trick_room) == TRICK_ROOM_TURNS
-    assert int(make_state(tables, party, party).trick_room) == 0
+    assert int(trick_room_of(state)) == TRICK_ROOM_TURNS
+    assert int(trick_room_of(make_state(tables, party, party))) == 0
 
 
 def test_area_gravity_is_modelled(tables, names):
@@ -363,8 +365,8 @@ def test_area_gravity_is_modelled(tables, names):
     assert start_gravity(trainer) == GRAVITY_TURNS and start_gravity(roark_trainer()) == 0
     party = roark_party(names)
     state = make_state(tables, party, party, gravity=start_gravity(trainer))
-    assert int(state.gravity) == GRAVITY_TURNS
-    assert int(make_state(tables, party, party).gravity) == 0
+    assert int(gravity_of(state)) == GRAVITY_TURNS
+    assert int(gravity_of(make_state(tables, party, party))) == 0
 
 
 @pytest.mark.fullset
@@ -583,8 +585,8 @@ def test_terrain_moves_refused_only_for_an_unknown_terrain(tables, names):
     assert terrain_refusal(tables, names, roark, [nature_power]) is None
     mixed = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=(0, 2, 7))
     line = terrain_refusal(tables, names, mixed, [tackle, nature_power, 0])
-    assert "varies over its maps (TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER)" in line
-    assert line.endswith("and Nature Power would read it")
+    assert "start tiles give TERRAIN_PLAIN, TERRAIN_GRASS, TERRAIN_WATER (ROM; the calc" in line
+    assert line.endswith("and Nature Power would read it: name it with --terrain")
     assert terrain_refusal(tables, names, mixed, [tackle]) is None
     unplaced = replace(roark, terrain=TERRAIN_UNKNOWN, terrains=())
     assert "no map places the trainer" in terrain_refusal(tables, names, unplaced, [nature_power])
@@ -600,8 +602,9 @@ def test_fight_with_a_terrain_move_names_the_terrains(tables, names):
     report = check_coverage(tables, names, party, mixed, roark_party(names), 0)
     terrain = [m for m in report.missing if "battle terrain" in m]
     want = (
-        "Roark: the battle terrain varies over its maps (TERRAIN_GRASS, TERRAIN_SNOW), and "
-        "Camouflage would read it (battle terrain UNSUPPORTED)"
+        "Roark: the battle terrain is a run input: its start tiles give TERRAIN_GRASS, "
+        "TERRAIN_SNOW (ROM; the calc repo and the docs sheet record none), and Camouflage would "
+        "read it: name it with --terrain (battle terrain UNSUPPORTED)"
     )
     assert terrain == [want]
     known = check_coverage(tables, names, party, roark_trainer(), roark_party(names), 0)
@@ -615,7 +618,11 @@ def test_pool_candidate_with_a_terrain_move_is_refused(tables, names):
     cand = Candidate(("party", 0, 0), "party slot 0", spec, 0, (names.move("Secret Power"),), ())
     mixed = replace(roark_trainer(), terrain=TERRAIN_UNKNOWN, terrains=(0, 2))
     report = check_pool(tables, names, [cand], roark_party(names), mixed)
-    assert any("Secret Power would read it (battle terrain" in m for m in report.missing)
+    # G-21: an unnamed mixed terrain stays refused, a run input (G-18).
+    assert any(
+        "Secret Power would read it: name it with --terrain (battle terrain" in m
+        for m in report.missing
+    )
     report = check_pool(tables, names, [cand], roark_party(names), roark_trainer())
     assert not any("battle terrain" in m for m in report.missing)
 
@@ -629,28 +636,3 @@ def test_make_state_takes_the_trainers_terrain(tables, names):
     assert int(make_state(tables, sample_party(names), roark_party(names)).terrain) == -1
     with pytest.raises(ValueError, match="terrain 25"):
         make_state(tables, sample_party(names), roark_party(names), terrain=25)
-
-
-def test_acid_rain_note_scans_both_sides_moves(tables, names):
-    """SF2 gate 3: either side's Pursuit chases a switch (battle_script.c:6884-6935), so the Acid
-    Rain report line (subscript_pursuit.s:115) reads the player's party and learnable moves too."""
-    line = "field condition: Acid Rain (runtime refusal)"
-    pursuit = names.move("Pursuit")
-    real = roark_party(names)
-    # Roark's Cranidos knows Pursuit: the opponent's side alone raises the line.
-    assert line in check_opponent(tables, names, roark_trainer(), real, 0, []).runtime
-    # The control: Pursuit taken off Cranidos, and the sample party knows no Pursuit.
-    opp = [
-        replace(
-            mon, moves=tuple(m for m in mon.moves if m != pursuit) + (0,) * (pursuit in mon.moves)
-        )
-        for mon in real
-    ]
-    plain = sample_party(names)
-    assert not any(pursuit in mon.moves for mon in (*opp, *plain))
-    assert line not in check_opponent(tables, names, roark_trainer(), opp, 0, plain).runtime
-    party = sample_party(names, override_moves={0: ["Pursuit", "Scratch"]})
-    assert line in check_opponent(tables, names, roark_trainer(), opp, 0, party).runtime
-    learn = [pursuit]
-    r = check_opponent(tables, names, roark_trainer(), opp, 0, plain, learn)
-    assert line in r.runtime

@@ -536,6 +536,93 @@ class EffectId(IntEnum):
     # it is behind a Substitute, already has the bit, the move missed, the defender is
     # semi-invulnerable, or its raw ability is Multitype (``effects._gastro_acid``, E3-2-6).
     GASTRO_ACID = 129
+    # E1 batch G (G-31). Nightmare (107, BATTLE_EFFECT_STATUS_NIGHTMARE; no Kaizo move has it):
+    # zeros. effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender behind a
+    # Substitute (:5), with the bit (:6) or not asleep (:7) (``effects.nightmare_fails``, read
+    # with the script in ``step._use_move``); else a direct ON_HIT subscript_nightmare_start.s
+    # sets the defender's VOLATILE_CONDITION_NIGHTMARE (:9, ``effects._nightmare``).
+    NIGHTMARE = 130
+    # Fling (233, BATTLE_EFFECT_FLING): zeros. effect_script_0233.s: fails (MOVE_STATUS_FAILED) for
+    # a raw Multitype ability or Griseous Orb of its user or a fling power of 0
+    # (``Battler_ItemFlingPower``: no item, a power-0 item, Embargo); else the held item's fling
+    # power is the move's power (CalcCrit and CalcDamage read the item still held), the item is
+    # removed before TryMove (a miss or Protect still loses it), and ``subscript_fling.s`` applies
+    # the item's fling effect to the defender after the hit (``effects._fling``, ``step._use_move``,
+    # E3-B2-1).
+    FLING = 131
+    # Mirror Move (9, BATTLE_EFFECT_COPY_MOVE): zeros. effect_script_0009.s: BtlCmd_SetMirrorMove
+    # (battle_script.c:3483-3525) then GoToMoveScript on the defender's last Mirror-Move-able move
+    # at it (``BattleState.move_copied``): an invoker (``order.CALL_MIRROR_MOVE``), E3-B2-2.
+    MIRROR_MOVE = 132
+    # Conversion 2 (93, BATTLE_EFFECT_CONVERSION2): zeros. effect_script_0093.s: a direct ON_HIT
+    # ``subscript_conversion_2.s``: BtlCmd_TryConversion2 (battle_script.c:4765-4820) turns the user
+    # into a type that resists the type of the last move that landed on it
+    # (``BattleState.conv2_move`` / ``conv2_battler`` / ``conv2_type``), the row drawn by
+    # ``Outcome.conv2``; E3-B2-3.
+    CONVERSION_2 = 133
+    # Spite (100, BATTLE_EFFECT_DECREASE_LAST_MOVE_PP): zeros. effect_script_0100.s: a direct ON_HIT
+    # ``subscript_reduce_target_pp.s``: BtlCmd_TrySpite (battle_script.c:4990-5016) takes
+    # min(4, ppCur) from the PP of the slot of the target's last move (``BattleState.last_move``),
+    # no random draw; E3-B2-4.
+    SPITE = 134
+    # Role Play (178, BATTLE_EFFECT_COPY_ABILITY): zeros. effect_script_0178.s:5-7 fails on the
+    # user's Multitype or held Griseous Orb, else runs subscript_copy_ability.s: the user's
+    # ``BattleMon.ability`` becomes the defender's raw one and its ``truant`` ``totalTurns & 1``,
+    # unless the move missed, the defender is semi-invulnerable, has Wonder Guard, Multitype or no
+    # ability, or the user has Multitype (``effects._role_play``); no random draw; E3-B2-5.
+    ROLE_PLAY = 135
+    # Magic Coat (183, BATTLE_EFFECT_APPLY_MAGIC_COAT): zeros. effect_script_0183.s:5 TrySetMagicCoat
+    # (battle_script.c:6459-6478) fails (MOVE_STATUS_FAILED) when no other battler's action is
+    # pending, else ``BattleState.magic_coat`` = 1 + the user's move slot; the next move with
+    # ``MoveFlag.MAGIC_COAT`` aimed at the user is reflected (``step._use_move``,
+    # ``step._execute_actions``' reflect phase); no random draw; E3-B2-6.
+    MAGIC_COAT = 136
+    # Lucky Chant (240, BATTLE_EFFECT_PREVENT_CRITS): zeros. effect_script_0240.s:5-6 fails
+    # (:9-11, MOVE_STATUS_FAILED) with SIDE_CONDITION_LUCKY_CHANT on the user's side, else an
+    # indirect ON_HIT subscript_lucky_chant_start.s:5-6 sets the 3-bit counter (bits 12-14, 0x5000)
+    # to 5 (``LUCKY_CHANT_TURNS``, ``effects._lucky_chant``); the field-condition pass counts it
+    # down (``step.FIELD_SIDE_TIMERS``). Crits against the side's battlers are off while it is up
+    # (BattleSystem_CalcCriticalMulti, battle_lib.c:7137, ``effects.crit_blocked``); no random
+    # draw; E3-B2-7.
+    LUCKY_CHANT = 137
+    # Grudge (194, BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT): zeros. effect_script_0194.s:5-6 sets the
+    # user's MOVE_EFFECT_GRUDGE (``BattleState.grudge``; its :5 fail branch is dead, the bit is
+    # cleared at the user's move attempt, bcp.c:2427, before the script). Where a defender that
+    # fainted holding it was KO-ed by a living attacker of the other side (subscript_faint_check_
+    # destiny_bond.s:28, subscript_attack_then_switch_out.s:40, BtlCmd_TryGrudge,
+    # battle_script.c:6743-6763), that attacker's selected move slot goes to 0 PP; no random
+    # draw; E3-B2-9.
+    GRUDGE = 138
+    # Miracle Eye (216, BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE): zeros. effect_script_0216.s:5
+    # sets an indirect ON_HIT subscript_miracle_eye.s (:5 MOVE_EFFECT_MIRACLE_EYE on the defender, no
+    # failure and no Substitute check: ``effects._miracle_eye``); :6 SYSCTL_IGNORE_IMMUNITIES is inert
+    # (power 0 skips CheckTypeChart, bcp.c:2352-2357). The bit (``BattleState.miracle_eye``) makes
+    # the defender identified for accuracy (a positive evasion stage counts as 0, MON_IS_IDENTIFIED,
+    # bcp.c:2888) and skips the Dark rows with multiplier 0 of ``BasicTypeMulApplies`` (battle_lib.c:
+    # 2551-2555); no random draw; E3-B2-10.
+    MIRACLE_EYE = 139
+    # Last Resort (246, BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES): zeros. A plain hit
+    # (effect_script_0246.s:6-7 CalcCrit, CalcDamage) behind BtlCmd_TryLastResort (:5, MOVE_STATUS_
+    # FAILED at :10-11 when ``BattleState.last_resort_count`` is under the user's move count minus
+    # 1, or the user knows fewer than 2 moves). The count is written at the end of BeforeMove
+    # (``BattleSystem_UpdateLastResort``, battle_lib.c:3443-3459, ``step._use_move``); no random
+    # draw; E3-B2-11.
+    LAST_RESORT = 140
+    # Feint (223, BATTLE_EFFECT_REMOVE_PROTECT): zeros. A plain hit (effect_script_0223.s:7-8
+    # CalcCrit, CalcDamage) behind BtlCmd_TryFeint (:5, MOVE_STATUS_FAILED at :11-13 unless the
+    # defender's turnFlags.protecting is set, battle_script.c:7518-7528), whose ON_HIT subscript
+    # (:6, subscript_feint.s:20) clears that flag after a hit that is not MOVE_STATUS_NO_EFFECTS
+    # (``step`` and the reference engine, on the turn's events); no random draw; E3-B2-13.
+    FEINT = 141
+    # Defog (258, BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN): ``(Stat.EVA, -1, 0)``. A direct
+    # ON_HIT subscript (effect_script_0258.s:5, ``BattleSystem_TriggerPrimaryEffect``,
+    # battle_lib.c:1481-1491): subscript_defog.s lowers the defender's evasion one stage (:19-20,
+    # the Mist / Clear Body / White Smoke / -6 / Substitute tests of BtlCmd_ChangeStatStage,
+    # ``effects._foe_stage``; behind a Substitute it also fails the move, FAILED skips
+    # AfterMoveEffects, ``effects.primary_effect_fails``), then clears the defender's side's
+    # Reflect, Light Screen, Mist, Safeguard, Spikes, Toxic Spikes and Stealth Rock and the field's
+    # deep fog (:21-69, ``effects._defog``) whatever the drop did; no random draw; E3-B2-14.
+    DEFOG = 142
 
 
 # effect_script_0252.s:9: ``magnetRiseTurns`` at the move's success (G-66).
@@ -569,8 +656,16 @@ SNORE_PARAM = 1
 # ``minimized`` first (:5). E2 batch 9, B9-10.
 STOMP_PARAM = 2
 MINIMIZE_PARAM = 2
+# Charge (effect_script_0174.s, an indirect ON_HIT subscript_charge.s) is ``STAT_SELF`` (Sp. Def
+# +1) with ``move_param[m, 2] == CHARGE_PARAM``: it sets the user's MOVE_EFFECT_CHARGE bit and
+# ``chargedTurns`` = ``CHARGE_TURNS`` first (:5-6), the stage after (:11-13); E3-B2-8.
+CHARGE_PARAM = 3
+CHARGE_TURNS = 2
 # subscript_tailwind_start.s:11 sets both SIDE_CONDITION_TAILWIND bits: a 2-bit counter at 3.
 TAILWIND_TURNS = 3
+# subscript_lucky_chant_start.s:5 ORs 0x5000 into the side conditions: the 3-bit counter at bits
+# 12-14 (condition.h:100-108) = 0b101 = 5 (E3-B2-7).
+LUCKY_CHANT_TURNS = 5
 SPIKES_MAX = 3  # battle_script.c:5394
 TOXIC_SPIKES_MAX = 2  # battle_script.c:7598
 
@@ -771,6 +866,9 @@ class AbilityId(IntEnum):
     HYDRATION = 94
     # F-6: Forecast (BattleSystem_TriggerFormChange, battle_lib.c:6313-6364; ``hooks.forecast``).
     FORECAST = 95
+    # G-14: Air Lock shares Cloud Nine's lock (include/battle/common.h:63-67); read by decomp id
+    # (``WEATHER_ABILITY_IDS``) in ``damage.weather_suppressed``, so no new reader.
+    AIR_LOCK = 96
 
 
 # The decomp ability id of every supported ``AbilityId`` (generated/abilities.txt line N is id
@@ -874,6 +972,7 @@ ABILITY_DECOMP_IDS = {
     AbilityId.MULTITYPE: 121,
     AbilityId.HYDRATION: 93,
     AbilityId.FORECAST: 59,
+    AbilityId.AIR_LOCK: 76,
 }
 
 # The abilities every sleep site tests together (ruling G-47): subscript_fall_asleep.s:7-8 and
@@ -1124,6 +1223,11 @@ SPEED_HALVING_HOLD_EFFECTS = (50, 106, 122, 117, 118, 121, 119, 120)
 # generated/battle_stats.txt:2-6) is below +6. By the project's ``% n`` convention uniform over
 # the eligible stats: one value in [0, STARF_DRAWS) read modulo their count (1-5, lcm 60), F-10.
 STARF_DRAWS = 60
+# Every eat draws its own (lib:4864-4866, :5286-5288, Pluck :5808, Fling :6121), F-O3 (G-27): the
+# ``Outcome.starf`` columns a battler's eats in one turn take in order (column 1 is the faint
+# replacement's, after the turn), loaded into ``BattleState.starf_roll``; the turn's
+# ``starf_taken``-th eat reads entry ``min(starf_taken, len - 1)``.
+STARF_QUEUE = (0, 2, 3)
 
 # The three Choice items: ``BattleSystem_CheckInvalidMoves`` (battle_lib.c:2307-2315) and
 # ``UpdateMoveBuffers`` (battle_controller_player.c:3923-3933) test exactly these hold
@@ -1226,6 +1330,43 @@ QUICK_CLAW_MODULUS = 100 // QUICK_CLAW_PARAM  # % 5
 # ``Outcome.future_band``), exact only while every holder has this param: ``game_constants``
 # asserts it for every game (ruling G-1).
 FOCUS_BAND_PARAM = 10
+
+
+class FlingEffect(IntEnum):
+    """``FLING_EFFECT_*`` (include/constants/items.h:86-116): ``tables.item_fling_effect``, which
+    ``battle_lib.c:5857-6158`` (``BattleSystem_FlingItem``) reads for a Fling (E3-B2-1)."""
+
+    NONE = 0
+    PRZ_RESTORE = 1
+    SLP_RESTORE = 2
+    PSN_RESTORE = 3
+    BRN_RESTORE = 4
+    FRZ_RESTORE = 5
+    PP_RESTORE = 6
+    HP_RESTORE = 7
+    CNF_RESTORE = 8
+    ALL_RESTORE = 9
+    HP_PCT_RESTORE = 10
+    HP_RESTORE_SPICY = 11
+    HP_RESTORE_DRY = 12
+    HP_RESTORE_SWEET = 13
+    HP_RESTORE_BITTER = 14
+    HP_RESTORE_SOUR = 15
+    ATK_UP = 16
+    DEF_UP = 17
+    SPEED_UP = 18
+    SPATK_UP = 19
+    SPDEF_UP = 20
+    CRIT_UP = 21
+    RANDOM_UP2 = 22
+    TEMP_ACC_UP = 23
+    STATDOWN_RESTORE = 24
+    HEAL_INFATUATION = 25
+    FLINCH = 26
+    PARALYZE = 27
+    POISON = 28
+    BADLY_POISON = 29
+    BURN = 30
 
 
 class Flavor(IntEnum):
@@ -1361,6 +1502,14 @@ class MoveFlag(IntFlag):
     # secondary roll (bcp.c:3544-3554, the script reloaded per hit :3789). ``MULTI_HIT``
     # (Double Kick's effect_script_0044.s, a plain hit twice) keeps its count in its param.
     HIT_TWICE = 4194304
+    # MOVE_FLAG_CAN_MIRROR_MOVE (generated move flags): UpdateFlagsWhenHit records a move that has it
+    # as the defender's ``moveCopied`` (battle_controller_player.c:4480-4486), which Mirror Move
+    # copies (E3-B2-2).
+    MIRROR_MOVE = 8388608
+    # MOVE_FLAG_CAN_MAGIC_COAT (generated move flags): a move with it aimed at a battler whose
+    # ``turnFlags.magicCoat`` is set is reflected by BattleControllerPlayer_MoveStolen
+    # (battle_controller_player.c:3064-3070), E3-B2-6.
+    MAGIC_COAT = 16777216
 
 
 class SemiKind(IntEnum):
@@ -1409,7 +1558,8 @@ class MoveTarget(IntEnum):
 
 
 class Weather(IntEnum):
-    """``BattleState.weather``; also a battle's start condition (``make_state``)."""
+    """A weather: a battle's start condition (``make_state``) and the index of its mask bits
+    (``WEATHER_TEMP_BIT``, ``WEATHER_PERM_BIT``); ``engine.field.weather_seen`` reads one."""
 
     NONE = 0
     SUN = 1
@@ -1433,6 +1583,94 @@ WEATHER_ABILITIES = {
 # Weather moves: NUM_WEATHER_TURNS (effect_script_0136.s etc. ``UpdateVar OPCODE_SET,
 # BTLVAR_WEATHER_TURNS, 5``).
 WEATHER_TURNS = 5
+
+
+class FieldCondition(IntEnum):
+    """``BattleContext.fieldConditionsMask`` bits and groups (include/constants/battle/
+    condition.h:110-145), ``BattleState.field_mask`` (``engine.field``)."""
+
+    RAINING_TEMP = 1 << 0
+    RAINING_PERM = 1 << 1
+    SANDSTORM_TEMP = 1 << 2
+    SANDSTORM_PERM = 1 << 3
+    SUNNY_TEMP = 1 << 4
+    SUNNY_PERM = 1 << 5
+    HAILING_TEMP = 1 << 6
+    HAILING_PERM = 1 << 7
+    UPROAR = 0xF << 8  # bit 8 + battler (:118)
+    GRAVITY = 0x7 << 12  # a 3-bit counter (:119-121, :142)
+    DEEP_FOG = 1 << 15
+    TRICK_ROOM = 0x7 << 16  # a 3-bit counter (:123-125, :144)
+    RAINING = RAINING_TEMP | RAINING_PERM
+    SANDSTORM = SANDSTORM_TEMP | SANDSTORM_PERM
+    SUNNY = SUNNY_TEMP | SUNNY_PERM
+    HAILING = HAILING_TEMP | HAILING_PERM
+    WEATHER = RAINING | SANDSTORM | SUNNY | HAILING | DEEP_FOG  # :131-135
+    GRAVITY_INIT = 0x5 << 12  # :143
+    TRICK_ROOM_INIT = 0x5 << 16  # :145
+
+
+FIELD_CONDITION_UPROAR_SHIFT = 8  # condition.h:147
+FIELD_CONDITION_GRAVITY_SHIFT = 12  # :148
+FIELD_CONDITION_TRICK_ROOM_SHIFT = 16  # :149
+# The TEMP / PERM bit of each ``Weather`` (by id): a weather move sets the TEMP bit
+# (effect_script_0115.s, _0136.s, _0137.s, _0164.s :9), a weather ability or a battle-start area
+# condition the PERM bit (subscript_drizzle.s etc. :12, subscript_overworld_rain.s etc. :11);
+# deep fog has one bit (subscript_overworld_fog.s:11).
+WEATHER_TEMP_BIT = (
+    0,
+    FieldCondition.SUNNY_TEMP,
+    FieldCondition.RAINING_TEMP,
+    FieldCondition.SANDSTORM_TEMP,
+    FieldCondition.HAILING_TEMP,
+    FieldCondition.DEEP_FOG,
+)
+WEATHER_PERM_BIT = (
+    0,
+    FieldCondition.SUNNY_PERM,
+    FieldCondition.RAINING_PERM,
+    FieldCondition.SANDSTORM_PERM,
+    FieldCondition.HAILING_PERM,
+    FieldCondition.DEEP_FOG,
+)
+# CheckFieldConditions' four countdown states in their order (battle_controller_player.c:907-912,
+# :1113-1211): the (TEMP, PERM) bits of RAINING, SANDSTORM, SUNNY, HAILING.
+WEATHER_COUNTDOWN = (
+    (FieldCondition.RAINING_TEMP, FieldCondition.RAINING_PERM),
+    (FieldCondition.SANDSTORM_TEMP, FieldCondition.SANDSTORM_PERM),
+    (FieldCondition.SUNNY_TEMP, FieldCondition.SUNNY_PERM),
+    (FieldCondition.HAILING_TEMP, FieldCondition.HAILING_PERM),
+)
+
+
+def start_field_mask(start_condition: int, gravity: int = 0, trick_room: int = 0) -> int:
+    """``fieldConditionsMask`` at battle start (BattleContext starts zeroed, battle_controller_
+    player.c:180-184): the area condition's bit (a weather's PERM bit, subscript_overworld_rain.s /
+    _sand.s / _sun.s / _hail.s :11; DEEP_FOG, _fog.s:11; chosen at battle_lib.c:3664-3696) and the
+    counters of a Kaizo Gravity / Trick Room area condition (``gravity << 12``: sub_seq 297's
+    GRAVITY_INIT; ``trick_room << 16``: subscript_overworld_trick_room.s:14)."""
+    return (
+        int(WEATHER_PERM_BIT[int(start_condition)])
+        | (int(gravity) << FIELD_CONDITION_GRAVITY_SHIFT)
+        | (int(trick_room) << FIELD_CONDITION_TRICK_ROOM_SHIFT)
+    )
+
+
+def clean_field_mask(
+    weather: int, timer: int = 0, gravity: int = 0, trick_room: int = 0, uproar=()
+) -> int:
+    """The clean ``fieldConditionsMask`` of one ``Weather`` (FCM 4.4): its TEMP bit while a
+    weather move's ``timer`` runs (effect_script_0136.s etc. :9), else its PERM bit (deep fog:
+    bit 15); the Gravity and Trick Room counters (``<< 12``, ``<< 16``); battler ``b``'s Uproar
+    bit ``8 + b`` where ``uproar[b]`` is nonzero (subscript_uproar.s:9-11). For a state built
+    by hand (``engine.field.with_weather``, ``tests.strategies``)."""
+    bits = WEATHER_TEMP_BIT if int(timer) else WEATHER_PERM_BIT
+    mask = int(bits[int(weather)])
+    mask |= int(gravity) << FIELD_CONDITION_GRAVITY_SHIFT
+    mask |= int(trick_room) << FIELD_CONDITION_TRICK_ROOM_SHIFT
+    for b, count in enumerate(uproar):
+        mask |= int(int(count) != 0) << (FIELD_CONDITION_UPROAR_SHIFT + b)
+    return mask
 
 
 class Type(IntEnum):
@@ -1462,6 +1700,10 @@ class Type(IntEnum):
 # Decomp move id the engine names directly (``generated/moves.txt`` line 166, 0-based
 # from MOVE_NONE): Struggle replaces the chosen move when it has no PP left.
 MOVE_STRUGGLE = 165
+# Last Resort (``generated/moves.txt`` line 388): ``BattleSystem_UpdateLastResort`` never records
+# it (battle_lib.c:3445), and a Mimic or Sketch that copies it zeroes the count (battle_script.c:
+# 4514-4516, :4876-4878), E3-B2-11.
+MOVE_LAST_RESORT = 387
 # D2-12: the moves ``CalcMoveType`` keys on (generated/moves.txt line N is id N - 1).
 MOVE_HIDDEN_POWER = 237
 MOVE_WEATHER_BALL = 311

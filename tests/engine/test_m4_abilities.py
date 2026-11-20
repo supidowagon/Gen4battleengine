@@ -22,6 +22,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from nuzline.engine.damage import decomp_ability_id
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Status, Weather
 from nuzline.engine.outcome import empty_outcome, hit_threshold
 from nuzline.engine.step import _turn_end_ability, step
@@ -134,7 +135,7 @@ def test_cloud_nine_is_inert(tables, names, data):
     Transform ``shadow_*`` fields hold the user's own slot and form, never an ability id, and stay
     compared."""
     s = data.draw(supported_state(tables, names))
-    s = s._replace(weather=jnp.full_like(s.weather, Weather.NONE))
+    s = with_weather(s, Weather.NONE)
     acts = data.draw(legal_action_pair(tables, s))
     outcome = data.draw(any_outcome())
     side = data.draw(st.integers(0, 1))

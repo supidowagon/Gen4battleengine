@@ -499,7 +499,7 @@ def test_seed_steps_checks_the_saved_actions(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     state = SimpleNamespace(active=np.zeros(2, np.int32))
-    monkeypatch.setattr(sc, "rebuild_state", lambda saved: state)
+    monkeypatch.setattr(sc, "rebuild_state", lambda saved, tables: state)
     monkeypatch.setattr(sc, "rebuild_outcome", lambda saved: None)
     monkeypatch.setattr(sc, "group_outputs", lambda *a: {})
 
@@ -508,7 +508,7 @@ def test_seed_steps_checks_the_saved_actions(tmp_path, monkeypatch):
                                                "in_outcome": {}})]  # fmt: skip
         with gzip.open(tmp_path / "0-0.inputs.pkl.gz", "wb") as f:
             pickle.dump(inputs, f)
-        return sc.seed_steps(None, tmp_path, "compare", 0, 0, "rest")
+        return sc.seed_steps(SimpleNamespace(tables=None), tmp_path, "compare", 0, 0, "rest")
 
     assert len(steps(np.zeros(2, np.int32))) == 1
     with pytest.raises(ValueError, match="actions"):
@@ -626,9 +626,109 @@ def test_a_one_sided_input_field_is_reported_and_fails(monkeypatch):
     assert out.roll.shape == saved["roll"].shape and not hasattr(out, "legacy_field")
     assert sc.INPUT_ONE_SIDED["new"] == {"in_outcome.roll"}
     assert sc.INPUT_ONE_SIDED["base"] == {"in_outcome.legacy_field"}
-    res = result(only_base=["in_outcome.legacy_field"], only_new=["in_outcome.roll"])
-    assert sc.report(args(), "p", res, 1.0, set(), set(), "") == 1
-    assert sc.report(args(), "p", res, 1.0, {"legacy_field", "roll"}, set(), "") == 0
+    new = result(only_new=["in_outcome.roll"])
+    assert sc.report(args(), "p", new, 1.0, set(), set(), "") == 1
+    assert sc.report(args(), "p", new, 1.0, {"roll"}, set(), "") == 0
+
+
+def test_a_dropped_field_without_a_row_fails_even_with_allow_new(capsys):
+    """Rule 3: --allow-new admits only fields new in this checkout; a captured field this
+    checkout lacks needs an UPGRADES row (or a "dropped, no successor" one)."""
+    res = result(only_base=["in_outcome.legacy_field", ".jit_step.legacy_field"])
+    assert sc.report(args(), "p", res, 1.0, {"legacy_field"}, set(), "") == 1
+    assert "FAIL dropped field without an upgrade row: in_outcome.legacy_field" in (
+        capsys.readouterr().out
+    )
+    rows = {u.name: u for u in sc.UPGRADES}
+    acid = rows["state.acid_rain (): dropped, no successor"]
+    assert acid.fill is None and acid.writes == () and "G-13" in acid.ledger
+    assert "acid_rain" not in sc.upgrade_fields("state", {"acid_rain": np.int8(2)})
+    assert all(u.reason and u.ledger for u in sc.UPGRADES)
+
+
+def test_learn_pin_and_exp_refused_leave_by_their_rows(monkeypatch, capsys):
+    """E3-B2-21 (review b2 #6): main's learn_pin and exp_refused have "dropped, no successor"
+    rows, so a captured state holding them upgrades with no "dropped field" failure."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    hp = np.ones(2, np.int16)
+    old = {"species": hp, "active": np.zeros(2, np.int8), "hp": hp,
+           "learn_pin": np.int8(2), "exp_refused": np.int8(2)}  # fmt: skip
+    ((_, got),) = sc.upgrade_inputs([("k", {"in_state": old})], None)
+    assert "learn_pin" not in got["in_state"] and "exp_refused" not in got["in_state"]
+    got = sc.upgrade_entries(sc.canon({"jit_step": old}), None)
+    assert not any(p.endswith(("learn_pin", "exp_refused")) for p in got)
+    assert {".jit_step.species", ".jit_step.active", ".jit_step.hp"} <= set(got)
+    assert {
+        "state.learn_pin (): dropped, no successor",
+        "state.exp_refused (): dropped, no successor",
+    } <= set(sc.UPGRADED)
+    assert sc.report(args(), "p", result(), 1.0, set(), set(), "") == 0
+    assert "dropped field without an upgrade row" not in capsys.readouterr().out
+
+
+# --- layout upgrades (an older commit's field shapes) ---------------------------------------
+
+STARF_ROW, STARF_COLS = sc.UPGRADES[0].name, sc.UPGRADES[1].name
+
+
+def test_old_shapes_upgrade_on_load(monkeypatch):
+    """F-O3: an old int8[B] starf_roll and int8[B, 2] Outcome.starf load as int8[B, 3] (the draw
+    in entry 0, then 0) and int8[B, 4] (columns 2-3 copy column 0), in the saved inputs and in
+    the captured entries alike; a field already in the new shape is left alone."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    roll, starf = np.array([7, -1], np.int8), np.array([[1, 2], [3, 4]], np.int8)
+    want_roll = np.array([[7, 0, 0], [-1, 0, 0]], np.int8)
+    want_starf = np.array([[1, 2, 1, 1], [3, 4, 3, 3]], np.int8)
+    hp = np.ones(2, np.int16)
+    inputs = [("k", {"in_state": {"starf_roll": roll, "hp": hp}, "in_actions": hp,
+                     "in_outcome": {"starf": starf}}), ("a", {"in_ai_state": {"starf_roll": roll}})]  # fmt: skip
+    (_, got), (_, ai) = sc.upgrade_inputs(inputs, None)
+    np.testing.assert_array_equal(got["in_state"]["starf_roll"], want_roll)
+    np.testing.assert_array_equal(got["in_outcome"]["starf"], want_starf)
+    np.testing.assert_array_equal(ai["in_ai_state"]["starf_roll"], want_roll)
+    assert got["in_state"]["hp"] is hp and got["in_actions"] is hp
+    marks = {"hit": hp, "roll": hp, "crit": hp}
+    entries = sc.canon({"outcome": {"starf": starf, **marks}, "x": hp})
+    assert sc.upgrade_entries(entries, None) == sc.canon(
+        {"outcome": {"starf": want_starf, **marks}, "x": hp}
+    )
+    assert sc.UPGRADED == {STARF_ROW: 2, STARF_COLS: 2}
+    assert sc.upgrade_fields("state", {"starf_roll": want_roll})["starf_roll"] is want_roll
+    # no Outcome marks: not an Outcome, left alone (the kind is part of the match)
+    assert sc.upgrade_entries(sc.canon({"starf": starf}), None) == sc.canon({"starf": starf})
+    assert sc.UPGRADED == {STARF_ROW: 2, STARF_COLS: 2}
+
+
+def test_an_unknown_shape_mismatch_still_raises(monkeypatch):
+    """Only a row's exact old dtype and shape upgrades: any other mismatch stays the error."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    layout = {"starf_roll": ((2, 3), np.int8), "starf": ((2, 4), np.int8)}
+    for name, kind, bad in (
+        ("starf_roll", "state", np.zeros((2, 2), np.int8)),
+        ("starf_roll", "state", np.zeros(2, np.int16)),
+        ("starf", "outcome", np.zeros((2, 3), np.int8)),
+    ):
+        saved = sc.upgrade_fields(kind, {name: bad})
+        assert saved[name] is bad
+        with pytest.raises(ValueError, match=name):
+            sc.check_layout(saved, layout)
+        entries = sc.canon({name: bad})
+        assert sc.upgrade_entries(entries, None) == entries
+    assert sc.UPGRADED == {}
+
+
+def test_compare_header_lists_the_upgrades_and_their_counts(run, capsys):
+    snap = str(run.snap)
+    assert run(["capture", snap, "0-1", "--commit", BASE, "--parts", "step"]) == 0
+    capsys.readouterr()
+    run.code = "code-b"
+    res = {**result(), "upgraded": {STARF_ROW: 4, STARF_COLS: 2}}
+    assert run(["compare", snap, "0-1", "--commit", NEW, "--parts", "step"], res=res) == 0
+    out = capsys.readouterr().out
+    assert f"layout upgrade: {STARF_ROW} (F-O3, G-27): the old draw is entry 0" in out
+    assert f"layout upgrade: {STARF_COLS} (F-O3, G-27..G-30): columns 0-1 kept" in out
+    assert f"  layout upgrades: {STARF_COLS} x 2, {STARF_ROW} x 4" in out
+    assert f"layout upgrades run: {STARF_COLS} x 2, {STARF_ROW} x 4" in out
 
 
 def test_every_escape_flag_defaults_off():
@@ -640,3 +740,320 @@ def test_every_escape_flag_defaults_off():
     for action in sc.build_parser()._actions:  # no switch is on by default
         if action.nargs == 0 and action.dest != "help":
             assert action.default is False, action.dest
+
+
+# --- lossless rebuild of an older capture (rules 1-4) ----------------------------------------
+
+
+def _old_state(batch=()):
+    """An older commit's state fields (0b12b1a's names), ``batch`` leading axes."""
+
+    def z(*shape, dtype=np.int8):
+        return np.zeros((*batch, *shape), dtype)
+
+    s = {"species": z(2, 6, dtype=np.int16), "form": z(2, 6), "ability_form": z(2, 6),
+         "ability_slot": z(2, 6), "item": z(2, 6, dtype=np.int16), "types": z(2, 6, 2),
+         "active": z(2), "transformed": z(2), "hp": z(2, 6, dtype=np.int16), "uproar": z(2),
+         "starf_roll": z(2), "weather": z(), "weather_timer": z(), "gravity": z(),
+         "trick_room": z()}  # fmt: skip
+    s["species"][..., 0] = 25
+    return s
+
+
+@pytest.fixture
+def rows(monkeypatch):
+    """No tables: Pikachu's personal types are (13, 13)."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    monkeypatch.setattr(sc, "_personal_types", lambda tables, *mon: (13, 13))
+    return sc
+
+
+def test_field_rows_rebuild_the_mask_weather_turns_and_party_ability(rows):
+    """Rule 1 (G-4, G-11): a TEMP weather keeps its timer as weather_turns and takes the TEMP
+    bit, a permanent one (timer 0) the PERM bit; Gravity << 12, Trick Room << 16, Uproar bit
+    8 + b; party_ability / nightmare / starf_taken 0; the old fields leave."""
+    from nuzline.engine.ids import FieldCondition as F
+    from nuzline.engine.ids import Weather
+
+    s = _old_state()
+    s["types"][:, 0] = 13
+    s.update(weather=np.int8(Weather.RAIN), weather_timer=np.int8(3), gravity=np.int8(2),
+             trick_room=np.int8(4), uproar=np.array([0, 2], np.int8))  # fmt: skip
+    new = sc.upgrade_fields("state", s)
+    assert int(new["field_mask"]) == F.RAINING_TEMP | 2 << 12 | 4 << 16 | 1 << 9
+    assert new["field_mask"].dtype == np.int32 and int(new["weather_turns"]) == 3
+    assert not {"weather", "weather_timer", "gravity", "trick_room"} & set(new)
+    assert "uproar" in new
+    for name, shape in (("party_ability", (2, 6)), ("nightmare", (2,)), ("starf_taken", (2,))):
+        assert new[name].shape == shape and not new[name].any(), name
+    assert new["party_ability"].dtype == np.int16
+    s.update(weather_timer=np.int8(0), gravity=np.int8(0), trick_room=np.int8(0))
+    s["uproar"][:] = 0
+    new = sc.upgrade_fields("state", s)
+    assert (int(new["field_mask"]), int(new["weather_turns"])) == (F.RAINING_PERM, 0)
+    assert sc.upgrade_fields("state", new) == new  # a newer state: no row runs
+    s.update(weather=np.int8(Weather.FOG), gravity=np.int8(1))  # deep fog: bit 15, one bit
+    new = sc.upgrade_fields("state", s)
+    assert int(new["field_mask"]) == 1 << 15 | 1 << 12 and F.DEEP_FOG == 1 << 15
+    assert int(new["weather_turns"]) == 0
+
+
+def test_camouflage_is_the_old_inference_but_not_on_a_transformed_battler(rows):
+    """G-20: types off the personal row read as camouflaged in the old engine; a Transformed
+    battler's copy no longer does."""
+    s = _old_state()
+    s["types"][:, 0] = 13
+    s["types"][0, 0] = (0, 2)  # the player's active: Camouflaged
+    s["types"][1, 0] = (0, 2)
+    s["transformed"][1] = 1  # the foe: a Transformed copy
+    assert sc.upgrade_fields("state", s)["camouflage"].tolist() == [1, 0]
+
+
+def test_camouflage_reads_the_tables_of_the_states_game(monkeypatch):
+    """Review G MUST: the camouflage row compares a battler's types with the personal row of
+    the game its state belongs to: a species whose types a game changed (here Kaizo's Pikachu
+    as (13, 2); no built Kaizo row differs from vanilla today) is camouflaged on the vanilla
+    tables, not on its own; no tables, no inference (it raises)."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    games = {"vanilla": {25: (13, 13)}, "kaizo": {25: (13, 2)}}
+    monkeypatch.setattr(sc, "_personal_types", lambda tables, species, *rest: tables[species])
+    s = _old_state()
+    s["types"][:, 0] = (13, 2)  # Kaizo's Pikachu as the trace saves it
+    assert sc.upgrade_fields("state", s, tables=games["kaizo"])["camouflage"].tolist() == [0, 0]
+    assert sc.upgrade_fields("state", s, tables=games["vanilla"])["camouflage"].tolist() == [1, 1]
+    entries = sc.canon({"rb": s})
+    got = sc.upgrade_entries(entries, games["kaizo"])
+    assert np.frombuffer(got[".rb.camouflage"][3], np.int8).tolist() == [0, 0]
+    monkeypatch.undo()
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    with pytest.raises(RuntimeError, match="tables"):
+        sc.upgrade_fields("state", s)
+
+
+def test_each_part_upgrades_on_its_own_games_tables():
+    """roark.trace (kaizo_roark_02) reads the Kaizo tables, loaded once; every other part the
+    vanilla ones (roark.rank: roark_real_state)."""
+    ctx = object.__new__(sc.Ctx)
+    loads = []
+    ctx.tables, ctx.kdir, ctx._kaizo = "vanilla", "kaizo-dir", None
+    ctx._load = lambda d: loads.append(d) or f"tables of {d}"
+    for part in ("0-9.step", "0-9.gen", "0-9.ai", "roark.rank"):
+        assert ctx.tables_for(part) == "vanilla", part
+    assert ctx.tables_for("roark.trace") == ctx.tables_for("roark.trace") == "tables of kaizo-dir"
+    assert loads == ["kaizo-dir"]
+
+
+def test_rows_run_on_batched_outputs_by_kind(rows):
+    """Rule 2: leading axes (a batch of states, enumerate_turn's outcomes) upgrade; rows match
+    a group of entries by its kind's marks, so an Outcome's starf never meets a state row."""
+    from nuzline.engine.ids import FieldCondition as F
+
+    s = _old_state((3,))
+    s["types"][..., 0, :] = 13
+    s["weather"][1], s["weather_timer"][1] = 1, 0  # sun, permanent
+    starf = np.arange(3 * 2 * 2, dtype=np.int8).reshape(3, 2, 2)
+    o = {"starf": starf, "hit": np.zeros((3, 2, 6), np.int8), "roll": np.zeros(3, np.int8),
+         "crit": np.zeros(3, np.int8)}  # fmt: skip
+    inv = {}
+    got = sc.upgrade_entries(sc.canon({"rb": [s], "et": [o]}), None, inv)
+    mask = np.frombuffer(got[".rb[0].field_mask"][3], np.int32)
+    assert mask.tolist() == [0, F.SUNNY_PERM, 0]
+    assert ".rb[0].weather" not in got and got[".rb[0].starf_roll"][2] == "(3, 2, 3)"
+    assert got[".et[0].starf"][2] == "(3, 2, 4)" and inv == {".et[0].starf": (2, 3)}
+    assert got[".rb[0].camouflage"][2] == "(3, 2)"
+    # a saved input is one state: no leading axes there
+    assert sc.upgrade_fields("state", {"starf_roll": np.zeros((2, 2), np.int8)})[
+        "starf_roll"
+    ].shape == (2, 2)
+
+
+# main 08a57000's from_ref output entries (``ref_step``'s state), exactly as its code emitted
+# them through ``canon``: from_ref stores every field in LAYOUT's dtype and shape
+# (08a57000 reference/convert.py:53-75; state.py:741 _FIELD = (), :868-870 weather /
+# weather_timer / trick_room int8, :801 uproar int8[B]), and canon writes a 0-d array as (1,)
+# (np.ascontiguousarray, ndim >= 1). Generated with 08a57000's src on a singles state with
+# weather 2, timer 3, gravity 4, Trick Room 1, uproar (0, 2). jit(step) / step_events write
+# the same dtypes (08a57000 step.py:4133-4134 and :4326 astype; :4157 jnp.where of the int8
+# counter and the weak Python int GRAVITY_TURNS stays int8), root_belief and the Roark parts
+# return single states: every output state stores its 0-d fields as (1,).
+MAIN_OLD_FIELDS = {
+    "weather": ("arr", "|i1", "(1,)", b"\x02"),
+    "weather_timer": ("arr", "|i1", "(1,)", b"\x03"),
+    "gravity": ("arr", "|i1", "(1,)", b"\x04"),
+    "trick_room": ("arr", "|i1", "(1,)", b"\x01"),
+    "uproar": ("arr", "|i1", "(2,)", b"\x00\x02"),
+    "acid_rain": ("arr", "|i1", "(1,)", b"\x00"),
+    "species": ("arr", "<i2", "(2, 6)", bytes(24)),
+    "active": ("arr", "|i1", "(2,)", bytes(2)),
+    "hp": ("arr", "<i2", "(2, 6)", bytes(24)),
+}
+OUTPUT_PREFIXES = (".ref_step", ".step_events[0]", ".jit_step", ".root_belief[0][0]",
+                   ".ref_replay", ".replay_turn", ".state", ".in_state", ".in_ai_state")  # fmt: skip
+
+
+@pytest.mark.parametrize("prefix", OUTPUT_PREFIXES)
+def test_field_row_runs_on_main_output_records(rows, prefix):
+    """Task 1 (pod compare of 56cd9f4): the field row ran on the saved inputs only. A captured
+    output state's 0-d fields are (1,) entries (canon) while uproar is (2,): the reads' leads
+    differed ((1,) against ()), so Upgrade.lead returned None on every output (ref_step,
+    step_events, jit_step, root_belief, ref_replay / replay_turn / state, the record's
+    in_state / in_ai_state). Read flat, they are the 0-d fields and the row runs."""
+    from nuzline.engine.ids import FieldCondition as F
+
+    entries = {f"{prefix}.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    got = sc.upgrade_entries(entries, None)
+    assert not {
+        f"{prefix}.{k}" for k in ("weather", "weather_timer", "gravity", "trick_room")
+    } & set(got)
+    mask = got[f"{prefix}.field_mask"]
+    want = F.RAINING_TEMP | 4 << 12 | 1 << 16 | 1 << 9  # Weather 2 = rain, timer 3
+    assert mask[:3] == ("arr", "<i4", "(1,)") and struct.unpack("<i", mask[3])[0] == want
+    assert got[f"{prefix}.weather_turns"] == ("arr", "<i4", "(1,)", struct.pack("<i", 3))
+    assert got[f"{prefix}.uproar"] == MAIN_OLD_FIELDS["uproar"]
+    assert sc.UPGRADED[sc.UPGRADES[2].name] == 1
+
+
+def test_flat_scalars_keep_batches_and_newer_captures(rows):
+    """A (1,) read is a batch of one where the other reads say so; a newer capture (a
+    field_mask already there) and a scalar of another dtype still run no row."""
+    one = {k: v for k, v in MAIN_OLD_FIELDS.items()}
+    one.update(uproar=("arr", "|i1", "(1, 2)", b"\x00\x02"), species=("arr", "<i2", "(1, 2, 6)", bytes(24)),
+               active=("arr", "|i1", "(1, 2)", bytes(2)), hp=("arr", "<i2", "(1, 2, 6)", bytes(24)))  # fmt: skip
+    got = sc.upgrade_entries({f".rb.{k}": v for k, v in one.items()}, None)
+    assert got[".rb.field_mask"][2] == "(1,)" and ".rb.weather" not in got
+    newer = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    newer[".s.field_mask"] = ("arr", "<i4", "(1,)", bytes(4))
+    assert ".s.weather" in sc.upgrade_entries(newer, None)
+    wide = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}
+    wide[".s.gravity"] = ("arr", "<i4", "(1,)", struct.pack("<i", 4))
+    assert ".s.weather" in sc.upgrade_entries(wide, None)
+    batch3 = {f".s.{k}": v for k, v in MAIN_OLD_FIELDS.items()}  # (1,) scalars, lead (3,): no
+    batch3[".s.uproar"] = ("arr", "|i1", "(3, 2)", bytes(6))
+    assert ".s.weather" in sc.upgrade_entries(batch3, None)
+
+
+def test_sampler_outputs_drift_in_every_starf_column_saved_outcomes_in_2_3(capsys):
+    """Task 2: main drew Outcome.starf as randint(fold_in(key, 48), (B, 2)) and this checkout
+    draws (B, 4) from that key (outcome.py sample_outcome), so every column of a fresh draw
+    (.sample_outcome) changes: all four are sampler drift. A saved Outcome (.in_outcome)
+    invents only columns 2-3; its columns 0-1 stay strict."""
+    old = np.array([[5, 1], [7, 2]], np.int8)
+    marks = {"hit": np.zeros((2, 6), np.int8), "roll": np.zeros(2, np.int8),
+             "crit": np.zeros(2, np.int8)}  # fmt: skip
+    entries = sc.canon(
+        {"sample_outcome": {"starf": old, **marks}, "in_outcome": {"starf": old, **marks}}
+    )
+    inv: dict = {}
+    want = sc.upgrade_entries(entries, None, inv)
+    assert inv == {".sample_outcome.starf": (0, 1, 2, 3), ".in_outcome.starf": (2, 3)}
+    drawn = np.array([[9, 8, 7, 6], [5, 4, 3, 2]], np.int8)
+    saved = np.array([[5, 1, 5, 5], [7, 2, 7, 7]], np.int8)
+    got = sc.canon(
+        {"sample_outcome": {"starf": drawn, **marks}, "in_outcome": {"starf": saved, **marks}}
+    )
+    assert sc.settle_new_columns(want, got, inv) == 1
+    assert sc.compare_dumps(_step(want), [("k", got)])[0] is None
+    saved[1, 0] = 0  # a saved Outcome's column 0 still diverges
+    want = sc.upgrade_entries(entries, None, inv := {})
+    got = sc.canon(
+        {"sample_outcome": {"starf": drawn, **marks}, "in_outcome": {"starf": saved, **marks}}
+    )
+    sc.settle_new_columns(want, got, inv)
+    diverged = sc.compare_dumps(_step(want), [("k", got)])[0]
+    assert diverged and ".in_outcome.starf[1, 0]" in diverged
+
+
+def test_new_starf_columns_are_sampler_drift_not_divergence(capsys):
+    """Rule 4: Outcome.starf columns 2-3 of an old capture are invented: a rerun's own draws
+    there are sampler drift; columns 0-1 stay strict."""
+    old = np.array([[5, 1, 5, 5], [7, 2, 7, 7]], np.int8)
+    new = old.copy()
+    new[:, 2:] = 9
+    want, got = sc.canon({"s": {"starf": old}}), sc.canon({"s": {"starf": new}})
+    assert sc.settle_new_columns(want, got, {".s.starf": (2, 3)}) == 1
+    assert sc.compare_dumps(_step(want), [("k", got)])[0] is None
+    new[1, 0] = 0
+    want, got = sc.canon({"s": {"starf": old}}), sc.canon({"s": {"starf": new}})
+    sc.settle_new_columns(want, got, {".s.starf": (2, 3)})
+    diverged = sc.compare_dumps(_step(want), [("k", got)])[0]
+    assert diverged and ".s.starf[1, 0]" in diverged
+    res = {**result(), "sampler_drift": 3}
+    assert sc.report(args(), "0-0.sample", res, 1.0, set(), set(), "") == 0
+    assert "sampler drift (new columns): 3 steps" in capsys.readouterr().out
+    assert sc.part_class("0-0.sample", res, 0) == "sampler drift"
+
+
+def test_starf_columns_0_1_diverge_even_under_sampler_drift(capsys):
+    """Only Outcome.starf columns 2-3 are sampler drift: a step whose columns 2-3 drifted and
+    whose column 0 or 1 differs is a divergence, and the part is diverged (a failure), not
+    sampler drift."""
+    old = np.array([[5, 1, 5, 5], [7, 2, 7, 7]], np.int8)
+    for col in (0, 1):
+        new = old.copy()
+        new[:, 2:] = 9
+        new[0, col] += 1
+        want, got = sc.canon({"s": {"starf": old}}), sc.canon({"s": {"starf": new}})
+        assert sc.settle_new_columns(want, got, {".s.starf": (2, 3)}) == 1
+        diverged = sc.compare_dumps(_step(want), [("k", got)])[0]
+        assert diverged and f".s.starf[0, {col}]" in diverged, col
+    res = {**result(diverged=diverged), "sampler_drift": 1}
+    assert sc.report(args(), "0-0.sample", res, 1.0, set(), set(), "") == 1
+    assert sc.part_class("0-0.sample", res, 1) == "diverged"
+
+
+def test_gen_divergence_is_generator_drift_and_the_closing_line_counts(run, capsys):
+    """Rule 4: the "gen" part's divergence is counted as generator drift, not a failure; the
+    final line counts ok / diverged / error / sampler drift / generator drift."""
+    snap = str(run.snap)
+    assert run(["capture", snap, "0-1", "--commit", BASE, "--parts", "gen,rest"]) == 0
+    run.code = "code-b"
+    capsys.readouterr()
+    drift = {**result(diverged="seed 1 turn 3 segment 0: .in_actions[0]: 0 -> 2"),
+             "generator_drift": True}  # fmt: skip
+    argv = ["compare", snap, "0-1", "--commit", NEW, "--parts", "gen,rest"]
+    assert run(argv, res=drift) == 1  # rest diverged with the same canned result
+    out = capsys.readouterr().out
+    assert "generator drift: first at seed 1 turn 3" in out
+    assert "parts: 0 ok, 1 diverged, 0 error, 0 sampler drift, 1 generator drift" in out
+    assert sc.report(args(), "0-1.gen", drift, 1.0, set(), set(), "") == 0
+    hard = {**drift, "generator_drift": False}  # classify_gen found an entry no strategy draws
+    assert sc.report(args(), "0-1.gen", hard, 1.0, set(), set(), "") == 1
+    assert sc.part_class("0-1.gen", hard, 1) == "diverged"
+
+
+def test_gen_drift_only_in_inputs_the_strategies_draw():
+    """Generator drift is informational only when every differing "gen" entry is a drawn input
+    (a segment's actions and Outcome, the AI state, segment 0's state); a later segment's
+    state (read from the saved inputs, not drawn), any other entry, a raise or a different step
+    list is a divergence."""
+    a, b = np.zeros(2, np.int32), np.ones(2, np.int32)
+    s0, s1, ai = "seed 1 turn 0 segment 0", "seed 1 turn 0 segment 1", "seed 1 turn 0 ai"
+
+    def gen(changed):
+        """(record, dump, diverged) of three steps; ``changed``: {(key, path)} that differ."""
+        steps = {s0: (".in_actions", ".in_outcome.roll", ".in_state.hp"),
+                 s1: (".in_actions", ".in_outcome.roll", ".in_state.hp"), ai: (".in_ai_state.hp",)}  # fmt: skip
+        record = [(k, "d", {p: sc.canon(a)[""] for p in ps}) for k, ps in steps.items()]
+        dump = [(k, {p: sc.canon(b if (k, p) in changed else a)[""] for p in ps})
+                for k, ps in steps.items()]  # fmt: skip
+        return record, dump, sc.compare_dumps(record, dump)[0]
+
+    for changed in ({(s0, ".in_actions")}, {(s0, ".in_state.hp")}, {(s1, ".in_outcome.roll")},
+                    {(ai, ".in_ai_state.hp")}, {(s0, ".in_state.hp"), (s1, ".in_actions")}):  # fmt: skip
+        record, dump, diverged = gen(changed)
+        assert diverged and sc.classify_gen(record, dump, diverged) == (diverged, True), changed
+    record, dump, diverged = gen({(s0, ".in_actions"), (s1, ".in_actions"), (s1, ".in_state.hp")})
+    hard, drift = sc.classify_gen(record, dump, diverged)
+    assert not drift and hard.startswith(f"{s1}: .in_state.hp[0]") and "not an input" in hard
+    record, dump, _ = gen(set())
+    record[0][2][".other"], dump[0][1][".other"] = sc.canon(a)[""], sc.canon(b)[""]
+    hard, drift = sc.classify_gen(record, dump, sc.compare_dumps(record, dump)[0])
+    assert not drift and hard.startswith(f"{s0}: .other")
+    record, dump, _ = gen(set())
+    dump[2][1][".in_ai_state.hp"] = sc.canon(ValueError("x"))[""]
+    hard, drift = sc.classify_gen(record, dump, sc.compare_dumps(record, dump)[0])
+    assert not drift and "raised on" in hard
+    record, dump, _ = gen({(s0, ".in_actions")})
+    diverged = sc.compare_dumps(record, dump[:2])[0]
+    assert sc.classify_gen(record, dump[:2], diverged) == (diverged, False)
+    assert sc.classify_gen(record, dump, None) == (None, False)

@@ -20,7 +20,6 @@ from tools.kaizo.backlog import (
     new_by_split,
     partner_unknown,
     reachable_species,
-    runtime_section,
     sheet_cites,
 )
 
@@ -214,16 +213,3 @@ def test_metronome_unmodelled_counts_the_refused_calls(tables, names):
     assert 0 < n < m
     # Metronome is refused while any of them is (coverage.move_effect_line).
     assert move_effect_line(tables, names, metronome, 1)[0] == Support.NONE
-
-
-def test_runtime_kind_is_a_battle_condition_and_lists_the_fight_as_playable():
-    # SF2 (f): a trainer with a Pursuit user reports "field condition: Acid Rain (runtime
-    # refusal)" in CoverageReport.runtime; the group kind is a battle condition, and the fight
-    # is listed playable (it is not a missing group), with the exposure note.
-    line = "field condition: Acid Rain (runtime refusal)"
-    assert group_kind(("field condition", "Acid Rain")) == "battle conditions"
-    text = "\n".join(runtime_section([("7 Pursuer", [line, line])]))
-    assert "## Playable, lines hitting the glitch refused" in text
-    assert "| 7 Pursuer | " + line + " |" in text
-    assert "any fight is exposed when the player carries Pursuit" in text
-    assert "1 battles." in text

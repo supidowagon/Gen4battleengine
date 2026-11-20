@@ -19,12 +19,12 @@ from nuzline.engine import enumerate as enum_mod
 from nuzline.engine import outcome as outcome_mod
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.enumerate import _paused_rock, enumerate_turn
-from nuzline.engine.ids import AbilityId, Stat, Status, Type, Weather
+from nuzline.engine.ids import AbilityId, FieldCondition, Stat, Status, Type, Weather
 from nuzline.engine.order import metronome_weights
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, pivot_view
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step_events
-from tests.engine.helpers import assert_matches_reference, jit_step, step_rows
+from tests.engine.helpers import assert_matches_reference, jit_step, step_rows, trick_room_of
 
 O = empty_outcome()
 SWITCH = MOVE_ACTIONS + 1  # switch to party slot 1
@@ -981,7 +981,7 @@ def test_trick_room_sets_custap_again_and_the_next_turn_eats_it(tables, names):
     s = _pinch_after_tackle(tables, _tr_duel(tables, n, "Custap Berry", ["Tackle"], foe_bench=True))
     assert np.asarray(s.custap_flag).tolist() == [0, 0]
     out = assert_matches_reference(tables, s, (0, 0), O)
-    assert int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4 and int(out.trick_room) != 0
+    assert int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4 and int(trick_room_of(out)) != 0
     assert int(out.item[0, 0]) == n.item("Custap Berry")
     assert np.asarray(out.custap_flag).tolist() == [1, 0]
     assert np.asarray(out.claw_flag).tolist() == [0, 0]
@@ -1004,22 +1004,21 @@ def test_trick_room_sets_no_flag_when_the_foe_is_down_or_switching(tables, names
     )
     s = _pinch_after_tackle(tables, s)
     out = assert_matches_reference(tables, s, (0, 0), O)
-    assert int(out.hp[1, 0]) == 0 and int(out.trick_room) != 0 and int(out.over) == 0
+    assert int(out.hp[1, 0]) == 0 and int(trick_room_of(out)) != 0 and int(out.over) == 0
     assert int(out.hp[0, 0]) == int(s.max_hp[0, 0]) // 4
     assert np.asarray(out.custap_flag).tolist() == [0, 0]
     # The foe switched: no FIGHT pair, no compare, whatever the holder's HP.
     s = _tr_duel(tables, n, "Custap Berry", ["Tackle"], foe_bench=True)
     s = s.replace_hp(0, 0, int(s.max_hp[0, 0]) // 4)
     out = assert_matches_reference(tables, s, (0, SWITCH), O)
-    assert int(out.trick_room) != 0
+    assert int(trick_room_of(out)) != 0
     assert np.asarray(out.custap_flag).tolist() == [0, 0]
 
 
 def _claw_next(out):
     """The turn after: the claw draw of the turn before is 0, Trick Room is over, the foe fast."""
-    nxt = out._replace(
-        qc_roll=jnp.zeros_like(out.qc_roll), trick_room=jnp.zeros_like(out.trick_room)
-    )
+    off = jnp.asarray(~int(FieldCondition.TRICK_ROOM), out.field_mask.dtype)
+    nxt = out._replace(qc_roll=jnp.zeros_like(out.qc_roll), field_mask=out.field_mask & off)
     return nxt._replace(stats=nxt.stats.at[1, 0, _SPE].set(999))
 
 
@@ -1028,7 +1027,7 @@ def test_trick_room_sets_quick_claw_again_and_it_guards_against_knock_off(tables
     s = _tr_duel(tables, n, "Quick Claw", ["Tackle", "Knock Off"])
     o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
-    assert int(out.trick_room) != 0
+    assert int(trick_room_of(out)) != 0
     assert np.asarray(out.claw_flag).tolist() == [1, 0]
     nxt = _claw_next(out)
     acts = (1, 1)  # the foe's Knock Off comes first, on the standing flag
@@ -1054,7 +1053,7 @@ def test_a_called_trick_room_guards_the_holder_in_the_same_turn(tables, names):
     rank = int(np.count_nonzero(weights[:room]))
     o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8), call=jnp.asarray([rank, 0], jnp.int16))
     out = assert_matches_reference(tables, s, (0, 0), o)
-    assert int(out.trick_room) != 0
+    assert int(trick_room_of(out)) != 0
     assert int(out.item[0, 0]) == n.item("Quick Claw")  # the slower foe's Knock Off failed
 
 
@@ -1100,14 +1099,14 @@ def test_a_flagged_battler_that_faints_at_the_turn_end_keeps_no_flag(tables, nam
     s = s.replace_hp(0, 0, 1)
     o = O._replace(quick_claw=jnp.asarray([1, 0], jnp.int8))
     out = assert_matches_reference(tables, s, (0, 0), o)
-    assert int(out.hp[0, 0]) == 0 and int(out.trick_room) != 0
+    assert int(out.hp[0, 0]) == 0 and int(trick_room_of(out)) != 0
     assert np.asarray(out.claw_flag).tolist() == [0, 0]
 
 
 def test_a_trick_room_turn_without_a_holder_leaves_no_flag(tables, names):
     s = _tr_duel(tables, names, "", ["Tackle"])
     out = assert_matches_reference(tables, s, (0, 0), O._replace(quick_claw=jnp.ones(2, jnp.int8)))
-    assert int(out.trick_room) != 0
+    assert int(trick_room_of(out)) != 0
     assert not np.any(np.asarray(out.claw_flag)) and not np.any(np.asarray(out.custap_flag))
 
 

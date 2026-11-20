@@ -54,32 +54,6 @@ def group_kind(k):
     return _KIND_OF.get(kind, "other")
 
 
-RUNTIME_NOTE = "any fight is exposed when the player carries Pursuit"
-
-
-def runtime_section(entries):
-    """The lines of the "playable, lines hitting the glitch refused" section. ``entries``:
-    ``(battle label, runtime lines)`` of each runnable battle (no missing group) whose opponents
-    report ``CoverageReport.runtime`` lines (kind "field condition": a trainer move whose
-    effect is BATTLE_EFFECT_HIT_BEFORE_SWITCH, the Acid Rain guard). Such a fight stays
-    playable: only the play lines that reach the glitch are refused at run time."""
-    out = [
-        "",
-        "## Playable, lines hitting the glitch refused",
-        "",
-        "Runnable battles whose opponents report a runtime line (`CoverageReport.runtime`,",
-        "kind field condition): the fight is playable and only the lines that reach the",
-        f"glitch are refused ({RUNTIME_NOTE}).",
-        "",
-        f"{len(entries)} battles.",
-        "",
-        "| Battle | Runtime lines |",
-        "|---|---|",
-    ]
-    out += [f"| {label} | {'; '.join(sorted(set(lines)))} |" for label, lines in entries]
-    return out
-
-
 def battles(rows, by_id):
     """The battles of the split rows ``rows``, each a sorted tuple of trainer ids: a row joined
     with its ``opponent_2`` (both directions, transitively). A second opponent that is not a
@@ -273,6 +247,29 @@ NO_BATTLE_EFFECT = {
     "HOLD_EFFECT_EVOLVE_PORYGON2": _TRADE_EVO,
     "HOLD_EFFECT_EVOLVE_DUSCLOPS": _TRADE_EVO,
 }
+
+
+# Start conditions a Kaizo ROM script puts on your party outside any trainer row (E1 ledger
+# G-25, G-35; manager order 19 Nov): (condition, status here, source). No split battle needs
+# them, so they count in no total.
+SCRIPT_START_CONDITIONS = (
+    (
+        (
+            "Newmoon status 0x7B on party[0] (sleep 3, poison, burn, freeze, paralysis;"
+            " condition.h:7-13), kept by the battle until healed"
+        ),
+        (
+            "playable after heal; multi-status start refused (`SaveMon.to_spec`,"
+            " src/nuzline/saves/pkm.py:109) until the status-word batch (E1 G-39)"
+        ),
+        (
+            "scr_seq 213 entry 20 (the Pokemon Center 2F bed, common script 9019) warps to 320 with"
+            " trainer flag 882 set (scr_seq 278 0x011d), always with flag 823 (0x0199 -> 0x0b18);"
+            " scr_seq 362 0x00f8 warps 320 -> 321; scr_seq 363 0x00f2 writes the word, then"
+            " StartFirstBattle 674 (Lady Emi, no split)"
+        ),
+    ),
+)
 
 
 def _check_no_battle_effect(decomp):
@@ -574,9 +571,7 @@ def main(out_path):
     from nuzline.data.trainer import IntermediateData, build_trainer_party
     from nuzline.engine.coverage import (
         check_opponent,
-        display_name,
         start_weather,
-        transform_sky_refusals,
     )
 
     game = cli._game(argparse.Namespace(game="kaizo"))
@@ -658,8 +653,6 @@ def main(out_path):
         return (kind, name), None
 
     errors = []
-    runtime_of = {}  # trainer id -> CoverageReport.runtime lines (refuse no fight)
-    transform = names.move("Transform")
 
     def check(t, mem=members, errs=errors):
         """The missing groups of trainer row ``t`` (its team, bag, AI and battle conditions)."""
@@ -667,16 +660,7 @@ def main(out_path):
             cli._check_buildable(tables, names, t, inter)
             party = build_trainer_party(t, inter)
             r = check_opponent(tables, names, t, party, start_weather(t))
-            runtime_of[t.id] = list(r.runtime)
             ks = ai_move_groups(t, party, mem)
-            # F-26 (open, E1's next batch): check_opponent runs without your party, so a
-            # trainer's Sky Shaymin is counted here as facing your Transform user (Ditto),
-            # whose freeze revert writes Land's ability into your party Pokemon
-            # (battle_script.c:3401-3407, battle_io_command.c:601-604).
-            for line in transform_sky_refusals(tables, names, (), party, (transform,)):
-                k = ("form change", f"{line} (F-26; your Transform user assumed)")
-                ks.add(k)
-                mem[k].add(display_name(t))
             for m in r.missing:
                 k, member = key(str(m))
                 ks.add(k)
@@ -739,8 +723,7 @@ def main(out_path):
         "opposing trainer row of every split.",
         "It counts only what the trainers' teams, bags, AI and battle conditions need.",
         "Your own Pokemon's moves, abilities and items are not counted, nor are the teams of",
-        "AI partners beside you in multi battles, except F-26: a trainer's Sky Shaymin is counted",
-        "as facing your Transform user (form change).",
+        "AI partners beside you in multi battles.",
         "Moves are grouped by the game's move-effect number and held items by hold-effect number,",
         "since one implementation covers the whole group.",
         "",
@@ -840,6 +823,19 @@ def main(out_path):
         ]
         + [f"| {group_kind(k)} | {label(k)} | {first[k]} |" for k in odd]
     )
+    L.extend(
+        [
+            "",
+            "### Start conditions set by ROM scripts",
+            "",
+            "Set on your party by a script outside any trainer row (E1 ledger G-25, G-35); no split",
+            "battle needs them, so they count in no total above.",
+            "",
+            "| Condition | Status | Source |",
+            "|---|---|---|",
+        ]
+        + [f"| {c} | {st} | {src} |" for c, st, src in SCRIPT_START_CONDITIONS]
+    )
     player_section(
         L, order, whole, by_id, split_rows, extra, check, key, tables, names, d, items, decomp
     )
@@ -866,18 +862,6 @@ def main(out_path):
         L.extend(["", "Groups by kind: " + ", ".join(f"{k} {v}" for k, v in kinds.most_common())])
         return cnt
 
-    L.extend(
-        runtime_section(
-            [
-                (
-                    ", ".join(f"{i} {by_id[i].label}" for i in b),
-                    [line for i in b for line in runtime_of.get(i, ())],
-                )
-                for b in bs
-                if not battle_groups[b] and any(runtime_of.get(i) for i in b)
-            ]
-        )
-    )
     table("Roark split", order[:1])
     table("Roark and Gardenia splits (up to the second gym)", order[:2])
     table("All ten splits (top 60)", order, 60)

@@ -23,7 +23,7 @@ from tests.strategies import any_outcome, legal_action_pair, pivot_actions, supp
 
 NEW_FIELDS = ("deaths", "faint_budget", "protected", "replace_mul")
 # Fields added after them (E2 batch 6: the turn scratch, 0 between turns, docs/kaizo/
-# e2-mechanics-ledger.md "Batch 6 design"): all 0 in a fresh state too.
+# e2-mechanics-ledger.md "Batch 6 design"; E3-B2-21's learn pause): all 0 in a fresh state too.
 LATER_FIELDS = tuple(
     BattleState._fields[
         BattleState._fields.index("replace_mul") + 1 : BattleState._fields.index("chosen_target")
@@ -45,7 +45,9 @@ def test_new_fields_start_values(tables, names):
     assert np.asarray(s.chosen_target).tolist() == (b ^ 1).tolist()
     start = BattleState._fields.index("deaths")
     assert BattleState._fields[start : start + 4] == NEW_FIELDS
-    assert all(name == "pivot_battler" or name.startswith("ts_") for name in LATER_FIELDS)
+    assert all(
+        name in ("pivot_battler", "learn_site") or name.startswith("ts_") for name in LATER_FIELDS
+    )
     assert LAYOUT["deaths"] == ((6,), np.int8)
     assert LAYOUT["faint_budget"] == ((), np.int8)
     assert LAYOUT["protected"] == ((6,), np.int8)

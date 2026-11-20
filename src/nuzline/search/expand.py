@@ -38,8 +38,18 @@ war's tie (ruling G-26, ``step.resolve_war``): two children at 1/2 where it deci
 weather, else the one child has probability 1; the store is deduplicated by state bytes as
 ``expand``'s.
 
-**Learn-move prompts** (K3d-exp design §3.5): ``TurnEnd`` pays exp and runs its learn-move
-prompts (battle_controller_player.c:1846) before ``ReplaceFainted`` (:1848). So a turn's
+**Mid-turn learn prompts** (E3-B2-21): a payout at MoveEnd, in the field conditions or in a
+battler's turn-end checks runs its learn prompts inside it (bcp.c:3968, :941, :1296), before any
+later action or draw of the turn. ``step`` pauses there (``BattleState.learn_site``), so a turn's
+child can be a state paused at a prompt (a learn decision, ``stage_b``: ``_resumes``). Its answer
+is a request ``(state index, option)`` of ``expand``, as a pivot's pick is: the option is applied
+(``levelup.learn``), another prompt left is the one child (``expand_learns``), else the turn
+resumes through ``step`` and the later draws are a chance node of the request, grouped and
+merged as a turn's.
+
+**Learn-move prompts at the turn's end** (K3d-exp design §3.5): ``TurnEnd`` pays exp and runs its
+learn-move prompts (battle_controller_player.c:1846) before ``ReplaceFainted`` (:1848): Future
+Sight, Perish Song and the replacement loop pay there. So a turn's
 child first runs the learnset scans (``levelup.advance_learns``); when a prompt is left and
 the battle goes on, the child **stops** at that learn decision before the opponent's
 replacement, holding the turn's ``power_mul`` in ``replace_mul`` when the opponent's active
@@ -52,7 +62,7 @@ once no prompt is left, ``send_replacements`` with the carried ``powerMul``
 (``playout._carried_mul``), which may stop at a player replacement and hold it again;
 ``replace_mul`` is cleared when nothing is pending. It is observed with
 ``replacement_observation`` (no action ran). Every row kind (turn, learn, replacement) also
-marks a child refused when ``exp_refused`` is set (design §3.3, window (c)).
+is never refused for learn work (E3-B2-21: no window (c)).
 """
 
 from __future__ import annotations
@@ -125,8 +135,7 @@ for _cls in (Outcome, OutcomeLaws, Reads, CallLaws):
 class Child:
     """One merged child of a request: ``state_row`` indexes the store ``expand``
     returns; ``obs`` is the ``int32[OBS_SIZE]`` observation's bytes; ``prob`` the
-    float64 total of its outcomes; ``refused`` the opponent's replacement was refused (or
-    ``exp_refused`` is set)."""
+    float64 total of its outcomes; ``refused`` the opponent's replacement was refused."""
 
     state_row: int
     obs: bytes
@@ -237,12 +246,6 @@ def _picks(tables: Tables, states: BattleState, actions) -> jnp.ndarray:
     return jax.vmap(lambda s, a: turn_inputs(tables, s, a)[0])(states, actions)
 
 
-def _refused_state(state: BattleState) -> jnp.ndarray:
-    """A state the search must not play on: learn work refused (``exp_refused``) or a Pursuit
-    Acid Rain (``acid_rain``)."""
-    return (state.exp_refused != 0) | (state.acid_rain != 0)
-
-
 def _select(cond, a, b):
     return jax.tree.map(lambda x, y: jnp.where(cond, x, y), a, b)
 
@@ -264,8 +267,9 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome, taken)
     # (tests/search/test_pivot_search.py test_the_opponents_list_is_resolved_by_its_ai).
     _, pick_refused, power_mul, ai_switched = turn_inputs(tables, before, actions)
     stepped, events = step_events(tables, before, actions, outcome)
-    # A turn that pauses stops here: the child is the decision at the list (stage_b's "pivot").
-    halted = stepped.pivot_battler != 0
+    # A turn that pauses stops here: the child is the decision at the list (stage_b's "pivot") or
+    # at the learn prompt (E3-B2-21).
+    halted = (stepped.pivot_battler != 0) | (stepped.learn_site != 0)
     paused_child = stepped
     stepped = advance_learns(tables, stepped)
     prompt = needs_learn(stepped) & (stepped.over == 0)  # D8: no prompt once it is over
@@ -279,7 +283,7 @@ def _turn(tables: Tables, before: BattleState, actions, outcome: Outcome, taken)
     held_refused = ai_switched & (needs_replacement(stepped)[1] == 1)
     sent, sent_refused = send_replacements(tables, stepped, ai_switched, power_mul)
     after = _select(prompt, held, sent)
-    refused = jnp.where(prompt, held_refused, sent_refused) | _refused_state(after)
+    refused = jnp.where(prompt, held_refused, sent_refused)
     after = _select(halted, paused_child, after)
     refused = jnp.where(halted, False, refused) | pick_refused
     keep = call_consistent(tables, before, actions, outcome, events, taken)
@@ -338,11 +342,61 @@ class _Merger:
             self.parts.append(take(after, np.asarray(new)))
 
 
+@jax.jit
+def _answers(tables: Tables, states: BattleState, options):
+    """``(answered, again)``: ``levelup.learn`` of each learn-paused row with its option, and
+    whether another prompt is left in a battle that goes on."""
+
+    def one(state, option):
+        answered = learn(tables, state, option)
+        return answered, needs_learn(answered) & (answered.over == 0)
+
+    return jax.vmap(one, in_axes=(0, 0))(states, options)
+
+
 def expand(
     tables: Tables, states: BattleState, pairs: list[tuple[int, int, int]]
 ) -> tuple[BattleState, dict[int, list[Child] | SamplingOnly]]:
+    """``_expand_requests`` of the requests ``pairs``, where a request on a state paused at a
+    learn prompt (``learn_site``, E3-B2-21) carries its answer: ``(state index, option, 0)``. The
+    option is applied first (``levelup.learn``): the laws and the resumed turn read the answered
+    state (its move lists, ``outcome.pivot_view``); another prompt left is the request's one
+    child (``expand_learns``: no turn is played), else the turn resumes and its later draws are
+    the request's chance node."""
+    states = jax.tree.map(np.asarray, states)
+    index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
+    actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
+    paused = np.flatnonzero(np.asarray(states.learn_site)[index] != 0)
+    if not len(paused):
+        return _expand_requests(tables, states, index, actions)
+    answered, again = jax.device_get(
+        _answers(tables, take(states, index[paused]), jnp.asarray(actions[paused, 0]))
+    )
+    answered, again = jax.tree.map(np.asarray, answered), np.asarray(again, bool)
+    n = len(states.hp)
+    index = index.copy()
+    index[paused] = n + np.arange(len(paused))
+    combined = concat([states, answered])
+    run = np.setdiff1d(np.arange(len(pairs)), paused[again])
+    store, kids = _expand_requests(tables, combined, index[run], actions[run])
+    out: dict[int, list[Child] | SamplingOnly] = {int(run[j]): c for j, c in kids.items()}
+    if again.any():
+        stay = paused[again]
+        requests = [(int(pairs[r][0]), int(pairs[r][1])) for r in stay]
+        side, one = expand_learns(tables, states, requests)
+        base = len(store.hp)
+        store = concat([store, side]) if len(side.hp) else store
+        for k, r in enumerate(stay):
+            c = one[k]
+            out[int(r)] = [Child(base + c.state_row, c.obs, c.prob, c.refused)]
+    return store, dict(sorted(out.items()))
+
+
+def _expand_requests(
+    tables: Tables, states: BattleState, index: np.ndarray, actions: np.ndarray
+) -> tuple[BattleState, dict[int, list[Child] | SamplingOnly]]:
     """The merged children of each request ``(state index, player action, opponent
-    action)`` of ``pairs`` on the numpy ``states`` (``N`` rows).
+    action)`` (``index`` and ``actions``, ``int32[R, 2]``) on the numpy ``states`` (``N`` rows).
 
     Returns ``(store, children)``: ``store`` holds this call's distinct child states
     (numpy, one row each; ``Child.state_row`` indexes it), ``children[r]`` the merged
@@ -350,9 +404,8 @@ def expand(
     1, or the ``SamplingOnly`` that ``enumerate_outcomes`` raised for it (above the
     width cap). Rows stream through ``step_rows`` one ``CHUNK`` at a time, so memory is
     one chunk, one request's enumeration and the merged children."""
-    states = jax.tree.map(np.asarray, states)
-    index = np.asarray([p[0] for p in pairs], np.int64).reshape(-1)
-    actions = np.asarray([p[1:] for p in pairs], np.int32).reshape(-1, 2)
+    pairs = index
+    actions = actions.copy()
     # E2 batch 6: at the opponent's own party list its pick is the resume's switch, which the
     # laws read (``outcome.pivot_view``): made here only (``turn_inputs``' pick); the row program
     # steps these actions and reads only the pick's refusal.
@@ -415,10 +468,9 @@ def expand(
 
 def _replace(tables: Tables, state: BattleState, action):
     after, refused = replacement_pass(tables, state, action - MOVE_ACTIONS)
-    refused = refused | _refused_state(after)
     # An open weather war (ruling G-26): its tie bit is a chance node here, before the
     # player's next decision (step.resolve_war), else both rows are the one child.
-    ties = [resolve_war(after, tie) for tie in (0, 1)]
+    ties = [resolve_war(after, tie, tables) for tie in (0, 1)]
     obs = jnp.stack([replacement_observation(t) for t in ties])
     both = jax.tree.map(lambda a, b: jnp.stack([a, b]), *ties)
     return both, war_split(after), refused, obs
@@ -515,7 +567,7 @@ def _learn(tables: Tables, state: BattleState, option):
         replace_mul=jnp.where(pending, sent.replace_mul, 0).astype(sent.replace_mul.dtype)
     )
     after = _select(prompt, answered, sent)
-    refused = (~prompt & sent_refused) | _refused_state(after)
+    refused = ~prompt & sent_refused
     return after, refused, replacement_observation(after)
 
 

@@ -7,8 +7,8 @@
   battler alive and below full HP heals ``BattleSystem_Divide(maxHP, 16)`` through
   ``subscript_aqua_ring_heal.s``, which multiplies by ``(100 + param) / 100`` with a Big
   Root. Only Heal Block (``healBlockTurns``, unsupported) gates the heal.
-* ``MOVE_EFFECT_AQUA_RING`` is part of ``MOVE_EFFECT_BATON_PASSED`` (moves.h:44), but Baton
-  Pass is unsupported, so the carry-over is unreachable.
+* ``MOVE_EFFECT_AQUA_RING`` is part of ``MOVE_EFFECT_BATON_PASSED`` (moves.h:46-48); a Baton
+  Pass keeps it (tests/engine/test_e3_batch2.py, E3-B2-20).
 """
 
 import pytest

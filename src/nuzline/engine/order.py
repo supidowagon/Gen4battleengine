@@ -39,6 +39,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
@@ -69,9 +70,9 @@ from nuzline.engine.ids import (
     EffectId,
     ItemId,
     MoveFlag,
+    MoveTarget,
     Stat,
     Status,
-    Weather,
 )
 from nuzline.engine.state import BattleState, battler_ability, held_item
 
@@ -97,31 +98,35 @@ def selected_move(
     ``STRUGGLING_ALL`` (battle_controller_player.c:433). The legality mask then only
     allows action 0. A locked battler picks no command and uses ``moveLockedInto``
     (``FightCommand``, battle_controller_player.c:1885-1888), never Struggling. Meaningless
-    for a switch or item action (callers mask it)."""
+    for a switch or item action (callers mask it). A turn paused at a party list or a learn
+    prompt keeps the Struggle and the lock fixed at the selection (bcp.c:335, :433; the scratch
+    ``ts_struggling`` / ``ts_locked`` / ``ts_move``, as ``step._execute_actions`` reads them), so
+    the laws see the move the step runs, while a free slot is re-read (FightCommand, bcp.c:
+    1889-1895; review b2 #7)."""
     fmt = format_of(state)
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
     mon = state.active[side]
-    struggling = ~jnp.any(usable_moves(tables, state, side))
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    struggling = jnp.where(
+        paused, state.ts_struggling[side] != 0, ~jnp.any(usable_moves(tables, state, side))
+    )
     move = jnp.where(
         struggling, MOVE_STRUGGLE, state.moves[party(fmt, side), mon, slot].astype(_I32)
     )
-    locked = locked_slot(state, side) >= 0
-    return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
+    locked = jnp.where(paused, state.ts_locked[side] != 0, locked_slot(state, side) >= 0)
+    lock_move = jnp.where(paused, state.ts_move[side], state.locked_move[side]).astype(_I32)
+    return jnp.where(locked, lock_move, move), struggling
 
 
 def terrain_index(state: BattleState) -> jnp.ndarray:
     """``int32``: the row of the terrain tables (``ids.TERRAIN_MOVES``, ``TERRAIN_TYPES``) the
     battle reads: ``min(terrain, TERRAIN_SPECIAL)`` (``BtlCmd_GetTerrainMove``,
-    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010). An unknown terrain
-    (``TERRAIN_UNKNOWN``, -1) is clamped to row 0 so that no table is ever indexed with -1;
-    its readers test ``terrain_known`` and do nothing then (coverage and ``trace_to_state``
-    refuse such a battle before it reaches the engine)."""
+    battle_script.c:8040-8043; ``BtlCmd_TryCamouflage``, :8007-8010;
+    ``BtlCmd_GetTerrainSecondaryEffect``, :8067-8070). A fight that reads it has a named terrain:
+    ``TERRAIN_UNKNOWN`` (-1, the run named none) with a terrain move is refused before the engine
+    (``coverage.terrain_refusal``, manager ruling 1; ledger G-21); the lower bound 0 only keeps the
+    index in the tables."""
     return jnp.clip(jnp.asarray(state.terrain, _I32), 0, TERRAIN_SPECIAL)
-
-
-def terrain_known(state: BattleState) -> jnp.ndarray:
-    """``bool``: the battle's terrain is a ``TERRAIN_*`` id, not ``TERRAIN_UNKNOWN``."""
-    return jnp.asarray(state.terrain, _I32) >= 0
 
 
 def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
@@ -133,11 +138,9 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
     effect and ``moveHit`` read the called move (``step._use_move``); otherwise ``move``
     itself. Nature Power stays the move for the status checks, the PP, Taunt, Disable,
     priority and ``movePrevByBattler`` (``moveTemp``, set at command selection,
-    bcp.c:1861-1898, is never changed by ``GoToMoveScript``). With ``TERRAIN_UNKNOWN`` the
-    call is ``MOVE_NONE`` (0, the guard of ``terrain_index``): the move then does nothing."""
+    bcp.c:1861-1898, is never changed by ``GoToMoveScript``)."""
     move = jnp.asarray(move, _I32)
     terrain_move = jnp.asarray(TERRAIN_MOVES, _I32)[terrain_index(state)]
-    terrain_move = jnp.where(terrain_known(state), terrain_move, 0)
     nature_power = tables.move_effect[move] == EffectId.NATURE_POWER
     return jnp.where(nature_power, terrain_move, move)
 
@@ -146,6 +149,9 @@ def called_move(tables: Tables, state: BattleState, move) -> jnp.ndarray:
 CALL_NONE, CALL_SLEEP_TALK, CALL_METRONOME, CALL_COPYCAT = 0, 1, 2, 3
 CALL_ASSIST = 4  # E2 batch 10, B10-11
 CALL_ME_FIRST = 5  # E3-2-3: Me First, ``me_first_copy``; no draw, ordered like Copycat
+CALL_MIRROR_MOVE = (
+    6  # E3-B2-2: Mirror Move, ``mirror_call``; no draw in singles, ordered like Copycat
+)
 
 
 def call_kind(tables: Tables, move) -> jnp.ndarray:
@@ -163,7 +169,11 @@ def call_kind(tables: Tables, move) -> jnp.ndarray:
                 jnp.where(
                     effect == EffectId.ASSIST,
                     CALL_ASSIST,
-                    jnp.where(effect == EffectId.ME_FIRST, CALL_ME_FIRST, CALL_NONE),
+                    jnp.where(
+                        effect == EffectId.ME_FIRST,
+                        CALL_ME_FIRST,
+                        jnp.where(effect == EffectId.MIRROR_MOVE, CALL_MIRROR_MOVE, CALL_NONE),
+                    ),
                 ),
             ),
         ),
@@ -261,6 +271,46 @@ def copycat_call(tables: Tables, move_prev, state: BattleState | None = None) ->
     return jnp.where(ok, move_prev, 0).astype(_I32)
 
 
+# The ranges whose defender stays the user (a Counter-family command re-picks it, so its special
+# range is left out: it may be aimed at the foe, over-approximately): such a move does not write the
+# foe's ``moveCopied``.
+MIRROR_SELF_RANGES = (
+    MoveTarget.RANGE_USER,
+    MoveTarget.RANGE_USER_SIDE,
+    MoveTarget.RANGE_FIELD,
+    MoveTarget.RANGE_ALLY,
+    MoveTarget.RANGE_USER_OR_ALLY,
+)
+
+
+def mirror_call(tables: Tables, copied) -> jnp.ndarray:
+    """``int32``: the move ``BtlCmd_SetMirrorMove`` (battle_script.c:3483-3525) calls with the
+    user's ``moveCopied`` ``copied``, 0 when it fails: MOVE_NONE, or a move ``Move_CanBeEncored``
+    refuses (battle_lib.c:7221-7231: the battle effect of a ``CANNOT_ENCORE_MOVES`` move, the
+    table Mirror Move shares with Encore). A call is not Metronome-limited (an invoker is never
+    recorded: no invoker has ``MoveFlag.MIRROR_MOVE``) and reads nothing of Gravity (E3-B2-2)."""
+    copied = jnp.asarray(copied, _I32)
+    banned = tables.move_ai_effect[jnp.asarray(CANNOT_ENCORE_MOVES, _I32)]
+    refused = jnp.any(tables.move_ai_effect[copied][..., None] == banned, axis=-1)
+    return jnp.where((copied != 0) & ~refused, copied, 0).astype(_I32)
+
+
+def mirror_copied(state: BattleState, side, call) -> jnp.ndarray:
+    """``int32``: ``moveCopied`` of ``side``'s battler as ``BtlCmd_SetMirrorMove`` reads it
+    (battle_script.c:3490-3503): ``move_copied``, else in a doubles battle (more than two battlers)
+    a random nonzero entry of its ``move_copied_hit`` row (``RandNext() % 4`` until nonzero:
+    uniform over the nonzero entries, the ``call % count``-th of them), else none (E3-B2-2)."""
+    fmt = format_of(state)
+    own = state.move_copied[side].astype(_I32)
+    if fmt.B <= 2:
+        return own
+    row = state.move_copied_hit[side].astype(_I32)
+    nonzero = row != 0
+    count = jnp.sum(nonzero.astype(_I32))
+    pick = row[_nth(nonzero, jnp.asarray(call, _I32) % jnp.maximum(count, 1))]
+    return jnp.where(own != 0, own, jnp.where(count > 0, pick, 0)).astype(_I32)
+
+
 def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fights) -> jnp.ndarray:
     """``int32``: the move ``BtlCmd_TryMeFirst`` (battle_script.c:7286-7312) copies from
     ``target_side``'s battler, 0 when it fails, for a target that has not acted yet (the caller's
@@ -287,7 +337,7 @@ def me_first_copy(tables: Tables, state: BattleState, target_side, picked, fight
 
 
 def invoked_move(
-    tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None
+    tables: Tables, state: BattleState, side, move, call, move_prev=None, me_first=None, copied=None
 ):
     """``int32``: the move ``side``'s ``move`` runs through its invoker script, read with
     ``state`` as it is when the script runs; 0 when the invoker finds none. Sleep Talk: the
@@ -297,7 +347,8 @@ def invoked_move(
     ``state.move_prev``, the battle's movePrev when the script runs). Any other move: itself.
     Nature Power on the result is ``called_move``'s. A Gravity variant's ``CALL_GRAVITY`` offset
     is dropped (``call % CALL_GRAVITY``). Me First: ``me_first``, the caller's ``me_first_copy`` of
-    its target (0 when none is given or the target has acted)."""
+    its target (0 when none is given or the target has acted). Mirror Move: ``mirror_call`` of
+    ``copied`` (default ``mirror_copied``, the user's moveCopied when the script runs)."""
     fmt = format_of(state)
     move = jnp.asarray(move, _I32)
     call = jnp.asarray(call, _I32) % CALL_GRAVITY
@@ -317,6 +368,8 @@ def invoked_move(
     n_listed = jnp.sum(valid.astype(_I32))
     assist = jnp.where(n_listed > 0, listed[_nth(valid, call % jnp.maximum(n_listed, 1))], 0)
     first = jnp.asarray(0 if me_first is None else me_first, _I32)
+    held = mirror_copied(state, side, call) if copied is None else jnp.asarray(copied, _I32)
+    mirror = mirror_call(tables, held)
     return jnp.where(
         kind == CALL_SLEEP_TALK,
         talk,
@@ -329,7 +382,11 @@ def invoked_move(
                 jnp.where(
                     kind == CALL_ASSIST,
                     assist,
-                    jnp.where(kind == CALL_ME_FIRST, first, move),
+                    jnp.where(
+                        kind == CALL_ME_FIRST,
+                        first,
+                        jnp.where(kind == CALL_MIRROR_MOVE, mirror, move),
+                    ),
                 ),
             ),
         ),
@@ -386,7 +443,7 @@ def gravity_state(state: BattleState) -> BattleState:
     subscript_gravity_start.s), which then bans ``GRAVITY_MOVES`` from the invokers' calls
     (``Move_CanBeMetronomed``, battle_lib.c:7198-7201; Sleep Talk's CHECK_INVALID_GRAVITY,
     :2292-2295). Only the count is set: the call sets read nothing else of it (G-67)."""
-    return state._replace(gravity=jnp.asarray(GRAVITY_TURNS, state.gravity.dtype))
+    return fcm.with_gravity(state, GRAVITY_TURNS)
 
 
 def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> jnp.ndarray:
@@ -404,7 +461,7 @@ def gravity_possible(tables: Tables, state: BattleState, actions, side, foe) -> 
     calls = (kind == CALL_SLEEP_TALK) | (kind == CALL_METRONOME) | (kind == CALL_ASSIST)
     foe_chosen = selected_move(tables, state, foe, actions[foe])[0]
     foe_can = uses_move[foe] & can_call_effect(tables, state, foe, foe_chosen, EffectId.GRAVITY)
-    return (state.gravity == 0) & uses_move[side] & calls & foe_can
+    return ~fcm.gravity_on(state) & uses_move[side] & calls & foe_can
 
 
 def encored_state(tables: Tables, state: BattleState, sides) -> BattleState:
@@ -435,12 +492,14 @@ def can_call_effect(tables: Tables, state: BattleState, side, move, wanted) -> j
     listed, valid = assist_candidates(tables, state, side)
     assist = jnp.any(valid & (effect[listed] == wanted))
     copycat = effect[copycat_call(tables, state.move_prev, state)] == wanted
+    mirror = effect[mirror_call(tables, mirror_copied(state, side, 0))] == wanted
     return (
         (effect[move] == wanted)
         | ((kind == CALL_SLEEP_TALK) & talk)
         | ((kind == CALL_METRONOME) & metronome)
         | ((kind == CALL_ASSIST) & assist)
         | ((kind == CALL_COPYCAT) & copycat)
+        | ((kind == CALL_MIRROR_MOVE) & mirror)
     )
 
 
@@ -487,15 +546,13 @@ def move_effects(tables: Tables, state: BattleState, move) -> tuple[jnp.ndarray,
     ``int32[..., 3]``), with Secret Power's resolved to the terrain's secondary effect
     (``ids.SECRET_POWER_EFFECTS``; effect_script_0197.s ``GetTerrainSecondaryEffect``,
     battle_script.c:8063-8075: ``min(terrain, TERRAIN_SPECIAL)``), the effect every hit and law
-    reads. An unknown terrain (coverage refuses it) resolves to ``PLAIN``. ``move`` may be
-    batched."""
+    reads. ``move`` may be batched."""
     move = jnp.asarray(move, _I32)
     effect = tables.move_effect[move].astype(_I32)
     param = tables.move_param[move].astype(_I32)
     row = terrain_index(state)
     sp_effect = jnp.asarray([e for e, _ in SECRET_POWER_EFFECTS], _I32)[row]
     sp_param = jnp.asarray([p for _, p in SECRET_POWER_EFFECTS], _I32)[row]
-    sp_effect = jnp.where(terrain_known(state), sp_effect, EffectId.PLAIN)
     secret = effect == EffectId.SECRET_POWER
     return (
         jnp.where(secret, sp_effect, effect),
@@ -546,10 +603,26 @@ def used_moves(
         first = jnp.where(
             after_foe[side], 0, me_first_copy(tables, state, foe, chosen[foe], fights)
         )
-        invoked = invoked_move(tables, state, side, chosen[side], call[side], prev, first)
-        out.append(
-            jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked)).astype(_I32)
+        # Mirror Move copies what the foe's move this turn recorded for its user (UpdateFlagsWhenHit,
+        # bcp.c:4480-4486): the foe's chosen move when it has MoveFlag.MIRROR_MOVE and is aimed at
+        # the user, else the turn-start ``move_copied`` (E3-B2-2).
+        flagged = (tables.move_flags[chosen[foe]] & MoveFlag.MIRROR_MOVE) != 0
+        own_range = jnp.isin(tables.move_target[chosen[foe]], jnp.asarray(MIRROR_SELF_RANGES, _I32))
+        aimed = flagged & ~own_range
+        held = jnp.where(
+            after_foe[side] & aimed, chosen[foe], mirror_copied(state, side, call[side])
         )
+        invoked = invoked_move(
+            tables, state, side, chosen[side], call[side], prev, first, copied=held
+        )
+        run = jnp.where(invoked == 0, chosen[side], called_move(tables, state, invoked))
+        # A Magic Coat user acting before a foe whose move it can reflect runs that move on the foe
+        # (``step._execute_actions``' reflect phase draws it from the holder's own slots): its
+        # accuracy, crit odds, duration and secondary roll are the reflected move's (E3-B2-6;
+        # over-approximate where the Magic Coat fails: the draw is then unread).
+        coat = (tables.move_effect[chosen[side]] == EffectId.MAGIC_COAT) & fights & ~after_foe[side]
+        reflected = coat & ((tables.move_flags[chosen[foe]] & MoveFlag.MAGIC_COAT) != 0)
+        out.append(jnp.where(reflected, chosen[foe], run).astype(_I32))
     return jnp.stack(out)
 
 
@@ -558,21 +631,23 @@ def effective_speed(
 ) -> jnp.ndarray:
     """``int32`` speed as ``BattleSystem_CompareBattlerSpeed`` computes it. ``suppressed``
     (``bool``, default ``damage.weather_suppressed`` of ``state``) overrides the weather
-    lock (``NO_CLOUD_NINE``) and ``weather`` (default ``state.weather``) the weather, for a
-    lock or a weather that can change before the speed is read (``enumerate._end_speeds``)."""
+    lock (``NO_CLOUD_NINE``) and ``weather`` (weather bits, default ``field.weather_bits`` of
+    ``state``) the weather, for a lock or a weather that can change before the speed is read
+    (``enumerate._end_speeds``)."""
     fmt = format_of(state)
     if suppressed is None:
         suppressed = weather_suppressed(tables, state)
-    weather = state.weather if weather is None else weather
+    weather = fcm.weather_bits(state) if weather is None else weather
     mon = state.active[side]
     ability = battler_ability(state, side)  # CompareBattlerSpeed (battle_lib.c:1213-1214)
     stage = state.stages[side, Stat.SPE].astype(_I32)
     stage = jnp.where(ability == AbilityId.SIMPLE, simple_stage(stage), stage)
     speed = apply_stage(state.stats[party(fmt, side), mon, Stat.SPE - 1].astype(_I32), stage)
-    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability), inside NO_CLOUD_NINE.
+    # :1228-1238 Swift Swim in rain, Chlorophyll in sun (Battler_Ability, WEATHER_IS_RAIN /
+    # _SUN of the mask), inside NO_CLOUD_NINE.
     swim = (
-        ((ability == AbilityId.SWIFT_SWIM) & (weather == Weather.RAIN))
-        | ((ability == AbilityId.CHLOROPHYLL) & (weather == Weather.SUN))
+        ((ability == AbilityId.SWIFT_SWIM) & fcm.rain(weather))
+        | ((ability == AbilityId.CHLOROPHYLL) & fcm.sun(weather))
     ) & ~jnp.asarray(suppressed, bool)
     speed = jnp.where(swim, speed * 2, speed)
     # :1240-1246 sSpeedHalvingItemEffects (:1160-1169: Iron Ball, Macho Brace, the Power items),
@@ -603,6 +678,25 @@ def effective_speed(
     )
     speed = jnp.where(unburdened, speed * 2, speed)
     return jnp.where(state.tailwind[side_of(side)] != 0, speed * 2, speed)
+
+
+def record_speeds(tables: Tables, state: BattleState, cond=True) -> BattleState:
+    """``state`` with ``speed_rec`` (``BattleContext.monSpeedValues``) written as a
+    ``SortMonSpeedOrder`` writes it where ``cond`` (E3-B2-15): ``BattleSystem_CompareBattlerSpeed``
+    stores both battlers' speeds (``effective_speed``, battle_lib.c:1372-1373) unless either has no
+    HP (:1204-1211), and the sort compares every pair of battlers (:3364-3383), so a battler's
+    value is written when it is alive and another battler is (doubles section 5 rule 4: a loop,
+    not "me and the foe"). A fainted battler's slot keeps its last value. Called at the battle
+    start after the switch-in effects (bcp.c:263), before each action and after the last one of
+    a turn (BranchActions, bcp.c:888)."""
+    fmt = format_of(state)
+    sides = list(range(fmt.B))
+    alive = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in sides])
+    speeds = jnp.stack([effective_speed(tables, state, b) for b in sides])
+    write = jnp.asarray(cond, bool) & alive & (jnp.sum(alive.astype(_I32)) >= 2)
+    return state._replace(
+        speed_rec=jnp.where(write, speeds, state.speed_rec).astype(state.speed_rec.dtype)
+    )
 
 
 def _holds(tables: Tables, state: BattleState, side, item) -> jnp.ndarray:
@@ -754,7 +848,7 @@ def compare_speed(
     speed1, speed2 = speed[battler1], speed[other]
     claw1, claw2 = claw[battler1], claw[other]
     lag1, lag2 = lag[battler1], lag[other]
-    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | ((state.trick_room != 0) & ~lag1 & ~lag2))
+    reversed_ = ~(claw1 & claw2) & ((lag1 & lag2) | (fcm.trick_room_on(state) & ~lag1 & ~lag2))
     slower = jnp.where(reversed_, speed1 > speed2, speed1 < speed2)
     tie = (speed1 == speed2) & (jnp.asarray(tie_roll) != 0)
     by_speed = jnp.where(

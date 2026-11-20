@@ -47,6 +47,7 @@ class RefPokemon:
     gender: int
     friendship: int
     party_friendship: int  # the party Pokemon's u8 friendship (F-15)
+    party_ability: int  # the party Pokemon's ability a script wrote, 0 = none (F-O2)
     ivs: list[int]
     evs: list[int]  # ids.Stat order
     nature: int
@@ -85,6 +86,12 @@ class RefBattler:
     water_sport: int
     fake_out_turn: int
     move_hit: int
+    move_copied: int  # BattleContext.moveCopied (E3-B2-2)
+    move_copied_hit: list[int]  # moveCopiedHit[holder][attacker] (E3-B2-2)
+    magic_coat: int  # turnFlags.magicCoat as 1 + the user's moveSlot (E3-B2-6)
+    conv2_move: int  # BattleContext.conversion2Move (E3-B2-3)
+    conv2_battler: int  # conversion2Battler, 1 + battler, 0 = none
+    conv2_type: int  # conversion2Type
     foresight: int
     disabled_move: int
     disable_turns: int
@@ -99,8 +106,13 @@ class RefBattler:
     aqua_ring: int
     infatuated: int
     destiny_bond: int
+    grudge: int  # MOVE_EFFECT_GRUDGE (E3-B2-9)
+    miracle_eye: int  # MOVE_EFFECT_MIRACLE_EYE (E3-B2-10)
+    last_resort_count: int  # MoveEffectsData.lastResortCount (E3-B2-11)
+    last_resort_moves: list[int]  # MoveEffectsData.lastResortMoves[4] (E3-B2-11)
     uproar: int  # VOLATILE_CONDITION_UPROAR turns left (and the battler's FIELD_CONDITION bit)
     curse: int
+    nightmare: int  # VOLATILE_CONDITION_NIGHTMARE (G-31)
     perish_song: int
     perish_song_turns: int
     yawn: int
@@ -128,6 +140,8 @@ class RefBattler:
     power_trick_desync: int  # the Attack / Defense swap XOR power_trick (B12-10)
     magnet_rise: int  # MOVE_EFFECT_MAGNET_RISE (G-66)
     magnet_rise_turns: int  # MoveEffectsData.magnetRiseTurns (G-66)
+    charged_turns: int  # MoveEffectsData.chargedTurns with MOVE_EFFECT_CHARGE (E3-B2-8)
+    camouflage: int  # MOVE_EFFECT_CAMOUFLAGE (G-20)
     mimic_slots: int  # MoveEffectsData.mimickedMoveSlot bitmask (G-68)
     shadow_moves: list[int]  # the party's move of each flagged slot (G-68)
     shadow_pp: list[int]  # the party's PP of each flagged slot (G-68)
@@ -151,7 +165,9 @@ class RefBattler:
     future_move: int
     future_attacker: int  # 1 + battler, 0 = none
     qc_roll: int
-    starf_roll: int  # a Starf Berry draw (Outcome.starf; engine.state docstring, F-10)
+    speed_rec: int  # BattleContext.monSpeedValues (E3-B2-15)
+    starf_roll: list[int]  # the turn's Starf Berry draws (engine.state docstring, F-O3)
+    starf_taken: int  # the draws this turn's Starf Berry eats used (F-O3)
     starf_open: int  # a battle-start Starf Berry's stat waits for the root draw (F-10)
     entry_pending: int  # a list newcomer's switch-in states wait (engine.state docstring)
     ts_acted: int
@@ -168,9 +184,13 @@ class RefBattler:
     ts_taken: list[int]
     ts_dragged: int
     ts_move_failed: int
+    ts_move_cur: int  # moveCur of the battler's action this turn (E3-B2-21)
+    ts_eot: int  # monSpeedOrder of the turn end, sorted before a learn pause (E3-B2-21)
+    ts_qc: int  # the turn's speedRand draw at a learn pause (E3-B2-21)
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_grudge: int  # fainted in the paused action holding Grudge (engine.state, review b2 #5)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
@@ -196,11 +216,8 @@ class RefState:
     parties: list[RefParty]
     battlers: list[RefBattler]
     sides: list[RefSideConds]
-    weather: int
-    weather_timer: int
-    trick_room: int
-    gravity: int
-    acid_rain: int
+    field_mask: int  # fieldConditionsMask (engine.state, engine.field)
+    weather_turns: int  # FieldConditions.weatherTurns
     war_swaps: int  # a weather war's open monSpeedOrder (engine.state docstring)
     move_prev: int
     terrain: int
@@ -219,8 +236,6 @@ class RefState:
     friend_bonus: list[int]
     learn_level: list[int]
     learn_cursor: list[int]
-    learn_pin: int
-    exp_refused: int
     deaths: list[int]
     faint_budget: int
     protected: list[int]
@@ -228,6 +243,8 @@ class RefState:
     # E2 batch 6: the mid-turn switch decision (engine.state docstring): 0 between turns.
     pivot_battler: int
     ts_cursor: int
+    learn_site: int  # E3-B2-21: the learn pause's site (engine.state docstring), 0 none
+    ts_ran: int
     ts_pursued: int
     ts_used: int
     ts_damaged: int

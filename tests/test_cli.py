@@ -476,8 +476,8 @@ def test_a_fight_from_a_save_resolves_the_exp_boost_with_its_trainer(
     specs = []
     to_spec = SaveMon.to_spec
 
-    def spy(self, tables, trainer=None):
-        specs.append(to_spec(self, tables, trainer))
+    def spy(self, tables, trainer=None, healed=False):
+        specs.append(to_spec(self, tables, trainer, healed=healed))
         return specs[-1]
 
     monkeypatch.setattr(SaveMon, "to_spec", spy)

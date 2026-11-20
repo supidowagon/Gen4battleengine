@@ -12,7 +12,7 @@ from nuzline.engine.ids import Stat, Status, Weather
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import LAYOUT, BattleState, make_state
 from nuzline.reference.convert import from_ref, to_ref
-from tests.engine.helpers import A, jit_step, roark_state
+from tests.engine.helpers import A, jit_step, roark_state, weather_of, weather_timer_of
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -37,7 +37,7 @@ def test_shapes_dtypes_and_no_64bit(state):
     assert s.stats.shape == (2, 6, 5) and s.moves.shape == (2, 6, 4)
     assert s.ivs.shape == (2, 6, 6) and s.ivs.dtype == jnp.int8
     assert s.stages.shape == (2, 8) and s.trainer_items.shape == (2, 4)
-    assert s.ai_seen_moves.shape == (6, 4) and s.weather.shape == ()
+    assert s.ai_seen_moves.shape == (6, 4) and s.field_mask.shape == ()
     assert all(x.dtype.itemsize <= 4 for x in s)
 
 
@@ -52,7 +52,7 @@ def test_fainted_member_and_start_weather(tables, names):
     p = load_party(FIXTURES / "sample_party_fainted.toml", names)
     s = make_state(tables, p, p[:2], start_condition=Weather.HAIL)
     assert int(s.hp[0, 5]) == 0 and int(s.max_hp[0, 5]) > 0
-    assert int(s.weather) == Weather.HAIL and int(s.weather_timer) == 0
+    assert int(weather_of(s)) == Weather.HAIL and int(weather_timer_of(s)) == 0
 
 
 def test_state_is_a_valid_pytree_for_vmap(state):
@@ -184,10 +184,7 @@ def test_state_md_accounts_for_every_struct_field():
 # (``moveLockedInto`` moved to ``locked_move`` in milestone 4a; ``moveProtect`` folded into
 # ``protect_count`` in K3b2 Task 6, test_move_protect_is_folded_into_protect_count; the four
 # announced flags mapped with Skill Swap, E3-2-5, ``hooks.move_end_switch_in``).
-AUDIT_LATER_ROWS = (
-    "BattleContext.monSpeedValues",
-    "BattleContext.moveSketched",
-)
+AUDIT_LATER_ROWS = ("BattleContext.moveSketched",)
 
 
 def test_state_md_audit_rows_are_later_m6():
@@ -196,11 +193,40 @@ def test_state_md_audit_rows_are_later_m6():
         assert status[field] == "later (M6)", f"{field}: {status[field]!r}"
 
 
+def test_mon_speed_values_map_to_speed_rec():
+    # E3-B2-15: monSpeedValues, the speeds of the last CompareBattlerSpeed, read by Gyro Ball's
+    # script command and by TrainerAI_CalcDamage's Gyro Ball case: the per-battler `speed_rec`.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    assert rows["BattleContext.monSpeedValues"] == ("speed_rec", "mapped")
+    assert "speed_rec" in BattleState._fields and LAYOUT["speed_rec"][0] == (2,)
+
+
 def test_move_protect_is_folded_into_protect_count():
     # docs/kaizo/k3b2-rules.md §12: the moveProtect reset is folded into protect_count.
     rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
     assert rows["BattleContext.moveProtect"] == ("protect_count", "mapped")
     assert rows["MoveEffectsData.protectSuccessTurns"] == ("protect_count", "mapped")
+
+
+def test_conversion_2_record_maps_to_conv2_fields():
+    # E3-B2-3: UpdateFlagsWhenHit's conversion2Move / Battler / Type, read by Conversion 2.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    for part, name in (
+        ("Move", "conv2_move"),
+        ("Battler", "conv2_battler"),
+        ("Type", "conv2_type"),
+    ):
+        assert rows[f"BattleContext.conversion2{part}"] == (name, "mapped")
+
+
+def test_magic_coat_flag_maps_to_magic_coat():
+    # E3-B2-6: turnFlags.magicCoat is the per-battler `magic_coat` (1 + the user's move slot);
+    # magicCoatMon is the reflect phase's actor, per-action scratch.
+    rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
+    pytree, status = rows["BattleContext.turnFlags"]
+    assert status == "mapped" and "magic_coat" in re.findall(r"\w+", pytree)
+    assert "magic_coat" in BattleState._fields
+    assert rows["BattleContext.magicCoatMon"][1].startswith("not needed because")
 
 
 def test_attract_bits_map_to_infatuated():

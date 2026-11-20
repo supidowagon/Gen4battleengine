@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_table
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.order import effective_speed
 from nuzline.engine.outcome import MAX_HITS, empty_outcome, hit_threshold
@@ -28,7 +29,7 @@ SPD, SPE = Stat.SPD - 1, Stat.SPE - 1  # stats[..., 0..4] are Atk..Spe
 
 
 def _weather(s, weather):
-    return s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    return with_weather(s, weather)
 
 
 def _table(tables, s, move, side=0):

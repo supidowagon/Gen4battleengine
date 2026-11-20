@@ -80,6 +80,22 @@ class SaveFile:
     # The player's Chatter parameter 0-2 from the save's Chatot cry (``chatot_parameter``):
     # BATTLER_PLAYER_1's cry (field_battle_data_transfer.c:260), ``make_state``'s chatot_cry.
     chatot_cry: int = 0
+    # Where the save stands and its overworld weather (``layout.MAP_HEADER``,
+    # ``OVERWORLD_WEATHER``): a fog fight saved on its own header starts in this weather
+    # (ledger G-15).
+    map_header: int = 0
+    overworld_weather: int = 0
+    # VarsFlags.vars (``layout.VARS``, ``NUM_VARS``), by id - VARS_START: the script state a
+    # map script's weather window reads (ledger G-24).
+    vars: tuple[int, ...] = ()
+
+    def var(self, var_id: int) -> int:
+        """The saved value of variable ``var_id`` (0x4000 up; VarsFlags_GetVarAddress,
+        src/vars_flags.c:65-69). ``ValueError`` outside the saved range."""
+        index = var_id - L.VARS_START
+        if not 0 <= index < len(self.vars):
+            raise ValueError(f"variable {var_id:#x} is not a saved variable")
+        return self.vars[index]
 
 
 def read_image(data: bytes) -> bytes:
@@ -363,6 +379,9 @@ def load_save(
         sha256=hashlib.sha256(data).hexdigest(),
         player_starter=_u16(normal, L.VARS + 2 * L.VAR_PLAYER_STARTER_INDEX),
         chatot_cry=chatot_parameter(normal),
+        map_header=_u32(normal, L.MAP_HEADER),
+        overworld_weather=_u16(normal, L.OVERWORLD_WEATHER),
+        vars=tuple(_u16(normal, L.VARS + 2 * i) for i in range(L.NUM_VARS)),
         trainer=SaveTrainer(
             id=trainer_id,
             gender=normal[L.TRAINER_GENDER],

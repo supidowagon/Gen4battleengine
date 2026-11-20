@@ -19,6 +19,7 @@ import pytest
 
 from nuzline.engine.damage import damage_table
 from nuzline.engine.effects import can_have_status
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Stat, Status, Weather
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from tests.engine.helpers import A, jit_step, roark_state
@@ -187,7 +188,7 @@ def test_ice_types_cannot_be_frozen_nor_anyone_in_sun(tables, names):
         int(jit_step(tables, ice, A("Powder Snow", "Leer", ice, names), PROC).status[1, 0])
         == Status.NONE
     )
-    sun = s._replace(weather=jnp.int8(Weather.SUN))
+    sun = with_weather(s, Weather.SUN)
     assert (
         int(jit_step(tables, sun, A("Powder Snow", "Leer", sun, names), PROC).status[1, 0])
         == Status.NONE

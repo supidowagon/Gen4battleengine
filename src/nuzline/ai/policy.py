@@ -108,8 +108,9 @@ from nuzline.data.game_constants import AI_POLICIES
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import FIRST_ITEM_ACTION, NUM_OPP_ACTIONS, locked_slot, usable_moves
 from nuzline.engine.bag import bag_item_category
-from nuzline.engine.damage import ai_weather_ball_typed, decomp_abilities
+from nuzline.engine.damage import AI_GYRO_BALL, ai_weather_ball_typed, decomp_abilities
 from nuzline.engine.enumerate import WIDTH_CAP
+from nuzline.engine.format import format_of
 from nuzline.engine.ids import ItemAiCategory, Stat
 from nuzline.engine.order import COMPARE_SPEED_SLOWER
 from nuzline.engine.state import BAG_SLOTS, MOVES, BattleState
@@ -545,6 +546,85 @@ def _basic_check_mist(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_score(ctx, t, -8))
 
 
+def _basic_check_lucky_chant(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLuckyChant`` (script.s:1378-1381): the AI's side already under Lucky Chant
+    (SIDE_CONDITION_LUCKY_CHANT, IfSideCondition trainer_ai.c:732), -10; E3-B2-7."""
+    ctx, t = _split(c.if_side_condition(_at(ctx, mask), _A, c.SideCondition.LUCKY_CHANT))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+_DEFOG_HAZARDS = (
+    c.SideCondition.SPIKES | c.SideCondition.STEALTH_ROCK | c.SideCondition.TOXIC_SPIKES
+)
+_DEFOG_EVASION_MIN = (
+    0  # IfStatStageNotEqualTo's value: stage -6 in decomp units (BATTLE_STAT 0..12)
+)
+
+
+def _basic_check_defog(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckDefog`` (script.s:1476-1499): the player's evasion not at -6 (decomp stage 0), or
+    Light Screen or Reflect on its side, or deep fog (``LoadCurrentWeather`` ==
+    ``AI_WEATHER_DEEP_FOG``) ends the check; no living party member for the player after its active
+    one -10; its side without Spikes, Stealth Rock and Toxic Spikes -10 (:1488-1496); E3-B2-14."""
+    ctx = _at(ctx, mask)
+    ctx, _ = _split(c.if_stat_stage_not_equal_to(ctx, _D, Stat.EVA, _DEFOG_EVASION_MIN))
+    ctx, _ = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
+    ctx, _ = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
+    ctx, _ = _split(c.if_loaded_equal_to(c.load_current_weather(ctx), c.AiWeather.DEEP_FOG))
+    ctx, t = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _D), 0))
+    ctx = _score(ctx, t, -10)
+    for hazard in (
+        c.SideCondition.SPIKES,
+        c.SideCondition.STEALTH_ROCK,
+        c.SideCondition.TOXIC_SPIKES,
+    ):
+        ctx, _ = _split(c.if_side_condition(ctx, _D, hazard))
+    return c.pop_or_end(c.add_to_move_score(ctx, -10))  # :1496 GoTo ScoreMinus10
+
+
+def _basic_check_last_resort(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLastResort`` (script.s:1420-1426): the AI's battler that cannot use Last Resort
+    yet (``IfCanUseLastResort``, trainer_ai.c:2030-2042, to the terminating label when it can) -10;
+    E3-B2-11."""
+    ctx, _ = _split(c.if_can_use_last_resort(_at(ctx, mask), _A))
+    return c.pop_or_end(c.add_to_move_score(ctx, -10))
+
+
+def _basic_check_miracle_eye(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckMiracleEye`` (script.s:1031-1034): the player's battler already under
+    MOVE_EFFECT_MIRACLE_EYE (``IfMoveEffect``, trainer_ai.c:704-714), -10; E3-B2-10."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.MIRACLE_EYE))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_foresight(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckForesight`` (script.s:715-718): the player's battler already under
+    VOLATILE_CONDITION_FORESIGHT (``IfVolatileStatus``, trainer_ai.c:676-686), -10; E3-B2-18."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.FORESIGHT))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_lock_on(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckLockOn`` (script.s:665-672): the player's battler already under
+    MOVE_EFFECT_LOCK_ON (``IfMoveEffect``, trainer_ai.c:704-714; any locker's bit), -10; else
+    either battler with No Guard (``LoadBattlerAbility``, the defender's read a coin flip when it
+    guesses), -10; E3-B2-17."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _D, c.MoveEffectMask.LOCK_ON))
+    ctx = _score(ctx, t, -10)
+    for battler in (_A, _D):
+        ctx = c.load_battler_ability(ctx, battler)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["No Guard"]))
+        ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
+
+
+def _basic_check_aqua_ring(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckAquaRing`` (script.s:1456-1459): the AI's battler already under
+    MOVE_EFFECT_AQUA_RING (``IfMoveEffect``, trainer_ai.c:704-714), -10; E3-B2-20."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.AQUA_RING))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
 def _basic_check_already_pumped_up(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyPumpedUp`` (script.s:592-595): -10 under the AI's own Focus Energy."""
     ctx = _at(ctx, mask)
@@ -924,6 +1004,93 @@ def _basic_check_gastro_acid(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _basic_check_fling(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckFling`` (script.s:1199-1216): the chart immune -10; the AI's own fling power
+    (``LoadFlingPower``, 0 under Embargo) below 10 -10; its raw ability Multitype -10; then by its
+    held item's hold effect (``LoadHeldItemEffect``): a poison item (Toxic Orb, Poison Barb), a
+    burn item (Flame Orb) or Light Ball. The poison and burn blocks (:1218-1278) go to their
+    AttackerChecks when the status cannot land on the player (Safeguard, a status, a type or
+    ability immunity; the poison block also on the AI's own Poison Heal, the code reads the
+    attacker, :1221-1222) and end otherwise; the AttackerChecks score -5 for an AI the item would
+    hurt or that cannot hold it, else +3. Light Ball: -5 for a player that cannot be paralyzed,
+    else nothing (E3-B2-1)."""
+    ctx, t = _split(c.if_move_effectiveness_equals(_at(ctx, mask), TypeMulti.IMMUNE))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_loaded_less_than(c.load_fling_power(ctx, _A), 10))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _A), _ABILITY["Multitype"]))
+    ctx = _score(ctx, t, -10)
+    ctx = c.load_held_item_effect(ctx, _A)
+    ctx, poison = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_POISON))
+    ctx, burn = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_BURN))
+    ctx, para = _split(c.if_loaded_in_table(ctx, c.FLING_ITEMS_PARALYZE))
+    ctx = c.pop_or_end(ctx)
+
+    def attacker_checks(ctx, mask, types, abilities):
+        """Basic_Fling*_AttackerChecks (:1235-1251, :1265-1278): -5 per test, else +3."""
+        ctx = _at(ctx, mask)
+        ctx, t = _split(c.if_side_condition(ctx, _A, c.SideCondition.SAFEGUARD))
+        ctx = _score(ctx, t, -5)
+        ctx, t = _split(c.if_status(ctx, _A, c.MonCondition.ANY))
+        ctx = _score(ctx, t, -5)
+        for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+            ctx = c.load_type_from(ctx, target)
+            for type_name in types:
+                ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+                ctx = _score(ctx, t, -5)
+        ctx = c.load_battler_ability(ctx, _A)
+        for name in abilities:
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+            ctx = _score(ctx, t, -5)
+        return c.pop_or_end(c.add_to_move_score(ctx, 3))
+
+    # Basic_FlingPoison (:1218)
+    ctx = _at(ctx, poison)
+    ctx, blocked = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    blocked = blocked | t
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _A), _ABILITY["Poison Heal"]))
+    blocked = blocked | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        for type_name in ("Poison", "Steel"):
+            ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE[type_name]))
+            blocked = blocked | t
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Immunity", "Poison Heal", "Magic Guard"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        blocked = blocked | t
+    ctx = c.pop_or_end(ctx)  # the poison cannot be stopped: nothing to score
+    ctx = attacker_checks(
+        ctx,
+        blocked,
+        ("Poison", "Steel"),
+        ("Klutz", "Immunity", "Poison Heal", "Magic Guard", "Guts"),
+    )
+    # Basic_FlingBurn (:1253)
+    ctx = _at(ctx, burn)
+    ctx, blocked = _split(c.if_side_condition(ctx, _D, c.SideCondition.SAFEGUARD))
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    blocked = blocked | t
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Fire"]))
+        blocked = blocked | t
+    ctx = c.load_battler_ability(ctx, _D)
+    for name in ("Magic Guard", "Water Veil"):
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY[name]))
+        blocked = blocked | t
+    ctx = c.pop_or_end(ctx)
+    ctx = attacker_checks(ctx, blocked, ("Fire",), ("Klutz", "Magic Guard", "Water Veil", "Guts"))
+    # Basic_FlingParalyze (:1280)
+    ctx, t = _split(c.if_side_condition(_at(ctx, para), _D, c.SideCondition.SAFEGUARD))
+    ctx = _score(ctx, t, -5)
+    ctx, t = _split(c.if_status(ctx, _D, c.MonCondition.ANY))
+    ctx = _score(ctx, t, -5)
+    ctx, t = _split(c.if_loaded_equal_to(c.load_battler_ability(ctx, _D), _ABILITY["Limber"]))
+    return c.pop_or_end(_score(ctx, t, -5))
+
+
 def _basic_score_minus_10(ctx: AiContext, mask) -> AiContext:
     """``ScoreMinus10`` (Basic_ScoreMoveEffect, script.s:221: ``IfCurrentMoveEffectEqualTo
     BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE``): Teleport, -10 with no further test (E3-1-4)."""
@@ -1006,6 +1173,20 @@ def _basic_check_dream_eater(ctx: AiContext, mask) -> AiContext:
     ctx = _score(ctx, t, -8)
     ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
     return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_nightmare(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckNightmare`` (script.s:321-327): the player already in a nightmare -10 (:323),
+    not asleep -8 (:324), Magic Guard (the player's ability, guessed or known: LoadBattlerAbility,
+    :325-326) -10 (G-34)."""
+    ctx, t = _split(c.if_volatile_status(_at(ctx, mask), _D, c.VolatileCondition.NIGHTMARE))
+    ctx = _score(ctx, t, -10)
+    ctx, t = _split(c.if_not_status(ctx, _D, c.MonCondition.SLEEP))
+    ctx = _score(ctx, t, -8)
+    ctx = c.load_battler_ability(ctx, _D)
+    ctx, t = _split(c.if_loaded_equal_to(ctx, _ABILITY["Magic Guard"]))
+    ctx = _score(ctx, t, -10)
+    return c.pop_or_end(ctx)
 
 
 def _basic_check_metal_burst(ctx: AiContext, mask) -> AiContext:
@@ -1167,6 +1348,13 @@ def _expert_baton_pass(ctx: AiContext, mask) -> AiContext:
 def _basic_check_already_ingrained(ctx: AiContext, mask) -> AiContext:
     """``Basic_CheckAlreadyIngrained`` (script.s:906-909): the attacker ingrained, -10."""
     ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.INGRAIN))
+    return c.pop_or_end(_score(ctx, t, -10))
+
+
+def _basic_check_camouflage(ctx: AiContext, mask) -> AiContext:
+    """``Basic_CheckCamouflage`` (script.s:1021-1024): the attacker already has
+    MOVE_EFFECT_CAMOUFLAGE (``IfMoveEffect``, trainer_ai.c:704-714), -10 (G-20)."""
+    ctx, t = _split(c.if_move_effect(_at(ctx, mask), _A, c.MoveEffectMask.CAMOUFLAGE))
     return c.pop_or_end(_score(ctx, t, -10))
 
 
@@ -1855,7 +2043,7 @@ def _expert_me_first(ctx: AiContext, mask) -> AiContext:
 
 
 def _expert_change_user_ability(ctx: AiContext, mask) -> AiContext:
-    """``Expert_ChangeUserAbility`` (script.s:4415-4433, entry :1743, E3-2-5): the attacker's
+    """``Expert_ChangeUserAbility`` (script.s:4415-4433, entries :1733 (Role Play, E3-B2-5) and :1743 (Skill Swap, E3-2-5)): the attacker's
     ability (``LoadBattlerAbility``: its own true one, NONE when suppressed) in
     ``CHANGE_USER_ABILITY_DESIRABLE`` -1; else the player's (its known one, else the species coin
     flip, the draw of ``load_battler_ability``) in the table: the 50 roll (:4429) jumping ends, else
@@ -1911,6 +2099,47 @@ def _expert_trick_room(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(ctx)
 
 
+def _expert_fling(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Fling`` (script.s:5231-5286): a move the player resists or is immune to goes to
+    the item check (-1 unless the AI's hold effect is King's Rock, Razor Fang, a poison or burn
+    item or Light Ball); else by the AI's fling power: below 30 -2 and end, above 90 the
+    weakness check (a double or quadruple hit +4 then the 64 roll; else the 128 roll jumping to
+    the 64 roll, else +1 first), above 60 the 64 roll (:5276, +1 unless it jumps), else the 128
+    roll (:5257) jumping ends, else -1. The target of every jump is _End or the _TryScorePlus1
+    block (:5275); the power below 30 ends (:5263) and does not fall into the weakness check
+    (E3-B2-1)."""
+    ctx = _at(ctx, mask)
+    ctx, item = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.IMMUNE))
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.HALF))
+    item = item | t
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUARTER))
+    item = item | t
+    ctx = c.load_fling_power(ctx, _A)
+    ctx, minus2 = _split(c.if_loaded_less_than(ctx, 30))
+    ctx, weak = _split(c.if_loaded_greater_than(ctx, 90))
+    ctx, try1 = _split(c.if_loaded_greater_than(ctx, 60))
+    ctx, _ = _split(c.if_random_less_than(ctx, 128, 5257))  # -> _End
+    ctx = c.add_to_move_score(ctx, -1)  # then GoTo _End
+    # Expert_Fling_ScoreMinus2 (:5261)
+    ctx = c.add_to_move_score(_at(ctx, minus2), -2)
+    # Expert_Fling_CheckWeakness (:5265)
+    ctx, plus4 = _split(c.if_move_effectiveness_equals(_at(ctx, weak), TypeMulti.DOUBLE))
+    ctx, t = _split(c.if_move_effectiveness_equals(ctx, TypeMulti.QUADRUPLE))
+    plus4 = plus4 | t
+    ctx, skip = _split(c.if_random_less_than(ctx, 128, 5268))  # -> _TryScorePlus1
+    ctx = c.add_to_move_score(ctx, 1)
+    plus1 = ctx.live
+    # Expert_Fling_ScorePlus4 (:5272), then _TryScorePlus1 (:5275)
+    ctx = c.add_to_move_score(_at(ctx, plus4), 4)
+    ctx = _at(ctx, try1 | skip | plus1 | plus4)
+    ctx, _ = _split(c.if_random_less_than(ctx, 64, 5276))  # -> _End
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Fling_CheckAttackerItem (:5280)
+    ctx = c.load_held_item_effect(_at(ctx, item), _A)
+    ctx, _ = _split(c.if_loaded_in_table(ctx, c.FLING_DESIRABLE_EFFECTS))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
 def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
     """``Expert_GastroAcid`` (script.s:5471-5494, the code, not its comment): the 64 roll (:5481)
     jumping ends with 0; else +1, then the player above 70 % HP ends; else the 128 roll (:5484)
@@ -1927,6 +2156,180 @@ def _expert_gastro_acid(ctx: AiContext, mask) -> AiContext:
     ctx = c.add_to_move_score(ctx, -1)
     ctx, _ = _split(c.if_hp_percent_greater_than(ctx, _D, 30))  # -> _End
     return c.pop_or_end(c.add_to_move_score(ctx, -1))
+
+
+def _expert_miracle_eye(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MiracleEye`` (script.s:4805-4827): a Dark player type 1 or 2 goes to the extra
+    gate (:4819-4820: the 80 roll, to _End when it jumps); else an evasion stage above 8 goes to
+    _ScorePlus2 (:4815); else -2 and end (:4816). _ScorePlus2 (:4822-4824) is a second 80 roll,
+    to _End when it jumps, else +2 (E3-B2-10)."""
+    ctx = _at(ctx, mask)
+    dark = jnp.zeros_like(ctx.live)
+    for target in (LoadType.DEFENDER_TYPE_1, LoadType.DEFENDER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Dark"]))
+        dark = dark | t
+    ctx, evasive = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))  # :4816-4817
+    # Expert_MiracleEye_ExtraRandomGate (:4819-4820), falling into _ScorePlus2 (:4822)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, dark), 80, 4820))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | evasive), 80, 4823))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_foresight(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Foresight`` (script.s:3608-3631): the AI's own type 1 or 2 Ghost (the decomp's
+    bug, :3610: ``LOAD_ATTACKER_TYPE_*``) goes to the first roll (:3624, to _End when it jumps);
+    else an evasion stage above 8 goes to the second roll (:3619); else -2 and end. The second
+    roll (:3627) is to _End when it jumps, else +2 (E3-B2-18)."""
+    ctx = _at(ctx, mask)
+    ghost = jnp.zeros_like(ctx.live)
+    for target in (LoadType.ATTACKER_TYPE_1, LoadType.ATTACKER_TYPE_2):
+        ctx = c.load_type_from(ctx, target)
+        ctx, t = _split(c.if_loaded_equal_to(ctx, _TYPE["Ghost"]))
+        ghost = ghost | t
+    ctx, evasive = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 8))
+    ctx = c.pop_or_end(c.add_to_move_score(ctx, -2))  # :3620-3621
+    # Expert_Foresight_FirstRoll (:3623-3624), falling into _SecondRoll (:3626)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ghost), 80, 3624))  # -> _End
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, ctx.live | evasive), 80, 3627))  # -> _End
+    return c.pop_or_end(c.add_to_move_score(ctx, 2))
+
+
+def _expert_lucky_chant(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LuckyChant`` (script.s:5496-5517): the AI below 70 % HP -1 and end; else the player
+    knowing a move of effect HIGH_CRITICAL (43), HIGH_CRITICAL_BURN_HIT (200) or
+    HIGH_CRITICAL_POISON_HIT (209) (``IfMoveEffectKnown``, trainer_ai.c:1739) +1 and end; else the
+    64 roll (:5506) jumping +1, else nothing (E3-B2-7)."""
+    ctx, minus1 = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 70))
+    plus1 = jnp.zeros_like(ctx.live)
+    for effect in (
+        BattleEffect.HIGH_CRITICAL,
+        BattleEffect.HIGH_CRITICAL_BURN_HIT,
+        BattleEffect.HIGH_CRITICAL_POISON_HIT,
+    ):
+        ctx, t = _split(c.if_move_effect_known(ctx, _D, effect))
+        plus1 = plus1 | t
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 5506))
+    plus1 = plus1 | t
+    ctx = c.add_to_move_score(_at(ctx, plus1), 1)
+    ctx = c.add_to_move_score(_at(ctx, minus1), -1)
+    return c.pop_or_end(ctx)
+
+
+def _expert_last_resort(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LastResort`` (script.s:5953-5971): resisted (immune, quarter, half) -1; else the AI
+    able to use Last Resort now (``IfCanUseLastResort``) +1; else nothing; no roll (E3-B2-11)."""
+    ctx, minus1 = _not_resisted(_at(ctx, mask))
+    ctx, plus1 = _split(c.if_can_use_last_resort(ctx, _A))
+    ctx = c.pop_or_end(c.add_to_move_score(_at(ctx, minus1), -1))  # _ScoreMinus1 (:5963)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, plus1), 1))  # _ScorePlus1 (:5967)
+
+
+def _expert_feint(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Feint`` (script.s:4892-4950, the code, not its comment): a player knowing a
+    Protect-effect move goes on, else the 64 roll (:4912) jumping goes on, else it ends. The AI
+    badly poisoned, cursed, perishing, infatuated, seeded or drowsy goes to the +1 block; else the
+    player at full HP, or holding an item whose effect is not Leftovers' or Black Sludge's
+    (``FEINT_GRADUAL_RECOVERY_EFFECTS``), goes to the Protect chain; else (a wounded holder of
+    either) the +1 block: +1 unless the 128 roll (:4927) jumps. The player's chain: 0 and the
+    exactly-2 fall-through, +1 unless the 128 roll (:4937) jumps; 1, +1 unless the 192 roll
+    (:4942) jumps; above 2, -2 (E3-B2-13)."""
+    ctx, check = _split(c.if_move_effect_known(_at(ctx, mask), _D, BattleEffect.PROTECT))
+    ctx, t = _split(c.if_random_less_than(ctx, 64, 4912))
+    check = check | t
+    ctx, _ = _split(c.go_to(ctx))  # -> _End (:4913)
+    # Expert_Feint_CheckConditions (:4915)
+    ctx = _at(ctx, check)
+    plus1 = jnp.zeros_like(ctx.live)
+    for test in (
+        lambda x: c.if_status(x, _A, c.MonCondition.TOXIC),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.CURSE),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.PERISH_SONG),
+        lambda x: c.if_volatile_status(x, _A, c.VolatileCondition.ATTRACT),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.LEECH_SEED),
+        lambda x: c.if_move_effect(x, _A, c.MoveEffectMask.YAWN),
+    ):
+        ctx, t = _split(test(ctx))
+        plus1 = plus1 | t
+    ctx, chain = _split(c.if_hp_percent_equal_to(ctx, _D, 100))  # -> _CheckProtectChain
+    ctx = c.load_held_item_effect(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.FEINT_GRADUAL_RECOVERY_EFFECTS))
+    chain = chain | t
+    # Expert_Feint_TryScorePlus1 (:4926), reached by a jump or by falling through
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, plus1 | ctx.live), 128, 4927))
+    ctx = c.add_to_move_score(ctx, 1)
+    # Expert_Feint_CheckProtectChain (:4930)
+    ctx = c.load_protect_chain(_at(ctx, chain | skip | ctx.live), _D)
+    ctx, none = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, one = _split(c.if_loaded_equal_to(ctx, 1))
+    ctx, many = _split(c.if_loaded_greater_than(ctx, 2))
+    # Expert_Feint_NoProtectChain (:4936), which a chain of exactly 2 falls into
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, none | ctx.live), 128, 4937))  # -> _End
+    ctx, _ = _split(c.go_to(c.add_to_move_score(ctx, 1)))  # :4938-4939
+    # Expert_Feint_ProtectChain1 (:4941)
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, one), 192, 4942))  # -> _End
+    ctx, _ = _split(c.go_to(c.add_to_move_score(ctx, 1)))  # :4943-4944
+    # Expert_Feint_ProtectChain2OrMore (:4946)
+    return c.pop_or_end(c.add_to_move_score(_at(ctx, many), -2))
+
+
+def _expert_defog(ctx: AiContext, mask) -> AiContext:
+    """``Expert_Defog`` (script.s:6125-6188, the code): Light Screen or Reflect on the player's
+    side goes to _ScreenScrubbing (the AI above 30 % HP, or with a living party member left, on to
+    _CheckHazards, else _TryScoreMinus2; _CheckHazards: +1, then, unless the player has no
+    living party member, a hazard of its side goes to _TryScoreMinus1: -1 unless the 128 roll
+    (:6171) jumps); else a hazard (Spikes, Stealth Rock, Toxic Spikes) -2. Then
+    _CheckUserHPAndOpponentEvasion: the AI below 70 % HP, or the player's evasion at -3 or
+    below (not above decomp stage 3, :6177), goes to _TryScoreMinus2 (-2 unless the 50 roll
+    (:6180) jumps), then _CheckOpponentHP: -2 unless the player is above 70 % HP (E3-B2-14)."""
+    ctx = _at(ctx, mask)
+    ctx, screens = _split(c.if_side_condition(ctx, _D, c.SideCondition.LIGHT_SCREEN))
+    ctx, t = _split(c.if_side_condition(ctx, _D, c.SideCondition.REFLECT))
+    screens = screens | t
+    ctx, hazards = _split(c.if_side_condition(ctx, _D, _DEFOG_HAZARDS))
+    check = ctx.live  # GoTo _CheckUserHPAndOpponentEvasion (:6150)
+    # Expert_Defog_ScreenScrubbing (:6152)
+    ctx, scrub_hazards = _split(c.if_hp_percent_greater_than(_at(ctx, screens), _A, 30))
+    ctx, minus2_only = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _A), 0))
+    # Expert_Defog_ScreenScrubbingCheckHazards (:6157), reached by a jump or by falling through
+    ctx = c.add_to_move_score(_at(ctx, scrub_hazards | ctx.live), 1)
+    ctx, _ = _split(c.if_loaded_equal_to(c.count_alive_party_battlers(ctx, _D), 0))  # -> _End
+    ctx, try_minus1 = _split(c.if_side_condition(ctx, _D, _DEFOG_HAZARDS))
+    check = check | ctx.live  # GoTo _CheckUserHPAndOpponentEvasion (:6164)
+    # Expert_Defog_ScoreMinus2AndEnd (:6166)
+    ctx = c.add_to_move_score(_at(ctx, hazards), -2)
+    check = check | ctx.live
+    # Expert_Defog_TryScoreMinus1 (:6170)
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, try_minus1), 128, 6171))
+    ctx = c.add_to_move_score(ctx, -1)
+    check = check | skip | ctx.live
+    # Expert_Defog_CheckUserHPAndOpponentEvasion (:6175)
+    ctx, low_hp = _split(c.if_hp_percent_less_than(_at(ctx, check), _A, 70))
+    ctx, check_hp = _split(c.if_stat_stage_greater_than(ctx, _D, Stat.EVA, 3))
+    # Expert_Defog_TryScoreMinus2 (:6179), also the target of _ScreenScrubbing's no-party case
+    ctx, skip = _split(c.if_random_less_than(_at(ctx, minus2_only | low_hp | ctx.live), 50, 6180))
+    ctx = c.add_to_move_score(ctx, -2)
+    # Expert_Defog_CheckOpponentHP (:6183)
+    ctx, _ = _split(c.if_hp_percent_greater_than(_at(ctx, check_hp | skip | ctx.live), _D, 70))
+    return c.pop_or_end(c.add_to_move_score(ctx, -2))
+
+
+def _expert_lock_on(ctx: AiContext, mask) -> AiContext:
+    """``Expert_LockOn`` (script.s:3319-3325): the 128 roll (:3321) jumping to the end, else
+    +2 (E3-B2-17)."""
+    ctx, _ = _split(c.if_random_less_than(_at(ctx, mask), 128, 3321))
+    ctx = c.add_to_move_score(ctx, 2)
+    return c.pop_or_end(ctx)
+
+
+def _expert_aqua_ring(ctx: AiContext, mask) -> AiContext:
+    """``Expert_AquaRing`` (script.s:6081-6088): the AI's battler below 30 % HP, or the 128 roll
+    (:6084) jumping, goes to the end; else +1 (E3-B2-20)."""
+    ctx, end = _split(c.if_hp_percent_less_than(_at(ctx, mask), _A, 30))
+    ctx, t = _split(c.if_random_less_than(ctx, 128, 6084))
+    ctx = c.add_to_move_score(ctx, 1)
+    return c.pop_or_end(_at(ctx, end | t | ctx.live))
 
 
 def _expert_hammer_arm(ctx: AiContext, mask) -> AiContext:
@@ -2928,6 +3331,56 @@ def _expert_copycat(ctx: AiContext, mask) -> AiContext:
     return c.pop_or_end(_at(ctx, end | ctx.live))
 
 
+def _expert_mirror_move(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MirrorMove`` (script.s:1907-1926): slower (the SLOWER compare, no tie read), or
+    the player's last move (``LoadBattlerPreviousMove``) not in ``MIRROR_MOVE_TABLE``, goes to
+    ``_TryScoreMinus1`` (:1919): the last move in the table ends, else -1 unless the 80 roll
+    (:1922) jumps; faster with it in the table, +2 unless the 128 roll (:1915) jumps (E3-B2-2)."""
+    ctx = _at(ctx, mask)
+    ctx, minus1 = _split(c.if_speed_compare_equal_to(ctx, c.COMPARE_SPEED_SLOWER))
+    ctx = c.load_battler_previous_move(ctx, _D)
+    ctx, t = _split(c.if_loaded_not_in_table(ctx, c.MIRROR_MOVE_TABLE))
+    minus1 = minus1 | t
+    ctx, end = _split(c.if_random_less_than(ctx, 128, 1915))
+    ctx = c.add_to_move_score(ctx, 2)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # _TryScoreMinus1 (:1919)
+    ctx = c.load_battler_previous_move(_at(ctx, minus1), _D)
+    ctx, t = _split(c.if_loaded_in_table(ctx, c.MIRROR_MOVE_TABLE))
+    end = end | t
+    ctx, t = _split(c.if_random_less_than(ctx, 80, 1922))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # _End (:1925)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
+def _expert_magic_coat(ctx: AiContext, mask) -> AiContext:
+    """``Expert_MagicCoat`` (script.s:4492-4515, entry :1736): a defender above 30 % HP (:4498) or the
+    100 roll (:4499) jumping goes to ``_CheckUserFirstTurn``, else -1 (:4500) first. There
+    (:4503-4504) a turn that is not the attacker's first goes to ``_TryScoreMinus1``; the first
+    turn ends when the 150 roll (:4505) jumps, else +1 (:4506) and ends (:4507; :4508 is
+    unreachable). ``_TryScoreMinus1`` (:4511): the 30 roll jumping ends, else -1 (E3-B2-6)."""
+    ctx = _at(ctx, mask)
+    ctx, check = _split(c.if_hp_percent_greater_than(ctx, _D, 30))
+    ctx, t = _split(c.if_random_less_than(ctx, 100, 4499))
+    check = check | t
+    ctx = c.add_to_move_score(ctx, -1)
+    # Expert_MagicCoat_CheckUserFirstTurn (:4503)
+    ctx = c.load_is_first_turn_in_battle(_at(ctx, check | ctx.live), _A)
+    ctx, minus1 = _split(c.if_loaded_equal_to(ctx, 0))
+    ctx, end = _split(c.if_random_less_than(ctx, 150, 4505))
+    ctx = c.add_to_move_score(ctx, 1)
+    ctx, t = _split(c.go_to(ctx))
+    end = end | t
+    # Expert_MagicCoat_TryScoreMinus1 (:4511)
+    ctx, t = _split(c.if_random_less_than(_at(ctx, minus1), 30, 4511))
+    end = end | t
+    ctx = c.add_to_move_score(ctx, -1)
+    return c.pop_or_end(_at(ctx, end | ctx.live))
+
+
 def _status_stat_trick(label: str, lines: dict[str, int], first, hp_check):
     """``Expert_StatusAccuracyDown`` (script.s:2431-2498) and ``Expert_StatusEvasionUp``
     (:2184-2253), one shape after their first round (``first``): the attacker's own
@@ -3632,12 +4085,15 @@ _BASIC_LABELS = (
     (BattleEffect.COUNTER, _basic_check_non_standard_damage),  # :187
     (BattleEffect.ENCORE, _basic_check_cannot_encore),  # :188
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _basic_check_attacker_asleep),  # :189
+    (BattleEffect.NEXT_ATTACK_ALWAYS_HITS, _basic_check_lock_on),  # :190 (E3-B2-17)
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _basic_check_attacker_asleep),  # :191
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _basic_check_non_standard_damage),  # :192
     (BattleEffect.PREVENT_ESCAPE, _basic_check_mean_look),  # :193
+    (BattleEffect.STATUS_NIGHTMARE, _basic_check_nightmare),  # :194 (G-34)
     (BattleEffect.EVA_UP_2_MINIMIZE, _basic_check_high_evasion),  # :195
     (BattleEffect.CURSE, _basic_check_curse),  # :196
     (BattleEffect.SET_SPIKES, _basic_check_spikes),  # :197
+    (BattleEffect.FORESIGHT, _basic_check_foresight),  # :198 (E3-B2-18)
     (BattleEffect.ALL_FAINT_3_TURNS, _basic_check_perish_song),  # :199
     (BattleEffect.ATK_UP_2_STATUS_CONFUSION, _basic_check_cannot_confuse),  # :201
     (BattleEffect.INFATUATE, _basic_check_cannot_attract),  # :202
@@ -3677,25 +4133,32 @@ _BASIC_LABELS = (
     (BattleEffect.ATK_DEF_UP, _basic_check_bulk_up),  # :248
     (BattleEffect.SP_ATK_SP_DEF_UP, _basic_check_calm_mind),  # :250
     (BattleEffect.ATK_SPD_UP, _basic_check_dragon_dance),  # :251
+    (BattleEffect.CAMOUFLAGE, _basic_check_camouflage),  # :252 (G-20)
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _basic_check_can_recover_hp),  # :253
     (BattleEffect.GRAVITY, _basic_check_gravity_active),  # :254
+    (BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE, _basic_check_miracle_eye),  # :255 (E3-B2-10)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _basic_check_non_standard_damage),  # :256
     (BattleEffect.NATURAL_GIFT, _basic_check_natural_gift),  # :258 (B13-23)
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _basic_check_tailwind),  # :259
     (BattleEffect.RANDOM_STAT_UP_2, _basic_check_acupressure),  # :260 (B12-11)
     (BattleEffect.METAL_BURST, _basic_check_metal_burst),  # :261
     (BattleEffect.PREVENT_ITEM_USE, _basic_check_embargo),  # :262 (B13-32)
+    (BattleEffect.FLING, _basic_check_fling),  # :263 (E3-B2-1)
     (BattleEffect.TRANSFER_STATUS, _basic_check_can_psycho_shift),  # :264 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _basic_check_non_standard_damage),  # :265
     (BattleEffect.SWAP_ATK_DEF, _basic_check_power_trick),  # :268 (B12-11)
     (BattleEffect.SUPRESS_ABILITY, _basic_check_gastro_acid),  # :269 (E3-2-6)
+    (BattleEffect.PREVENT_CRITS, _basic_check_lucky_chant),  # :270 (E3-B2-7)
     (BattleEffect.USE_LAST_USED_MOVE, _basic_check_copycat),  # :271
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _basic_check_powerswap),  # :272 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _basic_check_guardswap),  # :273 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _basic_check_non_standard_damage),  # :274
+    (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _basic_check_last_resort),  # :275 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _basic_check_worry_seed),  # :276 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _basic_check_toxic_spikes),  # :277
+    (BattleEffect.RESTORE_HP_EVERY_TURN, _basic_check_aqua_ring),  # :279 (E3-B2-20)
     (BattleEffect.GIVE_GROUND_IMMUNITY, _basic_check_magnet_rise),  # :280
+    (BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN, _basic_check_defog),  # :281 (E3-B2-14)
     (BattleEffect.TRICK_ROOM, _basic_check_trick_room),  # :282 (E3-2-4)
     (BattleEffect.SP_ATK_DOWN_2_OPPOSITE_GENDER, _basic_check_captivate),  # :283 (B12-11)
     (BattleEffect.STEALTH_ROCK, _basic_check_stealth_rock),  # :284
@@ -3707,6 +4170,7 @@ _EXPERT_LABELS = (
     (BattleEffect.RECOVER_HALF_DAMAGE_DEALT, _expert_drain_move),  # :1629
     (BattleEffect.HALVE_DEFENSE, _expert_explosion),  # :1630
     (BattleEffect.RECOVER_DAMAGE_SLEEP, _expert_dream_eater),  # :1631
+    (BattleEffect.COPY_MOVE, _expert_mirror_move),  # :1632 (E3-B2-2)
     (BattleEffect.ATK_UP, _expert_status_atk_up),  # :1633
     (BattleEffect.DEF_UP, _expert_status_def_up),  # :1634
     (BattleEffect.SP_ATK_UP, _expert_status_spa_up),  # :1636
@@ -3750,6 +4214,7 @@ _EXPERT_LABELS = (
     (BattleEffect.ENCORE, _expert_encore),  # :1689
     (BattleEffect.AVERAGE_HP, _expert_pain_split),  # :1690
     (BattleEffect.DAMAGE_WHILE_ASLEEP, _expert_nightmare),  # :1691
+    (BattleEffect.NEXT_ATTACK_ALWAYS_HITS, _expert_lock_on),  # :1692 (E3-B2-17)
     (BattleEffect.USE_RANDOM_LEARNED_MOVE_SLEEP, _expert_sleep_talk),  # :1693
     (BattleEffect.KO_MON_THAT_DEFEATED_USER, _expert_destiny_bond),  # :1694
     (BattleEffect.INCREASE_POWER_WITH_LESS_HP, _expert_reversal),  # :1695
@@ -3759,6 +4224,7 @@ _EXPERT_LABELS = (
     (BattleEffect.CURSE, _expert_curse),  # :1700
     (BattleEffect.PROTECT, _expert_protect),  # :1701
     (BattleEffect.SET_SPIKES, _expert_spikes),  # :1702
+    (BattleEffect.FORESIGHT, _expert_foresight),  # :1703 (E3-B2-18)
     (BattleEffect.SURVIVE_WITH_1_HP, _expert_endure),  # :1704
     (BattleEffect.PASS_STATS_AND_STATUS, _expert_baton_pass),  # :1705
     (BattleEffect.HIT_BEFORE_SWITCH, _expert_pursuit),  # :1706
@@ -3780,8 +4246,10 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_WHEN_STATUSED, _expert_facade),  # :1729
     (BattleEffect.HIT_LAST_WHIFF_IF_HIT, _expert_focus_punch),  # :1730
     (BattleEffect.DOUBLE_POWER_AND_CURE_PARALYSIS, _expert_smelling_salts),  # :1731
+    (BattleEffect.COPY_ABILITY, _expert_change_user_ability),  # :1733 (E3-B2-5)
     (BattleEffect.GROUND_TRAP_USER_CONTINUOUS_HEAL, _expert_ingrain),  # :1734
     (BattleEffect.LOWER_OWN_ATK_AND_DEF, _expert_superpower),  # :1735
+    (BattleEffect.APPLY_MAGIC_COAT, _expert_magic_coat),  # :1736 (E3-B2-6)
     (BattleEffect.RECYCLE, _expert_recycle),  # :1737 (B13-23)
     (BattleEffect.REMOVE_SCREENS, _expert_brick_break),  # :1739
     (BattleEffect.REMOVE_HELD_ITEM, _expert_knock_off),  # :1740
@@ -3800,10 +4268,12 @@ _EXPERT_LABELS = (
     (BattleEffect.ATK_SPD_UP, _expert_dragon_dance),  # :1757
     (BattleEffect.HEAL_HALF_REMOVE_FLYING_TYPE, _expert_recovery),  # :1758
     (BattleEffect.GRAVITY, _expert_gravity),  # :1759
+    (BattleEffect.IGNORE_EVATION_REMOVE_DARK_IMMUNE, _expert_miracle_eye),  # :1760 (E3-B2-10)
     (BattleEffect.DOUBLE_POWER_HEAL_SLEEP, _expert_wake_up_slap),  # :1761 (B13-23)
     (BattleEffect.SPEED_DOWN_HIT, _expert_hammer_arm),  # :1762 (E3-1-5)
     (BattleEffect.POWER_BASED_ON_LOW_SPEED, _expert_gyro_ball),  # :1763 (B13-23)
     (BattleEffect.DOUBLE_POWER_WHEN_BELOW_HALF, _expert_brine),  # :1765
+    (BattleEffect.REMOVE_PROTECT, _expert_feint),  # :1766 (E3-B2-13)
     (BattleEffect.EAT_BERRY, _expert_pluck),  # :1767
     (BattleEffect.DOUBLE_SPEED_3_TURNS, _expert_tailwind),  # :1768
     (BattleEffect.RANDOM_STAT_UP_2, _expert_acupressure),  # :1769 (B12-11)
@@ -3812,21 +4282,26 @@ _EXPERT_LABELS = (
     (BattleEffect.DOUBLE_POWER_IF_MOVING_SECOND, _expert_payback),  # :1773
     (BattleEffect.DOUBLE_POWER_IF_TARGET_HIT, _expert_assurance),  # :1774 (B13-23)
     (BattleEffect.PREVENT_ITEM_USE, _expert_embargo),  # :1775 (B13-32)
+    (BattleEffect.FLING, _expert_fling),  # :1776 (E3-B2-1)
     (BattleEffect.TRANSFER_STATUS, _expert_psycho_shift),  # :1777 (B12-18)
     (BattleEffect.HIGHER_POWER_WHEN_LOW_PP, _expert_trump_card),  # :1778 (B13-23)
     (BattleEffect.SWAP_ATK_DEF, _expert_power_trick),  # :1781 (B12-11)
     (BattleEffect.SUPRESS_ABILITY, _expert_gastro_acid),  # :1782 (E3-2-6)
+    (BattleEffect.PREVENT_CRITS, _expert_lucky_chant),  # :1783 (E3-B2-7)
     (BattleEffect.USE_MOVE_FIRST, _expert_me_first),  # :1784 (E3-2-3)
     (BattleEffect.USE_LAST_USED_MOVE, _expert_copycat),  # :1785
     (BattleEffect.SWAP_ATK_SP_ATK_STAT_CHANGES, _expert_powerswap),  # :1786 (B12-11)
     (BattleEffect.SWAP_DEF_SP_DEF_STAT_CHANGES, _expert_guardswap),  # :1787 (B12-11)
     (BattleEffect.INCREASE_POWER_WITH_MORE_STAT_UP, _expert_punishment),  # :1788
+    (BattleEffect.FAIL_IF_NOT_USED_ALL_OTHER_MOVES, _expert_last_resort),  # :1789 (E3-B2-11)
     (BattleEffect.SET_ABILITY_TO_INSOMNIA, _expert_worry_seed),  # :1790 (E3-2-2)
     (BattleEffect.TOXIC_SPIKES, _expert_toxic_spikes),  # :1792
+    (BattleEffect.RESTORE_HP_EVERY_TURN, _expert_aqua_ring),  # :1794 (E3-B2-20)
     (BattleEffect.GIVE_GROUND_IMMUNITY, _expert_magnet_rise),  # :1795
     (BattleEffect.RECOIL_BURN_HIT, _expert_recoil_move),  # :1796
     (BattleEffect.DIVE, _expert_charge_turn_with_invuln),  # :1797
     (BattleEffect.DIG, _expert_charge_turn_with_invuln),  # :1798
+    (BattleEffect.REMOVE_HAZARDS_SCREENS_EVA_DOWN, _expert_defog),  # :1799 (E3-B2-14)
     (BattleEffect.TRICK_ROOM, _expert_trick_room),  # :1800 (E3-2-4)
     (BattleEffect.BLIZZARD, _expert_blizzard),  # :1801
     (BattleEffect.RECOIL_PARALYZE_HIT, _expert_recoil_move),  # :1802
@@ -4052,7 +4527,8 @@ _ATTACKER_ABILITIES = ("Normalize", "Adaptability", "Scrappy", "Tinted Lens")
 _DEFENDER_ABILITIES = ("Levitate", "Filter", "Solid Rock")
 # Ingrain and Roost are read since E1 prep batch P2, Magnet Rise since the E1 trial batch
 # (switching.defender_chart_flags).
-_STATE_MOVE_IDS = {n: switching.MOVE_IDS[n] for n in ("Miracle Eye",)}
+# Miracle Eye since E3-B2-10 (``defender_chart_flags``): no move is refused for its state now.
+_STATE_MOVE_IDS: dict[str, int] = {}
 
 
 def player_move_refusal(move: int) -> str | None:
@@ -4115,6 +4591,14 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
         expert = jnp.zeros_like(expert)
     known = present[1][:, None] & (moves[1] != 0)
     calc_damage = known & jnp.isin(moves[1], jnp.array(c.CALC_DAMAGE_MOVES, _I32))
+    # Gyro Ball's estimate divides by the AI battler's monSpeedValues (trainer_ai.c:2995-3003):
+    # the record's, or the current speed after the decision's first speed compare; a 0 divisor is
+    # left to the ROM's division routine (as the mechanic's, coverage.GYRO_SPEED_MIN), E3-B2-15.
+    speeds = c.current_speeds(tables, state)
+    zero = jnp.stack(
+        [(state.speed_rec[b] == 0) | (speeds[b] == 0) for b in range(format_of(state).B)]
+    )
+    calc_damage = calc_damage | (known & (moves[1] == AI_GYRO_BALL) & zero[1])
     # Weather Ball's TrainerAI_MoveType case assigns nothing outside its weathers (B13-26).
     move_type = known & jnp.isin(moves[1], jnp.array(c.MOVE_TYPE_MOVES, _I32))
     move_type = move_type & ~ai_weather_ball_typed(tables, state)
@@ -4151,6 +4635,8 @@ def _refused(tables: Tables, state: BattleState, layout: AiLayout = VANILLA) -> 
     copied = (
         present[0][:, None] & jnp.isin(moves[0], jnp.array(c.CALC_DAMAGE_MOVES, _I32)) & copycat
     )
+    # The player's Gyro Ball is 1 + 25 * v / v there (attacker = defender = the player): v = 0
+    copied = copied | (present[0][:, None] & (moves[0] == AI_GYRO_BALL) & copycat & zero[0])
     scoring = (
         jnp.any(move)
         | jnp.any(expert)
@@ -4288,6 +4774,13 @@ def _scoring_refusals(
             "(docs/ai/kaizo_roark.md 5)"
         )
     for s, k in zip(*np.nonzero(np.asarray(r.calc_damage)), strict=True):
+        if int(moves[1, s, k]) == AI_GYRO_BALL:
+            out.append(
+                f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
+                "divides by a monSpeedValues of 0 (trainer_ai.c:2995-3003), which the ROM's "
+                "division routine decides (E3-B2-15)"
+            )
+            continue
         out.append(
             f"ai scoring: opponent slot {s}: move {_move_name(int(moves[1, s, k]), names)} "
             "takes a TrainerAI_CalcDamage move-id case (trainer_ai.c:2885-3056) that is not "
@@ -4438,11 +4931,12 @@ def _run_flags(ctx: AiContext, layout: AiLayout, flags: tuple | None = None) -> 
     draws as in the fight's own layout (E1 Ruling R4)."""
     ctx = ctx._replace(slot=jnp.asarray(0, _I32))
     pairs = _flag_scripts(layout) if flags is None else tuple((None, f) for f in flags)
-    for bit, flag in pairs:  # trainer_ai.c:297-310
+    for index, (bit, flag) in enumerate(pairs):  # trainer_ai.c:297-310
         # The slots in a loop, not unrolled: one copy of each flag script in the program.
 
-        def eval_slot(slot, ctx, flag=flag):  # TrainerAI_EvalMoves (:483-525)
-            ctx = flag(c.at_slot(ctx, slot))
+        def eval_slot(slot, ctx, flag=flag, index=index):  # TrainerAI_EvalMoves (:483-525)
+            # E3-B2-15: ``written`` (monSpeedValues) runs on across the slots and the flags
+            ctx = flag(c.start_run(c.at_slot(ctx, slot), index))
             # A MOVE_NONE slot runs no command and scores 0 (:499-501).
             return ctx._replace(
                 scores=ctx.scores.at[slot].set(jnp.where(ctx.move == 0, 0, ctx.scores[slot]))
@@ -4481,11 +4975,13 @@ def _check_outcome(ai_outcome: AiOutcome, layout: AiLayout) -> None:
 
 
 def _score_context(
-    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout
+    tables: Tables, state: BattleState, ai_outcome: AiOutcome, layout: AiLayout, inject=-1
 ) -> AiContext:
-    """The ``AiContext`` after the policy's flag scripts (refusals not applied)."""
+    """The ``AiContext`` after the policy's flag scripts (refusals not applied). ``inject``: -1,
+    or the exact distribution's injected speed-compare schedule (``_slot_event_scorings``)."""
     _check_outcome(ai_outcome, layout)
-    return _run_flags(c.new_context(tables, state, ai_outcome), layout)
+    ctx = c.new_context(tables, state, ai_outcome)
+    return _run_flags(ctx._replace(inject=jnp.asarray(inject, _I32)), layout)
 
 
 def _scores(
@@ -4776,25 +5272,35 @@ def _slot_move_distribution(tables: Tables, state: BattleState, layout: AiLayout
 
     NaN when a score is outside the s8 ``moveScore``'s clamped range 0-127
     (include/battle/ai_context.h:14)."""
-    scores, hist = _slot_histograms(tables, state, layout)
     has = (state.moves[1, state.active[1]] != 0).at[0].set(True)  # the pick's candidates
-    equal = jnp.where(has[:, None], hist, 0.0)
-    below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
-    picked = []
-    for slot in range(MOVES):
-        others = [j for j in range(MOVES) if j != slot]
-        win = jnp.zeros(_SCORE_VALUES, jnp.float32)
-        for subset in range(2 ** len(others)):
-            tied = [j for k, j in enumerate(others) if subset >> k & 1]
-            term = jnp.ones(_SCORE_VALUES, jnp.float32)
-            for j in others:
-                term = term * (equal[j] if j in tied else below[j])
-            rank = sum(j < slot for j in tied)
-            win = win + term * _TIE_SHARE[len(tied) + 1, rank]
-        picked.append(jnp.sum(equal[slot] * win))
-    dist = jnp.stack(picked)
+
+    def pick(hist):
+        equal = jnp.where(has[:, None], hist, 0.0)
+        below = jnp.where(has[:, None], jnp.cumsum(hist, axis=1) - hist, 1.0)
+        picked = []
+        for slot in range(MOVES):
+            others = [j for j in range(MOVES) if j != slot]
+            win = jnp.zeros(_SCORE_VALUES, jnp.float32)
+            for subset in range(2 ** len(others)):
+                tied = [j for k, j in enumerate(others) if subset >> k & 1]
+                term = jnp.ones(_SCORE_VALUES, jnp.float32)
+                for j in others:
+                    term = term * (equal[j] if j in tied else below[j])
+                rank = sum(j < slot for j in tied)
+                win = win + term * _TIE_SHARE[len(tied) + 1, rank]
+            picked.append(jnp.sum(equal[slot] * win))
+        return jnp.stack(picked)
+
+    if _tracks_speed(layout):
+        # E3-B2-15: the events (the first speed compare's place) are disjoint and the slots
+        # independent within one: the pick of each event's histograms, summed.
+        _, hists, out_of_range = _slot_event_histograms(tables, state, layout)
+        dist = jnp.sum(jax.vmap(pick)(hists), axis=0)
+    else:
+        scores, hist = _slot_histograms(tables, state, layout)
+        dist = pick(hist)
+        out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     dist = jnp.where(jnp.any(usable_moves(tables, state, 1)), dist, jax.nn.one_hot(0, MOVES))
-    out_of_range = jnp.any((scores < 0) | (scores > _SCORE_MAX))
     return jnp.where(out_of_range, jnp.nan, dist)
 
 
@@ -4833,10 +5339,16 @@ def _path_records(tables: Tables, state: BattleState, layout: AiLayout):
     slot's random reads."""
     _, outcomes = _pattern_outcomes(layout)
 
-    def one(o):
-        ctx = _score_context(tables, state, o, layout)
+    def one(o, inject=-1):
+        ctx = _score_context(tables, state, o, layout, inject)
         return ctx.missing_read, ctx.reads
 
+    if _tracks_speed(layout):  # a path can differ with the injected schedule: every one counts
+        n = len(_flag_scripts(layout))
+        missing, reads = jax.vmap(lambda k: jax.vmap(lambda o: one(o, k))(outcomes))(
+            jnp.arange(n + 1, dtype=_I32)
+        )
+        return missing.reshape(-1), reads.reshape(-1, MOVES)
     return jax.vmap(one)(outcomes)
 
 
@@ -4871,12 +5383,102 @@ def _raise_path_refusal(tables: Tables, state: BattleState, layout: AiLayout) ->
     raise UnsupportedAi("; ".join(found) or _PATH_REFUSAL)
 
 
+def _tracks_speed(layout: AiLayout) -> bool:
+    """Static: the fight's AI can estimate a Gyro Ball (a per-slot layout that transcribes
+    ``POWER_BASED_ON_LOW_SPEED``, ``R7``: the effects of the fight's own moves), whose power reads
+    ``monSpeedValues`` (trainer_ai.c:2995-3003), written by the decision's own speed compares
+    (``AiContext.written``). The scoring then depends across the slots and flags on which paths
+    reached a compare first, which ``_slot_event_histograms`` factors exactly. E3-B2-15."""
+    return (
+        layout.per_slot_sites and int(BattleEffect.POWER_BASED_ON_LOW_SPEED) in layout.transcribed
+    )
+
+
+def _slot_event_scorings(tables: Tables, state: BattleState, layout: AiLayout):
+    """``(n, scores int32[n + 1, P, MOVES], weight float32[n + 1, P, MOVES], first int32[P,
+    MOVES])`` of a layout that tracks monSpeedValues: the scoring of every local bit pattern p
+    (``_pattern_outcomes``) under each injected schedule ``tau`` in 0..n (``n`` flag scripts): a
+    script run of flag index f starts with ``written`` = f >= tau, so ``tau = n`` is "no run
+    starts after a compare", ``tau = 0`` "every run does". ``first[p, m]``: under ``tau = n`` the
+    least flag index at which slot m's pattern p made a speed compare (``commands.NO_COMPARE``:
+    none)."""
+    _, outcomes = _pattern_outcomes(layout)
+    refused = _refused(tables, state, layout).scoring
+    n = len(_flag_scripts(layout))
+
+    def one(o, tau):
+        ctx = _score_context(tables, state, o, layout, tau)
+        scores = jnp.where(refused | (ctx.missing_read > 0), -1, ctx.scores).astype(_I32)
+        keep = _canonical(o.script_rolls, ctx.reads)
+        return scores, jnp.where(keep, ctx.weight, 0.0), ctx.first_cmp
+
+    scores, weight, first = jax.vmap(lambda tau: jax.vmap(lambda o: one(o, tau))(outcomes))(
+        jnp.arange(n + 1, dtype=_I32)
+    )
+    return n, scores, weight, first[n]
+
+
+def _slot_event_histograms(tables: Tables, state: BattleState, layout: AiLayout):
+    """``(scores int32[(n + 1) * P, MOVES], hists float32[E, MOVES, 256], bad bool)`` for a
+    layout that tracks monSpeedValues (``_tracks_speed``): the decision split by where the first
+    speed compare happened, the one split of the cross-slot dependence (E3-B2-15).
+
+    ``written`` turns true at the first (flag, slot) run, in the decomp's order (flags in bit
+    order, slots 0-3 in each), that makes an ``IfSpeedCompare*`` and stays true (nothing resets
+    it); a run's own estimates before its compare still read the record. The event ``(f, s)``: the
+    first compare is in the run of flag index f, slot s. The slots' paths are independent
+    given the event: slot m must not have compared in a run before it (flags before f, and f
+    itself when m < s), slot s must compare at f, and slot m's runs after it start with ``written``
+    (``tau_m = f + 1`` for m <= s, ``f`` for m > s). The last event: no compare anywhere
+    (``tau = n``). A slot's runs before the first compare are those of the ``tau = n`` scoring
+    (nothing was written), so its first compare there decides the event; ``hists[e, m, v]`` is
+    the probability that the event holds for slot m's pattern and slot m scores v, the event's
+    probability the product over the slots of their masses. ``bad``: a reachable score outside
+    the s8 range 0-127."""
+    n, scores, weight, first = _slot_event_scorings(tables, state, layout)
+    values = jnp.clip(scores, 0, _SCORE_VALUES - 1)
+    events = [(f, s) for f in range(n) for s in range(MOVES)] + [None]
+    hists = []
+    bad = jnp.asarray(False)
+    for event in events:
+        rows = []
+        for m in range(MOVES):
+            if event is None:
+                tau, cond = n, first[:, m] == c.NO_COMPARE
+            else:
+                f, s = event
+                tau = f + 1 if m <= s else f
+                cond = (
+                    (first[:, m] > f)
+                    if m < s
+                    else (first[:, m] == f)
+                    if m == s
+                    else (first[:, m] >= f)
+                )
+            w = jnp.where(cond, weight[tau, :, m], 0.0)
+            rows.append(jnp.zeros(_SCORE_VALUES, jnp.float32).at[values[tau, :, m]].add(w))
+            off = (scores[tau, :, m] < 0) | (scores[tau, :, m] > _SCORE_MAX)
+            bad = bad | jnp.any(off & (w > 0))
+        hists.append(jnp.stack(rows))
+    return scores.reshape(-1, MOVES), jnp.stack(hists), bad
+
+
 def _slot_histograms(
     tables: Tables, state: BattleState, layout: AiLayout
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Steps 1 and 2 of ``_slot_move_distribution``: ``(scores int32[P, MOVES],
     hist float32[MOVES, 256])``, ``hist[m, v]`` the probability that slot m scores v
-    (refusals not applied)."""
+    (refusals not applied). A layout that tracks monSpeedValues (``_tracks_speed``) gives the
+    marginal of each slot over the events of ``_slot_event_histograms``, and every schedule's
+    scores."""
+    if _tracks_speed(layout):
+        scores, hists, _ = _slot_event_histograms(tables, state, layout)
+        mass = jnp.sum(hists, axis=2)  # [E, MOVES]
+        others = jnp.stack(
+            [jnp.prod(jnp.where(jnp.arange(MOVES) != m, mass, 1.0), axis=1) for m in range(MOVES)],
+            axis=1,
+        )  # [E, MOVES]: the product of the other slots' masses
+        return scores, jnp.sum(hists * others[:, :, None], axis=0)
     _, outcomes = _pattern_outcomes(layout)
     refused = _refused(tables, state, layout).scoring
 

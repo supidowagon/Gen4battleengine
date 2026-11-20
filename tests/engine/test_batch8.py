@@ -6,6 +6,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.engine.actions import MOVE_ACTIONS
+from nuzline.engine.field import with_gravity
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import make_state
 from tests.engine.helpers import assert_matches_reference
@@ -215,7 +216,7 @@ def test_future_sight_roll_is_kept_whole_around_gravity_and_transform(tables, na
     for move in ("Gravity", "Transform", "Knock Off"):
         assert loose(tables, _future_due(tables, names, move)), move
     ending = _future_due(tables, names, "Growl")
-    ending = ending._replace(gravity=jnp.asarray(1, ending.gravity.dtype))
+    ending = with_gravity(ending, 1)
     assert loose(tables, ending)
     rearm = tables._replace(gravity_rearm=jnp.asarray(1, tables.gravity_rearm.dtype))
     assert not loose(rearm, ending)
