@@ -2177,9 +2177,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   take `switcher` (was `_foe(pursuer)`); the reference's U-turn site takes `_pursuit`'s returned pursuer for
   `turn.pursued` and `_owed_pursuer` (`not bonded`: the U-turn user has no Destiny Bond, bcp.c:2425) in place of
   `foe` / `turn.done[foe]`. Same values in singles (one foe; `_pursuer_ready` needs a living pursuer).
-- G-42 tools/snap_compare.py `upgrade_entries` keys an UPGRADES row by (kind, field) (gate review G record b): a
-  captured `PARENT.FIELD` is of the kind whose marker (`KIND_MARKERS`: state `active`, outcome `speed_tie`) sits
-  beside it, so a same-named field of the other kind is not upgraded.
+- G-42 Gate review G record b (`upgrade_entries` keyed by kind) is not built here: the snap_compare upgrade
+  rewrite on its own branch carries it (manager, 19 Nov).
 - G-43 Batch G's interim refusals (gate review G record c): the multi-condition status word at the save
   (`SaveMon.to_spec`, G-25) closes with the status-word batch (G-39; the backlog row of G-35 says so). The 24
   weather-16 rows (Volkner Split 11 on headers 154-156, Galactic Split 13 on 284 / 380) are no interim refusal and

@@ -652,9 +652,7 @@ def test_old_shapes_upgrade_on_load(monkeypatch):
     np.testing.assert_array_equal(got["in_outcome"]["starf"], want_starf)
     np.testing.assert_array_equal(ai["in_ai_state"]["starf_roll"], want_roll)
     assert got["in_state"]["hp"] is hp and got["in_actions"] is hp
-    tie = np.int8(0)
-    state, outcome = {"starf_roll": roll, "active": hp}, {"starf": starf, "speed_tie": tie}
-    entries = sc.canon({"state": state, "outcome": outcome, "x": hp})
+    entries = sc.canon({"state": {"starf_roll": roll}, "outcome": {"starf": starf}, "x": hp})
     assert sc.upgrade_entries(entries) == {
         **entries,
         **sc.canon({"state": {"starf_roll": want_roll}, "outcome": {"starf": want_starf}}),
@@ -662,11 +660,6 @@ def test_old_shapes_upgrade_on_load(monkeypatch):
     assert sc.UPGRADED == {STARF_ROW: 3, STARF_COLS: 2}
     assert sc.upgrade_fields("state", {"starf_roll": want_roll})["starf_roll"] is want_roll
     assert sc.upgrade_entries(sc.canon({"starf": want_starf})) == sc.canon({"starf": want_starf})
-    # The row's kind is the parent's (KIND_MARKERS): an old-shaped field of the same name in
-    # the other kind, or under a parent of no known kind, is left alone.
-    crossed = sc.canon({"s": {"starf": starf, "active": hp}, "o": {"starf_roll": roll,
-                        "speed_tie": tie}, "u": {"starf": starf}})  # fmt: skip
-    assert sc.upgrade_entries(crossed) == crossed
     assert sc.UPGRADED == {STARF_ROW: 3, STARF_COLS: 2}
 
 

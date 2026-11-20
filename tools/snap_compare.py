@@ -108,8 +108,7 @@ Layout upgrades: a field whose shape a later commit changed is read through ``UP
 (kind ``state`` / ``outcome``, field, dtype, old shape, new shape, a fill), applied wherever the
 capture is read back: the saved inputs (``in_state``, ``in_ai_state``: state; ``in_outcome``:
 outcome) as they are loaded and in ``rebuild_state`` / ``rebuild_outcome``, and the captured
-output entries of every part (a ``PARENT.FIELD`` entry of the row's field whose parent is of the
-row's kind, ``KIND_MARKERS``) before they are compared.
+output entries of every part (a ``.FIELD`` entry of the row's field) before they are compared.
 A field is upgraded only when its dtype and shape are the row's old ones exactly (``B`` the
 array's own battler count); any other shape or dtype is still the error above. What is compared
 after the upgrade is unchanged. The compare header lists the rows; each part prints the upgrades
@@ -466,23 +465,15 @@ def upgrade_inputs(inputs: list) -> list:
     ]  # fmt: skip
 
 
-# A field every capture of the kind holds (BattleState.active, Outcome.speed_tie): a captured
-# ``PARENT.FIELD`` is of the kind whose marker ``PARENT.MARKER`` sits beside it.
-KIND_MARKERS = {"state": "active", "outcome": "speed_tie"}
-
-
 def upgrade_entries(entries: dict) -> dict:
-    """Captured canon ``entries`` with each ``PARENT.FIELD`` array of an ``UPGRADES`` row in its
-    old dtype and shape upgraded; the row's kind is the parent's (``KIND_MARKERS``), so a
-    same-named field of another kind is left alone."""
+    """Captured canon ``entries`` with each ``.FIELD`` array of an ``UPGRADES`` row in its old
+    dtype and shape upgraded (a row's field name is unique to its kind)."""
     import numpy as np
 
-    rows = {(u.kind, u.field): u for u in UPGRADES}
+    rows = {u.field: u for u in UPGRADES}
     out = dict(entries)
     for path, e in entries.items():
-        parent, _, field = path.rpartition(".")
-        kinds = [k for k, m in KIND_MARKERS.items() if f"{parent}.{m}" in entries]
-        u = rows.get((kinds[0], field)) if len(kinds) == 1 else None
+        u = rows.get(path.rsplit(".", 1)[-1])
         if u is None or e[0] != "arr":
             continue
         a = np.frombuffer(e[3], np.dtype(e[1])).reshape(ast.literal_eval(e[2]))
