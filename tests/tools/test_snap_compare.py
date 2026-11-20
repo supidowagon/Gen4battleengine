@@ -1057,3 +1057,25 @@ def test_gen_drift_only_in_inputs_the_strategies_draw():
     diverged = sc.compare_dumps(record, dump[:2])[0]
     assert sc.classify_gen(record, dump[:2], diverged) == (diverged, False)
     assert sc.classify_gen(record, dump, None) == (None, False)
+
+
+def test_a_resumed_segment_reads_the_turns_quick_claw_draw(monkeypatch):
+    """E3-B2-29 (c): a resumed segment's saved state with no ts_qc gets the turn's draw, segment
+    k - 1's in_outcome.quick_claw != 0; segment 0, a state that has ts_qc, and the AI state keep
+    theirs, and no read is left behind."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    hp, qc = np.ones(2, np.int16), np.array([0, 3], np.int8)
+    turn = "seed 1 turn 0 segment"
+    kept = np.array([1, 1], np.int8)
+    inputs = [
+        (f"{turn} 0", {"in_state": {"hp": hp}, "in_outcome": {"quick_claw": qc}}),
+        (f"{turn} 1", {"in_state": {"hp": hp}, "in_outcome": {"quick_claw": qc[::-1]}}),
+        (f"{turn} 2", {"in_state": {"hp": hp, "ts_qc": kept}, "in_outcome": {"quick_claw": qc}}),
+        ("seed 1 turn 0 ai", {"in_ai_state": {"hp": hp}}),
+    ]
+    (_, s0), (_, s1), (_, s2), (_, ai) = sc.upgrade_inputs(inputs, None)
+    assert "ts_qc" not in s0["in_state"] and "ts_qc" not in ai["in_ai_state"]
+    assert s1["in_state"]["ts_qc"].tolist() == [0, 1] and s1["in_state"]["ts_qc"].dtype == np.int8
+    assert s2["in_state"]["ts_qc"] is kept
+    assert not any(sc.RESUME_QC in d["in_state"] for d in (s0, s1, s2))
+    assert set(sc.UPGRADED) == {"state.resume.quick_claw -> ts_qc"}

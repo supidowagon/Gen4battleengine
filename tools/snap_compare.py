@@ -127,7 +127,9 @@ sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B,
 (G-4, G-11); ``party_ability``, ``nightmare``, ``starf_taken`` = 0 (F-O2, G-31, G-27);
 ``camouflage`` from the old types against the personal rows of the part's own game (Kaizo for
 "roark.trace", vanilla for every other part: ``Ctx.tables_for``; G-20); ``acid_rain`` dropped,
-no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21).
+no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21);
+``ts_qc`` of a resumed segment (k > 0) from segment k - 1's ``in_outcome.quick_claw`` (the turn's
+draw its stop stored; ``upgrade_inputs`` hands the row that read, E3-B2-29 (c)).
 
 Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
 shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
@@ -658,6 +660,21 @@ def _camouflage(a, lead, tables):
     return {"camouflage": out}
 
 
+def _resumed_qc(a, lead, tables):
+    """``ts_qc`` of a resumed segment's state (E3-B2-29 (c)): the stop stored the turn's
+    speedRand draw, ``quick_claw != 0`` of the turn's Outcome (``step._execute_actions``' stop
+    at a party list, ``step_events``' learn stop): the previous segment's ``in_outcome``
+    (``RESUME_QC``)."""
+    import numpy as np
+
+    return {"ts_qc": (np.asarray(a[RESUME_QC]) != 0).astype(np.int8)}
+
+
+# A read no captured state holds: ``upgrade_inputs`` puts the previous segment's
+# ``in_outcome.quick_claw`` under it in a resumed segment's ``in_state`` that has no ``ts_qc``.
+RESUME_QC = "resume.quick_claw"
+_SEGMENT = re.compile(r"(.* segment )(\d+)$")
+
 _I1, _I2 = "|i1", "<i2"
 _MON_READS = tuple(
     (f, d, ("P", 6))
@@ -683,6 +700,7 @@ UPGRADES = (
     dropped("state", "acid_rain", _I1, (), "G-12, G-13", "E2's interim Acid Rain guard flag (main 08a57000, SF2 (f)); batch G models the write in field_mask and removed the flag"),
     dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
     dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
+    derive("state", ((RESUME_QC, _I1, ("B",)),), ("ts_qc",), _resumed_qc, "E3-B2-29 (c)", "a resumed segment (k > 0) reads the turn's draw its stop stored: quick_claw != 0 of segment k - 1's in_outcome; main kept none and drew again"),
 )  # fmt: skip
 UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
 INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
@@ -730,12 +748,28 @@ def upgrade_fields(
 
 def upgrade_inputs(inputs: list, tables) -> list:
     """Saved ``[(key, {in_state, in_actions, in_outcome} | {in_ai_state})]`` of the game of
-    ``tables``, upgraded."""
+    ``tables``, upgraded. A resumed segment's ``in_state`` (key "... segment k", k > 0) with no
+    ``ts_qc`` first gets segment k - 1's ``in_outcome.quick_claw`` as ``RESUME_QC``, which its
+    row turns into ``ts_qc``."""
+    saved = dict(inputs)
     return [
-        (key, {n: upgrade_fields(INPUT_KINDS[n], v, tables=tables) if n in INPUT_KINDS else v
+        (key, {n: upgrade_fields(INPUT_KINDS[n], _resume_draw(key, n, v, saved), tables=tables)
+               if n in INPUT_KINDS else v
                for n, v in inp.items()})
         for key, inp in inputs
     ]  # fmt: skip
+
+
+def _resume_draw(key: str, name: str, fields: dict, saved: dict) -> dict:
+    """``fields`` (input ``name`` of segment ``key``) with ``RESUME_QC`` added when it is a
+    resumed segment's ``in_state`` without ``ts_qc`` and the previous segment's Outcome is saved."""
+    m = _SEGMENT.match(key)
+    if name != "in_state" or not m or int(m.group(2)) == 0 or "ts_qc" in fields:
+        return fields
+    prev = saved.get(f"{m.group(1)}{int(m.group(2)) - 1}", {}).get("in_outcome", {})
+    if "quick_claw" not in prev:
+        return fields
+    return {**fields, RESUME_QC: prev["quick_claw"]}
 
 
 def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict:
