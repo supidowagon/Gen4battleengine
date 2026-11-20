@@ -2443,6 +2443,10 @@ def outcome_laws(
             # battlers have HP, since which battlers meet at a position pair depends on the swaps.
             order_tie=jnp.broadcast_to(order_tie_live, (TIE_PAIRS[fmt.B],)),
             sort_tie=jnp.broadcast_to(order_tie_live, (fmt.B + 1, TIE_PAIRS[fmt.B])),
+            # D3-18: a Trick Room's MoveEnd re-sort (``resort_tie``), B = 4 only, over-approximate:
+            # every element while the battle is live (which battlers meet at a position pair
+            # depends on the order the turn had reached).
+            resort_tie=jnp.broadcast_to(live & (fmt.B == 4), (fmt.B, TIE_PAIRS[fmt.B])),
         )
 
     both = zip(branch_relevant(branches[0]), branch_relevant(branches[1]), strict=True)
@@ -3045,6 +3049,9 @@ _LAWS = {
     # CalcTurnOrder's and the sorts' RandNext() & 1 (lib.c:1405-1445), B = 4 only (D3-3, D3-4).
     "order_tie": _coin,
     "sort_tie": _coin,
+    # A Trick Room's MoveEnd re-sort's RandNext() & 1 (lib.c:7276-7300 -> :1405-1445), B = 4
+    # only (D3-18).
+    "resort_tie": _coin,
 }
 
 

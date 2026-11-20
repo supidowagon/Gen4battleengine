@@ -2449,6 +2449,8 @@ def any_outcome(fmt: Format = SINGLES) -> st.SearchStrategy[Outcome]:
         # D3-3: the position loops' tie bits (size 0 at B = 2: nothing drawn).
         order_tie=_tie_bits((TIE_PAIRS[fmt.B],)),
         sort_tie=_tie_bits((fmt.B + 1, TIE_PAIRS[fmt.B])),
+        # D3-18: the Trick Room re-sort's bits, row = the battler whose Trick Room it follows.
+        resort_tie=_tie_bits((fmt.B, TIE_PAIRS[fmt.B])),
     )
 
 

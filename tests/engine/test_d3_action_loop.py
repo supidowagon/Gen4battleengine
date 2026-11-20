@@ -55,7 +55,7 @@ def _engine(tables, state, actions, outcome, targets, order=None):
     if order is None:
         order = action_order(tables, fresh, actions, outcome)
     order = jnp.asarray(order).astype(jnp.int32)
-    out, _, shown = _execute_actions(
+    out, _, shown, _ = _execute_actions(
         tables,
         fresh,
         actions,

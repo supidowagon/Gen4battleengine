@@ -240,6 +240,9 @@ class _Turn:
     # battler's (G-24).
     battle_status: dict = field(default_factory=dict)
     done: list[bool] = field(default_factory=lambda: [False, False])  # action is MOVE_END
+    # The battler's entry reached its MoveEnd (bcp.c:3989; a skipped entry too): after a Trick
+    # Room's restart the cursor no longer says who acted (D3-18; read at B = 4 only).
+    acted: list[bool] = field(default_factory=lambda: [False, False])
     # selfTurnFlags, cleared by BattleContext_Init at every action's end (bcp.c:3998,
     # lib.c:2014): the defender's focusItemActivated (bcp.c:3391) and the attacker's
     # SELF_TURN_FLAG_PLUCK_BERRY (lib.c:5848).
@@ -364,7 +367,7 @@ class _Turn:
 
 # The _Turn lists of one bool per battler.
 _TURN_FLAGS = (
-    "done", "protecting", "enduring", "roosting", "custap", "claw", "move_failed", "assurance",
+    "done", "acted", "protecting", "enduring", "roosting", "custap", "claw", "move_failed", "assurance",
     "entered",
 )  # fmt: skip
 
@@ -7634,6 +7637,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             break
         stale = _stale_snapshot(s)
         if turn.done[side] or _active(s, side).hp == 0:
+            turn.acted[side] = True  # a MOVE_END entry (D3-18: a restarted walk meets them again)
             continue
         if _fmt(s).B == 4:  # BranchActions' sort before this entry (bcp.c:888); row = the actor's
             ties = turn.outcome.sort_tie[side]
@@ -7709,6 +7713,16 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         # pair of FIGHT commands with both alive, ignoreQuickClaw = FALSE, which sets the flags of
         # an activated Quick Claw (this turn's speedRand) and of a Custap holder in its pinch;
         # it never clears (SF2 (k); ``order.resort_claw_flags``).
+        if turn.trick_room_ran and _fmt(s).B == 4:
+            # D3-18: SortMonActionOrder re-sorts the current order (bcp.c:3991), the counter goes
+            # back to 0 (:3993) and BranchActions walks again from position 0 (:889-893); the
+            # battlers that acted are MOVE_END entries (skipped above). Only while the battle goes
+            # on (CheckBattleOver, :3969).
+            turn.trick_room_ran = False
+            if not s.over:
+                _resort(turn, s, side)
+                _actions(turn, s, 0)
+                return
         if turn.trick_room_ran:
             turn.trick_room_ran = False
             # A battler is compared when it and another battler both FIGHT with HP (:7289-7293;
@@ -7725,9 +7739,50 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                         turn.claw[b] = True
 
 
+def _resort(turn: _Turn, s: RefState, b_tr: int) -> None:
+    """``BattleSystem_SortMonActionOrder`` (lib.c:7276-7300) at B = 4, run at battler ``b_tr``'s
+    Trick Room's MoveEnd (bcp.c:3991; D3-18): over the CURRENT ``turn.order``, for the position
+    pairs (0,1) (0,2) (0,3) (1,2) (1,3) (2,3) the battlers now at the two positions are compared
+    only when their SELECTED_COMMAND is equal (:7288; a battler absent now is FIGHT), with
+    ``ignoreQuickClaw = command != FIGHT`` (:7289-7293), and swapped on a nonzero result. A FIGHT
+    pair reads each battler's priority from its slot's move now, Struggle when it struggles
+    (:1375-1399), and writes the claw / Custap flags into ``turn.claw`` / ``turn.custap``
+    (``_compare_battlers``). Pair ``p``'s bit is ``outcome.resort_tie[b_tr][p]``."""
+    tables, n = turn.tables, _fmt(s).B
+    qc = list(turn.outcome.quick_claw)
+    ties = turn.outcome.resort_tie[b_tr]
+    command = [FIGHT if _absent_now(s, b) else turn.commands[b] for b in range(n)]
+    p = 0
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            b1, b2 = turn.order[i], turn.order[j]
+            if command[b1] == command[b2]:
+                fight = command[b1] == FIGHT
+                priority = (0, 0)
+                if fight:
+                    priority = tuple(
+                        _t(tables, "move_priority", MOVE_STRUGGLE)
+                        if turn.choices[b][1]
+                        else _t(
+                            tables,
+                            "move_priority",
+                            _active(s, b).moves[min(max(turn.actions[b], 0), MOVE_ACTIONS - 1)],
+                        )
+                        for b in (b1, b2)
+                    )
+                swap = _compare_battlers(
+                    tables, s, b1, b2, ties[p], qc, priority,
+                    (turn.claw, turn.custap) if fight else None,
+                )  # fmt: skip
+                if swap:
+                    turn.order[i], turn.order[j] = b2, b1
+            p += 1
+
+
 def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -> None:
     """An action's end: its faint check, ``moveHit``, ``MoveEnd`` and its payout."""
     turn.done[side] = True
+    turn.acted[side] = True
     battle = [(_active(s, b), _active(s, b).ability) for b in range(len(s.battlers))]
     _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
     # The MoveEnd cures read the battle abilities; the battle-end _restore_ability of
@@ -7787,7 +7842,7 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         pending = [
             side_of(side) == 1
             and side_of(b) == 0
-            and b not in turn.order[:position]
+            and not turn.acted[b]
             and turn.commands[b] == FIGHT
             for b in range(_fmt(s).B)
         ]
@@ -7911,7 +7966,10 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     assert not turn.payout, "the payouts before a list are paid"
     s.pivot_battler = side + 1
     s.ts_cursor = turn.position
-    _put(s, "ts_acted", [int(b in turn.order[: turn.position]) for b in range(_fmt(s).B)])
+    if _fmt(s).B == 4:  # D3-18: after a Trick Room's restart the cursor does not say who acted
+        _put(s, "ts_acted", [int(f) for f in turn.acted])
+    else:
+        _put(s, "ts_acted", [int(b in turn.order[: turn.position]) for b in range(_fmt(s).B)])
     _put(s, "ts_order", turn.order)
     _put(s, "ts_actions", turn.actions)
     _put(s, "ts_move", [c[0] for c in turn.choices])
@@ -8038,6 +8096,7 @@ def _resume(
     for k in range(_fmt(s).B):  # MOVE_END: acted, pursued (script.c:6931), dragged (lib.c:2053)
         if s.battlers[k].ts_acted or s.ts_pursued >> k & 1 or s.battlers[k].ts_dragged:
             turn.done[k] = True
+        turn.acted[k] = bool(s.battlers[k].ts_acted)
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
     se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))

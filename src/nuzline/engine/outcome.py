@@ -211,6 +211,13 @@ class Outcome(NamedTuple):
     # int8[B + 1, TIE_PAIRS[B]]: the position-loop bits of the BranchActions sorts (D3-4: row = the
     # acting battler) and of the end-of-turn sort (D3-11: row B); size 0 at B = 2. Key 50.
     sort_tie: jnp.ndarray
+    # int8[B, TIE_PAIRS[B]]: the position-loop bits of the re-sort a Trick Room's MoveEnd runs
+    # (``SortMonActionOrder``, bcp.c:3991, lib.c:7276-7300; D3-18): row b = the re-sort after
+    # battler b's Trick Room (at most one per battler per turn), column p = the p-th position pair
+    # (``order.PAIRS``); read only where that compare draws it (``order.resort_action_order``).
+    # Size 0 at B = 2 (the order is not re-sorted there, the flags are ``order.resort_claw_flags``'s).
+    # Its sample key is 51.
+    resort_tie: jnp.ndarray
 
 
 def empty_outcome(fmt: Format = SINGLES) -> Outcome:
@@ -255,6 +262,7 @@ def empty_outcome(fmt: Format = SINGLES) -> Outcome:
         trace_pick=jnp.zeros((fmt.B, TRACE_FIRES), _I8),
         order_tie=jnp.zeros((TIE_PAIRS[fmt.B],), _I8),
         sort_tie=jnp.zeros((fmt.B + 1, TIE_PAIRS[fmt.B]), _I8),
+        resort_tie=jnp.zeros((fmt.B, TIE_PAIRS[fmt.B]), _I8),
     )
 
 
@@ -1971,6 +1979,11 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         if pairs
         else jnp.zeros((fmt.B + 1, 0), _I32)
     )
+    resort_tie = (
+        jax.random.randint(jax.random.fold_in(key, 51), (fmt.B, pairs), 0, 2, dtype=_I32)
+        if pairs
+        else jnp.zeros((fmt.B, 0), _I32)
+    )
     chosen = jnp.stack(
         [selected_move(tables, state, side, actions[side])[0] for side in range(fmt.B)]
     )
@@ -2105,6 +2118,7 @@ def sample_outcome(key, tables: Tables, state: BattleState, actions, replacement
         ),
         order_tie=order_tie,
         sort_tie=sort_tie,
+        resort_tie=resort_tie,
     )
     outcome = _cast(outcome)
 

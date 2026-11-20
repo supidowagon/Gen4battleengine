@@ -260,6 +260,7 @@ from nuzline.engine.order import (
     is_switch,
     me_first_copy,
     player_second,
+    resort_action_order,
     resort_claw_flags,
     selected_move,
     sort_mon_speed,
@@ -3321,8 +3322,8 @@ _TAKEN = ("phys_taken", "spec_taken", "last_taken", "phys_from", "spec_from", "l
 
 def _execute_actions(
     tables: Tables, state: BattleState, actions, outcome: Outcome, order, paused, power_mul
-) -> tuple[BattleState, dict, dict]:
-    """``execute_actions`` with the turn's events: ``(state, read, shown)``. ``read``: every
+) -> tuple[BattleState, dict, dict, jnp.ndarray]:
+    """``execute_actions`` with the turn's events: ``(state, read, shown, move_cur)``. ``read``: every
     event of the turn so far (later actors read the turn flags in it; on a resume it starts from
     the scratch); ``shown``: this call's own (the observation's; ``pursuit``: a Pursuit hit ran,
     which shows the pursuer's move).
@@ -3335,7 +3336,13 @@ def _execute_actions(
     the turn flags, the bitmask of the faints handled, ``power_mul`` (the search's turn
     ``powerMul``), the AI switch, the list's ``powerMul``). ``paused`` (the state is such a
     pause): the picks, the order and the turn flags come from the scratch, ``actions[pivot]`` is
-    the switch to the picked slot, and the loop resumes at the cursor (``MODE_RESUME``)."""
+    the switch to the picked slot, and the loop resumes at the cursor (``MODE_RESUME``).
+
+    D3-18 (B = 4): a Trick Room's MoveEnd re-sorts the order (``order.resort_action_order``,
+    bcp.c:3989-3993) and the walk restarts at position 0 (``turnOrderCounter = 0``,
+    BranchActions, :889-893): ``order`` is a loop carry, and an entry whose battler already
+    reached its MoveEnd (``mend``: PICK_COMMAND == MOVE_END) runs MoveEnd only, state-free
+    (``redo``). ``move_cur`` is the last FIGHT's ``moveCur`` in time."""
     fmt = format_of(state)
     real = jnp.where(paused, state.ts_actions.astype(_I32), actions)
     pivot = jnp.clip(state.pivot_battler.astype(_I32) - 1, 0, fmt.B - 1)
@@ -3388,7 +3395,7 @@ def _execute_actions(
 
     def body(carry):
         state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry[:10]
-        custap, claw, entered, owed_c, defender_c, speed_c, hold = carry[10:]
+        custap, claw, entered, owed_c, defender_c, speed_c, hold, order, mend, cur_c = carry[10:]
         active0 = state.active
         side = order[position].astype(_I32)
         # BranchActions' BattleSystem_SortMonSpeedOrder before this entry (bcp.c:888), on the state
@@ -3407,19 +3414,27 @@ def _execute_actions(
         # dragged or a Pokemon entered its slot this turn, or it is at 0 HP. Fact A reads one
         # entry (``moved[b]``); Fact B is every entry but the actor's own.
         battlers = jnp.arange(fmt.B)
-        over = jnp.stack(
-            [jnp.any((order[: fmt.B] == b) & (battlers < position)) for b in range(fmt.B)]
-        )
+        if fmt.B == 4:
+            # D3-18: after a Trick Room's restart the cursor no longer says who has acted.
+            over = mend
+        else:
+            over = jnp.stack(
+                [jnp.any((order[: fmt.B] == b) & (battlers < position)) for b in range(fmt.B)]
+            )
         hp0 = jnp.stack([state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)])
         moved = over | (((pursued >> battlers) & 1) != 0) | (read["dragged"] != 0) | entered | hp0
         last_to_act = jnp.all(moved | (battlers == side))
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
+        # D3-18 rule 8: a restarted walk meets the entries of the battlers that acted: MOVE_END,
+        # their MoveEnd only (bcp.c:893), state-free (D3-15 rule 6).
+        redo = (start & mend[side]) if fmt.B == 4 else jnp.bool_(False)
         # subscript_switch_pokemon.s:5-6: every switch action that runs gets its Natural Cure
         # before the Pursuit (:11), whatever its position (idempotent with ``_send_out``'s).
         runs = (
             ~(((pursued >> side) & 1) != 0)
             & (read["dragged"][side] == 0)
             & (state.hp[party(fmt, side), state.active[side]] > 0)
+            & ~redo
         )
         first_switch = start & runs & is_switch(acts[side]) & (state.over == 0)
         state = _natural_cure(state, side, first_switch)
@@ -3583,9 +3598,10 @@ def _execute_actions(
         # ``pre`` is the carry before the Pursuit hit and ``_act`` (a switcher the Pursuit
         # KO'd still runs its switch's MoveEnd, as ``ran`` above).
         alive_at_start = pre.hp[party(fmt, side), pre.active[side]] > 0
-        skip = start & (
-            (((pursued >> side) & 1) != 0) | (read["dragged"][side] != 0) | ~alive_at_start
-        )
+        skip = (
+            start
+            & ((((pursued >> side) & 1) != 0) | (read["dragged"][side] != 0) | ~alive_at_start)
+        ) | redo
         acted = _where(skip, state, acted)
         ran = ran & ~skip
         # B10-6: the player's FIGHT attempt or an HP update clears a knocked item's record.
@@ -3597,6 +3613,9 @@ def _execute_actions(
         # Only a FIGHT that ran reached FightCommand's moveCur (bcp.c:1898).
         own = {**own, "move_cur": jnp.where(ran, own["move_cur"], 0)}
         read, shown = put((read, shown), side, own, keep)
+        # battleCtx->moveCur at the turn's end: the last FIGHT's, in time (D3-18: after a restart
+        # the order's positions are no longer the sequence).
+        cur_c = jnp.where(keep & (own["move_cur"] != 0), own["move_cur"], cur_c).astype(_I32)
         # The defender's events: the action's defender (``ctl["target"]``), at B = 2 the foe or
         # the user itself when a lock hit itself.
         foe = ctl["target"]
@@ -3606,7 +3625,7 @@ def _execute_actions(
         ]
         read = _put(read, foe, merged[0], keep)
         shown = _put(shown, foe, merged[1], keep)
-        stop = ctl["pause"] | ctl["pursue"]
+        stop = (ctl["pause"] | ctl["pursue"]) & ~redo
         done = _move_end(
             tables,
             _faint_check(tables, _with_alive(acted, ctl["fbase"]), acted),
@@ -3656,11 +3675,29 @@ def _execute_actions(
         gone = gone | jnp.stack(
             [state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)]
         )
-        claw_set, custap_set = resort_claw_flags(tables, state, real, outcome.quick_claw)
         resort = ran & ctl["trick_room"] & (state.over == 0) & ~stop & ~again
+        if fmt.B == 4:
+            # D3-18: SortMonActionOrder (bcp.c:3991) over the current order, with the Trick Room
+            # battler's row of bits; the flags it sets join the carry; the walk restarts at 0
+            # (turnOrderCounter = 0, :3993), else the counter goes on (:3995). The entry's MoveEnd
+            # is over (``mend``), a pause or a Pursuit pass is not.
+            new_order, claw_set, custap_set, _ = resort_action_order(
+                tables,
+                state,
+                order,
+                real,
+                outcome.quick_claw,
+                outcome.resort_tie[side],
+                choices[1],
+            )
+            order = jnp.where(resort, new_order, order).astype(_I32)
+            mend = mend | ((battlers == side) & ~stop & ~again)
+            position = jnp.where(stop | again, position, jnp.where(resort, 0, position + 1))
+        else:
+            claw_set, custap_set = resort_claw_flags(tables, state, real, outcome.quick_claw)
+            position = jnp.where(stop | again, position, position + 1)
         claw = (claw & ~gone) | (resort & claw_set)
         custap = (custap & ~gone) | (resort & custap_set)
-        position = jnp.where(stop | again, position, position + 1)
         phase = jnp.where(again, phase, jnp.where(ctl["pursue"], _PURSUIT, _START)).astype(_I32)
         sync = (
             jnp.where(again, pursuit_sync[0], jnp.where(ctl["pursue"], ctl["sync_flag"], sync[0])),
@@ -3688,6 +3725,9 @@ def _execute_actions(
             jnp.where(start, ctl["defender"], defender_c).astype(_I32),
             speed_order.astype(_I32) if fmt.B == 4 else speed_c,
             again,
+            order,
+            mend,
+            cur_c,
         )
 
     start = (
@@ -3709,10 +3749,16 @@ def _execute_actions(
         jnp.where(paused, state.ts_defender.astype(_I32) - 1, NO_DEFENDER).astype(_I32),
         jnp.where(paused, state.ts_speed_order.astype(_I32), jnp.arange(fmt.B, dtype=_I32)),
         jnp.bool_(False),
+        # the order (re-sorted by a Trick Room, D3-18), the battlers whose action is MOVE_END and
+        # the turn's last moveCur
+        order.astype(_I32),
+        (state.ts_acted != 0) & paused if fmt.B == 4 else jnp.zeros(fmt.B, bool),
+        jnp.zeros((), _I32),
     )
     out = jax.lax.while_loop(cond, body, start)
     state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw = out[:12]
     defender_c, speed_c = out[14], out[15]
+    order, mend, cur = out[17], out[18], out[19]
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     alive_now = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
@@ -3720,7 +3766,9 @@ def _execute_actions(
         "ts_cursor": position,
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
         # paused one are over (MoveEnd, bcp.c:3989).
-        "ts_acted": jnp.stack(
+        "ts_acted": mend
+        if fmt.B == 4
+        else jnp.stack(
             [jnp.any((order[: fmt.B] == b) & (jnp.arange(fmt.B) < position)) for b in range(fmt.B)]
         ),
         "ts_order": order,
@@ -3781,7 +3829,7 @@ def _execute_actions(
             state.roosting.dtype
         ),
     )
-    return state, read, {**shown, "pursuit": fired.astype(_I32)}
+    return state, read, {**shown, "pursuit": fired.astype(_I32)}, cur
 
 
 def _hp_change(state: BattleState, side, mon, delta) -> BattleState:
@@ -4549,19 +4597,6 @@ def end_of_turn(
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
-def _turn_move_cur(read: dict, order) -> jnp.ndarray:
-    """``battleCtx->moveCur`` at the turn's end: the last action in ``order`` whose FIGHT ran
-    (``read["move_cur"]``, 0 for none), over the B positions of ``order``. Nothing else sets it after the actions, and
-    ``BattleContext_Init`` keeps it (battle_lib.c:1974-2017). A turn with no FIGHT leaves an older
-    moveCur, but then no battler is semi-invulnerable at the turn's end (the bit is set by a
-    charge turn and its holder is locked into a FIGHT the next turn), so its range is never read."""
-    cur = jnp.zeros((), _I32)
-    for k in range(read["move_cur"].shape[0]):
-        move = read["move_cur"][order[k]].astype(_I32)
-        cur = jnp.where(move != 0, move, cur)
-    return cur
-
-
 def _future_sight(
     tables: Tables, state: BattleState, sides, outcome: Outcome, protecting, move_cur=0
 ) -> BattleState:
@@ -4734,7 +4769,7 @@ def _unlock_sleepers(state: BattleState) -> BattleState:
 def _action_phase(
     tables: Tables, state: BattleState, actions, outcome: Outcome, targets=None
 ) -> tuple[BattleState, dict, dict, jnp.ndarray]:
-    """Phases 2-3 with the turn's events: ``(state, shown, read, order)``. ``learn_pin`` is the
+    """Phases 2-3 with the turn's events: ``(state, shown, read, move_cur)``; ``move_cur``: the turn's last FIGHT's ``battleCtx->moveCur`` in time, 0 for none. ``learn_pin`` is the
     turn's own (design §3.3(a)): it starts each turn at 0. A resumed pause (``pivot_battler``)
     skips the turn's prologue (the pin, the AI's record of the player's move, the order and its
     Quick Claw, the bag items and a switch's Pursuit) and reads the order from the scratch.
@@ -4759,8 +4794,8 @@ def _action_phase(
     order = jnp.where(paused, state.ts_order, order).astype(_I32)
     power_mul = replacement_power_mul(tables, state, actions)
     s = _where(paused, state, fresh)
-    s, read, shown = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
-    return s, {**shown, "order": order}, read, order
+    s, read, shown, cur = _execute_actions(tables, s, actions, outcome, order, paused, power_mul)
+    return s, {**shown, "order": order}, read, cur
 
 
 def turn_events(
@@ -4782,12 +4817,12 @@ def step_events(
     6) returns the first half's events and stops before the end of the turn; the resuming call
     returns the second half's."""
     actions = jnp.asarray(actions, _I32)
-    s, events, read, order = _action_phase(tables, state, actions, outcome, targets)
+    s, events, read, move_cur = _action_phase(tables, state, actions, outcome, targets)
     halted = s.pivot_battler != 0
     sides = end_of_turn_order(tables, s, outcome)
     e = field_conditions(tables, s, sides)
-    e = end_of_turn(tables, e, actions, outcome, order, sides, read["move_failed"])
-    e = _future_sight(tables, e, sides, outcome, read["protect_ok"], _turn_move_cur(read, order))
+    e = end_of_turn(tables, e, actions, outcome, events["order"], sides, read["move_failed"])
+    e = _future_sight(tables, e, sides, outcome, read["protect_ok"], move_cur)
     e = _stale_known_item(s, e, False)  # B10-6: the end of the turn's HP updates
     e = _unlock_sleepers(e)
     e = e._replace(turn=(e.turn + 1).astype(e.turn.dtype))

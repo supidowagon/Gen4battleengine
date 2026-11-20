@@ -314,12 +314,6 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-18: Trick Room's MoveEnd re-sort over four; deleted by D3-18
-    TurnClause(
-        "D3-18",
-        "Trick Room re-sort over four battlers",
-        lambda t, s, a: _four(s) and _selects(t, s, a, {EffectId.TRICK_ROOM}),
-    ),
     # D3-13: switch-in effects over a four-battler sort (TriggerEffectOnSwitch at every MoveEnd);
     # deleted by D3-13
     TurnClause("D3-13", "switch-in effects over four battlers", lambda t, s, a: _four(s)),

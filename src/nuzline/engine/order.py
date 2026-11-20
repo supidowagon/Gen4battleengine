@@ -42,6 +42,7 @@ from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
     FIRST_ITEM_ACTION,
     MOVE_ACTIONS,
+    absent_now,
     choice_locked,
     gravity_banned,
     locked_slot,
@@ -718,7 +719,8 @@ def custap_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     (``subscript_check_quick_claw.s:26-28``, ``step._use_move``); until then Pluck cannot take
     it (``hooks.pluck_berry``). ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300)
     writes it too, through the same compare with ``ignoreQuickClaw = FALSE``, when a Trick
-    Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_claw_flags`` re-sets it there."""
+    Room activation re-sorts the turn (bcp.c:3990-3993): ``resort_action_order`` (at B = 2
+    ``resort_claw_flags``, its flag part) re-sets it there."""
     actions = jnp.asarray(actions, _I32)
     if format_of(state).B == 4:
         return custap_active(tables, state) & _compared_fighters(state, actions)
@@ -735,7 +737,7 @@ def claw_flags(tables: Tables, state: BattleState, actions) -> jnp.ndarray:
     Knock Off reads it (subscript_knock_off.s:8), B10-6. The sort compares every pair of
     battlers whose commands are both FIGHT (bcp.c:766-778), so a FIGHT battler is compared when
     any other battler fights (doubles design section 5 rule 4). A Trick Room's MoveEnd re-sort
-    sets it again (``resort_claw_flags``)."""
+    sets it again (``resort_action_order``; at B = 2 ``resort_claw_flags``)."""
     actions = jnp.asarray(actions, _I32)
     if format_of(state).B == 4:
         return quick_claw_active(tables, state, state.qc_roll) & _compared_fighters(state, actions)
@@ -764,6 +766,52 @@ def resort_claw_flags(tables: Tables, state: BattleState, actions, qc):
         quick_claw_active(tables, state, qc) & pair,
         custap_active(tables, state) & pair,
     )
+
+
+def resort_action_order(tables: Tables, state: BattleState, order, real, qc, ties, struggling=None):
+    """``(order int32[B], claw_set bool[B], custap_set bool[B], read bool[6])``:
+    ``BattleSystem_SortMonActionOrder`` (battle_lib.c:7276-7300) at B = 4, which a Trick Room's
+    MoveEnd runs (battle_controller_player.c:3989-3991; D3-18). Over the CURRENT ``order`` (no
+    regrouping into ITEM / PARTY first, unlike CalcTurnOrder), for each position pair of ``PAIRS``
+    (i < j, :7283-7286) the battlers now at the two positions are compared only when their
+    SELECTED_COMMAND is equal (:7288; ITEM / PARTY / FIGHT from ``real``; a battler absent now
+    (``actions.absent_now``) is FIGHT, D3-3 rule 7), with ``ignoreQuickClaw = command != FIGHT``
+    (:7289-7293), and swapped on a result other than FASTER (:7295-7298). Every battler takes part,
+    MOVE_END or not. The compare (``compare_full``) reads ``state``, the state at the MoveEnd:
+    current speeds and Trick Room, Quick Claw from ``qc`` (``Outcome.quick_claw``: this turn's
+    ``speedRand``), Custap on the current HP, a FIGHT pair's priorities from the slot's move now
+    (``moveSlot``, ``BattleMon_Get(MOVE_1 + slot)``; Struggle where the turn's ``struggling`` says
+    so: lib.c:1375-1399). ``ties`` is ``Outcome.resort_tie[battler whose Trick Room it is]``;
+    ``read[p]`` whether pair ``p``'s compare drew its bit. ``claw_set`` / ``custap_set`` are
+    ``resort_claw_flags``: what the FIGHT-against-FIGHT compares with both alive write (they only
+    set)."""
+    fmt = format_of(state)
+    real = jnp.asarray(real, _I32)
+    switch, item = is_switch(real), is_item(real)
+    absent = jnp.stack([absent_now(state, b) for b in range(fmt.B)])
+    command = jnp.where(absent | (~switch & ~item), 0, jnp.where(item, 1, 2)).astype(_I32)
+    slot = jnp.clip(real, 0, MOVE_ACTIONS - 1)
+    moves = jnp.stack(
+        [state.moves[party(fmt, b), state.active[b], slot[b]].astype(_I32) for b in range(fmt.B)]
+    )
+    if struggling is not None:
+        moves = jnp.where(jnp.asarray(struggling, bool), MOVE_STRUGGLE, moves)
+    priority = tables.move_priority[moves].astype(_I32)
+    facts = _pair_facts(tables, state, qc)
+    order = jnp.asarray(order, _I32)
+    reads = []
+    for p, (i, j) in enumerate(PAIRS):
+        b1, b2 = order[i], order[j]
+        same = command[b1] == command[b2]
+        skip = command[b1] != 0
+        p1 = jnp.where(skip, 0, priority[b1])
+        p2 = jnp.where(skip, 0, priority[b2])
+        result, read = compare_full(tables, state, b1, b2, ties[p], qc, p1, p2, facts)
+        swap = same & (result != COMPARE_SPEED_FASTER)
+        order = order.at[i].set(jnp.where(swap, b2, b1)).at[j].set(jnp.where(swap, b1, b2))
+        reads.append(same & read)
+    claw_set, custap_set = resort_claw_flags(tables, state, real, qc)
+    return order, claw_set, custap_set, jnp.stack(reads)
 
 
 def quick_claw_active(tables: Tables, state: BattleState, qc) -> jnp.ndarray:
