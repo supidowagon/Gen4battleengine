@@ -114,11 +114,13 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
     """``s`` with the player's exp block redrawn to reach the payout's edges: exp anywhere in
     the level or just short of the next one, EVs near the 510 / 255 caps, friendship near the
     tier limits, the payout items, Pokerus, a Luxury Ball, any participation mask (fainted
-    slots included) and pending learn markers; sometimes a level-99 or level-100 Pokemon. The
-    stats and max HP are then ``recalc_stats``' at the drawn level and EVs."""
+    slots included); sometimes a level-99 or level-100 Pokemon. No pending learn work: a payout
+    and a step start with ``learn_level`` 0 (an in-turn prompt pauses the turn and is answered
+    before it resumes, any other before the next step or replacement: ``search.expand``), and
+    the pending scans come from the payouts the tests run. The stats and max HP are then
+    ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
-    forms = np.asarray(tables.species_form_row)
     for slot in np.flatnonzero(a["species"][0]):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
@@ -146,18 +148,6 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
         )
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
-        if draw(st.integers(0, 4)) == 0:
-            a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
-            # The cursor never passes the learnset's terminator: it starts at 0 (bs.c:9882) and
-            # moves only past a real entry (src/pokemon.c:3952, :3960). The learnset is the party
-            # Pokemon's own (a Transformed active's shadow, G-69).
-            sp, fm = (
-                (a["shadow_species"][0], a["shadow_form"][0])
-                if own
-                else (a["species"][0, slot], a["form"][0, slot])
-            )
-            entries = int(np.count_nonzero(np.asarray(tables.learnset_level)[forms[sp, fm]]))
-            a["learn_cursor"][slot] = draw(st.integers(0, entries))
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
     for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
         recalc_stats(tables, a, 0, int(slot))
