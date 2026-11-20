@@ -1803,7 +1803,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   Tests: `tests/engine/test_field_mask.py` (3.1's rows; the player's and the foe's Pursuit KO, a Life Orb
   recoil faint, Destiny Bond against a recoil with a spurious Uproar bit, U-turn's chase under Gravity; the
   first pursuer by index at B = 4; the Future Sight law on 0x8044). tests/engine/test_d3_pursuit.py does not
-  exist on this branch.
+  exist on this branch. Superseded by H-1: per-mask classes (the roll is no longer kept whole for Acid Rain at
+  B = 2; `acid_rain_reachable` no longer feeds `future_loose` there).
 - G-13 Manager ruling 7: E2's interim Acid Rain guard (SF2 (f) at B = 2, D3-9 at B = 4; the `acid_rain` field,
   its refusal and its `fullset` test) is not on main, so batch G touches no guard. When E2 merges main after
   G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
@@ -2230,6 +2231,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   The enumerator's `future_hit` law grows to the 100 values and `weather_free` frees the end-speed weather points
   (enumerate.py:2365-2369, :3083-3093), which changes the width count. Same key, shape and bounds: not sampler drift,
   no UPGRADES row (encoding unchanged). The E1-only compare (56cd9f4) already diverged on rest at this seed and turn.
+  H-1 restores the seed 22 / 165 values (expected, confirm by print: ruling 2's script).
 - G-S6 Snapshot seeds 64 turn 4 / 107 turn 3: `_starf_reads` over-read `starf(0, 2)` through `twice` (the Pluck
   flag's second own Starf eat) whenever the Pluck / Bug Bite target held any item (Grip Claw, Micle Berry).
   `BattleSystem_PluckBerry` (battle_lib.c:5539-5850) sets SELF_TURN_FLAG_PLUCK_BERRY only for an eaten berry
@@ -2263,6 +2265,58 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
   tests.strategies._draw_terrain; since batch H's first commit it draws a terrain for every state (no
   TERRAIN_UNKNOWN), so Nature Power, Secret Power and Camouflage, directly or through a call move, never read one.
+- G-S8 (snapshot entry 8; explains a compare divergence of mechanic H-1) `future_loose` now holds only on a
+  battler whose Future Sight hit is due (count 1 now, table accuracy != 0; bcp.c:1767-1769, :2900-2902): a side
+  with a `loose` source (Trace, Embargo, Knock Off, Gravity used or ending, Transform, Worry Seed, Skill Swap,
+  Role Play, Gastro Acid, a Micle flag or berry) whose count is not 1 now stores the raw roll's class in
+  `sample` `.sample_outcome.future_hit[d]` instead of the raw roll (`hit_class` over `future_thresholds`, the
+  same `randint(fold_in(key, 28), (B,), 1, 101)`). The step reads that value only at a due hit, so no `step`
+  part changes from it; the enumerator's read is gated on a count of 1 already (enumerate.py `future_hit`
+  relevance), so no `rest` count changes from it. Same key, shape and bounds: not sampler drift, no UPGRADES
+  row (E1 ruling 3: the stored class, not 0).
+
+## Batch H
+
+- H-1 G-12 refinement: the Future Sight / Doom Desire hit's accuracy law per post-Acid-Rain mask (rule sheet
+  acid-future-law.md with its review applied; E1 rulings 1-5 of 20 Nov). Decomp: the hit runs in
+  SIDE_COND_CHECK_STATE_FUTURE_SIGHT (bcp.c:1758-1786) per battler in monSpeedOrder, skipping
+  battlersSwitchingMask (:1761-1764), only when `futureSightTurns != 0 && --futureSightTurns == 0 && curHP`
+  (:1767-1769); its subscript is loaded only then (:1782), and its CheckMoveHit
+  (subscript_future_sight_damage.s:8, battle_script.c:6115-6133, bcp.c:217-221) draws `RandNext() % 100 + 1`
+  (bcp.c:2976) unless the table accuracy is 0 (:2900-2902). The SYSCTL bits are clear at the turn end (bcp.c:3998).
+  Damage was fixed at use (battle_script.c:6065-6098): no crit or damage draw at the hit. Kaizo Future Sight and
+  Doom Desire are acc 100 (data/intermediate_kaizo/rom/moves.json 248, 353); neither can be Protected
+  (future_sight/data.json:21 flags [], doom_desire/data.json:21-23 HIDES_SHADOWS only). Acid Rain
+  (subscript_pursuit.s:100, :115, OPCODE_SUB_TO_ZERO battle_script.c:3282-3287) is reached only from a switch
+  (subscript_switch_pokemon.s:11) or U-turn (subscript_attack_then_switch_out.s:54); after it, in singles, no
+  action follows (the pursuer's action is MOVE_END, battle_script.c:6931; a U-turn user at 0 HP jumps to `_172`,
+  attack_then_switch_out.s:55, and stays in its slot at 0 HP: its count ends with no hit, bcp.c:1769); then the
+  newcomer's weather ability (clears fog, subscript_sand_stream.s:11-12 etc.), the field pass (Gravity
+  `-= 1 << 12`, Kaizo re-arm, bcp.c:1227-1238, G-67) and the hit. The hit reads the mask through sand, hail, deep
+  fog (bcp.c:2926-2937) and Gravity (:2972-2974) only.
+  Engine (`outcome`): `acid_rain_pairs` (bool[B, B], a loop over battler pairs of different sides;
+  `acid_rain_reachable` = any of it, still read by enumerate's `weather_free`). `future_thresholds`' weather axis
+  is now none / sand / hail x a field axis (Gravity off / on x fog off / on); `_future_fields` gives which are
+  possible: the start's Gravity with its fog or none, and at B = 2 for each reachable pair (b chased, x pursuer)
+  the mask `field.acid_rain` leaves for faintedMon b (b's Uproar bit cleared, x's too where b holds Destiny Bond
+  and switches: a U-turn user's Destiny Bond is gone at its move attempt, bcp.c:2425) and for faintedMon x (x's
+  Uproar bit kept for the subtraction), ticked by `field.gravity_tick`, with its fog or none. The classes are
+  over the union (`hit_class`, `hit_class_law` unchanged). Acid Rain no longer sets `loose` at B = 2; at B = 4 it
+  still does wherever any acid pair is reachable (a third battler can write the mask before the chase, two chases
+  compose; commented at the site: the exact B = 4 handling goes to the doubles milestone, E2). `loose` is masked
+  to a due hit: `over == 0 & future_timer == 1 & move_accuracy[future_move] != 0` (HP and the switching mask
+  over-approximated). Step and the reference are unchanged: both read the stored value against the live
+  threshold (`step._future_sight`, reference `_future_sight`); the class keeps that test exact.
+  Tests (tests/engine/test_e1_batch_h.py): T1 the switch / U-turn / Growl / zero-mask rows give the Growl law,
+  never loose (replaces test_field_mask.py's `test_future_sight_roll_is_kept_whole_only_where_acid_rain_can_write`);
+  T2 deep fog with the foe's switcher KO'd (0x7FFF, Gravity on): law over {a*6//10, a, a*10//6}, the step lands
+  every roll after the KO and only up to a*6//10 after a miss, each roll steps as its class, the newcomer survives
+  the hail; T2 mirror the player's switcher KO'd by a pursuer that falls to its Life Orb (faintedMon 1); T3 the
+  Kaizo Gravity rule on 0x1000 (a + 1 misses after the KO, lands without it); T4 an Embargo keeps the roll whole
+  only at a due hit (sampled values); T5 B = 4 pair [2, 3] only, loose with the Pursuit, not without.
+  Snapshot (expected, confirm by print): seed 165 turn 3 `future_hit[0]` back to main's 0 and `rest` rows back to
+  160; seed 22 turn 4 segment 0 `future_hit[0]` back to 1 (`rest` may still differ through `weather_free`); seed
+  107 unchanged (G-S6, ruling 1); other seeds: G-S8.
 
 ## Stream state (restart point, 2026-11-19)
 

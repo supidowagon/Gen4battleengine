@@ -3123,7 +3123,8 @@ def _hit(laws: OutcomeLaws, side: int, hit: int = 0) -> _Law:
 
 def _future_hit(laws: OutcomeLaws, side: int) -> _Law:
     """The Future Sight hit's CheckMoveHit roll (bcp.c:2976) on side ``side``'s battler: its
-    class over ``outcome.future_thresholds``, or every roll 1-100 where ``future_loose``."""
+    class over ``outcome.future_thresholds`` (the union of every mask the hit can read, an Acid
+    Rain write's included, H-1), or every roll 1-100 where ``future_loose`` (a due hit only)."""
     if bool(laws.future_loose[side]):
         return list(range(1, 101)), [1] * 100, 100
     possible = np.asarray(laws.future_possible[side], bool)
