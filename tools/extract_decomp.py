@@ -853,6 +853,52 @@ def extract_evolutions(decomp: Path) -> dict[str, list[list[int]]]:
     return out
 
 
+MAP_HEADER_C = Path("src") / "map_header.c"
+
+
+def _map_header_ids(decomp: Path) -> dict[str, int]:
+    """``MAP_HEADER_*`` name -> header id: the line order of ``generated/map_headers.txt`` up to
+    ``MAP_HEADER_COUNT`` (the file then names ``MAP_HEADER_INVALID`` and ``MAP_HEADER_DYNAMIC``
+    as aliases, not headers)."""
+    path = decomp / "generated" / "map_headers.txt"
+    out: dict[str, int] = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if line == "MAP_HEADER_COUNT":
+            return out
+        if not re.fullmatch(r"MAP_HEADER_[A-Z0-9_]+", line):
+            raise ExtractError(f"{path}:{lineno}: unexpected map header line {raw!r}")
+        out[line] = len(out)
+    raise ExtractError(f"{path}: no MAP_HEADER_COUNT line")
+
+
+def extract_map_evolution_methods(decomp: Path) -> dict[str, int]:
+    """Map header id -> evolution method from the static ``mapEvolutionMethods`` of
+    ``MapHeader_GetMapEvolutionMethod`` (``src/map_header.c:251-303``): (header, method) pairs
+    scanned two at a time, the first pair naming the header winning (``:298-300``); a header
+    outside the table gives ``EVO_NONE``. ``method`` is the ``generated/evolution_methods.txt``
+    id, as the evolutions' methods are."""
+    path = decomp / MAP_HEADER_C
+    m = re.search(
+        r"mapEvolutionMethods\[\]\s*=\s*\{(.*?)\};", path.read_text(encoding="utf-8"), re.DOTALL
+    )
+    if not m:
+        raise ExtractError(f"{path}: no mapEvolutionMethods table")
+    tokens = [t.strip() for t in m.group(1).split(",") if t.strip()]
+    if len(tokens) % 2:
+        raise ExtractError(f"{path}: mapEvolutionMethods has {len(tokens)} values, not pairs")
+    header_id = _map_header_ids(decomp)
+    method_id = _index(_constants(decomp, "evolution_methods", "EVO_"), "evolution method")
+    out: dict[str, int] = {}
+    for header, method in zip(tokens[0::2], tokens[1::2], strict=True):
+        if header not in header_id:
+            raise ExtractError(f"{path}: unknown map header constant {header!r}")
+        key = str(header_id[header])
+        if key not in out:  # the scan returns the first pair naming the header
+            out[key] = method_id(method)
+    return out
+
+
 def extract_egg_moves(decomp: Path) -> dict[str, list[int]]:
     """Species id -> egg moves, for species with at least one (``learnset.egg_moves``,
     emitted by ``EmitEggMoves``, ``speciesproc.c:681-692``, into ``sEggMoves``; read by
@@ -1492,6 +1538,7 @@ def extract_static(decomp_root: Path, out_dir: Path) -> None:
     _write(out_dir / "evolutions.json", extract_evolutions(decomp_root))
     _write(out_dir / "egg_moves.json", extract_egg_moves(decomp_root))
     _write(out_dir / "evolution_methods.json", extract_evolution_methods(decomp_root))
+    _write(out_dir / "map_evolution_methods.json", extract_map_evolution_methods(decomp_root))
     _write(out_dir / "tutor_moves.json", extract_tutor_moves(decomp_root))
     _write(out_dir / "tutor_learnsets.json", extract_tutor_learnsets(decomp_root))
     _write(out_dir / "exp_tables.json", extract_exp_tables(decomp_root))

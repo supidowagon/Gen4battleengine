@@ -76,6 +76,7 @@ ROM_FILES = (
     "learnsets",
     "tm_learnsets",
     "evolutions",
+    "map_evolution_methods",
     "egg_moves",
     "tutor_moves",
     "tutor_learnsets",
@@ -329,7 +330,12 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
         _member_entries(ROM_DIFF_TOML, changed)
         _check_code_entries(ROM_DIFF_TOML, code)
 
-    from tools.rom.readers.code_tables import egg_moves, tutor_learnsets, tutor_moves
+    from tools.rom.readers.code_tables import (
+        egg_moves,
+        map_evolution_methods,
+        tutor_learnsets,
+        tutor_moves,
+    )
     from tools.rom.readers.evolutions import read_evolutions
     from tools.rom.readers.items import read_items
     from tools.rom.readers.learnsets import read_learnsets
@@ -392,6 +398,9 @@ def extract(game: str, out: Path, decomp: Path, symbols: Path, inputs: RomInputs
             "learnsets": read_learnsets(rom, decomp),
             "tm_learnsets": read_tm_learnsets(rom),
             "evolutions": read_evolutions(rom),
+            "map_evolution_methods": {
+                str(k): v for k, v in map_evolution_methods(rom, smap, decomp).items()
+            },
             "egg_moves": {str(k): v for k, v in egg_moves(rom, smap, decomp).items()},
             "tutor_moves": tutors,
             "tutor_learnsets": tutor_learnsets(rom, smap, len(tutors)),

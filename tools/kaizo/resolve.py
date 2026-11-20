@@ -113,6 +113,7 @@ COPIED = (
     "learnsets",
     "tm_learnsets",
     "evolutions",
+    "map_evolution_methods",
     "egg_moves",
     "evolution_methods",
     "tutor_moves",

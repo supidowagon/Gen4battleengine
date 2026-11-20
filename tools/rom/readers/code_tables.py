@@ -6,7 +6,7 @@ import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tools.extract_decomp import MAX_TUTOR_COST, _constants, _stem
+from tools.extract_decomp import MAX_TUTOR_COST, _constants, _map_header_ids, _stem
 from tools.rom.readers import ReaderError, symbol_bytes
 from tools.rom.readers.personal import FORM_ROW_COUNT, ROW_COUNT, SPECIES_COUNT
 
@@ -28,6 +28,9 @@ TUTOR_ENTRY = struct.Struct(
 # Personal rows with no tutor set (SPECIES_NONE, SPECIES_EGG, SPECIES_BAD_EGG; HasTutorSet,
 # tools/dataproc/src/speciesproc.c:258).
 TUTOR_NO_SET_ROWS = (0, SPECIES_COUNT - 2, SPECIES_COUNT - 1)
+MAP_EVOLUTION_SYMBOL = (
+    "mapEvolutionMethods$12747"  # the function's static table, src/map_header.c:253
+)
 NATIONAL_DEX_COUNT = SPECIES_COUNT - 3  # MAX_SPECIES - 2, include/constants/species.h:7
 
 
@@ -95,6 +98,41 @@ def egg_moves(
             if len(cur) > MAX_EGG_MOVES:
                 raise ReaderError(f"{EGG_SYMBOL}[{i}]: more than {MAX_EGG_MOVES} egg moves")
     return {k: v for k, v in out.items() if v}
+
+
+def map_evolution_methods(
+    rom: RomFiles, symbols: SymbolMap, decomp: Path | None = None
+) -> dict[int, int]:
+    """Map header id -> evolution method from ``mapEvolutionMethods``: u16 (header, method)
+    pairs scanned two at a time by ``MapHeader_GetMapEvolutionMethod``
+    (``src/map_header.c:251-303``; the linker map names the symbol ``mapEvolutionMethods$12747``,
+    0x54 bytes, 21 pairs). A header outside the table gives ``EVO_NONE``. ``method`` is the
+    ``generated/evolution_methods.txt`` id.
+
+    Shape checks: a whole number of pairs, every header a real map header (below
+    ``MAP_HEADER_COUNT``), every method a real evolution method (below the number of methods),
+    and no header twice."""
+    decomp = _decomp_root(decomp)
+    n_headers = len(_map_header_ids(decomp))
+    n_methods = len(_constants(decomp, "evolution_methods", "EVO_"))
+    data = symbol_bytes(rom, symbols, MAP_EVOLUTION_SYMBOL)
+    if not data or len(data) % 4:
+        raise ReaderError(
+            f"{MAP_EVOLUTION_SYMBOL}: {len(data)} bytes is not a whole number of u16 pairs"
+        )
+    vals = struct.unpack(f"<{len(data) // 2}H", data)
+    out: dict[int, int] = {}
+    for i, (header, method) in enumerate(zip(vals[0::2], vals[1::2], strict=True)):
+        if header >= n_headers:
+            raise ReaderError(f"{MAP_EVOLUTION_SYMBOL}[{i}]: map header {header} is out of range")
+        if method >= n_methods:
+            raise ReaderError(
+                f"{MAP_EVOLUTION_SYMBOL}[{i}]: evolution method {method} is out of range"
+            )
+        if header in out:
+            raise ReaderError(f"{MAP_EVOLUTION_SYMBOL}[{i}]: map header {header} listed twice")
+        out[header] = method
+    return out
 
 
 def _decomp_root(decomp: Path | None) -> Path:

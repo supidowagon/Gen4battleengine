@@ -1793,3 +1793,31 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Tests: tests/kaizo/test_gauntlet_map.py (synthetic: a var-gated coord on the only exit; an unknown running coord raises;
   ROM: join_before [1], the walk-out coord and the 76-tile start pocket), tests/kaizo/test_overrides.py,
   tests/kaizo/test_resolve.py, tests/data/test_gauntlet_settings.py. Not run locally (RAM below the 8000 MB rule).
+
+- E3-B3-12 GT-12 evolution conditions (`src/nuzline/prep/growth.py`, `src/nuzline/data/learnsets.py`, `tools/rom/readers/code_tables.py`,
+  `tools/extract_decomp.py`, `tools/extract_rom.py`, `tools/kaizo/resolve.py`, `tools/build_tables.py`, `src/nuzline/data/tables.py`).
+  TABLE INPUT CHANGED: new `map_evolution_methods.json` in both intermediate dirs and `manifest["map_evolution_methods"]`;
+  `MANIFEST_VERSION` 44 -> 45. The managing session rebuilds vanilla (`extract_decomp`, `build_tables`) and Kaizo
+  (`extract_rom --game kaizo`, resolve, `build_tables --game kaizo`) and commits the vanilla manifest. Nothing here was run
+  locally (RAM below the 8000 MB rule).
+  (a) `evolution_target(tables, learnsets, member, party, evo_class, evo_param, time, *, personality, beauty)` is
+  `Pokemon_GetEvolutionTargetSpecies` (`src/pokemon.c:3528-3790`) on a `PokemonSpec` member: Everstone (hold effect 64,
+  `generated/item_hold_effects.txt:65`; `tables.item_hold_effect`) blocks every class but BY_ITEM, Kadabra exempt (`:3541-3547`);
+  BY_LEVEL scans the species' rows in order and the first match wins (`:3721-3723`): happiness >= 220 (`include/constants/
+  pokemon.h:25`), level, Atk/Def, personality upper half % 10 (`:3619-3636`), Ninjask, beauty, held item day/night, known move,
+  species in party (`src/party.c:128-139`), male/female with level, map methods by `row method == evo_param`
+  (`:3699-3720`); Shedinja row matches nothing (`:3644-3646`). BY_TRADE returns None (no trade in a run, design G7). BY_ITEM
+  and class 2 (`:3745-3784`): `use_item`, `use_item_male`, `use_item_female` with `param == evo_param`; the method is EVO_NONE.
+  Deviations from the sheet's signature (stated): `learnsets` is a separate argument (the rows are `Learnsets`, the hold effect
+  is `Tables`); `evo_param` stands for the map method (BY_LEVEL) and the stone (BY_ITEM), as in the game's `evoParam`;
+  `personality` and `beauty` are keyword arguments, constants of the Pokemon (no Carry class: GT-4 is not built). Friendship,
+  held item, moves, gender, level and stats are read from the spec the caller passes, as the level-up left it.
+  (b) `time`: day rows need `time == "day"`, night rows `time == "night"`; unset matches neither (design section 6). At the
+  E4 and Champion a level-100 member gains no EXP (`bs.c:9740`), so `time` matters there only for members below 100 (a note).
+  (c) Map table: `map_evolution_methods(rom, symbols, decomp)` reads `mapEvolutionMethods$12747` (`code_tables.py`),
+  `extract_map_evolution_methods` the same table from `src/map_header.c:253-296` for vanilla; the two must be equal (slow test
+  on the ROM); Kaizo reads its own ROM (the test that Kaizo equals vanilla is slow; if `symbol_bytes` raises on the Kaizo ARM9
+  image the managing session is told, no address is guessed). `Learnsets.map_evolution_method(header)` returns 0 for a header
+  not listed (`src/map_header.c:298-303`), `Learnsets.evolution_methods` the method names.
+  Tests: tests/prep/test_growth.py, tests/tools/test_extract_decomp.py (map table cases), tests/tools/rom/test_code_tables.py
+  (symbol, shape errors, slow ROM matches). Not run locally (RAM below the 8000 MB rule): all of them, for the pod.
