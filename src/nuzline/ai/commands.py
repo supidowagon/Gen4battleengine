@@ -72,8 +72,10 @@ from nuzline.ai.switching import (
 )
 from nuzline.data.tables import BATTLE_TYPE_DOUBLES as _BATTLE_TYPE_DOUBLES
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import (
+    AI_GYRO_BALL,
     AI_MAGNITUDE,
     AI_PSYWAVE,
     ai_damage_for_roll,
@@ -81,13 +83,14 @@ from nuzline.engine.damage import (
     decomp_abilities,
 )
 from nuzline.engine.format import format_of, party, side_of
-from nuzline.engine.ids import AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import AbilityId, Stat, Status
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
     COMPARE_SPEED_SLOWER,
     COMPARE_SPEED_TIE,
     battler_slower,
     compare_speed,
+    effective_speed,
 )
 from nuzline.engine.state import MOVES, BattleState, held_item, record_seen_move
 
@@ -135,6 +138,9 @@ class SideCondition(IntEnum):
     TOXIC_SPIKES = 1 << 10  # :98; BattleState.toxic_spikes (layers, LoadSpikesLayers)
     TAILWIND = (1 << 8) | (1 << 9)  # :96-97, :104; BattleState.tailwind (turns left)
     FUTURE_SIGHT = 1 << 4  # :92; BattleState.future_sight (per side)
+    LUCKY_CHANT = (
+        (1 << 12) | (1 << 13) | (1 << 14)
+    )  # :100-105; BattleState.lucky_chant (turns left)
 
 
 _SIDE_CONDITION_FIELDS = {
@@ -147,6 +153,7 @@ _SIDE_CONDITION_FIELDS = {
     SideCondition.SPIKES: "spikes",  # layers; on while above 0 (Expert_ForceSwitch, :2591)
     SideCondition.TOXIC_SPIKES: "toxic_spikes",
     SideCondition.FUTURE_SIGHT: "future_sight",
+    SideCondition.LUCKY_CHANT: "lucky_chant",
 }
 
 
@@ -173,8 +180,8 @@ class FieldCondition(IntEnum):
     """``IfFieldConditionsMask`` masks Roark's scripts use (``FIELD_CONDITION_*``,
     include/constants/battle/condition.h:123-125, :144)."""
 
-    TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # BattleState.trick_room
-    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; BattleState.gravity (G-67)
+    TRICK_ROOM = (1 << 16) | (1 << 17) | (1 << 18)  # field.trick_room_on
+    GRAVITY = (1 << 12) | (1 << 13) | (1 << 14)  # :119-121, :142-143; field.gravity_on (G-67)
 
 
 class VolatileCondition(IntEnum):
@@ -189,6 +196,8 @@ class VolatileCondition(IntEnum):
     MEAN_LOOK = 1 << 26  # :58; BattleState.mean_look
     FOCUS_ENERGY = 1 << 20  # :52; BattleState.focus_energy (B12-4)
     TORMENT = 1 << 31  # :63; BattleState.torment (E3-2-1)
+    FORESIGHT = 1 << 29  # :61; BattleState.foresight (Basic_CheckForesight, E3-B2-18)
+    NIGHTMARE = 1 << 27  # :59; BattleState.nightmare (G-31)
 
 
 _VOLATILE_FIELDS = {
@@ -199,6 +208,8 @@ _VOLATILE_FIELDS = {
     VolatileCondition.MEAN_LOOK: "mean_look",
     VolatileCondition.FOCUS_ENERGY: "focus_energy",
     VolatileCondition.TORMENT: "torment",
+    VolatileCondition.FORESIGHT: "foresight",
+    VolatileCondition.NIGHTMARE: "nightmare",
 }
 
 
@@ -218,6 +229,8 @@ class MoveEffectMask(IntEnum):
     EMBARGO = 1 << 26  # :34; BattleState.embargo (set and cleared with embargoTurns, B13-31)
     MAGNET_RISE = 1 << 27  # :31; BattleState.magnet_rise (the bit, not the turns; G-66)
     ABILITY_SUPPRESSED = 1 << 21  # :29; BattleState.ability_suppressed (Gastro Acid, E3-2-6a)
+    MIRACLE_EYE = 1 << 22  # moves.h:30; BattleState.miracle_eye (Basic_CheckMiracleEye, E3-B2-10)
+    CAMOUFLAGE = 1 << 28  # :36; BattleState.camouflage (G-20)
 
 
 _MOVE_EFFECT_FIELDS = {
@@ -233,6 +246,8 @@ _MOVE_EFFECT_FIELDS = {
     MoveEffectMask.EMBARGO: "embargo",
     MoveEffectMask.MAGNET_RISE: "magnet_rise",
     MoveEffectMask.ABILITY_SUPPRESSED: "ability_suppressed",
+    MoveEffectMask.MIRACLE_EYE: "miracle_eye",
+    MoveEffectMask.CAMOUFLAGE: "camouflage",
 }
 BATTLE_TYPE_DOUBLES = int(_BATTLE_TYPE_DOUBLES)  # include/constants/battle.h:27
 # include/constants/battle.h:33: never set in a trainer battle of the story (Basic_CheckEmbargo).
@@ -294,6 +309,7 @@ class BattleEffect(IntEnum):
     SURVIVE_WITH_1_HP = 116  # Endure (Expert_Endure :1704)
     GIVE_GROUND_IMMUNITY = 252  # Magnet Rise (Basic_CheckMagnetRise :280; Expert_MagnetRise :1795)
     GRAVITY = 215  # Gravity (Basic_CheckGravityActive :254; Expert_Gravity :1759)
+    CAMOUFLAGE = 213  # Camouflage (Basic_CheckCamouflage :252; no Expert_Main entry), G-20
     FLINCH_HIT = 31
     RESTORE_HALF_HP = 32  # Recover
     STATUS_BADLY_POISON = 33  # Toxic
@@ -317,7 +333,8 @@ class BattleEffect(IntEnum):
     STATUS_LEECH_SEED = 84
     KO_MON_THAT_DEFEATED_USER = 98  # Destiny Bond
     PRIORITY_1 = 103  # EvalAttack_ApplyKillBonuses' +2 (script.s:6400); no Roark move has it
-    STATUS_NIGHTMARE = 107  # Nightmare (Expert_StatusSleep's IfMoveEffectKnown, :1817)
+    # Nightmare: Basic_CheckNightmare (:194, G-34); Expert_StatusSleep's IfMoveEffectKnown (:1817)
+    STATUS_NIGHTMARE = 107
     CURSE = 109
     PROTECT = 111  # Expert_ToxicLeechSeed's IfMoveEffectKnown (script.s:2700); Protect, Detect
     DEF_UP_DOUBLE_ROLLOUT_POWER = 156  # Defense Curl (Expert_Protect, script.s:3554)
@@ -458,6 +475,25 @@ class BattleEffect(IntEnum):
     TRICK_ROOM = 259  # Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800)
     SWITCH_ABILITIES = 191  # Skill Swap: Expert_ChangeUserAbility (:1743); no Basic entry
     SUPRESS_ABILITY = 239  # Gastro Acid: Basic_CheckGastroAcid (:269); Expert_GastroAcid (:1782)
+    FLING = 233  # Basic_CheckFling (:263); Expert_Fling (:1776)
+    # E3 batch 2 (E3-B2-2).
+    COPY_MOVE = 9  # Mirror Move: Expert_MirrorMove (:1632); Risky :6539; no Basic entry
+    COPY_ABILITY = 178  # Role Play: Expert_ChangeUserAbility (:1733); no Basic entry
+    APPLY_MAGIC_COAT = 183  # Magic Coat: Expert_MagicCoat (:1736); no Basic entry (E3-B2-6)
+    PREVENT_CRITS = (
+        240  # Lucky Chant: Basic_CheckLuckyChant (:270); Expert_LuckyChant (:1783), E3-B2-7
+    )
+    FORESIGHT = 113  # Foresight, Odor Sleuth: Basic_CheckForesight (:198); Expert_Foresight (:1703), E3-B2-18
+    # Miracle Eye: Basic_CheckMiracleEye (:255); Expert_MiracleEye (:1760), E3-B2-10
+    IGNORE_EVATION_REMOVE_DARK_IMMUNE = 216
+    # Last Resort: Basic_CheckLastResort (:275); Expert_LastResort (:1789), E3-B2-11
+    FAIL_IF_NOT_USED_ALL_OTHER_MOVES = 246
+    # Aqua Ring: Basic_CheckAquaRing (:279); Expert_AquaRing (:1794), E3-B2-20
+    RESTORE_HP_EVERY_TURN = 251
+    # Feint: no Basic entry; Expert_Feint (:1766), E3-B2-13
+    REMOVE_PROTECT = 223
+    # Defog: Basic_CheckDefog (:281); Expert_Defog (:1799), E3-B2-14
+    REMOVE_HAZARDS_SCREENS_EVA_DOWN = 258
 
 
 # BattleEffect members whose decomp name (BATTLE_EFFECT_<name>) starts with a digit, which a
@@ -979,15 +1015,14 @@ CHECK_HP_TABLES: dict[str, tuple[int, ...]] = {
 # LoadDefenderLastUsedMoveClass loads it (Expert_LightScreen, script.s:2723).
 CLASS_PHYSICAL, CLASS_SPECIAL, CLASS_STATUS = 0, 1, 2
 # TrainerAI_CalcDamage's move-id cases (trainer_ai.c:2885-3071) the AI damage does not model,
-# refused: Gyro Ball (:2995-3003), whose power reads monSpeedValues, the speeds of the last
-# CompareBattlerSpeed of any caller (battle_lib.c:1372-1373: the action order's sorts,
-# battle_controller_player.c:780, :888, :3992, and the AI's own compares, trainer_ai.c:1109,
-# :1121, :2081, in the scripts' order across every move slot), which no state field holds
-# (B13-27). Return, Frustration, Low Kick, Grass Knot, Hidden Power and the fixed-damage cases
-# are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13), Psywave and
-# Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39, ``_calc_read``), Natural
-# Gift and Judgment by the held item (ai_case_power, ai_case_type; B13-25). Decomp move ids.
-CALC_DAMAGE_MOVES = (360,)
+# refused: none since E3-B2-15. Return, Frustration, Low Kick, Grass Knot, Hidden Power and the
+# fixed-damage cases are modelled (engine.damage.ai_case_power, ai_case_fixed; E1 batch 13),
+# Psywave and Magnitude with their RandNext draws (:3015, :3030; E1 ruling G-39, ``_calc_read``),
+# Natural Gift and Judgment by the held item (ai_case_power, ai_case_type; B13-25), and Gyro Ball
+# (:2995-3003) by monSpeedValues, the speeds of the last CompareBattlerSpeed of any caller
+# (battle_lib.c:1372-1373): ``BattleState.speed_rec`` until the decision's first speed compare,
+# the current speeds after it (``AiContext.written``, B13-27, E3-B2-15). Decomp move ids.
+CALC_DAMAGE_MOVES: tuple[int, ...] = ()
 # TrainerAI_MoveType's move-id cases (trainer_ai.c:3132-3227) refused in some state: Weather
 # Ball outside rain, sand, sun and hail or under Cloud Nine / Air Lock, where the case assigns
 # no result (engine.damage.ai_weather_ball_typed; policy._refused). Hidden Power's, Natural
@@ -1003,6 +1038,11 @@ COPYCAT_ENCOURAGED_MOVES = (
     276, 285, 375, 384, 385, 389, 391, 415, 445, 464,
 )  # fmt: skip
 
+# Expert_MirrorMove_MoveTable (script.s:1928-1976): the same 47 moves in the same order as
+# Expert_Copycat_EncouragedMoves above (compared name by name against the decomp's two tables by
+# tests/engine/test_e3_batch2.py, E3-B2-2).
+MIRROR_MOVE_TABLE = COPYCAT_ENCOURAGED_MOVES
+
 # Expert_ChangeUserAbility_DesirableAbilities (script.s:4435-4461): ABILITY_SPEED_BOOST, _BATTLE_ARMOR,
 # _SAND_VEIL, _STATIC, _FLASH_FIRE, _WONDER_GUARD, _EFFECT_SPORE, _SWIFT_SWIM, _HUGE_POWER,
 # _RAIN_DISH, _CUTE_CHARM, _SHED_SKIN, _MARVEL_SCALE, _PURE_POWER, _CHLOROPHYLL, _SHIELD_DUST,
@@ -1013,6 +1053,21 @@ CHANGE_USER_ABILITY_DESIRABLE = (
     3, 4, 8, 9, 18, 25, 27, 33, 37, 44, 56, 61, 63, 74, 34, 19, 91, 98, 104, 105, 109, 110, 111,
     116, 120,
 )  # fmt: skip
+
+# Basic_FlingItems_Poison / _Burn / _Paralyze and Expert_Fling_DesirableFlingEffects
+# (script.s:1288-1299, :5288-5294): decomp hold-effect ids (generated/item_hold_effects.txt, line
+# N is id N-1: HOLD_EFFECT_PSN_USER 100, _STRENGTHEN_POISON 80, _BRN_USER 101, _PIKA_SPATK_UP 71,
+# _SOMETIMES_FLINCH 56), compared with ``LoadHeldItemEffect`` (Tables.item_hold_effect); checked
+# against the decomp's names by tests/engine/test_e3_batch2.py (E3-B2-1).
+FLING_ITEMS_POISON = (100, 80)
+FLING_ITEMS_BURN = (101,)
+FLING_ITEMS_PARALYZE = (71,)
+FLING_DESIRABLE_EFFECTS = (56, 80, 100, 101, 71)
+# Expert_Feint_GradualRecoveryItems (script.s:4952-4955): HOLD_EFFECT_HP_RESTORE_GRADUAL (Leftovers)
+# and HOLD_EFFECT_HP_RESTORE_PSN_TYPE (Black Sludge), compared with ``LoadHeldItemEffect``
+# (generated/item_hold_effects.txt, line N is id N-1); checked against the decomp's names by
+# tests/ai/test_kaizo_policy.py (E3-B2-13).
+FEINT_GRADUAL_RECOVERY_EFFECTS = (69, 109)
 
 # Decomp ids, checked against the manifest by tests/ai/test_policy.py.
 ABILITY_IDS = {
@@ -1088,6 +1143,10 @@ ABILITY_IDS = {
     "Run Away": 50,
     "Pickup": 53,
     "Honey Gather": 118,
+    # E3-B2-1: Basic_FlingPoison / _FlingBurn AttackerChecks (script.s:1235-1278; Poison Heal,
+    # Immunity, Magic Guard and Water Veil above).
+    "Klutz": 103,
+    "Guts": 62,
 }
 MOVE_IDS = {
     "Thunder Wave": 86,  # Basic_CheckCannotParalyze (script.s:620)
@@ -1315,6 +1374,57 @@ class AiContext(NamedTuple):
     # (_slot_read); the per-slot layout refuses the decision
     missing_read: jnp.ndarray
     loose: LooseDraws | None = None  # the loose oracle's draws (tests only), else None
+    # E3-B2-15, monSpeedValues (battle_lib.c:1372-1373). ``speeds`` int32[B]: the battlers'
+    # speeds as CompareBattlerSpeed computes them now (``order.effective_speed``). ``written``:
+    # an IfSpeedCompare* ran earlier in this decision (trainer_ai.c:1109, :1121), so the
+    # record holds ``speeds`` instead of ``state.speed_rec`` (``seen_state``); threaded in the
+    # decomp's order, flags in bit order and slots 0-3 in each (``start_run``).
+    speeds: jnp.ndarray | None = None
+    written: jnp.ndarray | None = None  # bool
+    # ``damage`` with ``speeds`` in the record (``seen_damage``): only a Gyro Ball slot differs
+    damage_w: CalcEstimate | None = None
+    # int32: the index in the layout's flag list of the flag script running (``start_run``)
+    flag: jnp.ndarray | None = None
+    # int32: -1, or the exact distribution's injected schedule (``policy._slot_histograms``): a
+    # script run of flag index f starts with ``written`` = f >= inject, whatever ran before
+    inject: jnp.ndarray | None = None
+    # int32[MOVES]: per slot, the least flag index whose run made an IfSpeedCompare*, else
+    # ``NO_COMPARE`` (the first compare of the decision, the one split of the factoring)
+    first_cmp: jnp.ndarray | None = None
+
+
+NO_COMPARE = 127  # ``AiContext.first_cmp`` of a slot that made no speed compare
+
+
+def current_speeds(tables: Tables, state: BattleState) -> jnp.ndarray:
+    """``int32[B]``: every battler's speed as ``BattleSystem_CompareBattlerSpeed`` computes it
+    now (``order.effective_speed``), what its call writes to ``monSpeedValues``."""
+    return jnp.stack([effective_speed(tables, state, b) for b in range(format_of(state).B)])
+
+
+def seen_state(ctx: AiContext) -> BattleState:
+    """``ctx.state`` with ``speed_rec`` as ``TrainerAI_CalcDamage`` reads ``monSpeedValues`` here
+    (trainer_ai.c:2995-3003): the record of the last turn's sort until the decision's first
+    ``IfSpeedCompare*`` (``AiContext.written``), the compare's own speeds after it. Every
+    estimate of ``ctx`` goes through this state (E3-B2-15)."""
+    state = ctx.state
+    return state._replace(
+        speed_rec=jnp.where(ctx.written, ctx.speeds, state.speed_rec).astype(state.speed_rec.dtype)
+    )
+
+
+def seen_damage(ctx: AiContext) -> CalcEstimate:
+    """``ctx.damage`` (``_slot_damage`` at USE_MAX_DAMAGE) in ``seen_state``'s speeds."""
+    return jax.tree.map(lambda w, r: jnp.where(ctx.written, w, r), ctx.damage_w, ctx.damage)
+
+
+def start_run(ctx: AiContext, flag: int) -> AiContext:
+    """The start of one flag script's run over the current slot (``TrainerAI_EvalMoves``,
+    trainer_ai.c:483-525): ``flag`` is its index in the layout's flag list. An injected
+    schedule (``AiContext.inject`` not -1) overrides what the earlier runs wrote."""
+    flag = jnp.asarray(flag, _I32)
+    written = jnp.where(ctx.inject >= 0, flag >= ctx.inject, ctx.written)
+    return ctx._replace(flag=flag, written=written)
 
 
 def ai_damage(tables: Tables, state: BattleState, move, roll, draw=0) -> jnp.ndarray:
@@ -1517,18 +1627,19 @@ def if_has_super_effective_move(ctx: AiContext) -> AiContext:
     a, d = _side(Battler.ATTACKER), _side(Battler.DEFENDER)
     moves = state.moves[_row(state, a), state.active[a]].astype(_I32)
     d_types = state.types[_row(state, d), state.active[d]]
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, d)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, d)
     flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
             m,
             d_types,
-            state.gravity,
+            fcm.gravity_count(state),
             identified,
             ai_move_type(tables, state, a, m),
             grounded,
             roosting,
             magnet,
+            eyed,
         )
     )(moves)
     return _jump(ctx, jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0)))
@@ -1552,7 +1663,8 @@ def if_party_member_deals_more_damage(ctx: AiContext, use_damage_roll: int) -> A
     active's best and M_j member j's, all independent (the loop's ``break``, :2167, only stops
     draws that change nothing)."""
     assert int(use_damage_roll) == USE_MAX_DAMAGE, use_damage_roll
-    tables, state = ctx.tables, ctx.state
+    # A bench member's Gyro Ball reads monSpeedValues as the active's does (seen_state).
+    tables, state = ctx.tables, seen_state(ctx)
     a = _side(Battler.ATTACKER)
     active = state.active[a]
 
@@ -1623,10 +1735,10 @@ def if_battler_deals_more_damage(
     assert battler == Battler.DEFENDER, battler
     tables, state = ctx.tables, ctx.state
     a, d = _side(Battler.ATTACKER), _side(battler)
-    mine = ctx.damage  # _slot_damage at USE_MAX_DAMAGE (new_context)
+    mine = seen_damage(ctx)  # _slot_damage at USE_MAX_DAMAGE (new_context)
     theirs = estimate(
         tables,
-        state,
+        seen_state(ctx),
         state.last_move[d].astype(_I32),
         SIM_ROLL_MAX,
         atk_side=d,
@@ -1658,9 +1770,10 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
     ``BattleSystem_Divide``), mapped 120 -> 80, 240 -> 160, 30 -> 20, 15 -> 10, and 0 when
     the status mask has an immunity bit (``MOVE_STATUS_IMMUNE``: ``INEFFECTIVE`` or Wonder
     Guard's bit, ``switching.wonder_guard_bit``, ruling G-23). Normalize, Adaptability,
-    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter, Solid Rock and Miracle Eye change
+    Scrappy, Tinted Lens, Expert Belt, Levitate, Filter and Solid Rock change
     this value and are refused (``policy.ai_refusals``); the player's Foresight, Ingrain /
-    Iron Ball, roosting and Magnet Rise flags are read (``switching.defender_chart_flags``)."""
+    Iron Ball, roosting, Magnet Rise and Miracle Eye flags are read
+    (``switching.defender_chart_flags``)."""
     move = jnp.asarray(move, _I32)
     d_types = state.types[0, state.active[0]]
     value = apply_type_chart(tables, state, 1, move, TypeMulti.BASE)
@@ -1675,17 +1788,18 @@ def effectiveness_class(tables: Tables, state: BattleState, move) -> jnp.ndarray
         [TypeMulti.DOUBLE, TypeMulti.QUADRUPLE, TypeMulti.HALF, TypeMulti.QUARTER],
         value,
     )
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     flags = type_chart_flags(
         tables,
         move,
         d_types,
-        state.gravity,
+        fcm.gravity_count(state),
         identified,
         ai_move_type(tables, state, 1, move),  # TrainerAI_MoveType (:1323)
         grounded,
         roosting,
         magnet,
+        eyed,
     )
     # MOVE_STATUS_IMMUNE (moves.h:87): INEFFECTIVE, Wonder Guard's or Magnet Rise's bit.
     immune = ((flags & (INEFFECTIVE | MAGNET_RISE)) != 0) | wonder_guard_bit(
@@ -1791,6 +1905,23 @@ def new_context(
         sites = jnp.zeros((), _I32)
     elif sites is None:
         sites = line_sites(state)
+    # E3-B2-15: Gyro Ball's estimate in the current speeds is the one estimate that differs once
+    # the decision has compared speeds; the other moves' are the same (``seen_damage``).
+    speeds = current_speeds(tables, state)
+    damage = _slot_damage(tables, state, SIM_ROLL_MAX)
+    moves = state.moves[1, state.active[1]].astype(_I32)
+    gyro = estimate(
+        tables,
+        state._replace(speed_rec=speeds.astype(state.speed_rec.dtype)),
+        AI_GYRO_BALL,
+        SIM_ROLL_MAX,
+    )
+    gyro_slot = moves == AI_GYRO_BALL
+    damage_w = jax.tree.map(
+        lambda g, d: jnp.where(gyro_slot.reshape((-1,) + (1,) * (d.ndim - 1)), g[None], d),
+        gyro,
+        damage,
+    )
     return AiContext(
         tables=tables,
         state=state,
@@ -1807,7 +1938,7 @@ def new_context(
             if slotted
             else defender_ability(tables, state, outcome.ability_guess)
         ),
-        damage=_slot_damage(tables, state, SIM_ROLL_MAX),
+        damage=damage,
         sites=jnp.asarray(sites, _I32),
         guess_abilities=jnp.stack([defender_ability(tables, state, g) for g in (0, 1)]),
         guessing=ability_guessed(tables, state),
@@ -1815,6 +1946,12 @@ def new_context(
         weight=jnp.ones(MOVES, jnp.float32),
         missing_read=jnp.asarray(0, _I32),
         loose=loose,
+        speeds=speeds,
+        written=false,
+        damage_w=damage_w,
+        flag=jnp.asarray(0, _I32),
+        inject=jnp.asarray(-1, _I32),
+        first_cmp=jnp.full(MOVES, NO_COMPARE, _I32),
     )
 
 
@@ -1928,9 +2065,9 @@ def flag_move_damage_score(
     anew before reading it again (script.s:62-67, :112-117, :6511-6512, :6572-6573), so the
     draws are no read (the loose oracle still draws them)."""
     if use_damage_roll == ROLL_FOR_DAMAGE:
-        damage = _slot_damage(ctx.tables, ctx.state, ctx.outcome.sim_roll)
+        damage = _slot_damage(ctx.tables, seen_state(ctx), ctx.outcome.sim_roll)
     else:
-        damage = ctx.damage
+        damage = seen_damage(ctx)
     mine = jax.tree.map(lambda x: jnp.take(x, ctx.slot, axis=0), damage)
     others = jnp.arange(MOVES) != ctx.slot
     le = _at_most(damage, mine.value[:, None])  # [C, MOVES]: P(D_i <= d_c)
@@ -2057,6 +2194,16 @@ def if_held_item_equal_to(ctx: AiContext, battler: Battler, item: int) -> AiCont
     return _jump(ctx, _held_item(ctx, battler) == item)
 
 
+def load_fling_power(ctx: AiContext, battler: Battler) -> AiContext:
+    """``LoadFlingPower`` (trainer_ai.c:2014-2022): ``Battler_ItemFlingPower`` of the battler
+    (battle_lib.c:5491-5498): 0 under its Embargo, else the true ``heldItem``'s ``flingPower``
+    (``Tables.item_fling_power``), whichever side (E3-B2-1)."""
+    state, side = ctx.state, _side(battler)
+    item = state.item[_row(state, side), state.active[side]]
+    power = jnp.where(state.embargo[side] != 0, 0, ctx.tables.item_fling_power[item])
+    return ctx._replace(calc_temp=power.astype(_I32))
+
+
 def load_held_item(ctx: AiContext, battler: Battler) -> AiContext:
     """``LoadHeldItem`` (trainer_ai.c:1891-1899): ``battleMons[battler].heldItem``, the true item of
     either side (unlike ``IfHeldItemEqualTo``)."""
@@ -2160,6 +2307,13 @@ def if_stat_stage_equal_to(ctx: AiContext, battler: Battler, stat: Stat, value: 
     return _jump(ctx, _stage(ctx, battler, stat) == value)
 
 
+def if_stat_stage_not_equal_to(
+    ctx: AiContext, battler: Battler, stat: Stat, value: int
+) -> AiContext:
+    """``IfStatStageNotEqualTo`` (trainer_ai.c:1510-1521), ``value`` in decomp units (E3-B2-14)."""
+    return _jump(ctx, _stage(ctx, battler, stat) != value)
+
+
 def if_side_condition(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     """``IfSideCondition`` (trainer_ai.c:732): ``sideConditionsMask[side] & mask``, the
     battler's side having any condition of ``mask``, a union of ``SideCondition`` members
@@ -2244,7 +2398,7 @@ def if_current_move_kills(ctx: AiContext, use_damage_roll: int) -> AiContext:
         roll = ctx.outcome.sim_roll[ctx.slot]
     else:
         roll = SIM_ROLL_MAX
-    est = estimate(ctx.tables, ctx.state, ctx.move, roll)
+    est = estimate(ctx.tables, seen_state(ctx), ctx.move, roll)
     state = ctx.state
     hp = state.hp[0, state.active[0]].astype(_I32)
     p_kill = jnp.sum(jnp.where(hp <= est.value, est.prob, 0.0))
@@ -2420,14 +2574,12 @@ def if_stat_stage_less_than(ctx: AiContext, battler: Battler, stat: Stat, value:
 def if_field_conditions_mask(ctx: AiContext, mask: int) -> AiContext:
     """``IfFieldConditionsMask`` (trainer_ai.c:1936-1946): ``fieldConditionsMask & mask``.
     ``FieldCondition.TRICK_ROOM`` and ``FieldCondition.GRAVITY`` are supported (static; refused
-    otherwise): Trick Room is on while ``BattleState.trick_room`` is nonzero, Gravity while
-    ``BattleState.gravity`` is."""
+    otherwise), read from ``field_mask`` itself, so a borrowed counter (FCM 3.1) counts too."""
     assert int(mask) in (
         FieldCondition.TRICK_ROOM,
         FieldCondition.GRAVITY,
     ), f"unsupported field mask {int(mask):#x}"
-    field = ctx.state.gravity if int(mask) == FieldCondition.GRAVITY else ctx.state.trick_room
-    return _jump(ctx, field != 0)
+    return _jump(ctx, (ctx.state.field_mask.astype(_I32) & int(mask)) != 0)
 
 
 def load_current_weather(ctx: AiContext) -> AiContext:
@@ -2435,29 +2587,20 @@ def load_current_weather(ctx: AiContext) -> AiContext:
     ``fieldConditionsMask`` through ``WEATHER_IS_*`` (include/battle/common.h:68-72), with
     **no** Cloud Nine or Air Lock check. Each ``WEATHER_IS_*`` takes both the temporary and
     the permanent bit (``FIELD_CONDITION_SANDSTORM`` = ``_TEMP | _PERM``,
-    include/constants/battle/condition.h:112-128). The battle holds one weather at a time:
-    a weather move clears ``FIELD_CONDITION_WEATHER`` before it sets its own bit
-    (effect_script_0115.s:8-9, Sandstorm), so the decomp's last-match order does not matter
-    and the engine's single ``BattleState.weather`` gives the value."""
-    w = ctx.state.weather
-    value = jnp.select(
-        [
-            w == Weather.RAIN,
-            w == Weather.SANDSTORM,
-            w == Weather.SUN,
-            w == Weather.HAIL,
-            w == Weather.FOG,
-        ],
-        [
-            AiWeather.RAINING,
-            AiWeather.SANDSTORM,
-            AiWeather.SUNNY,
-            AiWeather.HAILING,
-            AiWeather.DEEP_FOG,
-        ],
-        AiWeather.CLEAR,
-    )
-    return ctx._replace(calc_temp=jnp.asarray(value, _I32))
+    include/constants/battle/condition.h:112-128), ``if`` after ``if``: the last set group wins,
+    rain < sand < sun < hail < fog (``field.weather_bits``; a mask with several groups, FCM
+    3.2)."""
+    w = fcm.weather_bits(ctx.state)
+    value = jnp.asarray(AiWeather.CLEAR, _I32)
+    for test, kind in (
+        (fcm.rain, AiWeather.RAINING),
+        (fcm.sand, AiWeather.SANDSTORM),
+        (fcm.sun, AiWeather.SUNNY),
+        (fcm.hail, AiWeather.HAILING),
+        (fcm.fog, AiWeather.DEEP_FOG),
+    ):
+        value = jnp.where(test(w), int(kind), value)
+    return ctx._replace(calc_temp=value)
 
 
 def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
@@ -2489,6 +2632,13 @@ def if_speed_compare_equal_to(ctx: AiContext, value: int) -> AiContext:
     tables, state = ctx.tables, ctx.state
     a = _side(Battler.ATTACKER)
     slower = value == COMPARE_SPEED_SLOWER
+    # The compare writes both battlers' speeds to monSpeedValues (battle_lib.c:1372-1373) before
+    # it returns: what the estimates after it read (E3-B2-15, ``seen_state``).
+    first = jnp.minimum(ctx.first_cmp[ctx.slot], ctx.flag)
+    first = jnp.where(ctx.live, first, ctx.first_cmp[ctx.slot])
+    ctx = ctx._replace(
+        written=ctx.written | ctx.live, first_cmp=ctx.first_cmp.at[ctx.slot].set(first.astype(_I32))
+    )
     if ctx.loose is not None:
         reads = compare_speed(tables, state, a, 1, state.qc_roll) == COMPARE_SPEED_TIE
         kind = ReadKind.SPEED_TIE if slower else ReadKind.SPEED_TIE_DRAWN
@@ -2574,6 +2724,19 @@ def if_move_effect(ctx: AiContext, battler: Battler, mask: int) -> AiContext:
     one ``MoveEffectMask`` (refused at trace time otherwise), read from its field."""
     field = _MOVE_EFFECT_FIELDS[MoveEffectMask(int(mask))]
     return _jump(ctx, getattr(ctx.state, field)[_side(battler)] > 0)
+
+
+def if_can_use_last_resort(ctx: AiContext, battler: Battler) -> AiContext:
+    """``IfCanUseLastResort`` (trainer_ai.c:2030-2042): jumps when the battler's
+    ``moveEffectsData.lastResortCount`` is at least ``numKnownMoves - 1`` and it knows more than
+    one move, ``numKnownMoves`` being ``Battler_CountMoves`` (battle_lib.c:3461-3471) of its true
+    moves (the index of the first empty slot), the test ``BtlCmd_TryLastResort`` makes
+    (battle_script.c:7573-7574; ``BattleState.last_resort_count``, E3-B2-11)."""
+    state, side = ctx.state, _side(battler)
+    moves = state.moves[_row(state, side), state.active[side]]
+    known = jnp.sum(jnp.cumprod((moves != 0).astype(_I32)))
+    count = state.last_resort_count[side].astype(_I32)
+    return _jump(ctx, (count >= known - 1) & (known > 1))
 
 
 def load_gender(ctx: AiContext, battler: Battler) -> AiContext:

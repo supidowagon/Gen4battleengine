@@ -101,9 +101,11 @@ _SOUND_MOVES = {
     "Bug Buzz": 405,
     "Chatter": 448,
 }
-# ai/switching.py MOVE_IDS; _MOVES is these less Hidden Power, Roost, Ingrain, Perish Song,
-# Magnet Rise and the variable-type moves (_SWITCH_REFUSED): moves whose decomp handling the
-# switch check does not model. Roost and Ingrain are read since E1 prep batch P2
+# ai/switching.py MOVE_IDS; _MOVES would be these less Hidden Power, Roost, Ingrain, Perish Song,
+# Magnet Rise and the variable-type moves: moves whose decomp handling the switch check does not
+# model; none is left since Miracle Eye's bit is read (E3-B2-10), so ``_MOVES``,
+# ``PLAYER_MOVE_REFUSALS`` and ``policy._STATE_MOVE_IDS`` are empty and name no id.
+# Roost and Ingrain are read since E1 prep batch P2
 # (switching.defender_chart_flags); Perish Song (step 3, AI_PerishSongKO, G-64) and Magnet
 # Rise (G-66) since the E1 trial batch; Weather Ball, Natural Gift and Judgment are typed
 # since E2 batch 13 (B13-35: switching.party_move_types; Weather Ball refused only where its
@@ -111,28 +113,12 @@ _SOUND_MOVES = {
 _SWITCH_MOVES = {
     "Magnet Rise": 393,
     "Roost": 355,
-    "Miracle Eye": 357,
     "Ingrain": 275,
     "Perish Song": 195,
     "Hidden Power": 237,
     "Weather Ball": 311,
     "Natural Gift": 363,
     "Judgment": 449,
-}
-_SWITCH_REFUSED = {
-    k: v
-    for k, v in _SWITCH_MOVES.items()
-    if k
-    not in (
-        "Hidden Power",
-        "Roost",
-        "Ingrain",
-        "Perish Song",
-        "Magnet Rise",
-        "Weather Ball",
-        "Natural Gift",
-        "Judgment",
-    )
 }
 # ai/switching.py _ANY_SIDE_ABILITIES (ApplyTypeChart / CalcEffectiveness, trainer_ai.c).
 _ANY_SIDE_ABILITIES = {"Levitate": 26, "Scrappy": 113, "Normalize": 96}
@@ -182,8 +168,9 @@ _AI_MOVE_IDS = {
 # Return, Frustration, Low Kick, Grass Knot, Dragon Rage, SonicBoom, Seismic Toss and Night
 # Shade are modelled since E1 batch 13, Hidden Power since batch 14, Psywave (149) and
 # Magnitude (222) with their draws since E1 ruling G-39 (engine.damage.AI_DRAWN_MOVES),
-# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25).
-_CALC_DAMAGE_MOVES = {"Gyro Ball": 360}
+# Natural Gift (363) and Judgment (449) since E2 batch 13 (B13-25), Gyro Ball (360) since E3-B2-15
+# (engine.damage.AI_GYRO_BALL, a ``commands.MOVE_IDS`` id too): none is left, so the table is
+# empty and names no id (so it is no constant of this table).
 # ai/commands.py MOVE_TYPE_MOVES: TrainerAI_MoveType's id cases (trainer_ai.c:3132-3227)
 # refused in some state: Weather Ball where its case assigns no type (B13-26). Hidden Power's
 # (E1 batch 14), Natural Gift's and Judgment's (B13-26) are modelled (engine.damage.ai_move_type).
@@ -238,16 +225,8 @@ def _policy_tables(scope: str) -> tuple[Constant, ...]:
         *_table("nuzline.ai.switching.MOVE_IDS", "move", scope, _SWITCH_MOVES),
         # Hidden Power's AI type is modelled on both sides since E1 batch 14: in MOVE_IDS
         # (the bench's IV type), refused in neither.
-        *_table("nuzline.ai.switching._MOVES", "move", scope, _SWITCH_REFUSED),
-        *_table("nuzline.ai.switching.PLAYER_MOVE_REFUSALS", "move", scope, _SWITCH_REFUSED),
         *_table(
             "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS", "ability", scope, _ANY_SIDE_ABILITIES
-        ),
-        *_table(
-            "nuzline.ai.policy._STATE_MOVE_IDS",
-            "move",
-            scope,
-            {k: _SWITCH_MOVES[k] for k in ("Miracle Eye",)},
         ),
     )
 
@@ -318,6 +297,9 @@ CONSTANTS: tuple[Constant, ...] = (
             "Run Away": 50,
             "Pickup": 53,
             "Honey Gather": 118,
+            # E3-B2-1: Basic_FlingPoison / _FlingBurn AttackerChecks (script.s:1235-1278).
+            "Klutz": 103,
+            "Guts": 62,
         },
     ),
     *_table(
@@ -370,6 +352,8 @@ CONSTANTS: tuple[Constant, ...] = (
     *_table("nuzline.engine.ids.Type", "type", _E, _TYPES),
     # MOVE_STRUGGLE (generated/moves.txt line 166).
     Constant("nuzline.engine.ids.MOVE_STRUGGLE", "move", 165, "Struggle", _E),
+    # MOVE_LAST_RESORT (generated/moves.txt line 388): battle_lib.c:3445, battle_script.c:4514, :4876.
+    Constant("nuzline.engine.ids.MOVE_LAST_RESORT", "move", 387, "Last Resort", _E),
     # MOVE_FAKE_OUT (generated/moves.txt line 253): subscript_flinch_mon.s:18.
     Constant("nuzline.engine.ids.MOVE_FAKE_OUT", "move", 252, "Fake Out", _E),
     # MOVE_SNORE, MOVE_SLEEP_TALK (generated/moves.txt lines 174, 215): the sleep check's
@@ -515,6 +499,7 @@ CONSTANTS: tuple[Constant, ...] = (
             "Hydration": 93,
             "Forecast": 59,
             "Storm Drain": 114,
+            "Air Lock": 76,
         },
     ),
     # ChooseTraceTarget's untraceable abilities (battle_lib.c:7750-7775) and its Forecast.
@@ -706,7 +691,6 @@ CONSTANTS: tuple[Constant, ...] = (
     # The decomp's C id cases: both policies compare these by id, whatever a game names the
     # slot (Kaizo's 149 is Triple Axel and still takes MOVE_PSYWAVE's case), so they are
     # name-checked against vanilla only.
-    *_table("nuzline.ai.commands.CALC_DAMAGE_MOVES", "move", _P, _CALC_DAMAGE_MOVES),
     *_table("nuzline.ai.commands.MOVE_TYPE_MOVES", "move", _P, _MOVE_TYPE_MOVES),
     *_table("nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES", "move", _P, _COPYCAT_ENCOURAGED_MOVES),
     # script.s:78's compare (Basic_CheckForImmunity -> Basic_CheckWaterAbsorption2): the
@@ -762,10 +746,24 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.MoveFlag": _ENGINE_ENCODING,
     "nuzline.engine.ids.SemiKind": _ENGINE_ENCODING,
     "nuzline.engine.ids.Weather": _ENGINE_ENCODING,
+    "nuzline.engine.ids.FieldCondition": (
+        "fieldConditionsMask bits (FIELD_CONDITION_*, include/constants/battle/condition.h:110-149), "
+        "battle-engine state, not a game id"
+    ),
+    "nuzline.engine.ids.WEATHER_TEMP_BIT": "the FieldCondition TEMP bit by Weather; "
+    + _ENGINE_ENCODING,
+    "nuzline.engine.ids.WEATHER_PERM_BIT": "the FieldCondition PERM bit by Weather; "
+    + _ENGINE_ENCODING,
+    "nuzline.engine.ids.STARF_QUEUE": "the Outcome.starf columns of a battler's eats in a turn "
+    "(F-O3); " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemId": _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemParam": "columns of tables.item_party_param; " + _ENGINE_ENCODING,
     "nuzline.engine.ids.ItemAiCategory": _ENGINE_ENCODING,
     "nuzline.engine.ids.AbilityId": _ENGINE_ENCODING,
+    "nuzline.engine.ids.FlingEffect": (
+        "engine index order of the decomp's FLING_EFFECT_* (BattleSystem_FlingItem, "
+        "battle_lib.c:5857-6158); " + _ENGINE_ENCODING
+    ),
     "nuzline.ai.commands.Battler": _AI_ENCODING + " (AI_BATTLER_*)",
     "nuzline.ai.commands.LoadType": _AI_ENCODING + " (LOAD_*, trainer_ai.c:937)",
     "nuzline.ai.commands.SideCondition": _AI_ENCODING + " (SIDE_CONDITION_*)",
@@ -906,6 +904,31 @@ EXEMPT: dict[str, str] = {
     "nuzline.engine.ids.NATURE_DISLIKED_FLAVOR": (
         "sNatureFlavorAffinities (src/pokemon.c:61-237) indexed by decomp nature id: a code table, "
         "not item or move data; tests/engine/test_e1_gardenia.py reads it back from the decomp"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_POISON": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Poison, script.s:1288), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_BURN": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Burn, script.s:1293), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_ITEMS_PARALYZE": (
+        "decomp hold effect ids of the AI script's table (Basic_FlingItems_Paralyze, script.s:1297), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FLING_DESIRABLE_EFFECTS": (
+        "decomp hold effect ids of the AI script's table (Expert_Fling_DesirableFlingEffects, script.s:5288), compared with each game's own "
+        "item hold effects (LoadHeldItemEffect); tests/engine/test_e3_batch2.py reads it back from "
+        "the decomp (E3-B2-1)"
+    ),
+    "nuzline.ai.commands.FEINT_GRADUAL_RECOVERY_EFFECTS": (
+        "decomp hold effect ids of the AI script's table (Expert_Feint_GradualRecoveryItems, "
+        "script.s:4952), compared with each game's own item hold effects (LoadHeldItemEffect); "
+        "tests/ai/test_kaizo_policy.py reads it back from the decomp (E3-B2-13)"
     ),
     "nuzline.engine.ids.SPEED_HALVING_HOLD_EFFECTS": (
         "decomp hold effect ids of sSpeedHalvingItemEffects (battle_lib.c:1160-1169), a code "

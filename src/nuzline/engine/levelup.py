@@ -24,33 +24,30 @@ per-level loop literally, and the differential tests prove the two equal.
 
 Not modelled here, and refused elsewhere (design §4): the egg-location friendship bonus
 (src/pokemon.c:2668-2670, read only by the friendship-power moves, §4.4) and a battle item
-that differs from the party item (§4.2). The learnset scan of the levels gained is deferred
-to the post-step resolve (``learn_level`` / ``learn_cursor``, design §3.2-3.3).
+that differs from the party item (§4.2).
 
-The resolve (``advance_learns``, ``learn``) runs after ``step`` and before any faint
-replacement: the decomp's ``TurnEnd`` payout and its prompts (bcp.c:1846) come before
-``ReplaceFainted`` (:1848). It is never inlined into ``step``. Only the learnset work is
-deferred: auto-learn fills only an empty slot (src/pokemon.c:3857-3862), and the readers of a
-slot that holds a move, between a mid-turn payout and the resolve, are exact under the
-``learn_options`` masks or refused (design §3.3):
+The learnset scan and the prompt run at the payout (E3-B2-21, ruling L1). ``advance_learns``
+is called by ``step`` right after each ``pay_exp`` of an in-turn payout site (MoveEnd,
+``CheckFieldConditions``, ``CheckMonConditions``; ``step._execute_actions``, ``field_conditions``,
+``end_of_turn``), and a prompt that is left pauses the turn there (``BattleState.learn_site``;
+the E2 batch 6 pause, ``step.step_events``): the decomp runs the whole ``GetExpTask``, every
+level's prompts included, inside the payout, before any later action, check or draw of the turn
+(bcp.c:3968, :941, :1296; bs.c:10003-10187). The answer (``learn``) is made at the pause and the
+turn resumes as a chance node; the later draws of the turn are unseen when it is made. Pursuit's
+payout (``subscript_pursuit.s:106-108``) is taken at the same action's MoveEnd: the pursued
+action is over by then (the pursued battler fainted, so its switch or its U-turn's list never
+runs), and nothing between them reads the learn state. A payout that is not followed by an
+in-turn step before the replacements (``TurnEnd``'s, bcp.c:1846-1848: Future Sight, Perish Song,
+the replacement loop) leaves its prompt in the state after ``step`` / ``replace`` (``learn_site``
+0); the answer comes before the replacement (``search``).
 
-* the player's pending move after the opponent fainted first: the decomp stores the slot at
-  selection (bcp.c:525-527) and re-reads ``moves[moveSlot]`` when the move runs
-  (bcp.c:1885-1895; the PP slot by ``Battler_SlotForMove``, bcp.c:2272-2283), so only a
-  prompt that replaces the selected slot differs: ``learn_pin`` masks that option;
-* the end-of-turn Disable and Encore checks end each once ``disabledMove`` / ``encoredMove``
-  is no longer known (bcp.c:1565-1576, :1591-1602), while the engine runs them before the
-  resolve: masked with the disabled and the encored move (ruling D2);
-* the locked move and the Choice lock are read by move id: ``FightCommand`` runs
-  ``moveLockedInto`` (bcp.c:1885-1888) and spends no PP for it (``ppDecremented``,
-  bcp.c:335; no slot, :2272-2294), as ``order.selected_move`` and ``actions.locked_slot``
-  do, and ``CHECK_INVALID_CHOICE_ITEM`` clears a lock the battler no longer knows
-  (battle_lib.c:2307-2310), which ``actions.choice_locked`` reads as no lock: replacing
-  either move is exact and offered;
-* a newcomer the hazards faint inside the opponent's replacement loop: refused
-  (``exp_refused``, window (c)).
-
-The converter refuses a recorded answer the masks drop (``tools.trace_to_state._learn_refusal``).
+The state read between the payout and the answer is the decomp's: the pending move of the
+learner re-reads its slot when it runs (bcp.c:1889-1895; ``step._execute_actions``), the
+end-of-turn Disable and Encore checks run after the answer (bcp.c:1565-1576, :1591-1602), and
+the locked and the choice-locked move are read by id (bcp.c:1885-1888; ``order.selected_move``,
+``actions.locked_slot``, ``actions.choice_locked`` read a lock the battler no longer knows as no
+lock, battle_lib.c:2307-2310). So ``learn_options`` has no mask but the game's (an HM, ruling
+D10).
 
 Prompts still pending when the battle ends stay in the state (ruling D8).
 """
@@ -146,34 +143,17 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, item, hold
     return evs
 
 
-def pay_exp(
-    tables: Tables,
-    before: BattleState,
-    after: BattleState,
-    pending=False,
-    selected=0,
-    battler=None,
-) -> BattleState:
+def pay_exp(tables: Tables, before: BattleState, after: BattleState, battler=None) -> BattleState:
     """``after`` with the exp payout for an opponent faint between ``before`` and ``after``
     (``after`` is the state after the hook's faint check); unchanged when nothing fainted.
-    ``pending``: the player's move ``selected`` (its slot, 0-3) has not run yet this turn, so
-    a level-up of the player's active pins that slot (``learn_pin``, design §3.3(a)). At B = 4
-    both are per battler (``[B]``; a scalar is battler 0's) and ``learn_pin`` holds two base-5
-    digits, battler 0's (``% 5``) and battler 2's (``// 5``; party-0 battlers only: DOUBLES and
-    TWO_TRAINERS), each 0 or 1 + the move slot. A level-up of battler 2's active reloads it
-    into battler 2 (``expBattler = 2``, battle_script.c:9716-9720, :9860-9864).
-    ``battler``: a static Python int, the payout for that battler alone (see
-    ``pay_exp_leveled``); ``None`` is the singles payout."""
-    return pay_exp_leveled(tables, before, after, pending, selected, battler)[0]
+    A level-up of battler 2's active reloads it into battler 2 (``expBattler = 2``,
+    battle_script.c:9716-9720, :9860-9864; D3-12). ``battler``: a static Python int, the payout
+    for that battler alone (see ``pay_exp_leveled``); ``None`` is the singles payout."""
+    return pay_exp_leveled(tables, before, after, battler)[0]
 
 
 def pay_exp_leveled(
-    tables: Tables,
-    before: BattleState,
-    after: BattleState,
-    pending=False,
-    selected=0,
-    battler=None,
+    tables: Tables, before: BattleState, after: BattleState, battler=None
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(pay_exp(...), bool[6])``: the state and the player slots that gained a level.
 
@@ -287,26 +267,7 @@ def pay_exp_leveled(
     # slot: battler 2 first, in DOUBLES and TWO_TRAINERS (BATTLE_TYPE_AI excluded), else battler 0
     # (battle_script.c:9716-9720, :9860-9864; D3-12 owed from D3-8b). ``reloaders`` are the
     # player battlers of party 0 that can be that battler (MULTI's battler 2 draws from party 2).
-    fmt = format_of(after)
-    reloaders = (0, 2) if fmt.B == 4 and fmt != MULTI else (0,)
-    pending = jnp.asarray(pending)
-    selected = jnp.asarray(selected)
-    if fmt.B == 2:
-        pin = pending & leveled[after.active[0]]
-        learn_pin = jnp.where(pin, selected + 1, after.learn_pin)
-    else:
-        # B = 4: ``pending`` / ``selected`` are per battler (a scalar is battler 0's) and the pin
-        # of each reloader is one base-5 digit of ``learn_pin`` (``learn_pin % 5`` battler 0,
-        # ``learn_pin // 5`` battler 2; the digit is 0 none, else 1 + the move slot).
-        pend = jnp.zeros(fmt.B, bool).at[0].set(pending) if pending.ndim == 0 else pending
-        sel = jnp.broadcast_to(selected, (fmt.B,))
-        cur = after.learn_pin.astype(_I32)
-        digits = []
-        for k, p in enumerate(reloaders):
-            old_digit = (cur // 5**k) % 5
-            pin = pend[p] & leveled[after.active[p]]
-            digits.append(jnp.where(pin, sel[p].astype(_I32) + 1, old_digit))
-        learn_pin = sum(d * 5**k for k, d in enumerate(digits))
+    reloaders = _reloaders(format_of(after))
 
     def put(field, side0):
         full = getattr(after, field)
@@ -329,7 +290,6 @@ def pay_exp_leveled(
         ).astype(after.exp_mask.dtype),
         learn_level=jnp.where(marked, level + 1, after.learn_level).astype(after.learn_level.dtype),
         learn_cursor=jnp.where(marked, 0, after.learn_cursor).astype(after.learn_cursor.dtype),
-        learn_pin=learn_pin.astype(after.learn_pin.dtype),
     )
     for p in reloaders:
         reloaded = leveled[after.active[p]]
@@ -359,6 +319,12 @@ def pay_exp_leveled(
 GIVE_UP = MOVES  # learn option 4 gives the move up; options 0-3 replace that move slot
 LEARN_OPTIONS = MOVES + 1
 
+# ``BattleState.learn_site``: where the turn paused for a learn prompt (module docstring). The
+# payout sites of the decomp (E3-B2-21): MoveEnd (bcp.c:3968; Pursuit's, subscript_pursuit.s:106,
+# is taken here), the head of CheckFieldConditions (:941), the head of CheckMonConditions' next
+# re-entry (:1296; the pause is after the battler block whose check fainted the foe).
+LEARN_MOVE_END, LEARN_FIELD, LEARN_MON = 1, 2, 3
+
 
 def needs_learn(state: BattleState) -> jnp.ndarray:
     """``bool``: a learn-move prompt is pending. Valid after ``advance_learns``, which leaves
@@ -385,11 +351,33 @@ def party_identity(state: BattleState) -> tuple[jnp.ndarray, jnp.ndarray, jnp.nd
     learnset and the Shedinja rule belong to the party Pokemon (``Pokemon_CalcStats``, the
     ``ReloadPokemon`` of battle_lib.c:169-194 copies its own stats back), G-69."""
     slots = jnp.arange(SLOTS)
-    swapped = (state.transformed[0] != 0) & (slots == state.active[0])
-    species = jnp.where(swapped, state.shadow_species[0], state.species[0])
-    form = jnp.where(swapped, state.shadow_form[0], state.form[0])
-    ivs = jnp.where(swapped[:, None], state.shadow_ivs[0][None, :], state.ivs[0])
+    species, form, ivs = state.species[0], state.form[0], state.ivs[0]
+    # At B = 4 the active slot of either party-0 battler (``_reloaders``; D3-12).
+    for p in _reloaders(format_of(state)):
+        swapped = (state.transformed[p] != 0) & (slots == state.active[p])
+        species = jnp.where(swapped, state.shadow_species[p], species)
+        form = jnp.where(swapped, state.shadow_form[p], form)
+        ivs = jnp.where(swapped[:, None], state.shadow_ivs[p][None, :], ivs)
     return species, form, ivs
+
+
+def _reloaders(fmt) -> tuple[int, ...]:
+    """The player battlers of party 0 that ``BattleSystem_ReloadPokemon`` can reload as
+    ``expBattler``: battler 2 when its ``selectedPartySlot`` is the slot, in a doubles battle
+    without ``BATTLE_TYPE_AI`` (DOUBLES, TWO_TRAINERS), else battler 0 (battle_script.c:9716-9720,
+    :9860-9864, :10173-10178; D3-12). MULTI's battler 2 draws from party 2."""
+    return (0, 2) if fmt.B == 4 and fmt != MULTI else (0,)
+
+
+def _exp_battler(state: BattleState, slot) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """``(active, battler)``: whether player party ``slot`` is the active Pokemon of a reloader
+    (``_reloaders``), and that battler (0 when it is none)."""
+    slot = jnp.asarray(slot)
+    on, battler = jnp.bool_(False), jnp.int32(0)
+    for p in _reloaders(format_of(state)):
+        here = slot == state.active[p]
+        on, battler = on | here, jnp.where(here, p, battler)
+    return on, battler
 
 
 def _masked(state: BattleState, slot) -> jnp.ndarray:
@@ -397,16 +385,18 @@ def _masked(state: BattleState, slot) -> jnp.ndarray:
     ``mimic_slots`` of the active Pokemon (G-68). The learn reads and writes the party Pokemon
     (``Pokemon_SetMoveSlot``, battle_script.c:10168-10176; ``BoxPokemon_AddMove``, pokemon.c:3852),
     and ``BattleSystem_ReloadPokemon`` reloads the unflagged slots from it (battle_lib.c:183-191)."""
-    bits = (state.mimic_slots[0].astype(_I32) >> jnp.arange(MOVES)) & 1
-    return (bits == 1) & (jnp.asarray(slot) == state.active[0])
+    on, p = _exp_battler(state, slot)
+    bits = (state.mimic_slots[p].astype(_I32) >> jnp.arange(MOVES)) & 1
+    return (bits == 1) & on
 
 
 def _party_moves(state: BattleState, slot) -> tuple[jnp.ndarray, jnp.ndarray]:
     """``(moves, pp)`` of player party ``slot`` as the party Pokemon holds them: the shadow of a
     flagged slot (``_masked``), else the slot's own."""
     masked = _masked(state, slot)
-    moves = jnp.where(masked, state.shadow_moves[0], state.moves[0, slot])
-    pp = jnp.where(masked, state.shadow_pp[0], state.pp[0, slot])
+    p = _exp_battler(state, slot)[1]
+    moves = jnp.where(masked, state.shadow_moves[p], state.moves[0, slot])
+    pp = jnp.where(masked, state.shadow_pp[p], state.pp[0, slot])
     return moves, pp
 
 
@@ -416,6 +406,7 @@ def _put_party(state: BattleState, slot, k, move, pp, apply) -> BattleState:
     then shows it)."""
     shadowed = _masked(state, slot)[k]
     live, shadow = apply & ~shadowed, apply & shadowed
+    p = _exp_battler(state, slot)[1]
 
     def put(arr, index, value, cond):
         return arr.at[index].set(jnp.where(cond, value, arr[index]).astype(arr.dtype))
@@ -423,8 +414,8 @@ def _put_party(state: BattleState, slot, k, move, pp, apply) -> BattleState:
     return state._replace(
         moves=put(state.moves, (0, slot, k), move, live),
         pp=put(state.pp, (0, slot, k), pp, live),
-        shadow_moves=put(state.shadow_moves, (0, k), move, shadow),
-        shadow_pp=put(state.shadow_pp, (0, k), pp, shadow),
+        shadow_moves=put(state.shadow_moves, (p, k), move, shadow),
+        shadow_pp=put(state.shadow_pp, (p, k), pp, shadow),
     )
 
 
@@ -491,35 +482,35 @@ def advance_learns(tables: Tables, state: BattleState) -> BattleState:
     return state
 
 
+def learn_prompt(tables: Tables, state: BattleState) -> tuple[BattleState, jnp.ndarray]:
+    """``(state, prompt)``: ``advance_learns`` at a payout site, and whether a prompt is left in a
+    battle that goes on (D8: none once it is over). ``step`` pauses the turn on a prompt."""
+    state = advance_learns(tables, state)
+    return state, needs_learn(state) & (state.over == 0)
+
+
 def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     """``bool[5]``: the search's answers to the pending prompt (``needs_learn``, after
     ``advance_learns``). Option ``k < 4`` replaces move slot ``k``; option 4 (``GIVE_UP``)
     gives the move up and is always legal (a "No" to "Make it forget another move?" leads to
     the give-up prompt, bs.c:10076-10077, :10104-10135).
 
-    Replacing slot ``k`` is offered only if all of these hold:
+    Replacing slot ``k`` is offered only if both hold:
 
     * its move is not an HM (``CheckSelectedMoveIsHM``, src/battle_sub_menus/battle_party.c:
       1724-1735; ``Item_IsHMMove``, src/item.c:306-315): a game rule;
-    * for the player's active learner: it is not the disabled or the encored move (ruling D2:
-      the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
-      bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
-      (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895; at B = 4 the
-      learner's own battler, 0 or 2);
-      none of these while the battle is over (``state.over``: the payout that ended it runs no
-      later turn end or move, bcp.c:3965-3969);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
       D10). Coverage refuses an unsupported move only where it could be learned without a
       prompt, into an empty slot (``BoxPokemon_AddMove``, src/pokemon.c:3852-3873;
       battle_script.c:10007-10027); as a prompt the player may always give it up.
 
-    A slot the AI has seen is open: ``ai_seen_moves`` holds move ids, so the replaced move's id
-    stays in it as in the decomp's list (``TrainerAI_RecordLastMove``,
-    src/battle/trainer_ai/trainer_ai.c:2705-2716, G-68) and the AI does not know the new move.
-    The locked and the choice-locked move are offered: both are read by id (module
-    docstring). The D2, pin and D10 masks drop legal game choices, so plan values at learn
-    nodes are achievable lower bounds, except the mid-turn-prompt case (``STATE.md``,
-    Experience)."""
+    No move is masked for the active learner (E3-B2-21): the prompt is answered at the payout,
+    where the decomp reads the new move list (module docstring), so the selected, the disabled,
+    the encored, the locked and the choice-locked move are all offered. A slot the AI has seen is
+    open too: ``ai_seen_moves`` holds move ids, so the replaced move's id stays in it as in the
+    decomp's list (``TrainerAI_RecordLastMove``, src/battle/trainer_ai/trainer_ai.c:2705-2716,
+    G-68) and the AI does not know the new move. The D10 mask drops legal game choices, so plan
+    values at learn nodes are achievable lower bounds."""
     slot = _learner(state)
     moves, _ = _party_moves(state, slot)
     width = tables.learnset_level.shape[1]
@@ -530,30 +521,6 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     offered = jnp.where(real, tables.learnset_move[row, col], 0)
     supported = (tables.move_effect[offered] != EffectId.UNSUPPORTED) | ~needs_learn(state)
     ok = (tables.move_is_hm[moves] == 0) & supported
-    live = state.moves[0, slot]
-    fmt = format_of(state)
-    if fmt.B == 2:
-        held = (
-            (live == state.disabled_move[0])
-            | (live == state.encore_move[0])
-            | (jnp.arange(MOVES) + 1 == state.learn_pin)
-        )
-        learner_held = (slot == state.active[0]) & held
-    else:
-        # B = 4: the masks of the party-0 battler the learner is (D3-12; ``pay_exp_leveled``'s
-        # base-5 ``learn_pin``: battler 0 ``% 5``, battler 2 ``// 5``).
-        learner_held = jnp.zeros(MOVES, bool)
-        for k, p in enumerate((0, 2) if fmt != MULTI else (0,)):
-            pin = (state.learn_pin.astype(_I32) // 5**k) % 5
-            held = (
-                (live == state.disabled_move[p])
-                | (live == state.encore_move[p])
-                | (jnp.arange(MOVES) + 1 == pin)
-            )
-            learner_held = learner_held | ((slot == state.active[p]) & held)
-    # After the battle ends no turn end or move runs (MoveEnd's AnyExpPayout precedes
-    # CheckBattleOver, bcp.c:3965-3969): the D2 and pin masks drop nothing then.
-    ok = ok & ~(learner_held & (state.over == 0))
     return jnp.concatenate([ok, jnp.ones(1, bool)])
 
 

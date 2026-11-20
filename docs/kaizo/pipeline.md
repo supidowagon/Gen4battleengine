@@ -249,14 +249,11 @@ Experience refusals (coverage category `experience`: `coverage.exp_refusals`,
   (effect, AI, terrain, ROM change). An unsupported move is refused only when it could be
   learned into an empty move slot without a prompt; when every slot that could take it is
   full, the engine gives it up (ruling D10: the plan is then an achievable lower bound,
-  except the mid-turn-prompt case, where a learn node can be optimistic;
-  `src/nuzline/engine/STATE.md`, Experience);
-- a payout inside the opponent's replacement that leaves learn work (a newcomer fainted by
-  the hazards; `exp_refused`) refuses that line of the search;
+  `src/nuzline/engine/STATE.md`, Experience: the prompt is answered at the payout, as the
+  game does, E3-B2-21);
 - the trace converter (`tools/trace_to_state.py`) refuses a recording in which the player
   learned a move the engine does not support (ruling D10), replaced a move the AI had
-  already seen, or answered with another option the search masks (the disabled, locked,
-  choice-locked or selected move), and a party file whose exp is not of its level.
+  already seen, or answered with an HM slot, and a party file whose exp is not of its level.
 
 Terrain: read per trainer from the ROM (`Trainer.terrain`, `tools/terrain.py`): the tiles of
 every map the trainer can be fought on, then the map header's battle background (the patched

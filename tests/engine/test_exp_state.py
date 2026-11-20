@@ -52,8 +52,6 @@ EXP_BLOCK = {
     "friend_bonus": ((6,), np.int8),
     "learn_level": ((6,), np.int8),
     "learn_cursor": ((6,), np.int8),
-    "learn_pin": ((), np.int8),
-    "exp_refused": ((), np.int8),
 }
 
 
@@ -113,7 +111,7 @@ def test_make_state_fills_the_block_from_the_specs(tables, names):
     assert np.asarray(s.exp_boost).tolist() == [100, 150, 100, 100, 100, 100]
     assert np.asarray(s.pokerus).tolist() == [0, 1, 0, 0, 0, 0]
     assert np.asarray(s.friend_bonus).tolist() == [0, 1, 0, 0, 0, 0]
-    for name in ("learn_level", "learn_cursor", "learn_pin", "exp_refused"):
+    for name in ("learn_level", "learn_cursor"):
         assert not np.any(np.asarray(getattr(s, name))), name
 
 

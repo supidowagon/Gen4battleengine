@@ -454,6 +454,9 @@ source = "rom:map header 310 weather 18 (Trick Room)"
 
 # 666 Hooded Figure; sheet: Elite Four Split:206 ['trick_room']
 # rom: no map of this trainer has weather 18 and start_condition is 'none': a sheet-only claim (Task 13 reports it)
+# The ROM agrees through a script (ledger G-23): scr_seq 182 (header 172) sets VAR 0x4016 = 18 and runs the
+# Kaizo command 0x9C (overworld weather 18, Trick Room in the Kaizo switch) at 0x00d5 / 0x01a3, then
+# StartTrainerBattle 666 at 0x0101 / 0x01cf; maps.script_weathers leaves field effects to this entry.
 [area.666]
 trick_room = true
 source = "Elite Four Split:206"
@@ -1171,6 +1174,10 @@ source = "user, 2026-11-07"
 # (vanilla 33), but a Kaizo script event starts rain (scr_seq 459); sheet Wake Split:192
 # 'Route 213 (PERMANENT RAIN)', PKCalc rain list (raw/FLAGS_PK.json). The user: rain for all
 # eight, overriding the ROM byte (resolutions.toml records the ROM-vs-PKCalc row).
+# Since ledger G-24 the rain is the default of a run input: scr_seq 459 entry 12 (coord event
+# VAR 0x40FA == 7) sets overworld weather 4 at 0x0264 and VAR 0x40FA := 8; ScrCmd_0C4 after
+# the Chelle win or a map change ends it (rom_script_weather.json windows; cli --script-weather,
+# and a save whose VAR 0x40FA >= 8 decides).
 [area.103]
 weather = "rain"
 source = "user, 2026-11-07"

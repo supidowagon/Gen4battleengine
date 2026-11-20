@@ -1,6 +1,6 @@
 """D3-12 on the reference: ``ref_replace_round`` equals the engine's ``replace_round`` field by
 field (``tests/engine/test_d3_replacement.py`` has the rules), and the reference's battler-2
-reload and per-battler ``learn_pin`` equal ``levelup.pay_exp``."""
+reload equals ``levelup.pay_exp``."""
 
 from __future__ import annotations
 
@@ -65,23 +65,17 @@ def test_ref_hazard_faint(tables, names):
     both(tables, s, picks(2, -1, -1, -1))
 
 
-def test_ref_battler_2_reload_and_pins_equal_the_engine(tables, names):
+def test_ref_battler_2_reload_equals_the_engine(tables, names):
     s, after = leveling(tables, names)
     s = s._replace(
         power_trick=s.power_trick.at[0].set(1).at[2].set(1),
         transformed=s.transformed.at[2].set(1),
     )
     after = after._replace(power_trick=s.power_trick, transformed=s.transformed)
-    pending = [True, False, True, False]
-    selected = [1, 0, 3, 0]
-    want = pay_exp(
-        tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32), battler=1
-    )
-    ref = ref_grant_exp(
-        to_numpy(tables), to_ref(after), int(after.active[1]), pending, selected, battler=1
-    )
+    want = pay_exp(tables, s, after, battler=1)
+    ref = ref_grant_exp(to_numpy(tables), to_ref(after), int(after.active[1]), battler=1)
     got = from_ref(ref)
-    for name in ("learn_pin", "power_trick_desync", "shadow_stats", "level", "hp", "exp"):
+    for name in ("power_trick_desync", "shadow_stats", "level", "hp", "exp"):
         np.testing.assert_array_equal(
             np.asarray(getattr(want, name)), np.asarray(getattr(got, name)), err_msg=name
         )

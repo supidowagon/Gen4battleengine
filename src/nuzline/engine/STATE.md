@@ -29,14 +29,6 @@ three structs has a row.
   traced data the engine never reads. `replace_mul` is the decomp's `powerMul` kept
   for a pending player replacement (it persists until `BattleContext_Init`,
   battle_controller_player.c:1855), 0 otherwise.
-  `acid_rain` (int8, after `gravity` with the field conditions, outside the experience
-  block and the turn scratch after `replace_mul`; sticky to the
-  battle's end) is not decomp state either: the operand of Pursuit's
-  `fieldConditionsMask -=` (subscript_pursuit.s:100, :115; OPCODE_SUB_TO_ZERO,
-  battle_script.c:3282-3287), 1..3, 0 = none; set only where the subtraction happens with a
-  nonzero operand while a field condition is up. The engine cannot hold the result: a state
-  with `acid_rain != 0` is refused (`coverage.check_acid_rain`; the search's `exp_refused`
-  readers). Owed: FCM.md (the field conditions as the decomp mask).
 - **Battlers vs. party slots.** The decomp keeps a `BattleMon` per battler
   (`BattleContext.battleMons[4]`, built from the party mon by
   `BattleSystem_InitBattleMon`, `src/battle/battle_lib.c:70`) and writes HP, PP,
@@ -86,17 +78,27 @@ three structs has a row.
   `curse` (below), Focus Energy -> `focus_energy` (E2 batch 12, B12-4: per battler, set by
   subscript_focus_energy.s:6, ORed in by Psych Up, battle_script.c:6050, cleared by Haze, :3544,
   and with the volatiles; Baton Pass keeps it, condition.h:72). The other bits (Thrash,
-  Transform, Rage, Substitute flag, Nightmare) are later (M6); the Substitute flag is
+  Transform, Rage, Substitute flag) are later (M6); the Substitute flag is
   implied by `substitute_hp > 0`. Torment -> `torment` (E3 batch 1, E3-2-1: per battler `[B]`,
   `VOLATILE_CONDITION_TORMENT` bit 31, set by subscript_torment_start.s:8 with no count, cleared
   with the volatiles; Baton Pass drops it, condition.h:72-76, battle_lib.c:2075; it only blocks
   the slot holding `last_move` at the next move selection, `actions.usable_moves`).
+  Nightmare -> `nightmare` (E1 batch G, G-31..G-33: per battler `[B]`,
+  `VOLATILE_CONDITION_NIGHTMARE` bit 27, condition.h:59, set on a sleeping defender by
+  subscript_nightmare_start.s:9; the turn end, after the burn and before the curse, costs a
+  sleeper `Divide(maxHP, 4)` unless Magic Guard and clears it on a battler not asleep,
+  bcp.c:1436-1448; every wake-up, Chesto / Lum, Shed Skin, Hydration, Insomnia / Vital Spirit,
+  Heal Bell / Aromatherapy and a bag sleep cure clear it (`effects.clear_nightmare`); cleared
+  with the volatiles, not Baton-passed, condition.h:72-76, not copied by Transform).
 - **moveEffectsMask** bits mapped: Leech Seed -> `leech_seed`, Leech Seed recipient -> `leech_seed_recipient` (`1 + battler`, the battler that used the move, MOVE_EFFECT_LEECH_SEED_RECIPIENT, moves.h:8-10; D3-11b), Water Sport ->
   `water_sport`, Mud Sport -> `mud_sport`, Aqua Ring -> `aqua_ring` (per battler, cleared on switch-out; the
   Electric power halving reads every active battler, `battle_lib.c:6812`), Ingrain -> `ingrain`,
   Imprison -> `imprison` (its user) and Imprisoned -> `imprisoned` (its foes) (E2 batch 7, per
   battler, cleared with the volatiles; Baton Pass keeps Ingrain only, moves.h:46-48), Perish
-  Song, Yawn and Lock-On (below). Camouflage's bit is read off `types` (`effects.camouflaged`).
+  Song, Yawn and Lock-On (below). Camouflage -> `camouflage` (E1 batch G, G-20: per battler, set
+  by a Camouflage that changed the types, effect_script_0213.s:6; not copied by Transform, which
+  copies the BattleMon up to `ability`, battle_script.c:5346-5348; cleared by a switch or a faint,
+  battle_lib.c:2071, :2166, and not Baton-passed, moves.h:46-48).
   Roar's Ingrain test compares the whole mask (`effects.ingrain_anchors`, the kept bits in
   `effects.MOVE_EFFECT_MASK_FIELDS`). The semi-invulnerable bits (AIRBORNE, UNDERGROUND,
   UNDERWATER, SHADOW_FORCE) -> `semi_invulnerable`, one `ids.SemiKind` (E2 batch 10, B10-12).
@@ -118,21 +120,50 @@ three structs has a row.
   battle_lib.c:3088-3093, and by the AI's LoadBattlerAbility / CheckBattlerAbility,
   trainer_ai.c:1177-1178, :1221-1222). Gastro Acid (E3-2-6, `effects._gastro_acid`) sets it
   (subscript_suppress_target_ability.s:10); it is in `effects.MOVE_EFFECT_MASK_FIELDS`, so a
-  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). The rest
-  (Charge, Grudge, Miracle Eye, Heal Block) are later (M6).
-- **fieldConditionsMask**: the weather bits (temporary vs. permanent rain, sand,
-  sun, hail, plus deep fog) -> `weather` with `weather_timer == 0` meaning
-  permanent; Trick Room turns -> `trick_room`; Gravity turns -> `gravity`. The
-  Uproar battler mask (`FIELD_CONDITION_UPROAR`, one bit per battler) is `uproar != 0`: the
-  bit and the battler's Uproar count are set together (subscript_uproar.s:6-11) and cleared
-  together (bcp.c:1525-1535; `UpdateAfterSwitch`, battle_lib.c:2135, and
-  `CleanupFaintedMon`, :2213, with the volatiles).
+  suppressed Ingrain user no longer anchors against Roar (the whole-mask compare, :7). Charge ->
+  `charged_turns` (E3-B2-8: `MoveEffectsData.chargedTurns`, 2 bits, with its `MOVE_EFFECT_CHARGE`
+  bit, set to 2 by subscript_charge.s:5-6, counted down at the turn end, bcp.c:1626-1630; cleared
+  with the volatiles, not Baton-passed, moves.h:46-48; in `effects.MOVE_EFFECT_MASK_FIELDS`;
+  doubles the user's Electric power, battle_lib.c:6690). Grudge -> `grudge` (E3-B2-9: the
+  `MOVE_EFFECT_GRUDGE` bit, set by effect_script_0194.s:6, cleared at the user's next move attempt,
+  bcp.c:2427, and with the volatiles; not Baton-passed, moves.h:46-48; in
+  `effects.MOVE_EFFECT_MASK_FIELDS`; `effects.try_grudge` zeroes a KO-ing attacker's selected slot's
+  PP, battle_script.c:6743-6763). Miracle Eye -> `miracle_eye` (E3-B2-10: the `MOVE_EFFECT_MIRACLE_EYE`
+  bit, moves.h:30, set on the defender by subscript_miracle_eye.s:5 with no failure and no
+  Substitute test; cleared with the volatiles, not Baton-passed, moves.h:46-48; in
+  `effects.MOVE_EFFECT_MASK_FIELDS`; read as `MON_IS_IDENTIFIED`, common.h:48-49: a positive evasion
+  stage counts as 0, bcp.c:2888-2890, and `BasicTypeMulApplies` skips its Dark immunity rows,
+  battle_lib.c:2551-2555). Last Resort -> `last_resort_count` (3 bits, battle_mon.h:27) and
+  `last_resort_moves` (`[B, 4]` move ids, battle_mon.h:50) (E3-B2-11: both per battler,
+  written by `step._use_move` at BeforeMove's tail through `effects.last_resort_update`, battle_lib.c:
+  3443-3459 / bcp.c:3218; zeroed with the volatiles at a switch or faint, battle_lib.c:2100-2104,
+  and not Baton-passed, :2107-2115; zeroed by Transform, battle_script.c:5340, and a Mimic that
+  copies Last Resort, :4514-4516; `effects.last_resort_fails` is BtlCmd_TryLastResort,
+  battle_script.c:7567-7579; the Sketch zeroing, :4876-4878, waits for Sketch). The rest (Heal
+  Block) is later (M6).
+- **fieldConditionsMask -> `field_mask`** (int32, `_FIELD`, one per battle: BattleContext state,
+  doubles-state-design section 5 convention 2): `BattleContext.fieldConditionsMask`
+  (battle_context.h:210) bit for bit, bits condition.h:110-149 (`ids.FieldCondition`): the
+  weather bits 0-7 (TEMP / PERM of rain, sand, sun, hail) and deep fog 15, the Uproar bits 8-11
+  (bit `8 + b` of battler `b`), the Gravity counter 12-14 and the Trick Room counter 16-18.
+  **`weather_turns`** (int32, `_FIELD`): `FieldConditions.weatherTurns` (battle_context.h:29);
+  stale outside a TEMP-only weather (only the weather moves, effect_script_0115/0136/0137/0164.s
+  :10-14, and the TEMP-only countdown, bcp.c:1121, :1146, :1171, :1196, write it). FCM (FCM.md
+  section 4, steps 1-3): every writer and reader goes through `engine.field` (the reference the
+  same), so a mask with several groups or a borrowed counter (FCM 3.1, Acid Rain) reads as the
+  decomp reads it (FCM 3.2). `uproar[b]` is the battler's VOLATILE_CONDITION_UPROAR count only
+  (the lock, its end check, Metronome): the field's Uproar readers read bits 8-11
+  (`field.uproar_any`). The old `weather`, `weather_timer`, `gravity` and `trick_room` fields
+  are gone (step 3). Defog clears the deep fog bit 15 alone (subscript_defog.s:64-65,
+  `effects._defog`, E3-B2-14).
 - **sideConditionsMask**: Stealth Rock -> `stealth_rock`, Tailwind turns ->
-  `tailwind`, Lucky Chant turns -> `lucky_chant`, Future Sight -> `future_sight` (E2 batch 5:
+  `tailwind`, Lucky Chant turns -> `lucky_chant` (the 3-bit counter at bits 12-14, set to 5 by
+  `effects._lucky_chant`, subscript_lucky_chant_start.s:5-6, E3-B2-7), Future Sight -> `future_sight` (E2 batch 5:
   per side; set by `BtlCmd_TryFutureSight`, battle_script.c:6070-6072, cleared only when the hit
   fires on a battler with HP, bcp.c:1767-1770, so it outlives a count that ran out on a fainted
   battler; the AI reads it). Its Reflect, Light Screen, Spikes, Safeguard, Mist, Toxic Spikes
-  and Wish bits are implied by the nonzero turn/layer counts in the mapped fields.
+  and Wish bits are implied by the nonzero turn/layer counts in the mapped fields. Defog clears
+  seven of them on its defender's side (`effects._defog`, subscript_defog.s:21-61, E3-B2-14).
 - **FieldConditions.futureSight\*** (E2 batch 5): per battler (`[MAX_BATTLERS]` arrays, the
   battler the move aims at; in singles the side's slot): `future_timer`, `future_damage` (the
   HP the hit takes: the decomp stores it negative), `future_move` and `future_attacker` (the
@@ -141,14 +172,42 @@ three structs has a row.
 - **The field-condition pass** (`step.field_conditions`,
   `BattleControllerPlayer_CheckFieldConditions`, battle_controller_player.c:932-1254)
   counts down `reflect`, `light_screen`, `mist`, `safeguard`, `tailwind`, `lucky_chant`,
-  a temporary weather's `weather_timer` (the weather ends at 0) and `gravity`; a turn
-  count of 0 is the condition's mask bit clear. `wish_timer` (Wish's heal) is not counted
-  down yet. `trick_room` is counted down by the turn end's side-condition pass
-  (`step._trick_room_check`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
+  `weather_turns` once per TEMP-only weather group (the group's TEMP bit clears at 0,
+  `field.weather_state`) and the Gravity bits (`field.gravity_tick`); a turn count of 0 is the
+  condition's mask bit clear. `wish_timer` (Wish's heal) is not counted down yet. The Trick
+  Room bits are counted down by the turn end's side-condition pass (`step._trick_room_check`,
+  `field.trick_room_tick`, bcp.c:1822-1830, E3-2-4; Kaizo re-arms it, `Tables.trick_room_rearm`).
 - **movePrev -> `move_prev`** (E2 batch 5): battle-wide, the last move used in the battle:
   `UpdateMoveBuffers` / `UpdateFlagsWhenHit` (bcp.c:3936-3942, :4499-4508) write moveTemp when
   the attack message showed, else 0, on every acting path (`step._use_move`); Copycat reads it
   (`order.copycat_call`). A field condition, not a battler's: it does not leave with a battler.
+- **moveCopied / moveCopiedHit -> `move_copied` / `move_copied_hit`** (E3-B2-2): per battler `[B]`
+  (the holder) and `[B,B]` (holder, then attacking battler), int16 move ids, 0 = none. Mirror Move
+  (`order.mirror_call`) reads `move_copied[b]`, else in a doubles battle a random nonzero
+  `move_copied_hit[b]` entry (battle_script.c:3483-3503). `UpdateFlagsWhenHit` writes both for the
+  defender when moveTemp has `MoveFlag.MIRROR_MOVE` and the attack message showed
+  (battle_controller_player.c:4480-4486; `step._use_move` computes the write, `step._move_end`
+  applies it after the faint check like `move_hit`). A battler's switch-in or faint clears its own
+  entry and row (`VOLATILE_FIELDS`) and, through `state.clear_copied`, every foe's `move_copied`
+  and every holder's column of it (battle_lib.c:2125-2149, :2203-2220; `step._reset_battler`).
+  Nothing counts them down; Baton Pass clears them too.
+- **turnFlags.magicCoat -> `magic_coat`** (E3-B2-6): per battler `[B]`, int8, `1 + moveSlot` of the
+  Magic Coat user (0 = down). `TrySetMagicCoat` (battle_script.c:6459-6478) sets it
+  (`effects._magic_coat`; it fails when the user acts last, `waitingBattlers == 1`); the first
+  reflectable move aimed at the holder clears it (bcp.c:3071, `step._use_move`) and runs as the
+  holder's own move on the mover in a second pass (`step._execute_actions`' `_REFLECT` phase,
+  `MODE_REFLECT`). It is a turn flag: cleared at the holder's faint (`VOLATILE_FIELDS`) and at the
+  end of the turn's actions (`SetupNextTurn`, battle_lib.c:2231); kept at a pivot's pause.
+- **conversion2Move / conversion2Battler / conversion2Type -> `conv2_move` / `conv2_battler` /
+  `conv2_type`** (E3-B2-3): per battler `[B]` (the defender), int16 move id (0 = none), int8
+  `1 + attacking battler` (0 = none) and int8 type id. `UpdateFlagsWhenHit` writes them for the
+  defender of every move (battle_controller_player.c:4509-4533): moveCur (the called move), the
+  attacker and `CalcCurrentMoveType` where the move succeeded without `MOVE_STATUS_NO_EFFECTS` and
+  its range is not user / user side / field / opponent side / ally / user-or-ally, else clears all
+  three (`step._use_move` computes the write, `step._move_end` applies it after the faint check like
+  `move_hit`). `ClearFlags` clears the actor's own `conv2_move` at its MoveEnd (:4390). A battler's
+  switch-in or faint clears its own three (battle_lib.c:2131-2133, :2209-2211: `VOLATILE_FIELDS`).
+  Conversion 2 (`effects._conversion_2`) reads them.
 - **moveLockedInto -> `locked_move`**, not `charge_turn`: it holds the move id a
   battler is locked into for its next turn (Bide, Rollout, Uproar, and since E2 batch 10 the
   charge-up moves: subscript_vanish_on_charge_turn.s:10 locks into moveCur, B10-12), and
@@ -171,8 +230,8 @@ three structs has a row.
   four are mapped since E3-2-5, `hooks.move_end_switch_in`);
   `MoveEffectsData.quickClaw` is read by `BtlCmd_TryStealItem`
   (`src/battle/battle_script.c:5114`: Thief and Covet fail against a battler
-  whose Quick Claw activated this turn); `monSpeedValues`, the
-  speeds computed when the turn was ordered, by `BtlCmd_CalcGyroBallPower`
+  whose Quick Claw activated this turn); `monSpeedValues` (mapped since E3-B2-15 to
+  `speed_rec`, below), by `BtlCmd_CalcGyroBallPower`
   (`:7127`); and `moveSketched` by `BtlCmd_TrySketch` (`:4848`). M1 is
   unaffected: no M1 mechanic gains an ability mid-battle, Quick Claw's
   activation is `qc_roll` (below; the flag `claw_flag` carries its animation and the
@@ -183,7 +242,7 @@ three structs has a row.
   battler: Trace (`hooks.trace`, battle_lib.c:3718-3737) writes the active battler's
   `ability`, `step._restore_ability` puts the party's back when it leaves (as
   `BattleSystem_InitBattleMon` re-reads it, battle_lib.c:124), and `damage.decomp_abilities`
-  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
+  gives a Trace holder that traced the copied ability's decomp id (`ids.ABILITY_DECOMP_IDS`). Role Play (E3-B2-5) writes the user's `ability` = the target's the same way (and its `truant`; no announced flag, so the move-end switch-in pass acts for the copied entry ability); Worry Seed (E3-2-2) writes `ability` = Insomnia the same way; `decomp_abilities` now reads the written ability whenever `ability` differs from the personal row's.
   `traceAnnounced`, `weatherAbilityAnnounced`, `intimidateAnnounced` and `downloadAnnounced` are
   the per-battler fields `trace_announced`, `weather_announced`, `intimidate_announced` and
   `download_announced` since E3-2-5 (Skill Swap gives a battler an ability mid-battle): cleared
@@ -275,11 +334,11 @@ three structs has a row.
   start, cleared by the send-in (script.c:2511-2512), plus an "active none" value
   (selectedPartySlot 6, bcp.c:4111) so a revived slot's party HP is not read as the masked
   battler's.
-- **`learn_pin` at B = 4** (D3-12, owed from D3-8b): two base-5 digits, battler 0's (`% 5`) and
-  battler 2's (`// 5`; DOUBLES and TWO_TRAINERS), each 0 or 1 + the move slot the battler
-  selected; set when a payout levels its active before its move runs. A level-up of battler 2's
-  active reloads battler 2 (`expBattler = 2`, battle_script.c:9716-9720, :9860-9864). B = 2: the
-  scalar, unchanged.
+- **Learn prompts at B = 4** (D3-12, finding 8): no pin; the prompt pauses the turn (E3-B2-21,
+  `learn_site`) and a pending FIGHT re-reads its slot on the resume (bcp.c:1889-1895), not one
+  that is MOVE_END (acted, pursued, dragged; `step._execute_actions`' `reread`). A level-up of
+  battler 2's active reloads battler 2 (`expBattler = 2`, battle_script.c:9716-9720, :9860-9864;
+  `levelup._reloaders`).
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's
@@ -300,6 +359,21 @@ three structs has a row.
   sort's result in `ts_order` / `ts_speed_order`, not the bits). `Outcome.resort_tie` (`int8[B, TIE_PAIRS[B]]`, D3-18) is
   the same for the re-sort a Trick Room's MoveEnd runs (row = the Trick Room's battler). All have size 0 at B = 2, where
   `speed_tie` / `end_speed_tie` are the bits.
+- **monSpeedValues -> `speed_rec`** (E3-B2-15): `BattleContext.monSpeedValues[battler]` is the
+  speed `BattleSystem_CompareBattlerSpeed` last computed for the battler
+  (`src/battle/battle_lib.c:1372-1373`, `order.effective_speed`), read only by
+  `BtlCmd_CalcGyroBallPower` (`battle_script.c:7123-7131`) and `TrainerAI_CalcDamage`'s Gyro Ball
+  case (`trainer_ai.c:2995-3003`). Per battler (`[B]`), not a volatile: a replacement's slot keeps
+  its predecessor's value, and nothing writes a battler without HP or when it has no live
+  opponent (`:1204-1211`). Written by `order.record_speeds` at the sorts that can be read before
+  the next one: after the battle start's switch-in effects (`battle_controller_player.c:263`,
+  `hooks.battle_start`; a weather war the start leaves open is settled by `step.resolve_war`,
+  which writes again at turn 0), before each action and after the last one of a turn
+  (`BranchActions`, `:888`, `step._execute_actions`). The turn-order sort's own compares
+  (`:773-786`, the Trick Room sort `:3990-3992`) are followed by one of those sorts before any
+  reader and add no state. The trainer AI's compares (`IfSpeedCompareEqualTo`,
+  `trainer_ai.c:1109`) write it inside one decision, which no later decision reads (the next
+  turn's `BranchActions` comes first): `ai.commands.AiContext.written`, not state.
 - **Starf Berry draw -> `starf_roll`** (E1 batch F, F-10): `BattleSystem_TriggerHeldItem`
   (`battle_lib.c:4864-4866`) and `BattleSystem_PluckBerry` (:5805-5810) draw `RandNext() % 5` until
   the stat is below +6. `Outcome.starf[side, k]` holds a draw as one value in [0, 60) (the stat
@@ -312,23 +386,33 @@ three structs has a row.
   `starf_roll` = `STARF_UNDRAWN`: a lead's berry is eaten and its stat waits in **`starf_open`**
   (per battler, no decomp field: the draw the decomp makes there, `battle_lib.c:5273-5294`) for
   the root's draw (`step.root_belief`, `step.sample_root`, `hooks.resolve_starf`).
+  F-O3 (E1 batch G, G-27): each eat draws its own `RandNext() % 5` (lib:4864-4866, :5286-5288,
+  Pluck :5808), so `starf_roll` is per battler `int8[B, 3]`, the turn's queue
+  `Outcome.starf[:, ids.STARF_QUEUE]` (columns 0, 2, 3: first, second, third eat), and
+  **`starf_taken`** (per battler, `int8[B]`, no decomp field: the count of draws the battler's
+  eats made this turn) picks the entry an eat reads, `min(starf_taken, 2)` (`hooks.starf_draw`;
+  `hooks._pinch_effects` adds one per draw, an open battle-start berry takes entry 0). Both
+  0 between turns except a kept replacement draw in entry 0; `step.replace` sets `starf_taken` 0.
 - **BattleSystem.terrain -> `terrain`** (K3b2 Task 9; docs/kaizo/k3b2-rules.md §9, §12):
   not one of the three structs above (`include/struct_defs/battle_system.h:112`), copied
   from the field's `FieldBattleDTO.terrain` once (`src/battle/battle_main.c:1052`) and
   never written in battle. `BattleSystem_GetTerrain` (`src/battle/battle_system.c:375-382`)
   is read by Nature Power, Secret Power and Camouflage (`src/battle/battle_script.c:8007`,
   `:8040`, `:8067`); its other readers are graphics and wild catches. `make_state` takes
-  it from `Trainer.terrain` (`tools/terrain.py`); `TERRAIN_UNKNOWN` (-1) when the trainer's
-  maps give several terrains or none, and coverage then refuses those three effects.
-  Nature Power (`order.called_move`) and Camouflage (`effects._camouflage`) read it through
-  `ids.TERRAIN_MOVES` / `TERRAIN_TYPES` (K3b2 Task 10); an unknown terrain indexes no table
-  (`order.terrain_index`: those readers then do nothing).
+  it from `Trainer.terrain` (`tools/terrain.py`), or for a trainer whose start tiles give
+  several, from the run's `--terrain` (`cli.fight_terrain`, ledger G-18); `TERRAIN_UNKNOWN`
+  (-1) while none is named or no map places the trainer, and coverage then refuses those
+  three effects (G-21).
+  Nature Power (`order.called_move`), Secret Power (`order.move_effects`) and Camouflage
+  (`effects._camouflage`) read it through `ids.TERRAIN_MOVES` / `SECRET_POWER_EFFECTS` /
+  `TERRAIN_TYPES` (`order.terrain_index`, the decomp's clamp to `TERRAIN_SPECIAL`).
 - **BattleMon.type1/type2 -> `types`**: per party slot, from the personal row; written for
   the active battler by Camouflage (`BtlCmd_TryCamouflage`, `battle_script.c:7997-8022`)
   and restored from the personal row when the battler leaves (a switch, a faint,
   `step._restore_types`), as `BattleSystem_InitBattleMon` re-reads the party's types on the
-  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` stays
-  later: only the AI's own Camouflage scoring reads it (`script.s:1023`).
+  next switch-in (`battle_lib.c:114-115`). The Camouflage bit of `moveEffectsMask` is
+  `camouflage` (G-20; read by the AI's `Basic_CheckCamouflage`, `script.s:1023`, and Roar's
+  Ingrain test).
 - **moveCur / msgMoveTemp** (Nature Power's call) stay per-action scratch: `step._use_move`
   recomputes the called move (`order.called_move`) from the chosen move and the terrain.
 - **battleEndFlag -> `over`, `winner`**: `winner` is 0 none, 1 player lost (no
@@ -358,6 +442,9 @@ three structs has a row.
   party's move and PP in `shadow_moves` / `shadow_pp`; `BattleMon_CopyToParty` skips flagged slots
   (its `BtlIOCmd_UpdatePartyMon`, battle_io_command.c:581-587), a level-up's learn writes the shadow, and
   leaving (`step._restore_moves`) puts the party's back (`InitBattleMon`, battle_lib.c:80-85).
+  Spite (E3-B2-4, `effects._spite`) takes `min(4, ppCur)` from the BattleMon's slot of the target's
+  `last_move` (BtlCmd_TrySpite, battle_script.c:4990-5016): it writes `pp` only, so a Mimic slot's
+  `shadow_pp` stays (`BattleMon_CopyToParty` skips it).
 - **aiContext**: `battlerMoves` (moves the AI has seen, as move ids in first-free order,
   `TrainerAI_RecordLastMove`, trainer_ai.c:2705-2716) -> `ai_seen_moves`,
   `battlerHeldItems` (the player's held items a message named, E2 batch 7) -> `ai_item_known`
@@ -403,6 +490,17 @@ three structs has a row.
     writes both (`engine.bag.use_bag_item`); every switch-in (`step._switch_in`, battle_lib.c:136),
     a level-up and Shaymin-Sky's revert (`BattleSystem_ReloadPokemon`, :179) copy it into
     `friendship`. It is the value a save returns for the player's Pokemon.
+  - `party_ability` (F-O2, per party Pokemon like `party_friendship`): the ability a script wrote into
+    the party Pokemon in battle (MON_DATA_ABILITY written in battle, `BtlIOCmd_UpdatePartyMon`,
+    battle_io_command.c:601-604); 0 (`UNSUPPORTED`) = none, the personal row's. Only `hooks.shaymin_land`
+    on a Transformed battler writes it (Land's ability: the revert's `UpdateMonDataFromVar` sends the
+    BattleMon's ability to the Transform user's OWN party Pokemon, battle_script.c:3401-3407,
+    battle_controller.c:1496-1499); `step._restore_ability` puts it back into `ability` when that
+    Pokemon leaves (`BattleSystem_InitBattleMon`, battle_lib.c:124), so every later read of the bench
+    slot (`damage.decomp_abilities`, the AI's, Natural Cure, Heal Bell) sees it through `ability`. The
+    same write sets the party's form 0 and recalculated stats: `shadow_form` / `shadow_stats` /
+    `max_hp` / `hp` (`hooks.own_stats`). A state built with `party_ability` set must set `ability`
+    to match (a run planner carrying the override forward does both).
   - `form` (F-16): a frozen Shaymin-Sky's form becomes 0 after a hit (`hooks.shaymin_land`;
     `subscript_check_shaymin_form.s`), with `ability`, `ability_slot`, `ability_form`, `types`,
     `stats`, `max_hp` / `hp` and `friendship` rewritten as `BattleSystem_ReloadPokemon` reloads them;
@@ -452,32 +550,30 @@ three structs has a row.
     at once (`BattleMon_CopyToParty`, battle_lib.c:1819-1823). 0 when no bit covers the slot.
   - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
     next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
-    level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
-    payout reached its active before its move ran) and `exp_refused` (a sticky refusal
-    code) are the engine's own bookkeeping. All four are 0 until the payout and the learn
-    resolve set them.
-  - The search masks some learn-move options (ruling D2, and `learn_pin`, ruling U1):
-    replacing the active learner's disabled or encored move, or the slot pinned by
-    `learn_pin` (the decomp ends Disable and Encore at the turn end, and re-reads the pinned slot
-    when its move runs, after any learn of the turn; none of these masks once the battle is over,
-    bcp.c:3965-3969; the locked and choice-locked moves are read by id and stay offered;
-    `levelup` module docstring), and every replacement when the offered move's effect is
-    unsupported (ruling D10; coverage then refuses it only where it could auto-learn into an
-    empty slot, `coverage.learnable_moves`). They are legal game choices the search skips, so plan
-    values at learn nodes are achievable lower bounds (`levelup.learn_options`; the playout
-    always gives the move up, ruling D3). The scan, auto-learns and prompts run after `step`,
-    before any faint replacement (`levelup.advance_learns` / `learn`,
-    `search.learn.resolve_learns`); prompts pending when the battle ends stay (ruling D8).
-  - Known limitation (T8 review M1): Stage B's learn node comes after the whole turn's
-    outcome (`expand._turn`), but the decomp can prompt mid-turn, at a payout in `MoveEnd`
-    (battle_controller_player.c:3968), `CheckFieldConditions` (:941) or `CheckMonConditions`
-    (:1296), before a later draw of the same turn such as Shed Skin's
-    (`BattleSystem_RandNext(battleSys) % 10 < 3`, battle_lib.c:3567-3570, run from
-    `MON_COND_CHECK_STATE_ABILITY`, battle_controller_player.c:1354-1355). The search then
-    picks the answer knowing that draw, which the player cannot, so in that case the learn
-    node's value is possibly optimistic: it may exceed what the player can achieve. It
-    needs a chance event after a mid-turn payout in the same turn; the replayed state
-    stays exact, only the choice is better informed than the player's.
+    level, battle_script.c:9882). Both are 0 until the payout and the learn resolve set them
+    (the selected-slot pin and the window (c) refusal code are removed: review b2 #6, below).
+  - **Mid-turn learn prompts (E3-B2-21).** The payout runs the whole `GetExpTask`, every level's
+    learnset scan and prompt included, inside itself, so the prompt comes before any later
+    action or draw of the turn: at `MoveEnd` (`AnyExpPayout`, battle_controller_player.c:3968,
+    before the tail `TriggerEffectOnSwitch` at :3973), in `CheckFieldConditions` (:941, the
+    weather faints), in `CheckMonConditions` (:1296, a battler's end-of-turn block) and at the
+    `TurnEnd` payout (:1846, before `ReplaceFainted`, :1848). `step` pauses at the prompt:
+    `learn_site` (per field, 0 none, 1 `LEARN_MOVE_END`, 2 `LEARN_FIELD`, 3 `LEARN_MON`) and
+    the turn scratch (`ts_ran`: the MoveEnd `clear`; `ts_move_cur`: each battler's `moveCur`;
+    `ts_eot`: the turn end's order, fixed at the last `BranchActions`, :888-891; `ts_qc`: the
+    turn's speedRand draw, :853-857, which every stop, a party list's included, keeps for the
+    resume's re-sorts and turn end, `step._turn_outcome`) hold the turn, and the answered state resumes it through the
+    same `step` (`levelup.learn_prompt`, `levelup.learn`). A pending action re-reads its move
+    slot (`FightCommand`, :1889-1895), so the learner's replaced slot runs the new move. The
+    answer is a request `(state, option)` of `search.expand.expand`; a playout gives the
+    move up at the pause (`resolve_learns`, ruling D3). A payout that ends the battle leaves
+    its prompts (ruling D8: `over`).
+  - The search masks only the HM slots and, when the offered move's effect is unsupported,
+    every replacement (ruling D10; coverage then refuses it only where it could auto-learn
+    into an empty slot, `coverage.learnable_moves`). The D2 masks (Disable, Encore) and the
+    selected-slot pin are gone: the prompt is answered at the payout, before the turn end
+    that ends them and before the slot is read again. They are legal game choices the search
+    skips, so plan values at learn nodes are achievable lower bounds (`levelup.learn_options`).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are
   `BattleState`'s own bookkeeping: the decomp derives Pursuit's pre-switch hit
   from per-turn scratch (the opposing battler's selected move when a switch is
@@ -501,18 +597,23 @@ three structs has a row.
   6092-6094) and Beat Up (:6214-6216), cleared by `CleanupFaintedMon` (battle_lib.c:2190-2193)
   and the turn's end (D3 fix B); `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
   battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
-  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `focusItemActivated` and
+  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `ts_grudge`: per battler, the battler fainted in the paused
+  action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
+  U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs
+  TryGrudge on the newcomer (review b2 #5); `focusItemActivated` and
   `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`);
   `lightningRodActivated` / `stormDrainActivated` are `_use_move`'s local `redirected`; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
   turn and `step` resolves a whole turn: `protecting` is the first actor's `protect_ok` event,
-  read by the second actor in `step._execute_actions`), the per-battler `moveFailFlags`
+  read by the second actor in `step._execute_actions`; a Feint that hits clears it,
+  subscript_feint.s:20, E3-B2-13: `step._execute_actions` zeroes the defender's `protect_ok` read), the per-battler `moveFailFlags`
   (`ts_move_failed`), the paused action's `moveCur` and its defender's damage taken (`ts_used`,
   `ts_damaged`, `ts_dealt`), `moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE` (`ts_se`: the paused or
   chased action's only; the U-turn's, or the last Pursuit's, lib.c:3359, script.c:6964-6973; the tail's
   Enigma Berry reads it with `ts_sub_hit`, battle_lib.c:5378, :5421-5428), the per-side bitmask of the faints handled (`ts_alive`), `powerMul`
   at the list (`ts_pick_mul`) and the search's turn-start reads (`ts_power_mul`,
-  `ts_switched`). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
+  `ts_switched`; E3-B2-21: `ts_ran`, `ts_move_cur`, `ts_eot`, `ts_qc`, with `learn_site` the
+  learn pause above). All are 0 between turns (`engine.state` docstring): `turnOrderCounter`,
   `battlerActionOrder` and `battlerActions` (the actions as chosen, and the MOVE_END writes of a
   Pursuit, `ts_pursued` (bitmask, bit b = battler b's PICK_COMMAND set MOVE_END by TryPursuit (script.c:6931), written `|= 1 << pursuer` by both engines; BtlCmd_TryPursuit's loop, battle_script.c:6884-6935 with subscript_pursuit.s:82, lets several battlers chase one switch), and of UpdateAfterSwitch for a Pokemon Roar drags in, `ts_dragged`, which
   skip their actions in `step._execute_actions`) are kept only at such a pause.
@@ -569,7 +670,7 @@ three structs has a row.
 | `BattleMon.formNum` | `form`, `shadow_form` | mapped |
 | `BattleMon.isShiny` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.padding0026_06` | — | not needed because it is padding |
-| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form` | mapped |
+| `BattleMon.ability` | `ability`, `ability_slot`, `ability_form`, `party_ability` | mapped |
 | `BattleMon.weatherAbilityAnnounced` | `weather_announced` | mapped |
 | `BattleMon.intimidateAnnounced` | `intimidate_announced` | mapped |
 | `BattleMon.traceAnnounced` | `trace_announced` | mapped |
@@ -593,7 +694,7 @@ three structs has a row.
 | `BattleMon.exp` | `exp` | mapped |
 | `BattleMon.personality` | — | not needed because its battle uses (nature, ability slot, gender) are resolved into `PokemonSpec` before `make_state` |
 | `BattleMon.status` | `status`, `status_counter` | mapped |
-| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
+| `BattleMon.statusVolatile` | `confusion`, `flinched`, `trapped`, `recharge`, `foresight`, `bide_turns`, `curled`, `locked_move`, `infatuated`, `destiny_bond`, `uproar`, `curse`, `nightmare`, `mean_look`, `focus_energy`, `torment`, `transformed` | mapped |
 | `BattleMon.OTId` | — | not needed because only obedience and the traded-Pokemon exp bonus read it; the tool assumes an obedient party and resolves the exp bonus into `exp_boost` before `make_state` |
 | `BattleMon.heldItem` | `item` | mapped |
 | `BattleMon.padding007A` | — | not needed because it is padding |
@@ -602,7 +703,7 @@ three structs has a row.
 | `BattleMon.gender` | `gender` | mapped |
 | `BattleMon.OTGender` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
 | `BattleMon.capturedBall` | — | not needed because it is cosmetic (names, messages, sprites, animation) |
-| `BattleMon.moveEffectsMask` | `leech_seed`, `leech_seed_recipient`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed` | mapped |
+| `BattleMon.moveEffectsMask` | `leech_seed`, `leech_seed_recipient`, `water_sport`, `mud_sport`, `aqua_ring`, `perish_song`, `yawn`, `lock_on`, `ingrain`, `imprison`, `imprisoned`, `minimized`, `semi_invulnerable`, `power_trick`, `power_trick_desync`, `magnet_rise`, `ability_suppressed`, `charged_turns`, `grudge`, `miracle_eye`, `camouflage` | mapped |
 | `BattleMon.moveEffectsTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleMon.moveEffectsData` | `taunt`, `protect_count`, `rollout_count`, `recharge`, `substitute_hp`, `trap_move`, `choice_lock` | mapped |
 
@@ -612,7 +713,7 @@ three structs has a row.
 |---|---|---|
 | `MoveEffectsData.disabledTurns` | `disable_turns` | mapped |
 | `MoveEffectsData.encoredTurns` | `encore_turns` | mapped |
-| `MoveEffectsData.chargedTurns` | — | later (M6) |
+| `MoveEffectsData.chargedTurns` | `charged_turns` | mapped |
 | `MoveEffectsData.tauntedTurns` | `taunt` | mapped |
 | `MoveEffectsData.protectSuccessTurns` | `protect_count` | mapped |
 | `MoveEffectsData.perishSongTurns` | `perish_song_turns` | mapped |
@@ -627,7 +728,7 @@ three structs has a row.
 | `MoveEffectsData.mimickedMoveSlot` | `mimic_slots` | mapped |
 | `MoveEffectsData.bindTarget` | — | not needed because in singles the binder is always the opposing active Pokemon |
 | `MoveEffectsData.meanLookTarget` | `mean_look_target` | mapped |
-| `MoveEffectsData.lastResortCount` | — | later (M6) |
+| `MoveEffectsData.lastResortCount` | `last_resort_count` | mapped |
 | `MoveEffectsData.magnetRiseTurns` | — | later (M6) |
 | `MoveEffectsData.healBlockTurns` | — | later (M6) |
 | `MoveEffectsData.embargoTurns` | `embargo` | mapped |
@@ -648,7 +749,7 @@ three structs has a row.
 | `MoveEffectsData.bindingMove` | `trap_move` | mapped |
 | `MoveEffectsData.encoredMove` | `encore_move` | mapped |
 | `MoveEffectsData.encoredMoveSlot` | `encore_slot` | mapped |
-| `MoveEffectsData.lastResortMoves` | — | later (M6) |
+| `MoveEffectsData.lastResortMoves` | `last_resort_moves` | mapped |
 | `MoveEffectsData.choiceLockedMove` | `choice_lock` | mapped |
 | `MoveEffectsData.transformedGender` | — | not needed because it is cosmetic (sprites and messages): Attract, Captivate and Rivalry keep the user's own `gender` (battle_script.c:5337-5338) |
 | `MoveEffectsData.itemHPRecovery` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -677,7 +778,7 @@ three structs has a row.
 
 | Struct.field | pytree field | status |
 |---|---|---|
-| `FieldConditions.weatherTurns` | `weather_timer` | mapped |
+| `FieldConditions.weatherTurns` | `weather_turns` | mapped |
 | `FieldConditions.futureSightTurns` | `future_timer` | mapped |
 | `FieldConditions.wishTurns` | `wish_timer` | mapped |
 | `FieldConditions.futureSightMove` | `future_move` | mapped |
@@ -722,7 +823,7 @@ three structs has a row.
 | `BattleContext.switchedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.switchedMonTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.abilityMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.magicCoatMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.magicCoatMon` | — | not needed because it is per-action scratch: `step._execute_actions`' reflect phase (E3-B2-6) knows the reflected move's user as the actor whose pass it resumes |
 | `BattleContext.sideEffectType` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectParam` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.sideEffectFlags` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -758,17 +859,17 @@ three structs has a row.
 | `BattleContext.meFirstTurnOrder` | — | not needed because it is `turn` + 1 (lib.c:2028 starts it at 1, bcp.c:1853 adds 1 at each TurnEnd with `totalTurns`): `damage.me_first_active` reads it so |
 | `BattleContext.taskData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.tmpData` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.fieldConditionsMask` | `weather`, `trick_room`, `gravity`, `uproar`, `acid_rain` | mapped |
-| `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
+| `BattleContext.fieldConditionsMask` | `field_mask` | mapped |
+| `BattleContext.fieldConditions` | `weather_turns`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `ts_helping_hand` | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `magic_coat`, `ts_helping_hand` | mapped |
 | `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.aiScriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.battleStatusMask` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.battleStatusMask` | `ts_grudge` | mapped |
 | `BattleContext.battleStatusMask2` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.damage` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.hitDamage` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -798,7 +899,7 @@ three structs has a row.
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
 | `BattleContext.battlerActionOrder` | `ts_order` | mapped |
 | `BattleContext.monSpeedOrder` | `war_swaps`, `ts_speed_order` | mapped |
-| `BattleContext.monSpeedValues` | — | later (M6) |
+| `BattleContext.monSpeedValues` | `speed_rec` | mapped |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.battleScript` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -812,14 +913,14 @@ three structs has a row.
 | `BattleContext.moveHitBattler` | — | not needed because in singles it is the opposing battler whenever `move_hit` is set: both are written together (battle_controller_player.c:4500-4507), and `ClearFlags` (:4389) clears only `moveHit` |
 | `BattleContext.moveHitType` | — | later (M6) |
 | `BattleContext.movePrevByBattler` | `last_move` | mapped |
-| `BattleContext.moveCopied` | — | later (M6) |
-| `BattleContext.moveCopiedHit` | — | later (M6) |
+| `BattleContext.moveCopied` | `move_copied` | mapped |
+| `BattleContext.moveCopiedHit` | `move_copied_hit` | mapped |
 | `BattleContext.moveSketched` | — | later (M6) |
 | `BattleContext.moveSelected` | — | not needed because it is reset every turn and `step` resolves a whole turn |
 | `BattleContext.moveSlot` | — | not needed because it is reset every turn and `step` resolves a whole turn |
-| `BattleContext.conversion2Move` | — | later (M6) |
-| `BattleContext.conversion2Battler` | — | later (M6) |
-| `BattleContext.conversion2Type` | — | later (M6) |
+| `BattleContext.conversion2Move` | `conv2_move` | mapped |
+| `BattleContext.conversion2Battler` | `conv2_battler` | mapped |
+| `BattleContext.conversion2Type` | `conv2_type` | mapped |
 | `BattleContext.metronomeMove` | `metronome_move` | mapped |
 | `BattleContext.storedDamage` | `bide_damage` | mapped |
 | `BattleContext.lastHitByBattler` | `last_hit_by` | mapped |
@@ -828,8 +929,8 @@ three structs has a row.
 | `BattleContext.levelUpMons` | — | not needed because only the battle's end reads it (`BattleMain_CopyBattleSysToDTOAndFree`, battle_main.c:723, for evolution), after the fight being searched |
 | `BattleContext.padding310A` | — | not needed because it is padding |
 | `BattleContext.speedRand` | `qc_roll` | mapped |
-| `BattleContext.flingTemp` | — | later (M6) |
-| `BattleContext.flingScript` | — | later (M6) |
+| `BattleContext.flingTemp` | — | not needed because Fling's flung item (`_Hit.fling_item`) and its script run inside the one hit (`effects._fling`, `hooks.fling_effect`, E3-B2-1) and nothing reads it after |
+| `BattleContext.flingScript` | — | not needed because the item's script is chosen from `tables.item_fling_effect` inside the hit (`effects._fling`, E3-B2-1) and nothing reads it after |
 | `BattleContext.safariCatchStage` | — | not needed because trainer battles have no Safari Zone |
 | `BattleContext.safariEscapeCount` | — | not needed because trainer battles have no Safari Zone |
 | `BattleContext.runAttempts` | — | not needed because the player cannot flee a trainer battle |

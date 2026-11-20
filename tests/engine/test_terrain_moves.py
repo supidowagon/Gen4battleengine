@@ -22,6 +22,7 @@ Decomp (external/pokeplatinum):
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from pathlib import Path
@@ -31,8 +32,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.coverage import terrain_call, terrain_refusal
+from nuzline.data.trainer import TERRAIN_NAMES
+from nuzline.engine.coverage import IMPLEMENTED_EFFECTS, Support, terrain_call, terrain_refusal
 from nuzline.engine.enumerate import (
     _LAWS,
     INPUT_CLAUSE_EFFECTS,
@@ -50,6 +51,7 @@ from nuzline.engine.ids import (
     AbilityId,
     EffectId,
     MoveFlag,
+    Stat,
     Status,
     Type,
 )
@@ -60,10 +62,13 @@ from nuzline.engine.state import make_state
 from nuzline.engine.step import ACT_MOVE, ACT_TAUNTED, replace, step_events
 from tests.engine.helpers import A, as_species, assert_matches_reference, jit_step, roark_state
 from tests.engine.test_enumerate import _kaizo_spec, assert_equals_bruteforce, laws_of
+from tests.engine.test_pivot import _mon, _resume
 from tools.effect_map import DECOMP_EFFECT_TO_ID
 
 DECOMP = Path("external/pokeplatinum")
-NP, CAMO, TRI = "Nature Power", "Camouflage", "Tri Attack"
+NP, CAMO, TRI, SP = "Nature Power", "Camouflage", "Tri Attack", "Secret Power"
+SNOW = TERRAIN_NAMES.index("TERRAIN_SNOW")
+BRIDGE = TERRAIN_NAMES.index("TERRAIN_BRIDGE")
 BUILDING = TERRAIN_NAMES.index("TERRAIN_BUILDING")
 GRASS = TERRAIN_NAMES.index("TERRAIN_GRASS")
 MOUNTAIN = TERRAIN_NAMES.index("TERRAIN_MOUNTAIN")
@@ -324,17 +329,6 @@ def test_other_terrains_call_their_move(tables, names):
     assert int(out.hp[1, 0]) < int(s.hp[1, 0])
 
 
-def test_unknown_terrain_never_indexes_a_table(tables, names):
-    # TERRAIN_UNKNOWN (-1): the guard calls MOVE_NONE (no -1 index into sTerrainMove, whose
-    # last row a -1 would read in JAX); coverage and trace_to_state refuse such a fight.
-    s = _state(tables, names, player=(NP, CAMO), terrain=TERRAIN_UNKNOWN)
-    assert int(called_move(tables, s, names.move(NP))) == 0
-    out = assert_matches_reference(tables, s, A(NP, "Tackle", s, names), _o())
-    assert int(out.hp[1, 0]) == int(s.hp[1, 0])
-    out = assert_matches_reference(tables, s, A(CAMO, "Tackle", s, names), _o())
-    assert _types(out, 0) == _types(s, 0)
-
-
 # --- Tri Attack's status ---------------------------------------------------------------------
 
 
@@ -396,6 +390,8 @@ def test_camouflage_writes_the_terrain_type_and_fails_on_a_match(tables, names):
     assert Type.NORMAL not in _types(s, 0)
     out = assert_matches_reference(tables, s, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == [Type.NORMAL, Type.NORMAL]
+    # effect_script_0213.s:6: the user's MOVE_EFFECT_CAMOUFLAGE on success (G-20).
+    assert np.asarray(out.camouflage).tolist() == [1, 0]
     grass = _state(tables, names, player=(CAMO,), opp=("Leer",), terrain=GRASS)
     out = assert_matches_reference(tables, grass, A(CAMO, "Leer", grass, names), _o())
     assert _types(out, 0) == [Type.GRASS, Type.GRASS]
@@ -405,6 +401,7 @@ def test_camouflage_writes_the_terrain_type_and_fails_on_a_match(tables, names):
     )
     out = assert_matches_reference(tables, half, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == [Type.FIRE, Type.NORMAL]
+    assert int(out.camouflage[0]) == 0  # TryCamouflage _016 jumps past :6
 
 
 def test_camouflage_fails_for_multitype(tables, names):
@@ -414,7 +411,7 @@ def test_camouflage_fails_for_multitype(tables, names):
     arceus = names.species("Arceus")
     s = as_species(tables, s, 0, 0, arceus)
     out = assert_matches_reference(tables, s, A(CAMO, "Leer", s, names), _o())
-    assert _types(out, 0) == _types(s, 0)
+    assert _types(out, 0) == _types(s, 0) and int(out.camouflage[0]) == 0
     plain = as_species(tables, s, 0, 0, names.species("Kecleon"))
     out = assert_matches_reference(tables, plain, A(CAMO, "Leer", s, names), _o())
     assert _types(out, 0) == [Type.GRASS, Type.GRASS]
@@ -424,14 +421,16 @@ def test_camouflage_types_are_restored_on_leave(tables, names):
     s = _state(tables, names, player=(CAMO,), opp=("Leer",))
     party = _types(s, 0)
     camo = assert_matches_reference(tables, s, A(CAMO, "Leer", s, names), _o())
-    assert _types(camo, 0) == [Type.NORMAL, Type.NORMAL]
-    # A switch out restores them.
+    assert _types(camo, 0) == [Type.NORMAL, Type.NORMAL] and int(camo.camouflage[0]) == 1
+    # A switch out restores them and clears the bit (battle_lib.c:2071).
     out = assert_matches_reference(tables, camo, A(5, "Leer", camo, names), _o())
-    assert [int(t) for t in out.types[0, 0]] == party
-    # A faint restores them (the foe's KO): the fainted battler's party types.
+    assert [int(t) for t in out.types[0, 0]] == party and int(out.camouflage[0]) == 0
+    # A faint restores them (the foe's KO): the fainted battler's party types; the bit goes
+    # with the mask (battle_lib.c:2166).
     weak = camo.replace_hp(0, 0, 1)
     out = assert_matches_reference(tables, weak, A(CAMO, "Tackle", weak, names), _o(side=1))
     assert int(out.hp[0, 0]) == 0 and [int(t) for t in out.types[0, 0]] == party
+    assert int(out.camouflage[0]) == 0
     # The replacement path (step.replace) restores nothing more: still the party types.
     back = replace(tables, out, 0, 1)
     assert [int(t) for t in back.types[0, 0]] == party
@@ -602,16 +601,74 @@ def test_kaizo_nature_power_on_roarks_terrain(kaizo_tables, kaizo_names, kaizo_r
 # --- coverage ----------------------------------------------------------------------------------
 
 
-def test_coverage_refuses_an_unsupported_call(tables, names, trainers):
-    """Nature Power is refused where its terrain's call has an unsupported effect. Earthquake
-    (TERRAIN_PLAIN's call) is supported since E2 batch 4 (B4-8), so the branch is shown with its
-    effect made unsupported."""
+def test_every_call_is_modelled_and_a_named_terrain_refuses_nothing(
+    tables, names, kaizo_tables, trainers
+):
+    """G-21: the thirteen sTerrainMove calls have modelled effects in both games, so with a
+    named terrain the terrain moves are never refused (the refusal is ruling 1's unnamed one)."""
+    for t in (tables, kaizo_tables):
+        for called in TERRAIN_MOVES:
+            assert IMPLEMENTED_EFFECTS[EffectId(int(t.move_effect[called]))] != Support.NONE
     roark = next(t for t in trainers if t.id == ROARK)
-    assert terrain_refusal(tables, names, roark, [names.move(NP)]) is None
-    plain = roark.__class__(**{**roark.__dict__, "terrain": TERRAIN_NAMES.index("TERRAIN_PLAIN")})
-    assert terrain_refusal(tables, names, plain, [names.move(NP), names.move(CAMO)]) is None
-    quake = names.move("Earthquake")
-    gone = tables._replace(move_effect=tables.move_effect.at[quake].set(EffectId.UNSUPPORTED))
-    line = terrain_refusal(gone, names, plain, [names.move(NP), names.move(CAMO)])
-    assert line is not None and "Earthquake" in line
-    assert terrain_refusal(gone, names, plain, [names.move(CAMO)]) is None
+    readers = [names.move(m) for m in (NP, SP, CAMO)]
+    for terrain in range(len(TERRAIN_NAMES)):
+        named = dataclasses.replace(roark, terrain=terrain)
+        assert terrain_refusal(tables, names, named, readers) is None
+
+
+# --- E1 batch G: Secret Power, the Camouflage bit (G-20, G-22) ---------------------------------
+
+
+def test_secret_power_on_snow_freezes_but_not_through_a_substitute(tables, names):
+    """GetTerrainSecondaryEffect (battle_script.c:8063-8075): SNOW gives FREEZE, indirect
+    TO_DEFENDER at the move's chance; the plain-flags branch of TriggerSecondaryEffect
+    (battle_lib.c:1570-1587) rolls, then needs HP and no substitute hit (G-22)."""
+    s = _state(tables, names, player=(SP,), opp=("Leer",), order="opp", terrain=SNOW)
+    out = assert_matches_reference(tables, s, A(SP, "Leer", s, names), _o(secondary=1))
+    assert int(out.status[1, 0]) == Status.FREEZE and int(out.hp[1, 0]) < int(s.hp[1, 0])
+    out = assert_matches_reference(tables, s, A(SP, "Leer", s, names), _o(secondary=0))
+    assert int(out.status[1, 0]) == Status.NONE
+    sub = s._replace(substitute_hp=s.substitute_hp.at[1].set(200))
+    out = assert_matches_reference(tables, sub, A(SP, "Leer", s, names), _o(secondary=1))
+    assert int(out.status[1, 0]) == Status.NONE and int(out.hp[1, 0]) == int(s.hp[1, 0])
+
+
+def test_secret_power_on_bridge_lowers_evasion(tables, names):
+    # sTerrainSideEffect[TERRAIN_BRIDGE] = EVASION_DOWN_1_STAGE (to_secondary_effect.h).
+    s = _state(tables, names, player=(SP,), opp=("Leer",), order="opp", terrain=BRIDGE)
+    out = assert_matches_reference(tables, s, A(SP, "Leer", s, names), _o(secondary=1))
+    assert int(out.stages[1, Stat.EVA]) == -1
+
+
+def test_baton_pass_drops_the_camouflage_bit(tables, names):
+    # MOVE_EFFECT_BATON_PASSED (moves.h:46-48) omits MOVE_EFFECT_CAMOUFLAGE (battle_lib.c:2076).
+    s = make_state(
+        tables,
+        [_mon(names, "Ninjask", ["Baton Pass"], 40), _mon(names, "Geodude", ["Tackle"], 30)],
+        [_mon(names, "Bulbasaur", ["Leer"], 20)],
+        terrain=BUILDING,
+    )
+    s = s._replace(camouflage=s.camouflage.at[0].set(1))
+    paused = assert_matches_reference(tables, s, (0, 0), empty_outcome())
+    assert int(paused.camouflage[0]) == 1
+    assert int(_resume(tables, paused, 1).camouflage[0]) == 0
+
+
+def test_transform_copies_the_types_but_not_the_bit(tables, names):
+    # BtlCmd_Transform copies the BattleMon up to ``ability`` (battle_script.c:5346-5348);
+    # moveEffectsMask lies after it (battle_mon.h:127): the copier is not camouflaged.
+    s = make_state(
+        tables,
+        [_mon(names, "Ditto", ["Transform"], 50)],
+        [_mon(names, "Kecleon", ["Leer"], 20)],
+        terrain=GRASS,
+    )
+    grass = jnp.asarray([Type.GRASS] * 2, s.types.dtype)
+    s = s._replace(
+        types=s.types.at[1, 0].set(grass),
+        camouflage=s.camouflage.at[1].set(1),
+        stats=s.stats.at[0, 0, _SPE].set(500),
+    )
+    out = assert_matches_reference(tables, s, (0, 0), empty_outcome())
+    assert int(out.transformed[0]) == 1 and _types(out, 0) == [Type.GRASS, Type.GRASS]
+    assert np.asarray(out.camouflage).tolist() == [0, 1]

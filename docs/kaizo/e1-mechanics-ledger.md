@@ -1238,7 +1238,7 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   can reach the untyped state (Cloud Nine / Air Lock on the player's side reaches it under any weather). A player's own
   Weather Ball reaches it through the switch AI (`ai/replacement.py:142`) in any battle. Trigger: a real-game check
   (memory dump per caller) when the user next does real-game checks.
-- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch.** Ruling
+- **F-O2 A Transform user facing a Sky Shaymin (F-26) stays refused; first group of E1's next batch (closed: G-1).** Ruling
   (manager, merge gate of batch F): kept as ordinary backlog in this batch, built as the next batch's first group. The
   decomp path: a frozen Transformed copy passes `subscript_check_shaymin_form.s:5-9` (species 492, form not 0, no
   Substitute, Freeze); :10 sets the form to 0; :12-19 load Land's ability by the copy's own personality bit 0; :22-23
@@ -1260,17 +1260,18 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   `step._action_phase`), so a holder that eats at its pinch and then U-turns / Baton Passes into a second holder that
   eats on entry (the same `BattleSystem_TriggerHeldItem` path, :5273-5294) repeats the first rank, as F-10's Recycled
   berry eaten twice. Needs a third draw column (`starf[side, 2]`) for the pivot newcomer's check with its own law in
-  `enumerate._starf_reads`. Not built in this fix round.
+  `enumerate._starf_reads`. Not built in this fix round. (Modelled in batch G: G-27..G-30.)
 - **F-O4 The AI's absorb switch under its shared gate draw, and Water / Volt Absorb on its bench.**
   `AI_HasAbsorbAbilityInParty` (trainer_ai.c:3640) draws one `RandNext() % 3` when the AI has a super-effective move
   and returns FALSE unless it is 0 (:3651), and only then the bench's `RandNext() & 1` draws (:3706): one sequence the
   independent switch sites cannot express, refused (`switching._Layout.absorb_gate`, raises). The same function's
   Water (:3668-3669) and Electric (:3670-3671) cases are refused outright (`switching._AI_SIDE_ABILITIES`). Both
   raise; to build: the gate as a conditioning draw of the absorb sites, and `checkAbility` by `moveHit`'s type for the
-  bench test.
+  bench test. (Closed in batch G: G-36..G-38.)
 - **F-O5 Hydration's Nightmare clear waits for Nightmare.** `subscript_ability_restore_status.s:6` clears
   `VOLATILE_CONDITION_NIGHTMARE` with the status (F-5); Nightmare is not modelled, so this is part of the Nightmare
   group: when it is built, Hydration's (and every `subscript_ability_restore_status` caller's) cure clears it.
+  (Built in batch G: G-31..G-34.)
 
 ### Rulings
 - F-1 Heatproof (`AbilityId.HEATPROOF`, decomp 85). `BattleSystem_CalcMoveDamage` halves a Fire move's power
@@ -1612,6 +1613,653 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
     party index gives that in every format.
   - `outcome._threshold_grid`'s "one move has one effect" (one foe move between the turn start and the side's check)
     holds with one foe only; with two foes both moves can land before the check (the D-steps).
+## Batch G
+
+- G-1 A Transform user's Sky Shaymin revert (F-O2, closes F-26): modelled, nothing is refused. The copy of a frozen
+  Sky Shaymin passes `subscript_check_shaymin_form.s:5-9` (Transform copies the BattleMon up to `ability`,
+  battle_script.c:5346-5348). The revert writes Land's ability into the Transform user's OWN party Pokemon:
+  :23's `UpdateMonDataFromVar` runs `BattleMon_CopyToParty` (battle_script.c:3401-3407) under
+  `SYSCTL_RECALC_MON_STATS`, which sends `updateStats` and `updateForm` (battle_controller.c:1496-1499), and
+  `BtlIOCmd_UpdatePartyMon` sets `MON_DATA_FORM` (form 0 from :10) and `MON_DATA_ABILITY` and recalculates the
+  stats (battle_io_command.c:597-604). New state `party_ability[P, 6]` (0 = no override); `hooks.shaymin_land`
+  and the reference's `_shaymin_land` drop the Transformed term. For a Transformed battler: the copy takes
+  form 0, Land's ability, ability slot / form and types; `party_ability` := Land's ability; `shadow_form` := 0;
+  the party's own stats (its own species at form 0, its IVs from `shadow_ivs`, EVs, level, nature:
+  `hooks.own_stats`) go to `shadow_stats`, `max_hp` / `hp` (by the max-HP delta) and, through `RefreshMonData`
+  (:30, `BattleSystem_ReloadPokemon`, battle_lib.c:169-193), to the copy's Atk..Spe: the copy has the user's own
+  stats, not Land's. Coverage: `coverage.transform_sky_refusals`, its call in `check_opponent` and the backlog's
+  F-26 rows are deleted; `enumerate.damage_inputs_can_change`'s `sky` loses its `transformed == 0` term; the end
+  speed grid's Land point is `hooks.reverted_stats` (the user's own Speed for a Transformed battler).
+- G-2 The Land ability slot is the battler's own personality bit (:12-19: `BATTLEMON_PERSONALITY` is not in the
+  copied range, battle_mon.h:105-106): `shadow_ability_slot` while Transformed (the own `ability_slot` saved by
+  Transform), the battler's `ability_slot` otherwise; slot 1 falls back to slot 0 when Land's ability 2 is empty
+  (:18-19). Kaizo's Land Shaymin is [Natural Cure, -]: always Natural Cure.
+- G-3 Later reads of the written ability go through `ability`, not a second lookup. `step._restore_ability`
+  (battle_lib.c:124, `InitBattleMon` reads `MON_DATA_ABILITY`) puts `party_ability` into `ability` when the
+  Transform user leaves (the shadow is restored first, so species and slot are its own), so the bench slot
+  reads as written (`damage.decomp_abilities`, whose written-ability branch needs no new term; its readers: the
+  AI's bench reads, Natural Cure at switch-out, Heal Bell's Soundproof) and a new Transform copies the target's
+  ability over it again (:5346-5348). The AI learns Land's ability at the write (`_know`,
+  battle_script.c:3401-3403). `AI_IsAsleepWithNaturalCure` is still refused (`switching._AI_SIDE_ABILITIES`): an
+  AI Ditto with the override now reaches that refusal, which names it. A state built with `party_ability` set
+  must also set `ability` (the planner that carries a player's override forward does both).
+  Also fixed: the empty-slot fallback tested `AbilityId` 0, but an empty slot maps to `AbilityId.NONE` (1); it tests the decomp id now (:18-19). Tests: `tests/engine/test_e1_batch_g.py`.
+- G-4 FCM step 1 (FCM.md 4.4; fcm-verify corrections (a)-(d)): `field_mask` (int32, `_FIELD`, `BattleContext.
+  fieldConditionsMask`, battle_context.h:210, bits condition.h:110-149 as `ids.FieldCondition`) and
+  `weather_turns` (int32, `FieldConditions.weatherTurns`, battle_context.h:29) beside the old fields; readers
+  unchanged. Writers (`engine.field`, the reference the same): start condition -> PERM bit or DEEP_FOG
+  (subscript_overworld_*.s:11, lib.c:3664-3696), Kaizo area Gravity / Trick Room counters (sub_seq 297;
+  subscript_overworld_trick_room.s:14) (`ids.start_field_mask`); weather moves WEATHER off + TEMP bit +
+  weatherTurns (effect_script_0115/0136/0137/0164.s:8-14); weather abilities WEATHER off + PERM bit, skipped
+  while their own PERM bit is set (lib.c:3749-3776; subscript_drizzle.s etc. :11-12), at the switch-in, the
+  move-end recheck and the weather war's swap (`hooks.swap_war`); the TEMP-only countdown in bcp.c order
+  (:1113-1211, `--weatherTurns == 0` at :1121, :1146, :1171, :1196; the end scripts clear the TEMP bit, :5);
+  Gravity `|= GRAVITY_INIT` (subscript_gravity_start.s:9), `-= 1 << 12` (bcp.c:1229), Kaizo re-arm at 0
+  (sub_seq 238, G-67); Trick Room toggle (effect_script_0259.s:5-12), `-= 1 << 16` (bcp.c:1824) and Kaizo's
+  re-arm at 0 (sub_seq 251 = the move's script, :6; manager ruling 8: E3's `_trick_room_check` stays the one
+  implementation and writes the bits too); Uproar bit 8 + b on (subscript_uproar.s:9-11), off at its end
+  (bcp.c:1528, :1534), switch (lib.c:2135) and faint (lib.c:2213, `step._reset_battler`). The views that
+  write the old fields write the bits too: `order.gravity_state`, `outcome`'s foe-Gravity variant,
+  `outcome.pivot_view` (the pivot's Uproar bit), `playout._sort_view`, the battle-start sort's no-weather view.
+  Acid Rain (subscript_pursuit.s:115) is not written yet: FCM 4.4 places it after the readers move (its diff is
+  the stated one). Tests: `tests/engine/test_field_mask.py` (clean mask = old fields on each writer path,
+  engine = reference). Owed for step 2: `tests/strategies.py` and hand-built test states write the old
+  fields only; they must set `field_mask` / `weather_turns` before the readers move.
+- G-5 Motor Drive also tests ``attacker != defender`` (battle_lib.c:3532-3536), as Volt Absorb does
+  (:3500-3502); Water Absorb, Dry Skin and Flash Fire do not. Whoever models Motor Drive gates it like
+  Volt Absorb (`volt & ~self_target`, step.py `absorbed`). Not modelled here (batch F gate note).
+- G-6 FCM step 2, weather family (FCM.md 4.4 (2), 4.7 weather; fcm-verify (b)): every reader of the weather
+  bits (0-7, deep fog 15) and `weatherTurns` reads `field_mask` / `weather_turns` through `engine.field`
+  (`weather_bits`, `rain` .. `fog` = WEATHER_IS_*, include/battle/common.h:68-72; `any_weather`, `solar_down`,
+  condition.h:131-139), the reference the same; `weather` / `weather_timer` are written only (step 3 drops them).
+  Each reader tests its own group, so several set groups read as the decomp reads them (FCM 3.2): damage
+  (lib.c:6921-6940, :7046-7070: rain's step then sun's, SOLAR_DOWN); Weather Ball power on any WEATHER bit, type
+  of the last set group rain < sand < sun < hail (battle_script.c:6847-6865, lib.c:7896-7911, trainer_ai.c:
+  3223-3238; `field.weather_ball_type`); the AI's `LoadCurrentWeather` last writer rain < sand < sun < hail < fog
+  (trainer_ai.c:1414-1438); accuracy: Thunder-flag sun 50 then rain sure, Sand Veil, Snow Cloak, fog (bcp.c:
+  2915-2935, :3025-3029), where Kaizo's effect 141 (Hurricane) already carries `MoveFlag.THUNDER` (B13-3), so
+  fcm-verify (b) (rom_diff.md:366-367) needs no new branch; Swift Swim / Chlorophyll (lib.c:1229-1235); the
+  weather moves' fail tests (effect_script_0115/0136/0137.s:5 the group, 0164.s:5 HAILING_TEMP only:
+  `field.weather_move_fails`); the weather abilities skip on their own PERM bit (lib.c:3749-3776; the AI
+  reveal follows); WeatherHPRecovery (script.c:5970-5976); Leaf Guard / freeze / SolarBeam charge (any SUNNY
+  bit, script.c:9195-9206, bcp.c:2320-2323); Forecast (lib.c:6318-6352, if-else). The turn end runs one weather
+  state per set group in bcp.c order (:1113-1225, `field.weather_state`, a `lax.scan`): a TEMP-only group counts
+  the shared `weather_turns` down (two such groups: twice; past 0 it never ends, the u32 wrap), and each group
+  that goes on runs EndOfTurnWeatherEffect on the whole mask, last writer of hpCalcTemp sand < sun < hail < rain
+  (script.c:5573-5625; Ice Body at full HP writes nothing), Hydration's scriptTemp 1 skips the HP step
+  (subscript_weather_continues.s:13), a chip under any SUNNY bit tags the ability (:17); the faint check, the
+  payout and the battle end run after each state (the loop head, bcp.c:938-944). The outcome / enumerate what-if
+  weathers are weather bits (`field.ability_bits`, `field.move_bits`); the observation's weather is
+  `field.weather_seen` (the one group's `Weather` id, or 8 + a bit per group), printed by `field.weather_text`.
+  A clean mask reads as before (4.4). Prerequisite commit: `tests.strategies` and the hand-built test states set
+  a clean mask (`ids.clean_field_mask`, `field.with_weather`), the G-4 owed item; the snap capture for this
+  step is taken there. Owed for the Acid Rain commit (corrupted masks become reachable there): the Future Sight
+  threshold grid's weathers (start, none, sand, hail) and `_threshold_grid`'s (start, the foe's move's) cover
+  clean masks; a corrupted start can end the turn as itself minus an ended TEMP group (0x8044 -> 0x8040). Not
+  built: Forecast under sun + rain bits re-triggers forever (lib.c:6327-6343 alternate Fire / Water); Forecast
+  stays refused (FCM 4.5). Gravity, Uproar and Trick Room readers unchanged (their commits). Tests:
+  `tests/engine/test_field_mask.py` (readers on 0x7F, 0x5, 0x1, 0x3F, fog; turn end on 0x7F stale 3; 0x5 twice
+  and the wrap; Snow Warning cleaning 0x7F; Rain Dance failing under 0x7F, Hail under 0x3F; engine = reference),
+  `tests/ai/test_kaizo_commands.py::test_load_current_weather_takes_the_last_set_group`.
+- G-7 Defog (#258, fog clear and side-condition clears) is E3's (claude/e3-batch2 400c898; manager ruling
+  19 Nov). Its fog clear is one more weather writer for the field mask: it must clear the fog bit in
+  `field_mask` (engine.field writers, G-4) and Defog's readers read the mask (G-6). Whichever of batch G and
+  E3 batch 2 reaches main second converts it on its merge of main.
+- G-8 FCM step 2, Gravity family (FCM.md 4.4 (2), 4.7 Gravity): every Gravity reader reads the mask's bits
+  12-14 through `engine.field` (`gravity_on`: any `FIELD_CONDITION_GRAVITY` bit; `gravity_count`: the counter),
+  the reference the same (`_gravity_on`); `gravity` is written only (step 3 drops it). Readers: the move ban
+  `Move_FailsInHighGravity` (battle_lib.c:3398; selection, the status check, the invokers' calls), Levitate as
+  none (`Battler_Ability`, :3095), the chart's grounded flag (:2545, :2701, :2766), `BattlerIsGrounded` (:5506:
+  `damage.grounded`, Arena Trap's `actions.trapped`, :3215), accuracy x10/6 (bcp.c:2972), the Gravity move's fail
+  test (effect_script_0215.s:5), Magnet Rise's Levitate test, the hazards check (subscript_hazards_check.s:6),
+  the AI's chart flags (trainer_ai type-chart, `replacement.post_ko_switch_in`, `switching`) and
+  `IfFieldConditionsMask` (trainer_ai.c:1936-1946, script.s:1028, :6920); the views: the `gravity_at_move`
+  event and `enumerate.gravity_events`, `order.gravity_possible`, outcome's Future Sight `ends` (a count of 1),
+  the observation (`observe._FIELD_VIEWS`). The countdown (bcp.c:1227-1238) re-arms and runs the grounding
+  loop where the tick takes the bits from 1 to 0 (`field.gravity_tick`; Kaizo sub_seq 238, G-67), so a borrowed
+  counter of 7 (FCM 3.1) runs 7 turns and then never ends in Kaizo. `field.with_gravity` writes the bits and
+  the old field (the views `order.gravity_state`, outcome's foe Gravity; hand-built test states,
+  prerequisite commit a397bce, the snap base). Clean masks read as before (4.4). Tests:
+  `tests/engine/test_field_mask.py` (0x7FFF, 0x5000 - 3, 0xFFF readers; 0x7000 to the Kaizo re-arm; engine =
+  reference), `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_gravity_reads_the_mask`.
+- G-9 FCM step 2, Uproar family (FCM.md 4.4 (2), 4.7 Uproar): the field's Uproar readers read the mask's bits
+  8-11 (`field.uproar_any`: any `FIELD_CONDITION_UPROAR` bit; `effects.uproar_on` is gone), the reference the
+  same (`_uproar_on`): a sleeper wakes at its move (bcp.c:2432, subscript_wake_up.s:6), sleep does not land
+  (subscript_fall_asleep.s:16, :45, `_inflict`, the sleep move's `kept_awake`), Yawn's sleep and block
+  (subscript_yawn.s:16), Rest fails (subscript_rest.s:11). `uproar[b]` stays the battler's
+  VOLATILE_CONDITION_UPROAR count and is still read where the decomp reads the volatile: Uproar's own start
+  test (effect_script_0159.s:5), the lock (B5-5), the end check (bcp.c:1504-1535) and Metronome's count
+  (battle_lib.c:6160-6198, `statusVolatile & VOLATILE_CONDITION_UPROAR`). So a spurious bit (FCM 3.1, e.g.
+  0xFFF) keeps every battler awake until its battler switches or faints (battle_lib.c:2135, :2213). Not
+  built, no engine site: CheckObedience's nap (bcp.c:2204; Kaizo always obeys, rom_diff.md:365) and
+  DecrementPP's second-call `MON_IS_UPROARING` (bcp.c:2287-2293; the engine models the first call only).
+  No hand-built test state sets `uproar` (tests.strategies derives the bits), so no prerequisite commit: the
+  snap base is the Gravity commit. Tests: `tests/engine/test_field_mask.py::
+  test_spurious_uproar_bits_keep_everyone_awake_until_their_battler_leaves` (0xFFF; engine = reference).
+- G-10 FCM step 2, Trick Room family (FCM.md 4.4 (2), 4.7 Trick Room; fcm-verify (a); manager ruling 8): the
+  Trick Room bits are a real model (E3's Kaizo re-arm, sub_seq 251), not "carried, refused". Every reader tests
+  any `FIELD_CONDITION_TRICK_ROOM` bit (bits 16-18, condition.h:123-125, :144) through `field.trick_room_on`,
+  the reference the same: `CompareBattlerSpeed`'s reversal (battle_lib.c:1432; `order.compare_speed`, which
+  the AI's speed compare also takes), the move's toggle (effect_script_0259.s:5, `field.trick_room_toggle`),
+  the countdown (bcp.c:1822-1827, `field.trick_room_tick` inside E3's one `step._trick_room_check`, which
+  stays the one implementation), `IfFieldConditionsMask` (trainer_ai.c:1936-1946; script.s:364, :439,
+  :1004, :1131), now `field_mask & operand` for both supported operands, and the observation
+  (`observe._FIELD_VIEWS`). `trick_room` is written only (step 3 drops it). A borrowed counter t (FCM 3.1)
+  runs t turns; t = 1 ends silently in vanilla and re-arms in Kaizo. `field.with_trick_room` writes the bits
+  and the old field for hand-built test states (prerequisite commit ff665e3, the snap base). Clean masks read
+  as before (4.4). Tests: `tests/engine/test_field_mask.py` (0x40000 - 3 reverses the order, 0xFFFF does not;
+  the toggle under a borrow; 0x1FFFF ends / re-arms; engine = reference),
+  `tests/ai/test_kaizo_commands.py::test_if_field_conditions_mask_trick_room_reads_the_mask`. Acid Rain
+  (subscript_pursuit.s:115) is not part of step 2 and is not built here.
+- G-11 FCM step 3 (FCM.md 4.2, 4.4 (3)): `weather`, `weather_timer`, `gravity` and `trick_room` are dropped
+  from `BattleState`, `RefState`, `layout` and STATE.md; `field_mask` / `weather_turns` are the only
+  field-condition state (`fieldConditionsMask`, battle_context.h:210; `weatherTurns`, :29). `uproar[b]` stays
+  the battler's VOLATILE_CONDITION_UPROAR count (G-9: read where the decomp reads the volatile); no field-wide
+  Uproar read of it was left. `make_state` keeps its `start_condition`, `gravity`, `trick_room` inputs and
+  writes only `ids.start_field_mask` of them. `field.with_weather` / `with_gravity` / `with_trick_room` write
+  the mask only. The golden-trace converter (`tools/trace_to_state.py`) compares and carries the traced
+  `fieldConditionsMask` bit for bit as `field_mask` (was: one decoded `weather`; `decode_weather` is gone).
+  Test reads of the dropped fields go through `tests.engine.helpers.weather_of`, `weather_timer_of` (FCM
+  4.4's `where(temp_only, weather_turns, 0)`), `gravity_of`, `trick_room_of`; `tests.strategies` draws the
+  field into the mask (`_set_weather`, `_drawn_weather`, `ids.clean_field_mask`). Snap diff: the four
+  dropped fields only.
+- G-12 FCM step 4, Acid Rain (FCM.md 1, 3, 4.3; fcm-verify (c), (d)): modelled in every format, nothing refused.
+  At a Pursuit KO of the switcher (subscript_pursuit.s:39 `_166`) :100 copies `faintedMon` to `scriptTemp` and
+  :115, after the payout loop (:102-113), runs `fieldConditionsMask = sub_to_zero(mask, scriptTemp)` (OPCODE_
+  SUB_TO_ZERO on the signed int, battle_script.c:3282-3287; `field.sub_to_zero`, `field.acid_rain`). Engine:
+  `step._acid_rain`, called at the one Pursuit site of `_execute_actions` after the pass's faint check and
+  `pay_exp` (the switch's chase and U-turn's, subscript_attack_then_switch_out.s:54); reference: `_pursuit`
+  returns the operand, `_acid_rain` applies it after `_faint_check` / `_pay_exp` in `_switch` and the U-turn
+  site. `faintedMon` (FCM 1.3): the pursuer when it is at 0 HP after the chain (Rough Skin, Aftermath, Jaboca
+  Berry, Life Orb: UPDATE_HP's TryFaintMon, battle_script.c:1767-1770) and the switcher held no Destiny Bond
+  (the game's order: Destiny Bond at :85 before every recoil, the pursuer always alive there; it restores
+  `faintedMon`, subscript_faint_check_destiny_bond.s:10, :25), else the switcher. The mask read at :115 (FCM 1.4,
+  fcm-verify (c)): the switcher's Uproar bit is gone (its FAINT_MON, :36) and, after Destiny Bond, the
+  pursuer's (:16 PlayFaintAnimation -> battle_script.c:1803 -> battle_lib.c:2213); a recoil-fainted pursuer's
+  bit is still set (TryFaintMon only, battle_script.c:1769-1772) and cleared after the subtraction by its own
+  cleanup (`kept`). fcm-verify (d): `step.first_pursuer` (reference `_pursuit`) takes the first ready battler
+  of the other side in index order (battle_script.c:6899, `break` :6934; not acted, :6900, the caller's test: both singles sites run before the
+  other side acts),
+  not the fastest; `pursuit_fires` reads it; in singles it is the foe as before. Battlers are passed in
+  (doubles-state-design section 5): the site's pursuer is `first_pursuer`'s for the switch and for U-turn's chase
+  (no `_foe(side)` left there; in singles the foe either way, review G 11). E2's B = 4 Pursuit site (G-13, not on
+  this branch) must call `first_pursuer` with its own not-acted test (:6900) and `_acid_rain` with the pursuer it
+  found; `_use_move`'s `chases` still tests U-turn's target, the foe in singles (review G 8). G-6's owed item: `outcome.future_thresholds`' weathers are none,
+  sandstorm, hail, each with and without the start's deep fog bit (`_rate` reads sand for Sand Veil, hail for
+  Snow Cloak and fog; a defender holds one ability): every mask at the hit, a corrupted start that loses a TEMP
+  group included (0x8044 -> 0x8040), since weather moves and abilities clear fog (effect_script_0115.s etc. :8,
+  subscript_drizzle.s etc. :11). Where an Acid Rain write can happen this turn (`outcome.acid_rain_reachable`:
+  BtlCmd_TryPursuit runs only from a switch, subscript_switch_pokemon.s:11, and U-turn,
+  subscript_attack_then_switch_out.s:54, so a battler switches (not in a turn resumed after a party list, whose
+  switches have all run and whose pick reaches no TryPursuit) or uses U-turn while one of the other
+  side uses Pursuit, battle_script.c:6899-6916; and the mask at :115 can be nonzero: nonzero now, or a
+  third battler acts before the chase, never in singles) the Future Sight roll is kept whole (`loose`:
+  Acid Rain can turn Gravity or fog on or off) and the end-speed weather points are freed
+  (`enumerate`'s `weather_free`: it can set rain and sun bits). (Fix of a0a09a9, which took any
+  Pursuit on a nonzero mask, a chase or not: the snap compare's 12 diverged parts.) `outcome._threshold_grid` needs no change: its
+  weathers are the start mask through `field.ability_bits` / `move_bits`, exact on any mask, and in singles an
+  Acid Rain write ends both actions (the pursuer's and the switcher's), so no accuracy check follows it.
+  Coverage had no Acid Rain refusal on this branch (none in src); its docstring describes the mask (FCM 4.5).
+  Tests: `tests/engine/test_field_mask.py` (3.1's rows; the player's and the foe's Pursuit KO, a Life Orb
+  recoil faint, Destiny Bond against a recoil with a spurious Uproar bit, U-turn's chase under Gravity; the
+  first pursuer by index at B = 4; the Future Sight law on 0x8044). tests/engine/test_d3_pursuit.py does not
+  exist on this branch.
+- G-13 Manager ruling 7: E2's interim Acid Rain guard (SF2 (f) at B = 2, D3-9 at B = 4; the `acid_rain` field,
+  its refusal and its `fullset` test) is not on main, so batch G touches no guard. When E2 merges main after
+  G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
+  kind and tests/engine/test_acid_rain_guard.py) and its B = 4 Pursuit site calls `step.first_pursuer` and
+  `step._acid_rain` instead (G-12).
+  Done in batch G's merge of main 08a5700 (SF2): the B = 2 guard is gone (`BattleState.acid_rain`,
+  `RefState.acid_rain`, `coverage.acid_rain_reason` / `check_acid_rain` and their host entry calls, the
+  search's `acid_rain != 0` refusals, `CoverageReport.runtime` with its CLI print and the backlog's
+  "Playable, lines hitting the glitch refused" section, tests/engine/test_acid_rain_guard.py and the two
+  runtime-line tests); SF2's Pursuit sites call `step._acid_rain` (engine) and apply `_pursuit`'s
+  `(faintedMon, kept)` with `_acid_rain` (reference: `_pursuit` returns `(pursuer, took, acid)`, the
+  pursuer from `_pursuer_ready` in index order). The guard cases test_field_mask.py lacked are model tests
+  there now (Aftermath recoil, the player's Life Orb pursuer, Destiny Bond before Rough Skin). D3-9's
+  B = 4 guard is not on main yet: E2 drops it as above.
+- G-14 Air Lock (ability 76) counts exactly as Cloud Nine: `AbilityId.AIR_LOCK` = 96 (`ABILITY_DECOMP_IDS` 76,
+  `tools/effect_map.py` name map, `enumerate.INPUT_NEUTRAL_ABILITIES` beside Cloud Nine, the
+  `ids.ABILITY_DECOMP_IDS` table in `data/game_constants.py`). The rule was already modelled: every decomp read of the
+  ability pairs it with Cloud Nine (`ABILITY_AIR_LOCK`: include/battle/common.h:64, :67, battle_controller.c:2073,
+  battle_script.c:9201; no other C, script or AI-script read), and both engines read the lock as a count of living
+  battlers with decomp ability 13 or 76 (`damage.weather_suppressed`, the reference `_weather_suppressed`,
+  `ids.WEATHER_ABILITY_IDS`), so the missing `AbilityId` was the only gap (coverage refused it,
+  `IMPLEMENTED_ABILITIES`). No hook, reveal or switch-in message (battle_lib.c:3649-4170 has no case). The weather
+  countdown, the weather moves' fail tests, the weather abilities' PERM test and the AI's `LoadCurrentWeather` /
+  `IfFieldConditionsMask` stay ungated (the mask read raw, G-6). MANIFEST_VERSION 36 (table inputs changed: the
+  ability id numbering). Backlog: the Roark Split's "ability: Air Lock" row is gone (regenerated). Trainer 745's
+  Rayquaza still waits on its other groups. Tests: `tests/engine/test_e1_batch_g.py` (rain / sun damage equals Cloud
+  Nine's and the no-weather value; no sand chip).
+- G-15 MapHeader_GetMapType (rom_diff.md:277; sheet rom-map-type): `modelled`, its `when` dropped. The patched getter
+  changes no fight: every header a fight reaches keeps vanilla's mapType (d_test.narc u16 at 22, bits 0-6: 363
+  ROUTE_210_NORTH outdoors, 449 CELESTIC_TOWN_CAVE indoors, 247 VICTORY_ROAD_1F_ROOM_2 cave; 154-156, 284 the same).
+  The field rule it feeds is vanilla: a warp into a non-cave map clears FLAG_FLASH_ACTIVE / FLAG_DEFOG_ACTIVE
+  (field_map_change_flags.c:80-85; a walking zone change keeps them, :36-53); every map change sets the overworld
+  weather to the header's, clear for 14 with the Defog flag or 16 with the Flash flag (field_map_change.c:273-280);
+  field Defog sets the flag and the weather clear at once (scripts_field_moves.s:385-387, scrcmd.c:3667-3674),
+  offered only under weather 14 with the Relic Badge (field_move_tasks.c:285-288, :504); the battle starts in the
+  overworld weather (field_battle_data_transfer.c:267). Weather 16 has no battle effect (the field-weather switch's
+  default, battle_lib.c:3700; Kaizo keeps it, rom_diff.md:368): the 24 dark-flash rows (Sunyshore Gym, Wayward Cave)
+  leave the refusal on that source (manager ruling 4). Weather 14: `AreaCondition.fog_headers` (sorted header ids;
+  `fog_clearable`) lists a fog fight's headers of weather 14 (`OVERWORLD_WEATHER_FOG`, data/trainer.py); Kaizo:
+  `tools/kaizo/resolve.py` `fog_headers` over `rom_trainer_maps.json` and `rom_map_weather.json` (`Sources.
+  map_weather`), into `area_condition`; vanilla: `tools/extract_decomp.py` writes `fog_headers` beside the start
+  condition (header ids from `tools.terrain.header_names`). Kaizo: Byron Split's Route 210 North rows (66-69, 71-76,
+  78, 79, 81, 441, 442, 489, 490), 913 Cyrus #1 (449) and the unplaced-split 636, 637, 659, 660, 748, 774, 776;
+  Wake 695 / 696 (start none) and Candice 610 (rain, overrides) are on 363 / 247 without a fog start; deep fog (15:
+  Hearthome Gym, Coronet) is never cleared (fmc:275 tests 14 only). MANIFEST_VERSION 37 (table inputs changed:
+  trainers.json). Backlog: the GetMapType group is gone (Byron Split ready rows 24 -> 34; regenerated).
+- G-16 The fog start is a run input (manager ruling 4, the Route 213 input kind: default from the map, fog).
+  `coverage.start_weather(trainer, field_defog)` gives no weather for a `fog_clearable` fight and refuses any other.
+  `cli.fight_start` (called by `_fight` for coverage / rank / solve, `_prep`, `line_setup` for both line commands):
+  a save standing on one of the fight's fog headers gives the start from its overworld weather (`SaveFile.map_header`
+  = the player Location's mapHeaderID, `overworld_weather` = FieldOverworldState.weather, `saves.layout.MAP_HEADER`
+  0x1280 / `OVERWORLD_WEATHER` 0x12E6, field_overworld_state.h:13-20, location.h:18-24; Continue keeps it,
+  field_map_change.c:521-525): 0 clear, 14 fog, any other value refused; a `--field-defog` the save's fog (14)
+  contradicts is refused, one rule with `--script-weather` (G-24: the save decides when it shows the state on
+  the fight's map; review G 1). The warp acts on both the same way and opposite to the plan: it brings the fog
+  back (prep keeps a Defog holder) and ends the script rain for good (prep plans clear behind a warp step;
+  G-24, gate review G MUST 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
+  (`field_move` = Defog): any PC visit is a warp, which clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85)
+  and rewrites the weather from the header, fog again (field_map_change.c:273-280), so Defog is used again
+  before the fight (review G 2). Otherwise fog unless `--field-defog`,
+  which needs the save's Relic Badge (bit 4, generated/badges.txt:5, trainer_info.c:107-112) and a team member that
+  knows Defog (a fixed team: checked; prep: `PrepProblem.field_move` = Defog). FLAG_DEFOG_ACTIVE itself is not read:
+  on the header the weather already carries it (fmc:275-280), and off it the way in may warp (fmcf:80-85). Prep: the
+  user's flag is the confirmation the sheet asks for, so prep runs the chosen start only (not both); the party at the
+  fight is the party that used Defog (no PC after the last warp), so `setups.knows_field_move` keeps only team setups
+  whose members still know it after their changes (`team_setups`, `neighbours`' `add`, `exhaustive.restricted_setups`
+  / `pruned_setups`); `build_problem` refuses a pool with no Defog knower (the team phase starts from the candidates'
+  own moves: an HM05 Defog taught in prep counts only beside a base knower); `report.prep_steps` adds the field step;
+  the checkpoint digest carries `field_move` when set. Engine and AI unchanged: the start is `ids.start_field_mask`
+  (fog bit 15 or none, FCM.md 4.3), read by accuracy, Weather Ball, SolarBeam, recovery and the AI through the mask
+  (G-6); doubles 68, 75, 79, 441, 442 share the one `_FIELD` mask. Tests: tests/tools/rom/test_kaizo_rom.py
+  (headers), tests/kaizo/test_resolve.py and tests/data/test_trainer.py (`fog_headers`), tests/saves/test_save.py
+  (layout), tests/prep/test_setups.py (Defog teams, start mask), tests/engine/test_e1_batch_g.py (`fight_start`).
+- G-17 Rulings by group: ruling 4 (overworld Defog before a fog fight; the 24 weather-16 rows) is applied here
+  (G-15, G-16). Ruling 3 (Route 213 script rain as a start input) and ruling 5 (835 / 836 start in rain, scr_seq
+  329 + PKCalc) are the rom-field-script-commands group's (gFieldScriptCommands, sheet steps 1-2); its Route 213
+  check of a save on header 373 can reuse `SaveFile.map_header` / `overworld_weather`. Ruling 1 (per-fight terrain)
+  is terrain-per-map's.
+- G-18 Battle terrain per fight (sheet terrain-per-map; manager ruling 1): a run input, refused until set. A trainer
+  battle's terrain is the tile under the player at the start: Encounter_NewVsTrainer -> FieldBattleDTO_Init
+  (encounter.c:744) -> SetBackgroundAndTerrain (field_battle_data_transfer.c:496-505: background from the map header,
+  BACKGROUND_WATER while surfing) -> CalcTerrain (:467-494: the tile behaviour at location x, z,
+  terrain_collision_manager.c:229-240; else the background's row, :441-465), copied to BattleSystem.terrain
+  (battle_main.c:1052) and never written in battle. `Trainer.terrains` (tools/terrain.py trainer_terrains, the
+  start tiles) with one value is `Trainer.terrain`: no input. With several the tile is the run's route; sources
+  checked: ROM several, calc repo none (pkcalc raw/MOVES.json Nature Power / Secret Power texts only), docs sheet
+  none (docs.json has no terrain field). The row records them: Kaizo `sources.terrain` of each such trainer (tools/
+  kaizo/resolve.py: "several: pkcalc none (move texts only), sheet none (no terrain field): a run input
+  (--terrain)"); the coverage line (`coverage.terrain_refusal`) names the start-tile terrains and the three sources
+  and asks for `--terrain`. Input: `--terrain NAME` beside `--field-defog` (`cli.run_inputs`) on coverage, rank,
+  solve, prep and both line commands; `cli.fight_terrain(trainer, terrain)` (called by `_fight`, `_prep`,
+  `line_setup`) returns the trainer with `terrain` = the named value, which must be one of its known `terrains`
+  (`terrain_id` reads `TERRAIN_SNOW`, `snow`, `great marsh`); any other value, and any value for a trainer no map
+  places, is a `ValueError`. Every reader downstream already takes `trainer.terrain`: coverage, `make_state`
+  (`_FIELD` int8, one per battle, doubles convention 2), prep (`PrepProblem.trainer`). Prep: `report.prep_steps`
+  adds "Start the fight standing on a tile whose battle terrain is X"; the checkpoint digest carries the terrain
+  when the run named one (`data.trainer.run_terrain`), so a checkpoint of another terrain does not resume. Kaizo:
+  160 split rows have several start-tile terrains (none unread, none unplaced); vanilla none. MANIFEST_VERSION 38
+  (table inputs changed: trainers.json sources). Backlog regenerated: the 9 battle-terrain groups stay as run-input
+  rows with the new text. Tests: tests/engine/test_e1_batch_g.py (Laura 134 GRASS / SNOW: refusal, input, Nature
+  Power calls Blizzard / Seed Bomb, bad values, a single-terrain row), tests/prep/test_setups.py (step, digest),
+  tests/engine/test_coverage.py (line text).
+- G-19 Not built here, by ruling or by group: the sheet's per-terrain prep axis (evaluate every terrain, plan on the
+  worst) is replaced by ruling 1's refusal until set. A save does not give the terrain: its Location (header, x, z)
+  would, but CalcTerrain needs the ROM land data at run time, which no table carries; the user names the terrain
+  instead. `order.terrain_known` and the reference `_terrain_row` None paths stay: a mixed fight without a terrain
+  move still builds with TERRAIN_UNKNOWN (nothing reads it); dropping them is terrain-moves.md "Missing 1" (the
+  next group), which reads the state's `terrain` as set here.
+- G-20 Camouflage's `MOVE_EFFECT_CAMOUFLAGE` (moves.h:36, bit 28) is a battler field, `camouflage` (int8 per
+  battler, doubles convention 2; the decomp's `BattleMon.moveEffectsMask`, battle_mon.h:127), replacing
+  `effects.camouflaged`, which inferred it from types != personal row. Set only on success:
+  effect_script_0213.s:5-6 (`TryCamouflage _016` jumps to :16, MOVE_STATUS_FAILED, past the
+  `UpdateMonData ... MOVE_EFFECT_CAMOUFLAGE` on Multitype or an existing type, battle_script.c:7997-8022).
+  Cleared with the mask on a switch (battle_lib.c:2071) and a faint (:2166); Baton Pass keeps only
+  MOVE_EFFECT_BATON_PASSED (:2076, moves.h:46-48, which omits it): `VOLATILE_FIELDS`, not
+  `BATON_PASSED_FIELDS`; reference `_reset_battler` likewise. Transform does not copy it (BtlCmd_Transform
+  copies the BattleMon bytes up to `ability`, battle_script.c:5346-5348; the mask lies after), so a
+  Transformed copy of a Camouflaged foe has its types and no bit: the old inference read such a battler as
+  camouflaged. Readers: Roar's Ingrain test (`effects.ingrain_anchors` / reference `_ingrain_anchors`, the
+  bit joins `MOVE_EFFECT_MASK_FIELDS`, subscript_force_target_to_switch_or_flee.s:7) and the AI. AI (the
+  approved list's "#213", backlog row "AI move effect #213 CAMOUFLAGE not transcribed"): Basic_ScoreMoveEffect
+  dispatches BATTLE_EFFECT_CAMOUFLAGE at script.s:252 to Basic_CheckCamouflage (:1021-1024): `IfMoveEffect
+  AI_BATTLER_ATTACKER, MOVE_EFFECT_CAMOUFLAGE` (trainer_ai.c:704-714) -> -10. `MoveEffectMask.CAMOUFLAGE`
+  (ai/commands.py) reads `camouflage`; `policy._basic_check_camouflage` at :252 in the Basic table; 213 joins
+  `outcome.KAIZO_TRANSCRIBED` (no Expert_Main entry, :1623-1811; its other mentions are tables the generic
+  code already reads: Encore :3264, SetupFirstTurn :6477 / :6490, Harrassment :8065). Kaizo: overlay14
+  changes only script.s:78 (rom_diff.md:359). Observation: unchanged (the types it shows are the written
+  ones; no message-only state). Random states draw the bit (tests/strategies.py `_draw_batch12`).
+- G-21 The `terrain_known` guards are gone (terrain-moves.md "Missing 1"): `order.called_move`,
+  `order.move_effects` (its PLAIN fallback) and `effects._camouflage` read `TERRAIN_MOVES` /
+  `SECRET_POWER_EFFECTS` / `TERRAIN_TYPES` at `order.terrain_index` = min(terrain, TERRAIN_SPECIAL)
+  (battle_script.c:8007-8010, :8040-8043, :8067-8070); the reference `_terrain_row` returns a row, never
+  None, and both bound -1 at row 0 only to keep the index in the tables. What stays refused, and why:
+  `coverage.terrain_refusal` for a trainer whose terrain is `TERRAIN_UNKNOWN` (mixed start tiles the run
+  has not named, or no map places it) when a terrain move is in the fight. That is manager ruling 1
+  ("refused until set", a user input like the gauntlet rules), not a coverage gap, so it is kept;
+  `tools/trace_to_state.py` keeps its own TraceError for the same case. Dropped: the branch that refused
+  Nature Power on a named terrain whose call has an unsupported effect: all 13 calls (Earthquake, Seed
+  Bomb, Rock Slide, Blizzard, Hydro Pump, Ice Beam, Tri Attack, Mud Bomb, Air Slash) are modelled in both
+  games (tests/engine/test_terrain_moves.py). Random states draw only named terrains when a reader is
+  known (tests/strategies.py `TERRAINS`).
+- G-22 Secret Power's gates (terrain-moves.md "Missing 4"), confirmed, no change: effect_script_0197.s:7
+  sets `sideEffectIndirectFlags = sTerrainSideEffect[row]` with TO_DEFENDER only (battle_script.c:
+  8063-8075), the plain-flags branch of TriggerSecondaryEffect (battle_lib.c:1570-1587: chance x2 for
+  Serene Grace, roll, then HP, no substitute hit, no NO_EFFECTS), which is the branch of Rock Slide's,
+  Flamethrower's and Crunch's own scripts (effect_script_0031.s, 0004.s, 0069.s: TO_DEFENDER | PTR). So
+  the swapped-in effect (`order.move_effects`) runs through the same handlers as those moves' table
+  effects (SECONDARY_STATUS, FLINCH, SECONDARY_STAT_FOE: the substitute gate, the target-HP gate) with
+  Secret Power's own chance (`move_effect_chance`, 30). Tests: SNOW freeze, none through a substitute;
+  BRIDGE evasion -1 (engine == reference).
+
+- G-23 Kaizo script weather before a battle (rom_diff.md:292 gFieldScriptCommands; sheet
+  rom-field-script-commands; manager ruling 5). Command 0x9C (scrcmd.h:164, ScrCmd_Unused_09C) runs the
+  injected code at 0x023C8345: VAR_0x4015 != 0 -> FieldOverworldState_SetWeather(VAR_0x4016); the battle
+  starts in the overworld weather (field_battle_data_transfer.c:267; Kaizo switch, battle_lib.c:3665-3669:
+  4 THUNDERSTORM -> rain); ScrCmd_0C3 / 0C4 set clear (scrcmd.c:3657-3674), a warp rewrites it
+  (field_map_change.c:272-280). `maps._walk` carries the weather command a path last ran
+  (`ScriptWeatherWalk`; resets: 0C3, 0C4, Warp) and `maps.script_weathers` records the opponents of a
+  battle reached after it: scr_seq 329 (header 293) 0x01df -> StartTagBattle 609, 835, 836 at 0x0202, so
+  835 Triton #2 and 836 Neptune #2 start in rain (the partner 609 is not an opponent and keeps none).
+  `trainer_start_conditions` replaces the header's condition for that placement;
+  `rom/rom_script_weather.json` ("battles") and the trainer's sources cite it. PKCalc's rain list agrees, so
+  the resolutions.toml ROM-vs-PKCalc row for 835/836 and its "User calls" line are gone. scr_seq 182 sets 18
+  (Trick Room) before 666 (0x00d5 -> 0x0101, 0x01a3 -> 0x01cf): field effects are left to overrides
+  area.666 (sheet Elite Four Split:206), which now cites the script; 666 stays refused as every Trick Room
+  fight. scr_seq 1056 sets 16 (no battle effect, battle_lib.c:3700) and starts no battle; 1117 runs only the
+  wild branch. No other Kaizo trainer's ROM start condition changes (835, 836 only).
+- G-24 Route 213 script rain is a start-condition input (manager ruling 3). scr_seq 459 entry 12 runs from
+  coord event VAR 0x40FA == 7 (vanilla VAR_UNUSED_0x40FA; zone_event 359 coord #3; trigger test
+  src/unk_0203C954.c:218), sets overworld weather 4 at 0x0264, then VAR 0x40FA := 8 (0x0283) and ends; the
+  rain lasts until 0C4 after the Chelle win (0x02b7, 0x02ff) or a map change. `script_weathers` gives the
+  window to the header's object trainers (103-108, 110, 111, 696) and to the battles of entries an object
+  runs or a coord event at VAR 0x40FA >= 7 (491 Chelle, entries 13 and 14); the coord battles at 3, 4, 5
+  (692-695, 466; entries 9-11) run before it and get none. Data: `AreaCondition.script_weather` ("rain")
+  and `script_window` (373, 4, 0x40FA, 8). The start: `cli.script_weather_state` -- the run input
+  `--script-weather` / `--no-script-weather` (coverage, rank, solve, prep, both line commands, beside
+  `--field-defog` and `--terrain`, `run_inputs`); a save with VAR 0x40FA >= 8 decides (off header 373:
+  none, the map change cleared it and nothing sets it again; on it: its overworld weather, 4 rain, 0
+  clear; any other refused), and an input it contradicts is refused; before that the route decides, so the
+  default is the start condition (the user's rain, overrides area.103-111/491, 2026-11-07; none for 104
+  and 696). In prep (no team yet, `warp`) a save on header 373 in the rain gives False (gate review G MUST 1;
+  amends review G 2's "the input decides", which planned every changed team in rain): a team change is a PC
+  visit, a warp that rewrites the weather from the header, clear (field_map_change.c:273-280;
+  rom_map_weather.json[373] = 0), and VAR 0x40FA >= 8 keeps scr_seq 459 entry 12 from running again, so the
+  rain never returns. The save's own party (no PC) would keep it; rather than a second start weather per
+  setup (prep has one `start_condition`), prep lists a warp onto the map before the fight
+  (`cli.script_rain_on_save` -> `PrepProblem.script_weather_warp` -> `report.prep_steps`), so every setup
+  starts clear as planned; `--script-weather` there is refused ("prep plans a warp onto the map first"). A
+  fixed team (coverage, rank, solve, line) keeps the save's rain. A save's False binds in prep too.
+  `SaveFile.vars` /
+  `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
+  `coverage.start_weather(script_weather=)` turns the state into the weather.
+- G-25 Status 0x3F (manager ruling 2): a real battle of a split can start under Newmoon's 0x7B. scr_seq 363
+  entry 4 (header 321, an init-script entry) writes party[0] := 0x7B (sleep 3 | poison | burn | freeze |
+  paralysis, condition.h:7-13) when it has no status, then StartFirstBattle 674 (Lady Emi, no split) and
+  warps to header 415. Header 321 is reached mid-story: Kaizo's Pokemon Center 2F bed script (scr_seq 213
+  entry 20, common script 9019) runs once trainer flag 882 is set (scr_seq 278 0x011d, the Floaroma Meadow
+  house), and with trainer flag 823 set always (0x0199 -> 0x0b18: GetRandom 100 <= 100, GoToIf 3 is
+  "<=", scrcmd.c:744-752, :1069 -> 0x09d6), else on some maps by a GetRandom roll, `Warp 320` (0x09dc); scr_seq 362 0x00f8 warps 320 -> 321. (Vanilla's way in needs
+  FLAG_GAME_COMPLETED, scripts_canalave_city_harbor_inn.s:16-17, kept by Kaizo's scr_seq 47.) The battle
+  keeps every bit (wake: `status &= ~MON_CONDITION_SLEEP`, battle_controller_player.c:2449; thaw clears
+  only freeze, subscript_thaw_out.s; each reader tests its own bit, e.g. battle_lib.c:4479), so the word
+  reaches the next fight unless healed. NOT modelled here: the engine's status is one condition plus a
+  counter (`ids.Status`, STATE.md "Status"; saves/status.py decode_status kept only the first), and the full
+  word is a state change through every status reader (engine, reference, AI). What is done: a party
+  Pokemon whose word holds several conditions is refused at the save (`SaveMon.to_spec` RecordError,
+  `status.status_conditions` names them) instead of being silently cut to one; prep heals (`level_to_cap`,
+  `healed=True`). The full-word model is left for its own batch. Floaroma's (scr_seq 278) and the beds'
+  0x3F write 1 (sleep 1), one condition, read from the save as any status.
+- G-26 gFieldScriptCommands in rom_diff.toml / rom_diff.md: the weather by G-23 / G-24 and the status and exp
+  (0x1CE) through the save's party are modelled; the multi-condition word is the `not_reached` remainder with
+  `when = { map_header = [321] }` (G-39; amended from `modelled` by review G 6).
+- G-27 Every Starf Berry eat on one battler in one turn draws its own (F-O3, F-10's Recycle repeat): each
+  site runs its own `RandNext() % 5` loop: `BattleSystem_TriggerHeldItem` (battle_lib.c:4576, Starf
+  :4850-4872, draw :4865), `BattleSystem_TriggerHeldItemOnStatus` (:4967, Starf :5273-5294, draw :5288; the
+  F-O3 / F-10 text names it `TriggerHeldItem`: same code, its own function and draw), `BattleSystem_PluckBerry`
+  on the attacker (:5798-5817, draw :5808). `Outcome.starf` is `int8[B, 4]`: `[b, 0]` the battler's first eat,
+  `[b, 1]` the faint replacement's (unchanged), `[b, 2]` its second, `[b, 3]` its third. State: `starf_roll`
+  `int8[B, 3]` is the turn's queue (`Outcome.starf[:, ids.STARF_QUEUE]`, columns 0, 2, 3) and `starf_taken`
+  `int8[B]` counts the draws its eats made (STATE.md); `hooks.starf_draw` reads entry `min(starf_taken, 2)`,
+  `hooks._pinch_effects` (every held-item check and Pluck) adds one where a draw is made (a stat below +6),
+  an open battle-start berry takes entry 0 (`step._action_phase`: `starf_taken` 1). `step_events` and
+  `step.replace` leave `starf_taken` 0 and a kept replacement draw in entry 0, so a second replacement
+  re-reads it as before. The turn-start check (`_turn_start_items`) reads the queue, not the stale first
+  draw. Reference: `_pinch_effect`, `ref_step`, `ref_replace` the same.
+- G-28 Three draws without Fling (amends the sheet's bound "without Fling ... two"): battler b's Pluck / Bug
+  Bite of a foe's Starf (draw :5808; its `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears
+  SELF_TURN_FLAG_PLUCK_BERRY), its own Starf at AFTER_MOVE_EFFECT_ATTACKER_ITEM
+  (battle_controller_player.c:3684-3689), then a slower foe's Roar (priority -6) drags in a bench holder at
+  its pinch, whose switch-in check eats (lib:4151-4165 -> :5288). And one berry eaten twice: a Pluck whose
+  berry did nothing leaves the flag set (lib:5848, `subscript_pluck_check.s:5-9` skips RemoveItem), so the
+  attacker's own Starf is kept at :3684 and eaten again at _HELD_ITEM_STATUS (:3730-3761), two draws
+  (`step` `info.pluck_flag`). A fourth draw needs a foe's Fling of a Starf (lib:6110-6127, draw :6121) on
+  top; Fling (effect 233), Thief / Covet (105) and Trick / Switcheroo (177) are unsupported
+  (`coverage.ITEM_MOVING_EFFECTS`), so an eat past the third reads the queue's last entry; Fling's builder
+  adds its column. A U-turn / Baton Pass newcomer is no same-call source: the turn pauses at the party
+  pick (`pivot_battler`, subscript_attack_then_switch_out.s:71, subscript_baton_pass.s:17) and the resumed
+  call loads its own queue, so its eat takes the resumed outcome's `[b, 0]`.
+  With Fling (gate review G MUST 2; E3's e5490ccb, E3-B2-1, E3-B2-22: a flung Starf takes the defender's next
+  entry): three draws per battler per call still bound singles. Every extra source is one action or one item:
+  b's action is Pluck / Bug Bite, Recycle or neither; the foe's is Fling (TryFling draws at :6121 before
+  TryMove, effect_script_0233.s:7, :18, so a miss, Protect or Substitute still takes the entry) or Roar; Fling
+  and Pluck share the foe's one item (Fling removes it; a Pluck of a foe without a berry sets no flag,
+  lib:5832-5835, :5848). A held berry is eaten once, twice only under the acting attacker's set
+  SELF_TURN_FLAG_PLUCK_BERRY (subscript_pluck_check.s:5-9), and flags last one action (BattleContext_Init at
+  MoveEnd, bcp.c:3998; lib:2013-2015). Fling's own flag (lib:6150-6152) stays set only when
+  subscript_fling.s:5-7 skips (b at 0 HP or behind a Substitute): b then loses no HP and no stage in that
+  action, and any earlier pinch was eaten at the check after it (bcp.c:3684-3761, :1362-1368, :1699-1708; the
+  turn-start switch-in check, lib:4151-4165), so no own Starf of b is eaten under it. Singles worst cases, three
+  each: own + flung + Recycled own (an open battle-start berry may stand for the own eat); Pluck draw + own +
+  Roar newcomer; own twice under b's Pluck flag + Roar newcomer. A fourth needs two foe actions or items:
+  doubles only (G-40).
+- G-29 The laws (`enumerate._starf_reads`): `[b, 0]` and `[b, 1]` unchanged. Battler b's eat sources this
+  call are counted: its own (the field holder at its pinch or able to lose HP; once more with a Pluck /
+  Bug Bite of a foe item (G-28); a Recycle of a Starf, recycled before or eaten first; a Pluck / Bug Bite of
+  a foe holder; an open battle-start berry) plus a Roar newcomer holder. `[b, k]` (k = 2, 3) is read where
+  the count reaches k. Law: the k-th eat is the same battler's while it has k own sources: the `[b, 0]` rule
+  with +2 per earlier eat (Recycle stays a stage jump: all 60); else the Roar newcomer's on fresh stages
+  (`InitBattleMon`, battle_lib.c:97-101; a dragged battler does not act): five values unless the foe's
+  bounded gains + 2 reach +6 or a stage jump is used. Brute force (`loose`): `[b, 2]`, `[b, 3]` all 60 where
+  a holder or berry source meets a second source of any kind (a drag, Recycle, Pluck / Bug Bite, open berry).
+  `starf_loose` is `bool[B, 4]`. Doubles: partners' actions add sources (multi-battler milestone).
+- G-30 No coverage refusal held this case (F-O3 was a known limit, none to remove); no AI read (the AI reads
+  the stages next turn; Recycle / Natural Gift tables already list Starf, F-10); no table input changed (no
+  MANIFEST bump). Tests: tests/engine/test_e1_batch_g.py (engine equals reference per case, the laws).
+- G-31 Nightmare (F-O5; manager ruling 6: kept, vanilla coverage). Effect 107 BATTLE_EFFECT_STATUS_NIGHTMARE
+  (generated/move_battle_effects.txt:108; res/moves/nightmare/data.json: Ghost, status, power 0, accuracy 100,
+  CAN_PROTECT) maps to `EffectId.NIGHTMARE` (tools/effect_map.py; MANIFEST 40). No Kaizo move has effect 107
+  (Kaizo move 171 is Hidden Power Ghost, effect 0), so it is vanilla only; Snore (effect 92, whose AI label is
+  named Expert_Nightmare) is unchanged. effect_script_0107.s fails (MOVE_STATUS_FAILED, :11-12) on a defender
+  behind a Substitute (:5), with the bit (:6) or not asleep (:7): `effects.nightmare_fails(state,
+  target_side)`, read with the script beside Dream Eater's in `step._use_move` and the reference's
+  `_script_fails(..., target)`; a landed move runs subscript_nightmare_start.s (re-tests :5-7, sets the bit
+  :9): `effects._nightmare`, the reference's `_move_effect`. Power 0: no type chart (bcp.c:2350-2357), a
+  Normal type is hit. New state `nightmare: int8[B]` (statusVolatile bit 27, condition.h:59): in
+  `VOLATILE_FIELDS`, not in `BATON_PASSED_FIELDS` (condition.h:72-76; battle_lib.c:2070, :2075, faint :2165),
+  not copied by Transform (statusVolatile, battle_mon.h:115, lies past `ability`, battle_script.c:5346-5348);
+  STATE.md row. Doubles: the defender is passed in (`target_side` / `turn.target_side`), never `1 - side`.
+  Coverage: the effect is EXACT once mapped (coverage.py:203); no backlog row (no Kaizo move).
+- G-32 What clears the bit (every decomp writer of VOLATILE_CONDITION_NIGHTMARE, by grep; `effects.clear_nightmare`
+  and the reference's `nightmare = 0`): every wake-up, subscript_wake_up.s:20 (the counter at the move,
+  bcp.c:2443-2470; an uproar at the move, :2432-2439, and at the turn end, :1505-1516); Chesto / Lum through
+  subscript_held_item_slp_restore.s:13 (a sleep cure: battle_lib.c:4608-4611, :4667-4671, Pluck :5577-5580,
+  :5648-5651) and _multi_restore.s:13 (Lum on a status and confusion, :4689-4692, :5669-5672); Lum's other
+  restore subscripts (prz/psn/brn/frz/cnf) keep it (`hooks._restore`, reference `_cure`); Shed Skin
+  (battle_lib.c:3567-3586) and Hydration in rain (battle_script.c:5626-5639 -> subscript_weather_continues.s:54)
+  through subscript_ability_restore_status.s:6, with any status (closes F-O5); Insomnia / Vital Spirit
+  (RecoverStatusByAbility, battle_lib.c:4404-4408, at the switch-in :4139 and the move end bcp.c:3965-3967)
+  through subscript_ability_forbids_status.s:16-18 (msgTemp MSGCOND_SLEEP = 0 only; Limber's branch keeps it);
+  Heal Bell / Aromatherapy (BtlCmd_TryPartyStatusRefresh, battle_script.c:5039-5070: the user unless its
+  Soundproof spares it, and the doubles partner): each battler of the user's party whose active slot the
+  refresh cures (the partner's battlersSwitchingMask test, :5049, :5068, is a doubles case for the multi-battler
+  milestone); a bag sleep cure on the active battler (battle_system.c:459-475, `bag.use_bag_item`). Full
+  Restore's subscript_use_full_restore.s clears the status first and copies it to the party
+  (battle_script.c:3077-3078), so its UseBagItem finds no sleep and keeps the bit (the engines already read
+  the status after it). Not cleared: Wake-Up Slap (subscript_heal_target_sleep.s:6), Psycho Shift
+  (subscript_give_target_own_status.s:30), Refresh, Natural Cure (the switch clears it anyway); the bit then
+  waits for the turn end (G-33), or costs a quarter if the battler is asleep again by then (a Rest after a
+  Wake-Up Slap). Fling's Chesto / Lum (battle_lib.c:5886, :5948, :5969) has no engine path: Fling is refused
+  (`coverage.ITEM_MOVING_EFFECTS`).
+- G-33 The turn end: MON_COND_CHECK_STATE_NIGHTMARE (bcp.c:1436-1448) runs after BURN and before CURSE
+  (enum bcp.c:1256-1283): a battler with the bit and curHP that is asleep runs subscript_nightmare_effect.s
+  (Magic Guard: CheckAbility :5 skips it; else Divide(maxHP, 4), :8-10, battle_lib.c:3599-3618, floor 1;
+  UPDATE_HP :16, it may faint); not asleep, the bit is cleared with no message (:1444). JAX
+  `step._nightmare_check` inside `_burn_then_curse` (one faint check still serves the three: each needs
+  curHP); reference `_nightmare_check` in `_end_of_turn`'s list. The loss is before ITEM_CONDITION (:1699),
+  so a pinch berry can eat after it, and after Shed Skin (:1355) and USE_ITEM (:1362), so those cures come
+  first. `enumerate._starf_reads` counts the bit as a residual HP source. Observation: `nightmare` beside
+  `torment` (observe.py). Tests: tests/engine/test_e1_batch_g.py (engine equals reference per case).
+- G-34 AI: Basic_CheckNightmare (script.s:194 -> :321-327) is `policy._basic_check_nightmare`: the defender's
+  VOLATILE_CONDITION_NIGHTMARE -10 (`commands.VolatileCondition.NIGHTMARE`, read from `nightmare`), not asleep
+  -8, a loaded Magic Guard (LoadBattlerAbility: known or guessed, one read) -10. 107 joins
+  `outcome.KAIZO_TRANSCRIBED` (no Expert_Main entry: Expert_StatusSleep's IfMoveEffectKnown :1817 and
+  Expert_Encore's table :3227 name it for other moves, both already transcribed), so
+  `opponent_move_refusals` no longer refuses it; `read_bounds.py` regenerated (tools/ai_read_bounds.py) with
+  its rows; the run also adds the rows of 213 (Camouflage), which G-20 put in `KAIZO_TRANSCRIBED` without
+  regenerating (tests/ai/test_read_bounds.py pins the key set to it). Test: tests/ai/test_kaizo_policy.py
+  test_nightmare_basic (a synthetic effect-107 move).
+- G-35 Backlog row (manager order 19 Nov, G-25 context): `tools/kaizo/backlog.py` `SCRIPT_START_CONDITIONS`
+  writes "Start conditions set by ROM scripts" into docs/kaizo/mechanics_backlog.md: Newmoon's status 0x7B
+  on party[0] is "playable after heal; multi-status start refused" (`SaveMon.to_spec`), citing scr_seq 213
+  entry 20, scr_seq 363 0x00f2 and trainer flags 882 + 823. It blocks no split battle (Lady Emi 674 has no
+  split), so it counts in no total.
+- G-36 `AI_HasAbsorbAbilityInParty` (F-O4) is modelled whole: Water Absorb and Volt Absorb on the AI's bench are
+  no longer refused (`switching._AI_SIDE_ABILITIES` keeps Natural Cure only). `checkAbility` comes from `moveHit`'s
+  table type (`MOVE_DATA().type`, trainer_ai.c:3665-3674: Fire -> Flash Fire, Water -> Water Absorb, Electric ->
+  Volt Absorb, else `return ABILITY_NONE` = FALSE), after a `moveHit` with power (:3656-3663); the active's own
+  `Battler_Ability` (`damage.battler_decomp_ability`, so a suppressed one is none) equal to it holds the switch
+  (:3677-3679); each living bench Pokemon whose `MON_DATA_ABILITY` is it draws `RandNext() & 1` (:3703-3708) in
+  party order, the first success switching to it (`SwitchSite.ABSORB`). Bench: `aiSlot2` is the battler itself in
+  singles (`BattleSystem_GetPartner`, battle_system.c:400-402), so the passes' bench. A Weather Ball `moveHit` is
+  read as Normal here (table type), unlike the passes (`TrainerAI_MoveType`, :3767).
+- G-37 The gate. With a super-effective move of the active (`AI_HasSuperEffectiveMove(..., TRUE)`, no draw inside,
+  :3586-3588) the function first reads `RandNext() % 3` and returns FALSE unless it is 0 (:3651-3653): 21846 of
+  65536. Its bench sites are `SwitchSite.ABSORB_GATED` (same `& 1` draw); the gate is no site: `outcome.
+  switch_stop_probs` is `g * law(p) + (1 - g) * law(p, ABSORB_GATED at 0)`, exact since the gate only filters
+  those sites and every later read is its own draw; `_first_stop` masks them unless the sampler's gate u16 (its
+  own key, `fold_in(k[3], sites)`, so the site draws are unchanged) is 0 mod 3. The gate is read before the
+  `moveHit` tests, so also when no bench site exists; then it changes nothing and the law is unchanged. The gate
+  rides in the site kinds, so every caller of `switch_stop_probs(switch_sites(...))` (outcome enumerator,
+  `policy` x3) gets it with no API change (the sheet's `gated` flag / companion function is that bit).
+- G-38 Site count: absorb sites now exist beside the keep draws too (`_layout` drops `& ~any(keep)` and the
+  `absorb_gate` refusal): at most 5 + 4 + 40 = 49 <= 60; with the Wonder Guard draws (no keep) 20 + 5 + 40 can
+  pass 60 and the count refusal stays. Tests: tests/ai/test_switching.py (`_brute_stop_law` over residue classes,
+  the sampler, Water / Volt / Ice / mismatched holder, own ability, Weather Ball in rain); the Kaizo loose oracle
+  (tests/ai/test_kaizo_switching.py `_loose_reads`) walks the gate with a skip of the bench reads, and its
+  hypothesis states now draw absorb holders.
+- G-39 Manager ruling 2026-11-19 (supersedes ruling 2 for batch G; review G 5): the Newmoon multi-condition status
+  word (G-25) is its own batch after G, family "status word"; batch G keeps the interim named refusal at the save
+  (`SaveMon.to_spec`, `status.status_conditions`) and the backlog row (G-35). rom_diff.toml's gFieldScriptCommands
+  is `not_reached` with `when = { map_header = [321] }`: file 363 (scr_seq 363 entry 4, an init script of header
+  321) writes 0x7B to party[0] after any save and before StartFirstBattle 674, so the fight on that header is
+  refused at the build's rom-change condition; a later fight gets the word only through a save, refused there.
+  The other 0x3F writes (scr_seq 278 entry 1, common script 9019) are one condition (sleep 1), read from the save
+  as any status, so the earlier 20-header `when` is not restored. MANIFEST_VERSION 41. Lady Emi 674's split is
+  open (CLAUDE.md: every real battle belongs to a split): the ROM has no split field; PKCalc lists "Lady Emi" in
+  `FLAGS_PK.json`'s hidden list beside "Maid Yoki", and `PARTY_ORDER_PK.json` orders her after Aroma Lady Taylor
+  (Gardenia Split:79) and before Galactic Mercury #1 (Gardenia Split:91), an order, not a split; no split sheet
+  of the docs lists her. The ROM gate: flags 882 and 823 come from scr_seq 278 (header 257, Floaroma Meadow house:
+  entry 1 sets 882 at 0x011d, entry 3 StartTrainerBattle 823 at 0x0155, no badge check); the bed script (scr_seq
+  213 entry 20) needs 882 (0x0171) and with 823 always warps (0x0199 -> 0x0b18 -> Warp 320 at 0x09dc), without it
+  checks badge 2 (0x01a4, Cobble, generated/badges.txt:3). The window this points to (from the meadow on) is the
+  manager's call; until then 674 counts in no split total.
+- G-40 For E2's doubles work (multi-battler milestone; gate review G MUST 2): the Starf queue's three draws per
+  battler per call (`starf_roll` int8[B, 3], `Outcome.starf` int8[B, 4], `ids.STARF_QUEUE`) is a singles bound
+  (G-28). With B = 4 a partner's and both foes' actions add sources: own eat + the partner's flung Starf + a foe's
+  flung Starf + its Recycle is four, and `hooks.starf_draw`'s `min(starf_taken, 2)` re-reads the last entry. The
+  doubles batch widens the queue to its bound (state, Outcome, `STARF_QUEUE`, `enumerate._starf_reads`, the
+  reference, tests/strategies.py, a tools/snap_compare.py UPGRADES row).
+- G-41 Pursuit targets, doubles-ready (gate review G record a): `step._pursuit_hit`'s Sticky Barb and on-hit berry
+  take `switcher` (was `_foe(pursuer)`); the reference's U-turn site takes `_pursuit`'s returned pursuer for
+  `turn.pursued` and `_owed_pursuer` (`not bonded`: the U-turn user has no Destiny Bond, bcp.c:2425) in place of
+  `foe` / `turn.done[foe]`. Same values in singles (one foe; `_pursuer_ready` needs a living pursuer).
+- G-42 Gate review G record b (`upgrade_entries` keyed by kind) is not built here: the snap_compare upgrade
+  rewrite on its own branch carries it (manager, 19 Nov).
+- G-43 Batch G's interim refusals (gate review G record c): the multi-condition status word at the save
+  (`SaveMon.to_spec`, G-25) closes with the status-word batch (G-39; the backlog row of G-35 says so). The 24
+  weather-16 rows (Volkner Split 11 on headers 154-156, Galactic Split 13 on 284 / 380) are no interim refusal and
+  do not move there: they start `none` (data/kaizo/start_conditions.json; weather 16 has no battle effect,
+  battle_lib.c:3700, manager ruling 4) and hold no weather refusal; any refusal of theirs is their own other
+  source's.
+- G-44 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
+  `randint(fold_in(key, 48), (B, 2))` (08a57000 outcome.py:2076) and now `(B, 4)` from the same key
+  (outcome.py:2139), which changes every entry, columns 0-1 too: all four columns of a fresh draw are sampler drift
+  (`snap_compare.SAMPLED`); a saved `in_outcome` keeps columns 0-1 strict. No other draw's key, shape or bounds
+  changed in `sample_outcome` (body diff: the starf line only); its state reads moved to `field_mask` (FCM).
+- G-45 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
+  dropped `terrain_known` from `effects._camouflage` (08a57000 effects.py:618-633), so terrain -1 reads row 0
+  (`order.terrain_index` clip) and succeeds where main wrote nothing; the reference (`_terrain_row`) does the
+  same. In a fight -1 never reaches it: `coverage.terrain_refusal` runs over the known moves plus
+  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reach it:
+  `tests.strategies._draw_terrain` draws a terrain only when a Pokemon knows a reader, not when a Metronome (or a
+  drawn last move a caller copies) can call one (E2 owns the strategies). The game never holds an unknown:
+  `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
+  (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
+  (battle_script.c:8007-8010). No engine change.
+- G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
+  sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
+  third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
+  `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears the flag; with all five at +6 neither berry
+  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo (lib:5838-5841) no own eat. `twice` now excludes
+  `plucked`. The engine's step and the reference are unchanged (they already draw twice there:
+  `test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Tackle]`).
+- G-47 The widened snapshot "rest" states (seed 165 turn 3: 160 -> 16000 rows, 2^2 * 5^2; seeds 22 / 64 / 120: the
+  width-cap text; seed 107 turn 3: SamplingOnly where main enumerated) come from batch G's later Starf reads
+  (G-29): factor 5 per read eat. Not reproduced locally (RAM gate); G-46's over-read is the only unreachable
+  read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
+  (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
+  The pod checked `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer` (dropped: see G-S6).
+- G-S5 (snapshot entry 5; explains a compare divergence of mechanic G-12) Future Sight's stored roll on a Pursuit
+  meeting (pod compare e3-snap2-093367d vs main; seed 22 turn 4 segment 0, and seed 165 turn 3: `future_hit[0]` 0 -> 88,
+  rest rows 160 -> 16000 = x100; both PURSUIT vs U_TURN with `acid` set):
+  `sample` part `.sample_outcome.future_hit[0]` 1 -> 11, and the `rest` part's `enumerate_turn` SamplingOnly width-cap
+  text with a different count. G-12: a switch (subscript_switch_pokemon.s:11) or U-turn (subscript_attack_then_switch_out.s:54)
+  that meets the other side's Pursuit (subscript_pursuit.s:100, :115, the Acid Rain mask write OPCODE_SUB_TO_ZERO,
+  battle_script.c:3282-3287; battle_script.c:6899-6916) with a nonzero
+  `field_mask` sets `future_loose` (`acid = outcome.acid_rain_reachable`, outcome.py:526-552, :722), so `sample_outcome`
+  stores the raw 1-100 roll (`randint(fold_in(key, 28), (B,), 1, 101)`, outcome.py:1973; the game's roll, bcp.c:2976,
+  reached through CheckMoveHit at subscript_future_sight_damage.s:8, BtlCmd_CheckMoveHit battle_script.c:6115-6133)
+  where main stored its hit class (1 for u = 11).
+  The enumerator's `future_hit` law grows to the 100 values and `weather_free` frees the end-speed weather points
+  (enumerate.py:2365-2369, :3083-3093), which changes the width count. Same key, shape and bounds: not sampler drift,
+  no UPGRADES row (encoding unchanged). The E1-only compare (56cd9f4) already diverged on rest at this seed and turn.
+- G-S6 Snapshot seeds 64 turn 4 / 107 turn 3: `_starf_reads` over-read `starf(0, 2)` through `twice` (the Pluck
+  flag's second own Starf eat) whenever the Pluck / Bug Bite target held any item (Grip Claw, Micle Berry).
+  `BattleSystem_PluckBerry` (battle_lib.c:5539-5850) sets SELF_TURN_FLAG_PLUCK_BERRY only for an eaten berry
+  (`result == TRUE`: a listed PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, :5846-5848), and every held-item
+  subscript ends in PLUCK_CHECK (subscript_pluck_check.s clears it), so it stays only while `nextSeq` is 0.
+  Leppa (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830,
+  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-46). `twice` now needs a foe
+  item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
+  Focus Energy) are over-approximated. Klutz / Embargo (:5839-5845) keep the flag but make the own Starf inert.
+  The read also takes a berry the foe Recycles before the Pluck (effect_script_0184.s:5-7: `hooks.pluck_berry`
+  reads the live item), for `twice` (a `keeps` berry) and for `plucked` (a Starf Berry, index 0).
+  The loose (brute-force) branch's `eats` is now `foes(anyone | recycled)`: a foe's Recycled Starf Berry is a
+  Pluck source there too (`test_the_loose_law_reads_the_pluck_of_a_berry_the_foe_recycles_first`).
+  Step and reference unchanged. `test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it`,
+  `test_the_pluck_reads_a_berry_the_foe_recycles_first` (the Rough Skin board puts the plucker at its pinch).
+  The train's third-eat bound (`own` counts a foe's Fling of a Starf Berry, `flung`, E3-B2-1, Fling's
+  RANDOM_UP2 draw battle_lib.c:6110-6129, plus d's held berry and its Recycle; or a Roar newcomer):
+  `test_a_flung_starf_its_own_and_its_recycle_are_three_eats` (the Abra starts one HP above its pinch and the Fling's hit takes it down; the foe's Fling draws, the Abra's own Starf goes at the Fling's DEFENDER_ITEM, bcp:3691-3696, and the recycled one at the Abra's own ATTACKER_ITEM, bcp:3684-3689, lib:4865; `starf[d, 3]` with no Roar; two sources, none).
+  Dropped `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer` and its `_snap_segment`: they
+  redrew the snapshot seeds through the live strategies generator, which does not reproduce the compare's
+  states, and their "third eat only with a Roar" rule is stale on the train (a flung Starf and a Recycle make three).
+- G-S7 Snapshot seed 120 turn 2 (rest: width-cap text, 262144 -> 524288 rows; one new 2-valued `secondary(1,0)`):
+  terrain-unknown class, the same root as seed 2's Camouflage line (G-45, renamed G-S2 in batch H). b1's Copycat
+  copies Secret Power (290) when b1 moves first (`move_prev`, battle_script.c:7328-7341). 5da2dd49 (G-20..G-22)
+  removed `terrain_known` from order.move_effects, so Secret Power on TERRAIN_UNKNOWN (-1) now resolves to row 0's
+  secondary effect (terrain_index clips to 0; SECRET_POWER_EFFECTS) instead of PLAIN, and its 30% proc becomes a
+  read. Decomp: effect_script_0197.s GetTerrainSecondaryEffect, battle_script.c:8063-8075 (min(terrain,
+  TERRAIN_SPECIAL), :8067-8070). In the game the terrain is never unknown (CalcTerrain
+  field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381), and real fights with a
+  reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
+  tests.strategies._draw_terrain, which batch H's first commit fixes: no TERRAIN_UNKNOWN when Nature Power, Secret
+  Power or Camouflage is reachable, directly or through a call move.
+
 ## Stream state (restart point, 2026-11-19)
 
 Read this section first after a clear, then `docs/process.md` section 2. Branches, worktrees and

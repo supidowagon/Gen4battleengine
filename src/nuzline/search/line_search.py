@@ -75,8 +75,7 @@ import numpy as np
 
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS
-from nuzline.engine.coverage import check_acid_rain
-from nuzline.engine.damage import damage_table, effectiveness, move_type_of
+from nuzline.engine.damage import damage_table, effectiveness, identified, move_type_of
 from nuzline.engine.effects import can_have_status
 from nuzline.engine.ids import EffectId, Status
 from nuzline.engine.state import BattleState
@@ -160,7 +159,7 @@ def _receives(tables: Tables, state: BattleState, use, foe, move):
     s = _facing(_facing(state, 0, MOVE_ACTIONS + use), 1, MOVE_ACTIONS + foe)
     param = tables.move_param[move]
     hits = effectiveness(
-        tables, move_type_of(tables, s, 0, move), s.types[1, foe], s.foresight[1] != 0
+        tables, move_type_of(tables, s, 0, move), s.types[1, foe], identified(tables, s, 0, 1)
     )
     type_ok = (param[1] == 0) | (hits > 0)
     return type_ok & can_have_status(tables, s, 1, foe, param[0])
@@ -447,7 +446,6 @@ def find_line(
     """The line the search settles on and its hold-out odds (module docstring). ``key``
     is a legacy ``PRNGKey``; ``clock`` measures the budget (injectable for tests)."""
     del names  # the search works on ids; kept for the commands' uniform signature
-    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     run = _Run(tables, state, key, settings, clock)
     foes = [int(f) for f in np.flatnonzero(np.asarray(state.species[1]) > 0)]
     options = {f: joint_candidates(tables, state, f) for f in foes}

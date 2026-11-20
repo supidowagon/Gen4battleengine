@@ -12,6 +12,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import gravity_banned, legal_actions, trapped, usable_moves
 from nuzline.engine.coverage import IMPLEMENTED_ABILITIES, Support
 from nuzline.engine.damage import damage_table, side_ability_count
+from nuzline.engine.field import with_gravity
 from nuzline.engine.ids import (
     GRAVITY_MOVES,
     GRAVITY_TURNS,
@@ -39,7 +40,9 @@ from tests.engine.helpers import (
     as_species,
     assert_matches_reference,
     drop_programs,
+    gravity_of,
     roark_state,
+    weather_of,
 )
 from tests.engine.test_pivot import _mon, _resume
 from tests.engine.test_protect import _events, _hp, _o, _state
@@ -408,7 +411,7 @@ PLAIN = ("Scratch", "Leer", "Growl", "Tackle")
 def _gravity(tables, names, *, turns=0, mine=GRAVITY_PLAYER, opp="Leer", **kw):
     """Monferno (``mine``) against Geodude (``opp`` first); ``turns`` is the field's Gravity."""
     s = _state(tables, names, mine=mine, opp=opp, **kw)
-    return s._replace(gravity=jnp.asarray(turns, s.gravity.dtype))
+    return with_gravity(s, turns)
 
 
 def test_gravity_is_mapped_and_pinned(tables, names, kaizo_tables, kaizo_names):
@@ -435,10 +438,10 @@ def test_gravity_starts_for_five_turns_and_fails_when_up(tables, names):
     s = _gravity(tables, names)
     out = assert_matches_reference(tables, s, A("Gravity", "Leer", s, names), _o())
     # Set to 5 by the move, then the turn's field-condition pass counts it once.
-    assert int(out.gravity) == GRAVITY_TURNS - 1
+    assert int(gravity_of(out)) == GRAVITY_TURNS - 1
     up = _gravity(tables, names, turns=3)
     out = assert_matches_reference(tables, up, A("Gravity", "Leer", up, names), _o())
-    assert int(out.gravity) == 2  # failed: only the countdown ran (not reset to 4)
+    assert int(gravity_of(out)) == 2  # failed: only the countdown ran (not reset to 4)
 
 
 def test_gravity_lifts_the_flying_and_levitate_immunities(tables, names):
@@ -449,7 +452,7 @@ def test_gravity_lifts_the_flying_and_levitate_immunities(tables, names):
     acts = A("Splash", "Earthquake", base, names)
     safe = assert_matches_reference(tables, base, acts, _o())
     assert _hp(safe, 0) == _hp(base, 0)  # the Ground hit is an immunity
-    up = base._replace(gravity=jnp.asarray(3, base.gravity.dtype))
+    up = with_gravity(base, 3)
     # (Splash is banned under Gravity: the player uses a legal move instead.)
     hit = assert_matches_reference(tables, up, A("Scratch", "Earthquake", up, names), _o())
     assert _hp(hit, 0) < _hp(up, 0)
@@ -459,7 +462,7 @@ def test_gravity_lifts_the_flying_and_levitate_immunities(tables, names):
         AbilityId.LEVITATE,
     )
     assert _hp(assert_matches_reference(tables, lev, acts, _o()), 0) == _hp(lev, 0)
-    lev_up = lev._replace(gravity=jnp.asarray(3, lev.gravity.dtype))
+    lev_up = with_gravity(lev, 3)
     out = assert_matches_reference(tables, lev_up, A("Scratch", "Earthquake", lev_up, names), _o())
     assert _hp(out, 0) < _hp(lev_up, 0)
 
@@ -470,7 +473,7 @@ def test_spikes_hit_a_flying_newcomer_under_gravity(tables, names):
     s = s._replace(types=s.types.at[0, 1].set(flying), spikes=s.spikes.at[0].set(1))
     out = assert_matches_reference(tables, s, A(4 + 1, "Leer", s, names), _o())
     assert int(out.hp[0, 1]) < int(s.hp[0, 1])
-    calm = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    calm = with_gravity(s, 0)
     out = assert_matches_reference(tables, calm, A(4 + 1, "Leer", calm, names), _o())
     assert int(out.hp[0, 1]) == int(calm.hp[0, 1])  # a Flying type is off the ground
 
@@ -483,7 +486,7 @@ def test_gravity_grounds_a_magnet_rise_user_and_unlocks_a_fly_user(tables, names
         magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(4)
     )
     out = assert_matches_reference(tables, s, A("Scratch", "Gravity", s, names), _o())
-    assert int(out.gravity) == GRAVITY_TURNS - 1
+    assert int(gravity_of(out)) == GRAVITY_TURNS - 1
     assert (int(out.magnet_rise[0]), int(out.magnet_rise_turns[0])) == (1, 0)
     fly = names.move("Fly")
     f = _gravity(tables, names, opp="Gravity", order="opp")
@@ -501,7 +504,7 @@ def test_the_gravity_move_ban(tables, names):
     s = _gravity(tables, names, turns=3, mine=banned)
     assert not bool(jnp.any(usable_moves(tables, s, 0)))  # all invalid: Struggle (bcp.c:433)
     assert bool(legal_actions(tables, s, 0)[0])  # action 0 is Struggle
-    free = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    free = with_gravity(s, 0)
     assert bool(jnp.all(usable_moves(tables, free, 0)))
     assert bool(jnp.all(gravity_banned(s, jnp.asarray(GRAVITY_MOVES))))
     assert not bool(jnp.any(gravity_banned(free, jnp.asarray(GRAVITY_MOVES))))
@@ -519,7 +522,7 @@ def test_the_gravity_move_ban(tables, names):
 
 def test_metronome_and_copycat_never_call_a_banned_move(tables, names):
     s = _gravity(tables, names, turns=3, mine=PLAIN)
-    calm = s._replace(gravity=jnp.asarray(0, s.gravity.dtype))
+    calm = with_gravity(s, 0)
     for move in GRAVITY_MOVES:
         assert not bool(metronome_candidates(tables, s, 0)[move]), move
         assert int(copycat_call(tables, move, s)) == 0, move
@@ -533,7 +536,7 @@ def test_vanilla_gravity_ends_after_five_turn_ends(tables, names):
     s = _gravity(tables, names, turns=GRAVITY_TURNS, mine=PLAIN)
     for left in (4, 3, 2, 1, 0, 0):
         s = assert_matches_reference(tables, s, A("Leer", "Leer", s, names), _o())
-        assert int(s.gravity) == left
+        assert int(gravity_of(s)) == left
 
 
 def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
@@ -548,14 +551,14 @@ def test_kaizo_gravity_re_arms_for_ever(kaizo_tables, kaizo_names):
         [_kaizo_spec(n, "Skitty", "Growl", 20)],
         gravity=GRAVITY_TURNS,
     )
-    assert int(s.gravity) == GRAVITY_TURNS  # sub_seq 297: the fight starts with Gravity up
+    assert int(gravity_of(s)) == GRAVITY_TURNS  # sub_seq 297: the fight starts with Gravity up
     s = s._replace(
         magnet_rise=s.magnet_rise.at[0].set(1), magnet_rise_turns=s.magnet_rise_turns.at[0].set(9)
     )
     seen = []
     for _turn in range(6):
         s = assert_matches_reference(t, s, A("Leer", "Growl", s, n), _o())
-        seen.append(int(s.gravity))
+        seen.append(int(gravity_of(s)))
     assert seen == [4, 3, 2, 1, GRAVITY_TURNS, 4]
     assert int(s.magnet_rise_turns[0]) == 0  # zeroed by the first start at 0 or the loop
 
@@ -949,7 +952,7 @@ def test_transform_runs_the_copied_abilitys_switch_in_checks(tables, names):
         weather_announced=s.weather_announced.at[1].set(1),
     )
     out = assert_matches_reference(tables, s, A("Transform", "Tackle", s, names), _o())
-    assert int(out.weather) == Weather.RAIN
+    assert int(weather_of(out)) == Weather.RAIN
 
 
 def test_a_transformed_ditto_loses_metal_powder(tables, names):

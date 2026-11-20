@@ -144,14 +144,19 @@ EXP_ITEMS = (
 )
 
 
-def _exp_party(draw, tables, names, s, *, near_level: bool):
+def _exp_party(draw, tables, names, s, *, near_level: bool, markers: bool):
     """``s`` with the player's exp block redrawn to reach the payout's edges: exp anywhere in
     the level or just short of the next one, EVs near the 510 / 255 caps, friendship near the
     tier limits, the payout items, Pokerus, a Luxury Ball, any participation mask (fainted
-    slots included) and pending learn markers; sometimes a level-99 or level-100 Pokemon. The
-    stats and max HP are then ``recalc_stats``' at the drawn level and EVs."""
+    slots included); sometimes a level-99 or level-100 Pokemon. With ``markers``, pending learn
+    markers too (a payout can start with them: a Pursuit payout leaves its scan to the action's
+    MoveEnd payout). A step starts with no pending learn (an in-turn prompt pauses the turn and is
+    answered before it resumes, any other before the next step or replacement:
+    ``search.expand``), so the step test draws none. The stats and max HP are then
+    ``recalc_stats``' at the drawn level and EVs."""
     a = {name: np.asarray(getattr(s, name)).copy() for name in s._fields}
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
+    forms = np.asarray(tables.species_form_row)
     for slot in np.flatnonzero(a["species"][0]):
         if draw(st.integers(0, 9)) == 0:
             a["level"][0, slot] = draw(st.sampled_from((99, 100)))
@@ -179,9 +184,18 @@ def _exp_party(draw, tables, names, s, *, near_level: bool):
         )
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
-        if draw(st.integers(0, 4)) == 0:
+        if markers and draw(st.integers(0, 4)) == 0:
             a["learn_level"][slot] = draw(st.integers(2, max(2, level)))
-            a["learn_cursor"][slot] = draw(st.integers(0, 20))
+            # The cursor never passes the learnset's terminator: it starts at 0 (bs.c:9882) and
+            # moves only past a real entry (src/pokemon.c:3952, :3960). The learnset is the party
+            # Pokemon's own (a Transformed active's shadow, G-69).
+            sp, fm = (
+                (a["shadow_species"][0], a["shadow_form"][0])
+                if own
+                else (a["species"][0, slot], a["form"][0, slot])
+            )
+            entries = int(np.count_nonzero(np.asarray(tables.learnset_level)[forms[sp, fm]]))
+            a["learn_cursor"][slot] = draw(st.integers(0, entries))
     a["exp_mask"][...] = draw(st.integers(0, 63)) | (1 << int(a["active"][0]))
     for slot in np.flatnonzero(a["species"][0]):  # the drawn level and EVs' stats
         recalc_stats(tables, a, 0, int(slot))
@@ -231,22 +245,42 @@ def test_pay_exp_matches_the_per_level_loop(tables, names, data, pinned):
     # decomp's literal per-level ShouldLevelUp loop. A foe up to level 100 pays up to
     # 255 * 100 / 7 = 3642 before the multipliers: many levels at once.
     if pinned:
-        s, j, pending, selected = _transformed_payer(tables, names), 0, False, 0
+        s, j = _transformed_payer(tables, names), 0
     else:
         s = data.draw(supported_state(tables, names))
-        s = _exp_party(data.draw, tables, names, s, near_level=data.draw(st.booleans()))
+        s = _exp_party(
+            data.draw, tables, names, s, near_level=data.draw(st.booleans()), markers=True
+        )
         living = [j for j in range(6) if int(s.species[1, j]) and int(s.hp[1, j])]
         j = data.draw(st.sampled_from(living))
         s = s._replace(level=s.level.at[1, j].set(data.draw(st.integers(1, 100))))
-        pending, selected = data.draw(st.booleans()), data.draw(st.integers(0, 3))
     after = s.replace_hp(1, j, 0)
-    got = jit_pay(tables, s, after, jnp.asarray(pending), jnp.asarray(selected, jnp.int32))
-    want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j, pending, selected))
+    got = jit_pay(tables, s, after)
+    want = from_ref(ref_grant_exp(to_numpy(tables), to_ref(after), j))
     for name, a, b in zip(got._fields, got, want):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
 
 
 jit_replace = jax.jit(replace)
+
+
+def _resume_learn_pauses(tables, out, data):
+    """``out`` with every learn pause (E3-B2-21) answered and its turn resumed, on both engines.
+    TurnEnd's ReplaceFainted (bcp.c:1848) comes after the whole turn, so a replacement never
+    sees a paused turn: its scratch (``ts_*``) is 0 between turns (``step.replace``)."""
+    np_tables = to_numpy(tables)
+    for _ in range(8):
+        if not int(out.learn_site):
+            return out
+        options = [bool(x) for x in np.asarray(jit_options(tables, out))]
+        assert options == ref_learn_options(np_tables, to_ref(out)) and options[4]
+        pick = data.draw(st.sampled_from([k for k, ok in enumerate(options) if ok]))
+        want = from_ref(ref_learn(np_tables, to_ref(out), pick))
+        out = jit_learn(tables, out, jnp.int32(pick))
+        _assert_same(out, want)
+        if not bool(needs_learn(out)):  # the payout's last prompt: the turn goes on
+            out = _step_both(tables, out, jnp.zeros(2, jnp.int32), data.draw(any_outcome()), data)
+    raise AssertionError("more than eight learn prompts in one turn")
 
 
 @pytest.mark.slow
@@ -262,7 +296,7 @@ def test_step_payouts_match_reference(tables, names, data):
     # end-of-turn residual, Stealth Rock on a replacement), and the player's are close to a
     # level-up, so the payout's level-up changes what the rest of the turn reads.
     s = data.draw(supported_state(tables, names))
-    s = _exp_party(data.draw, tables, names, s, near_level=True)
+    s = _exp_party(data.draw, tables, names, s, near_level=True, markers=False)
     hp = np.asarray(s.hp).copy()
     for j in range(6):
         if hp[1, j] > 1 and data.draw(st.booleans()):
@@ -270,7 +304,7 @@ def test_step_payouts_match_reference(tables, names, data):
     s = s._replace(hp=jnp.asarray(hp, s.hp.dtype))
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
-    jax_out = _step_both(tables, s, acts, o, data)
+    jax_out = _resume_learn_pauses(tables, _step_both(tables, s, acts, o, data), data)
     if int(needs_replacement(jax_out)[1]):
         bench = [
             j
@@ -282,6 +316,35 @@ def test_step_payouts_match_reference(tables, names, data):
         want = from_ref(ref_replace(to_numpy(tables), to_ref(jax_out), 1, slot))
         for name, a, b in zip(got._fields, got, want):
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+
+
+@pytest.mark.slow
+def test_replacement_follows_the_resumed_learn_pause(tables, names):
+    # train5 u_004 (375094ac): a MoveEnd learn pause keeps the turn's assuranceDamageMask
+    # (subscript_update_hp.s:18-19; cleared by CleanupFaintedMon and SetupNextTurn, battle_lib.c:
+    # 2190-2193, :2231), and the test sent the opponent's replacement into the paused turn,
+    # where ``replace`` zeroes the scratch and the reference kept it. Geodude's Quick Attack
+    # damages Prinplup first, Bubble KOs it, the payout's BubbleBeam prompt pauses MoveEnd
+    # (bcp.c:3968); the answer resumes the turn, then Bonsly comes in.
+    from nuzline.engine.levelup import GIVE_UP, LEARN_MOVE_END
+    from nuzline.engine.outcome import empty_outcome
+    from tests.engine.helpers import A, assert_matches_reference
+    from tests.engine.test_e3_batch2 import _learn_state
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12, moves=("Quick Attack",)), _mon(names, "Bonsly", 15)]
+    s = _learn_state(tables, names, opp).replace_hp(1, 0, 1)
+    acts = A("Bubble", "Quick Attack", s, names)
+    paused = assert_matches_reference(tables, s, acts, empty_outcome())
+    assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.ts_assurance[0]) == 1
+    assert int(needs_replacement(paused)[1])
+    np_tables = to_numpy(tables)
+    answered = jit_learn(tables, paused, jnp.int32(GIVE_UP))
+    _assert_same(answered, from_ref(ref_learn(np_tables, to_ref(paused), GIVE_UP)))
+    done = assert_matches_reference(tables, answered, jnp.zeros(2, jnp.int32), empty_outcome())
+    assert int(done.learn_site) == 0 and int(done.ts_assurance[0]) == 0
+    got = jit_replace(tables, done, 1, 1)
+    _assert_same(got, from_ref(ref_replace(np_tables, to_ref(done), 1, 1)))
 
 
 # --- K3d-exp T6: the learnset resolve (JAX scan vs the decomp's Pokemon_LevelUpMove loop) ------
@@ -345,7 +408,6 @@ def _learn_party(draw, tables, s):
     held = [int(m) for m in a["moves"][0, side] if m] or [0]
     for name in ("disabled_move", "encore_move", "locked_move", "choice_lock"):
         a[name][0] = draw(st.sampled_from((0, 0, *held)))
-    a["learn_pin"][...] = draw(st.integers(0, 4))
     return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
 
 

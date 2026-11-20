@@ -21,6 +21,7 @@ from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import usable_moves
 from nuzline.engine.damage import ai_damage_for_roll, damage_table, decomp_abilities
 from nuzline.engine.enumerate import hit_class_law, outcome_laws
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import TRICK_ROOM_TURNS, AbilityId, EffectId, Stat, Status
 from nuzline.engine.outcome import MAX_HITS, empty_outcome
 from nuzline.engine.state import BATON_PASSED_FIELDS, VOLATILE_FIELDS, make_state
@@ -28,7 +29,14 @@ from nuzline.engine.step import step_events
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import _usable as ref_usable
 from nuzline.reference.engine import ref_damage_table
-from tests.engine.helpers import A, assert_matches_reference, roark_state
+from tests.engine.helpers import (
+    A,
+    assert_matches_reference,
+    roark_state,
+    trick_room_of,
+    weather_of,
+    weather_timer_of,
+)
 from tools.effect_map import CERTAIN_SECONDARY_EFFECTS, DECOMP_EFFECT_TO_ID
 
 SPE = 4  # stats[..., 0..4] are Atk..Spe
@@ -574,7 +582,7 @@ def test_me_first_counter_moves_against_protect_and_a_semi_invulnerable_foe(tabl
 
 def _trick(t, n, turns=0, mine=("Trick Room",), opp=("Growl",)):
     s = _fight(t, n, mine, opp)
-    return s._replace(trick_room=jnp.asarray(turns, s.trick_room.dtype))
+    return with_trick_room(s, turns)
 
 
 def test_trick_room_is_mapped_and_rearmed_only_in_kaizo(tables, names, kaizo_tables, kaizo_names):
@@ -588,10 +596,10 @@ def test_trick_room_toggles_and_the_turn_pass_counts_it_once(tables, names):
     s = _trick(tables, names)
     out = assert_matches_reference(tables, s, A("Trick Room", "Growl", s, names), _hits())
     # Set to 5 by the move, then the turn's pass counts it once (up through turn T + 4).
-    assert int(out.trick_room) == TRICK_ROOM_TURNS - 1
+    assert int(trick_room_of(out)) == TRICK_ROOM_TURNS - 1
     up = _trick(tables, names, turns=3)
     out = assert_matches_reference(tables, up, A("Trick Room", "Growl", up, names), _hits())
-    assert int(out.trick_room) == 0  # a second use ends it (the pass has nothing left to count)
+    assert int(trick_room_of(out)) == 0  # a second use ends it (the pass has nothing left to count)
 
 
 def test_trick_room_ends_in_vanilla_and_is_rearmed_in_kaizo(
@@ -602,10 +610,10 @@ def test_trick_room_ends_in_vanilla_and_is_rearmed_in_kaizo(
     for t, n, after in ((tables, names, 0), (kaizo_tables, kaizo_names, TRICK_ROOM_TURNS)):
         s = _trick(t, n, turns=1, mine=("Growl",))
         out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
-        assert int(out.trick_room) == after
+        assert int(trick_room_of(out)) == after
         s = _trick(t, n, turns=2, mine=("Growl",))
         out = assert_matches_reference(t, s, A("Growl", "Growl", s, n), _hits())
-        assert int(out.trick_room) == 1
+        assert int(trick_room_of(out)) == 1
 
 
 def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names):
@@ -621,8 +629,8 @@ def test_trick_room_reverses_the_order_and_an_area_start_sets_five(tables, names
         [_spec(names, "Geodude", 40, ("Tackle",))],
         trick_room=TRICK_ROOM_TURNS,
     )
-    assert int(started.trick_room) == TRICK_ROOM_TURNS
-    reversed_ = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    assert int(trick_room_of(started)) == TRICK_ROOM_TURNS
+    reversed_ = with_trick_room(s, 3)
     out = assert_matches_reference(tables, reversed_, acts, _hits())
     assert int(out.hp[1, 0]) == int(s.hp[1, 0])
     for bad in (-1, TRICK_ROOM_TURNS + 1):
@@ -825,7 +833,7 @@ def test_skill_swap_hands_over_an_entry_ability_that_acts_once_at_the_move_end(t
     rain = _ss(tables, names, AbilityId.BLAZE, AbilityId.DROUGHT)
     rain = rain._replace(weather_announced=_flags(rain, "weather_announced", [0, 1]))
     out = assert_matches_reference(tables, rain, acts, _hits())
-    assert int(out.weather) == Weather.SUN and int(out.weather_timer) == 0
+    assert int(weather_of(out)) == Weather.SUN and int(weather_timer_of(out)) == 0
     assert out.weather_announced.tolist() == [1, 1]
 
 
@@ -871,7 +879,7 @@ def test_skill_swap_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     acts = A("Rock Throw", "Skill Swap", s, names)
     assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
     assert EffectId.SKILL_SWAP in CRIT_ODDS_EFFECTS
-    swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](s)
+    swapped = CRIT_ODDS_EFFECTS[EffectId.SKILL_SWAP](tables, s)
     assert int(swapped.ability[1, int(s.active[1])]) == AbilityId.COMPOUNDEYES
     assert int(swapped.ability[0, int(s.active[0])]) == int(s.ability[1, int(s.active[1])])
 
@@ -980,9 +988,8 @@ def test_gastro_acid_hides_a_speed_ability(tables, names):
     from nuzline.engine.order import action_order, effective_speed
 
     s = _fight(tables, names, ("Tackle",), ("Tackle",))
-    s = s._replace(
+    s = with_weather(s, Weather.RAIN)._replace(
         ability=s.ability.at[0, 0].set(AbilityId.SWIFT_SWIM),
-        weather=jnp.asarray(Weather.RAIN, s.weather.dtype),
         stats=s.stats.at[0, 0, SPE].set(100).at[1, 0, SPE].set(150),
     )
     acts = A("Tackle", "Tackle", s, names)
@@ -1120,7 +1127,7 @@ def test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds(tables, names):
     acts = A("Rock Throw", "Gastro Acid", s, names)
     assert hit_law(tables, s, acts, 0) == {1: 90, 91: 10}
     assert EffectId.GASTRO_ACID in CRIT_ODDS_EFFECTS
-    assert CRIT_ODDS_EFFECTS[EffectId.GASTRO_ACID](s).ability_suppressed.tolist() == [1, 1]
+    assert CRIT_ODDS_EFFECTS[EffectId.GASTRO_ACID](tables, s).ability_suppressed.tolist() == [1, 1]
     bit = 1 << list(CRIT_ODDS_EFFECTS).index(EffectId.GASTRO_ACID)
     odds, possible = crit_variants(tables, s, acts)
     assert not bool(possible[0, bit])  # Super Luck / Compoundeyes: no crit input changes

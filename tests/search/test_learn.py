@@ -17,9 +17,9 @@ from nuzline.engine.ids import Stat, Status
 from nuzline.engine.levelup import advance_learns, needs_learn
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
-from nuzline.engine.step import EXP_REFUSED_WINDOW_C, step
+from nuzline.engine.step import step
 from nuzline.search import playout as playout_module
-from nuzline.search.learn import learn_reason, resolve_learns
+from nuzline.search.learn import resolve_learns
 from nuzline.search.playout import finish_turn, refusal_reason
 from nuzline.search.stage_a import rank_actions
 from tests.engine.helpers import A, roark_real_state
@@ -86,7 +86,9 @@ def test_the_player_replacement_reads_the_moves_after_the_learn(tables, names):
     s = _mask(_with(s, exp={2: _base(tables, names, "Magikarp", 15) - 1}), 0, 2)
     played = _step(tables, s, A("Tackle", "Splash", s, names), empty_outcome())
     assert int(played.hp[0, 0]) == 0 and int(played.hp[1, 0]) == 0
-    assert int(played.level[0, 2]) == 15 and int(played.learn_level[2]) == 15
+    # The payout's scan runs inside it (E3-B2-21): the empty slot takes Tackle at once.
+    assert int(played.level[0, 2]) == 15 and int(played.learn_level[2]) == 0
+    assert _moves(names, played, 2) == ["Splash", "Tackle", "", ""]
     out, refused = finish_turn(tables, played, False, 10)
     assert not bool(refused)
     assert _moves(names, out, 2) == ["Splash", "Tackle", "", ""]
@@ -103,7 +105,7 @@ def test_learn_work_of_a_battle_ending_entry_ko_stays(tables, names):
     s = _prinplup_state(tables, names, opp=opp).replace_hp(1, 0, 1)
     s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
     played = _step(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())
-    assert (int(played.level[0, 0]), int(played.learn_level[0])) == (17, 17)
+    assert (int(played.level[0, 0]), int(played.learn_level[0])) == (17, 0)
     out, refused = finish_turn(tables, played, False, 10)
     assert not bool(refused) and int(out.over) == 1
     assert int(out.exp[0]) == 3888 and int(out.level[0, 0]) == 18
@@ -128,13 +130,13 @@ def _window_c(tables, names):
 # Fast after the module's other tests compile its program; under -m fullset alone it pays
 # that compile (pod 172-190 s), which only the fullset run sees.
 @pytest.mark.fullset
-def test_window_c_refuses_finish_turn(tables, names):
+def test_a_hazard_ko_in_the_replacement_loop_is_not_refused(tables, names):
     s = _window_c(tables, names)
     played = _step(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())
-    out, refused = finish_turn(tables, played, False, 10)
-    assert bool(refused) and int(out.exp_refused) == EXP_REFUSED_WINDOW_C
-    assert "window (c)" in learn_reason(out)
-    assert learn_reason(played) is None
+    _, refused = finish_turn(tables, played, False, 10)
+    # E3-B2-21: the payout runs inside the replacement and its prompt stays for the player
+    # (bcp.c:3968); nothing is refused.
+    assert not bool(refused)
 
 
 def test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul(tables, names):

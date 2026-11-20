@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import pytest
 
 from nuzline.engine.damage import damage_for_roll, damage_table, effectiveness
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import MOVE_STRUGGLE, AbilityId, Status, Type, Weather
 from tests.engine.helpers import synthetic_state
 
@@ -243,14 +244,12 @@ def test_screens_halve_except_on_crit(tables):
 
 def test_weather(tables):
     s, move = special(tables)
-    assert table(tables, s._replace(weather=jnp.int8(Weather.SUN)), move) == rolls(
-        180
-    )  # 119 * 1.5 + 2
-    assert table(tables, s._replace(weather=jnp.int8(Weather.RAIN)), move) == rolls(61)
-    assert table(tables, s._replace(weather=jnp.int8(Weather.FOG)), move) == rolls(121)
+    assert table(tables, with_weather(s, Weather.SUN), move) == rolls(180)  # 119 * 1.5 + 2
+    assert table(tables, with_weather(s, Weather.RAIN), move) == rolls(61)
+    assert table(tables, with_weather(s, Weather.FOG), move) == rolls(121)
     # Sandstorm raises a Rock-type defender's SpD x1.5: 300*95*42 // 300 // 50 = 79.
     s, move = special(tables, move_type="Electric", def_types=("Rock", "Rock"))
-    assert table(tables, s._replace(weather=jnp.int8(Weather.SANDSTORM)), move) == rolls(81)
+    assert table(tables, with_weather(s, Weather.SANDSTORM), move) == rolls(81)
 
 
 def test_pinch_abilities(tables):
@@ -331,5 +330,5 @@ def test_sandstorm_spd_boost_comes_before_the_stage(tables):
     # docs/discrepancies.md #5: SpD 200 x1.5 = 300 (battle_lib.c:6925), then -1 stage
     # (:7008) gives 200 again; the other order (200 -> 133 -> 199) gives 120 + 2.
     s, move = special(tables, move_type="Electric", def_types=("Rock", "Rock"))
-    sand = s._replace(weather=jnp.int8(Weather.SANDSTORM)).with_stages(1, spd=-1)
+    sand = with_weather(s, Weather.SANDSTORM).with_stages(1, spd=-1)
     assert table(tables, sand, move) == table(tables, s, move) == rolls(121)

@@ -31,9 +31,11 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
 The site layout depends on the state (which of the AI's moves are super effective,
 which bench Pokemon resist ``move_hit``): both functions take ``tables`` and derive it
 with ``nuzline.ai.switching.switch_sites``, the one layout function Task 3's
-``maybe_switch`` also uses (``switch_action`` maps a stop to its action). Draws that
-cannot change the result (``AI_HasAbsorbAbilityInParty``'s ``% 3`` for Roark) are not
-sites. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
+``maybe_switch`` also uses (``switch_action`` maps a stop to its action).
+``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` gate (trainer_ai.c:3651-3653) is no site:
+it only filters the layout's ``ABSORB_GATED`` sites, so the stop law mixes the two branches
+(``switch_stop_probs``) and the sampler draws it apart (G-37); with no such site it cannot
+change the result. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
 gives ``switch_stop = SWITCH_REFUSED`` and NaN probabilities (``switching``). Item use
 draws nothing (8.6).
 
@@ -141,6 +143,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ABILITY_GUESSES",
+    "ABSORB_GATE_P",
     "AI_SITE_MOVES",
     "CALC_DRAWS",
     "CALC_DRAW_CLASSES",
@@ -183,14 +186,19 @@ TIEBREAK_MOD = 12
 _I8, _I32, _F32 = jnp.int8, jnp.int32, jnp.float32
 
 # RandNext() % m over a uniform u16 per SwitchSite (NONE, KEEP, PASS_INEFFECTIVE,
-# PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD, ABSORB): (modulus, the residues lo <= r < hi that
-# stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1, so the
-# residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691). ABSORB
-# switches when ``RandNext() & 1`` is set (trainer_ai.c:3706): residue 1 of 2.
-_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3, 2], _I32)
-_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 1], _I32)
-_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 2], _I32)
-_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691, 32768], _F32) / 65536
+# PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD, ABSORB, ABSORB_GATED): (modulus, the residues
+# lo <= r < hi that stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845
+# + 1, so the residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691).
+# ABSORB switches when ``RandNext() & 1`` is set (trainer_ai.c:3706): residue 1 of 2; so does
+# ABSORB_GATED once its gate passed (below).
+_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3, 2, 2], _I32)
+_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 1, 1], _I32)
+_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 2, 2], _I32)
+_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691, 32768, 32768], _F32) / 65536
+# AI_HasAbsorbAbilityInParty's gate (trainer_ai.c:3651-3653): RandNext() % 3 == 0 lets the
+# ABSORB_GATED sites draw, 21846 of 65536.
+ABSORB_GATE_MOD = 3
+ABSORB_GATE_P = 21846 / 65536
 
 # IfRandomLessThan sites per move (decomp move id), transcribed from roark.md 5.2-5.3
 # and 8.3: the N of the move's EVAL_ATTACK site (EvalAttack_TryScorePlus2,
@@ -277,6 +285,10 @@ SITE_N: dict[int, int] = {
     2836: 128,  # Expert_HighCritical (neutral: on to TryScorePlus1 when it does NOT jump)
     2839: 128,  # Expert_HighCritical_TryScorePlus1 (+1 when it does NOT jump)
     4882: 128,  # Expert_Brine (+1 more when it does NOT jump)
+    4912: 64,  # Expert_Feint (to _CheckConditions when it jumps, else the end), E3-B2-13
+    4927: 128,  # Expert_Feint_TryScorePlus1 (+1 when it does NOT jump)
+    4937: 128,  # Expert_Feint_NoProtectChain (to _End when it jumps, else +1)
+    4942: 192,  # Expert_Feint_ProtectChain1 (to _End when it jumps, else +1)
     # E1 batch 9.
     3346: 128,  # Expert_DestinyBond (+1 when it does NOT jump)
     3351: 128,  # Expert_DestinyBond_CheckUserMediumHP (+1 when it does NOT jump)
@@ -440,6 +452,23 @@ SITE_N: dict[int, int] = {
     5542: 64,  # Expert_MeFirst_TryScorePlus1AndEnd (+1 when it does NOT jump)
     6210: 64,  # Expert_TrickRoom_TryScorePlus3 (+3 when it does NOT jump)
     4429: 50,  # Expert_ChangeUserAbility_TryScorePlus2 (+2 when it does NOT jump)
+    5257: 128,  # Expert_Fling (power 30-60: to _End when it jumps, else -1)
+    5268: 128,  # Expert_Fling_CheckWeakness (to _TryScorePlus1 when it jumps, else +1 first)
+    5276: 64,  # Expert_Fling_TryScorePlus1 (+1 when it does NOT jump)
+    1915: 128,  # Expert_MirrorMove (faster, last move in the table: to _End when it jumps, else +2)
+    1922: 80,  # Expert_MirrorMove_TryScoreMinus1 (to _End when it jumps, else -1)
+    3624: 80,  # Expert_Foresight_FirstRoll (a Ghost AI battler: to _End when it jumps), E3-B2-18
+    3627: 80,  # Expert_Foresight_SecondRoll (to _End when it jumps, else +2), E3-B2-18
+    3321: 128,  # Expert_LockOn (to _End when it jumps, else +2), E3-B2-17
+    6084: 128,  # Expert_AquaRing (HP 30 % or more: to _End when it jumps, else +1), E3-B2-20
+    5506: 64,  # Expert_LuckyChant (to _ScorePlus1 when it jumps: +1, else 0), E3-B2-7
+    6171: 128,  # Expert_Defog_TryScoreMinus1 (to _CheckUserHPAndOpponentEvasion when it jumps), E3-B2-14
+    6180: 50,  # Expert_Defog_TryScoreMinus2 (to _CheckOpponentHP when it jumps: no -2), E3-B2-14
+    4820: 80,  # Expert_MiracleEye_ExtraRandomGate (a Dark defender: to _End when it jumps), E3-B2-10
+    4823: 80,  # Expert_MiracleEye_ScorePlus2 (to _End when it jumps, else +2), E3-B2-10
+    4499: 100,  # Expert_MagicCoat (to _CheckUserFirstTurn when it jumps, else -1), E3-B2-6
+    4505: 150,  # Expert_MagicCoat_CheckUserFirstTurn (first turn: to _End when it jumps, else +1)
+    4511: 30,  # Expert_MagicCoat_TryScoreMinus1 (to _End when it jumps, else -1)
 }
 SITE_LINES = tuple(SITE_N)
 # The flat (vanilla) layout's column of script_roll_sites that each line reads: column 0 is
@@ -676,6 +705,18 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         82,  # COPY_MOVE_FOR_BATTLE (Mimic): no Basic or Expert entry, no other script.s mention
         57,  # TRANSFORM: no Basic or Expert entry, no script.s mention
         267,  # CHATTER: no Basic or Expert entry; Basic_CheckSoundproof :131 by move id
+        # E3-B2-3. No Basic_ScoreMoveEffect (:133-286), Expert_Main (:1623-1811) or other flag
+        # entry names it: its move takes the generic paths (the tables that list it, Expert_
+        # Encore's :3223 and the CheckHP ones :7798, :7847, :7958, are transcribed).
+        93,  # CONVERSION2
+        # E3-B2-4. Named only by the tables Harrassment_Effects (script.s:8051) and CheckHP_Target_
+        # DiscourageAtLowHP (:7960), both transcribed (commands.py): no Basic_ScoreMoveEffect or
+        # Expert_Main entry, so its move takes the generic paths.
+        100,  # DECREASE_LAST_MOVE_PP (Spite)
+        # E3-B2-9. Named only by the tables Expert_Encore_EncouragedMoveEffects (script.s:3259) and
+        # CheckHP_DiscourageAtHighHP (:7757), both transcribed (commands.py): no Basic_ScoreMoveEffect
+        # or Expert_Main entry, no roll, and no AI command reads the bit.
+        194,  # REMOVE_ALL_PP_ON_DEFEAT (Grudge)
         # E2 batch 13 (B13-23). No Basic_ScoreMoveEffect (:133-286), Expert_Main
         # (:1623-1811) or other flag entry names these: their moves take the generic paths.
         77,  # POISON_MULTI_HIT (Twineedle)
@@ -713,8 +754,39 @@ KAIZO_TRANSCRIBED: frozenset[int] = frozenset(
         # (:1790), :5984, :5988 (E3-2-2)
         259,  # TRICK_ROOM: Basic_CheckTrickRoom (:282); Expert_TrickRoom (:1800), :6210 (E3-2-4)
         191,  # SWITCH_ABILITIES (Skill Swap): Expert_ChangeUserAbility (:1743), :4429 (E3-2-5)
+        178,  # COPY_ABILITY (Role Play): Expert_ChangeUserAbility (:1733), :4429 (E3-B2-5)
+        183,  # APPLY_MAGIC_COAT: no Basic entry; Expert_MagicCoat (:1736), :4499, :4505, :4511
+        # (E3-B2-6)
+        240,  # PREVENT_CRITS (Lucky Chant): Basic_CheckLuckyChant (:270); Expert_LuckyChant
+        # (:1783), :5506 (E3-B2-7)
+        113,  # FORESIGHT (Foresight, Odor Sleuth): Basic_CheckForesight (:198);
+        # Expert_Foresight (:1703), :3624, :3627 (E3-B2-18)
+        94,  # NEXT_ATTACK_ALWAYS_HITS (Lock-On, Mind Reader): Basic_CheckLockOn (:190);
+        # Expert_LockOn (:1692), :3321 (E3-B2-17)
+        251,  # RESTORE_HP_EVERY_TURN (Aqua Ring): Basic_CheckAquaRing (:279);
+        # Expert_AquaRing (:1794), :6084 (E3-B2-20)
+        216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE (Miracle Eye): Basic_CheckMiracleEye (:255);
+        # Expert_MiracleEye (:1760), :4820, :4823 (E3-B2-10)
+        246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES (Last Resort): Basic_CheckLastResort (:275);
+        # Expert_LastResort (:1789), no roll (E3-B2-11)
+        223,  # REMOVE_PROTECT (Feint): no Basic entry; Expert_Feint (:1766), :4912, :4927, :4937,
+        # :4942 (E3-B2-13)
+        258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN (Defog): Basic_CheckDefog (:281); Expert_Defog
+        # (:1799), :6171, :6180 (E3-B2-14)
+        233,  # FLING: Basic_CheckFling (:263); Expert_Fling (:1776), :5257, :5268, :5276
+        # (E3-B2-1)
+        9,  # COPY_MOVE (Mirror Move): no Basic entry; Expert_MirrorMove (:1632), :1915, :1922;
+        # Risky :6539 (E3-B2-2)
         239,  # SUPRESS_ABILITY (Gastro Acid): Basic_CheckGastroAcid (:269); Expert_GastroAcid
         # (:1782), :5481, :5484 (E3-2-6)
+        # E3-B2-16. Named by no script.s table, Basic_ScoreMoveEffect (:133-286) or Expert_Main
+        # (:1623-1811) entry (grep): its move takes the generic paths.
+        34,  # INCREASE_PRIZE_MONEY (Pay Day)
+        # E1 batch G (G-20): no Expert_Main entry; tables :3264, :6477, :6490, :8065.
+        213,  # CAMOUFLAGE: Basic_CheckCamouflage (:252 -> :1021-1024)
+        # G-34: no Expert_Main entry (Expert_StatusSleep's :1817 and Expert_Encore's table :3227
+        # name it for other moves); no Kaizo move has it (vanilla Nightmare).
+        107,  # STATUS_NIGHTMARE: Basic_CheckNightmare (:194 -> :321-327)
     }
 )
 # The transcribed effects (KAIZO_TRANSCRIBED) whose Expert_Main entry goes to a label added
@@ -865,6 +937,18 @@ KAIZO_EXPERT_LABELS: dict[int, tuple[str, int]] = {
     239: ("Expert_GastroAcid", 1782),
     259: ("Expert_TrickRoom", 1800),
     191: ("Expert_ChangeUserAbility", 1743),
+    178: ("Expert_ChangeUserAbility", 1733),
+    233: ("Expert_Fling", 1776),
+    9: ("Expert_MirrorMove", 1632),
+    183: ("Expert_MagicCoat", 1736),
+    240: ("Expert_LuckyChant", 1783),
+    94: ("Expert_LockOn", 1692),
+    251: ("Expert_AquaRing", 1794),
+    113: ("Expert_Foresight", 1703),
+    216: ("Expert_MiracleEye", 1760),
+    246: ("Expert_LastResort", 1789),
+    223: ("Expert_Feint", 1766),
+    258: ("Expert_Defog", 1799),
 }
 # Of KAIZO_EXPERT_LABELS, the effects whose Expert label policy._expert transcribes
 # (layout.KAIZO expert_transcribed), written out: it is not derived from the table, so an
@@ -1000,6 +1084,18 @@ KAIZO_EXPERT_TRANSCRIBED: frozenset[int] = frozenset(
         239,  # SUPRESS_ABILITY: Expert_GastroAcid (E3-2-6)
         259,  # TRICK_ROOM: Expert_TrickRoom (E3-2-4)
         191,  # SWITCH_ABILITIES: Expert_ChangeUserAbility (E3-2-5)
+        178,  # COPY_ABILITY: Expert_ChangeUserAbility (E3-B2-5)
+        233,  # FLING: Expert_Fling (E3-B2-1)
+        9,  # COPY_MOVE: Expert_MirrorMove (E3-B2-2)
+        183,  # APPLY_MAGIC_COAT: Expert_MagicCoat (E3-B2-6)
+        240,  # PREVENT_CRITS: Expert_LuckyChant (E3-B2-7)
+        94,  # NEXT_ATTACK_ALWAYS_HITS: Expert_LockOn (E3-B2-17)
+        251,  # RESTORE_HP_EVERY_TURN: Expert_AquaRing (E3-B2-20)
+        113,  # FORESIGHT: Expert_Foresight (E3-B2-18)
+        216,  # IGNORE_EVATION_REMOVE_DARK_IMMUNE: Expert_MiracleEye (E3-B2-10)
+        246,  # FAIL_IF_NOT_USED_ALL_OTHER_MOVES: Expert_LastResort (E3-B2-11)
+        223,  # REMOVE_PROTECT: Expert_Feint (E3-B2-13)
+        258,  # REMOVE_HAZARDS_SCREENS_EVA_DOWN: Expert_Defog (E3-B2-14)
     }
 )
 assert set(KAIZO_EXPERT_LABELS) <= KAIZO_TRANSCRIBED
@@ -1188,20 +1284,33 @@ def switch_stop_probs(switch_sites) -> jnp.ndarray:
     """``float32[sites + 1]``: over the ``switch_sites`` kinds (``int8[sites]``), the
     probability that site i is the first to stop,
     ``prod_{h<i} (1 - p_h) * p_i``, then (last entry) that none stops; all NaN for a
-    refused layout."""
+    refused layout. With ``ABSORB_GATED`` sites, ``AI_HasAbsorbAbilityInParty``'s gate
+    (trainer_ai.c:3651-3653) passes with ``g = ABSORB_GATE_P`` and otherwise skips them: the
+    law is ``g * probs(p) + (1 - g) * probs(p, ABSORB_GATED sites at 0)``, exact because the
+    gate only filters those sites and every later site is its own draw (G-37)."""
     kind = jnp.asarray(switch_sites, _I32)
+    gated = kind == SwitchSite.ABSORB_GATED
     p = _SWITCH_P[kind]
-    reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [sites + 1]
-    probs = jnp.concatenate([reach[:-1] * p, reach[-1:]])
+
+    def law(p):
+        reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [sites + 1]
+        return jnp.concatenate([reach[:-1] * p, reach[-1:]])
+
+    probs = law(p)
+    mixed = ABSORB_GATE_P * probs + (1 - ABSORB_GATE_P) * law(jnp.where(gated, 0, p))
+    probs = jnp.where(jnp.any(gated), mixed, probs)
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), jnp.nan, probs)
 
 
-def _first_stop(draws, switch_sites) -> jnp.ndarray:
+def _first_stop(draws, switch_sites, gate) -> jnp.ndarray:
     """The first site whose u16 ``draws[i]`` stops the check, else the number of sites
-    (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout."""
+    (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout. ``gate``:
+    the u16 of ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` (trainer_ai.c:3651); an
+    ``ABSORB_GATED`` site stops only when it is 0 (G-37)."""
     kind = jnp.asarray(switch_sites, _I32)
     residue = draws % _SWITCH_MOD[kind]
     stops = (residue >= _SWITCH_LO[kind]) & (residue < _SWITCH_HI[kind])
+    stops = stops & ((kind != SwitchSite.ABSORB_GATED) | (gate % ABSORB_GATE_MOD == 0))
     first = jnp.where(jnp.any(stops), jnp.argmax(stops), kind.shape[0])
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), SWITCH_REFUSED, first)
 
@@ -1220,6 +1329,8 @@ def sample_ai_outcome(
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
+    # AI_HasAbsorbAbilityInParty's gate (G-37): its own key, so the site draws are unchanged.
+    gate = jax.random.randint(jax.random.fold_in(k[3], sites), (), 0, 65536, dtype=_I32)
     calc = no_calc_draws()
     if layout is not None and layout.per_slot_sites:
         rolls = jax.vmap(
@@ -1244,7 +1355,7 @@ def sample_ai_outcome(
         ability_guess=guess,
         script_rolls=script_rolls,
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
-        switch_stop=_first_stop(draws, layout_sites).astype(_I8),
+        switch_stop=_first_stop(draws, layout_sites, gate).astype(_I8),
         calc_draws=calc,
     )
 

@@ -29,10 +29,10 @@ comparison after it still runs (battle_lib.c:8080), on the ``score`` left over f
 1, which this module does not track. Wonder Guard's ``MOVE_STATUS_IMMUNE`` bit zeroes a stage-2
 score (``switching.wonder_guard_bit``, ruling G-23). The type-chart modifiers (Levitate,
 Normalize, Scrappy, Adaptability, Tinted Lens, Filter, Solid Rock, Expert Belt, Iron
-Ball, Miracle Eye; Hidden Power, Natural Gift, Judgment and Weather Ball take each
+Ball; Hidden Power, Natural Gift, Judgment and Weather Ball take each
 candidate's ``Move_CalcVariableType``, ``switching.party_move_types``, B13-35; a candidate's
 Weather Ball where that case assigns no type is refused here
-(``damage.ai_weather_ball_typed``); the player's Foresight, Ingrain and
+(``damage.ai_weather_ball_typed``); the player's Foresight, Ingrain, Miracle Eye and
 roosting flags are read through ``apply_type_chart``: a replacement is where the AI reads
 roosting, battle_lib.c:2540) are not implemented here:
 ``policy.ai_refusals`` refuses every one of them for the fight, so the precondition is
@@ -56,6 +56,7 @@ from nuzline.ai.switching import (
     wonder_guard_bit,
 )
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     AI_WEATHER_BALL,
     ai_weather_ball_typed,
@@ -95,10 +96,19 @@ def _stage_2_score(tables: Tables, state: BattleState, move, move_type, power_mu
     the chart takes ``move_type``, the candidate's ``Move_CalcVariableType`` (:8051)."""
     score = calc_move_damage(tables, state, 1, move, power_mul) & _U8
     score = apply_type_chart(tables, state, 1, move, score, move_type) & _U8
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     d_types = state.types[0, state.active[0]]
     flags = type_chart_flags(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
+        tables,
+        move,
+        d_types,
+        fcm.gravity_count(state),
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
+        eyed,
     )
     immune = wonder_guard_bit(tables, state, 1, 0, move, flags) | ((flags & MAGNET_RISE) != 0)
     return jnp.where(immune, 0, score)
@@ -121,7 +131,9 @@ def _post_ko(tables: Tables, state: BattleState, power_mul) -> tuple[jnp.ndarray
     # Battler_HeldItemEffect(defender) (battle_lib.c:8006): the player's Iron Ball (G-56).
     d_iron = iron_ball(tables, state, 0)
     flags = jax.vmap(
-        lambda m, k: calc_effectiveness_flags(tables, m, d_types, state.gravity, k, d_iron)
+        lambda m, k: calc_effectiveness_flags(
+            tables, m, d_types, fcm.gravity_count(state), k, d_iron
+        )
     )(moves.reshape(-1), types.reshape(-1)).reshape(SLOTS, MOVES)
     super_effective = jnp.any((moves != 0) & ((flags & SUPER_EFFECTIVE) != 0), axis=1)
     eligible = candidate & super_effective & (score_1 > 0)

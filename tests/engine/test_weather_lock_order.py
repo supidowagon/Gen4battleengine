@@ -26,7 +26,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from nuzline.engine.ids import WEATHER_ABILITY_IDS, AbilityId, Stat, Status, Weather
+from nuzline.engine.ids import (
+    WEATHER_ABILITY_IDS,
+    AbilityId,
+    Stat,
+    Status,
+    Weather,
+    clean_field_mask,
+)
 from nuzline.engine.order import MOVE_ACTIONS
 from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.step import step
@@ -60,7 +67,7 @@ def _setup(tables, names, case):
     # Swift Swim and Roark's other Pokemon no ability; Psyduck gets its row's (``as_species``).
     a["ability"][1, :2] = AbilityId.NONE
     a["stealth_rock"][:] = 0
-    a["weather"][...], a["weather_timer"][...] = Weather.RAIN, 0
+    a["field_mask"][...] = clean_field_mask(Weather.RAIN)  # a permanent rain
     # (Psyduck's slot, its Spe, the other slot's Spe, the slot on the field at the end):
     lock, lock_spe, other_spe, end = {
         "switch_in": (1, X, 3 * X, 1),  # the opponent switches Psyduck in: X vs X

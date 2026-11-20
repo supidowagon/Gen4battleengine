@@ -14,11 +14,11 @@ super-effective move (no keep draw). With five bench Pokemon that is at most
 9.
 
 The exact switch part merges each stop into one categorical (``outcome.switch_stop_probs``)
-and drops ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` (:3651), which cannot change
-the result without an absorbing bench ability (:3655-3713). ``_loose_switch`` checks both
-gates: it walks the decomp's control flow with every ``RandNext`` read its own independent
-draw, the :3651 read included, and enumerates every combination of the reads. It reads no
-switch site layout.
+and folds ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` gate (:3651-3653) into it, which
+changes the result only through the bench absorb draws behind it (:3655-3713; G-36, G-37).
+``_loose_switch`` checks both: it walks the decomp's control flow with every ``RandNext`` read
+its own independent draw, the :3651 read included (a failed gate skips the bench draws), and
+enumerates every combination of the reads. It reads no switch site layout.
 """
 
 import dataclasses
@@ -55,9 +55,11 @@ from nuzline.ai.switching import (
 )
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import move_type_of
+from nuzline.engine.field import with_gravity
 from nuzline.engine.state import MOVES, SLOTS, BattleState, make_state
 from tests.ai.test_kaizo_outcome import KAIZO  # Roark's fight layout (E1 Ruling R7)
-from tests.engine.helpers import as_species
+from tests.ai.test_kaizo_policy import _species_with
+from tests.engine.helpers import as_species, gravity_of
 
 K = SwitchSite
 # Kaizo move ids (data/gen4_platinum_kaizo names; types and powers asserted in the tests).
@@ -67,6 +69,10 @@ ROCK4 = (ROCK_THROW, ACCELEROCK, ANCIENT_POWER, HEAD_SMASH)
 KAIZO_SWITCH_SITES = max(MOVES, (SLOTS - 1) * MOVES) + 2 * (SLOTS - 1) * MOVES
 SPARE = KAIZO_SWITCH_SITES - (MOVES + 2 * (SLOTS - 1) * MOVES)  # 16 unused by the six-bench case
 TYPE_STEEL = 8  # generated/pokemon_types.txt; checked in test_type_steel_id
+# AI_HasAbsorbAbilityInParty's checkAbility by moveHit's table type (trainer_ai.c:3665-3674);
+# type ids from generated/pokemon_types.txt, checked in test_type_steel_id.
+TYPE_FIRE, TYPE_WATER, TYPE_ELECTRIC = 10, 11, 13
+_CHECK_ABILITY = {TYPE_FIRE: "Flash Fire", TYPE_WATER: "Water Absorb", TYPE_ELECTRIC: "Volt Absorb"}
 
 # The u16 residue counts of each read (BattleSystem_RandNext is a u16), counted here rather
 # than taken from nuzline.ai.outcome.
@@ -74,7 +80,8 @@ _U16 = np.arange(65536)
 P_KEEP = np.count_nonzero(_U16 % 10 != 0) / 65536  # :3588, keep (stop: no switch)
 P_PASS_1 = np.count_nonzero(_U16 % 2 == 0) / 65536  # :3796 with rand 2 (:3975)
 P_PASS_2 = np.count_nonzero(_U16 % 3 == 0) / 65536  # :3796 with rand 3 (:3981)
-P_ABSORB = np.count_nonzero(_U16 % 3 != 0) / 65536  # :3651
+P_ABSORB = np.count_nonzero(_U16 % 3 != 0) / 65536  # :3651, the gate returns FALSE
+P_ABSORB_SWITCH = np.count_nonzero(_U16 & 1) / 65536  # :3706
 P_GUARD = np.count_nonzero(_U16 % 3 < 2) / 65536  # :3338, AI_CannotDamageWonderGuard (G-23)
 # MoveIsOnDamagingTurn's listed battle effects (battle_lib.c:7588-7604); none is on its damaging
 # turn at the AI's reads (SYSCTL_LAST_OF_MULTI_TURN cleared by BattleContext_Init).
@@ -115,6 +122,8 @@ def _actions(t, s, sites: int) -> list[int]:
 
 def test_type_steel_id(kaizo_names):
     assert kaizo_names.type("Steel") == TYPE_STEEL
+    assert kaizo_names.type("Fire") == TYPE_FIRE and kaizo_names.type("Water") == TYPE_WATER
+    assert kaizo_names.type("Electric") == TYPE_ELECTRIC
 
 
 def test_kaizo_switch_sites_are_the_six_party_maximum():
@@ -263,19 +272,24 @@ def test_vanilla_switch_sites_unchanged(tables, names):
 # --- The loose oracle -----------------------------------------------------------------------
 
 
+class _Skip(int):
+    """A read's ``action`` that, on probability ``p``, skips the next ``int`` reads (unread)."""
+
+
 def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     """The ``RandNext`` reads ``TrainerAI_ShouldSwitch`` (trainer_ai.c:3894) makes on the
     longest path, in order, each ``(p, action)``: with probability ``p`` (its u16 residue
     count) the read stops the check with ``action``, or, for ``action = None``, takes the
-    branch that still goes on, as its other branch does. Written from the decomp's
-    control flow, step by step, on concrete numpy values; it reads no switch site layout."""
+    branch that still goes on, as its other branch does; for a ``_Skip(k)`` action it goes on
+    past the next k reads, which are not made. Written from the decomp's control flow, step
+    by step, on concrete numpy values; it reads no switch site layout."""
     a, d = int(s.active[1]), int(s.active[0])
     species = np.asarray(s.species)
     hp = np.asarray(s.hp)
     row = np.asarray(t.species_form_row)[species, np.asarray(s.form)]
     ability = np.asarray(t.species_abilities_decomp)[row, np.asarray(s.ability_slot)]
     d_types = s.types[0, d]
-    gravity = int(s.gravity)
+    gravity = int(gravity_of(s))
     reads: list[tuple[float, int | None]] = []  # (P(the read's branch), action or None)
 
     # :3906-3913: trapped (Bind, Mean Look), ingrained, Shadow Tag / Arena Trap on the player's
@@ -297,10 +311,9 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
     if not bench:
         return reads
     # :3941-3959. AI_PerishSongKO (step 3: these states never set Perish Song; its switch is
-    # tested in test_switching.py, G-64), AI_OnlyIneffectiveMoves, the absorbing abilities on the
-    # bench and Natural Cure are refused (the caller assumes no refusal), so these return FALSE (Wonder
-    # Guard's check is below); AI_HasAbsorbAbilityInParty still reads RandNext() % 3 (:3651) when the
-    # active has a super-effective move (flag TRUE: no draw inside, :3586-3587).
+    # tested in test_switching.py, G-64), AI_OnlyIneffectiveMoves and Natural Cure are refused
+    # (the caller assumes no refusal), so these return FALSE (Wonder Guard's check and
+    # AI_HasAbsorbAbilityInParty are below).
     a_moves = [int(m) for m in np.asarray(s.moves[1, a])]
     identified = int(s.foresight[0]) != 0
 
@@ -318,10 +331,22 @@ def _loose_reads(t, s: BattleState) -> list[tuple[float, int]]:
             for m in (int(x) for x in np.asarray(s.moves[1, j])):
                 if m and int(calc_effectiveness_flags(t, m, d_types, gravity)) & SUPER_EFFECTIVE:
                     reads.append((P_GUARD, MOVE_ACTIONS + j))
+    # :3947, AI_HasAbsorbAbilityInParty (:3640-3713): a moveHit with power (:3656-3663) of table
+    # type Fire / Water / Electric names checkAbility (:3665-3674); the active's own one holds
+    # the switch (:3677-3679); each bench holder of it, in party order, draws RandNext() & 1
+    # (:3703-3708), a success switching to it.
+    hit = int(s.move_hit[1])
+    absorb: list[tuple[float, int]] = []
+    hit_type = int(t.move_type[hit])
+    if hit != 0 and int(t.move_power[hit]) != 0 and hit_type in _CHECK_ABILITY:
+        check = ABILITY_IDS[_CHECK_ABILITY[hit_type]]
+        if int(ability[1, a]) != check:
+            absorb = [(P_ABSORB_SWITCH, MOVE_ACTIONS + j) for j in bench if ability[1, j] == check]
     if any(keep_se(m) for m in a_moves):
-        # :3651: % 3 != 0 returns FALSE (:3652); otherwise :3656-3713 return FALSE as well, with
-        # no absorbing bench ability. Either way the check goes on: "stop" here is never one.
-        reads.append((P_ABSORB, None))
+        # :3651: with a super-effective move (flag TRUE: no draw inside, :3586-3587) % 3 != 0
+        # returns FALSE (:3652) before the bench draws; otherwise they follow.
+        reads.append((P_ABSORB, _Skip(len(absorb)) if absorb else None))
+    reads.extend(absorb)
     # :3964, AI_HasSuperEffectiveMove(..., FALSE) (:3560-3592).
     for m in a_moves:
         if keep_se(m):
@@ -366,8 +391,13 @@ def _loose_switch(t, s: BattleState) -> np.ndarray:
             weight *= p if b else 1 - p
         if weight == 0:
             continue
+        skip = 0
         for (_, action), b in zip(reads, bits, strict=True):
-            if b and action is not None:
+            if skip:  # not read: its two outcomes sum out
+                skip -= 1
+            elif b and isinstance(action, _Skip):
+                skip = int(action)
+            elif b and action is not None:
                 if action != NO_SWITCH:
                     out[action] += weight
                 break
@@ -401,7 +431,8 @@ def _switch_states(draw, t, n, party):
             b1, b2 = draw(pair)
             s = s._replace(types=s.types.at[1, j].set(_types(n, b1, b2)))
     hits = ("Earthquake", "Tackle", "Ember", "Water Gun", "Wing Attack", "Karate Chop",
-            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer", "Fire Fang")  # fmt: skip
+            "ThunderShock", "Psybeam", "Bite", "Shadow Ball", "Leer", "Fire Fang",
+            "Weather Ball")  # fmt: skip
     # G-23: Shedinja (Wonder Guard) as the player's active or on the AI's bench (its types stay
     # the drawn ones: only its ability matters here).
     shedinja = n.species("Shedinja")
@@ -410,16 +441,23 @@ def _switch_states(draw, t, n, party):
     if draw(st.integers(0, 3)) == 0:
         j = draw(st.sampled_from(bench))
         s = as_species(t, s, 1, j, shedinja)
-    return s._replace(
+    # G-36: Flash Fire / Water Absorb / Volt Absorb holders on the AI's side, the active too.
+    for _ in range(draw(st.integers(0, 2))):
+        name = draw(st.sampled_from(sorted(set(_CHECK_ABILITY.values()))))
+        j = draw(st.sampled_from(range(SLOTS)))
+        s = as_species(t, s, 1, j, _species_with(t, ABILITY_IDS[name]))
+    hit = n.move(draw(st.sampled_from(hits)))
+    gravity = draw(st.sampled_from((0, 0, 0, 5)))
+    s = s._replace(
         hp=hp,
-        move_hit=s.move_hit.at[1].set(n.move(draw(st.sampled_from(hits)))),
-        gravity=jnp.asarray(draw(st.sampled_from((0, 0, 0, 5))), s.gravity.dtype),
+        move_hit=s.move_hit.at[1].set(hit),
         foresight=s.foresight.at[0].set(draw(st.sampled_from((0, 0, 1)))),
         trapped=s.trapped.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 2)))),
         mean_look=s.mean_look.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         ingrain=s.ingrain.at[1].set(draw(st.sampled_from((0, 0, 0, 0, 1)))),
         stages=s.stages.at[1, 1].set(draw(st.sampled_from((0, 0, 0, 2, 4)))),
     )
+    return with_gravity(s, gravity)
 
 
 def _assert_switch_equals_loose(t, s: BattleState) -> None:
@@ -447,7 +485,9 @@ def test_roark_switch_distribution_matches_loose(
     assume(not policy.ai_refusals(t, s, n))
     reads = _loose_reads(t, s)
     assume(len(reads) <= 12)
-    passes = sum(action not in (None, NO_SWITCH) for _, action in reads)
+    passes = sum(
+        action not in (None, NO_SWITCH) and not isinstance(action, _Skip) for _, action in reads
+    )
     event(f"party-pass reads: {min(passes, 6)}{'+' if passes >= 6 else ''}")
     target(float(passes))
     _assert_switch_equals_loose(t, s)
@@ -513,6 +553,33 @@ def test_loose_counts_the_absorb_read(kaizo_tables, kaizo_names, kaizo_roark_par
         K.PASS_NOT_VERY_EFFECTIVE,
         K.NONE,
     ]
+    _assert_switch_equals_loose(t, s)
+
+
+@pytest.mark.parametrize("keep", [True, False])
+@pytest.mark.parametrize(
+    ("hit", "holder"), [("Water Gun", "Water Absorb"), ("Ember", "Flash Fire")]
+)
+def test_absorb_bench_matches_loose(
+    kaizo_tables, kaizo_names, kaizo_roark_party, keep, hit, holder
+):
+    """G-36, G-37: two bench holders of the absorb ability ``hit`` names; with ``keep`` the
+    active's Rock Throw is super effective, so AI_HasAbsorbAbilityInParty's gate (:3651) is read
+    first and a failure skips both bench draws (:3706). Exact against loose."""
+    t, n = kaizo_tables, kaizo_names
+    s = _six_bench(t, n, kaizo_roark_party, (ROCK_THROW, 0, 0, 0))
+    s = s._replace(hp=s.hp.at[1, 3:].set(0), move_hit=s.move_hit.at[1].set(n.move(hit)))
+    for j in (1, 2):
+        s = as_species(t, s, 1, j, _species_with(t, ABILITY_IDS[holder]))
+    if not keep:
+        s = s._replace(moves=s.moves.at[1, 0].set(jnp.asarray([33, 0, 0, 0], s.moves.dtype)))
+    reads = _loose_reads(t, s)
+    gate = [(P_ABSORB, _Skip(2))] if keep else []
+    assert reads[: len(gate) + 2] == gate + [(P_ABSORB_SWITCH, MOVE_ACTIONS + j) for j in (1, 2)]
+    kind = K.ABSORB_GATED if keep else K.ABSORB
+    assert switch_sites(t, s, KAIZO.switch_sites).tolist()[:2] == [kind] * 2
+    assert switching_refusals(t, s, KAIZO.switch_sites) == []
+    assert policy.ai_refusals(t, s, n) == []
     _assert_switch_equals_loose(t, s)
 
 

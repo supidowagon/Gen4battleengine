@@ -18,6 +18,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.damage import (
     hidden_power,
     judgment_type,
@@ -38,7 +39,6 @@ from nuzline.engine.ids import (
     MoveFlag,
     MoveTarget,
     Type,
-    Weather,
 )
 from nuzline.engine.state import BattleState, battler_ability, held_item
 
@@ -71,17 +71,38 @@ def opponents(battler) -> tuple[jnp.ndarray, jnp.ndarray]:
     return other | 2, other & 1
 
 
-def follow_me_target(state: BattleState, attacker) -> jnp.ndarray:
-    """``int32``: the living Follow Me user on the other side of ``attacker`` (the readers of
-    ``BattleSystem_Defender``, lib.c:1694-1697, :1714-1717): ``ts_follow_me[side ^ 1] - 1`` when
-    that field is set and the Pokemon now in the user's battler slot has HP, else ``NO_DEFENDER``
-    (D2-11 rule 4: nothing clears ``followMe`` on a faint or switch; the readers test the slot's
-    ``curHP``)."""
+def follow_me_user(state: BattleState, side) -> jnp.ndarray:
+    """``int32``: the living Follow Me user of side ``side`` (a side index, ``side_of``):
+    ``ts_follow_me[side] - 1`` when that field is set and the Pokemon now in the user's battler
+    slot has HP (``sideConditions[side].followMe && FOLLOW_ME_MON(side).curHP``), else
+    ``NO_DEFENDER`` (D2-11 rule 4: nothing clears ``followMe`` on a faint or switch; the readers
+    test the slot's ``curHP``)."""
     fmt = format_of(state)
-    attacker = jnp.asarray(attacker, _I32)
-    value = state.ts_follow_me[side_of(attacker) ^ 1].astype(_I32)
+    value = state.ts_follow_me[jnp.asarray(side, _I32)].astype(_I32)
     user = jnp.clip(value - 1, 0, fmt.B - 1)
     return jnp.where((value != 0) & alive(state, user), user, NO_DEFENDER)
+
+
+def follow_me_target(state: BattleState, attacker) -> jnp.ndarray:
+    """``int32``: the living Follow Me user on the other side of ``attacker`` (the readers of
+    ``BattleSystem_Defender``, lib.c:1694-1697, :1714-1717; ``follow_me_user``)."""
+    return follow_me_user(state, side_of(jnp.asarray(attacker, _I32)) ^ 1)
+
+
+def magic_coat_defender(state: BattleState, mover) -> jnp.ndarray:
+    """``int32``: the defender of a reflected move's holder pass, ``BtlCmd_MagicCoat``
+    (battle_script.c:6487-6507; E3-B2-6, review b2 #9): the living Follow Me user of the
+    MOVER's side (``target`` is ``GetBattlerSide(attacker)`` read while the mover is still the
+    attacker, :6490), else the mover. The range branch (:6497-6498, adjacent opponents / all
+    adjacent) gives the mover; so does the last branch (:6500-6505): ``BattleSystem_Defender``
+    reads the move's own range (lib.c:1604-1606, ``inRange`` only for move 0) and its battler is
+    an opponent of the holder, while the one Lightning Rod / Storm Drain flag of the action
+    (``selfTurnFlags``, cleared by BattleContext_Init at each action's end) sits on the redirect
+    target, which is the holder itself (the reflection reads the DEFENDER's magicCoat, bcp.c:3069).
+    At B = 2 it is the mover (its side's Follow Me is its own, and it is acting now)."""
+    mover = jnp.asarray(mover, _I32)
+    fm = follow_me_user(state, side_of(mover))
+    return jnp.where(fm != NO_DEFENDER, fm, mover).astype(_I32)
 
 
 def random_opponent(state: BattleState, attacker, bit):
@@ -97,14 +118,19 @@ def random_opponent(state: BattleState, attacker, bit):
     return jnp.where(alive(state, pick), pick, other), jnp.asarray(True)
 
 
-def fight_randomizes(state: BattleState, side, struggling) -> jnp.ndarray:
+def fight_randomizes(state: BattleState, side, struggling, reselected=False) -> jnp.ndarray:
     """``bool``: the fight command's ``randomizeTarget`` (bcp.c:1861-1903, D2-9 rule 1).
     ``struggling`` (:1866-1868), or an Encore on the attacker at the action's start (:1869-1884):
     both Encore branches randomize, whether or not the slot still holds the encored move. The
     lock branch (:1885-1888) and the plain slot (:1894-1896) do not; a locked battler is never
-    struggling. Branch 1.5 (:1889-1893, the selected move left its slot) cannot occur: the move is
-    read from the slot at the action (``levelup.learn_pin``)."""
-    return jnp.asarray(struggling, bool) | (state.encore_move[side] != 0)
+    struggling. Branch 1.5 (:1889-1893) randomizes when the selected move left its slot:
+    ``reselected``, a learn prompt answered between the selection and the action replaced the
+    slot (``step._execute_actions``, E3-B2-21)."""
+    return (
+        jnp.asarray(struggling, bool)
+        | (state.encore_move[side] != 0)
+        | jnp.asarray(reselected, bool)
+    )
 
 
 def multi_turn(tables: Tables, move) -> jnp.ndarray:
@@ -132,7 +158,7 @@ def charge_keeps_user(tables: Tables, state: BattleState, battler, move, defende
     attacker, so a charge turn with no foe charges."""
     sun_now = (
         ((tables.move_flags[move].astype(_I32) & MoveFlag.SUN_SKIP) != 0)
-        & (state.weather == Weather.SUN)
+        & fcm.sun(fcm.weather_bits(state))
         & ~weather_suppressed(tables, state)
     )
     herb = tables.item_effect[held_item(state, battler)] == ItemId.POWER_HERB
@@ -312,9 +338,7 @@ def resolve(
         live_foe = jnp.where(alive(state, foe), foe, none)
         fm = follow_me_target(state, attacker)
         random_def = live_foe
-        single_def = jnp.where(
-            fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe)
-        )
+        single_def = jnp.where(fm != none, fm, jnp.where(alive(state, chosen), chosen, live_foe))
         random_drew = single_drew = uoa_random_drew = jnp.asarray(False)
 
     is_ = lambda *ranges: jnp.isin(rng, jnp.asarray([int(r) for r in ranges], _I32))

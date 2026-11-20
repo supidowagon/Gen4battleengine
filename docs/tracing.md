@@ -483,7 +483,8 @@ For each turn, `tools/trace_to_state.py` works out the following:
   sets `status` and `status_counter` to 0 for every Pokemon at 0 HP in a record.
 
 `COMPARED_FIELDS` is `species`, `level`, `hp`, `max_hp`, `status`, `status_counter`,
-`item`, `moves`, `pp`, `active`, `stages` and `weather`. The dump does not fill the
+`item`, `moves`, `pp`, `active`, `stages` and `field_mask` (the traced
+`fieldConditionsMask` bit for bit). The dump does not fill the
 other `BattleState` fields. Each turn takes them from the engine's own replay of the
 previous turn, so they are carried forward and never checked:
 
@@ -496,7 +497,7 @@ previous turn, so they are carried forward and never checked:
 - side conditions: `spikes`, `toxic_spikes`, `stealth_rock`, `reflect`,
   `light_screen`, `safeguard`, `mist`, `lucky_chant`, `tailwind`, `wish_timer`,
   `wish_hp`, `future_timer`, `future_damage`, `trainer_items`, `trainer_item_count`
-- field: `weather_timer`, `trick_room`, `gravity`, `mud_sport`
+- field: `weather_turns`, `mud_sport`
 - hidden draws: `qc_roll` (fitted, see Quick Claw above)
 - experience: `exp`, `evs`, `exp_mask` and the learn fields (the trace has no exp;
   `level`, `max_hp`, `hp`, `moves` and `pp` check the level-ups and learns)

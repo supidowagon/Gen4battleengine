@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from nuzline.engine.ids import Status
 
-__all__ = ["decode_status"]
+__all__ = ["decode_status", "status_conditions"]
 
 # MON_CONDITION_* (include/constants/battle/condition.h)
 _SLEEP_MASK, _TOXIC_COUNTER_SHIFT = 0x7, 8
@@ -15,6 +15,16 @@ _STATUS_BITS = (
     (1 << 6, Status.PARALYSIS),
     (1 << 7, Status.TOXIC),
 )
+
+
+def status_conditions(raw: int) -> list[str]:
+    """The conditions a ``MON_CONDITION_*`` word holds (sleep turns, then each status bit),
+    e.g. ``["sleep 3", "poison", "burn", "freeze", "paralysis"]`` for 0x7B. A battle tests
+    each bit on its own (``status & MON_CONDITION_BURN``, battle_lib.c:4479; wake-up clears
+    only the sleep bits, battle_controller_player.c:2449; thaw only the freeze bit,
+    subscript_thaw_out.s), so a word with several keeps them all."""
+    out = [f"sleep {raw & _SLEEP_MASK}"] if raw & _SLEEP_MASK else []
+    return out + [s.name.lower() for bit, s in _STATUS_BITS if raw & bit]
 
 
 def decode_status(raw: int) -> tuple[Status, int]:

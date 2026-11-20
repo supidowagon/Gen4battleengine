@@ -11,6 +11,7 @@ import pytest
 
 from nuzline.engine.damage import damage_for_roll
 from nuzline.engine.enumerate import enumerate_turn, outcome_laws
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, Stat
 from nuzline.engine.outcome import ACUPRESSURE_DRAWS, MAX_HITS, crit_odds, empty_outcome
 from nuzline.engine.state import make_state
@@ -262,7 +263,7 @@ def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_in
     effect that changes one of them is one of CRIT_ODDS_EFFECTS, and its declared write gives
     the same inputs. A later batch adding Thief, Trick, Skill Swap, Worry Seed, Embargo
     (through the item read) or the like fails here until it joins them."""
-    from nuzline.engine.ids import AbilityId
+    from nuzline.engine.ids import AbilityId, EffectId
     from nuzline.engine.outcome import CRIT_ODDS_EFFECTS
     from nuzline.engine.step import step
 
@@ -285,13 +286,22 @@ def test_crit_odds_effects_are_every_effect_that_writes_another_battlers_crit_in
     run = jax.jit(step)
     before = _crit_inputs(base, 1)
     writers = set()
+    # Fling (E3-B2-1) writes the foe's Focus Energy only by a flung Lansat Berry
+    # (subscript_held_item_raise_crit.s:11): its user holds one and the foe has none yet.
+    lansat = base._replace(
+        focus_energy=base.focus_energy.at[1].set(0),
+        item=base.item.at[0, 0].set(n.item("Lansat Berry")),
+    )
     for effect, move in sorted(first_move.items()):
-        state = base._replace(moves=base.moves.at[0, 0, 0].set(move))
+        is_fling = effect == EffectId.FLING
+        origin, start = (lansat, _crit_inputs(lansat, 1)) if is_fling else (base, before)
+        state = origin._replace(moves=origin.moves.at[0, 0, 0].set(move))
         after = _crit_inputs(run(tables, state, acts, procs), 1)
-        if after != before:
+        if after != start:
             writers.add(effect)
-            assert effect in CRIT_ODDS_EFFECTS, (effect, move, before, after)
-            assert _crit_inputs(CRIT_ODDS_EFFECTS[effect](state), 1) == after, (effect, move)
+            assert effect in CRIT_ODDS_EFFECTS, (effect, move, start, after)
+            written = CRIT_ODDS_EFFECTS[effect](tables, state)
+            assert _crit_inputs(written, 1) == after, (effect, move)
     assert writers == set(CRIT_ODDS_EFFECTS), writers
 
 
@@ -500,7 +510,7 @@ def test_weather_heal_by_weather(tables, names):
     m = int(s.max_hp[0, 0])
     cases = ((Weather.NONE, m // 2), (Weather.SUN, m * 20 // 30), (Weather.RAIN, m // 4))
     for weather, gained in cases:
-        w = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+        w = with_weather(s, weather)
         out = assert_matches_reference(tables, w, (0, 0), O)
         assert int(out.hp[0, 0]) == 1 + gained, weather
 

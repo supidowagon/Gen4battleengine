@@ -76,12 +76,8 @@ LISTED = [
     "nuzline.ai.commands.MOVE_IDS",
     "nuzline.ai.commands.SOUND_MOVES",
     "nuzline.ai.switching.MOVE_IDS",
-    "nuzline.ai.switching._MOVES",
     "nuzline.ai.switching.PLAYER_ABILITY_REFUSALS",
-    "nuzline.ai.switching.PLAYER_MOVE_REFUSALS",
-    "nuzline.ai.policy._STATE_MOVE_IDS",
     "nuzline.ai.outcome._SITES",
-    "nuzline.ai.commands.CALC_DAMAGE_MOVES",
     "nuzline.ai.commands.MOVE_TYPE_MOVES",
     "nuzline.ai.commands.COPYCAT_ENCOURAGED_MOVES",
     # vanilla_policy / kaizo_policy: script.s:78's compare (the Dry Skin word)
@@ -94,10 +90,15 @@ LISTED = [
     "nuzline.engine.ids.Stat",
     "nuzline.engine.ids.MoveFlag",
     "nuzline.engine.ids.Weather",
+    "nuzline.engine.ids.FieldCondition",
+    "nuzline.engine.ids.WEATHER_TEMP_BIT",
+    "nuzline.engine.ids.WEATHER_PERM_BIT",
+    "nuzline.engine.ids.STARF_QUEUE",
     "nuzline.engine.ids.ItemId",
     "nuzline.engine.ids.ItemParam",
     "nuzline.engine.ids.ItemAiCategory",
     "nuzline.engine.ids.AbilityId",
+    "nuzline.engine.ids.FlingEffect",
     "nuzline.engine.ids.GRAVITY_MOVES",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     "nuzline.engine.ids.MIMIC_FORBIDDEN",  # EXEMPT: code move ids (_CODE_MOVE_IDS)
     "nuzline.ai.layout.COPIER_EFFECTS",  # EXEMPT: keyed by decomp effect id
@@ -119,6 +120,11 @@ LISTED = [
     "nuzline.ai.commands.RISKY_EFFECTS",
     "nuzline.ai.commands.SETUP_FIRST_TURN_EFFECTS",
     "nuzline.ai.commands.HARRASSMENT_EFFECTS",
+    "nuzline.ai.commands.FLING_ITEMS_POISON",
+    "nuzline.ai.commands.FLING_ITEMS_BURN",
+    "nuzline.ai.commands.FLING_ITEMS_PARALYZE",
+    "nuzline.ai.commands.FLING_DESIRABLE_EFFECTS",
+    "nuzline.ai.commands.FEINT_GRADUAL_RECOVERY_EFFECTS",
     "nuzline.ai.commands.CHECK_HP_TABLES",
     "nuzline.ai.outcome.KAIZO_TRANSCRIBED",
     "nuzline.ai.outcome.KAIZO_EXPERT_LABELS",
@@ -230,7 +236,6 @@ def _resolve(where: str):
 def _code_entries(where: str) -> set:
     """The table at ``where`` as ``{(name or None, id or None)}``, to compare with its
     ``CONSTANTS`` entries."""
-    from nuzline.ai import switching
     from nuzline.ai.layout import AiLayout
 
     obj = _resolve(where)
@@ -246,8 +251,6 @@ def _code_entries(where: str) -> set:
         return {("Focus Band", band.id)}
     if where == "nuzline.saves.check.ULTIMATE_MOVES":  # species keys and move values
         return {(None, k) for k in obj} | {(None, v) for v in set(obj.values())}
-    if where == "nuzline.ai.switching._MOVES":
-        return {(n, switching.MOVE_IDS[n]) for n in obj}
     if where == "nuzline.engine.ids.ABILITY_DECOMP_IDS":  # AbilityId keys, decomp id values
         return {(None, v) for v in obj.values()}
     if isinstance(obj, type) and issubclass(obj, IntEnum | IntFlag):
@@ -361,15 +364,11 @@ def test_kaizo_policy_ids_are_checked(vanilla_manifest, vanilla_items):
 
 
 def test_id_cases_are_decomp_ids_in_every_policy():
-    """The TrainerAI_CalcDamage and TrainerAI_MoveType id cases are compared by id in both
-    policies (the C code is unchanged in Kaizo), so Kaizo's Triple Axel (149) hits
-    MOVE_PSYWAVE: they are vanilla_policy constants, never name-checked against Kaizo."""
-    scopes = {
-        c.scope
-        for c in CONSTANTS
-        if c.where
-        in ("nuzline.ai.commands.CALC_DAMAGE_MOVES", "nuzline.ai.commands.MOVE_TYPE_MOVES")
-    }
+    """The TrainerAI_CalcDamage (``CALC_DAMAGE_MOVES``, empty since E3-B2-15) and
+    TrainerAI_MoveType id cases are compared by id in both policies (the C code is unchanged in
+    Kaizo), so Kaizo's Triple Axel (149) hits MOVE_PSYWAVE: they are vanilla_policy constants,
+    never name-checked against Kaizo."""
+    scopes = {c.scope for c in CONSTANTS if c.where == "nuzline.ai.commands.MOVE_TYPE_MOVES"}
     assert scopes == {"vanilla_policy"}
 
 

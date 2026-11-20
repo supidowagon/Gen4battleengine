@@ -376,6 +376,16 @@ class PrepProblem:
     blocking_abilities: tuple[tuple[int, int], ...] | None = None
     # The player's Chatter parameter from the save's Chatot cry (``SaveFile.chatot_cry``, G-70).
     chatot_cry: int = 0
+    # A move some team member must know (0: none): Defog when the run clears the fight's
+    # fog with field Defog just before it (``cli.fight_start``, ledger G-15). The team at the
+    # fight is the party that used it: a warp onto the fight's map clears FLAG_DEFOG_ACTIVE
+    # (field_map_change_flags.c:80-85), so it is used after the last warp, with no PC between.
+    field_move: int = 0
+    # The save stands in the fight's map script weather (``cli.script_rain_on_save``, ledger
+    # G-24): the run warps onto the map before the fight, which rewrites the weather from the
+    # header (field_map_change.c:273-280) while the var keeps the script from running again,
+    # so every setup starts as ``start_condition`` says (clear), the save's own party too.
+    script_weather_warp: bool = False
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -400,11 +410,15 @@ def build_problem(
     exclude: Sequence[str] = (),
     reserve: Sequence[str] = (),
     prestatus: Sequence[str] = (),
+    field_move: int = 0,
+    script_weather_warp: bool = False,
 ) -> tuple[PrepProblem, list[str]]:
     """The save's pool at ``cap`` as a :class:`PrepProblem`, and the warnings (every
     exclusion and trim, reserved items missing from the bag). ``ValueError`` for a ``deaths``
     outside ``0..MAX_DEATH_BUDGET``, an unknown item or prestatus name, a value both protected
-    and excluded, a protected Pokemon left out as unsupported, and an empty pool."""
+    and excluded, a protected Pokemon left out as unsupported, and an empty pool, or, with a
+    ``field_move``, a pool where no candidate knows it (the team phase starts from the
+    candidates' own moves, ``setups.knows_field_move``)."""
     if not 0 <= deaths <= MAX_DEATH_BUDGET:
         raise ValueError(f"deaths {deaths} outside [0, {MAX_DEATH_BUDGET}]")
     reserved = [_lookup(names.item, name, "item") for name in reserve]
@@ -472,5 +486,12 @@ def build_problem(
         ),
         blocking_abilities=blocking_abilities(names),
         chatot_cry=save.chatot_cry,
+        field_move=field_move,
+        script_weather_warp=script_weather_warp,
     )
+    if field_move and not any(field_move in c.spec.moves for c in problem.candidates):
+        raise ValueError(
+            f"no usable Pokemon knows {names.move_names[field_move]}, which the field move "
+            "needs in the party"
+        )
     return problem, warnings

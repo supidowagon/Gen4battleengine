@@ -44,6 +44,7 @@ from nuzline.engine.enumerate import (
     INPUT_NEUTRAL_ITEMS,
     enumerate_drawn,
 )
+from nuzline.engine.field import with_trick_room
 from nuzline.engine.ids import QUICK_CLAW_MODULUS, QUICK_CLAW_PARAM, ItemId, Stat, Status
 from nuzline.engine.observe import observe
 from nuzline.engine.order import MOVE_ACTIONS, action_order, player_second
@@ -254,7 +255,7 @@ def test_both_active_compare_plain_speed(tables, names):
     acts = A("Scratch", "Tackle", s, names)
     assert _first(tables, s, acts) == 1  # Geodude is faster
     # Trick Room is ignored when both are active (lib.c:1402-1407) ...
-    tr = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    tr = with_trick_room(s, 3)
     assert _first(tables, tr, acts) == 1
     # ... and a lone active holder goes first even under Trick Room.
     lone = tr._replace(qc_roll=tr.qc_roll.at[1].set(0))
@@ -394,7 +395,7 @@ def test_reference_agreement_over_draws(tables, names):
             free = 1 if holders == (0,) else 0
             s = _claw(s, free, names, item="Lagging Tail")
         if trick:
-            s = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+            s = with_trick_room(s, 3)
         if low:
             s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
         acts = {

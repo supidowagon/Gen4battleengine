@@ -28,11 +28,24 @@ writes it (:3797). A bench Pokemon can be in both passes: ``UpateMoveStatusForTy
 row cleared it (Ground on Flying/Bug), and Wonder Guard's ``INEFFECTIVE`` (:2734-2739) never
 clears ``NOT_VERY_EFFECTIVE``; so the passes hold up to ``2 * 5 * 4 = 40`` draws. The Wonder
 Guard draws (step 4) exist only when no move of ``A`` is super effective (:3300-3311), so never
-beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates without the Flash Fire draws
+beside a keep draw: at most ``max(4, 5 * 4) + 40 = 60`` candidates without the absorb draws
 (ruling G-33; ``tests/ai/test_kaizo_switching.py::test_kaizo_switch_sites_reach_sixty``). The
-absorb draws (step 6, at most 5) share the keep draws' condition, so with the Wonder Guard draws
-a party of six could pass 60 only for a Wonder Guard player, a Fire ``moveHit`` and bench Flash
-Fire holders together: refused by the count test, never approximated.
+absorb draws (step 6, at most 5) exist with or without a keep draw: beside the keep draws that is
+at most ``5 + 4 + 40 = 49``; with the Wonder Guard draws a party of six could pass 60 only for a
+Wonder Guard player, an absorbable ``moveHit`` and bench absorb holders together: refused by the
+count test, never approximated.
+
+Step 6, ``AI_HasAbsorbAbilityInParty`` (trainer_ai.c:3640-3713; ruling G-36). When ``A`` has a
+super-effective move (``AI_HasSuperEffectiveMove(..., TRUE)``, no draw inside, :3586-3587) it
+first reads ``RandNext() % 3`` and returns FALSE unless it is 0 (:3651-3653): one gate draw
+shared by every bench draw below it. Then a ``moveHit`` with power (:3656-3663) of table type
+Fire, Water or Electric (``MOVE_DATA().type``, :3665-3674) names Flash Fire, Water Absorb or Volt
+Absorb; ``A``'s own ``Battler_Ability`` of that name holds the switch (:3677-3679); each living
+bench Pokemon (party order; ``aiSlot2`` is ``A`` itself in singles, battle_system.c:400-402)
+whose ``MON_DATA_ABILITY`` is it draws ``RandNext() & 1`` (:3703-3708), the first success
+switching to it. Its sites are ``SwitchSite.ABSORB`` without the gate and
+``SwitchSite.ABSORB_GATED`` behind it; the gate is no site of its own: ``outcome`` folds it into
+the stop law (``switch_stop_probs``) and draws it apart in the sampler (G-37).
 
 Wonder Guard (ruling G-23). ``AI_CannotDamageWonderGuard`` (step 4) runs when ``D``'s
 ``battleMons[].ability`` is Wonder Guard (no Mold Breaker test, no knowledge: the true
@@ -77,15 +90,11 @@ Breaker only matters against Levitate, which is refused, and the AI bench's Wond
 Refused, never approximated (``switching_refusals`` names each one):
 
 * abilities on either side that change these masks: Levitate, Scrappy, Normalize; and on
-  the AI's side the steps 6-7 abilities (Water Absorb, Volt Absorb:
-  ``AI_HasAbsorbAbilityInParty``; Natural Cure: ``AI_IsAsleepWithNaturalCure``), whose draws are
-  not modelled; Flash Fire's case of step 6 is (``SwitchSite.ABSORB``, F-2: one
-  ``RandNext() & 1`` per bench Pokemon with it after a Fire ``moveHit`` with power, in party
-  order, beside the Wonder Guard draws and only when no move of ``A`` is super effective: with
-  one, the function's ``RandNext() % 3`` gate (:3651) is shared by those draws, which independent
-  sites cannot express: refused, ``_Layout.absorb_gate``). A state with more candidates than the
+  the AI's side step 7's Natural Cure (``AI_IsAsleepWithNaturalCure``), whose draws are not
+  modelled (step 6, every absorb case, is: above). A state with more candidates than the
   layout's sites is refused (Wonder Guard, absorb and both passes together can exceed 60);
-* moves whose state the engine does not carry: Miracle Eye; the variable-type moves are
+* moves whose state the engine does not carry: none now (Miracle Eye's bit is read since E3-B2-10,
+  ``defender_chart_flags``); the variable-type moves are
   modelled (``TrainerAI_MoveType``, :3127, ``damage.ai_move_type`` for the AI's active and the
   player's ``moveHit``; ``Move_CalcVariableType``, battle_lib.c:8097, ``party_move_types`` for
   a bench member: Hidden Power, Natural Gift, Judgment, Weather Ball, B13-35), except Weather
@@ -112,6 +121,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import (
     AI_JUDGMENT,
@@ -164,7 +174,12 @@ class SwitchSite(IntEnum):
     WONDER_GUARD = 5
     # AI_HasAbsorbAbilityInParty (:3640-3713), Flash Fire's case (F-2): a bench Pokemon with Flash
     # Fire after a Fire moveHit with power: RandNext() & 1 switches to it (:3706), 32768 of 65536.
+    # Water Absorb and Volt Absorb after a Water / Electric moveHit likewise (:3668-3671; G-36).
     ABSORB = 6
+    # The same draw behind the function's gate (:3651-3653): A has a super-effective move, so one
+    # RandNext() % 3 shared by every ABSORB_GATED site of the layout lets them draw only on residue
+    # 0 (21846 of 65536). ``outcome`` folds the gate into the stop law (G-37).
+    ABSORB_GATED = 7
 
 
 # MOVE_STATUS_* bits (include/constants/battle/moves.h:58-60).
@@ -193,7 +208,6 @@ ABILITY_IDS = {
 MOVE_IDS = {
     "Magnet Rise": 393,
     "Roost": 355,
-    "Miracle Eye": 357,
     "Ingrain": 275,
     "Perish Song": 195,
     "Hidden Power": 237,
@@ -208,13 +222,9 @@ _ANY_SIDE_ABILITIES = {
     "Normalize": "makes every move Normal",
 }
 _AI_SIDE_ABILITIES = {
-    "Water Absorb": "AI_HasAbsorbAbilityInParty",
-    "Volt Absorb": "AI_HasAbsorbAbilityInParty",
     "Natural Cure": "AI_IsAsleepWithNaturalCure",
 }
-_MOVES = {
-    "Miracle Eye": "lifts the Dark immunity",
-}
+_MOVES: dict[str, str] = {}  # none refused now: Miracle Eye is modelled (E3-B2-10)
 # What the AI refuses on the player's side (side 0): the any-side abilities and every refused
 # move (Hidden Power's IV type is modelled on both sides, see ``_layout``). Decomp ids.
 PLAYER_ABILITY_REFUSALS = {
@@ -245,7 +255,12 @@ _CANDIDATE_TARGETS = jnp.array(
     _BENCH_TARGETS + list(range(SLOTS)) + [-1] * MOVES + _BENCH_TARGETS * 2, _I8
 )
 _WONDER_GUARD, _MOLD_BREAKER = ABILITY_IDS["Wonder Guard"], ABILITY_IDS["Mold Breaker"]
-_FLASH_FIRE = ABILITY_IDS["Flash Fire"]
+# AI_HasAbsorbAbilityInParty's checkAbility by moveHit's table type (trainer_ai.c:3665-3674).
+_ABSORB_TYPES = jnp.array([Type.FIRE, Type.WATER, Type.ELECTRIC], _I32)
+_ABSORB_ABILITIES = jnp.array(
+    [ABILITY_IDS[n] for n in ("Flash Fire", "Water Absorb", "Volt Absorb")], _I32
+)
+_ABSORB_FIRST = SLOTS * MOVES  # the absorb candidates' first index in _CANDIDATE_KINDS
 
 
 class UnsupportedSwitching(ValueError):
@@ -275,6 +290,7 @@ def chart_multipliers(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """The two ``ApplyTypeMultiplier`` factors (``int32`` tenths, 10 = no entry) of
     ``move``'s type against a defender of ``def_types`` (int8[2]), in the order
@@ -290,7 +306,9 @@ def chart_multipliers(
     ``ApplyTypeChart`` only; ``CalcEffectiveness``'s ``NoImmunityOverrides`` (:2759) has
     neither. ``magnet`` (the defender's Magnet Rise turns without Ingrain or an Iron Ball,
     ``defender_chart_flags``): a Ground move skips the walk (:2605-2609): both factors are 10,
-    the value keeps only STAB."""
+    the value keeps only STAB. ``eyed`` (the defender's ``MOVE_EFFECT_MIRACLE_EYE``) skips the
+    immune Dark rows (``BasicTypeMulApplies``, :2551-2555, E3-B2-10): ``ApplyTypeChart`` only,
+    like ``grounded``; ``CalcEffectiveness`` reads neither."""
     if move_type is None:
         move_type = tables.move_type[jnp.asarray(move, _I32)]
     move_type = jnp.asarray(move_type, _I32)
@@ -303,7 +321,8 @@ def chart_multipliers(
         mul = jnp.where(identified & (tables.type_chart_foresight[move_type, t] != 0), 10, mul)
         lifted = grounded & (t == _TYPE_FLYING) & (mul == 0)
         skipped = jnp.asarray(roosting, jnp.bool_) & (t == _TYPE_FLYING)
-        return jnp.where(lifted | skipped, 10, mul)
+        dark = jnp.asarray(eyed, jnp.bool_) & (t == _TYPE_DARK) & (mul == 0)
+        return jnp.where(lifted | skipped | dark, 10, mul)
 
     ground = jnp.asarray(magnet, jnp.bool_) & (move_type == _TYPE_GROUND)
     m1 = jnp.where(ground, 10, entry(t1))
@@ -366,7 +385,7 @@ def apply_type_chart(
     unchanged (:2573). The defender's Foresight, Ingrain / Iron Ball, roosting and Magnet Rise
     flags are read (``chart_multipliers``); Wonder Guard sets a flag only (``wonder_guard_bit``),
     the value is unchanged; the other type-chart modifiers (Adaptability, Normalize, Scrappy,
-    Levitate, Miracle Eye) are not implemented: ``policy.ai_refusals`` refuses them.
+    Levitate) are not implemented: ``policy.ai_refusals`` refuses them.
     ``move_type`` is the caller's type for the move (``party_move_types``); by default the
     attacker's ``TrainerAI_MoveType`` (``damage.ai_move_type``)."""
     move = jnp.asarray(move, _I32)
@@ -378,23 +397,34 @@ def apply_type_chart(
         move_type = ai_move_type(tables, state, atk_side, move)  # TrainerAI_MoveType
     value = jnp.asarray(value, _I32)
     out = jnp.where(jnp.any(a_types == move_type), value * 15 // 10, value)
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, def_side)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, def_side)
     for mul in chart_multipliers(
-        tables, move, d_types, state.gravity, identified, move_type, grounded, roosting, magnet
+        tables,
+        move,
+        d_types,
+        fcm.gravity_count(state),
+        identified,
+        move_type,
+        grounded,
+        roosting,
+        magnet,
+        eyed,
     ):
         out = divide(out * mul, 10)
     return jnp.where(move == MOVE_STRUGGLE, value, out)
 
 
 def defender_chart_flags(tables: Tables, state: BattleState, side) -> tuple:
-    """``(identified, grounded, roosting, magnet)`` of ``side``'s active battler as
+    """``(identified, grounded, roosting, magnet, eyed)`` of ``side``'s active battler as
     ``BattleSystem_ApplyTypeChart`` reads them (``chart_multipliers``): Foresight
     (battle_lib.c:2615), ``MOVE_EFFECT_INGRAIN`` or an Iron Ball (``Battler_HeldItemEffect``,
-    ruling G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543) and Magnet Rise
-    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66)."""
+    ruling G-56), ``turnFlags.roosting`` (``BasicTypeMulApplies``, :2534-2543), Magnet Rise
+    (``magnetRiseTurns`` without Ingrain or an Iron Ball, :2605-2606, G-66) and
+    ``MOVE_EFFECT_MIRACLE_EYE`` (:2551-2555, E3-B2-10)."""
     grounded = (state.ingrain[side] != 0) | iron_ball(tables, state, side)
     magnet = (state.magnet_rise_turns[side] != 0) & ~grounded
-    return state.foresight[side] != 0, grounded, state.roosting[side] != 0, magnet
+    eyed = state.miracle_eye[side] != 0
+    return state.foresight[side] != 0, grounded, state.roosting[side] != 0, magnet, eyed
 
 
 def _chart_flags(
@@ -408,10 +438,11 @@ def _chart_flags(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> jnp.ndarray:
     move = jnp.asarray(move, _I32)
     first, second = chart_multipliers(
-        tables, move, def_types, gravity, identified, move_type, grounded, roosting, magnet
+        tables, move, def_types, gravity, identified, move_type, grounded, roosting, magnet, eyed
     )
     mask = _apply_mul(_apply_mul(jnp.zeros((), _I32), first, update), second, update)
     # MOVE_STATUS_MAGNET_RISE instead of the walk (:2605-2609): no other chart bit is set.
@@ -432,11 +463,12 @@ def type_chart_flags(
     grounded=False,
     roosting=False,
     magnet=False,
+    eyed=False,
 ) -> jnp.ndarray:
     """``int32``: the ``MOVE_STATUS_*`` bits ``BattleSystem_ApplyTypeChart`` leaves for
     ``move`` against a defender of ``def_types`` (int8[2]), identified by Foresight or
-    not, grounded by Ingrain or not, roosting or not, magnet-risen or not
-    (``defender_chart_flags``; a Ground move against Magnet Rise leaves ``MAGNET_RISE`` alone);
+    not, grounded by Ingrain or not, roosting or not, magnet-risen or not, under Miracle Eye or
+    not (``defender_chart_flags``; a Ground move against Magnet Rise leaves ``MAGNET_RISE`` alone);
     only a move with power updates the super/not-very-effective bits. ``move_type`` overrides the
     move's table type (``damage.ai_move_type``)."""
     power = tables.move_power[jnp.asarray(move, _I32)]
@@ -451,6 +483,7 @@ def type_chart_flags(
         grounded,
         roosting,
         magnet,
+        eyed,
     )
 
 
@@ -502,14 +535,13 @@ class _Layout(NamedTuple):
     weather_ball: jnp.ndarray  # bool, weather_ball_refused
     refused: jnp.ndarray  # bool
     perish: jnp.ndarray  # bool, AI_PerishSongKO (step 3) switches the AI's active out
-    absorb_gate: jnp.ndarray  # bool, AI_HasAbsorbAbilityInParty's correlated gate draw applies
 
 
 @partial(jax.jit, static_argnames="sites")
 def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     a = state.active[1].astype(_I32)
     d = state.active[0].astype(_I32)
-    gravity = state.gravity
+    gravity = fcm.gravity_count(state)
     d_types = state.types[0, d]
     species = state.species.astype(_I32)
     # The engine's current abilities, raw: the refusal scan below is over every party slot, and
@@ -538,7 +570,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
 
     # Step 5 precondition and step 8: A's moves against D through ApplyTypeChart.
     a_moves = state.moves[1, a].astype(_I32)
-    identified, grounded, roosting, magnet = defender_chart_flags(tables, state, 0)
+    identified, grounded, roosting, magnet, eyed = defender_chart_flags(tables, state, 0)
     a_flags = jax.vmap(
         lambda m: type_chart_flags(
             tables,
@@ -550,6 +582,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
             grounded,
             roosting,
             magnet,
+            eyed,
         )
     )(a_moves)
     keep = (a_moves != 0) & ((a_flags & SUPER_EFFECTIVE) != 0)
@@ -605,31 +638,37 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     # order (``bench_se``), draw (:3338). Doubles return FALSE (:3294), so singles only.
     guard = (d_ability == _WONDER_GUARD) & ~jnp.any(keep)
     guard_draws = (guard & bench[:, None] & bench_se).reshape(-1)
-    # Step 6, AI_HasAbsorbAbilityInParty (:3640-3713), Flash Fire's case (F-2). After the keep
-    # test (flag TRUE, no draw inside, :3586-3587; ``keep``'s flags) the function reads
-    # RandNext() % 3 (:3651) and returns FALSE unless it is 0: when A has a super-effective move
-    # that gate is one draw shared by every bench draw below it, which independent sites cannot
-    # express (the later draws are conditioned on it): refused, ``absorb_gate``. Otherwise: a
-    # moveHit with power (:3657-3665) of table type Fire (``MOVE_DATA().type``, :3668), A's own
-    # ``Battler_Ability`` not Flash Fire (:3678), and each living bench Pokemon (the same bench
-    # as the passes; ``aiSwitchedPartySlot`` is 6) whose MON_DATA_ABILITY is Flash Fire draws
-    # ``RandNext() & 1`` in party order, the first success switching to it (:3706-3708).
-    flash_bench = (
+    # Step 6, AI_HasAbsorbAbilityInParty (:3640-3713; F-2, G-36). With a super-effective move of
+    # A (flag TRUE, no draw inside, :3586-3587; ``keep``'s flags) it reads RandNext() % 3 first
+    # and returns FALSE unless it is 0 (:3651-3653): the sites below are ABSORB_GATED then
+    # (G-37). A moveHit with power (:3656-3663) of table type Fire / Water / Electric
+    # (``MOVE_DATA().type``, not TrainerAI_MoveType: :3665-3674) names checkAbility, else none
+    # (:3672-3674); A's own Battler_Ability equal to it holds the switch (:3677-3679); each living
+    # bench Pokemon (the same bench as the passes: selectedPartySlot and aiSwitchedPartySlot of
+    # aiSlot1 = aiSlot2 = A in singles, :3681-3686, battle_system.c:400-402; the latter is 6)
+    # whose MON_DATA_ABILITY (:3703, party data) is checkAbility draws RandNext() & 1 in party
+    # order, the first success switching to it (:3706-3708).
+    hit_table_type = tables.move_type[hit].astype(_I32)
+    check = jnp.sum(jnp.where(_ABSORB_TYPES == hit_table_type, _ABSORB_ABILITIES, 0))
+    absorb_bench = (
         bench
         & hit_ok
-        & (tables.move_type[hit] == Type.FIRE)
-        & (ability[1, a] != _FLASH_FIRE)
-        & (ability[1] == _FLASH_FIRE)
+        & (check != 0)
+        & (battler_decomp_ability(tables, state, 1) != check)
+        & (ability[1] == check)
     )
-    absorb_gate = ~gate & ~perish & jnp.any(keep) & jnp.any(flash_bench)
-    absorb_draws = flash_bench & ~jnp.any(keep)
     exists = (
-        jnp.concatenate([guard_draws, absorb_draws, keep, *passes]) & ~gate & ~perish
+        jnp.concatenate([guard_draws, absorb_bench, keep, *passes]) & ~gate & ~perish
     )  # [_CANDIDATES]
+    candidate = jnp.arange(_CANDIDATES)
+    is_absorb = (candidate >= _ABSORB_FIRST) & (candidate < _ABSORB_FIRST + SLOTS)
+    candidate_kinds = jnp.where(
+        is_absorb & jnp.any(keep), jnp.asarray(SwitchSite.ABSORB_GATED, _I8), _CANDIDATE_KINDS
+    )
 
     position = jnp.cumsum(exists.astype(_I32)) - 1
     target = jnp.where(exists, position, sites)  # out of range: dropped
-    kinds = jnp.zeros(sites, _I8).at[target].set(_CANDIDATE_KINDS, mode="drop")
+    kinds = jnp.zeros(sites, _I8).at[target].set(candidate_kinds, mode="drop")
     targets = jnp.full(sites, -1, _I8).at[target].set(_CANDIDATE_TARGETS, mode="drop")
     count = jnp.sum(exists.astype(_I32))
 
@@ -640,7 +679,7 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
     move_refused = present[..., None] & jnp.isin(state.moves.astype(_I32), _MOVE_REFUSED_IDS)
     weather_ball = weather_ball_refused(tables, state)
     refused = (count > sites) | only_ineffective | jnp.any(ability_refused) | jnp.any(move_refused)
-    refused = refused | weather_ball | absorb_gate
+    refused = refused | weather_ball
     kinds = jnp.where(refused, jnp.asarray(SwitchSite.REFUSED, _I8), kinds)
     return _Layout(
         kinds,
@@ -652,7 +691,6 @@ def _layout(tables: Tables, state: BattleState, sites: int) -> _Layout:
         weather_ball,
         refused,
         perish,
-        absorb_gate,
     )
 
 
@@ -674,12 +712,6 @@ def _refusals(lay: _Layout, state: BattleState, tables: Tables, sites: int) -> l
             "switching: Weather Ball's type case assigns nothing in this weather "
             "(TrainerAI_MoveType, trainer_ai.c:3222-3240; Move_CalcVariableType, "
             "battle_lib.c:8177-8195): an uninitialized register"
-        )
-    if bool(lay.absorb_gate):
-        out.append(
-            "switching: AI_HasAbsorbAbilityInParty reads one RandNext() % 3 (trainer_ai.c:3651) "
-            "before its bench draws while the AI's active has a super-effective move: the gate "
-            "is shared by those draws and not expressible as independent sites"
         )
     if bool(lay.only_ineffective):
         out.append(
@@ -735,6 +767,7 @@ def switch_action(
         | (kind == SwitchSite.PASS_NOT_VERY_EFFECTIVE)
         | (kind == SwitchSite.WONDER_GUARD)
         | (kind == SwitchSite.ABSORB)
+        | (kind == SwitchSite.ABSORB_GATED)
     )
     action = jnp.where(is_pass, MOVE_ACTIONS + lay.targets[index].astype(_I32), NO_SWITCH)
     # AI_PerishSongKO switches whatever the stop (no draw precedes it): TrainerAI_PickCommand

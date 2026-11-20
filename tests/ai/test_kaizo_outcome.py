@@ -199,6 +199,11 @@ def kaizo_states(draw, t, party) -> BattleState:
     for k, empty in enumerate(empty_pp, start=1):
         if empty and draw(st.booleans()):
             s = s._replace(pp=s.pp.at[1, 0, k].set(0))
+    if draw(st.booleans()):
+        # E3-B2-15: monSpeedValues from a past sort, not the current speeds (Gyro Ball's estimate
+        # reads it until the decision's first speed compare)
+        record = [draw(st.integers(1, 600)), draw(st.integers(1, 600))]
+        s = s._replace(speed_rec=jnp.asarray(record, s.speed_rec.dtype))
     return s
 
 

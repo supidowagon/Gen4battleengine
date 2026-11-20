@@ -21,7 +21,7 @@ from nuzline.engine.actions import chosen_targets
 from nuzline.engine.format import DOUBLES, SINGLES
 from nuzline.engine.ids import AbilityId, Stat, Status, Type
 from nuzline.engine.order import action_order
-from nuzline.engine.outcome import empty_outcome, outcome_to_py
+from nuzline.engine.outcome import STARF_QUEUE, empty_outcome, outcome_to_py
 from nuzline.engine.state import make_state
 from nuzline.engine.step import (
     ACT_MOVE,
@@ -45,17 +45,17 @@ def _engine(tables, state, actions, outcome, targets, order=None):
     """``step._action_phase``: the turn's prologue (the Starf draw, the stale locks, the stored
     targets, the last moves), the order and the action loop; ``(state, shown)``. ``order``: an
     explicit battler order in place of CalcTurnOrder's (``play_forced``)."""
-    turn_draw = jnp.asarray(outcome.starf)[:, 0]
-    state = resolve_starf(state, turn_draw)
-    state = state._replace(starf_roll=turn_draw.astype(state.starf_roll.dtype))
-    fresh = state._replace(learn_pin=jnp.zeros_like(state.learn_pin))
-    fresh = _clear_stale_choice_locks(tables, fresh, actions)
+    queue = jnp.asarray(outcome.starf)[:, jnp.asarray(STARF_QUEUE)]
+    opened = (state.starf_open != 0).astype(state.starf_taken.dtype)
+    state = resolve_starf(state, queue[:, 0])
+    state = state._replace(starf_roll=queue.astype(state.starf_roll.dtype), starf_taken=opened)
+    fresh = _clear_stale_choice_locks(tables, state, actions)
     fresh = fresh._replace(chosen_target=chosen_targets(tables, state, actions, targets))
     fresh = _record_last_move(tables, fresh, actions)
     if order is None:
         order = action_order(tables, fresh, actions, outcome)
     order = jnp.asarray(order).astype(jnp.int32)
-    out, _, shown, _ = _execute_actions(
+    out, _, shown, _, _ = _execute_actions(
         tables,
         fresh,
         actions,
@@ -65,7 +65,9 @@ def _engine(tables, state, actions, outcome, targets, order=None):
         replacement_power_mul(tables, state, actions),
     )
     # The turn's end puts the Starf draw back to 0 where nothing keeps it (``step_events``).
-    return out._replace(starf_roll=jnp.zeros_like(out.starf_roll)), shown
+    return out._replace(
+        starf_roll=jnp.zeros_like(out.starf_roll), starf_taken=jnp.zeros_like(out.starf_taken)
+    ), shown
 
 
 def speed_ordered(state, order):

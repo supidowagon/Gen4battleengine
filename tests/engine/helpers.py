@@ -24,7 +24,17 @@ from nuzline.data.trainer import (
     default_moves,
     load_trainers,
 )
-from nuzline.engine.ids import AbilityId, EffectId, Stat
+from nuzline.engine.ids import (
+    FIELD_CONDITION_GRAVITY_SHIFT,
+    FIELD_CONDITION_TRICK_ROOM_SHIFT,
+    WEATHER_PERM_BIT,
+    WEATHER_TEMP_BIT,
+    AbilityId,
+    EffectId,
+    FieldCondition,
+    Stat,
+    Weather,
+)
 from nuzline.engine.outcome import Outcome, outcome_to_py, replacement_known, sample_outcome
 from nuzline.engine.state import BattleState, make_state
 from nuzline.engine.step import step
@@ -39,6 +49,41 @@ SAMPLE_PARTY = ROOT / "tests" / "fixtures" / "sample_party.toml"
 _GENDERS = {"male": 0, "female": 1, "none": 2}  # BattleState.gender
 # The fixture moveset every opponent gets (plan ruling): raw opponent action 0 is Tackle.
 OPP_FIXTURE_MOVES = ("Tackle", "Rock Throw", "Stealth Rock", "Leer")
+
+
+# Reads of a clean ``field_mask`` (FCM 4.4: at most one weather group) for assertions; any
+# shape (a state or a batch of states).
+def weather_of(s) -> np.ndarray:
+    """The ``Weather`` id of the one set weather group (TEMP or PERM; deep fog: bit 15), 0 with
+    none."""
+    mask = np.asarray(s.field_mask)
+    out = np.zeros(mask.shape, np.int64)
+    for weather in Weather:
+        bits = int(WEATHER_TEMP_BIT[weather]) | int(WEATHER_PERM_BIT[weather])
+        out = np.where(mask & bits, int(weather), out)
+    return out
+
+
+def weather_timer_of(s) -> np.ndarray:
+    """``weather_turns`` while the weather is a TEMP-only group (a weather move's), else 0 (a
+    permanent weather, deep fog or none): FCM 4.4's ``where(temp_only, weather_turns, 0)``."""
+    mask = np.asarray(s.field_mask)
+    temp = sum(int(WEATHER_TEMP_BIT[w]) for w in Weather if w != Weather.FOG)
+    perm = sum(int(WEATHER_PERM_BIT[w]) for w in Weather if w != Weather.FOG)
+    temp_only = ((mask & temp) != 0) & ((mask & perm) == 0)
+    return np.where(temp_only, np.asarray(s.weather_turns), 0)
+
+
+def gravity_of(s) -> np.ndarray:
+    """The Gravity counter, bits 12-14 (condition.h:119-121)."""
+    mask = np.asarray(s.field_mask)
+    return (mask & int(FieldCondition.GRAVITY)) >> FIELD_CONDITION_GRAVITY_SHIFT
+
+
+def trick_room_of(s) -> np.ndarray:
+    """The Trick Room counter, bits 16-18 (condition.h:123-125)."""
+    mask = np.asarray(s.field_mask)
+    return (mask & int(FieldCondition.TRICK_ROOM)) >> FIELD_CONDITION_TRICK_ROOM_SHIFT
 
 
 # Shared programs: every test module steps through these objects, so a program compiled in one

@@ -49,6 +49,7 @@ reached silently. Uproar's sleep block (subscript_fall_asleep.s:14-16, :43-45) i
 from __future__ import annotations
 
 from nuzline.engine.ids import (
+    CHARGE_PARAM,
     COUNTER_ANY,
     COUNTER_PHYSICAL,
     COUNTER_SPECIAL,
@@ -487,8 +488,9 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     # CalcCrit, CalcDamage (:20-22), as Thunderbolt's (6).
     263: ("BATTLE_EFFECT_BOUNCE", _E.SECONDARY_STATUS, (Status.PARALYSIS, 0, 0)),
     # Shadow Force: effect_script_0272.s, an ON_HIT subscript_feint.s (:21) and CalcCrit,
-    # CalcDamage: the feint only clears the defender's turnFlags.protecting (subscript_feint.s:20),
-    # which in singles nothing reads after the defender's own action (it acted, as it protected).
+    # CalcDamage: the feint clears the defender's turnFlags.protecting (subscript_feint.s:20),
+    # which ``step._feint_clears`` models with Feint's (E3-B2-13; keyed on MoveFlag.SEMI_SHADOW);
+    # in singles nothing reads it after the defender's own action (it acted, as it protected).
     272: ("BATTLE_EFFECT_SHADOW_FORCE", _E.PLAIN, (0, 0, 0)),
     # Twister: effect_script_0146.s, Headbutt's flinch (:5) with SYSCTL_HIT_DURING_FLY and a x2
     # against MOVE_EFFECT_AIRBORNE (SEMI_HIT_EFFECTS).
@@ -546,6 +548,8 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     153: ("BATTLE_EFFECT_FLEE_FROM_WILD_BATTLE", _E.FLEE, (0, 0, 0)),
     # Torment: effect_script_0165.s:5 -> subscript_torment_start.s (E3-2-1).
     165: ("BATTLE_EFFECT_TORMENT", _E.TORMENT, (0, 0, 0)),
+    # Nightmare: effect_script_0107.s -> subscript_nightmare_start.s (G-31; vanilla only).
+    107: ("BATTLE_EFFECT_STATUS_NIGHTMARE", _E.NIGHTMARE, (0, 0, 0)),
     # Worry Seed: effect_script_0247.s:5 -> subscript_give_target_insomnia.s (E3-2-2).
     247: ("BATTLE_EFFECT_SET_ABILITY_TO_INSOMNIA", _E.WORRY_SEED, (0, 0, 0)),
     # Me First: effect_script_0241.s -> BtlCmd_TryMeFirst, then GoToMoveScript (E3-2-3).
@@ -556,6 +560,38 @@ _EFFECTS: dict[int, tuple[str, EffectId, tuple[int, int, int]]] = {
     191: ("BATTLE_EFFECT_SWITCH_ABILITIES", _E.SKILL_SWAP, (0, 0, 0)),
     # Gastro Acid: effect_script_0239.s:5 -> subscript_suppress_target_ability.s (E3-2-6).
     239: ("BATTLE_EFFECT_SUPRESS_ABILITY", _E.GASTRO_ACID, (0, 0, 0)),
+    # Fling: effect_script_0233.s, the held item's fling power and effect (E3-B2-1).
+    233: ("BATTLE_EFFECT_FLING", _E.FLING, (0, 0, 0)),
+    # Mirror Move: effect_script_0009.s -> BtlCmd_SetMirrorMove, then GoToMoveScript (E3-B2-2).
+    9: ("BATTLE_EFFECT_COPY_MOVE", _E.MIRROR_MOVE, (0, 0, 0)),
+    # Conversion 2: effect_script_0093.s -> subscript_conversion_2.s, BtlCmd_TryConversion2 (E3-B2-3).
+    93: ("BATTLE_EFFECT_CONVERSION2", _E.CONVERSION_2, (0, 0, 0)),
+    # Spite: effect_script_0100.s -> subscript_reduce_target_pp.s, BtlCmd_TrySpite (E3-B2-4).
+    100: ("BATTLE_EFFECT_DECREASE_LAST_MOVE_PP", _E.SPITE, (0, 0, 0)),
+    # Role Play: effect_script_0178.s -> subscript_copy_ability.s (E3-B2-5).
+    178: ("BATTLE_EFFECT_COPY_ABILITY", _E.ROLE_PLAY, (0, 0, 0)),
+    # Magic Coat: effect_script_0183.s -> BtlCmd_TrySetMagicCoat (E3-B2-6).
+    183: ("BATTLE_EFFECT_APPLY_MAGIC_COAT", _E.MAGIC_COAT, (0, 0, 0)),
+    # Charge: effect_script_0174.s, an indirect ON_HIT subscript_charge.s: the user's
+    # MOVE_EFFECT_CHARGE and chargedTurns = 2, then Sp. Def +1 (STAT_SELF with
+    # move_param[m, 2] = CHARGE_PARAM), E3-B2-8.
+    174: ("BATTLE_EFFECT_SP_DEF_UP_DOUBLE_ELECTRIC_POWER", _E.STAT_SELF, (_SPD, 1, CHARGE_PARAM)),
+    # Grudge: effect_script_0194.s sets the user's MOVE_EFFECT_GRUDGE; BtlCmd_TryGrudge runs at a
+    # defender's faint (subscript_faint_check_destiny_bond.s:28, E3-B2-9).
+    194: ("BATTLE_EFFECT_REMOVE_ALL_PP_ON_DEFEAT", _E.GRUDGE, (0, 0, 0)),
+    # Miracle Eye: effect_script_0216.s, an indirect ON_HIT subscript_miracle_eye.s (the
+    # defender's MOVE_EFFECT_MIRACLE_EYE) and SYSCTL_IGNORE_IMMUNITIES (E3-B2-10).
+    216: ("BATTLE_EFFECT_IGNORE_EVATION_REMOVE_DARK_IMMUNE", _E.MIRACLE_EYE, (0, 0, 0)),
+    # Last Resort: effect_script_0246.s, BtlCmd_TryLastResort then a plain hit (E3-B2-11).
+    246: ("BATTLE_EFFECT_FAIL_IF_NOT_USED_ALL_OTHER_MOVES", _E.LAST_RESORT, (0, 0, 0)),
+    # Feint: effect_script_0223.s, TryFeint, an ON_HIT subscript_feint.s (the defender's
+    # turnFlags.protecting cleared) and a plain hit (E3-B2-13).
+    223: ("BATTLE_EFFECT_REMOVE_PROTECT", _E.FEINT, (0, 0, 0)),
+    # Defog: effect_script_0258.s, a direct ON_HIT subscript_defog.s: the defender's evasion -1,
+    # then its side's screens and hazards and the field's deep fog cleared (E3-B2-14).
+    258: ("BATTLE_EFFECT_REMOVE_HAZARDS_SCREENS_EVA_DOWN", _E.DEFOG, (_EVA, -1, 0)),
+    # Lucky Chant: effect_script_0240.s -> subscript_lucky_chant_start.s (E3-B2-7).
+    240: ("BATTLE_EFFECT_PREVENT_CRITS", _E.LUCKY_CHANT, (0, 0, 0)),
 }
 
 # The Kaizo ROM's changed battle effect scripts that data/kaizo/rom_diff.toml marks ``modelled``
@@ -787,6 +823,7 @@ DECOMP_ABILITY_TO_ID: dict[str, AbilityId] = {
     "Multitype": AbilityId.MULTITYPE,
     "Hydration": AbilityId.HYDRATION,
     "Forecast": AbilityId.FORECAST,
+    "Air Lock": AbilityId.AIR_LOCK,
     "Klutz": AbilityId.KLUTZ,
 }
 

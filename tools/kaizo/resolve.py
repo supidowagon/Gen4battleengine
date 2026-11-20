@@ -36,13 +36,18 @@ import hashlib
 import json
 import re
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
-from nuzline.data.trainer import AreaCondition, default_moves
+from nuzline.data.trainer import (
+    OVERWORLD_WEATHER_FOG,
+    TERRAIN_UNKNOWN,
+    AreaCondition,
+    default_moves,
+)
 from tools.kaizo.crosscheck import (
     DEFAULT_REPORT,
     DEFAULT_RESOLUTIONS,
@@ -162,6 +167,12 @@ class Sources:
     trainer_maps: dict[int, list[int]]
     pkcalc: dict
     docs: dict
+    # Each map header's weather byte (rom/rom_map_weather.json, by header id): the fog
+    # headers a fog fight can clear with field Defog (``fog_headers``, ledger G-15).
+    map_weather: tuple[int, ...] = ()
+    # rom/rom_script_weather.json (maps.script_weathers, ledger G-23, G-24): the script
+    # weather before a battle ("battles") and the one a script leaves on a map ("windows").
+    script_weather: Mapping[str, Any] | None = None
 
 
 def load_sources(inter: Path) -> Sources:
@@ -188,6 +199,8 @@ def load_sources(inter: Path) -> Sources:
         trainer_maps={int(k): list(v) for k, v in where.items()},
         pkcalc=pkcalc,
         docs=docs,
+        map_weather=tuple(_read(rom_dir / "rom_map_weather.json")),
+        script_weather=_read(rom_dir / "rom_script_weather.json"),
     )
 
 
@@ -404,12 +417,33 @@ def bare_tags(rows: list[tuple[dict, dict]]) -> frozenset[str]:
     return frozenset(out)
 
 
-def _area(start_condition: str, area: Any, bare: frozenset[str] = frozenset()) -> tuple[str, dict]:
+def fog_headers(headers: list[int], map_weather: tuple[int, ...]) -> list[int]:
+    """The ``headers`` whose weather byte is OVERWORLD_WEATHER_FOG (14,
+    include/constants/overworld_weather.h:18), the one fog FLAG_DEFOG_ACTIVE clears
+    (src/field_map_change.c:275-277; deep fog 15 is not). ``ResolveError`` for a header past
+    the weather table."""
+    out = []
+    for h in sorted(headers):
+        if h >= len(map_weather):
+            raise ResolveError(f"map header {h} has no weather byte (rom_map_weather.json)")
+        if map_weather[h] == OVERWORLD_WEATHER_FOG:
+            out.append(h)
+    return out
+
+
+def _area(
+    start_condition: str,
+    area: Any,
+    bare: frozenset[str] = frozenset(),
+    fog: Callable[[], list[int]] | None = None,
+) -> tuple[str, dict]:
     """(start_condition, area_condition) from the ROM start condition and an overrides
     ``[area.<id>]`` entry (weather replaces the start condition; Trick Room, Gravity add).
     ``permanent``: map weather is permanent in battle (``FIELD_CONDITION_*_PERM``, Ruling 8),
     so it is True, except where the trainer's sheet tags its weather or Trick Room only
-    barely (``bare``, ``bare_tags``): there it is ``BARE_WEATHER_PERMANENT`` (Ruling 22)."""
+    barely (``bare``, ``bare_tags``): there it is ``BARE_WEATHER_PERMANENT`` (Ruling 22).
+    ``fog``: gives the trainer's ``fog_headers``, read only when the fight starts in fog
+    (``AreaCondition.fog_headers``, ledger G-15)."""
     weather = getattr(area, "weather", None)
     start = start_condition if weather is None else weather
     cond = AreaCondition.from_start_condition(start)
@@ -419,6 +453,7 @@ def _area(start_condition: str, area: Any, bare: frozenset[str] = frozenset()) -
         "trick_room": bool(getattr(area, "trick_room", False)),
         "gravity": bool(getattr(area, "gravity", False)),
         "permanent": True,
+        "fog_headers": fog() if cond.fog and fog is not None else [],
     }
     barely = (out["weather"] in bare) or (out["trick_room"] and "trick_room" in bare)
     if barely:
@@ -587,7 +622,10 @@ def trainer_record(
                 sources["split_order"] = fsrc + "; no sheet position for the corrected split"
 
     start, area = _area(
-        t["start_condition"], overrides.area.get(tid), bare_tags(sheet.get(tid, []))
+        t["start_condition"],
+        overrides.area.get(tid),
+        bare_tags(sheet.get(tid, [])),
+        lambda: fog_headers(src.trainer_maps.get(tid, []), src.map_weather),
     )
     out["start_condition"], out["area_condition"] = start, area
     where = ", ".join(map(str, sorted(src.trainer_maps.get(tid, [])))) or "none"
@@ -601,6 +639,13 @@ def trainer_record(
         f"rom: CalcTerrain over the tiles of the trainer's map headers (headers {where}; "
         "tools/terrain.py)"
     )
+    if len([x for x in t.get("terrains", ()) if x != TERRAIN_UNKNOWN]) > 1:
+        # Manager ruling 1 (ledger G-18): several start-tile terrains are the run's route;
+        # the other two sources were checked and hold no terrain.
+        sources["terrain"] += (
+            "; several: pkcalc none (move texts only), sheet none (no terrain field): "
+            "a run input (--terrain)"
+        )
     a = overrides.area.get(tid)
     if a is not None:
         sources["area_condition"] += f"; overrides area.{tid} ({a.source})"
@@ -609,8 +654,45 @@ def trainer_record(
     if tid in overrides.area_exceptions:
         e = overrides.area_exceptions[tid]
         sources["area_condition"] += f"; area_exception ({e.reason}; {e.source})"
+    _script_weather(tid, t["start_condition"], src.script_weather or {}, out, sources)
     out["sources"] = sources
     return out
+
+
+def _script_weather(
+    tid: int, rom_start: str, scripted: Mapping[str, Any], out: dict, sources: dict
+) -> None:
+    """Kaizo's script weather on ``out`` (ledger G-23, G-24; ``rom_script_weather.json``).
+    A battle the script runs in a weather it set (835, 836: rain) already has that start
+    condition from the ROM; its sources cite the script. A trainer that can meet a weather a
+    script leaves on its map (Route 213's rain) gets ``area_condition.script_weather`` and
+    ``script_window`` (header, overworld weather, var, value): its start is a run input
+    (``cli.script_weather_state``), the start condition the default. The header's own
+    condition must be none, the weather the fight has outside the window; else
+    ``ResolveError``."""
+    for header, row in sorted(scripted.get("battles", {}).get(str(tid), {}).items()):
+        cite = f"; script weather {row['weather']} on header {header} ({row['source']})"
+        sources["start_condition"] += cite
+        sources["area_condition"] += cite
+    row = scripted.get("windows", {}).get(str(tid))
+    if row is None:
+        return
+    if rom_start != "none":
+        raise ResolveError(
+            f"trainer {tid}: a script weather window on header {row['header']}, but the ROM "
+            f"start condition is {rom_start!r}, not none"
+        )
+    out["area_condition"]["script_weather"] = row["condition"]
+    out["area_condition"]["script_window"] = [
+        row["header"],
+        row["weather"],
+        row["var"],
+        row["value"],
+    ]
+    sources["area_condition"] += (
+        f"; script weather {row['condition']} on header {row['header']} ({row['source']}): "
+        "a run input (--script-weather), the start condition the default"
+    )
 
 
 def _header_fields(

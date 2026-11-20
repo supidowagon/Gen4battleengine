@@ -25,6 +25,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.format import format_of, party
 from nuzline.engine.hooks import (
@@ -39,7 +40,7 @@ from nuzline.engine.hooks import (
     trace_coin,
     weather_ability,
 )
-from nuzline.engine.order import sort_mon_speed
+from nuzline.engine.order import record_speeds, sort_mon_speed
 from nuzline.engine.state import STARF_UNDRAWN, BattleState
 
 _I32 = jnp.int32
@@ -145,12 +146,14 @@ def show_battle_mon4(
         ),
         starf_roll=jnp.where(start, STARF_UNDRAWN, state.starf_roll).astype(state.starf_roll.dtype),
     )
-    sorted_on = state._replace(
-        weather=jnp.where(start, 0, state.weather).astype(state.weather.dtype),
-        weather_timer=jnp.where(start, 0, state.weather_timer).astype(state.weather_timer.dtype),
-    )
+    # The start condition is a field-mask weather bit (``field``); the start's sort sees none.
+    bare = fcm.without_weather(state).field_mask
+    sorted_on = state._replace(field_mask=jnp.where(start, bare, state.field_mask))
     order, _ = sort_mon_speed(tables, sorted_on, state.qc_roll, jnp.asarray(ties))
     state = run_states(tables, state, order, state.entry_pending != 0, None, trace_pick)
-    return state._replace(
+    state = state._replace(
         starf_roll=jnp.where(start, 0, state.starf_roll).astype(state.starf_roll.dtype)
     )
+    # ShowBattleMon's SortMonSpeedOrder after the switch-in states (bcp.c:263) writes
+    # monSpeedValues (``order.record_speeds``, E3-B2-15; ``hooks.battle_start`` at B = 2).
+    return record_speeds(tables, state)

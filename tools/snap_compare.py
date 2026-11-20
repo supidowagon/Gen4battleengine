@@ -24,8 +24,9 @@ Usage:
     --parts  run only these groups/parts: step, jitstep, sample, rest, ai, gen, roark.trace,
              roark.rank (any other name is a usage error); a left-out part is neither run nor
              counted.
-    --allow-new  field names (any segment of an entry path, e.g. ``new_field``) whose presence
-             on one side only does not fail; name both names of a renamed field.
+    --allow-new  field names (any segment of an entry path, e.g. ``new_field``) NEW in this
+             checkout whose absence from the capture does not fail. A field only in the capture
+             always fails ("dropped field without an upgrade row"): it needs an ``UPGRADES`` row.
     --allow-all-raise  function names (e.g. ``enumerate_turn``) allowed to raise on every call
              of a part; default none.
     --subset-ok  compare may run a strict subset of the captured parts.
@@ -96,16 +97,63 @@ generator check), then "roark.trace" and "roark.rank", one process each. The par
 part's wall time and peak memory and flags a part over 60 s or 4 GB (OVER LIMIT).
 
 Version independence: inputs are saved as plain {field: array} dicts, not pickled NamedTuples.
-A later commit rebuilds them by field name: a field it has that the capture lacks starts at the
-singles zero (BattleState: ``state.LAYOUT``'s shape and dtype) or at ``empty_outcome()``'s value
-(Outcome); a captured field it lacks is dropped; a saved BattleState field whose shape or dtype
-differs from ``LAYOUT``, a saved Outcome field whose shape or dtype differs from
-``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an error (the part
-fails). Each one-sided input field is reported
-(``in_state.NAME`` / ``in_outcome.NAME``). Outputs (states, Outcomes, events, reference
-outputs) are flattened to "path" -> (kind, dtype, shape, bytes) entries keyed by name. compare
-checks the entries present on both sides byte for byte (dtype, shape and bytes) and lists, per
-part, the entries present on one side only (indices folded to []).
+A later commit rebuilds them by field name, through ``UPGRADES`` first (below): a field it has
+that the capture lacks and no row writes starts at the singles zero (BattleState:
+``state.LAYOUT``'s shape and dtype) or at ``empty_outcome()``'s value (Outcome) and is reported
+(``in_state.NAME`` / ``in_outcome.NAME``: a failure unless --allow-new names it); a captured
+field it lacks and no row reads fails the part ("dropped field without an upgrade row"); a saved
+BattleState field whose shape or dtype differs from ``LAYOUT``, a saved Outcome field whose shape
+or dtype differs from ``empty_outcome()``'s, or saved actions that are not ``int32[B]`` is an
+error (the part fails).
+
+Layout upgrades: ``UPGRADES`` maps an older commit's fields to this checkout's, one row per
+line: kind (``state`` / ``outcome``), the saved fields it reads (dtype, old shape after any
+leading axes; "B" / "P" a battler / party axis of any format), the fields it writes, a fill, the
+ledger ids whose rule decides the mapping and a one-line reason. Row builders: ``reshape`` (a
+field's shape changed), ``derive`` (several reads, several writes), ``zero`` (a new field that is
+0 wherever an older commit saved a state), ``dropped`` (a field gone with no successor: its
+value leaves). A row runs where every read is there in its old dtype and shape (any leading
+axes, the same for all reads: a batch, e.g. ``enumerate_turn``'s outcomes) and its new writes
+are not (a newer capture); the reads leave unless kept. Rows run wherever the capture is read
+back: the saved inputs (``in_state``, ``in_ai_state``: state; ``in_outcome``: outcome) as they
+are loaded and in ``rebuild_state`` / ``rebuild_outcome``, and in the captured output entries of
+every part, on each group of entries under one path prefix that holds the kind's ``MARKS`` (a
+BattleState or Outcome at any depth: ``.root_belief[][]``, ``.step_events[]``,
+``.ref_replay``, ``.enumerate_turn[]``). The compare header lists the rows with their ledger ids
+and reasons; each part prints the rows it ran with their counts, and a line before the final one
+sums them. Today's rows: ``starf_roll`` (B,) -> (B, 3) and ``Outcome.starf`` (B, 2) -> (B, 4)
+(F-O3, G-27..G-30); ``weather``, ``weather_timer``, ``gravity``, ``trick_room`` (with
+``uproar``) -> ``field_mask`` (``ids.clean_field_mask``) and ``weather_turns`` (the timer)
+(G-4, G-11); ``party_ability``, ``nightmare``, ``starf_taken`` = 0 (F-O2, G-31, G-27);
+``camouflage`` from the old types against the personal rows of the part's own game (Kaizo for
+"roark.trace", vanilla for every other part: ``Ctx.tables_for``; G-20); ``acid_rain`` dropped,
+no successor (G-12, G-13); ``learn_pin``, ``exp_refused`` dropped, no successor (E3-B2-21).
+
+Outputs (states, Outcomes, events, reference outputs) are flattened to "path" -> (kind, dtype,
+shape, bytes) entries keyed by name. compare checks the entries present on both sides byte for
+byte (dtype, shape and bytes) and lists, per part, the entries present on one side only
+(indices folded to []; the entries under a path that raised on either side are left out: the
+raise is the divergence). Columns a row invents (``new_columns``: ``Outcome.starf``'s 2-3, for
+which the capture has no draw) are taken from the rerun before the compare and counted per part
+as "sampler drift (new columns)", not a divergence; in a saved Outcome (``in_outcome``, an
+Outcome step or enumerate_turn is given) columns 0-1 compare strictly. In a fresh sampler draw
+(``SAMPLED``: ``.sample_outcome``) every column of a reshaped field is sampler drift: main drew
+``starf`` as ``randint(fold_in(key, 48), (B, 2))`` and this checkout draws ``(B, 4)`` from that
+key, which changes every entry, columns 0-1 too (outcome.py ``sample_outcome``).
+
+An entry stores a 0-d array as shape (1,) (``canon``: ``np.ascontiguousarray`` has ndim >= 1).
+A row reading an old 0-d field (``weather``, ``gravity``, ...) of a captured output takes such a
+(1,) read as that 0-d field or a batch of one, whichever the row's other reads give
+(``Upgrade.lead``, ``flat``), and hands the fill the 0-d value; the saved inputs keep 0-d.
+
+Generator drift (decided): a "gen" divergence is informational ("generator drift: first at seed
+S turn T", counted, not a failure) only when every differing entry of the part is an input
+tests.strategies draws (``drawn_input``): a segment's ``in_actions`` (legal_action_pair /
+pivot_actions) and ``in_outcome`` (any_outcome), the AI example's ``in_ai_state``
+(gated_states), and segment 0's ``in_state`` (supported_state). Anything else that differs
+(a later segment's ``in_state``, which compare reads from the saved inputs, not from a draw; any
+other entry; a raise; a different step list) is a divergence and fails the part
+(``classify_gen``): a .gen part fails on a changed rebuild, never on a changed draw.
 
 An output that raised is stored as its exception (a refusal is an output) and compared like
 one: a raise against a result (a value or a structure) is a divergence, never a one-sided entry
@@ -115,12 +163,15 @@ payloads, differ. Each part prints its raise count and, per
 function, count/calls and the first error.
 
 Pass: compare prints "compare: ok" and exits 0 only when every precondition above holds, every
-listed part ran (no skip, no error), no entry diverged, every one-sided input field or output
-entry is named by --allow-new, and no function raised on every one of its calls in a part
-(unless named by --allow-all-raise), no part ran zero steps or (but "gen") zero calls, and no
-part's raise share is over --raise-fail. The final line names the groups compared (a seed
-group by its name, a Roark part by its full name) and the seed range with its count, or
-"seeds: none" when no seed part ran. Anything else exits 1 (2 for a usage error). capture exits
+listed part ran (no skip, no error), no entry diverged (but "gen"'s drawn inputs: generator
+drift), no field
+was dropped without an upgrade row, every field new in this checkout is named by --allow-new,
+and no function raised on every one of its calls in a part (unless named by --allow-all-raise),
+no part ran zero steps or (but "gen") zero calls, and no part's raise share is over
+--raise-fail. The final line counts the parts per class: ok / diverged / error (any other
+failure: a skip, a crash, a dropped field, ...) / sampler drift / generator drift (exit 0 only
+when diverged = error = 0), names the groups compared (a seed group by its name, a Roark part by
+its full name) and the seed range with its count, or "seeds: none" when no seed part ran. Anything else exits 1 (2 for a usage error). capture exits
 0 ("capture: ok") only when every part ran with no skip, no error and no all-raise function.
 
 Pod (``git archive`` checkouts, no .git; one snapshot folder SNAP):
@@ -312,12 +363,51 @@ def compare_dumps(record: list, dump: list) -> tuple[str | None, set[str], set[s
         return f"step list differs: {len(record)} captured, {len(dump)} rerun", set(), set()
     diverged, only_base, only_new = None, set(), set()
     for (key, _, want), (_, got) in zip(record, dump, strict=True):
-        only_base |= {fold(k) for k in set(want) - set(got)}
-        only_new |= {fold(k) for k in set(got) - set(want)}
+        raised = [k for k, e in (*want.items(), *got.items()) if e[0] == "raise"]
+        only_base |= {fold(k) for k in set(want) - set(got) if not under(k, raised)}
+        only_new |= {fold(k) for k in set(got) - set(want) if not under(k, raised)}
         diff = raise_mismatch(want, got) or first_diff(want, got)
         if diff and not diverged:
             diverged = f"{key}: {diff}"
     return diverged, only_base, only_new
+
+
+# The inputs tests.strategies draws in every "gen" step (draw_inputs): actions, Outcome, the
+# AI example's state; segment 0's state too (``drawn_input``).
+DRAWN_INPUTS = (".in_actions", ".in_outcome", ".in_ai_state")
+
+
+def drawn_input(key: str, path: str) -> bool:
+    """``path`` of the "gen" step ``key`` is an input tests.strategies draws (draw_inputs): a
+    segment's actions and Outcome, the AI example's state, and segment 0's state. A later
+    segment's state is the step's result (capture) or the saved one (compare), never a draw."""
+    drawn = DRAWN_INPUTS + ((".in_state",) if key.endswith(" segment 0") else ())
+    return under(path, list(drawn))
+
+
+def classify_gen(record: list, dump: list, diverged: str | None) -> tuple[str | None, bool]:
+    """The "gen" part's ``(divergence, generator drift)`` from ``compare_dumps``'s ``diverged``:
+    drift (informational) only when the step lists match and every differing entry is a
+    ``drawn_input``; else the first entry that is not one (or the step-list / raise
+    divergence) is the part's divergence, a failure."""
+    if not diverged or [k for k, _, _ in record] != [k for k, _ in dump]:
+        return diverged, False
+    for (key, _, want), (_, got) in zip(record, dump, strict=True):
+        diff = raise_mismatch(want, got)
+        for k in sorted(set(want) & set(got)):
+            if diff:
+                break
+            if want[k] != got[k] and not drawn_input(key, k):
+                diff = f"{first_diff({k: want[k]}, {k: got[k]})} (not an input the strategies draw)"
+        if diff:
+            return f"{key}: {diff}", False
+    return diverged, True
+
+
+def under(key: str, paths: list[str]) -> bool:
+    """``key`` is one of ``paths`` or lies under one (a raise against a result is a divergence,
+    raise_mismatch; its entries are not one-sided fields)."""
+    return any(key == p or key.startswith((f"{p}.", f"{p}[", f"{p}#")) for p in paths)
 
 
 def fold(key: str) -> str:
@@ -368,12 +458,357 @@ def check_actions(saved, battlers: int) -> None:
         raise ValueError(f"saved actions {a.dtype}{a.shape} != int32({battlers},)")
 
 
-def rebuild_state(saved: dict):
-    """A ``BattleState`` of this checkout from a saved field dict (see the docstring)."""
+# --- layout upgrades (see the docstring) -----------------------------------------------
+
+# Named axes of an old shape: a battler and a party axis take any count a format has
+# (engine.format: B 2 or 4, P 2, 3 or 4), so a row matches singles and doubles alike.
+DIMS = {"B": (2, 4), "P": (2, 3, 4)}
+# Fields that make a captured output group (the entries under one path prefix) a BattleState or
+# an Outcome, so that a row of that kind runs on it (a state saved by any commit has these).
+MARKS = {"state": ("species", "active", "hp"), "outcome": ("hit", "roll", "crit")}
+
+
+@dataclasses.dataclass(frozen=True)
+class Upgrade:
+    """One row of ``UPGRADES``: the saved fields ``reads`` of a ``kind`` ("state" / "outcome")
+    BattleState or Outcome (``(field, dtype, old shape)``, the shape after any leading axes:
+    "B" / "P" a battler / party axis, ``DIMS``) read as this checkout's ``writes`` through
+    ``fill({read: array}, lead, tables)``, ``lead`` the leading axes (a batch) the reads share,
+    ``tables`` the tables of the game the state belongs to (``Ctx.tables_for``). The reads
+    leave the state unless named in ``keeps`` or ``writes``. ``fill`` None: the read is a field
+    dropped with no successor (``writes`` empty). A row runs only when every read is there in its
+    old dtype and shape and no write that is not also a read is there yet (a newer capture).
+    ``new_columns``: ``(field, columns)`` the fill invents along the last axis (no old data:
+    compared as sampler drift, see the docstring). ``ledger``: the ledger ids whose rule decides
+    the mapping; ``reason``: why the mapping is lossless."""
+
+    kind: str
+    reads: tuple
+    writes: tuple
+    fill: object
+    label: str
+    ledger: str
+    reason: str
+    keeps: tuple = ()
+    new_columns: tuple = ()
+
+    @property
+    def name(self) -> str:
+        return f"{self.kind}.{self.label}"
+
+    def lead(self, saved: dict, batched: bool = True, flat: bool = False) -> tuple | None:
+        """The leading axes this row runs with on ``saved`` (a field dict), or None; none
+        unless ``batched`` (a saved input is one state). ``flat``: ``saved`` was read back from
+        ``canon`` entries, which store a 0-d array as shape (1,) (``np.ascontiguousarray`` has
+        ndim >= 1), so a read of old shape () found as (1,) is that 0-d field (lead ()) or a
+        batch of one (lead (1,)): the row's other reads decide, and a row of only such reads
+        runs with lead ()."""
+        import numpy as np
+
+        leads, scalar = set(), False
+        for field, dtype, old in self.reads:
+            if field not in saved:
+                return None
+            a = np.asarray(saved[field])
+            n = a.ndim - len(old)
+            if a.dtype.str != dtype or n < 0:
+                return None
+            if flat and old == () and a.shape == (1,):
+                scalar = True
+                continue
+            if not all(d == m or m in DIMS.get(d, ()) for d, m in zip(old, a.shape[n:])):
+                return None
+            leads.add(a.shape[:n])
+        if scalar and not leads:
+            leads.add(())
+        if len(leads) != 1 or any(w in saved for w in self.writes if w not in self.fields):
+            return None
+        lead = leads.pop()
+        if scalar and lead not in ((), (1,)):
+            return None
+        return lead if batched or not lead else None
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        return tuple(r[0] for r in self.reads)
+
+
+def _shape(t) -> str:
+    return "(" + ", ".join(map(str, t)) + ("," if len(t) == 1 else "") + ")"
+
+
+def reshape(kind, field, dtype, old, new, fill, ledger, reason, new_columns=()):
+    """A field whose shape changed: ``old`` -> ``new`` (shapes after any leading axes)."""
+    label = f"{field} {_shape(old)} -> {_shape(new)}"
+    reads = ((field, dtype, old),)
+    cols = ((field, new_columns),) if new_columns else ()
+    return Upgrade(kind, reads, (field,), fill, label, ledger, reason, new_columns=cols)
+
+
+def derive(kind, reads, writes, fill, ledger, reason, keeps=()):
+    """New fields computed from old ones (several reads, several writes)."""
+    label = f"{'+'.join(r[0] for r in reads)} -> {'+'.join(writes)}"
+    return Upgrade(kind, reads, writes, fill, label, ledger, reason, keeps=keeps)
+
+
+def zero(kind, field, like, ledger, reason):
+    """A new field whose value at every point the older commit saved a state is 0, shaped as
+    the old field ``like`` ``(name, dtype, old shape)`` with the new field's dtype: ``like`` gives
+    the shape and the leading axes."""
+    name, dtype, old, new_dtype = like
+
+    def fill(a, lead, tables):
+        import numpy as np
+
+        return {field: np.zeros(np.shape(a[name]), new_dtype)}
+
+    label = f"{field} = 0 (shape of {name})"
+    return Upgrade(kind, ((name, dtype, old),), (field,), fill, label, ledger, reason, (name,))
+
+
+def dropped(kind, field, dtype, old, ledger, reason):
+    """A field gone from the engine with no successor: the capture's value is dropped."""
+    label = f"{field} {_shape(old)}: dropped, no successor"
+    return Upgrade(kind, ((field, dtype, old),), (), None, label, ledger, reason)
+
+
+def _starf_queue(a, lead, tables):
+    """``starf_roll`` int8[B] -> the turn's queue int8[B, 3]: the draw in entry 0, entries 1-2
+    at 0 (what step_events / replace store where no draw is loaded), F-O3 (G-27)."""
+    import numpy as np
+
+    old = a["starf_roll"]
+    new = np.zeros((*old.shape, 3), old.dtype)
+    new[..., 0] = old
+    return {"starf_roll": new}
+
+
+def _starf_columns(a, lead, tables):
+    """``Outcome.starf`` int8[B, 2] -> int8[B, 4]: columns 0-1 kept; the old engine's second and
+    third eats read the one draw of column 0, so columns 2-3 copy it (F-O3, G-27)."""
+    import numpy as np
+
+    old = a["starf"]
+    return {"starf": np.concatenate([old, old[..., :1], old[..., :1]], axis=-1)}
+
+
+def _field_mask(a, lead, tables):
+    """``field_mask`` = ``ids.clean_field_mask`` of the old fields (the engine's own encoding
+    of them, as tests.strategies draws a state): the weather's TEMP bit while ``weather_timer``
+    runs, else its PERM bit (deep fog: bit 15), ``gravity << 12``, ``trick_room << 16``, battler
+    b's Uproar bit 8 + b while ``uproar[b]``; ``weather_turns`` = ``weather_timer`` (0 for a
+    permanent weather: make_state's weatherTurns), FCM 4.4 (G-4, G-11)."""
+    import numpy as np
+
+    from nuzline.engine.ids import clean_field_mask
+
+    mask = np.zeros(lead, np.int32)
+    for i in np.ndindex(*lead):
+        mask[i] = clean_field_mask(
+            int(a["weather"][i]),
+            int(a["weather_timer"][i]),
+            int(a["gravity"][i]),
+            int(a["trick_room"][i]),
+            a["uproar"][i].tolist(),
+        )
+    return {"field_mask": mask, "weather_turns": a["weather_timer"].astype(np.int32)}
+
+
+def _personal_types(tables, species, form, ability_form, ability_slot, item) -> tuple[int, int]:
+    """``damage.personal_types`` on ``tables``, the tables of the game the state belongs to (the
+    old engine's ``effects.camouflaged`` compared a battler's types with it), memoized per tables
+    object by its arguments: a Kaizo state reads the Kaizo rows, never the vanilla ones."""
+    if tables is None:
+        raise RuntimeError("the camouflage upgrade reads the state's tables: none were passed")
+    memo = _PERSONAL.setdefault(id(tables), (tables, {}))[1]  # holds tables: its id stays its own
+    key = (species, form, ability_form, ability_slot, item)
+    if key not in memo:
+        from nuzline.engine.damage import personal_types
+
+        memo[key] = tuple(int(x) for x in personal_types(tables, *key))
+    return memo[key]
+
+
+_PERSONAL: dict[int, tuple[object, dict[tuple, tuple[int, int]]]] = {}
+
+
+def _camouflage(a, lead, tables):
+    """``camouflage`` (G-20) of an older commit's state: its MOVE_EFFECT_CAMOUFLAGE was
+    ``effects.camouflaged``, the active battler's types differing from its personal row's
+    (``damage.personal_types``; only a Camouflage that ran writes ``types``), which also read a
+    Transformed copy of a camouflaged foe as camouflaged. The bit is that inference on a battler
+    not Transformed, 0 on a Transformed one (BtlCmd_Transform does not copy the mask,
+    battle_script.c:5346-5348): the one reading G-20 changed."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from nuzline.engine.format import format_of
+
+    unbatched = {f: np.empty(a[f].shape[len(lead) :]) for f in ("active", "species")}
+    fmt = format_of(SimpleNamespace(**unbatched))  # B and P: the state's format
+    out = np.zeros(a["active"].shape, np.int8)
+    for i in np.ndindex(*lead):
+        for b in range(fmt.B):
+            pm = (*i, fmt.party_of[b], int(a["active"][(*i, b)]))
+            mon = (a[f][pm] for f in ("species", "form", "ability_form", "ability_slot", "item"))
+            own = _personal_types(tables, *(int(x) for x in mon))
+            moved = tuple(int(x) for x in a["types"][pm]) != own
+            out[(*i, b)] = moved and not a["transformed"][(*i, b)]
+    return {"camouflage": out}
+
+
+_I1, _I2 = "|i1", "<i2"
+_MON_READS = tuple(
+    (f, d, ("P", 6))
+    for f, d in (("species", _I2), ("form", _I1), ("ability_form", _I1), ("ability_slot", _I1),
+                 ("item", _I2))
+) + (("types", _I1, ("P", 6, 2)), ("active", _I1, ("B",)), ("transformed", _I1, ("B",)))  # fmt: skip
+_FIELD_READS = (
+    ("weather", _I1, ()),
+    ("weather_timer", _I1, ()),
+    ("gravity", _I1, ()),
+    ("trick_room", _I1, ()),
+    ("uproar", _I1, ("B",)),
+)
+_ACTIVE = ("active", _I1, ("B",), "|i1")  # a battler field: zero rows of int8[B]
+UPGRADES = (
+    reshape("state", "starf_roll", _I1, ("B",), ("B", 3), _starf_queue, "F-O3, G-27", "the old draw is entry 0; entries 1-2 at 0, what step_events / replace store where no draw is loaded"),
+    reshape("outcome", "starf", _I1, ("B", 2), ("B", 4), _starf_columns, "F-O3, G-27..G-30", "columns 0-1 kept; the old engine's 2nd and 3rd eats read column 0, so 2-3 copy it", (2, 3)),
+    derive("state", _FIELD_READS, ("field_mask", "weather_turns"), _field_mask, "G-4, G-11", "ids.clean_field_mask of the old fields (TEMP bit while the timer runs, else PERM); weather_turns = the timer", ("uproar",)),
+    zero("state", "party_ability", ("species", _I2, ("P", 6), "<i2"), "F-O2, G-1..G-3", "0 = no written ability, the personal row's (step._restore_ability); initial_arrays leaves it 0 and the old engine wrote none"),
+    zero("state", "nightmare", _ACTIVE, "G-31", "the old engine refused Nightmare (effect 107): no battler had the bit"),
+    derive("state", _MON_READS, ("camouflage",), _camouflage, "G-20", "the old engine's own bit (effects.camouflaged: types != the personal row's), but 0 on a Transformed battler", tuple(r[0] for r in _MON_READS)),
+    zero("state", "starf_taken", _ACTIVE, "F-O3, G-27", "0 between turns and after step / replace: every point a state is saved"),
+    dropped("state", "acid_rain", _I1, (), "G-12, G-13", "E2's interim Acid Rain guard flag (main 08a57000, SF2 (f)); batch G models the write in field_mask and removed the flag"),
+    dropped("state", "learn_pin", _I1, (), "E3-B2-21", "1 + the selected slot a deferred learn masked (main 08a57000); the prompt now pauses at the payout, before the slot is re-read (review b2 #6): learn_site is a pause site, not a slot, and 0 at every saved point"),
+    dropped("state", "exp_refused", _I1, (), "E3-B2-21", "main's sticky window (c) refusal code; the payout's prompt now pauses the turn, so learn work never refuses (review b2 #6)"),
+)  # fmt: skip
+UPGRADED: dict[str, int] = {}  # Upgrade.name -> fields upgraded in this process
+INPUT_KINDS = {"in_state": "state", "in_ai_state": "state", "in_outcome": "outcome"}
+# Outputs that are a fresh sampler draw (jit(sample_outcome)): a reshaped field's every column
+# is drawn anew (another shape of one key's randint), so all of them are sampler drift; a saved
+# Outcome (``in_outcome``, any Outcome a part passes on) keeps its old columns strict.
+SAMPLED = ("sample_outcome",)
+
+
+def upgrade_fields(
+    kind: str,
+    saved: dict,
+    invented: dict | None = None,
+    batched: bool = False,
+    tables=None,
+    flat: bool = False,
+) -> dict:
+    """``saved`` (a field dict of ``kind``; with ``batched``, leading axes allowed) through
+    every ``UPGRADES`` row of ``kind`` that runs on it (``Upgrade.lead``), in table order; every
+    other field as it was. ``invented``, when given, gets ``{field: columns}`` of each row's
+    ``new_columns`` that ran. ``tables``: the tables of the game ``saved`` belongs to
+    (``Ctx.tables_for``); a row that reads them (camouflage) raises without them. ``flat``:
+    ``saved`` came from ``canon`` entries (``Upgrade.lead``); a read of old shape () reaches the
+    fill reshaped to the lead."""
+    import numpy as np
+
+    out = dict(saved)
+    for u in UPGRADES:
+        lead = u.lead(out, batched, flat) if u.kind == kind else None
+        if lead is None:
+            continue
+        UPGRADED[u.name] = UPGRADED.get(u.name, 0) + 1
+        reads = {f: np.asarray(out[f]) for f in u.fields}
+        if flat:  # canon's (1,) of a 0-d read back to the lead's shape
+            reads.update({f: reads[f].reshape(lead) for f, _, old in u.reads if old == ()})
+        made = u.fill(reads, lead, tables) if u.fill else {}
+        for f in u.fields:
+            if f not in u.keeps and f not in made:
+                del out[f]
+        out.update(made)
+        if invented is not None:
+            invented.update(u.new_columns)
+    return out
+
+
+def upgrade_inputs(inputs: list, tables) -> list:
+    """Saved ``[(key, {in_state, in_actions, in_outcome} | {in_ai_state})]`` of the game of
+    ``tables``, upgraded."""
+    return [
+        (key, {n: upgrade_fields(INPUT_KINDS[n], v, tables=tables) if n in INPUT_KINDS else v
+               for n, v in inp.items()})
+        for key, inp in inputs
+    ]  # fmt: skip
+
+
+def upgrade_entries(entries: dict, tables, invented: dict | None = None) -> dict:
+    """Captured canon ``entries`` with each BattleState / Outcome among them (the array entries
+    under one path prefix that hold the kind's ``MARKS``; a batch of them too) upgraded by
+    ``upgrade_fields`` on ``tables`` (the part's game, ``Ctx.tables_for``): dropped reads
+    leave, writes join. ``invented`` gets ``{path: columns}``
+    of each upgraded entry whose last-axis ``columns`` the upgrade invented: the row's
+    ``new_columns``, or every column of the field in a ``SAMPLED`` output (a fresh draw whose
+    shape changed draws every column anew)."""
+    import numpy as np
+
+    groups: dict[str, dict[str, str]] = {}
+    for path, e in entries.items():
+        if e[0] == "arr" and "." in path:
+            prefix, _, name = path.rpartition(".")
+            groups.setdefault(prefix, {})[name] = path
+    out = dict(entries)
+    for prefix, names in groups.items():
+        kind = next((k for k, m in MARKS.items() if all(f in names for f in m)), None)
+        if kind is None or not any(f in names for u in UPGRADES for f in u.fields):
+            continue
+        saved = {}
+        for name, path in names.items():
+            e = entries[path]
+            saved[name] = np.frombuffer(e[3], np.dtype(e[1])).reshape(ast.literal_eval(e[2]))
+        cols: dict = {}
+        new = upgrade_fields(kind, saved, cols, batched=True, tables=tables, flat=True)
+        for name in set(saved) - set(new):
+            del out[names[name]]
+        for name, a in new.items():
+            if name in saved and a is saved[name]:
+                continue
+            a = np.ascontiguousarray(a)
+            out[f"{prefix}.{name}"] = ("arr", a.dtype.str, str(a.shape), a.tobytes())
+        if invented is not None:
+            drawn = re.match(r"\.([^.\[#]+)", prefix)
+            if drawn and drawn.group(1) in SAMPLED:
+                cols = {f: tuple(range(np.shape(new[f])[-1])) for f in cols}
+            invented.update({f"{prefix}.{f}": c for f, c in cols.items()})
+    return out
+
+
+def settle_new_columns(want: dict, got: dict, invented: dict) -> int:
+    """Take each ``invented`` column (``{path: columns}`` from ``upgrade_entries``) of ``want``
+    from ``got``, so the compare reads only the columns the capture holds; the number of entries
+    whose invented columns differed (sampler drift, new columns: counted, not a divergence)."""
+    import numpy as np
+
+    drift = 0
+    for path, cols in invented.items():
+        a, b = want.get(path), got.get(path)
+        if a is None or b is None or a[0] != "arr" or a[:3] != b[:3]:
+            continue
+        shape = ast.literal_eval(a[2])
+        x = np.frombuffer(a[3], np.dtype(a[1])).reshape(shape).copy()
+        y = np.frombuffer(b[3], np.dtype(b[1])).reshape(shape)
+        idx = list(cols)
+        if x[..., idx].tobytes() != y[..., idx].tobytes():
+            drift += 1
+            x[..., idx] = y[..., idx]
+            want[path] = ("arr", a[1], a[2], np.ascontiguousarray(x).tobytes())
+    return drift
+
+
+def rebuild_state(saved: dict, tables):
+    """A ``BattleState`` of this checkout from a saved field dict of the game of ``tables``
+    (see the docstring)."""
     import numpy as np
 
     from nuzline.engine.state import LAYOUT, BattleState
 
+    saved = upgrade_fields("state", saved, tables=tables)
     check_layout(saved, LAYOUT)
     _note_input_fields("in_state", saved, BattleState._fields)
     return BattleState(
@@ -392,6 +827,7 @@ def rebuild_outcome(saved: dict):
     from nuzline.engine.outcome import Outcome, empty_outcome
 
     empty = jax.device_get(empty_outcome())
+    saved = upgrade_fields("outcome", saved)
     check_layout(
         saved,
         {
@@ -438,7 +874,18 @@ class Ctx:
         self.vdir, self.kdir = GAMES[VANILLA].tables_dir, GAMES[KAIZO].tables_dir
         self.tables, self.names = load_tables(self.vdir), load_names(self.vdir)
         self.np_tables = to_numpy(self.tables)
+        self._load, self._kaizo = load_tables, None
         self._jit = {}
+
+    def tables_for(self, part: str):
+        """The tables of the game ``part``'s states belong to, which its upgrades read: Kaizo
+        for "roark.trace" (kaizo_roark_02), loaded once; vanilla for every other part (the
+        seed groups and "roark.rank": roark_real_state)."""
+        if part != "roark.trace":
+            return self.tables
+        if self._kaizo is None:
+            self._kaizo = self._load(self.kdir)
+        return self._kaizo
 
     def jit(self, f):
         import jax
@@ -546,7 +993,7 @@ def draw_inputs(ctx: Ctx, seed_value: int, saved: dict | None = None) -> list[tu
                 nkey = f"seed {seed_value} turn {turn[0]} segment {seg + 1}"
                 if nkey not in saved:
                     break
-                s = rebuild_state(saved[nkey]["in_state"])
+                s = rebuild_state(saved[nkey]["in_state"], ctx.tables)
             else:
                 nxt = events(ctx.tables, s, acts, o)[0]
                 if int(nxt.pivot_battler) == 0:
@@ -578,7 +1025,7 @@ def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: st
             pickle.dump(inputs, f, protocol=pickle.HIGHEST_PROTOCOL)
     else:
         with gzip.open(inputs_path, "rb") as f:
-            inputs = pickle.load(f)
+            inputs = upgrade_inputs(pickle.load(f), ctx.tables)
     if group == "gen":  # compare only: the generator still draws the saved inputs
         saved = dict(inputs)
         return [kv for v in range(lo, hi + 1) for kv in draw_inputs(ctx, v, saved)]
@@ -586,12 +1033,13 @@ def seed_steps(ctx: Ctx, directory: Path, mode: str, lo: int, hi: int, group: st
     for key, inp in inputs:
         if "in_ai_state" in inp:  # an AI state: the "ai" group's only input
             if group == "ai":
-                steps.append((key, ai_outputs(ctx, rebuild_state(inp["in_ai_state"]))))
+                ai_s = rebuild_state(inp["in_ai_state"], ctx.tables)
+                steps.append((key, ai_outputs(ctx, ai_s)))
             continue
         if group == "ai":
             continue
         seed_value = int(key.split()[1])
-        s, o = rebuild_state(inp["in_state"]), rebuild_outcome(inp["in_outcome"])
+        s, o = rebuild_state(inp["in_state"], ctx.tables), rebuild_outcome(inp["in_outcome"])
         check_actions(inp["in_actions"], np.asarray(s.active).shape[0])
         outs = group_outputs(ctx, group, seed_value, s, inp["in_actions"], o)
         if group == "step":
@@ -615,14 +1063,10 @@ def roark_steps(ctx: Ctx, which: str):
             lambda: rank_actions(ctx.tables, ctx.names, state, RANK_N, jax.random.PRNGKey(0)),
         )
         return [("rank_actions roark_real_state", {"state": state, "ranking": ranking})]
-    from nuzline.data.tables import load_names, load_tables, to_numpy
-    from nuzline.engine.outcome import outcome_to_py
-    from nuzline.engine.step import needs_replacement
-    from nuzline.reference.convert import from_ref, to_ref
-    from nuzline.reference.engine import ref_advance_learns, ref_learn, ref_replace, ref_step
-    from tools.trace_to_state import learn_array, replay_turn, trace_to_states
+    from nuzline.data.tables import load_names, to_numpy
+    from tools.trace_to_state import learn_array, ref_apply_turn, replay_turn, trace_to_states
 
-    kt, kn = load_tables(ctx.kdir), load_names(ctx.kdir)
+    kt, kn = ctx.tables_for("roark.trace"), load_names(ctx.kdir)
     knp = to_numpy(kt)
     turns = timed(
         "trace_to_states",
@@ -652,18 +1096,9 @@ def roark_steps(ctx: Ctx, which: str):
             )
 
             def ref_replay(b=before, opp=opp_slot):
-                ref = ref_step(
-                    knp, to_ref(b.state), tuple(int(a) for a in b.actions), outcome_to_py(b.outcome)
+                return ref_apply_turn(
+                    knp, b.state, b.actions, b.outcome, b.player_slot, opp, b.learn_choices
                 )
-                need = np.asarray(needs_replacement(from_ref(ref))) != 0
-                ref = ref_advance_learns(knp, ref)
-                for choice in b.learn_choices:
-                    ref = ref_learn(knp, ref, choice)
-                if need[0] and b.player_slot >= 0:
-                    ref = ref_replace(knp, ref, 0, b.player_slot)
-                if need[1] and opp >= 0:
-                    ref = ref_replace(knp, ref, 1, opp)
-                return from_ref(ref)
 
             rec["ref_replay"] = timed("ref_replay", ref_replay)
         steps.append((f"kaizo_roark_02 turn {i}", rec))
@@ -735,11 +1170,24 @@ def child(mode: str, directory: Path, part: str) -> int:
         )
     else:
         with gzip.open(path, "rb") as f:
-            record = pickle.load(f)
+            saved = pickle.load(f)
+        record, drift, tables = [], 0, ctx.tables_for(part)
+        for (key, h, d), (rerun, got) in zip(saved, dump, strict=False):
+            invented: dict = {}
+            want = upgrade_entries(d, tables, invented)
+            drift += key == rerun and bool(settle_new_columns(want, got, invented))
+            record.append((key, h, want))
+        record += [(key, h, upgrade_entries(d, tables)) for key, h, d in saved[len(record) :]]
+        result["sampler_drift"] = drift
         result["diverged"], only_base, only_new = compare_dumps(record, dump)
+        if group == "gen":
+            result["diverged"], result["generator_drift"] = classify_gen(
+                record, dump, result["diverged"]
+            )
         only_base |= INPUT_ONE_SIDED["base"]
         only_new |= INPUT_ONE_SIDED["new"]
         result["only_base"], result["only_new"] = sorted(only_base), sorted(only_new)
+    result["upgraded"] = dict(sorted(UPGRADED.items()))
     result["peak_bytes"] = _peak_bytes()
     print("TIMES " + json.dumps({k: round(v, 1) for k, v in TIMES.items()}), file=sys.stderr)
     print("RESULT " + json.dumps(result), flush=True)
@@ -761,6 +1209,10 @@ def check_imported_from(module_file: str, root: Path) -> None:
 def _names(fields: list[str]) -> str:
     shown = ", ".join(fields[:LIST_SHOWN])
     return shown + (f" (+{len(fields) - LIST_SHOWN} more)" if len(fields) > LIST_SHOWN else "")
+
+
+def _counts(upgraded: dict[str, int]) -> str:
+    return ", ".join(f"{name} x {n}" for name, n in sorted(upgraded.items())) or "none"
 
 
 def _csv(text: str | None) -> set[str]:
@@ -1038,6 +1490,8 @@ def parent(args) -> int:
             flush=True,
         )
         stop = compare_problems(args, base, here, problems, parts)
+        for u in UPGRADES:
+            print(f"layout upgrade: {u.name} ({u.ledger}): {u.reason}", flush=True)
     if stop:
         for p in stop:
             print(f"FAIL: {p}", flush=True)
@@ -1058,8 +1512,10 @@ def parent(args) -> int:
         record["seeds"].append([lo, hi, args.chunk])
         write_capture(directory, record)
     bad, overs, skipped, total = 0, [], [], time.monotonic()
+    upgraded: dict[str, int] = {}
+    classes = dict.fromkeys(CLASSES, 0)
     for part in parts:
-        failed = 1
+        failed, kind = 1, "error"
         lack = missing(part)
         if lack:
             print(f"{part}: SKIPPED: needs {', '.join(lack)} (built tables; not a pass)",
@@ -1076,17 +1532,25 @@ def parent(args) -> int:
             else:
                 res = json.loads(line[7:])
                 failed = report(args, part, res, took, allow, allow_raise, stderr)
+                kind = part_class(part, res, failed)
+                for name, n in res.get("upgraded", {}).items():
+                    upgraded[name] = upgraded.get(name, 0) + n
                 overs += [part] if took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES else []
         bad += failed
+        classes[kind] += 1
         if record is not None:
             record["parts"][part] = "failed" if failed else "ok"
             write_capture(directory, record)
+    counts = ""
+    if args.mode == "compare":
+        print(f"layout upgrades run: {_counts(upgraded)}", flush=True)
+        counts = "parts: " + ", ".join(f"{n} {c}" for c, n in classes.items()) + "; "
     verdict = "ok" if not bad else f"FAILED ({bad} failure(s), skips included)"
     seeded = [p for p in parts if not p.startswith("roark.")]
     groups = ", ".join(dict.fromkeys(p.split(".", 1)[1] if p in seeded else p for p in parts))
     seeds = f"seeds: {lo}-{hi} ({hi - lo + 1})" if seeded else "seeds: none"
     print(
-        f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); "
+        f"{args.mode}: {verdict} ({time.monotonic() - total:.0f} s); {counts}"
         f"groups: {groups}; {seeds}; "
         f"over 60 s / 4 GB: {', '.join(overs) or 'none'}; "
         f"skipped (each a failure): {', '.join(skipped) or 'none'}"
@@ -1094,13 +1558,43 @@ def parent(args) -> int:
     return 1 if bad else 0
 
 
+CLASSES = ("ok", "diverged", "error", "sampler drift", "generator drift")
+
+
+def part_class(part: str, res: dict, failed: int) -> str:
+    """One compared part's class (``CLASSES``): diverged, else error (any other failure), else
+    generator drift (a "gen" divergence in drawn inputs only, ``classify_gen``), sampler drift,
+    or ok."""
+    gen = part.rsplit(".", 1)[-1] == "gen" and bool(res.get("generator_drift"))
+    if res["diverged"] and not gen:
+        return "diverged"
+    if failed:
+        return "error"
+    if res["diverged"]:
+        return "generator drift"
+    return "sampler drift" if res.get("sampler_drift") else "ok"
+
+
+def generator_drift(diverged: str) -> str:
+    """The "gen" part's divergence read as generator drift: its first seed and turn."""
+    at = re.match(r"seed (\d+) turn (\d+)", diverged)
+    where = f"seed {at[1]} turn {at[2]}" if at else diverged.split(":", 1)[0]
+    return f"generator drift: first at {where} ({diverged})"
+
+
 def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr: str) -> int:
-    """Print one part's result; 1 if it failed: a divergence, a one-sided field not in
-    ``--allow-new``, or a function (not in ``--allow-all-raise``) that raised on every call."""
+    """Print one part's result; 1 if it failed: a divergence (but generator drift: a "gen"
+    divergence in drawn inputs only, ``classify_gen``), a field only in the capture (a dropped field without an upgrade row), a field only
+    in this checkout not in ``--allow-new``, or a function (not in ``--allow-all-raise``) that
+    raised on every call. Sampler drift (new columns) is counted, never a failure."""
     gb = res["peak_bytes"] / 2**30
     over = took > LIMIT_S or res["peak_bytes"] > LIMIT_BYTES
+    group = part.rsplit(".", 1)[-1]
+    gen_drift = group == "gen" and bool(res.get("generator_drift")) and bool(res["diverged"])
     if args.mode == "capture":
         verdict = "captured"
+    elif gen_drift:
+        verdict = generator_drift(res["diverged"])
     else:
         verdict = f"DIVERGED: {res['diverged']}" if res["diverged"] else "identical"
     print(
@@ -1108,16 +1602,21 @@ def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr
         f"{'  OVER LIMIT' if over else ''}",
         flush=True,
     )
-    failed = bool(res["diverged"])
-    for label, key in (("only in the capture", "only_base"), ("only in this checkout", "only_new")):
-        hard = [f for f in res[key] if not allowed(f, allow)]
-        ok = [f for f in res[key] if allowed(f, allow)]
-        if hard:
-            print(f"  FAIL {label}: {_names(hard)}", flush=True)
-            failed = True
-        if ok:
-            print(f"  {label} (--allow-new): {_names(ok)}", flush=True)
-    group = part.rsplit(".", 1)[-1]
+    failed = bool(res["diverged"]) and not gen_drift
+    if res.get("sampler_drift"):
+        print(f"  sampler drift (new columns): {res['sampler_drift']} steps", flush=True)
+    if res["only_base"]:
+        print(
+            f"  FAIL dropped field without an upgrade row: {_names(res['only_base'])}", flush=True
+        )
+        failed = True
+    hard = [f for f in res["only_new"] if not allowed(f, allow)]
+    ok = [f for f in res["only_new"] if allowed(f, allow)]
+    if hard:
+        print(f"  FAIL only in this checkout: {_names(hard)}", flush=True)
+        failed = True
+    if ok:
+        print(f"  only in this checkout (--allow-new): {_names(ok)}", flush=True)
     if res["steps"] == 0:
         print("  FAIL zero steps", flush=True)
         failed = True
@@ -1143,6 +1642,8 @@ def report(args, part, res, took, allow: set[str], allow_raise: set[str], stderr
         else:
             note = " (--allow-all-raise)" if every else ""
             print(f"  raised: {name} {count}/{calls}{note} ({first})", flush=True)
+    if res.get("upgraded"):
+        print(f"  layout upgrades: {_counts(res['upgraded'])}", flush=True)
     if args.verbose:
         print("  " + next((ln for ln in stderr.splitlines() if ln.startswith("TIMES")), ""))
     return int(failed)

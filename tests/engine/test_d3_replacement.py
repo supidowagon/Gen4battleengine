@@ -1,6 +1,6 @@
 """D3-12: the turn-end replacement round over four battlers (``ReplaceFainted``, bcp.c:4070-4167;
 ``replace_round``), and the owed reload of battler 2's level-up (battle_script.c:9716-9720,
-:9860-9864; ``learn_pin``).
+:9860-9864; ``levelup._reloaders``).
 
 ``four`` states: every Pokemon is a level-50 Bulbasaur; the battlers lead from the first slots of
 their parties (DOUBLES: battler 0 slot 0, battler 2 slot 1). ``down`` sets Pokemon to 0 HP."""
@@ -16,7 +16,7 @@ from hypothesis import strategies as st
 from nuzline.engine.actions import absent_now, replacement_bench
 from nuzline.engine.damage import stealth_rock_loss
 from nuzline.engine.format import DOUBLES, MULTI, SINGLES, TWO_TRAINERS, format_of, party
-from nuzline.engine.levelup import learn_options, pay_exp
+from nuzline.engine.levelup import pay_exp
 from nuzline.engine.step import needs_replacement, replace_round
 from nuzline.reference.convert import to_ref
 from nuzline.reference.engine import _awaits_replacement
@@ -207,53 +207,26 @@ def leveling(tables, names, fmt=DOUBLES):
     return s, s._replace(hp=s.hp.at[1, 0].set(0))
 
 
-def test_battler_2s_level_up_reloads_battler_2_and_pins_its_move(tables, names):
+def test_battler_2s_level_up_reloads_battler_2(tables, names):
     s, after = leveling(tables, names)
     s = s._replace(
         power_trick=s.power_trick.at[0].set(1).at[2].set(1),
         transformed=s.transformed.at[2].set(1),
     )
     after = after._replace(power_trick=s.power_trick, transformed=s.transformed)
-    pending = jnp.asarray([False, False, True, False])
-    selected = jnp.asarray([0, 0, 3, 0], jnp.int32)
-    out = pay_exp(tables, s, after, pending, selected, battler=1)
+    out = pay_exp(tables, s, after, battler=1)
     assert int(out.level[0, 0]) == 51 and int(out.level[0, 1]) == 51
     # ReloadPokemon for expBattler 2 (battle_script.c:9716-9720, :9860-9864): the Attack / Defense
     # come unswapped (the Power Trick bit stays) and a Transformed battler's shadow follows.
     assert int(out.power_trick_desync[0]) == 1 and int(out.power_trick_desync[2]) == 1
     np.testing.assert_array_equal(np.asarray(out.shadow_stats[2]), np.asarray(out.stats[0, 1]))
-    assert int(out.learn_pin) == (3 + 1) * 5  # battler 2's digit; battler 0's move is not pending
 
 
-def test_both_party_0_battlers_pin_their_own_moves(tables, names):
-    s, after = leveling(tables, names)
-    pending = jnp.asarray([True, False, True, False])
-    selected = jnp.asarray([1, 0, 3, 0], jnp.int32)
-    out = pay_exp(tables, s, after, pending, selected, battler=1)
-    assert int(out.learn_pin) == (1 + 1) + 5 * (3 + 1)
-    scalar = pay_exp(tables, s, after, True, 2, battler=1)  # a scalar is battler 0's
-    assert int(scalar.learn_pin) == 2 + 1
-
-
-def test_multi_partner_is_not_reloaded_and_not_pinned(tables, names):
+def test_multi_partner_is_not_reloaded(tables, names):
     """MULTI's battler 2 draws from party 2: party 0 slot 0 (battler 0's) is the only reload."""
     s, after = leveling(tables, names, MULTI)
     s = s._replace(power_trick=s.power_trick.at[2].set(1))
     after = after._replace(power_trick=s.power_trick)
-    pending = jnp.asarray([False, False, True, False])
-    out = pay_exp(tables, s, after, pending, jnp.asarray([0, 0, 2, 0], jnp.int32), battler=1)
+    out = pay_exp(tables, s, after, battler=1)
     assert int(out.level[0, 0]) == 51
     assert int(out.power_trick_desync[2]) == 0  # its active slot 0 is party 2's, not leveled
-    assert int(out.learn_pin) == 0
-
-
-def test_the_learn_prompt_of_battler_2s_slot_masks_its_own_pin_and_disable(tables, names):
-    s, _ = leveling(tables, names)
-    s = s._replace(learn_level=s.learn_level.at[1].set(51), learn_cursor=s.learn_cursor * 0)
-    free = np.asarray(learn_options(tables, s)).tolist()
-    pinned = np.asarray(learn_options(tables, s._replace(learn_pin=jnp.int8(4 * 5)))).tolist()
-    assert pinned == [*free[:3], False, free[4]]  # battler 2's digit 4: move slot 3
-    other = learn_options(tables, s._replace(learn_pin=jnp.int8(3)))  # battler 0's digit only
-    assert np.asarray(other).tolist() == free
-    disabled = s._replace(disabled_move=s.disabled_move.at[2].set(s.moves[0, 1, 0]))
-    assert np.asarray(learn_options(tables, disabled)).tolist() == [False, *free[1:]]

@@ -23,6 +23,7 @@ from nuzline.engine.enumerate import (
     hit_class_law,
     outcome_laws,
 )
+from nuzline.engine.field import with_weather
 from nuzline.engine.ids import AbilityId, EffectId, ItemId, Stat, Weather
 from nuzline.engine.outcome import (
     MAX_HITS,
@@ -447,6 +448,17 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.COPYCAT,
     EffectId.ASSIST,  # an invoker (B10-11)
     EffectId.ME_FIRST,  # an invoker (E3-2-3): the copied move's own effect decides
+    EffectId.MIRROR_MOVE,  # an invoker (E3-B2-2): the copied move's own effect decides
+    EffectId.CONVERSION_2,  # writes the user's types, no stage (E3-B2-3)
+    EffectId.SPITE,  # writes the target's PP, no stage (E3-B2-4)
+    EffectId.GRUDGE,  # sets a flag on its user, no stage (E3-B2-9)
+    # sets the target's identified bit, no stage; hit_thresholds' ``free`` clause covers its change
+    # of the evasion the later checks read (like Foresight, outcome.future_thresholds, E3-B2-10)
+    EffectId.MIRACLE_EYE,
+    # sets a flag on its user, no stage; the move it reflects is read as the holder's own
+    # (order.used_moves, E3-B2-6)
+    EffectId.MAGIC_COAT,
+    EffectId.LUCKY_CHANT,  # a side's crit block: no stage, no accuracy input (E3-B2-7)
     # Uproar (a lock and a field bit) and Future Sight (a stored hit) write no stage.
     EffectId.UPROAR,
     EffectId.FUTURE_SIGHT,
@@ -482,6 +494,8 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.KNOCK_OFF,
     EffectId.SAFEGUARD,  # a side condition (B10-7)
     EffectId.FOCUS_PUNCH,  # a plain hit (B10-8)
+    EffectId.LAST_RESORT,  # a plain hit that can fail (E3-B2-11)
+    EffectId.FEINT,  # a plain hit that can fail (E3-B2-13)
     EffectId.ENCORE,  # sets the encore only (B10-9)
     # E2 batch 12, the stat family: Tickle writes Attack and Defense (B12-4), Power / Guard Swap
     # Attack / Sp. Atk or Defense / Sp. Def (B12-7), Captivate Sp. Atk (B12-8): their params name
@@ -535,6 +549,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
     EffectId.DO_NOTHING,
     EffectId.FLEE,
     EffectId.TORMENT,  # E3-2-1: a statusVolatile bit, no stage
+    EffectId.NIGHTMARE,  # G-31: a statusVolatile bit (subscript_nightmare_start.s:9), no stage
     EffectId.TRICK_ROOM,  # E3-2-4: a field condition bit, no stage
 }
 # Effects that write an accuracy or evasion stage outside the stat kinds, each followed by
@@ -548,7 +563,7 @@ _NO_ACC_EVA_WRITE = (frozenset(EffectId(i) for i in range(40)) - _STAT_KINDS) | 
 # test_gravity_and_transform_are_seen_by_hit_thresholds. Worry Seed (E3-2-2) writes the target's
 # ability (Compoundeyes, Hustle, ... lost before its check): tests/engine/test_e3_batch1.py
 # test_worry_seed_is_seen_by_hit_thresholds_and_crit_odds. Skill Swap (E3-2-5) swaps the two
-# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Gastro Acid (E3-2-6) suppresses the target's
+# battlers' abilities: tests/engine/test_e3_batch1.py test_skill_swap_is_seen_by_hit_thresholds. Role Play (E3-B2-5) gives its user the target's ability: tests/engine/test_e3_batch2.py test_role_play_is_seen_by_hit_thresholds_and_armor. Gastro Acid (E3-2-6) suppresses the target's
 # ability (Compoundeyes, Hustle, ... read NONE at its check):
 # tests/engine/test_e3_batch1.py test_gastro_acid_is_seen_by_hit_thresholds_and_crit_odds.
 _FOLLOWED = frozenset(
@@ -560,7 +575,10 @@ _FOLLOWED = frozenset(
         EffectId.TRANSFORM,
         EffectId.WORRY_SEED,
         EffectId.SKILL_SWAP,
+        EffectId.ROLE_PLAY,
         EffectId.GASTRO_ACID,
+        EffectId.FLING,
+        EffectId.DEFOG,  # clears the deep fog the check reads (E3-B2-14)
     }
 )
 # Effects whose params name stats: they must name no accuracy or evasion.
@@ -700,9 +718,8 @@ def _gravity_transform_cases(tables, names):
     # Transform copies the player's Sand Veil (battle_mon.h:84) in sand: Scratch x80/100
     # (bcp.c:2927-2929) against the transformed Geodude.
     veil = roark_state(tables, names, opp_moves=["Transform"], opp_faster=True)
-    veil = veil._replace(
-        ability=veil.ability.at[0, int(veil.active[0])].set(AbilityId.SAND_VEIL),
-        weather=jnp.asarray(Weather.SANDSTORM, veil.weather.dtype),
+    veil = with_weather(veil, Weather.SANDSTORM)._replace(
+        ability=veil.ability.at[0, int(veil.active[0])].set(AbilityId.SAND_VEIL)
     )
     return [
         (grav, A("Rock Throw", "Gravity", grav, names), {1: 90, 91: 10}, 100),
@@ -780,14 +797,13 @@ def _taken_and_copied_cases(tables, names):
         opp_faster=True,
     )
     slot = names.species_abilities(names.species("Psyduck")).index(names.ability("Cloud Nine"))
-    nine = nine._replace(
+    nine = with_weather(nine, Weather.RAIN)._replace(
         ability_slot=nine.ability_slot.at[1, 0].set(slot),
         ability=nine.ability.at[1, 0].set(AbilityId.CLOUD_NINE),
-        weather=jnp.asarray(Weather.RAIN, nine.weather.dtype),
     )
     cases.append((nine, A("Thunder", "Transform", nine, names), {1: 70, 71: 30}, 100))
     # In sun the lost Cloud Nine lets Thunder's hitRate = 50 apply (bcp.c:2915-2917), F-25.
-    sun = nine._replace(weather=jnp.asarray(Weather.SUN, nine.weather.dtype))
+    sun = with_weather(nine, Weather.SUN)
     cases.append((sun, A("Thunder", "Transform", sun, names), {1: 50, 51: 20, 0: 30}, 50))
     return cases
 

@@ -42,7 +42,6 @@ from nuzline.ai.layout import AiLayout, layout_of
 from nuzline.ai.policy import UnsupportedAi
 from nuzline.data.tables import Names, Tables
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, usable_moves
-from nuzline.engine.coverage import check_acid_rain
 from nuzline.engine.outcome import replacement_known
 from nuzline.engine.state import MAX_DEATH_BUDGET, BattleState
 from nuzline.jaxcache import cached_export, code_version
@@ -189,7 +188,6 @@ def rank_actions(
     """Rank the player's legal actions at ``state`` by ``n`` shared playouts each
     (module docstring). Raises ``UnsupportedAi`` when any playout is refused and
     ``ValueError`` on a root with learn work (Stage B answers a learn prompt; K3d-exp)."""
-    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     if np.any(np.asarray(state.learn_level)):
         raise ValueError("rank_actions: a Stage A root carries no learn work")
     legal = np.flatnonzero(np.asarray(decision_actions(tables, state)))

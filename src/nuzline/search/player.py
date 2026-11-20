@@ -49,7 +49,7 @@ from nuzline.ai.policy import ai_path_refusals, ai_refusals
 from nuzline.data.tables import Tables
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import WINNER_PLAYER, needs_replacement
-from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
+from nuzline.search.learn import resolve_learns, settle_learns, settle_reason
 from nuzline.search.playout import (
     REFUSED_WON,
     _carried_mul,
@@ -158,7 +158,7 @@ def _player_run(
     def body(carry):
         s, key, turns, fallback, _ = carry
         key, k_policy, k_turn = jax.random.split(key, 3)
-        s = settle_war(s, k_turn)  # an open weather war, before the decisions (G-26)
+        s = settle_war(s, k_turn, tables)  # an open weather war, before the decisions (G-26)
         action, act_refused, by_fallback = player.act(tables, s, params, k_policy, layout)
         played, refused, ai_switched, power_mul = _play(
             tables, s, jnp.asarray(action, _I32), k_turn, layout
@@ -169,13 +169,10 @@ def _player_run(
         played, pass_refused = _replace_while_needed(
             tables, played, player, params, sent_refused, SLOTS - 1, k_policy, 1, layout
         )
-        refused = (
-            refused
-            | pass_refused
-            | act_refused
-            | (played.exp_refused != 0)
-            | (played.acid_rain != 0)
-        )
+        # A newcomer's hazard faint inside the replacement loop leaves its prompt (E3-B2-21), but
+        # not at a finished battle (ruling D8).
+        played = _select(played.over != 0, played, resolve_learns(tables, played))
+        refused = refused | pass_refused | act_refused
         s = _select(refused, s, played)
         counted = jnp.where(refused, 0, 1)
         return s, key, turns + counted, fallback + jnp.where(by_fallback, counted, 0), refused
@@ -279,7 +276,7 @@ def _replay(
         if int(state.over) != 0:
             return None, state, turns
         key, k_policy, k_turn = jax.random.split(key, 3)
-        state = settle_war(state, k_turn)
+        state = settle_war(state, k_turn, tables)
         action, act_refused, _ = _act_jit(tables, state, player, params, k_policy, layout)
         played, ai_refused, ai_switched, power_mul = _play_jit(
             tables, state, jnp.asarray(action, _I32), k_turn, layout
@@ -291,18 +288,13 @@ def _replay(
             return reason or "the opponent's AI is refused", state, turns
         played = _resolve_jit(tables, played)
         sent, sent_refused = send_replacements(tables, played, ai_switched, power_mul)
-        # Refused learn work first, as playout.refusal_reason (a window (c) set by the send).
-        reason = learn_reason(sent)
-        if reason:
-            return reason, state, turns
         if bool(sent_refused):
             reason = _send_reason(tables, played, ai_switched, power_mul)[0]
             return reason or "the opponent's replacement is refused", state, turns
         reason, after = _passes_reason(tables, sent, player, params, k_policy, 1, layout)
-        reason = reason or learn_reason(after)
         if reason:
             return reason, state, turns
-        state = after
+        state = _resolve_jit(tables, after)  # the loop's hazard-faint prompts (E3-B2-21)
     return None, state, max_turns
 
 
@@ -322,6 +314,6 @@ def refusal_reason(
     jitted per call, and the refused step is asked on its concrete state: the AI
     (``ai_refusals``, then ``ai_path_refusals``) for a refused turn or player choice, the
     replacement mirrors (``playout._send_reason``, ``_pass_reason``) for a refused
-    replacement, ``learn.settle_reason`` / ``learn_reason`` for refused learn-move work. ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
+    replacement, ``learn.settle_reason`` for the pending replacement before the first turn. ``layout`` defaults to the concrete ``tables``' own (``layout_of``)."""
     layout = layout_of(tables) if layout is None else layout
     return _replay(tables, state, player, params, key, max_turns, layout)[0]

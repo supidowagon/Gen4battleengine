@@ -47,6 +47,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import (
     CHOICE_ITEMS,
@@ -147,7 +148,7 @@ def gravity_banned(state: BattleState, moves) -> jnp.ndarray:
     Splash, Magnet Rise). Selection (CHECK_INVALID_GRAVITY, :2292), the status check
     (CHECK_STATUS_STATE_GRAVITY, bcp.c:2586) and the invokers' calls read it."""
     moves = jnp.asarray(moves, jnp.int32)
-    return (state.gravity != 0) & jnp.isin(moves, jnp.asarray(GRAVITY_MOVES, jnp.int32))
+    return fcm.gravity_on(state) & jnp.isin(moves, jnp.asarray(GRAVITY_MOVES, jnp.int32))
 
 
 def usable_moves(tables: Tables, state: BattleState, side) -> jnp.ndarray:
@@ -215,7 +216,7 @@ def trapped(tables: Tables, state: BattleState, side) -> jnp.ndarray:
             & ~jnp.any(types == Type.FLYING)
         )
         | iron
-        | (state.gravity != 0)
+        | fcm.gravity_on(state)
     )
     steel = jnp.any(types == Type.STEEL)
     trapped_by = jnp.asarray(False)

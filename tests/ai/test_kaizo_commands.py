@@ -34,6 +34,7 @@ from nuzline.ai.commands import (
     SideCondition,
 )
 from nuzline.engine.damage import ai_damage_for_roll, weather_suppressed
+from nuzline.engine.field import with_trick_room, with_weather
 from nuzline.engine.ids import WEATHER_ABILITY_IDS, Stat, Status, Type, Weather
 from nuzline.engine.order import (
     COMPARE_SPEED_FASTER,
@@ -276,8 +277,26 @@ def test_if_field_conditions_mask_trick_room(tables, names):
     assert FieldCondition.TRICK_ROOM == (1 << 16) | (1 << 17) | (1 << 18)
     s = versus(tables, names, GEODUDE)
     assert not _jump(c.if_field_conditions_mask(_ctx(tables, s), FieldCondition.TRICK_ROOM))
-    tr = s._replace(trick_room=jnp.asarray(3, s.trick_room.dtype))
+    tr = with_trick_room(s, 3)
     assert _jump(c.if_field_conditions_mask(_ctx(tables, tr), FieldCondition.TRICK_ROOM))
+
+
+@pytest.mark.parametrize("mask, up", [(0x40000 - 3, True), (0xFFFF, False)])
+def test_if_field_conditions_mask_trick_room_reads_the_mask(tables, names, mask, up):
+    # script.s:364 etc.: fieldConditionsMask & FIELD_CONDITION_TRICK_ROOM (trainer_ai.c:
+    # 1936-1946), any of bits 16-18, a borrowed counter's too (FCM 3.1).
+    s = versus(tables, names, GEODUDE)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
+    assert _jump(c.if_field_conditions_mask(_ctx(tables, s), FieldCondition.TRICK_ROOM)) is up
+
+
+@pytest.mark.parametrize("mask, up", [(0x7FFF, True), (0x5000 - 3, True), (0xFFF, False)])
+def test_if_field_conditions_mask_gravity_reads_the_mask(tables, names, mask, up):
+    # Basic_CheckGravityActive (script.s:1028): fieldConditionsMask & FIELD_CONDITION_GRAVITY
+    # (trainer_ai.c:1936-1946), any of bits 12-14, a borrowed counter's too (FCM 3.1).
+    s = versus(tables, names, GEODUDE)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
+    assert _jump(c.if_field_conditions_mask(_ctx(tables, s), FieldCondition.GRAVITY)) is up
 
 
 # --- LoadCurrentWeather (trainer_ai.c:1414-1439) -------------------------------------------
@@ -303,7 +322,25 @@ def test_ai_weather_ids_are_the_decomps():
 )
 def test_load_current_weather(tables, names, weather, expected):
     s = versus(tables, names, GEODUDE)
-    s = s._replace(weather=jnp.asarray(weather, s.weather.dtype))
+    s = with_weather(s, weather)
+    assert _temp(c.load_current_weather(_ctx(tables, s))) == expected
+
+
+@pytest.mark.parametrize(
+    "mask, expected",
+    [
+        (0x7F, AiWeather.HAILING),
+        (0x807F, AiWeather.DEEP_FOG),
+        (0x5, AiWeather.SANDSTORM),
+        (0x3D, AiWeather.SUNNY),
+    ],
+)
+def test_load_current_weather_takes_the_last_set_group(tables, names, mask, expected):
+    # LoadCurrentWeather (trainer_ai.c:1414-1438) tests WEATHER_IS_RAIN, _SAND, _SUN, _HAIL,
+    # _FOG one after another, each overwriting calcTemp: on a mask with several groups (FCM
+    # 3.1-3.2) the last set one wins.
+    s = versus(tables, names, GEODUDE)
+    s = s._replace(field_mask=jnp.asarray(mask, s.field_mask.dtype))
     assert _temp(c.load_current_weather(_ctx(tables, s))) == expected
 
 
@@ -316,10 +353,7 @@ def test_load_current_weather_ignores_cloud_nine(tables, names, side, lock):
     # or Air Lock holder on the field still loads AI_WEATHER_SANDSTORM.
     holder = {"Cloud Nine": "Psyduck", "Air Lock": "Rayquaza"}[lock]
     s = versus(tables, names, GEODUDE)
-    s = s._replace(
-        weather=jnp.asarray(Weather.SANDSTORM, s.weather.dtype),
-        weather_timer=jnp.asarray(0, s.weather_timer.dtype),  # permanent
-    )
+    s = with_weather(s, Weather.SANDSTORM)
     s = _species_with(tables, s, side, names.species(holder), WEATHER_ABILITY_IDS[lock])
     assert bool(weather_suppressed(tables, s))  # the battle's weather effects are off
     assert _temp(c.load_current_weather(_ctx(tables, s))) == AiWeather.SANDSTORM
@@ -350,10 +384,7 @@ def test_ai_damage_sand_spdef_gated(tables, names):
         return int(ai_damage_for_roll(tables, st, 1, water_gun, 15))
 
     def weather(st, w):
-        return st._replace(
-            weather=jnp.asarray(w, st.weather.dtype),
-            weather_timer=jnp.asarray(0, st.weather_timer.dtype),
-        )
+        return with_weather(st, w)
 
     no_lock = _species_with(tables, s, 1, psyduck, damp)
     clear, sand = (
@@ -385,10 +416,9 @@ def test_compare_speed_constants_are_the_decomps():
     assert (COMPARE_SPEED_FASTER, COMPARE_SPEED_SLOWER, COMPARE_SPEED_TIE) == (0, 1, 2)
 
 
-def _speed_state(tables, names, player: int, opp: int, **fields):
+def _speed_state(tables, names, player: int, opp: int, trick_room: int = 0):
     s = versus(tables, names, GEODUDE)
-    s = _speeds(s, player, opp)
-    return s._replace(**{k: jnp.asarray(v, getattr(s, k).dtype) for k, v in fields.items()})
+    return with_trick_room(_speeds(s, player, opp), trick_room)
 
 
 def _slower(tables, s) -> bool:
@@ -446,7 +476,7 @@ def _tie_cases(tables, names):
     both = lambda item: base._replace(item=base.item.at[0, 0].set(item).at[1, GEODUDE].set(item))
     return {
         "plain": base,
-        "trick_room": base._replace(trick_room=jnp.asarray(3, base.trick_room.dtype)),
+        "trick_room": with_trick_room(base, 3),
         "quick_claws": both(claw)._replace(qc_roll=jnp.asarray([1, 1], base.qc_roll.dtype)),
         "lagging_tails": both(tail),
     }

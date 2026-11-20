@@ -150,7 +150,12 @@ of the turn:
   Plucks / Bug Bites a foe holding one, or Recycles one; or a battle-start berry is still open
   (``starf_open``). Five values while the count of stats below +6 stays 5, else all 60
   (``_starf_reads``). ``starf[d, 1]``: a faint replacement's draw (five values), where a holder
-  can enter at its pinch after the turn (``step.starf_kept`` keeps it).
+  can enter at its pinch after the turn (``step.starf_kept`` keeps it). ``starf[d, 2]`` (F-O3,
+  G-27): battler ``d``'s second eat this turn, where two of its eat sources can meet in one call
+  (a U-turn / Baton Pass newcomer eats after the pause, from the resumed outcome's ``[d, 0]``);
+  five values where the later eater is a fresh Roar newcomer, else as ``[d, 0]`` with one more +2.
+  ``starf[d, 3]``: its third eat (its Pluck / Bug Bite and own Starf Berry, then a foe's Roar
+  newcomer), the same law with +2 per earlier eat.
 * ``berry_confusion[s]`` (G-5): ``s`` moves and its confusion counter is ``CONFUSION_PENDING``
   at the start (a flavor berry's), or the foe moves first while ``s``'s active Pokemon, not
   confused, holds a flavor berry it dislikes (``hooks.held_item_check`` after the foe's hit):
@@ -205,15 +210,18 @@ import jax.numpy as jnp
 import numpy as np
 
 from nuzline.data.tables import Tables
+from nuzline.engine import field as fcm
 from nuzline.engine import targets
 from nuzline.engine.actions import absent_now, imprisoning_foe
 from nuzline.engine.damage import (
+    NUM_TYPES,
     PHYSICAL,
     ROLLS,
     SPECIAL,
     STATUS,
     beat_up_damage,
     beat_up_slots,
+    conv2_eligible,
     decomp_abilities,
     entry_ability,
     hit_damage_table,
@@ -226,14 +234,16 @@ from nuzline.engine.effects import (
     acupressure_valid,
     can_have_status,
     defender_side,
+    ghost_user,
     ingrain_anchors,
     metronome_update,
     protect_blocks,
     psycho_shift_status,
+    self_defender,
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.hooks import entry_damage_up, land_stats, starf_holders
+from nuzline.engine.hooks import PLUCKABLE, entry_damage_up, reverted_stats, starf_holders
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -256,12 +266,13 @@ from nuzline.engine.ids import (
     WEATHER_ABILITY_IDS,
     AbilityId,
     EffectId,
+    FieldCondition,
+    FlingEffect,
     ItemId,
     MoveFlag,
     Stat,
     Status,
     Type,
-    Weather,
     sleepless,
 )
 from nuzline.engine.order import (
@@ -269,8 +280,10 @@ from nuzline.engine.order import (
     CALL_COPYCAT,
     CALL_ME_FIRST,
     CALL_METRONOME,
+    CALL_MIRROR_MOVE,
     CALL_NONE,
     CALL_SLEEP_TALK,
+    MIRROR_SELF_RANGES,
     MOVE_ACTIONS,
     TIE_PAIRS,
     action_order,
@@ -290,6 +303,8 @@ from nuzline.engine.order import (
     me_first_copy,
     me_first_target,
     metronome_weights,
+    mirror_call,
+    mirror_copied,
     move_effects,
     sealed_state,
     selected_move,
@@ -306,6 +321,7 @@ from nuzline.engine.outcome import (
     PROTECT_RATES,
     ROAR_LEVEL_VALUES,
     Outcome,
+    acid_rain_reachable,
     armored,
     crit_class,
     crit_variants,
@@ -440,7 +456,10 @@ class OutcomeLaws(NamedTuple):
     acupressure_loose: jnp.ndarray  # bool[B]
     # int32[B]: ids.CHATTER_CHANCES of each battler's party's Chatot cry (G-70)
     chatter_chance: jnp.ndarray
-    # bool[B, 2]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
+    # E3-B2-3, Conversion 2's pick (``_conv2``): ``conv2_eligible[b, t, d]`` the row (t, d) is
+    # eligible for battler b's types (``damage.conv2_eligible``).
+    conv2_eligible: jnp.ndarray  # bool[B, NUM_TYPES, NUM_TYPES]
+    # bool[B, 4]: F-10, the Starf Berry draw (``_starf_reads``) is read modulo a count that can
     # change before the eating: all STARF_DRAWS values; else the five of a fixed count of 5.
     starf_loose: jnp.ndarray
 
@@ -562,8 +581,9 @@ def _end_speeds(
     item, E2 batch 9, or get one back through Recycle, B13-19), every point is also taken with
     Unburden's state toggled (:1268-1272). Where ``land_free`` (a Sky Shaymin of the side can be
     frozen and hit this turn, F-16), every point is also taken with a Sky Shaymin's stats
-    recalculated on Land Forme's row (``hooks.land_stats``: base Speed 127 -> 100,
-    subscript_check_shaymin_form.s:22-30, battle_io_command.c:601-604, battle_lib.c:169-193)."""
+    recalculated on Land Forme's row (``hooks.reverted_stats``: base Speed 127 -> 100; a Transform
+    user's own species, F-O2; subscript_check_shaymin_form.s:22-30, battle_io_command.c:601-604,
+    battle_lib.c:169-193)."""
     fmt = format_of(state)
     switching = is_switch(actions[side])
     mon = jnp.where(switching, actions[side] - MOVE_ACTIONS, state.active[side]).astype(
@@ -649,7 +669,7 @@ def _end_speeds(
         sky = (state.species[row, mon] == SPECIES_SHAYMIN) & (state.form[row, mon] != 0)
         land = ((wind & 4) != 0) & sky
         reverted = jnp.where(
-            land, land_stats(tables, state, row, mon)[Stat.ATK :], state.stats[row, mon]
+            land, reverted_stats(tables, state, side, mon)[Stat.ATK :], state.stats[row, mon]
         )
         # A Pokemon other than the active one comes in fresh: UpdateAfterSwitch zeroes its
         # MoveEffectsData (battle_lib.c:2101-2104) and its switch-in check arms canUnburden only
@@ -696,8 +716,10 @@ def _end_speeds(
         )
         suppressed = jnp.where(lock == 0, weather_suppressed(tables, s), lock == 1)
         chlorophyll = battler_ability(s, side, mon) == AbilityId.CHLOROPHYLL
-        doubling = jnp.where(chlorophyll, Weather.SUN, Weather.RAIN)
-        weather = jnp.where(lock == 3, doubling, s.weather).astype(s.weather.dtype)
+        doubling = jnp.where(
+            chlorophyll, int(FieldCondition.SUNNY_PERM), int(FieldCondition.RAINING_PERM)
+        )
+        weather = jnp.where(lock == 3, doubling, fcm.weather_bits(s))
         return effective_speed(tables, s, side, suppressed, weather)
 
     return jax.vmap(speed)(mons, stages, paras, locks, winds), possible
@@ -749,6 +771,9 @@ def _branch_masks(foe_first, first_self, base: dict) -> dict:
         "berry_confusion": b["pending"] | berry_by_foe,
         "chatter": b["chatter"],
         "berry_by_foe": berry_by_foe,
+        # E3-B2-3: Conversion 2's pick for each recorded type the move can meet in this order.
+        "conv2": b["conv2_use"][:, None]
+        & jnp.where(foe_first[:, None], b["conv2_foe"], b["conv2_own"]),
         # The battler acting last fails Protect whatever its roll (waitingBattlers == 1).
         "protect": b["protect"] & first_self,
         "full_para": b["para_own"] | para_by_foe,
@@ -804,11 +829,16 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.NATURAL_GIFT,
     _E.RECOIL,  # hurts the foe
     _E.FORESIGHT,  # identifies the attacker's side; the hit reads the defender's flag
+    # E3-B2-10: the target's own flag, read by hits and accuracy checks against it; the user is the
+    # only battler that attacks it this turn (singles) and has acted.
+    _E.MIRACLE_EYE,
     _E.LEVEL_DAMAGE,
     _E.HIDDEN_POWER,
     _E.MAGNITUDE,
     _E.SECONDARY_CONFUSE,
     _E.DISABLE,
+    _E.SPITE,  # E3-B2-4: the target's PP only; its move failing is no input of a hit
+    _E.GRUDGE,  # E3-B2-9: the user's flag; it reads and writes PP only after a faint
     _E.BIDE,
     _E.ROLLOUT,
     _E.BRICK_BREAK,  # clears the attacker's side's screens; the hit reads the defender's
@@ -846,8 +876,7 @@ INPUT_NEUTRAL_EFFECTS = (
     # Damages the side: its HP (the HP clause).
     _E.COUNTER,
     # Never the effect read here: the predicate reads the move each action runs
-    # (order.called_move), Nature Power's call; an unresolved one (unknown terrain, refused
-    # by coverage) calls MOVE_NONE and does nothing.
+    # (order.called_move), Nature Power's call on the battle's terrain.
     _E.NATURE_POWER,
     # The invokers likewise (order.used_moves): their called move is read; one whose call
     # fails does nothing.
@@ -856,6 +885,8 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
+    _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
+    _E.MAGIC_COAT,  # E3-B2-6: sets a flag on its user (order.used_moves: a reflection's move is read)
     # E2 batch 5. Uproar starts an uproar on its user, which wakes a sleeper at its own status
     # check: the side's own status change, which ``own_pre_move`` covers for a Guts user.
     _E.UPROAR,
@@ -893,6 +924,13 @@ INPUT_NEUTRAL_EFFECTS = (
     _E.MIST,
     # B10-8: a plain hit, or none once the user took a hit (its foe's damage is unchanged).
     _E.FOCUS_PUNCH,
+    # E3-B2-11: a plain hit, or none while the user has not used its other moves (its own count and
+    # moves, no input of the foe's hit).
+    _E.LAST_RESORT,
+    # E3-B2-13: a plain hit, or none unless the foe protected; the hit's only write is the foe's
+    # turnFlags.protecting, which no damage input reads (a later hit meets it through the Protect
+    # clause only).
+    _E.FEINT,
     # B10-9: it forces the foe's later turns' move; nothing of this turn's damage.
     _E.ENCORE,
     # B12-4: its user's own crit stages (another battler's crit odds are crit_variants').
@@ -924,6 +962,9 @@ INPUT_NEUTRAL_EFFECTS = (
     # marked done, so no action changes. Its flip of the order bit is read at the next turn's
     # order (order.py), not by a hit of this one. A doubles partner's order is not a singles case.
     _E.TRICK_ROOM,
+    # G-31: Nightmare sets a bit read at the turn end (bcp.c:1436-1448) and by its own script; no
+    # hit of this turn reads it.
+    _E.NIGHTMARE,
 )
 INPUT_CLAUSE_EFFECTS = (
     _E.STAT_SELF,  # the foe's Defense / Sp. Def; Minimize's flag (Stomp's power)
@@ -959,6 +1000,8 @@ INPUT_CLAUSE_EFFECTS = (
     # The foe's own types (effects._camouflage): the type chart of the side's later hit
     # (damage._finish) and the Rock Sp. Def boost in sand: the camouflage clause.
     _E.CAMOUFLAGE,
+    # E3-B2-3: Conversion 2 rewrites the user's types the same way (the camouflage clause).
+    _E.CONVERSION_2,
     # Takes the side's berry: a stat pinch berry raises the eater's stat (hooks.pluck_berry),
     # the defending one of the side's later hit: the pluck clause. Taking any other berry
     # changes no input of the side's hit, and only removes a later cure.
@@ -1022,11 +1065,32 @@ INPUT_CLAUSE_EFFECTS = (
     # that hit, its accuracy and crit odds, a Klutz holder's item, an Intimidate or Download
     # stage change of its stats: the skill-swap clause.
     _E.SKILL_SWAP,
+    # E3-B2-5: Role Play gives the foe (its user) the side's ability
+    # (subscript_copy_ability.s:14-15) before the side's later hit, and an entry ability it
+    # gains acts at the move's end (``hooks.move_end_switch_in``): every ability factor of that
+    # hit, its accuracy and crit odds (the side's own ability is unchanged): the role-play clause.
+    _E.ROLE_PLAY,
     # E3-2-6: Gastro Acid suppresses the side's ability before its later hit
     # (subscript_suppress_target_ability.s:10; ``Battler_Ability`` reads NONE, battle_lib.c:3088-
     # 3093): every ability factor of that hit, its accuracy and crit odds, a Klutz holder's item,
     # the speed abilities of the turn's end: the gastro-acid clause.
     _E.GASTRO_ACID,
+    # E3-B2-1: a foe's Fling acts on the side before its later hit: the flung item's effect
+    # (``hooks.fling_effect``: a heal, a cure, a raised Attack / Sp. Atk or Defense stage, Starf's
+    # draw, a burn for the Attack, a paralysis, poison or flinch, Lansat's Focus Energy, Micle's
+    # flag), TryFling's White Herb reset of the side's stages (``hooks.fling_try``) and the foe's
+    # own item gone (the defender's item the side's hit reads, ``damage._item_modifiers``): the
+    # fling clause, any foe Fling.
+    _E.FLING,
+    # E3-B2-7: a foe's Lucky Chant (subscript_lucky_chant_start.s:5-6) sets the condition the side's
+    # later CalcCrit reads (battle_lib.c:7137): the crit draw it spends crits nothing: the
+    # lucky-chant clause, a Lucky Chant not up at the turn start.
+    _E.LUCKY_CHANT,
+    # E3-B2-14: a foe's Defog clears the field's deep fog (subscript_defog.s:64-69), which Weather
+    # Ball's power and SolarBeam's halving read (damage.weather_ball_params, damage._finish): the
+    # defog clause, fog up at the turn start. The screens and hazards it clears are the side's
+    # own, which only the foe's hits read, and its evasion drop is the side's own too.
+    _E.DEFOG,
 )
 INPUT_NEUTRAL_ABILITIES = (
     AbilityId.NONE,
@@ -1042,6 +1106,7 @@ INPUT_NEUTRAL_ABILITIES = (
     AbilityId.STEADFAST,  # Speed
     AbilityId.INSOMNIA,
     AbilityId.CLOUD_NINE,  # changes only when its holder faints: no hit follows
+    AbilityId.AIR_LOCK,  # the same lock (G-14)
     AbilityId.COMPOUNDEYES,
     AbilityId.SHED_SKIN,  # turn end
     AbilityId.SAND_VEIL,
@@ -1335,6 +1400,12 @@ TABLE_DAMAGE_EFFECTS = (
     _E.KNOCK_OFF,
     # B10-8: CalcCrit, CalcDamage (effect_script_0170.s:8-9) unless the focus is lost first.
     _E.FOCUS_PUNCH,
+    # E3-B2-11: CalcCrit, CalcDamage (effect_script_0246.s:6-7) unless TryLastResort fails first
+    # (the user's own count and moves, nothing the foe changes within the turn).
+    _E.LAST_RESORT,
+    # E3-B2-13: CalcCrit, CalcDamage (effect_script_0223.s:7-8) unless TryFeint fails first (the
+    # foe's Protect this turn, an input of whether the hit happens, never of its table).
+    _E.FEINT,
     # B13-5, B13-10: their per-hit tables (``OutcomeLaws.damage[side, hit]``: Triple Kick's
     # k x step power, Beat Up's member), each its damage for the hit's (crit, roll).
     _E.TRIPLE_KICK,
@@ -1361,6 +1432,7 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.LEECH_SEED,
     _E.WATER_SPORT,
     _E.FORESIGHT,
+    _E.MIRACLE_EYE,  # a status move: no damage (E3-B2-10)
     _E.LEVEL_DAMAGE,
     _E.MAGNITUDE,
     _E.MUD_SPORT,
@@ -1378,6 +1450,9 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.ENDURE,  # a status move: no damage
     _E.ATTRACT,  # a status move: no damage
     _E.CAMOUFLAGE,  # a status move: no damage
+    _E.CONVERSION_2,  # a status move: no damage
+    _E.SPITE,  # a status move: no damage (E3-B2-4)
+    _E.GRUDGE,  # a status move: no damage (E3-B2-9)
     _E.ROAR,  # a status move: no damage
     _E.WEATHER,  # a status move: no damage
     # Power from the defender's HP or status, or the user's status, at the hit: not the
@@ -1395,8 +1470,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DESTINY_BOND,
     _E.COUNTER,  # the damage taken this turn, no roll
     # Its table power is 0: its damage is the called move's. outcome_laws reads the called
-    # move (order.called_move), whose own effect decides (Tri Attack's is a table hit), so
-    # this entry only keeps an unresolved Nature Power (unknown terrain) uncompressed.
+    # move (order.called_move), whose own effect decides (Tri Attack's is a table hit): this
+    # entry is never read.
     _E.NATURE_POWER,
     # The invokers likewise: their called move's effect decides; a failed call deals nothing.
     _E.SLEEP_TALK,
@@ -1404,6 +1479,8 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.COPYCAT,
     _E.ASSIST,  # B10-11: an invoker like them
     _E.ME_FIRST,  # E3-2-3: an invoker of its target's move (order.me_first_copy)
+    _E.MIRROR_MOVE,  # E3-B2-2: an invoker of the move aimed at its user (order.mirror_call)
+    _E.MAGIC_COAT,  # E3-B2-6: sets a flag on its user (order.used_moves: a reflection's move is read)
     # No damage at its use (its roll is TryFutureSight's stored damage, damage.fixed_damage).
     _E.FUTURE_SIGHT,
     _E.INGRAIN,  # status moves: no damage
@@ -1453,10 +1530,17 @@ NON_TABLE_DAMAGE_EFFECTS = (
     _E.DO_NOTHING,  # no CalcDamage: damage 0 (damage.fixed_damage), E3-1-1
     _E.FLEE,  # a status move that fails: no damage (E3-1-4)
     _E.TORMENT,  # a status move: no damage (E3-2-1)
+    _E.NIGHTMARE,  # a status move: no damage (G-31)
     _E.TRICK_ROOM,  # a status move: no damage (E3-2-4)
     _E.WORRY_SEED,  # a status move: no damage (E3-2-2)
     _E.SKILL_SWAP,  # a status move: no damage (E3-2-5)
+    _E.ROLE_PLAY,  # a status move: no damage (E3-B2-5)
     _E.GASTRO_ACID,  # a status move: no damage (E3-2-6)
+    # E3-B2-1: Fling's power is its item's fling power and its attacker's item is read with the
+    # item still held (``damage.flung_view``), neither of ``hit_damage_table``'s turn-start reads.
+    _E.FLING,
+    _E.LUCKY_CHANT,  # a status move: no damage (E3-B2-7)
+    _E.DEFOG,  # a status move: no damage (E3-B2-14)
 )
 
 
@@ -1577,10 +1661,8 @@ def damage_inputs_can_change(
     # F-16: a Shaymin-Sky that a hit freezes becomes Land Forme (hooks.shaymin_land): the foe's
     # earlier freezing move changes the side's own stats, types and ability, and the hits of
     # any move against a Sky Shaymin frozen at the turn start (the first hit reverts it).
-    sky = (
-        (state.species[party(fmt, sides), mons] == SPECIES_SHAYMIN)
-        & (state.form[party(fmt, sides), mons] != 0)
-        & (state.transformed == 0)
+    sky = (state.species[party(fmt, sides), mons] == SPECIES_SHAYMIN) & (
+        state.form[party(fmt, sides), mons] != 0
     )
     foe_freezes = _inflicts(
         tables, state, foes(moves), Status.FREEZE, users=tuple(_foe(b) for b in range(fmt.B))
@@ -1620,8 +1702,19 @@ def damage_inputs_can_change(
         | (foe_effect == _E.WORRY_SEED)
         # E3-2-5: the foe's Skill Swap gives the side the foe's ability (the skill-swap clause).
         | (foe_effect == _E.SKILL_SWAP)
+        # E3-B2-5: the foe's Role Play gives the foe the side's ability (the role-play clause).
+        | (foe_effect == _E.ROLE_PLAY)
         # E3-2-6: the foe's Gastro Acid suppresses the side's ability (the gastro-acid clause).
         | (foe_effect == _E.GASTRO_ACID)
+        # E3-B2-1: the foe's Fling (the fling clause): its item's effect on the side, TryFling's
+        # White Herb reset, its own item gone before the side's hit.
+        | (foe_effect == _E.FLING)
+        # E3-B2-7: the foe's Lucky Chant, when its side has none yet, blocks the side's crit at its
+        # later CalcCrit (the lucky-chant clause; the turn-start ``no_crit`` is the case it is up).
+        | ((foe_effect == _E.LUCKY_CHANT) & (state.lucky_chant[side_of(foes(sides))] == 0))
+        # E3-B2-14: the foe's Defog clears the deep fog Weather Ball and SolarBeam read (the defog
+        # clause; the turn-start fog is the case it clears).
+        | ((foe_effect == _E.DEFOG) & fcm.fog(fcm.weather_bits(state)))
         | _any_of(foe_effect, (_E.U_TURN, _E.BATON_PASS))
         | ((foe_effect == _E.DOUBLE_POWER) & guts)
         | (status_hit & (guts | (burnable & foe_burns)))
@@ -1630,6 +1723,7 @@ def damage_inputs_can_change(
         | ((foe_effect == _E.MUD_SPORT) & (move_type == Type.ELECTRIC))
         | ((foe_effect == _E.WATER_SPORT) & (move_type == Type.FIRE))
         | (foe_effect == _E.CAMOUFLAGE)
+        | (foe_effect == _E.CONVERSION_2)  # E3-B2-3: the same clause
         # F-2 flash_fire: the foe's Fire move on a Flash Fire side (absorbed or not: over-
         # approximate) sets the flag that boosts the side's own later Fire hit.
         | (
@@ -1793,8 +1887,11 @@ def outcome_laws(
     took_state = encored_state(tables, state, taken)
     chosen = jnp.where(taken, state.last_move.astype(_I32), picked)
     kinds = call_kind(tables, chosen)
-    # Copycat's and Me First's calls follow the order (the foe's move before them, or not).
-    copycat = uses_move & ((kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST))
+    # Copycat's, Me First's and Mirror Move's calls follow the order (the foe's move before them,
+    # or not).
+    copycat = uses_move & (
+        (kinds == CALL_COPYCAT) | (kinds == CALL_ME_FIRST) | (kinds == CALL_MIRROR_MOVE)
+    )
     me_first_used = uses_move & (kinds == CALL_ME_FIRST)
     if call is None:
         moves = jnp.stack([called_move(tables, state, chosen[side]) for side in range(fmt.B)])
@@ -1990,9 +2087,12 @@ def outcome_laws(
     # non-status move, the foe's active Pokemon or the one it switches in (no implemented path
     # gives a Focus Band mid-turn); a self-hit's roll is the user's own (_branch_masks).
     band_held = _holds_item(tables, state, actions, (ItemId.FOCUS_BAND,))
-    band_move = lands & (
-        (tables.move_category[moves] != STATUS) & (foes(band_held) | (band_held & lock))
-    )[:, None]
+    band_move = (
+        lands
+        & ((tables.move_category[moves] != STATUS) & (foes(band_held) | (band_held & lock)))[
+            :, None
+        ]
+    )
     own_band = tables.item_effect[state.item[party(fmt, sides), mons]] == ItemId.FOCUS_BAND
     # A disliked flavor berry on the side's active Pokemon (hooks.berry_confuse, G-5).
     own_berry = jnp.stack(
@@ -2009,7 +2109,53 @@ def outcome_laws(
     # King's Rock / Razor Fang (effects._kings_rock): the attacker's item, fixed through the turn.
     kings_rock = outcome_kings_rock_chance(tables, state)
     kings_move = (tables.move_flags[moves] & MoveFlag.KINGS_ROCK) != 0
+    # E3-B2-1: a Fling inflicts what its item's fling effect says on the foe (effects._fling): a
+    # paralysis (Light Ball), a confusion (a flavor berry: it confuses the foe whose nature
+    # dislikes it, over-approximate: any flavor berry), both before the foe's later move.
+    fling_kind = jnp.where(
+        uses_move & (effect == _E.FLING),
+        tables.item_fling_effect[state.item[party(fmt, sides), mons]],
+        0,
+    )
+    fling_paralyzes = fling_kind == FlingEffect.PARALYZE
+    fling_confuses = (fling_kind >= FlingEffect.HP_RESTORE_SPICY) & (
+        fling_kind <= FlingEffect.HP_RESTORE_SOUR
+    )
+    # E3-B2-3: Conversion 2 reads the type its user's last-hit record holds when it runs:
+    # the turn-start record (``conv2_own``), or, with the foe's move before it, what that move
+    # leaves (``conv2_foe``: a move aimed at its foe overwrites or clears the record, so its type;
+    # any other move leaves the record). Over-approximate: the foe's move may miss or be ineffective
+    # (the record is then cleared and Conversion 2 draws nothing).
+    type_ids = jnp.arange(NUM_TYPES, dtype=_I32)[None, :]
+    record_now = jnp.where(state.conv2_move != 0, state.conv2_type.astype(_I32), -1)
+    conv2_own = type_ids == record_now[:, None]
+    foe_type = foes(
+        jnp.stack([move_type_of(tables, state, b, moves[b]) for b in range(fmt.B)]).astype(_I32)
+    )
+    foe_aims = foes(
+        jnp.stack(
+            [
+                uses_move[b] & ~self_defender(tables, moves[b], ghost_user(state, b))
+                for b in range(fmt.B)
+            ]
+        )
+    )
+    conv2_foe = jnp.where(foe_aims[:, None], type_ids == foe_type[:, None], conv2_own)
+    conv2_use = uses_move & (effect == _E.CONVERSION_2)
+    if loose:
+        conv2_own = conv2_foe = jnp.ones((fmt.B, NUM_TYPES), bool)
+    # The law's inputs (``_conv2``): each battler's eligible rows per recorded type, at the
+    # turn-start types (only a battler's own action changes its types).
+    eligible = jnp.stack(
+        [
+            jax.vmap(lambda t, b=b: conv2_eligible(tables, state, b, t))(jnp.arange(NUM_TYPES))
+            for b in range(fmt.B)
+        ]
+    )
     base = {
+        "conv2_use": conv2_use,
+        "conv2_own": conv2_own,
+        "conv2_foe": conv2_foe,
         "uses_move": uses_move,
         "effect": effect,
         "hit_index": hit_index,
@@ -2043,11 +2189,12 @@ def outcome_laws(
                 & (battler_ability(state, sides, mons) == AbilityId.SYNCHRONIZE)
                 & (foes(battler_ability(state, sides, mons)) == AbilityId.STATIC)
             )
+            | fling_paralyzes
         ),
         "freeze_inflict": uses_move
         & _inflicts(tables, state, moves, Status.FREEZE, users=tuple(range(fmt.B)))
         & ~status_blocked,
-        "confuse_inflict": uses_move & confuses & ~confused_blocked,
+        "confuse_inflict": uses_move & (confuses | fling_confuses) & ~confused_blocked,
         "infatuated_own": infatuated_own,
         "attract_inflict": attract,
         "focus_band": band_move,
@@ -2215,8 +2362,13 @@ def outcome_laws(
     alive_setter = jnp.any(
         _any_of(state.ability, setters) & (state.species != 0) & (state.hp > 0), axis=1
     )[party(fmt, jnp.arange(fmt.B))]
-    weather_free = live & jnp.any(
-        (uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter)
+    # Acid Rain (subscript_pursuit.s:115, G-12): a Pursuit KO of a switcher or a U-turn user
+    # subtracts a battler from a nonzero mask before the turn end's sort, which can set the rain
+    # and sun bits (FCM 3.1); only where that write can happen (``acid_rain_reachable``).
+    acid = acid_rain_reachable(state, actions, uses_move, effect)
+    weather_free = live & (
+        jnp.any((uses_move & (effect == _E.WEATHER)) | switch_setter | (dragged & alive_setter))
+        | acid
     )
     # F-16: a Sky Shaymin of the side, frozen now or by a foe's move, that a foe's move hits
     # becomes Land Forme mid-turn (hooks.shaymin_land): its end speed may be Land's.
@@ -2294,11 +2446,20 @@ def outcome_laws(
     worry_used = uses_move & (effect == _E.WORRY_SEED)
     # E3-2-5: a Skill Swap moves a speed ability (and Shed Skin) between the battlers likewise.
     swap_used = uses_move & (effect == _E.SKILL_SWAP)
+    # E3-B2-5: a Role Play gives its user its target's speed ability (and Shed Skin) likewise.
+    role_used = uses_move & (effect == _E.ROLE_PLAY)
     # E3-2-6: a Gastro Acid suppresses its target's speed ability (Swift Swim, Chlorophyll, Quick
     # Feet, Unburden) and Shed Skin likewise (Battler_Ability reads NONE, battle_lib.c:3088-3093).
     gastro_used = uses_move & (effect == _E.GASTRO_ACID)
+    # E3-B2-1: a Fling takes its user's item (a Choice Scarf, an Iron Ball: the end-of-turn sort
+    # reads Battler_HeldItemEffect, battle_lib.c:1248) and raises, burns or paralyzes its
+    # defender's Speed (a Speed or Starf item, a status): neither is in the grid either.
+    fling_used = uses_move & (effect == _E.FLING)
     end_speed_tie = end_speed_tie | (
-        live & jnp.any(tracer | xform_used | worry_used | swap_used | gastro_used)
+        live
+        & jnp.any(
+            tracer | xform_used | worry_used | swap_used | role_used | gastro_used | fling_used
+        )
     )
     if loose:
         # The brute force: the end-of-turn tie roll whenever the battle goes on, with no
@@ -2319,6 +2480,7 @@ def outcome_laws(
         | tracer
         | (xform_used & foes(shed_holder))
         | (jnp.any(swap_used) & foes(shed_holder))  # E3-2-5: Skill Swap hands it over
+        | (role_used & foes(shed_holder))  # E3-B2-5: Role Play copies it
     )
     if loose:
         shed_skin = shed_skin | (live & jnp.any(roar) & jnp.any(shed_party))
@@ -2431,6 +2593,7 @@ def outcome_laws(
             future_band=live & present_now & (state.future_timer == 1) & band_party,
             berry_confusion=m["berry_confusion"],
             chatter=m["chatter"],
+            conv2=m["conv2"],
             starf=starf_draw,
             # D2-4: a fight command's BattleSystem_Defender draws one bit at B = 4 (over-
             # approximate; D6-D7 tighten it with the resolver's R4 table).
@@ -2589,9 +2752,7 @@ def outcome_laws(
         tri_attack=off if loose else uses_move & (effect == _E.TRI_ATTACK) & (chance != 0),
         # Only Protect's success blocks the foe's move (Endure's does not: its hit still lands).
         protect_sure=off if loose else reach & (effect == _E.PROTECT),
-        protect_blocks=off
-        if loose
-        else uses_move & protect_blocks(tables, moves, False) & ~lock,
+        protect_blocks=off if loose else uses_move & protect_blocks(tables, moves, False) & ~lock,
         self_lock=lock,
         endure_sure=off if loose else reach & (effect == _E.ENDURE),
         roar=off if loose else roar,
@@ -2715,6 +2876,7 @@ def outcome_laws(
         chatter_chance=jnp.asarray(CHATTER_CHANCES, _I32)[
             jnp.clip(state.chatot_cry[party(fmt, jnp.arange(fmt.B))].astype(_I32), 0, 2)
         ],
+        conv2_eligible=eligible,
         starf_loose=starf_loose,
     )
 
@@ -2732,16 +2894,18 @@ _STARF_STAGE_JUMPS = (
 
 
 def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loose):
-    """``(relevant bool[B, 2], loose bool[B, 2])`` of ``Outcome.starf`` (F-10). Index 0, the turn's
-    draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the one
-    it switches in holds one, or any living holder of its party can enter (its own U-turn or Baton
-    Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
+    """``(relevant bool[B, 4], loose bool[B, 4])`` of ``Outcome.starf`` (F-10). Index 0, the first
+    eat's draw, is read where side ``d`` can eat a Starf Berry this turn: its active Pokemon or the
+    one it switches in holds one, or any living holder of its party can enter (its own U-turn or
+    Baton Pass, a foe's Roar), and that holder is at its pinch or can lose HP this turn (any move, a
     residual damage source, entry hazards; over-approximate); or ``d`` Plucks / Bug Bites a foe
-    holding one (no HP test, battle_lib.c:5798-5817), or Recycles one; or a battle-start berry is
-    still open (``starf_open``). Index 1, the faint replacement's draw, where a living holder of
-    the party can be at its pinch when a replacement sends it in: at its pinch now, on the field
-    this turn when it can leave, or with Spikes / Stealth Rock up or set this turn
-    (``step.starf_kept``).
+    holding one or Recycling one first (no HP test, battle_lib.c:5798-5817), or Recycles one; or a
+    foe Flings one at ``d`` (BattleSystem_FlingItem, battle_lib.c:6110-6129: the same
+    ``RandNext() % 5`` loop on the defender's stats, read through ``d``'s draw, review b2 #4); or
+    a battle-start berry is still open (``starf_open``). Index 1, the faint replacement's draw,
+    where a living holder of the party can be at its pinch when a replacement sends it in: at its
+    pinch now, on the field this turn when it can leave, or with Spikes / Stealth Rock up or set
+    this turn (``step.starf_kept``).
 
     The law: the draw is read modulo the count of the five stats below +6 at the eating. A fresh
     newcomer has all five below +6; an active one keeps that count when its highest of them plus
@@ -2750,7 +2914,32 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     stat move (its param) and 2 for the rest (Steadfast, Speed Boost, a plucked pinch berry,
     Download); no Belly Drum, Psych Up, Power / Guard Swap, Transform, Baton Pass or Recycle
     (``_STARF_STAGE_JUMPS``). Then 5 values; else ``loose``, all ``STARF_DRAWS``. The replacement's
-    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5)."""
+    draw is always 5 values: a fresh battler (``step.starf_kept`` stores it modulo 5).
+
+    Index 2 (F-O3, G-27), battler ``d``'s second eat this turn: every eat draws its own
+    (battle_lib.c:4864-4866, :5286-5288, Pluck :5808). Read where two of its eat sources can meet
+    in one call: the holder on the field (at its pinch or able to lose HP), a newcomer holder a
+    foe's Roar drags in (a party holder off the field), a Recycle of a Starf Berry (the one
+    recycled before the turn, or the one eaten first), a Pluck / Bug Bite of a foe holder, an open
+    battle-start berry. A U-turn / Baton Pass newcomer is not one: the turn pauses at the party
+    pick (``pivot_battler``) and the resumed call loads its own queue, so the newcomer's eat takes
+    the resumed outcome's index 0. A Pluck / Bug Bite whose berry did nothing makes the holder's
+    own Starf Berry two sources (kept at the attacker's item check, eaten again at the held-item
+    status check: SELF_TURN_FLAG_PLUCK_BERRY, lib:5848, subscript_pluck_check.s). Index 3, the
+    third eat, where three sources can meet: d's Pluck / Bug Bite and its own Starf Berry, then a
+    foe's Roar newcomer holder (Roar's priority -6 drags after d's move). The k-th eat's law: the
+    same battler's while it has k sources of its own, the index-0 rule with +2 per earlier eat;
+    else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
+    dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
+    values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
+    its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or miss: ``hooks.fling_try``) is
+    one more of d's own sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In
+    singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
+    has no Roar the same turn, a Recycling foe does not Fling, and a plucked or flung foe Starf
+    Berry is gone for the other, so a fourth draw is not reached there; Thief / Covet and Trick /
+    Switcheroo, the other item givers, are unsupported (they map to ``EffectId.UNSUPPORTED``, not
+    a key of ``coverage.IMPLEMENTED_EFFECTS``: ``Support.NONE`` by its ``.get`` default,
+    coverage.py:203, :475); an eat past the third reads the queue's last entry."""
     fmt = format_of(state)
     sides = jnp.arange(fmt.B)
     rows = party(fmt, sides)
@@ -2769,13 +2958,26 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
         & (effect == _E.RECYCLE)
         & (tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY)
     )
-    plucked = uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1))
+    # A foe that Recycles a Starf Berry before d's Pluck / Bug Bite holds it again
+    # (effect_script_0184.s:5-7; ``step`` puts ``recycle_item`` back into ``item``) and
+    # ``hooks.pluck_berry`` reads the live item: ``recycled`` read through ``foes`` (G-S6).
+    # TODO(D2): at B = 4 ``foes`` must become the chosen target (or every other battler).
+    plucked = (
+        uses_move & (effect == _E.EAT_BERRY) & foes(jnp.any(holds_b & on_field, axis=1) | recycled)
+    )
+    flung_item = state.item[rows, state.active]
+    flung = foes(
+        uses_move
+        & (effect == _E.FLING)
+        & (tables.item_fling_effect[flung_item] == FlingEffect.RANDOM_UP2)
+    )
     hazards = entry_damage_up(state)
     residual = (
-        (state.weather != Weather.NONE)
+        fcm.any_weather(fcm.weather_bits(state))
         | jnp.any((state.status != Status.NONE) & (state.hp > 0))
         | jnp.any(state.leech_seed != 0)
         | jnp.any(state.curse != 0)
+        | jnp.any(state.nightmare != 0)  # G-33: the turn end's Divide(maxHP, 4)
         | jnp.any(state.trapped != 0)
         | jnp.any(state.future_timer != 0)
         | jnp.any(hazards)
@@ -2783,7 +2985,7 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     hp_drop = jnp.any(uses_move) | residual
     pinch_reach = jnp.any(candidates & (pinched_b | hp_drop), axis=1)
     open_ = state.starf_open != 0
-    turn = live & (pinch_reach | plucked | recycled | open_)
+    turn = live & (pinch_reach | plucked | recycled | flung | open_)
     # Index 1: a holder at its pinch when a replacement sends it in: one off the field, or the
     # active one if it can leave (a switch, its U-turn or Baton Pass, a foe's Roar), at its pinch
     # now, or anywhere in the party when it can lose HP first (it leaves after a hit, a hazard).
@@ -2811,16 +3013,99 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     gain = jnp.where(uses_move, own_gain, 0) + foes(jnp.where(uses_move, foe_gain, 0)) + 2
     jump = jnp.any(uses_move & _any_of(effect, _STARF_STAGE_JUMPS))
     turn_loose = jump | (highest + gain >= STAGE_MAX) | open_
-    relevant = jnp.stack([turn, rep], axis=1)
-    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn_loose)], axis=1)
+    # Indices 2 and 3: battler d's eats this turn (F-O3), counted: ``own`` the same battler's,
+    # then a Roar newcomer's (Roar's priority -6 puts its drag after d's own action).
+    reach = pinched_b | hp_drop
+    held_eat = jnp.any(holds_b & on_field & reach, axis=1)
+    # A Pluck / Bug Bite whose berry did nothing leaves SELF_TURN_FLAG_PLUCK_BERRY set
+    # (lib:5848; subscript_pluck_check.s skips RemoveItem while it is set): the attacker's own
+    # Starf Berry triggers at AFTER_MOVE_EFFECT_ATTACKER_ITEM, kept (bcp:3684-3689), and again at
+    # _HELD_ITEM_STATUS (bcp:3730-3761), two draws (``step`` ``info.pluck_flag``).
+    # Not with a plucked Starf Berry (``plucked``): its PLUCK_EFFECT_RANDOM_UP2 draws while one of
+    # the five stats is below +6, and its subscript_held_item_sharply_raise_stat.s:21 PLUCK_CHECK
+    # clears the flag (the own berry is eaten once after it); with all five at +6 neither berry
+    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5839-5845) its
+    # own berry does not act either. The plucked draw and a second own draw never meet: two
+    # draws, not three (G-28's bound needs a Roar newcomer for the third).
+    # G-S6: the flag is set only for an eaten berry (``result == TRUE``, lib:5848: a listed
+    # PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, ``hooks.PLUCKABLE``) and stays only while
+    # ``nextSeq`` is 0: every held-item subscript ends in PLUCK_CHECK, which clears it. Leppa
+    # (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830) always set
+    # ``nextSeq``; a non-berry (Grip Claw) sets no flag. The other berries' conditions (full HP,
+    # no status, +6, Focus Energy) are not tested: over-approximate. Klutz / Embargo
+    # (:5839-5845) keep the flag. STARF_BERRY's exclusion overlaps ``~plucked``.
+    # The foe's item as the Pluck reads it: the start-of-turn item of each on-field slot (the
+    # incoming one too: a switch acts before moves) or a berry it Recycles first
+    # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
+    # foe's own eaten berry and its Fling (RemoveItem, effect_script_0233.s; ``fling_removed``) only
+    # remove it (an over-read); Thief / Covet and Trick / Switcheroo are unsupported (they map to
+    # ``EffectId.UNSUPPORTED``, not a key of ``coverage.IMPLEMENTED_EFFECTS``: ``Support.NONE`` by
+    # its ``.get`` default, coverage.py:203, :475); a foe's U-turn / Baton
+    # Pass newcomer is read by the resumed call (``pivot_battler``); in singles only d itself
+    # could Roar the foe's side, and d is Plucking.
+    keeps = jnp.asarray(
+        [
+            e
+            for e in PLUCKABLE
+            if e not in (ItemId.LEPPA_BERRY, ItemId.MICLE_BERRY, ItemId.STARF_BERRY)
+        ],
+        _I32,
+    )
+    foe_effect = tables.item_effect[state.item[rows]].astype(_I32)
+    recycle_keeps = (
+        uses_move
+        & (effect == _E.RECYCLE)
+        & jnp.isin(tables.item_effect[state.recycle_item].astype(_I32), keeps)
+    )
+    foe_berry = jnp.any(jnp.isin(foe_effect, keeps) & on_field, axis=1) | recycle_keeps
+    # TODO(D2): at B = 4 ``foes`` must become the chosen target (or every other battler).
+    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_berry) & ~plucked
+    newcomer = jnp.any(holds_b & (slots != state.active[:, None]) & reach, axis=1)
+    entries = jnp.asarray(dragged, bool).astype(_I32)
+    recycles = (
+        uses_move
+        & (effect == _E.RECYCLE)
+        & ((tables.item_effect[state.recycle_item] == ItemId.STARF_BERRY) | held_eat | open_)
+    )
+    own = (
+        held_eat.astype(_I32)
+        + twice.astype(_I32)
+        + recycles.astype(_I32)
+        + plucked.astype(_I32)
+        + flung.astype(_I32)
+        + open_.astype(_I32)
+    )
+    sources = own + jnp.where(newcomer, entries, 0)
+    # The k-th eat (k = 2, 3) is the same battler's while ``own >= k``, its stages up 2 per
+    # earlier eat; else the Roar newcomer's, fresh (only a foe's bounded gains reach it).
+    fresh_loose = jump | (foes(jnp.where(uses_move, foe_gain, 0)) + 2 >= STAGE_MAX)
+
+    def later(k):
+        same = turn_loose | (highest + gain + 2 * (k - 1) >= STAGE_MAX)
+        return live & (sources >= k), jnp.where(own >= k, same, fresh_loose)
+
+    second, second_loose = later(2)
+    third, third_loose = later(3)
+    relevant = jnp.stack([turn, rep, second, third], axis=1)
+    loose_out = jnp.stack([turn_loose, jnp.zeros_like(turn), second_loose, third_loose], axis=1)
     if loose:
         # The brute force: the turn's draw, all STARF_DRAWS values, wherever a living holder is
         # in the side's party (or its foe's, for a Pluck / Bug Bite) or a berry is open, and the
-        # replacement's (five values: a fresh battler's count) wherever one is in the party.
+        # replacement's (five values: a fresh battler's count) wherever one is in the party; the
+        # second and third eats', all values, wherever the side has a second source at all (a
+        # Roar's drag, a Recycle, a Pluck / Bug Bite, an open berry) beside a holder.
         anyone = jnp.any(holds_b, axis=1)
-        eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone)
-        relevant = jnp.stack([live & (anyone | eats | open_ | recycled), live & anyone], axis=1)
-        loose_out = jnp.stack([jnp.ones_like(live & anyone), jnp.zeros_like(anyone)], axis=1)
+        eats = uses_move & (effect == _E.EAT_BERRY) & foes(anyone | recycled)
+        first = live & (anyone | eats | open_ | recycled | flung)
+        more = (
+            (entries > 0)
+            | (uses_move & _any_of(effect, (_E.RECYCLE, _E.EAT_BERRY)))
+            | open_
+            | flung
+        )
+        relevant = jnp.stack([first, live & anyone, first & more, first & more], axis=1)
+        all_ = jnp.ones_like(first)
+        loose_out = jnp.stack([all_, jnp.zeros_like(first), all_, all_], axis=1)
     return relevant, loose_out
 
 
@@ -2996,6 +3281,19 @@ def _chatter(laws: OutcomeLaws, side: int) -> _Law:
     # 1 with weight chance + 1 of 100 (G-70).
     chance = min(max(int(laws.chatter_chance[side]), 0), 99)
     return [0, 1], [99 - chance, chance + 1], 100
+
+
+def _conv2(laws: OutcomeLaws, side: int, kind: int) -> _Law:
+    """BtlCmd_TryConversion2 (battle_script.c:4783-4817) for battler ``side`` against the recorded
+    type ``kind``: the value is the defending type picked. Each of up to 1000 tries draws
+    ``RandNext() % 112`` rows and the first eligible row wins (else the linear scan's first);
+    by the ``% n`` convention every row is alike, so the pick is uniform over the eligible types
+    (``damage.conv2_pick``; review b2 #3, ledger E3-B2-3): weight 1 each over their count, exact.
+    No eligible row: the move fails, one value."""
+    values = [int(d) for d in np.flatnonzero(np.asarray(laws.conv2_eligible[side, kind]))]
+    if not values:
+        return [0], [1], 1
+    return values, [1] * len(values), len(values)
 
 
 def _flinch_item(laws: OutcomeLaws, side: int) -> _Law:
@@ -3644,7 +3942,9 @@ def _law(laws: OutcomeLaws, elem: Elem) -> _Law:
     name, index = elem
     if name == "hit":  # B13-6: a later Triple Kick hit's own thresholds
         values, weights, den = _hit(laws, index[0], index[1])
-    elif name == "starf":  # F-10: the turn's draw or the faint replacement's
+    elif name == "conv2":  # E3-B2-3: the pick against recorded type index[1]
+        values, weights, den = _conv2(laws, index[0], index[1])
+    elif name == "starf":  # F-10 / F-O3: an eat's draw or the faint replacement's
         values, weights, den = _starf(laws, index[0], index[1])
     else:
         values, weights, den = _LAWS[name](laws, index[0] if index else 0)
@@ -3829,7 +4129,7 @@ def gravity_events(state: BattleState, events) -> jnp.ndarray:
     """``bool[B]``: Gravity was up when the side's action started (the ``gravity_at_move`` event
     of ``step_events``) and down at the turn start: a faster foe's Gravity landed before its
     invoker call (G-67)."""
-    return (jnp.asarray(events["gravity_at_move"]) != 0) & (state.gravity == 0)
+    return (jnp.asarray(events["gravity_at_move"]) != 0) & ~fcm.gravity_on(state)
 
 
 def taken_events(state: BattleState, events) -> jnp.ndarray:
@@ -3981,6 +4281,19 @@ def _side_call_law(
     first_called = jnp.where(
         values == 0, me_first_copy(tables, state, first_from, first_move, first_fights), 0
     )
+    # Mirror Move (E3-B2-2): value 0, the foe has not recorded a move for it this turn (it calls
+    # its turn-start moveCopied), value 1, the foe's move before it did (the foe's chosen move when
+    # it is Mirror-Move-able and aimed at the user, else the moveCopied it had).
+    held = mirror_copied(state, side, 0)
+    foe_flagged = (tables.move_flags[foe_chosen] & MoveFlag.MIRROR_MOVE) != 0
+    foe_aimed = foe_flagged & ~jnp.isin(
+        tables.move_target[foe_chosen], jnp.asarray(MIRROR_SELF_RANGES, _I32)
+    )
+    mirror_called = jnp.where(
+        values == 0,
+        mirror_call(tables, held),
+        jnp.where(values == 1, mirror_call(tables, jnp.where(foe_aimed, foe_chosen, held)), 0),
+    )
     weight = jnp.where(
         kind == CALL_SLEEP_TALK,
         talk_w,
@@ -3988,7 +4301,7 @@ def _side_call_law(
             kind == CALL_METRONOME,
             metro_w,
             jnp.where(
-                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST),
+                (kind == CALL_COPYCAT) | (kind == CALL_ME_FIRST) | (kind == CALL_MIRROR_MOVE),
                 copy_w,
                 jnp.where(kind == CALL_ASSIST, assist_w, (values == 0).astype(_I32)),
             ),
@@ -4006,7 +4319,11 @@ def _side_call_law(
                 jnp.where(
                     kind == CALL_ASSIST,
                     assist_called,
-                    jnp.where(kind == CALL_ME_FIRST, first_called, 0),
+                    jnp.where(
+                        kind == CALL_ME_FIRST,
+                        first_called,
+                        jnp.where(kind == CALL_MIRROR_MOVE, mirror_called, 0),
+                    ),
                 ),
             ),
         ),
@@ -4032,7 +4349,7 @@ def call_laws(tables: Tables, state: BattleState, actions) -> CallLaws:
       Metronome or Assist call (``order.gravity_possible``), the law read with Gravity up
       (``order.gravity_state``: ``Move_CanBeMetronomed``, battle_lib.c:7198-7201, and Sleep
       Talk's CHECK_INVALID_GRAVITY, :2292-2295, read Gravity when the call runs);
-    * Copycat: no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
+    * Copycat and Mirror Move (E3-B2-2: value 1 is the foe's recorded move): no draw; its two orders (``outcome_laws``' ``call``) each weigh 1 and keep their
       consistent ``speed_tie`` branches (``branch_ok``), the second only when its foe uses a
       move;
     * the takeover variant (ruling B11-1): where a foe's Encore can replace the side's move
@@ -4153,7 +4470,7 @@ def _side_variants(kind, weight, called, alt, sealed, heavy, offsets) -> list[tu
                 # its assumption (``call_consistent``).
                 out += [(v + off, w, den) for off in offsets]
         return out
-    if kind in (CALL_COPYCAT, CALL_ME_FIRST):
+    if kind in (CALL_COPYCAT, CALL_ME_FIRST, CALL_MIRROR_MOVE):
         return [(int(v), 1, 1) for v in np.flatnonzero(weight)]
     return [(0, 1, 1)]
 
@@ -4247,9 +4564,6 @@ def enumerate_turn(tables: Tables, state: BattleState, actions) -> tuple[Outcome
     row its variant's value. Raises ``SamplingOnly`` above ``WIDTH_CAP`` rows in all. Split Sleep
     Talk variants (ruling B5-13) and takeover variants (B11-1) are played (``step.turn_events``)
     and each row is kept only where ``call_consistent``."""
-    from nuzline.engine.coverage import check_acid_rain  # coverage imports the engine
-
-    check_acid_rain(state)  # a refused state is never played on (docs/kaizo FCM.md section 5)
     fmt = format_of(state)
     actions = jnp.asarray(actions, _I32)
     parts, tags = [], []
