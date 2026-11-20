@@ -7137,6 +7137,10 @@ def _field_conditions(turn: _Turn, s: RefState, order: list[int], resume: int = 
         _faint_check(turn, s)
         _pay_exp(turn, s)
         if s.over:
+            # The payout that ended the battle ran its whole GetExpTask, the learnset scan
+            # included (subscript_grant_exp.s; bs.c:9882, :10007), before CheckBattleOver at the
+            # loop head (bcp.c:938-944); a prompt it leaves stays (D8).
+            _scan_learnsets(turn.tables, s)
             return
     # A learn prompt left by a chip's payout pauses before Gravity. The game prompts at the loop
     # head after the state that paid (bcp.c:938-944); with two set groups (a corrupted mask, FCM
