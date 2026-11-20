@@ -3538,3 +3538,32 @@ def test_midturn_learn_pending_action_rereads_the_replaced_slot(tables, names, a
     else:
         assert int(done.moves[0, 0, 3]) == bubble_beam
         assert int(done.pp[0, 0, 3]) < int(answered.pp[0, 0, 3])
+
+
+def test_midturn_learn_resume_starts_the_next_action_at_power_mul_10(tables, names):
+    # Geodude is faster and Selfdestructs; the payout pauses Prinplup's MoveEnd at the BubbleBeam
+    # prompt. The resume runs that MoveEnd's tail, whose BattleContext_Init sets powerMul to 10
+    # (bcp.c:3998, battle_lib.c:1980); Prinplup's Baton Pass then stops at its party list, where
+    # the foe's replacement AI reads that powerMul (``ts_pick_mul``, battle_script.c:6928 is the
+    # only 20).
+    from nuzline.engine.levelup import LEARN_MOVE_END
+    from tests.engine.test_levelup import _base, _mon
+
+    learner = _mon(
+        names,
+        "Prinplup",
+        18,
+        moves=("Bubble", "Roar", "Tackle", "Baton Pass"),
+        ivs=(3,) * 6,
+        exp=_base(tables, names, "Prinplup", 19) - 1,
+    )
+    opp = [_mon(names, "Geodude", 12, moves=("Selfdestruct",)), _mon(names, "Bonsly", 15)]
+    s = make_state(tables, [learner, _mon(names, "Machop", 20)], opp)
+    s = s._replace(stats=s.stats.at[1, 0, Stat.SPE - 1].set(int(s.stats[0, 0, Stat.SPE - 1]) + 1))
+    paused = assert_matches_reference(
+        tables, s, A("Baton Pass", "Selfdestruct", s, names), empty_outcome()
+    )
+    assert int(paused.learn_site) == LEARN_MOVE_END and int(paused.hp[1, 0]) == 0
+    _, listed = _resume_learn(tables, paused)
+    assert int(listed.pivot_battler) == 1 and int(listed.learn_site) == 0
+    assert int(listed.ts_pick_mul) == 10

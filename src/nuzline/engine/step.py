@@ -3809,6 +3809,9 @@ def _execute_actions(
         claw = (claw & ~gone) | (resort & claw_set)
         custap = (custap & ~gone) | (resort & custap_set)
         position = jnp.where(stop | hold | lstop, position, position + 1)
+        # MoveEnd's BattleContext_Init (bcp.c:3998, battle_lib.c:1980): a finished action leaves
+        # powerMul at 10, so a later action's list never reads a Pursuit's 20.
+        pick_mul = jnp.where(stop | hold | lstop, pick_mul, NORMAL_POWER_MUL)
         lran = jnp.where(lstop, clear, lran)
         phase = jnp.where(ctl["pursue"], _PURSUIT, jnp.where(hold, _REFLECT, _START)).astype(_I32)
         coat = jnp.where(hold, ctl["reflect_move"], 0).astype(_I32)
@@ -3847,7 +3850,9 @@ def _execute_actions(
         jnp.where(pivot_paused, _RESUME, _START).astype(_I32),
         jnp.where(paused, state.ts_pursued.astype(_I32), 0),
         jnp.where(pivot_paused, state.ts_alive, _alive_mask(state)),
-        jnp.where(paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
+        # A pivot resumes with its list's powerMul; a MoveEnd pause resumes after its tail, whose
+        # BattleContext_Init sets 10 (bcp.c:3998).
+        jnp.where(pivot_paused, state.ts_pick_mul.astype(_I32), NORMAL_POWER_MUL),
         jnp.bool_(False),
         (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
         _I32(0),  # the move a reflection's holder pass runs (E3-B2-6)

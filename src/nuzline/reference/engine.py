@@ -8287,6 +8287,9 @@ def _move_end_tail(turn: _Turn, s: RefState, clear: bool) -> None:
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
         _forecast(turn.tables, s)
+    # MoveEnd's BattleContext_Init (bcp.c:3998, battle_lib.c:1980): powerMul back to 10, so a
+    # later action's list never reads a Pursuit's 20 and a resumed MoveEnd pause starts at 10.
+    turn.pick_mul = 10
 
 
 def _stale_snapshot(s: RefState) -> tuple[int, bool, int]:
