@@ -294,10 +294,24 @@ def test_the_outgoing_pokemon_leaves_everything_behind(tables, names):
     o = _o(full_para=(0, 0), infatuation=(0, 0), confusion_hit=(0, 0))
     out = assert_matches_reference(tables, s, acts, o)
     assert int(out.active[1]) == 1
-    for name in _VOLATILE:  # the newcomer's slot starts clean; moveHit is Roar (below)
-        if name != "move_hit":
-            assert int(np.asarray(getattr(out, name))[1]) == 0, name
-    assert int(out.move_hit[1]) == ROAR
+    # The newcomer's slot starts clean (UpdateAfterSwitch, battle_lib.c:2121-2149), then
+    # UpdateFlagsWhenHit runs after Roar's script (bcp.c:3956) on the new defender: moveHit
+    # (:4500), moveCopied / moveCopiedHit (:4484-4485), conversion2 (:4525-4527) record Roar.
+    recorded = (
+        "move_hit",
+        "move_copied",
+        "move_copied_hit",
+        "conv2_move",
+        "conv2_battler",
+        "conv2_type",
+    )
+    for name in _VOLATILE:
+        if name not in recorded:
+            assert not np.asarray(getattr(out, name))[1].any(), name
+    assert int(out.move_hit[1]) == ROAR and int(out.move_copied[1]) == ROAR
+    assert np.asarray(out.move_copied_hit[1]).tolist() == [ROAR, 0]
+    assert int(out.conv2_move[1]) == ROAR and int(out.conv2_battler[1]) == 1
+    assert int(out.conv2_type[1]) == Type.NORMAL
     assert np.asarray(out.stages[1]).tolist() == [0] * 8
     # Sourced from the outgoing Geodude: the Roar user's Bind and love end (lib.c:2087-2096).
     assert int(out.trapped[0]) == 0 and int(out.infatuated[0]) == 0
