@@ -19,7 +19,7 @@ from nuzline.engine.actions import MOVE_ACTIONS
 from nuzline.engine.damage import confusion_damage, damage_for_roll
 from nuzline.engine.format import DOUBLES, MULTI, SINGLES, TWO_TRAINERS
 from nuzline.engine.ids import AbilityId, Stat, Status
-from nuzline.engine.outcome import MAX_HITS, empty_outcome
+from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import WINNER_PLAYER
 from tests.engine.d2_states import four, party_of, with_ability, with_hp, with_moves
@@ -74,8 +74,9 @@ def test_move_end_cures_every_battler_not_only_the_attacker_and_defender(tables,
     assert status(out, 1) == Status.NONE and status(out, 2) == Status.NONE
     assert int(out.stages[1, Stat.ATK]) == 2  # battler 1 moved: cured before its action
     assert int(out.stages[2, Stat.ATK]) == 2  # battler 2 moved: cured at battler 0's MoveEnd
-    assert int(out.move_hit[1]) == names.move(BODY_SLAM)  # the defender's record stays
-    assert int(out.move_hit[0]) == 0  # the attacker's is cleared (ClearFlags)
+    # Battler 0's ClearFlags clears its own record (bcp.c:4389); battler 1's Body Slam record
+    # (bcp.c:4500) is cleared at battler 1's own MoveEnd, as it acts later (bcp.c:3986, :4389).
+    assert int(out.move_hit[0]) == 0 and int(out.move_hit[1]) == 0
 
 
 def test_without_limber_the_paralysis_stands_and_the_action_fails(tables, names):
@@ -194,7 +195,8 @@ def test_jump_kick_crash_eats_sitrus_at_its_move_end(tables, names):
     min(Divide(damage, 2), Divide(defender maxHP, 2))) leaves 30 HP; the Sitrus Berry is eaten at
     that MoveEnd and the Dragon Rage leaves 30 + power - 40."""
     s = _singles(tables, names, "Jump Kick", "Dragon Rage", "Sitrus Berry")
-    miss = empty_outcome(SINGLES)._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    base = empty_outcome(SINGLES)
+    miss = base._replace(hit=base.hit.at[0].set(0))  # battler 1's Dragon Rage still hits
     would = int(damage_for_roll(tables, s, 0, names.move("Jump Kick"), False, int(miss.roll[0, 0])))
     assert would > 0
     crash = min(max(would // 2, 1), max(int(s.max_hp[1, 0]) // 2, 1))
@@ -216,7 +218,9 @@ def test_confusion_self_hit_eats_liechi_at_its_move_end(tables, names):
     limit = 100 // int(tables.item_param[names.item("Liechi Berry"), 0])
     out = _eaten_at_move_end(tables, names, s, limit + d, o)
     assert int(out.hp[0, 0]) == limit
-    assert int(out.stages[0, Stat.ATK]) == 1
+    # Gyarados's Intimidate left battler 0 at -1 when the leads came in; Liechi raises it by 1.
+    assert int(s.stages[0, Stat.ATK]) == -1
+    assert int(out.stages[0, Stat.ATK]) == 0
     assert int(out.item[0, 0]) == 0 and int(out.item_consumed[0, 0]) == names.item("Liechi Berry")
     assert int(out.item[1, 0]) == 0  # Trick moved nothing
 

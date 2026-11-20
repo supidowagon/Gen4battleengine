@@ -100,10 +100,12 @@ def test_equal_speeds_follow_the_tie_bits_over_all_64_rows(tables, names):
 
 
 def test_the_sort_reads_the_quick_claw_draw(tables, names):
-    """Battler 1 (Drought) is slower than battler 0 (Drizzle). With ``qc_roll[1]`` and a Quick Claw
-    it sorts first, so battler 0's rain is the one left; without the draw battler 1's sun."""
+    """Battler 1 (Drought) is the slowest, battler 0 (Drizzle) next; battlers 2 and 3 (Sand
+    Stream, Snow Warning) are faster than both. Without the draw the order is 2, 3, 0, 1 and
+    battler 1's sun is left; with ``qc_roll[1]`` and a Quick Claw battler 1 sorts first
+    (lib.c:1278-1286, :1408-1411, :3374-3381), so the order is 1, 2, 3, 0 and the rain is left."""
     s = weather_leads(tables, names)
-    s = speeds(s, [300, 200, 150, 100])
+    s = speeds(s, [200, 100, 400, 300])
     p, slot = party_of(s, 1), int(s.active[1])
     s = s._replace(item=s.item.at[p, slot].set(names.item("Quick Claw")))
     assert int(show(tables, s).weather) == Weather.SUN
