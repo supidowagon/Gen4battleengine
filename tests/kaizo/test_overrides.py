@@ -404,7 +404,7 @@ def test_gauntlet_members_tied_to_cited_group():
 
 
 def test_trainer_in_two_gauntlets_refused(tmp_path):
-    g = '[[gauntlet]]\nname = "{}"\ntrainers = {}\nrules = {{}}\nsource = "user, 2026-11-03"\n'
+    g = '[[gauntlet]]\nname = "{}"\ntrainers = {}\nsource = "user, 2026-11-03"\n'
     text = g.format("a", "[1, 2]") + g.format("b", "[2, 3]")
     with pytest.raises(OverridesError, match="gauntlet 'b': trainer 2 .*'a'"):
         load_overrides(write(tmp_path, text))
