@@ -49,6 +49,21 @@ Scripts named here: `tools/ops/` (`tools/ops/README.md`).
 9. On MERGE: `git merge --no-ff` into `main`, `git push origin main`, send the stream the
    new tip and the non-blocking notes, and tell the user in at most three lines.
 
+**Merge train.** When two or more batches are expected to be merge-ready within one gate run
+of each other (about 3 hours), the managing session names a train order.
+- The first stream merges `main`; each later stream merges the tip of the stream before it
+  (not `main`) and does the after-merge steps (CLAUDE.md) on that.
+- Each batch keeps its own Opus merge-gate review (step 8) on its own diff range.
+- The pod work runs once, on the last tip: one targeted run with the union of the lists
+  (`MARK='not slow'`), one `fullset` check (DAYBOX.md, Merge candidate), one snapshot
+  compare against the `main` capture with the union `--allow-new` list (section 5).
+- On green and MERGE from every review, the managing session merges the last tip
+  `--no-ff` (it contains the others) and pushes once.
+- A failure goes to the stream that owns the failing test's area. If it cannot be
+  attributed and fixed in one fix round, the train is dropped and the batches merge one by
+  one.
+- A batch that is ready alone and has no partner within one gate run merges alone.
+
 ## 3. Tests
 
 - **Per batch and per merge:** CLAUDE.md, Batches and Merges.
