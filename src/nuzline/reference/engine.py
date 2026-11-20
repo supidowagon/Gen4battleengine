@@ -5793,11 +5793,13 @@ def _follow_me_target(s: RefState, attacker: int) -> int | None:
     return _follow_me_user(s, side_of(attacker) ^ 1)
 
 
-def _waiting(turn: _Turn, s: RefState, side: int) -> int:
+def _waiting(turn: _Turn, s: RefState | None = None, side: int | None = None) -> int:
     """``BattleContext.waitingBattlers`` (bcp.c:881-886): the battlers whose action is not
     MOVE_END, the acting battler ``side`` included; an action, a Pursuit, a drag, an entry or a
-    faint sets it (the ``moved`` of ``_actions``; ``step._execute_actions``' ``waiting``), review
-    b2 #9."""
+    faint sets it (script.c:1801; the ``moved`` of ``_actions``; ``step._execute_actions``'
+    ``waiting``), review b2 #9. Without ``s``: ``turn.done`` alone."""
+    if s is None:
+        return sum(not done for done in turn.done)
     return sum(
         b == side or not (turn.done[b] or turn.entered[b] or _active(s, b).hp == 0)
         for b in range(_fmt(s).B)
