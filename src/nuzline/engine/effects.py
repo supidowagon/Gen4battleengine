@@ -3829,7 +3829,7 @@ def play_hit(
     takes the substitute down only when it breaks (``substituteHP <= damage``) and otherwise
     leaves its HP as it was (no ``UpdateMonData`` on that path), sets no flag and skips the
     on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158). ``grudge_slot``: with
-    ``pursuit_switch``, the pursuer's selected slot (the one Pursuit spent) for the TryGrudge of
+    ``pursuit_switch``, the pursuer's selected slot (moveSlot, not the PP slot) for the TryGrudge of
     subscript_pursuit.s:85 (subscript_faint_check_destiny_bond.s:28), which runs after the Destiny
     Bond take-down and before the contact ability (:86-87).
 

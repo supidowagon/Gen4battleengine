@@ -2078,8 +2078,8 @@ def test_the_reference_turn_sizes_the_grudge_scratch_per_battler(tables, names):
 
 def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables, names):
     """subscript_pursuit.s:85 runs the same faint check: a Grudge holder at 1 HP switching out to
-    a Pursuit zeroes the pursuer's slot (the one Pursuit spent). The bit stays from an earlier
-    turn: a switch is no move attempt."""
+    a Pursuit zeroes the pursuer's chosen slot (here also the one Pursuit spent). The bit stays
+    from an earlier turn: a switch is no move attempt."""
     from nuzline.engine.actions import MOVE_ACTIONS
 
     t, n = tables, names
@@ -2088,6 +2088,22 @@ def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables
     out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 1), _hits())
     assert int(out.hp[0, 0]) == 0
     assert _foe_pp(out) == [_foe_pp(s)[0], 0]
+
+
+def test_a_pursuit_grudge_zeroes_the_chosen_slot_not_the_pp_slot(tables, names):
+    """Pursuit in slots 0 and 2, slot 2 chosen: BtlCmd_TryPursuit spends the PP of the first slot
+    holding the move (battle_script.c:6913-6917, Battler_SlotForMove) and writes attacker but never
+    moveSlot (:6926); TryGrudge zeroes ATTACKER_MOVE_SLOT (:6753-6754, common.h:8), the slot chosen
+    at selection (bcp.c:526). So slot 0 loses one PP and slot 2 goes to 0."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    t, n = tables, names
+    s = _gr(t, n, foe=("Pursuit", "Growl", "Pursuit"))
+    s = s._replace(grudge=s.grudge.at[0].set(1))
+    full = np.asarray(s.pp[1, 0]).tolist()[:3]
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 2), _hits())
+    assert int(out.hp[0, 0]) == 0
+    assert np.asarray(out.pp[1, 0]).tolist()[:3] == [full[0] - 1, full[1], 0]
 
 
 @pytest.mark.parametrize("ability", ["Aftermath", "Rough Skin"])

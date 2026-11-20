@@ -7164,8 +7164,15 @@ def _pursuit_hit(
         _lose_hp(turn, s, pursuer, mon.hp)
     # The Destiny Bond subscript's :28 TryGrudge (battle_script.c:6743-6763) on the pursuer's
     # selected slot, still before the contact ability (subscript_pursuit.s:85 then :86-87): a
-    # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9).
-    _try_grudge(s, pursuer, slot, side, target_hp > 0 and _active(s, side).hp == 0, False)
+    # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9). The slot is
+    # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526); TryPursuit never
+    # writes it, so it is the chosen slot, not the PP slot above (step._pursuit_hit). An Encored
+    # pursuer that chose no FIGHT (B = 4) keeps an earlier turn's moveSlot: its Encore slot.
+    if _command(actions[pursuer]) == FIGHT:
+        chosen = min(actions[pursuer], MOVE_ACTIONS - 1)
+    else:
+        chosen = s.battlers[pursuer].encore_slot
+    _try_grudge(s, pursuer, chosen, side, target_hp > 0 and _active(s, side).hp == 0, False)
     _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt, side)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
@@ -8669,7 +8676,9 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             # D3-18: SortMonActionOrder re-sorts the current order (bcp.c:3991), the counter goes
             # back to 0 (:3993) and BranchActions walks again from position 0 (:889-893); the
             # battlers that acted are MOVE_END entries (skipped above). Only while the battle goes
-            # on (CheckBattleOver, :3969).
+            # on (CheckBattleOver, :3969). A Trick Room user's own MoveEnd learn pause
+            # (``_LearnPause`` from ``_finish_action``) skips this re-sort, as step's ``lstop``
+            # does: unreachable, since a Trick Room action fells nobody (E3 sign-off finding 4).
             turn.trick_room_ran = False
             if not s.over:
                 _resort(turn, s, side)

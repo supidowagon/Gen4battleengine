@@ -11,7 +11,6 @@ engine as a closed form (``order._compared_fighters``): this test is where they 
 from __future__ import annotations
 
 import jax.numpy as jnp
-import numpy as np
 
 from nuzline.data.tables import to_numpy
 from nuzline.engine.format import DOUBLES

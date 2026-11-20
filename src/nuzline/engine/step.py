@@ -3499,6 +3499,17 @@ def _pursuit_hit(
     )
     state = _set_last_move(state, pursuer, move, True)
     state = _set_choice_lock(state, pursuer, move, _holds_choice(tables, state, pursuer))
+    # TryGrudge's slot is ATTACKER_MOVE_SLOT (battle_script.c:6753-6754; common.h:8,
+    # moveSlot[attacker]), written only at selection (bcp.c:445 the Encore slot, :526 the chosen
+    # slot); TryPursuit sets attacker = pursuer (:6926) but never moveSlot, so Grudge zeroes the
+    # chosen slot, not the PP slot above: they differ when Pursuit sits in two slots, or (B = 4) when a foe's faster Encore
+    # this turn turned another chosen move into Pursuit. An Encored pursuer that chose no FIGHT
+    # (B = 4 only) keeps an earlier turn's moveSlot, not in the state: its Encore slot stands in.
+    action = actions[pursuer]
+    fight = ~is_switch(action) & ~is_item(action)
+    grudge_slot = jnp.where(
+        fight, jnp.clip(action, 0, MOVE_ACTIONS - 1), state.encore_slot[pursuer]
+    ).astype(_I32)
     # subscript_pursuit.s:11 ApplyTypeEffectiveness: a Wonder Guard block
     # (MOVE_STATUS_WONDER_GUARD, damage.wonder_guarded) goes to subscript_missed.s (:17, :154), whose :107-110 tags the
     # switcher's ability (ruling G-20); the hit then deals nothing (play_hit).
@@ -3518,13 +3529,13 @@ def _pursuit_hit(
         power_mul=PURSUIT_POWER_MUL,
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
         pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
-        grudge_slot=slot,  # :85's TryGrudge, before the contact ability (E3-B2-9)
+        grudge_slot=grudge_slot,  # :85's TryGrudge, before the contact ability (E3-B2-9)
         # subscript_pursuit.s ends in BtlCmd_CheckHoldOnWith1HP, which ignores Endure (G-65).
         target_side=switcher,
         defender=switcher,
     )
     # subscript_pursuit.s:85's Destiny Bond take-down and its subscript's :28 TryGrudge (the
-    # pursuer's selected slot, the one Pursuit spent, to 0 PP: ``grudge_slot``) run inside
+    # pursuer's selected slot, moveSlot, to 0 PP: ``grudge_slot``) run inside
     # play_hit (``pursuit_switch``), before the contact ability (:86-87); the items (:90,
     # :94-95) follow here (E3-B2-9).
     state = sticky_barb_transfer(tables, state, pursuer, switcher, move, info.damaged)
@@ -4222,6 +4233,9 @@ def _execute_actions(
             # battler's row of bits; the flags it sets join the carry; the walk restarts at 0
             # (turnOrderCounter = 0, :3993), else the counter goes on (:3995). The entry's MoveEnd
             # is over (``mend``); a pause (list, learn), a Pursuit or a reflection pass is not.
+            # A Trick Room user's own MoveEnd learn pause (``lstop``) skips this re-sort, as the
+            # reference's ``_LearnPause`` does: unreachable, since a Trick Room action fells
+            # nobody (E3 sign-off finding 4).
             new_order, claw_set, custap_set, _ = resort_action_order(
                 tables,
                 state,

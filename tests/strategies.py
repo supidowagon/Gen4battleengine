@@ -2148,9 +2148,9 @@ def supported_state(draw, tables: Tables, names: Names, invokers: bool = True) -
     move_pp = np.asarray(tables.move_pp)
     turn = draw(st.integers(0, 50))
     a["turn"][...] = turn  # read by _draw_batch3 (Truant)
-    for side, (party, active) in enumerate(parties):
+    for side, (team, active) in enumerate(parties):
         a["active"][side] = active
-        for slot in range(len(party)):
+        for slot in range(len(team)):
             for k, move in enumerate(a["moves"][side, slot]):
                 if move:
                     a["pp"][side, slot, k] = draw(st.integers(0, int(move_pp[move])))
