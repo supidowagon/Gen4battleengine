@@ -2912,8 +2912,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     singles the foe has one move: a flinger or a foe that Recycles a Starf Berry for d's Pluck
     has no Roar the same turn, a Recycling foe does not Fling, and a plucked or flung foe Starf
     Berry is gone for the other, so a fourth draw is not reached there; Thief / Covet and Trick /
-    Switcheroo, the other item givers, are unsupported (no ``EffectId``: ``Support.NONE`` in
-    ``coverage.IMPLEMENTED_EFFECTS``); an eat past the third reads the queue's last entry."""
+    Switcheroo, the other item givers, are unsupported (they map to ``EffectId.UNSUPPORTED``, not
+    a key of ``coverage.IMPLEMENTED_EFFECTS``: ``Support.NONE`` by its ``.get`` default,
+    coverage.py:203, :475); an eat past the third reads the queue's last entry."""
     fmt = format_of(state)
     sides = jnp.arange(fmt.B)
     rows = party(fmt, sides)
@@ -3012,8 +3013,9 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # incoming one too: a switch acts before moves) or a berry it Recycles first
     # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a
     # foe's own eaten berry and its Fling (RemoveItem, effect_script_0233.s; ``fling_removed``) only
-    # remove it (an over-read); Thief / Covet and Trick / Switcheroo are unsupported (no
-    # ``EffectId``: ``Support.NONE`` in ``coverage.IMPLEMENTED_EFFECTS``); a foe's U-turn / Baton
+    # remove it (an over-read); Thief / Covet and Trick / Switcheroo are unsupported (they map to
+    # ``EffectId.UNSUPPORTED``, not a key of ``coverage.IMPLEMENTED_EFFECTS``: ``Support.NONE`` by
+    # its ``.get`` default, coverage.py:203, :475); a foe's U-turn / Baton
     # Pass newcomer is read by the resumed call (``pivot_battler``); in singles only d itself
     # could Roar the foe's side, and d is Plucking.
     keeps = jnp.asarray(

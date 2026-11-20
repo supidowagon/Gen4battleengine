@@ -674,15 +674,16 @@ def test_a_flung_starf_its_own_and_its_recycle_are_three_eats(tables, names, min
     """The third eat's bound in ``enumerate._starf_reads`` (``own`` counts ``flung``, a Recycle and
     the held berry; E3-B2-1 on G-28). The faster foe Flings a Starf Berry at side 0's Abra, held
     Starf Berry, one HP above its pinch at the turn start (curHP <= maxHP / 4,
-    battle_lib.c:4852-4853, would have eaten it earlier); the Fling's hit takes it to the pinch
+    battle_lib.c:4855, would have eaten it earlier); the Fling's hit takes it to the pinch
     (power 10, starf_berry.json flingPower, from a level-10 foe: no KO). effect_script_0233.s:7
     TryFling runs BattleSystem_FlingItem's FLING_EFFECT_RANDOM_UP2 loop before the hit
     (battle_lib.c:6110-6129, ``RandNext() % 5`` at :6121; ``hooks.fling_try``), queue entry 0. The
     Abra's own Starf Berry is eaten at AFTER_MOVE_EFFECT_DEFENDER_ITEM (bcp:3691-3696, draw
     lib:4865), entry 2. With ``Recycle`` (effect_script_0184.s:5-7, BtlCmd_TryRecycle
-    battle_script.c:9000-9013) it gets that berry back and eats it again at
-    AFTER_MOVE_EFFECT_HELD_ITEM_STATUS (bcp:3730-3761, draw lib:5288), entry 3: ``starf[0, 3]``
-    with no Roar. With ``Tackle`` two sources only: no ``starf[0, 3]``. The Roar newcomer's third
+    battle_script.c:9000-9013) it gets that berry back, and its own after-move chain runs
+    AFTER_MOVE_EFFECT_ATTACKER_ITEM first (bcp:3684-3689): BattleSystem_TriggerHeldItem
+    (battle_lib.c:4576) on the Abra at its pinch eats it again (draw lib:4865), entry 3:
+    ``starf[0, 3]`` with no Roar. With ``Tackle`` two sources only: no ``starf[0, 3]``. The Roar newcomer's third
     eat (own + Bug Bite of a foe's Starf + a Roar-dragged bench holder) is pinned by
     ``test_the_later_starf_draws_are_read_where_eats_can_meet`` (enumeration) and
     ``test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Roar]`` (step). Every

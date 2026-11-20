@@ -2244,7 +2244,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   `test_the_pluck_reads_a_berry_the_foe_recycles_first` (the Rough Skin board puts the plucker at its pinch).
   The train's third-eat bound (`own` counts a foe's Fling of a Starf Berry, `flung`, E3-B2-1, Fling's
   RANDOM_UP2 draw battle_lib.c:6110-6129, plus d's held berry and its Recycle; or a Roar newcomer):
-  `test_a_flung_starf_its_own_and_its_recycle_are_three_eats` (the Abra starts one HP above its pinch and the Fling's hit takes it down; `starf[d, 3]` with no Roar; two sources, none).
+  `test_a_flung_starf_its_own_and_its_recycle_are_three_eats` (the Abra starts one HP above its pinch and the Fling's hit takes it down; the foe's Fling draws, the Abra's own Starf goes at the Fling's DEFENDER_ITEM, bcp:3691-3696, and the recycled one at the Abra's own ATTACKER_ITEM, bcp:3684-3689, lib:4865; `starf[d, 3]` with no Roar; two sources, none).
   Dropped `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer` and its `_snap_segment`: they
   redrew the snapshot seeds through the live strategies generator, which does not reproduce the compare's
   states, and their "third eat only with a Roar" rule is stale on the train (a flung Starf and a Recycle make three).
