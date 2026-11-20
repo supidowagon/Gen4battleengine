@@ -3247,7 +3247,6 @@ def _pursuit_hit(
         tables, state, pursuer, move, move_type_of(tables, state, pursuer, move), switcher
     )
     state = reveal_ability(state, switcher, state.active[switcher], DAMAGE_AVOIDED, guarded)
-    before_hp = state.hp[party(fmt, switcher), state.active[switcher]]
     state, info = play_hit(
         tables,
         state,
@@ -3260,18 +3259,14 @@ def _pursuit_hit(
         power_mul=PURSUIT_POWER_MUL,
         extra_flinch=False,  # subscript_pursuit.s has no CheckExtraFlinch (bcp.c:3527, :3593)
         pursuit_switch=True,  # its substitute path (:20, :56-73), B10-4
+        grudge_slot=slot,  # :85's TryGrudge, before the contact ability (E3-B2-9)
         # subscript_pursuit.s ends in BtlCmd_CheckHoldOnWith1HP, which ignores Endure (G-65).
         target_side=switcher,
         defender=switcher,
     )
-    # subscript_pursuit.s:85's Destiny Bond take-down runs inside play_hit (``pursuit_switch``),
-    # before the contact ability (:86-87) and the items (:90, :94-95). Its subscript's :28
-    # TryGrudge follows: the pursuer's selected slot (the one Pursuit spent) goes to 0 PP when the
-    # switcher fainted holding Grudge and the pursuer has HP left (E3-B2-9).
-    fell = (before_hp > 0) & (state.hp[party(fmt, switcher), state.active[switcher]] == 0)
-    state = try_grudge(
-        state, pursuer, mon, slot, switcher, state.grudge[switcher] != 0, False, fell
-    )
+    # subscript_pursuit.s:85's Destiny Bond take-down and its subscript's :28 TryGrudge (the
+    # pursuer's selected slot, the one Pursuit spent, to 0 PP: ``grudge_slot``) run inside
+    # play_hit, before the contact ability (:86-87); the items (:90, :94-95) follow here (E3-B2-9).
     state = sticky_barb_transfer(tables, state, pursuer, _foe(pursuer), move, info.damaged)
     # subscript_pursuit.s:32 writes the script's damage (before CheckHoldOnWith1HP) to the
     # defender's physicalDamageTaken whatever the class; its specialDamageTaken stays 0 (G-54).

@@ -2052,6 +2052,26 @@ def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables
     assert _foe_pp(out) == [_foe_pp(s)[0], 0]
 
 
+@pytest.mark.parametrize("ability", ["Aftermath", "Rough Skin"])
+def test_a_pursuit_ko_runs_grudge_before_the_contact_ability_that_faints_the_pursuer(
+    tables, names, ability
+):
+    """subscript_pursuit.s:85 (FAINT_CHECK_DESTINY_BOND, whose :28 TryGrudge needs the pursuer's
+    HP, battle_script.c:6751) runs before TriggerAbilityOnHit (:86-87): the switcher's Aftermath
+    (battle_lib.c:4358-4373, maxHP/4) or Rough Skin (:4257-4271, maxHP/8) faints the 1-HP pursuer
+    after its Pursuit slot is zeroed, so the slot ends at 0 PP."""
+    from nuzline.engine.actions import MOVE_ACTIONS
+
+    t, n = tables, names
+    s = _gr(t, n, foe=("Growl", "Pursuit"))
+    held = AbilityId.AFTERMATH if ability == "Aftermath" else AbilityId.ROUGH_SKIN
+    s = s._replace(grudge=s.grudge.at[0].set(1), ability=s.ability.at[0, 0].set(held))
+    s = s._replace(hp=s.hp.at[1, 0].set(1))
+    out = assert_matches_reference(t, s, (MOVE_ACTIONS + 1, 1), _hits())
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert _foe_pp(out) == [_foe_pp(s)[0], 0]
+
+
 def test_the_attackers_leppa_misses_the_zero_until_the_turn_end(tables, names):
     """The attacker's after-move held-item check (bcp.c:3687) runs before LOOP_FAINTED, so Leppa
     finds no empty slot at the move; the end-of-turn check (bcp.c:1363) restores the zeroed slot

@@ -6752,11 +6752,11 @@ def _pursuit(
     )
     if took:
         _lose_hp(turn, s, pursuer, mon.hp)
-    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
-    # The Destiny Bond subscript's :28 TryGrudge on the pursuer's slot (E3-B2-9), here after the
-    # contact ability (:86-87) as in ``step._pursuit_hit`` (play_hit runs both): only a pursuer
-    # the contact ability fainted differs, and it keeps no PP that matters.
+    # The Destiny Bond subscript's :28 TryGrudge (battle_script.c:6743-6763) on the pursuer's
+    # selected slot, still before the contact ability (subscript_pursuit.s:85 then :86-87): a
+    # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9).
     _try_grudge(s, pursuer, slot, side, target_hp > 0 and _active(s, side).hp == 0, False)
+    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
     # script's shellBellDamageDealt (:21-29: the damage before CheckHoldOnWith1HP, capped at

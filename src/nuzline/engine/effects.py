@@ -3733,6 +3733,7 @@ def play_hit(
     counter_damage=0,
     sub_hit=False,
     pursuit_switch=False,
+    grudge_slot=None,
     foe_claw=False,
     foe_enduring=False,
     in_power=0,
@@ -3789,7 +3790,10 @@ def play_hit(
     ``pursuit_switch`` (static): Pursuit's pre-switch hit, whose subscript_pursuit.s:20, :56-73
     takes the substitute down only when it breaks (``substituteHP <= damage``) and otherwise
     leaves its HP as it was (no ``UpdateMonData`` on that path), sets no flag and skips the
-    on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158).
+    on-hit ability and items and ``SYSCTL_MOVE_HIT`` (it goes to :158). ``grudge_slot``: with
+    ``pursuit_switch``, the pursuer's selected slot (the one Pursuit spent) for the TryGrudge of
+    subscript_pursuit.s:85 (subscript_faint_check_destiny_bond.s:28), which runs after the Destiny
+    Bond take-down and before the contact ability (:86-87).
 
     ``script_calc``: the move's script ran for hit 0 (``step._use_move``: the user acted, had a
     target, its script did not fail and it is not charging), so its CalcDamage ran before TryMove's
@@ -3974,6 +3978,21 @@ def play_hit(
             ko & (state.destiny_bond[target_side] != 0) & (state.hp[party(fmt, side), user] > 0)
         )
         state = _set(state, "hp", (side, user), 0, bonded)
+        # The same subscript's :28 TryGrudge (battle_script.c:6743-6763), still before
+        # TriggerAbilityOnHit (subscript_pursuit.s:86-87): a KO'd switcher holding Grudge zeroes
+        # the pursuer's selected slot while the pursuer has HP (:6751), so a Rough Skin or
+        # Aftermath that then faints the pursuer finds the slot zeroed already (E3-B2-9).
+        if grudge_slot is not None:
+            state = try_grudge(
+                state,
+                side,
+                user,
+                grudge_slot,
+                target_side,
+                state.grudge[target_side] != 0,
+                struggling,
+                ko,
+            )
     # subscript_move_followup_message.s:12-16: "hung on using its {1}" tags the defender's item
     # (BattleMessage_ItemTag, battle_script.c:11736-11739): the AI learns a Focus Band that stays.
     state = reveal_item(state, target_side, target, endured)

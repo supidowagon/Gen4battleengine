@@ -993,6 +993,14 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   in singles the only battler that can Encore the attacker mid-turn is the Grudge holder, whose own move
   attempt clears the bit (bcp.c:2426); covered by code reading, no test. Review b2-fix #1: the reference's
   `_Turn.__post_init__` sizes `grudge_kept` per battler (`test_the_reference_turn_sizes_the_grudge_scratch_per_battler`).
+  (6) Gate fix (Pursuit order): subscript_pursuit.s:85 calls FAINT_CHECK_DESTINY_BOND, whose :28 TryGrudge runs
+  before TriggerAbilityOnHit (subscript_pursuit.s:86-87); TryGrudge needs the attacker's HP (battle_script.c:6751). So a
+  switcher's Aftermath (battle_lib.c:4358-4373) or Rough Skin (:4257-4271) that faints the pursuer comes after the zero:
+  the pursuer's selected slot ends at 0 PP. Built: `effects.play_hit` takes `grudge_slot` and, on the `pursuit_switch`
+  path, calls `try_grudge` right after the Destiny Bond take-down; `step._pursuit_hit` passes the Pursuit slot and no
+  longer calls it after `play_hit`; the reference's `_pursuit` calls `_try_grudge` before `_contact_ability`. Supersedes
+  the E3-B2-23 interim order. Test: `test_a_pursuit_ko_runs_grudge_before_the_contact_ability_that_faints_the_pursuer`
+  (Aftermath, Rough Skin; both engines).
   Owed 1 (Grudge's second TryGrudge on a U-turn newcomer) closed by review b2 #5 (ruling 2). Doubles: `try_grudge`
   and the reference's `_try_grudge` test the side of the attacker against the fainted battler's (bs.c:6750, so a
   fainting partner's attacker on the same side is excluded) and the slot is per battler. Not modelled, message only: "{0}'s {1} lost all its PP
@@ -1002,7 +1010,8 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_a_faint_outside_a_move_takes_no_pp`, `test_a_destiny_bond_ko_leaves_no_attacker_for_grudge`,
   `test_an_invokers_own_slot_is_zeroed_not_the_called_moves`, `test_struggle_is_never_avenged`,
   `test_a_u_turn_ko_zeroes_the_users_slot_before_it_switches`, `test_a_pursuit_ko_of_a_switching_grudge_
-  user_zeroes_the_pursuers_slot`, `test_the_attackers_leppa_misses_the_zero_until_the_turn_end`,
+  user_zeroes_the_pursuers_slot`, `test_a_pursuit_ko_runs_grudge_before_the_contact_ability_that_faints_the_
+  pursuer`, `test_the_attackers_leppa_misses_the_zero_until_the_turn_end`,
   `test_a_mimicked_slot_loses_only_the_battlemons_pp_to_grudge`, `test_a_switch_clears_grudge_and_the_
   ingrain_test_reads_it`), tests/ai/test_kaizo_policy.py (`test_grudge_has_no_ai_label_and_two_table_entries`,
   `test_expert_encore_encourages_a_players_last_grudge`); `fullset`-free.
@@ -1512,7 +1521,7 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `ts_se` is pivot-only scratch (0 at a learn pause). Pursuit: SF2 moved the Destiny Bond take-down into `play_hit`
   (`pursuit_switch`), before the contact ability; batch 2's TryGrudge (subscript_faint_check_destiny_bond.s:28) runs
   after `play_hit` in `step._pursuit_hit` and, to match, after `_contact_ability` in the reference: the decomp runs it
-  before the contact ability (:86-87), so only a pursuer that the contact ability then faints differs (no PP of a
-  fainted battler is read). SF2's resumed-pass defender re-resolution moves from `_turn_from_scratch` into the
+  before the contact ability (:86-87), so a pursuer that the contact ability then faints differed (observable: a
+  Revive brings it back with that PP, bag.py:236-238). Superseded: E3-B2-9 ruling (6) builds the decomp order. SF2's resumed-pass defender re-resolution moves from `_turn_from_scratch` into the
   reference's `_resume` (pivot pauses only). E2's interim Acid Rain guard is gone on both sides (batch 2 never read it).
   MANIFEST_VERSION 43.
