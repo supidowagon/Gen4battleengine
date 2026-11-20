@@ -400,16 +400,19 @@ def test_prep_plans_route_213_script_rain_on_the_save_as_clear(kaizo_trainers, k
 
     rainy = save(8, 373, 4)
     brought = [SimpleNamespace(moves=(33, 0, 0, 0))]
+    ran = False
     for tid in (*range(103, 112), 491):
         t = kaizo_trainers[tid]
         if not t.area_condition.script_window:
             continue
+        ran = True
         assert script_rain_on_save(t, rainy), tid
         assert fight_start(t, kaizo_names, rainy)[0] == Weather.NONE, tid
         assert fight_start(t, kaizo_names, rainy, team=brought)[0] == Weather.RAIN, tid
         assert fight_start(t, kaizo_names, rainy, script_weather=False)[0] == Weather.NONE
         with pytest.raises(ValueError, match="prep plans a warp onto the map first"):
             fight_start(t, kaizo_names, rainy, script_weather=True)
+    assert ran  # at least one trainer has the script window: never vacuous
     chelle = kaizo_trainers[491]
     for other in (save(8, 373, 0), save(8), save(7, 373, 4), None):
         assert not script_rain_on_save(chelle, other)
