@@ -328,6 +328,12 @@ Encodings:
   (switch-out and faint clear the mask and the data, battle_lib.c:2071, :2101-2104) that Baton
   Pass drops (moves.h:46-48). ``damage`` doubles the user's Electric move power while it is up
   (battle_lib.c:6690).
+* SF2 (k). ``claw_flag`` / ``custap_flag`` are the battler's ``MoveEffectsData.quickClaw`` /
+  ``.custapBerry`` between turns: CalcTurnOrder (and a Trick Room's re-sort at its MoveEnd) sets
+  them, only the holder's BeforeMove (subscript_check_quick_claw.s:22-28), a switch-in
+  (battle_lib.c:2100-2104) and a faint (:2185-2188) clear them; SetupNextTurn does not (:2228-2253),
+  and a U-turn's pursuer never runs BeforeMove (script.c:6931). At a pause ``ts_claw`` /
+  ``ts_custap`` hold them. Not kept by a Baton Pass (:2107-2115).
 * The mid-turn switch decision (E2 batch 6, U-turn and Baton Pass; docs/kaizo/
   e2-mechanics-ledger.md "Batch 6 design"): a turn can pause at the party list of
   subscript_attack_then_switch_out.s:71 / subscript_baton_pass.s:17, inside one action.
@@ -551,6 +557,10 @@ class BattleState(NamedTuple):
     embargo: jnp.ndarray  # int8, MoveEffectsData.embargoTurns, 0 = none (B13-29)
     flash_fire: jnp.ndarray  # int8, MoveEffectsData.flashFire (F-2)
     ability_suppressed: jnp.ndarray  # int8, MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
+    # int8[B], MoveEffectsData.quickClaw / .custapBerry between turns (SF2 (k)): the flag
+    # CalcTurnOrder or a Trick Room's re-sort set and no BeforeMove has cleared yet.
+    claw_flag: jnp.ndarray
+    custap_flag: jnp.ndarray
     # side conditions [2], then per-battler [B] and per-party [P] fields (``_KEYS`` has each one)
     spikes: jnp.ndarray  # int8, layers
     toxic_spikes: jnp.ndarray  # int8, layers
@@ -627,7 +637,9 @@ class BattleState(NamedTuple):
     ts_item: jnp.ndarray  # int16[B], the bag item picked
     ts_custap: jnp.ndarray  # int8[B], moveEffectsData.custapBerry from the turn order
     ts_claw: jnp.ndarray  # int8[B], moveEffectsData.quickClaw from the turn order (B10-6)
-    ts_pursued: jnp.ndarray  # int8, 1 + the battler whose action a Pursuit ended, 0 = none
+    # int8, bitmask of the battlers whose action a Pursuit ended (bit b = battler b), written
+    # |= 1 << pursuer by both engines
+    ts_pursued: jnp.ndarray
     ts_protect_ok: jnp.ndarray  # int8[B], turnFlags.protecting
     ts_endure_ok: jnp.ndarray  # int8[B], turnFlags.enduring (Endure, G-65)
     ts_taken: jnp.ndarray  # int16[B,6], turnFlags damage taken and attackers (step._use_move)
@@ -636,6 +648,9 @@ class BattleState(NamedTuple):
     ts_used: jnp.ndarray  # int16, the paused action's moveCur
     ts_damaged: jnp.ndarray  # int8, its defender's physical / specialDamageTaken != 0
     ts_dealt: jnp.ndarray  # int16, its hit's HP drop (the thaw)
+    # int8, moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE as the paused or chased action's tail
+    # reads it (Enigma Berry): the stopping hit's, or the last Pursuit's (SF2 (i))
+    ts_se: jnp.ndarray
     ts_alive: jnp.ndarray  # int8[P], per party its bitmask of HP > 0 at the last faint check
     ts_power_mul: jnp.ndarray  # int8, the search's turn powerMul (replacement_power_mul)
     ts_switched: jnp.ndarray  # int8[B], the battler chose a switch this turn
@@ -810,6 +825,8 @@ VOLATILE_FIELDS = (
     "embargo",
     "flash_fire",  # MoveEffectsData.flashFire (F-2); not in BATON_PASSED_FIELDS (lib:2107-2115)
     "ability_suppressed",
+    "claw_flag",  # MoveEffectsData.quickClaw (lib.c:2100-2104); not in BATON_PASSED_FIELDS
+    "custap_flag",  # MoveEffectsData.custapBerry
 )
 # ``mimic_slots`` and the shadow (``shadow_moves`` / ``shadow_pp``) are not in ``VOLATILE_FIELDS``: a
 # faint clears ``moveEffectsData`` too, but the fainted battler keeps its copy until its replacement
@@ -970,6 +987,8 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "embargo": (_BATTLER, np.int8),
     "flash_fire": (_BATTLER, np.int8),
     "ability_suppressed": (_BATTLER, np.int8),
+    "claw_flag": (_BATTLER, np.int8),
+    "custap_flag": (_BATTLER, np.int8),
     "spikes": (_SIDE, np.int8),
     "toxic_spikes": (_SIDE, np.int8),
     "stealth_rock": (_SIDE, np.int8),
@@ -1044,6 +1063,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_used": (_FIELD, np.int16),
     "ts_damaged": (_FIELD, np.int8),
     "ts_dealt": (_FIELD, np.int16),
+    "ts_se": (_FIELD, np.int8),
     "ts_alive": (_PARTY, np.int8),
     "ts_power_mul": (_FIELD, np.int8),
     "ts_switched": (_BATTLER, np.int8),

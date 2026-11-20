@@ -1503,3 +1503,16 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   131-142 (E1's NIGHTMARE is 130); MANIFEST_VERSION 42. Both sides' moveEffectsMask bits are kept (`charged_turns`,
   `grudge`, `miracle_eye`, `camouflage`; `effects.camouflaged` is gone, G-20). No state or Outcome field of main changes
   shape here, so no `snap_compare.UPGRADES` row.
+- E3-B2-23 Merge of E1's gate tip 47e08eb (2c437bc + main 08a5700, E2's SF2). Batch 2's MoveEnd split keeps SF2's
+  status cures: `step._move_end_head` takes SF2's `defender` / `fought` and runs the attacker's cure under `ran` and the
+  defender's (or, at a battle's end, the FIGHT's named defender) before the payout (bcp.c:3965-3969), then E3-B2-21's
+  payout, learn prompt and `_move_end_tail`; the reference's `_finish_action` the same. SF2's quickClaw / custapBerry
+  carry rides the action loop's carry beside batch 2's Magic Coat and learn-pause entries; a Trick Room re-sort at
+  MoveEnd (bcp.c:3991) is skipped at a pause (a Trick Room MoveEnd pays no exp, so a learn pause there is not reached).
+  `ts_se` is pivot-only scratch (0 at a learn pause). Pursuit: SF2 moved the Destiny Bond take-down into `play_hit`
+  (`pursuit_switch`), before the contact ability; batch 2's TryGrudge (subscript_faint_check_destiny_bond.s:28) runs
+  after `play_hit` in `step._pursuit_hit` and, to match, after `_contact_ability` in the reference: the decomp runs it
+  before the contact ability (:86-87), so only a pursuer that the contact ability then faints differs (no PP of a
+  fainted battler is read). SF2's resumed-pass defender re-resolution moves from `_turn_from_scratch` into the
+  reference's `_resume` (pivot pauses only). E2's interim Acid Rain guard is gone on both sides (batch 2 never read it).
+  MANIFEST_VERSION 43.

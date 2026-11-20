@@ -243,8 +243,14 @@ def test_speed_rand_maps_to_qc_roll():
     rows = {field: (pytree, status) for field, pytree, status in _state_md_rows()}
     assert rows["BattleContext.speedRand"] == ("qc_roll", "mapped")
     # E2 B10-6: Knock Off reads moveEffectsData.quickClaw (subscript_knock_off.s:8): the turn
-    # scratch ts_claw (order.claw_flags).
-    assert rows["MoveEffectsData.quickClaw"] == ("ts_claw", "mapped")
+    # scratch ts_claw (order.claw_flags). SF2 (k): the flags persist across the turn end in
+    # claw_flag / custap_flag, so each row names two fields (read as the audit reads a row).
+    for field, names in (
+        ("MoveEffectsData.quickClaw", {"claw_flag", "ts_claw"}),
+        ("MoveEffectsData.custapBerry", {"custap_flag", "ts_custap"}),
+    ):
+        pytree, status = rows[field]
+        assert status == "mapped" and set(re.findall(r"\w+", pytree)) == names
 
 
 def test_leads_choose_the_active_slots_before_the_switch_in_effects(tables, names):

@@ -258,6 +258,9 @@ class _Turn:
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (bcp.c:3371), cleared with the others (B10-4).
     sub_hit: bool = False
     sub_hit_mon: int = -1  # the battler the flag is set on, while ``sub_hit`` (F-4)
+    # moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE: the last chart run (``_hit``'s, then
+    # ``_pursuit``'s: SetupLoop zeroes it, lib.c:3359), read by the tail's Enigma Berry (SF2 (i)).
+    move_se: bool = False
     # turnFlags.protecting (cleared at the turn end, lib.c:2231): TryProtection succeeded.
     protecting: list[bool] = field(default_factory=lambda: [False, False])
     # turnFlags.enduring (Endure, G-65): TryProtection succeeded for effect 116, same lifetime.
@@ -265,6 +268,8 @@ class _Turn:
     # turnFlags.roosting (subscript_roost.s:11-12, cleared at the turn end): the battler's chart
     # skips its Flying rows (lib.c:2540-2543) for the rest of the turn.
     roosting: list[bool] = field(default_factory=lambda: [False, False])
+    # The action's roosting defender while its Flying rows are skipped: (battler, mon, its types).
+    roost_strip: tuple | None = None
     # turnFlags damage taken per side this turn, [physical, special, last] and their attackers
     # as 1 + battler (bcp.c:3413-3434), and the current Counter / Mirror Coat / Metal Burst
     # damage (battleCtx->damage).
@@ -292,6 +297,9 @@ class _Turn:
     # moveEffectsData.quickClaw per side, written by the same compare (lib.c:1283, :1349) and
     # cleared at its holder's move start (subscript_check_quick_claw.s:22-23), B10-6.
     claw: list[bool] = field(default_factory=lambda: [False, False])
+    # The action's move ran Trick Room's script (set or restore, direct or called): its MoveEnd
+    # re-sorts (effect_script_0259.s:18; bcp.c:3991), which sets the two flags again (SF2 (k)).
+    trick_room_ran: bool = False
     # moveFailFlags per side (BattleContext_MoveFailed, lib.c:2808-2820; cleared by
     # SetupNextTurn, lib.c:2232): the Uproar check of the turn's end reads them.
     move_failed: list[bool] = field(default_factory=lambda: [False, False])
@@ -1915,6 +1923,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     _reset_battler(s.battlers[side])
     _clear_copied(s, side)
     _uproar_bit_off(s, side)  # lib.c:2213
+    turn.claw[side] = turn.custap[side] = False  # moveEffectsData (lib.c:2185-2188), SF2 (k)
     turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
@@ -2125,6 +2134,8 @@ def _reset_battler(sd: RefBattler, baton: bool = False) -> None:
         "embargo",  # MoveEffectsData.embargoTurns (B13-29)
         "flash_fire",  # MoveEffectsData.flashFire (F-2): lib.c:2101-2104, not kept by a Baton Pass
         "ability_suppressed",  # MOVE_EFFECT_ABILITY_SUPPRESSED, Baton-passed (E3-2-6a)
+        "claw_flag",  # MoveEffectsData.quickClaw / .custapBerry (SF2 (k)): lib.c:2100-2104,
+        "custap_flag",  # not kept by a Baton Pass
     ):
         if not (baton and name in BATON_PASSED):
             setattr(sd, name, 0)
@@ -2170,6 +2181,15 @@ def _source_leaves(s: RefState, side: int, baton: bool = False, faint: bool = Fa
                     sd.lock_on = sd.lock_on_target = 0
 
 
+def _sides_out(s: RefState) -> tuple[bool, bool]:
+    """``(player_out, opp_out)``: CheckBattleOver's per-side test (bcp.c:4181-4260) as built
+    today, party 0 / party 1 with no Pokemon with HP (the singles branch, :4242-4260); shared by
+    ``_faint_check`` and ``_switch``. D3-7's per-format rule (2vs2 / tag sum the partner's party,
+    :4211-4240; AI partner: the player's own party, :4189-4210) goes here (step._sides_out)."""
+    out = [all(m.species == 0 or m.hp == 0 for m in s.parties[p].mons) for p in (0, 1)]
+    return out[0], out[1]
+
+
 def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     """``BattleControllerPlayer_AnyFainted`` (bcp.c:4409) then ``CheckBattleOver``:
     each flagged Pokemon faints (``subscript_faint_mon.s`` -> ``PlayFaintAnimation``,
@@ -2200,9 +2220,10 @@ def _faint_check(turn: _Turn, s: RefState, decide: bool = True) -> None:
     s.player_faints += player_fainted
     if not decide:  # AnyFainted alone, no CheckBattleOver (the side-condition pass, bcp.c:1749)
         return
-    if all(m.species == 0 or m.hp == 0 for m in s.parties[0].mons):
+    player_out, opp_out = _sides_out(s)
+    if player_out:
         s.over, s.winner = 1, WINNER_OPPONENT
-    elif all(m.species == 0 or m.hp == 0 for m in s.parties[1].mons):
+    elif opp_out:
         s.over, s.winner = 1, WINNER_PLAYER
     if s.over:  # the player's party never saw a Mimic or Transform copy (step._faint_check)
         for b in range(_fmt(s).B):  # every battler of party 0 (ruling D1-3)
@@ -3378,6 +3399,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     _reset_battler(sd, baton)
     _clear_copied(s, side)
     _uproar_bit_off(s, side)  # lib.c:2135
+    turn.claw[side] = turn.custap[side] = False  # UpdateAfterSwitch (lib.c:2100-2104), SF2 (k)
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
@@ -4146,6 +4168,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             s.field_mask &= ~FieldCondition.TRICK_ROOM
         else:
             s.field_mask |= FieldCondition.TRICK_ROOM_INIT
+        turn.trick_room_ran = True  # trickRoomActivated (effect_script_0259.s:18)
     elif effect == EffectId.MAGNET_RISE and landed and not _script_fails(s, side, effect):
         # effect_script_0252.s:8-9 (the failures are ``_script_fails``): the bit and 5 turns.
         s.battlers[side].magnet_rise = 1
@@ -4244,7 +4267,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             _shielded(turn, s, target)
             or raw == ABILITY_MULTITYPE
             or foe.item == ITEM_GRISEOUS_ORB
-            or (turn.claw[target] and not target_moved)
+            or turn.claw[target]
             or turn.custap[target]
         )
         if foe.item and not blocked and not sticky:
@@ -4884,6 +4907,9 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
     # The move reaches its defender (BattleSystem_Defender): the living foe, or the
     # defender a DEFENDER_ALWAYS move always has; a TARGETS_USER move hits its user.
     landed = target_mon.hp > 0 or _defender_always(tables, move, _ghost(s, side))
+    # moveStatusFlags & MOVE_STATUS_SUPER_EFFECTIVE after the chart (bcp.c:2350-2358): the item
+    # block below and a paused U-turn's tail (``ts_se``) read it (SF2 (i)).
+    turn.move_se = _super_effective(turn, s, side, move, tg)
     # Bide is a RANGE_USER move whose unleash hits the foe (bcp.c:2702-2713).
     counter = _t(tables, "move_effect", move) == EffectId.COUNTER
     hits_foe = (
@@ -5119,16 +5145,21 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         int(b == foe and holder.hp == 0 and user.hp > 0 and bool(s.battlers[foe].grudge))
         for b in range(_fmt(s).B)
     ]
+    owed: list[int] = []
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
-        acid = _pursuit(turn, s, side, turn.actions, turn.choices)
+        p_alive = holder.hp > 0
+        _, _, acid = _pursuit(turn, s, side, turn.actions, turn.choices)
         if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
             # The Synchronize flag goes on: a user that falls to it ends the script at :55,
             # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
             # BattleMon.status (G-24).
-            turn.pursued = foe + 1
+            turn.pursued |= 1 << foe  # a bitmask of the pursuers (battle_script.c:6884-6935)
             turn.pick_mul = PURSUIT_POWER_MUL
-            _faint_check(turn, s)
+            # No battle-over check until MoveEnd (SF2 (a2) R1); a recoil-felled pursuer's exp
+            # waits for it too (R3), and a U-turn user has no Destiny Bond (bcp.c:2425).
+            _faint_check(turn, s, decide=False)
+            owed = _owed_pursuer(turn, s, foe, p_alive)
             _pay_exp(turn, s)
             _acid_rain(s, acid)
     if user.hp > 0 and not s.over:
@@ -5138,7 +5169,8 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             user.status_counter = 0
         turn.pivot_dealt = dealt
         turn.grudge_kept = kept
-        raise _Pause
+        raise _Pause  # the resumed pass finds the owed pursuer again (``_resume``)
+    turn.payout.extend(owed)
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
     rock = (
         turn.damaged
@@ -5657,18 +5689,48 @@ def _reveal_redirect(s: RefState, tables, holder: int) -> None:
 
 def _call_defender(turn: _Turn, s: RefState, side: int, move: int) -> bool:
     """GoToMoveScript's re-pick for the called ``move`` (script.c:2111-2134, D2-13): the action's
-    defender becomes ``called_defender`` and, at B = 4, the stored target (:2123). True when it
-    finds none (``subscript_no_target.s``). ``turn.call_redirected``: the redirection check moved it."""
+    defender becomes ``called_defender`` and the stored target (:2123, both formats, ruling
+    D2-33). True when it finds none (``subscript_no_target.s``). ``turn.call_redirected``: the
+    redirection check moved it."""
     order = turn.speed_order if turn.speed_order is not None else list(range(len(s.battlers)))
     called, turn.call_redirected = called_defender(
         turn.tables, s, side, move, order, turn.outcome.call_target_draw[side]
     )
     if called is None:
+        # battleCtx->defender = BATTLER_NONE (script.c:2121, :2126), so MoveEnd cures no defender
+        # (bcp.c:3966); step's ``_redefend`` writes NO_DEFENDER (SF2 review (a)).
+        turn.defender = None
         return True
     turn.defender = called
     turn.target_side = called if called != side else _foe(side)
     s.battlers[side].chosen_target = called  # script.c:2123, both formats (ruling D2-33)
     return False
+
+
+def _strip_roost(turn: _Turn, s: RefState, defender: int) -> None:
+    """BasicTypeMulApplies (battle_lib.c:2540-2543) skips the chart's Flying rows when
+    ``turnFlags[defender].roosting`` (set by subscript_roost.s:12 for the Roost user, cleared at
+    the turn's end): the move's defender reads its types without Flying until the action ends
+    (``_unstrip_roost``). Only the chart reads a defender's types for Flying. The user never
+    roosts before its own action's chart, so a lock that hits its user reads its own types. A new
+    defender (redirection, Counter) gives the previous one its types back first."""
+    _unstrip_roost(turn, s)
+    if turn.roosting[defender]:
+        mon = _active(s, defender)
+        saved = list(mon.types)
+        mon.types = [Type.MYSTERY if t == Type.FLYING else t for t in mon.types]
+        turn.roost_strip = (defender, mon, saved, list(mon.types))
+
+
+def _unstrip_roost(turn: _Turn, s: RefState) -> None:
+    """The stripped defender's own types again, if it is still active (a Pokemon dragged out
+    took its party types on the way out) and the move left its types alone: a move that
+    changed them (Shaymin-Sky's revert, F-16) leaves its own."""
+    if turn.roost_strip is not None:
+        defender, mon, types, stripped = turn.roost_strip
+        if _active(s, defender) is mon and mon.types == stripped:
+            mon.types = types
+        turn.roost_strip = None
 
 
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
@@ -5714,6 +5776,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # E3-B2-6, the holder's pass of a reflected move (``reflect_pass``: Magic Coat's user runs the
     # mover's move on the mover): BeforeMove resumes at CHECK_STOLEN (bcp.c:3196-3200), so none of
     # the checks before it run again and the attack message of the first pass stands.
+    _strip_roost(turn, s, turn.target_side)
     if reflect_pass:
         unleash, record = False, None
         turn.bide_ended = False
@@ -5733,6 +5796,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         turn.bide_ended = unleash
         disruption = _status_disrupted(turn, s, side, move)
         if disruption == HURT_ITSELF:  # the user became the defender (bcp.c:2629)
+            turn.defender = side  # MoveEnd cures battleCtx->defender (bcp.c:3966-3967)
             return None
         if disruption == DISRUPTED:  # no attack message: moveHit = MOVE_NONE
             return 0 if foe_defender else None
@@ -5801,6 +5865,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         )
     if redirected:
         turn.defender = turn.target_side = redirect_to
+        _strip_roost(turn, s, turn.target_side)
     # SYSCTL_MOVE_SUCCEEDED (bcp.c:3212): UpdateMoveBuffers (bcp.c:3945) keeps the move
     # (Struggle's own id when struggling; Nature Power, moveTemp, for Nature Power) in
     # movePrevByBattler.
@@ -5921,8 +5986,10 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     ):
         s.battlers[side].micle = 0
     # TRY_MOVE_STATE_CHECK_TYPE_CHART (bcp.c:3271-3277, after the script, hit or miss): a move
-    # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the foe sets the
-    # attacker's moveFailFlags.noEffect (bcp.c:2350-2370), which the Uproar check reads.
+    # with power that is not RANGE_USER / RANGE_USER_SIDE and is ineffective on the defender
+    # (BattleSystem_ApplyTypeChart on battleCtx->defender, bcp.c:2358-2365: the user for a lock
+    # that reads its stored user) sets the attacker's moveFailFlags.noEffect (bcp.c:2350-2370),
+    # which the Uproar check reads.
     if (
         _t(tables, "move_power", move) != 0
         and not _targets_user(tables, move, _ghost(s, side))
@@ -5934,8 +6001,8 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         and _matchup_x40(
             tables,
             _move_type(tables, s, side, move),
-            _active(s, _foe(side)).types,
-            _identified(tables, s, side, _foe(side)),
+            _active(s, turn.target_side).types,
+            _identified(tables, s, side, turn.target_side),
         )
         == 0
     ):
@@ -6046,6 +6113,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # D2-14: the defender is the living Follow Me user of the attacker's side, else the attacker.
         picked = counter_defender(s, side, attacker)
         turn.defender = turn.target_side = picked
+        _strip_roost(turn, s, picked)
         # BattleSystem_DecPPForPressure on the new defender (script.c:4646, :4699, :7180;
         # lib.c:7390-7397): one more PP from moveSlot, the chosen slot (an invoker's when it called
         # the move), while it has PP left, ruling G-9.
@@ -6485,7 +6553,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
                 tgt,
                 turn.damaged and klass == PHYSICAL,
                 turn.damaged and klass == SPECIAL,
-                _super_effective(turn, s, side, move, tgt),
+                turn.move_se,
             )
         _thaw_target(turn, s, side, move, dealt, tgt)
         for battler in (side, tgt):
@@ -6601,14 +6669,18 @@ def _pursuer_ready(turn: _Turn, s: RefState, b: int, actions, choices) -> bool:
     return not _truant_loafs(s, b) and mon.pp[actions[b]] != 0
 
 
-def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int, int] | None:
+def _pursuit(
+    turn: _Turn, s: RefState, side: int, actions, choices
+) -> tuple[int | None, bool, tuple[int, int] | None]:
     """``side`` is switching: ``BtlCmd_TryPursuit`` (script.c:6884, from
     ``subscript_switch_pokemon.s:11``): the first battler in index order (:6899, ``break``
     :6934) on the other side (:6904) that is ``_pursuer_ready`` spends the PP and hits with
     ``powerMul = 20``; ``subscript_pursuit.s`` runs crit, damage and the type chart
     (no accuracy check, no secondary effect), then the contact ability. The
-    pursuer's action is over. Returns ``(faintedMon, kept)`` for ``_acid_rain`` after a KO
-    of the switcher (subscript_pursuit.s:100, FCM 1.3-1.4), else None."""
+    pursuer's action is over. Returns ``(pursuer, took, acid)``: the pursuer (None when none
+    chased), whether Destiny Bond took it down (its exp is paid at the Pursuit, a recoil-felled
+    pursuer's at the action's MoveEnd: SF2 (a2) R3), and ``(faintedMon, kept)`` for
+    ``_acid_rain`` after a KO of the switcher (subscript_pursuit.s:100, FCM 1.3-1.4), else None."""
     tables = turn.tables
     pursuer = next(
         (
@@ -6619,7 +6691,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int
         None,
     )
     if pursuer is None:
-        return None
+        return None, False, None
     move = choices[pursuer][0]
     mon = _active(s, pursuer)
     slot = actions[pursuer]
@@ -6629,6 +6701,10 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int
     if _ability(s, _active(s, side)) == AbilityId.PRESSURE and mon.pp[slot] > 0:
         mon.pp[slot] -= 1
     turn.done[pursuer] = True
+    # SetupLoop zeroes moveStatusFlags (lib.c:3359) and the Pursuit's ApplyTypeEffectiveness sets
+    # the bit (subscript_pursuit.s:12, script.c:6964-6973): the tail's Enigma Berry reads the
+    # last Pursuit's flag (SF2 (i)).
+    turn.move_se = _super_effective(turn, s, pursuer, move)
     # script.c:6930: movePrevByBattler[pursuer] = Pursuit; :6943-6950: a Choice holder's
     # choiceLockedMove = Pursuit.
     s.battlers[pursuer].last_move = move
@@ -6652,7 +6728,7 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int
         # the ability, the items and SYSCTL_MOVE_HIT.
         if target_sd.substitute_hp <= damage:
             target_sd.substitute_hp = 0
-        return None
+        return pursuer, False, None
     # subscript_pursuit.s: CheckHoldOnWith1HP on the target (script.c:9098-9124).
     armed = _sash_at_full_hp(turn, s, side)
     armed = armed or _band_rolls(turn, s, side, o.focus_band[pursuer][0])  # G-1
@@ -6665,12 +6741,21 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int
     dealt = _lose_hp(turn, s, side, taken)
     if damage > 0 and not taken and not target_sd.substitute_hp:  # hpCalcTemp 0 (B13-17)
         turn.assurance[side] = False
-    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
     # subscript_pursuit.s:85: a switcher that fainted holding Destiny Bond takes the living
-    # pursuer down (subscript_faint_check_destiny_bond.s), before the items (:90, :94-95).
-    if target_hp > 0 and _active(s, side).hp == 0 and s.battlers[side].destiny_bond and mon.hp > 0:
+    # pursuer down (subscript_faint_check_destiny_bond.s), before the contact ability (:86-87)
+    # and the items (:90, :94-95).
+    took = (
+        target_hp > 0
+        and _active(s, side).hp == 0
+        and bool(s.battlers[side].destiny_bond)
+        and mon.hp > 0
+    )
+    if took:
         _lose_hp(turn, s, pursuer, mon.hp)
-    # The same subscript's :28 TryGrudge on the pursuer's slot (E3-B2-9).
+    _contact_ability(turn, s, pursuer, move, 0, damage > 0, dealt)
+    # The Destiny Bond subscript's :28 TryGrudge on the pursuer's slot (E3-B2-9), here after the
+    # contact ability (:86-87) as in ``step._pursuit_hit`` (play_hit runs both): only a pursuer
+    # the contact ability fainted differs, and it keeps no PP that matters.
     _try_grudge(s, pursuer, slot, side, target_hp > 0 and _active(s, side).hp == 0, False)
     # subscript_pursuit.s:44 / :90: TriggerHeldItemOnHit (the Sticky Barb); then :48-49
     # (:94-95 after a KO): SYSCTL_MOVE_HIT, TriggerHeldItemOnPivotMove: Shell Bell on the
@@ -6680,17 +6765,22 @@ def _pursuit(turn: _Turn, s: RefState, side: int, actions, choices) -> tuple[int
     if damage > 0:
         _sticky_barb_transfer(turn, s, pursuer, side, move)
         # :32 writes the damage to physicalDamageTaken whatever the class (G-54).
-        _on_hit_berry(turn, s, pursuer, side, True, False, _super_effective(turn, s, pursuer, move))
+        _on_hit_berry(turn, s, pursuer, side, True, False, turn.move_se)
         _shell_bell(turn, s, pursuer, min(damage, target_hp))
         _life_orb_recoil(turn, s, pursuer)
     if not (target_hp > 0 and _active(s, side).hp == 0):
-        return None
+        return pursuer, took, None
     # subscript_pursuit.s:100 (FCM 1.3): the pursuer when a recoil left it at 0 HP and the
-    # switcher's Destiny Bond (the game runs it first, :85) did not fire, else the switcher; a
-    # recoil-fainted pursuer's Uproar bit is still in the mask at :115 (FCM 1.4, fcm-verify (c)).
+    # switcher's Destiny Bond (the game runs it first, :85; ``took``) did not fire, else the
+    # switcher; a recoil-fainted pursuer's Uproar bit is still in the mask at :115 (FCM 1.4,
+    # fcm-verify (c)).
     if mon.hp == 0 and not s.battlers[side].destiny_bond:
-        return pursuer, s.field_mask & (1 << (FIELD_CONDITION_UPROAR_SHIFT + pursuer))
-    return side, 0
+        return (
+            pursuer,
+            took,
+            (pursuer, s.field_mask & (1 << (FIELD_CONDITION_UPROAR_SHIFT + pursuer))),
+        )
+    return pursuer, took, (side, 0)
 
 
 def _acid_rain(s: RefState, acid: tuple[int, int] | None) -> None:
@@ -6711,13 +6801,16 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     if mon.hp and mon.ability == AbilityId.NATURAL_CURE:
         mon.status = Status.NONE
         mon.status_counter = 0
-    # :11 Pursuit, then its own faint check (the battle may end here).
-    acid = _pursuit(turn, s, side, actions, choices)
-    _faint_check(turn, s)
-    _pay_exp(turn, s)  # subscript_pursuit.s:106-108: Pursuit's own payout
-    _acid_rain(s, acid)  # :115, G-12
-    if s.over:
-        return
+    # :11 Pursuit, then its faint flags: nothing up to the action's MoveEnd checks for a battle
+    # end (SF2 (a2) R1), so the switch goes on. subscript_pursuit.s:100-113 pays the switcher's KO
+    # and a Destiny-Bond pursuer; a pursuer felled by a recoil is paid at MoveEnd, after the
+    # hazards (R3). Then :115, Acid Rain (G-12).
+    pursuer, bonded, acid = _pursuit(turn, s, side, actions, choices)
+    _faint_check(turn, s, decide=False)
+    owed = [] if pursuer is None else _owed_pursuer(turn, s, pursuer, not bonded)
+    _pay_exp(turn, s)
+    turn.payout.extend(owed)
+    _acid_rain(s, acid)
     # The outgoing Pokemon goes back to the party: battle_controller.c:1482 writes its
     # status back without MON_CONDITION_TOXIC_COUNTER.
     if mon.status == Status.TOXIC:
@@ -6725,7 +6818,22 @@ def _switch(turn: _Turn, s: RefState, side: int, slot: int, actions, choices) ->
     _enter(turn, s, side, slot)
     _send_out_exp(s, side)  # subscript_switch_pokemon.s:39
     _entry_hazards(turn, s, side)  # :43
-    _switch_in_effects(turn, s, side)
+    # MoveEnd's CheckBattleOver returns before TriggerEffectOnSwitch (bcp.c:3969, :3973): a switch
+    # that leaves a side out runs no switch-in effects (R2).
+    if not any(_sides_out(s)):
+        _switch_in_effects(turn, s, side)
+
+
+def _owed_pursuer(turn: _Turn, s: RefState, pursuer: int, fell: bool) -> list[int]:
+    """The pursuer's active slot when a recoil felled it in the Pursuit chain (``fell``: it was
+    alive before, and Destiny Bond did not take it) and it is the foe: its payout flag leaves
+    ``turn.payout`` for the caller to hand back at the action's MoveEnd (SF2 (a2) R3)."""
+    slot = s.battlers[pursuer].active
+    if not (fell and _active(s, pursuer).hp == 0 and side_of(pursuer) == 1):
+        return []
+    if slot in turn.payout:
+        turn.payout.remove(slot)
+    return [slot]
 
 
 def _item_branch(tables, s: RefState, side: int, item: int) -> tuple[int, int, bool]:
@@ -7500,7 +7608,7 @@ def _embargo_fails(tables, s: RefState, turn: _Turn, target: int, target_moved: 
         or _decomp_ability(tables, foe) == ABILITY_MULTITYPE  # raw: subscript_embargo_start.s:7
         or s.battlers[target].embargo
         or foe.item == ITEM_GRISEOUS_ORB
-        or (turn.claw[target] and not target_moved)
+        or turn.claw[target]
         or turn.custap[target]
     )
 
@@ -7962,6 +8070,11 @@ def _ref_step(
                 _item_effect(tables, _active(s, side), s) == ItemId.QUICK_CLAW and qc[side] != 0
                 for side in range(_fmt(s).B)
             ]
+    # The flags the last turn left standing (only the holder's BeforeMove, a switch-in and a
+    # faint clear them, SF2 (k)).
+    for side in range(_fmt(s).B):
+        turn.claw[side] = turn.claw[side] or bool(s.battlers[side].claw_flag)
+        turn.custap[side] = turn.custap[side] or bool(s.battlers[side].custap_flag)
     turn.actions, turn.choices, turn.items = actions, choices, items
     turn.commands, turn.order = commands, order
     try:
@@ -8012,7 +8125,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             pursuer_done = turn.done[_foe(side)]
             _switch(turn, s, side, actions[side] - MOVE_ACTIONS, actions, choices)
             if turn.done[_foe(side)] and not pursuer_done:  # its Pursuit hit (_pursuit)
-                turn.pursued = 2 - side
+                turn.pursued |= 1 << _foe(side)
         else:
             move, struggling, locked = choices[side]
             turn.attack_message = turn.move_hit = turn.damaged = turn.sub_hit = False
@@ -8030,13 +8143,6 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             turn.move_cur = move
             turn.shell_dealt = 0
             turn.reflected = False
-            # A foe that roosted this turn: the move's chart skips its Flying rows
-            # (lib.c:2540-2543); only the chart reads the target's types for Flying.
-            foe = _active(s, _foe(side))
-            saved = list(foe.types)
-            if turn.roosting[_foe(side)]:
-                foe.types = [Type.MYSTERY if t == Type.FLYING else t for t in foe.types]
-            chart_types = list(foe.types)
             turn.met_reached = turn.met_worked = turn.met_immune = False
             turn.charge_strike = turn.bide_ended = False
             rollout0 = s.battlers[side].rollout_count
@@ -8046,9 +8152,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
                     target_moved=position == 1,
                 )  # fmt: skip
             finally:
-                # A move that changed them (Shaymin-Sky's revert, F-16) leaves its own.
-                if _active(s, _foe(side)) is foe and foe.types == chart_types:
-                    foe.types = saved
+                _unstrip_roost(turn, s)
             # UpdateMoveBuffers' BattleSystem_VerifyMetronomeCount (bcp.c:3957), G-60.
             no_effects = turn.met_reached and not (turn.met_worked and not turn.met_immune)
             last_of_multi = turn.charge_strike or turn.bide_ended
@@ -8083,6 +8187,21 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         _stale_known_item(s, stale, side == 0 and commands[side] not in (ITEM, SWITCH))
         _finish_action(turn, s, side, position, record, copied, conv2)
 
+        # Trick Room's MoveEnd: SortMonActionOrder (bcp.c:3991, lib.c:7276-7300) compares every
+        # pair of FIGHT commands with both alive, ignoreQuickClaw = FALSE, which sets the flags of
+        # an activated Quick Claw (this turn's speedRand) and of a Custap holder in its pinch;
+        # it never clears (SF2 (k); ``order.resort_claw_flags``).
+        if turn.trick_room_ran:
+            turn.trick_room_ran = False
+            alive = [_active(s, b).hp > 0 for b in range(_fmt(s).B)]
+            if not s.over and all(c == FIGHT for c in commands) and all(alive):
+                qc = turn.outcome.quick_claw
+                for b in range(_fmt(s).B):
+                    if _custap_active(tables, s, b):
+                        turn.custap[b] = True
+                    if _item_effect(tables, _active(s, b), s) == ItemId.QUICK_CLAW and qc[b] != 0:
+                        turn.claw[b] = True
+
 
 def _copied_writes(tables, turn: _Turn, move: int, record) -> tuple[int, int]:
     """``UpdateFlagsWhenHit``'s moveCopied write (bcp.c:4480-4486, E3-B2-2): ``(for the foe, for
@@ -8105,7 +8224,13 @@ def _finish_action(
     (``TriggerEffectOnSwitch``). A learn prompt the payout leaves pauses the turn between the
     payout and the tail (``_LearnPause``; ``engine.step._execute_actions``)."""
     turn.done[side] = True
+    battle = [(_active(s, b), _active(s, b).ability) for b in range(len(s.battlers))]
     _faint_check(turn, s)  # BATTLE_CONTROL_CHECK_ANY_FAINTED after each action
+    # The MoveEnd cures read the battle abilities; the battle-end _restore_ability of
+    # _faint_check (the party's own) is put back after them (Owed 20).
+    restored = [(mon, mon.ability) for mon, _ in battle]
+    for mon, ability in battle:
+        mon.ability = ability
     # UpdateFlagsWhenHit runs after LOOP_FAINTED (bcp.c:3820-3837): a KO'd defender
     # keeps the record until its replacement clears it.
     if record is not None:
@@ -8127,10 +8252,15 @@ def _finish_action(
     if clear:
         s.battlers[side].move_hit = 0
         s.battlers[side].conv2_move = 0
-        # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then
-        # defender (bcp.c:3965-3967).
-        _recover_status_by_ability(s, side)
+    # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then defender, both
+    # before CheckBattleOver (bcp.c:3965-3969; SF2 (a)): a battle that ends here cures them too.
+    _recover_status_by_ability(s, side)
+    if not s.over:
         _recover_status_by_ability(s, _foe(side))
+    elif turn.commands[side] == FIGHT and turn.defender is not None:
+        _recover_status_by_ability(s, turn.defender)
+    for mon, ability in restored:
+        mon.ability = ability
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver and
     # TriggerEffectOnSwitch (bcp.c:3965-3973): a KO that ends the battle pays too. The whole
     # GetExpTask, the learn prompts included, runs inside it (E3-B2-21).
@@ -8170,6 +8300,11 @@ def _end_turn(turn: _Turn, s: RefState, site: int = 0, cursor: int = 0) -> RefSt
     """The end of the turn after the actions. ``site``, ``cursor``: the learn pause it resumes
     (``_resume_learn``): the order and the speedRand draw are the pause's (E3-B2-21)."""
     tables, outcome = turn.tables, turn.outcome
+    # The flags standing at the turn's end carry into the next turn (SetupNextTurn clears neither,
+    # lib.c:2228-2253; SF2 (k)).
+    for b, sd in enumerate(s.battlers):
+        sd.claw_flag = int(turn.claw[b] and _active(s, b).hp > 0)
+        sd.custap_flag = int(turn.custap[b] and _active(s, b).hp > 0)
     if site < LEARN_FIELD:
         _record_speeds(tables, s)  # the sort after the last action (bcp.c:888-891), E3-B2-15
         order = _speed_order(tables, s, outcome)  # BattleSystem_SortMonSpeedOrder, bcp.c:887
@@ -8276,6 +8411,7 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         s.ts_used = turn.move_cur
         s.ts_damaged = int(turn.damaged)
         s.ts_dealt = turn.pivot_dealt
+        s.ts_se = int(turn.move_se)  # moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
         # The paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT sits on its defender (F-4).
         _put(
             s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
@@ -8313,7 +8449,8 @@ def _fainted_battler(s: RefState, k: int, i: int) -> int:
 
 _SCRATCH_ZERO = {
     "pivot_battler": 0, "ts_cursor": 0, "ts_pursued": 0, "ts_used": 0, "ts_damaged": 0,
-    "ts_dealt": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "learn_site": 0, "ts_ran": 0,
+    "ts_dealt": 0, "ts_se": 0, "ts_power_mul": 0, "ts_pick_mul": 0, "learn_site": 0,
+    "ts_ran": 0,
 }  # fmt: skip
 
 
@@ -8353,8 +8490,9 @@ def _turn_from_scratch(tables, s: RefState, outcome, acted_upto: int) -> _Turn:
     ]
     for position in range(acted_upto):
         turn.done[turn.order[position]] = True
-    if s.ts_pursued:
-        turn.done[s.ts_pursued - 1] = True
+    for k in range(_fmt(s).B):
+        if s.ts_pursued >> k & 1:
+            turn.done[k] = True
     for k in range(_fmt(s).B):
         if s.battlers[k].ts_dragged:
             turn.done[k] = True
@@ -8416,12 +8554,36 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     ``UpdateMoveBuffers``, ``MoveEnd``), the later actions and the end of the turn."""
     side = s.pivot_battler - 1
     turn = _turn_from_scratch(tables, s, outcome, s.ts_cursor)
+    # The paused move's battleCtx->defender, for MoveEnd's battle-end cure (bcp.c:3966-3967):
+    # FightCommand's pick (bcp.c:1900) re-resolved here on the paused state, before ``_enter``
+    # (the outgoing mon's Encore and chosen_target still in place); ``step._act`` re-resolves in
+    # MODE_RESUME on the post-list state. No visible case at B = 2 (ledger SF2-gate (2)); at B = 4 they can differ (an
+    # encored U-turn user randomizes in one and not the other). The game never re-resolves:
+    # battleCtx->defender stays from FightCommand. Owed 22 (ledger): carry the action-start
+    # defender in both engines.
+    p_move, p_struggling, _ = turn.choices[side]
+    p_sd = s.battlers[side]
+    if (
+        not p_struggling
+        and p_sd.encore_move
+        and _active(s, side).moves[p_sd.encore_slot] == p_sd.encore_move
+    ):
+        p_move = p_sd.encore_move
+    turn.defender = _resolve(
+        tables, s, side, p_move, p_struggling or bool(p_sd.encore_move), p_sd.chosen_target,
+        turn.speed_order if turn.speed_order is not None else list(range(_fmt(s).B)),
+        outcome.target_draw[side],
+    )[0]  # fmt: skip
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
+    se = bool(s.ts_se)  # the tail's moveStatusFlags & SUPER_EFFECTIVE (SF2 (i))
     position = s.ts_cursor
     grudge = _get(s, "ts_grudge")
     _clear_scratch(s)
     foe = _foe(side)
+    # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (F-4): the tail's TriggerHeldItemOnHit returns
+    # early on it (battle_lib.c:5378).
+    sub_hit = turn.sub_hit and turn.sub_hit_mon == foe
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
     # The list (subscript_show_party_list.s): the outgoing Pokemon goes back to the party
     # without its toxic counter (battle_controller.c:1482).
@@ -8431,7 +8593,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     _enter(turn, s, side, actions[side] - MOVE_ACTIONS, baton)
     _send_out_exp(s, side)  # :18
     _entry_hazards(turn, s, side)  # :22
-    _faint_check(turn, s)  # :23-24
+    _faint_check(turn, s, decide=False)  # :23-24: no CheckBattleOver until MoveEnd (SF2 (a2))
     # AfterMoveMessage's King's Rock with the newcomer's item (bcp.c:4630-4650).
     o = turn.outcome
     holder = _active(s, foe)
@@ -8457,6 +8619,11 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     _switch_in_effects(turn, s, side, turn.sub_hit_mon if turn.sub_hit else -1)
     for battler in (side, foe):
         _held_item(turn, s, battler)
+    # TRIGGER_ITEMS_ON_HIT (bcp.c:3698-3706): the Enigma Berry case reads the defender's
+    # substitute flag and moveStatusFlags (battle_lib.c:5378, :5421-5428); no attacker, moveCur
+    # or UTURN_ACTIVE test (SF2 (i)).
+    if se and not sub_hit:
+        _on_hit_berry(turn, s, side, foe, False, False, True)
     _thaw_target(turn, s, side, used, dealt)
     for battler in (side, foe):
         _held_item(turn, s, battler)
@@ -8483,6 +8650,10 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     if record is not None:
         clears = _move_target(tables, used) in CONV2_CLEARING
         conv2 = (0, 0, 0) if clears else (used, side + 1, _move_type(tables, s, side, used))
+    # SF2 (a2) R3, R4: the pursuer the Pursuit's recoil felled in the paused pass (a U-turn user
+    # has no Destiny Bond) is paid at this MoveEnd.
+    if turn.pursued >> foe & 1 and _active(s, foe).hp == 0 and side_of(foe) == 1:
+        turn.payout.append(s.battlers[foe].active)
     try:
         _finish_action(turn, s, side, position, record, copied, conv2)
         _actions(turn, s, position + 1)

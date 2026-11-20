@@ -1809,6 +1809,15 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   G-12 lands, E2 drops the guard (the field, the refusal line, the `exp_refused`-style consumers, the backlog
   kind and tests/engine/test_acid_rain_guard.py) and its B = 4 Pursuit site calls `step.first_pursuer` and
   `step._acid_rain` instead (G-12).
+  Done in batch G's merge of main 08a5700 (SF2): the B = 2 guard is gone (`BattleState.acid_rain`,
+  `RefState.acid_rain`, `coverage.acid_rain_reason` / `check_acid_rain` and their host entry calls, the
+  search's `acid_rain != 0` refusals, `CoverageReport.runtime` with its CLI print and the backlog's
+  "Playable, lines hitting the glitch refused" section, tests/engine/test_acid_rain_guard.py and the two
+  runtime-line tests); SF2's Pursuit sites call `step._acid_rain` (engine) and apply `_pursuit`'s
+  `(faintedMon, kept)` with `_acid_rain` (reference: `_pursuit` returns `(pursuer, took, acid)`, the
+  pursuer from `_pursuer_ready` in index order). The guard cases test_field_mask.py lacked are model tests
+  there now (Aftermath recoil, the player's Life Orb pursuer, Destiny Bond before Rough Skin). D3-9's
+  B = 4 guard is not on main yet: E2 drops it as above.
 - G-14 Air Lock (ability 76) counts exactly as Cloud Nine: `AbilityId.AIR_LOCK` = 96 (`ABILITY_DECOMP_IDS` 76,
   `tools/effect_map.py` name map, `enumerate.INPUT_NEUTRAL_ABILITIES` beside Cloud Nine, the
   `ids.ABILITY_DECOMP_IDS` table in `data/game_constants.py`). The rule was already modelled: every decomp read of the

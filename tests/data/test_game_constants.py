@@ -93,6 +93,7 @@ LISTED = [
     "nuzline.engine.ids.FieldCondition",
     "nuzline.engine.ids.WEATHER_TEMP_BIT",
     "nuzline.engine.ids.WEATHER_PERM_BIT",
+    "nuzline.engine.ids.STARF_QUEUE",
     "nuzline.engine.ids.ItemId",
     "nuzline.engine.ids.ItemParam",
     "nuzline.engine.ids.ItemAiCategory",
