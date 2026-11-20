@@ -63,7 +63,7 @@ import jax.numpy as jnp
 from nuzline.data.tables import Tables
 from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import EffectId, Stat
-from nuzline.engine.state import MOVES, SLOTS, BattleState
+from nuzline.engine.state import MOVES, SLOTS, BattleState, party_held_item
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
 
 _I32 = jnp.int32
@@ -129,7 +129,7 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
     510 (:10294-10296), then the stat to 255 (:10299-10301)."""
     evs = after.evs[0].astype(_I32)
     yields = tables.species_ev_yield[foe_row].astype(_I32)
-    power = tables.item_hold_param[after.item[0]].astype(_I32)
+    power = tables.item_hold_param[party_held_item(after, 0, jnp.arange(SLOTS))].astype(_I32)
     pokerus = after.pokerus != 0
     macho = hold == HOLD_EFFECT_EVS_UP_SPEED_DOWN
     total = jnp.sum(evs, axis=1)
@@ -188,7 +188,8 @@ def pay_exp_leveled(
     ``CalcExpGain`` (bs.c:2196-2238; the engine plays only trainer singles, so every opponent
     faint pays): ``E = yield[species] * level / 7`` (yield by species, bs.c:2216-2217);
     ``n`` / ``s`` count the player's party Pokemon with a species and HP that are in
-    ``exp_mask`` / hold an Exp. Share (party item, bs.c:2201-2212). With ``s > 0``:
+    ``exp_mask`` (the entry of the fainted enemy battler, ``(battler >> 1) & 1``, at B = 4;
+    D3-8b) / hold an Exp. Share (party item, bs.c:2201-2212). With ``s > 0``:
     ``g = max(1, (E/2)/n)``, ``h = max(1, (E/2)/s)`` (:2219-2230); else ``g = max(1, E/n)``,
     ``h = 0`` (:2231-2238). ``n = 0`` divides safely and pays no ``g``: ``g`` reaches only
     mask slots with HP (ruling D4).
@@ -233,8 +234,12 @@ def pay_exp_leveled(
     hp = after.hp[0].astype(_I32)
     level = after.level[0].astype(_I32)
     alive = (species != 0) & (hp > 0)
-    in_mask = (jnp.right_shift(after.exp_mask.astype(_I32), slots) & 1) == 1
-    hold = tables.item_hold_effect[after.item[0]]
+    # sideGetExpMask[(faintedMon >> 1) & 1] (bs.c:2205, :9700, :9709, :9741; D3-8b): one entry
+    # per enemy battler at B = 4, a scalar at B = 2.
+    entry = None if after.exp_mask.ndim == 0 else (battler >> 1) & 1
+    mask = after.exp_mask if entry is None else after.exp_mask[entry]
+    in_mask = (jnp.right_shift(mask.astype(_I32), slots) & 1) == 1
+    hold = tables.item_hold_effect[party_held_item(after, 0, jnp.arange(SLOTS))]
     share = hold == HOLD_EFFECT_EXP_SHARE
     n = jnp.sum((alive & in_mask).astype(_I32))
     s = jnp.sum((alive & share).astype(_I32))
@@ -305,7 +310,11 @@ def pay_exp_leveled(
         party_friendship=put("party_friendship", friendship),
         evs=put("evs", evs),
         exp=exp.astype(after.exp.dtype),
-        exp_mask=jnp.where(paying, 0, after.exp_mask).astype(after.exp_mask.dtype),
+        exp_mask=(
+            jnp.where(paying, 0, after.exp_mask)
+            if entry is None
+            else after.exp_mask.at[entry].set(jnp.where(paying, 0, mask))  # bs.c:10191
+        ).astype(after.exp_mask.dtype),
         learn_level=jnp.where(marked, level + 1, after.learn_level).astype(after.learn_level.dtype),
         learn_cursor=jnp.where(marked, 0, after.learn_cursor).astype(after.learn_cursor.dtype),
         learn_pin=jnp.where(pin, jnp.asarray(selected) + 1, after.learn_pin).astype(

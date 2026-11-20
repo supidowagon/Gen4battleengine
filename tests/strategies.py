@@ -2159,10 +2159,16 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
     """The player's experience block (K3d-exp): each Pokemon's ``exp`` anywhere in its level
     (``[base(L), base(L + 1))``), its ``exp_boost`` (100 / 150 / 170), ``pokerus`` and
     ``friend_bonus``; ``exp_mask`` is the active slot plus any other living slots (the
-    participants since the foe's entry); the learn fields and ``exp_refused`` stay 0."""
+    participants since the foe's entry); at B = 4 each of its two entries (one per enemy
+    battler) holds the active slots of the player battlers (battler 2's unless MULTI) plus any
+    other living slots; the learn fields and ``exp_refused`` stay 0."""
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
     living = (a["species"][0] > 0) & (a["hp"][0] > 0)
-    mask = 1 << int(a["active"][0])
+    four = a["exp_mask"].ndim == 1
+    base = 1 << int(a["active"][0])
+    if four and len(a["species"]) != 4:  # not MULTI: battler 2 sends from party 0
+        base |= 1 << int(a["active"][2])
+    masks = [base] * (2 if four else 1)
     for slot in np.flatnonzero(a["species"][0]):
         row = table[rates[a["species"][0, slot]]]
         level = int(a["level"][0, slot])
@@ -2170,9 +2176,10 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
         a["exp_boost"][slot] = draw(st.sampled_from((100, 150, 170)))
         a["pokerus"][slot] = draw(st.integers(0, 1))
         a["friend_bonus"][slot] = draw(st.integers(0, 1))
-        if living[slot] and draw(st.booleans()):
-            mask |= 1 << int(slot)
-    a["exp_mask"][...] = mask
+        for k in range(len(masks)):
+            if living[slot] and draw(st.booleans()):
+                masks[k] |= 1 << int(slot)
+    a["exp_mask"][...] = masks if four else masks[0]
 
 
 @st.composite

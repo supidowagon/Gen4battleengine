@@ -84,7 +84,7 @@ def test_two_trainers_battler_3_pays_from_party_2(tables, names):
     s = s._replace(
         species=s.species.at[2, 0].set(machop),
         level=s.level.at[2, 0].set(80).at[1, 0].set(10),
-        exp_mask=jnp.asarray(1, s.exp_mask.dtype),
+        exp_mask=jnp.full_like(s.exp_mask, 1),
     )
     after = s._replace(hp=s.hp.at[2, 0].set(0))
     out = pay_exp(tables, s, after, battler=3)

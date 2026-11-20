@@ -49,7 +49,7 @@ def test_grant_exp_reads_the_fainted_battlers_party(tables, names):
     """TWO_TRAINERS: battler 3's Pokemon is party 2's; its level, not party 1's, sets the exp."""
     s = four(tables, names, TWO_TRAINERS)
     s = s._replace(level=s.level.at[2, 0].set(80).at[1, 0].set(10))
-    s = s._replace(exp_mask=jnp.asarray(1, s.exp_mask.dtype))
+    s = s._replace(exp_mask=jnp.full_like(s.exp_mask, 1))
     np_tables = to_numpy(tables)
     third = from_ref(ref_grant_exp(np_tables, to_ref(s), 0, battler=3))
     first = from_ref(ref_grant_exp(np_tables, to_ref(s), 0, battler=1))

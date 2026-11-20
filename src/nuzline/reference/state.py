@@ -39,6 +39,7 @@ class RefPokemon:
     item: int
     item_consumed: int
     knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)
+    knocked_item: int  # the party's item while knocked_off is set (engine.state), else 0
     moves: list[int]
     pp: list[int]
     pp_ups: list[int]  # BattleMon.ppUps (E1 Batch D)
@@ -211,9 +212,10 @@ class RefState:
     ai_seen_moves: list[list[int]]
     ai_item_known: list[int]  # battlerHeldItems of the player's slots (item ids)
     ai_ability_known: list[int]
-    # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask[0].
+    # Experience (K3d-exp): the player party's, per slot, and sideGetExpMask: an int at B = 2
+    # (entry 0), a list of 2 at B = 4 (entry (b >> 1) & 1 of enemy battler b).
     exp: list[int]
-    exp_mask: int
+    exp_mask: int | list[int]
     exp_boost: list[int]
     pokerus: list[int]
     friend_bonus: list[int]

@@ -36,7 +36,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from nuzline.engine.format import blackout_parties, side_of, side_out_parties
+from nuzline.engine.format import MULTI, blackout_parties, side_of, side_out_parties
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import party as _party
 from nuzline.engine.ids import (
@@ -2142,9 +2142,18 @@ LOW_FRIENDSHIP_LIMIT, MED_FRIENDSHIP_LIMIT = 100, 200  # include/constants/pokem
 LEVEL_UP_FRIENDSHIP = (5, 3, 2)
 
 
-def _hold_effect(tables, mon: RefPokemon) -> int:
-    """``Item_LoadParam(MON_DATA_HELD_ITEM, ITEM_PARAM_HOLD_EFFECT)``: the party item's."""
-    return _t(tables, "item_hold_effect", mon.item)
+def party_held_item(s: RefState, party: int, slot: int) -> int:
+    """``engine.state.party_held_item``: party ``party`` slot ``slot``'s ``MON_DATA_HELD_ITEM``
+    (D9): ``knocked_item`` while ``knocked_off`` is set (a Knock Off's slot bit stops the party
+    write, battle_io_command.c:590-592), else ``item`` (every other change copies through
+    ``BattleMon_CopyToParty``, battle_lib.c:1819-1823)."""
+    mon = s.parties[party].mons[slot]
+    return mon.knocked_item if mon.knocked_off and mon.knocked_item else mon.item
+
+
+def _hold_effect(tables, item: int) -> int:
+    """``Item_LoadParam(item, ITEM_PARAM_HOLD_EFFECT)`` of a party item (``party_held_item``)."""
+    return _t(tables, "item_hold_effect", item)
 
 
 def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0) -> bool:
@@ -2180,13 +2189,20 @@ def _grant_exp(
     Returns whether a slot gained a level."""
     party = s.parties[0].mons
     foe = _party_of(s, battler).mons[fainted]
+    # sideGetExpMask[(faintedMon >> 1) & 1] (script.c:2205, :9700, :9709, :9741, :10191; D3-8b):
+    # one entry per enemy battler at B = 4, the scalar entry 0 at B = 2.
+    entry = None if _fmt(s).B == 2 else (battler >> 1) & 1
+
+    def mask() -> int:
+        return s.exp_mask if entry is None else s.exp_mask[entry]
+
     # CalcExpGain (script.c:2201-2212): the party Pokemon with a species and HP.
     gaining = with_share = 0
     for i, mon in enumerate(party):
         if mon.species and mon.hp:
-            if s.exp_mask & (1 << i):
+            if mask() & (1 << i):
                 gaining += 1
-            if _hold_effect(tables, mon) == HOLD_EFFECT_EXP_SHARE:
+            if _hold_effect(tables, party_held_item(s, 0, i)) == HOLD_EFFECT_EXP_SHARE:
                 with_share += 1
     # script.c:2216-2217: the yield by species (SpeciesData_GetSpeciesValue), a u16.
     exp = (_t(tables, "species_exp_yield", foe.species) * foe.level // 7) & 0xFFFF
@@ -2200,13 +2216,14 @@ def _grant_exp(
         shared = 0
     leveled = False
     for slot, mon in enumerate(party):
-        effect = _hold_effect(tables, mon)
+        item = party_held_item(s, 0, slot)
+        effect = _hold_effect(tables, item)
         # script.c:9703-9712: the next slot in the mask or holding an Exp. Share.
-        if not (effect == HOLD_EFFECT_EXP_SHARE or s.exp_mask & (1 << slot)):
+        if not (effect == HOLD_EFFECT_EXP_SHARE or mask() & (1 << slot)):
             continue
         total = 0
         if mon.hp and mon.level != MAX_POKEMON_LEVEL:  # script.c:9740
-            if s.exp_mask & (1 << slot):
+            if mask() & (1 << slot):
                 total = gained  # :9741-9743
             if effect == HOLD_EFFECT_EXP_SHARE:
                 total += shared  # :9745-9747
@@ -2218,14 +2235,14 @@ def _grant_exp(
             if s.exp_boost[slot] != 100:
                 total = total * s.exp_boost[slot] // 100
             s.exp[slot] += total  # :9767-9775
-            _effort_values(tables, mon, foe, s.pokerus[slot])  # :9776-9779
+            _effort_values(tables, mon, foe, s.pokerus[slot], item)  # :9776-9779
         if total:  # :9782-9791; SEQ_GET_EXP_CHECK_LEVEL_UP, :9824-9836, once per level
             while _should_level_up_as_party(tables, s, slot):
                 leveled = True
                 # SEQ_GET_EXP_WAIT_LEVEL_UP_EFFECT (:9838-9877): friendship, CalcStats, and
                 # ReloadPokemon for the active battler (lib.c:169-194; here party and battler
                 # are one object).
-                _level_up_friendship(tables, mon, s.friend_bonus[slot])
+                _level_up_friendship(tables, mon, s.friend_bonus[slot], item)
                 with _party_identity(s, slot):
                     _calc_stats(tables, mon)
                 if slot == s.battlers[0].active and s.battlers[0].transformed:
@@ -2242,7 +2259,11 @@ def _grant_exp(
                     s.learn_cursor[slot] = 0
                 if pending and slot == s.battlers[0].active:
                     s.learn_pin = selected + 1
-        s.exp_mask &= ~(1 << slot)  # SEQ_GET_EXP_CHECK_DONE, :10190-10193
+        # SEQ_GET_EXP_CHECK_DONE, :10190-10193
+        if entry is None:
+            s.exp_mask &= ~(1 << slot)
+        else:
+            s.exp_mask[entry] &= ~(1 << slot)
     return leveled
 
 
@@ -2269,7 +2290,7 @@ def _should_level_up(tables, s: RefState, slot: int) -> bool:
     return False
 
 
-def _level_up_friendship(tables, mon: RefPokemon, luxury_ball: int) -> None:
+def _level_up_friendship(tables, mon: RefPokemon, luxury_ball: int, item: int) -> None:
     """``Pokemon_UpdateFriendship(mon, FRIENDSHIP_EVENT_LEVEL_UP)`` (src/pokemon.c:
     2635-2689): the tier of the current value (:2651-2662), +1 for a Luxury Ball
     (:2664-2666), ``* 150 / 100`` with Soothe Bell (:2672-2676), clamped (:2680-2686). The
@@ -2282,7 +2303,7 @@ def _level_up_friendship(tables, mon: RefPokemon, luxury_ball: int) -> None:
     change = LEVEL_UP_FRIENDSHIP[tier]
     if change > 0 and luxury_ball:
         change += 1
-    if change > 0 and _hold_effect(tables, mon) == HOLD_EFFECT_FRIENDSHIP_UP:
+    if change > 0 and _hold_effect(tables, item) == HOLD_EFFECT_FRIENDSHIP_UP:
         change = change * 150 // 100
     # The party's value, which ReloadPokemon then re-reads into the battler (F-15).
     mon.party_friendship = min(max(mon.party_friendship + change, 0), MAX_FRIENDSHIP_VALUE)
@@ -2323,12 +2344,12 @@ def _calc_stats(tables, mon: RefPokemon) -> None:
             mon.hp += new_max - old_max
 
 
-def _effort_values(tables, mon: RefPokemon, foe: RefPokemon, pokerus: int) -> None:
+def _effort_values(tables, mon: RefPokemon, foe: RefPokemon, pokerus: int, item: int) -> None:
     """``BattleScript_CalcEffortValues`` (script.c:10214-10306) for ``mon`` beating ``foe``:
     the yields of the foe's form (:10224), the receiver's party item (:10226-10228)."""
     row = _t(tables, "species_form_row", foe.species, foe.form)
-    effect = _hold_effect(tables, mon)
-    power = _t(tables, "item_hold_param", mon.item)
+    effect = _hold_effect(tables, item)
+    power = _t(tables, "item_hold_param", item)
     total = sum(mon.evs)
     for stat in DECOMP_STATS:
         if total >= MAX_EVS_ALL_STATS:  # :10237-10239
@@ -3246,17 +3267,37 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
 
 
 def _send_out_exp(s: RefState, side: int) -> None:
-    """``BtlCmd_PokemonSendOut`` (script.c:543-635) for ``side``'s newcomer: a player
+    """``BtlCmd_PokemonSendOut`` (script.c:543-635) for battler ``side``'s newcomer: a player
     send-out flags the enemy (:571-572, :592-593, :607-608, :622-623), an enemy send-out
     clears the mask, then flags (:580-581, :595-596, :610-611, :625-626).
     ``BattleSystem_ClearSideExpGain`` (lib.c:1456-1459) sets ``sideGetExpMask`` to 0;
     ``BattleSystem_FlagBattlerExpGain`` (lib.c:1461-1479) ORs in
     ``selectedPartySlot[PLAYER_1]``'s bit when the enemy's ``curHP`` is nonzero (``PLAYER_2``
-    and ``ENEMY_2`` are in ``battlersSwitchingMask`` in singles, lib.c:2031-2033)."""
-    if side == 1:
-        s.exp_mask = 0
-    if _active(s, 1).hp:
-        s.exp_mask |= 1 << s.battlers[0].active
+    and ``ENEMY_2`` are in ``battlersSwitchingMask`` in singles, lib.c:2031-2033).
+
+    B = 4 (D3-8b): the mask has one entry per enemy battler ``e`` (``(e >> 1) & 1``,
+    lib.c:1458, :1470). A player send-out flags both enemy battlers (entries kept, then ORed); an
+    enemy send-out of ``e`` clears and flags its own entry only. A flag ORs the active slot of
+    player battler 0, then 2 (only 0 for MULTI, lib.c:1475-1477), each not in
+    ``battlersSwitchingMask`` (``_absent_now``), when ``e`` has HP (:1467-1469)."""
+    fmt = _fmt(s)
+    if fmt.B == 2:
+        if side == 1:
+            s.exp_mask = 0
+        if _active(s, 1).hp:
+            s.exp_mask |= 1 << s.battlers[0].active
+        return
+    players = (0,) if fmt == MULTI else (0, 2)
+    for k in (0, 1):
+        e = 2 * k + 1
+        if side_of(side) == 1 and (side >> 1) & 1 == k:
+            s.exp_mask[k] = 0  # ClearSideExpGain(side)
+        elif side_of(side) == 1:
+            continue
+        if _active(s, e).hp:
+            for p in players:
+                if not _absent_now(s, p):
+                    s.exp_mask[k] |= 1 << s.battlers[p].active
 
 
 # --------------------------------------------------------------------------- the move
@@ -3942,7 +3983,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             or turn.custap[target]
         )
         if foe.item and not blocked and not sticky:
-            foe.item, foe.knocked_off = 0, 1
+            foe.knocked_item, foe.item, foe.knocked_off = foe.item, 0, 1
     elif effect == EffectId.EMBARGO and effective:
         # effect_script_0232.s: a direct ON_HIT subscript_embargo_start.s (no HP check); its
         # failures (:5-11) then embargoTurns = 5 with the bit (:13-14), B13-31.

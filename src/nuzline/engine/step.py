@@ -176,6 +176,7 @@ from nuzline.engine.effects import (
     yawn_sleep,
 )
 from nuzline.engine.format import (
+    MULTI,
     Format,
     blackout_parties,
     format_of,
@@ -718,7 +719,7 @@ def _switch_in(
 
 
 def _flag_exp(state: BattleState, side) -> BattleState:
-    """``exp_mask`` (``sideGetExpMask[0]``) after ``side`` sent its newcomer out
+    """``exp_mask`` (``sideGetExpMask``) after battler ``side`` sent its newcomer out
     (``BtlCmd_PokemonSendOut``, battle_script.c:543-635, which every switch, drag and
     replacement subscript runs before its hazards check, e.g. subscript_show_party_list.s:18,
     :22). A player send-out flags the enemy (:571-572, :592-593, :607-608, :622-623); an
@@ -727,12 +728,41 @@ def _flag_exp(state: BattleState, side) -> BattleState:
     slot (``selectedPartySlot``) when the enemy's ``curHP`` is nonzero; in singles only
     ``PLAYER_1`` against ``ENEMY_1`` counts (``PLAYER_2`` / ``ENEMY_2`` are in
     ``battlersSwitchingMask`` from the start, battle_lib.c:2031-2033). The player's own HP is
-    not read."""
-    bit = jnp.left_shift(jnp.int32(1), state.active[0].astype(jnp.int32))
-    foe_has_hp = state.hp[1, state.active[1]] > 0
-    kept = jnp.where(side == 0, state.exp_mask.astype(jnp.int32), 0)  # ClearSideExpGain
-    mask = kept | jnp.where(foe_has_hp, bit, 0)
-    return state._replace(exp_mask=mask.astype(state.exp_mask.dtype))
+    not read.
+
+    B = 4 (D3-8b): the mask is one entry per enemy battler ``e`` (``sideGetExpMask[(e >> 1) &
+    1]``, battle_lib.c:1458, :1470). A player send-out runs ``FlagBattlerExpGain`` for both enemy
+    battlers (battle_script.c:465-466, :571-572: entries 0 and 1 are kept and ORed); an enemy
+    send-out of battler ``e`` runs ``ClearSideExpGain(e)`` then ``FlagBattlerExpGain(e)`` on its
+    own entry only (:474-475, :580-581). A flag ORs the active slot of each player battler p
+    (0, then 2; only 0 for ``MULTI``, lib.c:1475-1477) that is not in ``battlersSwitchingMask``
+    (here ``actions.absent_now``: it differs only for a player battler that fainted this turn
+    with no bench, whose 0-HP slot bit no payout can read, because ``n`` and the payment need HP,
+    battle_script.c:2204, :9740, and there is no in-battle revive, docs/design.md:19), when
+    ``e`` is not in it and has HP (:1467-1469; an absent ``e`` has none)."""
+    fmt = format_of(state)
+    if fmt.B == 2:
+        bit = jnp.left_shift(jnp.int32(1), state.active[0].astype(jnp.int32))
+        foe_has_hp = state.hp[1, state.active[1]] > 0
+        kept = jnp.where(side == 0, state.exp_mask.astype(jnp.int32), 0)  # ClearSideExpGain
+        mask = kept | jnp.where(foe_has_hp, bit, 0)
+        return state._replace(exp_mask=mask.astype(state.exp_mask.dtype))
+    players = (0,) if fmt == MULTI else (0, 2)
+    side = jnp.asarray(side, _I32)
+    player = side_of(side) == 0
+    entries = []
+    for k in (0, 1):
+        e = 2 * k + 1  # the enemy battler of entry k
+        has_hp = state.hp[party(fmt, e), state.active[e]] > 0
+        cleared = ~player & (jnp.right_shift(side, 1) == k)  # ClearSideExpGain(side)
+        base = jnp.where(cleared, 0, state.exp_mask[k].astype(_I32))
+        bits = jnp.int32(0)
+        for p in players:
+            slot = jnp.left_shift(jnp.int32(1), state.active[p].astype(_I32))
+            bits = bits | jnp.where(~absent_now(state, p) & has_hp, slot, 0)
+        flagged = base | bits
+        entries.append(jnp.where(player | cleared, flagged, base))
+    return state._replace(exp_mask=jnp.stack(entries).astype(state.exp_mask.dtype))
 
 
 def _send_out(

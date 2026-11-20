@@ -2466,6 +2466,7 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
         & ~sticky
     )
     state = _set(state, "item", (h.target_side, h.target), 0, cond)
+    state = _set(state, "knocked_item", (h.target_side, h.target), item, cond)
     return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
 
 

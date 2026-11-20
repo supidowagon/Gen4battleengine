@@ -403,9 +403,22 @@ three structs has a row.
     player's `PokemonSpec` fields (`BattleScript_GetExpTask`, battle_script.c:9757-9763;
     pokemon.c:4184-4199; pokemon.c:2664-2666). The host resolves the OT and language test
     into `exp_boost`.
-  - `exp_mask` is `sideGetExpMask[0]` (row below), a bitmask over the player's party
-    slots: `1 << lead` at the start, then written by every send-out (`step._switch_in`;
-    battle_lib.c:1456-1479, battle_script.c:543-635).
+  - `exp_mask` is `sideGetExpMask` (row below), a bitmask over the player's party slots
+    (`u32[2]`, battle_context.h:176). The index is the enemy position `(b >> 1) & 1` of an
+    enemy battler `b` (battle_lib.c:1458, :1470; entry 0 battler 1, entry 1 battler 3), neither
+    the battler nor the side (doubles-state-design section 5 rule 2). Shape key `"E"`: an int8
+    scalar at B = 2, int8[2] at B = 4. `1 << lead` at the start (B = 4: the player battlers'
+    leads, battler 2's unless MULTI, battle_lib.c:1475-1477), then written by every send-out
+    (`step._switch_in`; battle_lib.c:1456-1479, battle_script.c:543-635): a player send-out
+    flags both entries, an enemy send-out clears and flags its own. The payout of enemy
+    battler `b` reads and clears entry `(b >> 1) & 1` only (battle_script.c:2205, :9700,
+    :9709, :9741, :10191).
+  - `knocked_item` (D9) is the party Pokemon's held item while its `knocked_off` bit is set:
+    the item Knock Off removed from the battle copy. The party copy is never written for such
+    a slot (battle_io_command.c:590-592), and the payout reads the party item (bs.c:2210,
+    :9706, :10226; `levelup.party_item`), so a knocked-off Lucky Egg or Exp. Share still pays.
+    Every other item change reaches the party at once (`BattleMon_CopyToParty`,
+    battle_lib.c:1819-1823). 0 when nothing was knocked off.
   - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
     next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
     level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
@@ -613,7 +626,7 @@ three structs has a row.
 | `SideConditions.safeguardTurns` | `safeguard` | mapped |
 | `SideConditions.followMe` | `ts_follow_me` | mapped |
 | `SideConditions.followMeUser` | `ts_follow_me` | mapped |
-| `SideConditions.knockedOffItemsMask` | `knocked_off` | mapped |
+| `SideConditions.knockedOffItemsMask` | `knocked_off`, `knocked_item` | mapped |
 | `SideConditions.padding00_1D` | — | not needed because it is padding |
 | `SideConditions.spikesLayers` | `spikes` | mapped |
 | `SideConditions.toxicSpikesLayers` | `toxic_spikes` | mapped |

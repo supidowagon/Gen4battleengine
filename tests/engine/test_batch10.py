@@ -277,9 +277,12 @@ def test_knock_off_takes_the_item_and_marks_the_slot(tables, names):
     )
     out = assert_matches_reference(tables, s, (0, 0), O)
     assert int(out.item[1, 0]) == 0 and int(out.knocked_off[1, 0]) == 1
+    # The party keeps the item (D9; battle_io_command.c:590-592): ``knocked_item``.
+    assert int(out.knocked_item[1, 0]) == n.item("Leftovers")
     assert int(out.item_consumed[1, 0]) == 0
     sub = assert_matches_reference(tables, _subbed(s, 1, 200), (0, 0), O)
     assert int(sub.item[1, 0]) == n.item("Leftovers") and int(sub.knocked_off[1, 0]) == 0
+    assert int(sub.knocked_item[1, 0]) == 0
     shellos = make_state(
         tables,
         [_mon(n, "Sneasel", ["Knock Off"], 40)],

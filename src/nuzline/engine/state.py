@@ -222,9 +222,9 @@ Encodings:
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the
-  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
-  bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
-  send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
+  ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask`` as a
+  bitmask over the player's party slots, one entry per enemy battler at B = 4 (D3-8b): the
+  player's leads at the start, then written by every send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
   scan), ``learn_pin`` and ``exp_refused`` are 0 until the payout and the learn resolve set
   them (later K3d-exp tasks).
 * E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
@@ -289,7 +289,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.format import SINGLES, Format, format_of, party, side_of
+from nuzline.engine.format import MULTI, SINGLES, Format, format_of, party, side_of
 from nuzline.engine.ids import (
     CHATTER_CHANCES,
     GRAVITY_TURNS,
@@ -333,6 +333,10 @@ class BattleState(NamedTuple):
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
     # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
     knocked_off: jnp.ndarray
+    # int16, the held item the party Pokemon keeps while ``knocked_off`` is set: the item Knock Off
+    # removed from the battle copy (never written to the party, battle_io_command.c:590-592);
+    # 0 otherwise. The exp payout reads the party item (``levelup.party_item``), D9
+    knocked_item: jnp.ndarray
     moves: jnp.ndarray  # int16[P,6,4]
     pp: jnp.ndarray  # int8[P,6,4]
     pp_ups: jnp.ndarray  # int8[P,6,4], BattleMon.ppUps (E1 Batch D)
@@ -480,7 +484,9 @@ class BattleState(NamedTuple):
     weather_timer: jnp.ndarray  # int8, 0 = permanent
     trick_room: jnp.ndarray  # int8
     gravity: jnp.ndarray  # int8
-    acid_rain: jnp.ndarray  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
+    acid_rain: (
+        jnp.ndarray
+    )  # int8, Pursuit's fieldConditionsMask -= operand (1..3), 0 = none; sticky
     war_swaps: jnp.ndarray  # int16, a weather war's open monSpeedOrder (docstring), 0 = none
     entry_pending: jnp.ndarray  # int8[B], 1: a list newcomer's switch-in states wait (docstring)
     move_prev: jnp.ndarray  # int16, BattleContext.movePrev: the last move used in the battle
@@ -499,7 +505,9 @@ class BattleState(NamedTuple):
     exp: jnp.ndarray  # int32[6], player party MON_DATA_EXPERIENCE
     evs: jnp.ndarray  # int16[P,6,6], ids.Stat order
     nature: jnp.ndarray  # int8[P,6]
-    exp_mask: jnp.ndarray  # int8, sideGetExpMask[0]: bit = player party slot
+    # int8 at B = 2 (sideGetExpMask[0]); int8[2] at B = 4, sideGetExpMask[(b >> 1) & 1] for enemy
+    # battler b (battle_context.h:176; lib.c:1458, :1470); bit = player party slot
+    exp_mask: jnp.ndarray
     exp_boost: jnp.ndarray  # int16[6], 100 / 150 / 170 percent, 0 = unresolved
     pokerus: jnp.ndarray  # int8[6], 1 = the Pokerus byte is nonzero
     friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
@@ -739,6 +747,9 @@ BATON_PASSED_FIELDS = (
 # A shape key names its leading axes: "P" parties, "B" battlers, "S" sides; ``layout(fmt)``
 # fills them in.
 _MON, _BATTLER, _PARTY, _SIDE, _FIELD = ("P", SLOTS), ("B",), ("P",), ("S",), ()
+# "E": the enemy position ``(b >> 1) & 1`` of an enemy battler ``b`` (``sideGetExpMask``'s index,
+# battle_lib.c:1458): 2 at B = 4, dropped at B = 2 (``layout``), where the field is a scalar.
+_EXP = ("E",)
 _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "species": (_MON, np.int16),
     "form": (_MON, np.int8),
@@ -753,6 +764,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "item": (_MON, np.int16),
     "item_consumed": (_MON, np.int16),
     "knocked_off": (_MON, np.int8),
+    "knocked_item": (_MON, np.int16),
     "moves": ((*_MON, MOVES), np.int16),
     "pp": ((*_MON, MOVES), np.int8),
     "pp_ups": ((*_MON, MOVES), np.int8),
@@ -884,7 +896,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "exp": ((SLOTS,), np.int32),
     "evs": ((*_MON, 6), np.int16),
     "nature": (_MON, np.int8),
-    "exp_mask": (_FIELD, np.int8),
+    "exp_mask": (_EXP, np.int8),
     "exp_boost": ((SLOTS,), np.int16),
     "pokerus": ((SLOTS,), np.int8),
     "friend_bonus": ((SLOTS,), np.int8),
@@ -932,9 +944,12 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
 
 def layout(fmt: Format) -> dict[str, tuple[tuple[int, ...], type]]:
     """Shape and storage dtype of every field of a ``fmt`` fight, in ``BattleState`` order."""
-    dims = {"P": fmt.P, "B": fmt.B, "S": SIDES}
+    dims = {"P": fmt.P, "B": fmt.B, "S": SIDES, "E": 2}
     return {
-        name: (tuple(dims.get(d, d) for d in shape), dtype)  # type: ignore[arg-type]
+        name: (
+            tuple(dims.get(d, d) for d in shape if not (d == "E" and fmt.B == 2)),  # type: ignore[arg-type]
+            dtype,
+        )
         for name, (shape, dtype) in _KEYS.items()
     }
 
@@ -997,6 +1012,21 @@ def held_item(state: BattleState, side, slot=None) -> jnp.ndarray:
         (state.embargo[side] != 0) & (slot == active)
     )
     return jnp.where(hidden, 0, state.item[row, slot].astype(jnp.int32))
+
+
+def party_held_item(state: BattleState, party, slot) -> jnp.ndarray:
+    """``int16``: the held item of party ``party`` slot ``slot`` (arrays broadcast), i.e. the
+    party Pokemon's ``MON_DATA_HELD_ITEM`` that the exp payout reads (battle_script.c:2210, :9706,
+    :10226; D9), which is not always the BattleMon's ``item``. Every battle item change reaches
+    the party through ``BattleMon_CopyToParty`` (battle_lib.c:1819-1823; UpdateMonData,
+    battle_script.c:3078, :3407; RemoveItem, :8981), except a Knock Off: its slot's
+    ``knockedOffItemsMask`` bit stops the write (battle_io_command.c:590-592), so the party keeps
+    the item Knock Off removed (``knocked_item``) for the rest of the battle. So: ``knocked_item``
+    while ``knocked_off`` is set, else ``item``."""
+    kept = state.knocked_item[party, slot]
+    return jnp.where(
+        (state.knocked_off[party, slot] != 0) & (kept != 0), kept, state.item[party, slot]
+    )
 
 
 def held_items(state: BattleState) -> jnp.ndarray:
@@ -1162,7 +1192,10 @@ def initial_arrays(
     battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
     (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
     :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
-    battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
+    battle_lib.c:1461-1479). At B = 4 (D3-8b) both entries (one per enemy battler) hold the bits
+    of the player battlers' leads: battler 0's, and battler 2's unless the format is ``MULTI``
+    (the loop stops after player battler 0 for ``BATTLE_TYPE_TRAINER_WITH_AI_PARTNER``,
+    battle_lib.c:1475-1477). The learn fields and ``exp_refused`` start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:
@@ -1186,7 +1219,10 @@ def initial_arrays(
             raise ValueError(
                 f"side {side}: two battlers lead from one slot ({[leads[b] for b in own]})"
             )
-    a["exp_mask"][...] = 1 << leads[0]
+    bits = 1 << leads[0]
+    if fmt.B == 4 and fmt != MULTI:
+        bits |= 1 << leads[2]
+    a["exp_mask"][...] = bits
     # D2-1 rule 8: the game's zero is never read (every battler selects on turn 1); b ^ 1 keeps
     # a hand-built state's lock on today's defender.
     a["chosen_target"][...] = np.arange(fmt.B) ^ 1

@@ -171,14 +171,7 @@ from nuzline.engine.ids import (
     Stat,
     Weather,
 )
-from nuzline.engine.levelup import (
-    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
-    HOLD_EFFECT_EXP_SHARE,
-    HOLD_EFFECT_EXP_UP,
-    HOLD_EFFECT_FRIENDSHIP_UP,
-    MAX_LEVEL,
-    POWER_ITEM_HOLD_EFFECTS,
-)
+from nuzline.engine.levelup import HOLD_EFFECT_EXP_UP, MAX_LEVEL
 from nuzline.engine.state import BattleState, make_state, spec_exp, spec_stats
 
 # include/constants/forms.h:94, :98; generated/species.txt and items.txt (line N is id N-1).
@@ -600,24 +593,12 @@ def move_effect_line(
 
 # Decomp battle effects (generated/move_battle_effects.txt, line N is id N - 1), matched
 # against tables.move_ai_effect.
-ITEM_MOVING_EFFECTS = (
-    105,  # BATTLE_EFFECT_STEAL_HELD_ITEM (Thief, Covet): effect_script_0105.s, STEAL_ITEM
-    177,  # BATTLE_EFFECT_SWITCH_HELD_ITEMS (Trick, Switcheroo): effect_script_0177.s
-    188,  # BATTLE_EFFECT_REMOVE_HELD_ITEM (Knock Off): effect_script_0188.s, KNOCK_OFF
-    233,  # BATTLE_EFFECT_FLING: effect_script_0233.s, FLING
-)
 # BATTLE_EFFECT_POWER_BASED_ON_FRIENDSHIP (Return) and ..._LOW_FRIENDSHIP (Frustration):
 # effect_script_0121.s / 0123.s read the attacker's BATTLEMON_FRIENDSHIP.
 FRIENDSHIP_POWER_EFFECTS = (121, 123)
-# The hold effects the payout reads from the party item (engine.levelup): Macho Brace, Exp.
-# Share, Soothe Bell, Lucky Egg and the six Power items.
-EXP_ITEM_HOLD_EFFECTS = (
-    HOLD_EFFECT_EVS_UP_SPEED_DOWN,
-    HOLD_EFFECT_EXP_SHARE,
-    HOLD_EFFECT_FRIENDSHIP_UP,
-    HOLD_EFFECT_EXP_UP,
-    *POWER_ITEM_HOLD_EFFECTS,
-)
+# Ruling D9 (gone): the payout reads the party item (``levelup.party_item``), which every item
+# move but Knock Off copies from the battle item at once (BattleMon_CopyToParty); Knock Off's
+# kept party item is the state field ``knocked_item``. No item-moving move needs a refusal.
 MAX_EXP_BOOST = 170  # the largest exp_boost (battle_script.c:9757-9763)
 
 
@@ -736,10 +717,12 @@ def exp_refusals(
     ``levels_up``: ``reachable_level`` exceeds its level.
 
     * §4.3: below level 100 with ``exp_boost == 0`` (the OT and language test unresolved).
-    * §4.2 (ruling D9): it holds an exp item (``EXP_ITEM_HOLD_EFFECTS``) while an item-moving
-      move (``ITEM_MOVING_EFFECTS``) is in the fight. The payout reads the **party** item
-      (battle_script.c:2209, :9706, :10226; pokemon.c:2649), which a battle item change
-      leaves behind.
+    * §4.2 (ruling D9, gone): the payout reads the **party** item (battle_script.c:2210, :9709,
+      :10226; ``MON_DATA_HELD_ITEM``), which Trick, Switcheroo, Thief and Covet copy from the
+      battle item (UpdateMonData, :3078, :3407, through ``BattleMon_CopyToParty``,
+      battle_lib.c:1819, and ``BattleMon_CopyToParty``'s message, battle_io_command.c:589-591)
+      and Knock Off does not: its ``knockedOffItemsMask`` bit stops the copy (:590-592) and the
+      party keeps the item. The engines model both (``levelup.party_item``, ``knocked_item``).
     * §4.4 (ruling D6): its egg location is nonzero, it can level, and a friendship-power move
       (``FRIENDSHIP_POWER_EFFECTS``) is in the fight: the level-up adds 1 when the egg
       location is the battle map (pokemon.c:2668-2670), which the engine does not know
@@ -753,14 +736,6 @@ def exp_refusals(
         out.append(
             "exp multiplier unresolved (original trainer and language unknown: read the save "
             "with its trainer)"
-        )
-    hold = int(np.asarray(tables.item_hold_effect)[spec.item])
-    if hold in EXP_ITEM_HOLD_EFFECTS and (
-        moving := _effect_moves(tables, fight_moves, ITEM_MOVING_EFFECTS)
-    ):
-        out.append(
-            f"{names.item_names[spec.item]} is read from the party by the exp payout, and "
-            f"{names.move_names[moving[0]]} can move held items in battle"
         )
     if (
         levels_up
