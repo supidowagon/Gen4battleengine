@@ -3013,6 +3013,11 @@ def _act(
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,
         "conv2": jnp.where(runs_move, ctl["conv2"], 0),
+        # Nor reaches UpdateFlagsWhenHit's moveCopied (bcp.c:4480-4486): a switch or an item goes
+        # to MOVE_END (SwitchCommand :1985 via CheckAnyFainted :4008, ItemCommand :1973), never
+        # through UpdateMoveBuffers (:3956), and a Pursuit on the switcher writes none (E3-B2-2).
+        "copy_foe": jnp.where(runs_move, ctl["copy_foe"], 0),
+        "copy_self": jnp.where(runs_move, ctl["copy_self"], 0),
         "reflect": ctl["reflect"] & runs_move,
         "unprotect": ctl["unprotect"] & runs_move,
         "fbase": jnp.where(resumed, _alive_mask(listed), base),

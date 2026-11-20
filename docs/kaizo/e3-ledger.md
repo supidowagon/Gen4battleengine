@@ -625,6 +625,15 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `test_a_self_defended_*`, `test_a_switch_clears_*`), tests/ai/test_kaizo_policy.py
   (`test_mirror_move_tables_*`, `test_expert_mirror_move`); test_accuracy_classes' `_FOLLOWED` list
   and the state strategy (`move_copied`, `_draw_mirror_move`) carry it.
+  Fix (post-merge of main 0b12b1a): a switch, a bag item or a Pursuit on a switcher writes no
+  moveCopied. UpdateFlagsWhenHit (bcp.c:4477-4486) is called only from LoopSpreadMoves (:3837) and
+  UpdateMoveBuffers (:3956), both on the FIGHT path; SwitchCommand goes to CHECK_ANY_FAINTED
+  (:1985) then MOVE_END (:4008), ItemCommand straight to MOVE_END (:1973), and Pursuit runs inside
+  subscript_switch_pokemon (subscript_pursuit.s; BtlCmd_TryPursuit bs.c:6895-6950 sets no
+  moveCopied). The reference was right; JAX `_act` masked `conv2` but not `copy_foe` / `copy_self`
+  with `runs_move`, so the move in the slot a switch or item action clips to was recorded for its
+  foe (exposed once main's merge let that phantom move branch reach a record). Test:
+  `test_a_switch_a_bag_item_and_a_pursuit_record_no_copied_move`.
 
 - E3-B2-3 Conversion 2 (#93, BATTLE_EFFECT_CONVERSION2; move 176, the only move with effect 93 in
   either game): new `EffectId.CONVERSION_2` (132), state `conv2_move` / `conv2_battler` (`1 +

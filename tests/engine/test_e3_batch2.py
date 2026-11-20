@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from nuzline.data.spec import PokemonSpec
+from nuzline.engine.actions import FIRST_ITEM_ACTION
 from nuzline.engine.damage import (
     CHART_EYED,
     CHART_IDENTIFIED,
@@ -412,6 +413,44 @@ def test_a_switch_clears_the_copied_moves(tables, names):
     acts = jnp.asarray([4 + 1, names.move_slot(s, 1, "Swords Dance")], jnp.int32)
     out = assert_matches_reference(tables, s, acts, _hits())
     assert int(out.active[0]) == 1
+    assert not np.asarray(out.move_copied).any() and not np.asarray(out.move_copied_hit).any()
+
+
+def test_a_switch_a_bag_item_and_a_pursuit_record_no_copied_move(tables, names):
+    """UpdateFlagsWhenHit (bcp.c:4480-4486) runs only from LoopSpreadMoves (:3837) and
+    UpdateMoveBuffers (:3956), on a FIGHT's path. A switch goes to MOVE_END through CheckAnyFainted
+    (SwitchCommand :1985, :4008), a bag item straight there (ItemCommand :1973), and a Pursuit on
+    the switcher runs inside subscript_switch_pokemon (subscript_pursuit.s, BtlCmd_TryPursuit
+    battle_script.c:6895-6950): none writes moveCopied, so the move in the slot a switch or item
+    action would clip to (flagged here) records nothing, and the switch-in clears the rest
+    (battle_lib.c:2125-2149)."""
+    flags = np.asarray(tables.move_flags)
+    s = roark_state(tables, names)
+    s = s._replace(
+        trainer_items=s.trainer_items.at[1].set(jnp.asarray([names.item("Dire Hit"), 0, 0, 0])),
+        trainer_item_count=s.trainer_item_count.at[1].set(1),
+    )
+    for side in (0, 1):
+        assert flags[int(s.moves[side, s.active[side], 3])] & MoveFlag.MIRROR_MOVE
+    # A switch and a bag item: nothing recorded.
+    out = assert_matches_reference(
+        tables, s, [MOVE_ACTIONS + 1, FIRST_ITEM_ACTION], empty_outcome()
+    )
+    assert not np.asarray(out.move_copied).any() and not np.asarray(out.move_copied_hit).any()
+    # A switch, then the foe's Leer on the newcomer: Leer recorded for it, nothing for the foe.
+    leer = names.move("Leer")
+    out = assert_matches_reference(
+        tables, s, A(MOVE_ACTIONS + 1, "Leer", s, names), empty_outcome()
+    )
+    assert list(np.asarray(out.move_copied)) == [leer, 0]
+    assert np.asarray(out.move_copied_hit).tolist() == [[0, leer], [0, 0]]
+    # A Pursuit on the switcher: nothing recorded.
+    p = roark_state(tables, names, opp_moves=["Pursuit"])
+    assert flags[int(p.moves[0, p.active[0], 3])] & MoveFlag.MIRROR_MOVE
+    out = assert_matches_reference(
+        tables, p, A(MOVE_ACTIONS + 1, "Pursuit", p, names), empty_outcome()
+    )
+    assert int(out.hp[0, 0]) < int(p.hp[0, 0])  # Pursuit hit the switcher
     assert not np.asarray(out.move_copied).any() and not np.asarray(out.move_copied_hit).any()
 
 
