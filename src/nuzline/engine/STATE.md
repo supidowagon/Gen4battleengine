@@ -523,6 +523,12 @@ three structs has a row.
   counts the Traces of the slot's holder in the running step, the index into `Outcome.trace_pick`;
   written at B = 4 only.
 
+- **Mapped rows with extra rules (kept out of the status column).**
+  `BattleContext.defender`: the paused action's only, `1 + defender`, 0 = BATTLER_NONE, written at B = 4: the resumed tail reads the defender FightCommand fixed, bcp.c:1900, kept through the party list and a Pursuit, subscript_pursuit.s:5, :80, :116; inside the turn `step` recomputes it; at B = 2 the re-resolve gives the same battler, D3-10.
+  `BattleContext.turnOrderCounter`: reset to 0 by a Trick Room's MoveEnd re-sort at B = 4, bcp.c:3993; the battlers that acted are `ts_acted`, not the cursor's side of the order.
+  `BattleContext.battlerActionOrder`: written from `order.action_order`'s `int8[B]` order; the position loop's tie bits are `Outcome.order_tie`, never stored; re-sorted at a Trick Room's MoveEnd at B = 4 (`order.resort_action_order`, bits `Outcome.resort_tie[b]`, b the Trick Room's battler, never stored); at a pause `ts_order` / `ts_cursor`.
+  `BattleContext.monSpeedOrder`: the running action's: computed before each action at B = 4 (`order.sort_mon_speed`, `Outcome.sort_tie[b]`, b the acting battler), not stored; a paused action's: `ts_speed_order`, D3-10.
+
 ## BattleMon (`include/battle/battle_mon.h`)
 
 | Struct.field | pytree field | status |
@@ -696,7 +702,7 @@ three structs has a row.
 | `BattleContext.padding0060` | — | not needed because it is padding |
 | `BattleContext.attacker` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.attackerTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
-| `BattleContext.defender` | `ts_defender` | mapped (the paused action's only, `1 + defender`, 0 = BATTLER_NONE, written at B = 4: the resumed tail reads the defender FightCommand fixed, bcp.c:1900, kept through the party list and a Pursuit, subscript_pursuit.s:5, :80, :116; inside the turn `step` recomputes it; at B = 2 the re-resolve gives the same battler, D3-10) |
+| `BattleContext.defender` | `ts_defender` | mapped |
 | `BattleContext.defenderTemp` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.faintedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.switchedMon` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
@@ -718,7 +724,7 @@ three structs has a row.
 | `BattleContext.scriptStackNarc` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackFile` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.scriptStackCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.turnOrderCounter` | `ts_cursor` | mapped (reset to 0 by a Trick Room's MoveEnd re-sort at B = 4, bcp.c:3993; the battlers that acted are `ts_acted`, not the cursor's side of the order) |
+| `BattleContext.turnOrderCounter` | `ts_cursor` | mapped |
 | `BattleContext.waitCounter` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.msgBattlerTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
@@ -776,8 +782,8 @@ three structs has a row.
 | `BattleContext.switchedPartySlot` | — | not needed because the switch target comes from the action (or, for Roar's drag, from `Outcome.roar_target` inside `step._use_move`) and is written to `active` inside `step` |
 | `BattleContext.aiSwitchedPartySlot` | — | not needed because the switch target comes from the action and is written to `active` inside `step` |
 | `BattleContext.battlerActions` | `ts_actions`, `ts_pursued`, `ts_dragged`, `chosen_target` | mapped |
-| `BattleContext.battlerActionOrder` | `ts_order` | mapped (written from `order.action_order`'s `int8[B]` order; the position loop's tie bits are `Outcome.order_tie`, never stored; re-sorted at a Trick Room's MoveEnd at B = 4 (`order.resort_action_order`, bits `Outcome.resort_tie[b]`, b the Trick Room's battler, never stored); at a pause `ts_order` / `ts_cursor`) |
-| `BattleContext.monSpeedOrder` | `war_swaps` | mapped (the running action's: computed before each action at B = 4 (`order.sort_mon_speed`, `Outcome.sort_tie[b]`, b the acting battler), not stored; a paused action's: `ts_speed_order`, D3-10) |
+| `BattleContext.battlerActionOrder` | `ts_order` | mapped |
+| `BattleContext.monSpeedOrder` | `war_swaps`, `ts_speed_order` | mapped |
 | `BattleContext.monSpeedValues` | — | later (M6) |
 | `BattleContext.ioQueue` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.ioBuffer` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |

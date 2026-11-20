@@ -138,7 +138,7 @@ def test_payout_waits_for_the_round_and_hazards_read_the_pre_level_max_hp(tables
         hp=s.hp.at[1, 2].set(1).at[0, 2].set(118),
         level=s.level.at[0, 2].set(53),
         max_hp=s.max_hp.at[0, 2].set(118),  # 14 = 118 // 8; level 54's 120 would give 15
-        exp=s.exp.at[0, 2].set(int(table[54]) - 1),
+        exp=s.exp.at[2].set(int(table[54]) - 1),
         item=s.item.at[0, 2].set(names.item("Exp. Share")),
         stealth_rock=jnp.ones_like(s.stealth_rock),
     )
@@ -203,7 +203,7 @@ def leveling(tables, names, fmt=DOUBLES):
     level 51 and the foe of battler 1 faints in ``after``."""
     s = four(tables, names, fmt)
     table = tables.exp_table[tables.species_exp_rate[int(s.species[0, 0])]]
-    s = s._replace(exp=s.exp.at[0, 0].set(int(table[51]) - 1).at[0, 1].set(int(table[51]) - 1))
+    s = s._replace(exp=s.exp.at[0].set(int(table[51]) - 1).at[1].set(int(table[51]) - 1))
     return s, s._replace(hp=s.hp.at[1, 0].set(0))
 
 

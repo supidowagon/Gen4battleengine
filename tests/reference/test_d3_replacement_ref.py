@@ -52,7 +52,7 @@ def test_ref_send_in_order_and_payout_after_the_round(tables, names):
         hp=s.hp.at[1, 2].set(1).at[0, 2].set(118),
         level=s.level.at[0, 2].set(53),
         max_hp=s.max_hp.at[0, 2].set(118),
-        exp=s.exp.at[0, 2].set(int(table[54]) - 1),
+        exp=s.exp.at[2].set(int(table[54]) - 1),
         item=s.item.at[0, 2].set(names.item("Exp. Share")),
         stealth_rock=jnp.ones_like(s.stealth_rock),
     )
