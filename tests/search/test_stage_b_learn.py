@@ -25,6 +25,7 @@ from nuzline.engine.levelup import (
     LEARN_MON,
     LEARN_MOVE_END,
     advance_learns,
+    learn,
     learn_options,
     needs_learn,
 )
@@ -57,6 +58,7 @@ def _turn(tables, before, actions, outcome):
 
 
 _learn = jax.jit(expand._learn)
+_answer = jax.jit(learn)
 _advance = jax.jit(advance_learns)
 _options = jax.jit(learn_options)
 _OBS = dict(OBS_FIELDS)
@@ -173,17 +175,29 @@ def test_a_learn_answer_sends_the_opponent_replacement_with_the_carried_mul(tabl
 
 
 # Fast after the module's other tests compile its program; under -m fullset alone it pays
-# that compile (pod 172-190 s), which only the fullset run sees.
+# that compile (pod 172-190 s), which only the fullset run sees. Fullset: it asserts the
+# coverage refusal of an opponent replacement after its AI switched (roark.md 14, item 3).
 @pytest.mark.fullset
-def test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop(tables, names):
-    # The foe switches to Onix (1 HP); Tackle KOs it: Bulbasaur prompts, and the opponent's
-    # replacement after its AI switched is refused (roark.md 14, item 3), at the stop.
+def test_an_ai_switch_with_a_needed_replacement_pauses_then_refuses_at_the_resume(tables, names):
+    # The foe switches to Onix (1 HP); Tackle KOs it. E3-B2-21: the payout and Bulbasaur's
+    # prompts run in MoveEnd (bcp.c:3968), before the tail (:3973) and the opponent's
+    # replacement, so the child pauses at the prompt unrefused, the AI switch kept in
+    # ``ts_switched``. Answering both prompts resumes the turn; its replacement after the
+    # AI switch is then refused (``send_replacements`` through ``turn_muls``).
     s = _vs(tables, names, [_mon(names, "Geodude", 12), _mon(names, "Onix", 12, current_hp=1)])
     actions = jnp.asarray([names.move_slot(s, 0, "Tackle"), MOVE_ACTIONS + 1], jnp.int32)
     after, refused, _, keep = _turn(tables, s, actions, empty_outcome())
     assert bool(keep)  # expand._turn's call_consistent row flag (E2 batch 5)
-    assert int(after.hp[1, 1]) == 0 and bool(needs_learn(after))
-    assert bool(refused)
+    assert not bool(refused)
+    assert int(after.learn_site) == LEARN_MOVE_END and bool(needs_learn(after))
+    assert (int(after.active[1]), int(after.hp[1, ONIX])) == (ONIX, 0)
+    assert int(after.ts_switched[1]) != 0
+    answered = _answer(tables, _answer(tables, after, GIVE_UP), GIVE_UP)
+    assert not bool(needs_learn(answered)) and int(answered.learn_site) != 0
+    # expand's resumed row: the answer's request actions (option, 0) are not read.
+    done, refused, _, keep = _turn(tables, answered, jnp.asarray([GIVE_UP, 0]), empty_outcome())
+    assert bool(keep) and bool(refused)
+    assert int(done.learn_site) == 0 and int(done.active[1]) == ONIX
 
 
 def test_learn_work_at_a_battle_ending_ko_is_terminal(tables, names):

@@ -1521,8 +1521,8 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   step's move (`test_the_laws_keep_a_struggle_fixed_at_the_selection_through_a_learn_pause`). Owed lines added: (1) see above,
   closed; (2) the doubles
   laws (`enumerate` ~:2499) pass no `reselected` to `fight_randomizes`; (3) the AI-switch-then-needed-replacement refusal at the
-  learn stop (`test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`, fullset) is unverified here: the stop moved
-  to the payout; it is on this tip's `-m fullset` pod list. Not built: none. No table array or key changed, no manifest bump.
+  learn stop (`test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`, fullset): the stop moved to the payout;
+  closed by E3-B2-26. Not built: none. No table array or key changed, no manifest bump.
   Doubles (review b2 #8): the `ts_order` / `order` position readers of `_execute_actions` (`to_run`, `to_come`, `ts_acted`)
   compare against `jnp.arange(fmt.B)`, not a hard-coded 2.
   Tests: tests/engine/test_e3_batch2.py (`test_midturn_learn_pauses_at_the_move_end_payout`,
@@ -1570,3 +1570,10 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   its stage lands through the indirect ON_HIT subscript_charge.s (effect_script_0174.s:5; subscript_charge.s:5-6 the
   volatile, :11-13 Sp. Def +1 on the attacker), not a direct TO_ATTACKER stat subscript, so
   `test_stat_effects_match_decomp_scripts` checks it as its own case (as Minimize). No table input changed.
+- E3-B2-26 Stale learn-stop refusal test (fullset pod run on e5490ccb): with E3-B2-21 the payout's prompt pauses the turn
+  at MoveEnd (bcp.c:3968), before the tail (:3973) and the opponent's replacement, so an AI switch whose newcomer the
+  player KOs no longer refuses at the stop. Replaced by
+  `test_an_ai_switch_with_a_needed_replacement_pauses_then_refuses_at_the_resume` (tests/search/test_stage_b_learn.py):
+  the child pauses unrefused (`LEARN_MOVE_END`, `ts_switched[1]` kept); after both answers the resumed turn's opponent
+  replacement after the AI switch is refused (`playout.turn_muls` -> `send_replacements`; roark.md 14, item 3, a coverage
+  refusal, so the `fullset` marker stays). No engine change.
