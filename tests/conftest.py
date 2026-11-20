@@ -11,6 +11,7 @@ from pathlib import Path
 import jax
 import numpy as np
 import pytest
+from hypothesis import settings
 
 from nuzline.data.games import GAMES, KAIZO, VANILLA
 from nuzline.data.tables import load_names, load_tables
@@ -20,6 +21,21 @@ from nuzline.jaxcache import (
     jax_version,
     prune_other_versions,
     set_compile_cache_dir,
+)
+
+# Hypothesis profiles, loaded here at import, before any test module: every ``@settings(...)``,
+# ``settings(...)`` object and ``@given`` without settings copies each value it does not set from
+# the profile loaded when it is built (hypothesis/_settings.py ``settings.__init__``:
+# ``self._fallback = parent or settings.default``; core.py ``given``: ``... or Settings.default``),
+# so a test that does not set ``derandomize`` takes the profile's. ``gate`` (default): fixed seeds,
+# each test's seed drawn from its own code (``derandomize=True``, which also turns the example
+# database off). ``explore`` ($NUZLINE_HYPOTHESIS_PROFILE=explore, the nightly): random seeds, and
+# a failure prints its ``@reproduce_failure`` line. Both build on Hypothesis's own "default"
+# profile, so local runs and the pod (where Hypothesis may load its "ci" profile) agree.
+settings.register_profile("gate", settings.get_profile("default"), derandomize=True)
+settings.register_profile("explore", settings.get_profile("default"), print_blob=True)
+settings.load_profile(
+    "explore" if os.environ.get("NUZLINE_HYPOTHESIS_PROFILE") == "explore" else "gate"
 )
 
 TABLES_DIR = Path(__file__).resolve().parents[1] / "data" / "gen4_platinum"
@@ -185,6 +201,11 @@ def pytest_runtest_protocol(item, nextitem):
         _malloc_trim()
         _LAST_AFTER[0] = _resident_bytes()
         _CLEARS.append((item.nodeid, before, _LAST_AFTER[0], not next_module))
+
+
+def pytest_report_header(config):
+    """The active Hypothesis profile (gate: fixed seeds; explore: random seeds)."""
+    return f"nuzline hypothesis profile: {settings.get_current_profile_name()}"
 
 
 def pytest_terminal_summary(terminalreporter):
