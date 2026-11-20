@@ -262,6 +262,10 @@ def test_run_terrain_is_a_prep_step_and_in_the_checkpoint(tables, names):
         "under the player decides it)."
     )
     assert not any("battle terrain" in s for s in prep_steps(base, names, setup, tables))
+    # G-24: a save in the Route 213 script rain plans clear behind a warp onto the map.
+    warp = prep_steps(replace(base, script_weather_warp=True), names, setup, tables)
+    assert warp[-1].startswith("Warp onto the fight's map before the fight")
+    assert not any(s.startswith("Warp onto") for s in prep_steps(base, names, setup, tables))
     digest = {
         k: fingerprint(p, PrepSettings(), 0, "t", "c")["problem"]
         for k, p in (("base", base), ("unnamed", unnamed), *on.items())

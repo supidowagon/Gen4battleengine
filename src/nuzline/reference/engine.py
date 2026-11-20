@@ -5153,19 +5153,18 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     ]
     owed: list[int] = []
     if user.hp > 0 and not target_moved:
-        before = turn.done[foe]
-        p_alive = holder.hp > 0
-        _, _, acid = _pursuit(turn, s, side, turn.actions, turn.choices)
-        if turn.done[foe] and not before:  # the Pursuit hit (subscript_pursuit.s)
+        pursuer, bonded, acid = _pursuit(turn, s, side, turn.actions, turn.choices)
+        if pursuer is not None:  # the Pursuit hit (subscript_pursuit.s)
             # The Synchronize flag goes on: a user that falls to it ends the script at :55,
             # before the clear at :69, and AfterMoveEffects' Synchronize step reads its
             # BattleMon.status (G-24).
-            turn.pursued |= 1 << foe  # a bitmask of the pursuers (battle_script.c:6884-6935)
+            turn.pursued |= 1 << pursuer  # a bitmask of the pursuers (battle_script.c:6884-6935)
             turn.pick_mul = PURSUIT_POWER_MUL
             # No battle-over check until MoveEnd (SF2 (a2) R1); a recoil-felled pursuer's exp
             # waits for it too (R3), and a U-turn user has no Destiny Bond (bcp.c:2425).
             _faint_check(turn, s, decide=False)
-            owed = _owed_pursuer(turn, s, foe, p_alive)
+            # The pursuer was alive (``_pursuer_ready``); Destiny Bond never takes it here.
+            owed = _owed_pursuer(turn, s, pursuer, not bonded)
             _pay_exp(turn, s)
             _acid_rain(s, acid)
     if user.hp > 0 and not s.over:

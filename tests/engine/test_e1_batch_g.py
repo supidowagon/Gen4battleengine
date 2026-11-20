@@ -362,8 +362,8 @@ def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
     assert start(sheltin, save(5), False) == Weather.NONE  # before the cutscene: the route
     assert start(sheltin, save(7)) == Weather.RAIN
     assert start(sheltin, save(8)) == Weather.NONE  # left Route 213 after the rain
-    assert start(chelle, save(8, 373, 4)) == Weather.RAIN
     brought = [SimpleNamespace(moves=(33, 0, 0, 0))]
+    assert start(chelle, save(8, 373, 4), team=brought) == Weather.RAIN
     with pytest.raises(ValueError, match="the save says otherwise"):
         start(chelle, save(8, 373, 4), False, brought)
     # Prep (no team yet): a PC visit's warp rewrites the weather from header 373 (clear,
@@ -376,6 +376,45 @@ def test_route_213_script_rain_is_a_run_input(kaizo_trainers, kaizo_names):
         start(sheltin, save(8, 373, 2))
     with pytest.raises(ValueError, match="no map script sets the weather"):
         start(kaizo_trainers[466], flag=True)
+
+
+def test_prep_plans_route_213_script_rain_on_the_save_as_clear(kaizo_trainers, kaizo_names):
+    """Review G (MUST 1): a save on header 373 past VAR 0x40FA = 8 in the script rain. A team
+    change is a PC visit, a warp that rewrites the weather from the header (clear:
+    field_map_change.c:273-280, rom_map_weather.json[373] = 0), and VAR 0x40FA >= 8 keeps
+    scr_seq 459 entry 12 (coord event at VAR 0x40FA == 7) from setting it again. So prep
+    plans clear for every setup and lists a warp onto the map (``script_rain_on_save``,
+    ``PrepProblem.script_weather_warp``), the save's own party too; the rain the user asks for
+    is refused there. A fixed team (solve, line) keeps the save's rain."""
+    from types import SimpleNamespace
+
+    from nuzline.cli import fight_start, script_rain_on_save
+    from nuzline.engine.ids import Weather
+
+    def save(var, header=0, weather=0):
+        vars_ = [0] * 288
+        vars_[0xFA] = var
+        return SimpleNamespace(
+            map_header=header, overworld_weather=weather, badges=0, var=lambda v: vars_[v - 0x4000]
+        )
+
+    rainy = save(8, 373, 4)
+    brought = [SimpleNamespace(moves=(33, 0, 0, 0))]
+    for tid in (*range(103, 112), 491):
+        t = kaizo_trainers[tid]
+        if not t.area_condition.script_window:
+            continue
+        assert script_rain_on_save(t, rainy), tid
+        assert fight_start(t, kaizo_names, rainy)[0] == Weather.NONE, tid
+        assert fight_start(t, kaizo_names, rainy, team=brought)[0] == Weather.RAIN, tid
+        assert fight_start(t, kaizo_names, rainy, script_weather=False)[0] == Weather.NONE
+        with pytest.raises(ValueError, match="prep plans a warp onto the map first"):
+            fight_start(t, kaizo_names, rainy, script_weather=True)
+    chelle = kaizo_trainers[491]
+    for other in (save(8, 373, 0), save(8), save(7, 373, 4), None):
+        assert not script_rain_on_save(chelle, other)
+    assert fight_start(chelle, kaizo_names, save(7, 373, 4))[0] == Weather.RAIN  # the route
+    assert not script_rain_on_save(kaizo_trainers[466], rainy)
 
 
 @pytest.mark.fullset

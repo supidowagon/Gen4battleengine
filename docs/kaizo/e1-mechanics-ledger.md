@@ -1858,7 +1858,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   0x1280 / `OVERWORLD_WEATHER` 0x12E6, field_overworld_state.h:13-20, location.h:18-24; Continue keeps it,
   field_map_change.c:521-525): 0 clear, 14 fog, any other value refused; a `--field-defog` the save's fog (14)
   contradicts is refused, one rule with `--script-weather` (G-24: the save decides when it shows the state on
-  the fight's map; review G 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
+  the fight's map; review G 1). The warp acts on both the same way and opposite to the plan: it brings the fog
+  back (prep keeps a Defog holder) and ends the script rain for good (prep plans clear behind a warp step;
+  G-24, gate review G MUST 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
   (`field_move` = Defog): any PC visit is a warp, which clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85)
   and rewrites the weather from the header, fog again (field_map_change.c:273-280), so Defog is used again
   before the fight (review G 2). Otherwise fog unless `--field-defog`,
@@ -1982,10 +1984,16 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   none, the map change cleared it and nothing sets it again; on it: its overworld weather, 4 rain, 0
   clear; any other refused), and an input it contradicts is refused; before that the route decides, so the
   default is the start condition (the user's rain, overrides area.103-111/491, 2026-11-07; none for 104
-  and 696). In prep (no team yet) a save on header 373 in the rain does not bind (`warp`): a PC visit is a
-  warp that rewrites the weather from the header, clear (field_map_change.c:273-280), and VAR 0x40FA = 8 keeps
-  scr_seq 459 entry 12 from running again, so the input decides (default rain, the save's party kept;
-  `--no-script-weather` after a team change); a save's False binds there too (review G 2). `SaveFile.vars` /
+  and 696). In prep (no team yet, `warp`) a save on header 373 in the rain gives False (gate review G MUST 1;
+  amends review G 2's "the input decides", which planned every changed team in rain): a team change is a PC
+  visit, a warp that rewrites the weather from the header, clear (field_map_change.c:273-280;
+  rom_map_weather.json[373] = 0), and VAR 0x40FA >= 8 keeps scr_seq 459 entry 12 from running again, so the
+  rain never returns. The save's own party (no PC) would keep it; rather than a second start weather per
+  setup (prep has one `start_condition`), prep lists a warp onto the map before the fight
+  (`cli.script_rain_on_save` -> `PrepProblem.script_weather_warp` -> `report.prep_steps`), so every setup
+  starts clear as planned; `--script-weather` there is refused ("prep plans a warp onto the map first"). A
+  fixed team (coverage, rank, solve, line) keeps the save's rain. A save's False binds in prep too.
+  `SaveFile.vars` /
   `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
   `coverage.start_weather(script_weather=)` turns the state into the weather.
 - G-25 Status 0x3F (manager ruling 2): a real battle of a split can start under Newmoon's 0x7B. scr_seq 363
@@ -2034,6 +2042,20 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   adds its column. A U-turn / Baton Pass newcomer is no same-call source: the turn pauses at the party
   pick (`pivot_battler`, subscript_attack_then_switch_out.s:71, subscript_baton_pass.s:17) and the resumed
   call loads its own queue, so its eat takes the resumed outcome's `[b, 0]`.
+  With Fling (gate review G MUST 2; E3's e5490ccb, E3-B2-1, E3-B2-22: a flung Starf takes the defender's next
+  entry): three draws per battler per call still bound singles. Every extra source is one action or one item:
+  b's action is Pluck / Bug Bite, Recycle or neither; the foe's is Fling (TryFling draws at :6121 before
+  TryMove, effect_script_0233.s:7, :18, so a miss, Protect or Substitute still takes the entry) or Roar; Fling
+  and Pluck share the foe's one item (Fling removes it; a Pluck of a foe without a berry sets no flag,
+  lib:5832-5835, :5848). A held berry is eaten once, twice only under the acting attacker's set
+  SELF_TURN_FLAG_PLUCK_BERRY (subscript_pluck_check.s:5-9), and flags last one action (BattleContext_Init at
+  MoveEnd, bcp.c:3998; lib:2013-2015). Fling's own flag (lib:6150-6152) stays set only when
+  subscript_fling.s:5-7 skips (b at 0 HP or behind a Substitute): b then loses no HP and no stage in that
+  action, and any earlier pinch was eaten at the check after it (bcp.c:3684-3761, :1362-1368, :1699-1708; the
+  turn-start switch-in check, lib:4151-4165), so no own Starf of b is eaten under it. Singles worst cases, three
+  each: own + flung + Recycled own (an open battle-start berry may stand for the own eat); Pluck draw + own +
+  Roar newcomer; own twice under b's Pluck flag + Roar newcomer. A fourth needs two foe actions or items:
+  doubles only (G-40).
 - G-29 The laws (`enumerate._starf_reads`): `[b, 0]` and `[b, 1]` unchanged. Battler b's eat sources this
   call are counted: its own (the field holder at its pinch or able to lose HP; once more with a Pluck /
   Bug Bite of a foe item (G-28); a Recycle of a Starf, recycled before or eaten first; a Pluck / Bug Bite of
@@ -2145,6 +2167,24 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   213 entry 20) needs 882 (0x0171) and with 823 always warps (0x0199 -> 0x0b18 -> Warp 320 at 0x09dc), without it
   checks badge 2 (0x01a4, Cobble, generated/badges.txt:3). The window this points to (from the meadow on) is the
   manager's call; until then 674 counts in no split total.
+- G-40 For E2's doubles work (multi-battler milestone; gate review G MUST 2): the Starf queue's three draws per
+  battler per call (`starf_roll` int8[B, 3], `Outcome.starf` int8[B, 4], `ids.STARF_QUEUE`) is a singles bound
+  (G-28). With B = 4 a partner's and both foes' actions add sources: own eat + the partner's flung Starf + a foe's
+  flung Starf + its Recycle is four, and `hooks.starf_draw`'s `min(starf_taken, 2)` re-reads the last entry. The
+  doubles batch widens the queue to its bound (state, Outcome, `STARF_QUEUE`, `enumerate._starf_reads`, the
+  reference, tests/strategies.py, a tools/snap_compare.py UPGRADES row).
+- G-41 Pursuit targets, doubles-ready (gate review G record a): `step._pursuit_hit`'s Sticky Barb and on-hit berry
+  take `switcher` (was `_foe(pursuer)`); the reference's U-turn site takes `_pursuit`'s returned pursuer for
+  `turn.pursued` and `_owed_pursuer` (`not bonded`: the U-turn user has no Destiny Bond, bcp.c:2425) in place of
+  `foe` / `turn.done[foe]`. Same values in singles (one foe; `_pursuer_ready` needs a living pursuer).
+- G-42 Gate review G record b (`upgrade_entries` keyed by kind) is not built here: the snap_compare upgrade
+  rewrite on its own branch carries it (manager, 19 Nov).
+- G-43 Batch G's interim refusals (gate review G record c): the multi-condition status word at the save
+  (`SaveMon.to_spec`, G-25) closes with the status-word batch (G-39; the backlog row of G-35 says so). The 24
+  weather-16 rows (Volkner Split 11 on headers 154-156, Galactic Split 13 on 284 / 380) are no interim refusal and
+  do not move there: they start `none` (data/kaizo/start_conditions.json; weather 16 has no battle effect,
+  battle_lib.c:3700, manager ruling 4) and hold no weather refusal; any refusal of theirs is their own other
+  source's.
 
 ## Stream state (restart point, 2026-11-19)
 
