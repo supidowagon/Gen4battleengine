@@ -12,13 +12,14 @@ from hypothesis import strategies as st
 from nuzline.data.tables import to_numpy
 from nuzline.engine.actions import MOVE_ACTIONS, NUM_ACTIONS, decision_actions, legal_actions
 from nuzline.engine.outcome import empty_outcome, outcome_to_py
-from nuzline.engine.state import LAYOUT, MAX_DEATH_BUDGET, BattleState
+from nuzline.engine.state import LAYOUT, MAX_DEATH_BUDGET, BattleState, make_state
 from nuzline.engine.step import NORMAL_POWER_MUL, needs_replacement, replace
 from nuzline.reference.convert import from_ref, to_ref
 from nuzline.reference.engine import ref_replace, ref_step
 from nuzline.search.playout import finish_turn, playout
-from tests.engine.helpers import jit_step, roark_real_state, roark_state
-from tests.strategies import any_outcome, legal_action_pair, supported_state
+from tests.engine.helpers import assert_matches_reference, jit_step, roark_real_state, roark_state
+from tests.engine.test_pivot import _mon, _resume
+from tests.strategies import any_outcome, legal_action_pair, pivot_actions, supported_state
 
 NEW_FIELDS = ("deaths", "faint_budget", "protected", "replace_mul")
 # Fields added after them (E2 batch 6: the turn scratch, 0 between turns, docs/kaizo/
@@ -182,8 +183,18 @@ def test_player_replacement_matches_reference(tables, names, data):
     acts = data.draw(legal_action_pair(tables, s))
     o = data.draw(any_outcome())
     after = jit_step(tables, s, acts, o)
+    # A turn paused at a party list (U-turn, Baton Pass) is not at TurnEnd: the list switches
+    # mid-turn (subscript_attack_then_switch_out.s:71) and the faint replacement comes only at
+    # TurnEnd's ReplaceFainted (bcp.c:1844-1848), so the turn is resumed first (ruling D3-1g).
+    for _ in range(2):
+        if int(after.pivot_battler) == 0:
+            break
+        acts = data.draw(pivot_actions(after, acts))
+        after = jit_step(tables, after, acts, data.draw(any_outcome()))
+    assert int(after.pivot_battler) == 0, "a turn paused more than twice"
     if not needs_replacement(after)[0]:
         return
+    active = int(after.active[0])
     legal = [
         slot
         for slot in range(6)
@@ -194,3 +205,28 @@ def test_player_replacement_matches_reference(tables, names, data):
         want = from_ref(ref_replace(to_numpy(tables), to_ref(after), 0, slot))
         for name, a, b in zip(got._fields, got, want, strict=True):
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
+
+
+def test_u_turn_ko_replacement_comes_after_the_resumed_turn(tables, names):
+    """Ruling D3-1g. A faster foe's U-turn with Life Orb KOs the player's 1-HP lead: the hit
+    and the Life Orb loss set both battlers' assuranceDamageMask (subscript_update_hp.s:18-19)
+    and the turn pauses at the foe's party list (subscript_attack_then_switch_out.s:71) with
+    the flags in the scratch. The player's replacement is TurnEnd's (ReplaceFainted,
+    bcp.c:1844-1848): the turn resumes first, and SetupNextTurn's clear (battle_lib.c:2231) is
+    already in the state the replacement starts from, in both engines."""
+    n = names
+    s = make_state(
+        tables,
+        [_mon(n, "Snorlax", ["Tackle"], 40), _mon(n, "Geodude", ["Tackle"], 30)],
+        [_mon(n, "Scyther", ["U-turn"], 35, "Life Orb"), _mon(n, "Snorlax", ["Tail Whip"], 40)],
+    ).replace_hp(0, 0, 1)
+    paused = assert_matches_reference(tables, s, (0, 0), empty_outcome())
+    assert int(paused.pivot_battler) == 2 and int(paused.hp[0, 0]) == 0
+    assert np.asarray(paused.ts_assurance).tolist() == [1, 1]
+    after = _resume(tables, paused, 1)
+    assert int(after.pivot_battler) == 0 and int(needs_replacement(after)[0]) == 1
+    assert np.asarray(after.ts_assurance).tolist() == [0, 0]
+    got = replace(tables, after, 0, 1)
+    want = from_ref(ref_replace(to_numpy(tables), to_ref(after), 0, 1))
+    for name, a, b in zip(got._fields, got, want, strict=True):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b), err_msg=name)
