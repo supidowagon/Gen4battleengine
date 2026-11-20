@@ -653,9 +653,9 @@ def test_learn_pin_and_exp_refused_leave_by_their_rows(monkeypatch, capsys):
     hp = np.ones(2, np.int16)
     old = {"species": hp, "active": np.zeros(2, np.int8), "hp": hp,
            "learn_pin": np.int8(2), "exp_refused": np.int8(2)}  # fmt: skip
-    ((_, got),) = sc.upgrade_inputs([("k", {"in_state": old})])
+    ((_, got),) = sc.upgrade_inputs([("k", {"in_state": old})], None)
     assert "learn_pin" not in got["in_state"] and "exp_refused" not in got["in_state"]
-    got = sc.upgrade_entries(sc.canon({"jit_step": old}))
+    got = sc.upgrade_entries(sc.canon({"jit_step": old}), None)
     assert not any(p.endswith(("learn_pin", "exp_refused")) for p in got)
     assert {".jit_step.species", ".jit_step.active", ".jit_step.hp"} <= set(got)
     assert {
