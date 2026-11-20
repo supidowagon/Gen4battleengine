@@ -249,6 +249,62 @@ include/battle, res/battle) names it elsewhere; the tool re-checks both on every
 
 25 partner trainer rows (607, 608, 609, 610, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 800, 801, 861, 863, 864, 865), checked like opponents: 7 missing groups, 2 not needed by any opposing trainer, 0 also not on your side. Not needed by opponents, by kind: held items 1, abilities 1.
 
+## Playable, lines hitting the glitch refused
+
+Runnable battles whose opponents report a runtime line (`CoverageReport.runtime`,
+kind field condition): the fight is playable and only the lines that reach the
+glitch are refused (any fight is exposed when the player carries Pursuit).
+
+45 battles.
+
+| Battle | Runtime lines |
+|---|---|
+| 18 Hiker Daniel | field condition: Acid Rain (runtime refusal) |
+| 26 Cyclist James | field condition: Acid Rain (runtime refusal) |
+| 31 Cyclist Karen | field condition: Acid Rain (runtime refusal) |
+| 53 Poké Kid Danielle | field condition: Acid Rain (runtime refusal) |
+| 114 Ruin Maniac Jones | field condition: Acid Rain (runtime refusal) |
+| 128 Black Belt Derek | field condition: Acid Rain (runtime refusal) |
+| 129 Beauty Jasmine #1 | field condition: Acid Rain (runtime refusal) |
+| 137 Skier Edward | field condition: Acid Rain (runtime refusal) |
+| 138 Skier Kaitlyn | field condition: Acid Rain (runtime refusal) |
+| 226 Black Belt Roku | field condition: Acid Rain (runtime refusal) |
+| 229 Clown Julia | field condition: Acid Rain (runtime refusal) |
+| 232 Hiker David | field condition: Acid Rain (runtime refusal) |
+| 235 Bug Catcher Ford | field condition: Acid Rain (runtime refusal) |
+| 271 Ace Trainer Alicia | field condition: Acid Rain (runtime refusal) |
+| 273 Collector Brady | field condition: Acid Rain (runtime refusal) |
+| 284 Idol Catherine #1 | field condition: Acid Rain (runtime refusal) |
+| 309 Battle Girl Carly | field condition: Acid Rain (runtime refusal) |
+| 310 Black Belt Daniel | field condition: Acid Rain (runtime refusal) |
+| 316 Leader Wake | field condition: Acid Rain (runtime refusal) |
+| 317 Leader Maylene | field condition: Acid Rain (runtime refusal) |
+| 318 Leader Fantina | field condition: Acid Rain (runtime refusal) |
+| 343 Leader Fantina? | field condition: Acid Rain (runtime refusal) |
+| 361 Tuber Holly | field condition: Acid Rain (runtime refusal) |
+| 401 Roughneck Walter | field condition: Acid Rain (runtime refusal) |
+| 406 Commander Jupiter #1 | field condition: Acid Rain (runtime refusal) |
+| 470 Pokémon Trainer Barry #3 [Torterra] | field condition: Acid Rain (runtime refusal) |
+| 471 Pokémon Trainer Barry #3 [Infernape] | field condition: Acid Rain (runtime refusal) |
+| 472 Pokémon Trainer Barry #3 [Empoleon] | field condition: Acid Rain (runtime refusal) |
+| 473 Pokémon Trainer Barry #4 [Torterra] | field condition: Acid Rain (runtime refusal) |
+| 474 Pokémon Trainer Barry #4 [Infernape] | field condition: Acid Rain (runtime refusal) |
+| 475 Pokémon Trainer Barry #4 [Empoleon] | field condition: Acid Rain (runtime refusal) |
+| 476 Pokémon Trainer Barry #5 [Torterra] | field condition: Acid Rain (runtime refusal) |
+| 477 Pokémon Trainer Barry #5 [Infernape] | field condition: Acid Rain (runtime refusal) |
+| 478 Pokémon Trainer Barry #5 [Empoleon] | field condition: Acid Rain (runtime refusal) |
+| 479 Pokémon Trainer Barry #6 [Torterra] | field condition: Acid Rain (runtime refusal) |
+| 480 Pokémon Trainer Barry #6 [Infernape] | field condition: Acid Rain (runtime refusal) |
+| 481 Pokémon Trainer Barry #6 [Empoleon] | field condition: Acid Rain (runtime refusal) |
+| 484 Pokémon Breeder Frank | field condition: Acid Rain (runtime refusal) |
+| 497 Tuber Jacky | field condition: Acid Rain (runtime refusal) |
+| 510 Galactic Ferdinand #2 | field condition: Acid Rain (runtime refusal) |
+| 516 Galactic Laomedeia #2 | field condition: Acid Rain (runtime refusal) |
+| 828 Ace Trainer Tenzing | field condition: Acid Rain (runtime refusal) |
+| 844 Worker Dillan | field condition: Acid Rain (runtime refusal) |
+| 847 Galactic Io #2 | field condition: Acid Rain (runtime refusal) |
+| 868 Elite Four Flint | field condition: Acid Rain (runtime refusal) |
+
 ## Roark split
 
 26 fights (trainer rows). A group's count is the number of rows it blocks.

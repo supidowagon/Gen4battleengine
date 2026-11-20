@@ -145,6 +145,8 @@ class RefBattler:
     embargo: int  # MoveEffectsData.embargoTurns (B13-29)
     flash_fire: int  # MoveEffectsData.flashFire (F-2)
     ability_suppressed: int  # MOVE_EFFECT_ABILITY_SUPPRESSED (E3-2-6a)
+    claw_flag: int  # MoveEffectsData.quickClaw between turns (SF2 (k))
+    custap_flag: int  # MoveEffectsData.custapBerry between turns (SF2 (k))
     wish_timer: int
     wish_hp: int
     future_timer: int
@@ -231,6 +233,7 @@ class RefState:
     ts_used: int
     ts_damaged: int
     ts_dealt: int
+    ts_se: int
     ts_power_mul: int
     ts_pick_mul: int
 

@@ -479,6 +479,52 @@ def test_pursuit_chasing_a_u_turn_subtracts_too(tables, names):
     assert int(out.field_mask) == 0x3FFF
 
 
+def test_aftermath_fells_the_foes_pursuer_into_the_operand(tables, names):
+    """The contact ability's recoil (from the merged guard test, G-13): the player's 1 HP Drifloon
+    (Aftermath) switches, the foe's 1 HP pursuer KOs it and falls to Aftermath (subscript_pursuit.s
+    :86-87, battle_lib.c:4358-4371): UPDATE_HP's TryFaintMon makes it faintedMon (FCM 1.3):
+    0x80 - 1, as for the Life Orb case."""
+    drifloon = _spec(names, "Drifloon", 5, ("Tackle",))
+    slot = names.species_abilities(names.species("Drifloon")).index(names.ability("Aftermath"))
+    s = make_state(
+        tables,
+        [replace(drifloon, ability_slot=slot), _spec(names, "Chimchar", 20, ("Growl",))],
+        [_spec(names, "Houndour", 35, ("Pursuit",)), _spec(names, "Geodude", 40, ("Growl",))],
+        start_condition=Weather.HAIL,
+    )
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
+    out = _step(tables, s, A(MOVE_ACTIONS + 1, "Pursuit", s, names))
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert int(out.field_mask) == 0x7F
+
+
+def test_the_players_pursuer_felled_by_its_life_orb_subtracts_nothing(tables, names):
+    """The player's 1 HP pursuer (battler 0, Life Orb) KOs the foe's switcher and falls to its
+    recoil (battle_lib.c:7357-7365): faintedMon 0, the mask unchanged (merged guard test, G-13)."""
+    s = _pursuit_fight(
+        tables, names, ("Pursuit",), ("Growl",), my_item="Life Orb", start_condition=Weather.HAIL
+    )
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
+    out = _step(tables, s, A("Pursuit", MOVE_ACTIONS + 1, s, names))
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert int(out.field_mask) == 0x80
+
+
+def test_destiny_bond_keeps_the_switcher_as_operand_before_rough_skin(tables, names):
+    """The foe's 1 HP Carvanha (Rough Skin) holds Destiny Bond and switches; the player's 1 HP
+    pursuer KOs it. Destiny Bond (subscript_pursuit.s:85) takes the pursuer down before Rough
+    Skin (:86-87, which then fails on the attacker's HP, battle_lib.c:4258) and restores
+    faintedMon = 1 (subscript_faint_check_destiny_bond.s:25): 0x80 - 1 (merged guard test, G-13)."""
+    s = _pursuit_fight(
+        tables, names, ("Pursuit",), ("Growl",), foe="Carvanha", start_condition=Weather.HAIL
+    )
+    s = s.replace_hp(0, 0, 1).replace_hp(1, 0, 1)
+    s = s._replace(destiny_bond=s.destiny_bond.at[1].set(1))
+    out = _step(tables, s, A("Pursuit", MOVE_ACTIONS + 1, s, names))
+    assert int(out.hp[0, 0]) == 0 and int(out.hp[1, 0]) == 0
+    assert int(out.field_mask) == 0x7F
+
+
 def test_the_first_pursuer_is_the_first_ready_battler_by_index(tables, names):
     """fcm-verify (d): BtlCmd_TryPursuit loops the battlers in index order (battle_script.c:6899)
     and breaks at the first that is ready (:6934), whatever the speeds: battler 0 switches and

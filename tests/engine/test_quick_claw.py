@@ -63,7 +63,7 @@ from nuzline.engine.step import (
     step_events,
 )
 from nuzline.prep.problem import _item_refusal
-from nuzline.search.plan_tree import _FLAG_TEXT
+from nuzline.search.plan_tree import _FLAG_TEXT, _QUICK_TEXT
 from tests.engine.helpers import (
     A,
     assert_matches_reference,
@@ -452,7 +452,13 @@ def test_the_animation_is_seen_when_the_claw_moves_it_first(tables, names):
         for k in (0, 1)
     ]
     assert (obs[0] == obs[1]).all()
-    assert dict(_FLAG_TEXT)["quick_claw"] == "Quick Claw activated"
+    # The render reads the two bits: the animation (Quick Claw or Custap) and Custap's message.
+    assert "quick_claw" not in dict(_FLAG_TEXT)
+    assert [t for bit, t in _QUICK_TEXT if 3 & bit] == [
+        "Quick Claw or Custap Berry activated",
+        "Custap Berry let it move first",
+    ]
+    assert [t for bit, t in _QUICK_TEXT if 1 & bit] == ["Quick Claw or Custap Berry activated"]
 
 
 # --- relevance and enumeration -------------------------------------------------------------------
