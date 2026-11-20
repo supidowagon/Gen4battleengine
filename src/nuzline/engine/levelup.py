@@ -61,6 +61,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
+from nuzline.engine.format import format_of, party, side_of
 from nuzline.engine.ids import EffectId, Stat
 from nuzline.engine.state import MOVES, SLOTS, BattleState
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
@@ -146,19 +147,37 @@ def _effort_values(tables: Tables, after: BattleState, paid, foe_row, hold):
 
 
 def pay_exp(
-    tables: Tables, before: BattleState, after: BattleState, pending=False, selected=0
+    tables: Tables,
+    before: BattleState,
+    after: BattleState,
+    pending=False,
+    selected=0,
+    battler=None,
 ) -> BattleState:
     """``after`` with the exp payout for an opponent faint between ``before`` and ``after``
     (``after`` is the state after the hook's faint check); unchanged when nothing fainted.
     ``pending``: the player's move ``selected`` (its slot, 0-3) has not run yet this turn, so
-    a level-up of the player's active pins that slot (``learn_pin``, design §3.3(a))."""
-    return pay_exp_leveled(tables, before, after, pending, selected)[0]
+    a level-up of the player's active pins that slot (``learn_pin``, design §3.3(a)).
+    ``battler``: a static Python int, the payout for that battler alone (see
+    ``pay_exp_leveled``); ``None`` is the singles payout."""
+    return pay_exp_leveled(tables, before, after, pending, selected, battler)[0]
 
 
 def pay_exp_leveled(
-    tables: Tables, before: BattleState, after: BattleState, pending=False, selected=0
+    tables: Tables,
+    before: BattleState,
+    after: BattleState,
+    pending=False,
+    selected=0,
+    battler=None,
 ) -> tuple[BattleState, jnp.ndarray]:
     """``(pay_exp(...), bool[6])``: the state and the player slots that gained a level.
+
+    ``battler`` (D3-8): ``None`` is today's payout (the fainted slot of party 1, the lowest
+    when several). A static Python int is the payout of that battler alone: nothing for a
+    player battler (``CalcExpGain`` pays only a SOLO_ENEMY, script.c:2196); for an enemy
+    battler ``b`` the fainted Pokemon is party ``party(fmt, b)`` slot ``active[b]``
+    (script.c:2216-2217; ``AnyExpPayout`` pays one battler bit per call, bcp.c:4449-4469).
 
     Trigger (design §1.1): an opponent party slot ``j`` with ``before.hp > 0`` and
     ``after.hp == 0`` (the per-slot test of ``step._faint_check``): the payout is keyed on the
@@ -193,12 +212,20 @@ def pay_exp_leveled(
     does not level keeps its stats, even with new EVs. Party and battler share one row, which
     is ``BattleSystem_ReloadPokemon``'s copy for the active (battle_lib.c:169-194). A leveled
     slot without pending learnset work gets ``learn_level = L0 + 1``, ``learn_cursor = 0``."""
-    fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
-    paying = jnp.any(fainted)
-    j = jnp.argmax(fainted)
-    foe_species = after.species[1, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
-    foe_row = tables.species_form_row[foe_species, after.form[1, j]]
-    exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[1, j].astype(_I32)
+    if battler is None:
+        fp = 1
+        fainted = (before.hp[1] > 0) & (after.hp[1] == 0)
+        paying = jnp.any(fainted)
+        j = jnp.argmax(fainted)
+    else:
+        if side_of(battler) == 0:
+            return after, jnp.zeros(SLOTS, dtype=bool)
+        fp = party(format_of(after), battler)
+        j = after.active[battler]
+        paying = (before.hp[fp, j] > 0) & (after.hp[fp, j] == 0)
+    foe_species = after.species[fp, j].astype(_I32)  # a Transformed foe's copy, bs.c:2216
+    foe_row = tables.species_form_row[foe_species, after.form[fp, j]]
+    exp_e = tables.species_exp_yield[foe_species].astype(_I32) * after.level[fp, j].astype(_I32)
     exp_e = exp_e // 7
 
     slots = jnp.arange(SLOTS)

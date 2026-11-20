@@ -764,6 +764,21 @@ def _with_alive(state: BattleState, mask) -> BattleState:
     return state._replace(hp=on.astype(state.hp.dtype))
 
 
+def _pay_all(
+    tables: Tables, before: BattleState, after: BattleState, pending=False, selected=0
+) -> BattleState:
+    """Every exp payout owed between ``before`` and ``after``, in the decomp's order
+    (D3-8; ``AnyExpPayout``, bcp.c:4449-4469, takes the lowest set battler bit of
+    ``SYSCTL_PAYOUT_EXP`` each call, so the payouts come in ascending battler order; Pursuit's
+    own loop is the same order, subscript_pursuit.s:100-115). B = 2: ``pay_exp`` as before.
+    B = 4: battler 1, then battler 3, on its result (battlers 0 and 2 pay nothing,
+    script.c:2196). The exp amounts at B = 4 are D10's."""
+    if format_of(after).B == 2:
+        return pay_exp(tables, before, after, pending, selected)
+    after = pay_exp(tables, before, after, pending, selected, battler=1)
+    return pay_exp(tables, before, after, pending, selected, battler=3)
+
+
 def _has_bench(state: BattleState, side) -> jnp.ndarray:
     """``BattleSystem_AnyReplacementMons`` (battle_lib.c:3125-3180) in singles: a living,
     non-empty party slot of ``side`` other than the active one (TryReplaceFaintedMon,
@@ -3334,7 +3349,7 @@ def _execute_actions(
         bit = jnp.left_shift(jnp.int32(1), pm.astype(_I32))
         owed_bit = jnp.where(jnp.where(resumed, owed_res, owed_site), bit, 0)
         owed = jnp.zeros_like(base).at[pp].set(owed_bit.astype(base.dtype))
-        state = pay_exp(tables, _with_alive(pre, _alive_mask(pre) & ~owed), state)
+        state = _pay_all(tables, _with_alive(pre, _alive_mask(pre) & ~owed), state)
         # moveStatusFlags & SUPER_EFFECTIVE: the U-turn chase's Pursuit overwrites the paused
         # hit's (lib.c:3359); the tail (MODE_PURSUIT, a later MODE_RESUME) reads it (SF2 (i)). A
         # switch's Pursuit has no tail.
@@ -3463,7 +3478,7 @@ def _execute_actions(
             [(side_of(b) == 0) & ~over[b] & (real[b] < MOVE_ACTIONS) for b in range(fmt.B)]
         )
         pending = (side_of(side) == 1) & jnp.any(to_come)
-        done = pay_exp(tables, _with_alive(acted, base | owed), done, pending, real[0])
+        done = _pay_all(tables, _with_alive(acted, base | owed), done, pending, real[0])
         state = _where(stop, acted, done)
         # moveEffectsData.quickClaw / .custapBerry (SF2 (k)): the acting battler's BeforeMove
         # cleared its own (subscript_check_quick_claw.s:22-28; not a pursuer's or a resumed tail),
@@ -4268,7 +4283,7 @@ def field_conditions(tables: Tables, state: BattleState, sides) -> BattleState:
         state = _where(effects, _weather_effect(state, side, ability), state)
     state = _faint_check(tables, before, state)
     # The loop head's AnyExpPayout (bcp.c:938-944) pays for the chip's faint.
-    state = pay_exp(tables, before, state)
+    state = _pay_all(tables, before, state)
 
     # FIELD_COND_CHECK_STATE_GRAVITY (bcp.c:1227-1238): one turn off the counter; at 0 vanilla's
     # subscript_gravity_end only prints, Kaizo's (sub_seq 238, ``Tables.gravity_rearm``) sets the
@@ -4320,7 +4335,7 @@ def end_of_turn(
         # it), and it cannot happen here; whoever adds Liquid Ooze must pay after every check
         # again. The reference engine pays after every check, as the decomp does; the
         # differential tests compare the two.
-        state = pay_exp(tables, start, state)
+        state = _pay_all(tables, start, state)
     return state._replace(flinched=jnp.zeros_like(state.flinched))
 
 
@@ -4432,7 +4447,7 @@ def _future_sight(
     state = _trick_room_check(tables, state, live)
     # TurnEnd's CheckBattleOver (bcp.c:1845) after the whole side-condition pass.
     state = _faint_check(tables, state, state)
-    return pay_exp(tables, start, state)
+    return _pay_all(tables, start, state)
 
 
 def _trick_room_check(tables: Tables, state: BattleState, live) -> BattleState:

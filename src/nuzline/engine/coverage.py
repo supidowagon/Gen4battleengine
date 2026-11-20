@@ -331,8 +331,6 @@ def _replacement_point(state: BattleState) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-8: faint and payout order over four; deleted by D3-8
-    TurnClause("D3-8", "faint and payout order over four", lambda t, s, a: _four(s)),
     # D3-9: Pursuit scan over four (pursuit_fires, _pursues); deleted by D3-9
     TurnClause(
         "D3-9",
