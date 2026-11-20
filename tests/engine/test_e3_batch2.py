@@ -1425,6 +1425,7 @@ def test_magic_coats_doubles_paths_follow_the_decomp(tables, names):
     assert _waiting(turn) == 1
 
 
+@pytest.mark.slow  # 49 s, peak 8.17 GB, +4 GB over a loaded step (fast tier: 60 s, 4 GB); run on the pod
 def test_kaizos_reflectable_moves_are_reflected_too(kaizo_tables, kaizo_names):
     """Owed 1 (E3-1-3, E3-2-1) and E3-B2-4's ruling 1: Kaizo's Disable, Encore, Spite, Torment and
     the hazards carry CAN_MAGIC_COAT and meet the Magic Coat with the holder as attacker (the

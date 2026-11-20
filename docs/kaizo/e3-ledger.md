@@ -832,6 +832,9 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   bcp.c:3069), so the flag test never passes. At B = 2 both are the mover. Test:
   `test_magic_coats_doubles_paths_follow_the_decomp`. Not built: none (the pass itself is per side, the step skeleton's
   accepted rework, doubles-state-design section 5).
+  Test weight (review b2 #10, measured locally 19 Nov): `test_kaizos_reflectable_moves_are_reflected_too` 49 s, peak
+  8.17 GB, about 4 GB above a loaded step: marked `slow` (pod). `test_kaizos_priority_puts_lucky_chant_before_a_faster_foe`
+  and `test_metronome_calling_defog_runs_defogs_script_with_metronomes_pp` under 1 s, no growth: fast tier.
   Tests: tests/engine/test_e3_batch2.py (`test_magic_coat_*`, `test_a_reflect*`, `test_the_metronome_count_follows_the_passes`),
   tests/ai/test_kaizo_policy.py (`test_magic_coat_*`, `test_expert_magic_coat`, the exact-equals-loose list),
   tests/engine/test_state.py (`test_magic_coat_flag_maps_to_magic_coat`),
