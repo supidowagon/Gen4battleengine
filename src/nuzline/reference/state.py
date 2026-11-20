@@ -38,8 +38,7 @@ class RefPokemon:
     ability_form: int  # the form whose personal row ability_slot indexes (engine.state)
     item: int
     item_consumed: int
-    knocked_off: int  # the slot's knockedOffItemsMask bit (B10-6)
-    knocked_item: int  # the party's item while knocked_off is set (engine.state), else 0
+    knocked_item: int  # the party's item while its side's knocked_off bit is set (engine.state)
     moves: list[int]
     pp: list[int]
     pp_ups: list[int]  # BattleMon.ppUps (E1 Batch D)
@@ -175,6 +174,7 @@ class RefBattler:
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
     ts_speed_order: int  # the paused action's monSpeedOrder entry (D3-10; B = 4 only)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
+    ts_helping_hand: int  # turnFlags.helpingHand, 0 between turns (D3 fix B)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)
 
@@ -192,6 +192,9 @@ class RefSideConds:
     tailwind: int
     future_sight: int  # SIDE_CONDITION_FUTURE_SIGHT
     ts_follow_me: int  # 1 + followMeUser while followMe is set, else 0 (D2-11)
+    # knockedOffItemsMask (battle_context.h:49) as one 0/1 per party slot: the side's bit, shared by
+    # every party of the side (B10-6, D3 fix B)
+    knocked_off: list[int]
 
 
 @dataclass

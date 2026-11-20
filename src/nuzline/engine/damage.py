@@ -1414,8 +1414,9 @@ def beat_up_damage(
     Defense (DEFENDING_MON.species and formNum: the personal rows, ``species_form_row``) / 50 +
     2, x criticalMul (2, Sniper
     3: BattleSystem_CalcCriticalMulti, battle_lib.c:7139-7144, the user's ability), then
-    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Helping Hand (:6214) is a doubles
-    flag. No CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
+    BattleSystem_CalcDamageVariance (:7081-7092: at least 1). Between them the attacker's
+    turnFlags.helpingHand multiplies by 15/10 (:6214-6216; ``ts_helping_hand``, B = 4 only). No
+    CalcDamage, so no stage, item, ability, status, screen or weather modifier, and
     SYSCTL_IGNORE_IMMUNITIES (effect_script_0154.s:5) skips the type chart (bcp.c:2355): no STAB
     or effectiveness (B13-10)."""
     fmt = format_of(state)
@@ -1439,6 +1440,7 @@ def beat_up_damage(
     user_ability = _i32(battler_ability(state, atk_side))
     crit_mul = jnp.where(user_ability == AbilityId.SNIPER, SNIPER_CRIT_MUL, CRIT_MUL)
     damage = jnp.where(jnp.asarray(crit, jnp.bool_), damage * crit_mul, damage)
+    damage = jnp.where(state.ts_helping_hand[atk_side] != 0, damage * 15 // 10, damage)
     return jnp.maximum(damage * (85 + _i32(roll)) // 100, 1)
 
 
@@ -1582,8 +1584,14 @@ def _pre_random(
     power = jnp.where(drawn, PRESENT_POWER[jnp.clip(present, 0, PRESENT_HEAL - 1)], power)
     power = jnp.asarray(CONFUSION_POWER, _I32) if self_hit else power
     power = power * _i32(power_mul) // 10  # :6688 movePower * powerMul / 10
-    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul (Charge
-    # and Helping Hand, between them, are unsupported), never Struggle (the self-hit's move).
+    # :6694-6696 Helping Hand: movePower * 15 / 10 while the attacker's turnFlags.helpingHand is
+    # set (``ts_helping_hand``; B = 4 only, 0 between turns). CalcMoveDamage reads it for every
+    # caller: the move's hit, the confusion self-hit, Future Sight's setup and the AI's
+    # estimates (whose turn-start states have it 0).
+    helped = s.ts_helping_hand[atk_side] != 0
+    power = jnp.where(helped, power * 15 // 10, power)
+    # :6698-6702 Technician (attackerParams.ability): movePower <= 60 after powerMul and Helping
+    # Hand (Charge, before Helping Hand, is unsupported), never Struggle (the self-hit's move).
     technician = (_i32(battler_ability(s, atk_side, a_slot)) == AbilityId.TECHNICIAN) & (
         power <= 60
     )

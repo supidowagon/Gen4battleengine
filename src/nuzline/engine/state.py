@@ -294,7 +294,7 @@ from nuzline.data.forms import personal_row
 from nuzline.data.spec import PokemonSpec
 from nuzline.data.tables import Tables
 from nuzline.data.trainer import TERRAIN_NAMES, TERRAIN_UNKNOWN
-from nuzline.engine.format import MULTI, SINGLES, Format, format_of, party, side_of
+from nuzline.engine.format import MULTI, SINGLES, Format, format_of, party, party_sides, side_of
 from nuzline.engine.ids import (
     CHATTER_CHANCES,
     GRAVITY_TURNS,
@@ -336,11 +336,15 @@ class BattleState(NamedTuple):
     ability_form: jnp.ndarray  # int8, the form whose personal row ability_slot indexes
     item: jnp.ndarray  # int16
     item_consumed: jnp.ndarray  # int16, id of the last item consumed
-    # int8, the slot's bit of its side's knockedOffItemsMask (battle_script.c:6627), B10-6
+    # int8[S, 6], per SIDE: bit k of the side's SideConditions.knockedOffItemsMask, set by a
+    # Knock Off on any battler of the side whose selectedPartySlot is k (battle_context.h:49;
+    # battle_script.c:6627). Every party of the side shares it: a MULTI partner's slot k too
+    # (D3 fix B). Read with the battler's own slot (``knocked_off_at``)
     knocked_off: jnp.ndarray
-    # int16, the held item the party Pokemon keeps while ``knocked_off`` is set: the item Knock Off
-    # removed from the battle copy (never written to the party, battle_io_command.c:590-592);
-    # 0 otherwise. The exp payout reads the party item (``levelup.party_item``), D9
+    # int16[P, 6], the held item the party Pokemon keeps while its side's ``knocked_off`` bit is set:
+    # its item when the bit was set (the item Knock Off removed, for the knocked Pokemon), never
+    # written to the party after that (battle_io_command.c:590-592); 0 otherwise. The exp payout
+    # reads the party item (``party_held_item``), D9
     knocked_item: jnp.ndarray
     moves: jnp.ndarray  # int16[P,6,4]
     pp: jnp.ndarray  # int8[P,6,4]
@@ -580,6 +584,10 @@ class BattleState(NamedTuple):
     # int8[B], the Trace fires of the battler's slot in this step (D2-16, ruling D2-5): the index
     # into ``Outcome.trace_pick``; written at B = 4 only, 0 between turns
     ts_trace_fires: jnp.ndarray
+    # int8[B], turnFlags.helpingHand (battle_context.h:61): set on the partner by a Helping Hand
+    # that worked (BtlCmd_TryHelpingHand, battle_script.c:6291-6314; B = 4 only), cleared by
+    # CleanupFaintedMon (battle_lib.c:2190-2193) and SetupNextTurn (:2231): 0 between turns
+    ts_helping_hand: jnp.ndarray
     # int8[B], battlerActions[b][1] (D2-1): the battler chosen as the target, kept across turns
     chosen_target: jnp.ndarray
     # int8[B], 1 + BattleContext.lastHitByBattler[b] (D2-14; bcp.c:3347, :3357): the battler that
@@ -784,7 +792,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ability_form": (_MON, np.int8),
     "item": (_MON, np.int16),
     "item_consumed": (_MON, np.int16),
-    "knocked_off": (_MON, np.int8),
+    "knocked_off": ((*_SIDE, SLOTS), np.int8),
     "knocked_item": (_MON, np.int16),
     "moves": ((*_MON, MOVES), np.int16),
     "pp": ((*_MON, MOVES), np.int8),
@@ -961,6 +969,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_sub_hit": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
+    "ts_helping_hand": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),
     "last_hit_by": (_BATTLER, np.int8),
 }
@@ -1043,14 +1052,32 @@ def party_held_item(state: BattleState, party, slot) -> jnp.ndarray:
     party Pokemon's ``MON_DATA_HELD_ITEM`` that the exp payout reads (battle_script.c:2210, :9706,
     :10226; D9), which is not always the BattleMon's ``item``. Every battle item change reaches
     the party through ``BattleMon_CopyToParty`` (battle_lib.c:1819-1823; UpdateMonData,
-    battle_script.c:3078, :3407; RemoveItem, :8981), except a Knock Off: its slot's
-    ``knockedOffItemsMask`` bit stops the write (battle_io_command.c:590-592), so the party keeps
-    the item Knock Off removed (``knocked_item``) for the rest of the battle. So: ``knocked_item``
-    while ``knocked_off`` is set, else ``item``."""
-    kept = state.knocked_item[party, slot]
+    battle_script.c:3078, :3407; RemoveItem, :8981), except where the party's side has the slot's
+    ``knockedOffItemsMask`` bit: UpdatePartyMon then skips the item (battle_io_command.c:590-592;
+    the side's mask, battle_controller.c:1472), so from the bit on the party keeps the item it had
+    then (``knocked_item``: the item Knock Off removed, for the knocked Pokemon) for the rest of
+    the battle. So: ``knocked_item`` while the side's ``knocked_off`` bit is set, else ``item``.
+    The bit is per side (D3 fix B): a MULTI partner's slot ``k`` Knock Off freezes party 0's slot
+    ``k`` too. B = 2: a set bit is its own knocked Pokemon's, whose ``knocked_item`` is nonzero
+    (Knock Off needs a held item); a drawn knocked-off user (tests/strategies.py) holds nothing
+    and has no ``recycle_item``, and the mask stops every other way back to an item, so ``item``
+    is 0 too: the value is the old rule's (``knocked_item`` only where it is nonzero)."""
+    sides = jnp.asarray(party_sides(format_of(state)))[party]
     return jnp.where(
-        (state.knocked_off[party, slot] != 0) & (kept != 0), kept, state.item[party, slot]
+        state.knocked_off[sides, slot] != 0,
+        state.knocked_item[party, slot],
+        state.item[party, slot],
     )
+
+
+def knocked_off_at(state: BattleState, b, slot=None) -> jnp.ndarray:
+    """``bool``: battler ``b``'s side has the ``knockedOffItemsMask`` bit of its party ``slot``
+    (default its active one, ``selectedPartySlot[b]``): ``sideConditions[side].knockedOffItemsMask
+    & FlagIndex(selectedPartySlot[b])`` (battle_lib.c:161, :3059, :5390, :7380; battle_script.c:
+    5105, 6348-6349)."""
+    b = jnp.asarray(b, jnp.int32)
+    slot = state.active[b] if slot is None else slot
+    return state.knocked_off[side_of(b), slot] != 0
 
 
 def held_items(state: BattleState) -> jnp.ndarray:

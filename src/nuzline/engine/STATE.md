@@ -434,12 +434,22 @@ three structs has a row.
     flags both entries, an enemy send-out clears and flags its own. The payout of enemy
     battler `b` reads and clears entry `(b >> 1) & 1` only (battle_script.c:2205, :9700,
     :9709, :9741, :10191).
-  - `knocked_item` (D9) is the party Pokemon's held item while its `knocked_off` bit is set:
-    the item Knock Off removed from the battle copy. The party copy is never written for such
-    a slot (battle_io_command.c:590-592), and the payout reads the party item (bs.c:2210,
-    :9706, :10226; `levelup.party_item`), so a knocked-off Lucky Egg or Exp. Share still pays.
-    Every other item change reaches the party at once (`BattleMon_CopyToParty`,
-    battle_lib.c:1819-1823). 0 when nothing was knocked off.
+  - `knocked_off` is per SIDE, int8[S, 6]: bit k of `SideConditions.knockedOffItemsMask`
+    (battle_context.h:49), set by a Knock Off on any battler of the side whose
+    `selectedPartySlot` is k (battle_script.c:6627). Every party of the side shares it (MULTI:
+    a Knock Off on battler 2's slot k covers party 0's slot k; TWO_TRAINERS: parties 1 and 2).
+    Readers take the battler's own slot (`state.knocked_off_at`): InitBattleMon zeroes the
+    battle item of a newcomer under the bit (battle_lib.c:161-163, `step._switch_in`), the
+    Sticky Barb transfers skip such an attacker (:5390, :7380), UpdatePartyMon skips the item
+    (battle_io_command.c:590-592; the side's mask, battle_controller.c:1472). D3 fix B; at
+    B = 2 the side is the party, so the values are unchanged.
+  - `knocked_item` (D9) is the party Pokemon's held item while its side's `knocked_off` bit is
+    set: its item when the bit was set (for the knocked Pokemon the item Knock Off removed;
+    for another party's slot k its item then, which it keeps on the field until it is loaded
+    again). The party copy is never written under the bit (battle_io_command.c:590-592), and
+    the payout reads the party item (bs.c:2210, :9706, :10226; `state.party_held_item`), so a
+    knocked-off Lucky Egg or Exp. Share still pays. Every other item change reaches the party
+    at once (`BattleMon_CopyToParty`, battle_lib.c:1819-1823). 0 when no bit covers the slot.
   - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
     next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
     level, battle_script.c:9882). `learn_pin` (the move slot the player selected, when a
@@ -485,7 +495,11 @@ three structs has a row.
   is clear; `BattleSystem_SetupNextTurn` clears it, battle_lib.c:2251-2252, D2-11; written in both
   formats, ruling D2-33: at B = 2 the other side's non-Ghost Curse reads it, lib.c:1714-1717),
   `ts_defender` / `ts_speed_order` (the paused action's `battleCtx->defender` as `1 + defender` and `monSpeedOrder`, written at B = 4 only, D3-10), `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
-  itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
+  itself and Assurance reads, B13-17; `ts_helping_hand`: `turnFlags.helpingHand` per battler,
+  set on the partner by a Helping Hand that worked (battle_script.c:6291-6314, B = 4 only),
+  read by CalcMoveDamage (battle_lib.c:6694-6696), Future Sight's setup (battle_script.c:
+  6092-6094) and Beat Up (:6214-6216), cleared by `CleanupFaintedMon` (battle_lib.c:2190-2193)
+  and the turn's end (D3 fix B); `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
   battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
   action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `focusItemActivated` and
   `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`);
@@ -748,7 +762,7 @@ three structs has a row.
 | `BattleContext.fieldConditions` | `weather_timer`, `future_timer`, `future_damage`, `wish_timer` | mapped |
 | `BattleContext.sideConditionsMask` | `stealth_rock`, `tailwind`, `lucky_chant`, `future_sight` | mapped |
 | `BattleContext.sideConditions` | `reflect`, `light_screen`, `mist`, `safeguard`, `spikes`, `toxic_spikes` | mapped |
-| `BattleContext.turnFlags` | `roosting`, `ts_assurance` | mapped |
+| `BattleContext.turnFlags` | `roosting`, `ts_assurance`, `ts_helping_hand` | mapped |
 | `BattleContext.selfTurnFlags` | `ts_sub_hit` | mapped |
 | `BattleContext.moveFailFlags` | — | not needed because it is reset every turn and `step` resolves a whole turn (its only reader, the Uproar check, reads the turn's `move_failed` event) |
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |

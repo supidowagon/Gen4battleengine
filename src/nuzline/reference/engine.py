@@ -36,7 +36,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from nuzline.engine.format import MULTI, blackout_parties, side_of, side_out_parties
+from nuzline.engine.format import MULTI, blackout_parties, party_sides, side_of, side_out_parties
 from nuzline.engine.format import foe as _foe
 from nuzline.engine.format import party as _party
 from nuzline.engine.ids import (
@@ -351,6 +351,10 @@ class _Turn:
     # one coin per battler), None inside it (the outcome's).
     trace_fires: list[int] = field(default_factory=lambda: [0, 0])
     trace_pick: list[int] | None = None
+    # turnFlags.helpingHand per battler (battle_context.h:61): set on the partner by a Helping Hand
+    # that worked (script.c:6305, B = 4 only), cleared by SetupNextTurn and CleanupFaintedMon
+    # (lib.c:2231, :2190-2193); BattleState.ts_helping_hand at a pause (D3 fix B).
+    helping_hand: list[bool] = field(default_factory=lambda: [False, False])
 
     def __post_init__(self) -> None:
         n = self.battler_count
@@ -368,7 +372,7 @@ class _Turn:
 # The _Turn lists of one bool per battler.
 _TURN_FLAGS = (
     "done", "acted", "protecting", "enduring", "roosting", "custap", "claw", "move_failed", "assurance",
-    "entered",
+    "entered", "helping_hand",
 )  # fmt: skip
 
 
@@ -1415,11 +1419,13 @@ def _calc_move_damage(
     field_conditions: bool = True,
     hit: int = 0,
     gift: int = 0,
+    helped: bool = False,
 ) -> int:
     """``BattleSystem_CalcMoveDamage`` (lib.c:6601) times ``criticalMul``
     (``BattleScript_CalcMoveDamage``, script.c:1344). ``side_conditions`` /
     ``field_conditions`` False is the confusion self-hit's 0 masks. ``hit``: the hit of the move
-    (0-based), Triple Kick's power."""
+    (0-based), Triple Kick's power. ``helped``: the attacker's turnFlags.helpingHand
+    (``_Turn.helping_hand``; lib.c:6694-6696)."""
     atk, dfn = _active(s, attacker), _active(s, defender)
     attack, sp_attack = _battle_stat(s, attacker, Stat.ATK), atk.stats[Stat.SPA - 1]
     defense, sp_defense = _battle_stat(s, defender, Stat.DEF), dfn.stats[Stat.SPD - 1]
@@ -1476,6 +1482,8 @@ def _calc_move_damage(
         power = _t(tables, "item_gift_power", _gift_item(s, attacker, gift))
     move_type = _move_type(tables, s, attacker, move, gift)  # lib.c:6680 (Normalize is unsupported)
     power = power * power_mul // 10  # lib.c:6688
+    if helped:  # lib.c:6694-6696 Helping Hand (Charge, before it, is unsupported)
+        power = power * 15 // 10
     # lib.c:6698-6702 Technician: movePower <= 60, not Struggle.
     if a_ability == AbilityId.TECHNICIAN and move != MOVE_STRUGGLE and power <= 60:
         power = power * 15 // 10
@@ -1787,10 +1795,11 @@ def _beat_up_slots(s: RefState, side: int) -> list[int]:
 
 
 def _beat_up_damage(tables, s: RefState, attacker: int, defender: int, move: int, crit: bool,
-                    roll: int, hit: int) -> int:  # fmt: skip
+                    roll: int, hit: int, helped: bool = False) -> int:  # fmt: skip
     """BtlCmd_BeatUp's damage (script.c:6203-6219): the member's species base Attack x power x
-    (level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2, x criticalMul, then the
-    variance; no CalcDamage, no type chart (SYSCTL_IGNORE_IMMUNITIES), B13-10."""
+    (level x 2 / 5 + 2) / the defender's species base Defense / 50 + 2, x criticalMul, x15/10
+    with the attacker's turnFlags.helpingHand (``helped``, :6214-6216), then the variance; no
+    CalcDamage, no type chart (SYSCTL_IGNORE_IMMUNITIES), B13-10."""
     member = _party_of(s, attacker).mons[_beat_up_slots(s, attacker)[hit]]
     # SpeciesData_GetFormValue: by species and form, the personal row.
     row = _t(tables, "species_form_row", member.species, member.form)
@@ -1801,6 +1810,8 @@ def _beat_up_damage(tables, s: RefState, attacker: int, defender: int, move: int
     damage = damage // _t(tables, "species_base_stats", d_row, Stat.DEF) // 50 + 2
     if crit:  # BattleSystem_CalcCriticalMulti (lib.c:7139-7144): x3 for the user's Sniper
         damage *= 3 if _ability(s, _active(s, attacker)) == AbilityId.SNIPER else 2
+    if helped:
+        damage = damage * 15 // 10
     return _variance(damage, roll)
 
 
@@ -1833,9 +1844,9 @@ def _me_first_after_calc(s: RefState, side: int) -> None:
 def _move_damage(
     tables, s: RefState, attacker: int, move: int, crit: bool, roll: int, power_mul=10,
     magnitude: int = 4, present: int = -1, wonder_guard: bool = True, hit: int = 0,
-    in_power: int = 0, gift: int = 0, defender: int | None = None,
+    in_power: int = 0, gift: int = 0, defender: int | None = None, helped: bool = False,
 ):  # fmt: skip
-    """One hit's damage: the move script's ``CalcDamage`` and variance, then the
+    """One hit's damage (``helped``: the attacker's turnFlags.helpingHand, ``_calc_move_damage``): the move script's ``CalcDamage`` and variance, then the
     controller's type chart (``TRY_MOVE_STATE_CHECK_TYPE_CHART``, bcp.c:3272). A
     status move never calculates damage; ``CheckTypeChart`` needs base power
     (bcp.c:2354). Present's heal path jumps past ``CalcDamage`` (effect_script_0122.s).
@@ -1849,7 +1860,7 @@ def _move_damage(
     if _t(tables, "move_effect", move) in UNROLLED_EFFECTS:
         return _fixed_damage(tables, s, attacker, move, wonder_guard, defender)
     if _t(tables, "move_effect", move) == EffectId.BEAT_UP:
-        return _beat_up_damage(tables, s, attacker, defender, move, crit, roll, hit)
+        return _beat_up_damage(tables, s, attacker, defender, move, crit, roll, hit, helped)
     # effect_script_0048.s, _0269.s: a Reckless user's RECOIL move sets powerMul to 12; so do
     # effect_script_0045.s (Jump Kick), _0253.s and _0262.s (B10-1, B10-2).
     if (
@@ -1887,6 +1898,7 @@ def _move_damage(
         hit=hit,
         in_power=in_power,
         gift=gift,
+        helped=helped,
     )
     # script.c:1346-1348: Life Orb, after criticalMul.
     atk = _active(s, attacker)
@@ -1921,6 +1933,7 @@ def _cleanup_fainted(turn: _Turn, s: RefState, side: int) -> None:
     _reset_battler(s.battlers[side])
     turn.claw[side] = turn.custap[side] = False  # moveEffectsData (lib.c:2185-2188), SF2 (k)
     turn.assurance[side] = False  # its turnFlags (lib.c:2190-2193), B13-17
+    turn.helping_hand[side] = False  # helpingHand too (D3 fix B)
     s.battlers[side].fake_out_turn = turn.entry_turn
     s.battlers[side].truant = turn.entry_turn & 1  # lib.c:2197
     _source_leaves(s, side, faint=True)
@@ -2155,7 +2168,16 @@ def party_held_item(s: RefState, party: int, slot: int) -> int:
     write, battle_io_command.c:590-592), else ``item`` (every other change copies through
     ``BattleMon_CopyToParty``, battle_lib.c:1819-1823)."""
     mon = s.parties[party].mons[slot]
-    return mon.knocked_item if mon.knocked_off and mon.knocked_item else mon.item
+    knocked = s.sides[party_sides(_fmt(s))[party]].knocked_off[slot]  # the side's bit (D3 fix B)
+    return mon.knocked_item if knocked else mon.item
+
+
+def _knocked_off(s: RefState, b: int, slot: int | None = None) -> bool:
+    """``engine.state.knocked_off_at``: battler ``b``'s side has the knockedOffItemsMask bit of
+    its party ``slot`` (default its active one, selectedPartySlot[b]; lib.c:161, :5390,
+    :7380)."""
+    slot = s.battlers[b].active if slot is None else slot
+    return bool(s.sides[side_of(b)].knocked_off[slot])
 
 
 def _hold_effect(tables, item: int) -> int:
@@ -3388,6 +3410,10 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
+    # InitBattleMon (lib.c:161-163): no battle item under the side's knockedOffItemsMask bit of
+    # the slot (an item here only at B = 4: a partner's Knock Off on that slot, D3 fix B).
+    if _knocked_off(s, side, slot):
+        newcomer.item = 0
     sd.fake_out_turn = turn.entry_turn
     sd.truant = turn.entry_turn & 1  # lib.c:2119
     # lib.c:2151-2153: the AI forgets the battler's moves, ability and held item (a party-0
@@ -4116,7 +4142,15 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
             or turn.custap[target]
         )
         if foe.item and not blocked and not sticky:
-            foe.knocked_item, foe.item, foe.knocked_off = foe.item, 0, 1
+            # The bit is the defender side's (script.c:6627): every party of the side freezes its
+            # slot-``k`` party item where the bit is new (battle_io_command.c:590-592; D3 fix B).
+            k, sc = s.battlers[target].active, s.sides[side_of(target)]
+            if not sc.knocked_off[k]:
+                for p, pt in enumerate(s.parties):
+                    if party_sides(_fmt(s))[p] == side_of(target):
+                        pt.mons[k].knocked_item = pt.mons[k].item
+            foe.item = 0
+            sc.knocked_off[k] = 1
     elif effect == EffectId.EMBARGO and effective:
         # effect_script_0232.s: a direct ON_HIT subscript_embargo_start.s (no HP check); its
         # failures (:5-11) then embargoTurns = 5 with the bit (:13-14), B13-31.
@@ -4505,7 +4539,7 @@ def _sticky_barb_transfer(turn: _Turn, s: RefState, side: int, foe: int, move: i
     if _item_effect(tables, holder, s) != ItemId.STICKY_BARB:
         return
     # lib.c:5390-5391 (B10-6): not a knocked-off attacker, not Knock Off itself.
-    if user.knocked_off or move == MOVE_KNOCK_OFF:
+    if _knocked_off(s, side) or move == MOVE_KNOCK_OFF:
         return
     if user.hp and user.item == 0 and _t(tables, "move_flags", move) & MoveFlag.CONTACT:
         user.item, holder.item = holder.item, 0
@@ -4747,6 +4781,7 @@ def _hit(turn: _Turn, s: RefState, side: int, move: int, hit: int, struggling: b
             in_power=_script_power(turn, s, side, target, move),
             gift=turn.gift,
             defender=tg,
+            helped=turn.helping_hand[side],  # turnFlags[attacker].helpingHand (lib.c:6694)
         )
     # The same CalcDamage's Me First counter update (battle_script.c:1356-1363, E3-2-3).
     if (
@@ -4913,7 +4948,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         and _item_effect(tables, holder, s) == ItemId.STICKY_BARB
         and user.hp
         and user.item == 0
-        and not user.knocked_off  # lib.c:7380 (B10-6)
+        and not _knocked_off(s, side)  # lib.c:7380 (B10-6; the side's bit)
         and _t(tables, "move_flags", move) & MoveFlag.CONTACT
     )
     jaboca = (
@@ -5065,6 +5100,7 @@ def _status_disrupted(turn: _Turn, s: RefState, side: int, move: int) -> int:
                 in_power=CONFUSION_SELF_HIT_POWER,
                 side_conditions=False,
                 field_conditions=False,
+                helped=turn.helping_hand[side],  # CALC_SELF_HIT is CalcMoveDamage (common.h:35)
             )
             damage = _variance(damage, o.roll[side][0])
             # subscript_hurt_self_in_confusion.s: CheckHoldOnWith1HP on the user
@@ -5755,10 +5791,14 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         foe_sd.future_timer = FUTURE_SIGHT_TURNS
         foe_sd.future_move = move
         foe_sd.future_attacker = side + 1
-        damage = _calc_move_damage(tables, s, side, turn.target_side, move, False)
+        helped = turn.helping_hand[side]
+        damage = _calc_move_damage(tables, s, side, turn.target_side, move, False, helped=helped)
+        damage = _variance(damage, o.roll[side][0])
+        if helped:  # script.c:6092-6094, again after CalcMoveDamage's (a negative s32: truncated)
+            damage = damage * 15 // 10
         # An s32 in the decomp; read only through min(damage, curHP) and damage >= curHP, so it is
         # kept capped to BattleState's int16 storage.
-        foe_sd.future_damage = min(_variance(damage, o.roll[side][0]), 32767)
+        foe_sd.future_damage = min(damage, 32767)
     if effect == EffectId.FAKE_OUT and s.battlers[side].fake_out_turn != s.turn:
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
@@ -5785,6 +5825,23 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
     script_failed = _script_fails(
         s, side, effect, _t(tables, "move_param", move, 1), turn.target_side
     )
+    # Helping Hand (effect_script_0176.s:5, :12-14): BtlCmd_TryHelpingHand (script.c:6291-6314)
+    # fails outside a double battle (:6309-6311; B9-5). At B = 4 it works when the partner
+    # (``side ^ 2``) is not MOVE_END (acted, pursued, dragged, entered, at 0 HP: ``moved`` of
+    # ``_actions``; an absent partner has 0 HP, so battlersSwitchingMask adds nothing), has HP,
+    # and neither its nor the user's turnFlags.helpingHand is set (:6299-6303); then the
+    # partner's flag is set (:6305).
+    if effect == EffectId.HELPING_HAND:
+        mate = side ^ 2
+        helps = (
+            _fmt(s).B == 4
+            and not (turn.done[mate] or turn.entered[mate] or _active(s, mate).hp == 0)
+            and not turn.helping_hand[side]
+            and not turn.helping_hand[mate]
+        )
+        if helps:
+            turn.helping_hand[mate] = True
+        script_failed = not helps
     if script_failed or lost_focus:
         _unlock(s.battlers[side])  # subscript_missed.s
         return record
@@ -5949,7 +6006,7 @@ def _fight(turn: _Turn, s: RefState, side: int, action: int, move: int,
         would = _move_damage(
             tables, s, side, move,
             _crits(tables, s, side, move, o.crit[side][0]) and not _crit_blocked(s, side, tgt),
-            o.roll[side][0], wonder_guard=False, defender=tgt,
+            o.roll[side][0], wonder_guard=False, defender=tgt, helped=turn.helping_hand[side],
         )  # fmt: skip
         cap = _divide(_active(s, tgt).max_hp, 2)
         _lose_hp(turn, s, side, min(_divide(would, 2), cap))
@@ -6416,7 +6473,8 @@ def _pursuit_hit(turn: _Turn, s: RefState, side: int, pursuer: int, actions, cho
         s, pursuer, side
     )
     damage = _move_damage(tables, s, pursuer, move, crit, o.roll[pursuer][0],
-                          PURSUIT_POWER_MUL, defender=side)  # fmt: skip
+                          PURSUIT_POWER_MUL, defender=side,
+                          helped=turn.helping_hand[pursuer])  # fmt: skip
     target_sd = s.battlers[side]
     if damage > 0 and target_sd.substitute_hp:
         # subscript_pursuit.s:20, :56-73 (B10-4): the substitute breaks when substituteHP <=
@@ -7330,8 +7388,6 @@ def _script_fails(s: RefState, side: int, effect: int, move_param1: int = 0,
     """A user-effect script's MOVE_STATUS_FAILED (``_use_move``); ``target`` is the action's
     defender (BTLSCR_DEFENDER of Dream Eater, Embargo and Endeavor)."""
     sd = s.battlers[side]
-    if effect == EffectId.HELPING_HAND:  # BtlCmd_TryHelpingHand: no partner (script.c:6309-6311)
-        return True
     if effect == EffectId.FLEE:  # effect_script_0153.s:5, :9-10: a trainer battle (E3-1-4)
         return True
     if effect == EffectId.DRAIN and move_param1 == 1:  # Dream Eater, effect_script_0008.s:5-6
@@ -7988,7 +8044,7 @@ def _stale_snapshot(s: RefState) -> list[tuple[int, int, bool, int]]:
         if _party(_fmt(s), b) == 0:
             slot = s.battlers[b].active
             mon = s.parties[0].mons[slot]
-            snaps.append((b, slot, bool(mon.knocked_off), mon.hp))
+            snaps.append((b, slot, _knocked_off(s, b, slot), mon.hp))
     return snaps
 
 
@@ -8135,6 +8191,7 @@ def _write_scratch(turn: _Turn, s: RefState) -> None:
     _put(s, "ts_switched", [int(c == SWITCH) for c in turn.commands])
     s.ts_pick_mul = turn.pick_mul
     _put(s, "ts_assurance", [int(f) for f in turn.assurance])
+    _put(s, "ts_helping_hand", [int(f) for f in turn.helping_hand])
     _put(s, "ts_trace_fires", turn.trace_fires)
     for k, sc in enumerate(s.sides):
         sc.ts_follow_me = turn.follow_me[k]
@@ -8217,6 +8274,7 @@ def _resume(
     turn.move_failed = [bool(f) for f in _get(s, "ts_move_failed")]
     turn.power_mul, turn.pick_mul = s.ts_power_mul, s.ts_pick_mul
     turn.assurance = [bool(f) for f in _get(s, "ts_assurance")]
+    turn.helping_hand = [bool(f) for f in _get(s, "ts_helping_hand")]
     flagged = [k for k, sd in enumerate(s.battlers) if sd.ts_sub_hit]  # the paused action's (F-4)
     turn.sub_hit, turn.sub_hit_mon = bool(flagged), flagged[0] if flagged else -1
     turn.trace_fires = _get(s, "ts_trace_fires")

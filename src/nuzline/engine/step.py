@@ -286,6 +286,7 @@ from nuzline.engine.state import (
     battler_ability,
     field_index,
     held_item,
+    knocked_off_at,
     record_seen_move,
 )
 from nuzline.engine.switch_in import run_states, show_battle_mon4
@@ -716,6 +717,11 @@ def _switch_in(
     state = state._replace(
         friendship=state.friendship.at[row, slot].set(state.party_friendship[row, slot])
     )
+    # InitBattleMon (battle_lib.c:161-163): a newcomer whose side has its slot's
+    # knockedOffItemsMask bit holds nothing in battle, whatever its party item (``knocked_item``
+    # keeps that). Reached with an item only at B = 4: a partner's Knock Off on the same slot
+    # number (D3 fix B); at B = 2 the bit is the newcomer's own, set with its item removed.
+    state = _set_mon(state, "item", side, slot, 0, knocked_off_at(state, side, slot))
     state = _forget(state, side, slot)
     state = _entered(state, side, entry_turn, True)
     state = state._replace(active=state.active.at[side].set(jnp.asarray(slot).astype(jnp.int8)))
@@ -1547,9 +1553,26 @@ def _use_move(
     failed = failed | ((effect_used == EffectId.MAGNET_RISE) & magnet_rise_fails(state, side))
     # Gravity (effect_script_0215.s:3, :9-10): MOVE_STATUS_FAILED with Gravity already up (G-67).
     failed = failed | ((effect_used == EffectId.GRAVITY) & (state.gravity != 0))
-    # Helping Hand (effect_script_0176.s:5, :15-17): BtlCmd_TryHelpingHand fails outside a double
-    # battle (battle_script.c:6309-6311), so always in singles (B9-5).
-    failed = failed | (effect_used == EffectId.HELPING_HAND)
+    # Helping Hand (effect_script_0176.s:5, :12-14): BtlCmd_TryHelpingHand (battle_script.c:
+    # 6291-6314) fails outside a double battle (:6309-6311), so always in singles (B9-5). At B = 4
+    # (every four-battler format is BATTLE_TYPE_DOUBLES) it works when the partner
+    # (BTLSCR_ATTACKER_PARTNER, ``side ^ 2``) is not in battlersSwitchingMask, its PICK_COMMAND is
+    # not MOVE_END (``moved``: acted, pursued, dragged, entered or at 0 HP), its curHP is
+    # nonzero, and neither the user's nor the partner's turnFlags.helpingHand is set (:6299-6303);
+    # an absent partner has 0 HP (``actions.absent_now``). Then the partner's flag is set
+    # (``ts_helping_hand``, below, once the script runs).
+    helping = effect_used == EffectId.HELPING_HAND
+    if fmt.B == 4:
+        mate = jnp.asarray(side, _I32) ^ 2
+        helps = (
+            ~jnp.asarray(moved, bool)[mate]
+            & (state.hp[party(fmt, mate), state.active[mate]] > 0)
+            & (state.ts_helping_hand[side] == 0)
+            & (state.ts_helping_hand[mate] == 0)
+        )
+    else:
+        mate, helps = None, jnp.bool_(False)
+    failed = failed | (helping & ~helps)
     # Teleport (effect_script_0153.s:5, :9-10): MOVE_STATUS_FAILED in a trainer battle, which every
     # Nuzline battle is (E3-1-4); it still counts as used (bcp.c:3212, :3945-3949).
     failed = failed | (effect_used == EffectId.FLEE)
@@ -1619,6 +1642,10 @@ def _use_move(
     # Written in both formats (ruling D2-33): at B = 2 the other side's non-Ghost Curse reads it.
     follow = script_on & (effect_used == EffectId.FOLLOW_ME)
     state = _set_side(state, "ts_follow_me", side, side + 1, follow)
+    # Helping Hand that works (above): turnFlags[partner].helpingHand = TRUE (battle_script.c:6305),
+    # a turn flag (``ts_helping_hand``) that the partner's CalcMoveDamage reads this turn.
+    if fmt.B == 4:
+        state = _set_side(state, "ts_helping_hand", mate, 1, script_on & helping & helps)
     # Mud Sport and Water Sport fail the same way (effect_script_0201.s:5, _0210.s:5).
     failed = failed | ((effect_used == EffectId.MUD_SPORT) & (state.mud_sport[side] != 0))
     failed = failed | ((effect_used == EffectId.WATER_SPORT) & (state.water_sport[side] != 0))
@@ -1630,7 +1657,8 @@ def _use_move(
     # the field's conditions of now, :6079-6089; no type chart, no STAB, no Life Orb) times -1,
     # then BattleSystem_CalcDamageVariance (:6090; battle_lib.c:7081-7094: RandNext() % 16,
     # Outcome.roll[side, 0]; CalcMoveDamage's + 2 keeps it nonzero, so the "at least 1" never turns
-    # its sign); Helping Hand (x15/10, :6092-6094) is unsupported. The script then sets SYSCTL_NONSTANDARD_ACC_CHECK and
+    # its sign); then the attacker's turnFlags.helpingHand multiplies it by 15/10 again (:6092-6094,
+    # after CalcMoveDamage's own x15/10, battle_lib.c:6694-6696). The script then sets SYSCTL_NONSTANDARD_ACC_CHECK and
     # SYSCTL_IGNORE_IMMUNITIES (:7): no accuracy roll (bcp.c:2911-2913), no type chart (:2354),
     # and its ON_HIT effect only prints. With one pending it prints "But it failed!"
     # (:10-14, subscript_but_it_failed.s: MOVE_STATUS_NO_MORE_WORK, no AfterMoveEffects, no miss
@@ -1643,6 +1671,9 @@ def _use_move(
     # CalcMoveDamage against battleCtx->defender (battle_script.c:6079-6089).
     stored = calc_move_damage(tables, state, side, used, def_side=target_side)
     stored = jnp.maximum(stored * rolled // 100, 1)
+    # :6092-6094: the stored s32 is negative there; C's division truncates toward 0, so the
+    # magnitude is floored. 0 at B = 2 (no Helping Hand works there).
+    stored = jnp.where(state.ts_helping_hand[side] != 0, stored * 15 // 10, stored)
     # futureSightDamage is an s32; the hit reads it only through min(damage, curHP) and
     # damage >= curHP, so it is kept capped to the int16 storage (above any HP).
     stored = jnp.minimum(stored, FUTURE_DAMAGE_MAX)
@@ -3248,11 +3279,15 @@ def _faint_check(
         after = _reset_battler(after, side, active_fainted)
         after = _entered(after, side, entry_turn, active_fainted)
         after = _source_leaves(after, side, active_fainted, faint=True)
-        # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17.
+        # CleanupFaintedMon zeroes the battler's turnFlags (battle_lib.c:2190-2193), B13-17;
+        # helpingHand among them (D3 fix B).
         after = after._replace(
             ts_assurance=after.ts_assurance.at[side].set(
                 jnp.where(active_fainted, 0, after.ts_assurance[side]).astype(jnp.int8)
-            )
+            ),
+            ts_helping_hand=after.ts_helping_hand.at[side].set(
+                jnp.where(active_fainted, 0, after.ts_helping_hand[side]).astype(jnp.int8)
+            ),
         )
     return after
 
@@ -3854,6 +3889,8 @@ def _execute_actions(
         "ts_follow_me": state.ts_follow_me,
         # Trace fires of the step (D2-16): 0 once the turn completes, kept at a pause.
         "ts_trace_fires": state.ts_trace_fires,
+        # turnFlags.helpingHand (D3 fix B): SetupNextTurn clears it (lib.c:2231), kept at a pause.
+        "ts_helping_hand": state.ts_helping_hand,
     }
     if set(scratch) != set(TURN_SCRATCH):
         raise RuntimeError("the pause must write every ts_* field")
@@ -4143,9 +4180,7 @@ def _stale_known_item(before: BattleState, after: BattleState, fought) -> Battle
     fought = jnp.broadcast_to(jnp.asarray(fought, bool), (fmt.B,))
     for side in range(fmt.B):
         mon = before.active[side]
-        stale = (before.knocked_off[party(fmt, side), mon] != 0) & (
-            after.item[party(fmt, side), mon] == 0
-        )
+        stale = knocked_off_at(before, side, mon) & (after.item[party(fmt, side), mon] == 0)
         event = (after.hp[party(fmt, side), mon] != before.hp[party(fmt, side), mon]) | fought[side]
         after = forget_item(after, side, mon, stale & event)
     return after

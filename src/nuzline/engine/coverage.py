@@ -92,13 +92,19 @@ items) and plan 1b (Task 2b: trainer items; Task 3: Roark's AI flags) implement:
   a data form is built as its game builds it (G-41, ``data.trainer.build_trainer_party``):
   the base species' ability and default moves, the form's types, and the form's stats in
   Kaizo or the base's in vanilla;
-* battle format: only "single". The engine models one battler per side, so a trainer
-  whose header is a double battle, who is fought beside a second enemy trainer
-  ("double_two_trainer") or who is fought while the player has a partner ("multi", tag
-  battles and walking partners) is refused (``Trainer.format``). A four-battler state is
-  stepped only where the decomp's turn is the two-battler turn: ``four_turn_refusals`` is the
-  per-turn refusal every four-battler caller runs before ``step`` (one clause per D3 group,
-  each deleted by its group);
+* battle format: only "single". A trainer whose header is a double battle, who is fought
+  beside a second enemy trainer ("double_two_trainer") or who is fought while the player has a
+  partner ("multi", tag battles and walking partners) is refused (``Trainer.format``,
+  ``IMPLEMENTED_FORMATS``), so no prep, search or CLI path plays a four-battler battle to a
+  result. Four-battler TURNS are no longer refused: ``FOUR_TURN_CLAUSES`` is empty (D3-16
+  deleted the last clause), so ``four_turn_refusals``, which every four-battler caller of
+  ``step`` still runs, refuses nothing, and ``step`` plays every four-battler turn. At B = 4
+  coverage checks only this battle-level format refusal. It must stay until D5 lands the Bind /
+  Attract source (``step._source_leaves`` ends only ``_foe(side)``'s Bind and Attract; the decomp
+  loops every battler, battle_lib.c:2088-2098, :2168-2183), D11 builds the four-battler
+  enumeration and distribution (``enumerate`` / ``outcome``), and E1 reads AI_CONTEXT.defender
+  in the AI's damage estimates (trainer_ai.c:1109): the ledger's "OWED D5" and "OWED D11 / E1"
+  lines;
 * Kaizo trainer fields (plan K2b Task 14): a permanent Trick Room or Gravity area
   (``Trainer.area_condition``; both are modelled: Gravity since the E1 trial batch, G-67, Trick
   Room since E3-2-4, ``start_trick_room``), a gauntlet (a chain

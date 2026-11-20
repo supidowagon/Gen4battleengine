@@ -277,7 +277,7 @@ from nuzline.engine.damage import (
     wonder_guarded,
 )
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.format import format_of, party, side_of
+from nuzline.engine.format import format_of, party, party_sides, side_of
 from nuzline.engine.ids import (
     ABILITY_DECOMP_IDS,
     ABILITY_MULTITYPE,
@@ -337,6 +337,7 @@ from nuzline.engine.state import (
     battler_ability,
     field_index,
     held_item,
+    knocked_off_at,
 )
 from nuzline.engine.targets import NO_DEFENDER
 
@@ -2470,8 +2471,24 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
         & (item != 0)
         & ~sticky
     )
+    # The bit is the defender SIDE's (``sideConditions[defending]``, :6627): every party of the
+    # side sends slot ``h.target`` under it, so each one's party item freezes where the bit is new
+    # (UpdatePartyMon skips the item from now on, battle_io_command.c:590-592; D3 fix B): its item
+    # now, which for the defender is the item Knock Off takes. A party whose slot ``h.target`` is
+    # active elsewhere keeps its battle item until it is loaded again (InitBattleMon,
+    # battle_lib.c:161, ``step._switch_in``). B = 2: one party per side, the defender's.
+    fmt_sides = party_sides(fmt)
+    fresh = cond & ~knocked_off_at(state, h.target_side, h.target)
+    defending = side_of(jnp.asarray(h.target_side, _I32))
+    for p in range(fmt.P):
+        mine = fresh & (defending == fmt_sides[p])
+        kept = jnp.where(mine, state.item[p, h.target], state.knocked_item[p, h.target])
+        state = state._replace(
+            knocked_item=state.knocked_item.at[p, h.target].set(
+                kept.astype(state.knocked_item.dtype)
+            )
+        )
     state = _set(state, "item", (h.target_side, h.target), 0, cond)
-    state = _set(state, "knocked_item", (h.target_side, h.target), item, cond)
     return _set(state, "knocked_off", (h.target_side, h.target), 1, cond)
 
 
@@ -2856,8 +2873,9 @@ def sticky_barb_transfer(tables: Tables, state: BattleState, side, foe, move, co
         & _alive(state, side, user)
         & (state.item[party(fmt, side), user] == 0)
         & contact
-        # :5390-5391: not a knocked-off attacker, not Knock Off itself (B10-6).
-        & (state.knocked_off[party(fmt, side), user] == 0)
+        # :5390-5391: not an attacker whose side has its slot's knockedOffItemsMask bit, not
+        # Knock Off itself (B10-6; the side's bit, D3 fix B).
+        & ~knocked_off_at(state, side, user)
         & (move != MOVE_KNOCK_OFF)
     )
     state = _set(state, "item", (side, user), barb, on)
@@ -2933,8 +2951,9 @@ def sticky_barb_ready(tables: Tables, state: BattleState, side, foe, move) -> jn
         & _alive(state, side, user)
         & (state.item[party(fmt, side), user] == 0)
         & contact
-        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not a knocked-off attacker (B10-6).
-        & (state.knocked_off[party(fmt, side), user] == 0)
+        # TriggerHeldItemOnPivotMove (battle_lib.c:7380): not an attacker whose side has its
+        # slot's knockedOffItemsMask bit (B10-6; the side's bit, D3 fix B).
+        & ~knocked_off_at(state, side, user)
     )
 
 
