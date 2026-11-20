@@ -136,7 +136,7 @@ def test_an_encored_u_turn_keeps_its_first_defender_for_the_kings_rock_flinch(ta
     (``target_draw[0] = 1``) and rolls the flinch: battler 1 (kept, not yet moved) is flinched,
     battler 3 is not."""
     s = encore(pivoting(tables, names), names, 0, 0, "U-turn")
-    s = s._replace(item=s.item.at[0, 2].set(names.item("King's Rock")))
+    s = s._replace(item=s.item.at[0, 2].set(names.item("King’s Rock")))
     paused, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=(1, 0, 0, 0))
     assert int(paused.pivot_battler) == 1 and int(paused.ts_defender) == 2
     assert hp(paused, 1) > 0
