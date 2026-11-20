@@ -25,7 +25,7 @@ from nuzline.engine.step import (
     _faint_check,
     _sides_out,
 )
-from tests.engine.d2_states import four
+from tests.engine.d2_states import four, party_of, with_moves
 from tests.engine.test_d3_action_loop import play
 
 TACKLE, SWORDS = 0, 1  # action ids of d2_states.DEFAULT_MOVES
@@ -114,10 +114,14 @@ def test_doubles_player_party_empty_is_a_loss(tables, names):
 
 
 def test_doubles_both_empty_in_one_faint_check_is_a_draw_played_as_a_loss(tables, names):
-    s = four(tables, names, DOUBLES)
-    after = s._replace(hp=jnp.zeros_like(s.hp))
-    out = _faint_check(tables, s, after)
-    assert (int(out.over), int(out.winner)) == (1, WINNER_OPPONENT)  # ruling 2
+    """Battler 0 (the player's last, 1 HP, Life Orb) Tackles battler 1 (party 1's last, 1 HP): the
+    target and the Life Orb recoil faint in one action's faint check, both sides out."""
+    s = only_alive(only_alive(four(tables, names, DOUBLES), 1, 0), 0, 0)
+    s = with_moves(s, names, 0, ["Tackle"])
+    p0, slot0 = party_of(s, 0), int(s.active[0])
+    s = s._replace(item=s.item.at[p0, slot0].set(names.item("Life Orb")))
+    out = tackle(tables, s, 0, 1)
+    assert result(out) == (1, WINNER_OPPONENT)  # ruling 2
 
 
 def test_two_trainers_one_opponent_party_empty_is_not_over(tables, names):
@@ -126,7 +130,6 @@ def test_two_trainers_one_opponent_party_empty_is_not_over(tables, names):
 
 
 def test_two_trainers_both_opponent_parties_empty_is_a_win(tables, names):
-    # (the faint is battler 1's: ``_move_end``'s foe is still ``_foe(side)``, D3-15)
     s = only_alive(empty(four(tables, names, TWO_TRAINERS), 2), 1, 0)
     assert result(tackle(tables, s, 0, 1)) == (1, WINNER_PLAYER)
 
@@ -144,9 +147,8 @@ def test_multi_player_party_empty_while_the_partner_stands_is_a_loss(tables, nam
 
 def test_multi_partner_party_empty_alone_does_not_end_it(tables, names):
     """The partner's battler 2 never decides (rule 1a)."""
-    s = four(tables, names, MULTI)
-    out = _faint_check(tables, s, only_alive(s, 2, None))
-    assert (int(out.over), int(out.winner)) == (0, 0)
+    s = only_alive(four(tables, names, MULTI), 2, 0)  # battler 2's Pokemon is its party's last
+    assert result(tackle(tables, s, 1, 2)) == (0, 0)
 
 
 def test_multi_both_enemy_parties_empty_is_a_win(tables, names):
@@ -157,9 +159,8 @@ def test_multi_both_enemy_parties_empty_is_a_win(tables, names):
 def test_multi_one_enemy_party_alone_is_not_a_win(tables, names):
     s = only_alive(four(tables, names, MULTI), 1, 0)  # party 3 whole
     assert result(tackle(tables, s, 0, 1)) == (0, 0)
-    s = four(tables, names, MULTI)  # party 3 emptied alone: party 1 whole
-    out = _faint_check(tables, s, only_alive(s, 3, None))
-    assert (int(out.over), int(out.winner)) == (0, 0)
+    s = only_alive(four(tables, names, MULTI), 3, 0)  # party 3 emptied alone: party 1 whole
+    assert result(tackle(tables, s, 0, 3)) == (0, 0)
 
 
 # ---------------------------------------------------------------- deaths stay party 0
@@ -167,9 +168,9 @@ def test_multi_one_enemy_party_alone_is_not_a_win(tables, names):
 
 def test_multi_deaths_count_party_zero_only(tables, names):
     s = four(tables, names, MULTI)
-    partner = _faint_check(tables, s, s._replace(hp=s.hp.at[2, 0].set(0)))
+    partner = tackle(tables, s._replace(hp=s.hp.at[2, 0].set(1)), 1, 2)  # battler 2 faints
     assert int(partner.player_faints) == 0 and not np.any(np.asarray(partner.deaths))
-    own = _faint_check(tables, s, s._replace(hp=s.hp.at[0, 0].set(0)))
+    own = tackle(tables, s._replace(hp=s.hp.at[0, 0].set(1)), 1, 0)  # battler 0 faints
     assert int(own.player_faints) == 1 and np.asarray(own.deaths).tolist()[0] == 1
 
 

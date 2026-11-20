@@ -2773,6 +2773,9 @@ def _use_move(
         "sync_flag": looped[16],
         "sync_sem": looped[17],
         "target": jnp.asarray(target_side, _I32),
+        # UpdateFlagsWhenHit wrote ``move_hit[target]`` this action (the write above: ``record``
+        # in the tail passes); the action's MoveEnd keeps it past a faint (D3-15).
+        "record": record & tail,
         # battleCtx->defender at MoveEnd (bcp.c:3966-3967): BattleSystem_Defender's battler, the
         # user for a self-range move (lib.c:1659-1664), NO_DEFENDER for BATTLER_NONE, and the
         # user after a confusion self-hit (bcp.c:2629).
@@ -2949,6 +2952,7 @@ def _act(
         # caller's defender events are empty then.
         "target": jnp.where(is_move, ctl["target"], 0).astype(_I32),
         "defender": jnp.where(is_move, ctl["defender"], NO_DEFENDER).astype(_I32),
+        "record": ctl["record"] & runs_move,
         "pause": ctl["pause"] & runs_move,
         "pursue": ctl["pursue"] & runs_move,
         "fbase": jnp.where(resumed, _alive_mask(listed), base),
@@ -3214,9 +3218,12 @@ def _move_end(
     defender,
     fought,
     trace_pick=None,
+    target=None,
+    record=None,
+    speed_order=None,
 ) -> BattleState:
-    """After ``side``'s action and its faint check. The foe keeps the ``move_hit`` that
-    ``_use_move`` wrote: ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
+    """After ``side``'s action and its faint check. The action's defender keeps the ``move_hit``
+    that ``_use_move`` wrote (B = 4: ``target`` = ``ctl["target"]``, where ``record``; B = 2: the foe): ``UpdateFlagsWhenHit`` runs after a KO'd defender's faint
     (LOOP_FAINTED before LOOP_SPREAD_MOVES, battle_controller_player.c:3820-3837), so a
     fainted defender holds the record until its replacement clears it. Then
     ``BattleControllerPlayer_MoveEnd`` clears the actor's own (``ClearFlags``, :4389, via
@@ -3225,9 +3232,23 @@ def _move_end(
     reaches it) and the battle goes on (``CheckBattleOver`` returns first, :3969). ``trace_pick``:
     ``Outcome.trace_pick``, the coins of a Trace that acts at the move's end. ``defender``: the
     action's ``battleCtx->defender`` (``ctl["defender"]``: the user for a self-range move, else
-    ``NO_DEFENDER`` for none); ``fought``: the action was a FIGHT (SF2 (a))."""
-    foe = _foe(side)
-    move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
+    ``NO_DEFENDER`` for none); ``fought``: the action was a FIGHT (SF2 (a)).
+    D3-15, B = 4: while the battle goes on ``TriggerEffectOnSwitch`` runs
+    ``RecoverStatusByAbility`` for every battler (``SWITCH_IN_CHECK_STATE_FORBIDDEN_STATUS``,
+    battle_lib.c:4135-4148, after ``bcp.c:3973``) and ``TriggerHeldItemOnStatus`` for every battler
+    in ``monSpeedOrder`` (``..._HELD_ITEM_STATUS``, :4151-4165): ``side`` was cured under ``ran``,
+    then the defender, then the others in battler order; the item pass (``speed_order``) follows
+    the switch-in states and the form change (:4115). At B = 2 the foe call stands."""
+    fmt = format_of(state)
+    if fmt.B == 2:
+        foe = _foe(side)
+        move_hit = state.move_hit.at[foe].set(acted.move_hit[foe])
+    else:
+        # Only the battler UpdateFlagsWhenHit wrote (``record``): the faint's reset of any other
+        # battler stands.
+        move_hit = state.move_hit.at[target].set(
+            jnp.where(record, acted.move_hit[target], state.move_hit[target])
+        )
     clear = ran & (state.over == 0)
     move_hit = move_hit.at[side].set(jnp.where(clear, 0, move_hit[side]))
     state = state._replace(move_hit=move_hit.astype(state.move_hit.dtype))
@@ -3246,8 +3267,19 @@ def _move_end(
     state = recover_status_by_ability(state, side, ran)
     defender = jnp.asarray(defender, _I32)
     named = defender != NO_DEFENDER  # bcp.c:3966: BATTLER_NONE skips the call
-    second = jnp.where(ended & named, defender, foe)
-    state = recover_status_by_ability(state, second, clear | (ended & fought & named))
+    if fmt.B == 2:
+        second = jnp.where(ended & named, defender, foe)
+        state = recover_status_by_ability(state, second, clear | (ended & fought & named))
+    else:
+        # The battle's end: the FIGHT's defender only (:3966-3967); the battle going on: every
+        # other battler, the defender first, then battler order (:4135-4148; the order is
+        # state-free, lib.c:4378-4452 reads only the battler's own ability and status).
+        named_defender = jnp.where(named, defender, side)
+        state = recover_status_by_ability(state, named_defender, ended & fought & named)
+        state = recover_status_by_ability(state, named_defender, clear & named & (defender != side))
+        for b in range(fmt.B):
+            rest = clear & (b != side) & ~(named & (defender == b))
+            state = recover_status_by_ability(state, b, rest)
     state = state._replace(ability=restored)
     # BattleSystem_TriggerEffectOnSwitch over every battler (bcp.c:3973): an entry ability gained
     # mid-battle (Skill Swap, E3-2-5) acts now; a no-op while every flag is set or no holder.
@@ -3256,7 +3288,14 @@ def _move_end(
     # the Trace / weather / Intimidate / Download states; AfterMoveEffects' :3672-3680 before it):
     # its Castform form change runs after every move, so a weather move or a type change takes
     # effect before the next battler acts (F-6).
-    return forecast(tables, state, clear)
+    state = forecast(tables, state, clear)
+    if fmt.B == 4:
+        # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (:4151-4165): every battler in the action's
+        # monSpeedOrder, after the forbidden-status cures (a battler fires, its subscript runs,
+        # the pass restarts: the order is the sort's, the items the battler's own).
+        for i in range(fmt.B):
+            state = after_damage_items(tables, state, speed_order[i], clear)
+    return state
 
 
 def execute_actions(
@@ -3574,6 +3613,9 @@ def _execute_actions(
             ctl["defender"],
             ~is_switch(real[side]) & ~is_item(real[side]),
             outcome.trace_pick,
+            target=ctl["target"],
+            record=ctl["record"],
+            speed_order=speed_order,
         )
         # MoveEnd's AnyExpPayout, after RecoverStatusByAbility and before CheckBattleOver
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first

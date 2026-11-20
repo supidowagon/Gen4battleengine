@@ -314,8 +314,6 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-15: MoveEnd over four (_move_end reads _foe(side)); deleted by D3-15
-    TurnClause("D3-15", "MoveEnd over four battlers", lambda t, s, a: _four(s)),
     # D3-18: Trick Room's MoveEnd re-sort over four; deleted by D3-18
     TurnClause(
         "D3-18",

@@ -7740,8 +7740,20 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # BattleControllerPlayer_MoveEnd: RecoverStatusByAbility, attacker then defender, both
     # before CheckBattleOver (bcp.c:3965-3969; SF2 (a)): a battle that ends here cures them too.
     _recover_status_by_ability(s, side)
-    if not s.over:
-        _recover_status_by_ability(s, _foe(side))
+    if _fmt(s).B == 2:
+        if not s.over:
+            _recover_status_by_ability(s, _foe(side))
+        elif turn.commands[side] == FIGHT and turn.defender is not None:
+            _recover_status_by_ability(s, turn.defender)
+    elif not s.over:
+        # D3-15: TriggerEffectOnSwitch's FORBIDDEN_STATUS pass over every battler (lib.c:4135-4148,
+        # bcp.c:3973): the defender first, then the rest in battler order (``side`` was cured above).
+        defender = turn.defender if turn.commands[side] == FIGHT else None  # switch / item: none
+        if defender is not None and defender != side:
+            _recover_status_by_ability(s, defender)
+        for b in range(_fmt(s).B):
+            if b != side and b != defender:
+                _recover_status_by_ability(s, b)
     elif turn.commands[side] == FIGHT and turn.defender is not None:
         _recover_status_by_ability(s, turn.defender)
     for mon, ability in restored:
@@ -7752,6 +7764,11 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
         # The same TriggerEffectOnSwitch's SWITCH_IN_CHECK_STATE_FORM_CHANGE (lib.c:4115), after
         # its Trace / weather / Intimidate / Download states: Castform's Forecast, F-6.
         _forecast(turn.tables, s)
+        if _fmt(s).B == 4:
+            # SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS (lib.c:4151-4165): every battler in the
+            # action's monSpeedOrder, after the form change (D3-15).
+            for b in turn.speed_order:
+                _held_item(turn, s, b)
     # MoveEnd's AnyExpPayout, after the status recovery and before CheckBattleOver
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).
