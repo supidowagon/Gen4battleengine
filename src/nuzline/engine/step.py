@@ -2636,8 +2636,8 @@ def _use_move(
     state, hits, crits, contact, thaw, dealt, _, struck, shell, _, damage_taken = looped[:11]
     paused, pursue, damaged0, dealt0 = looped[11:15]
     sub_hit_now = looped[15]  # the target's SELF_TURN_FLAG_SUBSTITUTE_HIT after the hits
-    se_now = looped[19]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
-    trick_room_ran = looped[20]  # MoveHit.trick_room over the hits
+    se_now = looped[20]  # the stopping hit's MOVE_STATUS_SUPER_EFFECTIVE (a Baton Pass: 0)
+    trick_room_ran = looped[21]  # MoveHit.trick_room over the hits
     # Where the action stops (a pause at the list, or U-turn's Pursuit next), the tail waits:
     # the paused action's inputs go to the scratch (``ts_used``, ``ts_damaged``, ``ts_dealt``).
     stopped = paused | pursue
