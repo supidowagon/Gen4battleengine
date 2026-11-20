@@ -5015,7 +5015,9 @@ def step_events(
     s, events, read, order, scratch = _action_phase(tables, state, actions, outcome, targets)
     halted = (s.pivot_battler != 0) | (s.learn_site != 0)
     sides = jnp.where(site >= LEARN_FIELD, eot_in, end_of_turn_order(tables, s, outcome))
-    fs, f_prompt = field_conditions(tables, s, sides, site)
+    # A MoveEnd pause resumes before the turn end: its field pass runs whole (bcp.c:932-1254);
+    # only a pause inside it (LEARN_FIELD) or after it (LEARN_MON) skips what already ran.
+    fs, f_prompt = field_conditions(tables, s, sides, jnp.where(site >= LEARN_FIELD, site, 0))
     # A resume at LEARN_MON begins after the battler whose block paused; a resume at LEARN_FIELD
     # (the weather payout's pause) begins at the first.
     begin = jnp.where(site == LEARN_MON, cursor_in + 1, 0)

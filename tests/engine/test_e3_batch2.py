@@ -3588,3 +3588,71 @@ def test_a_party_list_resume_keeps_the_turns_speed_rand_draw(tables, names):
     assert int(done.pivot_battler) == 0 and int(done.active[0]) == 1
     assert np.asarray(done.qc_roll).tolist() == [0, 1]
     assert np.asarray(done.ts_qc).tolist() == [0, 0]
+
+
+_COUNTED = ("reflect", "light_screen", "mist", "safeguard", "tailwind", "lucky_chant")
+
+
+def _with_counters(s, temp_rain):
+    """``s`` with every turn-end counter at 3: the six side timers on both sides, Gravity and
+    Trick Room (the mask's 3-bit counters), the player's Taunt and Perish Song, and a TEMP rain's
+    ``weather_turns`` when ``temp_rain``."""
+    from nuzline.engine.ids import (
+        FIELD_CONDITION_GRAVITY_SHIFT,
+        FIELD_CONDITION_TRICK_ROOM_SHIFT,
+        FieldCondition,
+    )
+
+    three = {name: jnp.full_like(getattr(s, name), 3) for name in _COUNTED}
+    mask = int(s.field_mask) | 3 << FIELD_CONDITION_GRAVITY_SHIFT
+    mask |= 3 << FIELD_CONDITION_TRICK_ROOM_SHIFT
+    if temp_rain:
+        mask |= int(FieldCondition.RAINING_TEMP)
+        three["weather_turns"] = jnp.asarray(3, s.weather_turns.dtype)
+    return s._replace(
+        **three,
+        field_mask=jnp.asarray(mask, s.field_mask.dtype),
+        taunt=s.taunt.at[0].set(3),
+        perish_song=s.perish_song.at[0].set(1),
+        perish_song_turns=s.perish_song_turns.at[0].set(3),
+    )
+
+
+def _counted_once(done, temp_rain):
+    from nuzline.engine.ids import FIELD_CONDITION_GRAVITY_SHIFT, FIELD_CONDITION_TRICK_ROOM_SHIFT
+
+    for name in _COUNTED:  # CheckFieldConditions :947-1083
+        assert np.asarray(getattr(done, name)).tolist() == [2, 2], name
+    mask = int(done.field_mask)
+    assert mask >> FIELD_CONDITION_GRAVITY_SHIFT & 7 == 2  # :1227-1238
+    assert mask >> FIELD_CONDITION_TRICK_ROOM_SHIFT & 7 == 2  # :1822-1830
+    assert int(done.taunt[0]) == 2  # CheckMonConditions
+    assert int(done.perish_song_turns[0]) == 2  # CheckSideConditions
+    if temp_rain:
+        assert int(done.weather_turns) == 2  # :1121
+
+
+@pytest.mark.parametrize("site", ["move end", "field", "mon"])
+def test_midturn_learn_resume_counts_every_turn_end_counter_once(tables, names, site):
+    # A MoveEnd pause comes before the turn end, which the resume runs whole; a pause in the field
+    # pass (LEARN_FIELD, after the weather states) resumes with Gravity alone; one in a battler's
+    # block (LEARN_MON) resumes with the later blocks and the side conditions. Each counter of the
+    # turn end drops exactly once over the pause and the resume (bcp.c:932-1254, :1289, :1746).
+    from nuzline.engine.levelup import LEARN_FIELD, LEARN_MON, LEARN_MOVE_END
+    from tests.engine.test_levelup import _mon
+
+    opp = [_mon(names, "Geodude", 12), _mon(names, "Bonsly", 15)]
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    temp_rain = site != "field"
+    kw = {"start_condition": Weather.HAIL} if site == "field" else {}
+    s = _with_counters(_learn_state(tables, names, opp, **kw).replace_hp(1, 0, 1), temp_rain)
+    if site == "mon":
+        s = s._replace(status=s.status.at[1, 0].set(int(Status.BURN)))
+    acts, o, want = A("Tackle", "Tackle", s, names), miss, {"field": LEARN_FIELD, "mon": LEARN_MON}
+    if site == "move end":
+        acts, o = A("Bubble", "Tackle", s, names), empty_outcome()
+    paused = assert_matches_reference(tables, s, acts, o)
+    assert int(paused.learn_site) == want.get(site, LEARN_MOVE_END)
+    _, done = _resume_learn(tables, paused)
+    assert int(done.learn_site) == 0 and int(done.turn) == int(s.turn) + 1
+    _counted_once(done, temp_rain)
