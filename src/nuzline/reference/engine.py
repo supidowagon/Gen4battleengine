@@ -327,6 +327,10 @@ class _Turn:
     # B13-15.
     gyro_power: int = 0
     move_slot: int = 0
+    # ATTACKER_MOVE_SLOT (common.h:8): moveSlot[attacker], written only at selection (bcp.c:445,
+    # :526); FightCommand's Encore takeover (bcp.c:1868-1872) leaves it, so TryGrudge reads the
+    # chosen slot, not ``move_slot`` (review b2-fix #2).
+    chosen_slot: int = 0
     # The berry Natural Gift's RemoveItem took this action (effect_script_0222.s:8), which its
     # hit's power and type read (_gift_item), B13-37; 0 otherwise.
     gift: int = 0
@@ -365,6 +369,7 @@ class _Turn:
         for name in _TURN_FLAGS:
             setattr(self, name, [False] * n)
         self.items, self.dragged = [0] * n, [0] * n
+        self.grudge_kept = [0] * n
         self.trace_fires = [0] * n
         self.move_curs = [0] * n
         self.reselected = [False] * n
@@ -4996,7 +5001,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
     if holder.hp == 0 and s.battlers[foe].destiny_bond and user.hp > 0:
         _lose_hp(turn, s, side, user.hp)
     # :40 TryGrudge right after the Destiny Bond block (E3-B2-9).
-    _try_grudge(s, side, turn.move_slot, foe, holder.hp == 0, False)
+    _try_grudge(s, side, turn.chosen_slot, foe, holder.hp == 0, False)
     # Review b2 #5: the defender stays flagged (SYSCTL_MON_FAINTED) with its Grudge bit through the
     # list, for the resumed action's TryGrudge on the newcomer (``_resume``).
     kept = [
@@ -5568,6 +5573,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # (Gyro Ball, B13-14); moveSlot (Trump Card, B13-15).
     turn.gyro_power = _gyro_power(tables, s, side, target) if _active(s, target).hp else 0
     turn.move_slot = min(action, MOVE_ACTIONS - 1)
+    turn.chosen_slot = 0 if reflect_pass else min(turn.actions[side], MOVE_ACTIONS - 1)
     turn.gift = 0
     turn.fling = turn.fling_power = 0
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
@@ -6393,7 +6399,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     _try_grudge(
         s,
         side,
-        turn.move_slot,
+        turn.chosen_slot,
         _foe(side),
         foe_hp0 > 0 and foe_now is foe_mon0 and foe_now.hp == 0,
         struggling,

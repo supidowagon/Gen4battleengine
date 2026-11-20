@@ -2000,6 +2000,22 @@ def test_the_resumed_u_turn_zeroes_the_newcomers_slot_too(tables, names):
     assert np.asarray(plain.pp[1, 1]).tolist()[:2] == full
 
 
+def test_the_reference_turn_sizes_the_grudge_scratch_per_battler(tables, names):
+    """Review b2-fix #1: ``_write_scratch`` writes ``turn.grudge_kept`` to ``ts_grudge`` on every
+    pivot pause through ``_put`` (strict per battler), so a four-battler turn's list is four long
+    from ``__post_init__``, not only after a U-turn pause replaced it."""
+    from nuzline.data.tables import to_numpy
+    from nuzline.reference.convert import to_ref
+    from nuzline.reference.engine import _put, _Turn
+    from tests.engine.d2_states import four
+
+    s = to_ref(four(tables, names))
+    turn = _Turn(to_numpy(tables), None, entry_turn=1, battler_count=4)
+    assert turn.grudge_kept == [0, 0, 0, 0]
+    _put(s, "ts_grudge", turn.grudge_kept)
+    assert [bt.ts_grudge for bt in s.battlers] == [0, 0, 0, 0]
+
+
 def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables, names):
     """subscript_pursuit.s:85 runs the same faint check: a Grudge holder at 1 HP switching out to
     a Pursuit zeroes the pursuer's slot (the one Pursuit spent). The bit stays from an earlier

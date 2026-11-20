@@ -531,7 +531,11 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   `starf_roll`), not Fling's own `acupressure` rank as first built. `enumerate._starf_reads` marks the
   defender's draw relevant when a foe Flings a Starf Berry at it (count fixed at 5 or loose, as a held
   berry's), and Fling no longer joins the acupressure relevance. A defender that eats its own Starf Berry in
-  the same turn reads the same value (F-10's turn draw is one per battler). Test:
+  the same turn reads the same value (F-10's turn draw is one per battler), while the game draws
+  `RandNext() % 5` per event (Fling: lib.c:6119-6122; the held berry: lib.c:4864-4866): a flung Starf and the
+  defender's own held Starf eaten in one turn share one `starf_roll`. Open, riding on E1's F-O3
+  (e1-mechanics-ledger.md, "Two Starf Berry eats on one side in one turn share one draw"): its third draw
+  column covers this case too (review b2-fix #3). Test:
   `test_flung_stat_berries_and_starf`, `test_a_flung_starf_makes_the_defenders_starf_draw_relevant`.
   (2) The PLUCK flag Fling sets on the user (lib.c:6150-6152) is not modelled: it dies with
   selfTurnFlags at the next BattleContext_Init (bcp.c:3998) and is read only by a PLUCK_CHECK,
@@ -982,6 +986,13 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   reflected move is a status move; Pursuit is not Struggle); `try_grudge` takes `struggling` for the
   fight command's own Struggle. (4) The reference's `_ingrain_anchors` `others` has `sd.grudge`; no both-engine test: Roar's -6 priority
   makes the foe move after the holder's own attempt, which clears the bit (engine-only test above).
+  (5) Review b2-fix #2: every TryGrudge zeroes ATTACKER_MOVE_SLOT = moveSlot[attacker] (common.h:8), written
+  only at selection (bcp.c:445, :526); FightCommand's mid-turn Encore takeover (bcp.c:1868-1872) changes
+  moveTemp, not moveSlot. So the head-on sites (:40 and LOOP_FAINTED) take the chosen slot (step.py
+  `chosen_slot`; reference `_Turn.chosen_slot`), not the Encore-adjusted one that pays the PP. Doubles-only:
+  in singles the only battler that can Encore the attacker mid-turn is the Grudge holder, whose own move
+  attempt clears the bit (bcp.c:2426); covered by code reading, no test. Review b2-fix #1: the reference's
+  `_Turn.__post_init__` sizes `grudge_kept` per battler (`test_the_reference_turn_sizes_the_grudge_scratch_per_battler`).
   Owed 1 (Grudge's second TryGrudge on a U-turn newcomer) closed by review b2 #5 (ruling 2). Doubles: `try_grudge`
   and the reference's `_try_grudge` test the side of the attacker against the fainted battler's (bs.c:6750, so a
   fainting partner's attacker on the same side is excluded) and the slot is per battler. Not modelled, message only: "{0}'s {1} lost all its PP

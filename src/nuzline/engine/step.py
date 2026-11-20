@@ -949,6 +949,10 @@ def _use_move(
     after_pursuit = mode == MODE_PURSUIT
     move, struggling, locked = choice[:3]
     slot = jnp.clip(action, 0, MOVE_ACTIONS - 1)
+    # ATTACKER_MOVE_SLOT (common.h:8) is moveSlot[attacker], written only at selection
+    # (bcp.c:445, :526); the Encore takeover below (bcp.c:1868-1872) changes moveTemp, not
+    # moveSlot, so TryGrudge zeroes the chosen slot (review b2-fix #2).
+    chosen_slot = slot
     user = state.active[side]
     # BattleControllerPlayer_FightCommand (bcp.c:1866-1883), B10-9: after Struggle, an encored
     # battler whose encored slot holds the encored move uses it (and that slot's PP: the no-PP
@@ -2387,7 +2391,8 @@ def _use_move(
         # :40 TryGrudge (subscript_attack_then_switch_out.s, right after the Destiny Bond block):
         # a defender that fainted holding Grudge zeroes the attacker's selected slot (E3-B2-9).
         hit_state = try_grudge(
-            hit_state, side, user, slot, target_side, hit_state.grudge[target_side] != 0, False,
+            hit_state, side, user, chosen_slot, target_side, hit_state.grudge[target_side] != 0,
+            False,
             tries & fell,
         )  # fmt: skip
         # :48: a user that fainted does not switch; :54 its foe's Pursuit, else the list.
@@ -2619,11 +2624,18 @@ def _use_move(
     state = _set_mon(state, "hp", side, user, 0, bonded)
     # subscript_faint_check_destiny_bond.s:28 TryGrudge (BtlCmd_TryGrudge, battle_script.c:6743-6763)
     # right after: a defender that fainted holding MOVE_EFFECT_GRUDGE zeroes the PP of the living
-    # attacker's selected slot (``slot``: an invoker's own for a called move), never for Struggle.
-    # The attacker's Leppa Berry check (AfterMoveEffects, bcp.c:3687) already ran, so it misses this
-    # zero (E3-B2-9).
+    # attacker's selected slot (``chosen_slot``: an invoker's own for a called move), never for
+    # Struggle. The attacker's Leppa Berry check (AfterMoveEffects, bcp.c:3687) already ran, so it
+    # misses this zero (E3-B2-9).
     state = try_grudge(
-        state, side, user, slot, target_side, state.grudge[target_side] != 0, struggling, fell
+        state,
+        side,
+        user,
+        chosen_slot,
+        target_side,
+        state.grudge[target_side] != 0,
+        struggling,
+        fell,
     )
     # Review b2 #5: the resumed U-turn's LOOP_FAINTED (bcp.c:3820-3823) meets the defender still
     # flagged with its Grudge bit (``ts_grudge``), so subscript_faint_check_destiny_bond.s:28 runs
