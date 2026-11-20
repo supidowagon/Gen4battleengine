@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.trainer import (
     TERRAIN_UNKNOWN,
     AreaCondition,
@@ -16,6 +17,7 @@ from nuzline.data.trainer import (
     load_trainers,
     trainer_pid,
 )
+from tests.data.test_gauntlet_settings import facts_dict
 from tests.engine.helpers import roark_trainer
 
 INTER = Path(__file__).resolve().parents[2] / "data" / "intermediate"
@@ -206,7 +208,7 @@ def test_vanilla_trainers_load_with_defaults(trainers):  # data/intermediate tra
         and not t.optional
         and t.gauntlet is None
         and t.sources == {}
-        and t.gauntlet_rules == {}
+        and t.gauntlet_facts is None
         and t.player_starter is None
         and not t.left_side
         and t.split is None
@@ -300,7 +302,7 @@ def test_kaizo_fields_load(tmp_path):
         pid_routine=None,
         player_starter=390,
         gauntlet=["Oreburgh Gym", 2],
-        gauntlet_rules={"heal_between": True},
+        gauntlet_facts=facts_dict(),
         optional=True,
         left_side=True,
         area_condition={
@@ -316,7 +318,9 @@ def test_kaizo_fields_load(tmp_path):
     )
     (t,) = _write(tmp_path, [row])
     assert (t.label, t.pid_routine, t.player_starter) == ("Worker C (Oreburgh Gym)", None, 390)
-    assert t.gauntlet == ("Oreburgh Gym", 2) and t.gauntlet_rules == {"heal_between": True}
+    assert t.gauntlet == ("Oreburgh Gym", 2) and t.gauntlet_facts == GauntletFacts.from_dict(
+        facts_dict()
+    )
     assert t.optional and t.left_side and t.split == "Roark Split" and t.split_order == (1, 4)
     assert t.area_condition == AreaCondition(weather="rain", trick_room=True)
     assert t.sources == {"area_condition": "overrides.toml:12"}

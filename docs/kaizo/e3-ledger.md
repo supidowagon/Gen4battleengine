@@ -1637,3 +1637,19 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   Batch 2's earlier review nits are on this branch in 8f7db8ff: the Fling cite (BattleSystem_FlingItem,
   battle_lib.c:5854), the departure wording (the move table's placeholder power, discrepancies.md section 13) and the
   refusal reason asserted in the learn resume test.
+
+- E3-B3-1 GT-1 options registry (`src/nuzline/data/gauntlet.py`). No game rule: data shapes only (design v5.3 sections 1-3,
+  13). `OPTIONS` holds every option (kind, scope, per-gap, values strictest first, default, validator, transition name);
+  defaults are the strictest value, `order` and `partner_from` "worst", `time` unset. `Origin` (LOCKED, FLAG, RULES_FILE,
+  LOCAL, DEFAULT) and `resolve(facts, order, flag, rules_file, local) -> Settings`; `Settings.at_gap(k)` is the strictest
+  Level values and caps 0 (origin LOCKED, source `locked_gaps_source`) at a locked gap, else the group value overridden by
+  a gap value. `GauntletFacts` / `Partner` are the `trainers.json` `gauntlet_facts` row: `name`, `source`, `orders`,
+  `leave_gaps` (one tuple per order), `escape`, `pc_gaps`, `heal_gaps`, `locked_gaps` (each with `<key>_source`),
+  `partner`. `Trainer.gauntlet` is `(group, fight_id)`; `gauntlet_rules` is replaced by `gauntlet_facts`.
+  (a) Rulings of this group: a gap value overrides the group value whichever layer holds it; the partner who joins before
+  fight J counts as set at gaps J and later (gap k follows fight k), so Escape Rope and Dig are open at gaps < J
+  (`CanUseEscapeRope`, pp/src/item_use_functions.c:943-945). `missing_transitions(available)` is the loader's refusal
+  hook. No table input changed (`tools/kaizo/resolve.py` still writes `gauntlet_rules`, which the loader now ignores;
+  GT-2 writes `gauntlet_facts`). Coverage's gauntlet text reads "fight <id>; facts recorded|not recorded" until GT-18.
+  Tests: tests/data/test_gauntlet_settings.py (new); tests/data/test_trainer.py, tests/engine/test_coverage.py,
+  tests/test_cli.py updated.

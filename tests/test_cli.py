@@ -1079,7 +1079,7 @@ def test_trainers_marks_optional(tmp_path, monkeypatch, capsys):  # synthetic Ka
     monkeypatch.setitem(games.GAMES, _KAIZO, Game(_KAIZO, tmp_path, tmp_path))
     assert main(["trainers", "--game", "kaizo"]) == 0
     out = capsys.readouterr().out
-    assert "Lass B [optional]" in out and "Worker C [gauntlet Oreburgh Gym #2]" in out
+    assert "Lass B [optional]" in out and "Worker C [gauntlet Oreburgh Gym fight 2]" in out
     assert "Twins D & E [double]" in out
 
 

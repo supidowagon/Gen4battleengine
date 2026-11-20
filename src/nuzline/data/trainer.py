@@ -37,6 +37,7 @@ from pathlib import Path
 
 from nuzline.data.forms import form_row
 from nuzline.data.games import KAIZO, game_of_intermediate
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.spec import PokemonSpec
 
 MAX_IV = 31  # MAX_IVS_SINGLE_STAT
@@ -222,9 +223,10 @@ class Trainer:
     one of several trainers sharing a name; ``pid_routine`` is "vanilla" when
     ``build_trainer_party`` may compute nature, gender and ability from the PID, None when
     every party member must carry them; ``player_starter`` is the starter species a rival
-    or partner variant is fought with; ``gauntlet`` is (group, position) in a chain of
-    fights with ``gauntlet_rules`` (``heal_between``, ``change_team``; empty: not
-    recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
+    or partner variant is fought with; ``gauntlet`` is (group, fight_id) in a chain of
+    fights, ``fight_id`` the first trainer id of the trainer's fight as the sheet lists it,
+    and ``gauntlet_facts`` the tracked game facts of that group (``data/gauntlet.py``;
+    None: not recorded); ``optional`` and ``left_side`` (the split's Left Side AI) come from the
     spreadsheet; ``area_condition`` is what the fight starts with (built from
     ``start_condition`` when the JSON has none); ``split`` and ``split_order`` (split
     index, line) place the fight in the level-cap splits; ``sources`` cites each field.
@@ -233,7 +235,7 @@ class Trainer:
     ``TERRAIN_UNKNOWN`` when ``terrains``, every terrain those maps can give, has several
     values (mixed) or none (no map places the trainer); tools/terrain.py, K3b2 Task 9.
 
-    A ``Trainer`` is unhashable: ``gauntlet_rules`` and ``sources`` are dicts, so the
+    A ``Trainer`` is unhashable: ``sources`` is a dict, so the
     derived ``__hash__`` raises ``TypeError``; key caches by ``Trainer.id``."""
 
     id: int
@@ -252,7 +254,7 @@ class Trainer:
     pid_routine: str | None = "vanilla"
     player_starter: int | None = None
     gauntlet: tuple[str, int] | None = None
-    gauntlet_rules: dict[str, bool] = field(default_factory=dict)
+    gauntlet_facts: GauntletFacts | None = None
     optional: bool = False
     left_side: bool = False
     area_condition: AreaCondition = AreaCondition()
@@ -304,6 +306,11 @@ def _pair(t: dict, key: str):
     return tuple(value)
 
 
+def _facts(t: dict) -> GauntletFacts | None:
+    value = t.get("gauntlet_facts")
+    return None if value is None else GauntletFacts.from_dict(value)
+
+
 def _read(dir: Path, name: str):
     return json.loads((Path(dir) / f"{name}.json").read_text(encoding="utf-8"))
 
@@ -345,7 +352,7 @@ def load_trainers(dir: Path) -> list[Trainer]:
             pid_routine=t.get("pid_routine", "vanilla"),
             player_starter=t.get("player_starter"),
             gauntlet=_pair(t, "gauntlet"),
-            gauntlet_rules=dict(t.get("gauntlet_rules", {})),
+            gauntlet_facts=_facts(t),
             optional=t.get("optional", False),
             left_side=t.get("left_side", False),
             area_condition=_area(t),

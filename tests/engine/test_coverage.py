@@ -9,6 +9,7 @@ import pytest
 import nuzline.engine.coverage as coverage_module
 from nuzline.data.forms import personal_row
 from nuzline.data.games import KAIZO
+from nuzline.data.gauntlet import GauntletFacts
 from nuzline.data.tables import Names
 from nuzline.data.trainer import (
     TERRAIN_NAMES,
@@ -33,6 +34,7 @@ from nuzline.engine.coverage import (
     unknown_start,
 )
 from nuzline.engine.ids import AbilityId, ItemId, Weather
+from tests.data.test_gauntlet_settings import facts_dict
 from tests.engine.helpers import (
     INTERMEDIATE,
     _inter,
@@ -370,27 +372,22 @@ def test_area_gravity_is_modelled(tables, names):
 
 
 @pytest.mark.fullset
-def test_gauntlet_refused_rules_not_recorded(tables, names):
+def test_gauntlet_refused_facts_not_recorded(tables, names):
     t = replace(roark_trainer(), gauntlet=("Oreburgh Gym", 2))
     report = check_opponent(tables, names, t, roark_party(names), 0)
-    line = (
-        "Roark: gauntlet Oreburgh Gym (position 2; rules not recorded) (battle format UNSUPPORTED)"
-    )
+    line = "Roark: gauntlet Oreburgh Gym (fight 2; facts not recorded) (battle format UNSUPPORTED)"
     assert line in report.missing
 
 
 @pytest.mark.fullset
-def test_gauntlet_refused_with_rules(tables, names):
+def test_gauntlet_refused_with_facts(tables, names):
     t = replace(
         roark_trainer(),
         gauntlet=("Oreburgh Gym", 1),
-        gauntlet_rules={"heal_between": False, "change_team": True},
+        gauntlet_facts=GauntletFacts.from_dict(facts_dict()),
     )
     report = check_opponent(tables, names, t, roark_party(names), 0)
-    line = (
-        "Roark: gauntlet Oreburgh Gym (position 1; rules heal_between=false, "
-        "change_team=true) (battle format UNSUPPORTED)"
-    )
+    line = "Roark: gauntlet Oreburgh Gym (fight 1; facts recorded) (battle format UNSUPPORTED)"
     assert line in report.missing
 
 

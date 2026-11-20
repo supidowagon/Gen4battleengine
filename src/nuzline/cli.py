@@ -1635,8 +1635,8 @@ def _listing_line(t: Trainer) -> str:
     if t.optional:
         marks += " [optional]"
     if t.gauntlet is not None:
-        group, position = t.gauntlet
-        marks += f" [gauntlet {group} #{position}]"
+        group, fight_id = t.gauntlet
+        marks += f" [gauntlet {group} fight {fight_id}]"
     if t.format != "single":
         marks += f" [{t.format}]"
     return ascii_text(f"{t.id:4d}  {t.label or t.name}{marks}  ({class_text(t.trainer_class)})")
