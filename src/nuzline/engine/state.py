@@ -609,6 +609,12 @@ class BattleState(NamedTuple):
     # int8[B], the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of each battler (F-4): a U-turn
     # newcomer's Intimidate skips a foe whose substitute the action hit (hooks.intimidate)
     ts_sub_hit: jnp.ndarray
+    # int8[B], 1 = the battler fainted in the paused action holding MOVE_EFFECT_GRUDGE (review b2
+    # #5): SYSCTL_MON_FAINTED keeps it flagged across a U-turn's party list (battle_script.c:
+    # 1770-1771, cleared by PlayFaintAnimation :1799) and its moveEffectsMask stays until its faint
+    # cleanup (battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs TryGrudge again, on the
+    # newcomer (subscript_faint_check_destiny_bond.s:28, ``step._use_move``'s ``MODE_RESUME``)
+    ts_grudge: jnp.ndarray
     # int8[S], 1 + followMeUser while the side's followMe is set, else 0 (D2-11; SideConditions,
     # script.c:6261-6270, cleared by BattleSystem_SetupNextTurn, lib.c:2251-2252)
     ts_follow_me: jnp.ndarray
@@ -1007,6 +1013,7 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "ts_pick_mul": (_FIELD, np.int8),
     "ts_assurance": (_BATTLER, np.int8),
     "ts_sub_hit": (_BATTLER, np.int8),
+    "ts_grudge": (_BATTLER, np.int8),
     "ts_follow_me": (_SIDE, np.int8),
     "ts_trace_fires": (_BATTLER, np.int8),
     "chosen_target": (_BATTLER, np.int8),

@@ -184,6 +184,7 @@ class RefBattler:
     ts_switched: int
     ts_assurance: int  # turnFlags.assuranceDamageMask != 0 (B13-17)
     ts_sub_hit: int  # the paused action's SELF_TURN_FLAG_SUBSTITUTE_HIT of the battler (F-4)
+    ts_grudge: int  # fainted in the paused action holding Grudge (engine.state, review b2 #5)
     ts_trace_fires: int  # Trace fires of the slot in this step (D2-16)
     chosen_target: int  # battlerActions[b][1] (D2-1)
     last_hit_by: int  # 1 + lastHitByBattler[b], 0 = none (D2-14)

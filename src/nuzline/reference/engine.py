@@ -312,6 +312,8 @@ class _Turn:
     power_mul: int = 10
     # The paused action's own inputs (BattleState.ts_used / ts_dealt).
     pivot_dealt: int = 0
+    # Per battler: fainted in the paused action holding Grudge (BattleState.ts_grudge, review b2 #5).
+    grudge_kept: list[int] = field(default_factory=lambda: [0, 0])
     # SYSCTL_TRY_SYNCHRONIZE_STATUS (toggled at the end of every poison / bad poison / burn /
     # paralysis subscript that lands, cleared by BattleContext_Init) and sideEffectMon, the side
     # in singles (rulings G-12, G-13).
@@ -4995,6 +4997,12 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
         _lose_hp(turn, s, side, user.hp)
     # :40 TryGrudge right after the Destiny Bond block (E3-B2-9).
     _try_grudge(s, side, turn.move_slot, foe, holder.hp == 0, False)
+    # Review b2 #5: the defender stays flagged (SYSCTL_MON_FAINTED) with its Grudge bit through the
+    # list, for the resumed action's TryGrudge on the newcomer (``_resume``).
+    kept = [
+        int(b == foe and holder.hp == 0 and user.hp > 0 and bool(s.battlers[foe].grudge))
+        for b in range(_fmt(s).B)
+    ]
     if user.hp > 0 and not target_moved:
         before = turn.done[foe]
         _pursuit(turn, s, side, turn.actions, turn.choices)
@@ -5012,6 +5020,7 @@ def _u_turn(turn: _Turn, s: RefState, side: int, move: int, hit: int, dealt: int
             user.status = Status.NONE
             user.status_counter = 0
         turn.pivot_dealt = dealt
+        turn.grudge_kept = kept
         raise _Pause
     # No switch: AfterMoveMessage goes on with the extra flinch (the pursuer, if any, has moved).
     rock = (
@@ -6381,14 +6390,23 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
 
 
 def _try_grudge(
-    s: RefState, side: int, slot: int, fainted: int, fell: bool, struggling: bool
+    s: RefState,
+    side: int,
+    slot: int,
+    fainted: int,
+    fell: bool,
+    struggling: bool,
+    grudge: bool | None = None,
 ) -> None:
     """``BtlCmd_TryGrudge`` (battle_script.c:6743-6763): the defender ``fainted`` (battler) fell in
-    this action (``fell``) holding MOVE_EFFECT_GRUDGE; the attacker ``side`` is on the other side
-    (always, here), has HP and did not use Struggle: its PP of the selected move slot goes to 0.
+    this action (``fell``) holding MOVE_EFFECT_GRUDGE (``grudge``: its bit kept across a U-turn's
+    list, ``ts_grudge``; else its live bit); the attacker ``side`` is on the other side (:6750,
+    ``side_of``), has HP and did not use Struggle: its PP of the selected move slot goes to 0.
     The BattleMon's PP only (``BattleMon_CopyToParty`` skips a Mimic-flagged slot). E3-B2-9."""
     mon = _active(s, side)
-    if fell and s.battlers[fainted].grudge and mon.hp > 0 and not struggling:
+    held = bool(s.battlers[fainted].grudge) if grudge is None else grudge
+    other = side_of(side) != side_of(fainted)
+    if fell and held and other and mon.hp > 0 and not struggling:
         mon.pp[slot] = 0
 
 
@@ -8053,6 +8071,7 @@ def _write_scratch(turn: _Turn, s: RefState, pause: _Pause | None = None) -> Non
         _put(
             s, "ts_sub_hit", [int(turn.sub_hit and k == turn.sub_hit_mon) for k in range(_fmt(s).B)]
         )
+        _put(s, "ts_grudge", turn.grudge_kept)
         fainted = {(_party(_fmt(s), b), i) for b, i in turn.fainted}  # (party, slot)
         for k, pt in enumerate(s.parties):
             pt.ts_alive = sum(
@@ -8191,6 +8210,7 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     move, used = s.battlers[side].ts_move, s.ts_used
     damaged, dealt = bool(s.ts_damaged), s.ts_dealt
     position = s.ts_cursor
+    grudge = _get(s, "ts_grudge")
     _clear_scratch(s)
     foe = _foe(side)
     baton = _t(tables, "move_effect", used) == EffectId.BATON_PASS
@@ -8231,6 +8251,11 @@ def _resume(tables, s: RefState, actions: tuple[int, int], outcome) -> RefState:
     _thaw_target(turn, s, side, used, dealt)
     for battler in (side, foe):
         _held_item(turn, s, battler)
+    # LOOP_FAINTED (bcp.c:3820-3823): the defender is still flagged with its Grudge bit, so
+    # subscript_faint_check_destiny_bond.s:28 runs TryGrudge on the newcomer: moveSlot[attacker]
+    # is the paused action's selected slot, moveTemp the pivot move (review b2 #5).
+    for b in range(_fmt(s).B):
+        _try_grudge(s, side, turn.actions[side], b, bool(grudge[b]), False, bool(grudge[b]))
     # UpdateMoveBuffers / UpdateFlagsWhenHit on the newcomer (bcp.c:3917-3944): no Choice lock
     # for U-turn under SYSCTL_UTURN_ACTIVE nor Baton Pass (moveTemp), movePrev and
     # movePrevByBattler the paused move's moveTemp, the protect chain reset.

@@ -1928,6 +1928,42 @@ def test_a_u_turn_ko_zeroes_the_users_slot_before_it_switches(tables, names):
     assert _foe_pp(out) == [_foe_pp(s)[0], 0]
 
 
+def test_the_resumed_u_turn_zeroes_the_newcomers_slot_too(tables, names):
+    """Review b2 #5: after :40 zeroed the U-turn user's slot, the defender stays flagged
+    (SYSCTL_MON_FAINTED, battle_script.c:1770-1771, cleared only by PlayFaintAnimation :1799) with
+    its Grudge bit (cleared at its faint cleanup, battle_lib.c:2166): the paused state keeps it
+    (``ts_grudge``), and the resumed action's LOOP_FAINTED (bcp.c:3820-3823) runs
+    subscript_faint_check_destiny_bond.s:28's TryGrudge with the attacker battler's newcomer:
+    moveSlot[attacker] (common.h:8) is still U-turn's slot, so the newcomer's Rock Throw (its
+    slot 1) loses its PP, its Tackle not; both engines agree (the resume) and the scratch is 0
+    after it. Without the bit the newcomer keeps its PP."""
+    t, n = tables, names
+    s = make_state(
+        t,
+        [_spec(n, "Monferno", 50, ("Grudge",)), _spec(n, "Geodude", 50, ("Tackle",))],
+        [
+            _spec(n, "Bidoof", 50, ("Growl", "U-turn")),
+            _spec(n, "Geodude", 50, ("Tackle", "Rock Throw")),
+        ],
+    )
+    s = s._replace(ability=s.ability.at[:, 0].set(AbilityId.NONE), hp=s.hp.at[0, 0].set(1))
+    s = s._replace(stats=s.stats.at[0, 0, SPE].set(500).at[1, 0, SPE].set(1))
+    paused = _grgo(t, n, s, foe="U-turn")
+    assert int(paused.pivot_battler) == 2 and np.asarray(paused.ts_grudge).tolist() == [1, 0]
+    full = np.asarray(s.pp[1, 1]).tolist()[:2]
+
+    def resume(state):
+        acts = np.asarray(state.ts_actions).astype(int).tolist()
+        acts[1] = MOVE_ACTIONS + 1
+        return assert_matches_reference(t, state, tuple(acts), _hits())
+
+    out = resume(paused)
+    assert int(out.active[1]) == 1 and np.asarray(out.pp[1, 1]).tolist()[:2] == [full[0], 0]
+    assert np.asarray(out.ts_grudge).tolist() == [0, 0]
+    plain = resume(paused._replace(ts_grudge=jnp.zeros_like(paused.ts_grudge)))
+    assert np.asarray(plain.pp[1, 1]).tolist()[:2] == full
+
+
 def test_a_pursuit_ko_of_a_switching_grudge_user_zeroes_the_pursuers_slot(tables, names):
     """subscript_pursuit.s:85 runs the same faint check: a Grudge holder at 1 HP switching out to
     a Pursuit zeroes the pursuer's slot (the one Pursuit spent). The bit stays from an earlier

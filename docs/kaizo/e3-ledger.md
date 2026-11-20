@@ -953,16 +953,22 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   right after its Destiny Bond block (closes the E2 batch 6 open point "Grudge at :40", e2-mechanics-ledger.md
   "Around the pivots"). (2) After a paused U-turn's list the action goes on to LOOP_FAINTED with the defender
   still flagged (SYSCTL_MON_FAINTED, battle_script.c:1770-1771, cleared only by PlayFaintAnimation, :1799),
-  so TryGrudge would run again with the attacker battler's newcomer (moveSlot is per battler). NOT built: the
-  paused state has already reset the fainted defender's volatiles, so the bit is gone at the resume; owed
-  (Owed 1 below). (3) A reflected Magic Coat pass and Pursuit's Struggle cannot meet it (a
+  so TryGrudge runs again with the attacker battler's newcomer (moveSlot is per battler, common.h:8; moveTemp is
+  still U-turn). Built (review b2 #5): the pause keeps the fainted defender's bit in the scratch (`ts_grudge [B]`,
+  written at :40 when the user goes on to the list, kept by the scratch only while the turn waits at it, dropped
+  when a Pursuit stops the switch; its moveEffectsMask clears only at its faint cleanup, lib.c:2166) and the
+  resumed tail's LOOP_FAINTED calls `try_grudge` for every battler's kept bit with the newcomer and the paused
+  action's selected slot (`ts_actions`), after its AfterMoveEffects (so the newcomer's Leppa misses the zero);
+  reference `_resume` (`_Turn.grudge_kept`, `_write_scratch`). `_try_grudge` is doubles-ready: it tests the
+  attacker's side against the fainted battler's (:6750) and takes the kept bit. STATE.md maps
+  `BattleContext.battleStatusMask` to `ts_grudge`. Test: `test_the_resumed_u_turn_zeroes_the_newcomers_slot_too`.
+  (3) A reflected Magic Coat pass and Pursuit's Struggle cannot meet it (a
   reflected move is a status move; Pursuit is not Struggle); `try_grudge` takes `struggling` for the
   fight command's own Struggle. (4) The reference's `_ingrain_anchors` `others` has `sd.grudge`; no both-engine test: Roar's -6 priority
   makes the foe move after the holder's own attempt, which clears the bit (engine-only test above).
-  Not built: Owed 1 (added): Grudge's second TryGrudge on a U-turn newcomer (needs the fainted defender's bit
-  kept in the pause scratch, `ts_*`). Owed lines naming Grudge before: none. Doubles: `try_grudge` tests the side of the attacker against the
-  fainted battler's (bs.c:6750, so a fainting partner's attacker on the same side is excluded) and the slot is
-  per battler; the reference's `_try_grudge` is singles. Not modelled, message only: "{0}'s {1} lost all its PP
+  Owed 1 (Grudge's second TryGrudge on a U-turn newcomer) closed by review b2 #5 (ruling 2). Doubles: `try_grudge`
+  and the reference's `_try_grudge` test the side of the attacker against the fainted battler's (bs.c:6750, so a
+  fainting partner's attacker on the same side is excluded) and the slot is per battler. Not modelled, message only: "{0}'s {1} lost all its PP
   due to the grudge!", "{0} wants the foe to bear a grudge!".
   Tests: tests/engine/test_e3_batch2.py (`test_grudge_*`, `test_a_ko_zeroes_the_ko_moves_slot_only`,
   `test_the_users_next_move_attempt_clears_grudge`, `test_a_user_that_cannot_move_still_loses_the_bit`,

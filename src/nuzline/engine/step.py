@@ -2216,7 +2216,10 @@ def _use_move(
         state,
     )
     state = state._replace(
-        ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype)
+        ts_sub_hit=jnp.where(resumed, 0, state.ts_sub_hit).astype(state.ts_sub_hit.dtype),
+        # The Grudge bit is the paused action's (review b2 #5): read once by its resumed tail
+        # (``state_in``, below), and dropped when a Pursuit stopped the switch.
+        ts_grudge=jnp.where(resumed | tail_fainted, 0, state.ts_grudge).astype(jnp.int8),
     )
     # Transform (:5350-5362 cleared the announce flags): AfterMoveEffects' TRIGGER_SWITCH_IN_EFFECTS
     # runs the transformed battler's copied ability again once the copy is made (the effect runs in
@@ -2383,6 +2386,16 @@ def _use_move(
         )  # fmt: skip
         # :48: a user that fainted does not switch; :54 its foe's Pursuit, else the list.
         goes = tries & (hit_state.hp[party(fmt, side), user] > 0)
+        # Review b2 #5: a defender that fainted holding Grudge stays flagged through the list
+        # (SYSCTL_MON_FAINTED, battle_script.c:1770-1771, cleared by PlayFaintAnimation :1799; its
+        # moveEffectsMask until its faint cleanup, battle_lib.c:2166): the resumed action's
+        # LOOP_FAINTED runs TryGrudge again, on the newcomer (``ts_grudge``, MODE_RESUME below).
+        kept = goes & fell & (hit_state.grudge[target_side] != 0)
+        hit_state = hit_state._replace(
+            ts_grudge=hit_state.ts_grudge.at[target_side].set(
+                jnp.where(kept, 1, hit_state.ts_grudge[target_side]).astype(jnp.int8)
+            )
+        )
         foe = target_side
         chases = (
             goes
@@ -2606,6 +2619,17 @@ def _use_move(
     state = try_grudge(
         state, side, user, slot, target_side, state.grudge[target_side] != 0, struggling, fell
     )
+    # Review b2 #5: the resumed U-turn's LOOP_FAINTED (bcp.c:3820-3823) meets the defender still
+    # flagged with its Grudge bit (``ts_grudge``), so subscript_faint_check_destiny_bond.s:28 runs
+    # TryGrudge with the attacker battler's newcomer (``user`` here): ATTACKER_MOVE_SLOT is
+    # moveSlot[attacker] (common.h:8, per battler), the paused action's selected slot
+    # (``ts_actions``), and moveTemp is still the pivot move, not Struggle. Every battler's bit is
+    # tried (doubles section 5 rule 4); ``try_grudge``'s side test drops the attacker's own side.
+    pivot_slot = jnp.clip(state_in.ts_actions[side].astype(_I32), 0, MOVE_ACTIONS - 1)
+    for b in range(fmt.B):
+        state = try_grudge(
+            state, side, user, pivot_slot, b, state_in.ts_grudge[b] != 0, False, resumed
+        )
     # The unleash script clears the lock (the Bide counter is spent); the move above still
     # saw it locked, so effect_script_0026.s did not restart Bide.
     state = _unlock(state, side, bide_ends & head_on)
@@ -3620,6 +3644,7 @@ def _execute_actions(
         "ts_damaged": jnp.where(pivot_stopped, state.ts_damaged, 0),
         "ts_dealt": jnp.where(pivot_stopped, state.ts_dealt, 0),
         "ts_sub_hit": jnp.where(pivot_stopped, state.ts_sub_hit, 0),
+        "ts_grudge": jnp.where(pivot_stopped, state.ts_grudge, 0),
         "ts_alive": jnp.where(pivot_stopped, base, 0),
         "ts_power_mul": jnp.where(paused, state.ts_power_mul, power_mul),
         "ts_switched": is_switch(real),

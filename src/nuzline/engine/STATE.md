@@ -503,7 +503,10 @@ three structs has a row.
   `ts_assurance`: `assuranceDamageMask`, which the action-phase HP updates write in the state
   itself and Assurance reads, B13-17; `ts_sub_hit`: the paused action's `selfTurnFlags.statusFlags & SELF_TURN_FLAG_SUBSTITUTE_HIT` per
   battler, the only self turn flag kept across a U-turn's list (`BattleContext_Init` clears the rest at the
-  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `focusItemActivated` and
+  action's end, bcp.c:3998; `hooks.intimidate` reads it, F-4); `ts_grudge`: per battler, the battler fainted in the paused
+  action holding `MOVE_EFFECT_GRUDGE`: its `battleStatusMask` SYSCTL_MON_FAINTED bit and `moveEffectsMask` survive the
+  U-turn's list (battle_script.c:1770-1771, :1799; battle_lib.c:2166), so the resumed action's LOOP_FAINTED runs
+  TryGrudge on the newcomer (review b2 #5); `focusItemActivated` and
   `SELF_TURN_FLAG_PLUCK_BERRY` live in `_use_move`'s hit loop (`effects.MoveHit`);
   `lightningRodActivated` / `stormDrainActivated` are `_use_move`'s local `redirected`; `turnFlags.roosting` is the public `roosting`, kept at a pause
   and while a faint replacement is pending, `engine.state`; the other turn flags are reset every
@@ -764,7 +767,7 @@ three structs has a row.
 | `BattleContext.aiContext` | `ai_seen_moves`, `ai_item_known`, `ai_ability_known`, `trainer_items`, `trainer_item_count` | mapped |
 | `BattleContext.aiScriptTemp` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
 | `BattleContext.aiScriptCursor` | — | not needed because it is script-interpreter, IO or UI state; `step` is one pure function per turn |
-| `BattleContext.battleStatusMask` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
+| `BattleContext.battleStatusMask` | `ts_grudge` | mapped |
 | `BattleContext.battleStatusMask2` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.damage` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
 | `BattleContext.hitDamage` | — | not needed because it is per-action scratch that `step` recomputes inside the turn |
