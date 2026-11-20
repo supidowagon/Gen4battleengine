@@ -8300,8 +8300,8 @@ def _resume(
             setattr(bt, name, [0] * 6 if name == "ts_taken" else 0)
     for pt in s.parties:
         pt.ts_alive = 0
-    for sc in s.sides:
-        sc.ts_follow_me = 0
+    # ts_follow_me stays: Follow Me lasts to SetupNextTurn (battle_lib.c:2251-2252), _end_turn
+    # clears it, and _follow_me_target reads the state for every later action of the turn.
     foe = turn.target_side if _fmt(s).B == 4 else _foe(side)  # the kept defender (D3-10)
     # The defender's SELF_TURN_FLAG_SUBSTITUTE_HIT (F-4): the tail's TriggerHeldItemOnHit returns
     # early on it (battle_lib.c:5378).
