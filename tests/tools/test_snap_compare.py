@@ -631,6 +631,69 @@ def test_a_one_sided_input_field_is_reported_and_fails(monkeypatch):
     assert sc.report(args(), "p", res, 1.0, {"legacy_field", "roll"}, set(), "") == 0
 
 
+# --- layout upgrades (an older commit's field shapes) ---------------------------------------
+
+STARF_ROW, STARF_COLS = sc.UPGRADES[0].name, sc.UPGRADES[1].name
+
+
+def test_old_shapes_upgrade_on_load(monkeypatch):
+    """F-O3: an old int8[B] starf_roll and int8[B, 2] Outcome.starf load as int8[B, 3] (the draw
+    in entry 0, then 0) and int8[B, 4] (columns 2-3 copy column 0), in the saved inputs and in
+    the captured entries alike; a field already in the new shape is left alone."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    roll, starf = np.array([7, -1], np.int8), np.array([[1, 2], [3, 4]], np.int8)
+    want_roll = np.array([[7, 0, 0], [-1, 0, 0]], np.int8)
+    want_starf = np.array([[1, 2, 1, 1], [3, 4, 3, 3]], np.int8)
+    hp = np.ones(2, np.int16)
+    inputs = [("k", {"in_state": {"starf_roll": roll, "hp": hp}, "in_actions": hp,
+                     "in_outcome": {"starf": starf}}), ("a", {"in_ai_state": {"starf_roll": roll}})]  # fmt: skip
+    (_, got), (_, ai) = sc.upgrade_inputs(inputs)
+    np.testing.assert_array_equal(got["in_state"]["starf_roll"], want_roll)
+    np.testing.assert_array_equal(got["in_outcome"]["starf"], want_starf)
+    np.testing.assert_array_equal(ai["in_ai_state"]["starf_roll"], want_roll)
+    assert got["in_state"]["hp"] is hp and got["in_actions"] is hp
+    entries = sc.canon({"state": {"starf_roll": roll}, "outcome": {"starf": starf}, "x": hp})
+    assert sc.upgrade_entries(entries) == {
+        **entries,
+        **sc.canon({"state": {"starf_roll": want_roll}, "outcome": {"starf": want_starf}}),
+    }
+    assert sc.UPGRADED == {STARF_ROW: 3, STARF_COLS: 2}
+    assert sc.upgrade_fields("state", {"starf_roll": want_roll})["starf_roll"] is want_roll
+    assert sc.upgrade_entries(sc.canon({"starf": want_starf})) == sc.canon({"starf": want_starf})
+    assert sc.UPGRADED == {STARF_ROW: 3, STARF_COLS: 2}
+
+
+def test_an_unknown_shape_mismatch_still_raises(monkeypatch):
+    """Only a row's exact old dtype and shape upgrades: any other mismatch stays the error."""
+    monkeypatch.setattr(sc, "UPGRADED", {})
+    layout = {"starf_roll": ((2, 3), np.int8), "starf": ((2, 4), np.int8)}
+    for name, kind, bad in (
+        ("starf_roll", "state", np.zeros((2, 2), np.int8)),
+        ("starf_roll", "state", np.zeros(2, np.int16)),
+        ("starf", "outcome", np.zeros((2, 3), np.int8)),
+    ):
+        saved = sc.upgrade_fields(kind, {name: bad})
+        assert saved[name] is bad
+        with pytest.raises(ValueError, match=name):
+            sc.check_layout(saved, layout)
+        entries = sc.canon({name: bad})
+        assert sc.upgrade_entries(entries) == entries
+    assert sc.UPGRADED == {}
+
+
+def test_compare_header_lists_the_upgrades_and_their_counts(run, capsys):
+    snap = str(run.snap)
+    assert run(["capture", snap, "0-1", "--commit", BASE, "--parts", "step"]) == 0
+    capsys.readouterr()
+    run.code = "code-b"
+    res = {**result(), "upgraded": {STARF_ROW: 4, STARF_COLS: 2}}
+    assert run(["compare", snap, "0-1", "--commit", NEW, "--parts", "step"], res=res) == 0
+    out = capsys.readouterr().out
+    assert "layout upgrades: state.starf_roll (B,) -> (B, 3); outcome.starf (B, 2) -> (B, 4)" in out
+    assert f"  layout upgrades: {STARF_COLS} x 2, {STARF_ROW} x 4" in out
+    assert f"layout upgrades run: {STARF_COLS} x 2, {STARF_ROW} x 4" in out
+
+
 def test_every_escape_flag_defaults_off():
     ns = sc.build_parser().parse_args(["compare", "d", "0-1"])
     assert ns.allow_new is None and ns.allow_all_raise is None
