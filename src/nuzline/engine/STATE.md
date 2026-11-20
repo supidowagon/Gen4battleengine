@@ -260,6 +260,24 @@ three structs has a row.
   before `ShowBattleMon` (:256) runs its switch-in states. `entry_pending[battler]` is 1 then
   (`step.replace(..., effects=False)`), until `search.playout.replacement_pass` runs both
   newcomers' states (`hooks.show_battle_mon`); else 0.
+  At B = 4 `step.replace_round` (D3-12) sets it for every living newcomer of the round, until
+  D3-13's ShowBattleMon.
+- **No empty-slot field** (battlersSwitchingMask, bcp.c:330-333, :4109-4111): `absent_now` (active
+  at 0 HP and no `replacement_bench`) equals the mask because no slot is refilled in battle.
+  Premise, a design rule: the player uses no bag item in battle (docs/design.md:19); the only
+  in-battle party-HP raise is a bag revive (src/battle/battle_system.c:665-710). Trainers never
+  revive: the AI's item tests need its own active's curHP (trainer_ai.c:4100-4101, :4111-4113),
+  the AI partner uses none (trainer_ai.c:4069-4073), and no vanilla or Kaizo trainer bag holds
+  item 28, 29 or 37. If design.md:19 changes, the engine needs the decomp's mask as a field:
+  `absent` int8[B] `_BATTLER`, written by ReplaceFainted's no-replacement branch and at battle
+  start, cleared by the send-in (script.c:2511-2512), plus an "active none" value
+  (selectedPartySlot 6, bcp.c:4111) so a revived slot's party HP is not read as the masked
+  battler's.
+- **`learn_pin` at B = 4** (D3-12, owed from D3-8b): two base-5 digits, battler 0's (`% 5`) and
+  battler 2's (`// 5`; DOUBLES and TWO_TRAINERS), each 0 or 1 + the move slot the battler
+  selected; set when a payout levels its active before its move runs. A level-up of battler 2's
+  active reloads battler 2 (`expBattler = 2`, battle_script.c:9716-9720, :9860-9864). B = 2: the
+  scalar, unchanged.
 - **speedRand -> `qc_roll`** (K3b2 Task 8; docs/kaizo/k3b2-rules.md §5, §12):
   `speedRand[battler]` is one `RandNext()` per battler slot, drawn at battle start
   (`BattleContext_InitCounters`, `src/battle/battle_lib.c:2019-2025`) and in each turn's

@@ -78,6 +78,7 @@ import math
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine import targets
@@ -3578,12 +3579,27 @@ def _execute_actions(
         # (bcp.c:3965-3969). The player's move is still to run when the opponent acted first
         # and the player chose a move (design §3.3(a), ``learn_pin``).
         # The opponent party's action pays while a player-party battler's FIGHT is still to come
-        # (its action not over); the move passed on stays battler 0's (D10: the per-battler pin).
+        # (its action not over). B = 4: per battler, so the level-up of battler 0's or battler 2's
+        # active pins its own selected move (``learn_pin``, D3-12 owed from D3-8b).
         to_come = jnp.stack(
             [(side_of(b) == 0) & ~over[b] & (real[b] < MOVE_ACTIONS) for b in range(fmt.B)]
         )
-        pending = (side_of(side) == 1) & jnp.any(to_come)
-        done = _pay_all(tables, _with_alive(acted, base | owed_all), done, pending, real[0])
+        if fmt.B == 2:
+            done = _pay_all(
+                tables,
+                _with_alive(acted, base | owed_all),
+                done,
+                (side_of(side) == 1) & jnp.any(to_come),
+                real[0],
+            )
+        else:
+            done = _pay_all(
+                tables,
+                _with_alive(acted, base | owed_all),
+                done,
+                (side_of(side) == 1) & to_come,
+                real,
+            )
         state = _where(again, after_pursuit, _where(stop, acted, done))
         # moveEffectsData.quickClaw / .custapBerry (SF2 (k)): the acting battler's BeforeMove
         # cleared its own (subscript_check_quick_claw.s:22-28; not a pursuer's or a resumed tail),
@@ -4924,8 +4940,25 @@ def sample_war(key, state: BattleState) -> BattleState:
 def needs_replacement(state: BattleState) -> jnp.ndarray:
     """``int8[B]``: 1 where a side's active Pokemon has fainted and a healthy one is
     left to send in, while the battle goes on. A player faint is not terminal (the battle
-    ends at a whiteout, ``_faint_check``), so both sides are served."""
+    ends at a whiteout, ``_faint_check``), so both sides are served.
+
+    B = 4 (``ReplaceFainted``, bcp.c:4070-4167; D3-12): battler ``b`` is flagged when its
+    active has 0 HP, ``actions.replacement_bench`` has a Pokemon (the partner's active slot
+    is excluded where it draws from the same party, :4096-4107; none left: ``absent_now``,
+    :4109-4111) and the battle goes on; except a high battler (``b & 2``) whose partner is at
+    0 HP too and draws from the same party: the low battler is served first, the partner on a
+    later TurnEnd entry (:4083-4086)."""
     fmt = format_of(state)
+    if fmt.B == 4:
+        flags = []
+        for b in range(fmt.B):
+            down = state.hp[party(fmt, b), state.active[b]] == 0
+            flag = down & jnp.any(replacement_bench(state, b)) & (state.over == 0)
+            if b & 2 and party(fmt, b ^ 2) == party(fmt, b):
+                partner_down = state.hp[party(fmt, b ^ 2), state.active[b ^ 2]] == 0
+                flag = flag & ~partner_down
+            flags.append(flag)
+        return jnp.stack(flags).astype(jnp.int8)
     slots = jnp.arange(state.hp.shape[1])
     active_down = state.hp[party(fmt, jnp.arange(fmt.B)), state.active] == 0
     rows = party(fmt, jnp.arange(fmt.B))  # each battler's party
@@ -4995,4 +5028,71 @@ def replace(
     out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
     # The slot's speedRand stays; it is unread unless the newcomer (or, after an entry
     # faint, the next replacement) can be a Quick Claw holder (qc_kept).
+    return _keep_quick_claw(tables, out, out.qc_roll)
+
+
+def replace_round(tables: Tables, state: BattleState, picks, trace_pick=None) -> BattleState:
+    """One ``ReplaceFainted`` round at B = 4 (D3-12; ``replace`` is the B = 2 API): every flagged
+    battler (``needs_replacement``) sends in its pick together. ``picks``: ``int8[B]``, -1 = no
+    pick; a pick must be in ``actions.replacement_bench`` of a flagged battler (``ValueError``
+    otherwise; checked when ``picks`` is concrete).
+
+    The decomp: ``TurnEnd`` (bcp.c:1844-1859) runs ``AnyExpPayout``, ``CheckBattleOver``, then
+    ``ReplaceFainted`` (:1846-1848), which flags every battler to serve (bcp.c:4070-4167) and
+    loads ``subscript_show_party_list.s``; the caller loops ``TurnEnd`` until none is flagged.
+    The picks are simultaneous (``ShowParty`` / ``WaitMonSelection``, script.c:2378-2468): each
+    bench is the one of the round's start state, no pick sees another's result. The script sends
+    the lowest battler first (script.c:2408-2413): ``SwitchAndUpdateMon`` (``_switch_in``, which
+    also runs the send-out's exp flag), the entry hazards and a faint
+    (subscript_show_party_list.s:9-24), then ``GoToIfAnySwitches`` takes the next (:27); no payout
+    and no battle-over check inside it. Each hazard faint is a faint check alone
+    (``decide=False``). Then ``TurnEnd`` again: the payouts of the round's faints in ascending
+    battler order (``_pay_all`` from the round's start state, D3-8; so a later newcomer's hazard
+    damage reads its max HP before any level-up of the round), ``CheckBattleOver``; the window (c)
+    refusal as ``replace``. A newcomer with HP waits for the next turn's ``ShowBattleMon``
+    (``entry_pending``, D3-13; subscript_show_party_list.s runs no switch-in state)."""
+    fmt = format_of(state)
+    if fmt.B == 2:
+        raise ValueError("replace_round is the B = 4 API; use replace at B = 2")
+    if not isinstance(picks, jax.core.Tracer):
+        given = np.asarray(picks)
+        flagged = np.asarray(needs_replacement(state))
+        for b in range(fmt.B):
+            if given[b] < 0:
+                continue
+            if not flagged[b] or not np.asarray(replacement_bench(state, b))[given[b]]:
+                raise ValueError(f"battler {b}: pick {int(given[b])} is not a replacement now")
+    picks = jnp.asarray(picks, _I32)
+    start = state
+    out = state
+    for b in range(fmt.B):
+        has = picks[b] >= 0
+        entered = _switch_in(tables, out, b, jnp.maximum(picks[b], 0), state.turn)
+        hazards = entry_hazards(tables, entered, b)
+        out = _where(
+            has, _faint_check(tables, entered, hazards, entry_turn=state.turn, decide=False), out
+        )
+    paid = _pay_all(tables, start, out)
+    leveled = jnp.any(paid.level != out.level)
+    out = _faint_check(tables, paid, paid, entry_turn=state.turn)
+    # Learn work left inside the opponent's replacement loop would be read by the next pick
+    # before the learn resolve: refused as window (c) (design §3.3(c)), as ``replace``.
+    window_c = jnp.any(picks[1::2] >= 0) & leveled & (out.over == 0)
+    out = out._replace(
+        exp_refused=jnp.where(window_c, EXP_REFUSED_WINDOW_C, out.exp_refused).astype(
+            out.exp_refused.dtype
+        )
+    )
+    rows = party(fmt, jnp.arange(fmt.B))
+    waits = (picks >= 0) & (out.hp[rows, out.active] > 0) & (out.over == 0)
+    out = out._replace(
+        entry_pending=jnp.where(picks >= 0, waits, out.entry_pending != 0).astype(
+            out.entry_pending.dtype
+        )
+    )
+    keep = starf_kept(tables, out) | (out.entry_pending != 0)
+    out = out._replace(starf_roll=jnp.where(keep, out.starf_roll, 0).astype(out.starf_roll.dtype))
+    pending = jnp.any(needs_replacement(out) != 0)
+    out = out._replace(roosting=jnp.where(pending, out.roosting, 0).astype(out.roosting.dtype))
+    out = out._replace(ts_assurance=jnp.zeros_like(out.ts_assurance))
     return _keep_quick_claw(tables, out, out.qc_roll)

@@ -218,7 +218,8 @@ Encodings:
   256, ``BattleSystem_TriggerEffectOnSwitch``: its BattleMon ``traceAnnounced``,
   ``weatherAbilityAnnounced``, ``intimidateAnnounced``, ``downloadAnnounced`` all clear) while
   the player sends in another Pokemon first: at a double KO whose player newcomer fainted on the
-  entry hazards (``search.playout.replacement_pass``). Else 0, so states merge.
+  entry hazards (``search.playout.replacement_pass``). At B = 4 ``step.replace_round`` sets it for
+  every living newcomer of the round until ShowBattleMon (D3-13). Else 0, so states merge.
 * Experience (K3d-exp; ``STATE.md`` "Experience"): ``exp`` is the player party's
   ``MON_DATA_EXPERIENCE``; ``evs`` (``ids.Stat`` order, like ``ivs``) and ``nature`` feed the
   level-up stat recompute; ``exp_boost``, ``pokerus`` and ``friend_bonus`` are the

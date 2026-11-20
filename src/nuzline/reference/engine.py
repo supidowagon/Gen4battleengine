@@ -2156,7 +2156,7 @@ def _hold_effect(tables, item: int) -> int:
     return _t(tables, "item_hold_effect", item)
 
 
-def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0) -> bool:
+def _pay_exp(turn: _Turn, s: RefState, pending=False, selected=0) -> bool:
     """``BattleControllerPlayer_AnyExpPayout`` (bcp.c:4449-4469), re-entered until no payout
     flag is left: ``subscript_grant_exp.s`` for the lowest flagged entry each time (``(battler,
     slot)``; the ordering rule is D3-8's). Returns whether a player Pokemon gained a level."""
@@ -2166,6 +2166,14 @@ def _pay_exp(turn: _Turn, s: RefState, pending: bool = False, selected: int = 0)
         turn.payout.remove((battler, slot))
         leveled |= _grant_exp(turn.tables, s, battler, slot, pending, selected)
     return leveled
+
+
+def _pin_of(pending, selected, battler: int) -> tuple[bool, int]:
+    """``(pending, selected)`` of player ``battler``: scalars are battler 0's (B = 2); at B = 4
+    the callers pass one entry per battler (``engine.levelup.pay_exp``)."""
+    if isinstance(pending, (list, tuple)):
+        return bool(pending[battler]), int(selected[battler])
+    return (bool(pending) and battler == 0), int(selected)
 
 
 def ref_grant_exp(
@@ -2192,6 +2200,9 @@ def _grant_exp(
     # sideGetExpMask[(faintedMon >> 1) & 1] (script.c:2205, :9700, :9709, :9741, :10191; D3-8b):
     # one entry per enemy battler at B = 4, the scalar entry 0 at B = 2.
     entry = None if _fmt(s).B == 2 else (battler >> 1) & 1
+    # The player battlers a level-up of the slot can reload: battler 2 too in DOUBLES and
+    # TWO_TRAINERS (party 0, BATTLE_TYPE_AI excluded, script.c:9716-9720; D3-12).
+    reloaders = (0, 2) if _fmt(s).B == 4 and _fmt(s) != MULTI else (0,)
 
     def mask() -> int:
         return s.exp_mask if entry is None else s.exp_mask[entry]
@@ -2245,20 +2256,26 @@ def _grant_exp(
                 _level_up_friendship(tables, mon, s.friend_bonus[slot], item)
                 with _party_identity(s, slot):
                     _calc_stats(tables, mon)
-                if slot == s.battlers[0].active and s.battlers[0].transformed:
-                    # The reload gives the battler its own new stats, and the shadow too (G-69).
-                    s.battlers[0].shadow_stats = list(mon.stats)
-                if slot == s.battlers[0].active:
-                    # ReloadPokemon's Attack / Defense come unswapped; the Power Trick bit stays
-                    # (lib.c:169-174), B12-10.
-                    s.battlers[0].power_trick_desync = s.battlers[0].power_trick
+                for p in reloaders:  # expBattler 2 first, else 0 (script.c:9716-9720, :9860-9864)
+                    if slot == s.battlers[p].active and s.battlers[p].transformed:
+                        # The reload gives the battler its own new stats, and the shadow too
+                        # (G-69).
+                        s.battlers[p].shadow_stats = list(mon.stats)
+                    if slot == s.battlers[p].active:
+                        # ReloadPokemon's Attack / Defense come unswapped; the Power Trick bit
+                        # stays (lib.c:169-174), B12-10.
+                        s.battlers[p].power_trick_desync = s.battlers[p].power_trick
                 # The level's learnset scan (:9879-9883) is deferred to the learn resolve:
                 # the first pending level is marked (design §3.2).
                 if s.learn_level[slot] == 0:
                     s.learn_level[slot] = mon.level
                     s.learn_cursor[slot] = 0
-                if pending and slot == s.battlers[0].active:
-                    s.learn_pin = selected + 1
+                for k, p in enumerate(reloaders):
+                    pend, sel = _pin_of(pending, selected, p)
+                    if pend and slot == s.battlers[p].active:
+                        # B = 2: the pin; B = 4: base-5 digit k of learn_pin (levelup.pay_exp).
+                        digit = (s.learn_pin // 5**k) % 5
+                        s.learn_pin += (sel + 1 - digit) * 5**k
         # SEQ_GET_EXP_CHECK_DONE, :10190-10193
         if entry is None:
             s.exp_mask &= ~(1 << slot)
@@ -2488,15 +2505,24 @@ def ref_learn_options(tables, state: RefState) -> list[bool]:
     for k in range(LEARNED_MOVES_MAX):
         move = party[k]
         ok = supported and not _t(tables, "move_is_hm", move)
-        if (
-            slot == battler.active
-            and not state.over  # no turn end or move after the battle ends (bcp.c:3965-3969)
-            and (
-                mon.moves[k] in (battler.disabled_move, battler.encore_move)
-                or state.learn_pin == k + 1
-            )
-        ):
-            ok = False
+        if not state.over:  # no turn end or move after the battle ends (bcp.c:3965-3969)
+            if _fmt(state).B == 2:
+                held = slot == battler.active and (
+                    mon.moves[k] in (battler.disabled_move, battler.encore_move)
+                    or state.learn_pin == k + 1
+                )
+            else:  # B = 4: the learner's own battler, base-5 digit of learn_pin (D3-12)
+                held = any(
+                    slot == state.battlers[p].active
+                    and (
+                        mon.moves[k]
+                        in (state.battlers[p].disabled_move, state.battlers[p].encore_move)
+                        or (state.learn_pin // 5**j) % 5 == k + 1
+                    )
+                    for j, p in enumerate((0, 2) if _fmt(state) != MULTI else (0,))
+                )
+            if held:
+                ok = False
         options.append(ok)
     return [*options, True]
 
@@ -7730,11 +7756,21 @@ def _finish_action(turn: _Turn, s: RefState, side: int, position: int, record) -
     # (bcp.c:3965-3969): a KO that ends the battle pays too. The player's move is still to
     # run when the opponent acted first and the player chose a move (learn_pin).
     # (D3-5: any player-party battler whose action is not over and whose command is FIGHT.)
-    pending = side_of(side) == 1 and any(
-        side_of(b) == 0 and b not in turn.order[:position] and turn.commands[b] == FIGHT
-        for b in range(_fmt(s).B)
-    )
-    _pay_exp(turn, s, pending, turn.actions[0])
+    if _fmt(s).B == 2:
+        pending = side_of(side) == 1 and any(
+            side_of(b) == 0 and b not in turn.order[:position] and turn.commands[b] == FIGHT
+            for b in range(_fmt(s).B)
+        )
+        _pay_exp(turn, s, pending, turn.actions[0])
+    else:  # B = 4: per battler (the pin of battler 0's and battler 2's active, D3-12)
+        pending = [
+            side_of(side) == 1
+            and side_of(b) == 0
+            and b not in turn.order[:position]
+            and turn.commands[b] == FIGHT
+            for b in range(_fmt(s).B)
+        ]
+        _pay_exp(turn, s, pending, list(turn.actions))
 
 
 def _stale_snapshot(s: RefState) -> list[tuple[int, int, bool, int]]:
@@ -7808,12 +7844,14 @@ def _end_turn(turn: _Turn, s: RefState) -> RefState:
 
 
 def _awaits_replacement(s: RefState, b: int) -> bool:
-    """Battler ``b``'s active Pokemon has fainted and its party has another with HP left."""
-    mons = _party_of(s, b).mons
-    active = s.battlers[b].active
-    return mons[active].hp == 0 and any(
-        m.species and m.hp for i, m in enumerate(mons) if i != active
-    )
+    """``engine.step.needs_replacement`` for battler ``b`` (without the battle-over test): its
+    active Pokemon has fainted and ``_replacement_bench`` has a Pokemon (``_absent_now`` is the
+    complement). B = 4: a high battler whose partner is at 0 HP too and draws from the same party
+    is served on a later entry (ReplaceFainted, bcp.c:4083-4086)."""
+    if _active(s, b).hp != 0 or not any(_replacement_bench(s, b)):
+        return False
+    fmt = _fmt(s)
+    return not (b & 2 and _party(fmt, b ^ 2) == _party(fmt, b) and _active(s, b ^ 2).hp == 0)
 
 
 def _replacement_bench(s: RefState, b: int) -> list[bool]:
@@ -8128,6 +8166,47 @@ def ref_replace(tables, state: RefState, side: int, slot: int, effects: bool = T
         if not (keep or sd.entry_pending):
             sd.starf_roll = 0
     # The turn's roosting flags end with the last replacement (SetupNextTurn, bcp.c:1856).
+    if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
+        _set_roosting(s, [0] * _fmt(s).B)
+    return s
+
+
+def ref_replace_round(tables, state: RefState, picks, trace_pick=None) -> RefState:
+    """One ``ReplaceFainted`` round at B = 4 (``engine.step.replace_round``'s contract; ``picks``
+    one slot per battler, -1 = none). The flagged battlers send in together from the round's start
+    bench (script.c:2378-2468), lowest battler first: ``_enter``, the send-out's exp flag, the
+    entry hazards and a faint check alone (subscript_show_party_list.s:9-24); then the payouts
+    in ascending battler order (``_pay_exp``) and the battle-over decision (TurnEnd, bcp.c:
+    1846-1848). The newcomers' switch-in states wait for the next ``ShowBattleMon``
+    (``entry_pending``, D3-13)."""
+    s = copy.deepcopy(state)
+    if _fmt(s).B == 2:
+        raise ValueError("ref_replace_round is the B = 4 API; use ref_replace at B = 2")
+    for b, pick in enumerate(picks):
+        if pick >= 0 and (
+            s.over or not _awaits_replacement(s, b) or not _replacement_bench(s, b)[pick]
+        ):
+            raise ValueError(f"battler {b}: pick {int(pick)} is not a replacement now")
+    turn = _Turn(tables, None, entry_turn=s.turn, battler_count=_fmt(s).B)
+    turn.trace_pick = trace_pick
+    for b, pick in enumerate(picks):
+        if pick < 0:
+            continue
+        _enter(turn, s, b, int(pick))
+        _send_out_exp(s, b)
+        _entry_hazards(turn, s, b)
+        _faint_check(turn, s, decide=False)
+    leveled = _pay_exp(turn, s)
+    _faint_check(turn, s)
+    if leveled and any(pick >= 0 for pick in picks[1::2]) and not s.over:
+        s.exp_refused = 2  # window (c), as ref_replace
+    for b, pick in enumerate(picks):
+        if pick >= 0:
+            s.battlers[b].entry_pending = int(not s.over and _active(s, b).hp > 0)
+    _keep_qc(tables, s, _qc_rolls(s))
+    for sd, keep in zip(s.battlers, _starf_kept(tables, s), strict=True):
+        if not (keep or sd.entry_pending):
+            sd.starf_roll = 0
     if s.over or not any(_awaits_replacement(s, b) for b in range(_fmt(s).B)):
         _set_roosting(s, [0] * _fmt(s).B)
     return s

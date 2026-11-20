@@ -309,22 +309,11 @@ def _selects(tables: Tables, state: BattleState, actions, effects) -> bool:
     return False
 
 
-def _replacement_point(state: BattleState) -> bool:
-    from nuzline.engine.step import needs_replacement
-
-    return format_of(state).B == 4 and bool(np.any(np.asarray(needs_replacement(state))))
-
-
 # Build order of the D3 groups; each group deletes its own clause, and the tuple is empty after
 # D3-16 (tests/engine/test_coverage_four.py::OWED). Battlers 2 and 3 absent (0 HP, nothing left
 # in their parties) is the supported turn: the decomp's turn is then the two-battler turn
 # (``order.action_order`` puts them after battlers 0 and 1, where they never act).
 FOUR_TURN_CLAUSES: tuple[TurnClause, ...] = (
-    # D3-12: turn-end replacement over four (needs_replacement, _awaits_replacement);
-    # deleted by D3-12
-    TurnClause(
-        "D3-12", "turn-end replacement over four battlers", lambda t, s, a: _replacement_point(s)
-    ),
     # D3-15: MoveEnd over four (_move_end reads _foe(side)); deleted by D3-15
     TurnClause("D3-15", "MoveEnd over four battlers", lambda t, s, a: _four(s)),
     # D3-18: Trick Room's MoveEnd re-sort over four; deleted by D3-18

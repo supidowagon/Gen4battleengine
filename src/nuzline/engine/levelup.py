@@ -61,7 +61,7 @@ import jax
 import jax.numpy as jnp
 
 from nuzline.data.tables import Tables
-from nuzline.engine.format import format_of, party, side_of
+from nuzline.engine.format import MULTI, format_of, party, side_of
 from nuzline.engine.ids import EffectId, Stat
 from nuzline.engine.state import MOVES, SLOTS, BattleState, party_held_item
 from nuzline.engine.stats import SPECIES_SHEDINJA, calc_stats_jnp
@@ -157,7 +157,11 @@ def pay_exp(
     """``after`` with the exp payout for an opponent faint between ``before`` and ``after``
     (``after`` is the state after the hook's faint check); unchanged when nothing fainted.
     ``pending``: the player's move ``selected`` (its slot, 0-3) has not run yet this turn, so
-    a level-up of the player's active pins that slot (``learn_pin``, design §3.3(a)).
+    a level-up of the player's active pins that slot (``learn_pin``, design §3.3(a)). At B = 4
+    both are per battler (``[B]``; a scalar is battler 0's) and ``learn_pin`` holds two base-5
+    digits, battler 0's (``% 5``) and battler 2's (``// 5``; party-0 battlers only: DOUBLES and
+    TWO_TRAINERS), each 0 or 1 + the move slot. A level-up of battler 2's active reloads it
+    into battler 2 (``expBattler = 2``, battle_script.c:9716-9720, :9860-9864).
     ``battler``: a static Python int, the payout for that battler alone (see
     ``pay_exp_leveled``); ``None`` is the singles payout."""
     return pay_exp_leveled(tables, before, after, pending, selected, battler)[0]
@@ -278,7 +282,30 @@ def pay_exp_leveled(
     new_hp = jnp.where(species == SPECIES_SHEDINJA, 1, hp + new[:, Stat.HP] - old_max)
 
     marked = leveled & (after.learn_level == 0)
-    pin = jnp.asarray(pending) & leveled[after.active[0]]
+    # BattleSystem_ReloadPokemon runs for the battler whose ``selectedPartySlot`` is the leveled
+    # slot: battler 2 first, in DOUBLES and TWO_TRAINERS (BATTLE_TYPE_AI excluded), else battler 0
+    # (battle_script.c:9716-9720, :9860-9864; D3-12 owed from D3-8b). ``reloaders`` are the
+    # player battlers of party 0 that can be that battler (MULTI's battler 2 draws from party 2).
+    fmt = format_of(after)
+    reloaders = (0, 2) if fmt.B == 4 and fmt != MULTI else (0,)
+    pending = jnp.asarray(pending)
+    selected = jnp.asarray(selected)
+    if fmt.B == 2:
+        pin = pending & leveled[after.active[0]]
+        learn_pin = jnp.where(pin, selected + 1, after.learn_pin)
+    else:
+        # B = 4: ``pending`` / ``selected`` are per battler (a scalar is battler 0's) and the pin
+        # of each reloader is one base-5 digit of ``learn_pin`` (``learn_pin % 5`` battler 0,
+        # ``learn_pin // 5`` battler 2; the digit is 0 none, else 1 + the move slot).
+        pend = jnp.zeros(fmt.B, bool).at[0].set(pending) if pending.ndim == 0 else pending
+        sel = jnp.broadcast_to(selected, (fmt.B,))
+        cur = after.learn_pin.astype(_I32)
+        digits = []
+        for k, p in enumerate(reloaders):
+            old_digit = (cur // 5**k) % 5
+            pin = pend[p] & leveled[after.active[p]]
+            digits.append(jnp.where(pin, sel[p].astype(_I32) + 1, old_digit))
+        learn_pin = sum(d * 5**k for k, d in enumerate(digits))
 
     def put(field, side0):
         full = getattr(after, field)
@@ -289,22 +316,6 @@ def pay_exp_leveled(
         hp=put("hp", jnp.where(leveled, new_hp, hp)),
         max_hp=put("max_hp", jnp.where(leveled, new[:, Stat.HP], old_max)),
         stats=put("stats", jnp.where(leveled[:, None], new[:, Stat.ATK :], after.stats[0])),
-        # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's Attack
-        # and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
-        power_trick_desync=after.power_trick_desync.at[0].set(
-            jnp.where(
-                leveled[after.active[0]], after.power_trick[0], after.power_trick_desync[0]
-            ).astype(after.power_trick_desync.dtype)
-        ),
-        # A Transformed active Pokemon: the reload gives the battler its own new stats (:169-174)
-        # and the party's shadow too.
-        shadow_stats=after.shadow_stats.at[0].set(
-            jnp.where(
-                (after.transformed[0] != 0) & leveled[after.active[0]],
-                new[after.active[0], Stat.ATK :],
-                after.shadow_stats[0],
-            ).astype(after.shadow_stats.dtype)
-        ),
         # The level-up's ReloadPokemon re-reads the party value into the battler (F-15).
         friendship=put("friendship", jnp.where(leveled, friendship, after.friendship[0])),
         party_friendship=put("party_friendship", friendship),
@@ -317,10 +328,28 @@ def pay_exp_leveled(
         ).astype(after.exp_mask.dtype),
         learn_level=jnp.where(marked, level + 1, after.learn_level).astype(after.learn_level.dtype),
         learn_cursor=jnp.where(marked, 0, after.learn_cursor).astype(after.learn_cursor.dtype),
-        learn_pin=jnp.where(pin, jnp.asarray(selected) + 1, after.learn_pin).astype(
-            after.learn_pin.dtype
-        ),
+        learn_pin=learn_pin.astype(after.learn_pin.dtype),
     )
+    for p in reloaders:
+        reloaded = leveled[after.active[p]]
+        out = out._replace(
+            # BattleSystem_ReloadPokemon (battle_lib.c:169-174) reloads the active battler's
+            # Attack and Defense unswapped and keeps MOVE_EFFECT_POWER_TRICK (B12-10).
+            power_trick_desync=out.power_trick_desync.at[p].set(
+                jnp.where(reloaded, after.power_trick[p], after.power_trick_desync[p]).astype(
+                    after.power_trick_desync.dtype
+                )
+            ),
+            # A Transformed active Pokemon: the reload gives the battler its own new stats
+            # (:169-174) and the party's shadow too.
+            shadow_stats=out.shadow_stats.at[p].set(
+                jnp.where(
+                    (after.transformed[p] != 0) & reloaded,
+                    new[after.active[p], Stat.ATK :],
+                    after.shadow_stats[p],
+                ).astype(after.shadow_stats.dtype)
+            ),
+        )
     return out, leveled
 
 
@@ -474,7 +503,8 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     * for the player's active learner: it is not the disabled or the encored move (ruling D2:
       the decomp ends Disable and Encore at the end of a turn whose payout replaced it,
       bcp.c:1565-1576, :1591-1602), and not the slot the player selected this turn
-      (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895);
+      (``learn_pin``, window (a), ruling U1; re-read when its move runs, bcp.c:1891-1895; at B = 4 the
+      learner's own battler, 0 or 2);
       none of these while the battle is over (``state.over``: the payout that ended it runs no
       later turn end or move, bcp.c:3965-3969);
     * the offered move is one the engine supports (its effect is not ``UNSUPPORTED``; ruling
@@ -500,14 +530,29 @@ def learn_options(tables: Tables, state: BattleState) -> jnp.ndarray:
     supported = (tables.move_effect[offered] != EffectId.UNSUPPORTED) | ~needs_learn(state)
     ok = (tables.move_is_hm[moves] == 0) & supported
     live = state.moves[0, slot]
-    held = (
-        (live == state.disabled_move[0])
-        | (live == state.encore_move[0])
-        | (jnp.arange(MOVES) + 1 == state.learn_pin)
-    )
+    fmt = format_of(state)
+    if fmt.B == 2:
+        held = (
+            (live == state.disabled_move[0])
+            | (live == state.encore_move[0])
+            | (jnp.arange(MOVES) + 1 == state.learn_pin)
+        )
+        learner_held = (slot == state.active[0]) & held
+    else:
+        # B = 4: the masks of the party-0 battler the learner is (D3-12; ``pay_exp_leveled``'s
+        # base-5 ``learn_pin``: battler 0 ``% 5``, battler 2 ``// 5``).
+        learner_held = jnp.zeros(MOVES, bool)
+        for k, p in enumerate((0, 2) if fmt != MULTI else (0,)):
+            pin = (state.learn_pin.astype(_I32) // 5**k) % 5
+            held = (
+                (live == state.disabled_move[p])
+                | (live == state.encore_move[p])
+                | (jnp.arange(MOVES) + 1 == pin)
+            )
+            learner_held = learner_held | ((slot == state.active[p]) & held)
     # After the battle ends no turn end or move runs (MoveEnd's AnyExpPayout precedes
     # CheckBattleOver, bcp.c:3965-3969): the D2 and pin masks drop nothing then.
-    ok = ok & ~((slot == state.active[0]) & held & (state.over == 0))
+    ok = ok & ~(learner_held & (state.over == 0))
     return jnp.concatenate([ok, jnp.ones(1, bool)])
 
 
