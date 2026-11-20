@@ -3504,7 +3504,10 @@ def _pursuit_hit(
     # slot); TryPursuit sets attacker = pursuer (:6926) but never moveSlot, so Grudge zeroes the
     # chosen slot, not the PP slot above: they differ when Pursuit sits in two slots, or (B = 4) when a foe's faster Encore
     # this turn turned another chosen move into Pursuit. An Encored pursuer that chose no FIGHT
-    # (B = 4 only) keeps an earlier turn's moveSlot, not in the state: its Encore slot stands in.
+    # (an item or a switch this turn) keeps an earlier turn's moveSlot, not in the state: its
+    # Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch actions run in
+    # battler index order (bcp.c:754-768), so an encored battler 1 using an item can meet
+    # battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
     action = actions[pursuer]
     fight = ~is_switch(action) & ~is_item(action)
     grudge_slot = jnp.where(

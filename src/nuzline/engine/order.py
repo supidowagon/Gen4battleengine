@@ -1052,6 +1052,9 @@ def compare_full(
         result,
     ).astype(_I32)
     compares = (claw1 == claw2) & (claw1 | (lag1 == lag2))
+    # Two fainted entries: the decomp falls through to the compare and draws the tie bit
+    # (battle_lib.c:1204-1211 short-circuits only one dead; :1440-1446 draws), but the order of
+    # two fainted entries is never read by any later step, so not drawing it changes no result.
     read = alive1 & alive2 & (p1 == p2) & compares & (speed1 == speed2)
     return result, read
 

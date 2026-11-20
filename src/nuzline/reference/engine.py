@@ -7167,7 +7167,10 @@ def _pursuit_hit(
     # Rough Skin or Aftermath that faints the pursuer comes after the zero (E3-B2-9). The slot is
     # moveSlot (:6753, common.h:8), written only at selection (bcp.c:445, :526); TryPursuit never
     # writes it, so it is the chosen slot, not the PP slot above (step._pursuit_hit). An Encored
-    # pursuer that chose no FIGHT (B = 4) keeps an earlier turn's moveSlot: its Encore slot.
+    # pursuer that chose no FIGHT (an item or a switch this turn) keeps an earlier turn's
+    # moveSlot: its Encore slot stands in. Reachable at B = 2, not only B = 4: item and switch
+    # actions run in battler index order (bcp.c:754-768), so an encored battler 1 using an item
+    # can meet battler 0's switch before it acts. Owed SF3 (ledger, D3-9 rows).
     if _command(actions[pursuer]) == FIGHT:
         chosen = min(actions[pursuer], MOVE_ACTIONS - 1)
     else:
