@@ -37,6 +37,7 @@ computed for every pair ``CompareBattlerSpeed`` compares, so it also orders two 
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 
 from nuzline.data.tables import Tables
 from nuzline.engine.actions import (
@@ -405,7 +406,7 @@ def sealed_state(state: BattleState, sides) -> BattleState:
     sides = jnp.asarray(sides)
     foe_of = jnp.stack(
         [
-            jnp.any(sides[[x for x in range(fmt.B) if side_of(x) != side_of(b)]])
+            jnp.any(sides[np.asarray([x for x in range(fmt.B) if side_of(x) != side_of(b)])])
             for b in range(fmt.B)
         ]
     )

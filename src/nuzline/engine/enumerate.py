@@ -2260,15 +2260,21 @@ def outcome_laws(
         )
         for side in range(fmt.B)
     ]
-    (speed0, ok0), (speed1, ok1) = speeds
+    # BattleSystem_SortMonSpeedOrder (battle_lib.c:3364-3382) compares every pair j < k of the
+    # maxBattlers (:3372-3375): a tie of any two battlers' end speeds is a tie roll.
+    pair_tie = jnp.bool_(False)
+    for j in range(fmt.B):
+        for k in range(j + 1, fmt.B):
+            (speed_j, ok_j), (speed_k, ok_k) = speeds[j], speeds[k]
+            pair_tie = pair_tie | jnp.any(
+                ok_j[:, None] & ok_k[None, :] & (speed_j[:, None] == speed_k[None, :])
+            )
     # B13-31: a foe's Embargo can hide a side's Choice Scarf (CompareBattlerSpeed's
     # Battler_HeldItemEffect, battle_lib.c:1248) before the turn end's sort, a speed the grid
     # does not follow: the tie draw is then always enumerated (over-approximate, sound).
     scarf = tables.item_effect[held_items(state)] == ItemId.CHOICE_SCARF
     embargo_speed = jnp.any(scarf & foes(uses_move & (effect == _E.EMBARGO)))
-    end_speed_tie = live & (
-        jnp.any(ok0[:, None] & ok1[None, :] & (speed0[:, None] == speed1[None, :])) | embargo_speed
-    )
+    end_speed_tie = live & (pair_tie | embargo_speed)
     # A Trace holder on the field at the turn's end (the active or incoming one, or one a drag
     # brings in) may have copied a speed ability (Swift Swim, Quick Feet) the grid does not
     # follow, or Shed Skin: both reads are kept (over-approximate).

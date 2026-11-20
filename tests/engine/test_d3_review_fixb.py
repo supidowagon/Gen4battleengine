@@ -83,9 +83,14 @@ def test_helping_hand_flag_stands_at_a_pause_and_boosts_after_it(tables, names):
 
 
 def test_helping_hand_fails_when_the_partner_has_moved(tables, names):
-    """Battler 2 acts first: its PICK_COMMAND is MOVE_END (:6301), so no flag at the pause."""
+    """Battler 2 acts first: its PICK_COMMAND is MOVE_END (:6301), so no flag at the pause.
+    Helping Hand has priority 5 (res/moves/helping_hand/data.json:19), above every other move, and
+    CalcTurnOrder compares priority before speed (battle_lib.c:1396-1400), so a partner that moved
+    first switched: switches run before every move, and each action's end sets its PICK_COMMAND to
+    MOVE_END (battle_controller_player.c:3989)."""
     s = with_moves(helped(tables, names), names, 1, ["U-turn"])
-    _, paused = play_turn(tables, s, [0, 0, 0, 0], (2, 0, 1, 3), TARGETS)
+    acts = [0, 0, MOVE_ACTIONS + 2, 0]  # battler 2 switches to party 0's slot 2
+    _, paused = play_turn(tables, s, acts, (2, 0, 1, 3), TARGETS)
     assert int(paused.pivot_battler) == 2
     assert flags(paused) == [0, 0, 0, 0]
 

@@ -229,18 +229,21 @@ def test_follow_me_over_a_pause_is_clear_after_the_turn(tables, names):
 # --- the D3-3 case: Fake Out after a mover, with Follow Me through the real order -------------
 
 
-def fake_out_against_follow_me(tables, names):
+def fake_out_against_follow_me(tables, names, follow_me=True):
     """Battler 0 Fake Out (works this turn; the flinch roll procs), battler 3 Follow Me, the
-    others Swords Dance. Both +3: the faster of the two goes first."""
+    others Swords Dance. Follow Me has priority 3 (res/moves/follow_me/data.json:19), Fake Out 1
+    (res/moves/fake_out/data.json:20), and CalcTurnOrder compares priority first (battle_lib.c:
+    1396-1400): Follow Me always goes first. ``follow_me=False``: battler 3 Swords Dance."""
     s = with_moves(idle(tables, names), names, 0, ["Fake Out"])
-    s = with_moves(s, names, 3, ["Follow Me"])
+    if follow_me:
+        s = with_moves(s, names, 3, ["Follow Me"])
     s = s._replace(fake_out_turn=s.fake_out_turn.at[0].set(s.turn))
     o = empty_outcome(DOUBLES)
     return s, o._replace(secondary=o.secondary.at[0, 0].set(1))
 
 
 def test_a_fake_out_after_follow_me_reaches_the_user_and_flinches_nobody(tables, names):
-    """The real order (3, 0, 1, 2): Follow Me (+3, faster) is set when battler 0's Fake Out, chosen
+    """The real order (3, 0, 1, 2): Follow Me (+3, before Fake Out's +1) is set when battler 0's Fake Out, chosen
     at battler 1, runs; it goes to battler 3, which has moved (subscript_flinch_mon.s:5, a defender
     that has not moved), and battler 1 is untouched and acts."""
     s, o = fake_out_against_follow_me(tables, names)
@@ -250,14 +253,15 @@ def test_a_fake_out_after_follow_me_reaches_the_user_and_flinches_nobody(tables,
     assert int(out.stages[1, ATK]) == 2  # battler 1 was not flinched: its Swords Dance ran
 
 
-def test_a_fake_out_before_follow_me_flinches_its_defender(tables, names):
-    """The control, the real order (0, 3, 1, 2): Fake Out (+3, faster) runs before any Follow Me,
-    hits battler 1 and flinches it (it has not moved): no Swords Dance."""
-    s, o = fake_out_against_follow_me(tables, names)
+def test_a_fake_out_without_follow_me_flinches_its_defender(tables, names):
+    """The control, the real order (0, 3, 1, 2): with no Follow Me (battler 3 Swords Dance) Fake
+    Out (+1) runs first, hits battler 1, its chosen target, and flinches it (it has not moved): no
+    Swords Dance for battler 1. A Fake Out can never run before a Follow Me (+3)."""
+    s, o = fake_out_against_follow_me(tables, names, follow_me=False)
     _, out = play_turn(tables, s, [0, 0, 0, 0], (0, 3, 1, 2), (1, 0, 0, 0), o)
     assert hp(out, 1) < hp(s, 1) and hp(out, 3) == hp(s, 3)
     assert int(out.stages[1, ATK]) == 0  # flinched
-    assert int(out.last_move[3]) == names.move("Follow Me")  # battler 3 still moved
+    assert int(out.stages[3, ATK]) == 2  # battler 3 still moved
 
 
 @pytest.mark.slow  # a jitted step compile: over the fast tier's 4 GB

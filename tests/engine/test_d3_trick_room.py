@@ -362,14 +362,16 @@ def test_the_kaizo_re_arm_runs_no_move_end_and_no_re_sort(tables, names, kaizo_t
     """Rule 10: with the counter at 1 and nobody using Trick Room, the turn-end pass re-arms it
     (``Tables.trick_room_rearm``) with no MoveEnd after it: the turn's order is the one
     CalcTurnOrder gave (reversed Speeds, Trick Room up), and the field is up again; the next turn
-    starts from a fresh CalcTurnOrder (the engine equals the reference on both)."""
+    starts from a fresh CalcTurnOrder (the engine equals the reference on both) and its turn end
+    counts the new field down by one like any Trick Room (bcp.c:1823-1824): the re-arm runs only
+    at 0 (:1825-1826)."""
     s = lineup(kaizo_tables, kaizo_names, [["Swords Dance"]] * 4)
     s = s._replace(trick_room=jnp.asarray(1, s.trick_room.dtype))
     out = full_step(kaizo_tables, s, FIGHTS, empty_outcome(DOUBLES))
     assert int(out.trick_room) == TRICK_ROOM_TURNS
     assert [int(out.stages[b, Stat.ATK]) for b in range(4)] == [2, 2, 2, 2]
     again = full_step(kaizo_tables, out, FIGHTS, empty_outcome(DOUBLES))
-    assert int(again.trick_room) == TRICK_ROOM_TURNS
+    assert int(again.trick_room) == TRICK_ROOM_TURNS - 1
 
 
 # --- B = 2 ----------------------------------------------------------------------------------

@@ -132,16 +132,18 @@ def test_a_u_turn_that_kos_its_defender_keeps_it_through_the_list(tables, names)
 
 def test_an_encored_u_turn_keeps_its_first_defender_for_the_kings_rock_flinch(tables, names):
     """Battler 0, Encored into U-turn (a randomized target), hits battler 1 with the first
-    ``target_draw``; the newcomer holds King's Rock. The resume's outcome would pick battler 3
-    (``target_draw[0] = 1``) and rolls the flinch: battler 1 (kept, not yet moved) is flinched,
-    battler 3 is not."""
+    ``target_draw``; the newcomer holds King's Rock. The draw picks ``opponents[RandNext() & 1]``
+    with opponents ``(ENEMY_IN_SLOT_RIGHT, ENEMY_IN_SLOT_LEFT)`` = (3, 1) for battler 0
+    (lib.c:1690-1691, :1699-1700; ``targets.opponents``): bit 1 is battler 1. The resume's outcome
+    would pick battler 3 (``target_draw[0] = 0``) and rolls the flinch: battler 1 (kept, not yet
+    moved) is flinched, battler 3 is not."""
     s = encore(pivoting(tables, names), names, 0, 0, "U-turn")
     s = s._replace(item=s.item.at[0, 2].set(names.item("King’s Rock")))
-    paused, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=(1, 0, 0, 0))
+    first = empty_outcome(DOUBLES)._replace(target_draw=jnp.ones(4, jnp.int8))
+    paused, _ = play(tables, s, [0, 0, 0, 0], ORDER, targets=(1, 0, 0, 0), outcome=first)
     assert int(paused.pivot_battler) == 1 and int(paused.ts_defender) == 2
     assert hp(paused, 1) > 0
     later = empty_outcome(DOUBLES)._replace(
-        target_draw=jnp.ones(4, jnp.int8),
         flinch_item=empty_outcome(DOUBLES).flinch_item.at[0, 0].set(1),
     )
     out = resume(tables, paused, outcome=later)
