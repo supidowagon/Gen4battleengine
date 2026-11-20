@@ -31,9 +31,11 @@ probability. Ranges and encodings are those of ``docs/ai/roark.md`` section 8:
 The site layout depends on the state (which of the AI's moves are super effective,
 which bench Pokemon resist ``move_hit``): both functions take ``tables`` and derive it
 with ``nuzline.ai.switching.switch_sites``, the one layout function Task 3's
-``maybe_switch`` also uses (``switch_action`` maps a stop to its action). Draws that
-cannot change the result (``AI_HasAbsorbAbilityInParty``'s ``% 3`` for Roark) are not
-sites. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
+``maybe_switch`` also uses (``switch_action`` maps a stop to its action).
+``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` gate (trainer_ai.c:3651-3653) is no site:
+it only filters the layout's ``ABSORB_GATED`` sites, so the stop law mixes the two branches
+(``switch_stop_probs``) and the sampler draws it apart (G-37); with no such site it cannot
+change the result. A refused layout raises ``UnsupportedSwitching`` on concrete inputs; traced, it
 gives ``switch_stop = SWITCH_REFUSED`` and NaN probabilities (``switching``). Item use
 draws nothing (8.6).
 
@@ -141,6 +143,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ABILITY_GUESSES",
+    "ABSORB_GATE_P",
     "AI_SITE_MOVES",
     "CALC_DRAWS",
     "CALC_DRAW_CLASSES",
@@ -183,14 +186,19 @@ TIEBREAK_MOD = 12
 _I8, _I32, _F32 = jnp.int8, jnp.int32, jnp.float32
 
 # RandNext() % m over a uniform u16 per SwitchSite (NONE, KEEP, PASS_INEFFECTIVE,
-# PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD, ABSORB): (modulus, the residues lo <= r < hi that
-# stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845 + 1, so the
-# residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691). ABSORB
-# switches when ``RandNext() & 1`` is set (trainer_ai.c:3706): residue 1 of 2.
-_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3, 2], _I32)
-_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 1], _I32)
-_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 2], _I32)
-_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691, 32768], _F32) / 65536
+# PASS_NOT_VERY_EFFECTIVE, REFUSED, WONDER_GUARD, ABSORB, ABSORB_GATED): (modulus, the residues
+# lo <= r < hi that stop) -> stop probability, NaN for REFUSED. 65536 = 10 * 6553 + 6 = 3 * 21845
+# + 1, so the residues 0 and 1 of 3 have 21846 and 21845 values (WONDER_GUARD's % 3 < 2: 43691).
+# ABSORB switches when ``RandNext() & 1`` is set (trainer_ai.c:3706): residue 1 of 2; so does
+# ABSORB_GATED once its gate passed (below).
+_SWITCH_MOD = jnp.array([1, 10, 2, 3, 1, 3, 2, 2], _I32)
+_SWITCH_LO = jnp.array([0, 1, 0, 0, 0, 0, 1, 1], _I32)
+_SWITCH_HI = jnp.array([0, 10, 1, 1, 0, 2, 2, 2], _I32)
+_SWITCH_P = jnp.array([0, 58982, 32768, 21846, jnp.nan, 43691, 32768, 32768], _F32) / 65536
+# AI_HasAbsorbAbilityInParty's gate (trainer_ai.c:3651-3653): RandNext() % 3 == 0 lets the
+# ABSORB_GATED sites draw, 21846 of 65536.
+ABSORB_GATE_MOD = 3
+ABSORB_GATE_P = 21846 / 65536
 
 # IfRandomLessThan sites per move (decomp move id), transcribed from roark.md 5.2-5.3
 # and 8.3: the N of the move's EVAL_ATTACK site (EvalAttack_TryScorePlus2,
@@ -1193,20 +1201,33 @@ def switch_stop_probs(switch_sites) -> jnp.ndarray:
     """``float32[sites + 1]``: over the ``switch_sites`` kinds (``int8[sites]``), the
     probability that site i is the first to stop,
     ``prod_{h<i} (1 - p_h) * p_i``, then (last entry) that none stops; all NaN for a
-    refused layout."""
+    refused layout. With ``ABSORB_GATED`` sites, ``AI_HasAbsorbAbilityInParty``'s gate
+    (trainer_ai.c:3651-3653) passes with ``g = ABSORB_GATE_P`` and otherwise skips them: the
+    law is ``g * probs(p) + (1 - g) * probs(p, ABSORB_GATED sites at 0)``, exact because the
+    gate only filters those sites and every later site is its own draw (G-37)."""
     kind = jnp.asarray(switch_sites, _I32)
+    gated = kind == SwitchSite.ABSORB_GATED
     p = _SWITCH_P[kind]
-    reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [sites + 1]
-    probs = jnp.concatenate([reach[:-1] * p, reach[-1:]])
+
+    def law(p):
+        reach = jnp.cumprod(jnp.concatenate([jnp.ones(1, _F32), 1 - p]))  # [sites + 1]
+        return jnp.concatenate([reach[:-1] * p, reach[-1:]])
+
+    probs = law(p)
+    mixed = ABSORB_GATE_P * probs + (1 - ABSORB_GATE_P) * law(jnp.where(gated, 0, p))
+    probs = jnp.where(jnp.any(gated), mixed, probs)
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), jnp.nan, probs)
 
 
-def _first_stop(draws, switch_sites) -> jnp.ndarray:
+def _first_stop(draws, switch_sites, gate) -> jnp.ndarray:
     """The first site whose u16 ``draws[i]`` stops the check, else the number of sites
-    (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout."""
+    (``SWITCH_NONE`` for the flat layout); ``SWITCH_REFUSED`` for a refused layout. ``gate``:
+    the u16 of ``AI_HasAbsorbAbilityInParty``'s ``RandNext() % 3`` (trainer_ai.c:3651); an
+    ``ABSORB_GATED`` site stops only when it is 0 (G-37)."""
     kind = jnp.asarray(switch_sites, _I32)
     residue = draws % _SWITCH_MOD[kind]
     stops = (residue >= _SWITCH_LO[kind]) & (residue < _SWITCH_HI[kind])
+    stops = stops & ((kind != SwitchSite.ABSORB_GATED) | (gate % ABSORB_GATE_MOD == 0))
     first = jnp.where(jnp.any(stops), jnp.argmax(stops), kind.shape[0])
     return jnp.where(jnp.any(kind == SwitchSite.REFUSED), SWITCH_REFUSED, first)
 
@@ -1225,6 +1246,8 @@ def sample_ai_outcome(
     layout_sites = switch_sites(tables, state, sites)
     k = jax.random.split(key, 4)
     draws = jax.random.randint(k[3], (sites,), 0, 65536, dtype=_I32)
+    # AI_HasAbsorbAbilityInParty's gate (G-37): its own key, so the site draws are unchanged.
+    gate = jax.random.randint(jax.random.fold_in(k[3], sites), (), 0, 65536, dtype=_I32)
     calc = no_calc_draws()
     if layout is not None and layout.per_slot_sites:
         rolls = jax.vmap(
@@ -1249,7 +1272,7 @@ def sample_ai_outcome(
         ability_guess=guess,
         script_rolls=script_rolls,
         tiebreak=(jax.random.randint(k[2], (), 0, 65536, dtype=_I32) % TIEBREAK_MOD).astype(_I8),
-        switch_stop=_first_stop(draws, layout_sites).astype(_I8),
+        switch_stop=_first_stop(draws, layout_sites, gate).astype(_I8),
         calc_draws=calc,
     )
 

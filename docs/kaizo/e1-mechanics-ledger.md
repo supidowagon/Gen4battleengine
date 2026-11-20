@@ -1267,7 +1267,7 @@ Rule sheets: `_scratch/e1/b-next/sheets/` (17 groups). Carried review notes: `_s
   independent switch sites cannot express, refused (`switching._Layout.absorb_gate`, raises). The same function's
   Water (:3668-3669) and Electric (:3670-3671) cases are refused outright (`switching._AI_SIDE_ABILITIES`). Both
   raise; to build: the gate as a conditioning draw of the absorb sites, and `checkAbility` by `moveHit`'s type for the
-  bench test.
+  bench test. (Closed in batch G: G-36..G-38.)
 - **F-O5 Hydration's Nightmare clear waits for Nightmare.** `subscript_ability_restore_status.s:6` clears
   `VOLATILE_CONDITION_NIGHTMARE` with the status (F-5); Nightmare is not modelled, so this is part of the Nightmare
   group: when it is built, Hydration's (and every `subscript_ability_restore_status` caller's) cure clears it.
@@ -2077,6 +2077,30 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   on party[0] is "playable after heal; multi-status start refused" (`SaveMon.to_spec`), citing scr_seq 213
   entry 20, scr_seq 363 0x00f2 and trainer flags 882 + 823. It blocks no split battle (Lady Emi 674 has no
   split), so it counts in no total.
+- G-36 `AI_HasAbsorbAbilityInParty` (F-O4) is modelled whole: Water Absorb and Volt Absorb on the AI's bench are
+  no longer refused (`switching._AI_SIDE_ABILITIES` keeps Natural Cure only). `checkAbility` comes from `moveHit`'s
+  table type (`MOVE_DATA().type`, trainer_ai.c:3665-3674: Fire -> Flash Fire, Water -> Water Absorb, Electric ->
+  Volt Absorb, else `return ABILITY_NONE` = FALSE), after a `moveHit` with power (:3656-3663); the active's own
+  `Battler_Ability` (`damage.battler_decomp_ability`, so a suppressed one is none) equal to it holds the switch
+  (:3677-3679); each living bench Pokemon whose `MON_DATA_ABILITY` is it draws `RandNext() & 1` (:3703-3708) in
+  party order, the first success switching to it (`SwitchSite.ABSORB`). Bench: `aiSlot2` is the battler itself in
+  singles (`BattleSystem_GetPartner`, battle_system.c:400-402), so the passes' bench. A Weather Ball `moveHit` is
+  read as Normal here (table type), unlike the passes (`TrainerAI_MoveType`, :3767).
+- G-37 The gate. With a super-effective move of the active (`AI_HasSuperEffectiveMove(..., TRUE)`, no draw inside,
+  :3586-3588) the function first reads `RandNext() % 3` and returns FALSE unless it is 0 (:3651-3653): 21846 of
+  65536. Its bench sites are `SwitchSite.ABSORB_GATED` (same `& 1` draw); the gate is no site: `outcome.
+  switch_stop_probs` is `g * law(p) + (1 - g) * law(p, ABSORB_GATED at 0)`, exact since the gate only filters
+  those sites and every later read is its own draw; `_first_stop` masks them unless the sampler's gate u16 (its
+  own key, `fold_in(k[3], sites)`, so the site draws are unchanged) is 0 mod 3. The gate is read before the
+  `moveHit` tests, so also when no bench site exists; then it changes nothing and the law is unchanged. The gate
+  rides in the site kinds, so every caller of `switch_stop_probs(switch_sites(...))` (outcome enumerator,
+  `policy` x3) gets it with no API change (the sheet's `gated` flag / companion function is that bit).
+- G-38 Site count: absorb sites now exist beside the keep draws too (`_layout` drops `& ~any(keep)` and the
+  `absorb_gate` refusal): at most 5 + 4 + 40 = 49 <= 60; with the Wonder Guard draws (no keep) 20 + 5 + 40 can
+  pass 60 and the count refusal stays. Tests: tests/ai/test_switching.py (`_brute_stop_law` over residue classes,
+  the sampler, Water / Volt / Ice / mismatched holder, own ability, Weather Ball in rain); the Kaizo loose oracle
+  (tests/ai/test_kaizo_switching.py `_loose_reads`) walks the gate with a skip of the bench reads, and its
+  hypothesis states now draw absorb holders.
 
 ## Stream state (restart point, 2026-11-19)
 

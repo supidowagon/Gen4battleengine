@@ -1217,7 +1217,7 @@ so a replay that tracks the RNG must count them.
    1. *merged:* `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`), when `A` has a
       super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` itself draws nothing,
       `:3586-3587`). Its later draw (`:3706`) needs a bench Flash Fire, Water Absorb or Volt
-      Absorb, which Kaizo Roark lacks.
+      Absorb, which Kaizo Roark lacks (modelled for any party: E1 ledger G-36, G-37).
    2. The keep draws, `RandNext() % 10` (`:3588`), one per super-effective slot of `A` in
       slot order, until one is nonzero (then no further read).
    3. Unless `A` has 4 or more positive stages (`:3969`): pass 1 (`0x8`, `% 2`, `:3975`),
@@ -1423,9 +1423,10 @@ under Kaizo, since 60 is every candidate a party of six has.
 
 **Merged draws.** `AI_HasAbsorbAbilityInParty`'s `RandNext() % 3` (`:3651`) is read whenever
 the active has a super-effective move (`AI_HasSuperEffectiveMove(..., TRUE)` reads nothing,
-`:3586-3587`). It cannot change the result without a bench Flash Fire, Water Absorb or Volt
-Absorb (`:3655-3713`), which `switching` refuses on the AI's side, so it is not a site. It still
-consumes RNG (8.7, K3d). Kaizo Roark's six have no switching refusal
+`:3586-3587`). It changes the result only through a bench Flash Fire, Water Absorb or Volt
+Absorb draw (`:3655-3713`), so it is not a site: `switching` marks those draws
+`SwitchSite.ABSORB_GATED` and `outcome.switch_stop_probs` folds the gate into the stop law
+(E1 ledger G-37). It still consumes RNG (8.7, K3d). Kaizo Roark's six have no switching refusal
 (`tests/ai/test_kaizo_switching.py`, and the pool check below).
 
 **The loose check.** `test_roark_switch_distribution_matches_loose` walks the decomp's control
