@@ -1421,7 +1421,11 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   scratch `ts_ran` (the MoveEnd `clear`), `ts_move_cur`, `ts_eot` (the turn end's order, sorted at the last BranchActions,
   bcp.c:888-891, so a level-up cannot reorder it) and `ts_qc` (its speedRand draw). The answer is `levelup.learn`; the same
   `step` resumes. `levelup.learn_prompt` runs the scan and tests `needs_learn & over == 0` (D8: a battle-ending payout leaves its
-  prompts). `pay_exp` loses its pending/selected parameters, `learn_pin` and `exp_refused` stay in the pytree but are never set.
+  prompts). `pay_exp` loses its pending/selected parameters. Review b2 #6: the never-set `learn_pin` and `exp_refused` are
+  removed from `BattleState` (state.py, reference/state.py, STATE.md) with every reader: `search.learn.learn_reason` and its
+  callers (`player._replay`, `playout.refusal_reason`, `learn.settle_reason`), the `exp_refused` terms of `settle_learns`,
+  `playout.finish_turn`, `player._play`, `_finish_jit`'s third value, and the tests' asserts (decomp: the learn states sit in
+  GetExpTask, bs.c:2247-2263, which `BtlCmd_WaitGetExpTask` waits for, bs.c:2340-2348, so no learn work outlives the payout).
   A pending action re-reads `moves[moveSlot]` when it runs (FightCommand, bcp.c:1889-1895; branch 1.5 re-randomizes the target when
   the selected move left its slot: `targets.fight_randomizes(..., reselected)`), a Struggle or lock fixed at the selection stays.
   Search: an answer to a learn-paused state is a request `(state, option, 0)` of `expand` (the option applied, another prompt left
@@ -1438,11 +1442,16 @@ and Shed Skin for any Trace holder on the field (`tracer`) and for any Skill Swa
   the trace converter's refusal of those answers. The known limitation (optimism after a Shed Skin draw) is gone.
   Doubles (section 5): the learner is a party slot; `reselected` feeds `fight_randomizes` per battler; `ts_move_cur`, `ts_eot`,
   `ts_qc` are `[B]`.
-  Owed lines closed: none. Owed lines added: (1) the laws' view of a Struggling player at a pause: `selected_move` recomputes
-  Struggle from the current PP while `step` keeps `ts_struggling` (an edge: the learner's PP changed by a learn); (2) the doubles
+  Owed lines closed: (1) by review b2 #7: `order.selected_move` reads the selection-time Struggle and lock (`ts_struggling`,
+  `ts_locked`, the locked `ts_move`; bcp.c:335, :433) at a paused state (a party list or a learn prompt) as
+  `step._execute_actions` does, and re-reads a free slot (FightCommand, bcp.c:1889-1895), so every law and the sampler see the
+  step's move (`test_the_laws_keep_a_struggle_fixed_at_the_selection_through_a_learn_pause`). Owed lines added: (1) see above,
+  closed; (2) the doubles
   laws (`enumerate` ~:2499) pass no `reselected` to `fight_randomizes`; (3) the AI-switch-then-needed-replacement refusal at the
   learn stop (`test_an_ai_switch_with_a_needed_replacement_refuses_at_the_learn_stop`, fullset) is unverified here: the stop moved
-  to the payout. Not built: none. No table array or key changed, no manifest bump.
+  to the payout; it is on this tip's `-m fullset` pod list. Not built: none. No table array or key changed, no manifest bump.
+  Doubles (review b2 #8): the `ts_order` / `order` position readers of `_execute_actions` (`to_run`, `to_come`, `ts_acted`)
+  compare against `jnp.arange(fmt.B)`, not a hard-coded 2.
   Tests: tests/engine/test_e3_batch2.py (`test_midturn_learn_pauses_at_the_move_end_payout`,
   `test_midturn_learn_field_payout_pauses_before_gravity_and_the_turn_end`,
   `test_midturn_learn_battler_block_payout_pauses_in_the_turn_end_order`,

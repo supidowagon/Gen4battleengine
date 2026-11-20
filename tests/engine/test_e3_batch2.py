@@ -3019,6 +3019,41 @@ def test_a_kaizo_metronome_holder_passes_the_party_check(kaizo_tables, kaizo_nam
     assert not any("Metronome" in line for line in c.report.missing)
 
 
+def test_the_laws_keep_a_struggle_fixed_at_the_selection_through_a_learn_pause(tables, names):
+    """Review b2 #7: Struggle is fixed at the selection (``turnFlags.struggling``, bcp.c:433; a
+    locked battler's ``ppDecremented``, :335), so a learn prompt that refills the PP of a
+    battler whose action is still to come does not undo it: ``step._execute_actions`` reads
+    ``ts_struggling`` / ``ts_locked`` / ``ts_move`` at a pause, and ``order.selected_move`` (every
+    law's and the sampler's read, ``outcome.used_move``) now does the same; a free slot is
+    re-read (FightCommand, bcp.c:1889-1895). Unpaused, the live PP decide."""
+    from nuzline.engine.levelup import LEARN_MOVE_END
+    from nuzline.engine.order import selected_move, used_move
+
+    t, n = tables, names
+    s = roark_state(t, n, player_moves=["Tackle"], opp_moves=["Tackle"])
+    acts = A("Tackle", "Tackle", s, n)
+    tackle = n.move("Tackle")
+    assert [int(x) for x in selected_move(t, s, 0, acts[0])] == [tackle, 0]
+    paused = s._replace(
+        learn_site=jnp.asarray(LEARN_MOVE_END, s.learn_site.dtype),
+        ts_actions=jnp.asarray(acts, s.ts_actions.dtype),
+        ts_move=s.ts_move.at[0].set(MOVE_STRUGGLE),
+        ts_struggling=s.ts_struggling.at[0].set(1),
+    )
+    assert [int(x) for x in selected_move(t, paused, 0, acts[0])] == [MOVE_STRUGGLE, 1]
+    assert int(used_move(t, paused, 0, acts[0])) == MOVE_STRUGGLE
+    # A lock fixed at the selection runs its move (ts_move), not the slot's.
+    growl = n.move("Growl")
+    locked = paused._replace(
+        ts_struggling=paused.ts_struggling.at[0].set(0),
+        ts_locked=paused.ts_locked.at[0].set(1),
+        ts_move=paused.ts_move.at[0].set(growl),
+    )
+    assert [int(x) for x in selected_move(t, locked, 0, acts[0])] == [growl, 0]
+    free = locked._replace(ts_locked=locked.ts_locked.at[0].set(0))
+    assert [int(x) for x in selected_move(t, free, 0, acts[0])] == [tackle, 0]
+
+
 def test_metronome_calling_defog_runs_defogs_script_with_metronomes_pp(kaizo_tables, kaizo_names):
     """Metronome's call of Defog (rank ``call % count`` among ``metronome_calls``) runs
     subscript_defog.s on the foe's side; the PP stays Metronome's (``effects.metronome_update``);

@@ -463,7 +463,7 @@ def test_a_hazard_ko_inside_the_replacement_loop_pays_and_leaves_the_prompt(tabl
     s = s._replace(stealth_rock=s.stealth_rock.at[1].set(1))
     out = _replace_both(tables, s, 1, 1)
     assert int(out.hp[1, 1]) == 0 and int(out.level[0, 0]) == 17
-    assert int(out.exp_refused) == 0 and int(out.learn_level[0]) == 17
+    assert int(out.learn_level[0]) == 17
     # No level-up, no learn work.
     low = _with(s, exp={0: _base(tables, names, "Prinplup", 16)})
     out = _replace_both(tables, low, 1, 1)

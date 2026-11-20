@@ -135,8 +135,7 @@ for _cls in (Outcome, OutcomeLaws, Reads, CallLaws):
 class Child:
     """One merged child of a request: ``state_row`` indexes the store ``expand``
     returns; ``obs`` is the ``int32[OBS_SIZE]`` observation's bytes; ``prob`` the
-    float64 total of its outcomes; ``refused`` the opponent's replacement was refused (or
-    ``exp_refused`` is never set since E3-B2-21)."""
+    float64 total of its outcomes; ``refused`` the opponent's replacement was refused."""
 
     state_row: int
     obs: bytes

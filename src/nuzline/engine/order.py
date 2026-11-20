@@ -98,16 +98,24 @@ def selected_move(
     ``STRUGGLING_ALL`` (battle_controller_player.c:433). The legality mask then only
     allows action 0. A locked battler picks no command and uses ``moveLockedInto``
     (``FightCommand``, battle_controller_player.c:1885-1888), never Struggling. Meaningless
-    for a switch or item action (callers mask it)."""
+    for a switch or item action (callers mask it). A turn paused at a party list or a learn
+    prompt keeps the Struggle and the lock fixed at the selection (bcp.c:335, :433; the scratch
+    ``ts_struggling`` / ``ts_locked`` / ``ts_move``, as ``step._execute_actions`` reads them), so
+    the laws see the move the step runs, while a free slot is re-read (FightCommand, bcp.c:
+    1889-1895; review b2 #7)."""
     fmt = format_of(state)
     slot = jnp.clip(jnp.asarray(action, _I32), 0, MOVE_ACTIONS - 1)
     mon = state.active[side]
-    struggling = ~jnp.any(usable_moves(tables, state, side))
+    paused = (state.pivot_battler != 0) | (state.learn_site != 0)
+    struggling = jnp.where(
+        paused, state.ts_struggling[side] != 0, ~jnp.any(usable_moves(tables, state, side))
+    )
     move = jnp.where(
         struggling, MOVE_STRUGGLE, state.moves[party(fmt, side), mon, slot].astype(_I32)
     )
-    locked = locked_slot(state, side) >= 0
-    return jnp.where(locked, state.locked_move[side].astype(_I32), move), struggling
+    locked = jnp.where(paused, state.ts_locked[side] != 0, locked_slot(state, side) >= 0)
+    lock_move = jnp.where(paused, state.ts_move[side], state.locked_move[side]).astype(_I32)
+    return jnp.where(locked, lock_move, move), struggling
 
 
 def terrain_index(state: BattleState) -> jnp.ndarray:

@@ -112,7 +112,7 @@ from nuzline.engine.step import (
     step,
 )
 from nuzline.search.deaths import over_budget
-from nuzline.search.learn import learn_reason, resolve_learns, settle_learns, settle_reason
+from nuzline.search.learn import resolve_learns, settle_learns, settle_reason
 
 __all__ = [
     "REFUSED_WON",
@@ -458,7 +458,7 @@ def finish_turn(
     state, refused = _replace_while_needed(tables, state, refused, SLOTS - 1)
     # A battle-ending payout leaves its prompts (ruling D8).
     state = _select(state.over != 0, state, resolve_learns(tables, state))
-    return state, refused | (state.exp_refused != 0)
+    return state, refused
 
 
 def _replace_while_needed(tables: Tables, state: BattleState, refused, passes):
@@ -806,12 +806,10 @@ def _finish_jit(
     tables: Tables, state: BattleState, played: BattleState, refused, ai_switched, power_mul
 ):
     """``finish_turn`` of ``played`` and the select back to ``state`` at a refusal, one program:
-    ``(state after the turn, refused, finished)``, ``finished`` being ``finish_turn(...)[0]``
-    before the select (``refusal_reason``'s refused branch reads its learn work: a turn that
-    sets ``exp_refused`` is refused, so the selected state is the one before it)."""
+    ``(state after the turn, refused)``."""
     finished, replace_refused = finish_turn(tables, played, ai_switched, power_mul)
     refused = refused | replace_refused
-    return _select(refused, state, finished), refused, finished
+    return _select(refused, state, finished), refused
 
 
 def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: AiLayout = VANILLA):
@@ -822,7 +820,7 @@ def _turn_jit(tables: Tables, state: BattleState, player_action, key, layout: Ai
     state before ``finish_turn``, so a fused program would compile the whole turn a second
     time in a process that runs both (the step program dominates the compile)."""
     played, refused, ai_switched, power_mul = _play_jit(tables, state, player_action, key, layout)
-    return _finish_jit(tables, state, played, refused, ai_switched, power_mul)[:2]
+    return _finish_jit(tables, state, played, refused, ai_switched, power_mul)
 
 
 def refusal_reason(
@@ -879,8 +877,7 @@ def refusal_reason(
             played, _, ai_switched, power_mul = _play_jit(
                 tables, state, player_action, k_turn, layout
             )
-            finished = _finish_jit(tables, state, played, refused, ai_switched, power_mul)[2]
-            return learn_reason(finished) or replacement_refusal(
+            return replacement_refusal(
                 tables, resolve_learns(tables, played), ai_switched, power_mul
             )
         state = played

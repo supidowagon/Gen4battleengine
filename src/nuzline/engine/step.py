@@ -303,8 +303,6 @@ WINNER_OPPONENT, WINNER_PLAYER = 1, 2
 FUTURE_DAMAGE_MAX = 32767
 PURSUIT_POWER_MUL = 20  # BtlCmd_TryPursuit (battle_script.c:6884): powerMul = 20
 NORMAL_POWER_MUL = 10  # BattleContext_Init (battle_lib.c:1980): powerMul = 10
-# BattleState.exp_refused: a payout inside the opponent's replacement loop left learn work
-# (design §3.3(c)).
 # MON_CONDITION_TOXIC_COUNTER is 4 bits (include/constants/battle/condition.h:23).
 TOXIC_COUNTER_MAX = 15
 
@@ -3365,7 +3363,7 @@ def _execute_actions(
     rows = party(fmt, jnp.arange(fmt.B))
     cursor = state.ts_cursor.astype(_I32)
     to_run = jnp.stack(
-        [jnp.any((state.ts_order == b) & (jnp.arange(2) > cursor)) for b in range(fmt.B)]
+        [jnp.any((state.ts_order == b) & (jnp.arange(fmt.B) > cursor)) for b in range(fmt.B)]
     )
     held = state.moves[rows, state.active, jnp.clip(real, 0, MOVE_ACTIONS - 1)].astype(_I32)
     reread = lres & to_run & (real < MOVE_ACTIONS) & ~choices[1] & ~choices[2]
@@ -3611,14 +3609,16 @@ def _execute_actions(
     )
     # Each battler whose action is still to come (after the paused one in ``order``): doubles
     # section 5 rule 5, a fact about the named battler, not "the second actor" (B10-17).
-    to_come = jnp.stack([jnp.any((order == b) & (jnp.arange(2) > position)) for b in range(fmt.B)])
+    to_come = jnp.stack(
+        [jnp.any((order == b) & (jnp.arange(fmt.B) > position)) for b in range(fmt.B)]
+    )
     scratch = {
         "ts_cursor": position,
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
         # paused one are over (MoveEnd, bcp.c:3989).
         "ts_acted": jnp.stack(
             [
-                jnp.any((order == b) & (jnp.arange(2) < position + learn_stopped.astype(_I32)))
+                jnp.any((order == b) & (jnp.arange(fmt.B) < position + learn_stopped.astype(_I32)))
                 for b in range(fmt.B)
             ]
         ),

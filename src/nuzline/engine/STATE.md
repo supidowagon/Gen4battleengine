@@ -460,9 +460,8 @@ three structs has a row.
     battle_lib.c:1456-1479, battle_script.c:543-635).
   - `learn_level` / `learn_cursor` are the deferred learnset scan: the level whose scan is
     next and the index into it (the decomp restarts `GET_EXP_LEARNSET_INDEX` at 0 for each
-    level, battle_script.c:9882). `learn_pin` and `exp_refused` are kept in the pytree but
-    never set since E3-B2-21 (below). The four others are 0 until the payout and the learn
-    resolve set them.
+    level, battle_script.c:9882). Both are 0 until the payout and the learn resolve set them
+    (the selected-slot pin and the window (c) refusal code are removed: review b2 #6, below).
   - **Mid-turn learn prompts (E3-B2-21).** The payout runs the whole `GetExpTask`, every level's
     learnset scan and prompt included, inside itself, so the prompt comes before any later
     action or draw of the turn: at `MoveEnd` (`AnyExpPayout`, battle_controller_player.c:3968,
@@ -481,7 +480,7 @@ three structs has a row.
   - The search masks only the HM slots and, when the offered move's effect is unsupported,
     every replacement (ruling D10; coverage then refuses it only where it could auto-learn
     into an empty slot, `coverage.learnable_moves`). The D2 masks (Disable, Encore) and the
-    `learn_pin` mask are gone: the prompt is answered at the payout, before the turn end
+    selected-slot pin are gone: the prompt is answered at the payout, before the turn end
     that ends them and before the slot is read again. They are legal game choices the search
     skips, so plan values at learn nodes are achievable lower bounds (`levelup.learn_options`).
 - **Not from a struct field.** `pursuit_target` and `wish_hp` are

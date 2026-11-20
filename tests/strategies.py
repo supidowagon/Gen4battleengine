@@ -2245,7 +2245,7 @@ def _draw_exp(draw, tables: Tables, a: dict) -> None:
     """The player's experience block (K3d-exp): each Pokemon's ``exp`` anywhere in its level
     (``[base(L), base(L + 1))``), its ``exp_boost`` (100 / 150 / 170), ``pokerus`` and
     ``friend_bonus``; ``exp_mask`` is the active slot plus any other living slots (the
-    participants since the foe's entry); the learn fields and ``exp_refused`` stay 0."""
+    participants since the foe's entry); the learn fields stay 0."""
     rates, table = np.asarray(tables.species_exp_rate), np.asarray(tables.exp_table)
     living = (a["species"][0] > 0) & (a["hp"][0] > 0)
     mask = 1 << int(a["active"][0])

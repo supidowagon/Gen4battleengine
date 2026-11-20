@@ -21,7 +21,7 @@ from nuzline.engine.levelup import GIVE_UP, advance_learns, learn, needs_learn
 from nuzline.engine.state import SLOTS, BattleState
 from nuzline.engine.step import needs_replacement
 
-__all__ = ["learn_policy", "learn_reason", "resolve_learns", "settle_learns", "settle_reason"]
+__all__ = ["learn_policy", "resolve_learns", "settle_learns", "settle_reason"]
 
 _I32 = jnp.int32
 
@@ -58,9 +58,9 @@ def settle_learns(tables: Tables, state: BattleState, send, carried_mul):
     player's is not (a learn decision taken before the opponent's ``ReplaceFainted``), with
     the turn's carried ``powerMul`` (``carried_mul(state)``: a Pursuit hit leaves 20),
     and ``replace_mul`` cleared afterwards, as ``replacement_pass`` does. ``send`` is
-    ``playout.send_replacements``. ``refused`` (``bool``): that send refused, or
-    ``exp_refused`` is set. A one-pass ``while_loop``, so a batch where no row needs the
-    send runs none."""
+    ``playout.send_replacements``. ``refused`` (``bool``): that send refused (learn work never
+    refuses since E3-B2-21: the prompt pauses the turn). A one-pass ``while_loop``, so a batch
+    where no row needs the send runs none."""
     state = resolve_learns(tables, state)
 
     def cond(carry):
@@ -75,7 +75,7 @@ def settle_learns(tables: Tables, state: BattleState, send, carried_mul):
         return sent, refused | bad, n + 1
 
     state, refused, _ = jax.lax.while_loop(cond, body, (state, jnp.bool_(False), jnp.int32(0)))
-    return state, refused | (state.exp_refused != 0)
+    return state, refused
 
 
 _resolve_jit = jax.jit(resolve_learns)
@@ -87,7 +87,7 @@ def settle_reason(tables: Tables, state: BattleState, send_reason, carried_mul):
     opponent needs a replacement and the player does not, ``send_reason``
     (``playout._send_reason``, the concrete ``send_replacements``) with the carried
     ``powerMul`` (``carried_mul``) and ``replace_mul`` cleared after it. ``reason`` is that
-    send's refusal, else ``learn_reason``, else ``None``."""
+    send's refusal, else ``None``."""
     state = _resolve_jit(tables, state)
     need = needs_replacement(state)
     if int(need[1]) == 1 and int(need[0]) == 0:
@@ -95,14 +95,4 @@ def settle_reason(tables: Tables, state: BattleState, send_reason, carried_mul):
         if reason:
             return reason, state
         state = state._replace(replace_mul=jnp.zeros_like(state.replace_mul))
-    return learn_reason(state), state
-
-
-def learn_reason(state: BattleState) -> str | None:
-    """The refusal message for a concrete state's ``exp_refused``, or ``None``. No code is set
-    since E3-B2-21 (a payout inside the opponent's replacement loop no longer refuses: its prompt
-    stays for the caller's decision)."""
-    code = int(state.exp_refused)
-    if code == 0:
-        return None
-    return f"learn-move work refused (exp_refused = {code})"
+    return None, state

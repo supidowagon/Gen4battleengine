@@ -257,8 +257,8 @@ Encodings:
   ``PokemonSpec`` fields of the player's slots. ``exp_mask`` is ``sideGetExpMask[0]`` as a
   bitmask over the player's party slots: ``1 << lead`` at the start, then written by every
   send-out (``step._switch_in``). ``learn_level`` / ``learn_cursor`` (the pending learnset
-  scan) are 0 until the payout and the learn resolve set them; ``learn_pin`` and ``exp_refused``
-  are never set since E3-B2-21. E3-B2-21: a payout's learn prompt pauses the turn
+  scan) are 0 until the payout and the learn resolve set them. E3-B2-21: a payout's learn prompt
+  pauses the turn
   (``learn_site``, ``levelup.LEARN_*``), with the scratch ``ts_ran``, ``ts_move_cur``,
   ``ts_eot`` and ``ts_qc``; all 0 between turns (``STATE.md`` "Mid-turn learn prompts").
 * E2 batch 13 (B13-29, B13-30). ``embargo`` is the active battler's
@@ -566,8 +566,6 @@ class BattleState(NamedTuple):
     friend_bonus: jnp.ndarray  # int8[6], 1 = caught in a Luxury Ball
     learn_level: jnp.ndarray  # int8[6], 0 = no learnset work, else the level to scan
     learn_cursor: jnp.ndarray  # int8[6], index into that level's learnset scan
-    learn_pin: jnp.ndarray  # int8, 0 none, else 1 + the move slot the player selected
-    exp_refused: jnp.ndarray  # int8, sticky refusal code (0 none, 2 = window (c))
     # faint budget (search data; the engine only records deaths and never reads k)
     deaths: jnp.ndarray  # int8[6], 1 where the player's party slot fainted this battle
     faint_budget: jnp.ndarray  # int8, k: the deaths the search allows
@@ -976,8 +974,6 @@ _KEYS: dict[str, tuple[tuple[int | str, ...], type]] = {
     "friend_bonus": ((SLOTS,), np.int8),
     "learn_level": ((SLOTS,), np.int8),
     "learn_cursor": ((SLOTS,), np.int8),
-    "learn_pin": (_FIELD, np.int8),
-    "exp_refused": (_FIELD, np.int8),
     "deaths": ((SLOTS,), np.int8),
     "faint_budget": (_FIELD, np.int8),
     "protected": ((SLOTS,), np.int8),
@@ -1272,7 +1268,7 @@ def initial_arrays(
     battle-start ``PokemonSlideIn`` of the enemy (clear, then flag) and of the player (flag)
     (subscript_start_encounter.s:84, :91; ``BtlCmd_PokemonSlideIn``, battle_script.c:465-466,
     :474-475) leave the player lead's bit (``BattleSystem_FlagBattlerExpGain``,
-    battle_lib.c:1461-1479). The learn fields and ``exp_refused`` start at 0."""
+    battle_lib.c:1461-1479). The learn fields start at 0."""
     if len(parties) != fmt.P:
         raise ValueError(f"a {fmt.B}-battler fight has {fmt.P} parties, got {len(parties)}")
     if leads is None:

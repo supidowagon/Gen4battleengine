@@ -19,7 +19,7 @@ from nuzline.engine.outcome import empty_outcome
 from nuzline.engine.state import make_state
 from nuzline.engine.step import step
 from nuzline.search import playout as playout_module
-from nuzline.search.learn import learn_reason, resolve_learns
+from nuzline.search.learn import resolve_learns
 from nuzline.search.playout import finish_turn, refusal_reason
 from nuzline.search.stage_a import rank_actions
 from tests.engine.helpers import A, roark_real_state
@@ -133,11 +133,10 @@ def _window_c(tables, names):
 def test_a_hazard_ko_in_the_replacement_loop_is_not_refused(tables, names):
     s = _window_c(tables, names)
     played = _step(tables, s, A("Bubble", "Tackle", s, names), empty_outcome())
-    out, refused = finish_turn(tables, played, False, 10)
+    _, refused = finish_turn(tables, played, False, 10)
     # E3-B2-21: the payout runs inside the replacement and its prompt stays for the player
     # (bcp.c:3968); nothing is refused.
-    assert not bool(refused) and int(out.exp_refused) == 0
-    assert learn_reason(out) is None and learn_reason(played) is None
+    assert not bool(refused)
 
 
 def test_a_pending_learn_settles_the_opponent_replacement_with_the_carried_mul(tables, names):

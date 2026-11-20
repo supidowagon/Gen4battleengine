@@ -232,8 +232,6 @@ class RefState:
     friend_bonus: list[int]
     learn_level: list[int]
     learn_cursor: list[int]
-    learn_pin: int
-    exp_refused: int
     deaths: list[int]
     faint_budget: int
     protected: list[int]

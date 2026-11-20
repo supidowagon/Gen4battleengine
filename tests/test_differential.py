@@ -311,7 +311,6 @@ def _learn_party(draw, tables, s):
     held = [int(m) for m in a["moves"][0, side] if m] or [0]
     for name in ("disabled_move", "encore_move", "locked_move", "choice_lock"):
         a[name][0] = draw(st.sampled_from((0, 0, *held)))
-    a["learn_pin"][...] = draw(st.integers(0, 4))
     return s._replace(**{name: jnp.asarray(a[name]) for name in s._fields})
 
 
