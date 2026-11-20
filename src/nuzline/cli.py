@@ -103,9 +103,9 @@ give several (``fight_terrain``: the tile under the player when the battle start
 and a single-terrain fight needs none (ledger G-18).
 They also take ``--script-weather`` / ``--no-script-weather``: a fight a Kaizo map script's
 weather can reach (``AreaCondition.script_weather``, the Route 213 rain) starts in it or not;
-without either the save decides when it can (``script_weather_state``; in ``prep`` a save
-in the rain does not bind, since a PC visit's warp ends it), else the start condition
-stands (ledger G-24).
+without either the save decides when it can (``script_weather_state``; ``prep`` plans a
+save in the rain as clear and lists a warp onto the map, which ends it for good), else the
+start condition stands (ledger G-24).
 All output is plain ASCII (controller ruling: a default Windows console is cp1252).
 """
 
@@ -657,12 +657,13 @@ def script_weather_state(
     not (:521-525). A save whose var has reached the value settles it: on the header, its
     overworld weather is the start (that id: True; clear: False); elsewhere the weather was
     left behind and no script sets it again: False. Before that the route decides, so
-    ``script_weather`` (the run input) or None. ``warp``: the team may still change (prep),
-    and a PC visit is a warp that rewrites the weather from the header (field_map_change.c:
-    273-280) while the var keeps the script from running again, so the save's True does not
-    bind: the input decides (rain until the win or a map change; none after a team change).
-    ``ValueError`` for an input on a fight no script weather reaches, an input the save
-    contradicts, or another overworld weather."""
+    ``script_weather`` (the run input) or None. ``warp``: the team may still change (prep):
+    a PC visit is a warp that rewrites the weather from the header, clear (field_map_change.c:
+    273-280, rom_map_weather.json[373] = 0), and the var keeps the script from running again,
+    so the save's True gives False and prep plans a warp onto the map before the fight
+    (``script_rain_on_save``, ``PrepProblem.script_weather_warp``): every setup then starts
+    clear, the save's own party too. ``ValueError`` for an input on a fight no script weather
+    reaches, an input the save contradicts, or another overworld weather."""
     from nuzline.data.trainer import OVERWORLD_WEATHER_CLEAR
 
     area = trainer.area_condition
@@ -679,8 +680,7 @@ def script_weather_state(
         if save.map_header != header:
             state = False
         elif save.overworld_weather in (weather, OVERWORLD_WEATHER_CLEAR):
-            on = save.overworld_weather == weather
-            state = None if on and warp else on
+            state = save.overworld_weather == weather and not warp
         else:
             raise ValueError(
                 f"the save stands on map header {header} in overworld weather "
@@ -691,9 +691,21 @@ def script_weather_state(
             f"--{'' if script_weather else 'no-'}script-weather: the save says otherwise "
             f"(var {var:#x} = {save.var(var)} >= {value}, map header {save.map_header}, "
             f"overworld weather {save.overworld_weather}: the fight starts "
-            f"{'in' if state else 'without'} the map script's weather)"
+            f"{'in' if state else 'without'} the map script's weather"
+            f"{': prep plans a warp onto the map first' if warp and script_rain_on_save(trainer, save) else ''})"
         )
     return state if script_weather is None else script_weather
+
+
+def script_rain_on_save(trainer: Trainer, save) -> bool:
+    """The save stands in ``trainer``'s map script weather after the script ran (its var at
+    the value, on the window's header, in that overworld weather): ``script_weather_state``'s
+    True. Prep (``warp``) plans a warp onto the map before the fight instead (ledger G-24)."""
+    window = trainer.area_condition.script_window
+    if not window or save is None:
+        return False
+    header, weather, var, value = window
+    return save.var(var) >= value and (save.map_header, save.overworld_weather) == (header, weather)
 
 
 def fight_start(
@@ -1177,6 +1189,7 @@ def _prep(args) -> int:
         reserve=args.reserve,
         prestatus=args.prestatus,
         field_move=field_move,
+        script_weather_warp=script_rain_on_save(trainer, save),
     )
     for line in warnings:
         print(ascii_text(line), file=sys.stderr)

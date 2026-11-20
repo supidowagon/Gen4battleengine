@@ -381,6 +381,11 @@ class PrepProblem:
     # fight is the party that used it: a warp onto the fight's map clears FLAG_DEFOG_ACTIVE
     # (field_map_change_flags.c:80-85), so it is used after the last warp, with no PC between.
     field_move: int = 0
+    # The save stands in the fight's map script weather (``cli.script_rain_on_save``, ledger
+    # G-24): the run warps onto the map before the fight, which rewrites the weather from the
+    # header (field_map_change.c:273-280) while the var keeps the script from running again,
+    # so every setup starts as ``start_condition`` says (clear), the save's own party too.
+    script_weather_warp: bool = False
 
 
 def _lookup(lookup: Callable[[str], int], name: str, what: str) -> int:
@@ -406,6 +411,7 @@ def build_problem(
     reserve: Sequence[str] = (),
     prestatus: Sequence[str] = (),
     field_move: int = 0,
+    script_weather_warp: bool = False,
 ) -> tuple[PrepProblem, list[str]]:
     """The save's pool at ``cap`` as a :class:`PrepProblem`, and the warnings (every
     exclusion and trim, reserved items missing from the bag). ``ValueError`` for a ``deaths``
@@ -481,6 +487,7 @@ def build_problem(
         blocking_abilities=blocking_abilities(names),
         chatot_cry=save.chatot_cry,
         field_move=field_move,
+        script_weather_warp=script_weather_warp,
     )
     if field_move and not any(field_move in c.spec.moves for c in problem.candidates):
         raise ValueError(

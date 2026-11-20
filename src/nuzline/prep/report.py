@@ -190,6 +190,11 @@ def prep_steps(problem: PrepProblem, names: Names, setup: Setup, tables: Tables)
             f"On the fight's map, after the last warp onto it, use {move} from the party menu "
             "(clears the fog); then walk to the fight without warping."
         )
+    if problem.script_weather_warp:  # ledger G-24: the script does not run again
+        steps.append(
+            "Warp onto the fight's map before the fight (a door, Fly or a PC visit elsewhere): "
+            "the warp ends the map script's weather the save shows, and it does not come back."
+        )
     if run_terrain(problem.trainer):  # ledger G-18: the tile under the player at the start
         terrain = TERRAIN_NAMES[problem.trainer.terrain]
         steps.append(

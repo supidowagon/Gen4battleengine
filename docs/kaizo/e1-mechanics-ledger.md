@@ -1858,7 +1858,9 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   0x1280 / `OVERWORLD_WEATHER` 0x12E6, field_overworld_state.h:13-20, location.h:18-24; Continue keeps it,
   field_map_change.c:521-525): 0 clear, 14 fog, any other value refused; a `--field-defog` the save's fog (14)
   contradicts is refused, one rule with `--script-weather` (G-24: the save decides when it shows the state on
-  the fight's map; review G 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
+  the fight's map; review G 1). The warp acts on both the same way and opposite to the plan: it brings the fog
+  back (prep keeps a Defog holder) and ends the script rain for good (prep plans clear behind a warp step;
+  G-24, gate review G MUST 1). In prep (no team yet) a save's clear on the header keeps a Defog holder
   (`field_move` = Defog): any PC visit is a warp, which clears FLAG_DEFOG_ACTIVE (field_map_change_flags.c:80-85)
   and rewrites the weather from the header, fog again (field_map_change.c:273-280), so Defog is used again
   before the fight (review G 2). Otherwise fog unless `--field-defog`,
@@ -1982,10 +1984,16 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   none, the map change cleared it and nothing sets it again; on it: its overworld weather, 4 rain, 0
   clear; any other refused), and an input it contradicts is refused; before that the route decides, so the
   default is the start condition (the user's rain, overrides area.103-111/491, 2026-11-07; none for 104
-  and 696). In prep (no team yet) a save on header 373 in the rain does not bind (`warp`): a PC visit is a
-  warp that rewrites the weather from the header, clear (field_map_change.c:273-280), and VAR 0x40FA = 8 keeps
-  scr_seq 459 entry 12 from running again, so the input decides (default rain, the save's party kept;
-  `--no-script-weather` after a team change); a save's False binds there too (review G 2). `SaveFile.vars` /
+  and 696). In prep (no team yet, `warp`) a save on header 373 in the rain gives False (gate review G MUST 1;
+  amends review G 2's "the input decides", which planned every changed team in rain): a team change is a PC
+  visit, a warp that rewrites the weather from the header, clear (field_map_change.c:273-280;
+  rom_map_weather.json[373] = 0), and VAR 0x40FA >= 8 keeps scr_seq 459 entry 12 from running again, so the
+  rain never returns. The save's own party (no PC) would keep it; rather than a second start weather per
+  setup (prep has one `start_condition`), prep lists a warp onto the map before the fight
+  (`cli.script_rain_on_save` -> `PrepProblem.script_weather_warp` -> `report.prep_steps`), so every setup
+  starts clear as planned; `--script-weather` there is refused ("prep plans a warp onto the map first"). A
+  fixed team (coverage, rank, solve, line) keeps the save's rain. A save's False binds in prep too.
+  `SaveFile.vars` /
   `var` read VarsFlags.vars (vars_flags.c:65-69, NUM_VARS 288).
   `coverage.start_weather(script_weather=)` turns the state into the weather.
 - G-25 Status 0x3F (manager ruling 2): a real battle of a split can start under Newmoon's 0x7B. scr_seq 363
