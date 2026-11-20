@@ -882,7 +882,8 @@ def _use_move(
     action,
     choice,
     outcome: Outcome,
-    target_moved,
+    moved,
+    last_to_act,
     foe_protecting=False,
     custap=(False, False),
     foe_roosting=False,
@@ -902,7 +903,11 @@ def _use_move(
     (battle_controller_player.c:433), so a Taunt landing earlier this turn makes a chosen
     power-0 move fail instead of Struggling, and a battler locked then spends no PP
     (``ppDecremented`` is set at command selection, :335).
-    ``target_moved``: the other side has already acted this turn. ``foe_protecting``: its
+    ``moved`` (``bool[B]``): ``Battler_MovedThisTurn`` of every battler, its PICK_COMMAND is
+    MOVE_END (lib.c:5365-5368; D3-6 Fact A: the Zoom Lens, Payback, flinch and King's Rock
+    readers and Me First read the defender's entry). ``last_to_act``: every battler but the actor
+    is MOVE_END (``waitingBattlers == 1``, bcp.c:881-886; Fact B: Protect / Endure fail, the Quick
+    Claw and Custap displays are skipped). ``foe_protecting``: its
     Protect succeeded earlier this turn (the decomp's ``turnFlags.protecting``, a per-turn
     flag cleared at the turn end, battle_lib.c:2231, and on a faint, :2190-2193). ``custap``
     (``bool[B]``): each side's ``moveEffectsData.custapBerry`` from the turn order
@@ -1224,13 +1229,13 @@ def _use_move(
     kind = call_kind(tables, move)
     invoker = kind != CALL_NONE
     # Me First (E3-2-3; BtlCmd_TryMeFirst, battle_script.c:7286-7312) copies the foe's chosen move
-    # while the foe has not acted (``target_moved``): ``pursuit`` carries its action, selected move
+    # while the foe has not acted (``moved[target_side]``): ``pursuit`` carries its action, selected move
     # and struggling flag (``_act``); with none given the call finds nothing.
     me_first = jnp.asarray(0, _I32)
     if pursuit is not None:
         foe_fights = ~is_switch(pursuit[0]) & ~is_item(pursuit[0])
         copied = me_first_copy(tables, state, _foe(side), pursuit[1], foe_fights)
-        me_first = jnp.where(jnp.asarray(target_moved, bool), 0, copied)
+        me_first = jnp.where(jnp.asarray(moved, bool)[target_side], 0, copied)
     invoked = invoked_move(tables, state, side, move, outcome.call[side], me_first=me_first)
     call_failed = invoker & (
         (invoked == 0)
@@ -1375,7 +1380,7 @@ def _use_move(
     # flag of the defender (both cleared when its action started).
     self_target = target_side == side
     acc_target = target_side
-    tgt_moved = jnp.asarray(target_moved, bool) & ~self_target
+    tgt_moved = jnp.asarray(moved, bool)[target_side] & ~self_target
     foe_protecting = jnp.asarray(foe_protecting, bool) & ~self_target
     foe_roosting = jnp.asarray(foe_roosting, bool) & ~self_target
     foe_enduring = jnp.asarray(foe_enduring, bool) & ~self_target
@@ -1704,7 +1709,9 @@ def _use_move(
     tried_protect = connected & (tables.move_effect[used] == EffectId.PROTECT)
     tried_endure = connected & (tables.move_effect[used] == EffectId.ENDURE)
     tried = tried_protect | tried_endure
-    tried_ok = tried & ~target_moved & ((count == 0) | (outcome.protect[side] != 0))
+    tried_ok = (
+        tried & ~jnp.asarray(last_to_act, bool) & ((count == 0) | (outcome.protect[side] != 0))
+    )
     protect_ok = tried_protect & tried_ok
     endure_ok = tried_endure & tried_ok
     protect_failed = tried & ~tried_ok
@@ -2599,15 +2606,15 @@ def _use_move(
         "shown": ready,
         # subscript_check_quick_claw.s:5 -> :12-13: a Custap flag plays the held-item animation
         # (bit 0) always, and prints "let it move first!" (:16-19, bit 1) unless
-        # waitingBattlers == 1 (:15; bcp.c:881-886, itself counted): at B = 2 the foe has acted
-        # (``target_moved``). The same term as the removal above; Quick Claw's bit 0 comes from
+        # waitingBattlers == 1 (:15; bcp.c:881-886, itself counted): ``last_to_act`` (D3-6 Fact B).
+        # Quick Claw's bit 0 comes from
         # Quick Claw's animation (:6-10) is bit 0 where the foe has not acted
         # (``WAITING_BATTLERS != 1``), whatever the order of the turn (SF2 (k); one battler holds
         # one item).
         "quick_claw": jnp.where(
             ready & custap[side],
-            1 + 2 * (~jnp.asarray(target_moved, bool)).astype(_I32),
-            (started & jnp.asarray(claw, bool)[side] & ~jnp.asarray(target_moved, bool)).astype(
+            1 + 2 * (~jnp.asarray(last_to_act, bool)).astype(_I32),
+            (started & jnp.asarray(claw, bool)[side] & ~jnp.asarray(last_to_act, bool)).astype(
                 _I32
             ),
         ),
@@ -2747,7 +2754,8 @@ def _act(
     choices,
     items,
     outcome: Outcome,
-    target_moved,
+    moved,
+    last_to_act,
     foe_protecting,
     custap,
     foe_roosting=False,
@@ -2809,14 +2817,15 @@ def _act(
     choice = (choices[0][side], choices[1][side], choices[2][side])
     # U-turn's Pursuit reads the battler it hits (convention 1: passed in by the caller).
     pursuit = (actions[foe], choices[0][foe], choices[1][foe])
-    moved, own, foe_events, ctl = _use_move(
+    after, own, foe_events, ctl = _use_move(
         tables,
         _where(resumed, listed, state),
         side,
         action,
         choice,
         outcome,
-        target_moved,
+        moved,
+        last_to_act,
         foe_protecting,
         custap,
         foe_roosting,
@@ -2831,7 +2840,7 @@ def _act(
     )
     live = state.over == 0
     switch, item = is_switch(action) & live, is_item(action) & live
-    acted = _where(item, used, moved)
+    acted = _where(item, used, after)
     acted = _where(switch & ~resumed, switched, acted)
     is_move = ~is_switch(action) & ~is_item(action)
     kind = jnp.where(switch, ACT_SWITCH, jnp.where(item, ACT_ITEM, own["act_kind"]))
@@ -3190,10 +3199,20 @@ def _execute_actions(
 
     def body(carry):
         state, read, shown, position, phase, pursued, base, pick_mul, fired, sync = carry[:10]
-        custap, claw = carry[10:]
+        custap, claw, entered = carry[10:]
         active0 = state.active
         side = order[position].astype(_I32)
-        second = position == 1  # the first actor's target has not moved yet
+        # D3-6: PICK_COMMAND == MOVE_END of every battler at this action's start (script.c:1801,
+        # bcp.c:3988, :4430, :330-333; lib.c:2053): its action is over, its Pursuit fired, it was
+        # dragged or a Pokemon entered its slot this turn, or it is at 0 HP. Fact A reads one
+        # entry (``moved[b]``); Fact B is every entry but the actor's own.
+        battlers = jnp.arange(fmt.B)
+        over = jnp.stack(
+            [jnp.any((order[: fmt.B] == b) & (battlers < position)) for b in range(fmt.B)]
+        )
+        hp0 = jnp.stack([state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)])
+        moved = over | (((pursued >> battlers) & 1) != 0) | (read["dragged"] != 0) | entered | hp0
+        last_to_act = jnp.all(moved | (battlers == side))
         start, resumed, ap = phase == _START, phase == _RESUME, phase == _PURSUIT
         # subscript_switch_pokemon.s:5-6: a first actor's switch gets its Natural Cure before
         # the Pursuit (:11).
@@ -3308,7 +3327,8 @@ def _execute_actions(
             choices,
             items,
             outcome,
-            second,
+            moved,
+            last_to_act,
             foe_protecting,
             custap,
             foe_roosting,
@@ -3379,6 +3399,7 @@ def _execute_actions(
         # a Trick Room's MoveEnd re-sort sets them again where a FIGHT pair is alive (bcp.c:3991).
         gone = (jnp.arange(fmt.B) == side) & ctl["started"] & ~skip
         gone = gone | (state.active != active0)
+        entered = entered | (state.active != active0)
         gone = gone | jnp.stack(
             [state.hp[party(fmt, b), state.active[b]] <= 0 for b in range(fmt.B)]
         )
@@ -3405,6 +3426,7 @@ def _execute_actions(
             sync,
             custap,
             claw,
+            entered,
         )
 
     start = (
@@ -3420,9 +3442,10 @@ def _execute_actions(
         (jnp.bool_(False), _I32(0)),  # the stopped head's Synchronize flag and sideEffectMon
         custap0,
         claw0,
+        jnp.zeros(fmt.B, bool),  # a slot filled this turn (a list's or a switch's newcomer)
     )
     out = jax.lax.while_loop(cond, body, start)
-    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw = out
+    state, read, shown, position, _, pursued, base, pick_mul, fired, _, custap, claw, _ = out
     # At a pause the scratch holds the turn; else every ts_* is 0 (states merge between turns).
     stopped = state.pivot_battler != 0
     alive_now = jnp.stack([state.hp[party(fmt, b), state.active[b]] > 0 for b in range(fmt.B)])
@@ -3431,7 +3454,7 @@ def _execute_actions(
         # Battler_MovedThisTurn (battle_lib.c:5365-5368) of each battler: the actions before the
         # paused one are over (MoveEnd, bcp.c:3989).
         "ts_acted": jnp.stack(
-            [jnp.any((order[:2] == b) & (jnp.arange(2) < position)) for b in range(fmt.B)]
+            [jnp.any((order[: fmt.B] == b) & (jnp.arange(fmt.B) < position)) for b in range(fmt.B)]
         ),
         "ts_order": order,
         "ts_actions": real,

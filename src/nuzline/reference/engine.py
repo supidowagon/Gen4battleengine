@@ -287,6 +287,9 @@ class _Turn:
     # moveEffectsData.quickClaw per side, written by the same compare (lib.c:1283, :1349) and
     # cleared at its holder's move start (subscript_check_quick_claw.s:22-23), B10-6.
     claw: list[bool] = field(default_factory=lambda: [False, False])
+    # A Pokemon entered the battler's slot this turn (UpdateAfterSwitch, lib.c:2053: a drag, a
+    # list's or a switch action's newcomer): its PICK_COMMAND is MOVE_END (D3-6).
+    entered: list[bool] = field(default_factory=lambda: [False, False])
     # The action's move ran Trick Room's script (set or restore, direct or called): its MoveEnd
     # re-sorts (effect_script_0259.s:18; bcp.c:3991), which sets the two flags again (SF2 (k)).
     trick_room_ran: bool = False
@@ -362,6 +365,7 @@ class _Turn:
 # The _Turn lists of one bool per battler.
 _TURN_FLAGS = (
     "done", "protecting", "enduring", "roosting", "custap", "claw", "move_failed", "assurance",
+    "entered",
 )  # fmt: skip
 
 
@@ -3096,6 +3100,7 @@ def _enter(turn: _Turn, s: RefState, side: int, slot: int, baton: bool = False) 
     sd.active = slot
     _reset_battler(sd, baton)
     turn.claw[side] = turn.custap[side] = False  # UpdateAfterSwitch (lib.c:2100-2104), SF2 (k)
+    turn.entered[side] = True  # its PICK_COMMAND is MOVE_END (lib.c:2053), D3-6
     # BattleSystem_InitBattleMon re-reads the party's friendship (lib.c:136, F-15).
     newcomer = _active(s, side)
     newcomer.friendship = newcomer.party_friendship
@@ -3811,9 +3816,7 @@ def _move_effect(turn: _Turn, s: RefState, side: int, move: int, hit: int, lande
     elif effect == EffectId.EMBARGO and effective:
         # effect_script_0232.s: a direct ON_HIT subscript_embargo_start.s (no HP check); its
         # failures (:5-11) then embargoTurns = 5 with the bit (:13-14), B13-31.
-        if not _shielded(turn, s, target) and not _embargo_fails(
-            tables, s, turn, target, target_moved
-        ):
+        if not _shielded(turn, s, target) and not _embargo_fails(tables, s, turn, target):
             s.battlers[target].embargo = 5
     elif effect == EffectId.EAT_BERRY and effective:
         # effect_script_0224.s / subscript_pluck.s: an ON_HIT effect, no HP check;
@@ -5198,7 +5201,8 @@ def _unstrip_roost(turn: _Turn, s: RefState) -> None:
 
 
 def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: int,
-           struggling: bool, locked: bool, target_moved: bool) -> int | None:  # fmt: skip
+           struggling: bool, locked: bool, moved: list[bool],
+           last_to_act: bool) -> int | None:  # fmt: skip
     """``BattleControllerPlayer_FightCommand`` through ``TryMove`` and the move script
     for ``side``'s active Pokemon; ``target`` is the battler whose speed the action's sort
     compared (monSpeedValues, Gyro Ball). Returns what ``UpdateFlagsWhenHit`` (bcp.c:4499-4507)
@@ -5323,7 +5327,11 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         # asleep (effect_script_0097.s:5); a call that finds no move fails (MOVE_STATUS_FAILED,
         # subscript_missed.s); either way the defender stays the user (no moveHit).
         first = 0
-        if _t(tables, "move_effect", move) == EffectId.ME_FIRST and not target_moved:
+        # BtlCmd_TryMeFirst reads DEFENDER_ACTION[PICK_COMMAND] (battle_script.c:7299).
+        if (
+            _t(tables, "move_effect", move) == EffectId.ME_FIRST
+            and not moved[turn.target_side]
+        ):
             foe = _foe(side)
             first = _me_first_copy(
                 tables, s, foe, turn.choices[foe][0], turn.actions[foe] < MOVE_ACTIONS
@@ -5545,6 +5553,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     # (singles follow-up (ii)); every read of "the target" below goes through it.
     tgt = turn.target_side
     # ``Battler_MovedThisTurn(defender)`` (lib.c:5365-5368) is false for the user itself.
+    target_moved = moved[tgt]
     tgt_moved = target_moved and tgt != side
     # A non-Ghost Curse whose defender is the foe (Follow Me, a randomized call / Encore pick:
     # lib.c:1706-1707, :1714-1717) is tested like any move aimed at it.
@@ -5671,7 +5680,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         sd = s.battlers[side]
         n = sd.protect_count
         passes = n == 0 or o.protect[side] != 0  # PROTECT_SUCCESS_RATE[n] >= RandNext()
-        if passes and not target_moved:
+        if passes and not last_to_act:
             if effect == EffectId.ENDURE:
                 turn.enduring[side] = True
             else:
@@ -5844,7 +5853,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
         full = full or (effect == EffectId.LOCK_ON and bool(foe_sd.substitute_hp))  # :6, :33
         # subscript_embargo_start.s:6-11, :57 (MOVE_STATUS_FAILED), B13-31.
         full = full or (
-            effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, tgt, target_moved)
+            effect == EffectId.EMBARGO and _embargo_fails(tables, s, turn, tgt)
         )
         full = full or (effect == EffectId.YAWN and _yawn_blocks(tables, s, side, tgt)[0])
         full = full or (
@@ -6843,7 +6852,7 @@ def _embargo_check(turn: _Turn, s: RefState, side: int) -> None:
         sd.embargo -= 1
 
 
-def _embargo_fails(tables, s: RefState, turn: _Turn, target: int, target_moved: bool) -> bool:
+def _embargo_fails(tables, s: RefState, turn: _Turn, target: int) -> bool:
     """subscript_embargo_start.s:6-11: a substitute, Multitype, an embargo up, a held Griseous
     Orb (raw), the defender's quickClaw (until it moved) or custapBerry flag (B13-31)."""
     foe = _active(s, target)
@@ -7364,6 +7373,14 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
         stale = _stale_snapshot(s)
         if turn.done[side] or _active(s, side).hp == 0:
             continue
+        # D3-6: PICK_COMMAND == MOVE_END of every battler at this action's start (an action over,
+        # a Pursuit fired, dragged, a Pokemon entered its slot, fainted or absent: script.c:1801,
+        # bcp.c:3988, :4430, :330-333, lib.c:2053). Fact A reads one entry, Fact B all but the
+        # actor's own (waitingBattlers == 1, bcp.c:881-886).
+        moved = [
+            turn.done[b] or turn.entered[b] or _active(s, b).hp == 0 for b in range(_fmt(s).B)
+        ]
+        last_to_act = all(m for b, m in enumerate(moved) if b != side)
         record = None
         if commands[side] == ITEM:
             _use_item(tables, s, side, items[side])
@@ -7394,7 +7411,7 @@ def _actions(turn: _Turn, s: RefState, start: int) -> None:
             try:
                 record = _fight(
                     turn, s, side, _foe(side), action_slot, move, struggling, locked,
-                    target_moved=position == 1,
+                    moved=moved, last_to_act=last_to_act,
                 )  # fmt: skip
             finally:
                 _unstrip_roost(turn, s)

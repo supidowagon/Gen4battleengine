@@ -362,7 +362,7 @@ class _Hit(NamedTuple):
     effective: jnp.ndarray  # ... and was not ineffective (damage > 0, or a passed type gate)
     proc: jnp.ndarray  # the secondary applies on this hit (its roll, or certain)
     dealt: jnp.ndarray  # HP the target lost on this hit
-    target_moved: jnp.ndarray  # the target has already acted this turn
+    target_moved: jnp.ndarray  # D3-6 Fact A: the defender's PICK_COMMAND is MOVE_END (lib.c:5365)
     move: jnp.ndarray  # the move's id
     target_ignorable: jnp.ndarray  # target's ability as the attacker sees it (Mold Breaker)
     contact_proc: jnp.ndarray  # the target's contact-ability roll for this hit
@@ -2436,7 +2436,9 @@ def _knock_off(tables, state, h: _Hit, foe_custap, foe_claw) -> BattleState:
     was not MOVE_STATUS_NO_EFFECTS, battle_lib.c:1524-1529), B10-6. The subscript ends with
     nothing done for a defender behind a substitute (:5, ``h.shielded``), with Multitype
     (:6, its BATTLEMON_ABILITY), holding the Griseous Orb (:7) or with its quickClaw (:8,
-    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set; then BtlCmd_TryKnockOff
+    ``foe_claw``) or custapBerry (:9, ``foe_custap``) flag set (D3-6 Fact C: the flags stand until
+    the holder's own move starts or a Pokemon enters its slot; the caller passes them as carried,
+    with no ``moved`` term); then BtlCmd_TryKnockOff
     (battle_script.c:6608-6632): no item does nothing; an ignorable Sticky Hold keeps it (its
     C-built "made ineffective" message tags nothing for the AI); else heldItem = ITEM_NONE and
     the slot's knockedOffItemsMask bit (:6626-6627). Neither RemoveItem nor CopyToParty runs: the
@@ -2476,7 +2478,8 @@ def embargo_fails(tables, state: BattleState, target_side, foe_claw=False, foe_c
     (:6, CheckSubstitute; the script's own test, effect_script_0232.s:5, is the same), with
     Multitype (:7, its BATTLEMON_ABILITY), already under Embargo (:8, embargoTurns), holding the
     Griseous Orb (:9, its BATTLEMON_HELD_ITEM: the raw item) or with its quickClaw (:10,
-    ``foe_claw``) or custapBerry (:11, ``foe_custap``) flag set (B13-31)."""
+    ``foe_claw``) or custapBerry (:11, ``foe_custap``) flag set (B13-31; D3-6 Fact C: the carried
+    flags, no ``moved`` term)."""
     fmt = format_of(state)
     target_side = jnp.asarray(target_side, _I32)
     target = state.active[target_side]
