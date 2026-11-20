@@ -4,8 +4,11 @@
   (``subscript_switch_pokemon.s``) runs the entry hazards
   (``subscript_hazards_check.s``; Stealth Rock is the only M1 hazard), and the
   controller then runs ``BattleSystem_TriggerEffectOnSwitch`` (battle_lib.c:3649,
-  from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973; at the
-  start of the battle from ``ShowBattleMon``, :256). Of its states the engine reaches
+  from ``BattleControllerPlayer_MoveEnd``, battle_controller_player.c:3973, and from
+  ``ShowBattleMon``, :254-268, at the start of the battle and at every turn start:
+  ``TurnEnd`` sets ``BATTLE_CONTROL_TRAINER_MESSAGE``, :1858, which goes on to
+  ``SHOW_BATTLE_MON``, :241-248; the engine runs its form change and held-item states
+  there in ``step._turn_start_items``). Of its states the engine reaches
   ``SWITCH_IN_CHECK_STATE_TRACE`` (:3718, ``trace``), ``_WEATHER_ABILITIES`` (:3740,
   ``weather_ability``), ``_INTIMIDATE`` (:3795), ``_DOWNLOAD`` (:3814, ``download``),
   ``_FORBIDDEN_STATUS`` (:4135) and ``_HELD_ITEM_STATUS`` (:4151).
@@ -16,9 +19,10 @@
   move (``AFTER_MOVE_EFFECT_ATTACKER_ITEM`` / ``_DEFENDER_ITEM``,
   battle_controller_player.c:3684, :3691, then ``_HELD_ITEM_STATUS`` for both, :3730;
   the after-move effects run per hit before
-  ``BATTLE_CONTROL_LOOP_MULTI_HIT``, :3769), after a switch-in, and at the end of
+  ``BATTLE_CONTROL_LOOP_MULTI_HIT``, :3769), after a switch-in, at the end of
   the turn (``MON_COND_CHECK_STATE_USE_ITEM``, :1362, and
-  ``MON_COND_CHECK_STATE_ITEM_CONDITION``, :1699).
+  ``MON_COND_CHECK_STATE_ITEM_CONDITION``, :1699), and at the next turn start
+  (``SWITCH_IN_CHECK_STATE_HELD_ITEM_STATUS``, battle_lib.c:4151-4165, from ``ShowBattleMon``).
 
 Intimidate (``subscript_intimidate.s``): every living foe that is not behind a
 Substitute gets ``ATTACK_DOWN_1_STAGE`` as an ability side effect, through

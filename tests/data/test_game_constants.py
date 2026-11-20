@@ -403,3 +403,26 @@ def test_kaizo_load_game_without_items_names_build_tables(tmp_path):
     )
     with pytest.raises(GameDataError, match=r"tools\.build_tables --game kaizo"):
         load_game(Game(KAIZO, game.tables_dir, game.intermediate_dir))
+
+
+# Item_IsBerry (item.c:357-366) scans sBerryItemIDs, the items whose fieldUseFunc is
+# ITEM_USE_FUNC_BERRY (tools/dataproc/src/itemproc.c:271-272): ITEM_CHERI_BERRY ..
+# ITEM_ROWAP_BERRY, ids 149-212 (FIRST_BERRY_IDX .. LAST_BERRY_IDX, include/constants/items.h:
+# 57-59). BattleSystem_PluckBerry eats every one of them (battle_lib.c:5832-5835), so each needs
+# a berry class (``hooks.PLUCKABLE``) in ``tables.item_effect``.
+ITEM_IS_BERRY = range(149, 213)
+
+
+@pytest.mark.parametrize("game", [VANILLA, KAIZO])
+def test_every_berry_has_a_berry_class(game, request):  # Kaizo skips without the Kaizo tables
+    from nuzline.engine.hooks import PLUCKABLE
+
+    tables = request.getfixturevalue("tables" if game == VANILLA else "kaizo_tables")
+    names = request.getfixturevalue("names" if game == VANILLA else "kaizo_names")
+    effect = [int(e) for e in tables.item_effect]
+    wrong = [
+        f"{i} {names.item_names[i]}: item_effect {effect[i]}"
+        for i in ITEM_IS_BERRY
+        if effect[i] not in PLUCKABLE
+    ]
+    assert wrong == []

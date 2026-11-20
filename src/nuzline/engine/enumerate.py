@@ -2999,16 +2999,18 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # Not with a plucked Starf Berry (``plucked``): its PLUCK_EFFECT_RANDOM_UP2 draws while one of
     # the five stats is below +6, and its subscript_held_item_sharply_raise_stat.s:21 PLUCK_CHECK
     # clears the flag (the own berry is eaten once after it); with all five at +6 neither berry
-    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5839-5845) its
-    # own berry does not act either. The plucked draw and a second own draw never meet: two
-    # draws, not three (G-28's bound needs a Roar newcomer for the third).
+    # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo its own
+    # berry does not act either (``Battler_HeldItem`` gives ITEM_NONE, lib:5352-5363, read at
+    # :4580). The plucked draw and a second own draw never meet: two draws, not three (G-28's
+    # bound needs a Roar newcomer for the third).
     # G-S6: the flag is set only for an eaten berry (``result == TRUE``, lib:5848: a listed
     # PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, ``hooks.PLUCKABLE``) and stays only while
     # ``nextSeq`` is 0: every held-item subscript ends in PLUCK_CHECK, which clears it. Leppa
     # (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830) always set
     # ``nextSeq``; a non-berry (Grip Claw) sets no flag. The other berries' conditions (full HP,
     # no status, +6, Focus Energy) are not tested: over-approximate. Klutz / Embargo
-    # (:5839-5845) keep the flag. STARF_BERRY's exclusion overlaps ``~plucked``.
+    # keep the flag (they zero only ``scriptTemp``, :5840-5845; the flag is set at :5848).
+    # STARF_BERRY's exclusion overlaps ``~plucked``.
     # The foe's item as the Pluck reads it: the start-of-turn item of each on-field slot (the
     # incoming one too: a switch acts before moves) or a berry it Recycles first
     # (effect_script_0184.s:5-7, BtlCmd_TryRecycle battle_script.c:9000-9013). Knock Off and a

@@ -2185,34 +2185,37 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   do not move there: they start `none` (data/kaizo/start_conditions.json; weather 16 has no battle effect,
   battle_lib.c:3700, manager ruling 4) and hold no weather refusal; any refusal of theirs is their own other
   source's.
-- G-44 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
+- G-S1 Snapshot sampler drift (pod compare of 56cd9f4 vs main 08a57000): `sample_outcome` drew `starf` as
   `randint(fold_in(key, 48), (B, 2))` (08a57000 outcome.py:2076) and now `(B, 4)` from the same key
   (outcome.py:2139), which changes every entry, columns 0-1 too: all four columns of a fresh draw are sampler drift
   (`snap_compare.SAMPLED`); a saved `in_outcome` keeps columns 0-1 strict. No other draw's key, shape or bounds
   changed in `sample_outcome` (body diff: the starf line only); its state reads moved to `field_mask` (FCM).
-- G-45 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
+- G-S2 Camouflage on `TERRAIN_UNKNOWN` (snapshot step / jitstep first diff `.camouflage[0]` 0 -> 1): batch G
   dropped `terrain_known` from `effects._camouflage` (08a57000 effects.py:618-633), so terrain -1 reads row 0
   (`order.terrain_index` clip) and succeeds where main wrote nothing; the reference (`_terrain_row`) does the
   same. In a fight -1 never reaches it: `coverage.terrain_refusal` runs over the known moves plus
-  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reach it:
-  `tests.strategies._draw_terrain` draws a terrain only when a Pokemon knows a reader, not when a Metronome (or a
-  drawn last move a caller copies) can call one (E2 owns the strategies). The game never holds an unknown:
+  `fight_calls` (Metronome's calls) and the invokers' sources are known moves. The drawn states reached it:
+  `tests.strategies._draw_terrain` drew a terrain only when a Pokemon knew a reader, not when a Metronome (or a
+  drawn last move a caller copies) could call one; since batch H's first commit it draws a terrain for every
+  state. The game never holds an unknown:
   `CalcTerrain` (field_battle_data_transfer.c:470-504) always gives a terrain and `BattleSystem_GetTerrain`
   (battle_system.c:375-381) maps an out-of-range value to TERRAIN_MAX, read as `min(terrain, TERRAIN_SPECIAL)`
   (battle_script.c:8007-8010). No engine change.
-- G-46 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
+- G-S3 `enumerate._starf_reads` counted a plucked Starf Berry and the Pluck flag's second own eat as two
   sources (`twice` & `plucked`): with the attacker's own Starf that read `starf[d, 3]` with no Roar newcomer, a
   third eat G-28 shows unreachable. A plucked Starf draws while a stat of the five is below +6 and its
   `subscript_held_item_sharply_raise_stat.s:21` PLUCK_CHECK clears the flag; with all five at +6 neither berry
-  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo (lib:5838-5841) no own eat. `twice` now excludes
+  draws (lib:5798-5817, :4850-4872); under Klutz / Embargo no own eat (`Battler_HeldItem` gives ITEM_NONE,
+  lib:5352-5363, read by `BattleSystem_TriggerHeldItem` at :4580). `twice` now excludes
   `plucked`. The engine's step and the reference are unchanged (they already draw twice there:
   `test_bug_bite_of_a_starf_berry_then_its_own_then_a_roar_newcomer[Tackle]`).
-- G-47 The widened snapshot "rest" states (seed 165 turn 3: 160 -> 16000 rows, 2^2 * 5^2; seeds 22 / 64 / 120: the
-  width-cap text; seed 107 turn 3: SamplingOnly where main enumerated) come from batch G's later Starf reads
-  (G-29): factor 5 per read eat. Not reproduced locally (RAM gate); G-46's over-read is the only unreachable
-  read found in `_starf_reads`. Batch G's other enumerator changes: `weather_free` also on `acid`
-  (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin and band reads narrowed.
-  The pod checked `test_snapshot_states_read_a_third_starf_eat_only_with_a_roar_newcomer` (dropped: see G-S6).
+- G-S4 The widened snapshot "rest" states of batch G's pod compare (56cd9f4 vs main
+  08a57000) have three causes, each its own entry: seed 22 turn 4 and seed 165 turn 3 (160 -> 16000 rows) are
+  G-S5 (Future Sight's stored roll on a Pursuit meeting, G-12's acid law, not Starf); seed 64 turn 4 and seed 107
+  turn 3 (SamplingOnly where main enumerated) are G-S6 (the Pluck flag's over-read in `_starf_reads`); seed 120
+  turn 2 is G-S7 (Secret Power through Copycat on `TERRAIN_UNKNOWN`). Batch G's other enumerator changes:
+  `weather_free` also on `acid` (`outcome.acid_rain_reachable`, G-12, singles only with a nonzero mask), Shaymin
+  and band reads narrowed.
 - G-S5 (snapshot entry 5; explains a compare divergence of mechanic G-12) Future Sight's stored roll on a Pursuit
   meeting (pod compare e3-snap2-093367d vs main; seed 22 turn 4 segment 0, and seed 165 turn 3: `future_hit[0]` 0 -> 88,
   rest rows 160 -> 16000 = x100; both PURSUIT vs U_TURN with `acid` set):
@@ -2233,9 +2236,10 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   (`result == TRUE`: a listed PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, :5846-5848), and every held-item
   subscript ends in PLUCK_CHECK (subscript_pluck_check.s clears it), so it stays only while `nextSeq` is 0.
   Leppa (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830,
-  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-46). `twice` now needs a foe
+  subscript_held_item_temp_acc_up.s:12) always set `nextSeq`; Starf is `plucked` (G-S3). `twice` now needs a foe
   item in `hooks.PLUCKABLE` minus Leppa / Micle / Starf; the other berries' conditions (full HP, no status, +6,
-  Focus Energy) are over-approximated. Klutz / Embargo (:5839-5845) keep the flag but make the own Starf inert.
+  Focus Energy) are over-approximated. Klutz / Embargo keep the flag (they zero only `scriptTemp`, :5840-5845;
+  the flag is set at :5848) but make the own Starf inert (`Battler_HeldItem`, :5352-5363).
   The read also takes a berry the foe Recycles before the Pluck (effect_script_0184.s:5-7: `hooks.pluck_berry`
   reads the live item), for `twice` (a `keeps` berry) and for `plucked` (a Starf Berry, index 0).
   The loose (brute-force) branch's `eats` is now `foes(anyone | recycled)`: a foe's Recycled Starf Berry is a
@@ -2249,7 +2253,7 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   redrew the snapshot seeds through the live strategies generator, which does not reproduce the compare's
   states, and their "third eat only with a Roar" rule is stale on the train (a flung Starf and a Recycle make three).
 - G-S7 Snapshot seed 120 turn 2 (rest: width-cap text, 262144 -> 524288 rows; one new 2-valued `secondary(1,0)`):
-  terrain-unknown class, the same root as seed 2's Camouflage line (G-45, renamed G-S2 in batch H). b1's Copycat
+  terrain-unknown class, the same root as seed 2's Camouflage line (G-S2). b1's Copycat
   copies Secret Power (290) when b1 moves first (`move_prev`, battle_script.c:7328-7341). 5da2dd49 (G-20..G-22)
   removed `terrain_known` from order.move_effects, so Secret Power on TERRAIN_UNKNOWN (-1) now resolves to row 0's
   secondary effect (terrain_index clips to 0; SECRET_POWER_EFFECTS) instead of PLAIN, and its 30% proc becomes a
@@ -2257,8 +2261,8 @@ berry's id, since Pluck / Bug Bite read the item's own pluck effect and `Item_Is
   TERRAIN_SPECIAL), :8067-8070). In the game the terrain is never unknown (CalcTerrain
   field_battle_data_transfer.c:470-504; BattleSystem_GetTerrain battle_system.c:375-381), and real fights with a
   reachable terrain move are refused by coverage.terrain_refusal. The state is drawn only by
-  tests.strategies._draw_terrain, which batch H's first commit fixes: no TERRAIN_UNKNOWN when Nature Power, Secret
-  Power or Camouflage is reachable, directly or through a call move.
+  tests.strategies._draw_terrain; since batch H's first commit it draws a terrain for every state (no
+  TERRAIN_UNKNOWN), so Nature Power, Secret Power and Camouflage, directly or through a call move, never read one.
 
 ## Stream state (restart point, 2026-11-19)
 
