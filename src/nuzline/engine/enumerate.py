@@ -243,7 +243,7 @@ from nuzline.engine.effects import (
 )
 from nuzline.engine.format import FORMATS, foes, format_of, party, side_of
 from nuzline.engine.format import foe as _foe
-from nuzline.engine.hooks import entry_damage_up, reverted_stats, starf_holders
+from nuzline.engine.hooks import PLUCKABLE, entry_damage_up, reverted_stats, starf_holders
 from nuzline.engine.ids import (
     CALL_GRAVITY,
     CHATTER_CHANCES,
@@ -2994,8 +2994,23 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     # draws (lib:5798-5817, :4850-4872); under the attacker's Klutz / Embargo (lib:5838-5841) its
     # own berry does not act either. The plucked draw and a second own draw never meet: two
     # draws, not three (G-28's bound needs a Roar newcomer for the third).
-    foe_item = jnp.any((state.item[rows] != 0) & on_field, axis=1)
-    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_item) & ~plucked
+    # G-S6: the flag is set only for an eaten berry (``result == TRUE``, lib:5848: a listed
+    # PLUCK_EFFECT_* or Item_IsBerry, :5832-5835, ``hooks.PLUCKABLE``) and stays only while
+    # ``nextSeq`` is 0: every held-item subscript ends in PLUCK_CHECK, which clears it. Leppa
+    # (PLUCK_EFFECT_PP_RESTORE, :5609-5633) and Micle (_TEMP_ACC_UP, :5827-5830) always set
+    # ``nextSeq``; a non-berry (Grip Claw) sets no flag. The other berries' conditions (full HP,
+    # no status, +6, Focus Energy) are not tested: over-approximate.
+    keeps = jnp.asarray(
+        [
+            e
+            for e in PLUCKABLE
+            if e not in (ItemId.LEPPA_BERRY, ItemId.MICLE_BERRY, ItemId.STARF_BERRY)
+        ],
+        _I32,
+    )
+    foe_effect = tables.item_effect[state.item[rows]].astype(_I32)
+    foe_berry = jnp.any(jnp.isin(foe_effect, keeps) & (state.item[rows] != 0) & on_field, axis=1)
+    twice = held_eat & uses_move & (effect == _E.EAT_BERRY) & foes(foe_berry) & ~plucked
     newcomer = jnp.any(holds_b & (slots != state.active[:, None]) & reach, axis=1)
     entries = jnp.asarray(dragged, bool).astype(_I32)
     recycles = (

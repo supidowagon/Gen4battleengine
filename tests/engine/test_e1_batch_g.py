@@ -566,6 +566,33 @@ def test_the_later_starf_draws_are_read_where_eats_can_meet(tables, names):
     assert laws(bite, "Bug Bite", "Tackle").relevant.starf[0].tolist() == [True, False, True, False]
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "move, foe_item, full, second",
+    [
+        ("Bug Bite", "Grip Claw", False, False),
+        ("Pluck", "Micle Berry", False, False),
+        ("Bug Bite", "Oran Berry", True, True),
+    ],
+)
+def test_the_pluck_flags_second_starf_eat_needs_a_berry_that_can_keep_it(
+    tables, names, move, foe_item, full, second
+):
+    """G-S6: ``starf[0, 2]`` through the Pluck flag (``_starf_reads``' ``twice``) only where the
+    foe's item can leave SELF_TURN_FLAG_PLUCK_BERRY set. Grip Claw is no berry: no flag
+    (``result`` FALSE, battle_lib.c:5832-5835, :5846-5848). Micle's PLUCK_EFFECT_TEMP_ACC_UP
+    always sets ``nextSeq`` (:5827-5830) and subscript_held_item_temp_acc_up.s calls PLUCK_CHECK,
+    clearing it. An Oran Berry eaten at full HP leaves ``nextSeq`` 0 (:5551-5558): kept."""
+    from nuzline.engine.enumerate import outcome_laws
+
+    s = _starf_fight(names, tables, [move], ["Tackle"], foe_item=foe_item)
+    if full:
+        s = s.replace_hp(0, 0, int(s.max_hp[0, 0]))
+    acts = jnp.asarray(_acts(names, s, 0, move, "Tackle"))
+    laws = jax.tree.map(np.asarray, outcome_laws(tables, s, acts))
+    assert bool(laws.relevant.starf[0, 2]) is second
+
+
 def _snap_segment(tables, names, seed_value, turn):
     """``(state, actions)`` of "seed S turn T segment 0" exactly as tools/snap_compare.py's
     ``draw_inputs`` draws it (tests.strategies, Hypothesis @seed), its pauses resumed by the
