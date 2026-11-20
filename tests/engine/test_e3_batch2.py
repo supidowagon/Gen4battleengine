@@ -254,6 +254,44 @@ def test_a_flung_starf_uses_up_a_draw_of_the_defenders_queue(tables, names):
     assert _stage(after, 1, Stat.ATK) == 2 and _stage(after, 1, Stat.SPA) == 2
 
 
+def test_a_missed_flung_starf_still_uses_up_the_defenders_draw(tables, names):
+    """The RANDOM_UP2 loop runs at TryFling (BattleSystem_FlingItem, battle_lib.c:6110-6127, from
+    effect_script_0233.s:7, before CalcCrit and TryMove), so a Fling that then misses has taken the
+    defender's queue entry 0 (``Outcome.starf[1, 0]``): its own Starf Berry, eaten at its pinch after
+    its move, reads the next one (``starf[1, 2]``, ``ids.STARF_QUEUE``: Sp. Atk), not Attack. Engine
+    equals reference."""
+    s = _fight(tables, names, "Starf Berry", foe_item="Starf Berry", foe="Bidoof", foe_level=40)
+    s = s._replace(hp=s.hp.at[1, 0].set(int(s.max_hp[1, 0]) // 4))
+    miss = empty_outcome()._replace(hit=jnp.zeros((2, MAX_HITS), jnp.int8))
+    miss = miss._replace(starf=miss.starf.at[1, 0].set(0).at[1, 2].set(3))
+    after = _go(tables, names, s, miss)
+    assert int(after.item[1, 0]) == 0
+    assert _stage(after, 1, Stat.ATK) == 0 and _stage(after, 1, Stat.SPA) == 2
+
+
+def test_a_flung_starf_raises_the_stat_picked_at_tryfling(tables, names):
+    """battle_lib.c:6110-6127 picks the stat at TryFling from the stages before the hit; the hit's
+    subscript_held_item_sharply_raise_stat.s:14-18 adds 2 to that stat, capped at 12, with no
+    failure test. A stage raised to +6 in between (a critical hit's Anger Point,
+    subscript_critical_hit.s:10-15, ONE_HIT_CRITICAL bcp.c:3472 before ONE_HIT_TRIGGER_SECONDARY
+    :3484; Anger Point is not modelled) leaves the pick: the maxed stat stays at +6 and no other
+    stat rises (unit test of ``hooks.fling_try`` / ``hooks.fling_effect``)."""
+    from nuzline.engine.hooks import fling_effect, fling_try
+
+    s = _fight(tables, names, "Starf Berry", foe="Bidoof", foe_level=40)
+    s = s._replace(starf_roll=s.starf_roll.at[1].set(0))  # rank 0: Attack
+    item = s.item[0, 0]
+    tried, pick = fling_try(tables, s, 1, 0, item, True)
+    assert int(pick) == Stat.ATK + 1 and int(tried.starf_taken[1]) == 1
+    maxed = tried._replace(stages=tried.stages.at[1, Stat.ATK].set(6))
+    out = fling_effect(tables, maxed, 1, 0, item, True, pick)
+    assert np.asarray(out.stages[1]).tolist() == np.asarray(maxed.stages[1]).tolist()
+    out = fling_effect(tables, tried, 1, 0, item, True, pick)
+    assert _stage(out, 1, Stat.ATK) == 2
+    none, nopick = fling_try(tables, s, 1, 0, item, False)
+    assert int(nopick) == 0 and int(none.starf_taken[1]) == 0
+
+
 def test_flung_lansat_and_white_herb(tables, names):
     """Lansat Berry sets the foe's Focus Energy (subscript_held_item_raise_crit.s:11); White
     Herb resets its lowered stages at TryFling (battle_lib.c:6029-6036), even on a miss."""

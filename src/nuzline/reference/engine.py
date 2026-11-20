@@ -351,6 +351,9 @@ class _Turn:
     # (the move's power): its CalcCrit / CalcDamage read the item as still held, E3-B2-1.
     fling: int = 0
     fling_power: int = 0
+    # The stat a flung Starf Berry raises (``Stat``), picked at TryFling (lib.c:6110-6127), or
+    # None (``_fling_try``).
+    fling_pick: int | None = None
     # The action's move was reflected by Magic Coat (E3-B2-6): SYSCTL_REUSE_LAST_MOVE, so no moveHit,
     # moveCopied or conversion2 write (bcp.c:3077, :4481, :4498, :4509).
     reflected: bool = False
@@ -3784,7 +3787,10 @@ def _fling_try(turn: _Turn, s: RefState, side: int, item: int) -> None:
     """``BattleSystem_FlingItem``'s writes at TryFling time on the defender (lib.c:5857-6158; the
     engine's ``hooks.fling_try``): ``FLING_EFFECT_PP_RESTORE`` (:5908-5933) adds the item's hold
     param to the first slot with the largest ``maxPP - ppCur`` above 0, capped;
-    ``FLING_EFFECT_STATDOWN_RESTORE`` (:6029-6036) sets every stage below neutral to neutral."""
+    ``FLING_EFFECT_STATDOWN_RESTORE`` (:6029-6036) sets every stage below neutral to neutral;
+    ``FLING_EFFECT_RANDOM_UP2`` (Starf, :6110-6127) picks the stat from the stages before the hit
+    with its own draw (:6121): the defender's next queued Starf draw by the ``% n`` convention,
+    used up whether the Fling then hits or not (F-10, G-27), kept in ``turn.fling_pick``."""
     tables = turn.tables
     kind, power = _t(tables, "item_fling_effect", item), _t(tables, "item_hold_param", item)
     foe, foe_sd = _active(s, _foe(side)), s.battlers[_foe(side)]
@@ -3795,6 +3801,12 @@ def _fling_try(turn: _Turn, s: RefState, side: int, item: int) -> None:
             foe.pp[k] = min(foe.pp[k] + power, _max_pp(tables, foe, k))
     elif kind == FlingEffect.STATDOWN_RESTORE:
         foe_sd.stages = [max(x, 0) for x in foe_sd.stages]
+    elif kind == FlingEffect.RANDOM_UP2:
+        valid = [x for x in STARF_STATS if foe_sd.stages[x] < STAGE_MAX]
+        if valid:
+            roll = foe_sd.starf_roll[min(foe_sd.starf_taken, len(foe_sd.starf_roll) - 1)]
+            turn.fling_pick = valid[roll % len(valid)]
+            foe_sd.starf_taken += 1
 
 
 # The item a Fling's cure acts like (``_cure``) and the stat a Fling stat item raises.
@@ -3827,9 +3839,8 @@ def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: b
     ``effects._fling``): nothing for a defender at 0 HP or behind a Substitute (:5-7), nor for one
     with MOVE_EFFECT_EMBARGO (lib.c:6145-6146); else the flung item's fling effect acts on it:
     the heals (UPDATE_HP, capped; a flavor its nature dislikes confuses it), the cures
-    (``_cure``), heal infatuation, the stat items (+1 below +6; Starf +2 on the drawn one of the
-    five stats below +6: the defender's next queued Starf Berry draw, then used up, F-10, G-27,
-    review b2 #4),
+    (``_cure``), heal infatuation, the stat items (+1 below +6; Starf +2, capped at +6, on the stat
+    ``_fling_try`` picked at TryFling, subscript_held_item_sharply_raise_stat.s:14-18),
     Lansat's Focus Energy, Micle's flag, the flinch
     and the INDIRECT statuses (``_inflict``). PP restore and White Herb acted at TryFling
     (``_fling_try``). The restore subscripts' PLUCK_CHECK keeps the defender's own item (the
@@ -3856,14 +3867,9 @@ def _fling_hit(turn: _Turn, s: RefState, side: int, target: int, target_moved: b
         if sd.stages[_FLING_STAT_UP[kind]] < STAGE_MAX:
             _change_stage(s, target, _FLING_STAT_UP[kind], 1)
     elif kind == FlingEffect.RANDOM_UP2:
-        # lib.c:6110-6129: RandNext() % 5 redrawn while the stage is 12, uniform over the five
-        # stats below +6 by the % n convention: the held Starf Berry's draw and rank (F-10).
-        # The loop is its own draw (:6121): the next queue entry, then used up (F-O3, G-27).
-        valid = [x for x in STARF_STATS if sd.stages[x] < STAGE_MAX]
-        if valid:
-            roll = sd.starf_roll[min(sd.starf_taken, len(sd.starf_roll) - 1)]
-            _change_stage(s, target, valid[roll % len(valid)], 2)
-            sd.starf_taken += 1
+        # The stat TryFling picked (lib.c:6110-6127, ``_fling_try``), +2 capped at +6.
+        if turn.fling_pick is not None:
+            _change_stage(s, target, turn.fling_pick, 2)
     elif kind == FlingEffect.CRIT_UP:
         sd.focus_energy = 1
     elif kind == FlingEffect.TEMP_ACC_UP:
@@ -5750,6 +5756,7 @@ def _fight(turn: _Turn, s: RefState, side: int, target: int, action: int, move: 
     turn.chosen_slot = 0 if reflect_pass else min(turn.actions[side], MOVE_ACTIONS - 1)
     turn.gift = 0
     turn.fling = turn.fling_power = 0
+    turn.fling_pick = None
     # BattleContext_Init (battle_lib.c:2009) cleared SYSCTL_TRY_SYNCHRONIZE_STATUS at the last
     # action's end (G-13).
     turn.sync_flag, turn.sync_mon = False, -1

@@ -1611,7 +1611,9 @@ def _use_move(
     )
     failed = failed | (fling & fling_fails)
     fling_on = script_on & fling & ~fling_fails
-    state = fling_try(tables, state, target_side, state.active[target_side], fling_item, fling_on)
+    state, fling_pick = fling_try(
+        tables, state, target_side, state.active[target_side], fling_item, fling_on
+    )
     fling_removed = jnp.where(fling_on, fling_item, 0)
     state = consume_item(state, side, fling_on)
     # Embargo (effect_script_0232.s:5, :7-8): CheckSubstitute on the defender, MOVE_STATUS_FAILED
@@ -2380,6 +2382,7 @@ def _use_move(
             # counter update for hit 0 hit or miss (battle_script.c:1356-1363).
             script_calc=script_calc,
             fling=fling_removed,
+            fling_pick=fling_pick,
             coat_slot=slot,
         )
         first = hit_index == 0

@@ -391,6 +391,9 @@ class _Hit(NamedTuple):
     # The item Fling's script removed this action (``step._use_move``), else 0: the item whose
     # fling effect ``_fling`` applies to the defender (E3-B2-1).
     fling_item: jnp.ndarray
+    # The stat (``Stat`` + 1, 0 for none) a flung Starf Berry raises, picked at TryFling
+    # (``hooks.fling_try``, battle_lib.c:6110-6127), E3-B2-1.
+    fling_pick: jnp.ndarray
     # The user's chosen move slot (``moveSlot``): Magic Coat's flag keeps it for the reflection's
     # Pressure drain (``_magic_coat``, E3-B2-6).
     coat_slot: jnp.ndarray
@@ -1951,11 +1954,15 @@ def _fling(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
     ``subscript_fling.s:5-7`` ends it for a defender at 0 HP or behind a Substitute
     (``h.shielded``: CheckSubstitute), and ``BattleSystem_FlingItem`` zeroes ``flingScript`` for a
     defender with MOVE_EFFECT_EMBARGO (battle_lib.c:6145-6146). The script is the one
-    ``flingScript`` named at TryFling, which the defender's state at the hit still selects (the
-    hit changes none of its status, confusion, attraction, stages, Focus Energy or movesets
-    before this runs). The flung item's effect then acts on the defender: ``hooks.fling_effect``
-    (the heals, cures, stat raises, Starf's draw: the defender's ``Outcome.starf``, F-10, review
-    b2 #4; Lansat, Micle), and the
+    ``flingScript`` named at TryFling. Starf's stat is the one TryFling picked from the stages
+    before the hit (``h.fling_pick``, ``hooks.fling_try``: the defender's ``Outcome.starf`` draw,
+    F-10, review b2 #4); for every other item the defender's state at the hit still selects the
+    same script: between TryFling and here only a critical hit's Anger Point
+    (subscript_critical_hit.s:10-15, ONE_HIT_CRITICAL bcp.c:3472 before ONE_HIT_TRIGGER_SECONDARY
+    :3484) writes the defender (its Attack stage; Anger Point is not modelled: whoever adds it
+    must also model that subscript's :16 ``msgTemp = 1``, which turns any flung stat raise into an
+    Attack raise). The flung item's effect then acts on the defender: ``hooks.fling_effect`` (the
+    heals, cures, stat raises; Lansat, Micle), and the
     INDIRECT flinch and status subscripts here, with the secondary-effect checks they share
     (Shield Dust, Inner Focus, Substitute, Safeguard, immunities, ``_inflict``; the flinch needs
     a target that has not moved, subscript_flinch_mon.s:5). The attacker's item is gone: the
@@ -1974,7 +1981,7 @@ def _fling(tables, state, h: _Hit, outcome: Outcome) -> BattleState:
         & (item != 0)
         & (tables.item_fling_power[item] != 0)
     )
-    state = fling_effect(tables, state, h.target_side, h.target, item, reached)
+    state = fling_effect(tables, state, h.target_side, h.target, item, reached, h.fling_pick)
     flinch = (
         reached
         & (kind == FlingEffect.FLINCH)
@@ -3742,6 +3749,7 @@ def play_hit(
     defender=None,
     script_calc=False,
     fling=0,
+    fling_pick=0,
     coat_slot=0,
 ) -> tuple[BattleState, MoveHit]:
     """Hit ``hit_index`` (0-5, an int or a traced int32) of ``move`` by ``side``'s active Pokemon: damage with
@@ -4042,6 +4050,7 @@ def play_hit(
         sub_hit=sub_hit | (sub_take & pursuit_switch),
         shielded=sub_hit | sub_take | (state.substitute_hp[target_side] != 0),
         fling_item=jnp.asarray(fling, _I32),
+        fling_pick=jnp.asarray(fling_pick, _I32),
         coat_slot=jnp.asarray(coat_slot, _I32),
     )
     for fn in (

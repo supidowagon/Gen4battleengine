@@ -1396,14 +1396,22 @@ def _fling_lookup(table: dict, default) -> jnp.ndarray:
     return jnp.asarray(out, _I32)
 
 
-def fling_try(tables: Tables, state: BattleState, side, mon, item, cond) -> BattleState:
+def fling_try(
+    tables: Tables, state: BattleState, side, mon, item, cond
+) -> tuple[BattleState, jnp.ndarray]:
     """``BattleSystem_FlingItem``'s writes at TryFling time (battle_lib.c:5857-6158), on ``side``'s
     party ``mon`` (the Fling's defender) where ``cond`` (the move got to its script and did not
     fail): they land whether or not the Fling then hits, misses or is Protected, and before the
     script's CalcDamage. ``FLING_EFFECT_PP_RESTORE`` (:5908-5933): the first slot with the largest
     ``maxPP - ppCur`` above 0 gains the item's hold param, capped (``_leppa``'s pluck path); none
     below its maximum, nothing. ``FLING_EFFECT_STATDOWN_RESTORE`` (White Herb, :6029-6036): every
-    stage below neutral goes back to neutral, Embargo on the defender or not. E3-B2-1."""
+    stage below neutral goes back to neutral, Embargo on the defender or not.
+    ``FLING_EFFECT_RANDOM_UP2`` (Starf, :6110-6127): the stat is picked here, from the defender's
+    stages before the hit, when one of the five is below +6; the ``RandNext() % 5`` loop (:6121) is
+    its own draw, so it takes the defender's next queued Starf draw (``starf_stat``, the ``% n``
+    convention, F-10) and uses it up (``starf_taken`` + 1, G-27) whether the Fling then hits or
+    not; the pick waits in ``msgTemp`` for subscript_held_item_sharply_raise_stat.s at the hit.
+    ``(state, pick)``: ``pick`` the picked ``Stat`` + 1, 0 for none (``fling_effect``). E3-B2-1."""
     kind = tables.item_fling_effect[item].astype(_I32)
     power = tables.item_hold_param[item].astype(_I32)
     state, _ = _leppa(
@@ -1418,10 +1426,15 @@ def fling_try(tables: Tables, state: BattleState, side, mon, item, cond) -> Batt
     herb = jnp.asarray(cond) & (kind == FlingEffect.STATDOWN_RESTORE)
     stages = state.stages[side]
     reset = jnp.where(herb & (stages < 0), 0, stages).astype(stages.dtype)
-    return state._replace(stages=state.stages.at[side].set(reset))
+    state = state._replace(stages=state.stages.at[side].set(reset))
+    stat, some = starf_stat(state, side)
+    starf = jnp.asarray(cond) & (kind == FlingEffect.RANDOM_UP2) & some
+    taken = state.starf_taken[side] + starf.astype(state.starf_taken.dtype)
+    state = state._replace(starf_taken=state.starf_taken.at[side].set(taken))
+    return state, jnp.where(starf, stat + 1, 0).astype(_I32)
 
 
-def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> BattleState:
+def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond, pick=0) -> BattleState:
     """The flung ``item``'s effect on ``side``'s party ``mon`` (the Fling's defender) where
     ``cond`` (``effects._fling``: ``subscript_fling.s`` ran the script ``BattleSystem_FlingItem``
     chose, battle_lib.c:5857-6158). The restore subscripts (``subscript_held_item_*.s``) act on
@@ -1430,11 +1443,11 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> B
     param, 100)``, ``Divide(maxHP, param)``), and a flavor the defender's nature dislikes then
     confuses it (``berry_confuse``, subscript_held_item_dislike_flavor.s); the status restores cure
     what the defender has (``_restore``: Cheri, Chesto, Pecha, Rawst, Aspear, Persim, Lum); heal
-    infatuation clears its attraction; the stat items raise one stage below +6, Starf two on one
-    of the five below +6 (lib.c:6110-6129: ``RandNext() % 5`` redrawn while the stage is 12; by
-    the ``% n`` convention uniform over them, the rank of the defender's next queued Starf draw,
-    ``starf_stat`` / ``starf_draw``, which it then uses up: ``starf_taken`` + 1, F-10, G-27,
-    review b2 #4); Lansat sets Focus Energy; Micle its
+    infatuation clears its attraction; the stat items raise one stage below +6; Starf raises the
+    stat ``fling_try`` picked at TryFling (``pick``: ``Stat`` + 1, 0 for none; lib.c:6110-6127,
+    from the stages before the hit) by two, capped at +6 (subscript_held_item_sharply_raise_stat.s:
+    14-18: no failure test, so a stat maxed after TryFling stays at +6); Lansat sets Focus Energy;
+    Micle its
     ``micleBerry``. ``FLING_EFFECT_PP_RESTORE`` and ``_STATDOWN_RESTORE`` already acted
     (``fling_try``). Statuses and the flinch are ``effects._fling``'s. E3-B2-1."""
     cond = jnp.asarray(cond)
@@ -1467,13 +1480,9 @@ def fling_effect(tables: Tables, state: BattleState, side, mon, item, cond) -> B
     up = _fling_lookup(_FLING_STAT_UP, Stat.ATK)[kind]
     raises = cond & jnp.isin(kind, jnp.asarray([int(k) for k in _FLING_STAT_UP], _I32))
     state = change_stage(state, side, up, 1, raises & (state.stages[side, up] < STAGE_MAX))
-    stat, some = starf_stat(state, side)
-    starf = cond & (kind == FlingEffect.RANDOM_UP2) & some
-    state = change_stage(state, side, stat, 2, starf)
-    # The fling's loop is its own draw (lib.c:6121): the defender's next eat this turn reads the
-    # next queue entry (``starf_draw``, F-O3 G-27/G-28).
-    taken = state.starf_taken[side] + starf.astype(state.starf_taken.dtype)
-    state = state._replace(starf_taken=state.starf_taken.at[side].set(taken))
+    pick = jnp.asarray(pick, _I32)
+    starf = cond & (kind == FlingEffect.RANDOM_UP2) & (pick > 0)
+    state = change_stage(state, side, jnp.maximum(pick - 1, 0), 2, starf)
     crit = cond & (kind == FlingEffect.CRIT_UP)
     acc = cond & (kind == FlingEffect.TEMP_ACC_UP)
     return state._replace(

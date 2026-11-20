@@ -2907,8 +2907,8 @@ def _starf_reads(tables, state, actions, uses_move, effect, params, dragged, loo
     else the fresh Roar newcomer's (``InitBattleMon`` resets the stages, battle_lib.c:97-101; a
     dragged battler does not act, so only a foe's bounded gains and 2 for the rest reach it): five
     values unless those reach +6. A foe's Fling of a Starf Berry at d (``flung``, lib:6110-6127,
-    its own ``RandNext() % 5`` loop at :6121, ``hooks.fling_effect``) is one more of d's own
-    sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In singles the flinger
+    its own ``RandNext() % 5`` loop at :6121, at TryFling, hit or miss: ``hooks.fling_try``) is
+    one more of d's own sources: it takes the next queue entry like an eat (E3-B2-1 on G-28). In singles the flinger
     has no Roar the same turn and a plucked or flung foe Starf Berry is gone for the other, so a
     fourth draw is not reached there; Thief / Covet and Trick / Switcheroo, the other item givers,
     are unsupported (``coverage.ITEM_MOVING_EFFECTS``); an eat past the third reads the queue's

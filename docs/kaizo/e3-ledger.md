@@ -579,6 +579,18 @@ EffectId values are those after the E1 batch G merge (E3-B2-22): FLING 131, MIRR
   "AI move effect #233", close). STATE.md: flingTemp and flingScript are "not needed" (one hit).
   Not built: Tag Strategy's partner paths (:7454, :7624-7645) for Fling: doubles only (Owed 5);
   `coverage.ITEM_MOVING_EFFECTS` keeps 233 (the exp-item party read, a separate reason).
+  Gate fix (Starf pick time): BattleSystem_FlingItem picks Starf's stat at TryFling (battle_lib.c:6110-6127, from
+  effect_script_0233.s:7, before CalcCrit :9 and TryMove) from the defender's stages then, with its own draw (:6121),
+  and leaves it in msgTemp; the hit's subscript_held_item_sharply_raise_stat.s:14-18 adds 2 to that stat, capped at
+  12, with no failure test. Between the two only a critical hit's Anger Point writes the defender
+  (subscript_critical_hit.s:10-15; ONE_HIT_CRITICAL bcp.c:3472 before ONE_HIT_TRIGGER_SECONDARY :3484). Built:
+  `hooks.fling_try` returns the pick (`Stat` + 1, 0 for none) and uses up the defender's queued draw
+  (`starf_taken` + 1) at TryFling, hit or miss; `effects.play_hit` carries it (`fling_pick`, `_Hit.fling_pick`) to
+  `hooks.fling_effect`; the reference's `_fling_try` sets `turn.fling_pick` and `_fling_hit` raises it. The `% n`
+  convention and E1's queue draw stay. Anger Point is not modelled (no `AbilityId`); whoever adds it must also model
+  subscript_critical_hit.s:16 (`msgTemp = 1`), which makes any flung stat raise an Attack raise. Tests:
+  `test_a_missed_flung_starf_still_uses_up_the_defenders_draw` (both engines),
+  `test_a_flung_starf_raises_the_stat_picked_at_tryfling` (unit: the picked stat maxed in between stays at +6).
   Tests: tests/engine/test_e3_batch2.py (`test_fling_*`, `test_flung_*`), tests/ai/test_kaizo_policy.py
   (`test_fling_*`); test_batch12's crit-writer scan and test_accuracy_classes' `_FOLLOWED` list
   carry Fling.
