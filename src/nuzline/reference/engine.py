@@ -2353,8 +2353,8 @@ def _grant_exp(tables, s: RefState, fainted: int) -> bool:
                     # ReloadPokemon's Attack / Defense come unswapped; the Power Trick bit stays
                     # (lib.c:169-174), B12-10.
                     s.battlers[0].power_trick_desync = s.battlers[0].power_trick
-                # The level's learnset scan (:9879-9883) is deferred to the learn resolve:
-                # the first pending level is marked (design §3.2).
+                # The first pending level is marked (design §3.2); the level's learnset scan
+                # (:9879-9883) runs at the payout site (``_learn_prompt``, E3-B2-21).
                 if s.learn_level[slot] == 0:
                     s.learn_level[slot] = mon.level
                     s.learn_cursor[slot] = 0
